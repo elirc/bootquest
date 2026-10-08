@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { run, type JsExercise } from './index';
+import { run, type JsExercise } from './index.ts';
 import { gradeCode } from './grade-core.mjs';
 
 const addExercise: JsExercise = {
@@ -40,7 +40,7 @@ describe('js runner adapter', () => {
     expect(r.pass).toBe(false);
     expect(r.failures).toHaveLength(2);
     expect(r.failures[0]).toMatchObject({ name: 'adds positives', expected: '5', actual: '-1', input: '[ 2, 3 ]' });
-    expect(r.failures[0].message).toBeTruthy();
+    expect(r.failures[0]!.message).toBeTruthy();
     expect(r.failures[1]).toMatchObject({ name: 'adds negatives', expected: '-2', actual: '0' });
   });
 
@@ -56,7 +56,7 @@ describe('js runner adapter', () => {
     expect(bad.failures[0]).toMatchObject({ name: 'typed sum', expected: '6', actual: '3' });
     const broken = await run(ex, { code: 'const x: = 5' });
     expect(broken.pass).toBe(false);
-    expect(broken.failures[0].name).toBe('TypeScript compiles');
+    expect(broken.failures[0]!.name).toBe('TypeScript compiles');
   });
 
   it('kills an infinite loop on timeout, reports failure, leaves no zombie node process', async () => {
@@ -71,8 +71,8 @@ export const never = 1;`;
       const r = await run({ language: 'js', tests: [{ name: 'x', code: 'assert.ok(true);' }] }, { code });
       expect(r.pass).toBe(false);
       expect(r.failures).toHaveLength(1);
-      expect(r.failures[0].name).toBe('finishes in time');
-      expect(r.failures[0].message).toMatch(/Timed out/);
+      expect(r.failures[0]!.name).toBe('finishes in time');
+      expect(r.failures[0]!.message).toMatch(/Timed out/);
       expect(r.durationMs).toBeGreaterThanOrEqual(7000);
 
       const child = JSON.parse(fs.readFileSync(infoFile, 'utf8')) as { pid: number; cwd: string };

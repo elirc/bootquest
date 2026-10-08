@@ -129,6 +129,131 @@ Opus plan review (`docs/recon/plan-review.md`) returned 2 blockers + 17 majors;
   Gate verification uses `set -o pipefail` or captures the exit before piping.
 - W1a landed (0d6df99) + P1 grader transplant (09052ae): server 8 test files
   (96 tests) + shared 27, typecheck clean — all re-run by the orchestrator.
+## 2026-10-07 — P3 spike results (node-test-file / signalpost)
+
+- The M4 slice is proven: U01/U02/U03 run via a `node-test-file` runner with
+  sha256+blob-sha integrity gates (CheckIntegrityError = refusal, never a
+  recorded attempt), TAP parsing, `taskkill /T /F` tree-kill (grandchild PID
+  verified — `node --test` runs the file in a GRANDCHILD).
+- Adversarial holes found and closed: learner `process.exit(0)` at import
+  forges a file-level `ok` ⇒ runner enforces `expected_tests`; env leaks
+  (`NODE_TEST_CONTEXT`, `NODE_OPTIONS`, `VITEST*`) are stripped; check file is
+  copied fresh, chmod 444, re-hashed post-run.
+- Residual risk (documented in p3-findings.md): a submission sharing the
+  module graph could monkeypatch `node:assert` to fake green — W4/W7 should
+  add the suggested static-scan flag.
+- Fixture bytes MUST be protected from autocrlf: `.gitattributes` rule
+  `server/src/runners/node-test-file/fixtures/** -text` is part of the
+  transplant; app vitest config must EXCLUDE those fixtures (upstream
+  u03.test.ts otherwise gets collected and breaks the suite); `tsx` becomes a
+  server runtime dependency.
+- W4 implications: check paths are NOT structured data in program.json — they
+  live in ticket prose (UNN-02), so W4 uses a recorded spec table (P3's
+  checks.json is the model); U03's acceptance ALSO requires
+  `tsc -p practice/tsconfig.json` (composite check or explicit drop — decide
+  in W4); signalpost declares engines node>=24, we run 22.16 + tsx (works for
+  U01–U03); estate memo correction: U02's starter is DEFECTIVE code, not a
+  throwing stub.
+- Transplant deferred until W1b lands (package.json/vitest-config contention).
+
+## 2026-10-07 — P4 results (citation resolver)
+
+- Done, 51/51 green; transplant = tools/seed/src/citations/** (+fixtures with
+  `* -text` .gitattributes and PROVENANCE.md); zero runtime deps. At
+  transplant: add `"type": "module"` to tools/seed/package.json and exclude
+  `src/citations/fixtures/**` from tsconfig/lint (fixtures are data).
+- Eight citation forms the estate memo missed are handled — notably GitHub
+  `#L421-L423` anchors (~2,414 files across mirrors), `file.ts:17,22-24`
+  mixed lists, en-dash ranges, `[[...publicId]].tsx` catch-alls (exempt from
+  any "skip ..." rule), link targets carrying `:line`.
+- W5a MUST consume: `summary.warnings` / `inheritAmbiguous` (continuation
+  refs that bind plausibly-but-wrongly resolve "ok" — human review queue);
+  `excludeDirs` with path form for snapshot trees (e.g.
+  `astraupskill/snapshots` dupes make bare suffixes ambiguous); expect real
+  failures in some mirrors (newcodex3-23 has 4/198: escapes-repo, ambiguous
+  bare names, files-the-guide-says-to-create) ⇒ whitelist/quarantine step is
+  required, not optional. Exact-case index keeps Windows/Linux results equal.
+
+## 2026-10-07 — P2 results (C# runner spike) — warm gate MET
+
+- Warm <10s / first ≤60s both met, but ONLY on the direct-compiler path:
+  `csc.dll -shared:bq-<hash>` named compile server + prebuilt Check.dll
+  (console) / warm bin + `dotnet vstest` TRX parsing (xunit). Median warm:
+  console 0.66–1.75s, xunit 2.9–4.6s. Spec-literal `dotnet test` is 4–15s+
+  under load — keep only as opt-in `xunitEngine:'msbuild'` fallback. W3a
+  adopts the direct path as default; gate NOT widened.
+- GRADER-INTEGRITY TRAP: untouched csbootcamp starters EXIT 0 —
+  `NotImplementedException` counts as todo and Report() returns 1 only when
+  failed>0. Pass must require failed==0 && todo==0; never trust exit codes.
+- csbootcamp format facts: split is THREE parts (head/tests/tail — types
+  live after `return Report();` from module 05 on), divider `// ─── tests ───`,
+  solutions repeat tests byte-for-byte; `#:project` lines become comments to
+  preserve learner line numbers; NO Directory.Build.props in the GitHub repo
+  at e05b3505 (estate memo wrong; may apply to jstrain copy only).
+- Windows quirk: Check's ✔☐✘ glyphs become `?` under redirected stdout (OEM
+  code page) — fixed via injected UTF-8 module initializer.
+- Transplant: server/src/runners/csharp/** + fixtures + p2-timings.md; needs
+  vitest `pool:'forks'`, `fileParallelism:false`, 600s timeout for this
+  suite; NuGet pins Microsoft.NET.Test.Sdk 17.14.1 / xunit 2.9.3 /
+  xunit.runner.visualstudio 3.1.5. In-process mutex only — a lock file is
+  needed if two server processes ever share an app-data dir. Full 31-file
+  csbootcamp sweep still owed in W3a. Copy LF working-tree files, not the
+  worktree-committed (autocrlf) versions.
+
+## 2026-10-07 — P5 results (client shell)
+
+- Done: vite build + 37 tests green; dark-only, keyboard-first (g-chords,
+  1–4 review grading only after reveal, editor Ctrl+Enter), zero-layout-shift
+  conventions, heatmap buckets aligned to the 20-XP partial-day rule, freeze
+  days hatched. Server computes every number; client displays only.
+- Transplant: all of client/ except node_modules/dist/package-lock (replaces
+  the stub client/package.json). React 18.3.1 pinned; client tsconfig
+  standalone (root include correctly excludes client/).
+- Binding plan: swap enum types to @bootquest/shared, point http.ts at W1b's
+  final route names, flip the one-line mock→real switch in client.ts, add the
+  /api proxy in vite.config.ts (comment marks the spot). W1b owns route
+  naming; reconcile at integration.
+- Honest caveat: narrow/phone-width layout UNVERIFIED (headless capture at
+  420px was ambiguous; `min-width:0` added blind). Check on a real narrow
+  viewport in W7 dogfood.
+
+## 2026-10-07 — W1a fresh-context audit (docs/recon/w1a-audit.md)
+
+3 blockers + 6 majors in the honesty core, all latent (no API yet), all
+scheduled for the W1c fix wave immediately after W1b lands. Dispositions
+(all accepted):
+- **REPLACE bypasses append-only triggers** (proven on a probe DB: xp_event
+  amount rewritten, evidence assistance laundered). Fix: BEFORE INSERT
+  WHEN-EXISTS abort triggers on all 5 tables + recursive_triggers=ON +
+  REPLACE test cases.
+- **Promotion legs taken on the caller's word** → evidence kinds that feed
+  promotion must require a linked attempt with a passing run; `verified` set
+  server-side only.
+- **≥2-day retest back-fillable** (timed on evidence.created_at) → time on
+  the attempt, require a DIFFERENT attempt on a variation of the artifact's
+  unit.
+- **Legs must be linked, not competency-matched** (auditor rejected the
+  drafting decision; spec says "*its* explain-back"): artifact unit → its
+  explain-back → variation retest of that unit; leg (a) restricted to
+  project-kind units; evidence competency checked against unit competencies.
+- **awardXp must verify** a passing attempt; difficulty read from the unit
+  row; unit always required.
+- **Slate self-attest removed**: drill/campaign slots derive from recorded
+  attempts; only the spec'd 5-XP reading self-attest stays, unit-linked.
+- **Demotion only on lapses of Review-state cards** (spec interpretation:
+  "failed review" means forgetting learned material; Again on a new card
+  would pin ratings at 1).
+- **competency_rating needs integrity protection** tying changes to
+  promotion/demotion evidence; test setups must stop using direct UPDATEs.
+- **insertUnit must match content_ref by (repo, stable_key)**, not stable_key
+  alone (twin repos share keys).
+Verified clean by the audit: FK/WAL/busy_timeout on every connection,
+parameterized SQL, no-default DB path, clock discipline, migration
+idempotency, §9 schema fidelity, exact XP amounts/cap/curve, reveal
+persistence, streak arithmetic, FSRS wiring, never-averaged ratings.
+W1b was advised mid-flight: no client-supplied verified/assessor/score/
+difficulty/assistance anywhere; XP/evidence only via the submit pipeline.
+
 - W1a drafting decisions of note: XP pays once per unit per kind (0-XP
   'already-awarded' ledger rows — anti-farming, not in spec); 7-slate-day
   token counter cumulative, reset only by broken streak; promotion legs must
