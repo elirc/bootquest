@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import {
+  CampaignResponse,
   EmptyBody,
   EmptyQuery,
   GradeBody,
@@ -26,6 +27,7 @@ import { getRefContent } from './service.ts';
 import { defaultRunners, type RunnerRegistry } from './runners.ts';
 import {
   answerWrittenUnit,
+  getCampaign,
   getDashboard,
   getModelAnswer,
   getRevealedSolution,
@@ -110,6 +112,13 @@ export function createApp(opts: AppOptions): Express {
     validate(EmptyQuery, req.query, 'query');
     sendJson(res, 200, UnitDetailResponse.parse(getUnitDetailByKey(deps, key)));
   }));
+
+  router.get('/tracks/:id/campaign', asyncRoute((req, res) => {
+    const { id } = validate(TrackIdParams, req.params, 'params');
+    validate(EmptyQuery, req.query, 'query');
+    sendJson(res, 200, CampaignResponse.parse(getCampaign(deps, id)));
+  }));
+
 
   router.get('/units/:id', asyncRoute((req, res) => {
     const { id } = validate(UnitIdParams, req.params, 'params');

@@ -46,13 +46,13 @@ describe('migrations', () => {
     const tmp = makeTempDb();
     try {
       const first = tmp.db.all<{ version: number }>('SELECT version FROM schema_version ORDER BY version');
-      expect(first.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6]);
+      expect(first.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7]);
       tmp.db.close();
 
       const again = openDb({ path: tmp.path, env: {} });
       try {
         expect(migrate(again)).toEqual([]); // third pass, explicit
-        expect(schemaVersion(again)).toBe(6);
+        expect(schemaVersion(again)).toBe(7);
         expect(again.get<{ n: number }>('SELECT COUNT(*) AS n FROM schema_version')!.n).toBe(6);
         expect(again.all<{ checksum: string }>('SELECT checksum FROM schema_version').every((r) => /^[0-9a-f]{64}$/.test(r.checksum))).toBe(true);
         expect(again.get<{ n: number }>('SELECT COUNT(*) AS n FROM track')!.n).toBe(4);

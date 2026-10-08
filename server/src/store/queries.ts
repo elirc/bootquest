@@ -85,8 +85,16 @@ export function getTrack(db: Db, id: string): TrackRecord | undefined {
   return db.get<TrackRecord>('SELECT id, name, locked FROM track WHERE id = ?', id);
 }
 
+/**
+ * A track's live practice units. Campaign placeholder units (key 'campaign/...',
+ * W5b) are NOT practice units: they are listed and played through
+ * GET /tracks/:id/campaign, so they never inflate unit counts or become "next up".
+ */
 export function unitsForTrack(db: Db, trackId: string): UnitRecord[] {
-  return db.all<UnitRecord>(`SELECT ${UNIT_COLUMNS} FROM unit WHERE track_id = ? AND retired_at IS NULL ORDER BY id`, trackId);
+  return db.all<UnitRecord>(
+    `SELECT ${UNIT_COLUMNS} FROM unit WHERE track_id = ? AND retired_at IS NULL AND substr(key, 1, 9) <> 'campaign/' ORDER BY id`,
+    trackId,
+  );
 }
 
 /** Units with a verified pass (passing submit run, any mode) or, for reading units, a self-attest. */

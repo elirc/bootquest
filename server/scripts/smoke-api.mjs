@@ -47,6 +47,11 @@ const csManifest = JSON.parse(readFileSync(join(CS_DIR, 'manifest.json'), 'utf8'
 const csCourses = csManifest.courses.map((c) => JSON.parse(readFileSync(join(CS_DIR, c.file), 'utf8')));
 const csUnit = csCourses.flatMap((c) => c.units).find((u) => u.unit.difficulty === 2);
 const csContent = csCourses.find((c) => csUnit.unit.key in c.content).content[csUnit.unit.key];
+// W5b: the committed campaign map (seed:campaign output), loaded at startup (light stamp + loaded === built)
+const CAMPAIGN_DIR = join(REPO, 'content', 'campaign');
+const campaignManifest = JSON.parse(readFileSync(join(CAMPAIGN_DIR, 'manifest.json'), 'utf8'));
+const campaignUnits = campaignManifest.tracks.reduce((n, t) => n + t.counts.units, 0);
+const jsCampaign = campaignManifest.tracks.find((t) => t.track === 'js');
 
 /** Live processes whose command line mentions `needle` (Windows CIM query; [] elsewhere). */
 function processesMentioning(needle) {
@@ -144,6 +149,7 @@ async function main() {
         BOOTQUEST_PACKS: `${PACK_DIR},${CS_DIR}`,
         BOOTQUEST_PACK_COURSES: [PACK_COURSE, ...csManifest.courses.map((c) => c.id)].join(','),
         BOOTQUEST_CS_SCRATCH: csScratch,
+        BOOTQUEST_CAMPAIGN: CAMPAIGN_DIR,
         // explicit test-harness opt-out of the import-gate stamp (W2b/F1): the smoke
         // must not depend on a fresh seed:validate sweep. The real serve path never sets it.
         BOOTQUEST_PACKS_ALLOW_UNSTAMPED: '1',
@@ -174,11 +180,12 @@ async function main() {
     try {
       // 1. health
       const h = await api(base, 'GET', '/api/health');
-      // 3 fixture units (2 smoke + the W3c http lesson) + the real pack course (written units carry no check) + every csbootcamp drill
-      const wantUnits = 3 + packCounts.total + csManifest.totals.total;
+      // 3 fixture units (2 smoke + the W3c http lesson) + the real pack course (written units carry no check)
+      // + every csbootcamp drill + one placeholder unit per playable campaign quest (no checks until seed:quests)
+      const wantUnits = 3 + packCounts.total + csManifest.totals.total + campaignUnits;
       const wantChecks = 3 + packCounts.total - packCounts.written + csManifest.totals.total;
       step(
-        `health (3 fixture + ${packCounts.total} BootForge ${PACK_COURSE} + ${csManifest.totals.total} csbootcamp units: loaded === built)`,
+        `health (3 fixture + ${packCounts.total} BootForge ${PACK_COURSE} + ${csManifest.totals.total} csbootcamp + ${campaignUnits} campaign units: loaded === built)`,
         h.status === 200 && h.json?.ok === true && h.json.counts.units === wantUnits && h.json.counts.checks === wantChecks,
         JSON.stringify(h.json),
       );
@@ -266,6 +273,37 @@ async function main() {
         `xp=${d.json?.xp?.total}`,
       );
 
+      // 10a. W5b: the real campaign map, loaded at boot
+      const cj = await api(base, 'GET', '/api/tracks/js/campaign');
+      const cjQuests = (cj.json?.acts ?? []).reduce((n, a) => n + a.quests.length, 0);
+      const cjava = await api(base, 'GET', '/api/tracks/java/campaign');
+      step(
+        `campaign: js ${jsCampaign.counts.acts} acts / ${jsCampaign.counts.quests} quests in rank order, act 1 open, act 2 locked; java placeholder locked + inert`,
+        cj.status === 200 &&
+          cj.json.acts.length === jsCampaign.counts.acts &&
+          cjQuests === jsCampaign.counts.quests &&
+          cj.json.acts[0].unlocked === true &&
+          cj.json.acts[1].unlocked === false &&
+          cj.json.acts.every((a) => a.quests.every((q, i, qs) => i === 0 || qs[i - 1].rank < q.rank)) &&
+          cjava.status === 200 &&
+          cjava.json.acts.length === 1 &&
+          cjava.json.acts[0].unlocked === false &&
+          cjava.json.acts[0].quests.every((q) => q.state === 'locked' && q.unitId === undefined),
+        `js acts ${cj.json?.acts?.length} quests ${cjQuests}`,
+      );
+      const slateNow = d.json?.slate?.items?.map((i) => i.slot) ?? [];
+      const readingStep = cj.json?.acts?.[0]?.quests?.find((q) => q.kind === 'reading' && q.state === 'available');
+      const att = readingStep ? await api(base, 'POST', `/api/units/${readingStep.unitId}/self-attest`) : null;
+      const dCamp = await api(base, 'GET', '/api/dashboard');
+      step(
+        'campaign slate slot: present, ticked by an act-1 reading self-attest (5 XP)',
+        slateNow.includes('campaign') && att?.status === 200 && att.json.xp.amount === 5 && dCamp.json?.slate?.items?.find((i) => i.slot === 'campaign')?.done === true,
+        `slots ${slateNow.join(',')}; attest ${att?.status}`,
+      );
+      const lockedStep = cj.json?.acts?.[1]?.quests?.find((q) => q.kind === 'reading');
+      const la = lockedStep ? await api(base, 'POST', `/api/units/${lockedStep.unitId}/self-attest`) : null;
+      step('campaign: a locked act refuses its units (403 ACT_LOCKED)', la?.status === 403 && la.json?.error?.code === 'ACT_LOCKED', `status ${la?.status}`);
+
       // 10b. W2: real imported BootForge content, loaded by the server at startup
       const tu = await api(base, 'GET', '/api/tracks/js/units');
       const packUnits = (tu.json?.units ?? []).filter((x) => x.key.startsWith(`bootforge/${PACK_COURSE}/`));
@@ -351,8 +389,8 @@ async function main() {
 
       const d2 = await api(base, 'GET', '/api/dashboard');
       step(
-        `dashboard xp total ${3 + wantXp + 2 + 4} after the BootForge submissions`,
-        d2.status === 200 && d2.json?.xp?.total === 3 + wantXp + 2 + 4,
+        `dashboard xp total ${3 + 5 + wantXp + 2 + 4} after the BootForge submissions`,
+        d2.status === 200 && d2.json?.xp?.total === 3 + 5 + wantXp + 2 + 4,
         `xp=${d2.json?.xp?.total}`,
       );
 
@@ -427,7 +465,7 @@ async function main() {
         `xp=${JSON.stringify(csr.json?.xp)} ${csr.json?.result?.durationMs}ms warm`,
       );
       const d3 = await api(base, 'GET', '/api/dashboard');
-      step(`dashboard xp total ${3 + wantXp + 2 + 4 + csXp} after the C# submission`, d3.json?.xp?.total === 3 + wantXp + 2 + 4 + csXp, `xp=${d3.json?.xp?.total}`);
+      step(`dashboard xp total ${3 + 5 + wantXp + 2 + 4 + csXp} after the C# submission`, d3.json?.xp?.total === 3 + 5 + wantXp + 2 + 4 + csXp, `xp=${d3.json?.xp?.total}`);
 
       // 10d. W3c: the http-check lesson, graded by the REAL http runner against a fixture server
       const httpId = ids[httpLesson.key];

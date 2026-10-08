@@ -22,6 +22,8 @@ export const API_ERROR_CODES = [
   'NO_SOLUTION',
   'NOT_REVEALED',
   'TRACK_LOCKED',
+  /** the unit belongs to a campaign quest whose act is not unlocked yet (W5b) */
+  'ACT_LOCKED',
   /** quiz / predict-output: free runs would be an answer oracle — submit only */
   'RUN_NOT_AVAILABLE',
   /** review grade on a card that is not due yet */
@@ -512,3 +514,6 @@ export const DashboardResponse = z
   })
   .strict();
 export type DashboardResponse = z.infer<typeof DashboardResponse>;
+
+// GET /api/tracks/:id/campaign (W5b) — schemas live with the campaign pack format
+export { CampaignActDto, CampaignQuestDto, CampaignResponse, QuestState } from './campaign.ts';

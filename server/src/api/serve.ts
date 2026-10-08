@@ -7,6 +7,7 @@ import { PackManifest } from '@bootquest/shared';
 import type { UnitContentEntry } from '@bootquest/shared/api';
 import { openDb, resolveDbPath, type Db } from '../db/database.ts';
 import type { Clock } from '../engines/clock.ts';
+import { loadCampaignIntoDb, readCampaign, type CampaignLoadStats } from '../store/campaign.ts';
 import { ALLOW_UNSTAMPED_ENV, loadPackIntoDb, packContentEntries, PackLoadError, readPack, type LoadStats } from '../store/packs.ts';
 import { createApp } from './app.ts';
 import { combineContentStores, fileContentEntries } from './content-store.ts';
@@ -28,6 +29,11 @@ import { createSyncService, resolveSyncPaths, type SyncService } from '../sync/s
  *                           an id no pack provides REFUSES TO START (lists the valid ids)
  *   BOOTQUEST_PACKS_ALLOW_UNSTAMPED  tests/smoke ONLY ('1'): skip the import-gate stamp
  *                           check. Never set by this entrypoint.
+ *   BOOTQUEST_CAMPAIGN      (optional) the campaign dir (manifest.json + track files from
+ *                           `npm run seed:campaign`); when serve.ts is run directly and this is
+ *                           unset, <repo>/content/campaign is loaded if present. '' = none.
+ *                           A seeder-fingerprint / file-hash / loaded !== built mismatch
+ *                           REFUSES TO START (W5b).
  *   BOOTQUEST_CS_SCRATCH    (optional) app-data dir of the C# runner's warm scratch
  *                           projects; default <dir of BOOTQUEST_DB>/bootquest-scratch.
  *                           drill-cs submissions route there (W3a).
@@ -101,6 +107,8 @@ export interface RunningServer {
   close(): Promise<void>;
   /** one entry per loaded pack (loaded === built already asserted) */
   packs: LoadStats[];
+  /** campaign load stats (null when no campaign dir was configured) */
+  campaign: CampaignLoadStats | null;
   /** the C# runner's app-data dir (null when the caller injected its own registry) */
   csharpScratch: string | null;
 }
@@ -125,6 +133,11 @@ export function defaultPackDirs(root: string = fileURLToPath(new URL('../../../c
     .filter((d) => d.isDirectory() && existsSync(join(root, d.name, 'manifest.json')))
     .map((d) => join(root, d.name))
     .sort();
+}
+
+/** <repo>/content/campaign when it holds a manifest (default for the real entrypoint), else ''. */
+export function defaultCampaignDir(root: string = fileURLToPath(new URL('../../../content/campaign/', import.meta.url))): string {
+  return existsSync(join(root, 'manifest.json')) ? root : '';
 }
 
 export async function startServer(opts: StartOptions = {}): Promise<RunningServer> {
@@ -168,6 +181,8 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
       packStats.push(loadPackIntoDb(db, pack, clock)); // throws PackLoadError on loaded !== built
       sources.push(packContentEntries(pack));
     }
+    const campaignDir = (env.BOOTQUEST_CAMPAIGN ?? '').trim();
+    const campaign = campaignDir ? loadCampaignIntoDb(db, readCampaign(resolve(campaignDir)), clock) : null;
     const content = combineContentStores(sources);
     // drill-cs -> the warm C# runner (lazy: no dotnet process until the first C# grade)
     csharp = opts.runners ? null : createDrillCsRunner({ appDataDir: resolveCsScratchDir(env, dbPath) });
@@ -194,7 +209,7 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
       });
       return closing;
     };
-    return { server, db, port, host, close, packs: packStats, csharpScratch: csharp?.appDataDir ?? null };
+    return { server, db, port, host, close, packs: packStats, campaign, csharpScratch: csharp?.appDataDir ?? null };
   } catch (err) {
     db.close();
     throw err;
@@ -222,6 +237,7 @@ const invokedDirectly = process.argv[1] !== undefined && import.meta.url === pat
 if (invokedDirectly) {
   const env = { ...process.env };
   if (env.BOOTQUEST_PACKS === undefined) env.BOOTQUEST_PACKS = defaultPackDirs().join(',');
+  if (env.BOOTQUEST_CAMPAIGN === undefined) env.BOOTQUEST_CAMPAIGN = defaultCampaignDir();
   startServer({ env })
     .then((running) => {
       installShutdown(running);
@@ -230,6 +246,9 @@ if (invokedDirectly) {
           `[bootquest] pack ${p.source}: ${p.courses.length} course(s), loaded ${p.loaded} === built ${p.built} ` +
             `(inserted ${p.inserted}, updated ${p.updated}, unchanged ${p.unchanged}, quarantined ${p.withheld}, retired now ${p.retired})`,
         );
+      }
+      for (const t of running.campaign?.tracks ?? []) {
+        console.log(`[bootquest] campaign ${t.track}: ${t.acts} act(s), loaded ${t.loaded} === built ${t.built} quests (${t.units} playable units)`);
       }
       console.log(`[bootquest] API listening on http://${running.host}:${running.port} (db: ${running.db.path})`);
     })

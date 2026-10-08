@@ -1,6 +1,7 @@
 import type { CheckSpec, CompetencyId } from '@bootquest/shared';
 import {
   toPublicCheck,
+  type CampaignResponse,
   type CanonicalRunResult,
   type DashboardResponse,
   type ModelAnswerResponse,
@@ -14,6 +15,7 @@ import {
 } from '@bootquest/shared/api';
 import type { Db } from '../db/database.ts';
 import { HonestyRuleError, isRevealed, recordAttempt, recordSubmission, revealSolution, selfAttestReading } from '../engines/attempts.ts';
+import { campaignState, currentLevel, questUnitUnlocked } from '../engines/campaign.ts';
 import { addDays, type Clock } from '../engines/clock.ts';
 import { recordEvidence } from '../engines/evidence.ts';
 import { dueCount, review } from '../engines/fsrs.ts';
@@ -231,6 +233,45 @@ export async function getRefContent(deps: ServiceDeps, refId: number): Promise<R
   return { ref: toRefLink(row, 'self'), markdown: lines.slice(from - 1, to).join('\n'), servedFrom: blob.servedFrom };
 }
 
+// ---------------------------------------------------------------- campaign (W5b)
+
+/**
+ * GET /tracks/:id/campaign — acts in order with the derived unlock state and
+ * core progress, quests in INDEX-rank order with their derived state. Read-only:
+ * nothing is stored as "unlocked" (engines/campaign.ts owns the rule).
+ */
+export function getCampaign(deps: ServiceDeps, trackId: string): CampaignResponse {
+  const { db } = deps;
+  const track = getTrack(db, trackId);
+  if (!track) throw new HttpError(404, 'NOT_FOUND', `track ${trackId} not found`);
+  const level = currentLevel(db);
+  return {
+    track: { id: track.id, name: track.name, locked: track.locked },
+    level,
+    acts: campaignState(db, track.id, level).map((a) => ({
+      id: a.id,
+      title: a.title,
+      theme: a.theme,
+      ordinal: a.actNo,
+      unlocked: a.unlocked,
+      unlockRule: { previousCorePct: Math.round(a.unlockPct * 100), level: a.unlockLevel, staticLock: a.staticLock },
+      progress: { coreDone: a.coreDone, coreTotal: a.coreTotal },
+      quests: a.quests.map((q) => ({
+        id: q.id,
+        kind: q.kind,
+        title: q.title,
+        repo: q.repo,
+        rank: q.rank,
+        ...(q.unitId === null ? {} : { unitId: q.unitId }),
+        state: q.state,
+        core: q.core,
+        contentPending: q.contentPending,
+        twinRepo: q.twinRepo,
+      })),
+    })),
+  };
+}
+
 // ---------------------------------------------------------------- grading
 
 async function grade(deps: ServiceDeps, spec: CheckSpec, submission: LearnerSubmission): Promise<CanonicalRunResult> {
@@ -252,6 +293,10 @@ async function grade(deps: ServiceDeps, spec: CheckSpec, submission: LearnerSubm
 
 function assertTrackOpen(db: Db, unit: UnitRecord): void {
   if (getTrack(db, unit.trackId)?.locked) throw new HttpError(403, 'TRACK_LOCKED', `track ${unit.trackId} is locked`);
+  // W5b: a campaign quest's unit is playable only once its act is unlocked (derived, engines/campaign.ts)
+  if (questUnitUnlocked(db, unit.id) === false) {
+    throw new HttpError(403, 'ACT_LOCKED', `unit ${unit.id} belongs to a campaign act that is not unlocked yet`);
+  }
 }
 
 /** Map an engine honesty refusal to its HTTP shape; anything else propagates. */

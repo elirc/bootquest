@@ -1,5 +1,6 @@
 import type { Db } from '../db/database.ts';
 import { READING_ATTEST_SQL, VERIFIED_PASS_SQL } from './attempts.ts';
+import { campaignStepAvailable } from './campaign.ts';
 import { addDays, dayKey, nowMs, type Clock } from './clock.ts';
 import { xpOnDay } from './xp.ts';
 
@@ -7,8 +8,10 @@ import { xpOnDay } from './xp.ts';
  * Daily slate + streak engine (spec §6.1).
  *
  * Slate composition: one 5-exercise drill set per active track (track.locked=0
- * AND track.slate_drills=1), one campaign step ONLY when campaign quests are
- * seeded on an unlocked track (until W5 seeds them, a slate day is drill sets +
+ * AND track.slate_drills=1), one campaign step ONLY when a campaign step can
+ * actually be taken that day (W5b: an actionable, not-yet-done quest in an
+ * UNLOCKED act — engines/campaign.ts — or the step was already taken that day;
+ * a slot nothing can complete would make the streak impossible again, W1b
  * review), and "clear the review queue".
  *
  * Slot completion is DERIVED from the ledger, never marked by a caller (W1a
@@ -17,8 +20,10 @@ import { xpOnDay } from './xp.ts';
  *                   verified pass ever (outcome pass + passing submit run) is on
  *                   this day and was not guided: re-passing an old unit,
  *                   quizzes, and post-reveal passes never tick it;
- *   campaign      — a verified pass (or reading self-attest) this day on a unit
- *                   a campaign quest points at;
+ *   campaign      — the FIRST-EVER verified pass (or the reading self-attest) of
+ *                   a unit a campaign quest points at falls on this day and was
+ *                   not guided: re-passing an old quest unit never ticks it
+ *                   (same anti-gaming rule as the drill slot);
  *   review        — the due queue was empty right after some review this day,
  *                   or is empty at evaluation time (now for today, end of day
  *                   for a closed day). Past queue states are rebuilt from the
@@ -80,14 +85,11 @@ export function dayBounds(day: string): [number, number] {
   return [new Date(y, m - 1, d).getTime(), new Date(y, m - 1, d + 1).getTime()];
 }
 
-/** The current slot list (done flags unset). */
-function slateStructure(db: Db): SlateItem[] {
+/** The slot list for `day` (done flags unset), from the current tracks and campaign state. */
+function slateStructure(db: Db, day: string): SlateItem[] {
   const tracks = db.all<{ id: string }>('SELECT id FROM track WHERE locked = 0 AND slate_drills = 1 ORDER BY sort_order');
-  const hasCampaign =
-    db.get(
-      `SELECT 1 AS x FROM quest q JOIN campaign_act ca ON ca.id = q.act_id JOIN track t ON t.id = ca.track_id
-        WHERE q.unit_id IS NOT NULL AND ca.locked = 0 AND t.locked = 0 LIMIT 1`,
-    ) !== undefined;
+  const [start, end] = dayBounds(day);
+  const hasCampaign = campaignStepAvailable(db) || campaignStepDone(db, start, end);
   const items: SlateItem[] = tracks.map(
     (tr): SlateItem => ({ slot: `drill:${tr.id}`, kind: 'drill-set', track: tr.id, size: DRILL_SET_SIZE, done: false }),
   );
@@ -113,13 +115,20 @@ export function newDrillPasses(db: Db, trackId: string, from: number, to: number
   );
 }
 
-function campaignStepDone(db: Db, from: number, to: number): boolean {
+/** A quest unit's first-ever completion (verified pass or reading self-attest) is in [from, to) and was not guided. */
+export function campaignStepDone(db: Db, from: number, to: number): boolean {
   return (
     db.get(
-      `SELECT 1 AS x FROM attempt a JOIN unit u ON u.id = a.unit_id
-        WHERE a.created_at >= ? AND a.created_at < ?
-          AND EXISTS (SELECT 1 FROM quest q WHERE q.unit_id = a.unit_id)
-          AND (${VERIFIED_PASS_SQL} OR ${READING_ATTEST_SQL}) LIMIT 1`,
+      `SELECT 1 AS x FROM (
+         SELECT a.unit_id AS unit_id, MIN(a.created_at) AS first_at FROM attempt a JOIN unit u ON u.id = a.unit_id
+          WHERE a.unit_id IN (SELECT unit_id FROM quest WHERE unit_id IS NOT NULL)
+            AND (${VERIFIED_PASS_SQL} OR ${READING_ATTEST_SQL})
+          GROUP BY a.unit_id) f
+        WHERE f.first_at >= ? AND f.first_at < ?
+          AND EXISTS (SELECT 1 FROM attempt a JOIN unit u ON u.id = a.unit_id
+                       WHERE a.unit_id = f.unit_id AND a.created_at = f.first_at AND a.mode <> 'guided'
+                         AND (${VERIFIED_PASS_SQL} OR ${READING_ATTEST_SQL}))
+        LIMIT 1`,
       from,
       to,
     ) !== undefined
@@ -176,7 +185,7 @@ export function deriveSlate(db: Db, day: string, items: readonly SlateItem[], at
 export function composeSlate(db: Db, now: Clock): SlateRow {
   const t = nowMs(now);
   const day = dayKey(t);
-  const structure = slateStructure(db);
+  const structure = slateStructure(db, day);
   const existing = readSlate(db, day);
   if (!existing) {
     db.run(
@@ -228,7 +237,7 @@ export function closeElapsedDays(db: Db, now: Clock): ClosedDay[] {
       const xp = xpOnDay(db, day);
       const [, dayEnd] = dayBounds(day);
       // derived at end of day from the ledger; the stored row only supplies the slot list
-      const items = deriveSlate(db, day, slate ? slate.items : slateStructure(db), dayEnd - 1);
+      const items = deriveSlate(db, day, slate ? slate.items : slateStructure(db, day), dayEnd - 1);
       let status: ClosedDay['status'];
       if (isSlateComplete(items)) {
         status = 'slate';
@@ -305,7 +314,7 @@ export function streakStatus(db: Db, now: Clock): StreakStatus {
   const t = nowMs(now);
   const today = dayKey(t);
   const slate = readSlate(db, today);
-  const todayComplete = isSlateComplete(deriveSlate(db, today, slate ? slate.items : slateStructure(db), t));
+  const todayComplete = isSlateComplete(deriveSlate(db, today, slate ? slate.items : slateStructure(db, today), t));
   return {
     current: s.current,
     display: s.current + (todayComplete ? 1 : 0),
