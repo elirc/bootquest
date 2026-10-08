@@ -15,7 +15,7 @@ import type { UnitContentEntry } from '@bootquest/shared/api';
 import type { Db } from '../db/database.ts';
 import { nowMs, type Clock } from '../engines/clock.ts';
 import { insertCheck } from './content.ts';
-import { graderFingerprint, toolchainVersions } from './grader-fingerprint.ts';
+import { graderFingerprint, graderKindForTrack, toolchainVersions, type GraderKind } from './grader-fingerprint.ts';
 
 /**
  * Content loader for imported packs (W2). Packs (content/packs/<source>/) are
@@ -104,12 +104,27 @@ function verifyStamp(dir: string, manifest: PackManifest, manifestBytes: Buffer,
   if (stamp.manifestSha256 !== manifestSha) {
     throw new PackLoadError(`${who}: validation stamp is for manifest ${stamp.manifestSha256.slice(0, 12)}, not the current ${manifestSha.slice(0, 12)} (re-imported since validation?); ${RUN_GATE}`);
   }
-  const fp = graderFingerprint();
+  // W3a: the stamp is bound to the grader KIND that executes this pack (js | csharp)
+  let kind: GraderKind;
+  let fp: string;
+  try {
+    kind = graderKindForTrack(manifest.track);
+    fp = graderFingerprint(kind);
+  } catch (err) {
+    throw new PackLoadError(`${who}: cannot compute the grader fingerprint (${err instanceof Error ? err.message.slice(0, 300) : String(err)})`);
+  }
+  if ((stamp.graderKind ?? 'js') !== kind) {
+    throw new PackLoadError(`${who}: validation stamp is for the ${stamp.graderKind ?? 'js'} grader, but track ${manifest.track} is graded by ${kind}; ${RUN_GATE}`);
+  }
   if (stamp.graderFingerprint !== fp) {
-    const t = toolchainVersions();
+    const fmtT = (t: Record<string, string | undefined>) =>
+      Object.entries(t)
+        .filter(([, v]) => v !== undefined)
+        .map(([k, v]) => `${k} ${String(v)}`)
+        .join(' ');
     throw new PackLoadError(
-      `${who}: validation stamp grader fingerprint ${stamp.graderFingerprint.slice(0, 12)} != current ${fp.slice(0, 12)} ` +
-        `(grader/validator bytes or toolchain changed; stamped node ${stamp.toolchain.node} esbuild ${stamp.toolchain.esbuild}, now node ${t.node} esbuild ${t.esbuild}); ${RUN_GATE}`,
+      `${who}: validation stamp grader fingerprint ${stamp.graderFingerprint.slice(0, 12)} != current ${kind} ${fp.slice(0, 12)} ` +
+        `(grader/validator bytes or toolchain changed; stamped ${fmtT(stamp.toolchain)}, now ${fmtT({ ...toolchainVersions(kind) })}); ${RUN_GATE}`,
     );
   }
   if (JSON.stringify(stamp.counts) !== JSON.stringify(manifest.totals)) {

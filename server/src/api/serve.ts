@@ -10,7 +10,8 @@ import type { Clock } from '../engines/clock.ts';
 import { ALLOW_UNSTAMPED_ENV, loadPackIntoDb, packContentEntries, PackLoadError, readPack, type LoadStats } from '../store/packs.ts';
 import { createApp } from './app.ts';
 import { combineContentStores, fileContentEntries } from './content-store.ts';
-import type { RunnerRegistry } from './runners.ts';
+import { createDrillCsRunner, resolveCsScratchDir, type DrillCsRunner } from './runner-csharp.ts';
+import { defaultRunners, type RunnerRegistry } from './runners.ts';
 
 /**
  * Real entrypoint: `node --import tsx server/src/api/serve.ts`
@@ -25,6 +26,9 @@ import type { RunnerRegistry } from './runners.ts';
  *                           an id no pack provides REFUSES TO START (lists the valid ids)
  *   BOOTQUEST_PACKS_ALLOW_UNSTAMPED  tests/smoke ONLY ('1'): skip the import-gate stamp
  *                           check. Never set by this entrypoint.
+ *   BOOTQUEST_CS_SCRATCH    (optional) app-data dir of the C# runner's warm scratch
+ *                           projects; default <dir of BOOTQUEST_DB>/bootquest-scratch.
+ *                           drill-cs submissions route there (W3a).
  * A pack without a matching validation stamp (seed:validate full run), or whose
  * loaded count differs from its built count, REFUSES TO START.
  */
@@ -89,6 +93,8 @@ export interface RunningServer {
   close(): Promise<void>;
   /** one entry per loaded pack (loaded === built already asserted) */
   packs: LoadStats[];
+  /** the C# runner's app-data dir (null when the caller injected its own registry) */
+  csharpScratch: string | null;
 }
 
 function splitList(raw: string | undefined): string[] {
@@ -121,6 +127,7 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
   await assertPortFree(port, host); // before touching the DB
 
   const db = openDb({ path: dbPath, env: {} });
+  let csharp: DrillCsRunner | null = null;
   try {
     db.exec('PRAGMA journal_mode = WAL;');
     db.exec('PRAGMA busy_timeout = 5000;');
@@ -154,7 +161,10 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
       sources.push(packContentEntries(pack));
     }
     const content = combineContentStores(sources);
-    const app = createApp({ db, clock, content, ...(opts.runners ? { runners: opts.runners } : {}) });
+    // drill-cs -> the warm C# runner (lazy: no dotnet process until the first C# grade)
+    csharp = opts.runners ? null : createDrillCsRunner({ appDataDir: resolveCsScratchDir(env, dbPath) });
+    const runners: RunnerRegistry = opts.runners ?? defaultRunners(csharp ? { drillCs: csharp.runner } : {});
+    const app = createApp({ db, clock, content, runners });
 
     const server = await new Promise<Server>((ok, fail) => {
       const s = app.listen(port, host);
@@ -167,13 +177,14 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
       closing ??= new Promise<void>((done) => {
         server.close(() => {
           db.close();
-          done();
+          // stop the compiler server (named pipe) + any live dotnet child we started
+          void (csharp ? csharp.shutdown() : Promise.resolve()).finally(done);
         });
         server.closeAllConnections();
       });
       return closing;
     };
-    return { server, db, port, host, close, packs: packStats };
+    return { server, db, port, host, close, packs: packStats, csharpScratch: csharp?.appDataDir ?? null };
   } catch (err) {
     db.close();
     throw err;

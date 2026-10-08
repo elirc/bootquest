@@ -128,7 +128,7 @@ export type GradeBody = z.infer<typeof GradeBody>;
  *   drill-js       tests[].code, tests[].input   (test bodies encode expected values)
  *   quiz           answerKey
  *   predict-output expected
- *   drill-cs       testFile
+ *   drill-cs       files (tests block + types tail)
  *   http           requests[].expect, body, headers
  *   node-test-file checkPath, checkSha256
  *   self-run       fixtures
@@ -249,7 +249,7 @@ const PublicRepoPredicate = z.discriminatedUnion('kind', [
 /** Public check: strict per-type shapes — parsing fails if a private key slips in. */
 export const PublicCheck = z.discriminatedUnion('type', [
   z.object({ type: z.literal('drill-js'), language: z.enum(['js', 'ts', 'sql']), tests: z.array(z.object({ name: z.string() }).strict()), timeoutMs: z.number() }).strict(),
-  z.object({ type: z.literal('drill-cs'), shape: z.enum(['console', 'xunit']), timeoutMs: z.number() }).strict(),
+  z.object({ type: z.literal('drill-cs'), shape: z.enum(['console-check', 'xunit']), timeoutMs: z.number() }).strict(),
   z.object({ type: z.literal('quiz'), itemKey: z.string(), grading: z.enum(['exact', 'choice', 'self']), choices: z.array(z.string()).optional() }).strict(),
   z.object({ type: z.literal('predict-output'), language: z.enum(['js', 'ts', 'cs']), normalize: z.boolean() }).strict(),
   z.object({ type: z.literal('guided-step'), step: z.number(), runner: z.string(), timeoutMs: z.number() }).strict(),

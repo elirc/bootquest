@@ -16,7 +16,11 @@ const S = 'SECRET_MARKER';
 /** One FULL (private) spec per check type, every private field carrying the marker. */
 const FULL: Record<(typeof CHECK_TYPES)[number], unknown> = {
   'drill-js': { type: 'drill-js', language: 'js', tests: [{ name: 't1', code: `assert.equal(mod.f(), '${S}')`, input: S }] },
-  'drill-cs': { type: 'drill-cs', shape: 'xunit', testFile: `${S}/Tests.cs` },
+  'drill-cs': { type: 'drill-cs', shape: 'console-check', files: { tests: `// ─── tests ───
+Test("${S}", () => Eq(1, 1));
+return Report();
+`, tail: `record ${S}();
+` } },
   quiz: { type: 'quiz', itemKey: 'q1', grading: 'exact', answerKey: S },
   'predict-output': { type: 'predict-output', language: 'js', expected: S },
   'guided-step': { type: 'guided-step', step: 1, testFile: `${S}/step1.test.mjs`, runner: 'node-test' },

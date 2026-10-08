@@ -61,8 +61,13 @@ export const drillJsRunner: Runner = async (spec, submission) => {
   };
 };
 
-export function defaultRunners(): RunnerRegistry {
-  return { 'drill-js': drillJsRunner };
+/**
+ * The registry: drill-js always; drill-cs when the caller supplies the C#
+ * runner (it owns a scratch dir + a compiler server, so its lifecycle belongs
+ * to whoever starts the server — see serve.ts / runner-csharp.ts).
+ */
+export function defaultRunners(opts: { drillCs?: Runner } = {}): RunnerRegistry {
+  return { 'drill-js': drillJsRunner, ...(opts.drillCs ? { 'drill-cs': opts.drillCs } : {}) };
 }
 
 /**

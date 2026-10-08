@@ -14,7 +14,7 @@ import { startServer } from '../src/api/serve.ts';
 import { Db } from '../src/db/database.ts';
 import { migrate } from '../src/db/migrate.ts';
 import { fixedClock } from '../src/engines/clock.ts';
-import { graderFingerprint, toolchainVersions } from '../src/store/grader-fingerprint.ts';
+import { FINGERPRINT_FILES, graderFingerprint, graderKindForTrack, toolchainVersions } from '../src/store/grader-fingerprint.ts';
 import { ALLOW_UNSTAMPED_ENV, loadPackIntoDb, packContentEntries, PackLoadError, readPack, type ReadPackOptions } from '../src/store/packs.ts';
 import { localNoon, makeTempDb, makeUnit, submit, type TempDb } from './helpers.ts';
 
@@ -367,6 +367,23 @@ describe('import-gate stamp (validation.json): the loader refuses a pack seed:va
     const sPath = join(dir, 'validation.json');
     writeFileSync(sPath, readFileSync(sPath, 'utf8').replace(graderFingerprint(), 'a'.repeat(64)));
     expect(() => readPack(dir)).toThrow(/grader fingerprint.*npm run seed:validate/);
+  });
+
+  it('W3a per-kind binding: a js pack stamped for the csharp grader is refused; kinds never share files', () => {
+    stampPack(dir);
+    const sPath = join(dir, 'validation.json');
+    const stamp = JSON.parse(readFileSync(sPath, 'utf8'));
+    writeFileSync(sPath, JSON.stringify({ ...stamp, graderKind: 'csharp' }));
+    expect(() => readPack(dir)).toThrow(/stamp is for the csharp grader, but track js is graded by js/);
+    writeFileSync(sPath, JSON.stringify({ ...stamp, graderKind: 'js' }));
+    expect(readPack(dir).stamp?.graderKind).toBe('js');
+    // the C# fingerprint covers the C# runner (not the JS grader) and vice versa; only the validator is shared
+    const js = new Set(FINGERPRINT_FILES.js);
+    const shared = FINGERPRINT_FILES.csharp.filter((f) => js.has(f));
+    expect(shared.map((f) => f.replace(/\\/g, '/').split('/').pop())).toEqual(['validate.ts']);
+    expect(FINGERPRINT_FILES.csharp.some((f) => /grade-core/.test(f))).toBe(false);
+    expect(graderKindForTrack('csharp')).toBe('csharp');
+    expect(() => graderKindForTrack('java')).toThrow(/no grader kind/);
   });
 
   it('a quarantine.json edited after validation (keys differ from the stamp) is refused', () => {

@@ -213,6 +213,27 @@ Opus plan review (`docs/recon/plan-review.md`) returned 2 blockers + 17 majors;
   fs.deny for content/packs (solutions were servable via /@fs/).
 - Grader speed reality: 0.1–0.6s per run (not the feared 4s cold) — the
   full sweep is ~3 min, cheap enough to re-run fresh at every milestone.
+- W2b landed (451b3b0), gates re-run by orchestrator incl. a fully fresh
+  sweep (308s, 2,563 pass / 2 quarantined vacuous-check / 6 carve-out,
+  stamp verified). RATIFIED: strict per-source grader fingerprint stays —
+  editing grader/validator sources or upgrading node/esbuild forces a full
+  re-sweep before `npm run serve` accepts the pack; stamp/quarantine files
+  are committed (fresh clones refuse unstamped packs otherwise).
+- M3 waves launched: W3a (csbootcamp import + drill-cs wiring + stamped
+  C# sweep) in main workspace; W3b-cli (bootquest CLI + bin shim + real
+  server e2e) in a worktree from the 451b3b0 archive. W3c (HTTP/repo
+  checks, jstrain import, Stryker spike) follows W3a.
+- W3b-cli done in worktree (78 tests + tsc green; transplant queued behind
+  W3a): commander-only CLI, exit codes 0 pass / 1 fail / 2 usage-or-error,
+  kind-groups test forces a decision for every new check type, never
+  prints solutions (source-scan test). SHIM LESSON: `node --import tsx`
+  resolves tsx from the CALLER's cwd — the committed bin/bootquest.cmd
+  routes through cli/bootquest.mjs which loads tsx relative to the repo.
+  Transplant hand-edits: root script "bootquest", .gitignore needs `!/bin/`
+  (dotnet bin/ rule otherwise swallows the shim). CLI-reported API gaps →
+  W3c: GET /units/by-key/:key; submission request shapes for guided-step/
+  http/repo (CLI refuses them rather than guessing). Minor → W4/W7:
+  health lacks pack/stamp info; no test-count for non-drill checks.
 
 ## 2026-10-07 — W1c landed (c762032): honesty core unforgeable
 

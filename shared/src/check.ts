@@ -31,11 +31,29 @@ export const DrillJsCheck = z.object({
   timeoutMs: timeoutMs.default(8000),
 });
 
+/**
+ * C# drill graded by the warm C# runner (server/src/runners/csharp, W3a).
+ *   console-check  csbootcamp file-based app: the graded program is
+ *                  learner.head + files.tests + learner.tail (three-part split);
+ *                  files.tests is the exercise's `// ─── tests ───` block through
+ *                  `return Report();`, files.tail its types section (used only
+ *                  when the learner sends code without the tests marker).
+ *                  Pass = Check's `#done` with failed == 0 AND todo == 0 (never the
+ *                  exit code alone: untouched csbootcamp starters exit 0).
+ *   xunit          files.tests is an xunit test class compiled next to the
+ *                  learner's Solution.cs.
+ * files.* are PRIVATE (not in the public whitelist).
+ */
 export const DrillCsCheck = z.object({
   type: z.literal('drill-cs'),
-  shape: z.enum(['console', 'xunit']),
-  testFile: relPath,
-  timeoutMs: timeoutMs.default(60000),
+  shape: z.enum(['console-check', 'xunit']),
+  files: z
+    .object({
+      tests: z.string().min(1),
+      tail: z.string().default(''),
+    })
+    .strict(),
+  timeoutMs: timeoutMs.default(10000),
 });
 
 export const QuizCheck = z.object({

@@ -1,5 +1,9 @@
-// npm run seed:validate [-- --course <id>] [--pack <dir>] [--journal <file>]
+// npm run seed:validate [-- --source <bootforge|csbootcamp>] [--course <id>]
+//                           [--pack <dir>] [--journal <file>]
 //                           [--concurrency <n>] [--retry-failed] [--fresh]
+// --source picks content/packs/<source> (default bootforge); --pack overrides it.
+// Each source has its own journal (.seed-journal/<source>.jsonl), stamp and
+// grader fingerprint (js | csharp, from the manifest track).
 // Per-course foreground runs are the intended use on this laptop (10-minute
 // shell cap, memory reaper): the journal makes every run resumable, and a final
 // run without --course re-checks everything from the journal (fast) and asserts
@@ -8,7 +12,7 @@
 // (and re-executes a random 2% / min-20 sample of journaled passes first).
 import { basename, join, resolve } from 'node:path';
 import { DEFAULT_OUT_DIR } from '../bootforge/import.ts';
-import { DEFAULT_JOURNAL_DIR, formatCounts, QUARANTINE_CEILING, runValidate } from './validate.ts';
+import { DEFAULT_JOURNAL_DIR, formatCounts, QUARANTINE_CEILING, runValidate, shutdownValidatorRunners, validatorCsharpScratch } from './validate.ts';
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -17,7 +21,9 @@ function arg(name: string): string | undefined {
 const flag = (name: string): boolean => process.argv.includes(`--${name}`);
 
 async function main(): Promise<number> {
-  const packDir = resolve(arg('pack') ?? DEFAULT_OUT_DIR);
+  const source = arg('source');
+  if (source !== undefined && !/^[a-z0-9][a-z0-9-]*$/.test(source)) throw new Error('--source must be a pack name, e.g. bootforge or csbootcamp');
+  const packDir = resolve(arg('pack') ?? (source ? join(DEFAULT_OUT_DIR, '..', source) : DEFAULT_OUT_DIR));
   const journalPath = resolve(arg('journal') ?? join(DEFAULT_JOURNAL_DIR, `${basename(packDir)}.jsonl`));
   const concurrencyRaw = arg('concurrency');
   const concurrency = concurrencyRaw === undefined ? 4 : Number(concurrencyRaw);
@@ -28,15 +34,22 @@ async function main(): Promise<number> {
   console.log(`[seed:validate] journal ${journalPath}`);
   console.log(`[seed:validate] scope ${course ?? 'all courses'}, concurrency ${concurrency}`);
 
-  const report = await runValidate({
-    packDir,
-    journalPath,
-    concurrency,
-    ...(course !== undefined ? { course } : {}),
-    retryFailed: flag('retry-failed'),
-    fresh: flag('fresh'),
-    log: (l) => console.log(l),
-  });
+  let report;
+  try {
+    report = await runValidate({
+      packDir,
+      journalPath,
+      concurrency,
+      ...(course !== undefined ? { course } : {}),
+      retryFailed: flag('retry-failed'),
+      fresh: flag('fresh'),
+      log: (l) => console.log(l),
+    });
+  } finally {
+    // stops the C# compiler server + any dotnet child the validator started
+    await shutdownValidatorRunners();
+  }
+  console.log(`[seed:validate] grader ${report.graderKind ?? '?'}${report.graderKind === 'csharp' ? ` (scratch ${validatorCsharpScratch()})` : ''}`);
 
   console.log('');
   for (const c of report.courses) {

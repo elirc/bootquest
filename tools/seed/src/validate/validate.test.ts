@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -9,6 +9,7 @@ import { readPack } from '@bootquest/server/packs';
 import type { UnitContentEntry } from '@bootquest/shared/api';
 import { bfCourse, codeEx, outputEx, quizEx, sqlEx, writeBfSource, writtenEx } from '../bootforge/fixtures.ts';
 import { importBootforge } from '../bootforge/import.ts';
+import { importCsbootcamp } from '../csbootcamp/import.ts';
 import { appendJournal, readJournal } from './journal.ts';
 import { exerciseHash, graderFingerprint, realValidator, runValidate, type UnitValidator } from './validate.ts';
 
@@ -339,5 +340,49 @@ describe('PLANTED-BAD negative test: the seed:validate CLI exits nonzero with th
     expect(r.ok).toBe(false);
     expect(r.problems.join('\n')).toMatch(/sha256 .* != manifest/);
     expect(createHash('sha256').update(readFileSync(f)).digest('hex')).not.toBe(PackManifest.parse(JSON.parse(readFileSync(join(pack, 'manifest.json'), 'utf8'))).courses[0]!.sha256);
+  });
+});
+
+describe('W3a: a csharp (csbootcamp) pack is validated under the csharp grader kind', () => {
+  const FX = join(REPO, 'server', 'src', 'runners', 'csharp', 'fixtures', 'csbootcamp');
+  function csPack(): string {
+    const root = join(dir, 'cs-src');
+    const put = (rel: string, text: string) => {
+      const p = join(root, 'bootcamp', ...rel.split('/'));
+      mkdirSync(join(p, '..'), { recursive: true });
+      writeFileSync(p, text);
+    };
+    put('01-language-core/README.md', '# 01 · Language Core\n\nThe centre.\n');
+    put('01-language-core/exercises/01-count-vowels.cs', readFileSync(join(FX, '01-language-core', 'exercises', '01-count-vowels.cs'), 'utf8'));
+    put('01-language-core/solutions/01-count-vowels.cs', readFileSync(join(FX, '01-language-core', 'solutions', '01-count-vowels.cs'), 'utf8'));
+    const out = join(dir, 'cs-pack');
+    importCsbootcamp({ sourceDir: root, outDir: out, expected: null, gitHead: null });
+    return out;
+  }
+
+  it('journal hashes + stamp bind to the csharp fingerprint (C# runner + .NET SDK), not the JS one', async () => {
+    const pack = csPack();
+    const seen: string[] = [];
+    // stand-in verdicts: this test is about kind binding, the real C# sweep is the seed:validate gate
+    const validator: UnitValidator = async (pu) => {
+      seen.push(pu.unit.checks[0]!.spec.type);
+      return { verdict: 'pass', reasons: [], attempts: 2, durationMs: 1 };
+    };
+    const journalPath = join(dir, 'cs.jsonl');
+    const r = await runValidate({ packDir: pack, journalPath, validator });
+    expect(r.ok, r.problems.join('\n')).toBe(true);
+    expect(r.graderKind).toBe('csharp');
+    expect(seen).toEqual(['drill-cs']);
+    const stamp = PackValidationStamp.parse(JSON.parse(readFileSync(join(pack, 'validation.json'), 'utf8')));
+    expect(stamp.graderKind).toBe('csharp');
+    expect(stamp.graderFingerprint).toBe(graderFingerprint('csharp'));
+    expect(stamp.graderFingerprint).not.toBe(graderFingerprint('js'));
+    expect(stamp.toolchain.dotnetSdk).toMatch(/^10\./);
+    expect(stamp.toolchain.esbuild).toBeUndefined();
+    expect(readPack(pack).stamp).toEqual(stamp); // the real loader accepts it under the csharp kind
+    const [entry] = [...readJournal(journalPath).entries.values()];
+    const file = PackCourseFile.parse(JSON.parse(readFileSync(join(pack, '01-language-core.json'), 'utf8')));
+    const pu = file.units[0]!;
+    expect(entry!.hash).toBe(exerciseHash(pu, file.content[pu.unit.key]!, graderFingerprint('csharp')));
   });
 });

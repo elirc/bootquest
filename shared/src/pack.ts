@@ -62,14 +62,16 @@ export const PackUnit = z
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: `origin type ${u.origin.type} must map to unit kind ${kindFor[u.origin.type]}`, path: ['unit', 'kind'] });
     }
     const checkType = u.unit.checks[0]?.spec.type;
-    const wantCheck: Record<PackOriginType, string | undefined> = { code: 'drill-js', quiz: 'quiz', output: 'predict-output', written: undefined };
+    // code drills: drill-js (BootForge, JS track) or drill-cs (csbootcamp, C# track)
+    const wantCheck: Record<PackOriginType, readonly string[]> = { code: ['drill-js', 'drill-cs'], quiz: ['quiz'], output: ['predict-output'], written: [] };
     if (u.unit.checks.length > 1) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'pack units carry at most one check', path: ['unit', 'checks'] });
     }
-    if (checkType !== wantCheck[u.origin.type]) {
+    const allowed = wantCheck[u.origin.type];
+    if (checkType === undefined ? allowed.length > 0 : !allowed.includes(checkType)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: `origin type ${u.origin.type} needs check ${wantCheck[u.origin.type] ?? '(none)'}, got ${checkType ?? '(none)'}`,
+        message: `origin type ${u.origin.type} needs check ${allowed.join(' | ') || '(none)'}, got ${checkType ?? '(none)'}`,
         path: ['unit', 'checks'],
       });
     }
@@ -186,7 +188,20 @@ export const PackValidationStamp = z
     manifestSha256: z.string().regex(/^[0-9a-f]{64}$/),
     /** grader + validator bytes + toolchain versions (server/src/store/grader-fingerprint.ts) */
     graderFingerprint: z.string().regex(/^[0-9a-f]{64}$/),
-    toolchain: z.object({ node: z.string().min(1), esbuild: z.string().min(1) }).strict(),
+    /**
+     * versions bound into the fingerprint: node + esbuild for the JS grader,
+     * node + the .NET SDK (and reference-pack version) for the C# runner
+     */
+    toolchain: z
+      .object({
+        node: z.string().min(1),
+        esbuild: z.string().min(1).optional(),
+        dotnetSdk: z.string().min(1).optional(),
+        dotnetRef: z.string().min(1).optional(),
+      })
+      .strict(),
+    /** which grader the fingerprint covers (absent on stamps written before W3a = 'js') */
+    graderKind: z.enum(['js', 'csharp']).optional(),
     /** validated per-type counts (=== manifest totals on a stamped run) */
     counts: PackCounts,
     executable: z.number().int().nonnegative(),

@@ -14,7 +14,8 @@ import {
 } from '@bootquest/shared';
 import type { CanonicalRunResult, UnitContentEntry } from '@bootquest/shared/api';
 import { normalizeOutput, runSnippet } from '@bootquest/server/grade-core';
-import { graderFingerprint, toolchainVersions } from '@bootquest/server/grader-fingerprint';
+import { graderFingerprint, graderKindForTrack, toolchainVersions, type GraderKind } from '@bootquest/server/grader-fingerprint';
+import { createDrillCsRunner, type DrillCsRunner } from '@bootquest/server/runner-csharp';
 import { drillJsRunner, gradeDeterministic } from '@bootquest/server/runners';
 import { appendJournal, readJournal, type JournalEntry, type JournalVerdict } from './journal.ts';
 
@@ -32,6 +33,12 @@ import { appendJournal, readJournal, type JournalEntry, type JournalVerdict } fr
  *                  every other choice fails
  *   predict-output the expected output passes the grader, a perturbed one
  *                  fails, and re-running the snippet reproduces it exactly
+ *   drill-cs       (W3a, csbootcamp) reference solution through the REAL C# runner
+ *                  adapter (the same createDrillCsRunner POST /submit uses) must
+ *                  pass — failed == 0 AND todo == 0, never the exit code; the
+ *                  untouched starter must FAIL, and must fail as a structured
+ *                  test verdict (todo/failed), not a compile error, crash or
+ *                  timeout (an all-todo starter fails: todo counts as not-passed)
  *   written        schema-validated only: counted carve-out (no check exists)
  * Counts: importer (manifest) === pack (course files) === validated (journal),
  * and on a full run also === the expected census. Quarantine ceiling: 1% of
@@ -53,10 +60,35 @@ const REPO = resolve(import.meta.dirname, '..', '..', '..', '..');
 export const DEFAULT_JOURNAL_DIR = join(REPO, '.seed-journal');
 /**
  * Journal entries + the stamp are bound to the grader + validator bytes AND the
- * node / esbuild versions (F5): changing any of them re-validates everything.
+ * toolchain versions (F5): changing any of them re-validates everything.
+ * Per grader KIND (W3a): a js pack is bound to the JS grader + node/esbuild, a
+ * csharp pack to the C# runner sources + the .NET SDK — not to each other.
  * Computed by the server so the pack loader checks the very same value.
  */
 export { graderFingerprint };
+
+/**
+ * The C# runner used by the validator: one warm instance per process (scratch
+ * under BOOTQUEST_CS_SCRATCH, else <repo>/.cache/seed-csharp), created on the
+ * first drill-cs unit. Callers MUST await shutdownValidatorRunners() when done
+ * (it stops the compiler server and every dotnet child of the runner).
+ */
+let csRunner: DrillCsRunner | null = null;
+export function validatorCsharpScratch(): string {
+  const raw = process.env.BOOTQUEST_CS_SCRATCH;
+  return raw && raw.trim() ? resolve(raw.trim()) : join(REPO, '.cache', 'seed-csharp');
+}
+function csharpRunner(): DrillCsRunner {
+  csRunner ??= createDrillCsRunner({ appDataDir: validatorCsharpScratch() });
+  return csRunner;
+}
+export async function shutdownValidatorRunners(): Promise<void> {
+  const r = csRunner;
+  csRunner = null;
+  if (r) await r.shutdown();
+}
+
+const CS_NOT_A_VERDICT = new Set(['(compile)', '(timeout)', '(program)', '(format)']);
 
 export function exerciseHash(pu: PackUnit, content: UnitContentEntry, fingerprint: string): string {
   return createHash('sha256').update(JSON.stringify({ u: pu, c: content, g: fingerprint })).digest('hex');
@@ -123,6 +155,37 @@ export const realValidator: UnitValidator = async (pu, content) => {
     // F3: starter-must-fail on EVERY code drill (not only formatted ones)
     const starter = await grade(content.starter ?? '');
     if (starter.pass) reasons.push(`vacuous-check: the starter of a ${pu.origin.format ?? 'code'} exercise passes its own tests (must fail)`);
+    return done(reasons.length ? 'fail' : 'pass');
+  }
+
+  if (spec.type === 'drill-cs') {
+    if (!content.solution) {
+      reasons.push('no reference solution');
+      return done('fail');
+    }
+    if (!content.starter) {
+      reasons.push('no starter');
+      return done('fail');
+    }
+    const cs = csharpRunner();
+    const grade = async (code: string): Promise<CanonicalRunResult> => {
+      attempts++;
+      let r = await cs.runner(spec, { code });
+      if (!r.pass && r.failures.some((f) => f.name === '(timeout)')) {
+        attempts++; // timeout flake under load: retry once before calling it a failure
+        r = await cs.runner(spec, { code });
+      }
+      return r;
+    };
+    const ref = await grade(content.solution);
+    if (!ref.pass) reasons.push(`reference solution fails under the C# runner: ${describeFailures(ref)}${ref.failures.some((f) => f.name === '(compile)') ? ` :: ${ref.output.slice(0, 400)}` : ''}`);
+    const starter = await grade(content.starter);
+    if (starter.pass) reasons.push('vacuous-check: the untouched starter passes its own tests (must fail)');
+    else {
+      const broken = starter.failures.filter((f) => CS_NOT_A_VERDICT.has(f.name));
+      if (broken.length) reasons.push(`starter does not fail as a test verdict (${broken.map((f) => f.name).join(', ')}): ${starter.output.slice(0, 400)}`);
+      else if (starter.failures.length === 0) reasons.push('starter fails without any structured failure');
+    }
     return done(reasons.length ? 'fail' : 'pass');
   }
 
@@ -204,6 +267,8 @@ export interface ValidateReport {
   audit: { sampled: number; mismatches: string[] };
   /** path of the validation.json written by this run (full scope + ok only), else null */
   stampPath: string | null;
+  /** grader kind the pack's track maps to (null when the manifest was unreadable) */
+  graderKind: GraderKind | null;
 }
 
 export interface ValidateOptions {
@@ -240,7 +305,6 @@ async function pool<T>(items: readonly T[], size: number, fn: (item: T) => Promi
 export async function runValidate(opts: ValidateOptions): Promise<ValidateReport> {
   const log = opts.log ?? (() => {});
   const validator = opts.validator ?? realValidator;
-  const fingerprint = graderFingerprint();
   const problems: string[] = [];
   const report: ValidateReport = {
     ok: false,
@@ -255,6 +319,7 @@ export async function runValidate(opts: ValidateOptions): Promise<ValidateReport
     journalSkippedLines: 0,
     audit: { sampled: 0, mismatches: [] },
     stampPath: null,
+    graderKind: null,
   };
   const stampFile = join(opts.packDir, 'validation.json');
   // any run that does not end in a fresh stamp leaves NO stamp: the loader then refuses the pack
@@ -277,6 +342,17 @@ export async function runValidate(opts: ValidateOptions): Promise<ValidateReport
     return report;
   }
   report.expected = manifest.expected;
+  // W3a: the journal hashes + stamp are bound to the grader kind that executes this pack
+  let kind: GraderKind;
+  let fingerprint: string;
+  try {
+    kind = graderKindForTrack(manifest.track);
+    fingerprint = graderFingerprint(kind);
+  } catch (err) {
+    problems.push(`cannot compute the grader fingerprint: ${err instanceof Error ? err.message : String(err)}`);
+    return report;
+  }
+  report.graderKind = kind;
   const scope = opts.course ? manifest.courses.filter((c) => c.id === opts.course) : [...manifest.courses];
   if (opts.course && scope.length === 0) {
     problems.push(`unknown course ${opts.course} (manifest has ${manifest.courses.map((c) => c.id).join(', ')})`);
@@ -452,7 +528,8 @@ export async function runValidate(opts: ValidateOptions): Promise<ValidateReport
       source: manifest.source,
       manifestSha256: createHash('sha256').update(manifestBytes).digest('hex'),
       graderFingerprint: fingerprint,
-      toolchain: toolchainVersions(),
+      graderKind: kind,
+      toolchain: toolchainVersions(kind),
       counts: t.validated,
       executable: report.executable,
       passed: report.courses.reduce((n, c) => n + c.passed, 0),

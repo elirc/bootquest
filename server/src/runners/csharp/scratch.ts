@@ -147,6 +147,7 @@ export interface Toolchain {
   cscDll: string;
   vbcscompilerDll: string;
   refDir: string; // Microsoft.NETCore.App.Ref/<ver>/ref/net10.0
+  refVersion: string; // <ver> of the reference pack graded code compiles against
 }
 
 let cachedToolchain: Toolchain | undefined;
@@ -183,6 +184,7 @@ export function discoverToolchain(major = 10): Toolchain {
     cscDll: join(bincore, 'csc.dll'),
     vbcscompilerDll: join(bincore, 'VBCSCompiler.dll'),
     refDir: join(refBase, refVer, 'ref', `net${major}.0`),
+    refVersion: refVer,
   };
   cachedToolchain = tc;
   return tc;

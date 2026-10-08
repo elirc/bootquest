@@ -8,6 +8,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { composeGraded, CsbootcampFormatError, rewriteDirectives, splitAtTestsMarker } from './csbootcamp-split.js';
 import { createCsharpRunner, type CsExercise, type RunResult } from './index.js';
 import { livePids } from './scratch.js';
+import { createDrillCsRunner } from '../../api/runner-csharp.ts';
+import { CheckSpec } from '@bootquest/shared';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
 const FX = join(HERE, 'fixtures', 'csbootcamp', '01-language-core');
@@ -16,7 +18,9 @@ const SOLUTION_SRC = readFileSync(join(FX, 'solutions', '01-count-vowels.cs'), '
 
 const APP = mkdtempSync(join(tmpdir(), 'bootquest-p2-'));
 const APP_MSBUILD = mkdtempSync(join(tmpdir(), 'bootquest-p2-msb-'));
+const APP_ADAPTER = mkdtempSync(join(tmpdir(), 'bootquest-w3a-'));
 const runner = createCsharpRunner({ appDataDir: APP });
+const adapter = createDrillCsRunner({ appDataDir: APP_ADAPTER });
 const msbuildRunner = createCsharpRunner({ appDataDir: APP_MSBUILD, xunitEngine: 'msbuild' });
 
 const timings: Record<string, unknown> = { machine: { node: process.version } };
@@ -68,7 +72,14 @@ beforeAll(() => {
 afterAll(async () => {
   await runner.shutdown();
   await msbuildRunner.shutdown();
-  const leftovers = [...processesMentioning(APP), ...processesMentioning(runner.scratch.pipe), ...processesMentioning(msbuildRunner.scratch.pipe)];
+  await adapter.shutdown();
+  const leftovers = [
+    ...processesMentioning(APP),
+    ...processesMentioning(runner.scratch.pipe),
+    ...processesMentioning(msbuildRunner.scratch.pipe),
+    ...processesMentioning(APP_ADAPTER),
+    ...processesMentioning(adapter.pipe),
+  ];
   timings.leftoverProcessesAfterShutdown = leftovers;
   const out = join(tmpdir(), 'bootquest-p2-timings.json');
   writeFileSync(out, JSON.stringify(timings, null, 2));
@@ -76,6 +87,7 @@ afterAll(async () => {
   if (!process.env.BQ_KEEP_SCRATCH) {
     rmSync(APP, { recursive: true, force: true });
     rmSync(APP_MSBUILD, { recursive: true, force: true });
+    rmSync(APP_ADAPTER, { recursive: true, force: true });
   }
   expect(leftovers).toEqual([]);
   expect(livePids()).toEqual([]);
@@ -288,5 +300,85 @@ describe('xunit shape, spec-literal engine (`dotnet test --no-restore`) — meas
     const bad = await msbuildRunner.run(xunitEx, { code: 'public static class Calc { public static int Add(int a, int b) => a + b }\n' });
     expect(bad.compileError).toBe(true);
     timings.xunitMsbuild = { first: first.durationMs, warm: runs, median: median(runs) };
+  });
+});
+
+// ── W3a: the drill-cs adapter (what POST /submit and seed:validate call) ─────────
+
+describe('drill-cs adapter (createDrillCsRunner) over the real runner', () => {
+  const ex = splitAtTestsMarker(EXERCISE_SRC);
+  const spec = CheckSpec.parse({ type: 'drill-cs', shape: 'console-check', files: { tests: ex.tests, tail: ex.tail } });
+
+  it('GRADER-INTEGRITY TRAP documented: the untouched starter process EXITS 0 with todo=6', async () => {
+    const raw = await runner.scratch.withShape('console-check', () => runner.scratch.attemptConsole(composeGraded(EXERCISE_SRC, EXERCISE_SRC), 10_000));
+    expect(raw.compile.ok).toBe(true);
+    expect(raw.run?.code).toBe(0); // exit code says "fine" ...
+    expect(raw.run?.output).toContain('#done passed=0 failed=0 todo=6'); // ... the counts say "nothing done"
+  });
+
+  it('reference solution passes; untouched starter FAILS (todo counts as not-passed) with structured failures', async () => {
+    const ok = await adapter.runner(spec, { code: SOLUTION_SRC });
+    timings.adapterFirst = { pass: ok.pass, ms: ok.durationMs };
+    expect(ok.pass).toBe(true);
+    expect(ok.failures).toEqual([]);
+    const starter = await adapter.runner(spec, { code: EXERCISE_SRC });
+    expect(starter.pass).toBe(false);
+    expect(starter.failures).toHaveLength(6);
+    expect(starter.failures.every((f) => f.message === 'not implemented yet (todo)')).toBe(true);
+  });
+
+  it('a partially right answer fails with expected/actual; a syntax error comes back verbatim', async () => {
+    const wrong = await adapter.runner(spec, { code: EXERCISE_SRC.replace('=> throw new NotImplementedException("TODO");', '=> text.Count(c => "aeiou".Contains(c));') });
+    expect(wrong.pass).toBe(false);
+    expect(wrong.failures.find((f) => f.name === 'is case-insensitive')).toEqual({ name: 'is case-insensitive', message: 'values differ', expected: '2', actual: '0' });
+    const broken = await adapter.runner(spec, { code: SOLUTION_SRC.replace('text.Count(c => "aeiouAEIOU".Contains(c));', 'text.Count(c => "aeiouAEIOU".Contains(c))') });
+    expect(broken.pass).toBe(false);
+    expect(broken.failures[0]!.name).toBe('(compile)');
+    expect(broken.output).toMatch(/Program\.cs\(\d+,\d+\): error CS1002: ; expected/);
+  });
+
+  it('learner-edited tests are discarded: deleting every test cannot pass', async () => {
+    const gutted = SOLUTION_SRC.replace(/^Test\(.*$/gm, '');
+    const r = await adapter.runner(spec, { code: gutted.replace('static int CountVowels(string text) =>', 'static int CountVowels(string text) => 0; static int Unused(string text) =>') });
+    expect(r.pass).toBe(false);
+  });
+
+  it('module-05 layout: the edited type lives in the tail; code-only submissions get the exercise tail', async () => {
+    const TYPES_EX = [
+      '#:project ../../_lib/Check/Check.csproj',
+      'using static Bootcamp.Check;',
+      '',
+      '// ─── tests ───────────────────',
+      'Test("doubles", () => Eq(new Box(2).Twice, 4));',
+      'Test("doubles zero", () => Eq(new Box(0).Twice, 0));',
+      'return Report();',
+      '',
+      '// ─── the code you edit ───────',
+      'record Box(int W)',
+      '{',
+      '    public int Twice => throw new NotImplementedException("TODO");',
+      '}',
+      '',
+    ].join('\n');
+    const s = splitAtTestsMarker(TYPES_EX);
+    const tspec = CheckSpec.parse({ type: 'drill-cs', shape: 'console-check', files: { tests: s.tests, tail: s.tail } });
+    expect((await adapter.runner(tspec, { code: TYPES_EX })).pass).toBe(false);
+    const solved = TYPES_EX.replace('throw new NotImplementedException("TODO")', 'W * 2');
+    const r = await adapter.runner(tspec, { code: solved });
+    expect(r.failures).toEqual([]);
+    expect(r.pass).toBe(true);
+    // code-only (no tests marker) + the exercise's stub tail -> todo, not a pass
+    expect((await adapter.runner(tspec, { code: 'using static Bootcamp.Check;\n' })).pass).toBe(false);
+  });
+
+  it('warm adapter runs stay under the gate (median of 5)', async () => {
+    const runs: number[] = [];
+    for (let i = 0; i < 5; i++) {
+      const r = await adapter.runner(spec, { code: SOLUTION_SRC + `\n// w3a ${i}\n` });
+      expect(r.pass).toBe(true);
+      runs.push(r.durationMs);
+    }
+    timings.adapterWarm = { runs, median: median(runs) };
+    expect(median(runs)).toBeLessThan(10_000);
   });
 });

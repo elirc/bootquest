@@ -16,7 +16,7 @@ import {
 /** One valid minimal spec per check type. */
 const VALID: Record<(typeof CHECK_TYPES)[number], unknown> = {
   'drill-js': { type: 'drill-js', language: 'js', tests: [{ name: 't', code: 'assert.equal(mod.f(), 1)' }] },
-  'drill-cs': { type: 'drill-cs', shape: 'xunit', testFile: 'Tests.cs' },
+  'drill-cs': { type: 'drill-cs', shape: 'xunit', files: { tests: 'public class T { [Fact] public void A() => Assert.True(true); }' } },
   quiz: { type: 'quiz', itemKey: 'q1', grading: 'choice', answerKey: 1, choices: ['a', 'b'] },
   'predict-output': { type: 'predict-output', language: 'js', expected: 'object\nundefined' },
   'guided-step': { type: 'guided-step', step: 1, testFile: 'practice/checks/step1.test.mjs', runner: 'node-test' },
