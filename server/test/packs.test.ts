@@ -107,7 +107,7 @@ describe('migration 004 (written unit kind, FK-off table rebuild)', () => {
       const attempt = submit(db, clock, unitId);
       const before = db.get('SELECT * FROM unit WHERE id = ?', unitId);
 
-      expect(migrate(db)).toEqual([4, 5]);
+      expect(migrate(db)).toEqual([4, 5, 6]);
       // 005 only adds the nullable retired_at column (live by default)
       expect(db.get('SELECT * FROM unit WHERE id = ?', unitId)).toEqual({ ...(before as object), retired_at: null });
       expect(db.get<{ unit_id: number }>('SELECT unit_id FROM attempt WHERE id = ?', attempt.id)!.unit_id).toBe(unitId);

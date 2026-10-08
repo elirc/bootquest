@@ -144,6 +144,9 @@ beforeAll(async () => {
       BOOTQUEST_PACK_COURSES: COURSE,
       // test-harness opt-out of the import-gate stamp check (never set by the real entrypoint)
       BOOTQUEST_PACKS_ALLOW_UNSTAMPED: '1',
+      // W4: the CLI sync test runs the real sync job OFFLINE against an empty temp cache
+      BOOTQUEST_OFFLINE: '1',
+      BOOTQUEST_GITHUB_CACHE: join(tmp, 'gh-cache'),
     }),
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
@@ -277,13 +280,15 @@ describe('bootquest CLI against the real server', () => {
     expect(r.stderr).toMatch(/Server refused \(NOT_FOUND, HTTP 404\): no unit with key "bootforge\/no\/such\/unit"/);
   });
 
-  it('sync placeholder: health + counts, says W4', async () => {
-    const r = await cli(['sync']);
-    expect(r.code).toBe(0);
-    expect(r.stdout).toMatch(/is up \(BootQuest server v/);
-    expect(r.stdout).toMatch(/Content: \d+ units, \d+ checks loaded\./);
-    expect(r.stdout).toMatch(/js +JavaScript.*: 1\/\d+ done|js +.*: 1\/\d+ done/);
-    expect(r.stdout).toMatch(/not implemented yet \(milestone W4\)/);
+  it('sync (W4) runs the server sync job: offline with an empty cache every repo FAILS honestly, exit 1', async () => {
+    const r = await cli(['sync', '--repo', 'elirc/signalpost-swe-bootcamp']);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toMatch(/GitHub sync #\d+ on .* \(OFFLINE: cache only\):/);
+    expect(r.stdout).toMatch(/FAIL elirc\/signalpost-swe-bootcamp: NetworkUnavailableError: resolve HEAD/);
+    expect(r.stdout).toMatch(/Seed queue: 0 pending/);
+    const bad = await cli(['sync', '--repo', 'elirc/not-registered']);
+    expect(bad.code).toBe(2);
+    expect(bad.stderr).toMatch(/not registered in curriculum\.yaml: elirc\/not-registered/);
   });
 
   it('W3c http lesson: wrong-shape server -> run/submit exit 1 with named failures; good server -> submit exit 0 + XP', async () => {

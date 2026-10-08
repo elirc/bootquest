@@ -85,7 +85,8 @@ export const never = 1;`;
     } finally {
       fs.rmSync(scratch, { recursive: true, force: true });
     }
-  }, 30000);
+    // ~10s alone; 30s timed out in full parallel suites on this loaded laptop (also at fe0a8f3, before W4)
+  }, 90000);
 
   it('ignores ExperimentalWarning-style stderr when deciding pass/fail', async () => {
     const ex: JsExercise = {

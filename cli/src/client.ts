@@ -7,6 +7,7 @@ import type {
   UnitDetailResponse,
   UnitSummary,
 } from '@bootquest/shared/api';
+import type { SeedQueueResponse, SyncReport } from '@bootquest/shared/sync';
 
 /**
  * Thin HTTP client for the BootQuest API (contract: shared/src/api.ts; the
@@ -186,5 +187,12 @@ export class ApiClient {
   }
   submit(id: number, body: SubmissionBodyInput): Promise<SubmitResponse> {
     return this.request('POST', `/units/${id}/submit`, body);
+  }
+  /** W4: the server runs the GitHub sync job (it owns the DB: single writer) */
+  sync(repos?: string[]): Promise<SyncReport> {
+    return this.request('POST', '/sync', repos && repos.length ? { repos } : {});
+  }
+  seedQueue(limit = 20): Promise<SeedQueueResponse> {
+    return this.request('GET', `/sync/queue?limit=${limit}`);
   }
 }

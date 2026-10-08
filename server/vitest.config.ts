@@ -6,6 +6,9 @@ import { defineConfig } from 'vitest/config';
 // never be collected or transformed.
 export default defineConfig({
   test: {
+    // W4: every runner test spawns real node / tar child processes; vitest's 5s
+    // default flaked under load on this laptop (several agents at ~90% CPU)
+    testTimeout: 60_000,
     include: ['test/**/*.test.ts', 'src/**/*.test.ts', 'src/**/*.test.mjs'],
     exclude: [
       '**/node_modules/**',

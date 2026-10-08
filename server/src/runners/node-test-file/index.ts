@@ -100,6 +100,8 @@ export interface RunOptions {
   tsxLoaderUrl?: string;
   /** Called with the spawned top-level pid (tests use it to prove the tree was reaped). */
   onSpawn?: (pid: number) => void;
+  /** Parent dir of the per-run `bq-ntf-*` workspace (default os.tmpdir()). */
+  workRoot?: string;
 }
 
 export const DEFAULT_TIMEOUT_MS = 30_000;
@@ -364,7 +366,7 @@ export async function run(
   const checkBytes = await loadVerifiedCheck(exercise);
   if (spec.learner_path === spec.path) throw new CheckIntegrityError("learner_path must differ from the check path");
 
-  const root = await mkdtemp(path.join(tmpdir(), "bq-ntf-"));
+  const root = await mkdtemp(path.join(options.workRoot ?? tmpdir(), "bq-ntf-"));
   try {
     // 2. Mirror the source layout; check copied fresh every run and made read-only.
     const checkAbs = resolveInside(root, spec.path, "check");

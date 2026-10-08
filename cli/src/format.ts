@@ -1,5 +1,6 @@
 import type { CanonicalRunResult, DashboardResponse, SubmitResponse, UnitDetailResponse } from '@bootquest/shared/api';
-import { ApiError, BadResponseError, ServerUnreachableError, UsageError, type HealthResponse, type TracksResponse } from './client.ts';
+import type { SeedQueueResponse, SyncReport } from '@bootquest/shared/sync';
+import { ApiError, BadResponseError, ServerUnreachableError, UsageError } from './client.ts';
 import { ConfigError } from './config.ts';
 
 /** Plain text (no ANSI): output is meant to be readable in any terminal and greppable by scripts. */
@@ -173,13 +174,27 @@ export function formatProject(detail: UnitDetailResponse, configPath: string, fi
   ].join('\n');
 }
 
-export function formatSync(h: HealthResponse, tracks: TracksResponse, server: string): string {
-  return [
-    `Server ${server} is up (BootQuest server v${h.version}).`,
-    `Content: ${h.counts.units} units, ${h.counts.checks} checks loaded.`,
-    ...tracks.tracks.map((t) => `  ${t.id.padEnd(8)} ${t.name}: ${t.doneCount}/${t.unitCount} done${t.locked ? ' (locked)' : ''}`),
-    'GitHub curriculum sync is not implemented yet (milestone W4); this command only checks the server and its loaded content.',
-  ].join('\n');
+/** `bootquest sync`: one line per registered repo + the seed-queue size. */
+export function formatSync(r: SyncReport, queue: SeedQueueResponse, server: string): string {
+  const lines = [`GitHub sync #${r.syncId} on ${server}${r.offline ? ' (OFFLINE: cache only)' : ''}:`];
+  for (const x of r.repos) {
+    if (x.error !== null) {
+      lines.push(`  FAIL ${x.repo}: ${x.error}`);
+      continue;
+    }
+    const prog = x.program
+      ? `; program: ${x.program.units} units (${x.program.checked} checked, ${x.program.study} study)${x.program.checkDrift.length ? `, ${x.program.checkDrift.length} drift note(s)` : ''}`
+      : '';
+    lines.push(
+      `  ok   ${x.repo} @ ${(x.sha ?? '').slice(0, 7)} (${x.shaFrom}, tarball ${x.tarball}): ${x.markdownFiles} md, ` +
+        `refs +${x.refs.inserted} ~${x.refs.updated} =${x.refs.unchanged} -${x.refs.missing}, new keys ${x.newKeys}${prog}`,
+    );
+    for (const d of x.program?.checkDrift ?? []) lines.push(`         drift: ${d}`);
+  }
+  lines.push(`Seed queue: ${queue.count} pending stable_key(s) for the next seed session (GET /api/sync/queue).`);
+  for (const q of queue.items) lines.push(`  ${q.reason.padEnd(7)} ${q.repo} ${q.path}${q.anchor ? `#${q.anchor}` : ''}  "${q.title}"`);
+  if (queue.count > queue.items.length) lines.push(`  ... and ${queue.count - queue.items.length} more`);
+  return lines.join('\n');
 }
 
 /** Friendly rendering of every error the CLI can hit. Never a stack trace. */
@@ -208,5 +223,8 @@ const API_ERROR_HINTS: Readonly<Record<string, string>> = {
   PAYLOAD_TOO_LARGE: 'The file is too large to submit.',
   NO_CHECK: 'This unit has no machine check; it is completed in the web app.',
   WRONG_UNIT_KIND: 'That action does not apply to this kind of unit.',
+  CHECK_INTEGRITY: 'The pinned check file is not in the cache or fails its hash pin; run `bootquest sync` (online) and retry. Nothing was recorded.',
+  SYNC_UNAVAILABLE: 'This server has no GitHub sync configured (curriculum.yaml / cache dir).',
+  SYNC_IN_PROGRESS: 'A sync is already running on the server; wait for it to finish.',
   INTERNAL: 'The server hit an internal error; see the server log.',
 };

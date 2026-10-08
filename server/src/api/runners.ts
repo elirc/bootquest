@@ -32,6 +32,18 @@ export class UnsupportedCheckError extends Error {
   }
 }
 
+/**
+ * The check cannot be run honestly (missing / tampered pinned check file, unpinned
+ * spec). A refusal, never a learner fail: the API answers 409 CHECK_INTEGRITY
+ * and records nothing.
+ */
+export class CheckRefusedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'CheckRefusedError';
+  }
+}
+
 export class SubmissionShapeError extends Error {
   constructor(message: string) {
     super(message);
@@ -107,12 +119,13 @@ export function createRepoRunner(opts: { gh?: GhExec } = {}): Runner {
  * runner-csharp.ts). `gh` overrides the gh CLI executor of the repo runner's
  * remote predicates (tests).
  */
-export function defaultRunners(opts: { drillCs?: Runner; gh?: GhExec } = {}): RunnerRegistry {
+export function defaultRunners(opts: { drillCs?: Runner; nodeTestFile?: Runner; gh?: GhExec } = {}): RunnerRegistry {
   return {
     'drill-js': drillJsRunner,
     http: httpRunner,
     repo: createRepoRunner(opts.gh ? { gh: opts.gh } : {}),
     ...(opts.drillCs ? { 'drill-cs': opts.drillCs } : {}),
+    ...(opts.nodeTestFile ? { 'node-test-file': opts.nodeTestFile } : {}),
   };
 }
 

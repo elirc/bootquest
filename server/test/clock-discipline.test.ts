@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { addDays, dayKey } from '../src/engines/clock.ts';
 import { selfRunVerdict, starterMeetsContract } from '../src/store/content.ts';
 
-const ENGINE_DIRS = ['../src/engines/', '../src/store/'];
+const ENGINE_DIRS = ['../src/engines/', '../src/store/', '../src/sync/'];
 
 describe('clock discipline', () => {
   it('engines never read the wall clock (no Date.now(), no argument-less new Date())', () => {

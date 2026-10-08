@@ -19,7 +19,7 @@ describe('unit-kind decision table', () => {
 
   it('W3c: http and repo moved from refused to DELIVERED (project checks); the rest of the pending group is unchanged', () => {
     expect([...PROJECT_CHECKS].sort()).toEqual(['http', 'repo']);
-    expect([...PENDING_CLI_CHECKS].sort()).toEqual(['guided-step', 'node-test-file', 'self-run', 'vitest-project']);
+    expect([...PENDING_CLI_CHECKS].sort()).toEqual(['guided-step', 'self-run', 'vitest-project']);
     expect(classifyUnit(httpDetail(), 'submit')).toEqual({ mode: 'http', checkType: 'http', portHint: 3000 });
     expect(classifyUnit(httpDetail({ port: undefined }), 'run')).toEqual({ mode: 'http', checkType: 'http', portHint: null });
     expect(classifyUnit(repoDetail(), 'run')).toEqual({ mode: 'repo', checkType: 'repo' });
@@ -41,6 +41,14 @@ describe('unit-kind decision table', () => {
     const d = { ...drillDetail({ kind: 'guided-project' }), check: { id: 1, threshold: null, spec: { type: 'guided-step' as const, step: 1, runner: 'node-test', timeoutMs: 1 } } };
     const r = classifyUnit(d, 'submit');
     expect(r.mode === 'refuse' && r.reason).toMatch(/does not accept guided-step submissions yet.*Nothing was sent/);
+  });
+
+  it('node-test-file (W4 signalpost program units) is delivered as code: the server grades it with the pinned check', () => {
+    const d = {
+      ...drillDetail({ kind: 'program-unit' }),
+      check: { id: 1, threshold: null, spec: { type: 'node-test-file' as const, learnerPath: 'practice/learner/u01.mjs', sha: 'f'.repeat(40), tsx: false, timeoutMs: 30000 } },
+    };
+    expect(classifyUnit(d, 'submit')).toEqual({ mode: 'code', checkType: 'node-test-file' });
   });
 
   it('the CLI size guard matches the API contract', () => {

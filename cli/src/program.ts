@@ -19,6 +19,9 @@ export const EXIT = { OK: 0, NOT_PASSED: 1, ERROR: 2 } as const;
 /** Mirrors MAX_CODE_CHARS in shared/src/api.ts (cli/test/units.test.ts asserts they agree). */
 export const MAX_CODE_CHARS = 100_000;
 
+/** `bootquest sync` may download several tarballs on a first run. */
+export const SYNC_TIMEOUT_MS = 600_000;
+
 export interface CliIo {
   cwd: string;
   env: Record<string, string | undefined>;
@@ -216,11 +219,18 @@ export function buildProgram(io: CliIo, setExit: (code: number) => void): Comman
 
   program
     .command('sync')
-    .description('PLACEHOLDER until W4: checks the server is up and prints its loaded unit/check counts (no GitHub sync yet)')
-    .action(async (_o: unknown, cmd: Command) => {
-      const client = new ApiClient(serverUrl(cmd.optsWithGlobals<GlobalOpts>(), io.env), io.fetch);
-      const health = await client.health();
-      io.out(formatSync(health, await client.tracks(), client.server));
+    .description(
+      'GitHub curriculum sync (W4): the server walks every repo in curriculum.yaml at its HEAD (per-SHA tarball cache), ' +
+        'upserts content refs, registers program.json units and queues new stable_keys for the next seed session. ' +
+        'Exit 0 when every repo synced, 1 when any repo failed (e.g. offline with nothing cached)',
+    )
+    .option('--repo <owner/name...>', 'sync only these registered repos')
+    .action(async (o: { repo?: string[] }, cmd: Command) => {
+      // a first sync downloads tarballs: allow it far longer than a grade
+      const client = new ApiClient(serverUrl(cmd.optsWithGlobals<GlobalOpts>(), io.env), io.fetch, SYNC_TIMEOUT_MS);
+      const report = await client.sync(o.repo);
+      io.out(formatSync(report, await client.seedQueue(20), client.server));
+      setExit(report.ok ? EXIT.OK : EXIT.NOT_PASSED);
     });
 
   return program;

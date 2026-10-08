@@ -13,12 +13,16 @@ import {
   UnitKeyParams,
   WrittenAnswerBody,
 } from '@bootquest/shared/api';
+import { RefContentResponse, RefIdParams, SeedQueueQuery, SeedQueueResponse, SyncRequestBody } from '@bootquest/shared/sync';
 import type { Db } from '../db/database.ts';
+import { seedQueue, SyncConfigError } from '../sync/job.ts';
+import type { SyncService } from '../sync/service.ts';
 import { nowMs, type Clock } from '../engines/clock.ts';
 import { dueCount } from '../engines/fsrs.ts';
 import { contentCounts, reviewQueue } from '../store/queries.ts';
 import { emptyContentStore, type UnitContentStore } from './content-store.ts';
 import { asyncRoute, errorBody, HttpError, sendJson, validate } from './http.ts';
+import { getRefContent } from './service.ts';
 import { defaultRunners, type RunnerRegistry } from './runners.ts';
 import {
   answerWrittenUnit,
@@ -52,6 +56,8 @@ export interface AppOptions {
   runners?: RunnerRegistry;
   /** seed-output content (starter + private reference solutions) */
   content?: UnitContentStore;
+  /** W4 GitHub sync + per-SHA caches (POST /sync, GET /refs/:id/content); absent = 501 SYNC_UNAVAILABLE */
+  sync?: SyncService | null;
 }
 
 /**
@@ -67,7 +73,9 @@ export function createApp(opts: AppOptions): Express {
     clock: opts.clock,
     runners: opts.runners ?? defaultRunners(),
     content: opts.content ?? emptyContentStore,
+    sync: opts.sync ?? null,
   };
+  let syncInFlight = false;
   const app = express();
   app.disable('x-powered-by');
   app.set('etag', false);
@@ -174,6 +182,39 @@ export function createApp(opts: AppOptions): Express {
     validate(EmptyQuery, req.query, 'query');
     const { grade } = validate(GradeBody, req.body, 'body');
     sendJson(res, 200, gradeReview(deps, itemId, grade));
+  }));
+
+  // ---------------------------------------------------------------- W4 GitHub sync
+
+  // `bootquest sync` and (later) the UI: runs the sync job over curriculum.yaml
+  router.post('/sync', asyncRoute(async (req, res) => {
+    validate(EmptyQuery, req.query, 'query');
+    const body = validate(SyncRequestBody, req.body ?? {}, 'body');
+    if (!deps.sync) throw new HttpError(501, 'SYNC_UNAVAILABLE', 'this server has no GitHub sync configured');
+    if (syncInFlight) throw new HttpError(409, 'SYNC_IN_PROGRESS', 'a sync is already running');
+    syncInFlight = true;
+    try {
+      const report = await deps.sync.run(deps.db, deps.clock, body.repos ? { repos: body.repos } : {});
+      sendJson(res, 200, report);
+    } catch (err) {
+      if (err instanceof SyncConfigError) throw new HttpError(400, 'VALIDATION', err.message, [{ path: 'body.repos', message: err.message }]);
+      throw err;
+    } finally {
+      syncInFlight = false;
+    }
+  }));
+
+  // the next seed session's work list: stable_keys first seen by a sync
+  router.get('/sync/queue', asyncRoute((req, res) => {
+    const q = validate(SeedQueueQuery, req.query, 'query');
+    sendJson(res, 200, SeedQueueResponse.parse(seedQueue(deps.db, { status: q.status ?? 'pending', limit: q.limit ?? 500 })));
+  }));
+
+  // markdown of ONE registered ref, from the per-SHA cache (never the DB, never a request-supplied path)
+  router.get('/refs/:id/content', asyncRoute(async (req, res) => {
+    const { id } = validate(RefIdParams, req.params, 'params');
+    validate(EmptyQuery, req.query, 'query');
+    sendJson(res, 200, RefContentResponse.parse(await getRefContent(deps, id)));
   }));
 
   app.use('/api', router);

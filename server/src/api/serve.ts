@@ -12,6 +12,8 @@ import { createApp } from './app.ts';
 import { combineContentStores, fileContentEntries } from './content-store.ts';
 import { createDrillCsRunner, resolveCsScratchDir, type DrillCsRunner } from './runner-csharp.ts';
 import { defaultRunners, type RunnerRegistry } from './runners.ts';
+import { createNodeTestFileRunner } from './runner-node-test-file.ts';
+import { createSyncService, resolveSyncPaths, type SyncService } from '../sync/service.ts';
 
 /**
  * Real entrypoint: `node --import tsx server/src/api/serve.ts`
@@ -29,6 +31,10 @@ import { defaultRunners, type RunnerRegistry } from './runners.ts';
  *   BOOTQUEST_CS_SCRATCH    (optional) app-data dir of the C# runner's warm scratch
  *                           projects; default <dir of BOOTQUEST_DB>/bootquest-scratch.
  *                           drill-cs submissions route there (W3a).
+ *   BOOTQUEST_CURRICULUM / BOOTQUEST_CHECK_SPECS / BOOTQUEST_GITHUB_CACHE / BOOTQUEST_OFFLINE
+ *                           W4 GitHub sync (see sync/service.ts): POST /api/sync, GET
+ *                           /api/refs/:id/content, and node-test-file grading from the
+ *                           per-SHA tarball cache.
  * A pack without a matching validation stamp (seed:validate full run), or whose
  * loaded count differs from its built count, REFUSES TO START.
  */
@@ -83,6 +89,8 @@ export interface StartOptions {
   clock?: Clock;
   host?: string;
   runners?: RunnerRegistry;
+  /** W4 sync service (default: built from env via resolveSyncPaths) */
+  sync?: SyncService;
 }
 
 export interface RunningServer {
@@ -163,8 +171,10 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
     const content = combineContentStores(sources);
     // drill-cs -> the warm C# runner (lazy: no dotnet process until the first C# grade)
     csharp = opts.runners ? null : createDrillCsRunner({ appDataDir: resolveCsScratchDir(env, dbPath) });
-    const runners: RunnerRegistry = opts.runners ?? defaultRunners(csharp ? { drillCs: csharp.runner } : {});
-    const app = createApp({ db, clock, content, runners });
+    const sync = opts.sync ?? createSyncService(resolveSyncPaths(env));
+    const runners: RunnerRegistry =
+      opts.runners ?? defaultRunners({ ...(csharp ? { drillCs: csharp.runner } : {}), nodeTestFile: createNodeTestFileRunner(sync.cache) });
+    const app = createApp({ db, clock, content, runners, sync });
 
     const server = await new Promise<Server>((ok, fail) => {
       const s = app.listen(port, host);

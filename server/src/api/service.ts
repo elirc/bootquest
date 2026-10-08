@@ -42,7 +42,11 @@ import {
 } from '../store/queries.ts';
 import type { UnitContentStore } from './content-store.ts';
 import { HttpError } from './http.ts';
-import { gradeDeterministic, SubmissionShapeError, UnsupportedCheckError, type LearnerSubmission, type RunnerRegistry } from './runners.ts';
+import { CheckRefusedError, gradeDeterministic, SubmissionShapeError, UnsupportedCheckError, type LearnerSubmission, type RunnerRegistry } from './runners.ts';
+import type { SyncService } from '../sync/service.ts';
+import { CacheMissError, CachePathError } from '../sync/cache.ts';
+import { NetworkUnavailableError } from '../sync/github.ts';
+import type { RefContentResponse, RefLink } from '@bootquest/shared/sync';
 
 /**
  * API service layer: orchestrates the W1a engines. No XP / streak / FSRS /
@@ -53,6 +57,8 @@ export interface ServiceDeps {
   clock: Clock;
   runners: RunnerRegistry;
   content: UnitContentStore;
+  /** W4 GitHub sync + per-SHA caches; null = this server has no sync configured */
+  sync: SyncService | null;
 }
 
 export const HEATMAP_DAYS = 120;
@@ -148,6 +154,7 @@ export function getUnitDetail(deps: ServiceDeps, unitId: number): UnitDetailResp
     starter: entry?.starter ?? null,
     snippet: entry?.snippet ?? null,
     rubric: entry?.rubric ?? null,
+    refs: unitRefs(db, unit.id),
   };
 }
 
@@ -156,6 +163,72 @@ export function getUnitDetailByKey(deps: ServiceDeps, key: string): UnitDetailRe
   const unit = getUnitByKey(deps.db, key);
   if (!unit) throw new HttpError(404, 'NOT_FOUND', `no unit with key "${key}"`);
   return getUnitDetail(deps, unit.id);
+}
+
+// ---------------------------------------------------------------- GitHub content refs (W4)
+
+interface RefDbRow {
+  id: number;
+  repo: string;
+  path: string;
+  sha: string;
+  anchor: string | null;
+  title: string;
+  kind: RefLink['kind'];
+  status: RefLink['status'];
+  lineStart: number | null;
+  lineEnd: number | null;
+}
+
+const REF_COLUMNS = `r.id, r.repo, r.path, r.sha, r.anchor, r.title, r.kind, r.status, r.line_start AS lineStart, r.line_end AS lineEnd`;
+
+function isRenderable(row: Pick<RefDbRow, 'path' | 'status'>): boolean {
+  return /\.(md|markdown)$/i.test(row.path) && row.status !== 'quarantined';
+}
+
+function toRefLink(row: RefDbRow, role: string): RefLink {
+  return { ...row, role, contentUrl: isRenderable(row) ? `/api/refs/${row.id}/content` : null };
+}
+
+/** The refs a unit renders from (unit_ref: program milestone + lesson guide). */
+export function unitRefs(db: Db, unitId: number): RefLink[] {
+  return db
+    .all<RefDbRow & { role: string }>(
+      `SELECT ${REF_COLUMNS}, ur.role FROM unit_ref ur JOIN content_ref r ON r.id = ur.content_ref_id
+        WHERE ur.unit_id = ? ORDER BY CASE ur.role WHEN 'program' THEN 0 ELSE 1 END`,
+      unitId,
+    )
+    .map(({ role, ...row }) => toRefLink(row, role));
+}
+
+/**
+ * GET /refs/:id/content: the markdown of ONE registered content_ref, read from
+ * the per-SHA disk caches (tarball tree, else blob cache, else one first-view
+ * blob fetch). The path comes from the DB row, never from the request, so only
+ * registered refs are servable; quarantined and non-markdown refs are refused.
+ */
+export async function getRefContent(deps: ServiceDeps, refId: number): Promise<RefContentResponse> {
+  const row = deps.db.get<RefDbRow>(`SELECT ${REF_COLUMNS} FROM content_ref r WHERE r.id = ?`, refId);
+  if (!row) throw new HttpError(404, 'NOT_FOUND', `content ref ${refId} not found`);
+  if (!isRenderable(row)) {
+    throw new HttpError(409, 'NOT_RENDERABLE', `content ref ${refId} (${row.kind}, ${row.status}) is not renderable markdown`);
+  }
+  if (!deps.sync) throw new HttpError(501, 'SYNC_UNAVAILABLE', 'this server has no GitHub cache configured');
+  let blob: Awaited<ReturnType<SyncService['cache']['readBlob']>>;
+  try {
+    blob = await deps.sync.cache.readBlob(row.repo, row.sha, row.path);
+  } catch (err) {
+    if (err instanceof NetworkUnavailableError) {
+      throw new HttpError(503, 'UNAVAILABLE_OFFLINE', `${row.repo}@${row.sha.slice(0, 7)}:${row.path} is not cached and the network is unavailable`);
+    }
+    if (err instanceof CacheMissError) throw new HttpError(404, 'NOT_FOUND', err.message);
+    if (err instanceof CachePathError) throw new HttpError(409, 'NOT_RENDERABLE', err.message);
+    throw err;
+  }
+  const lines = blob.bytes.toString('utf8').replace(/^﻿/, '').replace(/\r\n?/g, '\n').split('\n');
+  const from = row.lineStart ?? 1;
+  const to = row.lineEnd ?? lines.length;
+  return { ref: toRefLink(row, 'self'), markdown: lines.slice(from - 1, to).join('\n'), servedFrom: blob.servedFrom };
 }
 
 // ---------------------------------------------------------------- grading
@@ -169,6 +242,7 @@ async function grade(deps: ServiceDeps, spec: CheckSpec, submission: LearnerSubm
     return await runner(spec, submission);
   } catch (err) {
     if (err instanceof UnsupportedCheckError) throw new HttpError(501, 'RUNNER_UNAVAILABLE', err.message);
+    if (err instanceof CheckRefusedError) throw new HttpError(409, 'CHECK_INTEGRITY', err.message);
     if (err instanceof SubmissionShapeError) {
       throw new HttpError(400, 'VALIDATION', err.message, [{ path: 'body', message: err.message }]);
     }

@@ -6,7 +6,10 @@ import type { ProjectConfig } from './config.ts';
  * Which units the CLI delivers (DECISION, W3b; http/repo added W3c):
  *
  *  - CODE checks the API grades from a learner file (`{code}` body): drill-js,
- *    drill-cs. The CLI reads the file and sends it to /run or /submit.
+ *    drill-cs, and (W4) node-test-file (signalpost program units: the learner
+ *    module is graded by the repo's own read-only node:test file, pinned by
+ *    sha256 in the server's per-SHA cache). The CLI reads the file and sends it
+ *    to /run or /submit.
  *  - PROJECT checks the API grades against the learner's running project:
  *      http  `{port}`     — the SERVER sends the request script to its loopback
  *                            interface on that port (`--port`, default: the
@@ -19,16 +22,16 @@ import type { ProjectConfig } from './config.ts';
  *    a pointer to the web app. A quiz/predict answer is a one-token choice made
  *    while looking at the choices/snippet — the browser is the material; a CLI
  *    `--answer` flag would only be a worse UI for the same POST.
- *  - CLI-DELIVERED-LATER checks (guided-step, node-test-file, self-run,
- *    vitest-project): spec §4 makes the CLI their delivery vehicle, but the API
- *    has no request shape / runner for them yet (it would answer 501
- *    RUNNER_UNAVAILABLE). Refused with an explicit "not wired yet" message
- *    rather than guessing a body shape.
+ *  - CLI-DELIVERED-LATER checks (guided-step, self-run, vitest-project):
+ *    spec §4 makes the CLI their delivery vehicle, but the API has no request
+ *    shape / runner for them yet (it would answer 501 RUNNER_UNAVAILABLE).
+ *    Refused with an explicit "not wired yet" message rather than guessing a
+ *    body shape.
  */
-export const CODE_CHECKS: ReadonlySet<string> = new Set(['drill-js', 'drill-cs']);
+export const CODE_CHECKS: ReadonlySet<string> = new Set(['drill-js', 'drill-cs', 'node-test-file']);
 export const PROJECT_CHECKS: ReadonlySet<string> = new Set(['http', 'repo']);
 export const BROWSER_CHECKS: ReadonlySet<string> = new Set(['quiz', 'predict-output', 'study-quiz', 'explain-back', 'patch-kata', 'review']);
-export const PENDING_CLI_CHECKS: ReadonlySet<string> = new Set(['guided-step', 'node-test-file', 'self-run', 'vitest-project']);
+export const PENDING_CLI_CHECKS: ReadonlySet<string> = new Set(['guided-step', 'self-run', 'vitest-project']);
 
 export type Delivery =
   | { mode: 'code'; checkType: string }

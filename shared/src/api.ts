@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { CheckSpec } from './check.ts';
 import { CompetencyId, ReviewGrade, RunVerdict, TrackId, UnitKind, XpZeroReason, type CheckType as CheckTypeT } from './enums.ts';
 import { RunnerFailure } from './schemas.ts';
+import { RefLink } from './sync.ts';
 
 /**
  * HTTP API contract (W1b). Every request body / params / query is validated
@@ -31,6 +32,16 @@ export const API_ERROR_CODES = [
   'ALREADY_ATTESTED',
   /** written units: the model answer is shown only after the learner's own answer is recorded */
   'NOT_ANSWERED',
+  /** node-test-file: the pinned check file is missing from the cache or fails its hash pin; nothing ran, nothing recorded */
+  'CHECK_INTEGRITY',
+  /** GET /refs/:id/content on a ref that is not renderable markdown (or is quarantined) */
+  'NOT_RENDERABLE',
+  /** the bytes are not cached and the network is unavailable (offline mode or fetch failure) */
+  'UNAVAILABLE_OFFLINE',
+  /** sync / ref rendering is not configured on this server */
+  'SYNC_UNAVAILABLE',
+  /** a sync is already running on this server */
+  'SYNC_IN_PROGRESS',
   'INTERNAL',
 ] as const;
 export const ApiErrorCode = z.enum(API_ERROR_CODES);
@@ -382,6 +393,8 @@ export const UnitDetailResponse = z
     snippet: z.string().nullable(),
     /** written units: self-assessment rubric */
     rubric: z.array(z.object({ id: z.string(), label: z.string() }).strict()).nullable(),
+    /** W4: GitHub content_refs this unit renders from (program milestone, lesson guide); optional for older clients */
+    refs: z.array(RefLink).optional(),
   })
   .strict();
 export type UnitDetailResponse = z.infer<typeof UnitDetailResponse>;

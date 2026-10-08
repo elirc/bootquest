@@ -286,6 +286,11 @@ export const NodeTestFileCheck = z.object({
   checkSha256: sha256.optional(), // hash-verified check file
   tsx: z.boolean().default(false), // .ts checks run with --import tsx
   timeoutMs: timeoutMs.default(30000),
+  // W4: the pins the node-test-file runner needs (all PRIVATE: not in the public whitelist)
+  repo: z.string().regex(/^[^/\s]+\/[^/\s]+$/).optional(), // owner/name the check file is cached from
+  blobSha: z.string().regex(/^[0-9a-f]{40}$/).optional(), // git blob sha of the check file at `sha`
+  expectedTests: z.array(z.string().min(1)).min(1).optional(), // top-level test names a pass must report ok
+  moduleType: z.enum(['module', 'commonjs']).optional(), // workspace package.json `type` (mirrors the repo)
 });
 
 /** jstrain / csbootcamp self-testing files printing `#done passed= failed= todo=`. */
