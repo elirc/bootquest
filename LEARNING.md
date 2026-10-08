@@ -194,6 +194,50 @@ Opus plan review (`docs/recon/plan-review.md`) returned 2 blockers + 17 majors;
   self-attest) and a fresh-context W1b API review (frozen git-archive copy,
   includes the client↔server binding worksheet) launched in parallel.
 
+## 2026-10-07 — W1c landed (c762032): honesty core unforgeable
+
+- All audit blockers/majors + W1b gaps + addendum closed; 358 tests,
+  typecheck, smoke 15/15 — re-run by the orchestrator. Tests that enshrined
+  holes were rewritten to assert closed behavior, not deleted.
+- Residual risks accepted and documented: raw-SQL forgery can still move a
+  rating exactly ONE notch (three-leg verification in a trigger is
+  impractical; engine API cannot forge at all; multi-notch and
+  evidence-reuse blocked in SQL); check.inverted affects only the shipped
+  starter's contract, learner submissions use the plain verdict.
+- W1c design notes: explain-back self-score lives on the evidence (answer
+  attempt is immutable BEFORE the key is shown, so the score cannot be on
+  it; 24h filing window, assessor self); review slate slot = "queue empty
+  right after some review that day" (pure end-of-day would undo a clear
+  when a card falls due at 23:00); promotion is currently reachable only
+  through the engine — HTTP endpoints for artifact/retest evidence arrive
+  with W3 (CLI submits) and W6 (players).
+- OWNER DECISION DEFERRED: cap demotions at one per competency per day?
+  Current behavior = every Review-state lapse demotes (spec-literal).
+- Machine note: this shell's heredocs mangle backticks — agents generate
+  tricky files via Python scripts in the scratchpad instead.
+- Next: W2 (BootForge import + 16-course sweep) in main workspace and W1d
+  (client binding per worksheet, server contract canonical) in a worktree,
+  in parallel.
+
+## 2026-10-07 — W1d results (client bound to real contract)
+
+- Done in worktree (69 tests + build green): all 21 worksheet groups fixed;
+  client defaults to HTTP API (IPv4 proxy to 127.0.0.1:4178), `dev:mock`
+  keeps the standalone demo; honesty fixes in (boolean selfAssisted only,
+  no correctIndex anywhere, reveal confirm "0 XP forever", no Run button
+  for quiz/predict, self-attest once). Transplant AFTER W2 releases the
+  workspace (fixes touch shared/).
+- At transplant, apply the G-fixes in main tree: G1 remove unused Assessor
+  import in shared/schemas.ts then restore client noUnusedLocals/Params;
+  G2 add missing type aliases + enum exports to shared/src/api.ts;
+  G5 tighten slate.status to the enum. G3 freeze-token cap stays a client
+  constant (2); G4 attested-via-state is fine.
+- OWNER DECISION DEFERRED (G6): quiz answers remain findable via repeated
+  RECORDED submits (spec-literal: failed submits free but recorded; reveal
+  laundering blocked). Accepted for V1; cooldown/shuffle possible later.
+- Content gaps G7 tracked: instructions/prompt arrive with W2 packs;
+  review-card front/back arrives with W4/W5 card seeding.
+
 ## 2026-10-07 — W1b fresh review (docs/recon/w1b-review.md) + decisions
 
 No blockers; 3 majors, all folded into W1c mid-flight by addendum:

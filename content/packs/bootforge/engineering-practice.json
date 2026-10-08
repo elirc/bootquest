@@ -1,0 +1,1011 @@
+{
+ "format": "bootquest-pack@1",
+ "source": "bootforge",
+ "course": {
+  "id": "engineering-practice",
+  "order": 16,
+  "title": "Engineering Practice: Build, Review & Operate",
+  "description": "Debug real defects, author regression tests, run atomic migrations, review changes, investigate incidents, and complete two evidence-based CRUD projects.",
+  "prerequisites": []
+ },
+ "modules": [
+  {
+   "id": "practice",
+   "title": "Engineering Workflows",
+   "lessons": [
+    {
+     "id": "debugging",
+     "title": "Debugging tickets: preserve the contract",
+     "explanation": "\n## Reproduce, explain, then repair\n\nA bug report rarely names the broken expression. It describes a user action and an unexpected result. First turn that story into a small reproduction: record the initial data, the request, the observed result, and the result the contract requires. Then identify the smallest change that explains both the failure and the cases that already work. A passing happy path is not enough evidence for closing the ticket.\n\nFor example, a task editor submits { done: false } to reopen an issue. The handler uses this update:\n\n~~~js\nconst next = { ...task, done: patch.done || task.done };\n~~~\n\nRead it from left to right. The spread copies the original task. The logical OR then treats false as missing and keeps the old value. The user supplied a valid value, but the handler confused presence with truthiness. Check whether the field was supplied, validate its type, and preserve its actual value. Testing only completion, where done is true, cannot reveal this failure.\n\nThe tickets below also protect immutable inputs and tenant boundaries. These are parts of the contract, not optional refactoring preferences. An authorization failure must leave data unchanged. Common mistakes include trusting ownership from the body, treating zero as absent, and repairing one branch while silently changing unrelated fields. Explain your suspected cause before running; use the results to revise that explanation.\n"
+    },
+    {
+     "id": "testing",
+     "title": "Write tests that detect meaningful defects",
+     "explanation": "\n## The tests are the deliverable\n\nAn assertion is useful when a plausible defect makes it fail. Code coverage alone tells you which lines ran, not whether an incorrect outcome would be noticed. In these exercises you write a test suite and hand it a candidate implementation. The grader checks that your suite accepts correct implementations and rejects deliberately defective ones. This gives immediate feedback about the strength of your examples.\n\nFor example, imagine a function that clamps a page size between one and one hundred. An assertion for input twenty accepts both the real function and a broken identity function:\n\n~~~js\nassert.equal(clamp(20), 20);\nassert.equal(clamp(0), 1);\nassert.equal(clamp(101), 100);\n~~~\n\nThe first line protects ordinary behavior. The second separates the lower boundary from the identity implementation. The third protects the independent upper boundary. These tests describe a public contract and remain valid after a refactor. A check of the function's name, source text, or choice of loop would instead test an implementation accident.\n\nUse small fixtures whose differences matter. Include empty collections, a boundary value, more than one valid match, and values that should be excluded. Save input snapshots before calling code when immutability is required. Common mistakes are catching your own assertion failures, asserting only array length, and writing a suite that always throws. The latter rejects bugs but rejects working software too, which is why both positive and negative candidates are necessary.\n"
+    },
+    {
+     "id": "migrations",
+     "title": "Migrations: failures must leave a recoverable database",
+     "explanation": "\n## Data and migration history form one outcome\n\nA migration runner changes two things: the application's schema or rows, and the ledger describing which changes have completed. If those writes are not atomic, a crash can leave the database changed but the ledger unchanged. The next startup then tries to repeat a migration that partially happened. A happy-path rerun test will not reveal this failure; an injected failure after the first statement will.\n\nConsider a SQLite migration that creates a table and then inserts seed data:\n\n~~~js\ndb.exec('BEGIN');\ntry {\n  db.exec(migration.sql);\n  record.run(migration.id);\n  db.exec('COMMIT');\n} catch (error) {\n  db.exec('ROLLBACK');\n  throw error;\n}\n~~~\n\nThe first line establishes the transaction boundary. The SQL and ledger insertion are both inside it. Commit makes them visible together. If either operation fails, rollback restores the earlier state before the error reaches the caller. This example relies on SQLite's transactional DDL; do not assume every database supports every schema operation inside a transaction.\n\nThe second exercise adds a backfill with a precondition. Existing ambiguous data must be identified before enforcing a uniqueness constraint. Do not silently delete records to make the migration pass. Preserve the data, report the conflict, and let a deliberate cleanup process resolve it. Common mistakes include recording a migration before its SQL, swallowing the original exception, and leaving an open transaction that breaks the next request on the same connection.\n"
+    },
+    {
+     "id": "reviews",
+     "title": "PR reviews: evidence, severity, and a concrete fix",
+     "explanation": "\n## Review the behavior the change introduces\n\nA useful review comment identifies a concrete failing scenario, points to the relevant code, explains the impact, and proposes a testable correction. It does not merely request a preferred style. Begin with the contract and the trust boundaries. Which values come from a caller? Which records may that caller act on? Which invariants must survive concurrent requests and failures?\n\nFor example, a handler loads an invoice with an id supplied in the URL:\n\n~~~js\nconst invoice = await repo.findById(req.params.id);\nreturn res.json(invoice);\n~~~\n\nThe lookup establishes existence, not permission. If invoices belong to organizations, the review should name a cross-organization request, require a lookup scoped to the authenticated organization, and request a regression test proving that another organization's invoice is not returned. Authentication middleware elsewhere is not evidence that this particular object is authorized.\n\nClassify findings by their user impact. A security or data-loss defect can block merging; an optional readability improvement should not obscure it. Check failure paths and races as carefully as the happy path. For concurrency, describe two interleaved requests rather than using the word race without an example. End with an explicit merge recommendation and the evidence needed to change it.\n\nThese responses are self-assessed against a checklist after you write them. The model answer is a comparison aid, not an automatically verified grade. Mark an item only when your own response contains the evidence it asks for; keep any disagreement in your notes.\n"
+    },
+    {
+     "id": "incidents",
+     "title": "Incident investigations: separate evidence from hypotheses",
+     "explanation": "\n## Restore service and learn what failed\n\nDuring an incident, a convincing story is not the same as evidence. Build a timeline from observations, identify affected users and operations, and distinguish confirmed facts from hypotheses that require another query or experiment. Choose a mitigation that reduces immediate harm while preserving the information needed to investigate. A mitigation can be appropriate even before the complete root cause is known.\n\nSuppose a release begins at 10:00, request errors rise at 10:02, and a database log says that an expected column does not exist. The temporal sequence suggests a deployment/schema mismatch, but it does not prove which instances or migrations are responsible. Compare running application versions with the migration ledger and actual schema before choosing the recovery path.\n\n~~~text\n10:00 release v8 begins\n10:02 GET /orders -> 500: no such column delivery_note\n10:03 old release v7 instance -> 200\n~~~\n\nThe first line marks a possible trigger. The second supplies a specific failing dependency. The third is a useful comparison, not proof that a blind rollback is always safe. Verify that the old version can still read current data before reverting.\n\nYour response should cover impact, evidence, immediate mitigation, investigation, data repair if needed, and prevention. Include measurable recovery criteria such as error rate, queue age, or a successful consistency check. Avoid promising zero data loss without checking. The exercises below are written investigations; self-assessment records practice and reflection, not an automatic certification of operational skill.\n"
+    },
+    {
+     "id": "projects",
+     "title": "Project milestones: build, verify, and explain",
+     "explanation": "\n## Turn isolated skills into a working product\n\nThese project briefs are completed in a local repository with a real frontend, HTTP server, and relational database. The in-app response is your evidence journal: paths or commit ids, commands you ran, representative results, and decisions. The app does not launch, inspect, or automatically grade that repository. Use the checklist honestly after comparing your work with the model evidence outline. A plan alone is not evidence that a running project works.\n\nWork in small vertical slices. For an issue tracker, the first slice might create an issue through an accessible form, send a validated request, insert a scoped database row, and return the new record to the list. A second slice can add edits and conflict handling. This sequence exposes integration problems sooner than building every table first and every screen last.\n\n~~~text\nMilestone evidence: create an issue\nUI: labelled form submits and shows a field error for blank titles\nHTTP: POST /issues returns 201 or a documented validation error\nDatabase: organization id comes from the session; foreign keys hold\nTest: a real request cannot create an issue in a different organization\n~~~\n\nEach line names observable behavior and the layer that supplies the evidence. Add commands and actual results to make it reviewable. Include failure paths, not only screenshots of successful creation. Common mistakes include claiming completion from mocked tests alone, storing authentication authority in client state, and adding infrastructure before a simple end-to-end flow works. Finish by explaining one tradeoff and one remaining limitation.\n"
+    }
+   ]
+  }
+ ],
+ "units": [
+  {
+   "unit": {
+    "key": "bootforge/engineering-practice/practice/debugging/reopen-task",
+    "track": "js",
+    "kind": "drill",
+    "title": "Ticket: reopening a task silently fails",
+    "phase": "engineering-practice",
+    "difficulty": 2,
+    "xp": 20,
+    "competencies": [
+     "code-reading"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-js",
+       "language": "js",
+       "tests": [
+        {
+         "name": "reopening preserves protected fields and inputs",
+         "code": "assert.equal(typeof mod.applyPatch, 'function', 'export applyPatch'); const task = { id: 4, ownerId: 7, title: 'Before', done: true }; const patch = { done: false, id: 99, ownerId: 99 }; const before = structuredClone([task, patch]); const result = mod.applyPatch(task, patch); assert.deepStrictEqual(result, { id: 4, ownerId: 7, title: 'Before', done: false }); assert.notStrictEqual(result, task); assert.deepStrictEqual([task, patch], before);",
+         "input": {
+          "task": {
+           "id": 4,
+           "ownerId": 7,
+           "title": "Before",
+           "done": true
+          },
+          "patch": {
+           "done": false,
+           "id": 99,
+           "ownerId": 99
+          }
+         }
+        },
+        {
+         "name": "trim titles, preserve missing fields, combine updates",
+         "code": "const task = { id: 1, title: 'Old', done: true }; assert.deepStrictEqual(mod.applyPatch(task, {}), task); assert.deepStrictEqual(mod.applyPatch(task, { title: ' New ', done: false }), { id: 1, title: 'New', done: false });",
+         "input": {
+          "task": {
+           "id": 1,
+           "title": "Old",
+           "done": true
+          },
+          "patches": [
+           {},
+           {
+            "title": " New ",
+            "done": false
+           }
+          ]
+         }
+        },
+        {
+         "name": "invalid supplied values fail without mutation",
+         "code": "for (const patch of [{title:''}, {title:'   '}, {title:5}, {title:null}, {done:0}, {done:'false'}, {done:undefined}]) { const task = {title:'Safe', done:true}; assert.throws(() => mod.applyPatch(task, patch), Error); assert.deepStrictEqual(task, {title:'Safe', done:true}); }",
+         "input": {
+          "task": {
+           "title": "Safe",
+           "done": true
+          },
+          "patchDescriptions": [
+           "title: empty string",
+           "title: whitespace",
+           "title: 5",
+           "title: null",
+           "done: 0",
+           "done: string false",
+           "done: undefined"
+          ]
+         }
+        }
+       ],
+       "timeoutMs": 8000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "engineering-practice/practice/debugging/reopen-task",
+    "type": "code",
+    "module": "practice",
+    "lesson": "debugging",
+    "position": 0,
+    "xp": 20,
+    "format": "debugging",
+    "skills": [
+     "crud-validation",
+     "data-integrity"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "bootforge/engineering-practice/practice/debugging/zero-stock",
+    "track": "js",
+    "kind": "drill",
+    "title": "Ticket: zero stock is ignored by the inventory editor",
+    "phase": "engineering-practice",
+    "difficulty": 2,
+    "xp": 20,
+    "competencies": [
+     "code-reading"
+    ],
+    "prerequisites": [
+     "bootforge/engineering-practice/practice/debugging/reopen-task"
+    ],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-js",
+       "language": "js",
+       "tests": [
+        {
+         "name": "zero is valid; sku is protected; both inputs survive",
+         "code": "assert.equal(typeof mod.updateInventory, 'function', 'export updateInventory'); const item = {sku:'A', label:'Pen', stock:7}; const patch = {sku:'B', stock:0, label:' New pen '}; const before = structuredClone([item,patch]); const result=mod.updateInventory(item,patch); assert.deepStrictEqual(result,{sku:'A',label:'New pen',stock:0}); assert.notStrictEqual(result,item); assert.deepStrictEqual([item,patch],before);",
+         "input": {
+          "item": {
+           "sku": "A",
+           "label": "Pen",
+           "stock": 7
+          },
+          "patch": {
+           "sku": "B",
+           "stock": 0,
+           "label": " New pen "
+          }
+         }
+        },
+        {
+         "name": "invalid stock and blank labels fail",
+         "code": "for (const patch of [{stock:-1}, {stock:1.5}, {stock:'0'}, {stock:NaN}, {stock:Infinity}, {stock:Number.MAX_SAFE_INTEGER+1}, {stock:undefined}, {label:' '}, {label:null}]) {const item={sku:'A',label:'Pen',stock:7}; assert.throws(()=>mod.updateInventory(item,patch), Error); assert.equal(item.stock,7); assert.equal(item.label,'Pen');}",
+         "input": {
+          "item": {
+           "sku": "A",
+           "label": "Pen",
+           "stock": 7
+          },
+          "patchDescriptions": [
+           "stock: -1",
+           "stock: 1.5",
+           "stock: string 0",
+           "stock: NaN",
+           "stock: Infinity",
+           "stock: MAX_SAFE_INTEGER + 1",
+           "stock: undefined",
+           "label: whitespace",
+           "label: null"
+          ]
+         }
+        },
+        {
+         "name": "omitted fields and ordinary updates work",
+         "code": "const item={sku:'Z',label:'Book',stock:5}; assert.deepStrictEqual(mod.updateInventory(item,{}),item); assert.deepStrictEqual(mod.updateInventory(item,{stock:12}),{sku:'Z',label:'Book',stock:12}); assert.deepStrictEqual(mod.updateInventory(item,{label:' Journal '}),{sku:'Z',label:'Journal',stock:5});",
+         "input": {
+          "item": {
+           "sku": "Z",
+           "label": "Book",
+           "stock": 5
+          },
+          "patches": [
+           {},
+           {
+            "stock": 12
+           },
+           {
+            "label": " Journal "
+           }
+          ]
+         }
+        }
+       ],
+       "timeoutMs": 8000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "engineering-practice/practice/debugging/zero-stock",
+    "type": "code",
+    "module": "practice",
+    "lesson": "debugging",
+    "position": 1,
+    "xp": 20,
+    "format": "debugging",
+    "reviewOf": "engineering-practice/practice/debugging/reopen-task",
+    "skills": [
+     "crud-validation",
+     "data-integrity"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "bootforge/engineering-practice/practice/testing/test-pagination",
+    "track": "js",
+    "kind": "drill",
+    "title": "Write the pagination contract tests",
+    "phase": "engineering-practice",
+    "difficulty": 2,
+    "xp": 20,
+    "competencies": [
+     "testing-verification"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-js",
+       "language": "js",
+       "tests": [
+        {
+         "name": "accepts correct slice-based paging",
+         "code": "assert.equal(typeof mod.verify, 'function', 'export verify'); const candidate = (rows,page,limit)=>rows.slice((page-1)*limit,page*limit); mod.verify(candidate);",
+         "input": {
+          "candidateImplementation": "(rows,page,limit)=>rows.slice((page-1)*limit,page*limit)",
+          "expectedSuiteOutcome": "returns normally"
+         }
+        },
+        {
+         "name": "accepts a correct filter-based implementation",
+         "code": "assert.equal(typeof mod.verify, 'function', 'export verify'); const candidate = (rows,page,limit)=>rows.filter((_,i)=>i>=(page-1)*limit && i<page*limit); mod.verify(candidate);",
+         "input": {
+          "candidateImplementation": "(rows,page,limit)=>rows.filter((_,i)=>i>=(page-1)*limit && i<page*limit)",
+          "expectedSuiteOutcome": "returns normally"
+         }
+        },
+        {
+         "name": "detects the zero-based offset defect",
+         "code": "assert.equal(typeof mod.verify, 'function', 'export verify'); const candidate = (rows,page,limit)=>rows.slice(page*limit,(page+1)*limit); assert.throws(() => mod.verify(candidate), { name: 'AssertionError' }, 'your assertions must detect this defective behavior');",
+         "input": {
+          "candidateImplementation": "(rows,page,limit)=>rows.slice(page*limit,(page+1)*limit)",
+          "expectedSuiteOutcome": "throws AssertionError"
+         }
+        },
+        {
+         "name": "detects an exclusive-end off-by-one defect",
+         "code": "assert.equal(typeof mod.verify, 'function', 'export verify'); const candidate = (rows,page,limit)=>rows.slice((page-1)*limit,page*limit-1); assert.throws(() => mod.verify(candidate), { name: 'AssertionError' }, 'your assertions must detect this defective behavior');",
+         "input": {
+          "candidateImplementation": "(rows,page,limit)=>rows.slice((page-1)*limit,page*limit-1)",
+          "expectedSuiteOutcome": "throws AssertionError"
+         }
+        },
+        {
+         "name": "detects destructive paging",
+         "code": "assert.equal(typeof mod.verify, 'function', 'export verify'); const candidate = (rows,page,limit)=>rows.splice((page-1)*limit,limit); assert.throws(() => mod.verify(candidate), { name: 'AssertionError' }, 'your assertions must detect this defective behavior');",
+         "input": {
+          "candidateImplementation": "(rows,page,limit)=>rows.splice((page-1)*limit,limit)",
+          "expectedSuiteOutcome": "throws AssertionError"
+         }
+        },
+        {
+         "name": "detects a lost partial final page",
+         "code": "assert.equal(typeof mod.verify, 'function', 'export verify'); const candidate = (rows,page,limit)=>page*limit>rows.length?[]:rows.slice((page-1)*limit,page*limit); assert.throws(() => mod.verify(candidate), { name: 'AssertionError' }, 'your assertions must detect this defective behavior');",
+         "input": {
+          "candidateImplementation": "(rows,page,limit)=>page*limit>rows.length?[]:rows.slice((page-1)*limit,page*limit)",
+          "expectedSuiteOutcome": "throws AssertionError"
+         }
+        }
+       ],
+       "timeoutMs": 8000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "engineering-practice/practice/testing/test-pagination",
+    "type": "code",
+    "module": "practice",
+    "lesson": "testing",
+    "position": 2,
+    "xp": 20,
+    "format": "test-writing",
+    "skills": [
+     "testing"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "bootforge/engineering-practice/practice/testing/test-tenant-list",
+    "track": "js",
+    "kind": "drill",
+    "title": "Write tenant-scoped list regression tests",
+    "phase": "engineering-practice",
+    "difficulty": 2,
+    "xp": 20,
+    "competencies": [
+     "testing-verification"
+    ],
+    "prerequisites": [
+     "bootforge/engineering-practice/practice/testing/test-pagination"
+    ],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-js",
+       "language": "js",
+       "tests": [
+        {
+         "name": "accepts correct filtering",
+         "code": "assert.equal(typeof mod.verify, 'function', 'export verify'); const candidate = (rows,orgId)=>rows.filter(r=>r.orgId===orgId && r.deletedAt==null); mod.verify(candidate);",
+         "input": {
+          "candidateImplementation": "(rows,orgId)=>rows.filter(r=>r.orgId===orgId && r.deletedAt==null)",
+          "expectedSuiteOutcome": "returns normally"
+         }
+        },
+        {
+         "name": "accepts correct iteration",
+         "code": "assert.equal(typeof mod.verify, 'function', 'export verify'); const candidate = (rows,orgId)=>{const out=[];for(const r of rows)if(r.orgId===orgId && (r.deletedAt===null || r.deletedAt===undefined))out.push(r);return out;}; mod.verify(candidate);",
+         "input": {
+          "candidateImplementation": "(rows,orgId)=>{const out=[];for(const r of rows)if(r.orgId===orgId && (r.deletedAt===null || r.deletedAt===undefined))out.push(r);return out;}",
+          "expectedSuiteOutcome": "returns normally"
+         }
+        },
+        {
+         "name": "detects records leaking across organizations",
+         "code": "assert.equal(typeof mod.verify, 'function', 'export verify'); const candidate = (rows,orgId)=>rows.filter(r=>r.deletedAt==null); assert.throws(() => mod.verify(candidate), { name: 'AssertionError' }, 'your assertions must detect this defective behavior');",
+         "input": {
+          "candidateImplementation": "(rows,orgId)=>rows.filter(r=>r.deletedAt==null)",
+          "expectedSuiteOutcome": "throws AssertionError"
+         }
+        },
+        {
+         "name": "detects falsy deletion timestamps treated as active",
+         "code": "assert.equal(typeof mod.verify, 'function', 'export verify'); const candidate = (rows,orgId)=>rows.filter(r=>r.orgId===orgId && !r.deletedAt); assert.throws(() => mod.verify(candidate), { name: 'AssertionError' }, 'your assertions must detect this defective behavior');",
+         "input": {
+          "candidateImplementation": "(rows,orgId)=>rows.filter(r=>r.orgId===orgId && !r.deletedAt)",
+          "expectedSuiteOutcome": "throws AssertionError"
+         }
+        },
+        {
+         "name": "detects returning only the first visible record",
+         "code": "assert.equal(typeof mod.verify, 'function', 'export verify'); const candidate = (rows,orgId)=>rows.filter(r=>r.orgId===orgId && r.deletedAt==null).slice(0,1); assert.throws(() => mod.verify(candidate), { name: 'AssertionError' }, 'your assertions must detect this defective behavior');",
+         "input": {
+          "candidateImplementation": "(rows,orgId)=>rows.filter(r=>r.orgId===orgId && r.deletedAt==null).slice(0,1)",
+          "expectedSuiteOutcome": "throws AssertionError"
+         }
+        },
+        {
+         "name": "detects sorting and mutating the input",
+         "code": "assert.equal(typeof mod.verify, 'function', 'export verify'); const candidate = (rows,orgId)=>rows.sort((a,b)=>a.id-b.id).filter(r=>r.orgId===orgId && r.deletedAt==null); assert.throws(() => mod.verify(candidate), { name: 'AssertionError' }, 'your assertions must detect this defective behavior');",
+         "input": {
+          "candidateImplementation": "(rows,orgId)=>rows.sort((a,b)=>a.id-b.id).filter(r=>r.orgId===orgId && r.deletedAt==null)",
+          "expectedSuiteOutcome": "throws AssertionError"
+         }
+        }
+       ],
+       "timeoutMs": 8000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "engineering-practice/practice/testing/test-tenant-list",
+    "type": "code",
+    "module": "practice",
+    "lesson": "testing",
+    "position": 3,
+    "xp": 20,
+    "format": "test-writing",
+    "reviewOf": "engineering-practice/practice/testing/test-pagination",
+    "skills": [
+     "testing"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "bootforge/engineering-practice/practice/migrations/atomic-runner",
+    "track": "js",
+    "kind": "drill",
+    "title": "Apply a migration and its ledger atomically",
+    "phase": "engineering-practice",
+    "difficulty": 2,
+    "xp": 20,
+    "competencies": [
+     "data-http"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-js",
+       "language": "js",
+       "tests": [
+        {
+         "name": "apply once and preserve the ledger",
+         "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec('PRAGMA foreign_keys = ON'); assert.equal(typeof mod.migrate,'function','export migrate'); db.exec('CREATE TABLE _migrations(id TEXT PRIMARY KEY)'); const m={id:'001',sql:'CREATE TABLE notes(id INTEGER PRIMARY KEY, title TEXT);'}; assert.equal(mod.migrate(db,m),true); assert.equal(mod.migrate(db,m),false); assert.equal(db.prepare('SELECT COUNT(*) AS n FROM _migrations').get().n,1); db.prepare('INSERT INTO notes(title) VALUES (?)').run('works'); db.close();",
+         "input": {
+          "initialSchema": "_migrations(id TEXT PRIMARY KEY)",
+          "migration": {
+           "id": "001",
+           "sql": "CREATE TABLE notes(id INTEGER PRIMARY KEY, title TEXT);"
+          },
+          "calls": "Run the same migration twice."
+         }
+        },
+        {
+         "name": "mid-migration failure leaves no partial schema and can retry",
+         "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec('PRAGMA foreign_keys = ON'); db.exec('CREATE TABLE _migrations(id TEXT PRIMARY KEY)'); assert.throws(()=>mod.migrate(db,{id:'001',sql:'CREATE TABLE notes(id INTEGER); INSERT INTO missing_table VALUES(1);'})); assert.equal(db.prepare(\"SELECT COUNT(*) AS n FROM sqlite_master WHERE name='notes'\").get().n,0); assert.equal(db.prepare('SELECT COUNT(*) AS n FROM _migrations').get().n,0); assert.equal(mod.migrate(db,{id:'001',sql:'CREATE TABLE notes(id INTEGER)'}),true); db.close();",
+         "input": {
+          "initialSchema": "_migrations(id TEXT PRIMARY KEY)",
+          "failedMigration": {
+           "id": "001",
+           "sql": "CREATE TABLE notes(id INTEGER); INSERT INTO missing_table VALUES(1);"
+          },
+          "retryMigration": {
+           "id": "001",
+           "sql": "CREATE TABLE notes(id INTEGER)"
+          }
+         }
+        },
+        {
+         "name": "ledger failure also rolls back application writes",
+         "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec('PRAGMA foreign_keys = ON'); db.exec(\"CREATE TABLE _migrations(id TEXT PRIMARY KEY CHECK(id <> 'blocked')); CREATE TABLE counter(n INTEGER); INSERT INTO counter VALUES(0)\"); assert.throws(()=>mod.migrate(db,{id:'blocked',sql:'UPDATE counter SET n=1'})); assert.equal(db.prepare('SELECT n FROM counter').get().n,0); db.exec('BEGIN'); db.exec('ROLLBACK'); db.close();",
+         "input": {
+          "ledgerConstraint": "CHECK(id <> 'blocked')",
+          "initialCounter": 0,
+          "migration": {
+           "id": "blocked",
+           "sql": "UPDATE counter SET n=1"
+          }
+         }
+        }
+       ],
+       "timeoutMs": 8000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "engineering-practice/practice/migrations/atomic-runner",
+    "type": "code",
+    "module": "practice",
+    "lesson": "migrations",
+    "position": 4,
+    "xp": 20,
+    "format": "schema-migration",
+    "skills": [
+     "data-integrity",
+     "schema-migrations"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "bootforge/engineering-practice/practice/migrations/normalized-email",
+    "track": "js",
+    "kind": "drill",
+    "title": "Backfill normalized emails without losing customer data",
+    "phase": "engineering-practice",
+    "difficulty": 2,
+    "xp": 20,
+    "competencies": [
+     "data-http"
+    ],
+    "prerequisites": [
+     "bootforge/engineering-practice/practice/migrations/atomic-runner"
+    ],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-js",
+       "language": "js",
+       "tests": [
+        {
+         "name": "backfill, uniqueness, original values, and safe rerun",
+         "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec('PRAGMA foreign_keys = ON'); assert.equal(typeof mod.migrateEmails,'function','export migrateEmails'); db.exec(\"CREATE TABLE _migrations(id TEXT PRIMARY KEY); CREATE TABLE users(id INTEGER PRIMARY KEY,email TEXT NOT NULL); INSERT INTO users VALUES(1,' Ada@Example.com '),(2,'grace@example.com')\"); assert.equal(mod.migrateEmails(db),true); assert.equal(mod.migrateEmails(db),false); assert.deepStrictEqual(db.prepare('SELECT email,email_normalized FROM users ORDER BY id').all().map(r=>({...r})),[{email:' Ada@Example.com ',email_normalized:'ada@example.com'},{email:'grace@example.com',email_normalized:'grace@example.com'}]); assert.throws(()=>db.prepare('INSERT INTO users(email,email_normalized) VALUES(?,?)').run('another','ada@example.com')); db.close();",
+         "input": {
+          "users": [
+           {
+            "id": 1,
+            "email": " Ada@Example.com "
+           },
+           {
+            "id": 2,
+            "email": "grace@example.com"
+           }
+          ],
+          "calls": "Migrate twice, then try inserting duplicate email_normalized=ada@example.com."
+         }
+        },
+        {
+         "name": "ambiguous existing customers abort without changes",
+         "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec('PRAGMA foreign_keys = ON'); db.exec(\"CREATE TABLE _migrations(id TEXT PRIMARY KEY); CREATE TABLE users(id INTEGER PRIMARY KEY,email TEXT NOT NULL); INSERT INTO users VALUES(1,'Ada@x.test'),(2,' ada@x.test ')\"); assert.throws(()=>mod.migrateEmails(db)); assert.equal(db.prepare('SELECT COUNT(*) AS n FROM users').get().n,2); assert.equal(db.prepare('PRAGMA table_info(users)').all().some(r=>r.name==='email_normalized'),false); assert.equal(db.prepare('SELECT COUNT(*) AS n FROM _migrations').get().n,0); db.exec('BEGIN'); db.exec('ROLLBACK'); db.close();",
+         "input": {
+          "users": [
+           {
+            "id": 1,
+            "email": "Ada@x.test"
+           },
+           {
+            "id": 2,
+            "email": " ada@x.test "
+           }
+          ],
+          "appliedMigrations": []
+         }
+        },
+        {
+         "name": "late ledger failure rolls back schema, index, and backfill",
+         "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec('PRAGMA foreign_keys = ON'); db.exec(\"CREATE TABLE _migrations(id TEXT PRIMARY KEY CHECK(id <> '002-normalized-email')); CREATE TABLE users(id INTEGER PRIMARY KEY,email TEXT NOT NULL); INSERT INTO users VALUES(1,'A@x.test')\"); assert.throws(()=>mod.migrateEmails(db)); assert.equal(db.prepare('PRAGMA table_info(users)').all().some(r=>r.name==='email_normalized'),false); assert.equal(db.prepare(\"SELECT COUNT(*) AS n FROM sqlite_master WHERE name='users_email_normalized_unique'\").get().n,0); db.close();",
+         "input": {
+          "users": [
+           {
+            "id": 1,
+            "email": "A@x.test"
+           }
+          ],
+          "ledgerConstraint": "CHECK(id <> '002-normalized-email')"
+         }
+        }
+       ],
+       "timeoutMs": 8000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "engineering-practice/practice/migrations/normalized-email",
+    "type": "code",
+    "module": "practice",
+    "lesson": "migrations",
+    "position": 5,
+    "xp": 20,
+    "format": "schema-migration",
+    "reviewOf": "engineering-practice/practice/migrations/atomic-runner",
+    "skills": [
+     "data-integrity",
+     "schema-migrations"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "bootforge/engineering-practice/practice/reviews/review-task-patch",
+    "track": "js",
+    "kind": "written",
+    "title": "Review a cross-organization task update",
+    "phase": "engineering-practice",
+    "difficulty": 3,
+    "xp": 35,
+    "competencies": [
+     "code-reading",
+     "communication"
+    ],
+    "prerequisites": [],
+    "checks": []
+   },
+   "origin": {
+    "id": "engineering-practice/practice/reviews/review-task-patch",
+    "type": "written",
+    "module": "practice",
+    "lesson": "reviews",
+    "position": 6,
+    "xp": 35,
+    "format": "pr-review",
+    "skills": [
+     "authorization",
+     "data-integrity"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "bootforge/engineering-practice/practice/reviews/review-order-create",
+    "track": "js",
+    "kind": "written",
+    "title": "Review an order endpoint under concurrent requests",
+    "phase": "engineering-practice",
+    "difficulty": 3,
+    "xp": 35,
+    "competencies": [
+     "code-reading",
+     "communication"
+    ],
+    "prerequisites": [],
+    "checks": []
+   },
+   "origin": {
+    "id": "engineering-practice/practice/reviews/review-order-create",
+    "type": "written",
+    "module": "practice",
+    "lesson": "reviews",
+    "position": 7,
+    "xp": 35,
+    "format": "pr-review",
+    "reviewOf": "engineering-practice/practice/reviews/review-task-patch",
+    "skills": [
+     "authorization",
+     "data-integrity"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "bootforge/engineering-practice/practice/incidents/investigate-partial-migration",
+    "track": "js",
+    "kind": "written",
+    "title": "Investigate a migration that fails differently on retry",
+    "phase": "engineering-practice",
+    "difficulty": 3,
+    "xp": 35,
+    "competencies": [
+     "code-reading",
+     "communication"
+    ],
+    "prerequisites": [],
+    "checks": []
+   },
+   "origin": {
+    "id": "engineering-practice/practice/incidents/investigate-partial-migration",
+    "type": "written",
+    "module": "practice",
+    "lesson": "incidents",
+    "position": 8,
+    "xp": 35,
+    "format": "incident",
+    "skills": [
+     "operations",
+     "data-integrity"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "bootforge/engineering-practice/practice/incidents/investigate-duplicate-import",
+    "track": "js",
+    "kind": "written",
+    "title": "Investigate duplicate customers after an import retry",
+    "phase": "engineering-practice",
+    "difficulty": 3,
+    "xp": 35,
+    "competencies": [
+     "code-reading",
+     "communication"
+    ],
+    "prerequisites": [],
+    "checks": []
+   },
+   "origin": {
+    "id": "engineering-practice/practice/incidents/investigate-duplicate-import",
+    "type": "written",
+    "module": "practice",
+    "lesson": "incidents",
+    "position": 9,
+    "xp": 35,
+    "format": "incident",
+    "reviewOf": "engineering-practice/practice/incidents/investigate-partial-migration",
+    "skills": [
+     "operations",
+     "data-integrity"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "bootforge/engineering-practice/practice/projects/project-issue-tracker",
+    "track": "js",
+    "kind": "written",
+    "title": "Build a multi-organization issue tracker",
+    "phase": "engineering-practice",
+    "difficulty": 3,
+    "xp": 35,
+    "competencies": [
+     "feature-delivery"
+    ],
+    "prerequisites": [],
+    "checks": []
+   },
+   "origin": {
+    "id": "engineering-practice/practice/projects/project-issue-tracker",
+    "type": "written",
+    "module": "practice",
+    "lesson": "projects",
+    "position": 10,
+    "xp": 35,
+    "format": "project",
+    "skills": [
+     "crud-validation",
+     "authorization",
+     "data-integrity",
+     "testing",
+     "operations"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "bootforge/engineering-practice/practice/projects/project-order-console",
+    "track": "js",
+    "kind": "written",
+    "title": "Build an inventory and order console that survives retries",
+    "phase": "engineering-practice",
+    "difficulty": 3,
+    "xp": 35,
+    "competencies": [
+     "feature-delivery"
+    ],
+    "prerequisites": [],
+    "checks": []
+   },
+   "origin": {
+    "id": "engineering-practice/practice/projects/project-order-console",
+    "type": "written",
+    "module": "practice",
+    "lesson": "projects",
+    "position": 11,
+    "xp": 35,
+    "format": "project",
+    "reviewOf": "engineering-practice/practice/projects/project-issue-tracker",
+    "skills": [
+     "crud-validation",
+     "authorization",
+     "data-integrity",
+     "testing",
+     "operations"
+    ]
+   }
+  }
+ ],
+ "content": {
+  "bootforge/engineering-practice/practice/debugging/reopen-task": {
+   "instructions": "Ticket #184: a completed task stays completed after PATCH { done: false }. A second report says callers can overwrite id.\nRepair exported applyPatch(task, patch). Return a NEW task; leave both inputs untouched.\nOnly title and done may change; ignore unknown fields, including id and ownerId.\nA supplied title must be a string that is nonblank after trimming; save the trimmed value.\nA supplied done must be boolean (false is valid). Invalid supplied fields throw Error.\nMissing fields preserve their old values. All valid fields must be applied together.",
+   "starter": "export function applyPatch(task, patch) {\n  return { ...task, ...patch, done: patch.done || task.done };\n}",
+   "solution": "export function applyPatch(task, patch) {\n  const next = { ...task };\n  if (Object.hasOwn(patch, 'title')) {\n    if (typeof patch.title !== 'string' || !patch.title.trim()) throw new Error('invalid title');\n    next.title = patch.title.trim();\n  }\n  if (Object.hasOwn(patch, 'done')) {\n    if (typeof patch.done !== 'boolean') throw new Error('invalid done');\n    next.done = patch.done;\n  }\n  return next;\n}",
+   "explanation": "Presence checks preserve false while an allowlist protects identity fields. Constructing a new object prevents a failed or successful patch from mutating the caller’s cached value. The negative tests cover the request contract, not just the reported symptom.",
+   "hints": [
+    "Separate field presence from field truthiness.",
+    "Build an allowlisted new object; validate a supplied boolean with typeof."
+   ]
+  },
+  "bootforge/engineering-practice/practice/debugging/zero-stock": {
+   "instructions": "Ticket #207: entering stock=0 leaves the old stock in place. Empty labels are also reaching the catalog.\nRepair updateInventory(item, patch). Return a NEW object, never mutate either input.\nOnly label and stock are writable; ignore every other key, including sku.\nIf supplied, label must be a nonblank string and is trimmed. stock must be a nonnegative safe integer; zero is valid.\nInvalid supplied values throw Error. Missing fields retain their previous values. A patch may contain both fields.",
+   "starter": "export function updateInventory(item, patch) {\n  Object.assign(item, patch);\n  return { ...item, stock: patch.stock || item.stock };\n}",
+   "solution": "export function updateInventory(item, patch) {\n  const next = { ...item };\n  if (Object.hasOwn(patch, 'label')) {\n    if (typeof patch.label !== 'string' || !patch.label.trim()) throw new Error('invalid label');\n    next.label = patch.label.trim();\n  }\n  if (Object.hasOwn(patch, 'stock')) {\n    if (!Number.isSafeInteger(patch.stock) || patch.stock < 0) throw new Error('invalid stock');\n    next.stock = patch.stock;\n  }\n  return next;\n}",
+   "explanation": "The alternate ticket tests the same presence and integrity skills in a numeric domain. A valid zero is data, and a stock quantity is stricter than any JavaScript number. Reproductions that also assert unchanged inputs catch regressions hidden by output-only checks.",
+   "hints": [
+    "Mutation and truthiness are separate defects; fix both.",
+    "Number.isSafeInteger rejects strings, fractions, NaN, infinity, and unsafe integers."
+   ]
+  },
+  "bootforge/engineering-practice/practice/testing/test-pagination": {
+   "instructions": "Candidate signature: paginate(rows, page, limit). page and limit are positive integers supplied by trusted validation. Return rows for that 1-based page in original order, or [] beyond the end. Return a new array and never mutate rows. Elements themselves may be shared. Write tests that distinguish the correct behavior from zero-based paging, lost last items, and input mutation.\n\nWrite and export verify(candidate). Use node:assert/strict to exercise the supplied function. It must return normally for EVERY correct implementation and throw an AssertionError (or an assertion failure propagated from your checks) for each defective implementation. Do not inspect function source, names, or implementation identity. Your tests must test behavior. The grader runs your suite against good implementations and intentionally broken ones.",
+   "starter": "import assert from 'node:assert/strict';\n\nexport function verify(candidate) {\n  // Arrange examples, call candidate, assert the contract.\n}\n",
+   "solution": "import assert from 'node:assert/strict';\nexport function verify(candidate) {\n  const rows = ['d','a','c','b','e'];\n  const before = [...rows];\n  const first = candidate(rows, 1, 2);\n  assert.deepStrictEqual(first, ['d','a']);\n  assert.notStrictEqual(first, rows);\n  assert.deepStrictEqual(rows, before);\n  assert.deepStrictEqual(candidate(rows, 2, 2), ['c','b']);\n  assert.deepStrictEqual(candidate(rows, 3, 2), ['e']);\n  assert.deepStrictEqual(candidate(rows, 4, 2), []);\n  assert.deepStrictEqual(candidate([], 1, 2), []);\n  assert.deepStrictEqual(candidate(rows, 1, 10), before);\n  assert.deepStrictEqual(rows, before);\n}",
+   "explanation": "This reverses the usual exercise: you submit the test suite, and implementations are the test data. Accepting more than one correct implementation discourages testing internal details. Rejecting faulty alternatives demonstrates that the assertions protect behavior rather than merely execute code.",
+   "hints": [
+    "Start with a happy path so an always-throwing suite cannot pass.",
+    "Choose examples that separate the contract from each plausible bug; check inputs after calls too."
+   ]
+  },
+  "bootforge/engineering-practice/practice/testing/test-tenant-list": {
+   "instructions": "Candidate signature: visible(rows, orgId). Each row has id, orgId, and optional deletedAt. Return all rows whose orgId strictly equals the requested orgId AND whose deletedAt is null or undefined. Preserve input order and never mutate rows. A deletion timestamp of 0 still means deleted. Unknown organizations return []. Write assertions for isolation, deleted records, order, and multiple matches.\n\nWrite and export verify(candidate). Use node:assert/strict to exercise the supplied function. It must return normally for EVERY correct implementation and throw an AssertionError (or an assertion failure propagated from your checks) for each defective implementation. Do not inspect function source, names, or implementation identity. Your tests must test behavior. The grader runs your suite against good implementations and intentionally broken ones.",
+   "starter": "import assert from 'node:assert/strict';\n\nexport function verify(candidate) {\n  // Arrange examples, call candidate, assert the contract.\n}\n",
+   "solution": "import assert from 'node:assert/strict';\nexport function verify(candidate) {\n  const rows = [\n    {id:3,orgId:'a',deletedAt:null},\n    {id:2,orgId:'b',deletedAt:null},\n    {id:4,orgId:'a',deletedAt:0},\n    {id:1,orgId:'a'},\n    {id:5,orgId:'a',deletedAt:100},\n  ];\n  const before = structuredClone(rows);\n  assert.deepStrictEqual(candidate(rows,'a'), [before[0],before[3]]);\n  assert.deepStrictEqual(rows,before);\n  assert.deepStrictEqual(candidate(rows,'b'), [before[1]]);\n  assert.deepStrictEqual(candidate(rows,'missing'), []);\n  assert.deepStrictEqual(candidate([],'a'), []);\n  assert.deepStrictEqual(rows,before);\n}",
+   "explanation": "This reverses the usual exercise: you submit the test suite, and implementations are the test data. Accepting more than one correct implementation discourages testing internal details. Rejecting faulty alternatives demonstrates that the assertions protect behavior rather than merely execute code.",
+   "hints": [
+    "Start with a happy path so an always-throwing suite cannot pass.",
+    "Choose examples that separate the contract from each plausible bug; check inputs after calls too."
+   ]
+  },
+  "bootforge/engineering-practice/practice/migrations/atomic-runner": {
+   "instructions": "Export migrate(db, migration), where migration is { id, sql } and the existing table is _migrations(id TEXT PRIMARY KEY). If id is already recorded, return false without executing SQL. Otherwise execute migration.sql and insert its id in ONE SQLite transaction; commit and return true. On any SQL/ledger error roll back and rethrow. The database has no open transaction when called. Do not close db. A failed migration must leave neither partial schema/data changes nor a ledger entry.",
+   "starter": "export function migrate(db, migration) {\n  db.exec(migration.sql);\n  db.prepare('INSERT INTO _migrations (id) VALUES (?)').run(migration.id);\n  return true;\n}",
+   "solution": "export function migrate(db, migration) {\n  if (db.prepare('SELECT id FROM _migrations WHERE id = ?').get(migration.id)) return false;\n  db.exec('BEGIN');\n  try {\n    db.exec(migration.sql);\n    db.prepare('INSERT INTO _migrations (id) VALUES (?)').run(migration.id);\n    db.exec('COMMIT');\n    return true;\n  } catch (error) {\n    db.exec('ROLLBACK');\n    throw error;\n  }\n}",
+   "explanation": "The failure tests protect the exact state that ordinary apply-twice tests miss. A retry works because rollback removes the partial schema change. Testing a ledger constraint failure also proves that the transaction boundary includes recording, not only migration SQL.",
+   "hints": [
+    "Both SQL and recording belong between BEGIN and COMMIT.",
+    "The ledger insertion can fail too; include it in the try block."
+   ]
+  },
+  "bootforge/engineering-practice/practice/migrations/normalized-email": {
+   "instructions": "Existing schema: users(id INTEGER PRIMARY KEY, email TEXT NOT NULL), _migrations(id TEXT PRIMARY KEY).\nExport migrateEmails(db). Migration id is '002-normalized-email'. Already recorded -> false.\nInside ONE transaction: reject duplicate lower(trim(email)) values with Error; add email_normalized TEXT;\nbackfill every row with lower(trim(email)); create UNIQUE INDEX users_email_normalized_unique ON users(email_normalized);\nrecord the migration, commit, return true. On failure roll back and rethrow. Do not delete/merge rows or change email.\nInputs use ASCII emails. No open transaction exists when called. This backfill does not implement future application dual-writes;\nthose require a separate rollout step. The uniqueness index allows NULL, so application writes must supply normalized values.",
+   "starter": "export function migrateEmails(db) {\n  // Inspect current data, then make the schema and ledger change atomic.\n}\n",
+   "solution": "export function migrateEmails(db) {\n  const id = '002-normalized-email';\n  if (db.prepare('SELECT id FROM _migrations WHERE id = ?').get(id)) return false;\n  db.exec('BEGIN');\n  try {\n    const duplicate = db.prepare('SELECT lower(trim(email)) AS normalized FROM users GROUP BY lower(trim(email)) HAVING COUNT(*) > 1 LIMIT 1').get();\n    if (duplicate) throw new Error('duplicate normalized email');\n    db.exec('ALTER TABLE users ADD COLUMN email_normalized TEXT');\n    db.exec('UPDATE users SET email_normalized = lower(trim(email))');\n    db.exec('CREATE UNIQUE INDEX users_email_normalized_unique ON users(email_normalized)');\n    db.prepare('INSERT INTO _migrations(id) VALUES (?)').run(id);\n    db.exec('COMMIT');\n    return true;\n  } catch (error) {\n    db.exec('ROLLBACK');\n    throw error;\n  }\n}",
+   "explanation": "Normalization can merge distinct representations into one identity, so the migration must inspect existing data before enforcing uniqueness. This exercise preserves original values and aborts on ambiguity. A real rollout must also deploy compatible writes and later enforce non-null normalized values; successful backfill alone does not finish that rollout.",
+   "hints": [
+    "Find collisions with GROUP BY lower(trim(email)) HAVING COUNT(*) > 1.",
+    "The precondition, schema change, data change, index, and ledger belong in one transaction."
+   ]
+  },
+  "bootforge/engineering-practice/practice/reviews/review-task-patch": {
+   "instructions": "You review PR #42. Auth middleware verifies a session and sets req.user={id,orgId}. A task belongs to exactly one org.\nProduct contract: members may edit title/done of tasks in their own org; callers cannot reassign ownership or identity.\nMissing and inaccessible tasks both return 404. The repository supports findOne(where), updateOne(where,patch),\nand returns null when no row matches. updateOne is an atomic scoped update.\n\nProposed handler (line numbers are part of the review):\n1 app.patch('/tasks/:id', requireSession, async (req,res) => {\n2   const task = await repo.findOne({id:req.params.id});\n3   if (!task) return res.status(404).json({error:'not found'});\n4   const updated = await repo.updateOne({id:task.id}, req.body);\n5   return res.json(updated);\n6 });\n\nPR test: member in org A edits the title of a task in org A and gets 200.\nWrite a review with blocking findings, one concrete exploit scenario, corrected query/update boundaries,\na validation strategy, and at least four regression tests. State a merge recommendation.",
+   "starter": "Recommendation:\n\nBlocking findings and evidence:\n\nProposed correction:\n\nRegression tests:\n",
+   "rubric": [
+    {
+     "id": "scope",
+     "label": "Identifies the cross-org exploit at the unscoped lookup AND update and uses authenticated orgId in both predicates."
+    },
+    {
+     "id": "allowlist",
+     "label": "Explains mass assignment and proposes a validated title/done allowlist with false preserved."
+    },
+    {
+     "id": "tests",
+     "label": "Includes cross-org, protected-field, invalid-input, and valid-update tests with unchanged data on rejection."
+    },
+    {
+     "id": "decision",
+     "label": "Requests changes for concrete security/data-integrity reasons and handles missing/inaccessible results consistently."
+    }
+   ],
+   "solution": "Request changes. At lines 2 and 4, identity-only predicates let an authenticated org A member patch an org B task by guessing its id. Scope BOTH lookup and update to {id, orgId:req.user.orgId}; use the server-established organization, never a body field. Line 4 also mass-assigns untrusted fields: build a validated title/done allowlist, trim a nonblank title, accept only boolean done, and reject invalid values before writing. Ignore or reject protected id/orgId/ownerId fields consistently. Handle a null scoped update as 404 as well, since deletion may occur after the read. Tests: cross-org request returns 404 with no write; missing id returns the same response; body orgId/id cannot change ownership/identity; false reopens a task; blank title/wrong boolean gets 400 without mutation; same-org valid edit succeeds. The existing happy-path test does not cover either trust boundary.",
+   "explanation": "A review must protect both row selection and writable fields. A scoped read alone is weaker than a scoped atomic update, and a verified session does not make an arbitrary request body trusted. The checklist evaluates the reasoning you explicitly wrote, not whether you happened to choose the same words as the model answer.",
+   "hints": [
+    "Authentication answers who; object authorization answers which records.",
+    "Look at both the WHERE boundary and the fields allowed in SET."
+   ]
+  },
+  "bootforge/engineering-practice/practice/reviews/review-order-create": {
+   "instructions": "Product contract: products are organization-owned; a member can order only from their org. Stock may never go below zero.\nCreating the order and decrementing stock must succeed or fail together. req.user.orgId comes from a verified session.\nAssume an async SQL client that supports db.transaction(async tx => ...), row counts, and parameterized SQL.\n\nProposed change:\n1 const product = await db.one('SELECT * FROM products WHERE id = ?', [req.body.productId]);\n2 if (product.stock < req.body.qty) return res.status(409).json({error:'out of stock'});\n3 await db.run('UPDATE products SET stock = ? WHERE id = ?', [product.stock - req.body.qty, product.id]);\n4 const order = await db.insert('orders', {org_id:req.body.orgId, product_id:product.id, qty:req.body.qty});\n5 res.status(201).json(order);\n\nEvidence: stock starts at 1. Requests A and B both read 1 before either line 3 runs; both request qty=1.\nAnother run crashes between lines 3 and 4. Tests cover one successful order only.\nWrite a prioritized review with the interleaving's concrete outcome, ownership corrections, an atomic stock strategy,\nfailure handling, quantity validation, and tests. Do not prescribe a particular ORM.",
+   "starter": "Recommendation:\n\nObserved failure scenarios:\n\nCorrected transaction and authorization:\n\nTests:\n",
+   "rubric": [
+    {
+     "id": "scope",
+     "label": "Derives order ownership from authenticated orgId and scopes product access to that org."
+    },
+    {
+     "id": "interleaving",
+     "label": "Explains that two orders can be created while stock ends at zero, and separately explains the crash-between-writes loss."
+    },
+    {
+     "id": "atomic",
+     "label": "Uses a guarded stock decrement and checks affected rows inside the same transaction as order creation."
+    },
+    {
+     "id": "tests",
+     "label": "Includes concurrent last-unit, injected failure, cross-org, and invalid-quantity regression tests."
+    }
+   ],
+   "solution": "Request changes. Both requests can write stock=0 and create two orders from one unit: a lost update hides the oversell. A crash after line 3 consumes stock without an order. Use one transaction with a guarded decrement UPDATE products SET stock=stock-? WHERE id=? AND org_id=? AND stock>=?, check that exactly one row changed, then insert the order in the same transaction. Roll back all work on insert failure. Require a positive safe integer quantity before the transaction. Scope product access using req.user.orgId and assign order.org_id from that verified value; body orgId is not authority. Missing/inaccessible products should follow the chosen non-leaking contract; insufficient stock is a domain conflict. Tests: two concurrent orders for the last unit yield one success; injected insert failure restores stock; foreign-org product is denied without changes; spoofed body orgId cannot reassign the order; zero/negative/fractional/string quantities fail; normal order records the authenticated org. The guarded statement and transaction have separate jobs: enforce the stock precondition atomically and couple the two writes.",
+   "explanation": "Concurrency defects require reasoning about more than one execution. The corrected design must preserve organization boundaries, stock invariants, and all-or-nothing writes together. Merely wrapping the existing read/absolute-write sequence in a transaction may still depend on isolation behavior, so state the atomic precondition explicitly.",
+   "hints": [
+    "The final stock can look valid while two orders have consumed the same unit.",
+    "A transaction and a conditional UPDATE solve different parts of this problem."
+   ]
+  },
+  "bootforge/engineering-practice/practice/incidents/investigate-partial-migration": {
+   "instructions": "At 09:00 release v12 starts; it expects invoices.paid_at. The runner executes each file with db.exec(sql), then records its id.\nMigration 012 SQL: ALTER TABLE invoices ADD COLUMN paid_at TEXT; UPDATE invoices SET paid_at = settled_at;\nThe old schema has settled_on, not settled_at. SQLite supports transactional DDL; the runner has no transaction.\n\nTimeline/logs:\n09:00:02 migration 012: no such column settled_at\n09:00:05 process restarts automatically\n09:00:06 migration 012: duplicate column name paid_at\n09:01:00 GET /invoices 500 rate: 38%; other endpoints normal\nLedger: latest applied id=011. PRAGMA table_info(invoices): paid_at EXISTS, settled_on EXISTS.\nRead-only sample: old paid invoices have settled_on populated and paid_at NULL. No rows have been deleted.\n\nWrite a concise incident report: confirmed mechanism, remaining uncertainties, safe immediate mitigation,\na reviewed recovery plan preserving invoice data, verification queries/checks, and prevention.\nDo not propose deleting production data, blindly replaying the file, or simply marking the broken migration complete.",
+   "starter": "Impact and timeline:\n\nConfirmed facts vs hypotheses:\n\nMitigation:\n\nRecovery and verification:\n\nPrevention:\n",
+   "rubric": [
+    {
+     "id": "cause",
+     "label": "Explains partial DDL commit, failed backfill, absent ledger, and why retry gets a different error."
+    },
+    {
+     "id": "mitigation",
+     "label": "Stops the failing rollout/retry loop and checks compatibility before rollback or rerouting."
+    },
+    {
+     "id": "repair",
+     "label": "Proposes backup/inspection plus a reviewed data-preserving repair; records completion only after validating the intended outcome."
+    },
+    {
+     "id": "verification",
+     "label": "Names data consistency, schema/ledger, restart, and endpoint-error checks and adds failure-injection prevention."
+    }
+   ],
+   "solution": "The first ALTER committed independently, the UPDATE failed on the wrong source column, and no ledger entry was written. Restart replay then failed because paid_at already existed. The evidence proves partial schema application; it does not prove all invoices are intact or which instances serve v12. Pause the restart/migration loop and stop the v12 rollout; route to a verified compatible version or temporarily disable the affected endpoint. Before recovery, capture a backup/snapshot and inspect schema, ledger, row counts, and paid/unpaid samples. Prepare and review an explicit repair for the actual schema: backfill paid_at from settled_on under the agreed business meaning, preserve existing non-null values as appropriate, validate counts and samples, then record completion only when the intended migration outcome is verified. Perform repair and ledger recording atomically where supported. Do not rerun ALTER blindly. Check paid invoices, null semantics, total counts, ledger/schema agreement, error rate, and restart behavior. Prevent with transactional apply+ledger, migration-failure injection tests, real old-schema fixtures, and a deployment gate checking migration success before new traffic.",
+   "explanation": "The mismatched ledger and schema explain both errors without requiring a second independent defect. Recovery must converge the actual database to the intended state while preserving business data. A useful report states what remains unverified rather than treating a small sample as proof of complete integrity.",
+   "hints": [
+    "Compare the ledger with the actual schema; neither alone describes the full state.",
+    "Separate stabilizing traffic from repairing the database."
+   ]
+  },
+  "bootforge/engineering-practice/practice/incidents/investigate-duplicate-import": {
+   "instructions": "A queue delivers import jobs at least once. Job 781 imports 500 CSV rows for org A.\nWorker code inserts each customer, then sends an acknowledgement after all rows. There is no import-row unique key.\nRetrying a job starts from row 1. Ordinary customer names/emails are NOT unique business identifiers.\n\nLogs:\n14:00:00 worker W1 receives job 781 attempt 1\n14:00:12 W1 commits source rows 1..300; network connection is lost before acknowledgement\n14:01:00 worker W2 receives job 781 attempt 2\n14:01:20 W2 commits source rows 1..500; acknowledgement succeeds\nMetrics: job status=completed; inserted rows with import_id=781: 800; CSV source rows: 500.\nExisting records store import_id and source_row_number, but no constraint prevents duplicates.\nSupport reports duplicate contacts; some contacts already have notes referencing their customer ids.\n\nWrite an investigation with the confirmed duplication mechanism, immediate containment, queries to scope impact,\na safe repair proposal preserving notes, a durable prevention design, and recovery criteria.\nExplain why in-memory deduplication or making email unique does not meet the contract.",
+   "starter": "Impact and evidence:\n\nContainment:\n\nRepair plan:\n\nDurable prevention:\n\nVerification:\n",
+   "rubric": [
+    {
+     "id": "cause",
+     "label": "Connects 300 committed rows plus a 500-row replay to 800 effects under at-least-once delivery."
+    },
+    {
+     "id": "scope",
+     "label": "Scopes duplicates by org/import/source-row identity and checks other jobs and dependent notes."
+    },
+    {
+     "id": "repair",
+     "label": "Uses a reviewed retained-id mapping and preserves references before deleting or archiving duplicates."
+    },
+    {
+     "id": "prevention",
+     "label": "Proposes a durable unique import-row identity with atomic effects, safe retries, and measurable integrity/replay checks."
+    }
+   ],
+   "solution": "At-least-once redelivery replayed 300 already-committed rows. Completed job status does not imply exactly-once row effects. Pause affected imports/retries if duplication continues, preserve the CSV and attempt logs, and query GROUP BY org_id,import_id,source_row_number HAVING COUNT(*)>1 to enumerate affected identities. Check other jobs and references before claiming the scope is only 781. Take a snapshot and prepare a reviewed mapping from duplicate ids to a retained record per import-row identity; reassign dependent notes with business approval and verify no conflicting edits before removing or archiving duplicates. Do not delete by email or name. Prevent with a durable unique key on (org_id,import_id,source_row_number) and an insert/upsert policy that makes redelivery harmless; persist the row effect and its idempotency identity atomically. Acknowledge only after durable completion; retries may still happen and must be safe. Memory disappears on restart and is not shared across workers. Email is not unique under the product contract. Verify one retained effect for each of 500 source rows, intact note relationships, no new duplicate-key groups, and safe replay/concurrent-worker tests.",
+   "explanation": "Reliable jobs are designed for redelivery, not for an assumption that acknowledgements never get lost. Repair is harder once other records refer to duplicates, so an id mapping and reference verification are part of the operation. The checklist separates identifying the cause from demonstrating a safe recovery.",
+   "hints": [
+    "The acknowledgement and row commits are separate failure boundaries.",
+    "Use the identity of the import action, not an attribute the business allows to repeat."
+   ]
+  },
+  "bootforge/engineering-practice/practice/projects/project-issue-tracker": {
+   "instructions": "Build in your own repository using React + TypeScript, a real HTTP API, and a relational database.\nScope: organizations, members, projects, issues, and comments. Roles: viewer reads; editor creates/edits; admin manages membership.\nAll records are organization-scoped. Issue title is required; status is todo/doing/done. Comments belong to an existing issue.\nImplement list/search/status filter with filter state in the URL, create/edit forms with labelled fields, keyboard use,\nloading/empty/error states, and a conflict response when editing a stale issue version.\n\nMilestone 1: schema, migrations, seed two organizations, and one UI-to-DB create/list flow.\nMilestone 2: verified sessions, server-side role/object authorization, comments, validated edits, and stale-version protection.\nMilestone 3: real API+database tests, at least one browser create/edit journey, and a regression proving org B cannot access org A.\nMilestone 4: documented local start, configuration, health endpoint, request logging without secrets, and a backup/restore drill.\nKeep deployment local if you have no hosting account; document the exact environment you actually verified.\n\nSubmit an evidence journal here with repository/commit references, schema decisions, commands and actual results,\none failed-path demonstration per boundary, and a short explanation of your tradeoffs and remaining gaps.\nThis is a self-assessed project: checking the rubric does not mean the app has verified your repository.",
+   "starter": "Repository and commit:\n\nMilestone 1 evidence:\n\nMilestone 2 evidence:\n\nMilestone 3 commands/results:\n\nMilestone 4 recovery evidence:\n\nTradeoffs and remaining gaps:\n",
+   "rubric": [
+    {
+     "id": "flow",
+     "label": "Provides repository/commit and evidence of real browser-to-HTTP-to-database create/list/edit flows with accessible forms and error states."
+    },
+    {
+     "id": "boundaries",
+     "label": "Demonstrates server-side org/role authorization, validation, foreign-key integrity, and stale-version conflict behavior."
+    },
+    {
+     "id": "verification",
+     "label": "Records actual API+database and browser test commands/results, including a cross-org negative test."
+    },
+    {
+     "id": "operations",
+     "label": "Documents reproducible startup, safe logs/health checks, and an actually executed backup/restore verification."
+    },
+    {
+     "id": "judgment",
+     "label": "Explains at least one tradeoff and accurately distinguishes finished milestones from remaining gaps."
+    }
+   ],
+   "solution": "A complete evidence journal points to the actual repository and commit, identifies migration files and org-scoped foreign keys/queries, and records the commands used to start the app and run its tests. It demonstrates creation and editing in the real browser, documents field-error and loading/empty/error states, and records an HTTP integration test rejecting a second organization without data changes. It shows viewer/editor/admin permission cases and a stale-version edit returning a conflict while preserving the newer value. It links the browser journey and reports actual pass/fail results rather than a proposed test list. Operational evidence includes configuration names without secret values, a health check, a redacted request log, a database backup, and a successful restore whose record counts or samples were verified. The decision note explains why the chosen state, schema, and authorization boundaries fit this app, and openly names incomplete milestones. There is no single source-code answer: completion requires working artifacts and reproducible evidence for the rubric.",
+   "explanation": "This milestone combines skills that isolated exercises cannot verify together. The evidence journal supports self-review without pretending that a checklist replaces running tests or external code review. Revisit unfinished criteria as you complete the real project.",
+   "hints": [
+    "Start with one organization-scoped vertical slice before adding every screen.",
+    "Keep a running evidence journal; do not reconstruct test claims from memory at the end."
+   ]
+  },
+  "bootforge/engineering-practice/practice/projects/project-order-console": {
+   "instructions": "Build a second vertical project in a local repository, or extend an existing app with these genuinely new requirements.\nScope: organization-owned products, stock, orders, order lines, and an audit trail. A member orders; an admin adjusts stock.\nQuantities are positive integers; prices use integer minor units. An order and all stock deductions are one transaction.\nRepeating the same authenticated organization's idempotency key with the same payload must replay the original result;\nreusing that key with a different payload must conflict. The key and outcome must survive a server restart.\n\nMilestone 1: real React/TypeScript form + HTTP endpoints + database migrations, product list, order details, validation and loading/error states.\nMilestone 2: role/org authorization, atomic guarded stock deductions, audit records, and durable idempotency.\nMilestone 3: concurrent last-unit tests, mid-order failure rollback, retry after restart, and a browser order journey.\nMilestone 4: seed enough orders to inspect a slow list query; capture the query plan before/after an appropriate index,\nwrite a small incident/recovery runbook, and verify a backup can be restored.\n\nSubmit an evidence journal with repo/commit references, schema and transaction boundaries, real commands/results,\nbefore/after query-plan evidence, and an honest limitation/tradeoff note. The app does not run or inspect your local project.",
+   "starter": "Repository and commit:\n\nWorking UI/API/data flow:\n\nTransaction, authorization, and retry evidence:\n\nTests and actual results:\n\nQuery-plan and recovery evidence:\n\nTradeoffs and gaps:\n",
+   "rubric": [
+    {
+     "id": "flow",
+     "label": "Shows real accessible UI/API/database product and order flows with validation and loading/error states."
+    },
+    {
+     "id": "boundaries",
+     "label": "Demonstrates org/role authorization, atomic stock/order changes, and durable payload-bound idempotency."
+    },
+    {
+     "id": "verification",
+     "label": "Records actual concurrency, rollback, restart/replay, cross-org, and browser test results."
+    },
+    {
+     "id": "operations",
+     "label": "Includes real before/after query plans, a tested backup/restore, and actionable incident recovery criteria."
+    },
+    {
+     "id": "judgment",
+     "label": "Explains design tradeoffs and names remaining work without treating plans as completed evidence."
+    }
+   ],
+   "solution": "A convincing submission identifies the repository/commit and migrations, demonstrates the real create/list/detail flows and accessible validation UI, and supplies a transaction design that atomically couples guarded stock decrements, order lines, and the required audit write. It derives organization and permissions from a verified server session. Durable idempotency is scoped to the authenticated organization, stores a payload fingerprint and original outcome, and handles concurrent duplicate requests as well as restart/replay. Test evidence includes two requests competing for one item with exactly one successful order, a forced later-line failure restoring earlier deductions, cross-org denial without writes, a mismatched idempotency payload returning conflict, and one real browser journey. The performance note gives dataset size, actual query plans, the index change, and its write/storage tradeoff. The operational evidence includes a tested restore and a runbook with detection, containment, integrity checks, and recovery criteria. Unimplemented criteria remain unchecked; a written design alone is not a finished project.",
+   "explanation": "The second project transfers the same broad CRUD competencies into a domain with stronger consistency and retry requirements. Successful self-assessment requires evidence from the actual app, including adverse cases. The added query-plan and recovery work connects feature delivery to ongoing ownership.",
+   "hints": [
+    "Scope idempotency by organization and operation; a request key alone is not an authorization boundary.",
+    "Failure injection and concurrent requests provide different evidence; include both."
+   ]
+  }
+ }
+}

@@ -135,11 +135,16 @@ export function getUnitDetail(deps: ServiceDeps, unitId: number): UnitDetailResp
   const track = getTrack(db, unit.trackId);
   const check = primaryCheck(db, unit.id);
   const summary = summarize(unit, track?.locked ?? true, passedUnitIds(db), revealedUnitIds(db), new Map([[unit.id, unitPrerequisites(db, unit.id)]]));
+  const entry = deps.content.get(unit.key);
   return {
     unit: { ...summary, code: unit.code, competencies: unitCompetencies(db, unit.id), variationOfUnitId: unit.variationOfUnitId },
     // PUBLIC projection only — the full spec never leaves the server
     check: check ? { id: check.id, threshold: check.threshold, spec: toPublicCheck(check.spec) } : null,
-    starter: deps.content.get(unit.key)?.starter ?? null,
+    // PUBLIC content fields only (whitelist); solution / explanation / hints stay server-side
+    instructions: entry?.instructions ?? null,
+    starter: entry?.starter ?? null,
+    snippet: entry?.snippet ?? null,
+    rubric: entry?.rubric ?? null,
   };
 }
 
@@ -389,7 +394,8 @@ export function getDashboard(deps: ServiceDeps): DashboardResponse {
     const nextUp = listTracks(db)
       .filter((t) => !t.locked)
       .map((t) => {
-        const next = unitsForTrack(db, t.id).find((u) => lockStateFor(u, false, passed, prereqs) === 'available');
+        // written units have no check (self-assessed carve-out): never "next up"
+        const next = unitsForTrack(db, t.id).find((u) => u.kind !== 'written' && lockStateFor(u, false, passed, prereqs) === 'available');
         return { trackId: t.id, unit: next ? { id: next.id, key: next.key, title: next.title, kind: next.kind } : null };
       });
 

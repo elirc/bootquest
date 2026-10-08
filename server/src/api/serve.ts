@@ -1,18 +1,27 @@
+import { existsSync, readdirSync } from 'node:fs';
 import type { Server } from 'node:http';
 import { createServer } from 'node:net';
-import { resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { join, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import type { UnitContentEntry } from '@bootquest/shared/api';
 import { openDb, resolveDbPath, type Db } from '../db/database.ts';
 import type { Clock } from '../engines/clock.ts';
+import { loadPackIntoDb, packContentEntries, readPack, type LoadStats } from '../store/packs.ts';
 import { createApp } from './app.ts';
-import { emptyContentStore, fileContentStore } from './content-store.ts';
+import { combineContentStores, fileContentEntries } from './content-store.ts';
 import type { RunnerRegistry } from './runners.ts';
 
 /**
  * Real entrypoint: `node --import tsx server/src/api/serve.ts`
  *   BOOTQUEST_DB            (required) the one DB file — there is no default
  *   BOOTQUEST_PORT          (optional) default 4178
- *   BOOTQUEST_UNIT_CONTENT  (optional) JSON {unitKey: {starter?, solution?}} from content/
+ *   BOOTQUEST_UNIT_CONTENT  (optional) JSON {unitKey: UnitContentEntry} from content/
+ *   BOOTQUEST_PACKS         (optional) comma-separated pack dirs (each with manifest.json)
+ *                           loaded at startup; when serve.ts is run directly and this is
+ *                           unset, every pack under <repo>/content/packs is loaded.
+ *                           Set it to '' to load none.
+ *   BOOTQUEST_PACK_COURSES  (optional) comma-separated course ids to load from the packs
+ * A pack whose loaded count differs from its built count REFUSES TO START.
  */
 export const DEFAULT_PORT = 4178;
 export const DEFAULT_HOST = '127.0.0.1';
@@ -73,6 +82,25 @@ export interface RunningServer {
   port: number;
   host: string;
   close(): Promise<void>;
+  /** one entry per loaded pack (loaded === built already asserted) */
+  packs: LoadStats[];
+}
+
+function splitList(raw: string | undefined): string[] {
+  return (raw ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+}
+
+function packHasCourse(dir: string, course: string): boolean {
+  return existsSync(join(dir, `${course}.json`));
+}
+
+/** Every content/packs/<source>/ directory with a manifest (default for the real entrypoint). */
+export function defaultPackDirs(root: string = fileURLToPath(new URL('../../../content/packs/', import.meta.url))): string[] {
+  if (!existsSync(root)) return [];
+  return readdirSync(root, { withFileTypes: true })
+    .filter((d) => d.isDirectory() && existsSync(join(root, d.name, 'manifest.json')))
+    .map((d) => join(root, d.name))
+    .sort();
 }
 
 export async function startServer(opts: StartOptions = {}): Promise<RunningServer> {
@@ -88,8 +116,18 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
     db.exec('PRAGMA busy_timeout = 5000;');
     const mode = db.get<{ journal_mode: string }>('PRAGMA journal_mode')?.journal_mode;
     if (mode !== 'wal') throw new Error(`expected journal_mode=wal on ${dbPath}, got ${String(mode)}`);
-    const content = env.BOOTQUEST_UNIT_CONTENT ? fileContentStore(resolve(env.BOOTQUEST_UNIT_CONTENT)) : emptyContentStore;
-    const app = createApp({ db, clock: opts.clock ?? systemClock, content, ...(opts.runners ? { runners: opts.runners } : {}) });
+    const clock = opts.clock ?? systemClock;
+    const sources: Map<string, UnitContentEntry>[] = [];
+    if (env.BOOTQUEST_UNIT_CONTENT) sources.push(fileContentEntries(resolve(env.BOOTQUEST_UNIT_CONTENT)));
+    const packStats: LoadStats[] = [];
+    const courses = splitList(env.BOOTQUEST_PACK_COURSES);
+    for (const dir of splitList(env.BOOTQUEST_PACKS)) {
+      const pack = readPack(resolve(dir), courses.length ? { courses: courses.filter((c) => packHasCourse(resolve(dir), c)) } : {});
+      packStats.push(loadPackIntoDb(db, pack, clock)); // throws PackLoadError on loaded !== built
+      sources.push(packContentEntries(pack));
+    }
+    const content = combineContentStores(sources);
+    const app = createApp({ db, clock, content, ...(opts.runners ? { runners: opts.runners } : {}) });
 
     const server = await new Promise<Server>((ok, fail) => {
       const s = app.listen(port, host);
@@ -108,7 +146,7 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
       });
       return closing;
     };
-    return { server, db, port, host, close };
+    return { server, db, port, host, close, packs: packStats };
   } catch (err) {
     db.close();
     throw err;
@@ -134,9 +172,17 @@ export function installShutdown(
 
 const invokedDirectly = process.argv[1] !== undefined && import.meta.url === pathToFileURL(resolve(process.argv[1])).href;
 if (invokedDirectly) {
-  startServer()
+  const env = { ...process.env };
+  if (env.BOOTQUEST_PACKS === undefined) env.BOOTQUEST_PACKS = defaultPackDirs().join(',');
+  startServer({ env })
     .then((running) => {
       installShutdown(running);
+      for (const p of running.packs) {
+        console.log(
+          `[bootquest] pack ${p.source}: ${p.courses.length} course(s), loaded ${p.loaded} === built ${p.built} ` +
+            `(inserted ${p.inserted}, updated ${p.updated}, unchanged ${p.unchanged}, quarantined ${p.withheld})`,
+        );
+      }
       console.log(`[bootquest] API listening on http://${running.host}:${running.port} (db: ${running.db.path})`);
     })
     .catch((err: unknown) => {

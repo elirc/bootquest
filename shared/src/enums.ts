@@ -52,6 +52,12 @@ export const UNIT_KINDS = [
   'review',
   'program-unit',
   'retest',
+  /**
+   * Imported self-assessed written exercise (BootForge `written`: model answer +
+   * rubric). Has NO check: never a pass target, never quarantined — a counted
+   * carve-out of the import gate (LEARNING.md R1). Added by migration 004.
+   */
+  'written',
 ] as const;
 export const UnitKind = z.enum(UNIT_KINDS);
 export type UnitKind = z.infer<typeof UnitKind>;

@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { CHECK_TYPES, CheckSpec } from '../src/index.ts';
-import { PRIVATE_FIELD_NAMES, PUBLIC_CHECK_FIELDS, PublicCheck, SubmissionBody, toPublicCheck } from '../src/api.ts';
+import {
+  PRIVATE_FIELD_NAMES,
+  PUBLIC_CHECK_FIELDS,
+  PUBLIC_NESTED_FIELDS,
+  PublicCheck,
+  PublicProjectionError,
+  SubmissionBody,
+  toPublicCheck,
+  UnitDetailResponse,
+} from '../src/api.ts';
 
 const S = 'SECRET_MARKER';
 
@@ -57,6 +66,103 @@ describe('check-spec public/private split', () => {
   it('the strict public schema rejects a smuggled private key', () => {
     expect(() => PublicCheck.parse({ type: 'quiz', itemKey: 'q', grading: 'exact', answerKey: 'x' })).toThrow();
     expect(() => PublicCheck.parse({ type: 'predict-output', language: 'js', normalize: true, expected: 'x' })).toThrow();
+  });
+});
+
+/** Nested keys of every object reachable under a top-level public field, grouped as "<field>" -> keys. */
+function nestedKeysByField(pub: Record<string, unknown>): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
+  for (const [field, v] of Object.entries(pub)) {
+    const objs = Array.isArray(v) ? v.filter((x) => typeof x === 'object' && x !== null) : typeof v === 'object' && v !== null ? [v] : [];
+    for (const o of objs) {
+      const set = out.get(field) ?? new Set<string>();
+      for (const k of Object.keys(o as object)) set.add(k);
+      out.set(field, set);
+    }
+  }
+  return out;
+}
+
+describe('check-spec public projection is a DEEP whitelist (W1b review: repo.predicates gap)', () => {
+  /** Explicit enumeration of every nested public field — changing it must be a deliberate edit here. */
+  const ENUMERATED: Record<string, Record<string, string[]>> = {
+    'drill-js': { tests: ['name'] },
+    http: { requests: ['method', 'path'] },
+    repo: { predicates: ['kind', 'branch', 'section', 'path'] },
+  };
+
+  it('PUBLIC_NESTED_FIELDS is exactly the enumerated nested whitelist', () => {
+    expect(JSON.parse(JSON.stringify(PUBLIC_NESTED_FIELDS))).toEqual(ENUMERATED);
+  });
+
+  for (const type of CHECK_TYPES) {
+    it(`${type}: every nested key in the public projection is enumerated`, () => {
+      const pub = toPublicCheck(CheckSpec.parse(FULL[type])) as Record<string, unknown>;
+      for (const [field, keys] of nestedKeysByField(pub)) {
+        const allowed = ENUMERATED[type]?.[field];
+        expect(allowed, `${type}.${field} holds objects but is not enumerated`).toBeDefined();
+        for (const k of keys) expect(allowed, `${type}.${field}[].${k}`).toContain(k);
+      }
+    });
+  }
+
+  it('repo predicates: each variant keeps only its own fields; a smuggled nested field is dropped', () => {
+    const smuggled = {
+      type: 'repo',
+      predicates: [
+        { kind: 'branch-exists', branch: 'feat/x', token: S },
+        { kind: 'ci-green', secretUrl: S },
+        { kind: 'pr-has-section', section: 'Testing', expect: S },
+        { kind: 'file-exists', path: 'docs/ADR.md', code: S },
+      ],
+    } as unknown as Parameters<typeof toPublicCheck>[0];
+    const pub = toPublicCheck(smuggled);
+    expect(pub).toEqual({
+      type: 'repo',
+      predicates: [
+        { kind: 'branch-exists', branch: 'feat/x' },
+        { kind: 'ci-green' },
+        { kind: 'pr-has-section', section: 'Testing' },
+        { kind: 'file-exists', path: 'docs/ADR.md' },
+      ],
+    });
+    expect(JSON.stringify(pub)).not.toContain(S);
+  });
+
+  it('drill-js tests / http requests: smuggled nested fields are dropped too', () => {
+    const drill = toPublicCheck({ type: 'drill-js', language: 'js', timeoutMs: 8000, tests: [{ name: 't', code: S, input: S, extra: S }] } as never);
+    expect(drill).toEqual({ type: 'drill-js', language: 'js', timeoutMs: 8000, tests: [{ name: 't' }] });
+    const http = toPublicCheck({ type: 'http', timeoutMs: 1, requests: [{ method: 'GET', path: '/x', note: S, expect: { status: 200 } }] } as never);
+    expect(JSON.stringify(http)).not.toContain(S);
+  });
+
+  it('a public field that unexpectedly holds objects without a nested whitelist throws, never passes through', () => {
+    expect(() => toPublicCheck({ type: 'quiz', itemKey: 'q', grading: 'choice', answerKey: 0, choices: [{ leak: S }, { leak: S }] } as never)).toThrow(PublicProjectionError);
+    expect(() => toPublicCheck({ type: 'repo', predicates: [{ kind: 'branch-exists', branch: { nested: S } }] } as never)).toThrow(PublicProjectionError);
+  });
+
+  it('the strict public repo schema rejects an unknown nested key', () => {
+    expect(() => PublicCheck.parse({ type: 'repo', predicates: [{ kind: 'branch-exists', branch: 'x', token: 'y' }] })).toThrow();
+  });
+});
+
+describe('UnitDetailResponse public content fields', () => {
+  const base = {
+    unit: {
+      id: 1, key: 'k', trackId: 'js', kind: 'quiz', title: 't', difficulty: 1, state: 'available', revealed: false,
+      prerequisites: [], code: null, competencies: [], variationOfUnitId: null,
+    },
+    check: { id: 1, threshold: null, spec: { type: 'quiz', itemKey: 'k', grading: 'choice', choices: ['a', 'b'] } },
+    instructions: 'Which one?',
+    starter: null,
+    snippet: null,
+    rubric: null,
+  };
+  it('accepts instructions/snippet/rubric and rejects private content fields', () => {
+    expect(UnitDetailResponse.parse(base)).toEqual(base);
+    for (const leak of ['solution', 'explanation', 'hints', 'answerKey', 'expected']) {
+      expect(UnitDetailResponse.safeParse({ ...base, [leak]: 'x' }).success, leak).toBe(false);
+    }
   });
 });
 

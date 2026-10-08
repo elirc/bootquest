@@ -57,30 +57,57 @@ export function migrate(db: Db, dir?: string): number[] {
 
   const done: number[] = [];
   for (const m of loadMigrations(dir)) {
-    db.tx(() => {
-      const row = db.get<{ checksum: string | null }>('SELECT checksum FROM schema_version WHERE version = ?', m.version);
-      if (row) {
-        if (row.checksum === null) {
-          // applied before checksums existed: record it now (trust on first verify)
-          db.run('UPDATE schema_version SET checksum = ? WHERE version = ?', m.checksum, m.version);
-        } else if (row.checksum !== m.checksum) {
-          throw new MigrationChecksumError(m.name);
+    const applied = db.get<{ checksum: string | null }>('SELECT checksum FROM schema_version WHERE version = ?', m.version);
+    const fkOff = !applied && needsForeignKeysOff(m.sql);
+    // PRAGMA foreign_keys is a no-op inside a transaction: toggle it outside.
+    if (fkOff) db.exec('PRAGMA foreign_keys = OFF;');
+    try {
+      db.tx(() => {
+        const row = db.get<{ checksum: string | null }>('SELECT checksum FROM schema_version WHERE version = ?', m.version);
+        if (row) {
+          if (row.checksum === null) {
+            // applied before checksums existed: record it now (trust on first verify)
+            db.run('UPDATE schema_version SET checksum = ? WHERE version = ?', m.checksum, m.version);
+          } else if (row.checksum !== m.checksum) {
+            throw new MigrationChecksumError(m.name);
+          }
+          return;
         }
-        return;
-      }
-      db.exec(m.sql);
-      // Migration bookkeeping is infrastructure, not an engine: wall clock is fine here.
-      db.run(
-        'INSERT INTO schema_version (version, name, applied_at, checksum) VALUES (?, ?, ?, ?)',
-        m.version,
-        m.name,
-        Date.now(),
-        m.checksum,
-      );
-      done.push(m.version);
-    });
+        db.exec(m.sql);
+        if (fkOff) {
+          // table rebuilds run with FKs off: prove nothing dangles before committing
+          const broken = db.all('PRAGMA foreign_key_check');
+          if (broken.length > 0) {
+            throw new Error(`migration ${m.name} left ${broken.length} foreign-key violation(s): ${JSON.stringify(broken.slice(0, 5))}`);
+          }
+        }
+        // Migration bookkeeping is infrastructure, not an engine: wall clock is fine here.
+        db.run(
+          'INSERT INTO schema_version (version, name, applied_at, checksum) VALUES (?, ?, ?, ?)',
+          m.version,
+          m.name,
+          Date.now(),
+          m.checksum,
+        );
+        done.push(m.version);
+      });
+    } finally {
+      if (fkOff) db.exec('PRAGMA foreign_keys = ON;');
+    }
   }
   return done;
+}
+
+/**
+ * First-line marker for table-rebuild migrations (SQLite's 12-step ALTER
+ * procedure): such a migration runs with foreign_keys OFF and must leave
+ * PRAGMA foreign_key_check empty, or it rolls back.
+ */
+export const FOREIGN_KEYS_OFF_MARKER = '-- bootquest:foreign-keys-off';
+
+function needsForeignKeysOff(sql: string): boolean {
+  const firstLine = sql.split(/\r?\n/, 1)[0] ?? '';
+  return firstLine.replace(/^\uFEFF/, '').trim() === FOREIGN_KEYS_OFF_MARKER;
 }
 
 export function schemaVersion(db: Db): number {

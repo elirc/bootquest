@@ -32,12 +32,21 @@ export class SubmissionShapeError extends Error {
   }
 }
 
-/** drill-js via the P1 adapter (BootForge grade-core). SQL drills wait for W2's adapter decision. */
+/**
+ * The grader language for a drill-js spec. SQL drills (W2 decision) are
+ * BootForge-style: the learner submits a JS module exporting SQL strings
+ * (`export const query = '...'`) and the tests open an in-memory node:sqlite
+ * DB (spec §5), so they grade exactly like a JS drill.
+ */
+export function graderLanguage(language: 'js' | 'ts' | 'sql'): 'js' | 'ts' {
+  return language === 'sql' ? 'js' : language;
+}
+
+/** drill-js via the P1 adapter (BootForge grade-core); js, ts and sql (JS module + node:sqlite tests). */
 export const drillJsRunner: Runner = async (spec, submission) => {
   if (spec.type !== 'drill-js') throw new UnsupportedCheckError(`drill-js runner got ${spec.type}`);
-  if (spec.language === 'sql') throw new UnsupportedCheckError('drill-js language "sql" has no runner yet (W2)');
   if (submission.code === undefined) throw new SubmissionShapeError('drill-js checks take `code`');
-  const r = await runJs({ language: spec.language, tests: spec.tests }, { code: submission.code });
+  const r = await runJs({ language: graderLanguage(spec.language), tests: spec.tests }, { code: submission.code });
   return {
     pass: r.pass,
     output: r.output,
