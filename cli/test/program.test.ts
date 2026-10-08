@@ -1,0 +1,212 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { DEFAULT_SERVER } from '../src/client.ts';
+import { EXIT, MAX_CODE_CHARS, runCli } from '../src/program.ts';
+import { captureIo, dashboard, drillDetail, fakeFetch, quizDetail, submitResp } from './helpers.ts';
+
+let proj: string;
+beforeEach(() => {
+  proj = mkdtempSync(join(tmpdir(), 'bq-cli-prog-'));
+  writeFileSync(join(proj, '.bootquest.json'), JSON.stringify({ unitId: 12, file: 'src/swap.js' }));
+  mkdirSync(join(proj, 'src'));
+  writeFileSync(join(proj, 'src', 'swap.js'), 'export function swap(a, b) { return [b, a]; }\n');
+});
+afterEach(() => {
+  rmSync(proj, { recursive: true, force: true });
+});
+
+const baseRoutes = () => ({
+  'GET /api/units/12': { status: 200, body: drillDetail() },
+  'GET /api/units/3': { status: 200, body: quizDetail() },
+  'GET /api/dashboard': { status: 200, body: dashboard() },
+  'POST /api/units/12/run': { status: 200, body: { result: { pass: true, output: '', failures: [], durationMs: 3 } } },
+  'POST /api/units/12/submit': { status: 200, body: submitResp() },
+});
+
+describe('arg parsing', () => {
+  it('no args prints help and exits 0 without touching the network', async () => {
+    const { fetch, calls } = fakeFetch({});
+    const io = captureIo(proj, fetch);
+    expect(await runCli([], io)).toBe(EXIT.OK);
+    expect(io.stdout.join('\n')).toMatch(/Usage: bootquest/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('--version exits 0', async () => {
+    const io = captureIo(proj, fakeFetch({}).fetch);
+    expect(await runCli(['--version'], io)).toBe(EXIT.OK);
+    expect(io.stdout.join('')).toContain('0.1.0');
+  });
+
+  it('sync --help documents that GitHub sync is W4', async () => {
+    const io = captureIo(proj, fakeFetch({}).fetch);
+    expect(await runCli(['sync', '--help'], io)).toBe(EXIT.OK);
+    expect(io.stdout.join('\n')).toMatch(/W4/);
+  });
+
+  it('unknown command / unknown option are usage errors (exit 2)', async () => {
+    const io = captureIo(proj, fakeFetch({}).fetch);
+    expect(await runCli(['frobnicate'], io)).toBe(EXIT.ERROR);
+    expect(await runCli(['submit', '--nope'], io)).toBe(EXIT.ERROR);
+    expect(io.stderr.join('\n')).toMatch(/unknown/);
+  });
+
+  it('server defaults to 127.0.0.1:4178', async () => {
+    const { fetch, calls } = fakeFetch(baseRoutes());
+    await runCli(['run'], captureIo(proj, fetch));
+    expect(calls[0]?.url).toBe(`${DEFAULT_SERVER}/api/units/12`);
+  });
+
+  it('BOOTQUEST_SERVER env overrides the default; --server overrides the env (before or after the command)', async () => {
+    const a = fakeFetch(baseRoutes());
+    await runCli(['run'], captureIo(proj, a.fetch, { BOOTQUEST_SERVER: 'http://localhost:5000/' }));
+    expect(a.calls[0]?.url).toBe('http://localhost:5000/api/units/12');
+
+    const b = fakeFetch(baseRoutes());
+    await runCli(['--server', 'http://127.0.0.1:6001', 'run'], captureIo(proj, b.fetch, { BOOTQUEST_SERVER: 'http://localhost:5000' }));
+    expect(b.calls[0]?.url).toBe('http://127.0.0.1:6001/api/units/12');
+
+    const c = fakeFetch(baseRoutes());
+    await runCli(['run', '--server', 'http://127.0.0.1:6002'], captureIo(proj, c.fetch));
+    expect(c.calls[0]?.url).toBe('http://127.0.0.1:6002/api/units/12');
+  });
+
+  it('a non-http --server is a usage error (exit 2)', async () => {
+    const io = captureIo(proj, fakeFetch(baseRoutes()).fetch);
+    expect(await runCli(['status', '--server', 'ftp://x'], io)).toBe(EXIT.ERROR);
+    expect(io.stderr.join('\n')).toMatch(/must be http/);
+  });
+
+  it('submit sends selfAssisted=false by default and true with --assisted', async () => {
+    const a = fakeFetch(baseRoutes());
+    await runCli(['submit'], captureIo(proj, a.fetch));
+    expect(a.calls.at(-1)?.body).toEqual({ code: 'export function swap(a, b) { return [b, a]; }\n', selfAssisted: false });
+
+    const b = fakeFetch(baseRoutes());
+    await runCli(['submit', '--assisted'], captureIo(proj, b.fetch));
+    expect(b.calls.at(-1)?.body).toMatchObject({ selfAssisted: true });
+  });
+
+  it('run sends only {code} (no selfAssisted) and a path argument wins over config "file"', async () => {
+    writeFileSync(join(proj, 'src', 'alt.js'), 'export const alt = 1;\n');
+    const { fetch, calls } = fakeFetch(baseRoutes());
+    expect(await runCli(['run', 'alt.js'], captureIo(join(proj, 'src'), fetch))).toBe(EXIT.OK);
+    expect(calls.at(-1)?.body).toEqual({ code: 'export const alt = 1;\n' });
+  });
+});
+
+describe('exit codes and refusals', () => {
+  it('submit pass -> 0; fail -> 1 (and the failed attempt is reported as recorded)', async () => {
+    const pass = captureIo(proj, fakeFetch(baseRoutes()).fetch);
+    expect(await runCli(['submit'], pass)).toBe(EXIT.OK);
+
+    const routes = {
+      ...baseRoutes(),
+      'POST /api/units/12/submit': {
+        status: 200,
+        body: submitResp({
+          verdict: 'fail',
+          result: { pass: false, output: '', failures: [{ name: 'a', message: 'boom' }], durationMs: 4 },
+          attempt: { id: 6, mode: 'solo', outcome: 'fail' },
+          xp: null,
+        }),
+      },
+    };
+    const fail = captureIo(proj, fakeFetch(routes).fetch);
+    expect(await runCli(['submit'], fail)).toBe(EXIT.NOT_PASSED);
+    expect(fail.stdout.join('\n')).toMatch(/Attempt #6 recorded/);
+  });
+
+  it('missing .bootquest.json -> exit 2 with guidance', async () => {
+    const empty = mkdtempSync(join(tmpdir(), 'bq-cli-none-'));
+    try {
+      const io = captureIo(empty, fakeFetch(baseRoutes()).fetch, {});
+      // only meaningful when no ancestor of the temp dir carries a config
+      const code = await runCli(['submit'], io);
+      expect(code).toBe(EXIT.ERROR);
+      expect(io.stderr.join('\n')).toMatch(/no \.bootquest\.json found|Config problem/);
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
+  });
+
+  it('missing file -> exit 2, nothing submitted', async () => {
+    writeFileSync(join(proj, '.bootquest.json'), JSON.stringify({ unitId: 12, file: 'src/gone.js' }));
+    const { fetch, calls } = fakeFetch(baseRoutes());
+    const io = captureIo(proj, fetch);
+    expect(await runCli(['submit'], io)).toBe(EXIT.ERROR);
+    expect(io.stderr.join('\n')).toMatch(/file not found/);
+    expect(calls.some((c) => c.method === 'POST')).toBe(false);
+  });
+
+  it('oversized file -> exit 2 before any POST', async () => {
+    writeFileSync(join(proj, 'src', 'swap.js'), 'x'.repeat(MAX_CODE_CHARS + 1));
+    const { fetch, calls } = fakeFetch(baseRoutes());
+    const io = captureIo(proj, fetch);
+    expect(await runCli(['submit'], io)).toBe(EXIT.ERROR);
+    expect(calls.some((c) => c.method === 'POST')).toBe(false);
+  });
+
+  it('quiz unit: run and submit are refused locally (exit 2, nothing POSTed)', async () => {
+    writeFileSync(join(proj, '.bootquest.json'), JSON.stringify({ unitId: 3, file: 'src/swap.js' }));
+    for (const cmd of ['run', 'submit']) {
+      const { fetch, calls } = fakeFetch(baseRoutes());
+      const io = captureIo(proj, fetch);
+      expect(await runCli([cmd], io)).toBe(EXIT.ERROR);
+      expect(io.stderr.join('\n')).toMatch(/browser material/);
+      if (cmd === 'run') expect(io.stderr.join('\n')).toMatch(/RUN_NOT_AVAILABLE/);
+      expect(calls.some((c) => c.method === 'POST')).toBe(false);
+    }
+  });
+
+  it('server error envelope is rendered friendly (exit 2)', async () => {
+    const routes = {
+      ...baseRoutes(),
+      'POST /api/units/12/run': { status: 409, body: { error: { code: 'RUN_NOT_AVAILABLE', message: 'quiz checks are submit-only' } } },
+    };
+    const io = captureIo(proj, fakeFetch(routes).fetch);
+    expect(await runCli(['run'], io)).toBe(EXIT.ERROR);
+    expect(io.stderr.join('\n')).toMatch(/Server refused \(RUN_NOT_AVAILABLE, HTTP 409\): quiz checks are submit-only/);
+  });
+
+  it('non-JSON answer (wrong server on that port) -> exit 2', async () => {
+    const io = captureIo(proj, fakeFetch({ 'GET /api/dashboard': { status: 200, body: '<html>hi</html>' } }).fetch);
+    expect(await runCli(['status'], io)).toBe(EXIT.ERROR);
+    expect(io.stderr.join('\n')).toMatch(/non-JSON/);
+  });
+
+  it('connection failure -> friendly message, exit 2', async () => {
+    const io = captureIo(proj, async () => {
+      throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } });
+    });
+    expect(await runCli(['status'], io)).toBe(EXIT.ERROR);
+    expect(io.stderr.join('\n')).toMatch(/Cannot reach the BootQuest server at http:\/\/127\.0\.0\.1:4178 \(ECONNREFUSED\)/);
+    expect(io.stderr.join('\n')).not.toMatch(/at .*\.ts:\d+/); // no stack trace
+  });
+});
+
+describe('status', () => {
+  it('prints the dashboard and the configured unit state', async () => {
+    const io = captureIo(proj, fakeFetch(baseRoutes()).fetch);
+    expect(await runCli(['status'], io)).toBe(EXIT.OK);
+    const out = io.stdout.join('\n');
+    expect(out).toMatch(/Streak: 3 days \(longest 5/);
+    expect(out).toMatch(/XP: 120 total - level 2/);
+    expect(out).toMatch(/Reviews due: 4/);
+    expect(out).toMatch(/js +Swap two values \[drill\] id 12/);
+    expect(out).toMatch(/csharp +\(nothing available\)/);
+    expect(out).toMatch(/Unit: +Swap two values/);
+    expect(out).toMatch(/Check: +drill-js \(3 tests\)/);
+    expect(out).toMatch(/File: +src[\\/]swap\.js$/m);
+  });
+
+  it('a malformed .bootquest.json still shows the dashboard, then exits 2', async () => {
+    writeFileSync(join(proj, '.bootquest.json'), '{ broken');
+    const io = captureIo(proj, fakeFetch(baseRoutes()).fetch);
+    expect(await runCli(['status'], io)).toBe(EXIT.ERROR);
+    expect(io.stdout.join('\n')).toMatch(/Streak:/);
+    expect(io.stderr.join('\n')).toMatch(/Config problem: .*not valid JSON/);
+  });
+});
