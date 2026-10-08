@@ -102,3 +102,36 @@ Opus plan review (`docs/recon/plan-review.md`) returned 2 blockers + 17 majors;
 - Minor: a `shared/` workspace is added to the spec's layout for Zod schemas
   used by server, cli, and tools (spec §2 listed only server/client/cli/
   tools/seed/content/docs).
+
+## 2026-10-07 — scale-up (owner directive: more agents, more quality)
+
+- Parallelism model changed: the one-agent rule now applies only to the MAIN
+  workspace; independent modules build concurrently in isolated git worktrees
+  (P1 JS grader port, P2 C# runner spike, P3 node-test-file spike = W1.5,
+  P4 citation resolver, P5 client shell prototype) and are transplanted by the
+  orchestrator at integration points. This front-loads the two
+  hardware-risk gates (dotnet warm <10s; signalpost checks actually runnable).
+- Quality upgrade: EVERY wave's diff gets a fresh-context Opus review before
+  Fable runs the gate and commits (previously only W1a/W6).
+
+## 2026-10-07 — worktree-isolation gotcha (machine)
+
+- Agent worktree isolation cut worktrees from the STRAY HOME-DIR REPO
+  (C:\Users\Owner, origin elirc/grouphelpdesk) instead of selfboot — the
+  session started before selfboot's `git init`, so the harness resolved the
+  wrong root. Consequences: P-agent worktree commits sit on helpdesk history
+  (never cherry-pick — transplant by file copy); `npm --prefix` inside such a
+  worktree adds a stray `"helpdesk": "file:.."` dep + junction (strip it;
+  delete junction with non-recursive unlink). All P agents were warned
+  mid-flight. Cleanup owed at the end: remove the agent worktrees + branches
+  from the home repo.
+- Pipe-masked exits strike again: `cmd | tail; echo $?` reports tail's exit.
+  Gate verification uses `set -o pipefail` or captures the exit before piping.
+- W1a landed (0d6df99) + P1 grader transplant (09052ae): server 8 test files
+  (96 tests) + shared 27, typecheck clean — all re-run by the orchestrator.
+- W1a drafting decisions of note: XP pays once per unit per kind (0-XP
+  'already-awarded' ledger rows — anti-farming, not in spec); 7-slate-day
+  token counter cumulative, reset only by broken streak; promotion legs must
+  postdate last promotion/demotion, leg (c) matched by competency ≥48h after
+  leg (b); `check` is an SQL keyword — always quote the table name; node 22.16
+  returns plain numbers (not BigInt) for lastInsertRowid.

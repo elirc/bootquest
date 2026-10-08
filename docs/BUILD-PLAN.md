@@ -29,14 +29,25 @@ build runs; it does not restate the spec.
 
 - **Fable**: plan, decompose, review every diff, re-run every gate personally,
   commit per milestone, keep LEARNING.md.
-- **Opus**: drafts all code/content. **One build agent in the workspace at a
-  time**; parallelism only for read-only recon and for W5c content batches
-  (distinct output files, read-only estate).
+- **Opus**: drafts all code/content. **One build agent in the MAIN workspace
+  at a time**; additional agents run concurrently in **isolated git worktrees**
+  on independent modules with pre-agreed interfaces and final paths — the
+  orchestrator transplants their work into the main tree at integration points
+  and reconciles dependencies. (Owner directive 2026-10-07: more agents for
+  speed and quality.)
+- **Parallel prototype track** (runs alongside W1a/W1b in worktrees):
+  P1 JS grader port (opusboot2 working-tree grade-core + spec-shape adapter),
+  P2 C# warm-runner spike incl. real csbootcamp exercise + timings,
+  P3 `node-test-file` check runner spike (signalpost U01; absorbs W1.5),
+  P4 citation resolver for seed validators (all R2-documented forms),
+  P5 client shell prototype (dark dashboard UI against a mocked API).
+  Canonical runner result shape all runners adapt to:
+  `{pass: boolean, output: string, failures: {name, message, expected?, actual?}[], durationMs: number}`.
 - **Spec-trace**: every build agent's report must include a table mapping each
   spec requirement in its brief → file/test that satisfies it, or "NOT DONE".
-- **Fresh-context Opus audits** (anti-rubber-stamping): after W1a (schema +
-  engines) and after W6 (honesty flows), a fresh Opus agent audits the result
-  against spec §6/§9 with no knowledge of the drafting conversation.
+- **Fresh-context Opus review of EVERY wave's diff** before Fable gates and
+  commits it (upgraded from W1a/W6-only audits); W1a and W6 additionally get
+  the deep spec-§6/§9 honesty audit.
 - **Seeded-content spot-checks**: Fable manually verifies ≥10% of every seeded
   batch against the source material before its commit.
 - **DB safety**: server/tools resolve the DB only via `BOOTQUEST_DB`; tests and
