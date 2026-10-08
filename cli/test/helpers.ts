@@ -60,6 +60,44 @@ export function drillDetail(over: Partial<UnitDetailResponse['unit']> = {}): Uni
   };
 }
 
+export function httpDetail(over: { port?: number } = { port: 3000 }): UnitDetailResponse {
+  return {
+    ...drillDetail({ id: 21, kind: 'http-lab', key: 'fixture:http-tasks-api', title: 'Tasks API' }),
+    check: {
+      id: 21,
+      threshold: null,
+      spec: {
+        type: 'http',
+        ...(over.port !== undefined ? { port: over.port } : {}),
+        timeoutMs: 5000,
+        requests: [
+          { name: 'health', method: 'GET', path: '/health' },
+          { name: 'create', method: 'POST', path: '/api/tasks' },
+        ],
+      },
+    },
+  };
+}
+
+export function repoDetail(): UnitDetailResponse {
+  return {
+    ...drillDetail({ id: 22, kind: 'repo-task', key: 'fixture:repo-feature-branch', title: 'Feature branch' }),
+    check: {
+      id: 22,
+      threshold: null,
+      spec: {
+        type: 'repo',
+        timeoutMs: 15000,
+        predicates: [
+          { kind: 'branch-exists', name: 'feature branch exists' },
+          { kind: 'clean-worktree', name: 'nothing left uncommitted' },
+          { kind: 'min-commits', name: 'small commits (3+)' },
+        ],
+      },
+    },
+  };
+}
+
 export function quizDetail(): UnitDetailResponse {
   return {
     ...drillDetail({ id: 3, kind: 'quiz', key: 'bootforge/q', title: 'Quick check' }),

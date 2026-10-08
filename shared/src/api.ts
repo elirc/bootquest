@@ -57,6 +57,19 @@ const positiveIdString = z
   .transform(Number);
 
 export const UnitIdParams = z.object({ id: positiveIdString }).strict();
+
+/**
+ * A unit key as stored in unit.key: `<source>/<course>/...` for pack units
+ * (e.g. bootforge/js-fundamentals/values/variables/swap), `<ns>:<name>` for
+ * fixtures. Sent URL-encoded as ONE path segment:
+ * GET /api/units/by-key/bootforge%2Fjs-fundamentals%2F...
+ */
+export const UNIT_KEY_RE = /^[A-Za-z0-9][A-Za-z0-9._:@+/-]{0,299}$/;
+export const UnitKey = z
+  .string()
+  .regex(UNIT_KEY_RE, 'must be a unit key like <source>/<course>/<...> (letters, digits, . _ : @ + / -; max 300)')
+  .refine((k) => !k.includes('//') && !k.split('/').includes('..') && !k.endsWith('/'), { message: 'must not contain empty or .. segments' });
+export const UnitKeyParams = z.object({ key: UnitKey }).strict();
 export const TrackIdParams = z.object({ id: TrackId }).strict();
 export const ReviewItemParams = z.object({ itemId: positiveIdString }).strict();
 
@@ -78,21 +91,34 @@ export const ReviewQueueQuery = z
 export const MAX_CODE_CHARS = 100_000;
 export const MAX_ANSWER_CHARS = 10_000;
 
+export const MAX_REPO_PATH_CHARS = 1024;
+
 /**
  * Body of POST /api/units/:id/run and /submit. Exactly one of:
- *  - `code`   for drill-js (learner source)
- *  - `answer` for quiz (choice index or exact text) / predict-output (predicted stdout)
+ *  - `code`     for drill-js / drill-cs (learner source)
+ *  - `answer`   for quiz (choice index or exact text) / predict-output (predicted stdout)
+ *  - `port`     for http checks: the loopback port the learner's server listens on
+ *               (the server only ever targets 127.0.0.1 / ::1 — nothing else is caller-supplied)
+ *  - `repoPath` for repo checks: ABSOLUTE path of a local git working tree (its root,
+ *               holding .git) on the server's machine
  * `selfAssisted` is the honor-system "I had help" flag (submit only; ignored by run).
  */
 export const SubmissionBody = z
   .object({
     code: z.string().max(MAX_CODE_CHARS).optional(),
     answer: z.union([z.string().max(MAX_ANSWER_CHARS), z.number().int().nonnegative()]).optional(),
+    port: z.number().int().min(1).max(65535).optional(),
+    repoPath: z
+      .string()
+      .min(1)
+      .max(MAX_REPO_PATH_CHARS)
+      .refine((p) => !/[\0\r\n]/.test(p), { message: 'must not contain NUL or newlines' })
+      .optional(),
     selfAssisted: z.boolean().default(false),
   })
   .strict()
-  .refine((b) => (b.code === undefined) !== (b.answer === undefined), {
-    message: 'provide exactly one of `code` or `answer`',
+  .refine((b) => [b.code, b.answer, b.port, b.repoPath].filter((v) => v !== undefined).length === 1, {
+    message: 'provide exactly one of `code`, `answer`, `port` or `repoPath`',
   });
 export type SubmissionBody = z.infer<typeof SubmissionBody>;
 export type SubmissionBodyInput = z.input<typeof SubmissionBody>;
@@ -129,7 +155,8 @@ export type GradeBody = z.infer<typeof GradeBody>;
  *   quiz           answerKey
  *   predict-output expected
  *   drill-cs       files (tests block + types tail)
- *   http           requests[].expect, body, headers
+ *   http           requests[].expect, body, headers (public: name, method, path)
+ *   repo           predicates[].branch / path / n / pattern / heading (public: kind, name)
  *   node-test-file checkPath, checkSha256
  *   self-run       fixtures
  *   vitest-project testFile, env
@@ -144,7 +171,7 @@ export const PUBLIC_CHECK_FIELDS: Readonly<Record<CheckTypeT, readonly string[]>
   'predict-output': ['type', 'language', 'normalize'],
   'guided-step': ['type', 'step', 'runner', 'timeoutMs'],
   http: ['type', 'port', 'requests', 'timeoutMs'],
-  repo: ['type', 'predicates'],
+  repo: ['type', 'predicates', 'timeoutMs'],
   'study-quiz': ['type', 'itemKeys', 'passPct'],
   'explain-back': ['type', 'questionSetKey', 'questionCount', 'minCoverage'],
   'patch-kata': ['type', 'kataKey', 'defectCount'],
@@ -168,6 +195,12 @@ export const PRIVATE_FIELD_NAMES: readonly string[] = [
   'checkSha256',
   'fixtures',
   'env',
+  'body',
+  'headers',
+  'jsonShape',
+  'branch',
+  'pattern',
+  'heading',
 ];
 
 /**
@@ -179,10 +212,10 @@ export const PRIVATE_FIELD_NAMES: readonly string[] = [
  */
 export const PUBLIC_NESTED_FIELDS: Readonly<Partial<Record<CheckTypeT, Readonly<Record<string, readonly string[]>>>>> = {
   'drill-js': { tests: ['name'] },
-  http: { requests: ['method', 'path'] },
-  // every RepoPredicate variant's fields; values are task statements (branch to
-  // create, PR section to write, file to add), not grading secrets
-  repo: { predicates: ['kind', 'branch', 'section', 'path'] },
+  http: { requests: ['name', 'method', 'path'] },
+  // W3c: predicate NAMES only (the learner-facing task list); branch names,
+  // paths, counts, patterns and headings are the grading data -> private
+  repo: { predicates: ['kind', 'name'] },
 };
 
 export class PublicProjectionError extends Error {
@@ -239,12 +272,12 @@ export function toPublicCheck(spec: CheckSpec): PublicCheck {
   return PublicCheck.parse(out);
 }
 
-const PublicRepoPredicate = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('branch-exists'), branch: z.string() }).strict(),
-  z.object({ kind: z.literal('ci-green'), branch: z.string().optional() }).strict(),
-  z.object({ kind: z.literal('pr-has-section'), section: z.string() }).strict(),
-  z.object({ kind: z.literal('file-exists'), path: z.string() }).strict(),
-]);
+const PublicRepoPredicate = z
+  .object({
+    kind: z.enum(['branch-exists', 'head-on-branch', 'file-exists-at-head', 'clean-worktree', 'min-commits', 'commit-message-matches', 'ci-green', 'pr-has-section']),
+    name: z.string(),
+  })
+  .strict();
 
 /** Public check: strict per-type shapes — parsing fails if a private key slips in. */
 export const PublicCheck = z.discriminatedUnion('type', [
@@ -253,8 +286,8 @@ export const PublicCheck = z.discriminatedUnion('type', [
   z.object({ type: z.literal('quiz'), itemKey: z.string(), grading: z.enum(['exact', 'choice', 'self']), choices: z.array(z.string()).optional() }).strict(),
   z.object({ type: z.literal('predict-output'), language: z.enum(['js', 'ts', 'cs']), normalize: z.boolean() }).strict(),
   z.object({ type: z.literal('guided-step'), step: z.number(), runner: z.string(), timeoutMs: z.number() }).strict(),
-  z.object({ type: z.literal('http'), port: z.number().optional(), requests: z.array(z.object({ method: z.string(), path: z.string() }).strict()), timeoutMs: z.number() }).strict(),
-  z.object({ type: z.literal('repo'), predicates: z.array(PublicRepoPredicate) }).strict(),
+  z.object({ type: z.literal('http'), port: z.number().optional(), requests: z.array(z.object({ name: z.string(), method: z.string(), path: z.string() }).strict()), timeoutMs: z.number() }).strict(),
+  z.object({ type: z.literal('repo'), predicates: z.array(PublicRepoPredicate), timeoutMs: z.number() }).strict(),
   z.object({ type: z.literal('study-quiz'), itemKeys: z.array(z.string()), passPct: z.number() }).strict(),
   z.object({ type: z.literal('explain-back'), questionSetKey: z.string(), questionCount: z.number(), minCoverage: z.number() }).strict(),
   z.object({ type: z.literal('patch-kata'), kataKey: z.string(), defectCount: z.number() }).strict(),

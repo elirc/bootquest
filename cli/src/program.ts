@@ -1,11 +1,11 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { relative } from 'node:path';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { relative, resolve } from 'node:path';
 import { Command, CommanderError } from 'commander';
 import type { UnitDetailResponse } from '@bootquest/shared/api';
 import { ApiClient, DEFAULT_SERVER, UsageError, type FetchLike } from './client.ts';
 import { ConfigError, loadConfig, resolveSubmissionFile, type ProjectConfig } from './config.ts';
 import { formatDashboard, formatError, formatProject, formatRun, formatSubmit, formatSync } from './format.ts';
-import { classifyUnit, resolveUnit } from './units.ts';
+import { classifyUnit, resolveUnit, type Delivery } from './units.ts';
 
 /**
  * Exit codes (scripts depend on these):
@@ -65,15 +65,39 @@ function display(cwd: string, file: string): string {
   return rel && !rel.startsWith('..') ? rel : file;
 }
 
+/** What run/submit send: exactly one of the API's submission shapes. */
+type Payload = { code: string } | { port: number } | { repoPath: string };
+
 interface Prepared {
   client: ApiClient;
   detail: UnitDetailResponse;
-  file: string;
-  code: string;
+  payload: Payload;
+  /** what was checked, for the output's "File:/Target:/Repo:" line */
+  source: string;
+  label: 'File' | 'Target' | 'Repo';
 }
 
-/** Shared run/submit front half: config -> unit -> kind gate -> file. Returns null when refused. */
-async function prepare(io: CliIo, opts: GlobalOpts, pathArg: string | undefined, command: 'run' | 'submit'): Promise<Prepared | null> {
+interface DeliveryOpts {
+  port?: string;
+  repo?: string;
+}
+
+/** --port value: an integer 1-65535. */
+export function parsePort(raw: string): number {
+  const t = raw.trim();
+  const n = /^\d{1,5}$/.test(t) ? Number(t) : NaN;
+  if (!(n >= 1 && n <= 65535)) throw new UsageError(`--port must be an integer 1-65535 (got "${raw}")`);
+  return n;
+}
+
+/** Shared run/submit front half: config -> unit -> kind gate -> payload. Returns null when refused. */
+async function prepare(
+  io: CliIo,
+  opts: GlobalOpts,
+  pathArg: string | undefined,
+  command: 'run' | 'submit',
+  d: DeliveryOpts,
+): Promise<Prepared | null> {
   const client = new ApiClient(serverUrl(opts, io.env), io.fetch);
   const config = requireConfig(io.cwd);
   const detail = await resolveUnit(client, config);
@@ -82,8 +106,40 @@ async function prepare(io: CliIo, opts: GlobalOpts, pathArg: string | undefined,
     io.err(`bootquest ${command}: ${delivery.reason}`);
     return null;
   }
-  const file = resolveSubmissionFile(pathArg, io.cwd, config);
-  return { client, detail, file, code: readCode(file) };
+  const kind = `"${detail.unit.title}" is a ${delivery.checkType} unit`;
+  if (delivery.mode === 'code') {
+    if (d.port !== undefined || d.repo !== undefined) {
+      throw new UsageError(`${kind}: send a file (bootquest ${command} [path]); --port is for http units and --repo for repo units`);
+    }
+    const file = resolveSubmissionFile(pathArg, io.cwd, config);
+    return { client, detail, payload: { code: readCode(file) }, source: display(io.cwd, file), label: 'File' };
+  }
+  if (delivery.mode === 'http') {
+    if (pathArg !== undefined || d.repo !== undefined) {
+      throw new UsageError(`${kind}: it checks your running server - use bootquest ${command} --port <n> (no file path, no --repo)`);
+    }
+    const port = d.port !== undefined ? parsePort(d.port) : delivery.portHint;
+    if (port === null) throw new UsageError(`${kind}: pass --port <n>, the port your server listens on`);
+    return {
+      client,
+      detail,
+      payload: { port },
+      source: `localhost:${port} (the BootQuest server sends the requests over loopback)${d.port === undefined ? ' - port from the unit hint; override with --port' : ''}`,
+      label: 'Target',
+    };
+  }
+  if (pathArg !== undefined || d.port !== undefined) {
+    throw new UsageError(`${kind}: it checks a git repo - use bootquest ${command} [--repo <dir>] (default: ${config.dir}, the directory holding .bootquest.json)`);
+  }
+  const repoPath = d.repo !== undefined ? resolve(io.cwd, d.repo) : config.dir;
+  let isDir = false;
+  try {
+    isDir = statSync(repoPath).isDirectory();
+  } catch {
+    isDir = false;
+  }
+  if (!isDir) throw new UsageError(`--repo ${repoPath} is not a directory`);
+  return { client, detail, payload: { repoPath }, source: repoPath, label: 'Repo' };
 }
 
 export function buildProgram(io: CliIo, setExit: (code: number) => void): Command {
@@ -115,37 +171,46 @@ export function buildProgram(io: CliIo, setExit: (code: number) => void): Comman
       const detail = await resolveUnit(client, config);
       const delivery = classifyUnit(detail, 'submit');
       const file = config.file !== undefined ? resolveSubmissionFile(undefined, io.cwd, config) : null;
+      const how: Record<Delivery['mode'], string> = {
+        code: 'run / submit from here',
+        http: `run / submit --port <n> while your server is running${delivery.mode === 'http' && delivery.portHint !== null ? ` (default ${delivery.portHint})` : ''}`,
+        repo: `run / submit [--repo <dir>] (default ${config.dir})`,
+        refuse: 'not delivered by the CLI (see `bootquest submit` for why)',
+      };
       io.out('');
-      io.out(
-        formatProject(
-          detail,
-          config.path,
-          file ? { path: display(io.cwd, file), exists: existsSync(file) } : null,
-          delivery.mode === 'code' ? 'run / submit from here' : 'not delivered by the CLI (see `bootquest submit` for why)',
-        ),
-      );
+      io.out(formatProject(detail, config.path, file ? { path: display(io.cwd, file), exists: existsSync(file) } : null, how[delivery.mode]));
     });
+
+  const PORT_HELP = 'http units: the local port your server listens on (default: the unit\'s port hint)';
+  const REPO_HELP = 'repo units: the git working tree to check (default: the directory holding .bootquest.json)';
 
   program
     .command('run [path]')
-    .description('free check of the current unit (not recorded, no XP); path defaults to "file" in .bootquest.json')
-    .action(async (pathArg: string | undefined, _o: unknown, cmd: Command) => {
-      const p = await prepare(io, cmd.optsWithGlobals<GlobalOpts>(), pathArg, 'run');
+    .description(
+      'free check of the current unit (not recorded, no XP). Code units: path defaults to "file" in .bootquest.json; ' +
+        'http units: --port; repo units: --repo',
+    )
+    .option('--port <n>', PORT_HELP)
+    .option('--repo <dir>', REPO_HELP)
+    .action(async (pathArg: string | undefined, o: DeliveryOpts, cmd: Command) => {
+      const p = await prepare(io, cmd.optsWithGlobals<GlobalOpts>(), pathArg, 'run', o);
       if (!p) return setExit(EXIT.ERROR);
-      const { result } = await p.client.run(p.detail.unit.id, { code: p.code });
-      io.out(formatRun(p.detail, result, display(io.cwd, p.file)));
+      const { result } = await p.client.run(p.detail.unit.id, p.payload);
+      io.out(formatRun(p.detail, result, p.source, p.label));
       setExit(result.pass ? EXIT.OK : EXIT.NOT_PASSED);
     });
 
   program
     .command('submit [path]')
     .description('submit the current unit (recorded; XP on pass). Exit 0 only when the check passes')
+    .option('--port <n>', PORT_HELP)
+    .option('--repo <dir>', REPO_HELP)
     .option('--assisted', 'honor system: you had help (AI, a friend, the docs answer) - recorded as an assisted attempt')
-    .action(async (pathArg: string | undefined, o: { assisted?: boolean }, cmd: Command) => {
-      const p = await prepare(io, cmd.optsWithGlobals<GlobalOpts>(), pathArg, 'submit');
+    .action(async (pathArg: string | undefined, o: DeliveryOpts & { assisted?: boolean }, cmd: Command) => {
+      const p = await prepare(io, cmd.optsWithGlobals<GlobalOpts>(), pathArg, 'submit', o);
       if (!p) return setExit(EXIT.ERROR);
-      const resp = await p.client.submit(p.detail.unit.id, { code: p.code, selfAssisted: o.assisted === true });
-      io.out(formatSubmit(p.detail, resp, display(io.cwd, p.file)));
+      const resp = await p.client.submit(p.detail.unit.id, { ...p.payload, selfAssisted: o.assisted === true });
+      io.out(formatSubmit(p.detail, resp, p.source, p.label));
       setExit(resp.verdict === 'pass' ? EXIT.OK : EXIT.NOT_PASSED);
     });
 

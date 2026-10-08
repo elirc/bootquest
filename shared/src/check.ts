@@ -81,41 +81,176 @@ export const GuidedStepCheck = z.object({
   timeoutMs: timeoutMs.default(60000),
 });
 
-export const HttpExpect = z.object({
-  status: z.number().int().min(100).max(599),
-  headers: z.record(z.string()).optional(),
-  /** JSON-shape assertion: key -> typeof name ('string','number','boolean','object','array','null') */
-  jsonShape: z.record(z.enum(['string', 'number', 'boolean', 'object', 'array', 'null'])).optional(),
-});
+/**
+ * JSON-shape predicate (W3c) — a deliberately SMALL structural matcher, not a
+ * JSON-schema engine. A shape is one of:
+ *   "string" | "number" | "integer" | "boolean" | "null" | "object" | "array" | "any"
+ *                                   type only
+ *   { "equals": <string|number|boolean|null> }
+ *                                   literal value (strict ===)
+ *   { "object": { "<key>": <shape>, ... } }
+ *                                   a non-null, non-array object that HAS every listed
+ *                                   key (extra keys are allowed) whose values match
+ *   { "array": <shape>, "minItems"?: n }
+ *                                   an array (at least minItems long) whose EVERY item matches
+ * Mismatches are reported with a JSONPath-ish location ("$.items[0].id").
+ */
+export const JSON_SHAPE_TYPES = ['string', 'number', 'integer', 'boolean', 'null', 'object', 'array', 'any'] as const;
+export type JsonShape =
+  | (typeof JSON_SHAPE_TYPES)[number]
+  | { equals: string | number | boolean | null }
+  | { object: { [key: string]: JsonShape } }
+  | { array: JsonShape; minItems?: number };
+export const JsonShape: z.ZodType<JsonShape> = z.lazy(() =>
+  z.union([
+    z.enum(JSON_SHAPE_TYPES),
+    z.object({ equals: z.union([z.string(), z.number(), z.boolean(), z.null()]) }).strict(),
+    z.object({ object: z.record(z.string().min(1), JsonShape) }).strict(),
+    z.object({ array: JsonShape, minItems: z.number().int().nonnegative().optional() }).strict(),
+  ]),
+);
 
-export const HttpCheck = z.object({
-  type: z.literal('http'),
-  port: z.number().int().min(1).max(65535).optional(),
-  requests: z
-    .array(
-      z.object({
-        method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']),
-        path: z.string().startsWith('/'),
-        body: z.unknown().optional(),
-        headers: z.record(z.string()).optional(),
-        expect: HttpExpect,
-      }),
-    )
-    .min(1),
-  timeoutMs: timeoutMs.default(10000),
-});
+/** Names are the learner-facing test names: unique within one check. */
+function uniqueNames(what: string) {
+  return (items: readonly { name: string }[], ctx: z.RefinementCtx) => {
+    const seen = new Set<string>();
+    items.forEach((it, i) => {
+      if (seen.has(it.name)) ctx.addIssue({ code: z.ZodIssueCode.custom, message: `duplicate ${what} name "${it.name}"`, path: [i, 'name'] });
+      seen.add(it.name);
+    });
+  };
+}
 
+const headerName = z.string().regex(/^[A-Za-z0-9-]{1,100}$/, 'header name');
+
+export const HttpExpect = z
+  .object({
+    status: z.number().int().min(100).max(599),
+    /**
+     * Subset match: every listed header must be present (names case-insensitive).
+     * A value matches when it equals the actual value, or the actual value's part
+     * before the first ';' (so "application/json" matches "application/json; charset=utf-8").
+     */
+    headers: z.record(headerName, z.string()).optional(),
+    /** structural predicate over the parsed JSON body (see JsonShape) */
+    jsonShape: JsonShape.optional(),
+  })
+  .strict();
+
+export const HTTP_METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'] as const;
+
+export const HttpRequestSpec = z
+  .object({
+    /** the named test this request becomes (public) */
+    name: z.string().min(1).max(120),
+    method: z.enum(HTTP_METHODS),
+    /** origin-relative path (+ optional query); the server always targets 127.0.0.1/::1 */
+    path: z
+      .string()
+      .max(2000)
+      .regex(/^\/(?!\/)[^\s\\#]*$/, 'must be an origin-relative path like /api/tasks?x=1 (no //, no whitespace, no backslash, no fragment)'),
+    /** request headers (Host is refused: the target is fixed to loopback) */
+    headers: z
+      .record(headerName, z.string().max(4000))
+      .refine((h) => !Object.keys(h).some((k) => k.toLowerCase() === 'host'), { message: 'the Host header cannot be set' })
+      .optional(),
+    /** JSON body (sent with content-type application/json unless headers set one) */
+    body: z.unknown().optional(),
+    expect: HttpExpect,
+  })
+  .strict();
+
+/**
+ * HTTP check (spec §4): the SERVER sends each request, in order, to
+ * http://127.0.0.1:<port> (falling back to [::1] when nothing listens on the
+ * IPv4 loopback) — the learner supplies ONLY the port. No redirects are
+ * followed, no retries. `port` here is a public HINT (the CLI's default).
+ */
+export const HttpCheck = z
+  .object({
+    type: z.literal('http'),
+    port: z.number().int().min(1).max(65535).optional(),
+    requests: z.array(HttpRequestSpec).min(1).max(50).superRefine(uniqueNames('request')),
+    /** per-request timeout */
+    timeoutMs: timeoutMs.default(5000),
+    /** cap for the whole request script; requests after the cap fail unrun */
+    totalTimeoutMs: timeoutMs.default(30000),
+  })
+  .strict();
+
+/** A local branch name that is safe to pass to git as refs/heads/<name>. */
+const branchName = z
+  .string()
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/, 'branch name')
+  .refine((b) => !b.includes('..') && !b.includes('//') && !b.endsWith('/') && !b.endsWith('.lock') && !b.endsWith('.'), {
+    message: 'not a valid git branch name',
+  });
+
+const regexSource = z
+  .string()
+  .min(1)
+  .max(500)
+  .refine(
+    (p) => {
+      try {
+        new RegExp(p);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    { message: 'must be a valid JavaScript regular expression' },
+  );
+
+const predName = z.string().min(1).max(120);
+
+/**
+ * Repo-check predicates (spec §4), evaluated IN ORDER against a LOCAL git repo
+ * (read-only git plumbing via `git -C`, nothing in the repo is executed).
+ * `name` is the public, learner-facing test name; the other fields are private.
+ *   branch-exists          refs/heads/<branch> exists
+ *   head-on-branch         HEAD is the symbolic ref refs/heads/<branch>
+ *   file-exists-at-head    <path> is in the HEAD commit's tree (committed, not just on disk)
+ *   clean-worktree         `git status --porcelain` is empty (incl. untracked files)
+ *   min-commits            at least n commits reachable from <branch> (default HEAD)
+ *   commit-message-matches the tip commit's full message (which:'tip', default) or ANY of
+ *                          the newest 200 commits (which:'any') on <branch> matches pattern
+ *   ci-green               REMOTE (gh CLI token): every check run on the GitHub commit
+ *                          equal to the local <branch> tip (default HEAD) completed green
+ *   pr-has-section         REMOTE (gh CLI token): the newest PR whose head is <branch>
+ *                          (default: current branch) has a markdown heading <heading>
+ *                          followed by non-empty text
+ */
 export const RepoPredicate = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('branch-exists'), branch: z.string().min(1) }),
-  z.object({ kind: z.literal('ci-green'), branch: z.string().min(1).optional() }),
-  z.object({ kind: z.literal('pr-has-section'), section: z.string().min(1) }),
-  z.object({ kind: z.literal('file-exists'), path: relPath }),
+  z.object({ kind: z.literal('branch-exists'), name: predName, branch: branchName }).strict(),
+  z.object({ kind: z.literal('head-on-branch'), name: predName, branch: branchName }).strict(),
+  z.object({ kind: z.literal('file-exists-at-head'), name: predName, path: relPath }).strict(),
+  z.object({ kind: z.literal('clean-worktree'), name: predName }).strict(),
+  z.object({ kind: z.literal('min-commits'), name: predName, n: z.number().int().positive(), branch: branchName.optional() }).strict(),
+  z
+    .object({
+      kind: z.literal('commit-message-matches'),
+      name: predName,
+      pattern: regexSource,
+      flags: z.string().regex(/^[ims]{0,3}$/).optional(),
+      which: z.enum(['tip', 'any']).default('tip'),
+      branch: branchName.optional(),
+    })
+    .strict(),
+  z.object({ kind: z.literal('ci-green'), name: predName, branch: branchName.optional() }).strict(),
+  z.object({ kind: z.literal('pr-has-section'), name: predName, heading: z.string().min(1).max(200), branch: branchName.optional() }).strict(),
 ]);
+export type RepoPredicate = z.infer<typeof RepoPredicate>;
+export const REPO_REMOTE_PREDICATES = ['ci-green', 'pr-has-section'] as const;
 
-export const RepoCheck = z.object({
-  type: z.literal('repo'),
-  predicates: z.array(RepoPredicate).min(1),
-});
+export const RepoCheck = z
+  .object({
+    type: z.literal('repo'),
+    predicates: z.array(RepoPredicate).min(1).max(50).superRefine(uniqueNames('predicate')),
+    /** per git / gh invocation */
+    timeoutMs: timeoutMs.default(15000),
+  })
+  .strict();
 
 export const StudyQuizCheck = z.object({
   type: z.literal('study-quiz'),

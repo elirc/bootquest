@@ -6,15 +6,23 @@ import { MAX_CODE_CHARS as SHARED_MAX } from '@bootquest/shared/api';
 import { describe, expect, it } from 'vitest';
 import { ApiClient, ApiError } from '../src/client.ts';
 import { MAX_CODE_CHARS } from '../src/program.ts';
-import { BROWSER_CHECKS, classifyUnit, CODE_CHECKS, PENDING_CLI_CHECKS, resolveUnit } from '../src/units.ts';
-import { drillDetail, fakeFetch, quizDetail } from './helpers.ts';
+import { BROWSER_CHECKS, classifyUnit, CODE_CHECKS, PENDING_CLI_CHECKS, PROJECT_CHECKS, resolveUnit } from '../src/units.ts';
+import { drillDetail, fakeFetch, httpDetail, quizDetail, repoDetail } from './helpers.ts';
 
 describe('unit-kind decision table', () => {
   it('every shared CHECK_TYPE is classified exactly once (new types force a decision here)', () => {
     for (const t of CHECK_TYPES) {
-      const hits = [CODE_CHECKS, BROWSER_CHECKS, PENDING_CLI_CHECKS].filter((s) => s.has(t)).length;
+      const hits = [CODE_CHECKS, PROJECT_CHECKS, BROWSER_CHECKS, PENDING_CLI_CHECKS].filter((s) => s.has(t)).length;
       expect(hits, t).toBe(1);
     }
+  });
+
+  it('W3c: http and repo moved from refused to DELIVERED (project checks); the rest of the pending group is unchanged', () => {
+    expect([...PROJECT_CHECKS].sort()).toEqual(['http', 'repo']);
+    expect([...PENDING_CLI_CHECKS].sort()).toEqual(['guided-step', 'node-test-file', 'self-run', 'vitest-project']);
+    expect(classifyUnit(httpDetail(), 'submit')).toEqual({ mode: 'http', checkType: 'http', portHint: 3000 });
+    expect(classifyUnit(httpDetail({ port: undefined }), 'run')).toEqual({ mode: 'http', checkType: 'http', portHint: null });
+    expect(classifyUnit(repoDetail(), 'run')).toEqual({ mode: 'repo', checkType: 'repo' });
   });
 
   it('drill-js is delivered as code; quiz is refused as browser material', () => {
@@ -29,10 +37,10 @@ describe('unit-kind decision table', () => {
     expect(r.mode === 'refuse' && r.reason).toMatch(/no machine check.*web app/);
   });
 
-  it('http / repo / guided-step are refused as "not wired yet", never guessed', () => {
-    const d = { ...drillDetail({ kind: 'http-lab' }), check: { id: 1, threshold: null, spec: { type: 'http' as const, requests: [], timeoutMs: 1 } } };
+  it('guided-step (still pending) is refused as "not wired yet", never guessed', () => {
+    const d = { ...drillDetail({ kind: 'guided-project' }), check: { id: 1, threshold: null, spec: { type: 'guided-step' as const, step: 1, runner: 'node-test', timeoutMs: 1 } } };
     const r = classifyUnit(d, 'submit');
-    expect(r.mode === 'refuse' && r.reason).toMatch(/does not accept http submissions yet.*Nothing was sent/);
+    expect(r.mode === 'refuse' && r.reason).toMatch(/does not accept guided-step submissions yet.*Nothing was sent/);
   });
 
   it('the CLI size guard matches the API contract', () => {
@@ -41,20 +49,18 @@ describe('unit-kind decision table', () => {
 });
 
 describe('resolveUnit', () => {
-  it('unitKey: lists tracks + units, matches the key, then fetches the detail', async () => {
+  it('unitKey: ONE request to /units/by-key/<url-encoded key> (W3c; was N+2 track scans)', async () => {
+    const key = 'bootforge/js-fundamentals/values/variables/swap';
     const { fetch, calls } = fakeFetch({
-      'GET /api/tracks': { status: 200, body: { tracks: [{ id: 'csharp' }, { id: 'js' }] } },
-      'GET /api/tracks/csharp/units': { status: 200, body: { units: [{ id: 1, key: 'other' }] } },
-      'GET /api/tracks/js/units': { status: 200, body: { units: [{ id: 12, key: 'bootforge/js-fundamentals/values/variables/swap' }] } },
-      'GET /api/units/12': { status: 200, body: drillDetail() },
+      [`GET /api/units/by-key/${encodeURIComponent(key)}`]: { status: 200, body: drillDetail() },
     });
-    const d = await resolveUnit(new ApiClient('http://h:1', fetch), { unitKey: 'bootforge/js-fundamentals/values/variables/swap', path: 'p' });
+    const d = await resolveUnit(new ApiClient('http://h:1', fetch), { unitKey: key, path: 'p' });
     expect(d.unit.id).toBe(12);
-    expect(calls.map((c) => new URL(c.url).pathname)).toEqual(['/api/tracks', '/api/tracks/csharp/units', '/api/tracks/js/units', '/api/units/12']);
+    expect(calls.map((c) => c.url)).toEqual([`http://h:1/api/units/by-key/bootforge%2Fjs-fundamentals%2Fvalues%2Fvariables%2Fswap`]);
   });
 
   it('unknown key / id -> NOT_FOUND ApiError naming the config file', async () => {
-    const { fetch } = fakeFetch({ 'GET /api/tracks': { status: 200, body: { tracks: [] } } });
+    const { fetch } = fakeFetch({});
     const c = new ApiClient('http://h:1', fetch);
     await expect(resolveUnit(c, { unitKey: 'nope', path: 'X/.bootquest.json' })).rejects.toThrow(/no unit with key "nope".*X\/\.bootquest\.json/);
     await expect(resolveUnit(c, { unitId: 99, path: 'X/.bootquest.json' })).rejects.toBeInstanceOf(ApiError);

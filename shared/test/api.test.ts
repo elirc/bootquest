@@ -7,6 +7,7 @@ import {
   PublicCheck,
   PublicProjectionError,
   SubmissionBody,
+  UnitKeyParams,
   toPublicCheck,
   UnitDetailResponse,
 } from '../src/api.ts';
@@ -26,9 +27,27 @@ return Report();
   'guided-step': { type: 'guided-step', step: 1, testFile: `${S}/step1.test.mjs`, runner: 'node-test' },
   http: {
     type: 'http',
-    requests: [{ method: 'POST', path: '/api/x', body: { s: S }, headers: { 'x-s': S }, expect: { status: 200, headers: { s: S } } }],
+    requests: [
+      {
+        name: 'create',
+        method: 'POST',
+        path: '/api/x',
+        body: { s: S },
+        headers: { 'x-s': S },
+        expect: { status: 200, headers: { s: S }, jsonShape: { object: { [S]: { equals: S } } } },
+      },
+    ],
   },
-  repo: { type: 'repo', predicates: [{ kind: 'branch-exists', branch: 'feat/x' }] },
+  repo: {
+    type: 'repo',
+    predicates: [
+      { kind: 'branch-exists', name: 'branch made', branch: `feat/${S}` },
+      { kind: 'file-exists-at-head', name: 'file committed', path: `${S}/x.md` },
+      { kind: 'min-commits', name: 'commits', n: 3, branch: `b${S}` },
+      { kind: 'commit-message-matches', name: 'conventional', pattern: S },
+      { kind: 'pr-has-section', name: 'pr', heading: S },
+    ],
+  },
   'study-quiz': { type: 'study-quiz', itemKeys: ['a'] },
   'explain-back': { type: 'explain-back', questionSetKey: 'eb:1' },
   'patch-kata': { type: 'patch-kata', kataKey: 'k:1', defectCount: 2 },
@@ -91,8 +110,8 @@ describe('check-spec public projection is a DEEP whitelist (W1b review: repo.pre
   /** Explicit enumeration of every nested public field — changing it must be a deliberate edit here. */
   const ENUMERATED: Record<string, Record<string, string[]>> = {
     'drill-js': { tests: ['name'] },
-    http: { requests: ['method', 'path'] },
-    repo: { predicates: ['kind', 'branch', 'section', 'path'] },
+    http: { requests: ['name', 'method', 'path'] },
+    repo: { predicates: ['kind', 'name'] },
   };
 
   it('PUBLIC_NESTED_FIELDS is exactly the enumerated nested whitelist', () => {
@@ -110,43 +129,56 @@ describe('check-spec public projection is a DEEP whitelist (W1b review: repo.pre
     });
   }
 
-  it('repo predicates: each variant keeps only its own fields; a smuggled nested field is dropped', () => {
+  it('repo predicates: only kind + name reach the client; grading values and smuggled fields are dropped', () => {
     const smuggled = {
       type: 'repo',
+      timeoutMs: 15000,
       predicates: [
-        { kind: 'branch-exists', branch: 'feat/x', token: S },
-        { kind: 'ci-green', secretUrl: S },
-        { kind: 'pr-has-section', section: 'Testing', expect: S },
-        { kind: 'file-exists', path: 'docs/ADR.md', code: S },
+        { kind: 'branch-exists', name: 'feature branch', branch: S, token: S },
+        { kind: 'ci-green', name: 'CI green', secretUrl: S },
+        { kind: 'pr-has-section', name: 'PR notes', heading: S, expect: S },
+        { kind: 'file-exists-at-head', name: 'ADR', path: S, code: S },
+        { kind: 'commit-message-matches', name: 'msg', pattern: S, flags: 'i', which: 'any' },
+        { kind: 'min-commits', name: 'count', n: 99 },
       ],
     } as unknown as Parameters<typeof toPublicCheck>[0];
     const pub = toPublicCheck(smuggled);
     expect(pub).toEqual({
       type: 'repo',
+      timeoutMs: 15000,
       predicates: [
-        { kind: 'branch-exists', branch: 'feat/x' },
-        { kind: 'ci-green' },
-        { kind: 'pr-has-section', section: 'Testing' },
-        { kind: 'file-exists', path: 'docs/ADR.md' },
+        { kind: 'branch-exists', name: 'feature branch' },
+        { kind: 'ci-green', name: 'CI green' },
+        { kind: 'pr-has-section', name: 'PR notes' },
+        { kind: 'file-exists-at-head', name: 'ADR' },
+        { kind: 'commit-message-matches', name: 'msg' },
+        { kind: 'min-commits', name: 'count' },
       ],
     });
     expect(JSON.stringify(pub)).not.toContain(S);
+    expect(JSON.stringify(pub)).not.toContain('99');
+  });
+
+  it('http requests: only name/method/path reach the client (no expect, body, headers, jsonShape)', () => {
+    const pub = toPublicCheck(CheckSpec.parse(FULL.http));
+    expect(pub).toEqual({ type: 'http', timeoutMs: 5000, requests: [{ name: 'create', method: 'POST', path: '/api/x' }] });
   });
 
   it('drill-js tests / http requests: smuggled nested fields are dropped too', () => {
     const drill = toPublicCheck({ type: 'drill-js', language: 'js', timeoutMs: 8000, tests: [{ name: 't', code: S, input: S, extra: S }] } as never);
     expect(drill).toEqual({ type: 'drill-js', language: 'js', timeoutMs: 8000, tests: [{ name: 't' }] });
-    const http = toPublicCheck({ type: 'http', timeoutMs: 1, requests: [{ method: 'GET', path: '/x', note: S, expect: { status: 200 } }] } as never);
+    const http = toPublicCheck({ type: 'http', timeoutMs: 1, requests: [{ name: 'n', method: 'GET', path: '/x', note: S, expect: { status: 200 } }] } as never);
     expect(JSON.stringify(http)).not.toContain(S);
   });
 
   it('a public field that unexpectedly holds objects without a nested whitelist throws, never passes through', () => {
     expect(() => toPublicCheck({ type: 'quiz', itemKey: 'q', grading: 'choice', answerKey: 0, choices: [{ leak: S }, { leak: S }] } as never)).toThrow(PublicProjectionError);
-    expect(() => toPublicCheck({ type: 'repo', predicates: [{ kind: 'branch-exists', branch: { nested: S } }] } as never)).toThrow(PublicProjectionError);
+    expect(() => toPublicCheck({ type: 'repo', timeoutMs: 1, predicates: [{ kind: 'branch-exists', name: { nested: S } }] } as never)).toThrow(PublicProjectionError);
   });
 
   it('the strict public repo schema rejects an unknown nested key', () => {
-    expect(() => PublicCheck.parse({ type: 'repo', predicates: [{ kind: 'branch-exists', branch: 'x', token: 'y' }] })).toThrow();
+    expect(() => PublicCheck.parse({ type: 'repo', timeoutMs: 1, predicates: [{ kind: 'branch-exists', name: 'x', branch: 'y' }] })).toThrow();
+    expect(PublicCheck.parse({ type: 'repo', timeoutMs: 1, predicates: [{ kind: 'branch-exists', name: 'x' }] })).toBeTruthy();
   });
 });
 
@@ -177,5 +209,39 @@ describe('SubmissionBody', () => {
     for (const bad of [{}, { code: 'x', answer: 1 }, { answer: 1, verified: true }, { answer: 1, assessor: 'pipeline' }, { answer: 1, score: 1 }, { answer: 1, rating: 5 }, { answer: 1, difficulty: 5 }, { answer: 1, assistance: 'none' }]) {
       expect(SubmissionBody.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
     }
+  });
+
+  it('W3c: `port` (http checks) and `repoPath` (repo checks) are the other two exclusive shapes', () => {
+    expect(SubmissionBody.parse({ port: 3000 })).toEqual({ port: 3000, selfAssisted: false });
+    expect(SubmissionBody.parse({ repoPath: 'C:\\work\\proj', selfAssisted: true })).toEqual({ repoPath: 'C:\\work\\proj', selfAssisted: true });
+    const bad = [
+      { port: 0 },
+      { port: 65536 },
+      { port: 3000.5 },
+      { port: '3000' },
+      { port: 3000, code: 'x' },
+      { port: 3000, repoPath: '/r' },
+      { port: 3000, host: 'evil.example' },
+      { port: 3000, url: 'http://evil.example' },
+      { repoPath: '' },
+      { repoPath: 'a\nb' },
+      { repoPath: 'a\u0000b' },
+      { repoPath: 'x'.repeat(1025) },
+    ];
+    for (const b of bad) expect(SubmissionBody.safeParse(b).success, JSON.stringify(b)).toBe(false);
+  });
+});
+
+describe('UnitKeyParams (GET /api/units/by-key/:key)', () => {
+  it('accepts real pack + fixture keys', () => {
+    for (const key of ['bootforge/js-fundamentals/values/variables/swap', 'csbootcamp/01-language-core/x.y_z', 'fixture:http-lab', 'test:unit-1']) {
+      expect(UnitKeyParams.parse({ key })).toEqual({ key });
+    }
+  });
+  it('rejects junk, traversal-looking and oversized keys', () => {
+    for (const key of ['', '/lead', 'a//b', 'a/../b', 'a/', 'has space', 'a?b', 'a\\b', 'x'.repeat(301), '-x']) {
+      expect(UnitKeyParams.safeParse({ key }).success, key).toBe(false);
+    }
+    expect(UnitKeyParams.safeParse({ key: 'a', extra: 1 }).success).toBe(false);
   });
 });

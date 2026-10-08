@@ -177,6 +177,10 @@ export class ApiClient {
   unit(id: number): Promise<UnitDetailResponse> {
     return this.request('GET', `/units/${id}`);
   }
+  /** Unit keys contain '/': sent URL-encoded as one path segment. */
+  unitByKey(key: string): Promise<UnitDetailResponse> {
+    return this.request('GET', `/units/by-key/${encodeURIComponent(key)}`);
+  }
   run(id: number, body: SubmissionBodyInput): Promise<RunResponse> {
     return this.request('POST', `/units/${id}/run`, body);
   }

@@ -5,6 +5,13 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+// W3c fixture lessons (one http-check, one repo-check) + their learner-side fixtures; seeded into the
+// e2e DB BEFORE the server starts (the smoke's pattern), so the server is the only writer afterwards
+import { openDb } from '../../server/src/db/database.ts';
+import { insertUnit } from '../../server/src/store/content.ts';
+import lessons from '../../server/test/fixtures/check-lessons.json' with { type: 'json' };
+import { buildFixtureRepo } from '../../server/test/fixtures/repo-fixture.ts';
+import { startTasksServer } from '../../server/test/fixtures/tasks-server.ts';
 
 /**
  * E2E: boots the REAL server entrypoint (server/src/api/serve.ts) as a child
@@ -13,7 +20,13 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
  * launcher (cli/bootquest.mjs) — and once the Windows shim bin/bootquest.cmd —
  * as separate processes from a scratch project directory OUTSIDE the repo.
  * The server is killed with taskkill /T /F and the port is verified free.
+ * W3c: the http-check and repo-check fixture lessons are seeded too; the http
+ * lesson is checked against a fixture server this process boots on a free
+ * port (spec M3 gate: "one HTTP-check lesson passes against a local server"),
+ * the repo lesson against fixture git repos built in the temp dir.
  */
+const HTTP_KEY = 'fixture:http-tasks-api';
+const REPO_KEY = 'fixture:repo-feature-branch';
 
 const REPO = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const SERVE = join(REPO, 'server', 'src', 'api', 'serve.ts');
@@ -115,12 +128,17 @@ beforeAll(async () => {
   tmp = mkdtempSync(join(tmpdir(), 'bq-cli-e2e-'));
   proj = join(tmp, 'my-project');
   mkdirSync(join(proj, 'src'), { recursive: true });
+  const seedDb = openDb({ path: join(tmp, 'e2e.db'), env: {} });
+  for (const u of lessons.units) insertUnit(seedDb, u, () => new Date());
+  seedDb.close();
+  writeFileSync(join(tmp, 'unit-content.json'), JSON.stringify(lessons.content));
   port = await freePort();
   base = `http://127.0.0.1:${port}`;
   server = spawn(process.execPath, ['--import', 'tsx', SERVE], {
     cwd: REPO,
     env: cleanEnv({
       BOOTQUEST_DB: join(tmp, 'e2e.db'),
+      BOOTQUEST_UNIT_CONTENT: join(tmp, 'unit-content.json'),
       BOOTQUEST_PORT: String(port),
       BOOTQUEST_PACKS: PACK_DIR,
       BOOTQUEST_PACK_COURSES: COURSE,
@@ -267,6 +285,81 @@ describe('bootquest CLI against the real server', () => {
     expect(r.stdout).toMatch(/js +JavaScript.*: 1\/\d+ done|js +.*: 1\/\d+ done/);
     expect(r.stdout).toMatch(/not implemented yet \(milestone W4\)/);
   });
+
+  it('W3c http lesson: wrong-shape server -> run/submit exit 1 with named failures; good server -> submit exit 0 + XP', async () => {
+    const dir = join(tmp, 'http-project');
+    mkdirSync(dir);
+    writeConfig(dir, { unitKey: HTTP_KEY });
+    const st = await cli(['status'], dir);
+    expect(st.code).toBe(0);
+    expect(st.stdout).toMatch(/Check: +http \(3 requests\), port hint 3000/);
+
+    const wrong = await startTasksServer('wrong-shape');
+    try {
+      const r = await cli(['run', '--port', String(wrong.port)], dir);
+      expect(r.code).toBe(1);
+      expect(r.stdout).toContain(`Target: localhost:${wrong.port}`);
+      expect(r.stdout).toMatch(/Result: FAIL \(1\/3 requests passing\)/);
+      expect(r.stdout).toMatch(/1\. create a task\n {7}body \$\.id: expected integer, got "1" \(string\)/);
+      expect(r.stdout).toMatch(/2\. list tasks/);
+      const s = await cli(['submit', '--port', String(wrong.port)], dir);
+      expect(s.code).toBe(1);
+      expect(s.stdout).toMatch(/Attempt #\d+ recorded \(mode: solo, outcome: fail/);
+    } finally {
+      await wrong.close();
+    }
+    expect(await portIsFree(wrong.port)).toBe(true);
+
+    const good = await startTasksServer('good');
+    try {
+      const ok = await cli(['submit', '--port', String(good.port)], dir);
+      expect(ok.stderr).toBe('');
+      expect(ok.code).toBe(0);
+      expect(ok.stdout).toMatch(/Verdict: PASS \(3\/3 requests passing\)/);
+      expect(ok.stdout).toMatch(/XP: \+20/);
+    } finally {
+      await good.close();
+    }
+    expect(await portIsFree(good.port)).toBe(true);
+  }, 180_000); // 2 fixture servers + 4 CLI processes
+
+  it('W3c http lesson: nothing listening on the port -> exit 1, network error verbatim', async () => {
+    const dead = await freePort();
+    const r = await cli(['run', '--port', String(dead)], join(tmp, 'http-project'));
+    expect(r.code).toBe(1);
+    expect(r.stdout).toMatch(new RegExp(`request failed: .*ECONNREFUSED.*${dead}`));
+  });
+
+  it('W3c repo lesson: default repo = dir holding .bootquest.json; dirty repo fails exactly clean-worktree; good repo passes + XP', async () => {
+    const parent = join(tmp, 'repos');
+    const [good, dirty] = await Promise.all([buildFixtureRepo(parent, 'good'), buildFixtureRepo(parent, 'dirty')]);
+    // the marker file at the repo root does not make the tree dirty (runner ignores it)
+    writeConfig(good, { unitKey: REPO_KEY });
+    writeConfig(dirty, { unitKey: REPO_KEY });
+
+    const bad = await cli(['submit'], join(dirty, 'src'));
+    expect(bad.code).toBe(1);
+    expect(bad.stdout).toContain(`Repo: ${dirty}`);
+    expect(bad.stdout).toMatch(/Verdict: FAIL \(5\/6 predicates passing\)/);
+    expect(bad.stdout).toMatch(/Failures \(1 of 6 predicates\):\n {2}1\. nothing left uncommitted\n/);
+
+    const ok = await cli(['submit'], good);
+    expect(ok.stderr).toBe('');
+    expect(ok.code).toBe(0);
+    expect(ok.stdout).toMatch(/Verdict: PASS \(6\/6 predicates passing\)/);
+    expect(ok.stdout).toMatch(/XP: \+20/);
+
+    // --repo from elsewhere (resolved against the cwd); run is free
+    const elsewhere = join(tmp, 'repo-flag');
+    mkdirSync(elsewhere);
+    writeConfig(elsewhere, { unitKey: REPO_KEY });
+    const viaFlag = await cli(['run', '--repo', '../repos/dirty'], elsewhere);
+    expect(viaFlag.code).toBe(1);
+    expect(viaFlag.stdout).toMatch(/Run \(free, not recorded\)/);
+    const notRepo = await cli(['run', '--repo', '.'], elsewhere);
+    expect(notRepo.code).toBe(2);
+    expect(notRepo.stderr).toMatch(/Server refused \(VALIDATION, HTTP 400\): repoPath is not the root of a git working tree/);
+  }, 180_000); // 2 fixture repos + 5 CLI processes, each a node cold start: slow on a loaded box
 
   it('bin/bootquest.cmd works from a foreign cwd and propagates exit codes', async () => {
     const env = cleanEnv({ BOOTQUEST_SERVER: base });

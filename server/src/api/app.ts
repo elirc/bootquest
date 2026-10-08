@@ -10,6 +10,7 @@ import {
   TrackIdParams,
   UnitDetailResponse,
   UnitIdParams,
+  UnitKeyParams,
   WrittenAnswerBody,
 } from '@bootquest/shared/api';
 import type { Db } from '../db/database.ts';
@@ -27,6 +28,7 @@ import {
   getTrackUnits,
   getTracks,
   getUnitDetail,
+  getUnitDetailByKey,
   gradeReview,
   revealUnit,
   runUnit,
@@ -94,6 +96,13 @@ export function createApp(opts: AppOptions): Express {
     sendJson(res, 200, getTrackUnits(deps, id));
   }));
 
+  // key = one URL-encoded path segment (keys contain '/'): /units/by-key/bootforge%2Fjs-fundamentals%2F...
+  router.get('/units/by-key/:key', asyncRoute((req, res) => {
+    const { key } = validate(UnitKeyParams, req.params, 'params');
+    validate(EmptyQuery, req.query, 'query');
+    sendJson(res, 200, UnitDetailResponse.parse(getUnitDetailByKey(deps, key)));
+  }));
+
   router.get('/units/:id', asyncRoute((req, res) => {
     const { id } = validate(UnitIdParams, req.params, 'params');
     validate(EmptyQuery, req.query, 'query');
@@ -105,7 +114,7 @@ export function createApp(opts: AppOptions): Express {
     const { id } = validate(UnitIdParams, req.params, 'params');
     validate(EmptyQuery, req.query, 'query');
     const body = validate(SubmissionBody, req.body, 'body');
-    const result = await runUnit(deps, id, { code: body.code, answer: body.answer });
+    const result = await runUnit(deps, id, { code: body.code, answer: body.answer, port: body.port, repoPath: body.repoPath });
     sendJson(res, 200, { result });
   }));
 
@@ -113,7 +122,11 @@ export function createApp(opts: AppOptions): Express {
     const { id } = validate(UnitIdParams, req.params, 'params');
     validate(EmptyQuery, req.query, 'query');
     const body = validate(SubmissionBody, req.body, 'body');
-    sendJson(res, 200, await submitUnit(deps, id, { code: body.code, answer: body.answer, selfAssisted: body.selfAssisted }));
+    sendJson(
+      res,
+      200,
+      await submitUnit(deps, id, { code: body.code, answer: body.answer, port: body.port, repoPath: body.repoPath, selfAssisted: body.selfAssisted }),
+    );
   }));
 
   router.post('/units/:id/reveal', asyncRoute((req, res) => {

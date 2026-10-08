@@ -38,11 +38,11 @@ export function unitLabel(unit: Pick<UnitDetailResponse['unit'], 'title' | 'key'
 }
 
 /** Numbered failure list with expected/actual when the server provides them. */
-export function formatFailures(failures: CanonicalRunResult['failures'], totalTests?: number): string {
+export function formatFailures(failures: CanonicalRunResult['failures'], totalTests?: number, noun = 'test'): string {
   if (failures.length === 0) return '';
   const head =
     totalTests !== undefined && totalTests > 0
-      ? `Failures (${failures.length} of ${totalTests} test${totalTests === 1 ? '' : 's'}):`
+      ? `Failures (${failures.length} of ${totalTests} ${noun}${totalTests === 1 ? '' : 's'}):`
       : `Failures (${failures.length}):`;
   const lines = [head];
   failures.forEach((f, i) => {
@@ -66,23 +66,35 @@ function formatOutput(output: string): string {
   return ['Output:', indent(shown.join('\n'), '  '), ...(more > 0 ? [`  ... (${more} more line${more === 1 ? '' : 's'})`] : [])].join('\n');
 }
 
-function testCount(detail: UnitDetailResponse): number | undefined {
+/** How many named tests the public spec declares, and what they are called (drill tests, http requests, repo predicates). */
+export function testCount(detail: UnitDetailResponse): { n: number; noun: string } | undefined {
   const spec = detail.check?.spec;
-  return spec && spec.type === 'drill-js' ? spec.tests.length : undefined;
+  if (!spec) return undefined;
+  if (spec.type === 'drill-js') return { n: spec.tests.length, noun: 'test' };
+  if (spec.type === 'http') return { n: spec.requests.length, noun: 'request' };
+  if (spec.type === 'repo') return { n: spec.predicates.length, noun: 'predicate' };
+  return undefined;
 }
 
-function passLine(result: CanonicalRunResult, total: number | undefined): string {
-  if (result.pass) return total !== undefined ? `PASS (${total}/${total} tests)` : 'PASS';
-  return total !== undefined ? `FAIL (${total - result.failures.length}/${total} tests passing)` : 'FAIL';
+const plural = (n: number, noun: string) => `${noun}${n === 1 ? '' : 's'}`;
+
+function passLine(result: CanonicalRunResult, count: { n: number; noun: string } | undefined): string {
+  if (!count) return result.pass ? 'PASS' : 'FAIL';
+  const { n, noun } = count;
+  return result.pass ? `PASS (${n}/${n} ${plural(n, noun)})` : `FAIL (${n - result.failures.length}/${n} ${plural(n, noun)} passing)`;
 }
 
-export function formatRun(detail: UnitDetailResponse, result: CanonicalRunResult, file: string): string {
-  const total = testCount(detail);
+/**
+ * `source` is what was checked: a file path (label "File"), the learner's
+ * server (label "Target") or a repo directory (label "Repo").
+ */
+export function formatRun(detail: UnitDetailResponse, result: CanonicalRunResult, source: string, label = 'File'): string {
+  const count = testCount(detail);
   return [
     `Run (free, not recorded): ${unitLabel(detail.unit)}`,
-    `File: ${file}`,
-    `Result: ${passLine(result, total)} in ${Math.round(result.durationMs)}ms`,
-    formatFailures(result.failures, total),
+    `${label}: ${source}`,
+    `Result: ${passLine(result, count)} in ${Math.round(result.durationMs)}ms`,
+    formatFailures(result.failures, count?.n, count?.noun),
     formatOutput(result.output),
     result.pass ? 'Looks good. `bootquest submit` records it and awards XP.' : '',
   ]
@@ -112,15 +124,15 @@ export function formatXp(resp: Pick<SubmitResponse, 'xp' | 'verdict'>): string {
   return 'XP: +0';
 }
 
-export function formatSubmit(detail: UnitDetailResponse, resp: SubmitResponse, file: string): string {
-  const total = testCount(detail);
+export function formatSubmit(detail: UnitDetailResponse, resp: SubmitResponse, source: string, label = 'File'): string {
+  const count = testCount(detail);
   const mode = resp.attempt.mode === 'assisted' ? 'assisted (you reported help)' : resp.attempt.mode;
   return [
     `Submit: ${unitLabel(detail.unit)}`,
-    `File: ${file}`,
-    `Verdict: ${resp.verdict.toUpperCase()}${total !== undefined ? ` (${total - resp.result.failures.length}/${total} tests passing)` : ''}`,
+    `${label}: ${source}`,
+    `Verdict: ${resp.verdict.toUpperCase()}${count !== undefined ? ` (${count.n - resp.result.failures.length}/${count.n} ${plural(count.n, count.noun)} passing)` : ''}`,
     `Attempt #${resp.attempt.id} recorded (mode: ${mode}, outcome: ${resp.attempt.outcome}, ${Math.round(resp.result.durationMs)}ms)`,
-    formatFailures(resp.result.failures, total),
+    formatFailures(resp.result.failures, count?.n, count?.noun),
     formatOutput(resp.result.output),
     formatXp(resp),
   ]
@@ -147,8 +159,9 @@ export function formatDashboard(d: DashboardResponse, server: string): string {
 export function formatProject(detail: UnitDetailResponse, configPath: string, file: { path: string; exists: boolean } | null, delivery: string): string {
   const u = detail.unit;
   const check = detail.check;
+  const count = testCount(detail);
   const checkLine = check
-    ? `${check.spec.type}${check.spec.type === 'drill-js' ? ` (${check.spec.tests.length} tests)` : ''}`
+    ? `${check.spec.type}${count ? ` (${count.n} ${plural(count.n, count.noun)})` : ''}${check.spec.type === 'http' && check.spec.port !== undefined ? `, port hint ${check.spec.port}` : ''}`
     : 'none (browser-only unit)';
   return [
     `Project: ${configPath}`,

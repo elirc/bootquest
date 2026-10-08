@@ -20,8 +20,14 @@ const VALID: Record<(typeof CHECK_TYPES)[number], unknown> = {
   quiz: { type: 'quiz', itemKey: 'q1', grading: 'choice', answerKey: 1, choices: ['a', 'b'] },
   'predict-output': { type: 'predict-output', language: 'js', expected: 'object\nundefined' },
   'guided-step': { type: 'guided-step', step: 1, testFile: 'practice/checks/step1.test.mjs', runner: 'node-test' },
-  http: { type: 'http', requests: [{ method: 'GET', path: '/api/tasks', expect: { status: 200, jsonShape: { items: 'array' } } }] },
-  repo: { type: 'repo', predicates: [{ kind: 'branch-exists', branch: 'feat/x' }, { kind: 'pr-has-section', section: 'Testing' }] },
+  http: { type: 'http', requests: [{ name: 'list tasks', method: 'GET', path: '/api/tasks', expect: { status: 200, jsonShape: { object: { items: 'array' } } } }] },
+  repo: {
+    type: 'repo',
+    predicates: [
+      { kind: 'branch-exists', name: 'feature branch', branch: 'feat/x' },
+      { kind: 'pr-has-section', name: 'PR testing notes', heading: 'Testing' },
+    ],
+  },
   'study-quiz': { type: 'study-quiz', itemKeys: ['a', 'b'] },
   'explain-back': { type: 'explain-back', questionSetKey: 'eb:u02' },
   'patch-kata': { type: 'patch-kata', kataKey: 'kata:unawaited-auth', defectCount: 2 },
@@ -60,7 +66,63 @@ describe('CheckSpec discriminated union', () => {
     expect(CheckSpec.safeParse({ ...(VALID['node-test-file'] as object), checkPath: '../../etc/passwd' }).success).toBe(false);
     expect(CheckSpec.safeParse({ ...(VALID['self-run'] as object), file: 'C:/abs/file.js' }).success).toBe(false);
     expect(CheckSpec.safeParse({ type: 'drill-js', language: 'js', tests: [] }).success).toBe(false);
-    expect(CheckSpec.safeParse({ type: 'http', requests: [{ method: 'GET', path: 'no-slash', expect: { status: 200 } }] }).success).toBe(false);
+    expect(CheckSpec.safeParse({ type: 'http', requests: [{ name: 'r', method: 'GET', path: 'no-slash', expect: { status: 200 } }] }).success).toBe(false);
+  });
+
+  it('http: rejects protocol-relative / backslash / whitespace paths, a Host header, duplicate names, unknown fields', () => {
+    const req = (over: object) => ({ type: 'http', requests: [{ name: 'r', method: 'GET', path: '/x', expect: { status: 200 }, ...over }] });
+    expect(CheckSpec.safeParse(req({})).success).toBe(true);
+    expect(CheckSpec.safeParse(req({ path: '/api/tasks?done=1&x=%20' })).success).toBe(true);
+    for (const path of ['//evil.example/x', '/a\\b', '/a b', '/x#frag', 'http://evil.example/']) {
+      expect(CheckSpec.safeParse(req({ path })).success, path).toBe(false);
+    }
+    expect(CheckSpec.safeParse(req({ headers: { Host: 'evil.example' } })).success).toBe(false);
+    expect(CheckSpec.safeParse(req({ expect: { status: 200, extra: 1 } })).success).toBe(false);
+    const dup = { type: 'http', requests: [{ name: 'a', method: 'GET', path: '/x', expect: { status: 200 } }, { name: 'a', method: 'GET', path: '/y', expect: { status: 200 } }] };
+    expect(CheckSpec.safeParse(dup).success).toBe(false);
+    // timeouts default: 5s per request, 30s total
+    expect(CheckSpec.parse(req({}))).toMatchObject({ timeoutMs: 5000, totalTimeoutMs: 30000 });
+  });
+
+  it('http jsonShape: the small structural grammar parses, junk does not', () => {
+    const withShape = (jsonShape: unknown) => ({ type: 'http', requests: [{ name: 'r', method: 'GET', path: '/x', expect: { status: 200, jsonShape } }] });
+    const ok = [
+      'any',
+      'integer',
+      { equals: null },
+      { equals: 'ok' },
+      { object: { id: 'integer', tags: { array: 'string', minItems: 1 }, meta: { object: { v: { equals: 2 } } } } },
+      { array: { object: { id: 'number' } } },
+    ];
+    for (const s of ok) expect(CheckSpec.safeParse(withShape(s)).success, JSON.stringify(s)).toBe(true);
+    const bad = ['float', { equals: { a: 1 } }, { object: { a: 'nope' } }, { array: 'string', minItems: -1 }, { object: {}, extra: 1 }, { items: 'array' }];
+    for (const s of bad) expect(CheckSpec.safeParse(withShape(s)).success, JSON.stringify(s)).toBe(false);
+  });
+
+  it('repo: every predicate kind parses; bad branch names / regexes / duplicate names are rejected', () => {
+    const all = {
+      type: 'repo',
+      predicates: [
+        { kind: 'branch-exists', name: 'a', branch: 'feat/add-tasks' },
+        { kind: 'head-on-branch', name: 'b', branch: 'main' },
+        { kind: 'file-exists-at-head', name: 'c', path: 'docs/ADR-001.md' },
+        { kind: 'clean-worktree', name: 'd' },
+        { kind: 'min-commits', name: 'e', n: 3, branch: 'feat/add-tasks' },
+        { kind: 'commit-message-matches', name: 'f', pattern: '^feat(\\(.+\\))?: ', flags: 'm', which: 'any' },
+        { kind: 'ci-green', name: 'g' },
+        { kind: 'pr-has-section', name: 'h', heading: 'Testing', branch: 'feat/add-tasks' },
+      ],
+    };
+    const parsed = CheckSpec.parse(all);
+    expect(parsed).toMatchObject({ timeoutMs: 15000 });
+    const one = (p: object) => ({ type: 'repo', predicates: [p] });
+    for (const branch of ['-rf', 'a..b', 'a//b', 'x/', 'x.lock', 'has space', 'C:/abs']) {
+      expect(CheckSpec.safeParse(one({ kind: 'branch-exists', name: 'n', branch })).success, branch).toBe(false);
+    }
+    expect(CheckSpec.safeParse(one({ kind: 'commit-message-matches', name: 'n', pattern: '(' })).success).toBe(false);
+    expect(CheckSpec.safeParse(one({ kind: 'file-exists-at-head', name: 'n', path: '../outside' })).success).toBe(false);
+    expect(CheckSpec.safeParse(one({ kind: 'branch-exists', branch: 'x' })).success).toBe(false); // name required
+    expect(CheckSpec.safeParse({ type: 'repo', predicates: [{ kind: 'clean-worktree', name: 'n' }, { kind: 'ci-green', name: 'n' }] }).success).toBe(false);
   });
 });
 

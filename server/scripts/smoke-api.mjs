@@ -7,7 +7,9 @@
 // submissions graded by the real runners, and (W3a) the whole csbootcamp C#
 // pack with a real csbootcamp reference solution AND its untouched starter
 // graded by the real warm C# runner (scratch in the temp dir, compiler server
-// shut down + process-checked at the end) —
+// shut down + process-checked at the end), and (W3c) the http-check fixture
+// lesson graded by the real http runner against a fixture server booted on a
+// free port —
 // verifies ledger rows through a read connection, kills the server and
 // verifies the port is free again. Exit 0 only if every step holds.
 import { execFileSync, spawn } from 'node:child_process';
@@ -21,11 +23,15 @@ import { addReviewItem } from '../src/engines/fsrs.ts';
 import { insertUnit } from '../src/store/content.ts';
 import { ledgerCounts } from '../src/store/queries.ts';
 import { ScratchManager } from '../src/runners/csharp/scratch.ts';
+import { startTasksServer } from '../test/fixtures/tasks-server.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, '..', '..');
 const SERVE = join(REPO, 'server', 'src', 'api', 'serve.ts');
 const fixture = JSON.parse(readFileSync(join(HERE, 'fixtures', 'smoke-units.json'), 'utf8'));
+// W3c: the http-check fixture lesson (the repo lesson is covered by the test suites)
+const checkLessons = JSON.parse(readFileSync(join(HERE, '..', 'test', 'fixtures', 'check-lessons.json'), 'utf8'));
+const httpLesson = checkLessons.units.find((u) => u.key === 'fixture:http-tasks-api');
 // one real imported BootForge course (W2): the server loads it at startup
 const PACK_DIR = join(REPO, 'content', 'packs', 'bootforge');
 const PACK_COURSE = 'js-fundamentals';
@@ -119,6 +125,7 @@ async function main() {
     const seedDb = openDb({ path: dbPath, env: {} });
     const ids = {};
     for (const u of fixture.units) ids[u.key] = insertUnit(seedDb, u, realClock);
+    ids[httpLesson.key] = insertUnit(seedDb, httpLesson, realClock);
     for (const c of fixture.reviewCards) addReviewItem(seedDb, c, realClock);
     seedDb.close();
     writeFileSync(contentPath, JSON.stringify(fixture.content));
@@ -167,11 +174,11 @@ async function main() {
     try {
       // 1. health
       const h = await api(base, 'GET', '/api/health');
-      // 2 fixture units + the real pack course (written units carry no check) + every csbootcamp drill
-      const wantUnits = 2 + packCounts.total + csManifest.totals.total;
-      const wantChecks = 2 + packCounts.total - packCounts.written + csManifest.totals.total;
+      // 3 fixture units (2 smoke + the W3c http lesson) + the real pack course (written units carry no check) + every csbootcamp drill
+      const wantUnits = 3 + packCounts.total + csManifest.totals.total;
+      const wantChecks = 3 + packCounts.total - packCounts.written + csManifest.totals.total;
       step(
-        `health (2 fixture + ${packCounts.total} BootForge ${PACK_COURSE} + ${csManifest.totals.total} csbootcamp units: loaded === built)`,
+        `health (3 fixture + ${packCounts.total} BootForge ${PACK_COURSE} + ${csManifest.totals.total} csbootcamp units: loaded === built)`,
         h.status === 200 && h.json?.ok === true && h.json.counts.units === wantUnits && h.json.counts.checks === wantChecks,
         JSON.stringify(h.json),
       );
@@ -421,6 +428,44 @@ async function main() {
       );
       const d3 = await api(base, 'GET', '/api/dashboard');
       step(`dashboard xp total ${3 + wantXp + 2 + 4 + csXp} after the C# submission`, d3.json?.xp?.total === 3 + wantXp + 2 + 4 + csXp, `xp=${d3.json?.xp?.total}`);
+
+      // 10d. W3c: the http-check lesson, graded by the REAL http runner against a fixture server
+      const httpId = ids[httpLesson.key];
+      const hByKey = await api(base, 'GET', `/api/units/by-key/${encodeURIComponent(httpLesson.key)}`);
+      step(
+        'GET /units/by-key: http lesson detail with the public spec only (request names/methods/paths, no expectations)',
+        hByKey.status === 200 &&
+          hByKey.json.unit.id === httpId &&
+          hByKey.json.check.spec.requests.every((r) => Object.keys(r).sort().join() === 'method,name,path') &&
+          !hByKey.text.includes('"expect"') &&
+          !hByKey.text.includes('jsonShape'),
+        `unit ${httpId}`,
+      );
+      const wrongSrv = await startTasksServer('wrong-shape');
+      let hw;
+      try {
+        hw = await api(base, 'POST', `/api/units/${httpId}/submit`, { port: wrongSrv.port });
+      } finally {
+        await wrongSrv.close();
+      }
+      step(
+        'http check vs a wrong-shape server: recorded FAIL, the two shape requests fail by name, no XP',
+        hw.status === 200 && hw.json.verdict === 'fail' && hw.json.xp === null && hw.json.result.failures.map((f) => f.name).join('|') === 'create a task|list tasks',
+        JSON.stringify(hw.json?.result?.failures?.map((f) => f.message)),
+      );
+      const goodSrv = await startTasksServer('good');
+      let hg;
+      try {
+        hg = await api(base, 'POST', `/api/units/${httpId}/submit`, { port: goodSrv.port });
+      } finally {
+        await goodSrv.close();
+      }
+      const hFree = (await portIsFree(wrongSrv.port)) && (await portIsFree(goodSrv.port));
+      step(
+        `http check vs the good fixture server: PASS (3/3 requests), +${10 * httpLesson.difficulty} code XP; fixture servers closed, ports free`,
+        hg.status === 200 && hg.json.verdict === 'pass' && hg.json.result.failures.length === 0 && hg.json.xp?.amount === 10 * httpLesson.difficulty && hFree,
+        `${hg.json?.result?.durationMs}ms xp=${JSON.stringify(hg.json?.xp)}`,
+      );
 
       // 11. errors are JSON
       const e = await api(base, 'GET', '/definitely-not-a-route');

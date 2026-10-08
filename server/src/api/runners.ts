@@ -2,11 +2,18 @@ import type { CheckSpec, CheckType } from '@bootquest/shared';
 import type { CanonicalRunResult } from '@bootquest/shared/api';
 import { run as runJs } from '../runners/js/index.ts';
 import { normalizeOutput } from '../runners/js/grade-core.mjs';
+import { runHttpCheck } from '../runners/http/index.ts';
+import { RepoPathError, runRepoCheck, type GhExec } from '../runners/repo/index.ts';
 
-/** What the learner sent: `code` for code checks, `answer` for quiz / predict-output. */
+/**
+ * What the learner sent: `code` for code checks, `answer` for quiz /
+ * predict-output, `port` for http checks, `repoPath` for repo checks.
+ */
 export interface LearnerSubmission {
   code?: string;
   answer?: string | number;
+  port?: number;
+  repoPath?: string;
 }
 
 /**
@@ -62,12 +69,51 @@ export const drillJsRunner: Runner = async (spec, submission) => {
 };
 
 /**
- * The registry: drill-js always; drill-cs when the caller supplies the C#
- * runner (it owns a scratch dir + a compiler server, so its lifecycle belongs
- * to whoever starts the server — see serve.ts / runner-csharp.ts).
+ * http checks (W3c): the learner sends only `port`; the runner targets the
+ * loopback interface by construction (server/src/runners/http).
  */
-export function defaultRunners(opts: { drillCs?: Runner } = {}): RunnerRegistry {
-  return { 'drill-js': drillJsRunner, ...(opts.drillCs ? { 'drill-cs': opts.drillCs } : {}) };
+export const httpRunner: Runner = async (spec, submission) => {
+  if (spec.type !== 'http') throw new UnsupportedCheckError(`http runner got ${spec.type}`);
+  if (submission.port === undefined) {
+    throw new SubmissionShapeError('http checks take `port`: the local port your server listens on (e.g. {"port": 3000})');
+  }
+  return runHttpCheck(spec, submission.port);
+};
+
+/**
+ * repo checks (W3c): the learner sends only `repoPath` (absolute path of a
+ * local working tree). A path that is not a usable repo root is a request
+ * error (400, nothing recorded), not a failed attempt.
+ */
+export function createRepoRunner(opts: { gh?: GhExec } = {}): Runner {
+  return async (spec, submission) => {
+    if (spec.type !== 'repo') throw new UnsupportedCheckError(`repo runner got ${spec.type}`);
+    if (submission.repoPath === undefined) {
+      throw new SubmissionShapeError('repo checks take `repoPath`: the absolute path of your local git working tree');
+    }
+    try {
+      return await runRepoCheck(spec, submission.repoPath, opts.gh ? { gh: opts.gh } : {});
+    } catch (err) {
+      if (err instanceof RepoPathError) throw new SubmissionShapeError(err.message);
+      throw err;
+    }
+  };
+}
+
+/**
+ * The registry: drill-js, http and repo always; drill-cs when the caller
+ * supplies the C# runner (it owns a scratch dir + a compiler server, so its
+ * lifecycle belongs to whoever starts the server — see serve.ts /
+ * runner-csharp.ts). `gh` overrides the gh CLI executor of the repo runner's
+ * remote predicates (tests).
+ */
+export function defaultRunners(opts: { drillCs?: Runner; gh?: GhExec } = {}): RunnerRegistry {
+  return {
+    'drill-js': drillJsRunner,
+    http: httpRunner,
+    repo: createRepoRunner(opts.gh ? { gh: opts.gh } : {}),
+    ...(opts.drillCs ? { 'drill-cs': opts.drillCs } : {}),
+  };
 }
 
 /**

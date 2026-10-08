@@ -39,6 +39,11 @@ export function getUnit(db: Db, id: number): UnitRecord | undefined {
   return db.get<UnitRecord>(`SELECT ${UNIT_COLUMNS} FROM unit WHERE id = ? AND retired_at IS NULL`, id);
 }
 
+/** Live unit by its key (unit.key is UNIQUE); retired units are not found, like getUnit. */
+export function getUnitByKey(db: Db, key: string): UnitRecord | undefined {
+  return db.get<UnitRecord>(`SELECT ${UNIT_COLUMNS} FROM unit WHERE key = ? AND retired_at IS NULL`, key);
+}
+
 export function unitCompetencies(db: Db, unitId: number): CompetencyId[] {
   return db
     .all<{ c: CompetencyId }>(

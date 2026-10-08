@@ -25,6 +25,7 @@ import {
   competencyTable,
   getTrack,
   getUnit,
+  getUnitByKey,
   listTracks,
   passedUnitIds,
   prerequisiteMap,
@@ -150,6 +151,13 @@ export function getUnitDetail(deps: ServiceDeps, unitId: number): UnitDetailResp
   };
 }
 
+/** GET /units/by-key/:key — same shape as /units/:id (one round trip for key-configured CLI projects). */
+export function getUnitDetailByKey(deps: ServiceDeps, key: string): UnitDetailResponse {
+  const unit = getUnitByKey(deps.db, key);
+  if (!unit) throw new HttpError(404, 'NOT_FOUND', `no unit with key "${key}"`);
+  return getUnitDetail(deps, unit.id);
+}
+
 // ---------------------------------------------------------------- grading
 
 async function grade(deps: ServiceDeps, spec: CheckSpec, submission: LearnerSubmission): Promise<CanonicalRunResult> {
@@ -210,6 +218,14 @@ export async function runUnit(deps: ServiceDeps, unitId: number, submission: Lea
   return grade(deps, check.spec, submission);
 }
 
+/** What the attempt row stores as the learner's submission (exactly one shape was sent). */
+function recordedAnswer(s: LearnerSubmission): Record<string, unknown> {
+  if (s.code !== undefined) return { code: s.code };
+  if (s.port !== undefined) return { port: s.port };
+  if (s.repoPath !== undefined) return { repoPath: s.repoPath };
+  return { answer: s.answer };
+}
+
 /**
  * POST /submit — same grading as run, then (one transaction): append-only
  * attempt + run rows, XP via the xp engine on pass (reveal / once-per-unit
@@ -236,7 +252,7 @@ export async function submitUnit(
         checkId: check.id,
         selfAssisted: submission.selfAssisted,
         result,
-        answer: submission.code !== undefined ? { code: submission.code } : { answer: submission.answer },
+        answer: recordedAnswer(submission),
       },
       clock,
     );

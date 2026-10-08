@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DEFAULT_SERVER } from '../src/client.ts';
 import { EXIT, MAX_CODE_CHARS, runCli } from '../src/program.ts';
-import { captureIo, dashboard, drillDetail, fakeFetch, quizDetail, submitResp } from './helpers.ts';
+import { captureIo, dashboard, drillDetail, fakeFetch, httpDetail, quizDetail, repoDetail, submitResp } from './helpers.ts';
 
 let proj: string;
 beforeEach(() => {
@@ -20,6 +20,20 @@ afterEach(() => {
 const baseRoutes = () => ({
   'GET /api/units/12': { status: 200, body: drillDetail() },
   'GET /api/units/3': { status: 200, body: quizDetail() },
+  'GET /api/units/21': { status: 200, body: httpDetail() },
+  'GET /api/units/22': { status: 200, body: repoDetail() },
+  'POST /api/units/21/run': { status: 200, body: { result: { pass: true, output: 'PASS health', failures: [], durationMs: 9 } } },
+  'POST /api/units/21/submit': {
+    status: 200,
+    body: submitResp({
+      verdict: 'fail',
+      result: { pass: false, output: '', failures: [{ name: 'create', message: 'status: expected 201, got 200', expected: 201, actual: 200 }], durationMs: 9 },
+      attempt: { id: 8, mode: 'solo', outcome: 'fail' },
+      xp: null,
+    }),
+  },
+  'POST /api/units/22/run': { status: 200, body: { result: { pass: true, output: '', failures: [], durationMs: 9 } } },
+  'POST /api/units/22/submit': { status: 200, body: submitResp() },
   'GET /api/dashboard': { status: 200, body: dashboard() },
   'POST /api/units/12/run': { status: 200, body: { result: { pass: true, output: '', failures: [], durationMs: 3 } } },
   'POST /api/units/12/submit': { status: 200, body: submitResp() },
@@ -184,6 +198,94 @@ describe('exit codes and refusals', () => {
     expect(await runCli(['status'], io)).toBe(EXIT.ERROR);
     expect(io.stderr.join('\n')).toMatch(/Cannot reach the BootQuest server at http:\/\/127\.0\.0\.1:4178 \(ECONNREFUSED\)/);
     expect(io.stderr.join('\n')).not.toMatch(/at .*\.ts:\d+/); // no stack trace
+  });
+});
+
+describe('W3c: http and repo units', () => {
+  const useUnit = (unitId: number) => writeFileSync(join(proj, '.bootquest.json'), JSON.stringify({ unitId }));
+
+  it('http submit --port sends {port, selfAssisted}; output names the target and counts requests', async () => {
+    useUnit(21);
+    const { fetch, calls } = fakeFetch(baseRoutes());
+    const io = captureIo(proj, fetch);
+    expect(await runCli(['submit', '--port', '4000'], io)).toBe(EXIT.NOT_PASSED);
+    expect(calls.at(-1)).toMatchObject({ method: 'POST', body: { port: 4000, selfAssisted: false } });
+    const out = io.stdout.join('\n');
+    expect(out).toMatch(/^Target: localhost:4000 \(the BootQuest server sends the requests over loopback\)$/m);
+    expect(out).toMatch(/Verdict: FAIL \(1\/2 requests passing\)/);
+    expect(out).toMatch(/Failures \(1 of 2 requests\):\n {2}1\. create\n {7}status: expected 201, got 200\n {7}expected: 201\n {7}actual: {3}200/);
+  });
+
+  it('http run without --port uses the public port hint (and says so); no hint -> usage error, nothing sent', async () => {
+    useUnit(21);
+    const a = fakeFetch(baseRoutes());
+    const io = captureIo(proj, a.fetch);
+    expect(await runCli(['run'], io)).toBe(EXIT.OK);
+    expect(a.calls.at(-1)?.body).toEqual({ port: 3000 });
+    expect(io.stdout.join('\n')).toMatch(/Target: localhost:3000 .*port from the unit hint; override with --port/);
+    expect(io.stdout.join('\n')).toMatch(/Result: PASS \(2\/2 requests\)/);
+
+    const b = fakeFetch({ ...baseRoutes(), 'GET /api/units/21': { status: 200, body: httpDetail({}) } });
+    const io2 = captureIo(proj, b.fetch);
+    expect(await runCli(['run'], io2)).toBe(EXIT.ERROR);
+    expect(io2.stderr.join('\n')).toMatch(/pass --port <n>, the port your server listens on/);
+    expect(b.calls.some((c) => c.method === 'POST')).toBe(false);
+  });
+
+  it('http: bad --port, a file path or --repo are usage errors before any POST', async () => {
+    useUnit(21);
+    for (const args of [['submit', '--port', '0'], ['submit', '--port', '70000'], ['submit', '--port', 'abc'], ['submit', 'src/swap.js'], ['run', '--repo', '.']]) {
+      const { fetch, calls } = fakeFetch(baseRoutes());
+      const io = captureIo(proj, fetch);
+      expect(await runCli(args, io), args.join(' ')).toBe(EXIT.ERROR);
+      expect(calls.some((c) => c.method === 'POST'), args.join(' ')).toBe(false);
+    }
+  });
+
+  it('repo submit defaults to the directory holding .bootquest.json (absolute); --repo resolves against the cwd', async () => {
+    useUnit(22);
+    const a = fakeFetch(baseRoutes());
+    const io = captureIo(join(proj, 'src'), a.fetch);
+    expect(await runCli(['submit', '--assisted'], io)).toBe(EXIT.OK);
+    expect(a.calls.at(-1)?.body).toEqual({ repoPath: proj, selfAssisted: true });
+    expect(io.stdout.join('\n')).toMatch(/Verdict: PASS \(3\/3 predicates passing\)/);
+
+    const b = fakeFetch(baseRoutes());
+    expect(await runCli(['run', '--repo', 'src'], captureIo(proj, b.fetch))).toBe(EXIT.OK);
+    expect(b.calls.at(-1)?.body).toEqual({ repoPath: join(proj, 'src') });
+  });
+
+  it('repo: missing --repo dir, --port, or a file path are usage errors before any POST', async () => {
+    useUnit(22);
+    for (const args of [['submit', '--repo', 'nope'], ['submit', '--port', '3000'], ['run', 'src/swap.js']]) {
+      const { fetch, calls } = fakeFetch(baseRoutes());
+      const io = captureIo(proj, fetch);
+      expect(await runCli(args, io), args.join(' ')).toBe(EXIT.ERROR);
+      expect(calls.some((c) => c.method === 'POST'), args.join(' ')).toBe(false);
+    }
+  });
+
+  it('code units refuse --port / --repo', async () => {
+    for (const args of [['submit', '--port', '3000'], ['run', '--repo', '.']]) {
+      const { fetch, calls } = fakeFetch(baseRoutes());
+      const io = captureIo(proj, fetch);
+      expect(await runCli(args, io)).toBe(EXIT.ERROR);
+      expect(io.stderr.join('\n')).toMatch(/send a file/);
+      expect(calls.some((c) => c.method === 'POST')).toBe(false);
+    }
+  });
+
+  it('status describes how to deliver http / repo units', async () => {
+    useUnit(21);
+    const io = captureIo(proj, fakeFetch(baseRoutes()).fetch);
+    expect(await runCli(['status'], io)).toBe(EXIT.OK);
+    expect(io.stdout.join('\n')).toMatch(/Check: +http \(2 requests\), port hint 3000/);
+    expect(io.stdout.join('\n')).toMatch(/CLI: +run \/ submit --port <n> while your server is running \(default 3000\)/);
+    useUnit(22);
+    const io2 = captureIo(proj, fakeFetch(baseRoutes()).fetch);
+    expect(await runCli(['status'], io2)).toBe(EXIT.OK);
+    expect(io2.stdout.join('\n')).toMatch(/Check: +repo \(3 predicates\)/);
+    expect(io2.stdout.join('\n')).toMatch(/CLI: +run \/ submit \[--repo <dir>\] \(default /);
   });
 });
 

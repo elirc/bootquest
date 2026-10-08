@@ -256,6 +256,85 @@ Opus plan review (`docs/recon/plan-review.md`) returned 2 blockers + 17 majors;
   `dotnet new sln` makes .slnx; parse Stryker.NET JSON, not its console
   table.
 
+## 2026-10-08 — W4 results (GitHub sync, M4 slice proven end-to-end)
+
+- Done in worktree (all gates + demo:m4 green: real network sync, tarball
+  cache, U01 render + real check stub-fail/solution-pass via API, new-key
+  queue, full offline mode, no-markdown-in-DB proof over 27 tables).
+  Transplant (45 files under the worktree's bq/) queued behind W3c-checks;
+  known conflicts: shared/src/check.ts (different regions), migration 006
+  number, api.ts error codes, cli units.ts check-type sets (W4 moved
+  node-test-file into CODE_CHECKS).
+- stable_key algo v1: h:sha256(repo + normalized heading path)[0..20],
+  frontmatter id wins (fm:<id>), nth duplicate heading gets ordinal (first
+  never renamed), cross-file dup k → <key>~k, moved files re-match (path
+  not hashed), vanished refs marked missing-at-sha and revivable.
+- Signalpost realities the recon missed: guides are DUPLICATED byte-
+  identical under apps/web/public/guides/ (registry excludes that dir or
+  canonical copies get ~2 keys); program.json schema is zod v4 + non-strict
+  (extra fields pass through); first full sync queues 1,468 'initial'
+  items across 4 repos ⇒ SEED SESSIONS NEED include-lists/triage, raw
+  queue is too wide. U03's tsc leg recorded as uncovered_legs in
+  check-specs.json (not surfaced in API yet). 24→7 competency mapping was
+  the agent's judgment — REVIEW during W6.
+- Sync core lives in server/src/sync (tools/seed→server dependency would
+  cycle); GitHub via REST fetch + gh auth token (no Octokit dep).
+- Under 6-agent load this laptop flakes vitest timeouts (~90% CPU): W4
+  raised server testTimeout to 60s / infinite-loop test to 90s — no
+  assertions weakened. Final full-suite verification happens after ALL
+  transplants, on a quiet machine.
+
+## 2026-10-08 — W5b results (campaign map seeded from real data)
+
+- Done in worktree; campaign suites 27/27 + smoke 32/32 + typecheck +
+  byte-identical determinism green; full npm test flaked ONLY on untouched
+  runner timing tests at 97–100% CPU (concurrent jstrain sweep) — re-verify
+  quiet at transplant. Transplant conflicts: shared/src/api.ts (hand-merge
+  ACT_LOCKED + re-export), migration 006 COLLIDES with W4's 006 → renumber
+  whichever lands second.
+- Real counts: 330 quests (JS 146 study + 113 reading across 5 acts; C# 48
+  + 19; Java 4 inert) · 233 skips absent · 52 no-track reported · 119
+  family-sampled · 7 twin pairs as single reading steps. Unlock: 80%
+  integer-math core gate + L1/L4/L8/L12/L16; ACT_LOCKED 403 on all unit
+  actions in locked acts; campaign slate slot anti-gamed like drills.
+- RATIFIED deviations: (1) family sampling keeps upskillorder's reviewed
+  pick lists even where they exceed the spec's "3–4 per family" (ww-crud
+  11, organized-experiment 7) — curated picks outrank the spec's rough
+  count, non-enumeration intent preserved; (2) 4 spec act anchors pinned
+  against their jsonl stack (gitvg-astra, opusorganize → JS;
+  dotnet-snapshot, buildsql → C#); (3) d4 apps moved act 3→4 for balance
+  (act 3 was 123 quests vs act 4's 20).
+- Honest-by-construction: ALL study quests are content-pending until
+  seed:quests fills quiz gates ⇒ act 2+ cannot unlock yet; campaign slot
+  feeds on reading steps meanwhile (JS act 1 has 9, C# act 1 has 1). W5c
+  content batches are what make the campaign actually playable.
+
+## 2026-10-08 — W5a results (seed content factory)
+
+- Done in worktree (branch w5a-seed-factory @ 69487c54f): all four
+  generators + validators + exclusion/redaction registry + secret scanner
+  + seed-pack format (bootquest-seed-pack@1: manifest blobs/counts with
+  candidates = shipped+quarantined+review+dropped accounting, timestamp-
+  free deterministic validation.json, review-queue ≠ pass). 23/23 planted-
+  bad demos exit 1 with the right reasons (incl. wrong-solution-passes,
+  diff-doesn't-apply, excluded-repo, UNREGISTERED secret pattern match);
+  real ww6 run: 33 shipped / 8 review / 0 quarantined on guides 05+06.
+- TRANSPLANT REQUIREMENT: seed:check needs the pack's source checkout at
+  .cache/checkouts/ww6@09751cea… (extract from the ww6 mirror via git
+  archive, or wire W4's tarball cache) — else W7's full gate goes red.
+- New estate lessons beyond P4: continuations cross blocks (bound to the
+  section's last-cited file, always → review, quarantined when provably
+  wrong); guides cite snapshots/ paths exactly (full index for exact
+  lookups, pruned for suffix); findings without any citation quarantine;
+  real files mix CRLF+LF internally (kata diffs must be machine-generated);
+  guide claims of "verified" map to author-recorded, never observed
+  (honesty: our pipeline ran nothing); j1-style Checks naming to-be-written
+  test files need per-repo citationWhitelist, not resolver weakening.
+- Owed to later waves: docs/SEEDING.md runbook (W7); review-queue human
+  approval/promotion path; findingRef cross-check on katas; curation note
+  for W5c: numbered findings lists include non-defects ("good design worth
+  naming") — don't flashcard them blindly.
+
 - W3b-cli done in worktree (78 tests + tsc green; transplant queued behind
   W3a): commander-only CLI, exit codes 0 pass / 1 fail / 2 usage-or-error,
   kind-groups test forces a decision for every new check type, never
