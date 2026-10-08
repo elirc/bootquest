@@ -93,17 +93,21 @@ describe('BootForge → BootQuest mapping (per exercise type)', () => {
     expect(asSql.pass).toBe(true);
   }, 30000);
 
-  it('reviewOf becomes a prerequisite only when the original is passable; a dangling reviewOf is refused', async () => {
+  it('reviewOf maps to variationOf (a review hint), NEVER a prerequisite lock; a dangling reviewOf is refused', async () => {
     const index = new Map<string, 'code' | 'written'>([
       ['js-fundamentals/m1/l1/orig', 'code'],
       ['js-fundamentals/m1/l1/w-orig', 'written'],
     ]);
     const review = await mapExercise(parseExercise(codeEx('js-fundamentals/m1/l1/alt', { reviewOf: 'js-fundamentals/m1/l1/orig' })), ctx(index));
-    expect(review.packUnit.unit.prerequisites).toEqual(['bootforge/js-fundamentals/m1/l1/orig']);
+    expect(review.packUnit.unit.prerequisites).toEqual([]);
+    expect(review.packUnit.unit.variationOf).toBe('bootforge/js-fundamentals/m1/l1/orig');
     expect(review.packUnit.origin.reviewOf).toBe('js-fundamentals/m1/l1/orig');
     const wReview = await mapExercise(parseExercise(writtenEx('js-fundamentals/m1/l1/w-alt', { reviewOf: 'js-fundamentals/m1/l1/w-orig' })), ctx(index));
     expect(wReview.packUnit.unit.prerequisites).toEqual([]);
+    expect(wReview.packUnit.unit.variationOf).toBe('bootforge/js-fundamentals/m1/l1/w-orig');
     expect(wReview.packUnit.origin.reviewOf).toBe('js-fundamentals/m1/l1/w-orig');
+    const plain = await mapExercise(parseExercise(codeEx('js-fundamentals/m1/l1/plain')), ctx(index));
+    expect(plain.packUnit.unit.variationOf).toBeUndefined();
     await expect(mapExercise(parseExercise(codeEx('js-fundamentals/m1/l1/x', { reviewOf: 'js-fundamentals/m1/l1/nope' })), ctx(index))).rejects.toThrow(ImportError);
   });
 
@@ -145,7 +149,9 @@ describe('importBootforge (files)', () => {
     }
     // cross-course reviewOf resolved (node-core → js-fundamentals)
     const c2 = PackCourseFile.parse(JSON.parse(readFileSync(join(out, 'node-core.json'), 'utf8')));
-    expect(c2.units.find((u) => u.origin.id === 'node-core/m1/l1/b')!.unit.prerequisites).toEqual(['bootforge/js-fundamentals/m1/l1/a']);
+    const b = c2.units.find((u) => u.origin.id === 'node-core/m1/l1/b')!.unit;
+    expect(b.variationOf).toBe('bootforge/js-fundamentals/m1/l1/a');
+    expect(b.prerequisites).toEqual([]);
 
     const snapshot = readdirSync(out).map((f) => [f, readFileSync(join(out, f), 'utf8')]);
     await importBootforge({ sourceDir: join(dir, 'src'), outDir: out, expected: null });

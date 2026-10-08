@@ -30,8 +30,13 @@ export interface CheckRecord {
 
 const UNIT_COLUMNS = `id, key, track_id AS trackId, kind, title, code, difficulty, variation_of_unit_id AS variationOfUnitId`;
 
+/**
+ * A LIVE unit by id. Retired units (quarantined after they were loaded, W2b/F2)
+ * are invisible to every unit-scoped endpoint: detail, run, submit, reveal,
+ * solution, self-attest and written answers all 404 on them.
+ */
 export function getUnit(db: Db, id: number): UnitRecord | undefined {
-  return db.get<UnitRecord>(`SELECT ${UNIT_COLUMNS} FROM unit WHERE id = ?`, id);
+  return db.get<UnitRecord>(`SELECT ${UNIT_COLUMNS} FROM unit WHERE id = ? AND retired_at IS NULL`, id);
 }
 
 export function unitCompetencies(db: Db, unitId: number): CompetencyId[] {
@@ -76,7 +81,7 @@ export function getTrack(db: Db, id: string): TrackRecord | undefined {
 }
 
 export function unitsForTrack(db: Db, trackId: string): UnitRecord[] {
-  return db.all<UnitRecord>(`SELECT ${UNIT_COLUMNS} FROM unit WHERE track_id = ? ORDER BY id`, trackId);
+  return db.all<UnitRecord>(`SELECT ${UNIT_COLUMNS} FROM unit WHERE track_id = ? AND retired_at IS NULL ORDER BY id`, trackId);
 }
 
 /** Units with a verified pass (passing submit run, any mode) or, for reading units, a self-attest. */
@@ -109,9 +114,10 @@ export function prerequisiteMap(db: Db): Map<number, number[]> {
   return map;
 }
 
+/** Live content counts (retired units and their checks are withdrawn, so not counted). */
 export function contentCounts(db: Db): { units: number; checks: number } {
-  const units = db.get<{ n: number }>('SELECT COUNT(*) AS n FROM unit')?.n ?? 0;
-  const checks = db.get<{ n: number }>('SELECT COUNT(*) AS n FROM "check"')?.n ?? 0;
+  const units = db.get<{ n: number }>('SELECT COUNT(*) AS n FROM unit WHERE retired_at IS NULL')?.n ?? 0;
+  const checks = db.get<{ n: number }>('SELECT COUNT(*) AS n FROM "check" c JOIN unit u ON u.id = c.unit_id WHERE u.retired_at IS NULL')?.n ?? 0;
   return { units, checks };
 }
 

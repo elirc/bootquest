@@ -7,6 +7,7 @@ import {
   PackCourseFile,
   PackManifest,
   PackQuarantine,
+  PackValidationStamp,
   type PackCounts,
   type PackUnit,
 } from '@bootquest/shared';
@@ -14,16 +15,21 @@ import type { UnitContentEntry } from '@bootquest/shared/api';
 import type { Db } from '../db/database.ts';
 import { nowMs, type Clock } from '../engines/clock.ts';
 import { insertCheck } from './content.ts';
+import { graderFingerprint, toolchainVersions } from './grader-fingerprint.ts';
 
 /**
  * Content loader for imported packs (W2). Packs (content/packs/<source>/) are
  * the store of record; at startup the server:
+ *   0. REFUSES a pack without a matching import-gate stamp (validation.json:
+ *      manifest sha256 + grader fingerprint + quarantine keys) — W2b/F1;
  *   1. reads manifest.json and every selected course file, verifying each
  *      file's sha256 against the manifest and its per-type counts;
  *   2. upserts every non-quarantined unit into the DB, keyed by
  *      (source, stable key) — idempotent: a second load changes nothing;
- *   3. asserts loaded === built (DB units + checks + content entries vs the
- *      manifest counts minus quarantine) and REFUSES TO START on a mismatch.
+ *      a quarantined unit already in the DB is RETIRED (retired_at), never
+ *      deleted (attempt/XP history keeps its FK target) — W2b/F2;
+ *   3. asserts loaded === built (live DB units + checks + content entries vs
+ *      the manifest counts minus quarantine) and REFUSES TO START on a mismatch.
  * Per-unit content (instructions, starter, solution, ...) is served from
  * memory via packContentEntries(); it never enters the DB.
  */
@@ -41,18 +47,93 @@ export interface LoadedPack {
   courses: PackCourseFile[];
   /** keys withheld by seed:validate's quarantine list */
   quarantined: Map<string, string>;
+  /** the verified import-gate stamp; null only when loaded with allowUnstamped */
+  stamp: PackValidationStamp | null;
 }
 
 export const sha256 = (buf: Buffer | string): string => createHash('sha256').update(buf).digest('hex');
 
+/** The opt-out env var: set by test harnesses / the smoke ONLY. The real serve path never sets it. */
+export const ALLOW_UNSTAMPED_ENV = 'BOOTQUEST_PACKS_ALLOW_UNSTAMPED';
+const RUN_GATE = 'run `npm run seed:validate` (full scope, no --course) to completion';
+
+export interface ReadPackOptions {
+  /** restrict which course files are read; built counts then cover only those courses */
+  courses?: readonly string[];
+  /**
+   * Tests / smoke only: accept a pack without a (matching) validation stamp
+   * and treat a missing quarantine.json as empty. A malformed quarantine.json
+   * is still a hard error.
+   */
+  allowUnstamped?: boolean;
+}
+
+function readQuarantine(dir: string, source: string, required: boolean): Map<string, string> {
+  const quarantined = new Map<string, string>();
+  const qPath = join(dir, 'quarantine.json');
+  if (!existsSync(qPath)) {
+    if (required) throw new PackLoadError(`pack ${source}: no quarantine.json (seed:validate always writes one, even empty) — ${RUN_GATE}`);
+    return quarantined;
+  }
+  let q: PackQuarantine;
+  try {
+    q = PackQuarantine.parse(JSON.parse(readFileSync(qPath, 'utf8')));
+  } catch (err) {
+    throw new PackLoadError(`pack ${source}: quarantine.json is malformed (${err instanceof Error ? err.message.slice(0, 200) : String(err)}) — fix or restore it, then ${RUN_GATE}`);
+  }
+  if (q.source !== source) throw new PackLoadError(`quarantine.json is for ${q.source}, not ${source}`);
+  for (const e of q.entries) quarantined.set(e.key, e.reason);
+  return quarantined;
+}
+
+/** F1: refuse a pack the import gate has not (or no longer) vouched for. */
+function verifyStamp(dir: string, manifest: PackManifest, manifestBytes: Buffer, quarantined: ReadonlyMap<string, string>): PackValidationStamp {
+  const sPath = join(dir, 'validation.json');
+  const who = `pack ${manifest.source}`;
+  if (!existsSync(sPath)) {
+    throw new PackLoadError(`${who}: no validation stamp (validation.json) — the import gate has not completed for this pack; ${RUN_GATE}`);
+  }
+  let stamp: PackValidationStamp;
+  try {
+    stamp = PackValidationStamp.parse(JSON.parse(readFileSync(sPath, 'utf8')));
+  } catch (err) {
+    throw new PackLoadError(`${who}: validation.json is malformed (${err instanceof Error ? err.message.slice(0, 200) : String(err)}); ${RUN_GATE}`);
+  }
+  if (stamp.source !== manifest.source) throw new PackLoadError(`${who}: validation.json is for ${stamp.source}`);
+  const manifestSha = sha256(manifestBytes);
+  if (stamp.manifestSha256 !== manifestSha) {
+    throw new PackLoadError(`${who}: validation stamp is for manifest ${stamp.manifestSha256.slice(0, 12)}, not the current ${manifestSha.slice(0, 12)} (re-imported since validation?); ${RUN_GATE}`);
+  }
+  const fp = graderFingerprint();
+  if (stamp.graderFingerprint !== fp) {
+    const t = toolchainVersions();
+    throw new PackLoadError(
+      `${who}: validation stamp grader fingerprint ${stamp.graderFingerprint.slice(0, 12)} != current ${fp.slice(0, 12)} ` +
+        `(grader/validator bytes or toolchain changed; stamped node ${stamp.toolchain.node} esbuild ${stamp.toolchain.esbuild}, now node ${t.node} esbuild ${t.esbuild}); ${RUN_GATE}`,
+    );
+  }
+  if (JSON.stringify(stamp.counts) !== JSON.stringify(manifest.totals)) {
+    throw new PackLoadError(`${who}: validation stamp counts ${JSON.stringify(stamp.counts)} != manifest totals ${JSON.stringify(manifest.totals)}; ${RUN_GATE}`);
+  }
+  const qKeys = [...quarantined.keys()].sort();
+  const sKeys = [...stamp.quarantinedKeys].sort();
+  if (JSON.stringify(qKeys) !== JSON.stringify(sKeys)) {
+    throw new PackLoadError(`${who}: quarantine.json (${qKeys.length} keys) does not match the validation stamp (${sKeys.length} keys) — edited after validation?; ${RUN_GATE}`);
+  }
+  return stamp;
+}
+
 /**
- * Read + verify a pack directory. `courses` (optional) restricts which course
- * files are read; built counts then cover only those courses.
+ * Read + verify a pack directory: manifest, per-file sha256 + counts, the
+ * quarantine list and (unless allowUnstamped) the import-gate stamp.
  */
-export function readPack(dir: string, opts: { courses?: readonly string[] } = {}): LoadedPack {
+export function readPack(dir: string, opts: ReadPackOptions = {}): LoadedPack {
   const manifestPath = join(dir, 'manifest.json');
   if (!existsSync(manifestPath)) throw new PackLoadError(`pack ${dir}: no manifest.json`);
-  const manifest = PackManifest.parse(JSON.parse(readFileSync(manifestPath, 'utf8')));
+  const manifestBytes = readFileSync(manifestPath);
+  const manifest = PackManifest.parse(JSON.parse(manifestBytes.toString('utf8')));
+  const quarantined = readQuarantine(dir, manifest.source, !opts.allowUnstamped);
+  const stamp = opts.allowUnstamped ? null : verifyStamp(dir, manifest, manifestBytes, quarantined);
   const wanted = opts.courses ? new Set(opts.courses) : null;
   if (wanted) {
     const known = new Set(manifest.courses.map((c) => c.id));
@@ -81,14 +162,7 @@ export function readPack(dir: string, opts: { courses?: readonly string[] } = {}
     }
     courses.push(file);
   }
-  const quarantined = new Map<string, string>();
-  const qPath = join(dir, 'quarantine.json');
-  if (existsSync(qPath)) {
-    const q = PackQuarantine.parse(JSON.parse(readFileSync(qPath, 'utf8')));
-    if (q.source !== manifest.source) throw new PackLoadError(`quarantine.json is for ${q.source}, not ${manifest.source}`);
-    for (const e of q.entries) quarantined.set(e.key, e.reason);
-  }
-  return { dir, manifest, courses, quarantined };
+  return { dir, manifest, courses, quarantined, stamp };
 }
 
 export const unitKeyPrefix = (source: string, course: string): string => `${source}/${course}/`;
@@ -99,7 +173,10 @@ export interface LoadStats {
   inserted: number;
   updated: number;
   unchanged: number;
+  /** quarantined units of the selected courses (not shipped) */
   withheld: number;
+  /** quarantined units that were live in the DB and got retired by this load */
+  retired: number;
   /** built = manifest counts (selected courses) minus quarantine */
   built: number;
   /** loaded = DB units under the selected course prefixes (minus quarantine) */
@@ -146,13 +223,14 @@ interface UnitRow {
   phase: string | null;
   difficulty: number | null;
   xp: number | null;
+  retired_at: number | null;
 }
 
 /** Upsert one unit row + its single check + competencies. Returns [id, 'inserted'|'updated'|'unchanged']. */
 function upsertUnit(db: Db, sourceId: number, course: string, pu: PackUnit, now: Clock): [number, 'inserted' | 'updated' | 'unchanged'] {
   const u = pu.unit;
   const existing = db.get<UnitRow>(
-    'SELECT id, source_id, track_id, kind, title, phase, difficulty, xp FROM unit WHERE key = ?',
+    'SELECT id, source_id, track_id, kind, title, phase, difficulty, xp, retired_at FROM unit WHERE key = ?',
     u.key,
   );
   let id: number;
@@ -182,6 +260,11 @@ function upsertUnit(db: Db, sourceId: number, course: string, pu: PackUnit, now:
     }
     if (existing.title !== u.title || existing.phase !== course || existing.difficulty !== (u.difficulty ?? null) || existing.xp !== (u.xp ?? null)) {
       db.run('UPDATE unit SET title = ?, phase = ?, difficulty = ?, xp = ? WHERE id = ?', u.title, course, u.difficulty, u.xp, id);
+      changed = true;
+    }
+    if (existing.retired_at !== null) {
+      // left the quarantine (fixed upstream, re-imported, re-validated): live again
+      db.run('UPDATE unit SET retired_at = NULL WHERE id = ?', id);
       changed = true;
     }
   }
@@ -234,6 +317,14 @@ function syncPrereqs(db: Db, unitId: number, prereqKeys: readonly string[], idOf
   return true;
 }
 
+/** Bring a unit's variation_of_unit_id (BootForge reviewOf, a review HINT — W2b/F6) in line with the pack. */
+function syncVariation(db: Db, unitId: number, target: number | null): boolean {
+  const have = db.get<{ v: number | null }>('SELECT variation_of_unit_id AS v FROM unit WHERE id = ?', unitId)?.v ?? null;
+  if (have === target) return false;
+  db.run('UPDATE unit SET variation_of_unit_id = ? WHERE id = ?', target, unitId);
+  return true;
+}
+
 /**
  * Upsert a verified pack into the DB (one transaction) and assert
  * loaded === built. Throws PackLoadError (and rolls back) on any mismatch.
@@ -249,6 +340,7 @@ export function loadPackIntoDb(db: Db, pack: LoadedPack, now: Clock): LoadStats 
       updated: 0,
       unchanged: 0,
       withheld: 0,
+      retired: 0,
       built: 0,
       loaded: 0,
       checks: 0,
@@ -260,6 +352,13 @@ export function loadPackIntoDb(db: Db, pack: LoadedPack, now: Clock): LoadStats 
       for (const pu of file.units) {
         if (quarantined.has(pu.unit.key)) {
           stats.withheld++;
+          // F2: quarantined after it was loaded -> withdraw it (retire; history rows keep their FK target)
+          const live = db.get<{ id: number; source_id: number | null }>('SELECT id, source_id FROM unit WHERE key = ? AND retired_at IS NULL', pu.unit.key);
+          if (live) {
+            if (live.source_id !== sourceId) throw new PackLoadError(`unit key ${pu.unit.key} already belongs to another source (source_id ${String(live.source_id)})`);
+            db.run('UPDATE unit SET retired_at = ? WHERE id = ?', nowMs(now), live.id);
+            stats.retired++;
+          }
           continue;
         }
         const [id, what] = upsertUnit(db, sourceId, file.course.id, pu, now);
@@ -267,16 +366,27 @@ export function loadPackIntoDb(db: Db, pack: LoadedPack, now: Clock): LoadStats 
         shipped.push({ pu, id, what });
       }
     }
-    // pass 2: prerequisite edges (targets may appear later in upstream order)
+    // pass 2: prerequisite edges + variation hints (targets may appear later in upstream order)
     const idOf = (key: string): number => {
       if (quarantined.has(key)) throw new PackLoadError(`prerequisite ${key} is quarantined`);
       const known = ids.get(key);
       if (known === undefined) throw new PackLoadError(`prerequisite ${key} is not in the loaded courses`);
       return known;
     };
+    const variationTarget = (key: string): number | null => {
+      // a hint, not a gate: a quarantined original simply has no live variant link
+      if (quarantined.has(key)) return null;
+      const known = ids.get(key);
+      if (known !== undefined) return known;
+      const row = db.get<{ id: number }>('SELECT id FROM unit WHERE key = ? AND source_id = ? AND retired_at IS NULL', key, sourceId);
+      if (!row) throw new PackLoadError(`variationOf ${key} is not in the loaded courses or the DB`);
+      return row.id;
+    };
     for (const s of shipped) {
       const edgesChanged = syncPrereqs(db, s.id, s.pu.unit.prerequisites, idOf);
-      stats[edgesChanged && s.what === 'unchanged' ? 'updated' : s.what]++;
+      const v = s.pu.unit.variationOf;
+      const variationChanged = syncVariation(db, s.id, v === undefined ? null : variationTarget(v));
+      stats[(edgesChanged || variationChanged) && s.what === 'unchanged' ? 'updated' : s.what]++;
     }
 
     // ---- loaded === built
@@ -286,23 +396,25 @@ export function loadPackIntoDb(db: Db, pack: LoadedPack, now: Clock): LoadStats 
       const built = mc.counts.total - withheldHere.length;
       const builtChecks = built - (mc.counts.written - withheldHere.filter((u) => u.origin.type === 'written').length);
       const prefix = unitKeyPrefix(manifest.source, file.course.id);
-      const rows = db.all<{ key: string; checks: number }>(
+      // live = not retired: a quarantined key can only be counted out by being retired, never by a filter
+      const live = db.all<{ key: string; checks: number }>(
         `SELECT u.key AS key, (SELECT COUNT(*) FROM "check" c WHERE c.unit_id = u.id) AS checks
-           FROM unit u WHERE u.source_id = ? AND substr(u.key, 1, ?) = ?`,
+           FROM unit u WHERE u.source_id = ? AND substr(u.key, 1, ?) = ? AND u.retired_at IS NULL`,
         sourceId,
         prefix.length,
         prefix,
       );
-      const live = rows.filter((r) => !quarantined.has(r.key));
       const packKeys = new Set(file.units.map((u) => u.unit.key));
       const stale = live.filter((r) => !packKeys.has(r.key)).map((r) => r.key);
+      const liveQuarantined = live.filter((r) => quarantined.has(r.key)).map((r) => r.key);
       const loaded = live.length;
       const checks = live.reduce((n, r) => n + r.checks, 0);
-      if (loaded !== built || checks !== builtChecks || stale.length > 0) {
+      if (loaded !== built || checks !== builtChecks || stale.length > 0 || liveQuarantined.length > 0) {
         throw new PackLoadError(
           `loaded !== built for ${manifest.source}/${file.course.id}: units loaded ${loaded} vs built ${built}, ` +
             `checks loaded ${checks} vs built ${builtChecks}` +
-            (stale.length ? `; ${stale.length} DB unit(s) not in the pack: ${stale.slice(0, 5).join(', ')}` : ''),
+            (stale.length ? `; ${stale.length} DB unit(s) not in the pack: ${stale.slice(0, 5).join(', ')}` : '') +
+            (liveQuarantined.length ? `; ${liveQuarantined.length} quarantined unit(s) still live: ${liveQuarantined.slice(0, 5).join(', ')}` : ''),
         );
       }
       stats.built += built;

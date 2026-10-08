@@ -215,9 +215,9 @@ export function selfAttestReading(db: Db, unitId: number, now: Clock): AttemptRo
   });
 }
 
-/** First pre-seeded changed-example variant of a unit, or null when none is seeded yet. */
+/** First pre-seeded LIVE changed-example variant of a unit, or null when none is seeded yet. */
 export function findVariation(db: Db, unitId: number): number | null {
-  const row = db.get<{ id: number }>('SELECT id FROM unit WHERE variation_of_unit_id = ? ORDER BY id LIMIT 1', unitId);
+  const row = db.get<{ id: number }>('SELECT id FROM unit WHERE variation_of_unit_id = ? AND retired_at IS NULL ORDER BY id LIMIT 1', unitId);
   return row?.id ?? null;
 }
 

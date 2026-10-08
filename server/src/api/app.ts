@@ -10,6 +10,7 @@ import {
   TrackIdParams,
   UnitDetailResponse,
   UnitIdParams,
+  WrittenAnswerBody,
 } from '@bootquest/shared/api';
 import type { Db } from '../db/database.ts';
 import { nowMs, type Clock } from '../engines/clock.ts';
@@ -19,7 +20,9 @@ import { emptyContentStore, type UnitContentStore } from './content-store.ts';
 import { asyncRoute, errorBody, HttpError, sendJson, validate } from './http.ts';
 import { defaultRunners, type RunnerRegistry } from './runners.ts';
 import {
+  answerWrittenUnit,
   getDashboard,
+  getModelAnswer,
   getRevealedSolution,
   getTrackUnits,
   getTracks,
@@ -131,6 +134,20 @@ export function createApp(opts: AppOptions): Express {
     const { id } = validate(UnitIdParams, req.params, 'params');
     validate(EmptyQuery, req.query, 'query');
     sendJson(res, 200, getRevealedSolution(deps, id));
+  }));
+
+  // written units: answer first (stored immutably), THEN the model answer
+  router.post('/units/:id/answer', asyncRoute((req, res) => {
+    const { id } = validate(UnitIdParams, req.params, 'params');
+    validate(EmptyQuery, req.query, 'query');
+    const body = validate(WrittenAnswerBody, req.body, 'body');
+    sendJson(res, 200, answerWrittenUnit(deps, id, body));
+  }));
+
+  router.get('/units/:id/model-answer', asyncRoute((req, res) => {
+    const { id } = validate(UnitIdParams, req.params, 'params');
+    validate(EmptyQuery, req.query, 'query');
+    sendJson(res, 200, getModelAnswer(deps, id));
   }));
 
   router.get('/reviews/queue', asyncRoute((req, res) => {

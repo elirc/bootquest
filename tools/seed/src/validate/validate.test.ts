@@ -4,12 +4,13 @@ import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFil
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { PackManifest, type PackUnit } from '@bootquest/shared';
+import { PackCourseFile, PackManifest, PackValidationStamp, type PackUnit } from '@bootquest/shared';
+import { readPack } from '@bootquest/server/packs';
 import type { UnitContentEntry } from '@bootquest/shared/api';
 import { bfCourse, codeEx, outputEx, quizEx, sqlEx, writeBfSource, writtenEx } from '../bootforge/fixtures.ts';
 import { importBootforge } from '../bootforge/import.ts';
 import { appendJournal, readJournal } from './journal.ts';
-import { realValidator, runValidate, type UnitValidator } from './validate.ts';
+import { exerciseHash, graderFingerprint, realValidator, runValidate, type UnitValidator } from './validate.ts';
 
 const REPO = resolve(import.meta.dirname, '..', '..', '..', '..');
 const CLI = join(REPO, 'tools', 'seed', 'src', 'validate', 'cli.ts');
@@ -66,17 +67,22 @@ describe('seed:validate journal (resumable sweep)', () => {
 
     const second = counting();
     const r2 = await runValidate({ packDir: pack, journalPath, validator: second.validator, concurrency: 1 });
-    expect(second.calls).toHaveLength(3);
+    // 3 unjournaled exercises execute; the 2 journaled passes are re-executed by the full-scope audit (F4)
+    expect(second.calls).toHaveLength(5);
+    expect(new Set(second.calls).size).toBe(5);
+    expect(r2.audit).toEqual({ sampled: 2, mismatches: [] });
     expect(r2.ok).toBe(true);
     expect(r2.journalSkippedLines).toBe(1);
     expect(r2.courses[0]).toMatchObject({ resumed: 2, executedNow: 3, passed: 4, carveOut: 1, failed: 0 });
     // the torn line did not swallow the next append
     expect(readJournal(journalPath).entries.size).toBe(5);
 
-    // a complete journal: nothing runs, counts still asserted from the journal
+    // a complete journal: only the audit sample re-executes (all 4 journaled passes: min 20), counts asserted from the journal
     const third = counting();
     const r3 = await runValidate({ packDir: pack, journalPath, validator: third.validator });
-    expect(third.calls).toEqual([]);
+    expect(r3.courses[0]).toMatchObject({ executedNow: 0, resumed: 5 });
+    expect(third.calls.sort()).toEqual(['q1', 'q2', 'q3', 'q4'].map((q) => `bootforge/js-fundamentals/m1/l1/${q}`));
+    expect(r3.audit).toEqual({ sampled: 4, mismatches: [] });
     expect(r3.ok).toBe(true);
     expect(r3.totals.validated).toEqual({ total: 5, code: 0, quiz: 4, output: 0, written: 1 });
   });
@@ -90,8 +96,10 @@ describe('seed:validate journal (resumable sweep)', () => {
     // forge a stale entry for q2 claiming 'fail' under an old hash: it must not count
     appendJournal(journalPath, { ...j.get(key)!, hash: 'f'.repeat(64), verdict: 'fail', reasons: ['stale'] });
     const again = counting();
-    const r = await runValidate({ packDir: pack, journalPath, validator: again.validator });
-    expect(again.calls).toEqual([key]);
+    const r = await runValidate({ packDir: pack, journalPath, validator: again.validator, concurrency: 1 });
+    expect(again.calls[0]).toBe(key); // re-validated (then the audit re-executes the 3 other journaled passes)
+    expect(r.courses[0]).toMatchObject({ executedNow: 1, resumed: 4 });
+    expect(r.audit.sampled).toBe(3);
     expect(r.ok).toBe(true);
   });
 
@@ -109,7 +117,8 @@ describe('seed:validate journal (resumable sweep)', () => {
     const r2 = await runValidate({ packDir: pack, journalPath, validator: retry.validator, retryFailed: true });
     expect(retry.calls).toHaveLength(5);
     expect(r2.ok).toBe(true);
-    expect(existsSync(join(pack, 'quarantine.json'))).toBe(false); // cleared once nothing is quarantined
+    // F1: quarantine.json persists when empty (a missing file means "never validated" to the loader)
+    expect(JSON.parse(readFileSync(join(pack, 'quarantine.json'), 'utf8')).entries).toEqual([]);
     const fresh = counting();
     await runValidate({ packDir: pack, journalPath, validator: fresh.validator, fresh: true });
     expect(fresh.calls).toHaveLength(5);
@@ -148,6 +157,129 @@ describe('seed:validate real validator (BootQuest runners)', () => {
     expect(reasons['o-wrong']).toMatch(/does not reproduce the expected output/);
     expect(reasons['starter-passes']).toMatch(/starter of a debugging exercise passes/);
   }, 60000);
+});
+
+describe('F3: starter-must-fail on EVERY code drill (vacuous checks are quarantined)', () => {
+  it('a plain (unformatted) drill whose untouched starter passes its own tests -> vacuous-check; a normal drill passes', async () => {
+    const solution = 'export function add(a, b) {\n  return a + b;\n}';
+    const pack = await buildPack([
+      bfCourse('js-fundamentals', 1, [
+        codeEx('js-fundamentals/m1/l1/normal'),
+        // the upstream defect shape (ts-fix-annotations / fetch-unknown): the starter already satisfies every test
+        codeEx('js-fundamentals/m1/l1/vacuous', { starter: solution }),
+      ]),
+    ]);
+    const r = await runValidate({ packDir: pack, journalPath: join(dir, 'j.jsonl') });
+    expect(r.quarantined.map((q) => q.key)).toEqual(['bootforge/js-fundamentals/m1/l1/vacuous']);
+    expect(r.quarantined[0]!.reason).toMatch(/^vacuous-check: the starter of a code exercise passes its own tests \(must fail\)$/);
+    expect(r.courses[0]).toMatchObject({ passed: 1, failed: 1 });
+  }, 60000);
+});
+
+describe('F1: the validation.json stamp (only a clean full-scope run writes it) + the server loader honoring it', () => {
+  it('clean full run -> stamp the server loader accepts; a --course run removes it; a failed run leaves none', async () => {
+    const pack = await buildPack(fastCourses());
+    const journalPath = join(dir, 'j.jsonl');
+    const stampPath = join(pack, 'validation.json');
+    expect(() => readPack(pack)).toThrow(/no quarantine\.json|no validation stamp/); // never validated -> refused
+
+    const r = await runValidate({ packDir: pack, journalPath });
+    expect(r.ok).toBe(true);
+    expect(r.stampPath).toBe(stampPath);
+    const stamp = PackValidationStamp.parse(JSON.parse(readFileSync(stampPath, 'utf8')));
+    expect(stamp).toMatchObject({
+      source: 'bootforge',
+      manifestSha256: createHash('sha256').update(readFileSync(join(pack, 'manifest.json'))).digest('hex'),
+      graderFingerprint: graderFingerprint(),
+      toolchain: { node: process.version },
+      counts: { total: 5, code: 0, quiz: 4, output: 0, written: 1 },
+      executable: 4,
+      passed: 4,
+      carveOut: 1,
+      quarantinedKeys: [],
+    });
+    expect(readPack(pack).stamp).toEqual(stamp); // the real loader accepts it
+
+    // a --course run never stamps (and removes the old stamp): the loader refuses again
+    const rc = await runValidate({ packDir: pack, journalPath, course: 'js-fundamentals' });
+    expect(rc.ok).toBe(true);
+    expect(rc.stampPath).toBeNull();
+    expect(existsSync(stampPath)).toBe(false);
+    expect(() => readPack(pack)).toThrow(/no validation stamp/);
+
+    // a failing full run leaves no stamp
+    const failing: UnitValidator = async () => ({ verdict: 'fail', reasons: ['planted'], attempts: 1, durationMs: 0 });
+    const rf = await runValidate({ packDir: pack, journalPath: join(dir, 'other.jsonl'), validator: failing });
+    expect(rf.ok).toBe(false);
+    expect(existsSync(stampPath)).toBe(false);
+  });
+
+  it('quarantined keys under the ceiling are recorded in the stamp; the loader accepts and withholds them', async () => {
+    const quizzes = Array.from({ length: 110 }, (_, i) => quizEx(`js-fundamentals/m1/l1/q${i}`));
+    const pack = await buildPack([
+      bfCourse('js-fundamentals', 1, [...quizzes, codeEx('js-fundamentals/m1/l1/vacuous', { starter: 'export function add(a, b) { return a + b; }' })]),
+    ]);
+    const r = await runValidate({ packDir: pack, journalPath: join(dir, 'j.jsonl') });
+    expect(r.problems).toEqual([]);
+    expect(r.ok).toBe(true);
+    const key = 'bootforge/js-fundamentals/m1/l1/vacuous';
+    const loaded = readPack(pack);
+    expect(loaded.stamp!.quarantinedKeys).toEqual([key]);
+    expect([...loaded.quarantined.keys()]).toEqual([key]);
+  }, 60000);
+});
+
+describe('F4: a forged journal is caught by the gating run', () => {
+  it('forged pass lines with correctly computed hashes -> the audit re-executes them, journal distrusted, exit nonzero, no stamp', async () => {
+    const pack = await buildPack([
+      bfCourse('js-fundamentals', 1, [
+        codeEx('js-fundamentals/m1/l1/good'),
+        // the reference solution is WRONG: a real run quarantines it
+        codeEx('js-fundamentals/m1/l1/broken', { solution: 'export function add(a, b) {\n  return a - b;\n}' }),
+        quizEx('js-fundamentals/m1/l1/q'),
+      ]),
+    ]);
+    const journalPath = join(dir, 'forged.jsonl');
+    const file = PackCourseFile.parse(JSON.parse(readFileSync(join(pack, 'js-fundamentals.json'), 'utf8')));
+    for (const pu of file.units) {
+      appendJournal(journalPath, {
+        key: pu.unit.key,
+        course: 'js-fundamentals',
+        type: pu.origin.type,
+        hash: exerciseHash(pu, file.content[pu.unit.key]!, graderFingerprint()),
+        verdict: 'pass',
+        reasons: [],
+        attempts: 1,
+        durationMs: 1,
+        at: '2026-10-07T00:00:00.000Z',
+      });
+    }
+    const r = await runValidate({ packDir: pack, journalPath });
+    expect(r.courses[0]).toMatchObject({ executedNow: 0, resumed: 3 });
+    expect(r.audit.sampled).toBe(3); // fewer than 20 journaled passes: all of them
+    expect(r.audit.mismatches).toEqual(['bootforge/js-fundamentals/m1/l1/broken']);
+    expect(r.problems.join('\n')).toMatch(/journal distrusted: 1 of 3 re-executed journaled passes did not pass/);
+    expect(r.ok).toBe(false);
+    expect(existsSync(join(pack, 'validation.json'))).toBe(false);
+    // the real verdict now supersedes the forged line
+    expect(readJournal(journalPath).entries.get('bootforge/js-fundamentals/m1/l1/broken')!.verdict).toBe('fail');
+  }, 60000);
+});
+
+describe('F8: a malformed quarantine.json is a hard error, never silently reset', () => {
+  it('a --course run (and a full run) refuses and leaves the file byte-identical', async () => {
+    const pack = await buildPack(fastCourses());
+    const qPath = join(pack, 'quarantine.json');
+    const conflicted = '<<<<<<< HEAD\n{"format":"bootquest-pack@1","source":"bootforge","entries":[{"key":"bootforge/other/m/l/x","course":"other","reason":"r"}]}\n=======\n';
+    writeFileSync(qPath, conflicted);
+    for (const course of ['js-fundamentals', undefined]) {
+      const r = await runValidate({ packDir: pack, journalPath: join(dir, 'j.jsonl'), ...(course ? { course } : {}) });
+      expect(r.ok).toBe(false);
+      expect(r.problems.join('\n')).toMatch(/quarantine\.json is malformed.*refusing to rewrite it/);
+      expect(readFileSync(qPath, 'utf8')).toBe(conflicted);
+      expect(existsSync(join(pack, 'validation.json'))).toBe(false);
+    }
+  });
 });
 
 describe('PLANTED-BAD negative test: the seed:validate CLI exits nonzero with the right reasons', () => {

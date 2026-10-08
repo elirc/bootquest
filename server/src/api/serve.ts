@@ -1,12 +1,13 @@
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import type { Server } from 'node:http';
 import { createServer } from 'node:net';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { PackManifest } from '@bootquest/shared';
 import type { UnitContentEntry } from '@bootquest/shared/api';
 import { openDb, resolveDbPath, type Db } from '../db/database.ts';
 import type { Clock } from '../engines/clock.ts';
-import { loadPackIntoDb, packContentEntries, readPack, type LoadStats } from '../store/packs.ts';
+import { ALLOW_UNSTAMPED_ENV, loadPackIntoDb, packContentEntries, PackLoadError, readPack, type LoadStats } from '../store/packs.ts';
 import { createApp } from './app.ts';
 import { combineContentStores, fileContentEntries } from './content-store.ts';
 import type { RunnerRegistry } from './runners.ts';
@@ -20,8 +21,12 @@ import type { RunnerRegistry } from './runners.ts';
  *                           loaded at startup; when serve.ts is run directly and this is
  *                           unset, every pack under <repo>/content/packs is loaded.
  *                           Set it to '' to load none.
- *   BOOTQUEST_PACK_COURSES  (optional) comma-separated course ids to load from the packs
- * A pack whose loaded count differs from its built count REFUSES TO START.
+ *   BOOTQUEST_PACK_COURSES  (optional) comma-separated course ids to load from the packs;
+ *                           an id no pack provides REFUSES TO START (lists the valid ids)
+ *   BOOTQUEST_PACKS_ALLOW_UNSTAMPED  tests/smoke ONLY ('1'): skip the import-gate stamp
+ *                           check. Never set by this entrypoint.
+ * A pack without a matching validation stamp (seed:validate full run), or whose
+ * loaded count differs from its built count, REFUSES TO START.
  */
 export const DEFAULT_PORT = 4178;
 export const DEFAULT_HOST = '127.0.0.1';
@@ -90,8 +95,13 @@ function splitList(raw: string | undefined): string[] {
   return (raw ?? '').split(',').map((s) => s.trim()).filter(Boolean);
 }
 
-function packHasCourse(dir: string, course: string): boolean {
-  return existsSync(join(dir, `${course}.json`));
+/** Course ids a pack's manifest declares (unreadable manifest -> none; readPack reports it). */
+function packCourseIds(dir: string): string[] {
+  try {
+    return PackManifest.parse(JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf8'))).courses.map((c) => c.id);
+  } catch {
+    return [];
+  }
 }
 
 /** Every content/packs/<source>/ directory with a manifest (default for the real entrypoint). */
@@ -121,8 +131,25 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
     if (env.BOOTQUEST_UNIT_CONTENT) sources.push(fileContentEntries(resolve(env.BOOTQUEST_UNIT_CONTENT)));
     const packStats: LoadStats[] = [];
     const courses = splitList(env.BOOTQUEST_PACK_COURSES);
-    for (const dir of splitList(env.BOOTQUEST_PACKS)) {
-      const pack = readPack(resolve(dir), courses.length ? { courses: courses.filter((c) => packHasCourse(resolve(dir), c)) } : {});
+    const packDirs = splitList(env.BOOTQUEST_PACKS).map((d) => resolve(d));
+    // F7: a requested course id that no pack provides is a startup refusal, never a silent no-op
+    if (courses.length) {
+      const known = new Set(packDirs.flatMap((d) => packCourseIds(d)));
+      const unknown = courses.filter((c) => !known.has(c));
+      if (unknown.length) {
+        throw new PackLoadError(
+          `BOOTQUEST_PACK_COURSES names course(s) no loaded pack provides: ${unknown.join(', ')}. ` +
+            `Valid ids: ${[...known].sort().join(', ') || '(none: BOOTQUEST_PACKS loads no pack)'}`,
+        );
+      }
+    }
+    // tests / smoke only (see ALLOW_UNSTAMPED_ENV); the real entrypoint never sets it
+    const allowUnstamped = env[ALLOW_UNSTAMPED_ENV] === '1';
+    if (allowUnstamped && packDirs.length) {
+      console.warn(`[bootquest] ${ALLOW_UNSTAMPED_ENV}=1: loading pack(s) WITHOUT checking the import-gate stamp (tests/smoke only)`);
+    }
+    for (const dir of packDirs) {
+      const pack = readPack(dir, { allowUnstamped, ...(courses.length ? { courses: courses.filter((c) => packCourseIds(dir).includes(c)) } : {}) });
       packStats.push(loadPackIntoDb(db, pack, clock)); // throws PackLoadError on loaded !== built
       sources.push(packContentEntries(pack));
     }
@@ -180,7 +207,7 @@ if (invokedDirectly) {
       for (const p of running.packs) {
         console.log(
           `[bootquest] pack ${p.source}: ${p.courses.length} course(s), loaded ${p.loaded} === built ${p.built} ` +
-            `(inserted ${p.inserted}, updated ${p.updated}, unchanged ${p.unchanged}, quarantined ${p.withheld})`,
+            `(inserted ${p.inserted}, updated ${p.updated}, unchanged ${p.unchanged}, quarantined ${p.withheld}, retired now ${p.retired})`,
         );
       }
       console.log(`[bootquest] API listening on http://${running.host}:${running.port} (db: ${running.db.path})`);

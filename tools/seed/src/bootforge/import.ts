@@ -97,9 +97,6 @@ function competenciesFor(course: string, ex: BfExercise): CompetencyId[] {
   return [...byCourse];
 }
 
-/** Exercise types that carry a machine check, i.e. can be passed (and so can gate a successor). */
-const PASSABLE = new Set(['code', 'quiz', 'output']);
-
 export interface MapContext {
   course: string;
   module: string;
@@ -117,14 +114,15 @@ export interface MappedExercise {
 /** Map one BootForge exercise to a pack unit + its content entry (both Zod-validated). */
 export async function mapExercise(ex: BfExercise, ctx: MapContext): Promise<MappedExercise> {
   const key = stableKey(ex.id);
-  const prerequisites: string[] = [];
+  let variationOf: string | undefined;
   if (ex.reviewOf !== undefined) {
     const targetType = ctx.index.get(ex.reviewOf);
     if (targetType === undefined) throw new ImportError(`${ex.id}: reviewOf ${ex.reviewOf} does not exist`);
     if (ex.reviewOf === ex.id) throw new ImportError(`${ex.id}: reviewOf points at itself`);
-    // BootForge's only inter-exercise relation: an alternate review follows its
-    // original. Only a passable original can gate (a written one has no pass).
-    if (PASSABLE.has(targetType)) prerequisites.push(stableKey(ex.reviewOf));
+    // W2b/F6: upstream reviewOf is a spaced-review RANKING HINT (opusboot2
+    // learning.ts), never a lock. It maps to BootQuest's changed-example
+    // variant link (unit.variation_of_unit_id), not to a prerequisite edge.
+    variationOf = stableKey(ex.reviewOf);
   }
   const base = {
     key,
@@ -134,7 +132,8 @@ export async function mapExercise(ex: BfExercise, ctx: MapContext): Promise<Mapp
     difficulty: ex.difficulty,
     xp: ex.xp,
     competencies: competenciesFor(ctx.course, ex),
-    prerequisites,
+    prerequisites: [] as string[],
+    ...(variationOf !== undefined ? { variationOf } : {}),
   };
   let unit: LessonSpec;
   let content: UnitContentEntry;
@@ -340,7 +339,8 @@ export async function importBootforge(opts: ImportOptions): Promise<ImportResult
   });
 
   mkdirSync(opts.outDir, { recursive: true });
-  const keep = new Set(['manifest.json', 'quarantine.json', ...courses.map((c) => c.file)]);
+  // validation.json is kept: the loader compares its manifest sha256, so a changed import is refused until re-validated
+  const keep = new Set(['manifest.json', 'quarantine.json', 'validation.json', ...courses.map((c) => c.file)]);
   const removed: string[] = [];
   for (const f of readdirSync(opts.outDir)) {
     if (f.endsWith('.json') && !keep.has(f)) {

@@ -29,6 +29,8 @@ export const API_ERROR_CODES = [
   'WRONG_UNIT_KIND',
   /** reading self-attest is once per unit */
   'ALREADY_ATTESTED',
+  /** written units: the model answer is shown only after the learner's own answer is recorded */
+  'NOT_ANSWERED',
   'INTERNAL',
 ] as const;
 export const ApiErrorCode = z.enum(API_ERROR_CODES);
@@ -94,6 +96,24 @@ export const SubmissionBody = z
   });
 export type SubmissionBody = z.infer<typeof SubmissionBody>;
 export type SubmissionBodyInput = z.input<typeof SubmissionBody>;
+
+export const MAX_WRITTEN_ANSWER_CHARS = 20_000;
+
+/**
+ * Body of POST /api/units/:id/answer (written units only): the learner's own
+ * answer, stored immutably as an ungraded 'submitted' attempt BEFORE the model
+ * answer can be read (the explain-back answer-first pattern, spec §4).
+ */
+export const WrittenAnswerBody = z
+  .object({
+    answer: z
+      .string()
+      .max(MAX_WRITTEN_ANSWER_CHARS)
+      .refine((a) => a.trim().length > 0, { message: 'answer must not be empty' }),
+    selfAssisted: z.boolean().default(false),
+  })
+  .strict();
+export type WrittenAnswerBody = z.infer<typeof WrittenAnswerBody>;
 
 export const GradeBody = z.object({ grade: ReviewGrade }).strict();
 export type GradeBody = z.infer<typeof GradeBody>;
@@ -362,6 +382,29 @@ export const RevealResponse = z
   })
   .strict();
 export type RevealResponse = z.infer<typeof RevealResponse>;
+
+/** POST /api/units/:id/answer — the recorded (ungraded, no XP) answer attempt. */
+export const WrittenAnswerResponse = z
+  .object({
+    attemptId: z.number(),
+    mode: z.enum(['solo', 'assisted', 'guided']),
+    outcome: z.literal('submitted'),
+  })
+  .strict();
+export type WrittenAnswerResponse = z.infer<typeof WrittenAnswerResponse>;
+
+/**
+ * GET /api/units/:id/model-answer — 403 NOT_ANSWERED until a non-empty answer
+ * attempt is recorded for the written unit; `attemptId` is that first answer.
+ */
+export const ModelAnswerResponse = z
+  .object({
+    attemptId: z.number(),
+    modelAnswer: z.string(),
+    rubric: z.array(z.object({ id: z.string(), label: z.string() }).strict()),
+  })
+  .strict();
+export type ModelAnswerResponse = z.infer<typeof ModelAnswerResponse>;
 
 export const ReviewQueueItem = z
   .object({

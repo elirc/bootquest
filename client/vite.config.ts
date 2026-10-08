@@ -19,6 +19,10 @@ export default defineConfig({
     strictPort: true,
     // Pinned to IPv4: the API server probes/listens on 127.0.0.1 only (w1b-review #13c).
     proxy: { '/api': { target: 'http://127.0.0.1:4178' } },
+    // Imported packs carry reference solutions and answer keys: the dev server must never
+    // serve them via /@fs/ (w2-review i1). Setting `deny` replaces Vite's defaults, so they
+    // are restated here.
+    fs: { deny: ['.env', '.env.*', '*.{crt,pem}', '**/.git/**', '**/content/packs/**'] },
   },
   build: {
     target: 'es2022',

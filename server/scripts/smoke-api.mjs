@@ -114,6 +114,9 @@ async function main() {
         BOOTQUEST_UNIT_CONTENT: contentPath,
         BOOTQUEST_PACKS: PACK_DIR,
         BOOTQUEST_PACK_COURSES: PACK_COURSE,
+        // explicit test-harness opt-out of the import-gate stamp (W2b/F1): the smoke
+        // must not depend on a fresh seed:validate sweep. The real serve path never sets it.
+        BOOTQUEST_PACKS_ALLOW_UNSTAMPED: '1',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,

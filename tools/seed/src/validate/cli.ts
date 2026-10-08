@@ -3,7 +3,9 @@
 // Per-course foreground runs are the intended use on this laptop (10-minute
 // shell cap, memory reaper): the journal makes every run resumable, and a final
 // run without --course re-checks everything from the journal (fast) and asserts
-// the full counts. Exit 0 only when every assertion holds.
+// the full counts. Exit 0 only when every assertion holds. Only that clean
+// full run writes the validation.json stamp the server's pack loader requires
+// (and re-executes a random 2% / min-20 sample of journaled passes first).
 import { basename, join, resolve } from 'node:path';
 import { DEFAULT_OUT_DIR } from '../bootforge/import.ts';
 import { DEFAULT_JOURNAL_DIR, formatCounts, QUARANTINE_CEILING, runValidate } from './validate.ts';
@@ -52,7 +54,13 @@ async function main(): Promise<number> {
   console.log(`executable ${report.executable}, written carve-out ${report.carveOut} (schema-validated, no check), quarantined ${report.quarantined.length} (ceiling ${QUARANTINE_CEILING * 100}%)`);
   for (const q of report.quarantined) console.log(`  QUARANTINED ${q.key} [${q.type}]: ${q.reason}`);
   if (report.journalSkippedLines) console.log(`journal: skipped ${report.journalSkippedLines} torn/invalid line(s)`);
+  if (!course) console.log(`AUDIT re-executed ${report.audit.sampled} journaled pass(es), ${report.audit.mismatches.length} mismatch(es)`);
   for (const p of report.problems) console.log(`PROBLEM ${p}`);
+  console.log(
+    report.stampPath
+      ? `STAMP written ${report.stampPath}`
+      : `STAMP none (${course ? 'a --course run never stamps; finish with a full run' : 'run failed'}): the server will refuse this pack`,
+  );
   console.log(`RESULT ${report.ok ? 'OK' : 'FAIL'} (${((Date.now() - started) / 1000).toFixed(1)}s)`);
   return report.ok ? 0 : 1;
 }

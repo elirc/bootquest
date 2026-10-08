@@ -194,6 +194,26 @@ Opus plan review (`docs/recon/plan-review.md`) returned 2 blockers + 17 majors;
   self-attest) and a fresh-context W1b API review (frozen git-archive copy,
   includes the client↔server binding worksheet) launched in parallel.
 
+## 2026-10-07 — M2 landed (4632a21) + client bound (01925e2) + W2b fixes
+
+- M2 gate run personally: fresh journal, 16 courses, 2,571/2,571 validated,
+  0 quarantined, 192.9s; 410→442 tests; smoke 22/22 incl. real BootForge
+  submissions. Mapping verified field-by-field across ALL 2,571 exercises
+  by the fresh reviewer: clean.
+- Client transplanted + prose contract aligned (top-level instructions/
+  snippet/rubric; quiz question promotes to the pane heading).
+- W2 review findings → W2b fix wave (in flight): F1 BLOCKER packs loadable
+  without any proof of validation ⇒ validation.json stamp + loader refusal;
+  F2 post-load quarantine must retire units; F3 starter-must-fail extends
+  to every code drill ⇒ the 2 vacuous upstream checks (ts-fix-annotations,
+  fetch-unknown) get QUARANTINED, not fixed (spec §3.1: never weaken
+  tests); F6 decided: reviewOf → variation_of_unit_id, not a prerequisite;
+  F9 decided: written model answers via immutable-answer-first
+  (/model-answer 403 until a recorded answer attempt exists); vite dev
+  fs.deny for content/packs (solutions were servable via /@fs/).
+- Grader speed reality: 0.1–0.6s per run (not the feared 4s cold) — the
+  full sweep is ~3 min, cheap enough to re-run fresh at every milestone.
+
 ## 2026-10-07 — W1c landed (c762032): honesty core unforgeable
 
 - All audit blockers/majors + W1b gaps + addendum closed; 358 tests,

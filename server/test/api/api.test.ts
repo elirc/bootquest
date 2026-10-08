@@ -5,6 +5,7 @@ import {
   DashboardResponse,
   GradeResponse,
   HealthResponse,
+  ModelAnswerResponse,
   ReviewQueueResponse,
   RevealResponse,
   RunResponse,
@@ -13,7 +14,10 @@ import {
   TrackUnitsResponse,
   TracksResponse,
   UnitDetailResponse,
+  WrittenAnswerResponse,
 } from '@bootquest/shared/api';
+import { createApp } from '../../src/api/app.ts';
+import { mapContentStore } from '../../src/api/content-store.ts';
 import { DAY_MS } from '../../src/engines/clock.ts';
 import { getRating } from '../../src/engines/evidence.ts';
 import { addReviewItem } from '../../src/engines/fsrs.ts';
@@ -370,6 +374,86 @@ describe('POST /api/units/:id/reveal', () => {
 
   it('rejects a reveal body with fields', async () => {
     expectApiError(await request(ctx.app).post(`/api/units/${ctx.id('fixture:quiz-typeof')}/reveal`).send({ force: true }), 400, 'VALIDATION');
+  });
+});
+
+describe('written units: answer first (immutable), THEN the model answer (F9)', () => {
+  const ctx = useApi();
+  const MODEL = 'MODEL-ANSWER-MARKER: the check-then-act race on stock';
+
+  function writtenApp() {
+    const id = insertUnit(ctx.db, { key: 'fixture:written', track: 'js', kind: 'written', title: 'review a patch', competencies: ['code-reading'] }, ctx.clock);
+    const app = createApp({
+      db: ctx.db,
+      clock: ctx.clock,
+      runners: {},
+      content: mapContentStore({
+        ...fixture.content,
+        'fixture:written': { instructions: 'Review the patch.', solution: MODEL, rubric: [{ id: 'race', label: 'Names the race' }] },
+      }),
+    });
+    return { app, id };
+  }
+
+  it('403 NOT_ANSWERED before any answer; detail never leaks the model answer', async () => {
+    const { app, id } = writtenApp();
+    expectApiError(await request(app).get(`/api/units/${id}/model-answer`), 403, 'NOT_ANSWERED');
+    const detail = await request(app).get(`/api/units/${id}`);
+    expect(detail.status).toBe(200);
+    expect(detail.body.check).toBeNull();
+    expect(detail.body.rubric).toEqual([{ id: 'race', label: 'Names the race' }]);
+    expect(detail.text).not.toContain('MODEL-ANSWER-MARKER');
+    // reveal / solution stay closed for written units (no check)
+    expectApiError(await request(app).post(`/api/units/${id}/reveal`).send({}), 409, 'NO_CHECK');
+    expect(ledgerCounts(ctx.db).attempt).toBe(0);
+  });
+
+  it('answer -> immutable submitted attempt (no grading, no XP, no evidence) -> model answer + rubric', async () => {
+    const { app, id } = writtenApp();
+    const before = ledgerCounts(ctx.db);
+    const ans = await request(app).post(`/api/units/${id}/answer`).send({ answer: 'The stock check and decrement race under concurrency.' });
+    expect(ans.status).toBe(200);
+    const body = WrittenAnswerResponse.parse(ans.body);
+    expect(body).toMatchObject({ mode: 'solo', outcome: 'submitted' });
+    const after = ledgerCounts(ctx.db);
+    expect(after).toEqual({ ...before, attempt: before.attempt + 1 }); // no run, no XP, no evidence
+    const row = ctx.db.get<{ outcome: string; check_id: number | null; answer: string }>('SELECT outcome, check_id, answer FROM attempt WHERE id = ?', body.attemptId)!;
+    expect(row).toEqual({ outcome: 'submitted', check_id: null, answer: JSON.stringify({ text: 'The stock check and decrement race under concurrency.' }) });
+    // append-only: the stored answer cannot be rewritten after the key is seen
+    expect(() => ctx.db.run('UPDATE attempt SET answer = ? WHERE id = ?', '{"text":"edited"}', body.attemptId)).toThrow();
+
+    const m = await request(app).get(`/api/units/${id}/model-answer`);
+    expect(m.status).toBe(200);
+    expect(ModelAnswerResponse.parse(m.body)).toEqual({ attemptId: body.attemptId, modelAnswer: MODEL, rubric: [{ id: 'race', label: 'Names the race' }] });
+    // a later answer is a NEW row; the model answer stays anchored on the first one
+    const second = await request(app).post(`/api/units/${id}/answer`).send({ answer: 'second try' });
+    expect(second.body.attemptId).toBeGreaterThan(body.attemptId);
+    expect((await request(app).get(`/api/units/${id}/model-answer`)).body.attemptId).toBe(body.attemptId);
+  });
+
+  it('refuses empty / whitespace answers (nothing written), extra fields, non-written units and missing units', async () => {
+    const { app, id } = writtenApp();
+    for (const bad of [{}, { answer: '' }, { answer: '   \n\t ' }, { answer: 'x', xp: 50 }, { answer: 42 }, { answer: 'x'.repeat(20_001) }]) {
+      expectApiError(await request(app).post(`/api/units/${id}/answer`).send(bad), 400, 'VALIDATION');
+    }
+    expect(ledgerCounts(ctx.db).attempt).toBe(0);
+    expectApiError(await request(app).get(`/api/units/${id}/model-answer`), 403, 'NOT_ANSWERED');
+    const drill = ctx.id(fixture.units[0]!.key);
+    expectApiError(await request(app).post(`/api/units/${drill}/answer`).send({ answer: 'x' }), 409, 'WRONG_UNIT_KIND');
+    expectApiError(await request(app).get(`/api/units/${drill}/model-answer`), 409, 'WRONG_UNIT_KIND');
+    expectApiError(await request(app).post('/api/units/999999/answer').send({ answer: 'x' }), 404, 'NOT_FOUND');
+    expectApiError(await request(app).get('/api/units/999999/model-answer'), 404, 'NOT_FOUND');
+    expectApiError(await request(app).get(`/api/units/${id}/model-answer?peek=1`), 400, 'VALIDATION');
+  });
+
+  it('a raw empty-text submitted attempt (not via the API) does not unlock the model answer', async () => {
+    const { app, id } = writtenApp();
+    ctx.db.run(
+      `INSERT INTO attempt (unit_id, check_id, mode, assisted, assistance_source, outcome, answer, created_at) VALUES (?, NULL, 'solo', 0, 'none', 'submitted', ?, 0)`,
+      id,
+      JSON.stringify({ text: '  ' }),
+    );
+    expectApiError(await request(app).get(`/api/units/${id}/model-answer`), 403, 'NOT_ANSWERED');
   });
 });
 

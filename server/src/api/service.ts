@@ -3,15 +3,17 @@ import {
   toPublicCheck,
   type CanonicalRunResult,
   type DashboardResponse,
+  type ModelAnswerResponse,
   type RevealResponse,
   type SelfAttestResponse,
   type SubmitResponse,
   type UnitDetailResponse,
   type UnitLockState,
   type UnitSummary,
+  type WrittenAnswerResponse,
 } from '@bootquest/shared/api';
 import type { Db } from '../db/database.ts';
-import { HonestyRuleError, isRevealed, recordSubmission, revealSolution, selfAttestReading } from '../engines/attempts.ts';
+import { HonestyRuleError, isRevealed, recordAttempt, recordSubmission, revealSolution, selfAttestReading } from '../engines/attempts.ts';
 import { addDays, type Clock } from '../engines/clock.ts';
 import { recordEvidence } from '../engines/evidence.ts';
 import { dueCount, review } from '../engines/fsrs.ts';
@@ -347,6 +349,56 @@ export function getRevealedSolution(deps: ServiceDeps, unitId: number): RevealRe
   const solution = solutionFor(deps, unit, check);
   if (!solution) throw new HttpError(404, 'NO_SOLUTION', `unit ${unit.id} has no reference solution in the content store`);
   return { attemptId: row.id, variationUnitId: row.variationUnitId, solution };
+}
+
+// ---------------------------------------------------------------- written units (answer first)
+
+function requireWritten(unit: UnitRecord): void {
+  if (unit.kind !== 'written') {
+    throw new HttpError(409, 'WRONG_UNIT_KIND', `unit ${unit.id} is ${unit.kind}; written answers / model answers are for written units only`);
+  }
+}
+
+/**
+ * POST /answer — written units only. Stores the learner's answer IMMUTABLY as an
+ * ungraded 'submitted' attempt through the engine's recordAttempt (append-only;
+ * mode/assistance derived there). No grading, no XP, no evidence in this wave.
+ */
+export function answerWrittenUnit(deps: ServiceDeps, unitId: number, body: { answer: string; selfAssisted: boolean }): WrittenAnswerResponse {
+  const { db, clock } = deps;
+  const unit = requireUnit(db, unitId);
+  assertTrackOpen(db, unit);
+  requireWritten(unit);
+  const attempt = recordAttempt(db, { unitId: unit.id, selfAssisted: body.selfAssisted, answer: { text: body.answer } }, clock);
+  return { attemptId: attempt.id, mode: attempt.mode, outcome: 'submitted' };
+}
+
+/** The learner's FIRST recorded non-empty written answer on this unit, if any. */
+function firstWrittenAnswer(db: Db, unitId: number): number | null {
+  const row = db.get<{ id: number }>(
+    `SELECT id FROM attempt
+      WHERE unit_id = ? AND outcome = 'submitted' AND check_id IS NULL
+        AND length(trim(json_extract(answer, '$.text'), ' ' || char(9, 10, 13))) > 0
+      ORDER BY id LIMIT 1`,
+    unitId,
+  );
+  return row?.id ?? null;
+}
+
+/**
+ * GET /model-answer — 403 NOT_ANSWERED until the learner's own answer row is
+ * committed (server-enforced answer-first), then the model answer + rubric for
+ * self-assessment.
+ */
+export function getModelAnswer(deps: ServiceDeps, unitId: number): ModelAnswerResponse {
+  const { db } = deps;
+  const unit = requireUnit(db, unitId);
+  requireWritten(unit);
+  const attemptId = firstWrittenAnswer(db, unit.id);
+  if (attemptId === null) throw new HttpError(403, 'NOT_ANSWERED', `unit ${unit.id}: record your own answer first (POST /api/units/${unit.id}/answer)`);
+  const entry = deps.content.get(unit.key);
+  if (!entry?.solution) throw new HttpError(404, 'NO_SOLUTION', `unit ${unit.id} has no model answer in the content store`);
+  return { attemptId, modelAnswer: entry.solution, rubric: entry.rubric ?? [] };
 }
 
 // ---------------------------------------------------------------- reviews

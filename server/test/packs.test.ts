@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { countPackUnits, PACK_FORMAT, type PackCounts } from '@bootquest/shared';
+import { countPackUnits, PACK_FORMAT, PackManifest, type PackCounts } from '@bootquest/shared';
 import { createApp } from '../src/api/app.ts';
 import { entriesContentStore } from '../src/api/content-store.ts';
 import { defaultRunners } from '../src/api/runners.ts';
@@ -14,14 +14,18 @@ import { startServer } from '../src/api/serve.ts';
 import { Db } from '../src/db/database.ts';
 import { migrate } from '../src/db/migrate.ts';
 import { fixedClock } from '../src/engines/clock.ts';
-import { loadPackIntoDb, packContentEntries, PackLoadError, readPack } from '../src/store/packs.ts';
+import { graderFingerprint, toolchainVersions } from '../src/store/grader-fingerprint.ts';
+import { ALLOW_UNSTAMPED_ENV, loadPackIntoDb, packContentEntries, PackLoadError, readPack, type ReadPackOptions } from '../src/store/packs.ts';
 import { localNoon, makeTempDb, makeUnit, submit, type TempDb } from './helpers.ts';
 
 const REPO = fileURLToPath(new URL('../../', import.meta.url));
 const BOOTFORGE = join(REPO, 'content', 'packs', 'bootforge');
 const MIGRATIONS = fileURLToPath(new URL('../src/db/migrations/', import.meta.url));
 const clock = fixedClock(localNoon(2026, 10, 1));
-const sha = (s: string) => createHash('sha256').update(s).digest('hex');
+const sha = (s: string | Buffer) => createHash('sha256').update(s).digest('hex');
+/** Test-harness opt-out of the import-gate stamp (W2b/F1). The real serve path never sets it. */
+const UNSTAMPED = { allowUnstamped: true } as const;
+const read = (dir: string, opts: ReadPackOptions = {}) => readPack(dir, { ...UNSTAMPED, ...opts });
 
 // ---------------------------------------------------------------- synthetic pack builder
 
@@ -29,6 +33,7 @@ interface SynthUnit {
   slug: string;
   type: 'quiz' | 'written';
   prerequisites?: string[];
+  variationOf?: string;
 }
 
 const keyOf = (course: string, slug: string) => `synth/${course}/m/l/${slug}`;
@@ -50,6 +55,7 @@ function synthCourse(course: string, units: SynthUnit[]) {
         xp: 5,
         competencies: ['language-fluency'],
         prerequisites: (u.prerequisites ?? []).map((p) => keyOf(course, p)),
+        ...(u.variationOf ? { variationOf: keyOf(course, u.variationOf) } : {}),
         checks:
           u.type === 'quiz'
             ? [{ spec: { type: 'quiz', itemKey: keyOf(course, u.slug), grading: 'choice', answerKey: 1, choices: ['a', 'b', 'c'] } }]
@@ -101,8 +107,9 @@ describe('migration 004 (written unit kind, FK-off table rebuild)', () => {
       const attempt = submit(db, clock, unitId);
       const before = db.get('SELECT * FROM unit WHERE id = ?', unitId);
 
-      expect(migrate(db)).toEqual([4]);
-      expect(db.get('SELECT * FROM unit WHERE id = ?', unitId)).toEqual(before);
+      expect(migrate(db)).toEqual([4, 5]);
+      // 005 only adds the nullable retired_at column (live by default)
+      expect(db.get('SELECT * FROM unit WHERE id = ?', unitId)).toEqual({ ...(before as object), retired_at: null });
       expect(db.get<{ unit_id: number }>('SELECT unit_id FROM attempt WHERE id = ?', attempt.id)!.unit_id).toBe(unitId);
       expect(db.all('PRAGMA foreign_key_check')).toEqual([]);
       expect(db.get<{ foreign_keys: number }>('PRAGMA foreign_keys')!.foreign_keys).toBe(1);
@@ -134,7 +141,7 @@ describe('pack loader', () => {
   });
 
   it('loads a real BootForge course pack: loaded === built, and a second load is a no-op (idempotent)', () => {
-    const pack = readPack(BOOTFORGE, { courses: ['js-fundamentals'] });
+    const pack = read(BOOTFORGE, { courses: ['js-fundamentals'] });
     const built = pack.manifest.courses.find((c) => c.id === 'js-fundamentals')!.counts;
     const first = loadPackIntoDb(tmp.db, pack, clock);
     expect(first).toMatchObject({ source: 'bootforge', inserted: built.total, updated: 0, unchanged: 0, built: built.total, loaded: built.total });
@@ -143,7 +150,7 @@ describe('pack loader', () => {
     const ids1 = tmp.db.all<{ id: number; key: string }>('SELECT id, key FROM unit ORDER BY id');
     const checks1 = tmp.db.all('SELECT id, unit_id, spec FROM "check" ORDER BY id');
 
-    const second = loadPackIntoDb(tmp.db, readPack(BOOTFORGE, { courses: ['js-fundamentals'] }), clock);
+    const second = loadPackIntoDb(tmp.db, read(BOOTFORGE, { courses: ['js-fundamentals'] }), clock);
     expect(second).toMatchObject({ inserted: 0, updated: 0, unchanged: built.total, built: built.total, loaded: built.total });
     expect(tmp.db.all('SELECT id, key FROM unit ORDER BY id')).toEqual(ids1);
     expect(tmp.db.all('SELECT id, unit_id, spec FROM "check" ORDER BY id')).toEqual(checks1);
@@ -154,7 +161,7 @@ describe('pack loader', () => {
   });
 
   it('serves a loaded BootForge drill: public instructions/starter, no solution, reference solution grades pass', async () => {
-    const pack = readPack(BOOTFORGE, { courses: ['js-fundamentals'] });
+    const pack = read(BOOTFORGE, { courses: ['js-fundamentals'] });
     loadPackIntoDb(tmp.db, pack, clock);
     const app = createApp({ db: tmp.db, clock, runners: defaultRunners(), content: entriesContentStore(packContentEntries(pack)) });
     const pu = pack.courses[0]!.units.find((u) => u.origin.type === 'code')!;
@@ -176,20 +183,20 @@ describe('pack loader', () => {
     writeSynthPack(dir, [{ slug: 'a', type: 'quiz' }, { slug: 'b', type: 'quiz' }], {
       countsOverride: { total: 3, code: 0, quiz: 3, output: 0, written: 0 },
     });
-    expect(() => readPack(dir)).toThrow(PackLoadError);
-    expect(() => readPack(dir)).toThrow(/units count/);
+    expect(() => read(dir)).toThrow(PackLoadError);
+    expect(() => read(dir)).toThrow(/units count/);
   });
 
   it('refuses a course file edited after import (sha256 mismatch)', () => {
     writeSynthPack(dir, [{ slug: 'a', type: 'quiz' }]);
     const f = join(dir, 'c1.json');
     writeFileSync(f, readFileSync(f, 'utf8').replace('"Q a?"', '"Q tampered?"'));
-    expect(() => readPack(dir)).toThrow(/sha256/);
+    expect(() => read(dir)).toThrow(/sha256/);
   });
 
   it('refuses (and rolls back) when the DB holds a unit of the course that the pack does not build', () => {
     writeSynthPack(dir, [{ slug: 'a', type: 'quiz' }, { slug: 'w', type: 'written' }]);
-    const pack = readPack(dir);
+    const pack = read(dir);
     loadPackIntoDb(tmp.db, pack, clock);
     // a stale row under the same source + course prefix (e.g. an exercise removed upstream)
     const src = tmp.db.get<{ id: number }>(`SELECT id FROM source WHERE key = 'synth'`)!.id;
@@ -199,16 +206,16 @@ describe('pack loader', () => {
       src,
     );
     const before = unitCount(tmp.db);
-    expect(() => loadPackIntoDb(tmp.db, readPack(dir), clock)).toThrow(/loaded !== built.*not in the pack/);
+    expect(() => loadPackIntoDb(tmp.db, read(dir), clock)).toThrow(/loaded !== built.*not in the pack/);
     expect(unitCount(tmp.db)).toBe(before);
   });
 
   it('refuses a unit whose kind changed upstream (attempts reference it)', () => {
     writeSynthPack(dir, [{ slug: 'a', type: 'quiz' }]);
-    loadPackIntoDb(tmp.db, readPack(dir), clock);
+    loadPackIntoDb(tmp.db, read(dir), clock);
     rmSync(dir, { recursive: true, force: true });
     writeSynthPack(dir, [{ slug: 'a', type: 'written' }]);
-    expect(() => loadPackIntoDb(tmp.db, readPack(dir), clock)).toThrow(/changed kind/);
+    expect(() => loadPackIntoDb(tmp.db, read(dir), clock)).toThrow(/changed kind/);
   });
 
   it('withholds quarantined units: never loaded, no content served, built shrinks accordingly', () => {
@@ -217,22 +224,174 @@ describe('pack loader', () => {
       join(dir, 'quarantine.json'),
       JSON.stringify({ format: PACK_FORMAT, source: 'synth', entries: [{ key: keyOf('c1', 'b'), course: 'c1', reason: 'reference fails' }] }),
     );
-    const pack = readPack(dir);
+    const pack = read(dir);
     const stats = loadPackIntoDb(tmp.db, pack, clock);
     expect(stats).toMatchObject({ built: 2, loaded: 2, withheld: 1, checks: 1, contentEntries: 2 });
     expect(tmp.db.get('SELECT id FROM unit WHERE key = ?', keyOf('c1', 'b'))).toBeUndefined();
     expect(packContentEntries(pack).has(keyOf('c1', 'b'))).toBe(false);
   });
 
+  it('F6: variationOf (BootForge reviewOf) sets variation_of_unit_id, not a prerequisite; reveal schedules the variant', async () => {
+    writeSynthPack(dir, [{ slug: 'alt', type: 'quiz', variationOf: 'orig' }, { slug: 'orig', type: 'quiz' }]);
+    const pack = read(dir);
+    loadPackIntoDb(tmp.db, pack, clock);
+    const id = (s: string) => tmp.db.get<{ id: number }>('SELECT id FROM unit WHERE key = ?', keyOf('c1', s))!.id;
+    expect(tmp.db.get<{ v: number | null }>('SELECT variation_of_unit_id AS v FROM unit WHERE id = ?', id('alt'))!.v).toBe(id('orig'));
+    expect(tmp.db.all('SELECT * FROM unit_prerequisite')).toEqual([]);
+    expect(loadPackIntoDb(tmp.db, read(dir), clock)).toMatchObject({ inserted: 0, updated: 0, unchanged: 2 });
+    const app = createApp({ db: tmp.db, clock, runners: defaultRunners(), content: entriesContentStore(packContentEntries(pack)) });
+    const units = (await request(app).get('/api/tracks/js/units')).body.units as { key: string; state: string }[];
+    expect(units.find((u) => u.key === keyOf('c1', 'alt'))!.state).toBe('available'); // never locked behind its original
+    const rev = await request(app).post(`/api/units/${id('orig')}/reveal`).send({});
+    expect(rev.status).toBe(200);
+    expect(rev.body.variationUnitId).toBe(id('alt'));
+  });
+
+  it('F2: load -> quarantine -> reload RETIRES the live unit (history kept), hides it everywhere; leaving quarantine revives it', async () => {
+    writeSynthPack(dir, [{ slug: 'a', type: 'quiz' }, { slug: 'b', type: 'quiz' }, { slug: 'w', type: 'written' }]);
+    const first = read(dir);
+    loadPackIntoDb(tmp.db, first, clock);
+    const bId = tmp.db.get<{ id: number }>('SELECT id FROM unit WHERE key = ?', keyOf('c1', 'b'))!.id;
+    // the learner used b before it was quarantined: append-only history must keep its FK target
+    const app1 = createApp({ db: tmp.db, clock, runners: defaultRunners(), content: entriesContentStore(packContentEntries(first)) });
+    expect((await request(app1).post(`/api/units/${bId}/submit`).send({ answer: 1 })).body.verdict).toBe('pass');
+    const history = tmp.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM attempt WHERE unit_id = ?', bId)!.n;
+    expect(history).toBe(1);
+
+    // seed:validate now quarantines b; the server restarts
+    writeFileSync(
+      join(dir, 'quarantine.json'),
+      JSON.stringify({ format: PACK_FORMAT, source: 'synth', entries: [{ key: keyOf('c1', 'b'), course: 'c1', reason: 'vacuous-check: starter passes' }] }),
+    );
+    const second = read(dir);
+    const stats = loadPackIntoDb(tmp.db, second, clock);
+    expect(stats).toMatchObject({ built: 2, loaded: 2, withheld: 1, retired: 1, checks: 1, contentEntries: 2 });
+    const row = tmp.db.get<{ retired_at: number | null }>('SELECT retired_at FROM unit WHERE id = ?', bId)!;
+    expect(row.retired_at).toBe(clock().getTime());
+    expect(tmp.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM attempt WHERE unit_id = ?', bId)!.n).toBe(history);
+
+    const app2 = createApp({ db: tmp.db, clock, runners: defaultRunners(), content: entriesContentStore(packContentEntries(second)) });
+    const units = (await request(app2).get('/api/tracks/js/units')).body.units as { id: number }[];
+    expect(units.map((u) => u.id)).not.toContain(bId);
+    const tracks = (await request(app2).get('/api/tracks')).body.tracks as { id: string; unitCount: number }[];
+    expect(tracks.find((t) => t.id === 'js')!.unitCount).toBe(2);
+    expect((await request(app2).get(`/api/units/${bId}`)).status).toBe(404);
+    expect((await request(app2).post(`/api/units/${bId}/submit`).send({ answer: 1 })).status).toBe(404);
+    expect((await request(app2).post(`/api/units/${bId}/reveal`).send({})).status).toBe(404);
+    expect((await request(app2).get('/api/health')).body.counts).toEqual({ units: 2, checks: 1 });
+    const dash = (await request(app2).get('/api/dashboard')).body as { nextUp: { trackId: string; unit: { id: number } | null }[] };
+    expect(dash.nextUp.map((n) => n.unit?.id)).not.toContain(bId);
+    // a third load is a no-op (already retired)
+    expect(loadPackIntoDb(tmp.db, read(dir), clock)).toMatchObject({ retired: 0, withheld: 1, unchanged: 2 });
+
+    // fixed upstream + re-validated: leaves the quarantine -> live again, same row id
+    writeFileSync(join(dir, 'quarantine.json'), JSON.stringify({ format: PACK_FORMAT, source: 'synth', entries: [] }));
+    expect(loadPackIntoDb(tmp.db, read(dir), clock)).toMatchObject({ built: 3, loaded: 3, updated: 1, retired: 0 });
+    expect(tmp.db.get<{ retired_at: number | null }>('SELECT retired_at FROM unit WHERE id = ?', bId)!.retired_at).toBeNull();
+  });
+
   it('wires prerequisite edges from the pack (second pass), idempotently', () => {
     writeSynthPack(dir, [{ slug: 'b', type: 'quiz', prerequisites: ['a'] }, { slug: 'a', type: 'quiz' }]);
-    loadPackIntoDb(tmp.db, readPack(dir), clock);
+    loadPackIntoDb(tmp.db, read(dir), clock);
     const id = (s: string) => tmp.db.get<{ id: number }>('SELECT id FROM unit WHERE key = ?', keyOf('c1', s))!.id;
     const edges = () => tmp.db.all('SELECT unit_id, prereq_unit_id FROM unit_prerequisite');
     expect(edges()).toEqual([{ unit_id: id('b'), prereq_unit_id: id('a') }]);
-    const again = loadPackIntoDb(tmp.db, readPack(dir), clock);
+    const again = loadPackIntoDb(tmp.db, read(dir), clock);
     expect(again).toMatchObject({ inserted: 0, updated: 0, unchanged: 2 });
     expect(edges()).toEqual([{ unit_id: id('b'), prereq_unit_id: id('a') }]);
+  });
+});
+
+// ---------------------------------------------------------------- import-gate stamp (F1, F8)
+
+/** What a clean full seed:validate run leaves behind: quarantine.json (even empty) + a matching validation.json. */
+function stampPack(dir: string, quarantinedKeys: string[] = []) {
+  writeFileSync(
+    join(dir, 'quarantine.json'),
+    JSON.stringify({ format: PACK_FORMAT, source: 'synth', entries: quarantinedKeys.map((key) => ({ key, course: 'c1', reason: 'x' })) }),
+  );
+  const bytes = readFileSync(join(dir, 'manifest.json'));
+  const m = PackManifest.parse(JSON.parse(bytes.toString('utf8')));
+  writeFileSync(
+    join(dir, 'validation.json'),
+    JSON.stringify({
+      format: PACK_FORMAT,
+      source: 'synth',
+      manifestSha256: sha(bytes),
+      graderFingerprint: graderFingerprint(),
+      toolchain: toolchainVersions(),
+      counts: m.totals,
+      executable: m.totals.code + m.totals.quiz + m.totals.output,
+      passed: m.totals.code + m.totals.quiz + m.totals.output - quarantinedKeys.length,
+      carveOut: m.totals.written,
+      quarantinedKeys: [...quarantinedKeys].sort(),
+      audit: { sampled: 0, mismatches: 0 },
+      completedAt: '2026-10-07T00:00:00.000Z',
+    }),
+  );
+}
+
+describe('import-gate stamp (validation.json): the loader refuses a pack seed:validate has not vouched for', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'bootquest-stamp-'));
+    writeSynthPack(dir, [{ slug: 'a', type: 'quiz' }, { slug: 'b', type: 'quiz' }, { slug: 'w', type: 'written' }]);
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it('never validated (no stamp, no quarantine.json) -> refused, naming the command to run', () => {
+    expect(() => readPack(dir)).toThrow(PackLoadError);
+    expect(() => readPack(dir)).toThrow(/no quarantine\.json.*npm run seed:validate/);
+    writeFileSync(join(dir, 'quarantine.json'), JSON.stringify({ format: PACK_FORMAT, source: 'synth', entries: [] }));
+    expect(() => readPack(dir)).toThrow(/no validation stamp \(validation\.json\).*npm run seed:validate/);
+  });
+
+  it('a matching stamp is accepted (with and without quarantined keys)', () => {
+    stampPack(dir);
+    expect(readPack(dir).stamp).toMatchObject({ source: 'synth', quarantinedKeys: [] });
+    stampPack(dir, [keyOf('c1', 'b')]);
+    const pack = readPack(dir);
+    expect(pack.stamp!.quarantinedKeys).toEqual([keyOf('c1', 'b')]);
+    expect([...pack.quarantined.keys()]).toEqual([keyOf('c1', 'b')]);
+  });
+
+  it('a stamp for other manifest bytes (re-imported since validation) is refused', () => {
+    stampPack(dir);
+    const mPath = join(dir, 'manifest.json');
+    writeFileSync(mPath, `${readFileSync(mPath, 'utf8')}\n`);
+    expect(() => readPack(dir)).toThrow(/re-imported since validation.*npm run seed:validate/);
+  });
+
+  it('a stamp from another grader / toolchain is refused', () => {
+    stampPack(dir);
+    const sPath = join(dir, 'validation.json');
+    writeFileSync(sPath, readFileSync(sPath, 'utf8').replace(graderFingerprint(), 'a'.repeat(64)));
+    expect(() => readPack(dir)).toThrow(/grader fingerprint.*npm run seed:validate/);
+  });
+
+  it('a quarantine.json edited after validation (keys differ from the stamp) is refused', () => {
+    stampPack(dir, [keyOf('c1', 'b')]);
+    writeFileSync(join(dir, 'quarantine.json'), JSON.stringify({ format: PACK_FORMAT, source: 'synth', entries: [] }));
+    expect(() => readPack(dir)).toThrow(/does not match the validation stamp/);
+  });
+
+  it('F8: a malformed quarantine.json is a hard error, even for the unstamped test opt-out', () => {
+    stampPack(dir);
+    writeFileSync(join(dir, 'quarantine.json'), '<<<<<<< HEAD\n{"entries": []}\n');
+    expect(() => readPack(dir)).toThrow(/quarantine\.json is malformed/);
+    expect(() => read(dir)).toThrow(/quarantine\.json is malformed/);
+  });
+
+  it('startServer refuses an unstamped pack without the opt-out, and loads it stamped', async () => {
+    const env = { BOOTQUEST_DB: join(dir, 's.db'), BOOTQUEST_PORT: String(await freePort()), BOOTQUEST_PACKS: dir };
+    await expect(startServer({ env, clock })).rejects.toThrow(/no quarantine\.json|no validation stamp/);
+    stampPack(dir);
+    const running = await startServer({ env: { ...env, BOOTQUEST_DB: join(dir, 's2.db') }, clock });
+    try {
+      expect(running.packs).toEqual([expect.objectContaining({ source: 'synth', built: 3, loaded: 3 })]);
+    } finally {
+      await running.close();
+    }
   });
 });
 
@@ -256,7 +415,7 @@ describe('server startup with packs', () => {
     try {
       const bad = join(dir, 'bad');
       writeSynthPack(bad, [{ slug: 'a', type: 'quiz' }], { countsOverride: { total: 2, code: 0, quiz: 2, output: 0, written: 0 } });
-      const env = { BOOTQUEST_DB: join(dir, 'a.db'), BOOTQUEST_PORT: String(await freePort()), BOOTQUEST_PACKS: bad };
+      const env = { BOOTQUEST_DB: join(dir, 'a.db'), BOOTQUEST_PORT: String(await freePort()), BOOTQUEST_PACKS: bad, [ALLOW_UNSTAMPED_ENV]: '1' };
       await expect(startServer({ env, clock })).rejects.toThrow(PackLoadError);
 
       const good = join(dir, 'good');
@@ -279,7 +438,7 @@ describe('server startup with packs', () => {
     try {
       const port = await freePort();
       const running = await startServer({
-        env: { BOOTQUEST_DB: join(dir, 'c.db'), BOOTQUEST_PORT: String(port), BOOTQUEST_PACKS: BOOTFORGE, BOOTQUEST_PACK_COURSES: 'engineering-practice' },
+        env: { BOOTQUEST_DB: join(dir, 'c.db'), BOOTQUEST_PORT: String(port), BOOTQUEST_PACKS: BOOTFORGE, BOOTQUEST_PACK_COURSES: 'engineering-practice', [ALLOW_UNSTAMPED_ENV]: '1' },
         clock,
       });
       try {
@@ -287,6 +446,29 @@ describe('server startup with packs', () => {
       } finally {
         await running.close();
       }
+    } finally {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
+  });
+});
+
+describe('F7: BOOTQUEST_PACK_COURSES typos', () => {
+  it('an id no pack provides refuses to start and lists the valid ids', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bootquest-packtypo-'));
+    try {
+      const env = {
+        BOOTQUEST_DB: join(dir, 't.db'),
+        BOOTQUEST_PORT: String(await freePort()),
+        BOOTQUEST_PACKS: BOOTFORGE,
+        BOOTQUEST_PACK_COURSES: 'js-fundamentals,engineering-practise',
+        [ALLOW_UNSTAMPED_ENV]: '1',
+      };
+      const err = await startServer({ env, clock }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(PackLoadError);
+      expect(String((err as Error).message)).toMatch(/no loaded pack provides: engineering-practise\. Valid ids: .*engineering-practice.*js-fundamentals/);
+      // all ids misspelled: still a refusal (never "0 loaded === 0 built")
+      const err2 = await startServer({ env: { ...env, BOOTQUEST_PACK_COURSES: 'nope' }, clock }).catch((e: unknown) => e);
+      expect(String((err2 as Error).message)).toMatch(/no loaded pack provides: nope/);
     } finally {
       rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }

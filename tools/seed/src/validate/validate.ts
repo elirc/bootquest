@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomInt } from 'node:crypto';
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import {
@@ -7,12 +7,14 @@ import {
   PackCourseFile,
   PackManifest,
   PackQuarantine,
+  PackValidationStamp,
   type PackCounts,
   type PackOriginType,
   type PackUnit,
 } from '@bootquest/shared';
 import type { CanonicalRunResult, UnitContentEntry } from '@bootquest/shared/api';
 import { normalizeOutput, runSnippet } from '@bootquest/server/grade-core';
+import { graderFingerprint, toolchainVersions } from '@bootquest/server/grader-fingerprint';
 import { drillJsRunner, gradeDeterministic } from '@bootquest/server/runners';
 import { appendJournal, readJournal, type JournalEntry, type JournalVerdict } from './journal.ts';
 
@@ -22,8 +24,10 @@ import { appendJournal, readJournal, type JournalEntry, type JournalVerdict } fr
  * (never shipped, never "fixed" by weakening tests).
  *   drill-js       reference solution through the server's drill-js runner
  *                  adapter (the exact code path POST /submit uses) must pass;
- *                  a timeout flake is retried once; formatted exercises'
- *                  starters must FAIL (BootForge validate.mjs rule)
+ *                  a timeout flake is retried once; EVERY drill's starter
+ *                  must FAIL its own tests: a starter that passes is a
+ *                  vacuous check (the untouched starter would earn a pass),
+ *                  quarantined with reason 'vacuous-check' (W2b/F3)
  *   quiz           single-keyed: the key passes the deterministic grader and
  *                  every other choice fails
  *   predict-output the expected output passes the grader, a perturbed one
@@ -32,27 +36,27 @@ import { appendJournal, readJournal, type JournalEntry, type JournalVerdict } fr
  * Counts: importer (manifest) === pack (course files) === validated (journal),
  * and on a full run also === the expected census. Quarantine ceiling: 1% of
  * executable exercises in the run's scope.
+ * Full-scope (gating) runs also re-execute a random sample of journaled passes
+ * (2%, min 20): any disagreement means the journal is distrusted (W2b/F4).
+ * Only a full-scope run with zero problems writes the validation.json stamp the
+ * server's pack loader requires; every other run removes it (W2b/F1).
+ * quarantine.json is always written (even empty); a malformed one is a hard
+ * error and is never rewritten (W2b/F8).
  */
 
 export const QUARANTINE_CEILING = 0.01;
 
-const REPO = resolve(import.meta.dirname, '..', '..', '..', '..');
-/** Journal entries are bound to the grader + validator bytes: changing either re-validates. */
-const FINGERPRINT_FILES = [
-  join(REPO, 'server', 'src', 'runners', 'js', 'grade-core.mjs'),
-  join(REPO, 'server', 'src', 'runners', 'js', 'index.ts'),
-  join(REPO, 'server', 'src', 'api', 'runners.ts'),
-  join(REPO, 'tools', 'seed', 'src', 'validate', 'validate.ts'),
-];
-export const DEFAULT_JOURNAL_DIR = join(REPO, '.seed-journal');
+export const AUDIT_RATE = 0.02;
+export const AUDIT_MIN = 20;
 
-let fingerprintCache: string | null = null;
-export function graderFingerprint(): string {
-  fingerprintCache ??= createHash('sha256')
-    .update(FINGERPRINT_FILES.map((f) => readFileSync(f, 'utf8').replace(/\r\n/g, '\n')).join('\u0000'))
-    .digest('hex');
-  return fingerprintCache;
-}
+const REPO = resolve(import.meta.dirname, '..', '..', '..', '..');
+export const DEFAULT_JOURNAL_DIR = join(REPO, '.seed-journal');
+/**
+ * Journal entries + the stamp are bound to the grader + validator bytes AND the
+ * node / esbuild versions (F5): changing any of them re-validates everything.
+ * Computed by the server so the pack loader checks the very same value.
+ */
+export { graderFingerprint };
 
 export function exerciseHash(pu: PackUnit, content: UnitContentEntry, fingerprint: string): string {
   return createHash('sha256').update(JSON.stringify({ u: pu, c: content, g: fingerprint })).digest('hex');
@@ -116,10 +120,9 @@ export const realValidator: UnitValidator = async (pu, content) => {
     };
     const ref = await grade(content.solution);
     if (!ref.pass) reasons.push(`reference solution fails under the drill-js runner: ${describeFailures(ref)}`);
-    if (pu.origin.format !== undefined) {
-      const starter = await grade(content.starter ?? '');
-      if (starter.pass) reasons.push(`starter of a ${pu.origin.format} exercise passes its own tests (must fail)`);
-    }
+    // F3: starter-must-fail on EVERY code drill (not only formatted ones)
+    const starter = await grade(content.starter ?? '');
+    if (starter.pass) reasons.push(`vacuous-check: the starter of a ${pu.origin.format ?? 'code'} exercise passes its own tests (must fail)`);
     return done(reasons.length ? 'fail' : 'pass');
   }
 
@@ -197,6 +200,10 @@ export interface ValidateReport {
   /** quarantined exercises within the run's scope */
   quarantined: QuarantineEntry[];
   journalSkippedLines: number;
+  /** F4: journaled passes re-executed by a full-scope run (keys whose verdict disagreed) */
+  audit: { sampled: number; mismatches: string[] };
+  /** path of the validation.json written by this run (full scope + ok only), else null */
+  stampPath: string | null;
 }
 
 export interface ValidateOptions {
@@ -246,13 +253,27 @@ export async function runValidate(opts: ValidateOptions): Promise<ValidateReport
     carveOut: 0,
     quarantined: [],
     journalSkippedLines: 0,
+    audit: { sampled: 0, mismatches: [] },
+    stampPath: null,
   };
+  const stampFile = join(opts.packDir, 'validation.json');
+  // any run that does not end in a fresh stamp leaves NO stamp: the loader then refuses the pack
+  rmSync(stampFile, { force: true });
 
   let manifest: PackManifest;
+  let manifestBytes: Buffer;
   try {
-    manifest = PackManifest.parse(JSON.parse(readFileSync(join(opts.packDir, 'manifest.json'), 'utf8')));
+    manifestBytes = readFileSync(join(opts.packDir, 'manifest.json'));
+    manifest = PackManifest.parse(JSON.parse(manifestBytes.toString('utf8')));
   } catch (err) {
     problems.push(`manifest.json unreadable/invalid: ${err instanceof Error ? err.message : String(err)}`);
+    return report;
+  }
+  // F8: a malformed quarantine.json is a hard error up front, never silently reset
+  try {
+    readQuarantineFile(opts.packDir);
+  } catch (err) {
+    problems.push(err instanceof Error ? err.message : String(err));
     return report;
   }
   report.expected = manifest.expected;
@@ -265,6 +286,8 @@ export async function runValidate(opts: ValidateOptions): Promise<ValidateReport
 
   const journal = opts.fresh ? { entries: new Map<string, JournalEntry>(), skipped: 0 } : readJournal(opts.journalPath);
   report.journalSkippedLines = journal.skipped;
+  /** passes taken from the journal without executing them in this run (F4 audit population) */
+  const resumedPasses: { pu: PackUnit; content: UnitContentEntry; hash: string; course: string }[] = [];
 
   for (const mc of scope) {
     const cr: CourseReport = { id: mc.id, importer: mc.counts, pack: null, validated: zero(), passed: 0, failed: 0, carveOut: 0, executedNow: 0, resumed: 0 };
@@ -299,8 +322,10 @@ export async function runValidate(opts: ValidateOptions): Promise<ValidateReport
       current.set(pu.unit.key, hash);
       const prior = journal.entries.get(pu.unit.key);
       const reusable = prior && prior.hash === hash && !(opts.retryFailed && prior.verdict === 'fail');
-      if (reusable) cr.resumed++;
-      else work.push({ pu, content, hash });
+      if (reusable) {
+        cr.resumed++;
+        if (prior.verdict === 'pass') resumedPasses.push({ pu, content, hash, course: mc.id });
+      } else work.push({ pu, content, hash });
     }
     log(`[${mc.id}] ${file.units.length} exercises: ${cr.resumed} already journaled, ${work.length} to run`);
 
@@ -352,6 +377,50 @@ export async function runValidate(opts: ValidateOptions): Promise<ValidateReport
     if (carveOutsWrong) problems.push(`${mc.id}: carve-outs ${cr.carveOut} != written exercises ${cr.pack.written}`);
   }
 
+  // F4: the gating (full-scope) run re-executes a random sample of journaled passes
+  if (!opts.course && resumedPasses.length > 0) {
+    const n = Math.min(resumedPasses.length, Math.max(AUDIT_MIN, Math.ceil(AUDIT_RATE * resumedPasses.length)));
+    const shuffled = [...resumedPasses];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = randomInt(i + 1);
+      [shuffled[i], shuffled[j]] = [shuffled[j]!, shuffled[i]!];
+    }
+    const sample = shuffled.slice(0, n);
+    log(`[audit] re-executing ${n} of ${resumedPasses.length} journaled passes`);
+    report.audit.sampled = n;
+    await pool(sample, opts.concurrency ?? 4, async ({ pu, content, hash, course }) => {
+      let v: UnitVerdict;
+      try {
+        v = await validator(pu, content);
+      } catch (err) {
+        v = { verdict: 'fail', reasons: [`validator crashed: ${err instanceof Error ? err.message : String(err)}`], attempts: 0, durationMs: 0 };
+      }
+      if (v.verdict !== 'pass') {
+        report.audit.mismatches.push(pu.unit.key);
+        log(`  AUDIT MISMATCH ${pu.unit.key}: journal says pass, re-execution says ${v.verdict}: ${v.reasons.join(' ; ')}`);
+        // the real verdict supersedes the untrustworthy line
+        appendJournal(opts.journalPath, {
+          key: pu.unit.key,
+          course,
+          type: pu.origin.type,
+          hash,
+          verdict: v.verdict,
+          reasons: v.reasons,
+          attempts: v.attempts,
+          durationMs: v.durationMs,
+          at: new Date().toISOString(),
+        });
+      }
+    });
+    if (report.audit.mismatches.length) {
+      report.audit.mismatches.sort();
+      problems.push(
+        `journal distrusted: ${report.audit.mismatches.length} of ${n} re-executed journaled passes did not pass ` +
+          `(${report.audit.mismatches.slice(0, 5).join(', ')}); delete the journal and re-run the sweep`,
+      );
+    }
+  }
+
   const t = report.totals;
   if (!same(t.importer, t.pack) || !same(t.pack, t.validated)) {
     problems.push(`counts disagree: importer ${fmt(t.importer)} / pack ${fmt(t.pack)} / validated ${fmt(t.validated)}`);
@@ -369,34 +438,71 @@ export async function runValidate(opts: ValidateOptions): Promise<ValidateReport
       `quarantined ${report.quarantined.length}/${report.executable} executable = ${((100 * report.quarantined.length) / report.executable).toFixed(2)}% > ceiling ${QUARANTINE_CEILING * 100}%`,
     );
   }
-  writeQuarantine(opts.packDir, manifest.source, scope.map((c) => c.id), report.quarantined);
+  try {
+    writeQuarantine(opts.packDir, manifest.source, scope.map((c) => c.id), report.quarantined);
+  } catch (err) {
+    problems.push(err instanceof Error ? err.message : String(err));
+  }
   report.ok = problems.length === 0;
+  // F1: the stamp exists ONLY after a clean full-scope run
+  if (report.ok && !opts.course) {
+    const q = readQuarantineFile(opts.packDir);
+    const stamp = PackValidationStamp.parse({
+      format: PACK_FORMAT,
+      source: manifest.source,
+      manifestSha256: createHash('sha256').update(manifestBytes).digest('hex'),
+      graderFingerprint: fingerprint,
+      toolchain: toolchainVersions(),
+      counts: t.validated,
+      executable: report.executable,
+      passed: report.courses.reduce((n, c) => n + c.passed, 0),
+      carveOut: report.carveOut,
+      quarantinedKeys: (q?.entries ?? []).map((e) => e.key).sort(),
+      audit: { sampled: report.audit.sampled, mismatches: report.audit.mismatches.length },
+      completedAt: new Date().toISOString(),
+    });
+    writeFileSync(stampFile, `${JSON.stringify(stamp, null, 1)}\n`);
+    report.stampPath = stampFile;
+  }
   return report;
+}
+
+export class QuarantineFileError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'QuarantineFileError';
+  }
+}
+
+/** Parse quarantine.json (null when absent). Malformed => QuarantineFileError, never a silent reset (F8). */
+export function readQuarantineFile(packDir: string): PackQuarantine | null {
+  const jsonPath = join(packDir, 'quarantine.json');
+  if (!existsSync(jsonPath)) return null;
+  try {
+    return PackQuarantine.parse(JSON.parse(readFileSync(jsonPath, 'utf8')));
+  } catch (err) {
+    throw new QuarantineFileError(
+      `quarantine.json is malformed (${err instanceof Error ? err.message.slice(0, 200) : String(err)}); refusing to rewrite it: ` +
+        'restore it (e.g. from git) or resolve the conflict, then re-run',
+    );
+  }
 }
 
 /**
  * Update quarantine.json + QUARANTINE.md in the pack dir: entries for the
  * courses in this run's scope are replaced; other courses' entries are kept.
- * Both files are removed when nothing is quarantined.
+ * Both files are ALWAYS written, also when nothing is quarantined (F1: to the
+ * loader a missing quarantine.json means "never validated"). A malformed
+ * existing file throws QuarantineFileError and is left untouched (F8).
  */
 export function writeQuarantine(packDir: string, source: string, scopeCourses: readonly string[], entries: readonly QuarantineEntry[]): void {
   const jsonPath = join(packDir, 'quarantine.json');
   const mdPath = join(packDir, 'QUARANTINE.md');
   const inScope = new Set(scopeCourses);
-  let kept: { key: string; course: string; reason: string }[] = [];
-  if (existsSync(jsonPath)) {
-    try {
-      kept = PackQuarantine.parse(JSON.parse(readFileSync(jsonPath, 'utf8'))).entries.filter((e) => !inScope.has(e.course));
-    } catch {
-      kept = [];
-    }
-  }
+  const existing = readQuarantineFile(packDir);
+  if (existing && existing.source !== source) throw new QuarantineFileError(`quarantine.json is for ${existing.source}, not ${source}; refusing to rewrite it`);
+  const kept = (existing?.entries ?? []).filter((e) => !inScope.has(e.course));
   const all = [...kept, ...entries.map(({ key, course, reason }) => ({ key, course, reason }))].sort((a, b) => a.key.localeCompare(b.key));
-  if (all.length === 0) {
-    rmSync(jsonPath, { force: true });
-    rmSync(mdPath, { force: true });
-    return;
-  }
   writeFileSync(jsonPath, `${JSON.stringify(PackQuarantine.parse({ format: PACK_FORMAT, source, entries: all }), null, 1)}\n`);
   const lines = [
     `# Quarantine — ${source}`,
@@ -408,6 +514,7 @@ export function writeQuarantine(packDir: string, source: string, scopeCourses: r
     '| exercise | course | reason |',
     '|---|---|---|',
     ...all.map((e) => `| \`${e.key}\` | ${e.course} | ${e.reason.replace(/\|/g, '\\|').replace(/\n/g, ' ')} |`),
+    ...(all.length === 0 ? ['| _(none: every exercise passed the gate)_ | | |'] : []),
     '',
   ];
   writeFileSync(mdPath, lines.join('\n'));

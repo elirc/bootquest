@@ -170,6 +170,37 @@ export const PackQuarantine = z
   .strict();
 export type PackQuarantine = z.infer<typeof PackQuarantine>;
 
+/**
+ * validation.json — the import-gate stamp (W2b/F1). seed:validate writes it
+ * ONLY after a full-scope run (every course of the source) succeeded; any
+ * other run removes it. The server's pack loader refuses a pack whose stamp is
+ * missing or no longer matches the manifest bytes, the grader fingerprint or
+ * the quarantine list, so "validated" and "never validated" can never look
+ * the same on disk.
+ */
+export const PackValidationStamp = z
+  .object({
+    format: z.literal(PACK_FORMAT),
+    source: z.string().min(1),
+    /** sha256 of manifest.json's bytes at validation time */
+    manifestSha256: z.string().regex(/^[0-9a-f]{64}$/),
+    /** grader + validator bytes + toolchain versions (server/src/store/grader-fingerprint.ts) */
+    graderFingerprint: z.string().regex(/^[0-9a-f]{64}$/),
+    toolchain: z.object({ node: z.string().min(1), esbuild: z.string().min(1) }).strict(),
+    /** validated per-type counts (=== manifest totals on a stamped run) */
+    counts: PackCounts,
+    executable: z.number().int().nonnegative(),
+    passed: z.number().int().nonnegative(),
+    carveOut: z.number().int().nonnegative(),
+    /** sorted; must equal quarantine.json's keys exactly */
+    quarantinedKeys: z.array(z.string().min(1)),
+    /** F4: journaled passes re-executed by the gating run */
+    audit: z.object({ sampled: z.number().int().nonnegative(), mismatches: z.number().int().nonnegative() }).strict(),
+    completedAt: z.string().min(1),
+  })
+  .strict();
+export type PackValidationStamp = z.infer<typeof PackValidationStamp>;
+
 /** Count units of a parsed course file by upstream type. */
 export function countPackUnits(units: readonly { origin: { type: PackOriginType } }[]): PackCounts {
   const c = { total: 0, code: 0, quiz: 0, output: 0, written: 0 };
