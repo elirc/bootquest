@@ -36,7 +36,7 @@ export function Heatmap({ days, today }: { days: HeatmapDay[]; today: string }) 
                 c ? (
                   <span
                     key={c.date}
-                    className={`hm-cell hm-${c.status === 'freeze' ? 'freeze' : c.bucket}${c.isToday ? ' hm-today' : ''}`}
+                    className={`hm-cell hm-${c.status === 'frozen' ? 'freeze' : c.bucket}${c.isToday ? ' hm-today' : ''}`}
                     data-date={c.date}
                     data-bucket={c.bucket}
                     title={describeCell(c)}
@@ -72,7 +72,11 @@ export function Heatmap({ days, today }: { days: HeatmapDay[]; today: string }) 
         </div>
         <div>
           <dt>Freezes used</dt>
-          <dd>{count('freeze')}</dd>
+          <dd>{count('frozen')}</dd>
+        </div>
+        <div>
+          <dt>Missed</dt>
+          <dd>{count('missed')}</dd>
         </div>
       </dl>
       </div>

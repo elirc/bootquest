@@ -1,7 +1,8 @@
 import { useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useApi } from '../api/context';
-import type { ReviewCard, ReviewGrade } from '../api/types';
+import { errorText } from '../api/errors';
+import { isApiError, type ReviewGrade, type ReviewQueueItem } from '../api/types';
 import { Icon } from '../components/Icon';
 import { Chip, Kbd, LoadState, PageHeader, ProgressBar } from '../components/ui';
 import { hasModifier, isEditableTarget, useKeydown } from '../lib/keys';
@@ -20,12 +21,12 @@ export function ReviewPage() {
   return (
     <>
       <PageHeader eyebrow="Spaced repetition" title="Review session" />
-      {q.status === 'ready' ? <Session cards={q.data} /> : <LoadState error={q.error} onRetry={q.reload} minHeight={420} />}
+      {q.status === 'ready' ? <Session cards={q.data.items} /> : <LoadState error={q.error} onRetry={q.reload} minHeight={420} />}
     </>
   );
 }
 
-function Session({ cards }: { cards: ReviewCard[] }) {
+function Session({ cards }: { cards: ReviewQueueItem[] }) {
   const api = useApi();
   const [index, setIndex] = useState(0);
   const [revealed, setRevealed] = useState(false);
@@ -40,13 +41,18 @@ function Session({ cards }: { cards: ReviewCard[] }) {
     busy.current = true;
     try {
       const r = await api.gradeReview(card.id, g);
-      setXp((x) => x + r.xpAwarded);
+      setXp((x) => x + r.xp.amount);
       setTally((t) => ({ ...t, [g]: t[g] + 1 }));
       setRevealed(false);
       setIndex((i) => i + 1);
       setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorText(e));
+      // NOT_DUE: the server will not take a grade for this card today; move on.
+      if (isApiError(e, 'NOT_DUE')) {
+        setRevealed(false);
+        setIndex((i) => i + 1);
+      }
     } finally {
       busy.current = false;
     }
@@ -95,16 +101,19 @@ function Session({ cards }: { cards: ReviewCard[] }) {
 
       <article className={`card${revealed ? ' card-revealed' : ''}`} aria-live="polite">
         <header className="card-meta">
-          <Chip>{card.trackId}</Chip>
-          <Chip>{card.competency}</Chip>
-          <span className="muted small">{card.source}</span>
+          <Chip>{card.kind}</Chip>
+          {card.competencyId && <Chip>{card.competencyId}</Chip>}
+          <span className="muted small">{card.unitId !== null ? `unit #${card.unitId}` : 'standalone card'}</span>
         </header>
         <div className="card-face">
-          <p className="card-front">{card.front}</p>
+          {/* W-20b: the queue carries no card text yet (content store, W2/W4); the key is the prompt. */}
+          <p className="card-front">
+            <code>{card.cardKey}</code>
+          </p>
           <div className="card-back-slot">
             {revealed ? (
               <p className="card-back" data-testid="card-back">
-                {card.back}
+                Card text is not served by the API yet. Grade how well you recalled <code>{card.cardKey}</code>.
               </p>
             ) : (
               <span className="muted">Recall the answer, then reveal.</span>

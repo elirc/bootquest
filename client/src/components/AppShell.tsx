@@ -4,6 +4,7 @@ import { API_MODE } from '../api/client';
 import { useApi } from '../api/context';
 import { CHORD_WINDOW_MS, GO_CHORDS, hasModifier, isEditableTarget, useKeydown } from '../lib/keys';
 import { useAsync } from '../lib/useAsync';
+import { TRACK_SHORT } from '../lib/view';
 import { Icon, type IconName } from './Icon';
 import { ShortcutHelp } from './ShortcutHelp';
 import { Kbd } from './ui';
@@ -25,7 +26,8 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   const tracks = useAsync(() => api.getTracks(), [api]);
   // Re-read the due count on every navigation so a finished review session is reflected.
-  const due = useAsync(() => api.getReviewQueueCount(), [api, pathname]);
+  // `count` is the total due regardless of `limit` (no separate count route).
+  const due = useAsync(() => api.getReviewQueue(1), [api, pathname]);
 
   useKeydown((e) => {
     if (e.defaultPrevented || hasModifier(e) || isEditableTarget(e.target)) return;
@@ -80,9 +82,9 @@ export function AppShell({ children }: { children: ReactNode }) {
             <NavLink key={n.to} to={n.to} end={n.end} className="nav-link">
               <Icon name={n.icon} />
               <span className="nav-label">{n.label}</span>
-              {n.to === '/review' && due.data && due.data.due > 0 && (
-                <span className="nav-badge" aria-label={`${due.data.due} due`}>
-                  {due.data.due}
+              {n.to === '/review' && due.data && due.data.count > 0 && (
+                <span className="nav-badge" aria-label={`${due.data.count} due`}>
+                  {due.data.count}
                 </span>
               )}
               <span className="nav-chord" aria-hidden="true">
@@ -95,23 +97,23 @@ export function AppShell({ children }: { children: ReactNode }) {
         <div className="side-section">
           <h2 className="side-title">Tracks</h2>
           <ul className="track-list">
-            {(tracks.data ?? []).map((t) => (
+            {(tracks.data?.tracks ?? []).map((t) => (
               <li key={t.id}>
-                {t.status === 'locked' ? (
+                {t.locked ? (
                   <NavLink
                     to={`/campaign/${t.id}`}
                     className="track-link track-locked"
-                    title={t.lockedReason ?? 'Locked'}
+                    title="Locked"
                   >
-                    <span className="track-badge">{t.short}</span>
+                    <span className="track-badge">{TRACK_SHORT[t.id]}</span>
                     <span className="track-name">{t.name}</span>
                     <Icon name="lock" size={14} label="Locked" />
                   </NavLink>
                 ) : (
                   <NavLink to={`/campaign/${t.id}`} className="track-link">
-                    <span className={`track-badge track-${t.id}`}>{t.short}</span>
+                    <span className={`track-badge track-${t.id}`}>{TRACK_SHORT[t.id]}</span>
                     <span className="track-name">{t.name}</span>
-                    <span className="track-count">{Math.round((t.unitsDone / Math.max(1, t.unitsTotal)) * 100)}%</span>
+                    <span className="track-count">{Math.round((t.doneCount / Math.max(1, t.unitCount)) * 100)}%</span>
                   </NavLink>
                 )}
               </li>

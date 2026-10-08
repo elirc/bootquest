@@ -17,6 +17,7 @@ export function bucketXp(xp: number): Bucket {
 }
 
 export interface HeatCell {
+  /** YYYY-MM-DD (the server's `day`). */
   date: string;
   xp: number;
   status: DayStatus;
@@ -44,12 +45,13 @@ const toIso = (ms: number): string => new Date(ms).toISOString().slice(0, 10);
 export const weekdayOf = (iso: string): number => (new Date(toMs(iso)).getUTCDay() + 6) % 7;
 
 /**
- * Lays days out as GitHub-style week columns. Missing dates inside the range are filled
+ * Lays days out as GitHub-style week columns. Missing days inside the range are filled
  * as zero-XP `none` days, so a sparse API response can never shift the grid.
+ * Input is the server's heatmap row `{ day, xp, status }`.
  */
 export function buildHeatGrid(days: HeatmapDay[], today: string): HeatGrid {
   if (days.length === 0) return { weeks: [], months: [], totalXp: 0, activeDays: 0 };
-  const byDate = new Map(days.map((d) => [d.date, d]));
+  const byDate = new Map(days.map((d) => [d.day, d]));
   const sorted = [...byDate.keys()].sort();
   const start = toMs(sorted[0]!);
   const end = Math.max(toMs(sorted[sorted.length - 1]!), toMs(today));
@@ -106,7 +108,9 @@ export function describeCell(c: HeatCell): string {
   const what: Record<DayStatus, string> = {
     slate: 'slate cleared',
     partial: 'partial day',
-    freeze: 'freeze token used',
+    frozen: 'freeze token used',
+    missed: c.xp > 0 ? 'below 20 XP, missed' : 'missed',
+    open: 'today, in progress',
     none: c.xp > 0 ? 'below 20 XP' : 'no activity',
   };
   return `${label}: ${c.xp} XP, ${what[c.status]}`;

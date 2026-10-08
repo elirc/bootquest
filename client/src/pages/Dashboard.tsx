@@ -1,13 +1,12 @@
 import { Link } from 'react-router-dom';
 import { useApi } from '../api/context';
-import type { CompetencyRow, Dashboard as DashboardData, PromotionLegState, SlateItem, TrackId } from '../api/types';
+import type { CompetencyRow, Dashboard as DashboardData, SlateItem, TrackId } from '../api/types';
 import { Heatmap } from '../components/Heatmap';
 import { Icon } from '../components/Icon';
-import { Chip, Kbd, LoadState, PageHeader, Panel, ProgressBar, RatingPips } from '../components/ui';
-import { fmtInt, fmtRelative, fmtShortDate } from '../lib/format';
+import { Kbd, LoadState, PageHeader, Panel, ProgressBar, RatingPips } from '../components/ui';
+import { fmtInt, fmtRelative } from '../lib/format';
 import { useAsync } from '../lib/useAsync';
-
-const TRACK_LABEL: Record<TrackId, string> = { js: 'JS/TS', csharp: 'C#/.NET', agentic: 'Agentic', java: 'Java' };
+import { FREEZE_TOKENS_MAX, TRACK_LABEL, dayOfMs, isTrackId } from '../lib/view';
 
 export function DashboardPage() {
   const api = useApi();
@@ -15,7 +14,7 @@ export function DashboardPage() {
   return (
     <>
       <PageHeader
-        eyebrow={q.data ? new Date(`${q.data.today}T00:00:00Z`).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC' }) : ' '}
+        eyebrow={q.data ? new Date(`${q.data.today}T00:00:00Z`).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC' }) : ' '}
         title="Dashboard"
       />
       {q.status === 'ready' ? <DashboardBody d={q.data} /> : <LoadState error={q.error} onRetry={q.reload} minHeight={720} />}
@@ -24,7 +23,11 @@ export function DashboardPage() {
 }
 
 function DashboardBody({ d }: { d: DashboardData }) {
-  const slateDone = d.slate.filter((s) => s.done >= s.total).length;
+  const items = d.slate.items;
+  const slateDone = items.filter((s) => s.done).length;
+  // No xpToday on the wire (W-7): today's heatmap row is the server's own number for it.
+  const xpToday = d.heatmap.find((h) => h.day === d.today)?.xp ?? 0;
+  const tokens = Math.min(d.streak.tokens, FREEZE_TOKENS_MAX);
   return (
     <div className="dash">
       <div className="tiles">
@@ -37,15 +40,15 @@ function DashboardBody({ d }: { d: DashboardData }) {
             <span className="tile-unit">days</span>
           </div>
           <div className="tile-meta">
-            <span className="freeze" aria-label={`${d.streak.freezeTokens} of ${d.streak.freezeTokensMax} freeze tokens banked`}>
-              {Array.from({ length: d.streak.freezeTokensMax }, (_, i) => (
-                <span key={i} className={`freeze-token${i < d.streak.freezeTokens ? ' freeze-on' : ''}`}>
+            <span className="freeze" aria-label={`${d.streak.tokens} of ${FREEZE_TOKENS_MAX} freeze tokens banked`}>
+              {Array.from({ length: FREEZE_TOKENS_MAX }, (_, i) => (
+                <span key={i} className={`freeze-token${i < tokens ? ' freeze-on' : ''}`}>
                   <Icon name="snow" size={14} />
                 </span>
               ))}
             </span>
-            <span title={`Next freeze token after ${d.streak.slateDaysToNextToken} more slate-days`}>
-              +1 in {d.streak.slateDaysToNextToken}d · best {d.streak.longest}
+            <span title="Slate-days banked toward the next freeze token">
+              {d.streak.slateDaysBanked} banked · best {d.streak.longest}
             </span>
           </div>
         </section>
@@ -55,15 +58,15 @@ function DashboardBody({ d }: { d: DashboardData }) {
             <Icon name="bolt" /> Level
           </h2>
           <div className="tile-value">
-            {d.level.level}
-            <span className="tile-unit">{fmtInt(d.level.xpTotal)} XP</span>
+            {d.xp.level}
+            <span className="tile-unit">{fmtInt(d.xp.total)} XP</span>
           </div>
-          <ProgressBar value={d.level.xpIntoLevel} max={d.level.xpLevelSpan} label={`Progress to level ${d.level.level + 1}`} />
+          <ProgressBar value={d.xp.intoLevel} max={d.xp.levelSpan} label={`Progress to level ${d.xp.level + 1}`} />
           <div className="tile-meta">
             <span>
-              {fmtInt(d.level.xpIntoLevel)} / {fmtInt(d.level.xpLevelSpan)} to L{d.level.level + 1}
+              {fmtInt(d.xp.intoLevel)} / {fmtInt(d.xp.levelSpan)} to L{d.xp.level + 1}
             </span>
-            <span className="pos">+{d.level.xpToday} today</span>
+            <span className="pos">+{xpToday} today</span>
           </div>
         </section>
 
@@ -72,11 +75,11 @@ function DashboardBody({ d }: { d: DashboardData }) {
             <Icon name="cards" /> Review queue
           </h2>
           <div className="tile-value">
-            {d.reviewDue}
+            {d.reviewQueue.due}
             <span className="tile-unit">due</span>
           </div>
           <div className="tile-meta">
-            {d.reviewDue > 0 ? (
+            {d.reviewQueue.due > 0 ? (
               <Link to="/review" className="btn btn-sm btn-primary">
                 Start review <Kbd>g</Kbd>
                 <Kbd>r</Kbd>
@@ -93,11 +96,11 @@ function DashboardBody({ d }: { d: DashboardData }) {
           </h2>
           <div className="tile-value">
             {slateDone}
-            <span className="tile-unit">/ {d.slate.length} cleared</span>
+            <span className="tile-unit">/ {items.length} cleared</span>
           </div>
-          <ProgressBar value={slateDone} max={d.slate.length} label="Slate items cleared" tone="success" />
+          <ProgressBar value={slateDone} max={items.length} label="Slate items cleared" tone="success" />
           <div className="tile-meta">
-            <span>{d.streak.todayCounts ? 'Today already counts for the streak' : 'Earn 20 XP to keep the streak'}</span>
+            <span>{d.streak.todayComplete ? 'Slate complete — today counts' : 'Clear the slate (or earn 20 XP) to keep the streak'}</span>
           </div>
         </section>
       </div>
@@ -108,18 +111,14 @@ function DashboardBody({ d }: { d: DashboardData }) {
         </Panel>
         <Panel title="Today's slate" labelledBy="p-slate" className="dash-slate">
           <ul className="slate">
-            {d.slate.map((s) => (
-              <SlateRow key={s.id} s={s} />
+            {items.map((s) => (
+              <SlateRow key={s.slot} s={s} />
             ))}
           </ul>
         </Panel>
       </div>
 
-      <Panel
-        title="Competencies"
-        labelledBy="p-comp"
-        aside={<span className="muted">rated 1–5 · never averaged · promotion = artifact + explain-back + retest</span>}
-      >
+      <Panel title="Competencies" labelledBy="p-comp" aside={<span className="muted">rated 1–5 · never averaged · promotion legs land in W6</span>}>
         <CompetencyTable rows={d.competencies} today={d.today} />
       </Panel>
 
@@ -127,56 +126,56 @@ function DashboardBody({ d }: { d: DashboardData }) {
         <ul className="nextup">
           {d.nextUp.map((n) => (
             <li key={n.trackId}>
-              <Link to={n.href} className="nextup-card">
-                <span className={`track-badge track-${n.trackId}`}>{TRACK_LABEL[n.trackId]}</span>
-                <span className="nextup-title">{n.title}</span>
-                <span className="nextup-meta">
-                  {n.actTitle} · {n.kind}
-                </span>
-              </Link>
+              {n.unit ? (
+                <Link to={`/play/${n.unit.id}`} className="nextup-card">
+                  <span className={`track-badge track-${n.trackId}`}>{TRACK_LABEL[n.trackId]}</span>
+                  <span className="nextup-title">{n.unit.title}</span>
+                  <span className="nextup-meta">{n.unit.kind}</span>
+                </Link>
+              ) : (
+                <div className="nextup-card nextup-locked" aria-disabled="true">
+                  <span className="track-badge">{TRACK_LABEL[n.trackId]}</span>
+                  <span className="nextup-title">Nothing available</span>
+                  <span className="nextup-meta">locked, or every unit is done</span>
+                </div>
+              )}
             </li>
           ))}
-          <li>
-            <div className="nextup-card nextup-locked" aria-disabled="true">
-              <span className="track-badge">Java</span>
-              <span className="nextup-title">
-                <Icon name="lock" size={14} /> Locked track
-              </span>
-              <span className="nextup-meta">Schema-ready; content after V1</span>
-            </div>
-          </li>
         </ul>
       </Panel>
     </div>
   );
 }
 
-function SlateRow({ s }: { s: SlateItem }) {
-  const done = s.done >= s.total;
-  return (
-    <li className={`slate-row${done ? ' slate-done' : ''}`}>
-      <span className={`slate-check${done ? ' on' : ''}`} aria-hidden="true">
-        {done && <Icon name="check" size={12} />}
-      </span>
-      <Link to={s.href} className="slate-label">
-        {s.label}
-        <span className="sr-only">{done ? ' (done)' : ` (${s.done} of ${s.total})`}</span>
-      </Link>
-      <span className="slate-count" aria-hidden="true">
-        {s.done}/{s.total}
-      </span>
-    </li>
-  );
+function slateView(s: SlateItem): { label: string; href: string } {
+  switch (s.kind) {
+    case 'drill-set': {
+      const track = s.track && isTrackId(s.track) ? (s.track as TrackId) : null;
+      const label = `${track ? TRACK_LABEL[track] : (s.track ?? '')} drill set${s.size ? ` (${s.size} drills)` : ''}`.trim();
+      return { label, href: track ? `/campaign/${track}` : '/campaign' };
+    }
+    case 'campaign-step':
+      return { label: 'Campaign step', href: '/campaign' };
+    case 'review-clear':
+      return { label: 'Clear the review queue', href: '/review' };
+  }
 }
 
-const LEG_TEXT: Record<PromotionLegState, string> = { done: 'done', pending: 'pending', scheduled: 'scheduled', failed: 'failed' };
-const LEG_TONE: Record<PromotionLegState, string> = { done: 'success', pending: 'neutral', scheduled: 'info', failed: 'danger' };
-
-function Leg({ name, state, detail }: { name: string; state: PromotionLegState; detail?: string | null }) {
+function SlateRow({ s }: { s: SlateItem }) {
+  const { label, href } = slateView(s);
   return (
-    <Chip tone={LEG_TONE[state]}>
-      <span className="leg-name">{name}</span> {detail ?? LEG_TEXT[state]}
-    </Chip>
+    <li className={`slate-row${s.done ? ' slate-done' : ''}`} data-slot={s.slot}>
+      <span className={`slate-check${s.done ? ' on' : ''}`} aria-hidden="true">
+        {s.done && <Icon name="check" size={12} />}
+      </span>
+      <Link to={href} className="slate-label">
+        {label}
+        <span className="sr-only">{s.done ? ' (done)' : ' (open)'}</span>
+      </Link>
+      <span className="slate-count" aria-hidden="true">
+        {s.done ? 'done' : 'open'}
+      </span>
+    </li>
   );
 }
 
@@ -188,44 +187,23 @@ export function CompetencyTable({ rows, today }: { rows: CompetencyRow[]; today:
           <tr>
             <th scope="col">Competency</th>
             <th scope="col">Rating</th>
-            <th scope="col">Promotion</th>
             <th scope="col">Last evidence</th>
           </tr>
         </thead>
         <tbody>
           {rows.map((r) => (
             <tr key={r.id} data-competency={r.id}>
-              <th scope="row">{r.label}</th>
+              <th scope="row">{r.name}</th>
               <td>
-                <RatingPips rating={r.rating} target={r.promotion?.targetRating} />
-              </td>
-              <td>
-                {r.promotion ? (
-                  <span className="legs">
-                    <Leg name="Artifact" state={r.promotion.artifact} />
-                    <Leg
-                      name="Explain"
-                      state={r.promotion.explainBack}
-                      detail={r.promotion.explainBackCoverage !== null ? `${Math.round(r.promotion.explainBackCoverage * 100)}%` : null}
-                    />
-                    <Leg
-                      name="Retest"
-                      state={r.promotion.retest}
-                      detail={r.promotion.retestDueAt ? fmtShortDate(r.promotion.retestDueAt) : null}
-                    />
-                  </span>
-                ) : (
-                  <span className="muted">—</span>
-                )}
+                <RatingPips rating={r.rating} />
               </td>
               <td className="evidence-cell">
                 {r.lastEvidence ? (
-                  <Link to={`/stats#evidence-${r.lastEvidence.id}`} className="evidence-link" title={r.lastEvidence.summary}>
-                    <span className="evidence-summary">{r.lastEvidence.summary}</span>
-                    <span className="evidence-meta">
-                      {fmtRelative(today, r.lastEvidence.at)} · {r.lastEvidence.assessor}
-                      {r.lastEvidence.assisted && <Chip tone="warning">assisted</Chip>}
+                  <Link to={`/stats#evidence-${r.lastEvidence.id}`} className="evidence-link">
+                    <span className="evidence-summary">
+                      {r.lastEvidence.kind} · #{r.lastEvidence.id}
                     </span>
+                    <span className="evidence-meta">{fmtRelative(today, dayOfMs(r.lastEvidence.createdAt))}</span>
                   </Link>
                 ) : (
                   <span className="evidence-missing">

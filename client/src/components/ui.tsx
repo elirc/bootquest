@@ -1,5 +1,6 @@
 // Small presentational primitives shared by every screen.
 import type { ReactNode } from 'react';
+import { errorText } from '../api/errors';
 import { pct } from '../lib/format';
 
 export function Kbd({ children }: { children: ReactNode }) {
@@ -106,7 +107,7 @@ export function LoadState({ error, onRetry, minHeight = 240 }: { error?: Error; 
   if (error) {
     return (
       <div className="loadstate loadstate-error" role="alert" style={{ minHeight }}>
-        <p>{error.message}</p>
+        <p>{errorText(error)}</p>
         {onRetry && (
           <button type="button" className="btn" onClick={onRetry}>
             Retry

@@ -1,13 +1,24 @@
 /// <reference types="vitest/config" />
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
+// The client binds to the server contract in shared/src/api.ts. The alias resolves it the
+// same way in an isolated checkout and in the npm-workspace repo (where the workspace
+// symlink would also resolve it). The client only ever imports TYPES from it, so no
+// shared/zod code ends up in the bundle.
+const sharedApi = fileURLToPath(new URL('../shared/src/api.ts', import.meta.url));
+
 export default defineConfig({
   plugins: [react()],
+  resolve: {
+    alias: { '@bootquest/shared/api': sharedApi },
+  },
   server: {
     port: 5173,
     strictPort: true,
-    // W1b: proxy /api to the Express server here when the real client is bound.
+    // Pinned to IPv4: the API server probes/listens on 127.0.0.1 only (w1b-review #13c).
+    proxy: { '/api': { target: 'http://127.0.0.1:4178' } },
   },
   build: {
     target: 'es2022',

@@ -1,7 +1,6 @@
 import { z } from 'zod';
 import { CheckSpec } from './check.ts';
 import {
-  Assessor,
   Assistance,
   AttemptMode,
   AttemptOutcome,

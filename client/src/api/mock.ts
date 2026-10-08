@@ -1,49 +1,69 @@
 // Fixture-backed implementation of BootQuestApi. No network, deterministic.
-// State (graded cards, awarded attempts) lives per instance, so tests can make a fresh one.
+// It mirrors the SERVER's semantics, not just its shapes:
+//  - run on quiz / predict-output -> 409 RUN_NOT_AVAILABLE (a free run would be an answer oracle)
+//  - a wrong quiz / predict submit never reveals the key; only POST /reveal does
+//  - reveal is recorded per unit; afterwards every submit is mode 'guided' with 0 XP ('revealed')
+//  - GET /solution -> 403 NOT_REVEALED until revealed
+//  - self-attest: reading units only (409 WRONG_UNIT_KIND), once (409 ALREADY_ATTESTED)
+//  - submit bodies are strict: exactly one of code/answer + boolean selfAssisted (anything else -> 400 VALIDATION)
+// State lives per instance, so tests can make a fresh one.
 
-import campaignsJson from './fixtures/campaigns.json';
 import competenciesJson from './fixtures/competencies.json';
 import dashboardJson from './fixtures/dashboard.json';
-import exercisesJson from './fixtures/exercises.json';
 import heatmapJson from './fixtures/heatmap.json';
 import reviewQueueJson from './fixtures/review-queue.json';
 import tracksJson from './fixtures/tracks.json';
-import { toRoman } from '../lib/format';
+import unitDetailsJson from './fixtures/unit-details.json';
+import unitsJson from './fixtures/units.json';
 import {
-  ApiNotFoundError,
-  type Assistance,
+  ApiError,
   type BootQuestApi,
-  type Campaign,
-  type CampaignStep,
-  type CompetencyRow,
+  type CanonicalRunResult,
+  type CompetencyId,
   type Dashboard,
-  type Exercise,
-  type ExerciseLanguage,
+  type GradeResponse,
   type HeatmapDay,
-  type ReviewCard,
+  type PublicCheck,
+  type RevealResponse,
   type ReviewGrade,
-  type RunResult,
-  type Track,
+  type ReviewQueueItem,
   type TrackId,
+  type TracksResponse,
+  type UnitDetail,
+  type UnitSummary,
 } from './types';
 
-/** Fixture-only fields that never cross the API boundary. */
-interface ExerciseFixture extends Exercise {
-  mock?: { passWhenIncludes: string; failRun: RunResult; passRun: RunResult };
-  answer?: { correctIndex: number; explanation: string };
+/** Private, fixture-only grading material. Never crosses the API boundary. */
+interface PrivateFixture {
+  passWhenIncludes?: string;
+  failResult?: CanonicalRunResult;
+  passResult?: CanonicalRunResult;
+  answerKey?: number | string;
+  expected?: string;
+  solution?: RevealResponse['solution'];
 }
 
-type DashboardBase = Omit<Dashboard, 'heatmap' | 'competencies' | 'reviewDue'>;
+interface DetailFixture {
+  code: string | null;
+  competencies: CompetencyId[];
+  instructions?: string | string[];
+  prompt?: string;
+  check: { id: number; threshold: number | null; spec: PublicCheck } | null;
+  starter: string | null;
+  private: PrivateFixture;
+}
+
+type DashboardBase = Omit<Dashboard, 'heatmap' | 'competencies' | 'reviewQueue'>;
 
 // JSON imports widen string unions to `string`; the fixture contract test pins their shape.
 const fx = {
   dashboard: dashboardJson as unknown as DashboardBase,
   heatmap: heatmapJson as unknown as HeatmapDay[],
-  competencies: competenciesJson as unknown as CompetencyRow[],
-  tracks: tracksJson as unknown as Track[],
-  campaigns: campaignsJson as unknown as Record<TrackId, Campaign>,
-  exercises: exercisesJson as unknown as ExerciseFixture[],
-  reviewQueue: reviewQueueJson as unknown as ReviewCard[],
+  competencies: competenciesJson as unknown as Dashboard['competencies'],
+  tracks: tracksJson as unknown as TracksResponse,
+  units: unitsJson as unknown as Record<TrackId, UnitSummary[]>,
+  details: unitDetailsJson as unknown as Record<string, DetailFixture>,
+  reviewQueue: reviewQueueJson as unknown as ReviewQueueItem[],
 };
 
 export const fixtures = fx;
@@ -51,51 +71,12 @@ export const fixtures = fx;
 const clone = <T>(v: T): T => structuredClone(v);
 const DAY_MS = 86_400_000;
 const GRADE_DAYS: Record<ReviewGrade, number> = { again: 0, hard: 1, good: 3, easy: 7 };
-const LANG: Record<TrackId, ExerciseLanguage> = {
-  js: 'typescript',
-  csharp: 'csharp',
-  java: 'javascript',
-  agentic: 'typescript',
-};
+/** Mock "now": end of the fixture's today, so every fixture card is due. */
+const NOW = Date.parse(`${fx.dashboard.today}T23:00:00Z`);
+const READING_XP = 5;
+const SUBMIT_KEYS = new Set(['code', 'answer', 'selfAssisted']);
 
-function findStep(unitId: string): { step: CampaignStep; trackId: TrackId; act: string } | null {
-  for (const campaign of Object.values(fx.campaigns)) {
-    for (const act of campaign.acts) {
-      const step = act.steps.find((s) => s.unitId === unitId);
-      if (step) return { step, trackId: campaign.trackId, act: `Act ${toRoman(act.ordinal)} · ${act.title}` };
-    }
-  }
-  return null;
-}
-
-/** Campaign steps without a hand-written fixture get a generic shell so every link resolves. */
-function synthesize(unitId: string): ExerciseFixture | null {
-  const hit = findStep(unitId);
-  if (!hit) return null;
-  const track = fx.tracks.find((t) => t.id === hit.trackId);
-  return {
-    id: unitId,
-    trackId: hit.trackId,
-    title: hit.step.title,
-    kind: hit.step.kind,
-    difficulty: 2,
-    xp: hit.step.xp,
-    language: LANG[hit.trackId],
-    competencies: ['feature-delivery'],
-    breadcrumb: [track?.name ?? hit.trackId, hit.act],
-    instructions: [
-      `Mock unit — the real instructions for “${hit.step.title}” are rendered from the source repo once W4 sync lands.`,
-      hit.step.repo ? `Source: ${hit.step.repo}` : 'Source: seeded campaign content.',
-    ],
-    starterCode: '// Write your solution here.\n',
-    quiz: null,
-  };
-}
-
-function strip(e: ExerciseFixture): Exercise {
-  const { mock: _mock, answer: _answer, ...pub } = e;
-  return clone(pub);
-}
+const err = (status: number, code: ApiError['code'], message: string) => new ApiError(status, code, message);
 
 export interface MockApiOptions {
   /** Artificial latency per call (ms). 0 = resolve on the next microtask. */
@@ -104,98 +85,219 @@ export interface MockApiOptions {
 
 export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
   const latency = opts.latencyMs ?? 0;
-  const graded = new Set<string>();
-  const awarded = new Set<string>();
+  const units = clone(fx.units);
+  const graded = new Set<number>();
+  const awarded = new Set<number>();
+  const revealed = new Map<number, number>(); // unitId -> reveal attemptId
+  const attested = new Set<number>();
+  let nextId = 5000;
 
   const respond = <T>(value: T): Promise<T> =>
     latency > 0
       ? new Promise((resolve) => setTimeout(() => resolve(clone(value)), latency))
       : Promise.resolve(clone(value));
-  const fail = (what: string): Promise<never> => Promise.reject(new ApiNotFoundError(what));
+  const reject = (e: ApiError): Promise<never> =>
+    latency > 0 ? new Promise((_, rej) => setTimeout(() => rej(e), latency)) : Promise.reject(e);
 
-  const exercise = (unitId: string): ExerciseFixture | null =>
-    fx.exercises.find((e) => e.id === unitId) ?? synthesize(unitId);
+  const allUnits = () => Object.values(units).flat();
+  const findUnit = (id: number) => allUnits().find((u) => u.id === id) ?? null;
+  const trackOf = (id: TrackId) => fx.tracks.tracks.find((t) => t.id === id)!;
 
-  const run = (e: ExerciseFixture, code: string): RunResult => {
-    if (e.mock) return code.includes(e.mock.passWhenIncludes) && !code.includes('TODO') ? e.mock.passRun : e.mock.failRun;
-    const empty = code.trim() === '' || code.trim() === e.starterCode.trim();
-    return {
-      verdict: empty ? 'todo' : 'pass',
-      durationMs: 120,
-      tests: [
-        {
-          name: 'mock check: solution differs from starter',
-          status: empty ? 'todo' : 'pass',
-          message: empty ? 'No changes from the starter code yet.' : null,
-          expected: null,
-          actual: null,
-        },
-      ],
-      stdout: '',
-      stderr: '',
-    };
+  function detail(u: UnitSummary): DetailFixture {
+    return (
+      fx.details[String(u.id)] ?? {
+        code: null,
+        competencies: ['feature-delivery'],
+        check: null,
+        starter: null,
+        private: {},
+      }
+    );
+  }
+
+  /** Common guards, in the server's order: 404 unit, 403 locked track, 409 no check. */
+  function guard(id: number, { needCheck }: { needCheck: boolean }) {
+    const u = findUnit(id);
+    if (!u) throw err(404, 'NOT_FOUND', `unit ${id} not found`);
+    if (trackOf(u.trackId).locked) throw err(403, 'TRACK_LOCKED', `track ${u.trackId} is locked`);
+    const d = detail(u);
+    if (needCheck && !d.check) throw err(409, 'NO_CHECK', `unit ${id} has no check`);
+    return { u, d, spec: d.check?.spec ?? null };
+  }
+
+  function grade(d: DetailFixture, spec: PublicCheck, input: { code?: string; answer?: string | number }): CanonicalRunResult {
+    const p = d.private;
+    if (spec.type === 'quiz' || spec.type === 'predict-output') {
+      const key = spec.type === 'quiz' ? p.answerKey : p.expected;
+      const given = typeof input.answer === 'string' ? input.answer.trim() : input.answer;
+      const pass = given !== undefined && String(given) === String(key);
+      // A wrong answer says "incorrect" and nothing else: no key, no expected output.
+      return { pass, output: '', failures: pass ? [] : [{ name: 'answer', message: 'Incorrect answer' }], durationMs: 3 };
+    }
+    const code = input.code ?? '';
+    if (p.passWhenIncludes && p.passResult && p.failResult) {
+      return code.includes(p.passWhenIncludes) && !code.includes('TODO') ? p.passResult : p.failResult;
+    }
+    const empty = code.trim() === '' || code.trim() === (d.starter ?? '').trim();
+    return empty
+      ? { pass: false, output: '', failures: [{ name: 'mock check', message: 'No changes from the starter code yet.' }], durationMs: 120 }
+      : { pass: true, output: 'mock check passed', failures: [], durationMs: 120 };
+  }
+
+  function validateSubmission(body: unknown): { code?: string; answer?: string | number; selfAssisted: boolean } {
+    const b = (body ?? {}) as Record<string, unknown>;
+    const extra = Object.keys(b).filter((k) => !SUBMIT_KEYS.has(k));
+    if (extra.length) throw err(400, 'VALIDATION', `unrecognized key(s): ${extra.join(', ')}`);
+    if ((b.code === undefined) === (b.answer === undefined)) throw err(400, 'VALIDATION', 'provide exactly one of `code` or `answer`');
+    if (b.selfAssisted !== undefined && typeof b.selfAssisted !== 'boolean') throw err(400, 'VALIDATION', 'selfAssisted must be boolean');
+    return { code: b.code as string | undefined, answer: b.answer as string | number | undefined, selfAssisted: b.selfAssisted === true };
+  }
+
+  const xpFor = (u: UnitSummary, spec: PublicCheck): number =>
+    spec.type === 'quiz' ? 2 : spec.type === 'predict-output' ? 4 : 10 * (u.difficulty ?? 1);
+
+  const queue = () => fx.reviewQueue.filter((c) => !graded.has(c.id) && c.dueAt <= NOW);
+
+  const wrap = <T>(fn: () => T): Promise<T> => {
+    try {
+      return respond(fn());
+    } catch (e) {
+      return reject(e instanceof ApiError ? e : err(500, 'INTERNAL', String(e)));
+    }
   };
 
-  const queue = () => fx.reviewQueue.filter((c) => !graded.has(c.id));
-
   return {
-    getDashboard() {
-      const d: Dashboard = {
+    getHealth: () => wrap(() => ({ ok: true as const, version: 'mock', counts: { units: allUnits().length, checks: Object.values(fx.details).filter((d) => d.check).length } })),
+
+    getDashboard: () =>
+      wrap(() => ({
         ...fx.dashboard,
         heatmap: fx.heatmap,
         competencies: fx.competencies,
-        reviewDue: queue().length,
-      };
-      return respond(d);
-    },
-    getTracks: () => respond(fx.tracks),
-    getCampaign(trackId) {
-      const c = fx.campaigns[trackId];
-      return c ? respond(c) : fail(`campaign ${trackId}`);
-    },
-    getExercise(unitId) {
-      const e = exercise(unitId);
-      return e ? respond(strip(e)) : fail(`unit ${unitId}`);
-    },
-    runExercise(unitId, code) {
-      const e = exercise(unitId);
-      return e ? respond(run(e, code)) : fail(`unit ${unitId}`);
-    },
-    submitAttempt(unitId: string, code: string, assistance: Assistance) {
-      const e = exercise(unitId);
-      if (!e) return fail(`unit ${unitId}`);
-      const result = run(e, code);
-      const passed = result.verdict === 'pass';
-      let xpAwarded = 0;
-      let xpZeroReason: 'revealed' | 'already-awarded' | null = null;
-      if (assistance === 'reveal') xpZeroReason = 'revealed';
-      else if (passed && awarded.has(unitId)) xpZeroReason = 'already-awarded';
-      else if (passed) {
-        xpAwarded = e.xp;
-        awarded.add(unitId);
-      }
-      return respond({ attemptId: `att-mock-${Date.now().toString(36)}`, run: result, xpAwarded, xpZeroReason });
-    },
-    submitQuizAnswer(unitId, choiceIndex) {
-      const e = exercise(unitId);
-      if (!e?.answer) return fail(`quiz ${unitId}`);
-      const correct = choiceIndex === e.answer.correctIndex;
-      return respond({
-        correct,
-        correctIndex: e.answer.correctIndex,
-        explanation: e.answer.explanation,
-        xpAwarded: correct ? e.xp : 0,
-      });
-    },
-    getReviewQueueCount: () => respond({ due: queue().length, newToday: 3 }),
-    getReviewQueue: () => respond(queue()),
-    gradeReview(cardId, grade) {
-      if (!fx.reviewQueue.some((c) => c.id === cardId)) return fail(`card ${cardId}`);
-      graded.add(cardId);
-      const today = Date.parse(`${fx.dashboard.today}T12:00:00Z`);
-      const nextDueAt = new Date(today + GRADE_DAYS[grade] * DAY_MS).toISOString();
-      return respond({ cardId, grade, nextDueAt, xpAwarded: 1 });
-    },
+        reviewQueue: { due: queue().length },
+      })),
+
+    getTracks: () =>
+      wrap(() => ({
+        tracks: fx.tracks.tracks.map((t) => ({
+          ...t,
+          unitCount: units[t.id]?.length ?? 0,
+          doneCount: units[t.id]?.filter((u) => u.state === 'done').length ?? 0,
+        })),
+      })),
+
+    getTrackUnits: (trackId) =>
+      wrap(() => {
+        const track = fx.tracks.tracks.find((t) => t.id === trackId);
+        if (!track) throw err(404, 'NOT_FOUND', `track ${trackId} not found`);
+        const list = units[trackId] ?? [];
+        return { track: { ...track, unitCount: list.length, doneCount: list.filter((u) => u.state === 'done').length }, units: list };
+      }),
+
+    getUnit: (id) =>
+      wrap((): UnitDetail => {
+        const u = findUnit(id);
+        if (!u) throw err(404, 'NOT_FOUND', `unit ${id} not found`);
+        const d = detail(u);
+        const unit: UnitDetail['unit'] = { ...u, code: d.code, competencies: d.competencies, variationOfUnitId: null };
+        // Server contract (W2): prose lives at the top level; a quiz serves its
+        // question as `instructions`. snippet/rubric arrive with real packs.
+        const instructions = Array.isArray(d.instructions)
+          ? d.instructions.join('\n\n')
+          : (d.instructions ?? d.prompt ?? null);
+        return { unit, check: d.check, starter: d.starter, instructions, snippet: null, rubric: null };
+      }),
+
+    runUnit: (id, input) =>
+      wrap(() => {
+        const { d, spec } = guard(id, { needCheck: true });
+        if (spec!.type === 'quiz' || spec!.type === 'predict-output') {
+          throw err(409, 'RUN_NOT_AVAILABLE', `${spec!.type} checks are submit-only (a free run would reveal the answer)`);
+        }
+        const body = validateSubmission(input);
+        return { result: grade(d, spec!, body) };
+      }),
+
+    submitUnit: (id, submission) =>
+      wrap(() => {
+        const { u, d, spec } = guard(id, { needCheck: true });
+        const body = validateSubmission(submission);
+        const result = grade(d, spec!, body);
+        const wasRevealed = revealed.has(id);
+        const mode = wasRevealed ? 'guided' : body.selfAssisted ? 'assisted' : 'solo';
+        let xp: GradeResponse['xp'] | null = null;
+        if (result.pass) {
+          if (wasRevealed) xp = { id: nextId++, amount: 0, reason: 'revealed' };
+          else if (awarded.has(id)) xp = { id: nextId++, amount: 0, reason: 'already-awarded' };
+          else {
+            xp = { id: nextId++, amount: xpFor(u, spec!), reason: null };
+            awarded.add(id);
+          }
+          u.state = 'done';
+        }
+        return {
+          result,
+          verdict: result.pass ? ('pass' as const) : ('fail' as const),
+          attempt: { id: nextId++, mode, outcome: result.pass ? 'pass' : 'fail' },
+          runId: nextId++,
+          xp,
+          evidenceIds: result.pass ? [nextId++] : [],
+        };
+      }),
+
+    revealUnit: (id) =>
+      wrap((): RevealResponse => {
+        const { u, d } = guard(id, { needCheck: true });
+        const solution = d.private.solution;
+        if (!solution) throw err(404, 'NO_SOLUTION', `unit ${id} has no reference solution in the content store`);
+        if (!revealed.has(id)) revealed.set(id, nextId++);
+        u.revealed = true;
+        return { attemptId: revealed.get(id)!, variationUnitId: null, solution };
+      }),
+
+    getSolution: (id) =>
+      wrap((): RevealResponse => {
+        const u = findUnit(id);
+        if (!u) throw err(404, 'NOT_FOUND', `unit ${id} not found`);
+        const attemptId = revealed.get(id);
+        if (attemptId === undefined) throw err(403, 'NOT_REVEALED', `unit ${id} has not been revealed`);
+        const solution = detail(u).private.solution;
+        if (!solution) throw err(404, 'NO_SOLUTION', `unit ${id} has no reference solution in the content store`);
+        return { attemptId, variationUnitId: null, solution };
+      }),
+
+    selfAttest: (id) =>
+      wrap(() => {
+        const { u } = guard(id, { needCheck: false });
+        if (u.kind !== 'reading') throw err(409, 'WRONG_UNIT_KIND', `self-attest is for reading units; unit ${id} is ${u.kind}`);
+        if (attested.has(id)) throw err(409, 'ALREADY_ATTESTED', `unit ${id} was already attested`);
+        attested.add(id);
+        u.state = 'done';
+        return { attemptId: nextId++, xp: { id: nextId++, amount: READING_XP, reason: null } };
+      }),
+
+    getReviewQueue: (limit) =>
+      wrap(() => {
+        const due = queue();
+        return { count: due.length, items: limit === undefined ? due : due.slice(0, limit) };
+      }),
+
+    gradeReview: (itemId, g) =>
+      wrap((): GradeResponse => {
+        const item = fx.reviewQueue.find((c) => c.id === itemId);
+        if (!item) throw err(404, 'NOT_FOUND', `review item ${itemId} not found`);
+        if (graded.has(itemId) || item.dueAt > NOW) throw err(409, 'NOT_DUE', `review item ${itemId} is not due`);
+        graded.add(itemId);
+        return {
+          itemId,
+          grade: g,
+          prevDueAt: item.dueAt,
+          nextDueAt: NOW + GRADE_DAYS[g] * DAY_MS,
+          xp: { id: nextId++, amount: 1, reason: null },
+          demotion: null,
+          remainingDue: queue().length,
+        };
+      }),
   };
 }
 
