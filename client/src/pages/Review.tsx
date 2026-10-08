@@ -1,0 +1,138 @@
+import { useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { useApi } from '../api/context';
+import type { ReviewCard, ReviewGrade } from '../api/types';
+import { Icon } from '../components/Icon';
+import { Chip, Kbd, LoadState, PageHeader, ProgressBar } from '../components/ui';
+import { hasModifier, isEditableTarget, useKeydown } from '../lib/keys';
+import { useAsync } from '../lib/useAsync';
+
+export const GRADES: { grade: ReviewGrade; key: string; label: string; hint: string }[] = [
+  { grade: 'again', key: '1', label: 'Again', hint: 'forgot' },
+  { grade: 'hard', key: '2', label: 'Hard', hint: 'struggled' },
+  { grade: 'good', key: '3', label: 'Good', hint: 'recalled' },
+  { grade: 'easy', key: '4', label: 'Easy', hint: 'instant' },
+];
+
+export function ReviewPage() {
+  const api = useApi();
+  const q = useAsync(() => api.getReviewQueue(), [api]);
+  return (
+    <>
+      <PageHeader eyebrow="Spaced repetition" title="Review session" />
+      {q.status === 'ready' ? <Session cards={q.data} /> : <LoadState error={q.error} onRetry={q.reload} minHeight={420} />}
+    </>
+  );
+}
+
+function Session({ cards }: { cards: ReviewCard[] }) {
+  const api = useApi();
+  const [index, setIndex] = useState(0);
+  const [revealed, setRevealed] = useState(false);
+  const [xp, setXp] = useState(0);
+  const [tally, setTally] = useState<Record<ReviewGrade, number>>({ again: 0, hard: 0, good: 0, easy: 0 });
+  const [error, setError] = useState<string | null>(null);
+  const busy = useRef(false);
+  const card = cards[index];
+
+  const grade = async (g: ReviewGrade) => {
+    if (!card || !revealed || busy.current) return;
+    busy.current = true;
+    try {
+      const r = await api.gradeReview(card.id, g);
+      setXp((x) => x + r.xpAwarded);
+      setTally((t) => ({ ...t, [g]: t[g] + 1 }));
+      setRevealed(false);
+      setIndex((i) => i + 1);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      busy.current = false;
+    }
+  };
+
+  useKeydown((e) => {
+    if (!card || hasModifier(e) || isEditableTarget(e.target)) return;
+    if (!revealed && (e.key === ' ' || e.key === 'Enter')) {
+      e.preventDefault();
+      setRevealed(true);
+      return;
+    }
+    const hit = GRADES.find((g) => g.key === e.key);
+    if (hit && revealed) {
+      e.preventDefault();
+      void grade(hit.grade);
+    }
+  });
+
+  if (cards.length === 0 || !card) {
+    return (
+      <div className="panel review-done" role="status">
+        <Icon name="check" size={24} />
+        <h2>{cards.length === 0 ? 'Nothing due' : 'Queue cleared'}</h2>
+        {cards.length > 0 && (
+          <p>
+            {cards.length} cards · +{xp} XP · {GRADES.map((g) => `${g.label} ${tally[g.grade]}`).join(' · ')}
+          </p>
+        )}
+        <Link to="/" className="btn">
+          Back to dashboard
+        </Link>
+      </div>
+    );
+  }
+
+  return (
+    <div className="review">
+      <div className="review-progress">
+        <span>
+          Card <strong>{index + 1}</strong> of {cards.length}
+        </span>
+        <ProgressBar value={index} max={cards.length} label="Review progress" tone="info" />
+        <span className="muted">+{xp} XP</span>
+      </div>
+
+      <article className={`card${revealed ? ' card-revealed' : ''}`} aria-live="polite">
+        <header className="card-meta">
+          <Chip>{card.trackId}</Chip>
+          <Chip>{card.competency}</Chip>
+          <span className="muted small">{card.source}</span>
+        </header>
+        <div className="card-face">
+          <p className="card-front">{card.front}</p>
+          <div className="card-back-slot">
+            {revealed ? (
+              <p className="card-back" data-testid="card-back">
+                {card.back}
+              </p>
+            ) : (
+              <span className="muted">Recall the answer, then reveal.</span>
+            )}
+          </div>
+        </div>
+      </article>
+
+      <div className="grade-bar">
+        {revealed ? (
+          GRADES.map((g) => (
+            <button key={g.grade} type="button" className={`btn grade grade-${g.grade}`} onClick={() => void grade(g.grade)}>
+              <Kbd>{g.key}</Kbd>
+              <span className="grade-label">{g.label}</span>
+              <span className="grade-hint">{g.hint}</span>
+            </button>
+          ))
+        ) : (
+          <button type="button" className="btn btn-primary reveal" onClick={() => setRevealed(true)}>
+            Show answer <Kbd>Space</Kbd>
+          </button>
+        )}
+      </div>
+      {error && (
+        <p className="error-text" role="alert">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}

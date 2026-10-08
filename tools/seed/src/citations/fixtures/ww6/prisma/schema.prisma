@@ -1,0 +1,246 @@
+/// This schema defines the multi-tenant cost allocation domain model.
+/// Called by Prisma Client generation and migrations.
+/// It supports service/repository boundaries by keeping tenant-owned entities explicit.
+/// A junior engineer often forgets composite uniqueness (tenantId + natural key), which causes cross-tenant collisions.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  PLATFORM_ADMIN
+  FINOPS_ANALYST
+  TEAM_MANAGER
+  VIEWER
+}
+
+enum AllocationRunStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum BudgetTargetType {
+  TEAM
+  PROJECT
+}
+
+enum AnomalySeverity {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+model Tenant {
+  id              String          @id @default(cuid())
+  name            String
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  users           User[]
+  teams           Team[]
+  projects        Project[]
+  costLineItems   CostLineItem[]
+  allocationRules AllocationRule[]
+  allocationRuns  AllocationRun[]
+  allocationRes   AllocationResult[]
+  budgets         Budget[]
+  anomalies       Anomaly[]
+  forecasts       Forecast[]
+}
+
+model User {
+  id        String   @id @default(cuid())
+  tenantId  String
+  email     String
+  name      String
+  role      Role
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  // ⚠️ SENIOR NOTE: this composite uniqueness prevents same-email collisions from crossing tenant boundaries.
+  @@unique([tenantId, email])
+  @@index([tenantId, role])
+}
+
+model Team {
+  id          String    @id @default(cuid())
+  tenantId    String
+  name        String
+  costCenter  String
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  projects    Project[]
+  budgets     Budget[]
+  allocRules  AllocationRule[]
+  allocResult AllocationResult[]
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+}
+
+model Project {
+  id          String    @id @default(cuid())
+  tenantId    String
+  teamId      String
+  name        String
+  costCenter  String
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  team        Team      @relation(fields: [teamId], references: [id])
+  budgets     Budget[]
+  allocRules  AllocationRule[]
+  costItems   CostLineItem[]
+  allocResult AllocationResult[]
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@unique([tenantId, name])
+  @@index([tenantId, teamId])
+}
+
+model CostLineItem {
+  id                 String             @id @default(cuid())
+  tenantId           String
+  projectId          String?
+  cloudProvider      String
+  externalResourceId String
+  service            String
+  region             String?
+  usageDate          DateTime
+  amount             Decimal            @db.Decimal(12, 2)
+  currency           String             @default("USD")
+  tags               Json
+  source             String
+  ingestedAt         DateTime           @default(now())
+  project            Project?           @relation(fields: [projectId], references: [id])
+  allocationResults  AllocationResult[]
+  anomalies          Anomaly[]
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId, usageDate])
+  @@index([tenantId, service])
+}
+
+model AllocationRule {
+  id             String    @id @default(cuid())
+  tenantId       String
+  name           String
+  matchTagKey    String
+  matchTagValue  String
+  weightPercent  Decimal   @db.Decimal(5, 2)
+  targetTeamId   String?
+  targetProjectId String?
+  isActive       Boolean   @default(true)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  team           Team?     @relation(fields: [targetTeamId], references: [id])
+  project        Project?  @relation(fields: [targetProjectId], references: [id])
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId, isActive])
+}
+
+model AllocationRun {
+  id                String              @id @default(cuid())
+  tenantId          String
+  monthStart        DateTime
+  status            AllocationRunStatus @default(PENDING)
+  initiatedByUserId String
+  startedAt         DateTime?
+  completedAt       DateTime?
+  failureReason     String?
+  summaryJson       Json?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  results           AllocationResult[]
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId, monthStart, status])
+}
+
+model AllocationResult {
+  id               String   @id @default(cuid())
+  tenantId         String
+  runId            String
+  costLineItemId   String
+  allocatedTeamId  String?
+  allocatedProjectId String?
+  allocationPercent Decimal @db.Decimal(5, 2)
+  allocatedAmount   Decimal @db.Decimal(12, 2)
+  createdAt         DateTime @default(now())
+
+  run      AllocationRun @relation(fields: [runId], references: [id])
+  costItem CostLineItem  @relation(fields: [costLineItemId], references: [id])
+  team     Team?         @relation(fields: [allocatedTeamId], references: [id])
+  project  Project?      @relation(fields: [allocatedProjectId], references: [id])
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId, runId])
+}
+
+model Budget {
+  id               String          @id @default(cuid())
+  tenantId         String
+  targetType       BudgetTargetType
+  teamId           String?
+  projectId        String?
+  monthStart       DateTime
+  amount           Decimal         @db.Decimal(12, 2)
+  alertThresholdPct Decimal        @db.Decimal(5, 2)
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+  team             Team?           @relation(fields: [teamId], references: [id])
+  project          Project?        @relation(fields: [projectId], references: [id])
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId, monthStart])
+}
+
+model Anomaly {
+  id             String          @id @default(cuid())
+  tenantId       String
+  costLineItemId String
+  severity       AnomalySeverity
+  expectedAmount Decimal         @db.Decimal(12, 2)
+  actualAmount   Decimal         @db.Decimal(12, 2)
+  message        String
+  detectedAt     DateTime        @default(now())
+  resolvedAt     DateTime?
+
+  costItem CostLineItem @relation(fields: [costLineItemId], references: [id])
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId, detectedAt])
+}
+
+model Forecast {
+  id             String   @id @default(cuid())
+  tenantId       String
+  monthStart     DateTime
+  predictedTotal Decimal  @db.Decimal(12, 2)
+  method         String
+  confidenceLow  Decimal  @db.Decimal(12, 2)
+  confidenceHigh Decimal  @db.Decimal(12, 2)
+  createdAt      DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId, monthStart])
+}
