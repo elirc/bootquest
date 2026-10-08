@@ -223,6 +223,39 @@ Opus plan review (`docs/recon/plan-review.md`) returned 2 blockers + 17 majors;
   C# sweep) in main workspace; W3b-cli (bootquest CLI + bin shim + real
   server e2e) in a worktree from the 451b3b0 archive. W3c (HTTP/repo
   checks, jstrain import, Stryker spike) follows W3a.
+## 2026-10-08 — finish push (owner: "finish, use more opus agents")
+
+- M3 landed through fe0a8f3 (C# track 6000ceb + CLI fe0a8f3, 562 tests).
+- Six concurrent Opus agents: W3c-checks (main workspace: http/repo check
+  types + by-key + CLI delivery), W3c-jstrain (worktree; stalled once on a
+  BACKGROUND npm install — the reaper gotcha struck an agent that was
+  explicitly warned; revived with foreground-only orders), W3c-stryker
+  (worktree spike), W4 sync (worktree), W5a seed tools (worktree), W5b
+  campaign (worktree). One W5b worktree-creation race in the home repo
+  (fatal: failed to read commondir) — retry succeeded.
+- Remaining after integration: W6 (promotion flow end-to-end + explain-back
+  /kata players + heatmap/slate UI + artifact/retest endpoints + Stryker
+  wiring), W5c content batches (needs W5a tools in-tree), the W6 honesty
+  audit, W7 hardening (smoke ~30 checks, guarded reset, SEEDING.md, README,
+  stats/evidence browser, G1 gate + G3/G4 units, dogfood checklist), then
+  worktree/branch cleanup in the home repo and the owner to-do list.
+
+## 2026-10-08 — Stryker spike results (docs/recon/stryker-spike.md)
+
+- Both tools work on this machine (Stryker 10 / dotnet-stryker 5; real
+  reports; gutted suites demonstrably caught). CRITICAL design input: the
+  overall `break` threshold misses gutted files (averaging) — W6 enforces a
+  PER-FILE floor (default 40%, per-lesson override) from the JSON report,
+  plus overall break 60; run as explicit `bootquest mutate <unit>` with a
+  15-min timeout before a solo-project unit counts complete (NOT at submit
+  time: ~2-3 min for 80 LOC ⇒ 5-20 min real units); --incremental for JS
+  reruns (27s no-change).
+- Machine notes for W6: kill VBCSCompiler after Stryker.NET (or
+  UseSharedCompilation=false); OWNER TO-DO: upgrade node 22.16 → ≥22.18
+  (Stryker 10/Babel 8 EBADENGINE warning; runs fine today); dotnet 10
+  `dotnet new sln` makes .slnx; parse Stryker.NET JSON, not its console
+  table.
+
 - W3b-cli done in worktree (78 tests + tsc green; transplant queued behind
   W3a): commander-only CLI, exit codes 0 pass / 1 fail / 2 usage-or-error,
   kind-groups test forces a decision for every new check type, never
