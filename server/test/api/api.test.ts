@@ -8,16 +8,19 @@ import {
   ReviewQueueResponse,
   RevealResponse,
   RunResponse,
+  SelfAttestResponse,
   SubmitResponse,
   TrackUnitsResponse,
   TracksResponse,
   UnitDetailResponse,
 } from '@bootquest/shared/api';
 import { DAY_MS } from '../../src/engines/clock.ts';
+import { getRating } from '../../src/engines/evidence.ts';
 import { addReviewItem } from '../../src/engines/fsrs.ts';
 import { toPlain } from '../../src/api/http.ts';
 import { insertUnit } from '../../src/store/content.ts';
 import { ledgerCounts } from '../../src/store/queries.ts';
+import { graduate, promoteTo } from '../helpers.ts';
 import { fixture, useApi } from './harness.ts';
 
 function expectApiError(res: request.Response, status: number, code: string): void {
@@ -172,35 +175,45 @@ describe('GET /api/units/:id', () => {
 describe('POST /api/units/:id/run (free, unlimited, NOT logged)', () => {
   const ctx = useApi();
 
-  it('grades quiz / predict deterministically and writes no rows', async () => {
+  it('drills run free and unlogged; quiz / predict-output are submit-only (no answer oracle)', async () => {
     const before = ledgerCounts(ctx.db);
-    const quiz = ctx.id('fixture:quiz-typeof');
-    const right = RunResponse.parse((await request(ctx.app).post(`/api/units/${quiz}/run`).send({ answer: 1 })).body);
-    expect(right.result).toEqual({ pass: true, output: '', failures: [], durationMs: 0 });
-    const wrong = RunResponse.parse((await request(ctx.app).post(`/api/units/${quiz}/run`).send({ answer: 0 })).body);
-    expect(wrong.result.pass).toBe(false);
+    const drill = ctx.id('fixture:drill-add');
+    const ok = RunResponse.parse((await request(ctx.app).post(`/api/units/${drill}/run`).send({ code: fixture.submissions.addRight })).body);
+    expect(ok.result.pass).toBe(true);
+    const bad = RunResponse.parse((await request(ctx.app).post(`/api/units/${drill}/run`).send({ code: fixture.submissions.addWrong })).body);
+    expect(bad.result.pass).toBe(false);
 
-    const predict = ctx.id('fixture:predict-log');
-    const p = await request(ctx.app).post(`/api/units/${predict}/run`).send({ answer: 'nope' });
-    expect(RunResponse.parse(p.body).result.pass).toBe(false);
-    for (const marker of fixture.markers) expect(p.text).not.toContain(marker); // failures never echo the expected output
-    const pOk = await request(ctx.app).post(`/api/units/${predict}/run`).send({ answer: 'EXPECTED_MARKER_out  \r\n42\n' });
-    expect(RunResponse.parse(pOk.body).result.pass).toBe(true); // CRLF + trailing-space normalization
-
-    const exact = await request(ctx.app).post(`/api/units/${ctx.id('fixture:quiz-exact')}/run`).send({ answer: 'guess' });
-    expect(exact.text).not.toContain('ANSWERKEY_MARKER_q2');
+    for (const key of ['fixture:quiz-typeof', 'fixture:quiz-exact', 'fixture:predict-log']) {
+      for (const answer of [0, 1, 2, 'guess', 'EXPECTED_MARKER_out\n42']) {
+        const res = await request(ctx.app).post(`/api/units/${ctx.id(key)}/run`).send({ answer });
+        expectApiError(res, 409, 'RUN_NOT_AVAILABLE');
+        for (const marker of fixture.markers) expect(res.text).not.toContain(marker);
+      }
+    }
 
     expect(ledgerCounts(ctx.db)).toEqual(before);
     expect(ctx.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM daily_slate')!.n).toBe(0);
+  });
+
+  it('predict-output submit still normalizes CRLF + trailing spaces and never echoes the expected output', async () => {
+    const predict = ctx.id('fixture:predict-log');
+    const p = await request(ctx.app).post(`/api/units/${predict}/submit`).send({ answer: 'nope' });
+    expect(SubmitResponse.parse(p.body).verdict).toBe('fail');
+    for (const marker of fixture.markers) expect(p.text).not.toContain(marker);
+    const pOk = await request(ctx.app).post(`/api/units/${predict}/submit`).send({ answer: 'EXPECTED_MARKER_out  \r\n42\n' });
+    expect(SubmitResponse.parse(pOk.body).verdict).toBe('pass');
   });
 
   it('validates the body: exactly one of code/answer, strict keys, no client-supplied grading fields', async () => {
     const id = ctx.id('fixture:quiz-typeof');
     for (const body of [{}, { code: 'x', answer: 1 }, { answer: 1, verified: true }, { answer: 1, xp: 99 }, { answer: 1, difficulty: 5 }, { answer: -1 }]) {
       expectApiError(await request(ctx.app).post(`/api/units/${id}/run`).send(body), 400, 'VALIDATION');
+      expectApiError(await request(ctx.app).post(`/api/units/${id}/submit`).send(body), 400, 'VALIDATION');
     }
-    // wrong shape for the check type
-    expectApiError(await request(ctx.app).post(`/api/units/${id}/run`).send({ code: 'export const x = 1' }), 400, 'VALIDATION');
+    // wrong shape for the check type (rejected before anything is written)
+    const before = ledgerCounts(ctx.db);
+    expectApiError(await request(ctx.app).post(`/api/units/${id}/submit`).send({ code: 'export const x = 1' }), 400, 'VALIDATION');
+    expect(ledgerCounts(ctx.db)).toEqual(before);
   });
 
   it('409 NO_CHECK for a unit without a check, 404 for a missing unit', async () => {
@@ -258,18 +271,60 @@ describe('POST /api/units/:id/submit', () => {
     expect(ctx.db.get<{ assistance: string }>('SELECT assistance FROM evidence')!.assistance).toBe('self');
   });
 
-  it('five passes on a track tick the slate drill-set slot (derived from attempts)', async () => {
+  it('five first-ever DRILL passes on a track tick its slate slot; five quiz passes do not', async () => {
     for (let i = 0; i < 5; i++) {
       const id = insertUnit(
         ctx.db,
         { key: `slate:q${i}`, track: 'csharp', kind: 'quiz', title: `q${i}`, checks: [{ spec: { type: 'quiz', itemKey: `s${i}`, grading: 'choice', answerKey: 0, choices: ['a', 'b'] } }] },
         ctx.clock,
       );
-      await request(ctx.app).post(`/api/units/${id}/submit`).send({ answer: 0 });
+      expect(SubmitResponse.parse((await request(ctx.app).post(`/api/units/${id}/submit`).send({ answer: 0 })).body).verdict).toBe('pass');
     }
-    const dash = DashboardResponse.parse((await request(ctx.app).get('/api/dashboard')).body);
+    let dash = DashboardResponse.parse((await request(ctx.app).get('/api/dashboard')).body);
+    expect(dash.slate.items.find((i) => i.slot === 'drill:csharp')!.done).toBe(false);
+
+    for (let i = 0; i < 5; i++) {
+      const id = insertUnit(
+        ctx.db,
+        { key: `slate:d${i}`, track: 'csharp', kind: 'drill', title: `d${i}`, difficulty: 1, checks: [{ spec: { type: 'drill-js', language: 'js', tests: [{ name: 't', code: 'x' }] } }] },
+        ctx.clock,
+      );
+      await request(ctx.app).post(`/api/units/${id}/submit`).send({ code: 'a + b' });
+    }
+    dash = DashboardResponse.parse((await request(ctx.app).get('/api/dashboard')).body);
     expect(dash.slate.items.find((i) => i.slot === 'drill:csharp')!.done).toBe(true);
     expect(dash.slate.items.find((i) => i.slot === 'drill:js')!.done).toBe(false);
+  });
+});
+
+describe('POST /api/units/:id/self-attest (reading units only)', () => {
+  const ctx = useApi();
+
+  function readingUnit(): number {
+    return insertUnit(ctx.db, { key: 'fixture:reading', track: 'js', kind: 'reading', title: 'read the guide' }, ctx.clock);
+  }
+
+  it('pays 5 XP once, writes one solo attempt, then 409 ALREADY_ATTESTED', async () => {
+    const id = readingUnit();
+    const first = SelfAttestResponse.parse((await request(ctx.app).post(`/api/units/${id}/self-attest`).send()).body);
+    expect(first.xp).toMatchObject({ amount: 5, reason: null });
+    expect(ctx.db.get('SELECT mode, outcome, check_id FROM attempt WHERE id = ?', first.attemptId)).toEqual({ mode: 'solo', outcome: 'pass', check_id: null });
+    const before = ledgerCounts(ctx.db);
+    expectApiError(await request(ctx.app).post(`/api/units/${id}/self-attest`).send(), 409, 'ALREADY_ATTESTED');
+    expect(ledgerCounts(ctx.db)).toEqual(before);
+    const units = TrackUnitsResponse.parse((await request(ctx.app).get('/api/tracks/js/units')).body);
+    expect(units.units.find((u) => u.id === id)!.state).toBe('done');
+  });
+
+  it('is refused on non-reading units, locked tracks, unknown units, and with any body/query', async () => {
+    const before = ledgerCounts(ctx.db);
+    expectApiError(await request(ctx.app).post(`/api/units/${ctx.id('fixture:drill-add')}/self-attest`).send(), 409, 'WRONG_UNIT_KIND');
+    expectApiError(await request(ctx.app).post(`/api/units/${ctx.id('fixture:java-quiz')}/self-attest`).send(), 403, 'TRACK_LOCKED');
+    expectApiError(await request(ctx.app).post('/api/units/4242/self-attest').send(), 404, 'NOT_FOUND');
+    const id = readingUnit();
+    expectApiError(await request(ctx.app).post(`/api/units/${id}/self-attest`).send({ xp: 50 }), 400, 'VALIDATION');
+    expectApiError(await request(ctx.app).post(`/api/units/${id}/self-attest?force=1`).send(), 400, 'VALIDATION');
+    expect(ledgerCounts(ctx.db)).toEqual(before);
   });
 });
 
@@ -356,12 +411,30 @@ describe('reviews', () => {
     expect(next.xp.amount).toBe(1);
   });
 
-  it('failed review on a competency-linked item triggers the demotion hook', async () => {
+  it('a lapse (Again on a Review-state card) on a competency-linked item triggers the demotion hook', async () => {
+    promoteTo(ctx.db, ctx.clock, 'data-http', 3);
     const item = addReviewItem(ctx.db, { cardKey: 'card:demote', competencyId: 'data-http' }, ctx.clock);
-    ctx.db.exec(`UPDATE competency_rating SET rating = 3 WHERE competency_id = 'data-http'`);
+    graduate(ctx.db, ctx.clock, item.id);
     const g = GradeResponse.parse((await request(ctx.app).post(`/api/reviews/${item.id}/grade`).send({ grade: 'again' })).body);
     expect(g.demotion).toMatchObject({ competency: 'data-http', from: 3, to: 2 });
     expect(ctx.db.get<{ kind: string }>('SELECT kind FROM evidence WHERE id = ?', g.demotion!.evidenceId)!.kind).toBe('demotion');
+  });
+
+  it('Again on a first-sight card does not demote; every linked review writes evidence', async () => {
+    promoteTo(ctx.db, ctx.clock, 'data-http', 2);
+    const item = addReviewItem(ctx.db, { cardKey: 'card:new', competencyId: 'data-http' }, ctx.clock);
+    const g = GradeResponse.parse((await request(ctx.app).post(`/api/reviews/${item.id}/grade`).send({ grade: 'again' })).body);
+    expect(g.demotion).toBeNull();
+    expect(getRating(ctx.db, 'data-http')).toBe(2);
+    expect(ctx.db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM evidence WHERE kind = 'review' AND competency_id = 'data-http'`)!.n).toBe(1);
+  });
+
+  it('grading a card that is not due yet -> 409 NOT_DUE, nothing written', async () => {
+    const item = addReviewItem(ctx.db, { cardKey: 'card:early' }, ctx.clock);
+    await request(ctx.app).post(`/api/reviews/${item.id}/grade`).send({ grade: 'easy' });
+    const before = ledgerCounts(ctx.db);
+    expectApiError(await request(ctx.app).post(`/api/reviews/${item.id}/grade`).send({ grade: 'easy' }), 409, 'NOT_DUE');
+    expect(ledgerCounts(ctx.db)).toEqual(before);
   });
 
   it('validates grade, item id and query', async () => {
@@ -396,7 +469,8 @@ describe('GET /api/dashboard', () => {
     expect(lf.lastEvidence).toMatchObject({ kind: 'submit' });
     expect(d.competencies.find((c) => c.id === 'communication')!.lastEvidence).toBeNull();
     expect(d.reviewQueue.due).toBe(1);
-    expect(d.slate.items.map((i) => i.slot)).toEqual(['drill:js', 'drill:csharp', 'campaign', 'review']);
+    // no campaign quests are seeded: the campaign slot is absent rather than impossible
+    expect(d.slate.items.map((i) => i.slot)).toEqual(['drill:js', 'drill:csharp', 'review']);
     expect(d.nextUp.map((n) => n.trackId)).toEqual(['js', 'csharp', 'agentic']); // Java locked -> absent
     expect(d.nextUp.find((n) => n.trackId === 'js')!.unit!.key).toBe('fixture:quiz-typeof');
     expect(d.streak).toMatchObject({ current: 0, tokens: 0, todayComplete: false });
@@ -410,5 +484,29 @@ describe('GET /api/dashboard', () => {
     expect(d.today).toBe('2026-10-02');
     expect(d.heatmap.at(-2)).toEqual({ day: '2026-10-01', xp: 30, status: 'partial' }); // 30 XP, no full slate
     expect(d.streak.current).toBe(0);
+  });
+
+  it('a full drill + review day (no campaign seeded) is a slate day: streak 1 the next day', async () => {
+    const card = addReviewItem(ctx.db, { cardKey: 'card:streak' }, ctx.clock);
+    for (const track of ['js', 'csharp']) {
+      for (let i = 0; i < 5; i++) {
+        const id = insertUnit(
+          ctx.db,
+          { key: `streak:${track}:${i}`, track, kind: 'drill', title: `d${i}`, difficulty: 1, checks: [{ spec: { type: 'drill-js', language: 'js', tests: [{ name: 't', code: 'x' }] } }] },
+          ctx.clock,
+        );
+        expect(SubmitResponse.parse((await request(ctx.app).post(`/api/units/${id}/submit`).send({ code: 'a + b' })).body).verdict).toBe('pass');
+      }
+    }
+    let d = DashboardResponse.parse((await request(ctx.app).get('/api/dashboard')).body);
+    expect(d.streak.todayComplete).toBe(false); // the review queue is not clear yet
+    await request(ctx.app).post(`/api/reviews/${card.id}/grade`).send({ grade: 'good' });
+    d = DashboardResponse.parse((await request(ctx.app).get('/api/dashboard')).body);
+    expect(d.slate.items.every((i) => i.done)).toBe(true);
+    expect(d.streak).toMatchObject({ current: 1, todayComplete: true });
+    ctx.clock.advance(DAY_MS);
+    d = DashboardResponse.parse((await request(ctx.app).get('/api/dashboard')).body);
+    expect(d.streak).toMatchObject({ current: 1, todayComplete: false });
+    expect(d.heatmap.at(-2)!.status).toBe('slate');
   });
 });

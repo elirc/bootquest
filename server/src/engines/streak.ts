@@ -1,13 +1,28 @@
 import type { Db } from '../db/database.ts';
+import { READING_ATTEST_SQL, VERIFIED_PASS_SQL } from './attempts.ts';
 import { addDays, dayKey, nowMs, type Clock } from './clock.ts';
-import { dueCount } from './fsrs.ts';
 import { xpOnDay } from './xp.ts';
 
 /**
  * Daily slate + streak engine (spec §6.1).
  *
  * Slate composition: one 5-exercise drill set per active track (track.locked=0
- * AND track.slate_drills=1), one campaign step, and "clear the review queue".
+ * AND track.slate_drills=1), one campaign step ONLY when campaign quests are
+ * seeded on an unlocked track (until W5 seeds them, a slate day is drill sets +
+ * review), and "clear the review queue".
+ *
+ * Slot completion is DERIVED from the ledger, never marked by a caller (W1a
+ * audit #6, W1b review): there is no markSlateItem.
+ *   drill:<track> — >= 5 distinct kind='drill' units on the track whose FIRST
+ *                   verified pass ever (outcome pass + passing submit run) is on
+ *                   this day and was not guided: re-passing an old unit,
+ *                   quizzes, and post-reveal passes never tick it;
+ *   campaign      — a verified pass (or reading self-attest) this day on a unit
+ *                   a campaign quest points at;
+ *   review        — the due queue was empty right after some review this day,
+ *                   or is empty at evaluation time (now for today, end of day
+ *                   for a closed day). Past queue states are rebuilt from the
+ *                   append-only review_log, so nothing can be pre-marked.
  *
  * Day classification, applied when a day is CLOSED (i.e. once it has passed):
  *   slate   — every slate item done      -> streak +1, +1 toward a freeze token
@@ -59,45 +74,122 @@ export function isSlateComplete(items: readonly SlateItem[]): boolean {
   return items.length > 0 && items.every((i) => i.done);
 }
 
-/** Compose (or return) today's slate. Idempotent per day. */
-export function composeSlate(db: Db, now: Clock): SlateRow {
-  const t = nowMs(now);
-  const day = dayKey(t);
-  const existing = readSlate(db, day);
-  if (existing) return existing;
-  const tracks = db.all<{ id: string }>(
-    'SELECT id FROM track WHERE locked = 0 AND slate_drills = 1 ORDER BY sort_order',
+/** [start, end) epoch ms of a local calendar day (calendar arithmetic, DST-safe). */
+export function dayBounds(day: string): [number, number] {
+  const [y, m, d] = day.split('-').map(Number) as [number, number, number];
+  return [new Date(y, m - 1, d).getTime(), new Date(y, m - 1, d + 1).getTime()];
+}
+
+/** The current slot list (done flags unset). */
+function slateStructure(db: Db): SlateItem[] {
+  const tracks = db.all<{ id: string }>('SELECT id FROM track WHERE locked = 0 AND slate_drills = 1 ORDER BY sort_order');
+  const hasCampaign =
+    db.get(
+      `SELECT 1 AS x FROM quest q JOIN campaign_act ca ON ca.id = q.act_id JOIN track t ON t.id = ca.track_id
+        WHERE q.unit_id IS NOT NULL AND ca.locked = 0 AND t.locked = 0 LIMIT 1`,
+    ) !== undefined;
+  const items: SlateItem[] = tracks.map(
+    (tr): SlateItem => ({ slot: `drill:${tr.id}`, kind: 'drill-set', track: tr.id, size: DRILL_SET_SIZE, done: false }),
   );
-  const items: SlateItem[] = [
-    ...tracks.map(
-      (tr): SlateItem => ({ slot: `drill:${tr.id}`, kind: 'drill-set', track: tr.id, size: DRILL_SET_SIZE, done: false }),
-    ),
-    { slot: 'campaign', kind: 'campaign-step', done: false },
-    { slot: 'review', kind: 'review-clear', done: dueCount(db, now) === 0 },
-  ];
-  db.run(
-    `INSERT INTO daily_slate (day, items, status, xp_total, created_at, closed_at) VALUES (?, ?, 'open', 0, ?, NULL)`,
-    day,
-    JSON.stringify(items),
-    t,
+  if (hasCampaign) items.push({ slot: 'campaign', kind: 'campaign-step', done: false });
+  items.push({ slot: 'review', kind: 'review-clear', done: false });
+  return items;
+}
+
+/** Distinct drill units on a track whose first-ever verified pass falls in [from, to) and was not guided. */
+export function newDrillPasses(db: Db, trackId: string, from: number, to: number): number {
+  return (
+    db.get<{ n: number }>(
+      `SELECT COUNT(*) AS n FROM unit u
+        WHERE u.track_id = ? AND u.kind = 'drill'
+          AND EXISTS (SELECT 1 FROM attempt a WHERE a.unit_id = u.id AND ${VERIFIED_PASS_SQL}
+                        AND a.mode <> 'guided' AND a.created_at >= ? AND a.created_at < ?)
+          AND NOT EXISTS (SELECT 1 FROM attempt a WHERE a.unit_id = u.id AND ${VERIFIED_PASS_SQL} AND a.created_at < ?)`,
+      trackId,
+      from,
+      to,
+      from,
+    )?.n ?? 0
   );
-  return readSlate(db, day)!;
+}
+
+function campaignStepDone(db: Db, from: number, to: number): boolean {
+  return (
+    db.get(
+      `SELECT 1 AS x FROM attempt a JOIN unit u ON u.id = a.unit_id
+        WHERE a.created_at >= ? AND a.created_at < ?
+          AND EXISTS (SELECT 1 FROM quest q WHERE q.unit_id = a.unit_id)
+          AND (${VERIFIED_PASS_SQL} OR ${READING_ATTEST_SQL}) LIMIT 1`,
+      from,
+      to,
+    ) !== undefined
+  );
+}
+
+/** Review items due as of moment T, rebuilt from review_log (reviews after T are undone). */
+export function dueAsOf(db: Db, T: number): number {
+  return (
+    db.get<{ n: number }>(
+      `SELECT COUNT(*) AS n FROM review_item ri
+        WHERE ri.created_at <= ?
+          AND COALESCE((SELECT rl.prev_due_at FROM review_log rl
+                         WHERE rl.review_item_id = ri.id AND rl.reviewed_at > ?
+                         ORDER BY rl.reviewed_at, rl.id LIMIT 1), ri.due_at) <= ?`,
+      T,
+      T,
+      T,
+    )?.n ?? 0
+  );
+}
+
+function reviewCleared(db: Db, from: number, at: number): boolean {
+  if (dueAsOf(db, at) === 0) return true;
+  const moments = db.all<{ t: number }>(
+    'SELECT DISTINCT reviewed_at AS t FROM review_log WHERE reviewed_at >= ? AND reviewed_at <= ? ORDER BY reviewed_at',
+    from,
+    at,
+  );
+  return moments.some((m) => dueAsOf(db, m.t) === 0);
 }
 
 /**
- * Mark one slot of today's slate done. The review slot can only be marked when
- * the due queue is actually empty at `now`.
+ * Derive every slot's `done` for `day` from the ledger as of `atMs`
+ * (capped at the end of that day).
  */
-export function markSlateItem(db: Db, slot: SlateItem['slot'], now: Clock): SlateRow {
-  return db.tx(() => {
-    const slate = composeSlate(db, now);
-    const item = slate.items.find((i) => i.slot === slot);
-    if (!item) throw new Error(`slot ${slot} is not on the ${slate.day} slate`);
-    if (slot === 'review' && dueCount(db, now) > 0) throw new Error('review queue is not clear');
-    item.done = true;
-    db.run('UPDATE daily_slate SET items = ? WHERE day = ?', JSON.stringify(slate.items), slate.day);
-    return readSlate(db, slate.day)!;
+export function deriveSlate(db: Db, day: string, items: readonly SlateItem[], atMs: number): SlateItem[] {
+  const [start, end] = dayBounds(day);
+  const cutoff = Math.min(end, atMs + 1); // attempts strictly before cutoff count
+  const at = cutoff - 1;
+  return items.map((item): SlateItem => {
+    if (item.kind === 'review-clear') return { ...item, done: reviewCleared(db, start, at) };
+    if (item.kind === 'campaign-step') return { ...item, done: campaignStepDone(db, start, cutoff) };
+    return { ...item, done: newDrillPasses(db, item.track, start, cutoff) >= item.size };
   });
+}
+
+/**
+ * Compose today's slate. The slot list is refreshed from the current tracks
+ * and quests while the day is open, and every `done` flag is derived from the
+ * ledger at `now`. Idempotent per day; done flags are persisted only as a
+ * snapshot when the day is closed.
+ */
+export function composeSlate(db: Db, now: Clock): SlateRow {
+  const t = nowMs(now);
+  const day = dayKey(t);
+  const structure = slateStructure(db);
+  const existing = readSlate(db, day);
+  if (!existing) {
+    db.run(
+      `INSERT INTO daily_slate (day, items, status, xp_total, created_at, closed_at) VALUES (?, ?, 'open', 0, ?, NULL)`,
+      day,
+      JSON.stringify(structure),
+      t,
+    );
+  } else if (existing.status === 'open') {
+    db.run('UPDATE daily_slate SET items = ? WHERE day = ?', JSON.stringify(structure), day);
+  }
+  const row = readSlate(db, day)!;
+  return { ...row, items: row.status === 'open' ? deriveSlate(db, day, row.items, t) : row.items };
 }
 
 function readStreak(db: Db): StreakRow {
@@ -134,8 +226,11 @@ export function closeElapsedDays(db: Db, now: Clock): ClosedDay[] {
     while (day < today) {
       const slate = readSlate(db, day);
       const xp = xpOnDay(db, day);
+      const [, dayEnd] = dayBounds(day);
+      // derived at end of day from the ledger; the stored row only supplies the slot list
+      const items = deriveSlate(db, day, slate ? slate.items : slateStructure(db), dayEnd - 1);
       let status: ClosedDay['status'];
-      if (slate && isSlateComplete(slate.items)) {
+      if (isSlateComplete(items)) {
         status = 'slate';
         current += 1;
         banked += 1;
@@ -155,11 +250,19 @@ export function closeElapsedDays(db: Db, now: Clock): ClosedDay[] {
       }
       longest = Math.max(longest, current);
       if (slate) {
-        db.run('UPDATE daily_slate SET status = ?, xp_total = ?, closed_at = ? WHERE day = ?', status, xp, t, day);
+        db.run(
+          'UPDATE daily_slate SET items = ?, status = ?, xp_total = ?, closed_at = ? WHERE day = ?',
+          JSON.stringify(items),
+          status,
+          xp,
+          t,
+          day,
+        );
       } else {
         db.run(
-          `INSERT INTO daily_slate (day, items, status, xp_total, created_at, closed_at) VALUES (?, '[]', ?, ?, ?, ?)`,
+          `INSERT INTO daily_slate (day, items, status, xp_total, created_at, closed_at) VALUES (?, ?, ?, ?, ?, ?)`,
           day,
+          JSON.stringify(items),
           status,
           xp,
           t,
@@ -199,9 +302,10 @@ export interface StreakStatus {
 export function streakStatus(db: Db, now: Clock): StreakStatus {
   closeElapsedDays(db, now);
   const s = readStreak(db);
-  const today = dayKey(nowMs(now));
+  const t = nowMs(now);
+  const today = dayKey(t);
   const slate = readSlate(db, today);
-  const todayComplete = slate !== undefined && isSlateComplete(slate.items);
+  const todayComplete = isSlateComplete(deriveSlate(db, today, slate ? slate.items : slateStructure(db), t));
   return {
     current: s.current,
     display: s.current + (todayComplete ? 1 : 0),
@@ -213,6 +317,7 @@ export function streakStatus(db: Db, now: Clock): StreakStatus {
   };
 }
 
+/** The stored slate row for a day (for closed days: the derived end-of-day snapshot). */
 export function getSlate(db: Db, day: string): SlateRow | undefined {
   return readSlate(db, day);
 }

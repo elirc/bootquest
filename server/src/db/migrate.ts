@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { Db } from './database.ts';
@@ -9,17 +10,29 @@ export interface Migration {
   version: number;
   name: string;
   sql: string;
+  /** sha256 of the SQL with line endings normalized (CRLF checkouts hash the same) */
+  checksum: string;
+}
+
+export function migrationChecksum(sql: string): string {
+  return createHash('sha256').update(sql.replace(/\r\n/g, '\n')).digest('hex');
+}
+
+export class MigrationChecksumError extends Error {
+  constructor(name: string) {
+    super(`migration ${name} was edited after it was applied (checksum mismatch); add a new migration instead`);
+    this.name = 'MigrationChecksumError';
+  }
 }
 
 export function loadMigrations(dir: string = MIGRATIONS_DIR): Migration[] {
   const migrations = readdirSync(dir)
     .filter((f) => FILE_RE.test(f))
     .sort()
-    .map((name) => ({
-      version: Number(FILE_RE.exec(name)![1]),
-      name,
-      sql: readFileSync(`${dir}/${name}`, 'utf8'),
-    }));
+    .map((name) => {
+      const sql = readFileSync(`${dir}/${name}`, 'utf8');
+      return { version: Number(FILE_RE.exec(name)![1]), name, sql, checksum: migrationChecksum(sql) };
+    });
   migrations.forEach((m, i) => {
     if (m.version !== i + 1) throw new Error(`migration numbering gap at ${m.name} (expected ${i + 1})`);
   });
@@ -28,24 +41,44 @@ export function loadMigrations(dir: string = MIGRATIONS_DIR): Migration[] {
 
 /**
  * Apply pending numbered migrations, each in its own transaction, recording
- * them in schema_version. Idempotent: already-applied versions are skipped.
+ * them (with a sha256 checksum) in schema_version. Idempotent: already-applied
+ * versions are skipped, but their checksum is verified — editing an applied
+ * migration fails loudly. The applied check is repeated inside the write
+ * transaction, so two concurrent starters cannot both apply a version.
  * Returns the versions applied by this call.
  */
 export function migrate(db: Db, dir?: string): number[] {
   db.exec(
     'CREATE TABLE IF NOT EXISTS schema_version (' +
-      'version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL)',
+      'version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL, checksum TEXT)',
   );
-  const applied = new Set(db.all<{ version: number }>('SELECT version FROM schema_version').map((r) => r.version));
+  const cols = db.all<{ name: string }>(`SELECT name FROM pragma_table_info('schema_version')`).map((c) => c.name);
+  if (!cols.includes('checksum')) db.exec('ALTER TABLE schema_version ADD COLUMN checksum TEXT');
+
   const done: number[] = [];
   for (const m of loadMigrations(dir)) {
-    if (applied.has(m.version)) continue;
     db.tx(() => {
+      const row = db.get<{ checksum: string | null }>('SELECT checksum FROM schema_version WHERE version = ?', m.version);
+      if (row) {
+        if (row.checksum === null) {
+          // applied before checksums existed: record it now (trust on first verify)
+          db.run('UPDATE schema_version SET checksum = ? WHERE version = ?', m.checksum, m.version);
+        } else if (row.checksum !== m.checksum) {
+          throw new MigrationChecksumError(m.name);
+        }
+        return;
+      }
       db.exec(m.sql);
       // Migration bookkeeping is infrastructure, not an engine: wall clock is fine here.
-      db.run('INSERT INTO schema_version (version, name, applied_at) VALUES (?, ?, ?)', m.version, m.name, Date.now());
+      db.run(
+        'INSERT INTO schema_version (version, name, applied_at, checksum) VALUES (?, ?, ?, ?)',
+        m.version,
+        m.name,
+        Date.now(),
+        m.checksum,
+      );
+      done.push(m.version);
     });
-    done.push(m.version);
   }
   return done;
 }

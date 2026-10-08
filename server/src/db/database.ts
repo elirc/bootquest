@@ -53,6 +53,10 @@ export class Db {
     this.raw = new sqlite.DatabaseSync(path);
     this.raw.exec('PRAGMA foreign_keys = ON;');
     this.raw.exec('PRAGMA busy_timeout = 5000;');
+    // REPLACE / INSERT OR REPLACE deletes the conflicting row WITHOUT firing
+    // DELETE triggers unless recursive_triggers is ON (W1a audit #1). With it
+    // ON, the append-only *_no_delete triggers also guard conflict-deletes.
+    this.raw.exec('PRAGMA recursive_triggers = ON;');
     if (path !== ':memory:') this.raw.exec('PRAGMA journal_mode = WAL;');
   }
 

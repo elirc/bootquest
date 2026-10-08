@@ -27,6 +27,7 @@ import {
   gradeReview,
   revealUnit,
   runUnit,
+  selfAttestUnit,
   submitUnit,
   type ServiceDeps,
 } from './service.ts';
@@ -117,6 +118,13 @@ export function createApp(opts: AppOptions): Express {
     validate(EmptyQuery, req.query, 'query');
     validate(EmptyBody, req.body, 'body');
     sendJson(res, 200, revealUnit(deps, id));
+  }));
+
+  router.post('/units/:id/self-attest', asyncRoute((req, res) => {
+    const { id } = validate(UnitIdParams, req.params, 'params');
+    validate(EmptyQuery, req.query, 'query');
+    validate(EmptyBody, req.body, 'body');
+    sendJson(res, 200, selfAttestUnit(deps, id));
   }));
 
   router.get('/units/:id/solution', asyncRoute((req, res) => {

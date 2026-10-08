@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CHECK_SPEC_TYPES,
   CHECK_TYPES,
+  AttemptInput,
   CheckSpec,
   ContentRef,
   EvidenceInput,
@@ -133,11 +134,14 @@ describe('LessonSpec / ExerciseSpec', () => {
 });
 
 describe('XP and evidence inputs', () => {
-  it('code XP needs a difficulty 1..5', () => {
-    expect(XpAwardInput.safeParse({ kind: 'code' }).success).toBe(false);
-    expect(XpAwardInput.safeParse({ kind: 'code', difficulty: 6 }).success).toBe(false);
-    expect(XpAwardInput.safeParse({ kind: 'code', difficulty: 3 }).success).toBe(true);
-    expect(XpAwardInput.safeParse({ kind: 'bonus' }).success).toBe(false);
+  it('XP claims are anchored on an attempt; difficulty / track / review are never caller-supplied', () => {
+    expect(XpAwardInput.safeParse({ kind: 'code', attemptId: 3 }).success).toBe(true);
+    expect(XpAwardInput.safeParse({ kind: 'code' }).success).toBe(false); // no unit-less / attempt-less awards
+    expect(XpAwardInput.safeParse({ kind: 'explain-back' }).success).toBe(false);
+    expect(XpAwardInput.safeParse({ kind: 'code', attemptId: 3, difficulty: 5 }).success).toBe(false);
+    expect(XpAwardInput.safeParse({ kind: 'code', attemptId: 3, trackId: 'js' }).success).toBe(false);
+    expect(XpAwardInput.safeParse({ kind: 'review', attemptId: 3 }).success).toBe(false); // paid by fsrs.review() only
+    expect(XpAwardInput.safeParse({ kind: 'bonus', attemptId: 3 }).success).toBe(false);
   });
 
   it('xp event rows validate', () => {
@@ -147,11 +151,35 @@ describe('XP and evidence inputs', () => {
     expect(XpEvent.safeParse({ id: 1, kind: 'review', amount: -1, reason: null, unitId: null, attemptId: null, trackId: null, day: '2026-10-01', createdAt: 0 }).success).toBe(false);
   });
 
-  it('promotion/demotion evidence cannot be written through the public input', () => {
-    const base = { competency: 'communication', intention: 'i', observation: 'o', assessor: 'self' };
-    expect(EvidenceInput.safeParse({ ...base, kind: 'explain-back', score: 0.9 }).success).toBe(true);
-    expect(EvidenceInput.safeParse({ ...base, kind: 'promotion' }).success).toBe(false);
-    expect(EvidenceInput.safeParse({ ...base, kind: 'explain-back', score: 1.2 }).success).toBe(false);
-    expect(EvidenceInput.safeParse({ ...base, kind: 'artifact', assessor: 'llm' }).success).toBe(false);
+  it('evidence input: no verified / assessor / assistance; linked kinds need an attempt; engine-only kinds refused', () => {
+    const base = { competency: 'communication', intention: 'i', observation: 'o' };
+    expect(EvidenceInput.safeParse({ ...base, kind: 'explain-back', score: 0.9, attemptId: 1 }).success).toBe(true);
+    expect(EvidenceInput.safeParse({ ...base, kind: 'explain-back', score: 0.9 }).success).toBe(false); // no attempt
+    expect(EvidenceInput.safeParse({ ...base, kind: 'explain-back', attemptId: 1 }).success).toBe(false); // no score
+    expect(EvidenceInput.safeParse({ ...base, kind: 'explain-back', score: 1.2, attemptId: 1 }).success).toBe(false);
+    expect(EvidenceInput.safeParse({ ...base, kind: 'artifact', attemptId: 1 }).success).toBe(true);
+    expect(EvidenceInput.safeParse({ ...base, kind: 'artifact', attemptId: 1, verified: true }).success).toBe(false);
+    expect(EvidenceInput.safeParse({ ...base, kind: 'artifact', attemptId: 1, assessor: 'pipeline' }).success).toBe(false);
+    expect(EvidenceInput.safeParse({ ...base, kind: 'artifact', attemptId: 1, assistance: 'none' }).success).toBe(false);
+    expect(EvidenceInput.safeParse({ ...base, kind: 'artifact', attemptId: 1, score: 1 }).success).toBe(false);
+    expect(EvidenceInput.safeParse({ ...base, kind: 'retest' }).success).toBe(false);
+    for (const kind of ['promotion', 'demotion', 'review']) {
+      expect(EvidenceInput.safeParse({ ...base, kind, attemptId: 1 }).success, kind).toBe(false);
+    }
+    expect(EvidenceInput.safeParse({ ...base, kind: 'self-assessment', rating: 4 }).success).toBe(true);
+    expect(EvidenceInput.safeParse({ ...base, kind: 'artifact', attemptId: 1, rating: 4 }).success).toBe(false);
+  });
+
+  it('attempt input stores answers only: graded outcomes cannot be chosen', () => {
+    expect(AttemptInput.safeParse({ unitId: 1, answer: { q1: 'x' } }).success).toBe(true);
+    expect(AttemptInput.safeParse({ unitId: 1 }).success).toBe(false);
+    expect(AttemptInput.safeParse({ unitId: 1, answer: 'x', outcome: 'pass' }).success).toBe(false);
+  });
+
+  it('lesson contentRef is a (repo, stableKey) pair, never a bare key', () => {
+    const u = { key: 'k', track: 'js', kind: 'reading', title: 't' };
+    expect(LessonSpec.safeParse({ ...u, contentRef: { repo: 'elirc/ww12', stableKey: 'h:x' } }).success).toBe(true);
+    expect(LessonSpec.safeParse({ ...u, contentRef: 'h:x' }).success).toBe(false);
+    expect(LessonSpec.safeParse({ ...u, phase: 'P1', xp: 120, targetLevel: 3 }).success).toBe(true);
   });
 });

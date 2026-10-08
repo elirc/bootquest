@@ -59,11 +59,22 @@ export const LessonSpec = z
     kind: UnitKind,
     title: z.string().min(1),
     code: z.string().optional(),
+    phase: z.string().min(1).optional(),
     difficulty: z.number().int().min(1).max(5).optional(),
+    /** informational (signalpost program.json); engines compute awards themselves */
+    xp: z.number().int().nonnegative().optional(),
+    targetLevel: z.number().int().min(1).max(5).optional(),
     competencies: z.array(CompetencyId).default([]),
     prerequisites: z.array(z.string().min(1)).default([]),
-    /** stable_key of the content_ref this unit renders from, if any */
-    contentRef: z.string().min(1).optional(),
+    /**
+     * The content_ref this unit renders from, if any. Addressed by (repo,
+     * stableKey) because stable keys are unique per repo only: twin repos and
+     * template families share heading text (estate contract §6).
+     */
+    contentRef: z
+      .object({ repo: z.string().regex(/^[^/\s]+\/[^/\s]+$/, 'owner/name'), stableKey: z.string().min(1) })
+      .strict()
+      .optional(),
     /** key of the unit this one is a changed-example variant of */
     variationOf: z.string().min(1).optional(),
     checks: z
@@ -123,21 +134,21 @@ export type RunnerResult = z.infer<typeof RunnerResult>;
 
 // ---------------------------------------------------------------- xp event
 
+/**
+ * An XP claim. Every non-review award is anchored on a recorded attempt: the
+ * engine verifies that attempt (passing run, or completed explain-back / kata,
+ * or reading self-attest) and reads unit, track and difficulty from the DB.
+ * Difficulty, track and amount are never caller-supplied. Review XP is paid
+ * only by the FSRS engine's review(), never through this input.
+ */
 export const XpAwardInput = z
   .object({
-    kind: XpKind,
+    kind: XpKind.exclude(['review']),
+    attemptId: z.number().int().positive(),
+    /** optional cross-check: must equal the attempt's unit */
     unitId: z.number().int().positive().optional(),
-    attemptId: z.number().int().positive().optional(),
-    trackId: TrackId.optional(),
-    /** required for kind 'code' (10 x difficulty) */
-    difficulty: z.number().int().min(1).max(5).optional(),
   })
-  .strict()
-  .superRefine((x, ctx) => {
-    if (x.kind === 'code' && x.difficulty === undefined) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'code XP needs difficulty', path: ['difficulty'] });
-    }
-  });
+  .strict();
 export type XpAwardInput = z.input<typeof XpAwardInput>;
 
 export const XpEvent = z.object({
@@ -155,15 +166,20 @@ export type XpEvent = z.infer<typeof XpEvent>;
 
 // ---------------------------------------------------------------- attempt + evidence
 
+/**
+ * An ungraded answer attempt (outcome 'submitted'): the explain-back transcript
+ * or kata findings, stored immutably BEFORE the key is shown. Graded outcomes
+ * (pass/fail/todo/error) are never caller-chosen: they come only from
+ * recordSubmission(), which derives the outcome from the runner verdict and
+ * writes the run row in the same transaction.
+ */
 export const AttemptInput = z
   .object({
     unitId: z.number().int().positive(),
     checkId: z.number().int().positive().optional(),
-    outcome: AttemptOutcome.exclude(['revealed']),
     /** honor-system self flag: "I had help on this" */
     selfAssisted: z.boolean().default(false),
-    score: z.number().min(0).max(1).optional(),
-    answer: z.unknown().optional(),
+    answer: z.unknown().refine((a) => a !== undefined && a !== null, { message: 'answer is required' }),
   })
   .strict();
 export type AttemptInput = z.input<typeof AttemptInput>;
@@ -180,21 +196,44 @@ export const Attempt = z.object({
 });
 export type Attempt = z.infer<typeof Attempt>;
 
+/** Evidence kinds that must be anchored on a recorded attempt. */
+export const ATTEMPT_LINKED_EVIDENCE_KINDS = ['artifact', 'retest', 'submit', 'explain-back', 'kata'] as const;
+
+/**
+ * Evidence a caller may record. `verified`, `assessor` and `assistance` are NOT
+ * inputs: the engine derives them from the linked attempt and its run
+ * (pipeline-verified only when a passing submit run exists). `score` is the
+ * self-scored explain-back coverage / kata catch rate, and is accepted only
+ * for those kinds. `rating` is accepted only for self-assessment. Promotion,
+ * demotion and review evidence are written by the engines alone.
+ */
 export const EvidenceInput = z
   .object({
     competency: CompetencyId,
-    kind: EvidenceKind.exclude(['promotion', 'demotion']),
+    kind: EvidenceKind.exclude(['promotion', 'demotion', 'review']),
     intention: z.string().min(1),
     observation: z.string().min(1),
-    /** ignored (derived from the attempt) when attemptId is given */
-    assistance: Assistance.default('none'),
-    assessor: Assessor,
     rating: z.number().int().min(1).max(5).optional(),
-    verified: z.boolean().default(false),
-    /** explain-back coverage / kata catch rate, 0..1 */
+    /** explain-back coverage / kata catch rate, 0..1 (self-scored after the key is revealed) */
     score: z.number().min(0).max(1).optional(),
     attemptId: z.number().int().positive().optional(),
     unitId: z.number().int().positive().optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((e, ctx) => {
+    const linked = (ATTEMPT_LINKED_EVIDENCE_KINDS as readonly string[]).includes(e.kind);
+    if (linked && e.attemptId === undefined) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: `${e.kind} evidence needs an attemptId`, path: ['attemptId'] });
+    }
+    const scored = e.kind === 'explain-back' || e.kind === 'kata';
+    if (scored && e.score === undefined) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: `${e.kind} evidence needs a score`, path: ['score'] });
+    }
+    if (!scored && e.score !== undefined) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: `score is derived for ${e.kind} evidence`, path: ['score'] });
+    }
+    if (e.rating !== undefined && e.kind !== 'self-assessment') {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'rating is only accepted on self-assessment', path: ['rating'] });
+    }
+  });
 export type EvidenceInput = z.input<typeof EvidenceInput>;

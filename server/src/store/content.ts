@@ -76,19 +76,29 @@ export function insertUnit(db: Db, input: unknown, now: Clock): number {
       if (!row) throw new Error(`unknown unit key ${key}`);
       return row.id;
     };
+    // (repo, stable_key) is the uniqueness key: twin repos share heading text (W1a audit #9)
     const contentRefId = u.contentRef
-      ? db.get<{ id: number }>('SELECT id FROM content_ref WHERE stable_key = ?', u.contentRef)?.id
+      ? db.get<{ id: number }>(
+          'SELECT id FROM content_ref WHERE repo = ? AND stable_key = ?',
+          u.contentRef.repo,
+          u.contentRef.stableKey,
+        )?.id
       : undefined;
-    if (u.contentRef && contentRefId === undefined) throw new Error(`unknown content_ref ${u.contentRef}`);
+    if (u.contentRef && contentRefId === undefined) {
+      throw new Error(`unknown content_ref ${u.contentRef.repo}#${u.contentRef.stableKey}`);
+    }
     const id = db.run(
-      `INSERT INTO unit (key, track_id, kind, title, code, difficulty, content_ref_id, variation_of_unit_id, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO unit (key, track_id, kind, title, code, phase, difficulty, xp, target_level, content_ref_id, variation_of_unit_id, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       u.key,
       u.track,
       u.kind,
       u.title,
       u.code,
+      u.phase,
       u.difficulty,
+      u.xp,
+      u.targetLevel,
       contentRefId,
       u.variationOf ? unitIdFor(u.variationOf) : undefined,
       t,
@@ -103,22 +113,40 @@ export function insertUnit(db: Db, input: unknown, now: Clock): number {
 }
 
 export interface RecordRunInput {
-  kind: 'run' | 'submit';
+  /** Only free runs are stored here. Submit runs are written by recordSubmission() with their attempt. */
+  kind: 'run';
   result: unknown;
-  attemptId?: number;
   checkId?: number;
   unitId?: number;
 }
 
-/** Store a runner verdict (raw JSON kept forever). `todo` is its own verdict, never 'fail'. */
+/**
+ * The stored verdict for a runner result. An explicit verdict wins; otherwise a
+ * self-run marker count decides (`todo` is its own verdict, never 'fail'); a
+ * result whose pass flag contradicts its counts is rejected (W1a audit #12).
+ */
+export function runVerdict(input: unknown): { result: RunnerResult; verdict: RunVerdict } {
+  const r = RunnerResult.parse(input);
+  if (r.verdict !== undefined) return { result: r, verdict: r.verdict };
+  if (r.counts) {
+    const v = selfRunVerdict(r.counts);
+    if ((v === 'pass') !== r.pass) throw new Error(`runner result pass=${r.pass} contradicts its counts (${v})`);
+    return { result: r, verdict: v };
+  }
+  return { result: r, verdict: r.pass ? 'pass' : 'fail' };
+}
+
+/** Store a free (unlogged-for-credit) run verdict. Raw JSON kept forever. */
 export function recordRun(db: Db, input: RecordRunInput, now: Clock): number {
-  const r = RunnerResult.parse(input.result);
-  const verdict: RunVerdict = r.verdict ?? (r.pass ? 'pass' : 'fail');
+  if (input.kind !== 'run') throw new Error('recordRun stores free runs only; submits go through recordSubmission()');
+  const { result: r, verdict } = runVerdict(input.result);
+  if (input.checkId !== undefined && input.unitId !== undefined) {
+    const owner = db.get<{ unit_id: number }>('SELECT unit_id FROM "check" WHERE id = ?', input.checkId);
+    if (owner?.unit_id !== input.unitId) throw new Error(`check ${input.checkId} does not belong to unit ${input.unitId}`);
+  }
   return db.run(
     `INSERT INTO run (kind, attempt_id, check_id, unit_id, verdict, passed, failed, todo, duration_ms, raw, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    input.kind,
-    input.attemptId,
+     VALUES ('run', NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     input.checkId,
     input.unitId,
     verdict,

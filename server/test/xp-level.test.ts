@@ -1,68 +1,91 @@
 import { describe, expect, it } from 'vitest';
-import { revealSolution, recordAttempt } from '../src/engines/attempts.ts';
+import { CHECK_TYPES } from '@bootquest/shared';
+import { recordAttempt, revealSolution, selfAttestReading } from '../src/engines/attempts.ts';
 import { DAY_MS } from '../src/engines/clock.ts';
+import { recordEvidence } from '../src/engines/evidence.ts';
+import { addReviewItem, review } from '../src/engines/fsrs.ts';
 import { levelForXp, levelProgress, xpToReach } from '../src/engines/level.ts';
-import { awardXp, baseAmount, REVIEW_DAILY_CAP, totalXp, XP_AMOUNTS, xpOnDay } from '../src/engines/xp.ts';
-import { makeUnit, useTempDb } from './helpers.ts';
+import { awardXp, baseAmount, REVIEW_DAILY_CAP, totalXp, XP_AMOUNTS, xpKindForCheck, xpOnDay } from '../src/engines/xp.ts';
+import { explainBack, makeUnit, submit, useTempDb } from './helpers.ts';
 
-describe('XP amounts (spec §6.1)', () => {
+describe('XP amounts (spec §6.1), each paid only for a verified attempt', () => {
   const ctx = useTempDb();
 
-  it('pays code 10 x difficulty for every difficulty 1..5', () => {
+  it('pays code 10 x the UNIT ROW difficulty for every difficulty 1..5', () => {
     for (const d of [1, 2, 3, 4, 5]) {
       const unitId = makeUnit(ctx.db, ctx.clock, { difficulty: d });
-      expect(awardXp(ctx.db, { kind: 'code', difficulty: d, unitId }, ctx.clock).amount).toBe(10 * d);
+      const a = submit(ctx.db, ctx.clock, unitId);
+      expect(awardXp(ctx.db, { kind: 'code', attemptId: a.id }, ctx.clock).amount).toBe(10 * d);
     }
     expect(totalXp(ctx.db)).toBe(150);
   });
 
   it('pays the fixed per-type amounts', () => {
-    const expected = {
-      quiz: 2,
-      predict: 4,
-      'study-quest': 50,
-      reading: 5,
-      'explain-back': 20,
-      'patch-kata': 15,
-      review: 1,
-    } as const;
-    for (const [kind, amount] of Object.entries(expected)) {
-      const unitId = makeUnit(ctx.db, ctx.clock);
-      const award = awardXp(ctx.db, { kind: kind as keyof typeof expected, unitId }, ctx.clock);
-      expect(award, kind).toMatchObject({ amount, reason: null });
-      expect(XP_AMOUNTS[kind as keyof typeof expected]).toBe(amount);
-    }
+    const quiz = submit(ctx.db, ctx.clock, makeUnit(ctx.db, ctx.clock, { kind: 'quiz' }));
+    expect(awardXp(ctx.db, { kind: 'quiz', attemptId: quiz.id }, ctx.clock)).toMatchObject({ amount: 2, reason: null });
+    const predict = submit(ctx.db, ctx.clock, makeUnit(ctx.db, ctx.clock, { kind: 'predict-output' }));
+    expect(awardXp(ctx.db, { kind: 'predict', attemptId: predict.id }, ctx.clock).amount).toBe(4);
+    const study = submit(ctx.db, ctx.clock, makeUnit(ctx.db, ctx.clock, { kind: 'study' }));
+    expect(awardXp(ctx.db, { kind: 'study-quest', attemptId: study.id }, ctx.clock).amount).toBe(50);
+    const reading = selfAttestReading(ctx.db, makeUnit(ctx.db, ctx.clock, { kind: 'reading' }), ctx.clock);
+    expect(awardXp(ctx.db, { kind: 'reading', attemptId: reading.id }, ctx.clock).amount).toBe(5);
+    const ebUnit = makeUnit(ctx.db, ctx.clock, { kind: 'explain-back', competencies: ['communication'] });
+    const eb = explainBack(ctx.db, ctx.clock, ebUnit, 'communication', 0.9);
+    expect(awardXp(ctx.db, { kind: 'explain-back', attemptId: eb.attempt.id }, ctx.clock).amount).toBe(20);
+    const kataUnit = makeUnit(ctx.db, ctx.clock, { kind: 'patch-kata', competencies: ['code-reading'] });
+    const kata = recordAttempt(ctx.db, { unitId: kataUnit, answer: { findings: [] } }, ctx.clock);
+    recordEvidence(ctx.db, { competency: 'code-reading', kind: 'kata', intention: 'i', observation: 'o', score: 0.5, attemptId: kata.id }, ctx.clock);
+    expect(awardXp(ctx.db, { kind: 'patch-kata', attemptId: kata.id }, ctx.clock).amount).toBe(15);
+    const card = addReviewItem(ctx.db, { cardKey: 'c' }, ctx.clock);
+    expect(review(ctx.db, card.id, 'good', ctx.clock).xp.amount).toBe(1);
+    expect(XP_AMOUNTS).toMatchObject({ quiz: 2, predict: 4, 'study-quest': 50, reading: 5, 'explain-back': 20, 'patch-kata': 15, review: 1 });
     expect(() => baseAmount('code')).toThrow();
-    expect(() => awardXp(ctx.db, { kind: 'code' }, ctx.clock)).toThrow(); // zod: difficulty required
+  });
+
+  it('every check type has an explicit XP kind (exhaustive mapping)', () => {
+    const map = Object.fromEntries(CHECK_TYPES.map((t) => [t, xpKindForCheck(t)]));
+    expect(map).toEqual({
+      'drill-js': 'code',
+      'drill-cs': 'code',
+      quiz: 'quiz',
+      'predict-output': 'predict',
+      'guided-step': 'code',
+      http: 'code',
+      repo: 'code',
+      'study-quiz': 'study-quest',
+      'explain-back': 'explain-back',
+      'patch-kata': 'patch-kata',
+      review: null,
+      'node-test-file': 'code',
+      'self-run': 'code',
+      'vitest-project': 'code',
+    });
   });
 
   it('caps FSRS review XP at 30 per local day, resetting the next day', () => {
-    const awards = Array.from({ length: 35 }, () => awardXp(ctx.db, { kind: 'review' }, ctx.clock));
+    const cards = Array.from({ length: 36 }, (_, i) => addReviewItem(ctx.db, { cardKey: `cap:${i}` }, ctx.clock));
+    const awards = cards.slice(0, 35).map((c) => review(ctx.db, c.id, 'good', ctx.clock).xp);
     expect(awards.filter((a) => a.amount === 1)).toHaveLength(REVIEW_DAILY_CAP);
     expect(awards.slice(30).every((a) => a.amount === 0 && a.reason === 'daily-cap')).toBe(true);
     expect(xpOnDay(ctx.db, awards[0]!.day, 'review')).toBe(30);
     // other kinds are not capped by the review cap
-    expect(awardXp(ctx.db, { kind: 'quiz' }, ctx.clock).amount).toBe(2);
+    const quiz = submit(ctx.db, ctx.clock, makeUnit(ctx.db, ctx.clock, { kind: 'quiz' }));
+    expect(awardXp(ctx.db, { kind: 'quiz', attemptId: quiz.id }, ctx.clock).amount).toBe(2);
 
     ctx.clock.advance(DAY_MS);
-    expect(awardXp(ctx.db, { kind: 'review' }, ctx.clock)).toMatchObject({ amount: 1, reason: null });
+    expect(review(ctx.db, cards[35]!.id, 'good', ctx.clock).xp).toMatchObject({ amount: 1, reason: null });
   });
 
   it('reveal-solution zeroes XP forever on that exercise and flags later attempts guided', () => {
     const unitId = makeUnit(ctx.db, ctx.clock, { difficulty: 3 });
     const { attempt } = revealSolution(ctx.db, unitId, ctx.clock);
     expect(attempt).toMatchObject({ mode: 'guided', assisted: true, assistance_source: 'reveal', outcome: 'revealed' });
-
     for (let i = 0; i < 3; i++) {
       ctx.clock.advance(30 * DAY_MS); // "forever": months later still zero
-      const later = recordAttempt(ctx.db, { unitId, outcome: 'pass' }, ctx.clock);
+      const later = submit(ctx.db, ctx.clock, unitId);
       expect(later.mode).toBe('guided');
-      const award = awardXp(ctx.db, { kind: 'code', difficulty: 3, unitId, attemptId: later.id }, ctx.clock);
-      expect(award).toMatchObject({ amount: 0, reason: 'revealed' });
+      expect(awardXp(ctx.db, { kind: 'code', attemptId: later.id }, ctx.clock)).toMatchObject({ amount: 0, reason: 'revealed' });
     }
-    // XP resolved via the attempt alone is also zeroed
-    const viaAttempt = recordAttempt(ctx.db, { unitId, outcome: 'pass' }, ctx.clock);
-    expect(awardXp(ctx.db, { kind: 'code', difficulty: 3, attemptId: viaAttempt.id }, ctx.clock).amount).toBe(0);
     expect(totalXp(ctx.db)).toBe(0);
   });
 
@@ -70,14 +93,74 @@ describe('XP amounts (spec §6.1)', () => {
     const a = makeUnit(ctx.db, ctx.clock);
     const b = makeUnit(ctx.db, ctx.clock);
     revealSolution(ctx.db, a, ctx.clock);
-    expect(awardXp(ctx.db, { kind: 'code', difficulty: 2, unitId: b }, ctx.clock).amount).toBe(20);
+    expect(awardXp(ctx.db, { kind: 'code', attemptId: submit(ctx.db, ctx.clock, b).id }, ctx.clock).amount).toBe(20);
   });
 
   it('pays once per unit per kind (re-submits record a zero row)', () => {
     const unitId = makeUnit(ctx.db, ctx.clock);
-    expect(awardXp(ctx.db, { kind: 'code', difficulty: 2, unitId }, ctx.clock).amount).toBe(20);
-    expect(awardXp(ctx.db, { kind: 'code', difficulty: 2, unitId }, ctx.clock)).toMatchObject({ amount: 0, reason: 'already-awarded' });
+    expect(awardXp(ctx.db, { kind: 'code', attemptId: submit(ctx.db, ctx.clock, unitId).id }, ctx.clock).amount).toBe(20);
+    expect(awardXp(ctx.db, { kind: 'code', attemptId: submit(ctx.db, ctx.clock, unitId).id }, ctx.clock)).toMatchObject({
+      amount: 0,
+      reason: 'already-awarded',
+    });
     expect(ctx.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM xp_event')!.n).toBe(2);
+    // and the SQL index refuses a second paying row even if the engine were bypassed
+    expect(() =>
+      ctx.db.run(`INSERT INTO xp_event (kind, amount, unit_id, day, created_at) VALUES ('code', 20, ?, '2026-10-01', 0)`, unitId),
+    ).toThrow(/UNIQUE/);
+  });
+});
+
+describe('XP cannot be farmed or claimed without verification (W1a audit #5)', () => {
+  const ctx = useTempDb();
+
+  it('no unit-less / attempt-less awards; no review kind through awardXp; no client difficulty', () => {
+    expect(() => awardXp(ctx.db, { kind: 'explain-back' } as never, ctx.clock)).toThrow();
+    expect(() => awardXp(ctx.db, { kind: 'study-quest' } as never, ctx.clock)).toThrow();
+    const a = submit(ctx.db, ctx.clock, makeUnit(ctx.db, ctx.clock, { difficulty: 1 }));
+    expect(() => awardXp(ctx.db, { kind: 'review', attemptId: a.id } as never, ctx.clock)).toThrow();
+    expect(() => awardXp(ctx.db, { kind: 'code', attemptId: a.id, difficulty: 5 } as never, ctx.clock)).toThrow();
+    expect(totalXp(ctx.db)).toBe(0);
+  });
+
+  it('a failed attempt earns nothing', () => {
+    const a = submit(ctx.db, ctx.clock, makeUnit(ctx.db, ctx.clock), { pass: false });
+    expect(() => awardXp(ctx.db, { kind: 'code', attemptId: a.id }, ctx.clock)).toThrow(/not a verified pass/);
+  });
+
+  it('the kind must match the check: a quiz pass cannot claim study-quest or code XP', () => {
+    const a = submit(ctx.db, ctx.clock, makeUnit(ctx.db, ctx.clock, { kind: 'quiz' }));
+    expect(() => awardXp(ctx.db, { kind: 'study-quest', attemptId: a.id }, ctx.clock)).toThrow(/does not earn/);
+    expect(() => awardXp(ctx.db, { kind: 'code', attemptId: a.id }, ctx.clock)).toThrow(/does not earn/);
+  });
+
+  it('unitId must agree with the attempt (no paying a revealed unit via another unit id)', () => {
+    const revealed = makeUnit(ctx.db, ctx.clock);
+    revealSolution(ctx.db, revealed, ctx.clock);
+    const guided = submit(ctx.db, ctx.clock, revealed);
+    const other = makeUnit(ctx.db, ctx.clock);
+    expect(() => awardXp(ctx.db, { kind: 'code', attemptId: guided.id, unitId: other }, ctx.clock)).toThrow(/not \d+/);
+  });
+
+  it('explain-back XP needs >= 80% self-scored coverage on the stored answer', () => {
+    const unit = makeUnit(ctx.db, ctx.clock, { kind: 'explain-back', competencies: ['communication'] });
+    const low = explainBack(ctx.db, ctx.clock, unit, 'communication', 0.5);
+    expect(() => awardXp(ctx.db, { kind: 'explain-back', attemptId: low.attempt.id }, ctx.clock)).toThrow(/completed explain-back/);
+    const bare = recordAttempt(ctx.db, { unitId: unit, answer: { q: 'a' } }, ctx.clock);
+    expect(() => awardXp(ctx.db, { kind: 'explain-back', attemptId: bare.id }, ctx.clock)).toThrow();
+  });
+
+  it('reading XP only for a reading self-attest, once per unit', () => {
+    const drill = makeUnit(ctx.db, ctx.clock);
+    expect(() => selfAttestReading(ctx.db, drill, ctx.clock)).toThrow(/only valid on reading units/);
+    const a = submit(ctx.db, ctx.clock, drill);
+    expect(() => awardXp(ctx.db, { kind: 'reading', attemptId: a.id }, ctx.clock)).toThrow(/does not earn/);
+    const reading = makeUnit(ctx.db, ctx.clock, { kind: 'reading' });
+    const att = selfAttestReading(ctx.db, reading, ctx.clock);
+    expect(att).toMatchObject({ mode: 'solo', outcome: 'pass', check_id: null });
+    expect(() => selfAttestReading(ctx.db, reading, ctx.clock)).toThrow(/already/);
+    expect(awardXp(ctx.db, { kind: 'reading', attemptId: att.id }, ctx.clock).amount).toBe(5);
+    expect(awardXp(ctx.db, { kind: 'reading', attemptId: att.id }, ctx.clock)).toMatchObject({ amount: 0, reason: 'already-awarded' });
   });
 });
 

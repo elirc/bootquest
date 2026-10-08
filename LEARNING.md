@@ -174,6 +174,51 @@ Opus plan review (`docs/recon/plan-review.md`) returned 2 blockers + 17 majors;
   bare names, files-the-guide-says-to-create) ⇒ whitelist/quarantine step is
   required, not optional. Exact-case index keeps Windows/Linux results equal.
 
+## 2026-10-07 — W1 integration burst (da8ca60)
+
+- W1b landed (205743b): 177 tests + typecheck + smoke 14/14, all re-run by
+  the orchestrator. W1b surprises worth keeping: root typecheck had been
+  RED at 09052ae (P1 extensionless import) and the workspace typecheck gate
+  had been vacuous (no workspace had a typecheck script) — both fixed;
+  GET /api/dashboard performs writes (closes elapsed days, creates today's
+  slate row) — flagged for the W1b reviewer's judgment; reference solutions
+  live in a UnitContentStore (BOOTQUEST_UNIT_CONTENT), NOT in check.spec.
+- P2–P5 transplanted in one window (da8ca60): 286 tests across 4 workspaces
+  + test:csharp 18/18 (128s, own gate so the main suite stays fast) +
+  client build. Integration fixes: P2 code needed ~25 noUncheckedIndexedAccess
+  fixes (its worktree tsconfig was laxer — worktree-proven code still meets
+  main-tree strictness only after adjustment); dual-vite type clash (root
+  vite 7.3.7 hoisted for vitest 3 vs client vite 5.4.21) ⇒ vite.config.ts
+  excluded from the client tsc project (vite loads its own config).
+- W1c (engine unforgeability per audit + review-evidence + reading
+  self-attest) and a fresh-context W1b API review (frozen git-archive copy,
+  includes the client↔server binding worksheet) launched in parallel.
+
+## 2026-10-07 — W1b fresh review (docs/recon/w1b-review.md) + decisions
+
+No blockers; 3 majors, all folded into W1c mid-flight by addendum:
+- **run() was a free answer oracle for quiz/predict** (3-choice quiz → 3 free
+  runs → full-XP submit). DECISION: run returns 409 for quiz/predict-output;
+  submit-only (failed submits stay free-but-recorded). Spec §4's "run is
+  free" is read as applying to code drills; §0.3/§0.5 honesty outweighs the
+  literal read for oracle-able types. Owner can overturn.
+- **Drill slate slot gameable** (any kind counted, incl. quizzes, old passes,
+  guided). DECISION: drill-kind only, non-guided, first-ever-pass-today.
+- **Streak was mathematically impossible** (campaign slot always present,
+  nothing completes it; tests asserted current:0 and hid it). DECISION:
+  campaign slot exists only when the track has seeded campaign quests —
+  keeps M1–M3 usable as the spec intends.
+Also: xpKindFor made exhaustive (study-quiz/explain-back/kata were silently
+paying as code); drill expected/actual feedback on run is INTENTIONAL
+disclosure (the learning experience), documented — quiz/predict never echo.
+Verified clean: submit atomicity, reveal gating, default-deny leak whitelist
+(one nested-field gap: repo.predicates — W1d), bounded limits, WAL.
+Known limitation (accepted): GET /dashboard closes elapsed days; a forward
+clock jump irreversibly marks skipped days missed — W7 adds a guard if cheap.
+Binding worksheet: 30 client↔server mismatches in 21 groups → W1d scope;
+client designs NOT to adopt: client-sent assistance:'reveal' (server derives
+reveal), mock returning correctIndex on wrong answers (resubmit exploit).
+
 ## 2026-10-07 — P2 results (C# runner spike) — warm gate MET
 
 - Warm <10s / first ≤60s both met, but ONLY on the direct-compiler path:

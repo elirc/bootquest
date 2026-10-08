@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 // Every enum here mirrors a CHECK constraint in server/src/db/migrations/001_init.sql.
-// server/test/schema.test.ts asserts they stay in sync with the SQL.
+// server/test/enum-sync.test.ts asserts they stay in sync with the SQL.
 
 export const TRACK_IDS = ['js', 'csharp', 'java', 'agentic'] as const;
 export const TrackId = z.enum(TRACK_IDS);
@@ -55,6 +55,18 @@ export const UNIT_KINDS = [
 ] as const;
 export const UnitKind = z.enum(UNIT_KINDS);
 export type UnitKind = z.infer<typeof UnitKind>;
+
+/**
+ * Unit kinds whose verified, unassisted pass counts as promotion leg (a), the
+ * "independent artifact passes verification (CLI-verified project)" of spec §6.2.
+ * These are exactly the §4 "Own editor + CLI" types (guided project, HTTP check,
+ * repo check) plus signalpost program units. Browser practice (drill, quiz,
+ * predict-output, study, reading, kata, review), explain-back and retest units
+ * can never anchor a promotion. The G2 delegation brief (§8) is not a separate
+ * unit kind: it maps to `explain-back`.
+ */
+export const PROJECT_UNIT_KINDS = ['guided-project', 'http-lab', 'repo-task', 'program-unit'] as const satisfies readonly UnitKind[];
+export type ProjectUnitKind = (typeof PROJECT_UNIT_KINDS)[number];
 
 export const ATTEMPT_MODES = ['solo', 'assisted', 'guided'] as const;
 export const AttemptMode = z.enum(ATTEMPT_MODES);

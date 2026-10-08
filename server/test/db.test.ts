@@ -1,18 +1,19 @@
 import { deepStrictEqual } from 'node:assert/strict';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { CHECK_TYPES, COMPETENCY_IDS, XP_KINDS } from '@bootquest/shared';
 import { DbPathError, openDb, resolveDbPath } from '../src/db/database.ts';
 import { cleanRow, toNumber, toParam } from '../src/db/hygiene.ts';
-import { migrate, schemaVersion } from '../src/db/migrate.ts';
+import { Db } from '../src/db/database.ts';
+import { migrate, MigrationChecksumError, schemaVersion } from '../src/db/migrate.ts';
 import { recordAttempt } from '../src/engines/attempts.ts';
 import { awardXp } from '../src/engines/xp.ts';
 import { recordEvidence } from '../src/engines/evidence.ts';
 import { addReviewItem, review } from '../src/engines/fsrs.ts';
-import { insertCheck, insertContentRef, recordRun } from '../src/store/content.ts';
-import { localNoon, makeTempDb, makeUnit, useTempDb } from './helpers.ts';
+import { insertCheck, insertContentRef, insertUnit, recordRun } from '../src/store/content.ts';
+import { localNoon, makeTempDb, makeUnit, submit, useTempDb } from './helpers.ts';
 import { fixedClock } from '../src/engines/clock.ts';
 
 describe('DB path resolution', () => {
@@ -45,14 +46,15 @@ describe('migrations', () => {
     const tmp = makeTempDb();
     try {
       const first = tmp.db.all<{ version: number }>('SELECT version FROM schema_version ORDER BY version');
-      expect(first.map((r) => r.version)).toEqual([1, 2]);
+      expect(first.map((r) => r.version)).toEqual([1, 2, 3]);
       tmp.db.close();
 
       const again = openDb({ path: tmp.path, env: {} });
       try {
         expect(migrate(again)).toEqual([]); // third pass, explicit
-        expect(schemaVersion(again)).toBe(2);
-        expect(again.get<{ n: number }>('SELECT COUNT(*) AS n FROM schema_version')!.n).toBe(2);
+        expect(schemaVersion(again)).toBe(3);
+        expect(again.get<{ n: number }>('SELECT COUNT(*) AS n FROM schema_version')!.n).toBe(3);
+        expect(again.all<{ checksum: string }>('SELECT checksum FROM schema_version').every((r) => /^[0-9a-f]{64}$/.test(r.checksum))).toBe(true);
         expect(again.get<{ n: number }>('SELECT COUNT(*) AS n FROM track')!.n).toBe(4);
         expect(again.get<{ n: number }>('SELECT COUNT(*) AS n FROM competency')!.n).toBe(7);
         expect(again.get<{ n: number }>('SELECT COUNT(*) AS n FROM competency_rating')!.n).toBe(7);
@@ -60,6 +62,31 @@ describe('migrations', () => {
       } finally {
         again.close();
       }
+    } finally {
+      tmp.cleanup();
+    }
+  });
+
+  it('an applied migration that is later edited fails loudly (sha256 checksum)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bootquest-mig-'));
+    const db = new Db(join(dir, 'm.db'));
+    try {
+      writeFileSync(join(dir, '001_one.sql'), 'CREATE TABLE t1 (x INTEGER);\n');
+      expect(migrate(db, dir)).toEqual([1]);
+      writeFileSync(join(dir, '001_one.sql'), 'CREATE TABLE t1 (x INTEGER);\r\n'); // CRLF checkout: same checksum
+      expect(migrate(db, dir)).toEqual([]);
+      writeFileSync(join(dir, '001_one.sql'), 'CREATE TABLE t1 (x INTEGER, y TEXT);\n');
+      expect(() => migrate(db, dir)).toThrow(MigrationChecksumError);
+    } finally {
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('every connection runs with recursive_triggers ON (REPLACE fires delete triggers)', () => {
+    const tmp = makeTempDb();
+    try {
+      expect(tmp.db.get<{ recursive_triggers: number }>('PRAGMA recursive_triggers')!.recursive_triggers).toBe(1);
     } finally {
       tmp.cleanup();
     }
@@ -138,9 +165,9 @@ describe('row hygiene', () => {
     expect(toParam(false)).toBe(0);
     expect(toParam(undefined)).toBe(null);
     const unitId = makeUnit(ctx.db, ctx.clock);
-    const a = recordAttempt(ctx.db, { unitId, outcome: 'pass' }, ctx.clock);
+    const a = submit(ctx.db, ctx.clock, unitId);
     expect(a.assisted).toBe(false);
-    const b = recordAttempt(ctx.db, { unitId, outcome: 'pass', selfAssisted: true }, ctx.clock);
+    const b = recordAttempt(ctx.db, { unitId, answer: { a: 1 }, selfAssisted: true }, ctx.clock);
     expect(b.assisted).toBe(true);
   });
 });
@@ -149,19 +176,15 @@ describe('append-only enforcement (SQL triggers)', () => {
   const ctx = useTempDb();
 
   function seedOneOfEach() {
-    const unitId = makeUnit(ctx.db, ctx.clock);
-    const attempt = recordAttempt(ctx.db, { unitId, outcome: 'pass' }, ctx.clock);
-    const runId = recordRun(
-      ctx.db,
-      { kind: 'submit', attemptId: attempt.id, unitId, result: { pass: true, output: '', failures: [], durationMs: 5 } },
-      ctx.clock,
-    );
+    const unitId = makeUnit(ctx.db, ctx.clock, { kind: 'guided-project', competencies: ['feature-delivery'] });
+    const attempt = submit(ctx.db, ctx.clock, unitId);
+    const runId = ctx.db.get<{ id: number }>('SELECT id FROM run WHERE attempt_id = ?', attempt.id)!.id;
     const ev = recordEvidence(
       ctx.db,
-      { competency: 'feature-delivery', kind: 'artifact', intention: 'i', observation: 'o', assessor: 'pipeline', verified: true, attemptId: attempt.id },
+      { competency: 'feature-delivery', kind: 'artifact', intention: 'i', observation: 'o', attemptId: attempt.id },
       ctx.clock,
     );
-    const xp = awardXp(ctx.db, { kind: 'code', difficulty: 2, unitId }, ctx.clock);
+    const xp = awardXp(ctx.db, { kind: 'code', attemptId: attempt.id }, ctx.clock);
     const item = addReviewItem(ctx.db, { cardKey: 'k1' }, ctx.clock);
     review(ctx.db, item.id, 'good', ctx.clock);
     const logId = ctx.db.get<{ id: number }>('SELECT id FROM review_log')!.id;
@@ -179,11 +202,41 @@ describe('append-only enforcement (SQL triggers)', () => {
       expect(() => ctx.db.run(`DELETE FROM ${table} WHERE id = ?`, ids[table])).toThrow(/append-only/);
       expect(ctx.db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM ${table}`)!.n).toBeGreaterThan(0);
     });
+    it(`${table}: INSERT OR REPLACE / REPLACE INTO an existing id raises (W1a audit #1)`, () => {
+      const ids = seedOneOfEach();
+      const before = JSON.stringify(ctx.db.get(`SELECT * FROM ${table} WHERE id = ?`, ids[table]));
+      const cols = ctx.db.all<{ name: string }>(`SELECT name FROM pragma_table_info(?)`, table).map((c) => c.name);
+      const list = cols.join(', ');
+      for (const verb of ['INSERT OR REPLACE INTO', 'REPLACE INTO']) {
+        expect(() => ctx.db.run(`${verb} ${table} (${list}) SELECT ${list} FROM ${table} WHERE id = ?`, ids[table])).toThrow(/append-only/);
+      }
+      expect(JSON.stringify(ctx.db.get(`SELECT * FROM ${table} WHERE id = ?`, ids[table]))).toBe(before);
+    });
   }
 
+  it('the probe attacks from the audit are blocked: xp amount rewrite and evidence laundering via REPLACE', () => {
+    const ids = seedOneOfEach();
+    const xp = ctx.db.get<{ kind: string; day: string; created_at: number }>('SELECT kind, day, created_at FROM xp_event WHERE id = ?', ids.xp_event)!;
+    expect(() =>
+      ctx.db.run(`INSERT OR REPLACE INTO xp_event (id, kind, amount, day, created_at) VALUES (?, ?, 999, ?, ?)`, ids.xp_event, xp.kind, xp.day, xp.created_at),
+    ).toThrow(/append-only/);
+    expect(() =>
+      ctx.db.run(
+        `REPLACE INTO evidence (id, competency_id, kind, intention, observation, assistance, assessor, verified, created_at)
+         VALUES (?, 'feature-delivery', 'artifact', 'i', 'o', 'none', 'pipeline', 1, 0)`,
+        ids.evidence,
+      ),
+    ).toThrow(/append-only/);
+    // upsert goes through the UPDATE trigger
+    expect(() =>
+      ctx.db.run(`INSERT INTO xp_event (id, kind, amount, day, created_at) VALUES (?, 'code', 1, '2026-10-01', 0) ON CONFLICT(id) DO UPDATE SET amount = 999`, ids.xp_event),
+    ).toThrow(/append-only/);
+    expect(ctx.db.get<{ amount: number }>('SELECT amount FROM xp_event WHERE id = ?', ids.xp_event)!.amount).toBe(20);
+  });
+
   it('xp_event ledger rejects an UPDATE of the amount (the W1a XP case)', () => {
-    const unitId = makeUnit(ctx.db, ctx.clock);
-    const xp = awardXp(ctx.db, { kind: 'quiz', unitId }, ctx.clock);
+    const unitId = makeUnit(ctx.db, ctx.clock, { kind: 'quiz' });
+    const xp = awardXp(ctx.db, { kind: 'quiz', attemptId: submit(ctx.db, ctx.clock, unitId).id }, ctx.clock);
     expect(() => ctx.db.run('UPDATE xp_event SET amount = 999 WHERE id = ?', xp.id)).toThrow(/append-only/);
     expect(ctx.db.get<{ amount: number }>('SELECT amount FROM xp_event WHERE id = ?', xp.id)!.amount).toBe(2);
   });
@@ -246,7 +299,7 @@ describe('schema constraints', () => {
 
   it('attempt.variation_unit_id is nullable', () => {
     const unitId = makeUnit(ctx.db, ctx.clock);
-    const a = recordAttempt(ctx.db, { unitId, outcome: 'fail' }, ctx.clock);
+    const a = submit(ctx.db, ctx.clock, unitId, { pass: false });
     expect(a.variation_unit_id).toBe(null);
   });
 
@@ -260,6 +313,66 @@ describe('schema constraints', () => {
     expect(() => insertContentRef(ctx.db, { ...base, repo: 'elirc/ww12', path: 'moved/guide.md' }, ctx.clock)).toThrow(
       /UNIQUE/,
     );
+  });
+
+  it('insertUnit links content_ref by (repo, stable_key): twin repos with the same key resolve correctly (audit #9)', () => {
+    const base = {
+      path: 'docs/guide.md', sha: 'abc1234', title: 'Exercise 1', stableKey: 'h:exercise-1',
+      kind: 'guide', provenance: 'heading-hash',
+    } as const;
+    const a = insertContentRef(ctx.db, { ...base, repo: 'elirc/ww12' }, ctx.clock);
+    const b = insertContentRef(ctx.db, { ...base, repo: 'elirc/organized-experiment-ww12' }, ctx.clock);
+    const unit = (key: string, repo: string) =>
+      insertUnit(ctx.db, { key, track: 'js', kind: 'reading', title: key, contentRef: { repo, stableKey: 'h:exercise-1' } }, ctx.clock);
+    const ref = (id: number) => ctx.db.get<{ r: number }>('SELECT content_ref_id AS r FROM unit WHERE id = ?', id)!.r;
+    expect(ref(unit('u:twin', 'elirc/organized-experiment-ww12'))).toBe(b);
+    expect(ref(unit('u:orig', 'elirc/ww12'))).toBe(a);
+    expect(() => unit('u:none', 'elirc/other')).toThrow(/unknown content_ref/);
+    expect(() =>
+      insertUnit(ctx.db, { key: 'u:bare', track: 'js', kind: 'reading', title: 't', contentRef: 'h:exercise-1' }, ctx.clock),
+    ).toThrow(); // a bare stable key is ambiguous across twins: rejected by the schema
+  });
+
+  it('insertUnit stores phase, xp and target level losslessly (audit #15)', () => {
+    const id = insertUnit(ctx.db, { key: 'sp:U02', track: 'js', kind: 'program-unit', title: 'U02', code: 'U02', phase: 'P1', xp: 120, targetLevel: 3 }, ctx.clock);
+    expect(ctx.db.get('SELECT code, phase, xp, target_level FROM unit WHERE id = ?', id)).toEqual({ code: 'U02', phase: 'P1', xp: 120, target_level: 3 });
+  });
+
+  it('check.type / inverted must agree with the spec JSON; summary is <= 280 chars in SQL (audit #14, #18)', () => {
+    const unitId = makeUnit(ctx.db, ctx.clock);
+    expect(() =>
+      ctx.db.run(`INSERT INTO "check" (unit_id, type, spec, created_at) VALUES (?, 'quiz', ?, 0)`, unitId, JSON.stringify({ type: 'drill-js' })),
+    ).toThrow(/must match/);
+    expect(() =>
+      ctx.db.run(
+        `INSERT INTO "check" (unit_id, type, spec, inverted, created_at) VALUES (?, 'self-run', ?, 0, 0)`,
+        unitId,
+        JSON.stringify({ type: 'self-run', inverted: true }),
+      ),
+    ).toThrow(/must match/);
+    expect(() =>
+      ctx.db.run(
+        `INSERT INTO content_ref (repo, path, sha, title, summary, stable_key, kind, provenance, created_at, updated_at)
+         VALUES ('elirc/x', 'a.md', 'abc1234', 't', ?, 'k', 'guide', 'heading-hash', 0, 0)`,
+        'x'.repeat(281),
+      ),
+    ).toThrow(/280/);
+  });
+
+  it('recordRun stores free runs only; pass flags that contradict self-run counts are rejected (audit #12)', () => {
+    const unitId = makeUnit(ctx.db, ctx.clock);
+    expect(() =>
+      recordRun(ctx.db, { kind: 'submit', unitId, result: { pass: true, output: '', failures: [], durationMs: 1 } } as never, ctx.clock),
+    ).toThrow(/free runs only/);
+    const runId = recordRun(
+      ctx.db,
+      { kind: 'run', unitId, result: { pass: false, output: '', failures: [], durationMs: 1, counts: { passed: 2, failed: 0, todo: 1 } } },
+      ctx.clock,
+    );
+    expect(ctx.db.get<{ verdict: string }>('SELECT verdict FROM run WHERE id = ?', runId)!.verdict).toBe('todo');
+    expect(() =>
+      recordRun(ctx.db, { kind: 'run', unitId, result: { pass: true, output: '', failures: [], durationMs: 1, counts: { passed: 2, failed: 0, todo: 1 } } }, ctx.clock),
+    ).toThrow(/contradicts/);
   });
 
   it('content_ref rejects curriculum text (strict schema) and no table has a text-body column', () => {

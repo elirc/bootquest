@@ -6,13 +6,15 @@ import {
   addReviewItem,
   deserializeCard,
   dueCount,
+  getReviewItem,
   newCard,
   review,
   schedule,
   serializeCard,
 } from '../src/engines/fsrs.ts';
 import type { RatingChange } from '../src/engines/evidence.ts';
-import { localNoon, useTempDb } from './helpers.ts';
+import { graduate, localNoon, promoteTo, useTempDb } from './helpers.ts';
+
 
 const GRADES = ['again', 'hard', 'good', 'easy'] as const;
 
@@ -68,9 +70,10 @@ describe('FSRS wrapper (ts-fsrs)', () => {
     });
   });
 
-  it('a failed review on a competency-linked item triggers the demotion hook', () => {
-    ctx.db.run(`UPDATE competency_rating SET rating = 3 WHERE competency_id = 'data-http'`);
+  it('a LAPSE (Again on a Review-state card) on a competency-linked item triggers the demotion hook', () => {
+    promoteTo(ctx.db, ctx.clock, 'data-http', 3);
     const item = addReviewItem(ctx.db, { cardKey: 'sql-joins', competencyId: 'data-http' }, ctx.clock);
+    graduate(ctx.db, ctx.clock, item.id);
     const hooked: RatingChange[] = [];
     const out = review(ctx.db, item.id, 'again', ctx.clock, { onDemotion: (c) => hooked.push(c) });
     expect(out.demotion).toMatchObject({ competency: 'data-http', from: 3, to: 2 });
@@ -78,18 +81,52 @@ describe('FSRS wrapper (ts-fsrs)', () => {
     expect(getRating(ctx.db, 'data-http')).toBe(2);
     const ev = ctx.db.get<{ kind: string; competency_id: string }>('SELECT kind, competency_id FROM evidence WHERE id = ?', out.demotion!.evidenceId);
     expect(ev).toEqual({ kind: 'demotion', competency_id: 'data-http' });
-    expect(ctx.db.get<{ demotion_evidence_id: number }>('SELECT demotion_evidence_id FROM review_log')!.demotion_evidence_id).toBe(out.demotion!.evidenceId);
+    const log = ctx.db.get<{ demotion_evidence_id: number }>('SELECT demotion_evidence_id FROM review_log ORDER BY id DESC LIMIT 1')!;
+    expect(log.demotion_evidence_id).toBe(out.demotion!.evidenceId);
+  });
+
+  it('Again on a NEW (or still-learning) card is not a lapse and does not demote (audit #7)', () => {
+    promoteTo(ctx.db, ctx.clock, 'data-http', 3);
+    const item = addReviewItem(ctx.db, { cardKey: 'first-sight', competencyId: 'data-http' }, ctx.clock);
+    expect(review(ctx.db, item.id, 'again', ctx.clock).demotion).toBe(null); // New -> Learning
+    ctx.clock.set(getReviewItem(ctx.db, item.id).due_at);
+    expect(review(ctx.db, item.id, 'again', ctx.clock).demotion).toBe(null); // Learning
+    expect(getRating(ctx.db, 'data-http')).toBe(3);
   });
 
   it('Hard/Good/Easy on a competency item, and Again on an unlinked item, do not demote', () => {
-    ctx.db.run(`UPDATE competency_rating SET rating = 3 WHERE competency_id = 'data-http'`);
+    promoteTo(ctx.db, ctx.clock, 'data-http', 3);
     const linked = addReviewItem(ctx.db, { cardKey: 'linked', competencyId: 'data-http' }, ctx.clock);
     for (const g of ['hard', 'good', 'easy'] as const) {
       ctx.clock.advance(30 * DAY_MS);
       expect(review(ctx.db, linked.id, g, ctx.clock).demotion).toBe(null);
     }
     const unlinked = addReviewItem(ctx.db, { cardKey: 'unlinked' }, ctx.clock);
+    graduate(ctx.db, ctx.clock, unlinked.id);
     expect(review(ctx.db, unlinked.id, 'again', ctx.clock).demotion).toBe(null);
     expect(getRating(ctx.db, 'data-http')).toBe(3);
+  });
+
+  it('every review of a competency-linked card writes a review evidence row (grade + due movement)', () => {
+    const item = addReviewItem(ctx.db, { cardKey: 'ev', competencyId: 'testing-verification' }, ctx.clock);
+    const out = review(ctx.db, item.id, 'good', ctx.clock);
+    const ev = ctx.db.all<{ kind: string; assessor: string; verified: boolean; observation: string }>(
+      `SELECT kind, assessor, verified, observation FROM evidence WHERE competency_id = 'testing-verification'`,
+    );
+    expect(ev).toHaveLength(1);
+    expect(ev[0]).toMatchObject({ kind: 'review', assessor: 'pipeline', verified: true });
+    expect(ev[0]!.observation).toContain('graded good');
+    expect(ev[0]!.observation).toContain(new Date(out.nextDueAt).toISOString());
+    // an unlinked card has no competency to file evidence under
+    const plain = addReviewItem(ctx.db, { cardKey: 'plain' }, ctx.clock);
+    review(ctx.db, plain.id, 'good', ctx.clock);
+    expect(ctx.db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM evidence WHERE kind = 'review'`)!.n).toBe(1);
+  });
+
+  it('a card that is not due yet cannot be reviewed (no early-review XP)', () => {
+    const item = addReviewItem(ctx.db, { cardKey: 'early' }, ctx.clock);
+    review(ctx.db, item.id, 'easy', ctx.clock);
+    expect(() => review(ctx.db, item.id, 'easy', ctx.clock)).toThrow(/not due/);
+    expect(ctx.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM xp_event')!.n).toBe(1);
   });
 });

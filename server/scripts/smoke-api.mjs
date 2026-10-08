@@ -145,6 +145,14 @@ async function main() {
         `failures=${r.json?.result?.failures?.length} rows ${JSON.stringify(c1)}`,
       );
 
+      // 3b. quiz run is refused (submit-only: a free run would be an answer oracle), writes nothing
+      const qr = await api(base, 'POST', `/api/units/${quizId}/run`, { answer: fixture.submissions.quizRight });
+      step(
+        'quiz run refused 409 RUN_NOT_AVAILABLE, no rows',
+        qr.status === 409 && qr.json?.error?.code === 'RUN_NOT_AVAILABLE' && JSON.stringify(counts()) === JSON.stringify(c1),
+        `status ${qr.status}`,
+      );
+
       // 4. submit wrong: recorded, no XP
       const w = await api(base, 'POST', `/api/units/${quizId}/submit`, { answer: fixture.submissions.quizWrong });
       const c2 = counts();

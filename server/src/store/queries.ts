@@ -1,5 +1,6 @@
 import { CheckSpec, type CompetencyId, type TrackId, type UnitKind } from '@bootquest/shared';
 import type { Db } from '../db/database.ts';
+import { READING_ATTEST_SQL, VERIFIED_PASS_SQL } from '../engines/attempts.ts';
 
 /**
  * Read-side queries for the HTTP API (W1b). Pure SQL reads mapped to camelCase
@@ -78,9 +79,16 @@ export function unitsForTrack(db: Db, trackId: string): UnitRecord[] {
   return db.all<UnitRecord>(`SELECT ${UNIT_COLUMNS} FROM unit WHERE track_id = ? ORDER BY id`, trackId);
 }
 
-/** Units with at least one passing attempt (any mode). */
+/** Units with a verified pass (passing submit run, any mode) or, for reading units, a self-attest. */
 export function passedUnitIds(db: Db): Set<number> {
-  return new Set(db.all<{ u: number }>(`SELECT DISTINCT unit_id AS u FROM attempt WHERE outcome = 'pass'`).map((r) => r.u));
+  return new Set(
+    db
+      .all<{ u: number }>(
+        `SELECT DISTINCT a.unit_id AS u FROM attempt a JOIN unit u ON u.id = a.unit_id
+          WHERE ${VERIFIED_PASS_SQL} OR ${READING_ATTEST_SQL}`,
+      )
+      .map((r) => r.u),
+  );
 }
 
 /** Units whose solution has ever been revealed. */
@@ -105,19 +113,6 @@ export function contentCounts(db: Db): { units: number; checks: number } {
   const units = db.get<{ n: number }>('SELECT COUNT(*) AS n FROM unit')?.n ?? 0;
   const checks = db.get<{ n: number }>('SELECT COUNT(*) AS n FROM "check"')?.n ?? 0;
   return { units, checks };
-}
-
-/** Distinct units of a track with a passing submit inside [fromMs, toMs). Feeds the slate drill-set slot. */
-export function passedUnitsInWindow(db: Db, trackId: string, fromMs: number, toMs: number): number {
-  return (
-    db.get<{ n: number }>(
-      `SELECT COUNT(DISTINCT a.unit_id) AS n FROM attempt a JOIN unit u ON u.id = a.unit_id
-        WHERE u.track_id = ? AND a.outcome = 'pass' AND a.created_at >= ? AND a.created_at < ?`,
-      trackId,
-      fromMs,
-      toMs,
-    )?.n ?? 0
-  );
 }
 
 export interface CompetencyRow {

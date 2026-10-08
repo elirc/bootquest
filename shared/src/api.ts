@@ -21,6 +21,14 @@ export const API_ERROR_CODES = [
   'NO_SOLUTION',
   'NOT_REVEALED',
   'TRACK_LOCKED',
+  /** quiz / predict-output: free runs would be an answer oracle — submit only */
+  'RUN_NOT_AVAILABLE',
+  /** review grade on a card that is not due yet */
+  'NOT_DUE',
+  /** endpoint not valid for this unit's kind (e.g. self-attest on a non-reading unit) */
+  'WRONG_UNIT_KIND',
+  /** reading self-attest is once per unit */
+  'ALREADY_ATTESTED',
   'INTERNAL',
 ] as const;
 export const ApiErrorCode = z.enum(API_ERROR_CODES);
@@ -286,6 +294,12 @@ export const ReviewQueueItem = z
   })
   .strict();
 export const ReviewQueueResponse = z.object({ count: z.number(), items: z.array(ReviewQueueItem) }).strict();
+
+/** POST /api/units/:id/self-attest — reading units only, once per unit, 5 XP (spec §6.1). */
+export const SelfAttestResponse = z
+  .object({ attemptId: z.number(), xp: XpOutcome })
+  .strict();
+export type SelfAttestResponse = z.infer<typeof SelfAttestResponse>;
 
 export const GradeResponse = z
   .object({

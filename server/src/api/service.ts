@@ -1,31 +1,30 @@
-import type { CheckSpec, CompetencyId, XpKind } from '@bootquest/shared';
+import type { CheckSpec, CompetencyId } from '@bootquest/shared';
 import {
   toPublicCheck,
   type CanonicalRunResult,
   type DashboardResponse,
   type RevealResponse,
+  type SelfAttestResponse,
   type SubmitResponse,
   type UnitDetailResponse,
   type UnitLockState,
   type UnitSummary,
 } from '@bootquest/shared/api';
 import type { Db } from '../db/database.ts';
-import { isRevealed, recordAttempt, revealSolution } from '../engines/attempts.ts';
-import { addDays, nowMs, type Clock } from '../engines/clock.ts';
+import { HonestyRuleError, isRevealed, recordSubmission, revealSolution, selfAttestReading } from '../engines/attempts.ts';
+import { addDays, type Clock } from '../engines/clock.ts';
 import { recordEvidence } from '../engines/evidence.ts';
 import { dueCount, review } from '../engines/fsrs.ts';
 import type { RatingChange } from '../engines/evidence.ts';
 import { levelProgress } from '../engines/level.ts';
-import { closeElapsedDays, composeSlate, DRILL_SET_SIZE, markSlateItem, streakStatus } from '../engines/streak.ts';
-import { awardXp, dailyXp, totalXp } from '../engines/xp.ts';
-import { recordRun } from '../store/content.ts';
+import { closeElapsedDays, composeSlate, streakStatus } from '../engines/streak.ts';
+import { awardXp, dailyXp, totalXp, xpKindForCheck } from '../engines/xp.ts';
 import {
   competencyTable,
   getTrack,
   getUnit,
   listTracks,
   passedUnitIds,
-  passedUnitsInWindow,
   prerequisiteMap,
   primaryCheck,
   reviewItemExists,
@@ -166,26 +165,42 @@ function assertTrackOpen(db: Db, unit: UnitRecord): void {
   if (getTrack(db, unit.trackId)?.locked) throw new HttpError(403, 'TRACK_LOCKED', `track ${unit.trackId} is locked`);
 }
 
-/** POST /run — free, unlimited, NOT logged: grades and returns; writes nothing. */
+/** Map an engine honesty refusal to its HTTP shape; anything else propagates. */
+function withHonesty<T>(fn: () => T): T {
+  try {
+    return fn();
+  } catch (err) {
+    if (err instanceof HonestyRuleError) {
+      switch (err.code) {
+        case 'NOT_DUE':
+          throw new HttpError(409, 'NOT_DUE', err.message);
+        case 'WRONG_UNIT_KIND':
+          throw new HttpError(409, 'WRONG_UNIT_KIND', err.message);
+        case 'ALREADY_ATTESTED':
+          throw new HttpError(409, 'ALREADY_ATTESTED', err.message);
+        default:
+          break; // any other honesty refusal here is a server bug: 500
+      }
+    }
+    throw err;
+  }
+}
+
+/**
+ * Check types whose free run would be an answer oracle (a 3-choice quiz is
+ * solved in 3 unrecorded runs, then submitted for full XP): submit only.
+ */
+const SUBMIT_ONLY_CHECKS: ReadonlySet<CheckSpec['type']> = new Set<CheckSpec['type']>(['quiz', 'predict-output']);
+
+/** POST /run — free, unlimited, NOT logged: grades and returns; writes nothing. Not for quiz / predict-output. */
 export async function runUnit(deps: ServiceDeps, unitId: number, submission: LearnerSubmission): Promise<CanonicalRunResult> {
   const unit = requireUnit(deps.db, unitId);
   assertTrackOpen(deps.db, unit);
   const check = requireCheck(deps.db, unit);
+  if (SUBMIT_ONLY_CHECKS.has(check.type)) {
+    throw new HttpError(409, 'RUN_NOT_AVAILABLE', `${check.type} checks are submit-only (a free run would reveal the answer)`);
+  }
   return grade(deps, check.spec, submission);
-}
-
-function xpKindFor(type: CheckSpec['type']): XpKind {
-  if (type === 'quiz') return 'quiz';
-  if (type === 'predict-output') return 'predict';
-  return 'code';
-}
-
-/** Local-day window [start, end) containing `ms` (calendar arithmetic, DST-safe). */
-function dayWindow(ms: number): [number, number] {
-  const d = new Date(ms);
-  const start = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-  const end = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime();
-  return [start, end];
 }
 
 /**
@@ -203,32 +218,27 @@ export async function submitUnit(
   assertTrackOpen(db, unit);
   const check = requireCheck(db, unit);
   const result = await grade(deps, check.spec, submission);
-  const verdict = result.pass ? 'pass' : 'fail';
 
   return db.tx(() => {
     closeElapsedDays(db, clock);
-    const attempt = recordAttempt(
+    // attempt outcome is derived from the verdict; the submit run is written with it
+    const { attempt, runId, verdict } = recordSubmission(
       db,
       {
         unitId: unit.id,
         checkId: check.id,
-        outcome: verdict,
         selfAssisted: submission.selfAssisted,
-        score: result.pass ? 1 : 0,
+        result,
         answer: submission.code !== undefined ? { code: submission.code } : { answer: submission.answer },
       },
       clock,
     );
-    const runId = recordRun(db, { kind: 'submit', result, attemptId: attempt.id, checkId: check.id, unitId: unit.id }, clock);
 
     let xp: SubmitResponse['xp'] = null;
-    if (result.pass) {
-      const kind = xpKindFor(check.type);
-      const award = awardXp(
-        db,
-        { kind, unitId: unit.id, attemptId: attempt.id, trackId: unit.trackId, ...(kind === 'code' ? { difficulty: unit.difficulty ?? 1 } : {}) },
-        clock,
-      );
+    const kind = xpKindForCheck(check.type);
+    if (verdict === 'pass' && kind !== null) {
+      // the engine re-verifies the attempt and reads difficulty/track from the unit row
+      const award = awardXp(db, { kind, attemptId: attempt.id }, clock);
       xp = { id: award.id, amount: award.amount, reason: award.reason };
     }
 
@@ -241,24 +251,13 @@ export async function submitUnit(
             kind: 'submit',
             intention: `submit ${unit.key} (${check.type})`,
             observation: result.pass ? 'check passed' : `check failed (${result.failures.length} failing)`,
-            assessor: 'pipeline',
-            verified: result.pass,
-            score: result.pass ? 1 : 0,
             attemptId: attempt.id,
           },
           clock,
         ).id,
     );
 
-    if (result.pass) {
-      const slate = composeSlate(db, clock);
-      const slot = `drill:${unit.trackId}` as const;
-      const item = slate.items.find((i) => i.slot === slot);
-      if (item && !item.done) {
-        const [from, to] = dayWindow(nowMs(clock));
-        if (passedUnitsInWindow(db, unit.trackId, from, to) >= DRILL_SET_SIZE) markSlateItem(db, slot, clock);
-      }
-    }
+    composeSlate(db, clock); // slots are derived from the ledger; this only opens today's row
 
     return {
       result,
@@ -269,6 +268,28 @@ export async function submitUnit(
       evidenceIds,
     };
   });
+}
+
+// ---------------------------------------------------------------- reading self-attest
+
+/**
+ * POST /self-attest — reading units only (spec §4 study-quest reading steps,
+ * §6.1 "reading self-attest 5"): once per unit, writes a solo attempt with the
+ * self-attest marker, then 5 XP through the xp engine (which re-verifies it).
+ */
+export function selfAttestUnit(deps: ServiceDeps, unitId: number): SelfAttestResponse {
+  const { db, clock } = deps;
+  const unit = requireUnit(db, unitId);
+  assertTrackOpen(db, unit);
+  return withHonesty(() =>
+    db.tx(() => {
+      closeElapsedDays(db, clock);
+      const attempt = selfAttestReading(db, unit.id, clock);
+      const award = awardXp(db, { kind: 'reading', attemptId: attempt.id }, clock);
+      composeSlate(db, clock);
+      return { attemptId: attempt.id, xp: { id: award.id, amount: award.amount, reason: award.reason } };
+    }),
+  );
 }
 
 // ---------------------------------------------------------------- reveal
@@ -328,14 +349,11 @@ export function getRevealedSolution(deps: ServiceDeps, unitId: number): RevealRe
 export function gradeReview(deps: ServiceDeps, itemId: number, gradeValue: 'again' | 'hard' | 'good' | 'easy') {
   const { db, clock } = deps;
   if (!reviewItemExists(db, itemId)) throw new HttpError(404, 'NOT_FOUND', `review item ${itemId} not found`);
-  return db.tx(() => {
+  return withHonesty(() => db.tx(() => {
     const demotions: RatingChange[] = [];
     const outcome = review(db, itemId, gradeValue, clock, { onDemotion: (c) => demotions.push(c) });
     const remainingDue = dueCount(db, clock);
-    if (remainingDue === 0) {
-      const slate = composeSlate(db, clock);
-      if (slate.items.some((i) => i.slot === 'review' && !i.done)) markSlateItem(db, 'review', clock);
-    }
+    composeSlate(db, clock); // the review slot is derived from review_log
     return {
       itemId,
       grade: gradeValue,
@@ -345,7 +363,7 @@ export function gradeReview(deps: ServiceDeps, itemId: number, gradeValue: 'agai
       demotion: demotions[0] ?? outcome.demotion,
       remainingDue,
     };
-  });
+  }));
 }
 
 // ---------------------------------------------------------------- dashboard

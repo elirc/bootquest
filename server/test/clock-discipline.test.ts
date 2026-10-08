@@ -15,6 +15,8 @@ describe('clock discipline', () => {
         expect(src, f).not.toMatch(/Date\.now\s*\(/);
         expect(src, f).not.toMatch(/new\s+Date\s*\(\s*\)/);
         expect(src, f).not.toMatch(/performance\.now\s*\(/);
+        // a bare Date() call (no `new`) also returns the wall-clock time as a string
+        expect(src, f).not.toMatch(/(?<![\w.$])Date\s*\(\s*\)/);
       }
     }
   });

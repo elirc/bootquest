@@ -2,8 +2,9 @@ import { createEmptyCard, fsrs, generatorParameters, Rating, State, type Card, t
 import { ReviewGrade, type CompetencyId } from '@bootquest/shared';
 import type { Db } from '../db/database.ts';
 import { nowMs, type Clock } from './clock.ts';
-import { demote, type RatingChange } from './evidence.ts';
-import { awardXp, type XpAward } from './xp.ts';
+import { HonestyRuleError } from './attempts.ts';
+import { demote, writeReviewEvidence, type RatingChange } from './evidence.ts';
+import { awardReviewXp, type XpAward } from './xp.ts';
 
 /**
  * FSRS review engine over ts-fsrs (pinned 5.2.3). Fuzz is disabled so due
@@ -114,15 +115,21 @@ export interface ReviewOptions {
 
 /**
  * Grade one review: reschedule via FSRS, append review_log, award 1 XP
- * (capped 30/day by xp.ts), and — on 'again' for a competency-linked item —
- * emit a demotion (evidence row + rating one notch down).
+ * (capped 30/day), write a 'review' evidence row for a competency-linked item
+ * (spec §6.2: every review writes evidence), and — only on a LAPSE, i.e.
+ * 'again' on a card that was in FSRS Review state before this grade — demote
+ * that competency one notch. Again on a New/Learning/Relearning card is not
+ * forgetting learned material and does not demote (W1a audit #7).
+ * Cards that are not due yet are refused (no early-review XP farming).
  */
 export function review(db: Db, itemId: number, grade: ReviewGrade, now: Clock, opts: ReviewOptions = {}): ReviewOutcome {
   const g = ReviewGrade.parse(grade);
   const t = nowMs(now);
   const outcome = db.tx(() => {
     const item = getReviewItem(db, itemId);
-    const next = schedule(deserializeCard(item.fsrs_state), g, now);
+    if (item.due_at > t) throw new HonestyRuleError('NOT_DUE', `review item ${itemId} is not due until ${new Date(item.due_at).toISOString()}`);
+    const before = deserializeCard(item.fsrs_state);
+    const next = schedule(before, g, now);
     db.run(
       'UPDATE review_item SET fsrs_state = ?, due_at = ?, updated_at = ? WHERE id = ?',
       serializeCard(next),
@@ -130,10 +137,17 @@ export function review(db: Db, itemId: number, grade: ReviewGrade, now: Clock, o
       t,
       itemId,
     );
-    const xp = awardXp(db, { kind: 'review' }, now);
+    const xp = awardReviewXp(db, now);
     let demotion: RatingChange | null = null;
-    if (g === 'again' && item.competency_id !== null) {
-      demotion = demote(db, item.competency_id, now, `failed FSRS review of ${item.card_key}`);
+    if (item.competency_id !== null) {
+      writeReviewEvidence(
+        db,
+        { competency: item.competency_id, unitId: item.unit_id, cardKey: item.card_key, grade: g, prevDueAt: item.due_at, nextDueAt: next.due.getTime() },
+        t,
+      );
+      if (g === 'again' && before.state === State.Review) {
+        demotion = demote(db, item.competency_id, now, `lapse: failed FSRS review of ${item.card_key}`);
+      }
     }
     db.run(
       `INSERT INTO review_log (review_item_id, rating, prev_due_at, next_due_at, xp_event_id, demotion_evidence_id, reviewed_at)
