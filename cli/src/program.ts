@@ -6,6 +6,7 @@ import { ApiClient, DEFAULT_SERVER, UsageError, type FetchLike } from './client.
 import { ConfigError, loadConfig, resolveSubmissionFile, type ProjectConfig } from './config.ts';
 import { formatDashboard, formatError, formatProject, formatRun, formatSubmit, formatSync } from './format.ts';
 import { classifyUnit, resolveUnit, type Delivery } from './units.ts';
+import { formatMutation, MutateError, mutateProject, spawnTool, type ToolRunner } from './mutate.ts';
 
 /**
  * Exit codes (scripts depend on these):
@@ -29,6 +30,8 @@ export interface CliIo {
   out(text: string): void;
   err(text: string): void;
   version?: string;
+  /** W6 test seam: how `mutate` runs Stryker (default: real child processes) */
+  runTool?: ToolRunner;
 }
 
 interface GlobalOpts {
@@ -215,6 +218,52 @@ export function buildProgram(io: CliIo, setExit: (code: number) => void): Comman
       const resp = await p.client.submit(p.detail.unit.id, { ...p.payload, selfAssisted: o.assisted === true });
       io.out(formatSubmit(p.detail, resp, p.source, p.label));
       setExit(resp.verdict === 'pass' ? EXIT.OK : EXIT.NOT_PASSED);
+    });
+
+  program
+    .command('mutate [path]')
+    .description(
+      'mutation gate for the current SOLO-PROJECT unit (spec §5; never drills): runs Stryker (JS, --incremental) or ' +
+        'Stryker.NET (C#) on your project dir (default: the directory holding .bootquest.json; for C#, your TEST project dir), ' +
+        'enforces the per-file floor (lesson threshold, default 40%) AND overall 60%, 15-minute hard limit, prints the ' +
+        'surviving mutants, and on pass records verified evidence on your latest passing submit. Exit 0 pass+recorded, 1 gate failed, 2 error',
+    )
+    .option('--quiet', 'do not stream the tool output')
+    .action(async (pathArg: string | undefined, o: { quiet?: boolean }, cmd: Command) => {
+      const client = new ApiClient(serverUrl(cmd.optsWithGlobals<GlobalOpts>(), io.env), io.fetch);
+      const config = requireConfig(io.cwd);
+      const detail = await resolveUnit(client, config);
+      const projectDir = pathArg !== undefined ? resolve(io.cwd, pathArg) : config.dir;
+      io.out(`Mutating "${detail.unit.title}" (${detail.unit.kind}, ${detail.unit.trackId}) in ${projectDir} - this takes minutes, not seconds.`);
+      let outcome;
+      try {
+        outcome = await mutateProject(detail, projectDir, {
+          run: io.runTool ?? spawnTool,
+          onOutput: (s) => {
+            if (!o.quiet) io.err(s.replace(/\n$/, ''));
+          },
+          env: io.env,
+        });
+      } catch (err) {
+        if (err instanceof MutateError) {
+          io.err(`bootquest mutate: ${err.message}`);
+          return setExit(EXIT.ERROR);
+        }
+        throw err;
+      }
+      io.out(formatMutation(outcome));
+      if (!outcome.verdict.pass) {
+        io.out('Nothing was recorded. Strengthen the tests that let these mutants survive, then run bootquest mutate again.');
+        return setExit(EXIT.NOT_PASSED);
+      }
+      const resp = await client.mutation(detail.unit.id, {
+        tool: outcome.tool,
+        toolVersion: outcome.toolVersion,
+        durationMs: outcome.durationMs,
+        files: outcome.report.files,
+      });
+      io.out(`Recorded: mutation evidence #${resp.evidenceIds.join(', #')} on attempt #${resp.attemptId} (server re-checked: overall ${resp.verdict.overallPct}%, floor ${resp.verdict.floorPct}%).`);
+      setExit(EXIT.OK);
     });
 
   program

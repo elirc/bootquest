@@ -1,4 +1,4 @@
-import type { CheckSpec, CompetencyId } from '@bootquest/shared';
+import { PROJECT_UNIT_KINDS, type CheckSpec, type CompetencyId } from '@bootquest/shared';
 import {
   toPublicCheck,
   type CampaignResponse,
@@ -17,14 +17,14 @@ import type { Db } from '../db/database.ts';
 import { HonestyRuleError, isRevealed, recordAttempt, recordSubmission, revealSolution, selfAttestReading } from '../engines/attempts.ts';
 import { campaignState, currentLevel, questUnitUnlocked } from '../engines/campaign.ts';
 import { addDays, type Clock } from '../engines/clock.ts';
-import { recordEvidence } from '../engines/evidence.ts';
+import { promoteIfEligible, recordEvidence } from '../engines/evidence.ts';
+import { assertRetestOpen } from '../engines/ladder.ts';
 import { dueCount, review } from '../engines/fsrs.ts';
 import type { RatingChange } from '../engines/evidence.ts';
 import { levelProgress } from '../engines/level.ts';
 import { closeElapsedDays, composeSlate, streakStatus } from '../engines/streak.ts';
 import { awardXp, dailyXp, totalXp, xpKindForCheck } from '../engines/xp.ts';
 import {
-  competencyTable,
   getTrack,
   getUnit,
   getUnitByKey,
@@ -43,6 +43,8 @@ import {
   type UnitRecord,
 } from '../store/queries.ts';
 import type { UnitContentStore } from './content-store.ts';
+import { competencyRowsWithPromotion, explainBackPublicFor, kataPublicFor } from './ladder-service.ts';
+import type { SeedItemStore } from '../store/seed-items.ts';
 import { HttpError } from './http.ts';
 import { CheckRefusedError, gradeDeterministic, SubmissionShapeError, UnsupportedCheckError, type LearnerSubmission, type RunnerRegistry } from './runners.ts';
 import type { SyncService } from '../sync/service.ts';
@@ -61,6 +63,8 @@ export interface ServiceDeps {
   content: UnitContentStore;
   /** W4 GitHub sync + per-SHA caches; null = this server has no sync configured */
   sync: SyncService | null;
+  /** W6 seed items (explain-back question sets, patch katas) — public/private halves split server-side */
+  seedItems: SeedItemStore;
 }
 
 export const HEATMAP_DAYS = 120;
@@ -147,7 +151,12 @@ export function getUnitDetail(deps: ServiceDeps, unitId: number): UnitDetailResp
   const check = primaryCheck(db, unit.id);
   const summary = summarize(unit, track?.locked ?? true, passedUnitIds(db), revealedUnitIds(db), new Map([[unit.id, unitPrerequisites(db, unit.id)]]));
   const entry = deps.content.get(unit.key);
+  // W6: PUBLIC halves only (questions; diff + context) — key points / defect keys never leave here
+  const explainBack = check ? explainBackPublicFor(deps.seedItems, check.spec) : undefined;
+  const kata = check ? kataPublicFor(deps.seedItems, check.spec) : undefined;
   return {
+    ...(explainBack !== undefined ? { explainBack } : {}),
+    ...(kata !== undefined ? { kata } : {}),
     unit: { ...summary, code: unit.code, competencies: unitCompetencies(db, unit.id), variationOfUnitId: unit.variationOfUnitId },
     // PUBLIC projection only — the full spec never leaves the server
     check: check ? { id: check.id, threshold: check.threshold, spec: toPublicCheck(check.spec) } : null,
@@ -326,11 +335,39 @@ function withHonesty<T>(fn: () => T): T {
  */
 const SUBMIT_ONLY_CHECKS: ReadonlySet<CheckSpec['type']> = new Set<CheckSpec['type']>(['quiz', 'predict-output']);
 
+/** W6: answer-first units are never run/submitted: they have their own immutable-answer endpoints. */
+const ANSWER_FIRST_CHECKS: ReadonlyMap<CheckSpec['type'], string> = new Map<CheckSpec['type'], string>([
+  ['explain-back', 'explain-back/answers'],
+  ['patch-kata', 'kata/findings'],
+]);
+
+function refuseAnswerFirst(unit: UnitRecord, check: CheckRecord): void {
+  const route = ANSWER_FIRST_CHECKS.get(check.type);
+  if (route) {
+    throw new HttpError(409, 'WRONG_UNIT_KIND', `${check.type} units are answered first, then self-scored: POST /api/units/${unit.id}/${route}`);
+  }
+}
+
+const PROJECT_KIND_SET: ReadonlySet<string> = new Set(PROJECT_UNIT_KINDS);
+
+/**
+ * The evidence kind a graded submit writes (W6): a project unit's submit IS the
+ * promotion leg (a) artifact; a changed-example retest unit's submit IS leg (c);
+ * everything else is plain 'submit' evidence. The engine still re-verifies all
+ * of it (verified pass, solo, timing) before a leg counts.
+ */
+function submitEvidenceKind(unit: UnitRecord): 'artifact' | 'retest' | 'submit' {
+  if (PROJECT_KIND_SET.has(unit.kind)) return 'artifact';
+  if (unit.kind === 'retest' && unit.variationOfUnitId !== null) return 'retest';
+  return 'submit';
+}
+
 /** POST /run — free, unlimited, NOT logged: grades and returns; writes nothing. Not for quiz / predict-output. */
 export async function runUnit(deps: ServiceDeps, unitId: number, submission: LearnerSubmission): Promise<CanonicalRunResult> {
   const unit = requireUnit(deps.db, unitId);
   assertTrackOpen(deps.db, unit);
   const check = requireCheck(deps.db, unit);
+  refuseAnswerFirst(unit, check);
   if (SUBMIT_ONLY_CHECKS.has(check.type)) {
     throw new HttpError(409, 'RUN_NOT_AVAILABLE', `${check.type} checks are submit-only (a free run would reveal the answer)`);
   }
@@ -359,6 +396,10 @@ export async function submitUnit(
   const unit = requireUnit(db, unitId);
   assertTrackOpen(db, unit);
   const check = requireCheck(db, unit);
+  refuseAnswerFirst(unit, check);
+  // W6: a scheduled changed-example retest opens >= 2 days after artifact + explain-back;
+  // before that, nothing is graded or recorded (the engine's 48h rule stays the truth either way)
+  if (unit.kind === 'retest') withHonesty(() => assertRetestOpen(db, unit.id, clock));
   const result = await grade(deps, check.spec, submission);
 
   return db.tx(() => {
@@ -384,20 +425,25 @@ export async function submitUnit(
       xp = { id: award.id, amount: award.amount, reason: award.reason };
     }
 
-    const evidenceIds = unitCompetencies(db, unit.id).map(
+    const evidenceKind = submitEvidenceKind(unit);
+    const competencies = unitCompetencies(db, unit.id);
+    const evidenceIds = competencies.map(
       (competency: CompetencyId) =>
         recordEvidence(
           db,
           {
             competency,
-            kind: 'submit',
-            intention: `submit ${unit.key} (${check.type})`,
+            kind: evidenceKind,
+            intention: `${evidenceKind === 'submit' ? 'submit' : evidenceKind === 'artifact' ? 'project artifact' : 'changed-example retest'} ${unit.key} (${check.type})`,
             observation: result.pass ? 'check passed' : `check failed (${result.failures.length} failing)`,
             attemptId: attempt.id,
           },
           clock,
         ).id,
     );
+
+    // W6: a passing artifact / retest may complete a linked three-leg chain (engine decides)
+    const promotions = verdict === 'pass' ? competencies.flatMap((c) => promoteIfEligible(db, c, clock) ?? []) : [];
 
     composeSlate(db, clock); // slots are derived from the ledger; this only opens today's row
 
@@ -408,6 +454,7 @@ export async function submitUnit(
       runId,
       xp,
       evidenceIds,
+      promotions,
     };
   });
 }
@@ -597,7 +644,7 @@ export function getDashboard(deps: ServiceDeps): DashboardResponse {
       },
       heatmap,
       xp: { total: lp.xp, level: lp.level, intoLevel: lp.intoLevel, levelSpan: lp.levelSpan, nextAt: lp.nextAt },
-      competencies: competencyTable(db),
+      competencies: competencyRowsWithPromotion(db, clock),
       slate: { day: slate.day, status: slate.status, items: slate.items },
       reviewQueue: { due: dueCount(db, clock) },
       nextUp,

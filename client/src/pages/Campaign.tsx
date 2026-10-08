@@ -1,18 +1,21 @@
 import { useRef, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
 import { useApi } from '../api/context';
-import type { NodeState, TrackId, TrackSummary, UnitSummary } from '../api/types';
+import type { CampaignActDto, CampaignQuestDto, QuestState, TrackId, TrackSummary } from '../api/types';
 import { Icon } from '../components/Icon';
-import { Chip, LoadState, PageHeader } from '../components/ui';
+import { Chip, LoadState, PageHeader, ProgressBar } from '../components/ui';
+import { toRoman } from '../lib/format';
 import { hasModifier, isEditableTarget, useKeydown } from '../lib/keys';
 import { useAsync } from '../lib/useAsync';
 import { TRACK_IDS, isTrackId } from '../lib/view';
 
-const STATE_LABEL: Record<NodeState, string> = {
+const STATE_LABEL: Record<QuestState, string> = {
   done: 'Done',
   available: 'Available',
+  pending: 'Content pending',
   locked: 'Locked',
 };
+const NODE_CLASS: Record<QuestState, string> = { done: 'complete', available: 'available', pending: 'locked', locked: 'locked' };
 
 export function CampaignPage() {
   const { trackId } = useParams();
@@ -20,19 +23,16 @@ export function CampaignPage() {
   return <CampaignView trackId={trackId} />;
 }
 
-/**
- * The campaign view is derived from GET /api/tracks/:id/units (there is no /campaign route).
- * Acts arrive in W5; until then the track renders as ONE act in server unit order.
- */
+/** Bound to GET /api/tracks/:id/campaign (W5b): acts, derived unlock state, quests in rank order. */
 function CampaignView({ trackId }: { trackId: TrackId }) {
   const api = useApi();
   const tracks = useAsync(() => api.getTracks(), [api]);
-  const units = useAsync(() => api.getTrackUnits(trackId), [api, trackId]);
+  const campaign = useAsync(() => api.getCampaign(trackId), [api, trackId]);
   const mapRef = useRef<HTMLDivElement>(null);
-  const track = units.data?.track ?? tracks.data?.tracks.find((t) => t.id === trackId);
+  const track = campaign.data?.track ?? tracks.data?.tracks.find((t) => t.id === trackId);
   const locked = track?.locked === true;
 
-  // j / k walk the path (including locked nodes, which are focusable but not actionable).
+  // j / k walk the quests (including locked ones, which are focusable but not actionable).
   useKeydown((e) => {
     if (hasModifier(e) || isEditableTarget(e.target)) return;
     if (e.key !== 'j' && e.key !== 'k') return;
@@ -60,10 +60,23 @@ function CampaignView({ trackId }: { trackId: TrackId }) {
             <Icon name="lock" /> <strong>{track.name} is locked.</strong> No content is available on this track yet.
           </div>
         )}
-        {units.status === 'ready' ? (
-          <CampaignPath units={units.data.units} />
+        {campaign.status === 'ready' ? (
+          campaign.data.acts.length === 0 ? (
+            <div className="act-empty" data-testid="campaign-empty">
+              <p>No campaign acts are seeded for this track yet.</p>
+              <p className="muted small">Practice units on this track are still playable from the dashboard's next-up list.</p>
+            </div>
+          ) : (
+            <ol className="acts" role="tabpanel" aria-label="Campaign acts">
+              {[...campaign.data.acts]
+                .sort((a, b) => a.ordinal - b.ordinal)
+                .map((act) => (
+                  <ActCard key={act.id} act={act} level={campaign.data.level} />
+                ))}
+            </ol>
+          )
         ) : (
-          <LoadState error={units.error} onRetry={units.reload} minHeight={480} />
+          <LoadState error={campaign.error} onRetry={campaign.reload} minHeight={480} />
         )}
       </div>
     </>
@@ -103,72 +116,87 @@ function TrackTabs({ tracks, current }: { tracks: TrackSummary[]; current: Track
   );
 }
 
-function CampaignPath({ units }: { units: UnitSummary[] }) {
-  const done = units.filter((u) => u.state === 'done').length;
-  const state = units.length === 0 ? 'locked' : done === units.length ? 'complete' : units.some((u) => u.state !== 'locked') ? 'in-progress' : 'locked';
+function unlockText(act: CampaignActDto, level: number): string {
+  const r = act.unlockRule;
+  if (r.staticLock) return 'Locked: content arrives after V1.';
+  const parts: string[] = [];
+  if (r.previousCorePct > 0) parts.push(`${r.previousCorePct}% of the previous act's core quests`);
+  if (r.level > 1) parts.push(`level ${r.level} (you are level ${level})`);
+  return `Unlocks at ${parts.length ? parts.join(' and ') : 'start'}.`;
+}
+
+function ActCard({ act, level }: { act: CampaignActDto; level: number }) {
+  const { coreDone, coreTotal } = act.progress;
+  const state = !act.unlocked ? 'locked' : coreTotal > 0 && coreDone >= coreTotal ? 'complete' : 'in-progress';
   return (
-    <ol className="acts" role="tabpanel" aria-label="Campaign acts">
-      <li className={`act act-${state}`} data-act="all">
-        <header className="act-head">
-          <span className="act-num" aria-hidden="true">
-            I
+    <li className={`act act-${state}`} data-act={act.ordinal} data-unlocked={act.unlocked}>
+      <header className="act-head">
+        <span className="act-num" aria-hidden="true">
+          {toRoman(act.ordinal)}
+        </span>
+        <div className="act-text">
+          <h2 className="act-title">
+            Act {act.ordinal}: {act.title}
+          </h2>
+          {act.theme && <p className="act-summary">{act.theme}</p>}
+        </div>
+        <div className="act-side">
+          {act.unlocked ? <Chip tone="success">unlocked</Chip> : <Chip>locked</Chip>}
+          <span className="muted">
+            core {coreDone}/{coreTotal}
           </span>
-          <div className="act-text">
-            <h2 className="act-title">All units</h2>
-            <p className="act-summary">Single act in unit order — campaign acts arrive in W5.</p>
-          </div>
-          <div className="act-side">
-            {units.length > 0 && (
-              <span className="muted">
-                {done}/{units.length} done
-              </span>
-            )}
-          </div>
-        </header>
-        {units.length === 0 ? (
-          <p className="act-gate">No units on this track yet.</p>
-        ) : (
-          <ol className="path">
-            {units.map((u) => (
-              <StepNode key={u.id} unit={u} />
-            ))}
-          </ol>
-        )}
-      </li>
-    </ol>
+          {coreTotal > 0 && <ProgressBar value={coreDone} max={coreTotal} label={`Act ${act.ordinal} core progress`} tone="success" />}
+        </div>
+      </header>
+      {!act.unlocked && (
+        <p className="act-gate">
+          <Icon name="lock" size={12} /> {unlockText(act, level)}
+        </p>
+      )}
+      {act.quests.length === 0 ? (
+        <p className="act-gate">No quests seeded in this act yet.</p>
+      ) : (
+        <ol className="path">
+          {act.quests.map((q) => (
+            <QuestNode key={q.id} quest={q} actUnlocked={act.unlocked} />
+          ))}
+        </ol>
+      )}
+    </li>
   );
 }
 
-const NODE_CLASS: Record<NodeState, string> = { done: 'complete', available: 'available', locked: 'locked' };
-
-function StepNode({ unit }: { unit: UnitSummary }) {
-  const actionable = unit.state !== 'locked';
-  const cls = NODE_CLASS[unit.state];
+function QuestNode({ quest, actUnlocked }: { quest: CampaignQuestDto; actUnlocked: boolean }) {
+  const actionable = actUnlocked && quest.state !== 'locked' && quest.unitId !== undefined;
+  const cls = NODE_CLASS[quest.state];
   const body = (
     <>
       <span className={`node node-${cls}`} aria-hidden="true">
-        {unit.state === 'done' && <Icon name="check" size={12} />}
-        {unit.state === 'locked' && <Icon name="lock" size={11} />}
+        {quest.state === 'done' && <Icon name="check" size={12} />}
+        {quest.state === 'locked' && <Icon name="lock" size={11} />}
       </span>
       <span className="step-main">
-        <span className="step-title">{unit.title}</span>
+        <span className="step-title">{quest.title}</span>
         <span className="step-meta">
-          {unit.kind}
-          {unit.difficulty !== null && <> · difficulty {unit.difficulty}</>}
+          {quest.kind} · {quest.repo}
+          {quest.twinRepo && <> · twin of {quest.twinRepo}</>}
         </span>
       </span>
-      {unit.revealed && <Chip tone="warning">revealed · 0 XP</Chip>}
-      <span className="sr-only">, {STATE_LABEL[unit.state]}</span>
+      <span className="chips">
+        {quest.core ? <Chip tone="accent">core</Chip> : <Chip>optional</Chip>}
+        {quest.contentPending && <Chip tone="warning">content pending</Chip>}
+      </span>
+      <span className="sr-only">, {STATE_LABEL[quest.state]}</span>
     </>
   );
   return (
-    <li className={`step step-${cls}`}>
+    <li className={`step step-${cls}`} data-quest={quest.id}>
       {actionable ? (
-        <Link to={`/play/${unit.id}`} className="step-box" data-step data-state={unit.state}>
+        <Link to={`/play/${quest.unitId}`} className="step-box" data-step data-state={quest.state}>
           {body}
         </Link>
       ) : (
-        <div className="step-box" data-step data-state={unit.state} tabIndex={-1} aria-disabled="true">
+        <div className="step-box" data-step data-state={quest.state} tabIndex={-1} aria-disabled="true">
           {body}
         </div>
       )}

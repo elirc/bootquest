@@ -209,7 +209,8 @@ export const ATTEMPT_LINKED_EVIDENCE_KINDS = ['artifact', 'retest', 'submit', 'e
 export const EvidenceInput = z
   .object({
     competency: CompetencyId,
-    kind: EvidenceKind.exclude(['promotion', 'demotion', 'review']),
+    // promotion/demotion/review/mutation are engine-internal writers (evidence.ts, fsrs.ts, mutation.ts)
+    kind: EvidenceKind.exclude(['promotion', 'demotion', 'review', 'mutation']),
     intention: z.string().min(1),
     observation: z.string().min(1),
     rating: z.number().int().min(1).max(5).optional(),

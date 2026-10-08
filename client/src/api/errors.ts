@@ -12,6 +12,13 @@ const FRIENDLY: Partial<Record<ClientErrorCode, string>> = {
   RUNNER_UNAVAILABLE: 'The runner for this unit type is not available yet.',
   WRONG_UNIT_KIND: 'That action is not available for this kind of unit.',
   NOT_FOUND: 'Not found.',
+  ACT_LOCKED: 'This campaign act is not unlocked yet.',
+  NOT_ANSWERED: 'Record your own answer first — the key is shown only after.',
+  ALREADY_ANSWERED: 'Your answer is already recorded and cannot be edited.',
+  ALREADY_SCORED: 'This answer is already self-scored.',
+  SCORE_WINDOW_CLOSED: 'The self-score window (same sitting, 24h) has closed for this answer.',
+  CONTENT_PENDING: 'The seeded content for this unit is not loaded yet.',
+  NOT_VERIFIED: 'This needs a verified, passing submit first.',
   NETWORK: 'Could not reach the BootQuest server.',
 };
 

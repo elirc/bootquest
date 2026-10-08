@@ -3,6 +3,16 @@
 
 import {
   ApiError,
+  type AnswerRecordedResponse,
+  type AttemptDetailResponse,
+  type CampaignResponse,
+  type CompetenciesResponse,
+  type EvidenceListResponse,
+  type ExplainBackKeyResponse,
+  type ExplainBackScoreResponse,
+  type KataKeyResponse,
+  type KataScoreResponse,
+  type KataStatsResponse,
   type BootQuestApi,
   type ClientErrorCode,
   type Dashboard,
@@ -77,5 +87,28 @@ export function createHttpApi(baseUrl = '/api', fetchImpl: typeof fetch = (...a)
     selfAttest: (id) => post<SelfAttestResponse>(`${unit(id)}/self-attest`),
     getReviewQueue: (limit) => call<ReviewQueueResponse>(`/reviews/queue${limit !== undefined ? `?limit=${limit}` : ''}`),
     gradeReview: (itemId, grade) => post<GradeResponse>(`/reviews/${encodeURIComponent(String(itemId))}/grade`, { grade }),
+    getCampaign: (trackId) => call<CampaignResponse>(`/tracks/${encodeURIComponent(trackId)}/campaign`),
+    // Whitelisted bodies: only the learner's own answer + the boolean selfAssisted ever leave the client.
+    answerExplainBack: (id, b) => post<AnswerRecordedResponse>(`${unit(id)}/explain-back/answers`, { answers: b.answers, selfAssisted: b.selfAssisted }),
+    getExplainBackKey: (id) => call<ExplainBackKeyResponse>(`${unit(id)}/explain-back/key`),
+    selfScoreExplainBack: (id, b) => post<ExplainBackScoreResponse>(`${unit(id)}/explain-back/self-score`, { perKeyPoint: b.perKeyPoint }),
+    submitKataFindings: (id, b) =>
+      post<AnswerRecordedResponse>(`${unit(id)}/kata/findings`, {
+        findings: b.findings.map((f) => ({ scenario: f.scenario, evidence: f.evidence, consequence: f.consequence })),
+        selfAssisted: b.selfAssisted,
+      }),
+    getKataKey: (id) => call<KataKeyResponse>(`${unit(id)}/kata/key`),
+    selfScoreKata: (id, b) => post<KataScoreResponse>(`${unit(id)}/kata/self-score`, { perDefect: b.perDefect }),
+    getCompetencies: () => call<CompetenciesResponse>('/competencies'),
+    listEvidence: (q = {}) => {
+      const params = new URLSearchParams();
+      if (q.competency) params.set('competency', q.competency);
+      if (q.kind) params.set('kind', q.kind);
+      if (q.limit !== undefined) params.set('limit', String(q.limit));
+      const qs = params.toString();
+      return call<EvidenceListResponse>(`/evidence${qs ? `?${qs}` : ''}`);
+    },
+    getAttempt: (id) => call<AttemptDetailResponse>(`/attempts/${encodeURIComponent(String(id))}`),
+    getKataStats: () => call<KataStatsResponse>('/stats/katas'),
   };
 }

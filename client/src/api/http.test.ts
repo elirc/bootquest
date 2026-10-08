@@ -66,6 +66,39 @@ describe('http client: real routes', () => {
     expect(calls[12]!.body).toEqual({ grade: 'good' });
   });
 
+  it('hits the W6 ladder routes with whitelisted bodies', async () => {
+    const { calls, impl } = fakeFetch(() => ok({}));
+    const api = createHttpApi('/api', impl);
+    await api.getCampaign('js');
+    await api.answerExplainBack(5, { answers: ['a', 'b', 'c'], selfAssisted: false, extra: 1 } as never);
+    await api.getExplainBackKey(5);
+    await api.selfScoreExplainBack(5, { perKeyPoint: { q1k1: 'covered' } });
+    await api.submitKataFindings(6, { findings: [{ scenario: 's', evidence: 'e', consequence: 'c', x: 1 } as never], selfAssisted: true });
+    await api.getKataKey(6);
+    await api.selfScoreKata(6, { perDefect: { d1: 'caught' } });
+    await api.getCompetencies();
+    await api.listEvidence({ competency: 'data-http', limit: 5 });
+    await api.listEvidence();
+    await api.getAttempt(9);
+    await api.getKataStats();
+    expect(calls.map((c) => `${c.method} ${c.url}`)).toEqual([
+      'GET /api/tracks/js/campaign',
+      'POST /api/units/5/explain-back/answers',
+      'GET /api/units/5/explain-back/key',
+      'POST /api/units/5/explain-back/self-score',
+      'POST /api/units/6/kata/findings',
+      'GET /api/units/6/kata/key',
+      'POST /api/units/6/kata/self-score',
+      'GET /api/competencies',
+      'GET /api/evidence?competency=data-http&limit=5',
+      'GET /api/evidence',
+      'GET /api/attempts/9',
+      'GET /api/stats/katas',
+    ]);
+    expect(calls[1]!.body).toEqual({ answers: ['a', 'b', 'c'], selfAssisted: false });
+    expect(calls[4]!.body).toEqual({ findings: [{ scenario: 's', evidence: 'e', consequence: 'c' }], selfAssisted: true });
+  });
+
   it('submit sends only code|answer + boolean selfAssisted — never an assistance string', async () => {
     const { calls, impl } = fakeFetch(() => ok());
     const api = createHttpApi('/api', impl);

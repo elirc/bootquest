@@ -228,7 +228,7 @@ export function getRatings(db: Db): { competency: CompetencyId; rating: number; 
  * actually lowered the rating (a floor demotion 1 -> 1 is logged but does not
  * discard banked legs — W1a audit #10), at or before `t` (audit #11).
  */
-function lastRatingChangeAt(db: Db, competency: CompetencyId, t: number): number {
+export function lastRatingChangeAt(db: Db, competency: CompetencyId, t: number): number {
   const row = db.get<{ t: number | null }>(
     `SELECT MAX(e.created_at) AS t FROM evidence e
       WHERE e.competency_id = ? AND e.kind IN ('promotion', 'demotion') AND e.created_at <= ?

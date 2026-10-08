@@ -1,8 +1,25 @@
 import { readFileSync } from 'node:fs';
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import {
+  AnswerRecordedResponse,
+  AttemptDetailResponse,
+  AttemptIdParams,
   CampaignResponse,
+  CompetenciesResponse,
   EmptyBody,
+  EvidenceListResponse,
+  EvidenceQuery,
+  ExplainBackAnswersBody,
+  ExplainBackKeyResponse,
+  ExplainBackScoreResponse,
+  ExplainBackSelfScoreBody,
+  KataFindingsBody,
+  KataKeyResponse,
+  KataScoreResponse,
+  KataSelfScoreBody,
+  KataStatsResponse,
+  MutationMarkerBody,
+  MutationMarkerResponse,
   EmptyQuery,
   GradeBody,
   ReviewItemParams,
@@ -25,6 +42,21 @@ import { emptyContentStore, type UnitContentStore } from './content-store.ts';
 import { asyncRoute, errorBody, HttpError, sendJson, validate } from './http.ts';
 import { getRefContent } from './service.ts';
 import { defaultRunners, type RunnerRegistry } from './runners.ts';
+import { emptySeedItemStore, type SeedItemStore } from '../store/seed-items.ts';
+import {
+  answerExplainBack,
+  getAttemptDetail,
+  getCompetencies,
+  getExplainBackKey,
+  getKataKey,
+  kataStats,
+  listEvidence,
+  recordMutationMarker,
+  selfScoreExplainBack,
+  selfScoreKata,
+  submitKataFindings,
+  type LadderDeps,
+} from './ladder-service.ts';
 import {
   answerWrittenUnit,
   getCampaign,
@@ -60,6 +92,8 @@ export interface AppOptions {
   content?: UnitContentStore;
   /** W4 GitHub sync + per-SHA caches (POST /sync, GET /refs/:id/content); absent = 501 SYNC_UNAVAILABLE */
   sync?: SyncService | null;
+  /** W6 seed items: explain-back question sets + patch katas (absent = every such unit is content-pending) */
+  seedItems?: SeedItemStore;
 }
 
 /**
@@ -76,7 +110,9 @@ export function createApp(opts: AppOptions): Express {
     runners: opts.runners ?? defaultRunners(),
     content: opts.content ?? emptyContentStore,
     sync: opts.sync ?? null,
+    seedItems: opts.seedItems ?? emptySeedItemStore,
   };
+  const ladder: LadderDeps = { db: deps.db, clock: deps.clock, seedItems: deps.seedItems };
   let syncInFlight = false;
   const app = express();
   app.disable('x-powered-by');
@@ -178,6 +214,78 @@ export function createApp(opts: AppOptions): Express {
     const { id } = validate(UnitIdParams, req.params, 'params');
     validate(EmptyQuery, req.query, 'query');
     sendJson(res, 200, getModelAnswer(deps, id));
+  }));
+
+  // ---------------------------------------------------------------- W6 competency ladder
+  // explain-back + patch kata: immutable answer FIRST (append-only attempt), THEN the key, THEN the self-score
+
+  router.post('/units/:id/explain-back/answers', asyncRoute((req, res) => {
+    const { id } = validate(UnitIdParams, req.params, 'params');
+    validate(EmptyQuery, req.query, 'query');
+    const body = validate(ExplainBackAnswersBody, req.body, 'body');
+    sendJson(res, 200, AnswerRecordedResponse.parse(answerExplainBack(ladder, id, body)));
+  }));
+
+  router.get('/units/:id/explain-back/key', asyncRoute((req, res) => {
+    const { id } = validate(UnitIdParams, req.params, 'params');
+    validate(EmptyQuery, req.query, 'query');
+    sendJson(res, 200, ExplainBackKeyResponse.parse(getExplainBackKey(ladder, id)));
+  }));
+
+  router.post('/units/:id/explain-back/self-score', asyncRoute((req, res) => {
+    const { id } = validate(UnitIdParams, req.params, 'params');
+    validate(EmptyQuery, req.query, 'query');
+    const body = validate(ExplainBackSelfScoreBody, req.body, 'body');
+    sendJson(res, 200, ExplainBackScoreResponse.parse(selfScoreExplainBack(ladder, id, body)));
+  }));
+
+  router.post('/units/:id/kata/findings', asyncRoute((req, res) => {
+    const { id } = validate(UnitIdParams, req.params, 'params');
+    validate(EmptyQuery, req.query, 'query');
+    const body = validate(KataFindingsBody, req.body, 'body');
+    sendJson(res, 200, AnswerRecordedResponse.parse(submitKataFindings(ladder, id, body)));
+  }));
+
+  router.get('/units/:id/kata/key', asyncRoute((req, res) => {
+    const { id } = validate(UnitIdParams, req.params, 'params');
+    validate(EmptyQuery, req.query, 'query');
+    sendJson(res, 200, KataKeyResponse.parse(getKataKey(ladder, id)));
+  }));
+
+  router.post('/units/:id/kata/self-score', asyncRoute((req, res) => {
+    const { id } = validate(UnitIdParams, req.params, 'params');
+    validate(EmptyQuery, req.query, 'query');
+    const body = validate(KataSelfScoreBody, req.body, 'body');
+    sendJson(res, 200, KataScoreResponse.parse(selfScoreKata(ladder, id, body)));
+  }));
+
+  // `bootquest mutate`: the server re-evaluates the per-file floor + overall break from the counts
+  router.post('/units/:id/mutation', asyncRoute((req, res) => {
+    const { id } = validate(UnitIdParams, req.params, 'params');
+    validate(EmptyQuery, req.query, 'query');
+    const body = validate(MutationMarkerBody, req.body, 'body');
+    sendJson(res, 200, MutationMarkerResponse.parse(recordMutationMarker(ladder, id, body)));
+  }));
+
+  router.get('/competencies', asyncRoute((req, res) => {
+    validate(EmptyQuery, req.query, 'query');
+    sendJson(res, 200, CompetenciesResponse.parse(getCompetencies(ladder)));
+  }));
+
+  router.get('/evidence', asyncRoute((req, res) => {
+    const q = validate(EvidenceQuery, req.query, 'query');
+    sendJson(res, 200, EvidenceListResponse.parse(listEvidence(ladder, q)));
+  }));
+
+  router.get('/attempts/:id', asyncRoute((req, res) => {
+    const { id } = validate(AttemptIdParams, req.params, 'params');
+    validate(EmptyQuery, req.query, 'query');
+    sendJson(res, 200, AttemptDetailResponse.parse(getAttemptDetail(ladder, id)));
+  }));
+
+  router.get('/stats/katas', asyncRoute((req, res) => {
+    validate(EmptyQuery, req.query, 'query');
+    sendJson(res, 200, KataStatsResponse.parse(kataStats(ladder)));
   }));
 
   router.get('/reviews/queue', asyncRoute((req, res) => {

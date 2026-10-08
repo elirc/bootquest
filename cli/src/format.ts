@@ -227,4 +227,8 @@ const API_ERROR_HINTS: Readonly<Record<string, string>> = {
   SYNC_UNAVAILABLE: 'This server has no GitHub sync configured (curriculum.yaml / cache dir).',
   SYNC_IN_PROGRESS: 'A sync is already running on the server; wait for it to finish.',
   INTERNAL: 'The server hit an internal error; see the server log.',
+  NOT_VERIFIED: 'Submit the project until it passes (bootquest submit), then run bootquest mutate on that same code.',
+  MUTATION_BELOW_THRESHOLD: 'The server re-checked the report and the gate does not hold; nothing was recorded.',
+  NOT_DUE: 'This changed-example retest opens >= 2 days after the artifact and its explain-back; bootquest run still works meanwhile.',
+  ACT_LOCKED: 'This unit belongs to a campaign act that is not unlocked yet.',
 };

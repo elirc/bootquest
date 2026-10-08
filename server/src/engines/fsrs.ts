@@ -22,7 +22,8 @@ const GRADE_TO_RATING: Readonly<Record<ReviewGrade, Grade>> = {
 export interface ReviewItemRow {
   id: number;
   card_key: string;
-  kind: 'card' | 'finding' | 'quiz-miss' | 'concept';
+  /** 'retest' rows are changed-example retest SCHEDULES (engines/ladder.ts), never FSRS cards */
+  kind: 'card' | 'finding' | 'quiz-miss' | 'concept' | 'retest';
   unit_id: number | null;
   content_ref_id: number | null;
   competency_id: CompetencyId | null;
@@ -59,7 +60,8 @@ export function schedule(card: Card, grade: ReviewGrade, now: Clock): Card {
 
 export interface NewReviewItem {
   cardKey: string;
-  kind?: ReviewItemRow['kind'];
+  /** FSRS cards only; retest schedules are written by engines/ladder.ts */
+  kind?: Exclude<ReviewItemRow['kind'], 'retest'>;
   unitId?: number;
   contentRefId?: number;
   competencyId?: CompetencyId;
@@ -91,11 +93,11 @@ export function getReviewItem(db: Db, id: number): ReviewItemRow {
 }
 
 export function dueItems(db: Db, now: Clock): ReviewItemRow[] {
-  return db.all<ReviewItemRow>('SELECT * FROM review_item WHERE due_at <= ? ORDER BY due_at, id', nowMs(now));
+  return db.all<ReviewItemRow>(`SELECT * FROM review_item WHERE due_at <= ? AND kind <> 'retest' ORDER BY due_at, id`, nowMs(now));
 }
 
 export function dueCount(db: Db, now: Clock): number {
-  return db.get<{ n: number }>('SELECT COUNT(*) AS n FROM review_item WHERE due_at <= ?', nowMs(now))?.n ?? 0;
+  return db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM review_item WHERE due_at <= ? AND kind <> 'retest'`, nowMs(now))?.n ?? 0;
 }
 
 export interface ReviewOutcome {
@@ -127,6 +129,9 @@ export function review(db: Db, itemId: number, grade: ReviewGrade, now: Clock, o
   const t = nowMs(now);
   const outcome = db.tx(() => {
     const item = getReviewItem(db, itemId);
+    if (item.kind === 'retest') {
+      throw new HonestyRuleError('WRONG_UNIT_KIND', `review item ${itemId} is a scheduled changed-example retest: submit its unit, it is not graded by recall`);
+    }
     if (item.due_at > t) throw new HonestyRuleError('NOT_DUE', `review item ${itemId} is not due until ${new Date(item.due_at).toISOString()}`);
     const before = deserializeCard(item.fsrs_state);
     const next = schedule(before, g, now);

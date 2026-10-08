@@ -1,10 +1,10 @@
 import { Link } from 'react-router-dom';
 import { useApi } from '../api/context';
-import type { CompetencyRow, Dashboard as DashboardData, SlateItem, TrackId } from '../api/types';
+import type { CompetencyRow, Dashboard as DashboardData, PromotionLegState, PromotionProgress, SlateItem, TrackId } from '../api/types';
 import { Heatmap } from '../components/Heatmap';
 import { Icon } from '../components/Icon';
-import { Kbd, LoadState, PageHeader, Panel, ProgressBar, RatingPips } from '../components/ui';
-import { fmtInt, fmtRelative } from '../lib/format';
+import { Chip, Kbd, LoadState, PageHeader, Panel, ProgressBar, RatingPips } from '../components/ui';
+import { fmtInt, fmtRelative, fmtShortDate } from '../lib/format';
 import { useAsync } from '../lib/useAsync';
 import { FREEZE_TOKENS_MAX, TRACK_LABEL, dayOfMs, isTrackId } from '../lib/view';
 
@@ -118,7 +118,7 @@ function DashboardBody({ d }: { d: DashboardData }) {
         </Panel>
       </div>
 
-      <Panel title="Competencies" labelledBy="p-comp" aside={<span className="muted">rated 1–5 · never averaged · promotion legs land in W6</span>}>
+      <Panel title="Competencies" labelledBy="p-comp" aside={<span className="muted">rated 1–5 · never averaged · promotion = artifact + explain-back ≥80% + retest ≥2 days later</span>}>
         <CompetencyTable rows={d.competencies} today={d.today} />
       </Panel>
 
@@ -179,6 +179,31 @@ function SlateRow({ s }: { s: SlateItem }) {
   );
 }
 
+const LEG_TONE: Record<PromotionLegState, string> = { done: 'success', pending: 'neutral', scheduled: 'info', failed: 'danger' };
+
+function Leg({ name, state, detail }: { name: string; state: PromotionLegState; detail?: string | null }) {
+  return (
+    <span data-leg={name.toLowerCase()} data-state={state}>
+      <Chip tone={LEG_TONE[state]}>
+        <span className="leg-name">{name}</span> {detail ?? state}
+      </Chip>
+    </span>
+  );
+}
+
+function PromotionLegs({ p }: { p: PromotionProgress }) {
+  const cov = p.explainBack.coverage !== null ? `${p.explainBack.state} ${Math.round(p.explainBack.coverage * 100)}%` : null;
+  const due = p.retest.state === 'scheduled' && p.retest.dueAt !== null ? `opens ${fmtShortDate(new Date(p.retest.dueAt).toISOString())}` : null;
+  return (
+    <span className="legs" title={p.missing.join(' / ')}>
+      <Leg name="Artifact" state={p.artifact.state} />
+      <Leg name="Explain" state={p.explainBack.state} detail={cov} />
+      <Leg name="Retest" state={p.retest.state} detail={due} />
+      {p.eligible && <Chip tone="accent">eligible</Chip>}
+    </span>
+  );
+}
+
 export function CompetencyTable({ rows, today }: { rows: CompetencyRow[]; today: string }) {
   return (
     <div className="table-wrap">
@@ -187,6 +212,7 @@ export function CompetencyTable({ rows, today }: { rows: CompetencyRow[]; today:
           <tr>
             <th scope="col">Competency</th>
             <th scope="col">Rating</th>
+            <th scope="col">Promotion</th>
             <th scope="col">Last evidence</th>
           </tr>
         </thead>
@@ -195,11 +221,12 @@ export function CompetencyTable({ rows, today }: { rows: CompetencyRow[]; today:
             <tr key={r.id} data-competency={r.id}>
               <th scope="row">{r.name}</th>
               <td>
-                <RatingPips rating={r.rating} />
+                <RatingPips rating={r.rating} {...(r.promotion?.targetRating ? { target: r.promotion.targetRating } : {})} />
               </td>
+              <td>{r.promotion ? <PromotionLegs p={r.promotion} /> : <span className="muted">—</span>}</td>
               <td className="evidence-cell">
                 {r.lastEvidence ? (
-                  <Link to={`/stats#evidence-${r.lastEvidence.id}`} className="evidence-link">
+                  <Link to={`/stats?competency=${r.id}#evidence-${r.lastEvidence.id}`} className="evidence-link">
                     <span className="evidence-summary">
                       {r.lastEvidence.kind} · #{r.lastEvidence.id}
                     </span>

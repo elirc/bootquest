@@ -15,6 +15,7 @@ import { createDrillCsRunner, resolveCsScratchDir, type DrillCsRunner } from './
 import { defaultRunners, type RunnerRegistry } from './runners.ts';
 import { createNodeTestFileRunner } from './runner-node-test-file.ts';
 import { createSyncService, resolveSyncPaths, type SyncService } from '../sync/service.ts';
+import { defaultSeedItemDirs, loadSeedItemStore } from '../store/seed-items.ts';
 
 /**
  * Real entrypoint: `node --import tsx server/src/api/serve.ts`
@@ -41,6 +42,11 @@ import { createSyncService, resolveSyncPaths, type SyncService } from '../sync/s
  *                           W4 GitHub sync (see sync/service.ts): POST /api/sync, GET
  *                           /api/refs/:id/content, and node-test-file grading from the
  *                           per-SHA tarball cache.
+ *   BOOTQUEST_SEED_ITEMS    (optional, W6) comma-separated stamped seed-pack dirs (items.json +
+ *                           validation.json) holding explain-back question sets / patch katas;
+ *                           when serve.ts is run directly and this is unset, every
+ *                           <repo>/content/seed/{explainback,patches}/<name>/ is loaded. '' = none.
+ *                           An unstamped / edited pack REFUSES TO START.
  * A pack without a matching validation stamp (seed:validate full run), or whose
  * loaded count differs from its built count, REFUSES TO START.
  */
@@ -136,6 +142,11 @@ export function defaultPackDirs(root: string = fileURLToPath(new URL('../../../c
 }
 
 /** <repo>/content/campaign when it holds a manifest (default for the real entrypoint), else ''. */
+/** <repo>/content/seed/{explainback,patches}/* dirs (default for the real entrypoint). */
+export function defaultSeedDirs(root: string = fileURLToPath(new URL('../../../content/seed/', import.meta.url))): string[] {
+  return defaultSeedItemDirs(root);
+}
+
 export function defaultCampaignDir(root: string = fileURLToPath(new URL('../../../content/campaign/', import.meta.url))): string {
   return existsSync(join(root, 'manifest.json')) ? root : '';
 }
@@ -184,12 +195,13 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
     const campaignDir = (env.BOOTQUEST_CAMPAIGN ?? '').trim();
     const campaign = campaignDir ? loadCampaignIntoDb(db, readCampaign(resolve(campaignDir)), clock) : null;
     const content = combineContentStores(sources);
+    const seedItems = loadSeedItemStore(splitList(env.BOOTQUEST_SEED_ITEMS).map((d) => resolve(d)));
     // drill-cs -> the warm C# runner (lazy: no dotnet process until the first C# grade)
     csharp = opts.runners ? null : createDrillCsRunner({ appDataDir: resolveCsScratchDir(env, dbPath) });
     const sync = opts.sync ?? createSyncService(resolveSyncPaths(env));
     const runners: RunnerRegistry =
       opts.runners ?? defaultRunners({ ...(csharp ? { drillCs: csharp.runner } : {}), nodeTestFile: createNodeTestFileRunner(sync.cache) });
-    const app = createApp({ db, clock, content, runners, sync });
+    const app = createApp({ db, clock, content, runners, sync, seedItems });
 
     const server = await new Promise<Server>((ok, fail) => {
       const s = app.listen(port, host);
@@ -238,6 +250,7 @@ if (invokedDirectly) {
   const env = { ...process.env };
   if (env.BOOTQUEST_PACKS === undefined) env.BOOTQUEST_PACKS = defaultPackDirs().join(',');
   if (env.BOOTQUEST_CAMPAIGN === undefined) env.BOOTQUEST_CAMPAIGN = defaultCampaignDir();
+  if (env.BOOTQUEST_SEED_ITEMS === undefined) env.BOOTQUEST_SEED_ITEMS = defaultSeedDirs().join(',');
   startServer({ env })
     .then((running) => {
       installShutdown(running);

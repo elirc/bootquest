@@ -2,6 +2,8 @@ import type {
   ApiErrorCode,
   CanonicalRunResult,
   DashboardResponse,
+  MutationMarkerBody,
+  MutationMarkerResponse,
   SubmissionBodyInput,
   SubmitResponse,
   UnitDetailResponse,
@@ -187,6 +189,10 @@ export class ApiClient {
   }
   submit(id: number, body: SubmissionBodyInput): Promise<SubmitResponse> {
     return this.request('POST', `/units/${id}/submit`, body);
+  }
+  /** W6: the mutation-gate marker (counts only; the server re-evaluates and records the evidence) */
+  mutation(id: number, body: MutationMarkerBody): Promise<MutationMarkerResponse> {
+    return this.request('POST', `/units/${id}/mutation`, body);
   }
   /** W4: the server runs the GitHub sync job (it owns the DB: single writer) */
   sync(repos?: string[]): Promise<SyncReport> {

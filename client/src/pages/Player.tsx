@@ -20,6 +20,7 @@ import { Chip, Kbd, LoadState, PageHeader } from '../components/ui';
 import { hasModifier, isEditableTarget, isMod, useKeydown } from '../lib/keys';
 import { useAsync } from '../lib/useAsync';
 import { TRACK_LABEL, languageOf, unitProse } from '../lib/view';
+import { ExplainBackPane, KataPane } from './LadderPanes';
 
 type Solution = RevealResponse['solution'];
 
@@ -51,6 +52,8 @@ function Player({ detail }: { detail: UnitDetail }) {
   const [revealed, setRevealed] = useState(unit.revealed);
   const [solution, setSolution] = useState<Solution | null>(null);
   const isReading = unit.kind === 'reading';
+  // W6 answer-first units: no reveal, and (explain-back) no code shown while answering
+  const answerFirst = spec?.type === 'explain-back' || spec?.type === 'patch-kata';
 
   return (
     <>
@@ -92,7 +95,7 @@ function Player({ detail }: { detail: UnitDetail }) {
               ))}
             </span>
           </div>
-          {check && !isReading && (
+          {check && !isReading && !answerFirst && (
             <RevealPanel
               unitId={unit.id}
               revealed={revealed}
@@ -111,6 +114,10 @@ function Player({ detail }: { detail: UnitDetail }) {
           <section className="panel player-work" aria-label="Solution">
             <p className="muted">This unit has no browser check. It is completed outside the player.</p>
           </section>
+        ) : spec.type === 'explain-back' ? (
+          <ExplainBackPane detail={detail} />
+        ) : spec.type === 'patch-kata' ? (
+          <KataPane detail={detail} />
         ) : spec.type === 'quiz' ? (
           <QuizPane detail={detail} spec={spec} prompt={prose.prompt} solution={solution} />
         ) : spec.type === 'predict-output' ? (
@@ -267,7 +274,9 @@ function CodePane({ detail, spec }: { detail: UnitDetail; spec: PublicCheck }) {
       if (kind === 'run') setOutcome({ kind, result: (await api.runUnit(id, { code })).result });
       else setOutcome({ kind, submit: await api.submitUnit(id, { code, selfAssisted: assisted }) });
     } catch (e) {
-      setError(errorText(e));
+      // W6: a changed-example retest submitted before its >= 2-day schedule opens is refused (409 NOT_DUE)
+      if (isApiError(e, 'NOT_DUE') && detail.unit.kind === 'retest') setError(`Retest not open yet: ${e.message} (NOT_DUE)`);
+      else setError(errorText(e));
     } finally {
       setBusy(null);
     }

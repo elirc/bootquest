@@ -15,6 +15,7 @@ import reviewQueueJson from './fixtures/review-queue.json';
 import tracksJson from './fixtures/tracks.json';
 import unitDetailsJson from './fixtures/unit-details.json';
 import unitsJson from './fixtures/units.json';
+import { campaignFixtures, emptyPromotion, evidenceFixtures, explainBackFixtures, kataFixtures, promotionFixtures } from './fixtures/ladder';
 import {
   ApiError,
   type BootQuestApi,
@@ -31,6 +32,9 @@ import {
   type TracksResponse,
   type UnitDetail,
   type UnitSummary,
+  type AttemptDetailResponse,
+  type EvidenceRowDto,
+  type KataFinding,
 } from './types';
 
 /** Private, fixture-only grading material. Never crosses the API boundary. */
@@ -91,6 +95,14 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
   const revealed = new Map<number, number>(); // unitId -> reveal attemptId
   const attested = new Set<number>();
   let nextId = 5000;
+  // W6 answer-first state: unitId -> recorded answer attempt; attemptId -> self-score
+  const ebAnswers = new Map<number, { attemptId: number; answers: string[]; at: number }>();
+  const kataAnswers = new Map<number, { attemptId: number; findings: KataFinding[]; at: number }>();
+  const scores = new Map<number, { score: number; evidenceIds: number[]; at: number }>();
+  const kataXpPaid = new Set<number>();
+  const ebXpPaid = new Set<number>();
+  const evidence: EvidenceRowDto[] = clone(evidenceFixtures);
+  const attempts = new Map<number, AttemptDetailResponse>();
 
   const respond = <T>(value: T): Promise<T> =>
     latency > 0
@@ -104,6 +116,26 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
   const trackOf = (id: TrackId) => fx.tracks.tracks.find((t) => t.id === id)!;
 
   function detail(u: UnitSummary): DetailFixture {
+    const eb = explainBackFixtures[String(u.id)];
+    if (eb) {
+      return {
+        code: null,
+        competencies: eb.competencies,
+        check: { id: 9000 + u.id, threshold: null, spec: { type: 'explain-back', questionSetKey: `seed:explain-back:mock-${u.id}`, questionCount: 3, minCoverage: 0.8 } },
+        starter: null,
+        private: {},
+      };
+    }
+    if (u.kind === 'patch-kata') {
+      const k = kataFixtures[String(u.id)];
+      return {
+        code: null,
+        competencies: k?.competencies ?? ['code-reading'],
+        check: { id: 9000 + u.id, threshold: null, spec: { type: 'patch-kata', kataKey: `seed:patch-kata:mock-${u.id}`, defectCount: k?.defects.length ?? 1 } },
+        starter: null,
+        private: {},
+      };
+    }
     return (
       fx.details[String(u.id)] ?? {
         code: null,
@@ -166,6 +198,80 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
     }
   };
 
+
+  // ---------------------------------------------------------------- W6 helpers
+
+  function requireType(id: number, type: 'explain-back' | 'patch-kata') {
+    const { u, d } = guard(id, { needCheck: true });
+    if (d.check?.spec.type !== type) throw err(409, 'WRONG_UNIT_KIND', `unit ${id} is not a ${type} unit`);
+    return { u, d };
+  }
+
+  function recordAttempt(u: UnitSummary, answer: unknown, selfAssisted: boolean): number {
+    const attemptId = nextId++;
+    attempts.set(attemptId, {
+      id: attemptId,
+      unitId: u.id,
+      unitTitle: u.title,
+      unitKind: u.kind,
+      mode: revealed.has(u.id) ? 'guided' : selfAssisted ? 'assisted' : 'solo',
+      outcome: 'submitted',
+      answer,
+      createdAt: NOW,
+      runs: [],
+      evidenceIds: [],
+    });
+    return attemptId;
+  }
+
+  function fileEvidence(
+    u: UnitSummary,
+    attemptId: number,
+    kind: 'explain-back' | 'kata',
+    score: number,
+    observation: string,
+    competencies: CompetencyId[],
+  ): number[] {
+    const a = attempts.get(attemptId)!;
+    const ids = competencies.map((competency) => {
+      const id = nextId++;
+      evidence.unshift({
+        id,
+        competency,
+        kind,
+        intention: kind === 'kata' ? 'patch-review kata: findings first, then self-score' : 'explain-back with the code hidden',
+        observation,
+        assistance: a.mode === 'solo' ? 'none' : a.mode === 'assisted' ? 'self' : 'reveal',
+        assessor: 'self',
+        rating: null,
+        verified: false,
+        score,
+        attemptId,
+        unitId: u.id,
+        unitTitle: u.title,
+        createdAt: NOW,
+      });
+      return id;
+    });
+    a.evidenceIds.push(...ids);
+    return ids;
+  }
+
+  function exactMarks(expected: string[], got: Record<string, string>) {
+    const missing = expected.filter((k) => !(k in got));
+    const extra = Object.keys(got).filter((k) => !expected.includes(k));
+    if (missing.length || extra.length) {
+      throw err(400, 'VALIDATION', `mark every id exactly once (missing: ${missing.join(',')}; extra: ${extra.join(',')})`);
+    }
+  }
+
+  const ebKeyPoints = (unitId: number) =>
+    explainBackFixtures[String(unitId)]!.questions.map((q, qi) => ({
+      prompt: q.prompt,
+      keyPoints: q.keyPoints.map((kp, ki) => ({ id: `q${qi + 1}k${ki + 1}`, text: kp.text, quote: kp.quote, cite: kp.cite })),
+    }));
+  const kataDefects = (unitId: number) => kataFixtures[String(unitId)]!.defects.map((d, i) => ({ id: `d${i + 1}`, ...d }));
+
   return {
     getHealth: () => wrap(() => ({ ok: true as const, version: 'mock', counts: { units: allUnits().length, checks: Object.values(fx.details).filter((d) => d.check).length } })),
 
@@ -173,7 +279,7 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
       wrap(() => ({
         ...fx.dashboard,
         heatmap: fx.heatmap,
-        competencies: fx.competencies,
+        competencies: fx.competencies.map((c) => ({ ...c, promotion: promotionFixtures[c.id] ?? emptyPromotion(c.rating) })),
         reviewQueue: { due: queue().length },
       })),
 
@@ -205,7 +311,17 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
         const instructions = Array.isArray(d.instructions)
           ? d.instructions.join('\n\n')
           : (d.instructions ?? d.prompt ?? null);
-        return { unit, check: d.check, starter: d.starter, instructions, snippet: null, rubric: null };
+        const out: UnitDetail = { unit, check: d.check, starter: d.starter, instructions, snippet: null, rubric: null };
+        // PUBLIC halves only: questions; diff + context (never key points or defect keys)
+        if (d.check?.spec.type === 'explain-back') {
+          const eb = explainBackFixtures[String(id)];
+          out.explainBack = eb ? { questions: eb.questions.map((q) => ({ prompt: q.prompt })), minCoveragePct: 80 } : null;
+        }
+        if (d.check?.spec.type === 'patch-kata') {
+          const k = kataFixtures[String(id)];
+          out.kata = k ? { title: k.title, diff: k.diff, contextFiles: k.contextFiles, defectCount: k.defects.length } : null;
+        }
+        return out;
       }),
 
     runUnit: (id, input) =>
@@ -296,6 +412,174 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
           xp: { id: nextId++, amount: 1, reason: null },
           demotion: null,
           remainingDue: queue().length,
+        };
+      }),
+
+    getCampaign: (trackId) =>
+      wrap(() => {
+        const c = campaignFixtures[trackId];
+        if (!c) throw err(404, 'NOT_FOUND', `track ${trackId} not found`);
+        return { ...c, level: 3 };
+      }),
+
+    answerExplainBack: (id, body) =>
+      wrap(() => {
+        const { u } = requireType(id, 'explain-back');
+        const eb = explainBackFixtures[String(id)];
+        if (!eb) throw err(409, 'CONTENT_PENDING', 'question set not loaded');
+        const b = body as unknown as Record<string, unknown>;
+        if (Object.keys(b).some((k) => k !== 'answers' && k !== 'selfAssisted')) throw err(400, 'VALIDATION', 'unrecognized key');
+        if (
+          !Array.isArray(body.answers) ||
+          body.answers.length !== eb.questions.length ||
+          body.answers.some((a) => typeof a !== 'string' || a.trim() === '')
+        ) {
+          throw err(400, 'VALIDATION', `send exactly ${eb.questions.length} non-empty answers`);
+        }
+        const prior = ebAnswers.get(id);
+        if (prior) throw err(403, 'ALREADY_ANSWERED', `answer #${prior.attemptId} is recorded and immutable`);
+        const attemptId = recordAttempt(u, { explainBack: { answers: body.answers } }, body.selfAssisted);
+        ebAnswers.set(id, { attemptId, answers: [...body.answers], at: NOW });
+        return { attemptId, mode: attempts.get(attemptId)!.mode, outcome: 'submitted' as const };
+      }),
+
+    getExplainBackKey: (id) =>
+      wrap(() => {
+        requireType(id, 'explain-back');
+        const a = ebAnswers.get(id);
+        if (!a) throw err(403, 'NOT_ANSWERED', 'record your answers first');
+        return { attemptId: a.attemptId, answeredAt: a.at, answers: a.answers, questions: ebKeyPoints(id), scored: scores.get(a.attemptId) ?? null };
+      }),
+
+    selfScoreExplainBack: (id, body) =>
+      wrap(() => {
+        const { u } = requireType(id, 'explain-back');
+        const a = ebAnswers.get(id);
+        if (!a) throw err(403, 'NOT_ANSWERED', 'record your answers first');
+        if (scores.has(a.attemptId)) throw err(409, 'ALREADY_SCORED', 'already self-scored');
+        const eb = explainBackFixtures[String(id)]!;
+        const ids = ebKeyPoints(id).flatMap((q) => q.keyPoints.map((k) => k.id));
+        exactMarks(ids, body.perKeyPoint);
+        const missed = ids.filter((k) => body.perKeyPoint[k] === 'missed');
+        const covered = ids.length - missed.length;
+        const coverage = covered / ids.length;
+        const passed = coverage >= 0.8;
+        const evidenceIds = fileEvidence(u, a.attemptId, 'explain-back', coverage, `${covered}/${ids.length} key points covered`, eb.competencies);
+        scores.set(a.attemptId, { score: coverage, evidenceIds, at: NOW });
+        let xp: { id: number; amount: number; reason: null | 'already-awarded' } | null = null;
+        if (passed) {
+          xp = ebXpPaid.has(id) ? { id: nextId++, amount: 0, reason: 'already-awarded' } : { id: nextId++, amount: 20, reason: null };
+          ebXpPaid.add(id);
+        }
+        const retests =
+          passed && eb.retest
+            ? [{ reviewItemId: nextId++, unitId: eb.retest.unitId, title: eb.retest.title, dueAt: NOW + 2 * DAY_MS, artifactUnitId: eb.retest.artifactUnitId }]
+            : [];
+        return { attemptId: a.attemptId, covered, total: ids.length, coverage, minCoveragePct: 80, passed, missed, evidenceIds, xp, retests, promotions: [] };
+      }),
+
+    submitKataFindings: (id, body) =>
+      wrap(() => {
+        const { u } = requireType(id, 'patch-kata');
+        if (!kataFixtures[String(id)]) throw err(409, 'CONTENT_PENDING', 'kata not loaded');
+        if (!Array.isArray(body.findings) || body.findings.length === 0) throw err(400, 'VALIDATION', 'at least one finding');
+        for (const f of body.findings) {
+          if (Object.keys(f).some((k) => !['scenario', 'evidence', 'consequence'].includes(k))) throw err(400, 'VALIDATION', 'unrecognized key');
+          if ([f.scenario, f.evidence, f.consequence].some((v) => typeof v !== 'string' || v.trim() === '')) {
+            throw err(400, 'VALIDATION', 'scenario, evidence and consequence are all required');
+          }
+        }
+        const prior = kataAnswers.get(id);
+        if (prior) throw err(403, 'ALREADY_ANSWERED', `findings #${prior.attemptId} are recorded and immutable`);
+        const attemptId = recordAttempt(u, { kata: { findings: body.findings } }, body.selfAssisted);
+        kataAnswers.set(id, { attemptId, findings: clone(body.findings), at: NOW });
+        return { attemptId, mode: attempts.get(attemptId)!.mode, outcome: 'submitted' as const };
+      }),
+
+    getKataKey: (id) =>
+      wrap(() => {
+        requireType(id, 'patch-kata');
+        const a = kataAnswers.get(id);
+        if (!a) throw err(403, 'NOT_ANSWERED', 'record your findings first');
+        return { attemptId: a.attemptId, answeredAt: a.at, findings: a.findings, defects: kataDefects(id), scored: scores.get(a.attemptId) ?? null };
+      }),
+
+    selfScoreKata: (id, body) =>
+      wrap(() => {
+        const { u } = requireType(id, 'patch-kata');
+        const a = kataAnswers.get(id);
+        if (!a) throw err(403, 'NOT_ANSWERED', 'record your findings first');
+        if (scores.has(a.attemptId)) throw err(409, 'ALREADY_SCORED', 'already self-scored');
+        const ids = kataDefects(id).map((d) => d.id);
+        exactMarks(ids, body.perDefect);
+        const missed = ids.filter((k) => body.perDefect[k] === 'missed');
+        const caught = ids.length - missed.length;
+        const catchRate = caught / ids.length;
+        const evidenceIds = fileEvidence(u, a.attemptId, 'kata', catchRate, `caught ${caught}/${ids.length}`, kataFixtures[String(id)]!.competencies);
+        scores.set(a.attemptId, { score: catchRate, evidenceIds, at: NOW });
+        const xp = kataXpPaid.has(id) ? { id: nextId++, amount: 0, reason: 'already-awarded' as const } : { id: nextId++, amount: 15, reason: null };
+        kataXpPaid.add(id);
+        return { attemptId: a.attemptId, caught, total: ids.length, catchRate, missed, evidenceIds, xp };
+      }),
+
+    getCompetencies: () =>
+      wrap(() => ({
+        competencies: fx.competencies.map((c) => ({ ...c, promotion: promotionFixtures[c.id] ?? emptyPromotion(c.rating) })),
+        retests: [],
+      })),
+
+    listEvidence: (q = {}) =>
+      wrap(() => {
+        const rows = evidence.filter((e) => (!q.competency || e.competency === q.competency) && (!q.kind || e.kind === q.kind));
+        return { total: rows.length, items: rows.slice(0, q.limit ?? 200) };
+      }),
+
+    getAttempt: (attemptId) =>
+      wrap((): AttemptDetailResponse => {
+        const a = attempts.get(attemptId);
+        if (a) return a;
+        const ev = evidence.find((e) => e.attemptId === attemptId);
+        if (!ev || ev.unitId === null) throw err(404, 'NOT_FOUND', `attempt ${attemptId} not found`);
+        const u = findUnit(ev.unitId);
+        return {
+          id: attemptId,
+          unitId: ev.unitId,
+          unitTitle: ev.unitTitle ?? u?.title ?? '',
+          unitKind: u?.kind ?? 'drill',
+          mode: ev.assistance === 'none' ? 'solo' : ev.assistance === 'self' ? 'assisted' : 'guided',
+          outcome: ev.kind === 'explain-back' ? 'submitted' : 'pass',
+          answer: ev.kind === 'explain-back' ? { explainBack: { answers: ['(fixture answer)'] } } : { code: '// fixture submission' },
+          createdAt: ev.createdAt,
+          runs: ev.verified ? [{ id: attemptId + 1, verdict: 'pass', durationMs: 412, createdAt: ev.createdAt }] : [],
+          evidenceIds: evidence.filter((e) => e.attemptId === attemptId).map((e) => e.id),
+        };
+      }),
+
+    getKataStats: () =>
+      wrap(() => {
+        let caught = 0;
+        let total = 0;
+        let katas = 0;
+        for (const [unitId, a] of kataAnswers) {
+          const sc = scores.get(a.attemptId);
+          if (!sc) continue;
+          const n = kataFixtures[String(unitId)]!.defects.length;
+          katas += 1;
+          total += n;
+          caught += Math.round(sc.score * n);
+        }
+        const catchRate = total === 0 ? null : caught / total;
+        return {
+          katasScored: katas,
+          defectsCaught: caught,
+          defectsTotal: total,
+          catchRate,
+          gate: {
+            targetRate: 0.8,
+            minDefects: 10,
+            met: catchRate !== null && total >= 10 && catchRate >= 0.8,
+            rule: 'G1: catch >= 8/10 seeded defects (scenario + evidence + consequence) across at least 10 seeded defects',
+          },
         };
       }),
   };

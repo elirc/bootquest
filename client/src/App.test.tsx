@@ -78,19 +78,32 @@ describe('routing + global keyboard navigation', () => {
   });
 });
 
-describe('campaign map (derived from GET /tracks/:id/units)', () => {
-  it('renders one act in unit order, labeled as such, and j/k walk from the first available unit', async () => {
+describe('campaign map (bound to GET /tracks/:id/campaign)', () => {
+  it('renders acts in order with unlock state, core progress and content-pending badges; j/k walk from the first available quest', async () => {
     const { user } = renderApp('/campaign/js');
-    const acts = await screen.findAllByRole('heading', { level: 2, name: 'All units' });
-    expect(acts).toHaveLength(1);
-    expect(screen.getByText(/campaign acts arrive in W5/)).toBeInTheDocument();
+    await screen.findByRole('heading', { level: 2, name: 'Act 1: Foundations' });
+    const acts = within(screen.getByRole('tabpanel', { name: 'Campaign acts' }))
+      .getAllByRole('heading', { level: 2 })
+      .map((h) => h.textContent);
+    expect(acts).toEqual(['Act 1: Foundations', 'Act 2: APIs and data']);
+    expect(screen.getByText('Language core, async, the event loop')).toBeInTheDocument();
+    expect(screen.getByText('core 1/3')).toBeInTheDocument();
+    expect(screen.getByText(/Unlocks at 80% of the previous act's core quests and level 4/)).toBeInTheDocument();
+    expect(screen.getAllByText('content pending')).toHaveLength(2);
+    // a quest in a locked act is never a link
+    expect(screen.queryByRole('link', { name: /HTTP lab: idempotent POST/ })).not.toBeInTheDocument();
     await user.keyboard('j');
-    expect(document.activeElement).toHaveTextContent('Group records with reduce');
-    await user.keyboard('j');
-    expect(document.activeElement).toHaveTextContent('Quiz: the event loop');
-    await user.keyboard('k');
     expect(document.activeElement).toHaveTextContent('Group records with reduce');
     expect(document.activeElement).toHaveAttribute('href', '/play/102');
+    await user.keyboard('j');
+    expect(document.activeElement).toHaveTextContent('signalpost guides');
+    await user.keyboard('k');
+    expect(document.activeElement).toHaveTextContent('Group records with reduce');
+  });
+
+  it('a track with no seeded acts shows a clear empty state', async () => {
+    renderApp('/campaign/agentic');
+    expect(await screen.findByTestId('campaign-empty')).toHaveTextContent('No campaign acts are seeded');
   });
 
   it('arrow keys switch track tabs; Java renders locked', async () => {

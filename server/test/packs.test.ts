@@ -107,7 +107,8 @@ describe('migration 004 (written unit kind, FK-off table rebuild)', () => {
       const attempt = submit(db, clock, unitId);
       const before = db.get('SELECT * FROM unit WHERE id = ?', unitId);
 
-      expect(migrate(db)).toEqual([4, 5, 6]);
+      // 007 (W5b campaign) and 008 (W6 ladder rebuilds) also apply here; the enumeration was stale since W5b
+      expect(migrate(db)).toEqual([4, 5, 6, 7, 8]);
       // 005 only adds the nullable retired_at column (live by default)
       expect(db.get('SELECT * FROM unit WHERE id = ?', unitId)).toEqual({ ...(before as object), retired_at: null });
       expect(db.get<{ unit_id: number }>('SELECT unit_id FROM attempt WHERE id = ?', attempt.id)!.unit_id).toBe(unitId);
@@ -119,6 +120,56 @@ describe('migration 004 (written unit kind, FK-off table rebuild)', () => {
       const written = makeUnit(db, clock, { key: 'w1', kind: 'written', noCheck: true });
       expect(db.get<{ kind: string }>('SELECT kind FROM unit WHERE id = ?', written)!.kind).toBe('written');
       expect(() => db.run(`INSERT INTO unit (key, track_id, kind, title, created_at) VALUES ('bad', 'js', 'not-a-kind', 't', 0)`)).toThrow();
+    } finally {
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('migration 008 (W6: evidence + review_item rebuilds)', () => {
+  it('preserves evidence / ratings / review rows, keeps every append-only + rating trigger, and accepts the new kinds', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bootquest-mig8-'));
+    const partial = join(dir, 'migs');
+    mkdirSync(partial);
+    for (const f of readdirSync(MIGRATIONS).filter((f) => /^00[1-7]_/.test(f))) copyFileSync(join(MIGRATIONS, f), join(partial, f));
+    const db = new Db(join(dir, 'm.db'));
+    try {
+      expect(migrate(db, partial)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+      const unitId = makeUnit(db, clock, { key: 'pre-008', kind: 'guided-project', competencies: ['data-http'] });
+      const attempt = submit(db, clock, unitId);
+      db.run(
+        `INSERT INTO evidence (competency_id, attempt_id, unit_id, kind, intention, observation, assistance, assessor, verified, score, created_at)
+         VALUES ('data-http', ?, ?, 'submit', 'i', 'o', 'none', 'pipeline', 1, 1, 0)`,
+        attempt.id,
+        unitId,
+      );
+      db.run(
+        `INSERT INTO evidence (competency_id, kind, intention, observation, assistance, assessor, rating, verified, created_at)
+         VALUES ('data-http', 'demotion', 'i', 'o', 'none', 'pipeline', 1, 1, 0)`,
+      );
+      db.run(`INSERT INTO review_item (card_key, kind, fsrs_state, due_at, created_at, updated_at) VALUES ('c1', 'card', '{}', 0, 0, 0)`);
+      const evBefore = db.all('SELECT * FROM evidence ORDER BY id');
+      const riBefore = db.all('SELECT * FROM review_item ORDER BY id');
+
+      expect(migrate(db)).toEqual([8]);
+      expect(db.all('SELECT * FROM evidence ORDER BY id')).toEqual(evBefore);
+      expect(db.all('SELECT * FROM review_item ORDER BY id')).toEqual(riBefore);
+      expect(db.all('PRAGMA foreign_key_check')).toEqual([]);
+      const triggers = db.all<{ name: string }>(`SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name`).map((t) => t.name);
+      for (const t of ['evidence_no_update', 'evidence_no_delete', 'evidence_no_replace', 'evidence_rating_change_consistent', 'competency_rating_guarded_update']) {
+        expect(triggers).toContain(t);
+      }
+      expect(() => db.run('UPDATE evidence SET score = 0 WHERE id = 1')).toThrow(/append-only/);
+      expect(() => db.run('DELETE FROM evidence WHERE id = 1')).toThrow(/append-only/);
+      expect(() =>
+        db.run(`REPLACE INTO evidence (id, competency_id, kind, intention, observation, assistance, assessor, verified, created_at) VALUES (1, 'data-http', 'submit', 'x', 'x', 'none', 'pipeline', 1, 0)`),
+      ).toThrow(/append-only/);
+      expect(() => db.run(`UPDATE competency_rating SET rating = 3, last_evidence_id = 2 WHERE competency_id = 'data-http'`)).toThrow(/rating integrity/);
+      // the new kinds are accepted; unknown kinds still are not
+      db.run(`INSERT INTO evidence (competency_id, kind, intention, observation, assistance, assessor, verified, score, created_at) VALUES ('data-http', 'mutation', 'i', 'o', 'none', 'pipeline', 1, 0.9, 0)`);
+      db.run(`INSERT INTO review_item (card_key, kind, fsrs_state, due_at, created_at, updated_at) VALUES ('r1', 'retest', '{}', 0, 0, 0)`);
+      expect(() => db.run(`INSERT INTO review_item (card_key, kind, fsrs_state, due_at, created_at, updated_at) VALUES ('r2', 'nope', '{}', 0, 0, 0)`)).toThrow();
     } finally {
       db.close();
       rmSync(dir, { recursive: true, force: true });

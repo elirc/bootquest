@@ -34,5 +34,8 @@ export default defineConfig({
     setupFiles: ['./src/test/setup.ts'],
     include: ['src/**/*.test.{ts,tsx}'],
     css: false,
+    // full-app user-event flows (typing whole answers) exceeded vitest's 5s default under
+    // multi-agent CPU load on this laptop; no assertion depends on timing
+    testTimeout: 30_000,
   },
 });

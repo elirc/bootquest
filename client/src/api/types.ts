@@ -12,6 +12,30 @@
 
 import type { z } from 'zod';
 import type {
+  AnswerRecordedResponse,
+  AttemptDetailResponse,
+  CampaignActDto,
+  CampaignQuestDto,
+  CampaignResponse,
+  CompetenciesResponse,
+  EvidenceListResponse,
+  EvidenceRowDto,
+  ExplainBackKeyResponse,
+  ExplainBackPublic,
+  ExplainBackScoreResponse,
+  KataDefectDto,
+  KataFinding,
+  KataKeyResponse,
+  KataPublic,
+  KataScoreResponse,
+  KataStatsResponse,
+  KeyPointDto,
+  PromotionLegState,
+  PromotionProgress,
+  QuestState,
+  RatingChangeDto,
+  RetestListItemDto,
+  ScheduledRetestDto,
   ApiErrorBody,
   ApiErrorCode,
   CanonicalRunResult,
@@ -39,6 +63,30 @@ import type {
 // ---------------------------------------------------------------- re-exported wire types
 
 export type {
+  AnswerRecordedResponse,
+  AttemptDetailResponse,
+  CampaignActDto,
+  CampaignQuestDto,
+  CampaignResponse,
+  CompetenciesResponse,
+  EvidenceListResponse,
+  EvidenceRowDto,
+  ExplainBackKeyResponse,
+  ExplainBackPublic,
+  ExplainBackScoreResponse,
+  KataDefectDto,
+  KataFinding,
+  KataKeyResponse,
+  KataPublic,
+  KataScoreResponse,
+  KataStatsResponse,
+  KeyPointDto,
+  PromotionLegState,
+  PromotionProgress,
+  QuestState,
+  RatingChangeDto,
+  RetestListItemDto,
+  ScheduledRetestDto,
   ApiErrorBody,
   ApiErrorCode,
   CanonicalRunResult,
@@ -82,6 +130,7 @@ export type DayStatus = HeatmapDay['status'];
 export type CompetencyRow = DashboardResponse['competencies'][number];
 export type NextUp = DashboardResponse['nextUp'][number];
 export type SlateItemKind = SlateItem['kind'];
+export type EvidenceKind = EvidenceRowDto['kind'];
 
 // ---------------------------------------------------------------- client view types
 
@@ -143,6 +192,30 @@ export interface BootQuestApi {
   getReviewQueue(limit?: number): Promise<ReviewQueueResponse>;
   /** POST /api/reviews/:itemId/grade — 409 NOT_DUE for a card that is not due yet. */
   gradeReview(itemId: number, grade: ReviewGrade): Promise<GradeResponse>;
+
+  // ---- W6 competency ladder (immutable answer FIRST, then the key, then the self-score)
+  /** GET /api/tracks/:id/campaign — acts, unlock rules, quests (W5b). */
+  getCampaign(trackId: TrackId): Promise<CampaignResponse>;
+  /** POST /api/units/:id/explain-back/answers — immutable; 403 ALREADY_ANSWERED on a second answer. */
+  answerExplainBack(unitId: number, body: { answers: string[]; selfAssisted: boolean }): Promise<AnswerRecordedResponse>;
+  /** GET /api/units/:id/explain-back/key — 403 NOT_ANSWERED until the answer row exists. */
+  getExplainBackKey(unitId: number): Promise<ExplainBackKeyResponse>;
+  /** POST /api/units/:id/explain-back/self-score — 409 ALREADY_SCORED on a second score. */
+  selfScoreExplainBack(unitId: number, body: { perKeyPoint: Record<string, 'covered' | 'missed'> }): Promise<ExplainBackScoreResponse>;
+  /** POST /api/units/:id/kata/findings — immutable; 403 ALREADY_ANSWERED on a second submit. */
+  submitKataFindings(unitId: number, body: { findings: KataFinding[]; selfAssisted: boolean }): Promise<AnswerRecordedResponse>;
+  /** GET /api/units/:id/kata/key — 403 NOT_ANSWERED until the findings row exists. */
+  getKataKey(unitId: number): Promise<KataKeyResponse>;
+  /** POST /api/units/:id/kata/self-score */
+  selfScoreKata(unitId: number, body: { perDefect: Record<string, 'caught' | 'missed'> }): Promise<KataScoreResponse>;
+  /** GET /api/competencies — ratings + three-leg promotion progress + open retests. */
+  getCompetencies(): Promise<CompetenciesResponse>;
+  /** GET /api/evidence[?competency&kind&limit] — newest first. */
+  listEvidence(q?: { competency?: CompetencyId; kind?: EvidenceKind; limit?: number }): Promise<EvidenceListResponse>;
+  /** GET /api/attempts/:id */
+  getAttempt(attemptId: number): Promise<AttemptDetailResponse>;
+  /** GET /api/stats/katas — the G1 aggregate. */
+  getKataStats(): Promise<KataStatsResponse>;
 }
 
 /** Codes the client can raise itself on top of the server's envelope codes. */

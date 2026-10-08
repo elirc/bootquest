@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { CheckSpec } from './check.ts';
-import { CompetencyId, ReviewGrade, RunVerdict, TrackId, UnitKind, XpZeroReason, type CheckType as CheckTypeT } from './enums.ts';
+import { Assessor, Assistance, CompetencyId, EvidenceKind, ReviewGrade, RunVerdict, TrackId, UnitKind, XpZeroReason, type CheckType as CheckTypeT } from './enums.ts';
+import { MUTATION_TOOLS } from './mutation.ts';
 import { RunnerFailure } from './schemas.ts';
 import { RefLink } from './sync.ts';
 
@@ -44,6 +45,18 @@ export const API_ERROR_CODES = [
   'SYNC_UNAVAILABLE',
   /** a sync is already running on this server */
   'SYNC_IN_PROGRESS',
+  /** W6 explain-back / kata: the immutable answer for this unit is already recorded (append-only, never re-answered) */
+  'ALREADY_ANSWERED',
+  /** W6 explain-back / kata: this answer attempt already carries its self-score evidence */
+  'ALREADY_SCORED',
+  /** W6: the self-score was filed outside the same-sitting window (24h after the answer) */
+  'SCORE_WINDOW_CLOSED',
+  /** W6: the unit's seeded content (question set / kata) is not loaded on this server */
+  'CONTENT_PENDING',
+  /** W6: the action needs a verified (passing, run-backed) attempt that does not exist */
+  'NOT_VERIFIED',
+  /** W6 mutation gate: a file is under the per-file floor or the total under the break */
+  'MUTATION_BELOW_THRESHOLD',
   'INTERNAL',
 ] as const;
 export const ApiErrorCode = z.enum(API_ERROR_CODES);
@@ -384,6 +397,28 @@ export const TrackSummary = z
 export const TracksResponse = z.object({ tracks: z.array(TrackSummary) }).strict();
 export const TrackUnitsResponse = z.object({ track: TrackSummary, units: z.array(UnitSummary) }).strict();
 
+// ---------------------------------------------------------------- W6 competency ladder: public halves
+
+export const ExplainBackPublic = z
+  .object({
+    questions: z.array(z.object({ prompt: z.string() }).strict()),
+    /** promotion leg (b) threshold, percent (engine PROMOTION_MIN_COVERAGE) */
+    minCoveragePct: z.number(),
+  })
+  .strict();
+export type ExplainBackPublic = z.infer<typeof ExplainBackPublic>;
+
+export const KataPublic = z
+  .object({
+    title: z.string(),
+    diff: z.string(),
+    contextFiles: z.array(z.object({ path: z.string(), content: z.string() }).strict()),
+    /** how many seeded defects the key holds (the count is public; the defects are not) */
+    defectCount: z.number(),
+  })
+  .strict();
+export type KataPublic = z.infer<typeof KataPublic>;
+
 export const UnitDetailResponse = z
   .object({
     unit: UnitSummary.extend({ code: z.string().nullable(), competencies: z.array(CompetencyId), variationOfUnitId: z.number().nullable() }).strict(),
@@ -397,6 +432,14 @@ export const UnitDetailResponse = z
     rubric: z.array(z.object({ id: z.string(), label: z.string() }).strict()).nullable(),
     /** W4: GitHub content_refs this unit renders from (program milestone, lesson guide); optional for older clients */
     refs: z.array(RefLink).optional(),
+    /**
+     * W6 explain-back units: the QUESTIONS only (never key points - those arrive from
+     * GET /units/:id/explain-back/key after the immutable answer row exists). null when the
+     * question set is not loaded (content pending); absent on other unit kinds.
+     */
+    explainBack: ExplainBackPublic.nullable().optional(),
+    /** W6 patch-kata units: diff + context only (never the seeded-defect key); null = content pending */
+    kata: KataPublic.nullable().optional(),
   })
   .strict();
 export type UnitDetailResponse = z.infer<typeof UnitDetailResponse>;
@@ -414,6 +457,8 @@ export const SubmitResponse = z
     /** null when the submit failed (failed submits cost nothing and earn nothing) */
     xp: XpOutcome.nullable(),
     evidenceIds: z.array(z.number()),
+    /** W6: competencies this submit promoted (a passing retest can complete leg (c)); optional for older servers */
+    promotions: z.array(z.lazy(() => RatingChangeDto)).optional(),
   })
   .strict();
 export type SubmitResponse = z.infer<typeof SubmitResponse>;
@@ -501,6 +546,8 @@ export const DashboardResponse = z
           name: z.string(),
           rating: z.number(),
           lastEvidence: z.object({ id: z.number(), kind: z.string(), createdAt: z.number() }).strict().nullable(),
+          /** W6: the three-leg promotion progress from the engine's evaluator (optional for older servers) */
+          promotion: z.lazy(() => PromotionProgress).optional(),
         })
         .strict(),
     ),
@@ -514,6 +561,310 @@ export const DashboardResponse = z
   })
   .strict();
 export type DashboardResponse = z.infer<typeof DashboardResponse>;
+
+// ---------------------------------------------------------------- W6 competency ladder
+
+export const RatingChangeDto = z.object({ competency: CompetencyId, from: z.number(), to: z.number(), evidenceId: z.number() }).strict();
+export type RatingChangeDto = z.infer<typeof RatingChangeDto>;
+
+const nonBlank = (max: number) =>
+  z
+    .string()
+    .max(max)
+    .refine((s) => s.trim().length > 0, { message: 'must not be empty' });
+
+/** Spec §4/§7: an explain-back set is exactly three questions. */
+export const EXPLAIN_BACK_QUESTION_COUNT = 3;
+export const MAX_EXPLAIN_ANSWER_CHARS = 10_000;
+
+/**
+ * POST /api/units/:id/explain-back/answers: the learner's three answers, written with the
+ * code hidden, stored IMMUTABLY (append-only attempt) BEFORE any key point can be read.
+ * A second answer on the same unit is refused (403 ALREADY_ANSWERED).
+ */
+export const ExplainBackAnswersBody = z
+  .object({
+    answers: z.array(nonBlank(MAX_EXPLAIN_ANSWER_CHARS)).length(EXPLAIN_BACK_QUESTION_COUNT),
+    selfAssisted: z.boolean().default(false),
+  })
+  .strict();
+export type ExplainBackAnswersBody = z.infer<typeof ExplainBackAnswersBody>;
+
+/** Key point ids are positional: q<question>k<point>, 1-based (q1k1, q3k6). */
+export const KEY_POINT_ID_RE = /^q[1-9]\d?k[1-9]\d?$/;
+export const COVERAGE_MARKS = ['covered', 'missed'] as const;
+
+/** POST /api/units/:id/explain-back/self-score: EVERY key point marked, nothing else. */
+export const ExplainBackSelfScoreBody = z
+  .object({ perKeyPoint: z.record(z.string().regex(KEY_POINT_ID_RE, 'key point id like q1k1'), z.enum(COVERAGE_MARKS)) })
+  .strict();
+export type ExplainBackSelfScoreBody = z.infer<typeof ExplainBackSelfScoreBody>;
+
+export const AnswerRecordedResponse = z
+  .object({ attemptId: z.number(), mode: z.enum(['solo', 'assisted', 'guided']), outcome: z.literal('submitted') })
+  .strict();
+export type AnswerRecordedResponse = z.infer<typeof AnswerRecordedResponse>;
+
+export const KeyPointDto = z
+  .object({
+    id: z.string(),
+    text: z.string(),
+    /** the source sentence this key point quotes, when it quotes */
+    quote: z.string().nullable(),
+    /** or the repo file:line it cites */
+    cite: z.object({ path: z.string(), lineStart: z.number(), lineEnd: z.number() }).strict().nullable(),
+  })
+  .strict();
+export type KeyPointDto = z.infer<typeof KeyPointDto>;
+
+export const SelfScoreSummary = z.object({ score: z.number(), evidenceIds: z.array(z.number()), at: z.number() }).strict();
+
+/** GET /api/units/:id/explain-back/key: 403 NOT_ANSWERED until the answer row exists. */
+export const ExplainBackKeyResponse = z
+  .object({
+    attemptId: z.number(),
+    answeredAt: z.number(),
+    /** the learner's own stored answers, verbatim */
+    answers: z.array(z.string()),
+    questions: z.array(z.object({ prompt: z.string(), keyPoints: z.array(KeyPointDto) }).strict()),
+    /** null until self-scored */
+    scored: SelfScoreSummary.nullable(),
+  })
+  .strict();
+export type ExplainBackKeyResponse = z.infer<typeof ExplainBackKeyResponse>;
+
+export const ScheduledRetestDto = z
+  .object({ reviewItemId: z.number(), unitId: z.number(), title: z.string(), dueAt: z.number(), artifactUnitId: z.number() })
+  .strict();
+export type ScheduledRetestDto = z.infer<typeof ScheduledRetestDto>;
+
+export const ExplainBackScoreResponse = z
+  .object({
+    attemptId: z.number(),
+    covered: z.number(),
+    total: z.number(),
+    /** covered / total, 0..1 */
+    coverage: z.number(),
+    minCoveragePct: z.number(),
+    passed: z.boolean(),
+    missed: z.array(z.string()),
+    evidenceIds: z.array(z.number()),
+    xp: XpOutcome.nullable(),
+    /** the changed-example retests this passing self-score scheduled (>= 2 days out) */
+    retests: z.array(ScheduledRetestDto),
+    promotions: z.array(RatingChangeDto),
+  })
+  .strict();
+export type ExplainBackScoreResponse = z.infer<typeof ExplainBackScoreResponse>;
+
+export const MAX_FINDINGS = 20;
+export const MAX_FINDING_CHARS = 4_000;
+export const KataFinding = z
+  .object({ scenario: nonBlank(MAX_FINDING_CHARS), evidence: nonBlank(MAX_FINDING_CHARS), consequence: nonBlank(MAX_FINDING_CHARS) })
+  .strict();
+export type KataFinding = z.infer<typeof KataFinding>;
+
+/** POST /api/units/:id/kata/findings: {scenario, evidence, consequence}[] stored immutably before the key. */
+export const KataFindingsBody = z
+  .object({ findings: z.array(KataFinding).min(1).max(MAX_FINDINGS), selfAssisted: z.boolean().default(false) })
+  .strict();
+export type KataFindingsBody = z.infer<typeof KataFindingsBody>;
+
+export const DEFECT_ID_RE = /^d[1-9]\d?$/;
+export const CATCH_MARKS = ['caught', 'missed'] as const;
+export const KataSelfScoreBody = z
+  .object({ perDefect: z.record(z.string().regex(DEFECT_ID_RE, 'defect id like d1'), z.enum(CATCH_MARKS)) })
+  .strict();
+export type KataSelfScoreBody = z.infer<typeof KataSelfScoreBody>;
+
+export const KataDefectDto = z
+  .object({
+    id: z.string(),
+    scenario: z.string(),
+    evidence: z.object({ path: z.string(), lineStart: z.number(), lineEnd: z.number(), in: z.enum(['repo', 'patched']) }).strict(),
+    consequence: z.string(),
+  })
+  .strict();
+export type KataDefectDto = z.infer<typeof KataDefectDto>;
+
+export const KataKeyResponse = z
+  .object({
+    attemptId: z.number(),
+    answeredAt: z.number(),
+    findings: z.array(KataFinding),
+    defects: z.array(KataDefectDto),
+    scored: SelfScoreSummary.nullable(),
+  })
+  .strict();
+export type KataKeyResponse = z.infer<typeof KataKeyResponse>;
+
+export const KataScoreResponse = z
+  .object({
+    attemptId: z.number(),
+    caught: z.number(),
+    total: z.number(),
+    catchRate: z.number(),
+    missed: z.array(z.string()),
+    evidenceIds: z.array(z.number()),
+    xp: XpOutcome.nullable(),
+  })
+  .strict();
+export type KataScoreResponse = z.infer<typeof KataScoreResponse>;
+
+/** G1 (spec §8): catch >= 8/10 seeded defects across the kata bank. */
+export const G1_TARGET_RATE = 0.8;
+export const G1_MIN_DEFECTS = 10;
+export const KataStatsResponse = z
+  .object({
+    katasScored: z.number(),
+    defectsCaught: z.number(),
+    defectsTotal: z.number(),
+    catchRate: z.number().nullable(),
+    gate: z.object({ targetRate: z.number(), minDefects: z.number(), met: z.boolean(), rule: z.string() }).strict(),
+  })
+  .strict();
+export type KataStatsResponse = z.infer<typeof KataStatsResponse>;
+
+export const MutationFileStatDto = z
+  .object({
+    path: z.string().min(1).max(500),
+    killed: z.number().int().nonnegative(),
+    timeout: z.number().int().nonnegative(),
+    survived: z.number().int().nonnegative(),
+    noCoverage: z.number().int().nonnegative(),
+  })
+  .strict();
+
+/**
+ * POST /api/units/:id/mutation: the "bootquest mutate" marker. Carries the per-file mutant
+ * COUNTS parsed from Stryker's JSON report; the server re-evaluates the floor/break itself
+ * (never the CLI's verdict) and records verified pipeline evidence linked to the unit's
+ * latest verified-pass attempt (or attemptId, which must be one).
+ */
+export const MutationMarkerBody = z
+  .object({
+    attemptId: z.number().int().positive().optional(),
+    tool: z.enum(MUTATION_TOOLS),
+    toolVersion: z.string().min(1).max(40),
+    durationMs: z.number().int().nonnegative(),
+    files: z.array(MutationFileStatDto).min(1).max(5000),
+  })
+  .strict();
+export type MutationMarkerBody = z.infer<typeof MutationMarkerBody>;
+
+export const MutationVerdictDto = z
+  .object({
+    pass: z.boolean(),
+    overallPct: z.number().nullable(),
+    floorPct: z.number(),
+    breakPct: z.number(),
+    files: z.array(z.object({ path: z.string(), scorePct: z.number().nullable(), pass: z.boolean() }).strict()),
+    failures: z.array(z.string()),
+  })
+  .strict();
+
+export const MutationMarkerResponse = z
+  .object({ unitId: z.number(), attemptId: z.number(), verdict: MutationVerdictDto, evidenceIds: z.array(z.number()) })
+  .strict();
+export type MutationMarkerResponse = z.infer<typeof MutationMarkerResponse>;
+
+export const PROMOTION_LEG_STATES = ['done', 'pending', 'scheduled', 'failed'] as const;
+export const PromotionLegState = z.enum(PROMOTION_LEG_STATES);
+export type PromotionLegState = z.infer<typeof PromotionLegState>;
+
+/** The three-leg promotion progress (spec §6.2), derived from evaluatePromotion; never stored. */
+export const PromotionProgress = z
+  .object({
+    /** the rating a promotion would reach; null at the max (5) */
+    targetRating: z.number().nullable(),
+    eligible: z.boolean(),
+    artifact: z.object({ state: PromotionLegState, evidenceId: z.number().nullable(), unitId: z.number().nullable() }).strict(),
+    explainBack: z.object({ state: PromotionLegState, evidenceId: z.number().nullable(), coverage: z.number().nullable() }).strict(),
+    retest: z
+      .object({ state: PromotionLegState, evidenceId: z.number().nullable(), dueAt: z.number().nullable(), unitId: z.number().nullable() })
+      .strict(),
+    /** the engine's own reasons, verbatim */
+    missing: z.array(z.string()),
+  })
+  .strict();
+export type PromotionProgress = z.infer<typeof PromotionProgress>;
+
+export const RetestListItemDto = ScheduledRetestDto.extend({ due: z.boolean() }).strict();
+export type RetestListItemDto = z.infer<typeof RetestListItemDto>;
+
+export const CompetenciesResponse = z
+  .object({
+    competencies: z.array(
+      z
+        .object({
+          id: CompetencyId,
+          name: z.string(),
+          rating: z.number(),
+          lastEvidence: z.object({ id: z.number(), kind: z.string(), createdAt: z.number() }).strict().nullable(),
+          promotion: PromotionProgress,
+        })
+        .strict(),
+    ),
+    /** changed-example retests scheduled by explain-backs and not yet passed */
+    retests: z.array(RetestListItemDto),
+  })
+  .strict();
+export type CompetenciesResponse = z.infer<typeof CompetenciesResponse>;
+
+export const EvidenceQuery = z
+  .object({
+    competency: CompetencyId.optional(),
+    kind: EvidenceKind.optional(),
+    limit: z
+      .string()
+      .regex(/^\d{1,4}$/)
+      .transform(Number)
+      .pipe(z.number().int().min(1).max(1000))
+      .optional(),
+  })
+  .strict();
+
+export const EvidenceRowDto = z
+  .object({
+    id: z.number(),
+    competency: CompetencyId,
+    kind: EvidenceKind,
+    intention: z.string(),
+    observation: z.string(),
+    assistance: Assistance,
+    assessor: Assessor,
+    rating: z.number().nullable(),
+    verified: z.boolean(),
+    score: z.number().nullable(),
+    attemptId: z.number().nullable(),
+    unitId: z.number().nullable(),
+    unitTitle: z.string().nullable(),
+    createdAt: z.number(),
+  })
+  .strict();
+export type EvidenceRowDto = z.infer<typeof EvidenceRowDto>;
+export const EvidenceListResponse = z.object({ total: z.number(), items: z.array(EvidenceRowDto) }).strict();
+export type EvidenceListResponse = z.infer<typeof EvidenceListResponse>;
+
+export const AttemptIdParams = z.object({ id: positiveIdString }).strict();
+
+/** GET /api/attempts/:id: one ledger attempt with its submit runs (the evidence browser's link target). */
+export const AttemptDetailResponse = z
+  .object({
+    id: z.number(),
+    unitId: z.number(),
+    unitTitle: z.string(),
+    unitKind: UnitKind,
+    mode: z.enum(['solo', 'assisted', 'guided']),
+    outcome: z.string(),
+    /** the learner's OWN stored submission/answer (never curriculum or keys) */
+    answer: z.unknown().nullable(),
+    createdAt: z.number(),
+    runs: z.array(z.object({ id: z.number(), verdict: RunVerdict, durationMs: z.number().nullable(), createdAt: z.number() }).strict()),
+    evidenceIds: z.array(z.number()),
+  })
+  .strict();
+export type AttemptDetailResponse = z.infer<typeof AttemptDetailResponse>;
 
 // GET /api/tracks/:id/campaign (W5b) — schemas live with the campaign pack format
 export { CampaignActDto, CampaignQuestDto, CampaignResponse, QuestState } from './campaign.ts';

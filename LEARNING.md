@@ -335,6 +335,67 @@ Opus plan review (`docs/recon/plan-review.md`) returned 2 blockers + 17 majors;
   for W5c: numbered findings lists include non-defects ("good design worth
   naming") — don't flashcard them blindly.
 
+## 2026-10-08 — W5c-katas results (done in worktree, transplant queued)
+
+- Branch w5c-katas @ 4abd6107a (261 files on 1cd1796): 21 katas (8E/9M/4H,
+  13 with tests proven to FAIL on the defective version, 6 ported from
+  source repos' own suites), 6 C# quest packs (79 quizzes incl. authored,
+  csharp-interview substitutes the 2 skipped pastebin/trello repos),
+  6 G2 rubrics (Q1 = 7 weighted checkpoints, Q2 pre-mortem / Q3 handback
+  checklists — RATIFIED framing under the 3×5–8 validator). 35 packs
+  stamped / 0 failures / 154 seed tests. Agent forked itself 4× for
+  authoring parallelism. RATIFIED: re-introduce-defect kata construction
+  (7 katas) with live-defect `repo` evidence.
+- Transplant needs 24 .cache/checkouts (copy from its worktree) +
+  content/seed/patches|quests|explainback + tools/seed/authoring +
+  docs/recon/w5c-content.md. Changes NO existing file.
+- UPSTREAM GUIDE ERRORS found (owner to-do — mirrors are never edited):
+  borrowbox 02-CONCEPTS.md:50 says lock(_gate), code is lock(item);
+  csharp-tut 10-linq.md:231 comment "2 4" vs actual "24";
+  dotnet-snapshot snapshot-12 queryDtos.ts:17 NaN page not in NOTES.
+- More factory fixes for W7: patches harness needs a drill-cs runner (C#
+  katas can't carry tests); PatchesDraft lacks difficulty; quest parser
+  misses `- Goal:`/`- **Check:**` bullet shape (9 nettrello exercises
+  lost) and flags Program.cs/System.Text.Json-style names as citations;
+  snapshots/ guides refused; near-dup check is token-order-blind;
+  explain-back (repo,unit,origin) key collides G2-vs-ordinary on one
+  unit; validators check citations RESOLVE, not that they SUPPORT the
+  claim (human spot-checks stay mandatory).
+
+## 2026-10-08 — SESSION CUTOFF (usage limit) — RESUME STATE
+
+Committed through 1cd1796 (15 commits: W0..W5b + W5a). Verified by the
+orchestrator at each commit. STILL RUNNING at cutoff (reports will be in
+the session transcript or their worktrees):
+- W6 (MAIN workspace, uncommitted edits in progress): ladder e2e +
+  explain-back/kata players + campaign client binding + bootquest mutate.
+  Gate: demo:promotion + mutate fixture. DO NOT discard its working tree.
+- W5c-katas (worktree): 20+ katas, C# quest packs, G2 rubrics.
+- jstrain (worktree, revived once): self-run runner + jstrain pack+sweep.
+DONE, AWAITING TRANSPLANT (worktrees intact, transplant by file copy):
+- W5c-js @ worktree agent-a89b2afe6e271f4f2 commit 63b7b9100: 10 JS repo
+  packs (122 hand quizzes/40 flashcards/140 reading/10 explain-back,
+  seed:check 21 packs OK, spot-check verified). RATIFIED: the drafts
+  pipeline (seed:quests:drafts) stays — hand items через unchanged
+  validators. Must recreate .cache/checkouts/<repo>@<sha> per its report.
+- W4-era conflicts pattern: use git diff base..head + git apply -p1
+  --3way, resolve UU files additively, regenerate drifted content packs
+  with their deterministic seeders (sha-refusals catch transit drift).
+W5c-js factory bug list for W7: basename reading-step key collisions
+(multi-app repos crash writeSeedPack), app-root suffix resolution,
+command names (npm.cmd) parsed as citations, per-repo citationWhitelist
+to recover guides citing gitignored/stale paths, quiz variety / flashcard
+shape need hand-authored values, guide-discovery regex misses
+docs/upskill, docs/lessons, upskilling/, nested astraupskill.
+REMAINING AFTER IN-FLIGHT WAVES LAND: transplants (jstrain renumber any
+migration collisions; W5c packs + checkouts), W6 fresh honesty audit,
+W7 hardening (full smoke, guarded reset, SEEDING.md, README, stats
+polish, G1 gate wiring, G3/G4 units, factory fixes above, full
+QUIET-MACHINE npm test + all sweeps + demo:m4 + demo:promotion), then
+home-repo worktree/branch cleanup and the owner to-do list (fine-grained
+read-only PAT; node ≥22.18; quiz-oracle + demotion-cap policy decisions;
+revoke the old Shopify token).
+
 - W3b-cli done in worktree (78 tests + tsc green; transplant queued behind
   W3a): commander-only CLI, exit codes 0 pass / 1 fail / 2 usage-or-error,
   kind-groups test forces a decision for every new check type, never

@@ -179,7 +179,7 @@ export interface ReviewQueueRow {
 export function reviewQueue(db: Db, atMs: number, limit: number): ReviewQueueRow[] {
   return db.all<ReviewQueueRow>(
     `SELECT id, card_key AS cardKey, kind, unit_id AS unitId, competency_id AS competencyId, due_at AS dueAt
-       FROM review_item WHERE due_at <= ? ORDER BY due_at, id LIMIT ?`,
+       FROM review_item WHERE due_at <= ? AND kind <> 'retest' ORDER BY due_at, id LIMIT ?`,
     atMs,
     limit,
   );

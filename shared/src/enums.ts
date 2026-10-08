@@ -118,6 +118,8 @@ export const EVIDENCE_KINDS = [
   'self-assessment',
   'promotion',
   'demotion',
+  /** W6 mutation gate (spec §5): verified pipeline evidence that the project's tests survived Stryker's per-file floor */
+  'mutation',
 ] as const;
 export const EvidenceKind = z.enum(EVIDENCE_KINDS);
 export type EvidenceKind = z.infer<typeof EvidenceKind>;
