@@ -1,0 +1,6 @@
+## Exercises
+
+1. **Goal:** see revocation take effect. **Check:** sign in as `liam.lead@corp.local`, then change that user's `role` to `CASE_WORKER` in the database. The next `POST /api/admin/escalation-sweeps` still returns 403 (lead never had it), but `POST /api/cases/<id>/transition` now returns 403 as well, without signing out.
+2. **Goal:** measure the timing gap. **Check:** time 10 logins with an unknown email and 10 with `admin@corp.local` plus a wrong password. Record the median of each; the known-email median should be noticeably larger (bcrypt cost 12). Then fix by calling `verifyPassword` against a fixed dummy hash when the user is missing.
+3. **Goal:** close the scope override. **Check:** change `caseService.ts:96-100` so `...accessWhere` is spread last. Re-run exercise 2 from `docs/architecture/README.md`; the response must now be `{ "items": [] }`. Add a unit test that passes `owningTeamId: "other"` for a `CASE_WORKER` and asserts the repository received `owningTeamId: "team_billing"`.
+4. **Goal:** enforce assignment permission. **Check:** add `ensurePermission(actor, "case:assign")` when `input.assignedToId` is present in `createCase` and `updateCase`. A `CASE_WORKER` posting a case with `assignedToId` must then get 403 and no `Case` row.

@@ -1,0 +1,223 @@
+/**
+ * Seed-pack writer / reader / stamp verifier — the code-pack import-gate
+ * machinery (validate.ts + server packs.ts) applied to seed content:
+ *   - any write first REMOVES validation.json; only a run whose validator
+ *     verdicts are all in (and whose quarantine is empty, or explicitly
+ *     allowed) writes a fresh stamp;
+ *   - quarantine.json (PackQuarantine schema, always written, even empty) +
+ *     QUARANTINE.md list every rejected candidate with its reason;
+ *   - review-queue.json holds items that need a human (not a pass);
+ *   - the stamp binds manifest bytes, items bytes, the seed fingerprint and
+ *     the quarantine + review keys.
+ */
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import {
+  PACK_FORMAT,
+  SEED_PACK_FORMAT,
+  SeedItemsFile,
+  SeedPackManifest,
+  SeedQuarantine,
+  SeedReviewQueue,
+  SeedValidationStamp,
+  type SeedCounts,
+  type SeedGenerator,
+  type SeedItem,
+  type SeedSkip,
+} from '@bootquest/shared';
+import type { Checkout } from './checkout.ts';
+import { seedFingerprint, seedToolchain } from './fingerprint.ts';
+import { sha256, stableJson } from './util.ts';
+
+export interface Rejection {
+  key: string;
+  reason: string;
+}
+
+export interface ReviewHold {
+  key: string;
+  warnings: string[];
+  item: SeedItem;
+}
+
+/** What a generator + its validator produced for one pack. */
+export interface SeedOutcome {
+  accepted: SeedItem[];
+  rejected: Rejection[];
+  review: ReviewHold[];
+  /** candidate items dropped because they touch an excluded file (counted toward candidates) */
+  dropped: SeedSkip[];
+  /** whole-file / not-generatable skips (not candidates) */
+  skipped: SeedSkip[];
+  executions: number;
+}
+
+export const emptyOutcome = (): SeedOutcome => ({ accepted: [], rejected: [], review: [], dropped: [], skipped: [], executions: 0 });
+
+export function countByKind(items: readonly SeedItem[]): { total: number; byKind: SeedCounts } {
+  const byKind: SeedCounts = {};
+  for (const it of items) byKind[it.kind] = (byKind[it.kind] ?? 0) + 1;
+  const sorted: SeedCounts = {};
+  for (const k of Object.keys(byKind).sort() as (keyof SeedCounts)[]) sorted[k] = byKind[k];
+  return { total: items.length, byKind: sorted };
+}
+
+export interface WriteSeedPackOptions {
+  dir: string;
+  generator: SeedGenerator;
+  name: string;
+  checkout: Pick<Checkout, 'repo' | 'sha' | 'pin' | 'excludeDirs' | 'blobs'>;
+  inputs: string[];
+  outcome: SeedOutcome;
+  /** stamp even though candidates were quarantined (explicit human choice; recorded in the stamp) */
+  allowQuarantine?: boolean;
+}
+
+export interface WriteSeedPackResult {
+  manifest: SeedPackManifest;
+  stamped: boolean;
+  /** why no stamp was written (empty when stamped) */
+  unstampedBecause: string[];
+}
+
+const byKey = <T extends { key: string }>(a: T, b: T): number => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
+
+export function writeSeedPack(o: WriteSeedPackOptions): WriteSeedPackResult {
+  mkdirSync(o.dir, { recursive: true });
+  const stampPath = join(o.dir, 'validation.json');
+  rmSync(stampPath, { force: true });
+  const source = `${o.generator}/${o.name}`;
+
+  const accepted = [...o.outcome.accepted].sort(byKey);
+  const rejected = [...o.outcome.rejected].sort(byKey);
+  const review = [...o.outcome.review].sort(byKey);
+  const itemsFile = SeedItemsFile.parse({ format: SEED_PACK_FORMAT, generator: o.generator, name: o.name, items: accepted });
+  const itemsBytes = stableJson(itemsFile);
+  writeFileSync(join(o.dir, 'items.json'), itemsBytes);
+
+  const blobs: Record<string, string> = {};
+  for (const k of [...o.checkout.blobs.keys()].sort()) blobs[k] = o.checkout.blobs.get(k)!;
+  const counts = countByKind(accepted);
+  const manifest = SeedPackManifest.parse({
+    format: SEED_PACK_FORMAT,
+    generator: o.generator,
+    name: o.name,
+    source: {
+      repo: o.checkout.repo,
+      sha: o.checkout.sha,
+      pin: o.checkout.pin,
+      inputs: [...o.inputs].sort(),
+      excludeDirs: [...o.checkout.excludeDirs],
+    },
+    blobs,
+    items: { file: 'items.json', sha256: sha256(itemsBytes) },
+    counts,
+    candidates: accepted.length + rejected.length + review.length + o.outcome.dropped.length,
+    quarantined: rejected.length,
+    review: review.length,
+    skipped: [...o.outcome.skipped, ...o.outcome.dropped].sort((a, b) => (a.subject + a.reason < b.subject + b.reason ? -1 : 1)),
+    dropped: o.outcome.dropped.length,
+  });
+  const manifestBytes = stableJson(manifest);
+  writeFileSync(join(o.dir, 'manifest.json'), manifestBytes);
+
+  const quarantine = SeedQuarantine.parse({ format: PACK_FORMAT, source, entries: rejected.map((r) => ({ key: r.key, course: o.generator, reason: r.reason })) });
+  writeFileSync(join(o.dir, 'quarantine.json'), stableJson(quarantine));
+  writeFileSync(
+    join(o.dir, 'QUARANTINE.md'),
+    [
+      `# Quarantine — ${source}`,
+      '',
+      'Written by the seed factory. These candidates FAILED their deterministic validator and are',
+      'never shipped. Never fix them by weakening the validator; fix the source and re-seed.',
+      '',
+      '| item | reason |',
+      '|---|---|',
+      ...rejected.map((r) => `| \`${r.key}\` | ${r.reason.replace(/\|/g, '\\|').replace(/\n/g, ' ')} |`),
+      ...(rejected.length === 0 ? ['| _(none: every candidate passed its validator)_ | |'] : []),
+      '',
+    ].join('\n'),
+  );
+  const rq = SeedReviewQueue.parse({ format: SEED_PACK_FORMAT, source, entries: review });
+  writeFileSync(join(o.dir, 'review-queue.json'), stableJson(rq));
+
+  const unstampedBecause: string[] = [];
+  if (rejected.length > 0 && !o.allowQuarantine) unstampedBecause.push(`${rejected.length} candidate(s) quarantined (pass --allow-quarantine to stamp with them withheld)`);
+  if (accepted.length === 0) unstampedBecause.push('no accepted items');
+  if (unstampedBecause.length === 0) {
+    const stamp = SeedValidationStamp.parse({
+      format: SEED_PACK_FORMAT,
+      source,
+      fingerprintKind: `seed:${o.generator}`,
+      fingerprint: seedFingerprint(o.generator),
+      toolchain: seedToolchain(o.generator),
+      manifestSha256: sha256(manifestBytes),
+      itemsSha256: sha256(itemsBytes),
+      counts,
+      quarantinedKeys: rejected.map((r) => r.key),
+      reviewKeys: review.map((r) => r.key),
+      executions: o.outcome.executions,
+    });
+    writeFileSync(stampPath, stableJson(stamp));
+  }
+  return { manifest, stamped: unstampedBecause.length === 0, unstampedBecause };
+}
+
+export interface LoadedSeedPack {
+  dir: string;
+  manifest: SeedPackManifest;
+  items: SeedItem[];
+  stamp: SeedValidationStamp | null;
+  quarantineKeys: string[];
+  reviewKeys: string[];
+}
+
+/** Read + structurally verify a seed pack (bytes, schema, counts, stamp binding). Throws on any mismatch. */
+export function loadSeedPack(dir: string, opts: { requireStamp?: boolean } = {}): LoadedSeedPack {
+  const read = (f: string): string => {
+    const p = join(dir, f);
+    if (!existsSync(p)) throw new Error(`${dir}: ${f} missing`);
+    return readFileSync(p, 'utf8');
+  };
+  const manifestBytes = read('manifest.json');
+  const manifest = SeedPackManifest.parse(JSON.parse(manifestBytes));
+  const itemsBytes = read('items.json');
+  if (sha256(itemsBytes) !== manifest.items.sha256) throw new Error(`${dir}: items.json sha256 != manifest (edited after generation?)`);
+  const itemsFile = SeedItemsFile.parse(JSON.parse(itemsBytes));
+  if (itemsFile.generator !== manifest.generator || itemsFile.name !== manifest.name) throw new Error(`${dir}: items.json is for ${itemsFile.generator}/${itemsFile.name}`);
+  const counts = countByKind(itemsFile.items);
+  if (JSON.stringify(counts) !== JSON.stringify(manifest.counts)) {
+    throw new Error(`${dir}: loaded ${JSON.stringify(counts)} != built ${JSON.stringify(manifest.counts)}`);
+  }
+  const source = `${manifest.generator}/${manifest.name}`;
+  const q = SeedQuarantine.parse(JSON.parse(read('quarantine.json')));
+  if (q.source !== source) throw new Error(`${dir}: quarantine.json is for ${q.source}`);
+  if (q.entries.length !== manifest.quarantined) throw new Error(`${dir}: quarantine.json has ${q.entries.length} entries, manifest says ${manifest.quarantined}`);
+  const rq = SeedReviewQueue.parse(JSON.parse(read('review-queue.json')));
+  if (rq.entries.length !== manifest.review) throw new Error(`${dir}: review-queue.json has ${rq.entries.length} entries, manifest says ${manifest.review}`);
+  const shipped = new Set(itemsFile.items.map((i) => i.key));
+  for (const k of [...q.entries.map((e) => e.key), ...rq.entries.map((e) => e.key)]) {
+    if (shipped.has(k)) throw new Error(`${dir}: ${k} is both shipped and withheld`);
+  }
+  const quarantineKeys = q.entries.map((e) => e.key).sort();
+  const reviewKeys = rq.entries.map((e) => e.key).sort();
+
+  let stamp: SeedValidationStamp | null = null;
+  const sp = join(dir, 'validation.json');
+  if (existsSync(sp)) {
+    stamp = SeedValidationStamp.parse(JSON.parse(readFileSync(sp, 'utf8')));
+    const why: string[] = [];
+    if (stamp.source !== source) why.push(`stamp is for ${stamp.source}`);
+    if (stamp.manifestSha256 !== sha256(manifestBytes)) why.push('manifest bytes changed since stamping');
+    if (stamp.itemsSha256 !== sha256(itemsBytes)) why.push('items bytes changed since stamping');
+    if (stamp.fingerprintKind !== `seed:${manifest.generator}`) why.push(`stamp kind ${stamp.fingerprintKind}`);
+    const fp = seedFingerprint(manifest.generator);
+    if (stamp.fingerprint !== fp) why.push(`seed fingerprint ${stamp.fingerprint.slice(0, 12)} != current ${fp.slice(0, 12)} (validator/generator/registry/toolchain changed: re-seed)`);
+    if (JSON.stringify(stamp.quarantinedKeys) !== JSON.stringify(quarantineKeys)) why.push('quarantine.json does not match the stamp');
+    if (JSON.stringify(stamp.reviewKeys) !== JSON.stringify(reviewKeys)) why.push('review-queue.json does not match the stamp');
+    if (why.length) throw new Error(`${dir}: stale/invalid stamp: ${why.join('; ')}`);
+  } else if (opts.requireStamp) {
+    throw new Error(`${dir}: no validation.json stamp — the generator's validator has not vouched for this pack`);
+  }
+  return { dir, manifest, items: itemsFile.items, stamp, quarantineKeys, reviewKeys };
+}
