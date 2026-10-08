@@ -1,0 +1,66 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "patches",
+ "name": "relay-app-katas",
+ "items": [
+  {
+   "key": "seed:patches:relay-app/patch-kata/60b682b12db92019",
+   "provenance": {
+    "repo": "relay-app",
+    "sha": "79e71dcbc4acc5d5bbae401cda5c2bc75b0eedaf",
+    "path": "docs/adr/0005-webhook-hmac-timestamp-idempotency.md",
+    "lines": {
+     "start": 59,
+     "end": 59
+    }
+   },
+   "citations": [],
+   "kind": "patch-kata",
+   "title": "Webhooks: turn the duplicate-delivery 500 into a deduplicated 202",
+   "diff": "diff --git a/server/Relay.Api/Controllers/HooksController.cs b/server/Relay.Api/Controllers/HooksController.cs\n--- a/server/Relay.Api/Controllers/HooksController.cs\n+++ b/server/Relay.Api/Controllers/HooksController.cs\n@@ -96,8 +96,23 @@\n             }\r\n         }\r\n \r\n-        var run = await _executor.RunFlowAsync(\r\n-            webhook.FlowId, RunTrigger.Webhook, body, ct, idempotencyKey: idempotencyKey);\r\n+        Run? run;\r\n+        try\r\n+        {\r\n+            run = await _executor.RunFlowAsync(\r\n+                webhook.FlowId, RunTrigger.Webhook, body, ct, idempotencyKey: idempotencyKey);\r\n+        }\r\n+        catch (DbUpdateException) when (idempotencyKey is not null)\r\n+        {\r\n+            // A concurrent delivery with the same key saved its run first: treat this\r\n+            // one as the duplicate it is instead of surfacing a 500 to the sender.\r\n+            _db.ChangeTracker.Clear();\r\n+            var winner = await _db.Runs.AsNoTracking()\r\n+                .FirstAsync(r => r.FlowId == webhook.FlowId && r.IdempotencyKey == idempotencyKey, ct);\r\n+            await LogDelivery(webhook, true, WebhookDeliveryOutcome.Duplicate, winner.Id, \"Deduplicated by idempotency key.\", ct);\r\n+            await _db.SaveChangesAsync(ct);\r\n+            return Accepted(new { runId = winner.Id, status = winner.Status.ToString(), deduplicated = true });\r\n+        }\r\n \r\n         webhook.LastTriggeredAtUtc = _clock.UtcNow;\r\n         await LogDelivery(webhook, true, WebhookDeliveryOutcome.Delivered, run!.Id, null, ct);\r\n",
+   "contextFiles": [
+    {
+     "path": "server/Relay.Api/Controllers/HooksController.cs",
+     "content": "using Microsoft.AspNetCore.Authorization;\r\nusing Microsoft.AspNetCore.Mvc;\r\nusing Microsoft.AspNetCore.RateLimiting;\r\nusing Microsoft.EntityFrameworkCore;\r\nusing Relay.Api.Security;\r\nusing Relay.Domain.Entities;\r\nusing Relay.Domain.Enums;\r\nusing Relay.Domain.Execution;\r\nusing Relay.Domain.Security;\r\nusing Relay.Domain.Time;\r\nusing Relay.Infrastructure.Persistence;\r\n\r\nnamespace Relay.Api.Controllers;\r\n\r\n/// <summary>\r\n/// Public inbound webhook entrypoint. A POST to a webhook's token triggers its\r\n/// flow with the request body as the run payload. Unauthenticated by design —\r\n/// the unguessable token is the credential, optionally reinforced by an HMAC\r\n/// signature. Every attempt is recorded in the webhook's delivery log.\r\n/// </summary>\r\n[ApiController]\r\n[AllowAnonymous]\r\n[Route(\"api/hooks\")]\r\npublic sealed class HooksController : ControllerBase\r\n{\r\n    // How far a signed request's timestamp may drift from now (replay window).\r\n    private static readonly TimeSpan SignatureWindow = TimeSpan.FromMinutes(5);\r\n\r\n    private readonly RelayDbContext _db;\r\n    private readonly IFlowExecutor _executor;\r\n    private readonly ISecretProtector _protector;\r\n    private readonly IClock _clock;\r\n\r\n    public HooksController(RelayDbContext db, IFlowExecutor executor, ISecretProtector protector, IClock clock)\r\n    {\r\n        _db = db;\r\n        _executor = executor;\r\n        _protector = protector;\r\n        _clock = clock;\r\n    }\r\n\r\n    [HttpPost(\"{token}\")]\r\n    [EnableRateLimiting(\"triggers\")]\r\n    [ProducesResponseType(StatusCodes.Status202Accepted)]\r\n    [ProducesResponseType(StatusCodes.Status401Unauthorized)]\r\n    [ProducesResponseType(StatusCodes.Status404NotFound)]\r\n    [ProducesResponseType(StatusCodes.Status409Conflict)]\r\n    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]\r\n    public async Task<IActionResult> Trigger(string token, CancellationToken ct)\r\n    {\r\n        var webhook = await _db.Webhooks\r\n            .Include(w => w.Flow)\r\n            .FirstOrDefaultAsync(w => w.Token == token, ct);\r\n\r\n        if (webhook is null || !webhook.IsEnabled)\r\n            return Problem(title: \"Webhook not found\", detail: \"No active webhook for that token.\", statusCode: StatusCodes.Status404NotFound);\r\n\r\n        // Read the body once — it is both the signed payload and the run input.\r\n        var body = await ReadBodyAsync(ct);\r\n\r\n        // Signature verification (when enabled): missing / bad / expired → 401.\r\n        if (webhook.RequireSignature && !string.IsNullOrWhiteSpace(webhook.SigningSecret))\r\n        {\r\n            var timestamp = Request.Headers[WebhookHeaders.Timestamp].ToString();\r\n            var signature = Request.Headers[WebhookHeaders.Signature].ToString();\r\n\r\n            if (string.IsNullOrWhiteSpace(timestamp) || string.IsNullOrWhiteSpace(signature))\r\n                return await Reject(webhook, WebhookDeliveryOutcome.MissingSignature, \"Signature or timestamp header missing.\", ct);\r\n\r\n            if (!IsTimestampFresh(timestamp))\r\n                return await Reject(webhook, WebhookDeliveryOutcome.TimestampExpired, \"Timestamp outside the allowed window.\", ct);\r\n\r\n            var secret = _protector.Reveal(webhook.SigningSecret);\r\n            if (!WebhookSignature.Verify(secret, timestamp, body ?? string.Empty, signature))\r\n                return await Reject(webhook, WebhookDeliveryOutcome.InvalidSignature, \"Signature did not match.\", ct);\r\n        }\r\n\r\n        if (webhook.Flow is null || !webhook.Flow.IsEnabled)\r\n        {\r\n            await LogDelivery(webhook, false, WebhookDeliveryOutcome.FlowDisabled, null, \"Flow is disabled.\", ct);\r\n            await _db.SaveChangesAsync(ct);\r\n            return Problem(title: \"Flow disabled\", detail: \"The flow for this webhook is disabled.\", statusCode: StatusCodes.Status409Conflict);\r\n        }\r\n\r\n        // Idempotency: a duplicate delivery keyed the same reuses the original run.\r\n        var idempotencyKey = ReadIdempotencyKey();\r\n        if (idempotencyKey is not null)\r\n        {\r\n            var existing = await _db.Runs.AsNoTracking()\r\n                .FirstOrDefaultAsync(r => r.FlowId == webhook.FlowId && r.IdempotencyKey == idempotencyKey, ct);\r\n            if (existing is not null)\r\n            {\r\n                await LogDelivery(webhook, true, WebhookDeliveryOutcome.Duplicate, existing.Id, \"Deduplicated by idempotency key.\", ct);\r\n                await _db.SaveChangesAsync(ct);\r\n                return Accepted(new { runId = existing.Id, status = existing.Status.ToString(), deduplicated = true });\r\n            }\r\n        }\r\n\r\n        var run = await _executor.RunFlowAsync(\r\n            webhook.FlowId, RunTrigger.Webhook, body, ct, idempotencyKey: idempotencyKey);\r\n\r\n        webhook.LastTriggeredAtUtc = _clock.UtcNow;\r\n        await LogDelivery(webhook, true, WebhookDeliveryOutcome.Delivered, run!.Id, null, ct);\r\n        await _db.SaveChangesAsync(ct);\r\n\r\n        return Accepted(new { runId = run.Id, status = run.Status.ToString(), deduplicated = false });\r\n    }\r\n\r\n    private async Task<IActionResult> Reject(Webhook webhook, WebhookDeliveryOutcome outcome, string detail, CancellationToken ct)\r\n    {\r\n        await LogDelivery(webhook, false, outcome, null, detail, ct);\r\n        await _db.SaveChangesAsync(ct);\r\n        return Problem(title: \"Signature verification failed\", detail: detail, statusCode: StatusCodes.Status401Unauthorized);\r\n    }\r\n\r\n    private Task LogDelivery(Webhook webhook, bool success, WebhookDeliveryOutcome outcome, Guid? runId, string? detail, CancellationToken ct)\r\n    {\r\n        _db.WebhookDeliveries.Add(new WebhookDelivery\r\n        {\r\n            Id = Guid.NewGuid(),\r\n            WebhookId = webhook.Id,\r\n            WorkspaceId = webhook.WorkspaceId,\r\n            ReceivedAtUtc = _clock.UtcNow,\r\n            Success = success,\r\n            Outcome = outcome,\r\n            RunId = runId,\r\n            Detail = detail,\r\n        });\r\n        return Task.CompletedTask;\r\n    }\r\n\r\n    private bool IsTimestampFresh(string timestamp)\r\n    {\r\n        if (!long.TryParse(timestamp, out var unixSeconds)) return false;\r\n        var sent = DateTimeOffset.FromUnixTimeSeconds(unixSeconds);\r\n        var drift = (_clock.UtcNow - sent).Duration();\r\n        return drift <= SignatureWindow;\r\n    }\r\n\r\n    private async Task<string?> ReadBodyAsync(CancellationToken ct)\r\n    {\r\n        using var reader = new StreamReader(Request.Body);\r\n        var body = await reader.ReadToEndAsync(ct);\r\n        return string.IsNullOrWhiteSpace(body) ? null : body;\r\n    }\r\n\r\n    private string? ReadIdempotencyKey()\r\n    {\r\n        var value = Request.Headers[\"Idempotency-Key\"].ToString();\r\n        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();\r\n    }\r\n}\r\n",
+     "origin": {
+      "kind": "verbatim",
+      "repoPath": "server/Relay.Api/Controllers/HooksController.cs"
+     }
+    }
+   ],
+   "seededDefectKey": [
+    {
+     "scenario": "The sender retries a slow delivery, so two requests with the same Idempotency-Key arrive concurrently; both miss the lookup and both execute the flow.",
+     "evidence": {
+      "path": "server/Relay.Api/Controllers/HooksController.cs",
+      "lineStart": 105,
+      "lineEnd": 105,
+      "in": "patched"
+     },
+     "consequence": "The catch runs only AFTER RunFlowAsync has executed every step (the run row is saved at the end, FlowExecutor.cs:166), so the flow's side effects (HTTP calls, emails, writes) have already happened twice. The patch reports \"deduplicated: true\" for a delivery that was not deduplicated, hiding the double dispatch behind a success code and removing the only signal (the 500) that it happened."
+    },
+    {
+     "scenario": "Same request: the delivery log.",
+     "evidence": {
+      "path": "server/Relay.Api/Controllers/HooksController.cs",
+      "lineStart": 112,
+      "lineEnd": 112,
+      "in": "patched"
+     },
+     "consequence": "The audit trail records Duplicate/success for an execution that really ran, so operators reconciling double charges or double emails find no trace of the second run."
+    },
+    {
+     "scenario": "The race itself is still there: idempotency is a read before the work, not a claim.",
+     "evidence": {
+      "path": "server/Relay.Api/Controllers/HooksController.cs",
+      "lineStart": 89,
+      "lineEnd": 90,
+      "in": "repo"
+     },
+     "consequence": "ADR 0005 known gap: check-then-insert at HooksController.cs:89-90. A real fix claims the key first (insert a pending run / unique row before executing) so the loser never runs the flow."
+    }
+   ],
+   "findingRef": "relay-app ADR 0005 known gap \"Check-then-insert race\" (docs/adr/0005-webhook-hmac-timestamp-idempotency.md:59)"
+  }
+ ]
+}

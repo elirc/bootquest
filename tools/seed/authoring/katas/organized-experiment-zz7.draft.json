@@ -1,0 +1,143 @@
+{
+ "name": "organized-experiment-zz7-katas",
+ "katas": [
+  {
+   "id": "approve-guard-out-of-where",
+   "title": "PO approval: drop the \"redundant\" status filter from the approve write",
+   "findingRef": "organized-experiment-zz7 auth-and-permissions finding 3 (docs/architecture/auth-and-permissions.md:199)",
+   "provenance": {
+    "path": "docs/architecture/auth-and-permissions.md",
+    "lines": {
+     "start": 199,
+     "end": 199
+    }
+   },
+   "diff": "diff --git a/src/services/approvePurchaseOrder.mjs b/src/services/approvePurchaseOrder.mjs\n--- a/src/services/approvePurchaseOrder.mjs\n+++ b/src/services/approvePurchaseOrder.mjs\n@@ -77,14 +77,8 @@\n \n   assertPurchaseOrderStatusTransition(purchaseOrder.status, \"APPROVED\");\n \n-  const result = await repo.approve(\n-    { id: purchaseOrderId, tenantId: session.tenantId, status: \"PENDING_APPROVAL\" },\n-    session.userId,\n-  );\n-\n-  if (result.count === 0) {\n-    throw new ConflictError(\"Purchase order is no longer pending approval.\");\n-  }\n+  // status was already checked by assertPurchaseOrderStatusTransition above\n+  await repo.approve({ id: purchaseOrderId, tenantId: session.tenantId }, session.userId);\n \n   await repo.auditCreate({\n     action: \"purchaseOrder.approved\",\n",
+   "contextFiles": [
+    {
+     "path": "src/services/approvePurchaseOrder.mjs",
+     "content": "// Adapted from organized-experiment-zz7 src/services/purchaseOrderService.ts:124-156 @ de75cd6\n// (+ purchaseOrderRepository.ts:93-110 approve(), purchaseOrderSchemas.ts:75-96 transition map).\n// Prisma replaced by an injected repository; the guide's two fixes are APPLIED here\n// (docs/architecture/auth-and-permissions.md findings 1 and 3): no self-approval, and the\n// status guard is part of the conditional write.\nexport class ForbiddenError extends Error {\n  constructor(message) {\n    super(message);\n    this.statusCode = 403;\n  }\n}\nexport class ConflictError extends Error {\n  constructor(message) {\n    super(message);\n    this.statusCode = 409;\n  }\n}\nexport class NotFoundError extends Error {\n  constructor(message) {\n    super(message);\n    this.statusCode = 404;\n  }\n}\n\nconst transitions = {\n  DRAFT: [\"PENDING_APPROVAL\", \"CANCELLED\"],\n  PENDING_APPROVAL: [\"APPROVED\", \"CANCELLED\"],\n  APPROVED: [\"PARTIALLY_RECEIVED\", \"RECEIVED\", \"CLOSED\", \"CANCELLED\"],\n  PARTIALLY_RECEIVED: [\"RECEIVED\", \"CLOSED\"],\n  RECEIVED: [\"CLOSED\"],\n  CLOSED: [],\n  CANCELLED: [],\n};\n\nexport function assertPurchaseOrderStatusTransition(fromStatus, toStatus) {\n  if (!transitions[fromStatus].includes(toStatus)) {\n    throw new ConflictError(`Invalid purchase order transition from ${fromStatus} to ${toStatus}`);\n  }\n  return true;\n}\n\n/** In-memory stand-in for the Prisma repository; `yieldBetween` lets a test interleave two requests. */\nexport function createRepository(rows, { yieldBetween = false } = {}) {\n  const audit = [];\n  return {\n    audit,\n    async findById(tenantId, id) {\n      const row = rows.find((r) => r.id === id && r.tenantId === tenantId);\n      const snapshot = row ? { ...row } : null;\n      if (yieldBetween) await new Promise((r) => setTimeout(r, 5));\n      return snapshot;\n    },\n    async approve(where, approvedById) {\n      const hits = rows.filter((r) => Object.entries(where).every(([k, v]) => r[k] === v));\n      for (const r of hits) {\n        r.status = \"APPROVED\";\n        r.approvedById = approvedById;\n      }\n      return { count: hits.length };\n    },\n    async auditCreate(entry) {\n      audit.push(entry);\n    },\n  };\n}\n\nexport async function approvePurchaseOrder(repo, session, purchaseOrderId) {\n  const purchaseOrder = await repo.findById(session.tenantId, purchaseOrderId);\n\n  if (!purchaseOrder) {\n    throw new NotFoundError(\"Purchase order was not found.\");\n  }\n\n  if (purchaseOrder.requestedById === session.userId) {\n    throw new ForbiddenError(\"You cannot approve a purchase order you requested.\");\n  }\n\n  assertPurchaseOrderStatusTransition(purchaseOrder.status, \"APPROVED\");\n\n  const result = await repo.approve(\n    { id: purchaseOrderId, tenantId: session.tenantId, status: \"PENDING_APPROVAL\" },\n    session.userId,\n  );\n\n  if (result.count === 0) {\n    throw new ConflictError(\"Purchase order is no longer pending approval.\");\n  }\n\n  await repo.auditCreate({\n    action: \"purchaseOrder.approved\",\n    actorUserId: session.userId,\n    entityId: purchaseOrderId,\n    metadata: { fromStatus: purchaseOrder.status, toStatus: \"APPROVED\" },\n  });\n\n  return { id: purchaseOrderId, status: \"APPROVED\", approvedById: session.userId };\n}\n",
+     "origin": {
+      "kind": "adapted",
+      "repoPath": "src/services/purchaseOrderService.ts",
+      "lines": {
+       "start": 124,
+       "end": 156
+      }
+     }
+    }
+   ],
+   "seededDefectKey": [
+    {
+     "scenario": "Two approvers click Approve on the same PENDING_APPROVAL purchase order at the same moment; both requests read the row before either writes.",
+     "evidence": {
+      "path": "src/services/approvePurchaseOrder.mjs",
+      "lineStart": 81,
+      "lineEnd": 81,
+      "in": "patched"
+     },
+     "consequence": "The status check now happens only in JavaScript on a stale read; the write no longer re-checks PENDING_APPROVAL, so both requests succeed, two purchaseOrder.approved audit rows are written and approvedById is whoever wrote last (check-then-act race)."
+    },
+    {
+     "scenario": "The shipped repository already writes without the status in the where clause.",
+     "evidence": {
+      "path": "src/repositories/purchaseOrderRepository.ts",
+      "lineStart": 99,
+      "lineEnd": 103,
+      "in": "repo"
+     },
+     "consequence": "This is the live double-approval race the guide documents (purchaseOrderService.ts:125 read -> :134 write); the patch removes the fix instead of applying it."
+    }
+   ],
+   "test": {
+    "module": "src/services/approvePurchaseOrder.mjs",
+    "check": {
+     "type": "drill-js",
+     "language": "js",
+     "timeoutMs": 8000,
+     "tests": [
+      {
+       "name": "two concurrent approvals: exactly one succeeds, the other is a 409",
+       "code": "const rows = [{ id: 'po1', tenantId: 't1', status: 'PENDING_APPROVAL', requestedById: 'req' }]; const repo = mod.createRepository(rows, { yieldBetween: true }); const r = await Promise.allSettled([mod.approvePurchaseOrder(repo, { tenantId: 't1', userId: 'a1' }, 'po1'), mod.approvePurchaseOrder(repo, { tenantId: 't1', userId: 'a2' }, 'po1')]); assert.equal(r.filter((x) => x.status === 'fulfilled').length, 1); const rej = r.find((x) => x.status === 'rejected'); assert.ok(rej, 'second approval must be rejected'); assert.equal(rej.reason.statusCode, 409); assert.equal(repo.audit.length, 1);"
+      },
+      {
+       "name": "a sequential second approval is a 409 conflict",
+       "code": "const rows = [{ id: 'po1', tenantId: 't1', status: 'PENDING_APPROVAL', requestedById: 'req' }]; const repo = mod.createRepository(rows); await mod.approvePurchaseOrder(repo, { tenantId: 't1', userId: 'a1' }, 'po1'); await assert.rejects(mod.approvePurchaseOrder(repo, { tenantId: 't1', userId: 'a2' }, 'po1'), (e) => e.statusCode === 409);"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "admin-self-approval",
+   "title": "PO approval: let admins fast-track their own purchase orders",
+   "findingRef": "organized-experiment-zz7 auth-and-permissions finding 1 (docs/architecture/auth-and-permissions.md:197)",
+   "provenance": {
+    "path": "docs/architecture/auth-and-permissions.md",
+    "lines": {
+     "start": 197,
+     "end": 197
+    }
+   },
+   "diff": "diff --git a/src/services/approvePurchaseOrder.mjs b/src/services/approvePurchaseOrder.mjs\n--- a/src/services/approvePurchaseOrder.mjs\n+++ b/src/services/approvePurchaseOrder.mjs\n@@ -71,7 +71,7 @@\n     throw new NotFoundError(\"Purchase order was not found.\");\n   }\n \n-  if (purchaseOrder.requestedById === session.userId) {\n+  if (purchaseOrder.requestedById === session.userId && session.role !== \"ADMIN\") {\n     throw new ForbiddenError(\"You cannot approve a purchase order you requested.\");\n   }\n \n",
+   "contextFiles": [
+    {
+     "path": "src/services/approvePurchaseOrder.mjs",
+     "content": "// Adapted from organized-experiment-zz7 src/services/purchaseOrderService.ts:124-156 @ de75cd6\n// (+ purchaseOrderRepository.ts:93-110 approve(), purchaseOrderSchemas.ts:75-96 transition map).\n// Prisma replaced by an injected repository; the guide's two fixes are APPLIED here\n// (docs/architecture/auth-and-permissions.md findings 1 and 3): no self-approval, and the\n// status guard is part of the conditional write.\nexport class ForbiddenError extends Error {\n  constructor(message) {\n    super(message);\n    this.statusCode = 403;\n  }\n}\nexport class ConflictError extends Error {\n  constructor(message) {\n    super(message);\n    this.statusCode = 409;\n  }\n}\nexport class NotFoundError extends Error {\n  constructor(message) {\n    super(message);\n    this.statusCode = 404;\n  }\n}\n\nconst transitions = {\n  DRAFT: [\"PENDING_APPROVAL\", \"CANCELLED\"],\n  PENDING_APPROVAL: [\"APPROVED\", \"CANCELLED\"],\n  APPROVED: [\"PARTIALLY_RECEIVED\", \"RECEIVED\", \"CLOSED\", \"CANCELLED\"],\n  PARTIALLY_RECEIVED: [\"RECEIVED\", \"CLOSED\"],\n  RECEIVED: [\"CLOSED\"],\n  CLOSED: [],\n  CANCELLED: [],\n};\n\nexport function assertPurchaseOrderStatusTransition(fromStatus, toStatus) {\n  if (!transitions[fromStatus].includes(toStatus)) {\n    throw new ConflictError(`Invalid purchase order transition from ${fromStatus} to ${toStatus}`);\n  }\n  return true;\n}\n\n/** In-memory stand-in for the Prisma repository; `yieldBetween` lets a test interleave two requests. */\nexport function createRepository(rows, { yieldBetween = false } = {}) {\n  const audit = [];\n  return {\n    audit,\n    async findById(tenantId, id) {\n      const row = rows.find((r) => r.id === id && r.tenantId === tenantId);\n      const snapshot = row ? { ...row } : null;\n      if (yieldBetween) await new Promise((r) => setTimeout(r, 5));\n      return snapshot;\n    },\n    async approve(where, approvedById) {\n      const hits = rows.filter((r) => Object.entries(where).every(([k, v]) => r[k] === v));\n      for (const r of hits) {\n        r.status = \"APPROVED\";\n        r.approvedById = approvedById;\n      }\n      return { count: hits.length };\n    },\n    async auditCreate(entry) {\n      audit.push(entry);\n    },\n  };\n}\n\nexport async function approvePurchaseOrder(repo, session, purchaseOrderId) {\n  const purchaseOrder = await repo.findById(session.tenantId, purchaseOrderId);\n\n  if (!purchaseOrder) {\n    throw new NotFoundError(\"Purchase order was not found.\");\n  }\n\n  if (purchaseOrder.requestedById === session.userId) {\n    throw new ForbiddenError(\"You cannot approve a purchase order you requested.\");\n  }\n\n  assertPurchaseOrderStatusTransition(purchaseOrder.status, \"APPROVED\");\n\n  const result = await repo.approve(\n    { id: purchaseOrderId, tenantId: session.tenantId, status: \"PENDING_APPROVAL\" },\n    session.userId,\n  );\n\n  if (result.count === 0) {\n    throw new ConflictError(\"Purchase order is no longer pending approval.\");\n  }\n\n  await repo.auditCreate({\n    action: \"purchaseOrder.approved\",\n    actorUserId: session.userId,\n    entityId: purchaseOrderId,\n    metadata: { fromStatus: purchaseOrder.status, toStatus: \"APPROVED\" },\n  });\n\n  return { id: purchaseOrderId, status: \"APPROVED\", approvedById: session.userId };\n}\n",
+     "origin": {
+      "kind": "adapted",
+      "repoPath": "src/services/purchaseOrderService.ts",
+      "lines": {
+       "start": 124,
+       "end": 156
+      }
+     }
+    }
+   ],
+   "seededDefectKey": [
+    {
+     "scenario": "An ADMIN raises a purchase order for a vendor they control and then approves it themselves.",
+     "evidence": {
+      "path": "src/services/approvePurchaseOrder.mjs",
+      "lineStart": 74,
+      "lineEnd": 74,
+      "in": "patched"
+     },
+     "consequence": "Segregation of duties is gone for exactly the most powerful role: the requester is also the approver, so a single person can commit company spend with no second pair of eyes."
+    },
+    {
+     "scenario": "The shipped approve flow has no requester check at all.",
+     "evidence": {
+      "path": "src/services/purchaseOrderService.ts",
+      "lineStart": 131,
+      "lineEnd": 131,
+      "in": "repo"
+     },
+     "consequence": "The only guard before the write is the transition map (finding 1, \"Self-approval is allowed\"); the patch re-opens the hole the fix closed, for admins."
+    }
+   ],
+   "test": {
+    "module": "src/services/approvePurchaseOrder.mjs",
+    "check": {
+     "type": "drill-js",
+     "language": "js",
+     "timeoutMs": 8000,
+     "tests": [
+      {
+       "name": "an admin cannot approve a purchase order they requested",
+       "code": "const rows = [{ id: 'po1', tenantId: 't1', status: 'PENDING_APPROVAL', requestedById: 'boss' }]; const repo = mod.createRepository(rows); await assert.rejects(mod.approvePurchaseOrder(repo, { tenantId: 't1', userId: 'boss', role: 'ADMIN' }, 'po1'), (e) => e.statusCode === 403); assert.equal(rows[0].status, 'PENDING_APPROVAL');"
+      },
+      {
+       "name": "a different approver can approve",
+       "code": "const rows = [{ id: 'po1', tenantId: 't1', status: 'PENDING_APPROVAL', requestedById: 'boss' }]; const repo = mod.createRepository(rows); const r = await mod.approvePurchaseOrder(repo, { tenantId: 't1', userId: 'fin', role: 'APPROVER' }, 'po1'); assert.equal(r.status, 'APPROVED');"
+      },
+      {
+       "name": "allows approval before receiving (ported from src/test/purchase-order-transition.test.ts)",
+       "code": "assert.equal(mod.assertPurchaseOrderStatusTransition('PENDING_APPROVAL', 'APPROVED'), true); assert.throws(() => mod.assertPurchaseOrderStatusTransition('DRAFT', 'RECEIVED'), /Invalid purchase order transition from DRAFT to RECEIVED/);"
+      }
+     ]
+    }
+   }
+  }
+ ]
+}

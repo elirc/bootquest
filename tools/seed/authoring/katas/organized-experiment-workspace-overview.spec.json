@@ -1,0 +1,74 @@
+{
+ "name": "organized-experiment-workspace-overview-katas",
+ "checkout": ".cache/checkouts/organized-experiment-workspace-overview@63ed0a70cdb196d06d39a6b4cb49746d4a6f88f3",
+ "katas": [
+  {
+   "id": "search-leads-unscoped",
+   "title": "Global search: search all leads, the lead page already enforces access",
+   "difficulty": "medium",
+   "findingRef": "workspace-overview CRM finding 2 (CODEBASE-STUDY-PATH.md:829)",
+   "provenance": {
+    "path": "CODEBASE-STUDY-PATH.md",
+    "find": "| 2 | CRM | `globalSearch` returns leads without the sales-rep owner filter"
+   },
+   "contextFiles": [
+    {
+     "path": "founder-crm-lite/src/modules/crm/search.mjs",
+     "repoPath": "founder-crm-lite/src/modules/crm/service.ts",
+     "kind": "adapted",
+     "lines": {
+      "start": 83,
+      "end": 176
+     },
+     "content": "// Adapted from organized-experiment-workspace-overview founder-crm-lite/src/modules/crm/service.ts:83-176 @ 63ed0a7\n// (listLeads, getLeadDetail, globalSearch; the JSON-file repository replaced by an injected db).\n// The study path's fix for finding 2 is APPLIED: globalSearch leads use listLeads' owner filter\n// (CODEBASE-STUDY-PATH.md:829, :870).\nconst visibleTo = (user) => (record) => (user.role === \"sales_rep\" ? record.ownerId === user.id : true);\n\nexport function listLeads(db, user, filters = {}) {\n  const q = filters.q?.trim().toLowerCase();\n  return db.leads\n    .filter(visibleTo(user))\n    .filter((lead) => (filters.status ? lead.status === filters.status : true))\n    .filter((lead) => (q ? [lead.fullName, lead.email ?? \"\", lead.notesSummary].join(\" \").toLowerCase().includes(q) : true));\n}\n\nexport function getLeadDetail(db, user, leadId) {\n  const lead = db.leads.find((entry) => entry.id === leadId);\n  if (!lead) {\n    return null;\n  }\n  if (user.role === \"sales_rep\" && lead.ownerId !== user.id) {\n    throw new Error(\"You do not have access to this lead.\");\n  }\n  return { lead };\n}\n\nexport function globalSearch(db, user, query) {\n  const q = query.trim().toLowerCase();\n  if (!q) {\n    return { leads: [], deals: [] };\n  }\n\n  return {\n    leads: db.leads\n      .filter(visibleTo(user))\n      .filter((lead) => [lead.fullName, lead.email ?? \"\", lead.notesSummary].join(\" \").toLowerCase().includes(q)),\n    deals: db.deals\n      .filter(visibleTo(user))\n      .filter((deal) => [deal.name, deal.notesSummary, deal.stage].join(\" \").toLowerCase().includes(q))\n  };\n}\n"
+    }
+   ],
+   "edits": [
+    {
+     "path": "founder-crm-lite/src/modules/crm/search.mjs",
+     "find": "    leads: db.leads\n      .filter(visibleTo(user))\n      .filter((lead) =>",
+     "replace": "    // no owner filter here: getLeadDetail rejects reps who open a lead they do not own\n    leads: db.leads\n      .filter((lead) =>"
+    }
+   ],
+   "defects": [
+    {
+     "scenario": "Jordan (sales_rep) types a common first name into the global search box.",
+     "in": "patched",
+     "path": "founder-crm-lite/src/modules/crm/search.mjs",
+     "find": "    // no owner filter here: getLeadDetail rejects reps who open a lead they do not own",
+     "span": 3,
+     "consequence": "Search results now include other reps' leads: name, email and notes summary are returned in the search response itself, so the detail-page check comes too late. The data is exposed before anyone clicks (and clicking then errors)."
+    },
+    {
+     "scenario": "The shipped search has exactly this gap for leads.",
+     "in": "repo",
+     "path": "founder-crm-lite/src/modules/crm/service.ts",
+     "find": "    leads: db.leads.filter((lead) => [lead.fullName, lead.email ?? \"\", lead.notesSummary].join(\" \").toLowerCase().includes(q)),",
+     "consequence": "Finding 2 (Medium, data exposure): listLeads filters by owner at service.ts:88, search does not at :170; the patch removes the fix."
+    }
+   ],
+   "test": {
+    "module": "founder-crm-lite/src/modules/crm/search.mjs",
+    "check": {
+     "type": "drill-js",
+     "language": "js",
+     "timeoutMs": 8000,
+     "tests": [
+      {
+       "name": "a sales rep only finds their own leads",
+       "code": "const db = { leads: [{ id: 'l1', ownerId: 'jordan', fullName: 'Avery Stone', email: 'avery@ex.com', notesSummary: 'warm intro' }, { id: 'l2', ownerId: 'sam', fullName: 'Avery Quinn', email: 'aq@ex.com', notesSummary: 'pricing call' }], deals: [] }; const jordan = { id: 'jordan', role: 'sales_rep' }; const r = mod.globalSearch(db, jordan, 'avery'); assert.deepEqual(r.leads.map((l) => l.id), ['l1']);"
+      },
+      {
+       "name": "search and list agree for a sales rep",
+       "code": "const db = { leads: [{ id: 'l1', ownerId: 'jordan', fullName: 'Avery Stone', email: 'avery@ex.com', notesSummary: 'warm intro' }, { id: 'l2', ownerId: 'sam', fullName: 'Avery Quinn', email: 'aq@ex.com', notesSummary: 'pricing call' }], deals: [] }; const jordan = { id: 'jordan', role: 'sales_rep' }; assert.deepEqual(mod.globalSearch(db, jordan, 'avery').leads.map((l) => l.id), mod.listLeads(db, jordan, { q: 'avery' }).map((l) => l.id));"
+      },
+      {
+       "name": "an admin still finds every lead",
+       "code": "const db = { leads: [{ id: 'l1', ownerId: 'jordan', fullName: 'Avery Stone', email: 'avery@ex.com', notesSummary: 'warm intro' }, { id: 'l2', ownerId: 'sam', fullName: 'Avery Quinn', email: 'aq@ex.com', notesSummary: 'pricing call' }], deals: [] }; const jordan = { id: 'jordan', role: 'sales_rep' }; assert.equal(mod.globalSearch(db, { id: 'a', role: 'admin' }, 'avery').leads.length, 2);"
+      }
+     ]
+    }
+   }
+  }
+ ]
+}

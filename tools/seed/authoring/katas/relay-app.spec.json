@@ -1,0 +1,54 @@
+{
+ "name": "relay-app-katas",
+ "checkout": ".cache/checkouts/relay-app@79e71dcbc4acc5d5bbae401cda5c2bc75b0eedaf",
+ "katas": [
+  {
+   "id": "swallow-duplicate-key-500",
+   "title": "Webhooks: turn the duplicate-delivery 500 into a deduplicated 202",
+   "difficulty": "hard",
+   "findingRef": "relay-app ADR 0005 known gap \"Check-then-insert race\" (docs/adr/0005-webhook-hmac-timestamp-idempotency.md:59)",
+   "provenance": {
+    "path": "docs/adr/0005-webhook-hmac-timestamp-idempotency.md",
+    "find": "- **Check-then-insert race.**"
+   },
+   "contextFiles": [
+    {
+     "path": "server/Relay.Api/Controllers/HooksController.cs",
+     "repoPath": "server/Relay.Api/Controllers/HooksController.cs",
+     "kind": "verbatim"
+    }
+   ],
+   "edits": [
+    {
+     "path": "server/Relay.Api/Controllers/HooksController.cs",
+     "find": "        var run = await _executor.RunFlowAsync(\n            webhook.FlowId, RunTrigger.Webhook, body, ct, idempotencyKey: idempotencyKey);\n",
+     "replace": "        Run? run;\n        try\n        {\n            run = await _executor.RunFlowAsync(\n                webhook.FlowId, RunTrigger.Webhook, body, ct, idempotencyKey: idempotencyKey);\n        }\n        catch (DbUpdateException) when (idempotencyKey is not null)\n        {\n            // A concurrent delivery with the same key saved its run first: treat this\n            // one as the duplicate it is instead of surfacing a 500 to the sender.\n            _db.ChangeTracker.Clear();\n            var winner = await _db.Runs.AsNoTracking()\n                .FirstAsync(r => r.FlowId == webhook.FlowId && r.IdempotencyKey == idempotencyKey, ct);\n            await LogDelivery(webhook, true, WebhookDeliveryOutcome.Duplicate, winner.Id, \"Deduplicated by idempotency key.\", ct);\n            await _db.SaveChangesAsync(ct);\n            return Accepted(new { runId = winner.Id, status = winner.Status.ToString(), deduplicated = true });\n        }\n"
+    }
+   ],
+   "defects": [
+    {
+     "scenario": "The sender retries a slow delivery, so two requests with the same Idempotency-Key arrive concurrently; both miss the lookup and both execute the flow.",
+     "in": "patched",
+     "path": "server/Relay.Api/Controllers/HooksController.cs",
+     "find": "        catch (DbUpdateException) when (idempotencyKey is not null)",
+     "consequence": "The catch runs only AFTER RunFlowAsync has executed every step (the run row is saved at the end, FlowExecutor.cs:166), so the flow's side effects (HTTP calls, emails, writes) have already happened twice. The patch reports \"deduplicated: true\" for a delivery that was not deduplicated, hiding the double dispatch behind a success code and removing the only signal (the 500) that it happened."
+    },
+    {
+     "scenario": "Same request: the delivery log.",
+     "in": "patched",
+     "path": "server/Relay.Api/Controllers/HooksController.cs",
+     "find": "            await LogDelivery(webhook, true, WebhookDeliveryOutcome.Duplicate, winner.Id, \"Deduplicated by idempotency key.\", ct);",
+     "consequence": "The audit trail records Duplicate/success for an execution that really ran, so operators reconciling double charges or double emails find no trace of the second run."
+    },
+    {
+     "scenario": "The race itself is still there: idempotency is a read before the work, not a claim.",
+     "in": "repo",
+     "path": "server/Relay.Api/Controllers/HooksController.cs",
+     "find": "            var existing = await _db.Runs.AsNoTracking()",
+     "span": 2,
+     "consequence": "ADR 0005 known gap: check-then-insert at HooksController.cs:89-90. A real fix claims the key first (insert a pending run / unique row before executing) so the loser never runs the flow."
+    }
+   ]
+  }
+ ]
+}

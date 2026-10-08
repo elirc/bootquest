@@ -1,0 +1,60 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "patches",
+ "name": "netzen-katas",
+ "items": [
+  {
+   "key": "seed:patches:netzen/patch-kata/60505e88e7ca43a0",
+   "provenance": {
+    "repo": "netzen",
+    "sha": "3dbc36d390d7c26e8dbac45d2ab67c014eb87f71",
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "lines": {
+     "start": 31,
+     "end": 31
+    }
+   },
+   "citations": [],
+   "kind": "patch-kata",
+   "title": "Problem details: always show the real exception message so support can debug",
+   "diff": "diff --git a/support-ticketing-app/backend/SupportDesk.Api/Auth/ApiExceptionHandler.cs b/support-ticketing-app/backend/SupportDesk.Api/Auth/ApiExceptionHandler.cs\n--- a/support-ticketing-app/backend/SupportDesk.Api/Auth/ApiExceptionHandler.cs\n+++ b/support-ticketing-app/backend/SupportDesk.Api/Auth/ApiExceptionHandler.cs\n@@ -30,15 +30,8 @@\n             _ => (StatusCodes.Status500InternalServerError, \"Unexpected error\")\r\n         };\r\n \r\n-        // Known exceptions carry messages written for the client (e.g. the 409 version hint).\r\n-        // Anything else is logged with its real message and answered generically.\r\n-        var detail = statusCode == StatusCodes.Status500InternalServerError\r\n-            ? \"An unexpected error occurred. Reference: \" + httpContext.TraceIdentifier\r\n-            : exception.Message;\r\n-        if (statusCode == StatusCodes.Status500InternalServerError)\r\n-        {\r\n-            _logger.LogError(exception, \"Unhandled exception for {Path}\", httpContext.Request.Path);\r\n-        }\r\n+        // Support asked for the real reason in the UI instead of a reference id.\r\n+        var detail = exception.Message;\r\n \r\n         httpContext.Response.StatusCode = statusCode;\r\n \r\n",
+   "contextFiles": [
+    {
+     "path": "support-ticketing-app/backend/SupportDesk.Api/Auth/ApiExceptionHandler.cs",
+     "content": "// Adapted from netzen support-ticketing-app/backend/SupportDesk.Api/Auth/ApiExceptionHandler.cs @ 3dbc36d with the review's F4 fix applied\r\n// (astraupskill/06-SOLUTIONS-AND-REVIEW.md:31): generic detail for the 500 arm, real message logged.\r\nusing Microsoft.AspNetCore.Diagnostics;\r\nusing Microsoft.AspNetCore.Mvc;\r\nusing SupportDesk.Api.Application;\r\nusing SupportDesk.Api.Domain;\r\n\r\nnamespace SupportDesk.Api.Auth;\r\n\r\npublic sealed class ApiExceptionHandler : IExceptionHandler\r\n{\r\n    private readonly IProblemDetailsService _problemDetails;\r\n    private readonly ILogger<ApiExceptionHandler> _logger;\r\n\r\n    public ApiExceptionHandler(IProblemDetailsService problemDetails, ILogger<ApiExceptionHandler> logger)\r\n    {\r\n        _problemDetails = problemDetails;\r\n        _logger = logger;\r\n    }\r\n\r\n    public async ValueTask<bool> TryHandleAsync(HttpContext httpContext, Exception exception, CancellationToken cancellationToken)\r\n    {\r\n        var (statusCode, title) = exception switch\r\n        {\r\n            NotFoundException => (StatusCodes.Status404NotFound, \"Not found\"),\r\n            ForbiddenException => (StatusCodes.Status403Forbidden, \"Forbidden\"),\r\n            ConcurrencyException => (StatusCodes.Status409Conflict, \"Concurrency conflict\"),\r\n            DomainException => (StatusCodes.Status400BadRequest, \"Invalid request\"),\r\n            BadHttpRequestException => (StatusCodes.Status400BadRequest, \"Invalid request\"),\r\n            _ => (StatusCodes.Status500InternalServerError, \"Unexpected error\")\r\n        };\r\n\r\n        // Known exceptions carry messages written for the client (e.g. the 409 version hint).\r\n        // Anything else is logged with its real message and answered generically.\r\n        var detail = statusCode == StatusCodes.Status500InternalServerError\r\n            ? \"An unexpected error occurred. Reference: \" + httpContext.TraceIdentifier\r\n            : exception.Message;\r\n        if (statusCode == StatusCodes.Status500InternalServerError)\r\n        {\r\n            _logger.LogError(exception, \"Unhandled exception for {Path}\", httpContext.Request.Path);\r\n        }\r\n\r\n        httpContext.Response.StatusCode = statusCode;\r\n\r\n        return await _problemDetails.TryWriteAsync(new ProblemDetailsContext\r\n        {\r\n            HttpContext = httpContext,\r\n            Exception = exception,\r\n            ProblemDetails = new ProblemDetails\r\n            {\r\n                Status = statusCode,\r\n                Title = title,\r\n                Detail = detail\r\n            }\r\n        });\r\n    }\r\n}\r\n",
+     "origin": {
+      "kind": "adapted",
+      "repoPath": "support-ticketing-app/backend/SupportDesk.Api/Auth/ApiExceptionHandler.cs",
+      "lines": {
+       "start": 29,
+       "end": 40
+      }
+     }
+    }
+   ],
+   "seededDefectKey": [
+    {
+     "scenario": "A storage or serialization bug throws an unexpected exception (e.g. a NullReferenceException, a SqlException with a connection string or table name in its text).",
+     "evidence": {
+      "path": "support-ticketing-app/backend/SupportDesk.Api/Auth/ApiExceptionHandler.cs",
+      "lineStart": 34,
+      "lineEnd": 34,
+      "in": "patched"
+     },
+     "consequence": "The 500 arm now sends the raw exception message as problem.detail, and the client renders problem.detail verbatim (api.ts:37-38): internals reach every user. The server-side LogError line was deleted with it, so the real error is no longer logged either."
+    },
+    {
+     "scenario": "The shipped handler has the same leak.",
+     "evidence": {
+      "path": "support-ticketing-app/backend/SupportDesk.Api/Auth/ApiExceptionHandler.cs",
+      "lineStart": 39,
+      "lineEnd": 39,
+      "in": "repo"
+     },
+     "consequence": "Review F4: the patch reverts the fix to the reviewed defect."
+    }
+   ],
+   "findingRef": "netzen review F4 (astraupskill/06-SOLUTIONS-AND-REVIEW.md:31)"
+  }
+ ]
+}

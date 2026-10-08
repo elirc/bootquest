@@ -1,0 +1,127 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "patches",
+ "name": "organized-experiment-clinical-trial-tracker-katas",
+ "items": [
+  {
+   "key": "seed:patches:organized-experiment-clinical-trial-tracker/patch-kata/15855e6c468d2ebe",
+   "provenance": {
+    "repo": "organized-experiment-clinical-trial-tracker",
+    "sha": "c70bac4235ebe281dd2a2499eae202d7928a84c0",
+    "path": "docs/architecture/auth-and-permissions.md",
+    "lines": {
+     "start": 106,
+     "end": 125
+    }
+   },
+   "citations": [],
+   "kind": "patch-kata",
+   "title": "participantRepository.findById: drop the redundant second check",
+   "diff": "diff --git a/src/repositories/participantRepository.mjs b/src/repositories/participantRepository.mjs\n--- a/src/repositories/participantRepository.mjs\n+++ b/src/repositories/participantRepository.mjs\n@@ -17,17 +17,8 @@\n     },\n \n     async findById(session, participantId) {\n-      const participant = participants.find((candidate) => candidate.id === participantId) ?? null;\n-\n-      if (!participant) {\n-        return null;\n-      }\n-\n-      if (!canAccessSite(session, participant.siteId)) {\n-        return null;\n-      }\n-\n-      return participant;\n+      // list() already scopes by site, and ids are opaque, so a direct lookup is safe.\n+      return participants.find((candidate) => candidate.id === participantId) ?? null;\n     },\n   };\n }\n",
+   "contextFiles": [
+    {
+     "path": "src/repositories/participantRepository.mjs",
+     "content": "// Adapted from organized-experiment-clinical-trial-tracker src/repositories/participantRepository.ts:15-44 @ c70bac4\n// (mock-db replaced by an injected array; demo sessions from src/lib/auth/session.ts reduced to\n// their accessScope so the repository runs standalone).\nexport const demoSessions = {\n  'user-coordinator-site-101': { user: { id: 'user-coordinator-site-101', role: 'STUDY_COORDINATOR' }, accessScope: { canReadAllSites: false, siteIds: ['site-101'] } },\n  'user-data-manager': { user: { id: 'user-data-manager', role: 'DATA_MANAGER' }, accessScope: { canReadAllSites: true, siteIds: [] } },\n};\n\nfunction canAccessSite(session, siteId) {\n  return session.accessScope.canReadAllSites || session.accessScope.siteIds.includes(siteId);\n}\n\nexport function createParticipantRepository(participants) {\n  return {\n    async list(session) {\n      return participants.filter((participant) => canAccessSite(session, participant.siteId));\n    },\n\n    async findById(session, participantId) {\n      const participant = participants.find((candidate) => candidate.id === participantId) ?? null;\n\n      if (!participant) {\n        return null;\n      }\n\n      if (!canAccessSite(session, participant.siteId)) {\n        return null;\n      }\n\n      return participant;\n    },\n  };\n}\n\nexport async function getParticipantDetail(repo, session, participantId) {\n  const participant = await repo.findById(session, participantId);\n  if (!participant) {\n    throw new Error('Participant not found.');\n  }\n  return { participant };\n}\n",
+     "origin": {
+      "kind": "adapted",
+      "repoPath": "src/repositories/participantRepository.ts",
+      "lines": {
+       "start": 15,
+       "end": 44
+      }
+     }
+    }
+   ],
+   "seededDefectKey": [
+    {
+     "scenario": "A site-101 coordinator opens /participants/participant-003 (a site-202 subject) by editing the URL.",
+     "evidence": {
+      "path": "src/repositories/participantRepository.mjs",
+      "lineStart": 21,
+      "lineEnd": 21,
+      "in": "patched"
+     },
+     "consequence": "findById returns the cross-site participant, and every caller that trusted it (detail page, enroll, complete-study, safety events) now reads or mutates another site's subject. Scoping in list() does not protect lookups by id; ids are guessable sequential mock ids, not secrets."
+    },
+    {
+     "scenario": "In the shipped repository the id lookup re-applies the site scope.",
+     "evidence": {
+      "path": "src/repositories/participantRepository.ts",
+      "lineStart": 39,
+      "lineEnd": 39,
+      "in": "repo"
+     },
+     "consequence": "This line is what makes tests/services/site-scoping.test.ts pass; the patch deletes the only object-level authorization on participant reads (IDOR)."
+    }
+   ],
+   "test": {
+    "module": "src/repositories/participantRepository.mjs",
+    "check": {
+     "type": "drill-js",
+     "language": "js",
+     "tests": [
+      {
+       "name": "site-scoped coordinator cannot read a participant from another site (ported from tests/services/site-scoping.test.ts)",
+       "code": "const repo = mod.createParticipantRepository([{ id: 'participant-001', siteId: 'site-101' }, { id: 'participant-003', siteId: 'site-202' }]); await assert.rejects(() => mod.getParticipantDetail(repo, mod.demoSessions['user-coordinator-site-101'], 'participant-003'), /Participant not found/);"
+      },
+      {
+       "name": "the coordinator still reads their own site and the data manager reads all",
+       "code": "const repo = mod.createParticipantRepository([{ id: 'participant-001', siteId: 'site-101' }, { id: 'participant-003', siteId: 'site-202' }]); assert.equal((await mod.getParticipantDetail(repo, mod.demoSessions['user-coordinator-site-101'], 'participant-001')).participant.id, 'participant-001'); assert.equal((await mod.getParticipantDetail(repo, mod.demoSessions['user-data-manager'], 'participant-003')).participant.siteId, 'site-202');"
+      }
+     ],
+     "timeoutMs": 8000
+    }
+   },
+   "findingRef": "clinical-trial-tracker site-scope enforcement (docs/architecture/auth-and-permissions.md:106-125)"
+  },
+  {
+   "key": "seed:patches:organized-experiment-clinical-trial-tracker/patch-kata/378f964cd38763f8",
+   "provenance": {
+    "repo": "organized-experiment-clinical-trial-tracker",
+    "sha": "c70bac4235ebe281dd2a2499eae202d7928a84c0",
+    "path": "docs/architecture/README.md",
+    "lines": {
+     "start": 106,
+     "end": 106
+    }
+   },
+   "citations": [],
+   "kind": "patch-kata",
+   "title": "Blinding: stop masking the treatment arm for roles that enroll",
+   "diff": "diff --git a/src/services/participantService.ts b/src/services/participantService.ts\n--- a/src/services/participantService.ts\n+++ b/src/services/participantService.ts\n@@ -25,7 +25,9 @@\n }\r\n \r\n function maskTreatmentArm(session: Session, participant: Participant) {\r\n-  const canUnblind = hasPermission(session.user.role, \"TREATMENT_ARM_UNBLIND\");\r\n+  // Enrolling roles already submit actualTreatmentArm (F10), so masking it back from them is theatre.\r\n+  const canUnblind =\r\n+    hasPermission(session.user.role, \"TREATMENT_ARM_UNBLIND\") || hasPermission(session.user.role, \"PARTICIPANT_ENROLL\");\r\n \r\n   return {\r\n     treatmentArm: canUnblind ? participant.actualTreatmentArm : null,\r\n",
+   "contextFiles": [
+    {
+     "path": "src/services/participantService.ts",
+     "content": "/**\r\n * What this file does:\r\n * Owns participant query and lifecycle operations, including enrollment and study completion.\r\n * What calls it:\r\n * Participant API route handlers and server-rendered pages.\r\n * What it calls:\r\n * Repositories under `src/repositories`, `src/lib/domain/*`, and `src/services/auditService.ts`.\r\n * One thing a junior engineer would likely get wrong when writing something similar:\r\n * Mixing query shaping, transition rules, and persistence in a route handler instead of keeping a service seam.\r\n */\r\nimport { assertPermission, hasPermission } from \"@/lib/auth/permissions\";\r\nimport { buildScheduledVisits } from \"@/lib/domain/protocolRules\";\r\nimport { assertParticipantCanCompleteStudy, assertParticipantCanEnroll } from \"@/lib/domain/stateTransitions\";\r\nimport { AppError } from \"@/lib/http/errors\";\r\nimport { participantRepository } from \"@/repositories/participantRepository\";\r\nimport { protocolRepository } from \"@/repositories/protocolRepository\";\r\nimport { visitRepository } from \"@/repositories/visitRepository\";\r\nimport { eventRepository } from \"@/repositories/eventRepository\";\r\nimport { auditRepository } from \"@/repositories/auditRepository\";\r\nimport { auditService } from \"@/services/auditService\";\r\nimport { Participant, ParticipantDetail, ParticipantSummary, Session } from \"@/types/domain\";\r\n\r\nfunction protocolLabel(versionNumber: number, protocolCode: string) {\r\n  return `${protocolCode} v${versionNumber}`;\r\n}\r\n\r\nfunction maskTreatmentArm(session: Session, participant: Participant) {\r\n  const canUnblind = hasPermission(session.user.role, \"TREATMENT_ARM_UNBLIND\");\r\n\r\n  return {\r\n    treatmentArm: canUnblind ? participant.actualTreatmentArm : null,\r\n    treatmentArmVisible: canUnblind\r\n  };\r\n}\r\n\r\nexport const participantService = {\r\n  async listParticipants(session: Session): Promise<ParticipantSummary[]> {\r\n    const [participants, protocolVersions] = await Promise.all([\r\n      participantRepository.list(session),\r\n      protocolRepository.findAll()\r\n    ]);\r\n\r\n    const summaries = await Promise.all(\r\n      participants.map(async (participant) => {\r\n        const visits = await visitRepository.listByParticipantId(participant.id);\r\n        const pinnedVersion =\r\n          participant.pinnedProtocolVersionId === null\r\n            ? null\r\n            : protocolVersions.find((version) => version.id === participant.pinnedProtocolVersionId) ?? null;\r\n        const nextVisit = visits\r\n          .filter((visit) => visit.status === \"SCHEDULED\")\r\n          .sort((left, right) => left.targetDate.localeCompare(right.targetDate))[0];\r\n        const blindedFields = maskTreatmentArm(session, participant);\r\n\r\n        return {\r\n          id: participant.id,\r\n          screeningNumber: participant.screeningNumber,\r\n          studySubjectId: participant.studySubjectId,\r\n          siteId: participant.siteId,\r\n          status: participant.status,\r\n          pinnedProtocolVersionLabel:\r\n            pinnedVersion === null ? null : protocolLabel(pinnedVersion.versionNumber, pinnedVersion.protocolCode),\r\n          nextVisitLabel: nextVisit?.label ?? null,\r\n          blindedRandomizationCode: participant.blindedRandomizationCode,\r\n          treatmentArm: blindedFields.treatmentArm\r\n        };\r\n      })\r\n    );\r\n\r\n    return summaries.sort((left, right) => left.screeningNumber.localeCompare(right.screeningNumber));\r\n  },\r\n\r\n  async getParticipantDetail(session: Session, participantId: string): Promise<ParticipantDetail> {\r\n    const participant = await participantRepository.findById(session, participantId);\r\n\r\n    if (!participant) {\r\n      throw new AppError(\"Participant not found.\", 404);\r\n    }\r\n\r\n    const [visits, adverseEvents, deviations, auditTrail, protocolVersion] = await Promise.all([\r\n      visitRepository.listByParticipantId(participant.id),\r\n      eventRepository.listAdverseEventsByParticipantId(participant.id),\r\n      eventRepository.listDeviationsByParticipantId(participant.id),\r\n      auditRepository.listByParticipantId(participant.id),\r\n      participant.pinnedProtocolVersionId === null\r\n        ? Promise.resolve(null)\r\n        : protocolRepository.findById(participant.pinnedProtocolVersionId)\r\n    ]);\r\n    const blindedFields = maskTreatmentArm(session, participant);\r\n\r\n    return {\r\n      participant: {\r\n        ...participant,\r\n        actualTreatmentArm: blindedFields.treatmentArm\r\n      },\r\n      protocolVersion,\r\n      visits,\r\n      adverseEvents,\r\n      deviations,\r\n      auditTrail: hasPermission(session.user.role, \"AUDIT_LOG_READ\") ? auditTrail : [],\r\n      treatmentArmVisible: blindedFields.treatmentArmVisible\r\n    };\r\n  },\r\n\r\n  async createScreeningParticipant(\r\n    session: Session,\r\n    input: {\r\n      screeningNumber: string;\r\n      siteId: string;\r\n      initials: string;\r\n      dateOfBirth: string;\r\n      screenedAt: string;\r\n    }\r\n  ) {\r\n    assertPermission(session, \"PARTICIPANT_CREATE\");\r\n\r\n    const existingScreeningNumber = await participantRepository.findByScreeningNumber(input.screeningNumber);\r\n\r\n    if (existingScreeningNumber) {\r\n      throw new AppError(\"This screening number already exists.\", 409, {\r\n        screeningNumber: input.screeningNumber\r\n      });\r\n    }\r\n\r\n    if (!session.accessScope.canReadAllSites && !session.accessScope.siteIds.includes(input.siteId)) {\r\n      throw new AppError(\"Caller cannot create participants for this site.\", 403, { siteId: input.siteId });\r\n    }\r\n\r\n    const created = await participantRepository.create({\r\n      screeningNumber: input.screeningNumber,\r\n      siteId: input.siteId,\r\n      initials: input.initials,\r\n      dateOfBirth: input.dateOfBirth,\r\n      screenedAt: input.screenedAt,\r\n      createdById: session.user.id\r\n    });\r\n\r\n    await auditService.record({\r\n      entityType: \"participant\",\r\n      entityId: created.id,\r\n      action: \"PARTICIPANT_SCREENED\",\r\n      actorUserId: session.user.id,\r\n      participantId: created.id,\r\n      metadataJson: {\r\n        screeningNumber: created.screeningNumber,\r\n        siteId: created.siteId\r\n      }\r\n    });\r\n\r\n    return created;\r\n  },\r\n\r\n  async enrollParticipant(\r\n    session: Session,\r\n    participantId: string,\r\n    input: {\r\n      protocolVersionId: string;\r\n      enrolledAt: string;\r\n      studySubjectId: string;\r\n      blindedRandomizationCode: string;\r\n      actualTreatmentArm: string;\r\n    }\r\n  ) {\r\n    const participant = await participantRepository.findById(session, participantId);\r\n\r\n    if (!participant) {\r\n      throw new AppError(\"Participant not found.\", 404);\r\n    }\r\n\r\n    const protocolVersion = await protocolRepository.findById(input.protocolVersionId);\r\n\r\n    if (!protocolVersion) {\r\n      throw new AppError(\"Protocol version not found.\", 404);\r\n    }\r\n\r\n    const conflictingSubjectId = await participantRepository.findByStudySubjectId(input.studySubjectId);\r\n\r\n    if (conflictingSubjectId && conflictingSubjectId.id !== participantId) {\r\n      throw new AppError(\"This study subject ID is already in use.\", 409, {\r\n        studySubjectId: input.studySubjectId\r\n      });\r\n    }\r\n\r\n    assertParticipantCanEnroll(participant, protocolVersion);\r\n\r\n    const enrolledParticipant = await participantRepository.update(participant.id, (current) => ({\r\n      ...current,\r\n      status: \"ENROLLED\",\r\n      enrolledAt: input.enrolledAt,\r\n      studySubjectId: input.studySubjectId,\r\n      pinnedProtocolVersionId: protocolVersion.id,\r\n      blindedRandomizationCode: input.blindedRandomizationCode,\r\n      actualTreatmentArm: input.actualTreatmentArm\r\n    }));\r\n\r\n    if (!enrolledParticipant) {\r\n      throw new AppError(\"Enrollment failed.\", 500);\r\n    }\r\n\r\n    const scheduledVisits = buildScheduledVisits({\r\n      participantId: participant.id,\r\n      protocolVersion,\r\n      enrollmentDate: input.enrolledAt,\r\n      now: new Date().toISOString()\r\n    });\r\n\r\n    // ⚠️ SENIOR NOTE: Visit rows are materialized at enrollment time so later protocol\r\n    // activations cannot retroactively rewrite participant obligations.\r\n    await visitRepository.createMany(scheduledVisits);\r\n    await auditService.record({\r\n      entityType: \"participant\",\r\n      entityId: participant.id,\r\n      action: \"PARTICIPANT_ENROLLED\",\r\n      actorUserId: session.user.id,\r\n      participantId: participant.id,\r\n      metadataJson: {\r\n        protocolVersionId: protocolVersion.id,\r\n        versionNumber: protocolVersion.versionNumber,\r\n        studySubjectId: input.studySubjectId\r\n      }\r\n    });\r\n\r\n    return this.getParticipantDetail(session, participant.id);\r\n  },\r\n\r\n  async completeStudy(session: Session, participantId: string, input: { completedAt: string }) {\r\n    const participant = await participantRepository.findById(session, participantId);\r\n\r\n    if (!participant) {\r\n      throw new AppError(\"Participant not found.\", 404);\r\n    }\r\n\r\n    const visits = await visitRepository.listByParticipantId(participant.id);\r\n    assertParticipantCanCompleteStudy(participant, visits);\r\n\r\n    const completed = await participantRepository.update(participant.id, (current) => ({\r\n      ...current,\r\n      status: \"COMPLETED\",\r\n      completedAt: input.completedAt\r\n    }));\r\n\r\n    if (!completed) {\r\n      throw new AppError(\"Study completion failed.\", 500);\r\n    }\r\n\r\n    await auditService.record({\r\n      entityType: \"participant\",\r\n      entityId: participant.id,\r\n      action: \"PARTICIPANT_COMPLETED\",\r\n      actorUserId: session.user.id,\r\n      participantId: participant.id,\r\n      metadataJson: {\r\n        completedAt: input.completedAt\r\n      }\r\n    });\r\n\r\n    return this.getParticipantDetail(session, participant.id);\r\n  }\r\n};\r\n",
+     "origin": {
+      "kind": "verbatim",
+      "repoPath": "src/services/participantService.ts"
+     }
+    }
+   ],
+   "seededDefectKey": [
+    {
+     "scenario": "A DATA_MANAGER (the role the shipped UI always calls as), a PI or any coordinator lists participants or opens a detail page.",
+     "evidence": {
+      "path": "src/services/participantService.ts",
+      "lineStart": 30,
+      "lineEnd": 30,
+      "in": "patched"
+     },
+     "consequence": "Every participant's actual treatment arm is shown to blinded study staff (including subjects they never enrolled, and via listParticipants for the whole site), breaking the blind the TREATMENT_ARM_UNBLIND permission exists to protect. The patch widens a permission by side door instead of fixing the write path F10 complains about."
+    },
+    {
+     "scenario": "The permission matrix grants unblinding only to monitors and pharmacists.",
+     "evidence": {
+      "path": "src/lib/auth/permissions.ts",
+      "lineStart": 41,
+      "lineEnd": 42,
+      "in": "repo"
+     },
+     "consequence": "The service is the single place the matrix is enforced on output (auth-and-permissions.md: 'blinding is enforced in the service output shaping'); OR-ing in PARTICIPANT_ENROLL silently contradicts the matrix without touching it, so a reviewer of permissions.ts would never see the change."
+    }
+   ],
+   "findingRef": "clinical-trial-tracker F10 (docs/architecture/README.md:106)"
+  }
+ ]
+}

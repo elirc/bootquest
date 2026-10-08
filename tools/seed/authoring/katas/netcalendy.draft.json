@@ -1,0 +1,66 @@
+{
+ "name": "netcalendy-katas",
+ "katas": [
+  {
+   "id": "slug-conflict-rename",
+   "title": "Event types: rename the duplicate-slug error code to say \"Conflict\"",
+   "findingRef": "netcalendy review finding B (astraupskill/06-SOLUTIONS-AND-REVIEW.md:67)",
+   "provenance": {
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "lines": {
+     "start": 66,
+     "end": 74
+    }
+   },
+   "diff": "diff --git a/src/NetCalendy.Application/EventTypes/Commands/CreateEventType/CreateEventTypeHandler.cs b/src/NetCalendy.Application/EventTypes/Commands/CreateEventType/CreateEventTypeHandler.cs\n--- a/src/NetCalendy.Application/EventTypes/Commands/CreateEventType/CreateEventTypeHandler.cs\n+++ b/src/NetCalendy.Application/EventTypes/Commands/CreateEventType/CreateEventTypeHandler.cs\n@@ -22,7 +22,7 @@\n \r\n         if (await eventTypes.SlugExistsForUserAsync(cmd.Slug, userId, tenantId, ct))\r\n             return Result.Failure<CreateEventTypeResponse>(\r\n-                Error.Conflict(\"EventType.SlugTaken\", $\"You already have an event type with slug '{cmd.Slug}'.\"));\r\n+                Error.Conflict(\"EventType.SlugConflict\", $\"You already have an event type with slug '{cmd.Slug}'.\"));\r\n \r\n         var result = EventType.Create(tenantId, userId, cmd.Name, cmd.Slug, cmd.DurationMinutes, cmd.Description, cmd.Color);\r\n         if (result.IsFailure) return Result.Failure<CreateEventTypeResponse>(result.Error);\r\n",
+   "contextFiles": [
+    {
+     "path": "src/NetCalendy.Application/EventTypes/Commands/CreateEventType/CreateEventTypeHandler.cs",
+     "origin": {
+      "kind": "verbatim",
+      "repoPath": "src/NetCalendy.Application/EventTypes/Commands/CreateEventType/CreateEventTypeHandler.cs"
+     }
+    },
+    {
+     "path": "src/NetCalendy.Api/Extensions/ResultExtensions.cs",
+     "origin": {
+      "kind": "verbatim",
+      "repoPath": "src/NetCalendy.Api/Extensions/ResultExtensions.cs"
+     }
+    }
+   ],
+   "seededDefectKey": [
+    {
+     "scenario": "A host creates a second event type with a slug they already use; the API answers through ResultExtensions.ToActionResult.",
+     "evidence": {
+      "path": "src/NetCalendy.Application/EventTypes/Commands/CreateEventType/CreateEventTypeHandler.cs",
+      "lineStart": 25,
+      "lineEnd": 25,
+      "in": "patched"
+     },
+     "consequence": "The status is chosen by substring on the code (ResultExtensions.cs:28 wants \".Conflict\", \"Taken\" or \"AlreadyCancelled\"). \"EventType.SlugConflict\" contains none of them (\".\" is followed by \"Slug\"), so the duplicate-slug response silently changes from 409 to 400 and clients that branch on 409 break."
+    },
+    {
+     "scenario": "The 409 mapping is decided here, not by the Error.Conflict factory the handler calls.",
+     "evidence": {
+      "path": "src/NetCalendy.Api/Extensions/ResultExtensions.cs",
+      "lineStart": 28,
+      "lineEnd": 28,
+      "in": "patched"
+     },
+     "consequence": "Error.Conflict(...) does not record a type, so \"it is a Conflict error\" is invisible to the mapper; only the string matters."
+    },
+    {
+     "scenario": "Same trap already shipped for bookings: \"Booking.TimeConflict\" falls through to 400.",
+     "evidence": {
+      "path": "src/NetCalendy.Application/Bookings/Commands/CreateBooking/CreateBookingHandler.cs",
+      "lineStart": 35,
+      "lineEnd": 35,
+      "in": "repo"
+     },
+     "consequence": "Review finding B: the patch spreads a known 400-instead-of-409 defect to a second endpoint (and breaks the existing CreateEventTypeHandlerTests assertion on the code)."
+    }
+   ]
+  }
+ ]
+}

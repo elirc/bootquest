@@ -1,0 +1,97 @@
+{
+ "name": "organized-experiment-clinical-trial-tracker-katas",
+ "checkout": ".cache/checkouts/organized-experiment-clinical-trial-tracker@c70bac4235ebe281dd2a2499eae202d7928a84c0",
+ "katas": [
+  {
+   "id": "participant-findbyid-one-lookup",
+   "title": "participantRepository.findById: drop the redundant second check",
+   "difficulty": "easy",
+   "findingRef": "clinical-trial-tracker site-scope enforcement (docs/architecture/auth-and-permissions.md:106-125)",
+   "provenance": { "path": "docs/architecture/auth-and-permissions.md", "find": "## Where site scope is (and is not) enforced", "span": 20 },
+   "contextFiles": [
+    {
+     "path": "src/repositories/participantRepository.mjs",
+     "repoPath": "src/repositories/participantRepository.ts",
+     "kind": "adapted",
+     "lines": { "start": 15, "end": 44 },
+     "content": "// Adapted from organized-experiment-clinical-trial-tracker src/repositories/participantRepository.ts:15-44 @ c70bac4\n// (mock-db replaced by an injected array; demo sessions from src/lib/auth/session.ts reduced to\n// their accessScope so the repository runs standalone).\nexport const demoSessions = {\n  'user-coordinator-site-101': { user: { id: 'user-coordinator-site-101', role: 'STUDY_COORDINATOR' }, accessScope: { canReadAllSites: false, siteIds: ['site-101'] } },\n  'user-data-manager': { user: { id: 'user-data-manager', role: 'DATA_MANAGER' }, accessScope: { canReadAllSites: true, siteIds: [] } },\n};\n\nfunction canAccessSite(session, siteId) {\n  return session.accessScope.canReadAllSites || session.accessScope.siteIds.includes(siteId);\n}\n\nexport function createParticipantRepository(participants) {\n  return {\n    async list(session) {\n      return participants.filter((participant) => canAccessSite(session, participant.siteId));\n    },\n\n    async findById(session, participantId) {\n      const participant = participants.find((candidate) => candidate.id === participantId) ?? null;\n\n      if (!participant) {\n        return null;\n      }\n\n      if (!canAccessSite(session, participant.siteId)) {\n        return null;\n      }\n\n      return participant;\n    },\n  };\n}\n\nexport async function getParticipantDetail(repo, session, participantId) {\n  const participant = await repo.findById(session, participantId);\n  if (!participant) {\n    throw new Error('Participant not found.');\n  }\n  return { participant };\n}\n"
+    }
+   ],
+   "edits": [
+    {
+     "path": "src/repositories/participantRepository.mjs",
+     "find": "      const participant = participants.find((candidate) => candidate.id === participantId) ?? null;\n\n      if (!participant) {\n        return null;\n      }\n\n      if (!canAccessSite(session, participant.siteId)) {\n        return null;\n      }\n\n      return participant;\n",
+     "replace": "      // list() already scopes by site, and ids are opaque, so a direct lookup is safe.\n      return participants.find((candidate) => candidate.id === participantId) ?? null;\n"
+    }
+   ],
+   "defects": [
+    {
+     "scenario": "A site-101 coordinator opens /participants/participant-003 (a site-202 subject) by editing the URL.",
+     "in": "patched",
+     "path": "src/repositories/participantRepository.mjs",
+     "find": "      return participants.find((candidate) => candidate.id === participantId) ?? null;",
+     "consequence": "findById returns the cross-site participant, and every caller that trusted it (detail page, enroll, complete-study, safety events) now reads or mutates another site's subject. Scoping in list() does not protect lookups by id; ids are guessable sequential mock ids, not secrets."
+    },
+    {
+     "scenario": "In the shipped repository the id lookup re-applies the site scope.",
+     "in": "repo",
+     "path": "src/repositories/participantRepository.ts",
+     "find": "    if (!canAccessSite(session, participant.siteId)) {",
+     "consequence": "This line is what makes tests/services/site-scoping.test.ts pass; the patch deletes the only object-level authorization on participant reads (IDOR)."
+    }
+   ],
+   "test": {
+    "module": "src/repositories/participantRepository.mjs",
+    "check": {
+     "type": "drill-js",
+     "language": "js",
+     "timeoutMs": 8000,
+     "tests": [
+      {
+       "name": "site-scoped coordinator cannot read a participant from another site (ported from tests/services/site-scoping.test.ts)",
+       "code": "const repo = mod.createParticipantRepository([{ id: 'participant-001', siteId: 'site-101' }, { id: 'participant-003', siteId: 'site-202' }]); await assert.rejects(() => mod.getParticipantDetail(repo, mod.demoSessions['user-coordinator-site-101'], 'participant-003'), /Participant not found/);"
+      },
+      {
+       "name": "the coordinator still reads their own site and the data manager reads all",
+       "code": "const repo = mod.createParticipantRepository([{ id: 'participant-001', siteId: 'site-101' }, { id: 'participant-003', siteId: 'site-202' }]); assert.equal((await mod.getParticipantDetail(repo, mod.demoSessions['user-coordinator-site-101'], 'participant-001')).participant.id, 'participant-001'); assert.equal((await mod.getParticipantDetail(repo, mod.demoSessions['user-data-manager'], 'participant-003')).participant.siteId, 'site-202');"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "unmask-arm-for-enrollers",
+   "title": "Blinding: stop masking the treatment arm for roles that enroll",
+   "difficulty": "medium",
+   "findingRef": "clinical-trial-tracker F10 (docs/architecture/README.md:106)",
+   "provenance": { "path": "docs/architecture/README.md", "find": "| F10 | Blinding is enforced on read only" },
+   "contextFiles": [
+    { "path": "src/services/participantService.ts", "repoPath": "src/services/participantService.ts", "kind": "verbatim" }
+   ],
+   "edits": [
+    {
+     "path": "src/services/participantService.ts",
+     "find": "  const canUnblind = hasPermission(session.user.role, \"TREATMENT_ARM_UNBLIND\");\n",
+     "replace": "  // Enrolling roles already submit actualTreatmentArm (F10), so masking it back from them is theatre.\n  const canUnblind =\n    hasPermission(session.user.role, \"TREATMENT_ARM_UNBLIND\") || hasPermission(session.user.role, \"PARTICIPANT_ENROLL\");\n"
+    }
+   ],
+   "defects": [
+    {
+     "scenario": "A DATA_MANAGER (the role the shipped UI always calls as), a PI or any coordinator lists participants or opens a detail page.",
+     "in": "patched",
+     "path": "src/services/participantService.ts",
+     "find": "    hasPermission(session.user.role, \"TREATMENT_ARM_UNBLIND\") || hasPermission(session.user.role, \"PARTICIPANT_ENROLL\");",
+     "consequence": "Every participant's actual treatment arm is shown to blinded study staff (including subjects they never enrolled, and via listParticipants for the whole site), breaking the blind the TREATMENT_ARM_UNBLIND permission exists to protect. The patch widens a permission by side door instead of fixing the write path F10 complains about."
+    },
+    {
+     "scenario": "The permission matrix grants unblinding only to monitors and pharmacists.",
+     "in": "repo",
+     "path": "src/lib/auth/permissions.ts",
+     "find": "  MEDICAL_MONITOR: [\"PARTICIPANT_READ\", \"ADVERSE_EVENT_CREATE\", \"TREATMENT_ARM_UNBLIND\"],",
+     "span": 2,
+     "consequence": "The service is the single place the matrix is enforced on output (auth-and-permissions.md: 'blinding is enforced in the service output shaping'); OR-ing in PARTICIPANT_ENROLL silently contradicts the matrix without touching it, so a reviewer of permissions.ts would never see the change."
+    }
+   ]
+  }
+ ]
+}

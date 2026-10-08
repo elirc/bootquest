@@ -1,0 +1,166 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "tracer-net--docs-architecture.md",
+ "items": [
+  {
+   "key": "seed:explainback:tracer-net/explain-back/5aa6ab8f3999c436",
+   "provenance": {
+    "repo": "tracer-net",
+    "sha": "2c0f21f6bc704811bec6fde07054a3ca1ace2346",
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 236,
+     "end": 241
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "G2 BRIEF — tracer-net (ASP.NET Core Linear clone, 591 tests). Senior-review finding 1: the write rate limiter partitions on the raw, unvalidated X-Api-Key header, so every made-up key gets a fresh window — the limiter neither slows key-guessing nor bounds its partition count. Delegate the fix to a coding agent. Write the brief: goal, allowed files, boundaries, test command, stop condition. Commit to your brief first, then tick the checkpoints you covered and add up the weights.",
+     "keyPoints": [
+      {
+       "text": "[w3] Goal stated as behaviour: N writes with N different invalid keys from one client are throttled once the permit limit is hit, while a valid key keeps its own bucket.",
+       "quote": "Every distinct garbage key gets its own fresh window, so the limiter neither throttles key-guessing nor bounds the number of partitions it keeps."
+      },
+      {
+       "text": "[w3] The brief surfaces the design tension: the limiter deliberately runs BEFORE authentication so abuse does not cost a key lookup; the agent must choose (and justify) partitioning by validated principal vs. by remote address for unproven keys.",
+       "cite": {
+        "path": "src/Tracer.Api/Program.cs",
+        "lineStart": 83,
+        "lineEnd": 86
+       }
+      },
+      {
+       "text": "[w2] Allowed files: WriteRateLimiter.cs, Program.cs only if the middleware order changes, and a new integration test beside the existing rate-limit test.",
+       "cite": {
+        "path": "src/Tracer.Api/RateLimiting/WriteRateLimiter.cs",
+        "lineStart": 54,
+        "lineEnd": 58
+       }
+      },
+      {
+       "text": "[w2] Boundary: reads stay unmetered and the RFC 7807 429 body with Retry-After stays as is.",
+       "cite": {
+        "path": "src/Tracer.Api/RateLimiting/WriteRateLimiter.cs",
+        "lineStart": 39,
+        "lineEnd": 44
+       }
+      },
+      {
+       "text": "[w2] Boundary: do not change API-key hashing or the authentication handler; the finding is about partitioning, not authentication.",
+       "cite": {
+        "path": "src/Tracer.Api/Auth/ApiKeyAuthentication.cs",
+        "lineStart": 54,
+        "lineEnd": 57
+       }
+      },
+      {
+       "text": "[w2] Test command: `dotnet test` for the full suite plus a filtered run of the new test while iterating; the test lowers the limit through the factory's RateLimitPermitLimit like the existing one.",
+       "cite": {
+        "path": "tests/Tracer.Tests/Integration/ProductionReadinessApiTests.cs",
+        "lineStart": 120,
+        "lineEnd": 126
+       }
+      },
+      {
+       "text": "[w2] Stop condition: new many-invalid-keys test green, existing 'writes limited, reads not' test still green, full suite count unchanged plus the new tests; stop and report if the fix needs the middleware order changed AND that breaks the 401/403 ProblemDetails contract.",
+       "cite": {
+        "path": "src/Tracer.Api/Program.cs",
+        "lineStart": 88,
+        "lineEnd": 92
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "G2 PRE-MORTEM — same delegation. How is an agent most likely to get this wrong, and which line of your brief prevents each failure?",
+     "keyPoints": [
+      {
+       "text": "[w3] It moves UseRateLimiter below UseAuthorization; the fallback policy then answers every bad-key write with 401 before it is metered, so key-guessing is still unthrottled.",
+       "cite": {
+        "path": "src/Tracer.Api/Program.cs",
+        "lineStart": 86,
+        "lineEnd": 92
+       }
+      },
+      {
+       "text": "[w2] It hashes or truncates the header and keeps partitioning on it, which still gives every distinct garbage key its own window.",
+       "cite": {
+        "path": "src/Tracer.Api/RateLimiting/WriteRateLimiter.cs",
+        "lineStart": 54,
+        "lineEnd": 54
+       }
+      },
+      {
+       "text": "[w2] It writes a test that only reuses one valid key, re-proving the existing behaviour instead of the gap the testing guide names.",
+       "cite": {
+        "path": "docs/testing.md",
+        "lineStart": 108,
+        "lineEnd": 108
+       }
+      },
+      {
+       "text": "[w2] It hard-codes a permit limit instead of reading RateLimiting:PermitLimit, breaking how hosts and tests configure it.",
+       "cite": {
+        "path": "src/Tracer.Api/RateLimiting/WriteRateLimiter.cs",
+        "lineStart": 50,
+        "lineEnd": 52
+       }
+      },
+      {
+       "text": "[w1] It also takes on finding 2 (cycle overlap check-then-insert) because it sits in the same review table.",
+       "quote": "Cycle overlap is a check-then-insert in application code"
+      }
+     ]
+    },
+    {
+     "prompt": "G2 HANDBACK REVIEW — the agent reports success. What do you verify before accepting?",
+     "keyPoints": [
+      {
+       "text": "[w3] Reproduce the guide's check: with the limit at 2, three writes each with a different made-up key now produce a 429, not three 401s.",
+       "cite": {
+        "path": "docs/getting-started.md",
+        "lineStart": 219,
+        "lineEnd": 219
+       }
+      },
+      {
+       "text": "[w2] The original rate-limit integration test is unchanged and still passes.",
+       "cite": {
+        "path": "tests/Tracer.Tests/Integration/ProductionReadinessApiTests.cs",
+        "lineStart": 120,
+        "lineEnd": 120
+       }
+      },
+      {
+       "text": "[w2] The suite total moved from 591 by exactly the tests added; nothing was skipped or deleted.",
+       "cite": {
+        "path": "docs/testing.md",
+        "lineStart": 3,
+        "lineEnd": 7
+       }
+      },
+      {
+       "text": "[w2] The class doc comment and the Program.cs comment were updated to describe the new partition key, so the code no longer claims 'per credential' for unproven keys.",
+       "cite": {
+        "path": "src/Tracer.Api/RateLimiting/WriteRateLimiter.cs",
+        "lineStart": 19,
+        "lineEnd": 25
+       }
+      },
+      {
+       "text": "[w1] The handback states which partitioning option it chose and why, so the senior-review row can be marked resolved with evidence.",
+       "cite": {
+        "path": "docs/architecture.md",
+        "lineStart": 241,
+        "lineEnd": 241
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

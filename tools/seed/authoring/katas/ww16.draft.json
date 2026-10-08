@@ -1,0 +1,86 @@
+{
+ "name": "ww16-katas",
+ "katas": [
+  {
+   "id": "channel-approval-shared-queue",
+   "title": "Deal approvals: channel managers work from a shared queue",
+   "findingRef": "ww16 senior review #3 (astraupskill/06-SOLUTIONS-AND-REVIEW.md:32)",
+   "provenance": {
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "lines": {
+     "start": 32,
+     "end": 32
+    }
+   },
+   "diff": "diff --git a/src/domain/dealRegistration.mjs b/src/domain/dealRegistration.mjs\n--- a/src/domain/dealRegistration.mjs\n+++ b/src/domain/dealRegistration.mjs\n@@ -65,8 +65,8 @@\n   }\n \n   if (nextStatus === \"APPROVED\") {\n+    // channel approvals come from the shared channel queue; any channel manager may pick one up\n     assertPermission(session, \"deal:approve_channel\");\n-    assertAssigned(session, deal.channelManagerId);\n     return;\n   }\n \n",
+   "contextFiles": [
+    {
+     "path": "src/domain/dealRegistration.mjs",
+     "content": "// Adapted from ww16 src/domain/dealRegistration.ts:12-53 @ f649784 (+ the role matrix in\n// src/lib/auth/permissions.ts:31-71, reduced to the roles that act on deals). The senior\n// review's finding 3 fix is APPLIED here: an assigned approver must be the caller\n// (astraupskill/06-SOLUTIONS-AND-REVIEW.md:32).\nexport class ConflictError extends Error {\n  constructor(message) {\n    super(message);\n    this.statusCode = 409;\n  }\n}\nexport class ForbiddenError extends Error {\n  constructor(message) {\n    super(message);\n    this.statusCode = 403;\n  }\n}\n\nconst rolePermissions = {\n  PLATFORM_ADMIN: [\"deal:submit\", \"deal:approve_sales\", \"deal:approve_channel\", \"deal:close\"],\n  CHANNEL_MANAGER: [\"deal:approve_channel\", \"deal:close\"],\n  SALES_REP: [\"deal:approve_sales\", \"deal:close\"],\n  PARTNER_ADMIN: [\"deal:submit\"],\n  PARTNER_SELLER: [\"deal:submit\"],\n};\n\nfunction assertPermission(session, permission) {\n  if (!rolePermissions[session.role].includes(permission)) {\n    throw new ForbiddenError(`Role ${session.role} cannot ${permission}.`);\n  }\n}\n\n/** Only the assigned approver may act (platform admins excepted); unassigned deals stay open to the role. */\nfunction assertAssigned(session, assignedUserId) {\n  if (session.role === \"PLATFORM_ADMIN\" || !assignedUserId) return;\n  if (assignedUserId !== session.userId) {\n    throw new ForbiddenError(\"This deal is assigned to another approver.\");\n  }\n}\n\nconst allowedTransitions = {\n  DRAFT: [\"SUBMITTED\"],\n  SUBMITTED: [\"SALES_APPROVED\", \"REJECTED\"],\n  SALES_APPROVED: [\"APPROVED\", \"REJECTED\"],\n  APPROVED: [\"CLOSED_WON\", \"CLOSED_LOST\"],\n  REJECTED: [],\n  CLOSED_WON: [],\n  CLOSED_LOST: [],\n};\n\nexport function assertDealTransitionAllowed(session, deal, nextStatus) {\n  const currentStatus = deal.status;\n  if (!allowedTransitions[currentStatus].includes(nextStatus)) {\n    throw new ConflictError(`Cannot move a deal from ${currentStatus} to ${nextStatus}.`);\n  }\n\n  if (nextStatus === \"SUBMITTED\") {\n    assertPermission(session, \"deal:submit\");\n    return;\n  }\n\n  if (nextStatus === \"SALES_APPROVED\") {\n    assertPermission(session, \"deal:approve_sales\");\n    assertAssigned(session, deal.assignedSalesRepId);\n    return;\n  }\n\n  if (nextStatus === \"APPROVED\") {\n    assertPermission(session, \"deal:approve_channel\");\n    assertAssigned(session, deal.channelManagerId);\n    return;\n  }\n\n  if (nextStatus === \"REJECTED\") {\n    const salesStage = currentStatus === \"SUBMITTED\";\n    assertPermission(session, salesStage ? \"deal:approve_sales\" : \"deal:approve_channel\");\n    assertAssigned(session, salesStage ? deal.assignedSalesRepId : deal.channelManagerId);\n    return;\n  }\n\n  assertPermission(session, \"deal:close\");\n}\n",
+     "origin": {
+      "kind": "adapted",
+      "repoPath": "src/domain/dealRegistration.ts",
+      "lines": {
+       "start": 12,
+       "end": 53
+      }
+     }
+    }
+   ],
+   "seededDefectKey": [
+    {
+     "scenario": "A deal is assigned to channel manager A (channelManagerId = A); channel manager B, who has no relationship with that partner, approves it.",
+     "evidence": {
+      "path": "src/domain/dealRegistration.mjs",
+      "lineStart": 68,
+      "lineEnd": 69,
+      "in": "patched"
+     },
+     "consequence": "Final approval checks only the role, not the assignment, so any channel manager can approve any partner's deal; the assignment recorded at create time no longer means anything for the step that commits revenue credit and schedules the leaderboard job."
+    },
+    {
+     "scenario": "Asymmetry left behind: REJECTED from SALES_APPROVED still requires the assigned channel manager.",
+     "evidence": {
+      "path": "src/domain/dealRegistration.mjs",
+      "lineStart": 76,
+      "lineEnd": 76,
+      "in": "patched"
+     },
+     "consequence": "An unassigned manager cannot reject the deal but can approve it: the permissive path is the one that matters."
+    },
+    {
+     "scenario": "The shipped domain never checks assignment at all.",
+     "evidence": {
+      "path": "src/domain/dealRegistration.ts",
+      "lineStart": 41,
+      "lineEnd": 42,
+      "in": "repo"
+     },
+     "consequence": "This is senior-review finding 3 (Approval ignores assignment); the patch re-opens it for the channel stage."
+    }
+   ],
+   "test": {
+    "module": "src/domain/dealRegistration.mjs",
+    "check": {
+     "type": "drill-js",
+     "language": "js",
+     "timeoutMs": 8000,
+     "tests": [
+      {
+       "name": "blocks an invalid jump from draft straight to approved (ported from tests/services/dealRegistrationDomain.test.ts)",
+       "code": "assert.throws(() => mod.assertDealTransitionAllowed({ userId: 'demo-channel-manager', role: 'CHANNEL_MANAGER' }, { status: 'DRAFT' }, 'APPROVED'), /Cannot move a deal from DRAFT to APPROVED\\./);"
+      },
+      {
+       "name": "an unassigned channel manager cannot approve another manager's deal",
+       "code": "assert.throws(() => mod.assertDealTransitionAllowed({ userId: 'cm-b', role: 'CHANNEL_MANAGER' }, { status: 'SALES_APPROVED', channelManagerId: 'cm-a' }, 'APPROVED'), (e) => e.statusCode === 403);"
+      },
+      {
+       "name": "the assigned channel manager can approve",
+       "code": "mod.assertDealTransitionAllowed({ userId: 'cm-a', role: 'CHANNEL_MANAGER' }, { status: 'SALES_APPROVED', channelManagerId: 'cm-a' }, 'APPROVED');"
+      }
+     ]
+    }
+   }
+  }
+ ]
+}

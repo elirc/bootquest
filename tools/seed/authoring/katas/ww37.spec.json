@@ -1,0 +1,124 @@
+{
+ "name": "ww37-katas",
+ "checkout": ".cache/checkouts/ww37@0d0f32c609e7436d617480c86f71896f15300e3b",
+ "katas": [
+  {
+   "id": "reservations-single-query-path",
+   "title": "Reservations: collapse listReservations to a single query path",
+   "difficulty": "easy",
+   "findingRef": "ww37 data-isolation rule (docs/architecture/auth-and-permissions.md:26)",
+   "provenance": { "path": "docs/architecture/auth-and-permissions.md", "find": "- `reservationService.listReservations` returns everything for owner/manager and filters by `createdByUserId` otherwise" },
+   "contextFiles": [
+    {
+     "path": "src/services/reservationService.mjs",
+     "repoPath": "src/services/reservationService.ts",
+     "kind": "adapted",
+     "lines": { "start": 66, "end": 121 },
+     "content": "// Adapted from ww37 src/services/reservationService.ts:66-121 @ 0d0f32c\n// (listReservations + a reduced createHold; the in-memory repository filter from\n// src/repositories/inMemoryInventoryRepository.ts:128-140 and the role helper from\n// src/lib/auth/roles.ts:26-28 inlined so the service runs standalone).\nexport function canViewAllReservationAction(role) {\n  return role === 'owner' || role === 'manager';\n}\n\nexport class InMemoryRepository {\n  constructor() {\n    this.reservations = new Map();\n    this.seq = 0;\n  }\n  async createReservation(r) {\n    const row = { id: `res-${++this.seq}`, ...r };\n    this.reservations.set(row.id, row);\n    return { ...row };\n  }\n  async listReservations(filter) {\n    return [...this.reservations.values()]\n      .filter((reservation) => {\n        if (filter?.createdByUserId && reservation.createdByUserId !== filter.createdByUserId) {\n          return false;\n        }\n        return true;\n      })\n      .map((r) => ({ ...r }));\n  }\n}\n\nexport function createReservationService(repository) {\n  return {\n    async listReservations(session) {\n      if (canViewAllReservationAction(session.role)) {\n        return repository.listReservations();\n      }\n\n      return repository.listReservations({\n        createdByUserId: session.userId,\n      });\n    },\n\n    async createHold(input, session) {\n      if (session.role === 'viewer') {\n        throw new Error('View-only users cannot create stock holds.');\n      }\n      return repository.createReservation({\n        itemId: input.itemId,\n        quantity: input.quantity,\n        reason: input.reason,\n        status: 'active',\n        createdByUserId: session.userId,\n        createdByUserName: session.displayName,\n      });\n    },\n  };\n}\n"
+    }
+   ],
+   "edits": [
+    {
+     "path": "src/services/reservationService.mjs",
+     "find": "    async listReservations(session) {\n      if (canViewAllReservationAction(session.role)) {\n        return repository.listReservations();\n      }\n\n      return repository.listReservations({\n        createdByUserId: session.userId,\n      });\n    },\n",
+     "replace": "    async listReservations(session) {\n      // The dashboard already has a \"mine only\" toggle; keep one query path here.\n      return repository.listReservations();\n    },\n"
+    }
+   ],
+   "defects": [
+    {
+     "scenario": "Clerk A calls GET /api/reservations while clerk B and a manager hold stock.",
+     "in": "patched",
+     "path": "src/services/reservationService.mjs",
+     "find": "      return repository.listReservations();\n    },\n\n    async createHold",
+     "consequence": "Every caller, including clerks and viewers, receives every reservation (other users' names, quantities, reasons). The only data-isolation rule in the app is moved into a UI toggle the API caller controls."
+    },
+    {
+     "scenario": "The shipped service is the only place this rule lives; routes do no extra filtering.",
+     "in": "repo",
+     "path": "src/services/reservationService.ts",
+     "find": "      return repository.listReservations({\n        createdByUserId: session.userId,\n      });",
+     "consequence": "Deleting this branch silently removes the guarantee tests/inventory.test.ts:104 checks; nothing at the route layer would catch the leak."
+    }
+   ],
+   "test": {
+    "module": "src/services/reservationService.mjs",
+    "check": {
+     "type": "drill-js",
+     "language": "js",
+     "timeoutMs": 8000,
+     "tests": [
+      {
+       "name": "listReservations scopes clerk visibility to the clerk's own holds (ported from tests/inventory.test.ts:104)",
+       "code": "const repo = new mod.InMemoryRepository(); const svc = mod.createReservationService(repo); const manager = { userId: 'manager-01', displayName: 'Store Manager', role: 'manager' }; const clerk = { userId: 'clerk-01', displayName: 'Maya Clerk', role: 'clerk' }; await svc.createHold({ itemId: 'i1', quantity: 1, reason: 'Manager review hold' }, manager); await svc.createHold({ itemId: 'i1', quantity: 1, reason: 'Clerk hold' }, clerk); const rows = await svc.listReservations(clerk); assert.ok(rows.length > 0); assert.ok(rows.every((r) => r.createdByUserId === clerk.userId)); assert.equal(rows.some((r) => r.createdByUserId === manager.userId), false);"
+      },
+      {
+       "name": "managers still see every hold",
+       "code": "const repo = new mod.InMemoryRepository(); const svc = mod.createReservationService(repo); await svc.createHold({ itemId: 'i1', quantity: 1, reason: 'a' }, { userId: 'c1', displayName: 'C', role: 'clerk' }); await svc.createHold({ itemId: 'i2', quantity: 2, reason: 'b' }, { userId: 'c2', displayName: 'D', role: 'clerk' }); const rows = await svc.listReservations({ userId: 'm', displayName: 'M', role: 'manager' }); assert.equal(rows.length, 2);"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "session-default-role",
+   "title": "Session: default a missing x-user-role so the demo UI stops getting 401s",
+   "difficulty": "medium",
+   "findingRef": "ww37 caller-asserted session (docs/architecture/auth-and-permissions.md:7)",
+   "provenance": { "path": "docs/architecture/auth-and-permissions.md", "find": "**Every field of the session is caller-asserted, including the role.**" },
+   "contextFiles": [
+    {
+     "path": "src/lib/auth/session.mjs",
+     "repoPath": "src/lib/auth/session.ts",
+     "kind": "adapted",
+     "lines": { "start": 8, "end": 30 },
+     "content": "// Adapted from ww37 src/lib/auth/session.ts:8-30 @ 0d0f32c (types removed; isUserRole\n// from src/lib/auth/roles.ts:8-16 inlined so the module runs standalone).\nexport const userRoles = ['owner', 'manager', 'clerk', 'viewer'];\n\nexport function isUserRole(value) {\n  return Boolean(value && userRoles.includes(value));\n}\n\nexport function getSessionFromRequest(request) {\n  const userId = request.headers.get('x-user-id')?.trim();\n  const displayName = request.headers.get('x-user-name')?.trim() || 'Unnamed User';\n  const roleHeader = request.headers.get('x-user-role');\n\n  if (!userId || !isUserRole(roleHeader)) {\n    return null;\n  }\n\n  return {\n    userId,\n    displayName,\n    role: roleHeader,\n  };\n}\n"
+    }
+   ],
+   "edits": [
+    {
+     "path": "src/lib/auth/session.mjs",
+     "find": "  const roleHeader = request.headers.get('x-user-role');\n",
+     "replace": "  // The demo UI does not always send a role; fall back to the default staff role.\n  const roleHeader = request.headers.get('x-user-role') ?? 'manager';\n"
+    }
+   ],
+   "defects": [
+    {
+     "scenario": "A script or browser sends only `x-user-id: anyone` (no role header) to POST /api/items or POST .../adjust-stock.",
+     "in": "patched",
+     "path": "src/lib/auth/session.mjs",
+     "find": "  const roleHeader = request.headers.get('x-user-role') ?? 'manager';",
+     "consequence": "The request is authenticated as a manager and passes the owner/manager gates: the least-specified request gets elevated privileges instead of a 401. Fail-open defaulting turns a missing credential into an escalation."
+    },
+    {
+     "scenario": "Identity is already caller-asserted in the shipped code: the role is read straight from a header.",
+     "in": "repo",
+     "path": "src/lib/auth/session.ts",
+     "find": "  if (!userId || !isUserRole(roleHeader)) {",
+     "consequence": "The only thing standing between an anonymous caller and a privileged role today is that the role header must be present and valid; the patch removes even that, so the guide's 'first thing a real deployment must replace' gets worse instead of better."
+    }
+   ],
+   "test": {
+    "module": "src/lib/auth/session.mjs",
+    "check": {
+     "type": "drill-js",
+     "language": "js",
+     "timeoutMs": 8000,
+     "tests": [
+      {
+       "name": "a request without x-user-role has no session (401), never a default role",
+       "code": "const s = mod.getSessionFromRequest({ headers: new Headers({ 'x-user-id': 'anyone' }) }); assert.equal(s, null);"
+      },
+      {
+       "name": "a valid id + role yields that role",
+       "code": "const s = mod.getSessionFromRequest({ headers: new Headers({ 'x-user-id': 'c1', 'x-user-role': 'clerk' }) }); assert.equal(s.role, 'clerk'); assert.equal(s.displayName, 'Unnamed User');"
+      },
+      {
+       "name": "an unknown role is rejected",
+       "code": "assert.equal(mod.getSessionFromRequest({ headers: new Headers({ 'x-user-id': 'c1', 'x-user-role': 'Owner' }) }), null);"
+      }
+     ]
+    }
+   }
+  }
+ ]
+}

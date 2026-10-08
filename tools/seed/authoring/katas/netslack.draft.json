@@ -1,0 +1,66 @@
+{
+ "name": "netslack-katas",
+ "katas": [
+  {
+   "id": "slug-collapse-dashes",
+   "title": "Workspace slugs: collapse repeated dashes and strip leading/trailing ones",
+   "findingRef": "netslack review finding A (astraupskill/06-SOLUTIONS-AND-REVIEW.md:17)",
+   "provenance": {
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "lines": {
+     "start": 17,
+     "end": 28
+    }
+   },
+   "diff": "diff --git a/src/NetSlack.Domain/Workspaces/Workspace.cs b/src/NetSlack.Domain/Workspaces/Workspace.cs\n--- a/src/NetSlack.Domain/Workspaces/Workspace.cs\n+++ b/src/NetSlack.Domain/Workspaces/Workspace.cs\n@@ -60,6 +60,14 @@\n             .ToLowerInvariant()\r\n             .Replace(' ', '-');\r\n \r\n+        // \"Acme  Co\" and \"acme--co\" should be the same workspace address.\r\n+        while (normalized.Contains(\"--\"))\r\n+        {\r\n+            normalized = normalized.Replace(\"--\", \"-\");\r\n+        }\r\n+\r\n+        normalized = normalized.Trim('-');\r\n+\r\n         if (normalized.Any(character => !char.IsLetterOrDigit(character) && character != '-'))\r\n         {\r\n             throw new ArgumentException(\"Workspace slug can only contain letters, numbers, and dashes.\", nameof(slug));\r\n",
+   "contextFiles": [
+    {
+     "path": "src/NetSlack.Domain/Workspaces/Workspace.cs",
+     "origin": {
+      "kind": "verbatim",
+      "repoPath": "src/NetSlack.Domain/Workspaces/Workspace.cs"
+     }
+    },
+    {
+     "path": "src/NetSlack.Application/Workspaces/WorkspaceService.cs",
+     "origin": {
+      "kind": "verbatim",
+      "repoPath": "src/NetSlack.Application/Workspaces/WorkspaceService.cs"
+     }
+    }
+   ],
+   "seededDefectKey": [
+    {
+     "scenario": "Workspace \"acme-co\" exists; a user creates a workspace with slug \"Acme  Co\" (two spaces) or \"acme--co\".",
+     "evidence": {
+      "path": "src/NetSlack.Application/Workspaces/WorkspaceService.cs",
+      "lineStart": 26,
+      "lineEnd": 26,
+      "in": "patched"
+     },
+     "consequence": "The service still prechecks with its own copy of the old rule, so it looks up \"acme--co\", finds nothing and proceeds; Workspace.Create stores \"acme-co\". The insert hits the unique index, and the recovery query (also \"acme--co\") again finds nothing, so the DbUpdateException is rethrown: the caller gets a 500 instead of the 409 \"slug already taken\"."
+    },
+    {
+     "scenario": "The domain rule changed in one place only.",
+     "evidence": {
+      "path": "src/NetSlack.Domain/Workspaces/Workspace.cs",
+      "lineStart": 64,
+      "lineEnd": 64,
+      "in": "patched"
+     },
+     "consequence": "Precheck, insert and recovery no longer agree on the key; the conflict classification that the comment in WorkspaceService promises is silently broken (and a slug of only dashes now normalizes to \"\", which Guard no longer catches)."
+    },
+    {
+     "scenario": "The duplicated rule is already in the shipped service.",
+     "evidence": {
+      "path": "src/NetSlack.Application/Workspaces/WorkspaceService.cs",
+      "lineStart": 26,
+      "lineEnd": 26,
+      "in": "repo"
+     },
+     "consequence": "Review finding A names exactly this change (\"say, collapsing repeated dashes\") as the way the two copies drift; the fix is one normalization function used in all three places."
+    }
+   ]
+  }
+ ]
+}

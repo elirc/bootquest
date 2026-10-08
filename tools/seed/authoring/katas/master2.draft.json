@@ -1,0 +1,143 @@
+{
+ "name": "master2-katas",
+ "katas": [
+  {
+   "id": "outbox-always-notify",
+   "title": "Payment webhook: always publish the outbox event so downstream never misses a notification",
+   "findingRef": "master2 F2 (astraupskill/06-SOLUTIONS-AND-REVIEW.md:179)",
+   "provenance": {
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "lines": {
+     "start": 179,
+     "end": 179
+    }
+   },
+   "diff": "diff --git a/apps/api/src/modules/payments.service.mjs b/apps/api/src/modules/payments.service.mjs\n--- a/apps/api/src/modules/payments.service.mjs\n+++ b/apps/api/src/modules/payments.service.mjs\n@@ -78,9 +78,8 @@\n \n     await tx.webhookEvent.update({ where: { id: event.id }, data: { processedAt: new Date() } });\n     await tx.auditLog.create({ data: { action: alreadySucceeded && !succeeded ? 'payment.failed.ignored' : body.eventType, entityId: payment.id } });\n-    if (!(alreadySucceeded && !succeeded)) {\n-      await tx.outboxEvent.create({ data: { topic: body.eventType, payload: { paymentId: payment.id, invoiceId: payment.invoiceId } } });\n-    }\n+    // every processed provider event is published; consumers decide what to ignore\n+    await tx.outboxEvent.create({ data: { topic: body.eventType, payload: { paymentId: payment.id, invoiceId: payment.invoiceId } } });\n \n     return { processed: true, eventId: event.id, ignoredFailure: alreadySucceeded && !succeeded };\n   });\n",
+   "contextFiles": [
+    {
+     "path": "apps/api/src/modules/payments.service.mjs",
+     "content": "// Adapted from master2 apps/api/src/modules/payments.service.ts:34-131 @ 01f83c0\n// (Prisma replaced by an injected client; zod schema reduced to the checks the flow\n// needs; hashRequestPayload/stableStringify from packages/domain/src/idempotency.ts\n// and the audit/outbox helpers inlined; fakeClient() is test scaffolding that records\n// every write, mirroring the vi.fn() tx in payments.service.test.ts).\nimport { createHash } from 'node:crypto';\n\nexport class HttpError extends Error {\n  constructor(status, code, message) {\n    super(message);\n    this.status = status;\n    this.code = code;\n  }\n}\n\nfunction stableStringify(value) {\n  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;\n  if (value && typeof value === 'object') {\n    return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(',')}}`;\n  }\n  return JSON.stringify(value);\n}\n\nexport const hashRequestPayload = (payload) => createHash('sha256').update(stableStringify(payload)).digest('hex');\n\nconst canTransitionInvoice = (from, to) => to === 'paid' && ['open', 'uncollectible'].includes(from);\n\nfunction parseMockWebhook(input) {\n  const ok = input && typeof input.providerEventId === 'string' && input.providerEventId.trim().length >= 4\n    && ['payment.succeeded', 'payment.failed'].includes(input.eventType) && typeof input.paymentId === 'string';\n  if (!ok) throw new HttpError(400, 'webhook.invalid', 'The mock webhook body is invalid.');\n  return { ...input, providerEventId: input.providerEventId.trim() };\n}\n\nexport async function processMockPaymentWebhook(prisma, tenant, input) {\n  if (!tenant.permissions.includes('payments:manage')) {\n    throw new HttpError(403, 'permission.denied', 'Missing permission payments:manage.');\n  }\n  const body = parseMockWebhook(input);\n  const payloadHash = hashRequestPayload(body);\n\n  return prisma.$transaction(async (tx) => {\n    const existing = await tx.webhookEvent.findUnique({ where: { providerEventId: body.providerEventId } });\n    if (existing) {\n      if (existing.organizationId !== tenant.organizationId || hashRequestPayload(existing.payload) !== payloadHash) {\n        throw new HttpError(409, 'webhook.identity_conflict', 'Provider event belongs to another tenant or payload.');\n      }\n\n      if (existing.processedAt) {\n        return { duplicate: true, eventId: existing.id };\n      }\n    }\n\n    const payment = await tx.payment.findFirst({ where: { id: body.paymentId, organizationId: tenant.organizationId } });\n    if (!payment) {\n      throw new HttpError(404, 'payment.not_found', 'Payment was not found in this organization.');\n    }\n\n    const invoice = await tx.invoice.findFirst({ where: { id: payment.invoiceId, organizationId: tenant.organizationId } });\n    if (!invoice) {\n      throw new HttpError(404, 'invoice.not_found', 'Invoice was not found in this organization.');\n    }\n\n    if (body.eventType === 'payment.succeeded' && invoice.status !== 'paid' && !canTransitionInvoice(invoice.status, 'paid')) {\n      throw new HttpError(409, 'invoice.transition_invalid', 'Invoice cannot transition to paid from its current state.');\n    }\n\n    const event = existing ?? await tx.webhookEvent.create({ data: { organizationId: tenant.organizationId, providerEventId: body.providerEventId, payload: body } });\n\n    const succeeded = body.eventType === 'payment.succeeded';\n    const alreadySucceeded = payment.status === 'succeeded';\n    if (!alreadySucceeded) {\n      await tx.payment.update({ where: { id: payment.id }, data: { status: succeeded ? 'succeeded' : 'failed' } });\n      if (succeeded && invoice.status !== 'paid') {\n        await tx.invoice.update({ where: { id: invoice.id }, data: { status: 'paid' } });\n      }\n    }\n\n    await tx.webhookEvent.update({ where: { id: event.id }, data: { processedAt: new Date() } });\n    await tx.auditLog.create({ data: { action: alreadySucceeded && !succeeded ? 'payment.failed.ignored' : body.eventType, entityId: payment.id } });\n    if (!(alreadySucceeded && !succeeded)) {\n      await tx.outboxEvent.create({ data: { topic: body.eventType, payload: { paymentId: payment.id, invoiceId: payment.invoiceId } } });\n    }\n\n    return { processed: true, eventId: event.id, ignoredFailure: alreadySucceeded && !succeeded };\n  });\n}\n\n/** test scaffolding: a client whose reads return the given rows and whose writes are recorded */\nexport function fakeClient({ event = null, payment = null, invoice = null } = {}) {\n  const writes = [];\n  const rec = (name, ret) => async (args) => {\n    writes.push({ name, args });\n    return ret ?? { id: `${name}-1`, ...(args?.data ?? {}) };\n  };\n  const tx = {\n    webhookEvent: { findUnique: async () => event, create: rec('webhookEvent.create'), update: rec('webhookEvent.update') },\n    payment: { findFirst: async () => payment, update: rec('payment.update') },\n    invoice: { findFirst: async () => invoice, update: rec('invoice.update') },\n    auditLog: { create: rec('auditLog.create') },\n    outboxEvent: { create: rec('outboxEvent.create') },\n  };\n  return { writes, $transaction: (fn) => fn(tx) };\n}\n",
+     "origin": {
+      "kind": "adapted",
+      "repoPath": "apps/api/src/modules/payments.service.ts",
+      "lines": {
+       "start": 34,
+       "end": 131
+      }
+     }
+    }
+   ],
+   "seededDefectKey": [
+    {
+     "scenario": "A payment is already succeeded (the worker creates most payments that way) and a late payment.failed notification arrives with a new provider event id.",
+     "evidence": {
+      "path": "apps/api/src/modules/payments.service.mjs",
+      "lineStart": 82,
+      "lineEnd": 82,
+      "in": "patched"
+     },
+     "consequence": "The service correctly ignores the failure for the payment row and audits 'payment.failed.ignored', but now publishes payment.failed downstream anyway: billing emails, dunning or revenue consumers see a failure for a paid invoice. The audit log and the event stream contradict each other."
+    },
+    {
+     "scenario": "The shipped guard already lets a second payment.succeeded through (finding F2).",
+     "evidence": {
+      "path": "apps/api/src/modules/payments.service.ts",
+      "lineStart": 110,
+      "lineEnd": 110,
+      "in": "repo"
+     },
+     "consequence": "F2 asks for this guard to be TIGHTENED (also skip alreadySucceeded && succeeded); the patch deletes it instead, so both the duplicate success and the ignored failure now notify downstream."
+    }
+   ],
+   "test": {
+    "module": "apps/api/src/modules/payments.service.mjs",
+    "check": {
+     "type": "drill-js",
+     "language": "js",
+     "timeoutMs": 8000,
+     "tests": [
+      {
+       "name": "does not regress a succeeded payment on a later failed notification (ported from apps/api/src/modules/payments.service.test.ts:107)",
+       "code": "const db = mod.fakeClient({ payment: { id: 'pay-a', organizationId: 'org-a', invoiceId: 'inv-a', status: 'succeeded' }, invoice: { id: 'inv-a', status: 'paid' } }); const r = await mod.processMockPaymentWebhook(db, { organizationId: 'org-a', permissions: ['payments:manage'] }, { providerEventId: 'evt-fail', eventType: 'payment.failed', paymentId: 'pay-a', failureCode: 'late' }); assert.equal(r.ignoredFailure, true); const names = db.writes.map((w) => w.name); assert.ok(!names.includes('payment.update')); assert.ok(!names.includes('invoice.update')); assert.equal(db.writes.find((w) => w.name === 'auditLog.create').args.data.action, 'payment.failed.ignored'); assert.ok(!names.includes('outboxEvent.create'), 'an ignored failure must not reach the outbox');"
+      },
+      {
+       "name": "processes a success with event, payment, invoice, audit and outbox (ported from payments.service.test.ts:76)",
+       "code": "const db = mod.fakeClient({ payment: { id: 'pay-a', organizationId: 'org-a', invoiceId: 'inv-a', status: 'processing' }, invoice: { id: 'inv-a', status: 'open' } }); await mod.processMockPaymentWebhook(db, { organizationId: 'org-a', permissions: ['payments:manage'] }, { providerEventId: 'evt-1234', eventType: 'payment.succeeded', paymentId: 'pay-a' }); assert.deepEqual(db.writes.map((w) => w.name), ['webhookEvent.create', 'payment.update', 'invoice.update', 'webhookEvent.update', 'auditLog.create', 'outboxEvent.create']);"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "event-identity-tenant-only",
+   "title": "Payment webhook: the provider event id is unique, drop the payload-hash comparison",
+   "findingRef": "master2 webhook identity model answer (astraupskill/06-SOLUTIONS-AND-REVIEW.md:57) + F3 (:181)",
+   "provenance": {
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "lines": {
+     "start": 57,
+     "end": 57
+    }
+   },
+   "diff": "diff --git a/apps/api/src/modules/payments.service.mjs b/apps/api/src/modules/payments.service.mjs\n--- a/apps/api/src/modules/payments.service.mjs\n+++ b/apps/api/src/modules/payments.service.mjs\n@@ -42,7 +42,8 @@\n   return prisma.$transaction(async (tx) => {\n     const existing = await tx.webhookEvent.findUnique({ where: { providerEventId: body.providerEventId } });\n     if (existing) {\n-      if (existing.organizationId !== tenant.organizationId || hashRequestPayload(existing.payload) !== payloadHash) {\n+      // providerEventId is @unique, so the id alone identifies the event; hashing is redundant\n+      if (existing.organizationId !== tenant.organizationId) {\n         throw new HttpError(409, 'webhook.identity_conflict', 'Provider event belongs to another tenant or payload.');\n       }\n \n",
+   "contextFiles": [
+    {
+     "path": "apps/api/src/modules/payments.service.mjs",
+     "content": "// Adapted from master2 apps/api/src/modules/payments.service.ts:34-131 @ 01f83c0\n// (Prisma replaced by an injected client; zod schema reduced to the checks the flow\n// needs; hashRequestPayload/stableStringify from packages/domain/src/idempotency.ts\n// and the audit/outbox helpers inlined; fakeClient() is test scaffolding that records\n// every write, mirroring the vi.fn() tx in payments.service.test.ts).\nimport { createHash } from 'node:crypto';\n\nexport class HttpError extends Error {\n  constructor(status, code, message) {\n    super(message);\n    this.status = status;\n    this.code = code;\n  }\n}\n\nfunction stableStringify(value) {\n  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;\n  if (value && typeof value === 'object') {\n    return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(',')}}`;\n  }\n  return JSON.stringify(value);\n}\n\nexport const hashRequestPayload = (payload) => createHash('sha256').update(stableStringify(payload)).digest('hex');\n\nconst canTransitionInvoice = (from, to) => to === 'paid' && ['open', 'uncollectible'].includes(from);\n\nfunction parseMockWebhook(input) {\n  const ok = input && typeof input.providerEventId === 'string' && input.providerEventId.trim().length >= 4\n    && ['payment.succeeded', 'payment.failed'].includes(input.eventType) && typeof input.paymentId === 'string';\n  if (!ok) throw new HttpError(400, 'webhook.invalid', 'The mock webhook body is invalid.');\n  return { ...input, providerEventId: input.providerEventId.trim() };\n}\n\nexport async function processMockPaymentWebhook(prisma, tenant, input) {\n  if (!tenant.permissions.includes('payments:manage')) {\n    throw new HttpError(403, 'permission.denied', 'Missing permission payments:manage.');\n  }\n  const body = parseMockWebhook(input);\n  const payloadHash = hashRequestPayload(body);\n\n  return prisma.$transaction(async (tx) => {\n    const existing = await tx.webhookEvent.findUnique({ where: { providerEventId: body.providerEventId } });\n    if (existing) {\n      if (existing.organizationId !== tenant.organizationId || hashRequestPayload(existing.payload) !== payloadHash) {\n        throw new HttpError(409, 'webhook.identity_conflict', 'Provider event belongs to another tenant or payload.');\n      }\n\n      if (existing.processedAt) {\n        return { duplicate: true, eventId: existing.id };\n      }\n    }\n\n    const payment = await tx.payment.findFirst({ where: { id: body.paymentId, organizationId: tenant.organizationId } });\n    if (!payment) {\n      throw new HttpError(404, 'payment.not_found', 'Payment was not found in this organization.');\n    }\n\n    const invoice = await tx.invoice.findFirst({ where: { id: payment.invoiceId, organizationId: tenant.organizationId } });\n    if (!invoice) {\n      throw new HttpError(404, 'invoice.not_found', 'Invoice was not found in this organization.');\n    }\n\n    if (body.eventType === 'payment.succeeded' && invoice.status !== 'paid' && !canTransitionInvoice(invoice.status, 'paid')) {\n      throw new HttpError(409, 'invoice.transition_invalid', 'Invoice cannot transition to paid from its current state.');\n    }\n\n    const event = existing ?? await tx.webhookEvent.create({ data: { organizationId: tenant.organizationId, providerEventId: body.providerEventId, payload: body } });\n\n    const succeeded = body.eventType === 'payment.succeeded';\n    const alreadySucceeded = payment.status === 'succeeded';\n    if (!alreadySucceeded) {\n      await tx.payment.update({ where: { id: payment.id }, data: { status: succeeded ? 'succeeded' : 'failed' } });\n      if (succeeded && invoice.status !== 'paid') {\n        await tx.invoice.update({ where: { id: invoice.id }, data: { status: 'paid' } });\n      }\n    }\n\n    await tx.webhookEvent.update({ where: { id: event.id }, data: { processedAt: new Date() } });\n    await tx.auditLog.create({ data: { action: alreadySucceeded && !succeeded ? 'payment.failed.ignored' : body.eventType, entityId: payment.id } });\n    if (!(alreadySucceeded && !succeeded)) {\n      await tx.outboxEvent.create({ data: { topic: body.eventType, payload: { paymentId: payment.id, invoiceId: payment.invoiceId } } });\n    }\n\n    return { processed: true, eventId: event.id, ignoredFailure: alreadySucceeded && !succeeded };\n  });\n}\n\n/** test scaffolding: a client whose reads return the given rows and whose writes are recorded */\nexport function fakeClient({ event = null, payment = null, invoice = null } = {}) {\n  const writes = [];\n  const rec = (name, ret) => async (args) => {\n    writes.push({ name, args });\n    return ret ?? { id: `${name}-1`, ...(args?.data ?? {}) };\n  };\n  const tx = {\n    webhookEvent: { findUnique: async () => event, create: rec('webhookEvent.create'), update: rec('webhookEvent.update') },\n    payment: { findFirst: async () => payment, update: rec('payment.update') },\n    invoice: { findFirst: async () => invoice, update: rec('invoice.update') },\n    auditLog: { create: rec('auditLog.create') },\n    outboxEvent: { create: rec('outboxEvent.create') },\n  };\n  return { writes, $transaction: (fn) => fn(tx) };\n}\n",
+     "origin": {
+      "kind": "adapted",
+      "repoPath": "apps/api/src/modules/payments.service.ts",
+      "lines": {
+       "start": 34,
+       "end": 131
+      }
+     }
+    }
+   ],
+   "seededDefectKey": [
+    {
+     "scenario": "The same tenant re-posts provider event 'evt-1234' but with a different paymentId (or eventType) — a provider bug, a replay of a mutated body, or a caller choosing ids on the mock endpoint.",
+     "evidence": {
+      "path": "apps/api/src/modules/payments.service.mjs",
+      "lineStart": 46,
+      "lineEnd": 46,
+      "in": "patched"
+     },
+     "consequence": "The changed request is answered as a harmless duplicate ({ duplicate: true }) when the event was already processed, or — while the first delivery is still unprocessed — the second body is applied to a different payment under the first body's event row. A reused id with a different meaning must be a 409 conflict, never a replay."
+    },
+    {
+     "scenario": "The shipped code compares both tenant and payload hash.",
+     "evidence": {
+      "path": "apps/api/src/modules/payments.service.ts",
+      "lineStart": 44,
+      "lineEnd": 44,
+      "in": "repo"
+     },
+     "consequence": "payments.service.test.ts 'rejects a changed payload under the same tenant event identity' depends on the hash half; the guide's model answer names it explicitly. Note the payloadHash variable becomes dead after the patch — a reviewer cue."
+    }
+   ],
+   "test": {
+    "module": "apps/api/src/modules/payments.service.mjs",
+    "check": {
+     "type": "drill-js",
+     "language": "js",
+     "timeoutMs": 8000,
+     "tests": [
+      {
+       "name": "rejects a changed payload under the same tenant event identity (ported from apps/api/src/modules/payments.service.test.ts:139)",
+       "code": "const db = mod.fakeClient({ event: { id: 'event-a', organizationId: 'org-a', processedAt: new Date(), payload: { ...{ providerEventId: 'evt-1234', eventType: 'payment.succeeded', paymentId: 'pay-a' }, paymentId: 'pay-other' } } }); await assert.rejects(mod.processMockPaymentWebhook(db, { organizationId: 'org-a', permissions: ['payments:manage'] }, { providerEventId: 'evt-1234', eventType: 'payment.succeeded', paymentId: 'pay-a' }), (e) => e.status === 409 && e.code === 'webhook.identity_conflict'); assert.equal(db.writes.length, 0);"
+      },
+      {
+       "name": "rejects a provider id collision across tenants (ported from payments.service.test.ts:100)",
+       "code": "const db = mod.fakeClient({ event: { id: 'event-x', organizationId: 'org-b', processedAt: null, payload: { providerEventId: 'evt-1234', eventType: 'payment.succeeded', paymentId: 'pay-a' } } }); await assert.rejects(mod.processMockPaymentWebhook(db, { organizationId: 'org-a', permissions: ['payments:manage'] }, { providerEventId: 'evt-1234', eventType: 'payment.succeeded', paymentId: 'pay-a' }), (e) => e.code === 'webhook.identity_conflict'); assert.equal(db.writes.length, 0);"
+      },
+      {
+       "name": "returns a same-payload replay without duplicate side effects (ported from payments.service.test.ts:91)",
+       "code": "const db = mod.fakeClient({ event: { id: 'event-a', organizationId: 'org-a', processedAt: new Date(), payload: { providerEventId: 'evt-1234', eventType: 'payment.succeeded', paymentId: 'pay-a' } } }); const r = await mod.processMockPaymentWebhook(db, { organizationId: 'org-a', permissions: ['payments:manage'] }, { providerEventId: 'evt-1234', eventType: 'payment.succeeded', paymentId: 'pay-a' }); assert.equal(r.duplicate, true); assert.equal(db.writes.length, 0);"
+      }
+     ]
+    }
+   }
+  }
+ ]
+}

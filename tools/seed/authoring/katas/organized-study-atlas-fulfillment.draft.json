@@ -1,0 +1,86 @@
+{
+ "name": "organized-study-atlas-fulfillment-katas",
+ "katas": [
+  {
+   "id": "require-role-by-rank",
+   "title": "requireRole: switch from role lists to role ranks so new roles slot in",
+   "findingRef": "atlas-fulfillment rank-based requireRole (docs/features/001-auth-rbac-shell.md:44)",
+   "provenance": {
+    "path": "docs/features/001-auth-rbac-shell.md",
+    "lines": {
+     "start": 44,
+     "end": 44
+    }
+   },
+   "diff": "diff --git a/src/server/modules/platform/auth.mjs b/src/server/modules/platform/auth.mjs\n--- a/src/server/modules/platform/auth.mjs\n+++ b/src/server/modules/platform/auth.mjs\n@@ -4,11 +4,22 @@\n // BEFORE the change under review.\n export const knownRoles = ['viewer', 'buyer', 'warehouse_associate', 'warehouse_manager', 'admin']\n \n+const roleRank = {\n+  viewer: 0,\n+  buyer: 1,\n+  warehouse_associate: 1,\n+  warehouse_manager: 2,\n+  admin: 3,\n+}\n+\n export function requireRole(allowedRoles) {\n+  // Ranks instead of lists: a new senior role only needs a number here.\n+  const minimumRank = Math.min(...allowedRoles.map((role) => roleRank[role] ?? 99))\n+\n   return (request, response, next) => {\n-    const role = request.actor?.role ?? 'viewer'\n+    const actorRank = roleRank[request.actor?.role ?? 'viewer'] ?? 0\n \n-    if (!allowedRoles.includes(role)) {\n+    if (actorRank < minimumRank) {\n       response.status(403).json({ error: 'Forbidden', requiredRoles: allowedRoles })\n       return\n     }\n",
+   "contextFiles": [
+    {
+     "path": "src/server/modules/platform/auth.mjs",
+     "content": "// Adapted from organized-study-atlas-fulfillment src/server/modules/platform/auth.ts:5-45 @ d82cc29\n// (Express/Prisma types removed). This is the guard in the list-membership form the\n// feature doc recommends (docs/features/001-auth-rbac-shell.md:44), i.e. the state\n// BEFORE the change under review.\nexport const knownRoles = ['viewer', 'buyer', 'warehouse_associate', 'warehouse_manager', 'admin']\n\nexport function requireRole(allowedRoles) {\n  return (request, response, next) => {\n    const role = request.actor?.role ?? 'viewer'\n\n    if (!allowedRoles.includes(role)) {\n      response.status(403).json({ error: 'Forbidden', requiredRoles: allowedRoles })\n      return\n    }\n\n    next()\n  }\n}\n\n/** test scaffolding: run a guard and report the outcome */\nexport function runGuard(guard, role) {\n  let status = 200\n  let nextCalled = false\n  const response = { status(s) { status = s; return this }, json() { return this } }\n  guard({ actor: role === null ? undefined : { role } }, response, () => { nextCalled = true })\n  return { status, nextCalled }\n}\n",
+     "origin": {
+      "kind": "adapted",
+      "repoPath": "src/server/modules/platform/auth.ts",
+      "lines": {
+       "start": 5,
+       "end": 45
+      }
+     }
+    }
+   ],
+   "seededDefectKey": [
+    {
+     "scenario": "A warehouse_associate calls a purchasing route guarded by requireRole(['buyer', 'warehouse_manager', 'admin']).",
+     "evidence": {
+      "path": "src/server/modules/platform/auth.mjs",
+      "lineStart": 17,
+      "lineEnd": 17,
+      "in": "patched"
+     },
+     "consequence": "The guard collapses the list to 'rank >= 1', and warehouse_associate shares buyer's rank, so the associate passes a gate whose role list does not name them. The 403 body still advertises requiredRoles = the list, so the rule enforced and the rule reported disagree."
+    },
+    {
+     "scenario": "A route guarded only by a misspelled role, or a user whose role string is misspelled.",
+     "evidence": {
+      "path": "src/server/modules/platform/auth.mjs",
+      "lineStart": 20,
+      "lineEnd": 20,
+      "in": "patched"
+     },
+     "consequence": "Unknown required roles become rank 99 (locks out everyone, admin included) while unknown user roles silently become rank 0; typos fail in opposite directions instead of failing loudly."
+    },
+    {
+     "scenario": "The shipped guard is exactly this rank form.",
+     "evidence": {
+      "path": "src/server/modules/platform/auth.ts",
+      "lineStart": 33,
+      "lineEnd": 33,
+      "in": "repo"
+     },
+     "consequence": "Feature doc finding 2: 'If the intent is ranking, accept one minimum role; if the intent is a list, check membership (allowedRoles.includes(role))'. No test exercises requireRole, so nothing catches it."
+    }
+   ],
+   "test": {
+    "module": "src/server/modules/platform/auth.mjs",
+    "check": {
+     "type": "drill-js",
+     "language": "js",
+     "timeoutMs": 8000,
+     "tests": [
+      {
+       "name": "a warehouse_associate cannot pass a buyer/manager/admin gate",
+       "code": "const g = mod.requireRole(['buyer', 'warehouse_manager', 'admin']); const r = mod.runGuard(g, 'warehouse_associate'); assert.equal(r.status, 403); assert.equal(r.nextCalled, false);"
+      },
+      {
+       "name": "listed roles pass and an anonymous actor is a viewer",
+       "code": "const g = mod.requireRole(['buyer', 'warehouse_manager', 'admin']); assert.equal(mod.runGuard(g, 'buyer').nextCalled, true); assert.equal(mod.runGuard(g, 'admin').nextCalled, true); assert.equal(mod.runGuard(g, null).status, 403);"
+      },
+      {
+       "name": "a manager-only gate refuses a buyer",
+       "code": "assert.equal(mod.runGuard(mod.requireRole(['warehouse_manager']), 'buyer').status, 403);"
+      }
+     ]
+    }
+   }
+  }
+ ]
+}

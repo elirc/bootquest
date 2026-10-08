@@ -1,0 +1,70 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "patches",
+ "name": "tracer-net-katas",
+ "items": [
+  {
+   "key": "seed:patches:tracer-net/patch-kata/59d5432655b9cfac",
+   "provenance": {
+    "repo": "tracer-net",
+    "sha": "2c0f21f6bc704811bec6fde07054a3ca1ace2346",
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 241,
+     "end": 241
+    }
+   },
+   "citations": [],
+   "kind": "patch-kata",
+   "title": "Write rate limiter: partition on the API key header so buckets exist before auth runs",
+   "diff": "diff --git a/src/Tracer.Api/RateLimiting/WriteRateLimiter.cs b/src/Tracer.Api/RateLimiting/WriteRateLimiter.cs\n--- a/src/Tracer.Api/RateLimiting/WriteRateLimiter.cs\n+++ b/src/Tracer.Api/RateLimiting/WriteRateLimiter.cs\n@@ -55,14 +55,13 @@\n                 var permitLimit = configuration.GetValue<int?>(\"RateLimiting:PermitLimit\") ?? 120;\r\n                 var windowSeconds = configuration.GetValue<int?>(\"RateLimiting:WindowSeconds\") ?? 60;\r\n \r\n-                // Partition on the AUTHENTICATED caller (UseRateLimiter runs after\r\n-                // UseAuthentication in this adaptation), never on a header the caller\r\n-                // controls: a request whose key failed to authenticate is bucketed by\r\n-                // remote address, so guessing keys cannot mint fresh windows.\r\n-                var userId = context.User.FindFirstValue(ClaimTypes.NameIdentifier);\r\n-                var partitionKey = userId is not null\r\n-                    ? $\"user:{userId}\"\r\n-                    : $\"ip:{context.Connection.RemoteIpAddress?.ToString() ?? \"anonymous\"}\";\r\n+                // Bucket per credential straight from the header: no need to wait for\r\n+                // the auth handler (and its DB lookup) before metering a write.\r\n+                var partitionKey = context.Request.Headers[ApiKeyAuthenticationHandler.HeaderName].ToString();\r\n+                if (string.IsNullOrEmpty(partitionKey))\r\n+                {\r\n+                    partitionKey = context.Connection.RemoteIpAddress?.ToString() ?? \"anonymous\";\r\n+                }\r\n \r\n                 return RateLimitPartition.GetFixedWindowLimiter(\r\n                     partitionKey,\r\n",
+   "contextFiles": [
+    {
+     "path": "src/Tracer.Api/RateLimiting/WriteRateLimiter.cs",
+     "content": "// Adapted from tracer-net src/Tracer.Api/RateLimiting/WriteRateLimiter.cs @ 2c0f21f: lines 54-58 replaced by the\r\n// fix the senior review proposes (docs/architecture.md:241, partition on the authenticated user, IP for failed auth),\r\n// assuming app.UseRateLimiter() is moved after app.UseAuthentication() (src/Tracer.Api/Program.cs:86-91).\r\nusing System.Security.Claims;\r\nusing System.Threading.RateLimiting;\r\nusing Microsoft.AspNetCore.Http;\r\nusing Microsoft.AspNetCore.RateLimiting;\r\nusing Tracer.Api.Auth;\r\n\r\nnamespace Tracer.Api.RateLimiting;\r\n\r\n/// <summary>\r\n/// A global rate limiter aimed at the endpoints that change state.\r\n///\r\n/// <para>\r\n/// <b>Only writes are limited.</b> A read is cheap and idempotent; a burst of\r\n/// <c>GET</c>s is a client that is merely eager. A burst of <c>POST</c>/<c>PUT</c>/\r\n/// <c>DELETE</c>s is the shape of a runaway script or a retry storm, and each one\r\n/// costs a transaction, an audit entry, and — through the activity spine — webhook\r\n/// deliveries and notifications fanned out to everyone watching. So reads pass\r\n/// through unmetered and only mutating methods draw from the bucket.\r\n/// </para>\r\n/// <para>\r\n/// <b>The bucket is per credential, not per process.</b> Partitioning by API key\r\n/// means one team's misbehaving integration cannot spend everyone else's budget;\r\n/// an unauthenticated caller (which can only reach <c>/api/health</c>) is bucketed\r\n/// by remote address instead. The limit is a fixed window read from configuration\r\n/// so an operator can tighten or loosen it without a redeploy.\r\n/// </para>\r\n/// </summary>\r\npublic static class WriteRateLimiter\r\n{\r\n    public const string PolicyName = \"writes\";\r\n\r\n    public static IServiceCollection AddWriteRateLimiter(this IServiceCollection services)\r\n    {\r\n        services.AddRateLimiter(options =>\r\n        {\r\n            options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;\r\n\r\n            options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>\r\n            {\r\n                if (!IsWrite(context.Request.Method))\r\n                {\r\n                    // Reads are never throttled: a NoLimiter partition draws from\r\n                    // nothing and rejects nothing.\r\n                    return RateLimitPartition.GetNoLimiter(\"read\");\r\n                }\r\n\r\n                // Read lazily from the request's configuration rather than captured\r\n                // at registration, so the value reflects the final merged config —\r\n                // which is what lets a host (or a test) set the limit without this\r\n                // code caring where it came from.\r\n                var configuration = context.RequestServices.GetRequiredService<IConfiguration>();\r\n                var permitLimit = configuration.GetValue<int?>(\"RateLimiting:PermitLimit\") ?? 120;\r\n                var windowSeconds = configuration.GetValue<int?>(\"RateLimiting:WindowSeconds\") ?? 60;\r\n\r\n                // Partition on the AUTHENTICATED caller (UseRateLimiter runs after\r\n                // UseAuthentication in this adaptation), never on a header the caller\r\n                // controls: a request whose key failed to authenticate is bucketed by\r\n                // remote address, so guessing keys cannot mint fresh windows.\r\n                var userId = context.User.FindFirstValue(ClaimTypes.NameIdentifier);\r\n                var partitionKey = userId is not null\r\n                    ? $\"user:{userId}\"\r\n                    : $\"ip:{context.Connection.RemoteIpAddress?.ToString() ?? \"anonymous\"}\";\r\n\r\n                return RateLimitPartition.GetFixedWindowLimiter(\r\n                    partitionKey,\r\n                    _ => new FixedWindowRateLimiterOptions\r\n                    {\r\n                        PermitLimit = permitLimit,\r\n                        Window = TimeSpan.FromSeconds(windowSeconds),\r\n                        QueueLimit = 0,\r\n                    });\r\n            });\r\n\r\n            // A rejection is an error like any other, so it comes back as RFC 7807\r\n            // rather than an empty 429 the client has to guess at. Retry-After is\r\n            // set when the window's reset time is known, so a well-behaved client\r\n            // backs off for exactly as long as it needs to.\r\n            options.OnRejected = async (context, ct) =>\r\n            {\r\n                if (context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))\r\n                {\r\n                    context.HttpContext.Response.Headers.RetryAfter =\r\n                        ((int)Math.Ceiling(retryAfter.TotalSeconds)).ToString();\r\n                }\r\n\r\n                var problemService = context.HttpContext.RequestServices\r\n                    .GetRequiredService<IProblemDetailsService>();\r\n\r\n                context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;\r\n                await problemService.WriteAsync(new ProblemDetailsContext\r\n                {\r\n                    HttpContext = context.HttpContext,\r\n                    ProblemDetails =\r\n                    {\r\n                        Status = StatusCodes.Status429TooManyRequests,\r\n                        Title = \"Too many requests.\",\r\n                        Detail = \"You have made too many write requests in a short window. Slow down and try again shortly.\",\r\n                    },\r\n                });\r\n            };\r\n        });\r\n\r\n        return services;\r\n    }\r\n\r\n    private static bool IsWrite(string method) =>\r\n        HttpMethods.IsPost(method)\r\n        || HttpMethods.IsPut(method)\r\n        || HttpMethods.IsPatch(method)\r\n        || HttpMethods.IsDelete(method);\r\n}\r\n",
+     "origin": {
+      "kind": "adapted",
+      "repoPath": "src/Tracer.Api/RateLimiting/WriteRateLimiter.cs",
+      "lines": {
+       "start": 54,
+       "end": 58
+      }
+     }
+    }
+   ],
+   "seededDefectKey": [
+    {
+     "scenario": "An attacker scripts POSTs, each carrying a different made-up X-Api-Key value (trk_guess_0001, trk_guess_0002, ...).",
+     "evidence": {
+      "path": "src/Tracer.Api/RateLimiting/WriteRateLimiter.cs",
+      "lineStart": 60,
+      "lineEnd": 60,
+      "in": "patched"
+     },
+     "consequence": "Every distinct garbage key gets its own fresh fixed window, so none of the requests is ever throttled (all 401, never 429): the limiter stops slowing key-guessing entirely."
+    },
+    {
+     "scenario": "The same flood keeps running for hours with unique header values.",
+     "evidence": {
+      "path": "src/Tracer.Api/RateLimiting/WriteRateLimiter.cs",
+      "lineStart": 66,
+      "lineEnd": 66,
+      "in": "patched"
+     },
+     "consequence": "The partitioned limiter keeps one limiter per partition key, and the key space is now attacker-chosen, so the number of partitions held in memory is unbounded."
+    },
+    {
+     "scenario": "The shipped code partitions exactly this way.",
+     "evidence": {
+      "path": "src/Tracer.Api/RateLimiting/WriteRateLimiter.cs",
+      "lineStart": 54,
+      "lineEnd": 54,
+      "in": "repo"
+     },
+     "consequence": "Senior-review finding 1 (Medium): the patch reverts the proposed fix back to the reviewed defect."
+    }
+   ],
+   "findingRef": "tracer-net senior review #1 (docs/architecture.md:241)"
+  }
+ ]
+}

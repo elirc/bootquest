@@ -1,0 +1,37 @@
+{
+ "lines": { "start": 20, "end": 23 },
+ "questions": [
+  {
+   "prompt": "G2 BRIEF — ww6 (cloud chargeback platform, Next.js + Prisma). Senior-review finding F2: allocation runs store `monthStart` exactly as the caller sent it, but the chargeback report looks runs up by equality with the normalised month start, so any non-first-of-month input creates runs the report never shows. You will delegate the fix to a coding agent. Write the brief: goal, allowed files, boundaries, test command, stop condition. Commit to your brief first, then tick the checkpoints you covered and add up the weights.",
+   "keyPoints": [
+    { "text": "[w3] Goal: a run created with any instant inside a month is found by the report for that month; the write path stores the normalised UTC month start instead of `new Date(monthStartIso)`.", "cite": { "path": "src/services/allocationRunService.ts", "lineStart": 66, "lineEnd": 66 } },
+    { "text": "[w3] Reuse the existing normaliser toUtcMonthWindow (as forecastService already does) rather than inventing new date math.", "cite": { "path": "src/lib/time/month.ts", "lineStart": 10, "lineEnd": 22 } },
+    { "text": "[w2] Scope names the second write site with the same bug: budgets are stored un-normalised despite the comment claiming normalisation.", "cite": { "path": "src/services/budgetService.ts", "lineStart": 11, "lineEnd": 18 } },
+    { "text": "[w2] Allowed files: allocationRunService.ts, budgetService.ts and new tests under tests/ (vitest only includes tests/**/*.test.ts).", "cite": { "path": "vitest.config.ts", "lineStart": 13, "lineEnd": 13 } },
+    { "text": "[w3] Boundary: no Prisma schema or migration change and no backfill of existing rows in this task; the report-side equality lookup stays as it is.", "cite": { "path": "src/repositories/reportRepository.ts", "lineStart": 9, "lineEnd": 17 } },
+    { "text": "[w2] Test command: `npm test` (vitest run), with the repository layer mocked so no database is needed.", "cite": { "path": "package.json", "lineStart": 10, "lineEnd": 10 } },
+    { "text": "[w2] Stop condition: both write sites normalised and a test proving a mid-month input is stored as the 1st 00:00Z; anything touching the run-uniqueness race (F8) is reported, not fixed.", "cite": { "path": "prisma/schema.prisma", "lineStart": 156, "lineEnd": 173 } }
+   ]
+  },
+  {
+   "prompt": "G2 PRE-MORTEM — same delegation. What are the likeliest ways an agent goes wrong on this task, and what in your brief prevents each?",
+   "keyPoints": [
+    { "text": "[w3] It normalises the READ side instead, which hides the symptom while the stored runs stay wrong for every other consumer.", "cite": { "path": "src/services/reportService.ts", "lineStart": 20, "lineEnd": 20 } },
+    { "text": "[w2] It uses local-time Date math (getMonth/setDate), the exact pitfall the month helper's header warns about.", "cite": { "path": "src/lib/time/month.ts", "lineStart": 5, "lineEnd": 5 } },
+    { "text": "[w2] It 'fixes' F8 too by adding a unique index on (tenantId, monthStart), a schema change that would fail on existing duplicate rows.", "quote": "No uniqueness on `(tenantId, monthStart)` for runs and no in-flight check in `createRunAndQueue`" },
+    { "text": "[w2] It also rewrites the queued job payload and the engine signature; unnecessary, because the engine already normalises the raw ISO itself, so the diff grows for nothing.", "cite": { "path": "src/services/allocationEngineService.ts", "lineStart": 32, "lineEnd": 32 } },
+    { "text": "[w1] It tightens the request schema to reject mid-month input, changing the public API contract instead of fixing storage.", "cite": { "path": "src/lib/validation/allocationSchemas.ts", "lineStart": 26, "lineEnd": 26 } }
+   ]
+  },
+  {
+   "prompt": "G2 HANDBACK REVIEW — the agent says the fix is in and tests pass. What do you check before you accept it?",
+   "keyPoints": [
+    { "text": "[w3] The new test fails on the original line (stores the raw instant) and passes on the fix; ask for both runs.", "cite": { "path": "src/services/allocationRunService.ts", "lineStart": 63, "lineEnd": 69 } },
+    { "text": "[w2] The budget path is fixed as well, and its comment is now true rather than deleted.", "cite": { "path": "src/services/budgetService.ts", "lineStart": 12, "lineEnd": 12 } },
+    { "text": "[w2] prisma/schema.prisma and the migrations are untouched in the diff.", "cite": { "path": "prisma/schema.prisma", "lineStart": 156, "lineEnd": 173 } },
+    { "text": "[w2] The handback flags the rows already stored un-normalised as a follow-up data repair, since the README told callers to send the first instant.", "cite": { "path": "README.md", "lineStart": 52, "lineEnd": 52 } },
+    { "text": "[w1] The test output is the real vitest summary from the pinned command, not a restatement.", "cite": { "path": "package.json", "lineStart": 10, "lineEnd": 10 } }
+   ]
+  }
+ ]
+}

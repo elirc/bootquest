@@ -1,0 +1,46 @@
+{
+ "name": "organized-js-training-jstrain2.4-katas",
+ "checkout": ".cache/checkouts/organized-js-training-jstrain2.4@d41d8849ae0381e8c03e9de2ff670aeb11d6b505",
+ "katas": [
+  {
+   "id": "actor-domain-fallback",
+   "title": "getActor: stop acting as the oldest user — match the caller's email domain instead",
+   "difficulty": "easy",
+   "findingRef": "jstrain2.4 getActor fallback (_learning/00-ARCHITECTURE.md:94)",
+   "provenance": { "path": "_learning/00-ARCHITECTURE.md", "find": "- `getActor(request)` (`lib/session.js:3-18`) looks up the user named by the `x-user-email` header" },
+   "contextFiles": [
+    { "path": "lib/session.js", "repoPath": "lib/session.js", "kind": "verbatim" }
+   ],
+   "edits": [
+    {
+     "path": "lib/session.js",
+     "find": "  return prisma.user.findFirst({\n    orderBy: { createdAt: \"asc\" },\n  });\n}\n",
+     "replace": "  // Unknown address: use a colleague from the same company rather than the oldest user.\n  const domain = email.split(\"@\")[1] ?? \"\";\n  return prisma.user.findFirst({\n    where: { email: { endsWith: `@${domain}` } },\n    orderBy: { createdAt: \"asc\" },\n  });\n}\n"
+    }
+   ],
+   "defects": [
+    {
+     "scenario": "A caller sends `x-user-email: anything@acme.dev` (an address no user has) to POST /api/deployments.",
+     "in": "patched",
+     "path": "lib/session.js",
+     "find": "    where: { email: { endsWith: `@${domain}` } },",
+     "consequence": "The request still runs as a real, privileged user (the oldest acme.dev account, i.e. the seeded owner) — the patch narrows the impersonation to one domain instead of rejecting an unknown identity. Any unknown email must produce no actor (401), not a best-guess user."
+    },
+    {
+     "scenario": "A request with no x-user-email header at all.",
+     "in": "patched",
+     "path": "lib/session.js",
+     "find": "  const email = emailHeader || \"owner@acme.dev\";",
+     "consequence": "The headerless default to owner@acme.dev is untouched, so the 'fix' leaves the bigger hole open: no credentials at all still means owner."
+    },
+    {
+     "scenario": "The shipped fallback the patch claims to fix.",
+     "in": "repo",
+     "path": "lib/session.js",
+     "find": "  return prisma.user.findFirst({\n    orderBy: { createdAt: \"asc\" },\n  });",
+     "consequence": "The guide's exercise (00-ARCHITECTURE.md:103) defines done as 'the request is rejected instead of running as the oldest user'; substituting a different guessed user does not meet it."
+    }
+   ]
+  }
+ ]
+}

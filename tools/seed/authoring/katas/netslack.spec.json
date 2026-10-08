@@ -1,0 +1,59 @@
+{
+ "name": "netslack-katas",
+ "checkout": ".cache/checkouts/netslack@c7337d7d381418cfd35ccf0ade33f89901ac8d2a",
+ "katas": [
+  {
+   "id": "slug-collapse-dashes",
+   "title": "Workspace slugs: collapse repeated dashes and strip leading/trailing ones",
+   "difficulty": "medium",
+   "findingRef": "netslack review finding A (astraupskill/06-SOLUTIONS-AND-REVIEW.md:17)",
+   "provenance": {
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "find": "**A. The slug is normalized twice, by two copies of the same rule.**",
+    "span": 12
+   },
+   "contextFiles": [
+    {
+     "path": "src/NetSlack.Domain/Workspaces/Workspace.cs",
+     "repoPath": "src/NetSlack.Domain/Workspaces/Workspace.cs",
+     "kind": "verbatim"
+    },
+    {
+     "path": "src/NetSlack.Application/Workspaces/WorkspaceService.cs",
+     "repoPath": "src/NetSlack.Application/Workspaces/WorkspaceService.cs",
+     "kind": "verbatim"
+    }
+   ],
+   "edits": [
+    {
+     "path": "src/NetSlack.Domain/Workspaces/Workspace.cs",
+     "find": "        var normalized = Guard.AgainstEmpty(slug, nameof(slug), 64)\n            .ToLowerInvariant()\n            .Replace(' ', '-');\n",
+     "replace": "        var normalized = Guard.AgainstEmpty(slug, nameof(slug), 64)\n            .ToLowerInvariant()\n            .Replace(' ', '-');\n\n        // \"Acme  Co\" and \"acme--co\" should be the same workspace address.\n        while (normalized.Contains(\"--\"))\n        {\n            normalized = normalized.Replace(\"--\", \"-\");\n        }\n\n        normalized = normalized.Trim('-');\n"
+    }
+   ],
+   "defects": [
+    {
+     "scenario": "Workspace \"acme-co\" exists; a user creates a workspace with slug \"Acme  Co\" (two spaces) or \"acme--co\".",
+     "in": "patched",
+     "path": "src/NetSlack.Application/Workspaces/WorkspaceService.cs",
+     "find": "        var slug = command.Slug.Trim().ToLowerInvariant().Replace(' ', '-');",
+     "consequence": "The service still prechecks with its own copy of the old rule, so it looks up \"acme--co\", finds nothing and proceeds; Workspace.Create stores \"acme-co\". The insert hits the unique index, and the recovery query (also \"acme--co\") again finds nothing, so the DbUpdateException is rethrown: the caller gets a 500 instead of the 409 \"slug already taken\"."
+    },
+    {
+     "scenario": "The domain rule changed in one place only.",
+     "in": "patched",
+     "path": "src/NetSlack.Domain/Workspaces/Workspace.cs",
+     "find": "        while (normalized.Contains(\"--\"))",
+     "consequence": "Precheck, insert and recovery no longer agree on the key; the conflict classification that the comment in WorkspaceService promises is silently broken (and a slug of only dashes now normalizes to \"\", which Guard no longer catches)."
+    },
+    {
+     "scenario": "The duplicated rule is already in the shipped service.",
+     "in": "repo",
+     "path": "src/NetSlack.Application/Workspaces/WorkspaceService.cs",
+     "find": "        var slug = command.Slug.Trim().ToLowerInvariant().Replace(' ', '-');",
+     "consequence": "Review finding A names exactly this change (\"say, collapsing repeated dashes\") as the way the two copies drift; the fix is one normalization function used in all three places."
+    }
+   ]
+  }
+ ]
+}

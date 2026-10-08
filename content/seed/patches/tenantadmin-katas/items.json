@@ -1,0 +1,159 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "patches",
+ "name": "tenantadmin-katas",
+ "items": [
+  {
+   "key": "seed:patches:tenantadmin/patch-kata/3b7121b8856f7eca",
+   "provenance": {
+    "repo": "tenantadmin",
+    "sha": "e9a4b4550ced449eaa3161e024d388de471a6710",
+    "path": "README.md",
+    "lines": {
+     "start": 120,
+     "end": 126
+    }
+   },
+   "citations": [],
+   "kind": "patch-kata",
+   "title": "Magic link consume: replace the updateMany+count dance with a plain update",
+   "diff": "diff --git a/server/src/services/magicLinkConsume.mjs b/server/src/services/magicLinkConsume.mjs\n--- a/server/src/services/magicLinkConsume.mjs\n+++ b/server/src/services/magicLinkConsume.mjs\n@@ -61,20 +61,12 @@\n   }\n \n   return prisma.$transaction(async (tx) => {\n-    const consumeResult = await tx.magicLinkToken.updateMany({\n-      where: {\n-        id: magicToken.id,\n-        consumedAt: null,\n-      },\n-      data: {\n-        consumedAt: new Date(),\n-      },\n+    // findFirst above already filtered on consumedAt: null, so a plain update is enough\n+    await tx.magicLinkToken.update({\n+      where: { id: magicToken.id },\n+      data: { consumedAt: new Date() },\n     });\n \n-    if (consumeResult.count !== 1) {\n-      throw new HttpError(400, 'Magic link already consumed');\n-    }\n-\n     const session = { id: `s${tx.sessions.length + 1}`, userId: magicToken.userId };\n     tx.sessions.push(session);\n     return { sessionId: session.id };\n",
+   "contextFiles": [
+    {
+     "path": "server/src/services/magicLinkConsume.mjs",
+     "content": "// Adapted from tenantadmin server/src/services/authService.js:422-484 @ e9a4b45\n// (Prisma replaced by an in-memory store with the same semantics: findFirst is an\n// async read, updateMany is an atomic conditional write returning { count }).\nimport { createHash, randomBytes } from 'node:crypto';\n\nexport class HttpError extends Error {\n  constructor(status, message) {\n    super(message);\n    this.status = status;\n  }\n}\n\nexport const hashToken = (token) => createHash('sha256').update(token).digest('hex');\n\nexport function createStore() {\n  const tick = () => new Promise((r) => setTimeout(r, 1));\n  const store = {\n    tokens: [],\n    sessions: [],\n    magicLinkToken: {\n      async findFirst({ where }) {\n        await tick();\n        const t = store.tokens.find((x) => x.tokenHash === where.tokenHash && x.consumedAt === null && x.expiresAt > where.now);\n        return t ? { ...t } : null;\n      },\n      async updateMany({ where, data }) {\n        await tick();\n        const rows = store.tokens.filter((x) => x.id === where.id && (where.consumedAt === undefined || x.consumedAt === where.consumedAt));\n        for (const r of rows) Object.assign(r, data);\n        return { count: rows.length };\n      },\n      async update({ where, data }) {\n        await tick();\n        const r = store.tokens.find((x) => x.id === where.id);\n        Object.assign(r, data);\n        return { ...r };\n      },\n    },\n    async $transaction(fn) {\n      return fn(store);\n    },\n  };\n  return store;\n}\n\nexport function issueToken(store, userId) {\n  const token = randomBytes(24).toString('hex');\n  store.tokens.push({ id: `t${store.tokens.length + 1}`, userId, tokenHash: hashToken(token), consumedAt: null, expiresAt: new Date(Date.now() + 15 * 60 * 1000) });\n  return token;\n}\n\nexport async function consumeMagicLink(prisma, { token }) {\n  const tokenHash = hashToken(token);\n\n  const magicToken = await prisma.magicLinkToken.findFirst({\n    where: { tokenHash, consumedAt: null, now: new Date() },\n  });\n\n  if (!magicToken) {\n    throw new HttpError(400, 'Magic link is invalid or expired');\n  }\n\n  return prisma.$transaction(async (tx) => {\n    const consumeResult = await tx.magicLinkToken.updateMany({\n      where: {\n        id: magicToken.id,\n        consumedAt: null,\n      },\n      data: {\n        consumedAt: new Date(),\n      },\n    });\n\n    if (consumeResult.count !== 1) {\n      throw new HttpError(400, 'Magic link already consumed');\n    }\n\n    const session = { id: `s${tx.sessions.length + 1}`, userId: magicToken.userId };\n    tx.sessions.push(session);\n    return { sessionId: session.id };\n  });\n}\n",
+     "origin": {
+      "kind": "adapted",
+      "repoPath": "server/src/services/authService.js",
+      "lines": {
+       "start": 422,
+       "end": 484
+      }
+     }
+    }
+   ],
+   "seededDefectKey": [
+    {
+     "scenario": "Two POST /api/auth/magic-link/consume calls with the same token overlap (React StrictMode double-mount, a double click, or an attacker racing the victim).",
+     "evidence": {
+      "path": "server/src/services/magicLinkConsume.mjs",
+      "lineStart": 65,
+      "lineEnd": 68,
+      "in": "patched"
+     },
+     "consequence": "Both requests pass the findFirst check before either writes, and the unconditional update lets both commit: one 'one-time' link mints two sessions. The guard moved from the atomic write back to a stale read (check-then-act)."
+    },
+    {
+     "scenario": "The shipped code closes the race with a conditional write plus a count check.",
+     "evidence": {
+      "path": "server/src/services/authService.js",
+      "lineStart": 450,
+      "lineEnd": 450,
+      "in": "repo"
+     },
+     "consequence": "Removing the count === 1 check (and the consumedAt: null condition on the write) deletes the only thing that makes the token single-use under concurrency; the README trace (two consumes: one 200, one 400) would turn into two 200s."
+    }
+   ],
+   "test": {
+    "module": "server/src/services/magicLinkConsume.mjs",
+    "check": {
+     "type": "drill-js",
+     "language": "js",
+     "tests": [
+      {
+       "name": "two concurrent consumes of one token: exactly one session",
+       "code": "const db = mod.createStore(); const t = mod.issueToken(db, 'u1'); const r = await Promise.allSettled([mod.consumeMagicLink(db, { token: t }), mod.consumeMagicLink(db, { token: t })]); assert.equal(r.filter((x) => x.status === 'fulfilled').length, 1); assert.equal(db.sessions.length, 1); const rej = r.find((x) => x.status === 'rejected'); assert.equal(rej.reason.status, 400);"
+      },
+      {
+       "name": "a sequential second consume is refused",
+       "code": "const db = mod.createStore(); const t = mod.issueToken(db, 'u1'); await mod.consumeMagicLink(db, { token: t }); await assert.rejects(mod.consumeMagicLink(db, { token: t }), /invalid or expired|already consumed/);"
+      }
+     ],
+     "timeoutMs": 8000
+    }
+   },
+   "findingRef": "tenantadmin magic-link one-time guard (README.md:120-126)"
+  },
+  {
+   "key": "seed:patches:tenantadmin/patch-kata/5602a8dfdce45066",
+   "provenance": {
+    "repo": "tenantadmin",
+    "sha": "e9a4b4550ced449eaa3161e024d388de471a6710",
+    "path": "README.md",
+    "lines": {
+     "start": 242,
+     "end": 246
+    }
+   },
+   "citations": [],
+   "kind": "patch-kata",
+   "title": "Magic link: return the login URL in dev so testers skip the console",
+   "diff": "diff --git a/server/src/services/magicLinkRequest.mjs b/server/src/services/magicLinkRequest.mjs\n--- a/server/src/services/magicLinkRequest.mjs\n+++ b/server/src/services/magicLinkRequest.mjs\n@@ -32,6 +32,8 @@\n \n     return {\n       accepted: true,\n+      // dev convenience: let testers click the link instead of digging through logs\n+      ...(env.NODE_ENV !== 'production' ? { magicLinkUrl } : {}),\n     };\n   };\n }\n",
+   "contextFiles": [
+    {
+     "path": "server/src/services/magicLinkRequest.mjs",
+     "content": "// Adapted from tenantadmin server/src/services/authService.js:373-420 @ e9a4b45\n// (Prisma replaced by injected stores; the NODE_ENV default from\n// server/src/config/env.js:5 reproduced by parseEnv). This is the request side of the\n// magic-link flow BEFORE the dev shortcut under review.\nimport { createHash, randomBytes } from 'node:crypto';\n\nexport function parseEnv(source) {\n  return {\n    NODE_ENV: source.NODE_ENV ?? 'development',\n    APP_BASE_URL: source.APP_BASE_URL ?? 'http://localhost:5173',\n    MAGIC_LINK_TTL_MINUTES: Number(source.MAGIC_LINK_TTL_MINUTES ?? 15),\n  };\n}\n\nconst hashToken = (token) => createHash('sha256').update(token).digest('hex');\n\nexport function createMagicLinkRequester({ env, users, tokens, log = () => {} }) {\n  return async function requestMagicLink({ email }) {\n    const normalizedEmail = email.trim().toLowerCase();\n    const user = users.find((u) => u.email === normalizedEmail);\n\n    if (!user) {\n      return { accepted: true };\n    }\n\n    const token = randomBytes(48).toString('hex');\n    const expiresAt = new Date(Date.now() + env.MAGIC_LINK_TTL_MINUTES * 60 * 1000);\n    tokens.push({ userId: user.id, tokenHash: hashToken(token), expiresAt, consumedAt: null });\n\n    const magicLinkUrl = `${env.APP_BASE_URL}/magic-link?token=${token}`;\n    log(`Magic link for ${user.email}: ${magicLinkUrl}`);\n\n    return {\n      accepted: true,\n    };\n  };\n}\n",
+     "origin": {
+      "kind": "adapted",
+      "repoPath": "server/src/services/authService.js",
+      "lines": {
+       "start": 373,
+       "end": 420
+      }
+     }
+    }
+   ],
+   "seededDefectKey": [
+    {
+     "scenario": "The API is deployed without NODE_ENV=production (the env schema defaults it to development) and an attacker POSTs /api/auth/magic-link/request with a victim's email.",
+     "evidence": {
+      "path": "server/src/services/magicLinkRequest.mjs",
+      "lineStart": 36,
+      "lineEnd": 36,
+      "in": "patched"
+     },
+     "consequence": "The response body hands the attacker a valid one-time login URL for the victim: full account takeover for anyone whose email is known. The gate fails open because it keys on a variable whose default is the unsafe value."
+    },
+    {
+     "scenario": "The shipped service already contains this exact shortcut.",
+     "evidence": {
+      "path": "server/src/services/authService.js",
+      "lineStart": 418,
+      "lineEnd": 418,
+      "in": "repo"
+     },
+     "consequence": "Senior review finding 1: the live code returns the URL to whoever asked; the fix is an explicit opt-in flag, not NODE_ENV."
+    },
+    {
+     "scenario": "Nobody sets NODE_ENV on the host.",
+     "evidence": {
+      "path": "server/src/config/env.js",
+      "lineStart": 5,
+      "lineEnd": 5,
+      "in": "repo"
+     },
+     "consequence": "The unsafe branch is the default branch, so a forgotten env var silently enables the takeover."
+    }
+   ],
+   "test": {
+    "module": "server/src/services/magicLinkRequest.mjs",
+    "check": {
+     "type": "drill-js",
+     "language": "js",
+     "tests": [
+      {
+       "name": "the request response never carries the login URL when NODE_ENV is unset",
+       "code": "const tokens = []; const req = mod.createMagicLinkRequester({ env: mod.parseEnv({}), users: [{ id: 'u1', email: 'owner@acme.test' }], tokens }); const res = await req({ email: 'Owner@acme.test' }); assert.deepEqual(res, { accepted: true }); assert.equal(tokens.length, 1);"
+      },
+      {
+       "name": "unknown emails get the same answer (no enumeration)",
+       "code": "const req = mod.createMagicLinkRequester({ env: mod.parseEnv({}), users: [], tokens: [] }); assert.deepEqual(await req({ email: 'nobody@x.test' }), { accepted: true });"
+      }
+     ],
+     "timeoutMs": 8000
+    }
+   },
+   "findingRef": "tenantadmin senior review 1 (README.md:242)"
+  }
+ ]
+}

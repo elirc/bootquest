@@ -1,0 +1,74 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "patches",
+ "name": "netslack-katas",
+ "items": [
+  {
+   "key": "seed:patches:netslack/patch-kata/8daef8a5e26d9465",
+   "provenance": {
+    "repo": "netslack",
+    "sha": "c7337d7d381418cfd35ccf0ade33f89901ac8d2a",
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "lines": {
+     "start": 17,
+     "end": 28
+    }
+   },
+   "citations": [],
+   "kind": "patch-kata",
+   "title": "Workspace slugs: collapse repeated dashes and strip leading/trailing ones",
+   "diff": "diff --git a/src/NetSlack.Domain/Workspaces/Workspace.cs b/src/NetSlack.Domain/Workspaces/Workspace.cs\n--- a/src/NetSlack.Domain/Workspaces/Workspace.cs\n+++ b/src/NetSlack.Domain/Workspaces/Workspace.cs\n@@ -60,6 +60,14 @@\n             .ToLowerInvariant()\r\n             .Replace(' ', '-');\r\n \r\n+        // \"Acme  Co\" and \"acme--co\" should be the same workspace address.\r\n+        while (normalized.Contains(\"--\"))\r\n+        {\r\n+            normalized = normalized.Replace(\"--\", \"-\");\r\n+        }\r\n+\r\n+        normalized = normalized.Trim('-');\r\n+\r\n         if (normalized.Any(character => !char.IsLetterOrDigit(character) && character != '-'))\r\n         {\r\n             throw new ArgumentException(\"Workspace slug can only contain letters, numbers, and dashes.\", nameof(slug));\r\n",
+   "contextFiles": [
+    {
+     "path": "src/NetSlack.Domain/Workspaces/Workspace.cs",
+     "content": "using NetSlack.Domain.Common;\r\n\r\nnamespace NetSlack.Domain.Workspaces;\r\n\r\npublic sealed class Workspace : Entity\r\n{\r\n    private readonly List<WorkspaceMember> _members = [];\r\n\r\n    private Workspace()\r\n    {\r\n        Name = string.Empty;\r\n        Slug = string.Empty;\r\n    }\r\n\r\n    private Workspace(Guid id, string name, string slug)\r\n        : base(id)\r\n    {\r\n        Name = name;\r\n        Slug = slug;\r\n        CreatedAt = DateTimeOffset.UtcNow;\r\n    }\r\n\r\n    public string Name { get; private set; }\r\n\r\n    public string Slug { get; private set; }\r\n\r\n    public DateTimeOffset CreatedAt { get; private set; }\r\n\r\n    public IReadOnlyCollection<WorkspaceMember> Members => _members.AsReadOnly();\r\n\r\n    public static Workspace Create(string name, string slug, Guid ownerId)\r\n    {\r\n        var workspace = new Workspace(\r\n            Guid.NewGuid(),\r\n            Guard.AgainstEmpty(name, nameof(name), 120),\r\n            NormalizeSlug(slug));\r\n\r\n        workspace.AddMember(ownerId, WorkspaceRole.Owner);\r\n        return workspace;\r\n    }\r\n\r\n    public void Rename(string name)\r\n    {\r\n        Name = Guard.AgainstEmpty(name, nameof(name), 120);\r\n    }\r\n\r\n    public void AddMember(Guid userId, WorkspaceRole role)\r\n    {\r\n        if (_members.Any(member => member.UserId == userId))\r\n        {\r\n            return;\r\n        }\r\n\r\n        _members.Add(new WorkspaceMember(Id, userId, role));\r\n    }\r\n\r\n    private static string NormalizeSlug(string slug)\r\n    {\r\n        var normalized = Guard.AgainstEmpty(slug, nameof(slug), 64)\r\n            .ToLowerInvariant()\r\n            .Replace(' ', '-');\r\n\r\n        if (normalized.Any(character => !char.IsLetterOrDigit(character) && character != '-'))\r\n        {\r\n            throw new ArgumentException(\"Workspace slug can only contain letters, numbers, and dashes.\", nameof(slug));\r\n        }\r\n\r\n        return normalized;\r\n    }\r\n}\r\n",
+     "origin": {
+      "kind": "verbatim",
+      "repoPath": "src/NetSlack.Domain/Workspaces/Workspace.cs"
+     }
+    },
+    {
+     "path": "src/NetSlack.Application/Workspaces/WorkspaceService.cs",
+     "content": "using Microsoft.EntityFrameworkCore;\r\nusing NetSlack.Application.Common;\r\nusing NetSlack.Domain.Channels;\r\nusing NetSlack.Domain.Workspaces;\r\n\r\nnamespace NetSlack.Application.Workspaces;\r\n\r\npublic sealed class WorkspaceService(IAppDbContext db, ICurrentUser currentUser)\r\n{\r\n    public async Task<IReadOnlyList<WorkspaceDto>> GetMineAsync(CancellationToken cancellationToken)\r\n    {\r\n        EnsureAuthenticated();\r\n\r\n        return await db.Workspaces\r\n            .AsNoTracking()\r\n            .Where(workspace => workspace.Members.Any(member => member.UserId == currentUser.UserId))\r\n            .OrderBy(workspace => workspace.Name)\r\n            .Select(workspace => new WorkspaceDto(workspace.Id, workspace.Name, workspace.Slug, workspace.CreatedAt))\r\n            .ToListAsync(cancellationToken);\r\n    }\r\n\r\n    public async Task<WorkspaceDto> CreateAsync(CreateWorkspaceCommand command, CancellationToken cancellationToken)\r\n    {\r\n        EnsureAuthenticated();\r\n\r\n        var slug = command.Slug.Trim().ToLowerInvariant().Replace(' ', '-');\r\n        var slugExists = await db.Workspaces.AnyAsync(workspace => workspace.Slug == slug, cancellationToken);\r\n        if (slugExists)\r\n        {\r\n            throw new ConflictException($\"Workspace slug '{slug}' is already taken.\");\r\n        }\r\n\r\n        var workspace = Workspace.Create(command.Name, command.Slug, currentUser.UserId);\r\n        var general = Channel.Create(workspace.Id, \"general\", \"Company-wide announcements and coordination\", ChannelType.Public, currentUser.UserId);\r\n\r\n        db.Workspaces.Add(workspace);\r\n        db.Channels.Add(general);\r\n        try\r\n        {\r\n            await db.SaveChangesAsync(cancellationToken);\r\n        }\r\n        catch (DbUpdateException)\r\n        {\r\n            // A concurrent writer can win after the pre-check. Ask the database for\r\n            // the normalized slug; this avoids parsing provider-specific constraint\r\n            // names and avoids turning unrelated unique violations into conflicts.\r\n            var existsAfterSave = await db.Workspaces\r\n                .AsNoTracking()\r\n                .AnyAsync(existing => existing.Slug == slug, cancellationToken);\r\n            if (existsAfterSave)\r\n            {\r\n                throw new ConflictException($\"Workspace slug '{slug}' is already taken.\");\r\n            }\r\n\r\n            throw;\r\n        }\r\n\r\n        return new WorkspaceDto(workspace.Id, workspace.Name, workspace.Slug, workspace.CreatedAt);\r\n    }\r\n\r\n    private void EnsureAuthenticated()\r\n    {\r\n        if (!currentUser.IsAuthenticated)\r\n        {\r\n            throw new ForbiddenException(\"You must be authenticated.\");\r\n        }\r\n    }\r\n}\r\n",
+     "origin": {
+      "kind": "verbatim",
+      "repoPath": "src/NetSlack.Application/Workspaces/WorkspaceService.cs"
+     }
+    }
+   ],
+   "seededDefectKey": [
+    {
+     "scenario": "Workspace \"acme-co\" exists; a user creates a workspace with slug \"Acme  Co\" (two spaces) or \"acme--co\".",
+     "evidence": {
+      "path": "src/NetSlack.Application/Workspaces/WorkspaceService.cs",
+      "lineStart": 26,
+      "lineEnd": 26,
+      "in": "patched"
+     },
+     "consequence": "The service still prechecks with its own copy of the old rule, so it looks up \"acme--co\", finds nothing and proceeds; Workspace.Create stores \"acme-co\". The insert hits the unique index, and the recovery query (also \"acme--co\") again finds nothing, so the DbUpdateException is rethrown: the caller gets a 500 instead of the 409 \"slug already taken\"."
+    },
+    {
+     "scenario": "The domain rule changed in one place only.",
+     "evidence": {
+      "path": "src/NetSlack.Domain/Workspaces/Workspace.cs",
+      "lineStart": 64,
+      "lineEnd": 64,
+      "in": "patched"
+     },
+     "consequence": "Precheck, insert and recovery no longer agree on the key; the conflict classification that the comment in WorkspaceService promises is silently broken (and a slug of only dashes now normalizes to \"\", which Guard no longer catches)."
+    },
+    {
+     "scenario": "The duplicated rule is already in the shipped service.",
+     "evidence": {
+      "path": "src/NetSlack.Application/Workspaces/WorkspaceService.cs",
+      "lineStart": 26,
+      "lineEnd": 26,
+      "in": "repo"
+     },
+     "consequence": "Review finding A names exactly this change (\"say, collapsing repeated dashes\") as the way the two copies drift; the fix is one normalization function used in all three places."
+    }
+   ],
+   "findingRef": "netslack review finding A (astraupskill/06-SOLUTIONS-AND-REVIEW.md:17)"
+  }
+ ]
+}

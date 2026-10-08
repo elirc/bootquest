@@ -1,0 +1,66 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "patches",
+ "name": "netgum-katas",
+ "items": [
+  {
+   "key": "seed:patches:netgum/patch-kata/0bec6ce7be877c70",
+   "provenance": {
+    "repo": "netgum",
+    "sha": "2984d9b817641444ac5886255f10f08788fc2882",
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "lines": {
+     "start": 108,
+     "end": 114
+    }
+   },
+   "citations": [],
+   "kind": "patch-kata",
+   "title": "Order download: throw the domain exception for a missing order, like CheckoutService does",
+   "diff": "diff --git a/src/Netgum.Api/Endpoints/OrderEndpoints.cs b/src/Netgum.Api/Endpoints/OrderEndpoints.cs\n--- a/src/Netgum.Api/Endpoints/OrderEndpoints.cs\n+++ b/src/Netgum.Api/Endpoints/OrderEndpoints.cs\n@@ -1,4 +1,5 @@\n using Netgum.Application.Abstractions;\r\n+using Netgum.Domain.Abstractions;\r\n using Netgum.Domain.Orders;\r\n \r\n namespace Netgum.Api.Endpoints;\r\n@@ -14,11 +15,8 @@\n             IOrderRepository orders,\r\n             CancellationToken cancellationToken) =>\r\n         {\r\n-            var order = await orders.GetByIdAsync(orderId, cancellationToken).ConfigureAwait(false);\r\n-            if (order is null)\r\n-            {\r\n-                return Results.NotFound();\r\n-            }\r\n+            var order = await orders.GetByIdAsync(orderId, cancellationToken).ConfigureAwait(false)\r\n+                ?? throw new DomainException(\"Order was not found.\");\r\n \r\n             if (order.PaymentStatus != PaymentStatus.Paid)\r\n             {\r\n",
+   "contextFiles": [
+    {
+     "path": "src/Netgum.Api/Endpoints/OrderEndpoints.cs",
+     "content": "using Netgum.Application.Abstractions;\r\nusing Netgum.Domain.Orders;\r\n\r\nnamespace Netgum.Api.Endpoints;\r\n\r\npublic static class OrderEndpoints\r\n{\r\n    public static IEndpointRouteBuilder MapOrderEndpoints(this IEndpointRouteBuilder app)\r\n    {\r\n        var group = app.MapGroup(\"/api/orders\").WithTags(\"Orders\");\r\n\r\n        group.MapGet(\"/{orderId:guid}/download\", async (\r\n            Guid orderId,\r\n            IOrderRepository orders,\r\n            CancellationToken cancellationToken) =>\r\n        {\r\n            var order = await orders.GetByIdAsync(orderId, cancellationToken).ConfigureAwait(false);\r\n            if (order is null)\r\n            {\r\n                return Results.NotFound();\r\n            }\r\n\r\n            if (order.PaymentStatus != PaymentStatus.Paid)\r\n            {\r\n                return Results.Problem(\"Order has not been paid.\", statusCode: StatusCodes.Status403Forbidden);\r\n            }\r\n\r\n            return Results.Ok(new\r\n            {\r\n                order.Id,\r\n                DownloadUrl = $\"https://files.example.test/downloads/{order.ProductId}?license={order.LicenseKey}\",\r\n                order.LicenseKey\r\n            });\r\n        })\r\n        .WithName(\"DownloadOrder\")\r\n        .WithOpenApi();\r\n\r\n        return app;\r\n    }\r\n}\r\n",
+     "origin": {
+      "kind": "verbatim",
+      "repoPath": "src/Netgum.Api/Endpoints/OrderEndpoints.cs"
+     }
+    }
+   ],
+   "seededDefectKey": [
+    {
+     "scenario": "A buyer (or a bot) requests GET /api/orders/{random-guid}/download for an order id that does not exist.",
+     "evidence": {
+      "path": "src/Netgum.Api/Endpoints/OrderEndpoints.cs",
+      "lineStart": 19,
+      "lineEnd": 19,
+      "in": "patched"
+     },
+     "consequence": "The global handler maps every DomainException to 400 \"Business rule violation\" (Program.cs:56), so the one endpoint that returned a correct 404 now answers 400; clients can no longer tell \"no such order\" from \"you sent something invalid\"."
+    },
+    {
+     "scenario": "Where the status is decided.",
+     "evidence": {
+      "path": "src/Netgum.Api/Program.cs",
+      "lineStart": 54,
+      "lineEnd": 54,
+      "in": "repo"
+     },
+     "consequence": "One exception type for both rule violations and missing entities is review finding A; the patch spreads it instead of introducing a typed not-found error."
+    },
+    {
+     "scenario": "The precedent the patch copies is itself the reviewed defect.",
+     "evidence": {
+      "path": "src/Netgum.Application/Checkout/CheckoutService.cs",
+      "lineStart": 98,
+      "lineEnd": 98,
+      "in": "repo"
+     },
+     "consequence": "\"Consistent with CheckoutService\" is consistency with a known 404-as-400 bug (CheckoutService.cs:98)."
+    }
+   ],
+   "findingRef": "netgum review finding A (astraupskill/06-SOLUTIONS-AND-REVIEW.md:108)"
+  }
+ ]
+}

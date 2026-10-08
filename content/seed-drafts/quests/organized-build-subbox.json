@@ -1,0 +1,241 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "organized-build-subbox",
+ "sha": "5d976a1c94be62d594fdd5c79c571b4f27f9d96a",
+ "guides": [
+  "docs/upskill/01-codebase-cartography/01-system-map.md",
+  "docs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+  "docs/upskill/03-architecture-and-patterns/06-architecture-critique.md",
+  "docs/upskill/08-reference/risk-register.md"
+ ],
+ "items": [
+  {
+   "id": "q01-reserve-twice",
+   "kind": "quiz",
+   "source": { "path": "docs/upskill/08-reference/risk-register.md", "lines": { "start": 9, "end": 9 } },
+   "cites": [{ "path": "src/App.jsx", "lineStart": 500, "lineEnd": 504 }],
+   "prompt": "A curator clicks 'Reserve SKUs' twice for the same June box. What happens to the stock of the boxed items?",
+   "answer": "Each click subtracts the full 1,842-unit reservation again, so the same cycle is reserved twice",
+   "distractors": [
+    "The second click is a no-op because those item ids are already marked reserved",
+    "React batches both clicks into a single update, so stock only drops once",
+    "The second click throws because the subtraction would push stock below zero"
+   ],
+   "explanation": "reserveInventory maps every boxed item to `stock - 1842` with no record of which cycle was already reserved: the operation is not idempotent."
+  },
+  {
+   "id": "q02-clamp-hides-shortfall",
+   "kind": "quiz",
+   "source": { "path": "docs/upskill/03-architecture-and-patterns/02-data-model-and-persistence.md", "lines": { "start": 39, "end": 44 } },
+   "cites": [
+    { "path": "src/App.jsx", "lineStart": 500, "lineEnd": 503 },
+    { "path": "src/data.js", "lineStart": 76, "lineEnd": 83 }
+   ],
+   "prompt": "itm_101 has 420 units in stock and reserveInventory computes `Math.max(0, item.stock - 1842)`. What real problem does the clamp hide?",
+   "answer": "About 1,422 subscribers get no reserved unit, yet the catalog just shows 0 and the shortfall is recorded nowhere",
+   "distractors": [
+    "Stock becomes -1422, which crashes the inventory catalog when it renders",
+    "The clamp rejects the whole reservation and leaves the stock at 420",
+    "Nothing: showing 0 units correctly means every box received one"
+   ],
+   "explanation": "The guide's invariant is 'Stock reservation must not go negative' - but clamping is not enforcing it, it silently discards the over-reservation instead of failing or flagging it."
+  },
+  {
+   "id": "q03-fail-invoice-twice",
+   "kind": "quiz",
+   "source": { "path": "docs/upskill/08-reference/risk-register.md", "lines": { "start": 7, "end": 7 } },
+   "cites": [{ "path": "src/App.jsx", "lineStart": 316, "lineEnd": 323 }],
+   "prompt": "On the Billing tab the admin clicks 'Fail invoice' two times in a row for the same invoice. What does the ledger show?",
+   "answer": "The open balance grows by another full plan price on each click, as if two separate invoices had failed",
+   "distractors": [
+    "The second click is ignored because paymentHealth is already past_due",
+    "retryAttempt resets to 0 and the open balance is left unchanged",
+    "The balance is overwritten with the plan price, so it still reflects one invoice"
+   ],
+   "explanation": "failPayment does `balance: current.balance + plan.price` unconditionally; there is no invoice entity whose state could make a repeated failure a no-op."
+  },
+  {
+   "id": "q04-retry-recovery",
+   "kind": "quiz",
+   "source": { "path": "docs/upskill/01-codebase-cartography/05-key-flows.md", "lines": { "start": 100, "end": 104 } },
+   "cites": [
+    { "path": "src/App.jsx", "lineStart": 316, "lineEnd": 320 },
+    { "path": "src/App.jsx", "lineStart": 327, "lineEnd": 336 }
+   ],
+   "prompt": "After one failed invoice the subscriber is past_due. The admin keeps clicking 'Retry charge'. When does the payment recover, and why is that a design smell?",
+   "answer": "On the second retry click, because recovery is keyed on a local counter reaching 2 rather than on any payment-provider result",
+   "distractors": [
+    "Never: retries only escalate the dunning stage until a new card is saved",
+    "On the first retry click, since any retry clears the past_due flag",
+    "On the third retry click, once the firm-email dunning stage has finished"
+   ],
+   "explanation": "failPayment sets retryAttempt to 1; the first retry bumps it to 2, the second sees `retryAttempt >= 2` and zeroes the balance. Real retry state should come from provider events."
+  },
+  {
+   "id": "q05-stale-event-copy",
+   "kind": "quiz",
+   "source": { "path": "docs/upskill/02-stack-and-language-mastery/01-language-runtime-model.md", "lines": { "start": 11, "end": 11 } },
+   "cites": [{ "path": "src/App.jsx", "lineStart": 222, "lineEnd": 231 }],
+   "prompt": "toggleSkip flips skipNext with a functional updater but chooses the timeline text from `subscriber.skipNext`. When can the logged text disagree with the resulting state?",
+   "answer": "When two toggles run before a re-render: both read the same render-time value, so both log the same message while the state flips twice",
+   "distractors": [
+    "Never, because the functional updater runs synchronously before addEvent reads the value",
+    "Always, because addEvent runs first and therefore describes the previous state",
+    "Only after a reload, because skipNext is restored from storage with the old value"
+   ],
+   "explanation": "The updater sees the latest queued state, but the closure's `subscriber` is fixed for that render - the classic stale-closure split between state and side-effect copy."
+  },
+  {
+   "id": "q06-date-now-ids",
+   "kind": "quiz",
+   "source": { "path": "docs/upskill/02-stack-and-language-mastery/01-language-runtime-model.md", "lines": { "start": 13, "end": 13 } },
+   "cites": [
+    { "path": "src/App.jsx", "lineStart": 51, "lineEnd": 58 },
+    { "path": "src/App.jsx", "lineStart": 693, "lineEnd": 694 }
+   ],
+   "prompt": "addEvent stamps each timeline event with `id: Date.now()` and the timeline renders `key={event.id}`. What goes wrong when two events are logged in the same millisecond?",
+   "answer": "They share an id, so React sees duplicate keys in the timeline and tests cannot predict event ids",
+   "distractors": [
+    "The second event overwrites the first, because events are stored in an object keyed by id",
+    "Nothing: Date.now() returns a strictly increasing value on every call",
+    "The timeline sorts by id and shows the two events in reverse order"
+   ],
+   "explanation": "Date.now() has millisecond resolution and is not unique per call; the guide calls it 'convenient but not collision-proof' and suggests injecting id/time providers."
+  },
+  {
+   "id": "q07-double-batch",
+   "kind": "quiz",
+   "source": { "path": "docs/upskill/08-reference/risk-register.md", "lines": { "start": 10, "end": 10 } },
+   "cites": [{ "path": "src/App.jsx", "lineStart": 557, "lineEnd": 568 }],
+   "prompt": "An operator clicks 'Run month start job' twice for June (or a cron fires twice). What is the result?",
+   "answer": "Two June shipments for the same subscriber, each with a different random id, because nothing checks subscriber plus cycle uniqueness",
+   "distractors": [
+    "The second run replaces the first, since both rows carry the same subscriber name",
+    "The second run is marked Suppressed because a June shipment already exists",
+    "The random ids collide, so React silently drops the duplicate row"
+   ],
+   "explanation": "generateBatch always prepends a new shipment with `shp_${Math.random()...}`; the fix is a unique (subscriber, cycle) constraint and a retry-safe job."
+  },
+  {
+   "id": "q08-idempotency-key",
+   "kind": "quiz",
+   "source": { "path": "docs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md", "lines": { "start": 17, "end": 25 } },
+   "cites": [{ "path": "src/App.jsx", "lineStart": 557, "lineEnd": 562 }],
+   "prompt": "You must make the month-start shipment job safe to run twice. Which idempotency key works?",
+   "answer": "A key scoped to the subscriber and the billing cycle, such as subscriber sub_4289 plus cycle 2026-06",
+   "distractors": [
+    "The generated shipment id, such as shp_4821, since it already identifies the row",
+    "The timestamp at which the job started, so each run is uniquely tagged",
+    "The plan name combined with the destination city of the shipment"
+   ],
+   "explanation": "Idempotency means a second run with the same key has the same effect as one run; only the business identity (who, which cycle) is stable across retries - generated ids and timestamps differ on every run."
+  },
+  {
+   "id": "q09-exclusion-soft-penalty",
+   "kind": "quiz",
+   "source": { "path": "docs/upskill/08-reference/risk-register.md", "lines": { "start": 15, "end": 15 } },
+   "cites": [{ "path": "src/App.jsx", "lineStart": 719, "lineEnd": 725 }],
+   "prompt": "Maya has excluded 'Lavender'. Why could an item tagged Lavender still rank near the top of her recommendation queue?",
+   "answer": "Exclusion only subtracts 35 points; enough tag matches, a good rating and novelty can still outscore other items",
+   "distractors": [
+    "scoreItem never reads preferences.excluded; only the Preferences screen uses that list",
+    "scoreInventory filters it out, but the queue renders the unscored inventory instead",
+    "The 12-point floor in Math.max lifts every excluded item back to the top"
+   ],
+   "explanation": "`blocked ? 35 : 0` is a penalty, not a filter. Hard exclusion must be enforced before selection, not only in display (review kata 7)."
+  },
+  {
+   "id": "q10-usememo-deps",
+   "kind": "quiz",
+   "source": { "path": "docs/upskill/02-stack-and-language-mastery/01-language-runtime-model.md", "lines": { "start": 40, "end": 52 } },
+   "cites": [
+    { "path": "src/App.jsx", "lineStart": 74, "lineEnd": 77 },
+    { "path": "src/App.jsx", "lineStart": 409, "lineEnd": 416 }
+   ],
+   "prompt": "scoredItems is memoized on [inventory, subscriber.preferences, ratings]. What breaks if `ratings` is removed from that dependency list?",
+   "answer": "New star ratings update state, but the queue keeps the scores computed from old ratings until preferences or inventory change",
+   "distractors": [
+    "Nothing, because useMemo recomputes on every render regardless of its list",
+    "React throws a missing-dependency error at runtime and the tab fails to render",
+    "The memo reads ratings through its closure, so it sees new ratings automatically"
+   ],
+   "explanation": "useMemo only recomputes when a listed dependency changes identity; rateItem replaces the ratings array, which is exactly the signal the memo would miss. 'Missing dependency in useMemo creates stale results.'"
+  },
+  {
+   "id": "q11-price-authority",
+   "kind": "quiz",
+   "source": { "path": "docs/upskill/01-codebase-cartography/05-key-flows.md", "lines": { "start": 65, "end": 80 } },
+   "cites": [{ "path": "src/App.jsx", "lineStart": 299, "lineEnd": 307 }],
+   "prompt": "A teammate proposes moving changePlan behind `POST /subscription/change-plan` that accepts `{ planId, price, proration }` from the browser. What is the blocking review comment?",
+   "answer": "Price and proration are money authority: the server must load the plan price by id itself, or any client can submit its own amount",
+   "distractors": [
+    "None: HTTPS already prevents the client from altering the request body",
+    "Only proration must move server-side; plan prices are public, so trusting them is fine",
+    "It is safe as long as the endpoint also logs a timeline event for auditing"
+   ],
+   "explanation": "Client-side prices cannot be trusted for billing; send only planId, compute server-side, and reconcile against provider webhooks."
+  },
+  {
+   "id": "q12-same-plan-click",
+   "kind": "quiz",
+   "source": { "path": "docs/upskill/01-codebase-cartography/05-key-flows.md", "lines": { "start": 57, "end": 62 } },
+   "cites": [{ "path": "src/App.jsx", "lineStart": 299, "lineEnd": 313 }],
+   "prompt": "On the Billing tab the subscriber clicks the plan card they are already on. What does the lifecycle timeline record?",
+   "answer": "A 'Downgrade' to the same plan with a $0.00 credit, because a zero delta falls into the non-upgrade branch",
+   "distractors": [
+    "Nothing, because changePlan returns early when the plan id is unchanged",
+    "An 'Upgrade' to the same plan with a $0.00 proration charge",
+    "A validation error, because a proration of zero is rejected"
+   ],
+   "explanation": "The guide notes 'Same selected plan can be clicked.' changePlan has no guard and labels every `delta <= 0` as a downgrade credit."
+  },
+  {
+   "id": "f01-reserve-not-idempotent",
+   "kind": "flashcard",
+   "source": { "path": "docs/upskill/08-reference/risk-register.md", "lines": { "start": 9, "end": 9 } },
+   "cites": [{ "path": "src/App.jsx", "lineStart": 500, "lineEnd": 504 }],
+   "severity": "High",
+   "front": "Curator dashboard: 'Reserve SKUs' maps every boxed item to `Math.max(0, stock - 1842)` and keeps no record that this cycle was already reserved (src/App.jsx:500-504). What is the risk, and what is the fix?",
+   "back": "Repeated clicks or retries over-reserve stock, and the clamp hides shortfalls. Fix: a cycle-scoped reservation command with an idempotency key (e.g. reserve_inventory:cycle=2026-06) that rejects or no-ops a repeat and flags insufficient stock."
+  },
+  {
+   "id": "f02-failed-payment-ledger",
+   "kind": "flashcard",
+   "source": { "path": "docs/upskill/08-reference/risk-register.md", "lines": { "start": 7, "end": 7 } },
+   "cites": [{ "path": "src/App.jsx", "lineStart": 316, "lineEnd": 323 }],
+   "severity": "Medium",
+   "front": "Billing: failPayment adds `plan.price` to `subscriber.balance` on every call, with no invoice id (src/App.jsx:316-323). What does a duplicate failure event do, and what is the fix?",
+   "back": "Each duplicate failure inflates the open balance by another full invoice, corrupting the ledger. Fix: an invoice-state model - the balance is derived from invoices, and a failure transitions one invoice (idempotently) instead of adding money."
+  },
+  {
+   "id": "f03-duplicate-shipments",
+   "kind": "flashcard",
+   "source": { "path": "docs/upskill/01-codebase-cartography/05-key-flows.md", "lines": { "start": 245, "end": 250 } },
+   "cites": [{ "path": "src/App.jsx", "lineStart": 557, "lineEnd": 568 }],
+   "severity": "High",
+   "front": "Fulfillment: the month-start job prepends a shipment with a `Math.random()` id and never checks whether this subscriber already has one for the cycle (src/App.jsx:557-568). A cron fires twice. Consequence and fix?",
+   "back": "The subscriber gets two boxes for one paid cycle, and random ids make it untestable. Fix: a unique constraint on (subscriber_id, cycle_month), a retry-safe job that upserts, and injected id providers for tests."
+  },
+  {
+   "id": "f04-dunning-only-logs",
+   "kind": "flashcard",
+   "source": { "path": "docs/upskill/08-reference/risk-register.md", "lines": { "start": 8, "end": 8 } },
+   "cites": [{ "path": "src/App.jsx", "lineStart": 375, "lineEnd": 381 }],
+   "severity": "Medium",
+   "front": "Billing: the 'Send dunning' button only calls addEvent('Dunning email sent', ...) - there is no network call or queue (src/App.jsx:375-381). What operational risk does this create, and what is the production fix?",
+   "back": "The timeline claims an email went out when nothing was sent - false operational confidence. Fix: write an outbox row in the same transaction as the billing change and let a worker deliver it with retry and dedupe; log 'sent' only on delivery."
+  },
+  {
+   "id": "f05-swap-lowest-match",
+   "kind": "flashcard",
+   "source": { "path": "src/App.jsx", "lines": { "start": 209, "end": 262 } },
+   "cites": [
+    { "path": "src/App.jsx", "lineStart": 210, "lineEnd": 211 },
+    { "path": "src/App.jsx", "lineStart": 259, "lineEnd": 262 }
+   ],
+   "severity": "Low",
+   "front": "Portal: the button labelled 'Swap lowest match' sets `swapTarget = selectedItems[selectedItems.length - 1]` (src/App.jsx:210, 259-262). What does a subscriber actually get?",
+   "back": "The LAST item in the box is swapped, whatever its score - a high-match item can be thrown out while a poor match stays. Fix: choose the selected item with the minimum scoreItem(...) and add a unit test that pins the label's promise."
+  }
+ ]
+}

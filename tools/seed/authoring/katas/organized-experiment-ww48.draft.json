@@ -1,0 +1,76 @@
+{
+ "name": "organized-experiment-ww48-katas",
+ "katas": [
+  {
+   "id": "dashboard-drop-await",
+   "title": "Dashboard route: tidy up the redundant `return await`",
+   "findingRef": "organized-experiment-ww48 A1 (docs/architecture/auth-and-permissions.md:164)",
+   "provenance": {
+    "path": "docs/architecture/auth-and-permissions.md",
+    "lines": {
+     "start": 164,
+     "end": 170
+    }
+   },
+   "diff": "diff --git a/src/app/api/dashboard/route.mjs b/src/app/api/dashboard/route.mjs\n--- a/src/app/api/dashboard/route.mjs\n+++ b/src/app/api/dashboard/route.mjs\n@@ -32,7 +32,7 @@\n \n export async function GET(request, getDashboardData = async () => ({ leads: [] })) {\n   try {\n-    return await withAuth(request, async ({ user }) => {\n+    return withAuth(request, async ({ user }) => {\n       const filters = request.query ?? {};\n \n       if (filters.ownerId && filters.ownerId !== user.id) {\n",
+   "contextFiles": [
+    {
+     "path": "src/app/api/dashboard/route.mjs",
+     "content": "// Adapted from organized-experiment-ww48 src/app/api/dashboard/route.ts:17-39 @ 2504441\n// (withAuth from src/lib/middleware/withAuth.ts:14-28, withRole + toErrorResponse\n// inlined; Next.js, zod and Prisma removed so the handler runs standalone).\nexport class ApiError extends Error {\n  constructor(message, statusCode, code) {\n    super(message);\n    this.statusCode = statusCode;\n    this.code = code;\n  }\n}\n\nexport async function withAuth(request, handler) {\n  const user = request.session ?? null;\n  if (!user) {\n    throw new ApiError(\"You must be logged in to access this resource.\", 401, \"UNAUTHORIZED\");\n  }\n  return handler({ user });\n}\n\nexport function withRole(user, roles) {\n  if (!roles.includes(user.role)) {\n    throw new ApiError(\"You do not have permission to perform this action.\", 403, \"FORBIDDEN\");\n  }\n}\n\nexport function toErrorResponse(error) {\n  if (error instanceof ApiError) {\n    return { status: error.statusCode, body: { error: error.message, code: error.code } };\n  }\n  return { status: 500, body: { error: \"Internal server error.\", code: \"INTERNAL_SERVER_ERROR\" } };\n}\n\nexport async function GET(request, getDashboardData = async () => ({ leads: [] })) {\n  try {\n    return await withAuth(request, async ({ user }) => {\n      const filters = request.query ?? {};\n\n      if (filters.ownerId && filters.ownerId !== user.id) {\n        // filtering by another owner's ID is itself a privileged action\n        withRole(user, [\"ADMIN\", \"MANAGER\"]);\n      }\n\n      return { status: 200, body: await getDashboardData(user, { ownerId: filters.mineOnly ? user.id : filters.ownerId }) };\n    });\n  } catch (error) {\n    return toErrorResponse(error);\n  }\n}\n",
+     "origin": {
+      "kind": "adapted",
+      "repoPath": "src/app/api/dashboard/route.ts",
+      "lines": {
+       "start": 17,
+       "end": 39
+      }
+     }
+    }
+   ],
+   "seededDefectKey": [
+    {
+     "scenario": "A REP calls GET /api/dashboard?ownerId=<someone else>, or any caller arrives without a session.",
+     "evidence": {
+      "path": "src/app/api/dashboard/route.mjs",
+      "lineStart": 35,
+      "lineEnd": 35,
+      "in": "patched"
+     },
+     "consequence": "withAuth returns a promise; `return promise` inside `try` hands it back un-awaited, so the ApiError (403/401) rejects after the try/catch has exited. toErrorResponse never runs and the client gets a generic 500 instead of 403/401."
+    },
+    {
+     "scenario": "This is the exact bug the six other authenticated handlers in the shipped repo already have; dashboard is the only one written correctly.",
+     "evidence": {
+      "path": "src/app/api/leads/[leadId]/route.ts",
+      "lineStart": 18,
+      "lineEnd": 18,
+      "in": "repo"
+     },
+     "consequence": "Accepting the patch spreads the A1 defect to the only handler that has a route-level test, so the test suite stops catching the pattern anywhere."
+    }
+   ],
+   "test": {
+    "module": "src/app/api/dashboard/route.mjs",
+    "check": {
+     "type": "drill-js",
+     "language": "js",
+     "timeoutMs": 8000,
+     "tests": [
+      {
+       "name": "rejects a rep trying to filter another owner's leads with 403 (ported from src/tests/auth-route-guards.test.ts)",
+       "code": "const res = await mod.GET({ session: { id: 'rep-user', role: 'REP' }, query: { ownerId: 'manager-user' } }); assert.equal(res.status, 403); assert.equal(res.body.code, 'FORBIDDEN');"
+      },
+      {
+       "name": "no session maps to 401, not a thrown error",
+       "code": "const res = await mod.GET({ session: null, query: {} }); assert.equal(res.status, 401); assert.equal(res.body.code, 'UNAUTHORIZED');"
+      },
+      {
+       "name": "a manager may filter by another owner",
+       "code": "const res = await mod.GET({ session: { id: 'm1', role: 'MANAGER' }, query: { ownerId: 'rep-user' } }); assert.equal(res.status, 200);"
+      }
+     ]
+    }
+   }
+  }
+ ]
+}
