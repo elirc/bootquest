@@ -76,11 +76,15 @@ export function createHttpApi(baseUrl = '/api', fetchImpl: typeof fetch = (...a)
     getUnit: (id) => call<UnitDetail>(unit(id)),
     runUnit: (id, input) =>
       post<RunResponse>(`${unit(id)}/run`, input.code !== undefined ? { code: input.code } : { answer: input.answer }),
-    // Whitelisted body: only code|answer + the boolean selfAssisted ever leave the client.
+    // Whitelisted body: only code|answer|answers + the boolean selfAssisted ever leave the client.
     submitUnit: (id, s) =>
       post<SubmitResponse>(
         `${unit(id)}/submit`,
-        s.code !== undefined ? { code: s.code, selfAssisted: s.selfAssisted } : { answer: s.answer, selfAssisted: s.selfAssisted },
+        s.code !== undefined
+          ? { code: s.code, selfAssisted: s.selfAssisted }
+          : s.answers !== undefined
+            ? { answers: s.answers, selfAssisted: s.selfAssisted }
+            : { answer: s.answer, selfAssisted: s.selfAssisted },
       ),
     revealUnit: (id) => post<RevealResponse>(`${unit(id)}/reveal`),
     getSolution: (id) => call<RevealResponse>(`${unit(id)}/solution`),

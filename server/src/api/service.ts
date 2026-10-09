@@ -24,6 +24,8 @@ import type { RatingChange } from '../engines/evidence.ts';
 import { levelProgress } from '../engines/level.ts';
 import { closeElapsedDays, composeSlate, streakStatus } from '../engines/streak.ts';
 import { awardXp, dailyXp, totalXp, xpKindForCheck } from '../engines/xp.ts';
+import { enrollFlashcards, queueQuizMisses } from '../engines/study-quest.ts';
+import { gradeStudySubmission, studyQuestPublicFor, type StudyGradeResult } from './study-service.ts';
 import {
   getTrack,
   getUnit,
@@ -154,12 +156,15 @@ export function getUnitDetail(deps: ServiceDeps, unitId: number): UnitDetailResp
   // W6: PUBLIC halves only (questions; diff + context) — key points / defect keys never leave here
   const explainBack = check ? explainBackPublicFor(deps.seedItems, check.spec) : undefined;
   const kata = check ? kataPublicFor(deps.seedItems, check.spec) : undefined;
+  // W8: reading list + questions with choices (never keys); null = the quest pack is not loaded
+  const studyQuest = check ? studyQuestPublicFor(deps.seedItems, check.spec) : undefined;
   // W7 (audit #1): a closed changed-example retest withholds its task (no day-0 pre-solving)
   const gate = unit.kind === 'retest' ? retestGate(db, unit.id, deps.clock) : null;
   const withhold = gate !== null && !gate.open;
   return {
     ...(explainBack !== undefined ? { explainBack } : {}),
     ...(kata !== undefined ? { kata } : {}),
+    ...(studyQuest !== undefined ? { studyQuest } : {}),
     ...(gate ? { retestGate: gate } : {}),
     unit: { ...summary, code: unit.code, competencies: unitCompetencies(db, unit.id), variationOfUnitId: unit.variationOfUnitId },
     // PUBLIC projection only — the full spec never leaves the server (and a closed retest shows none)
@@ -356,7 +361,7 @@ function withHonesty<T>(fn: () => T): T {
  * Check types whose free run would be an answer oracle (a 3-choice quiz is
  * solved in 3 unrecorded runs, then submitted for full XP): submit only.
  */
-const SUBMIT_ONLY_CHECKS: ReadonlySet<CheckSpec['type']> = new Set<CheckSpec['type']>(['quiz', 'predict-output']);
+const SUBMIT_ONLY_CHECKS: ReadonlySet<CheckSpec['type']> = new Set<CheckSpec['type']>(['quiz', 'predict-output', 'study-quiz']);
 
 /** W6: answer-first units are never run/submitted: they have their own immutable-answer endpoints. */
 const ANSWER_FIRST_CHECKS: ReadonlyMap<CheckSpec['type'], string> = new Map<CheckSpec['type'], string>([
@@ -385,8 +390,15 @@ function submitEvidenceKind(unit: UnitRecord): 'artifact' | 'retest' | 'submit' 
   return 'submit';
 }
 
-/** POST /run — free, unlimited, NOT logged: grades and returns; writes nothing. Not for quiz / predict-output. */
-export async function runUnit(deps: ServiceDeps, unitId: number, submission: LearnerSubmission): Promise<CanonicalRunResult> {
+/**
+ * What the API hands the service: the runner shape plus (W8) the study-quiz answer set. Kept
+ * out of runners.ts on purpose: that file is part of the JS grader fingerprint (every stamped
+ * JS pack binds its bytes).
+ */
+export type ServiceSubmission = LearnerSubmission & { answers?: (string | number)[] };
+
+/** POST /run — free, unlimited, NOT logged: grades and returns; writes nothing. Not for quiz / predict-output / study-quiz. */
+export async function runUnit(deps: ServiceDeps, unitId: number, submission: ServiceSubmission): Promise<CanonicalRunResult> {
   const unit = requireUnit(deps.db, unitId);
   assertTrackOpen(deps.db, unit);
   const check = requireCheck(deps.db, unit);
@@ -399,10 +411,11 @@ export async function runUnit(deps: ServiceDeps, unitId: number, submission: Lea
 }
 
 /** What the attempt row stores as the learner's submission (exactly one shape was sent). */
-function recordedAnswer(s: LearnerSubmission): Record<string, unknown> {
+function recordedAnswer(s: ServiceSubmission): Record<string, unknown> {
   if (s.code !== undefined) return { code: s.code };
   if (s.port !== undefined) return { port: s.port };
   if (s.repoPath !== undefined) return { repoPath: s.repoPath };
+  if (s.answers !== undefined) return { answers: s.answers };
   return { answer: s.answer };
 }
 
@@ -414,7 +427,7 @@ function recordedAnswer(s: LearnerSubmission): Record<string, unknown> {
 export async function submitUnit(
   deps: ServiceDeps,
   unitId: number,
-  submission: LearnerSubmission & { selfAssisted: boolean },
+  submission: ServiceSubmission & { selfAssisted: boolean },
 ): Promise<SubmitResponse> {
   const { db, clock } = deps;
   const unit = requireUnit(db, unitId);
@@ -425,7 +438,16 @@ export async function submitUnit(
   // practice after a reveal); before that nothing is graded or recorded (the engine's 48h rule
   // on attempt time stays the truth either way)
   assertRetestGate(deps, unit);
-  const result = await grade(deps, check.spec, submission);
+  // W8: a study-quiz gate is graded HERE from the stamped quest pack (full answer set, >= 80%);
+  // a registered 'study-quiz' runner (test stand-in) still takes precedence for `answer` bodies
+  let study: StudyGradeResult | null = null;
+  let result: CanonicalRunResult;
+  if (check.spec.type === 'study-quiz' && (submission.answers !== undefined || !deps.runners['study-quiz'])) {
+    study = gradeStudySubmission(deps.seedItems, check.spec, submission.answers);
+    result = study.result;
+  } else {
+    result = await grade(deps, check.spec, submission);
+  }
 
   return db.tx(() => {
     closeElapsedDays(db, clock);
@@ -438,9 +460,27 @@ export async function submitUnit(
         selfAssisted: submission.selfAssisted,
         result,
         answer: recordedAnswer(submission),
+        ...(study ? { score: study.grade.score } : {}),
       },
       clock,
     );
+
+    // W8: misses become FSRS cards (due tomorrow, deduped); the first pass enrolls the quest's flashcards
+    let studyQuiz: SubmitResponse['studyQuiz'];
+    if (study && check.spec.type === 'study-quiz') {
+      const cards = queueQuizMisses(db, unit.id, study.grade.missed, clock);
+      const flashcardsEnrolled = verdict === 'pass' ? enrollFlashcards(db, unit.id, study.flashcardKeys, clock) : 0;
+      studyQuiz = {
+        correct: study.grade.correct,
+        total: study.grade.total,
+        score: study.grade.score,
+        passPct: Math.round(check.spec.passPct * 100),
+        passed: verdict === 'pass',
+        items: study.grade.items,
+        reviewCards: cards,
+        flashcardsEnrolled,
+      };
+    }
 
     let xp: SubmitResponse['xp'] = null;
     const kind = xpKindForCheck(check.type);
@@ -460,7 +500,11 @@ export async function submitUnit(
             competency,
             kind: evidenceKind,
             intention: `${evidenceKind === 'submit' ? 'submit' : evidenceKind === 'artifact' ? 'project artifact' : 'changed-example retest'} ${unit.key} (${check.type})`,
-            observation: result.pass ? 'check passed' : `check failed (${result.failures.length} failing)`,
+            observation: study
+              ? `study quiz ${study.grade.correct}/${study.grade.total} (${Math.floor(study.grade.score * 100)}%) ${result.pass ? 'passed' : 'below the pass mark'}`
+              : result.pass
+                ? 'check passed'
+                : `check failed (${result.failures.length} failing)`,
             attemptId: attempt.id,
           },
           clock,
@@ -480,6 +524,7 @@ export async function submitUnit(
       xp,
       evidenceIds,
       promotions,
+      ...(studyQuiz ? { studyQuiz } : {}),
     };
   });
 }

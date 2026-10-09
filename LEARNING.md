@@ -335,6 +335,37 @@ Opus plan review (`docs/recon/plan-review.md`) returned 2 blockers + 17 majors;
   for W5c: numbered findings lists include non-defects ("good design worth
   naming") — don't flashcard them blindly.
 
+## 2026-10-08 — endgame integration (through 66e5668, 21 commits)
+
+- W6 landed (91e9be3: promo demo 38/38 + mutate fixture floor-catch),
+  W5c content landed (228a7c6: 55 packs / 659 items verified), W7 landed
+  (99e31e6: audit majors closed, real ladder wiring, SEEDING/README/
+  DOGFOOD, reset guard, 44-step smoke), jstrain landed (66e5668: fd-3
+  nonce-channel self-run runner, 1,389 new units, 54-step smoke).
+- THE SWEEP SAGA (machine lessons): stamps invalidate whenever grader/
+  validator bytes change — sequence transplants BEFORE sweeping, not
+  after (two full sweeps were wasted re-stamping mid-integration bytes).
+  The memory reaper killed background sweeps repeatedly; the pattern
+  that works: FOREGROUND runs chunked per-course/per-source under the
+  595s cap, journal makes every chunk durable, one-course calls for the
+  tsc-heavy TS tracks. Load flakes: a timing-sensitive exercise
+  (async-js timeout-all) got falsely quarantined under 100% CPU (cleared
+  by a quiet per-course re-run); the journal AUDIT distrusted itself
+  once on a load-flaked re-execution (correct behavior, annoying
+  timing); the infinite-loop adapter test only fails in combined runs
+  under cross-session contention (passes solo every time).
+- Transit-drift rule confirmed thrice: patches mangle pack bytes →
+  ALWAYS regenerate via the deterministic importer/seeder, never hand-
+  fix; the sha-refusals catch it every time.
+- jstrain decisions RATIFIED: two-strikes quarantine for timing-
+  sensitive refs (owner may veto); 62 embedded-cs exercises excluded on
+  runner capability (#:sdk Web / ASP.NET framework refs) + 7
+  Microsoft.Extensions — documented, honest counts; quiz bank mapped to
+  predict-output (ESM/CJS ordering preserved upstream-style) + written
+  carve-outs; CLI self-run delivery stays PENDING (W3b decision table).
+- W8 (final feature) launched: study-quest quiz gates from the 17 quest
+  packs, misses→FSRS cards, act-unlock proof demo.
+
 ## 2026-10-08 — W6 audit (docs/recon/w6-audit.md) — no blockers, 4 majors
 
 promotion-e2e certified trustworthy (real assertions, honest exit code).

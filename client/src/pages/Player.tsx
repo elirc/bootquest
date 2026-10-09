@@ -21,6 +21,7 @@ import { hasModifier, isEditableTarget, isMod, useKeydown } from '../lib/keys';
 import { useAsync } from '../lib/useAsync';
 import { TRACK_LABEL, languageOf, unitProse } from '../lib/view';
 import { ExplainBackPane, KataPane } from './LadderPanes';
+import { StudyQuestPane } from './StudyQuestPane';
 
 type Solution = RevealResponse['solution'];
 
@@ -53,7 +54,8 @@ function Player({ detail }: { detail: UnitDetail }) {
   const [solution, setSolution] = useState<Solution | null>(null);
   const isReading = unit.kind === 'reading';
   // W6 answer-first units: no reveal, and (explain-back) no code shown while answering
-  const answerFirst = spec?.type === 'explain-back' || spec?.type === 'patch-kata';
+  // W8 study quests: no reveal either (missed keys arrive as review cards)
+  const answerFirst = spec?.type === 'explain-back' || spec?.type === 'patch-kata' || spec?.type === 'study-quiz';
 
   return (
     <>
@@ -125,6 +127,8 @@ function Player({ detail }: { detail: UnitDetail }) {
           <ExplainBackPane detail={detail} />
         ) : spec.type === 'patch-kata' ? (
           <KataPane detail={detail} />
+        ) : spec.type === 'study-quiz' ? (
+          <StudyQuestPane detail={detail} />
         ) : spec.type === 'quiz' ? (
           <QuizPane detail={detail} spec={spec} prompt={prose.prompt} solution={solution} />
         ) : spec.type === 'predict-output' ? (

@@ -25,7 +25,9 @@ import {
   GradeBody,
   ReviewItemParams,
   ReviewQueueQuery,
+  ReviewQueueResponse,
   SubmissionBody,
+  SubmitResponse,
   TrackIdParams,
   UnitDetailResponse,
   UnitIdParams,
@@ -42,6 +44,7 @@ import { contentCounts, reviewQueue } from '../store/queries.ts';
 import { emptyContentStore, type UnitContentStore } from './content-store.ts';
 import { asyncRoute, errorBody, HttpError, sendJson, validate } from './http.ts';
 import { getRefContent } from './service.ts';
+import { reviewCardText } from './study-service.ts';
 import { defaultRunners, type RunnerRegistry } from './runners.ts';
 import { emptySeedItemStore, type SeedItemStore } from '../store/seed-items.ts';
 import { ladderUnits } from '../store/ladder.ts';
@@ -171,7 +174,7 @@ export function createApp(opts: AppOptions): Express {
     const { id } = validate(UnitIdParams, req.params, 'params');
     validate(EmptyQuery, req.query, 'query');
     const body = validate(SubmissionBody, req.body, 'body');
-    const result = await runUnit(deps, id, { code: body.code, answer: body.answer, port: body.port, repoPath: body.repoPath });
+    const result = await runUnit(deps, id, { code: body.code, answer: body.answer, answers: body.answers, port: body.port, repoPath: body.repoPath });
     sendJson(res, 200, { result });
   }));
 
@@ -182,7 +185,9 @@ export function createApp(opts: AppOptions): Express {
     sendJson(
       res,
       200,
-      await submitUnit(deps, id, { code: body.code, answer: body.answer, port: body.port, repoPath: body.repoPath, selfAssisted: body.selfAssisted }),
+      SubmitResponse.parse(
+        await submitUnit(deps, id, { code: body.code, answer: body.answer, answers: body.answers, port: body.port, repoPath: body.repoPath, selfAssisted: body.selfAssisted }),
+      ),
     );
   }));
 
@@ -302,8 +307,12 @@ export function createApp(opts: AppOptions): Express {
 
   router.get('/reviews/queue', asyncRoute((req, res) => {
     const q = validate(ReviewQueueQuery, req.query, 'query');
-    const items = reviewQueue(deps.db, nowMs(deps.clock), q.limit ?? DEFAULT_QUEUE_LIMIT);
-    sendJson(res, 200, { count: dueCount(deps.db, deps.clock), items });
+    // W8: seeded cards (study-quest misses, flashcards) carry their text, resolved from the stamped pack
+    const items = reviewQueue(deps.db, nowMs(deps.clock), q.limit ?? DEFAULT_QUEUE_LIMIT).map((it) => {
+      const card = reviewCardText(deps.seedItems, it.cardKey);
+      return card ? { ...it, card } : it;
+    });
+    sendJson(res, 200, ReviewQueueResponse.parse({ count: dueCount(deps.db, deps.clock), items }));
   }));
 
   router.post('/reviews/:itemId/grade', asyncRoute((req, res) => {

@@ -78,6 +78,15 @@ const variantItems = seedItems.filter((i) => i.kind === 'variant');
 const authoredUnits = JSON.parse(readFileSync(join(REPO, 'content', 'units', 'agentic.json'), 'utf8')).units;
 // variants stay PENDING on a fresh DB (their artifact units arrive with a sync), so they add no unit here
 const ladderUnitCount = ebItems.length + kataItems.length + authoredUnits.length;
+// W8: the stamped seed:quests packs; every campaign study quest whose repo has one (with quiz items) gains a quiz gate
+const QUEST_DIR = join(SEED_DIR, 'quests');
+const questPackDirs = existsSync(QUEST_DIR) ? readdirSync(QUEST_DIR).filter((n) => existsSync(join(QUEST_DIR, n, 'items.json'))) : [];
+const questQuizzes = new Map(
+  questPackDirs.map((n) => [n, JSON.parse(readFileSync(join(QUEST_DIR, n, 'items.json'), 'utf8')).items.filter((i) => i.kind === 'quiz')]),
+);
+const campaignStudyGates = campaignManifest.tracks
+  .flatMap((t) => JSON.parse(readFileSync(join(CAMPAIGN_DIR, t.file), 'utf8')).acts.flatMap((a) => a.quests))
+  .filter((q) => q.kind === 'study-quest' && q.unit !== null && (questQuizzes.get(q.repo)?.length ?? 0) > 0).length;
 
 /** Run a node entrypoint (process.execPath --import tsx, never a shell) to completion; returns {code, out}. */
 function runNode(entry, args, env, timeoutMs = 120_000) {
@@ -221,7 +230,7 @@ async function main() {
         BOOTQUEST_CS_SCRATCH: csScratch,
         BOOTQUEST_CAMPAIGN: CAMPAIGN_DIR,
         // W7: the real default seed packs + authored units (named explicitly so a caller's shell cannot override them)
-        BOOTQUEST_SEED_ITEMS: ['explainback', 'patches', 'variants']
+        BOOTQUEST_SEED_ITEMS: ['explainback', 'patches', 'variants', 'quests']
           .flatMap((g) => (existsSync(join(SEED_DIR, g)) ? readdirSync(join(SEED_DIR, g)).map((n) => join(SEED_DIR, g, n)) : []))
           .filter((d) => existsSync(join(d, 'items.json')))
           .join(','),
@@ -260,9 +269,9 @@ async function main() {
       // + every csbootcamp drill + one placeholder unit per playable campaign quest (no checks until seed:quests)
       // + W7: one ladder unit per explain-back set / kata + the authored G3/G4 units (each with one check)
       const wantUnits = 3 + packCounts.total + csManifest.totals.total + campaignUnits + ladderUnitCount + jsCount('total') + jcsFile.units.length;
-      const wantChecks = 3 + packCounts.total - packCounts.written + csManifest.totals.total + ladderUnitCount + jsCount('total') - jsCount('written') + jcsFile.units.length;
+      const wantChecks = 3 + packCounts.total - packCounts.written + csManifest.totals.total + ladderUnitCount + jsCount('total') - jsCount('written') + jcsFile.units.length + campaignStudyGates;
       step(
-        `health (3 fixture + ${packCounts.total} BootForge ${PACK_COURSE} + ${csManifest.totals.total} csbootcamp + ${campaignUnits} campaign + ${ladderUnitCount} ladder/authored + ${jsCount('total')} jstrain + ${jcsFile.units.length} jstrain-cs units: loaded === built)`,
+        `health (3 fixture + ${packCounts.total} BootForge ${PACK_COURSE} + ${csManifest.totals.total} csbootcamp + ${campaignUnits} campaign + ${ladderUnitCount} ladder/authored + ${jsCount('total')} jstrain + ${jcsFile.units.length} jstrain-cs units; + ${campaignStudyGates} W8 study-quest gates: loaded === built)`,
         h.status === 200 && h.json?.ok === true && h.json.counts.units === wantUnits && h.json.counts.checks === wantChecks,
         JSON.stringify(h.json),
       );
@@ -585,13 +594,14 @@ async function main() {
       // 10e. W7: startup summary — one line per loaded source, with its counts
       const seedLines = serverOut.split(/\r?\n/).filter((l) => l.startsWith('[bootquest] seed '));
       step(
-        `startup summary: pack + campaign lines, one stamp-verified line per seed pack (${readdirSync(join(SEED_DIR, 'explainback')).length + readdirSync(join(SEED_DIR, 'patches')).filter((n) => !n.endsWith('.json')).length + (existsSync(join(SEED_DIR, 'variants')) ? readdirSync(join(SEED_DIR, 'variants')).length : 0)}), and the ladder line`,
+        `startup summary: pack + campaign lines, one stamp-verified line per seed pack (${readdirSync(join(SEED_DIR, 'explainback')).length + readdirSync(join(SEED_DIR, 'patches')).filter((n) => !n.endsWith('.json')).length + (existsSync(join(SEED_DIR, 'variants')) ? readdirSync(join(SEED_DIR, 'variants')).length : 0) + questPackDirs.length}), and the ladder line`,
         /\[bootquest\] pack bootforge: .*loaded \d+ === built \d+/.test(serverOut) &&
           /\[bootquest\] campaign js: .*loaded \d+ === built \d+/.test(serverOut) &&
           seedLines.length > 0 &&
           seedLines.every((l) => /stamp verified$/.test(l)) &&
-          seedLines.length === readdirSync(join(SEED_DIR, 'explainback')).length + readdirSync(join(SEED_DIR, 'patches')).filter((n) => !n.endsWith('.json')).length + (existsSync(join(SEED_DIR, 'variants')) ? readdirSync(join(SEED_DIR, 'variants')).length : 0) &&
-          /\[bootquest\] ladder: explain-back (\d+) === \1 .*kata bank (\d+) === \2 .*authored (\d+) === \3/.test(serverOut),
+          seedLines.length === readdirSync(join(SEED_DIR, 'explainback')).length + readdirSync(join(SEED_DIR, 'patches')).filter((n) => !n.endsWith('.json')).length + (existsSync(join(SEED_DIR, 'variants')) ? readdirSync(join(SEED_DIR, 'variants')).length : 0) + questPackDirs.length &&
+          /\[bootquest\] ladder: explain-back (\d+) === \1 .*kata bank (\d+) === \2 .*authored (\d+) === \3/.test(serverOut) &&
+          /\[bootquest\] study quests js: loaded (\d+) === built \1 quiz gates/.test(serverOut),
         `${seedLines.length} seed line(s)`,
       );
 
@@ -788,6 +798,38 @@ async function main() {
       const d4 = await api(base, 'GET', '/api/dashboard');
       const total4 = xpBefore + jsXp + tsXp + 4 + jcsXp;
       step(`dashboard xp +${jsXp + tsXp + 4 + jcsXp} (= ${total4}) after the jstrain submissions`, d4.json?.xp?.total === total4, `xp=${d4.json?.xp?.total}`);
+
+      // 10n. W8: a REAL study quest (grok-js, js act 1) — reading list + quiz gate; misses -> review cards; pass +50 (delta XP)
+      const sqCamp = await api(base, 'GET', '/api/tracks/js/campaign');
+      const sqQuest = sqCamp.json?.acts?.[0]?.quests?.find((q) => q.repo === 'grok-js');
+      const sqD = await api(base, 'GET', `/api/units/${sqQuest?.unitId}`);
+      const sqKeys = new Map((questQuizzes.get('grok-js') ?? []).map((q) => [q.key, q.check.answerKey])); // seed-time oracle
+      const sqRight = (sqD.json?.studyQuest?.questions ?? []).map((q) => sqKeys.get(q.itemKey));
+      const sqWrong = sqRight.map((a, i) => (i < 4 ? (a + 1) % sqD.json.studyQuest.questions[i].choices.length : a));
+      const sqRun = await api(base, 'POST', `/api/units/${sqQuest?.unitId}/run`, { answers: sqRight });
+      const sqC0 = counts();
+      const sqFail = await api(base, 'POST', `/api/units/${sqQuest?.unitId}/submit`, { answers: sqWrong });
+      const sqC1 = counts();
+      const sqQueue = await api(base, 'GET', '/api/reviews/queue');
+      const sqCards = reader.get(`SELECT COUNT(*) AS n, MIN(due_at) AS d FROM review_item WHERE kind = 'quiz-miss' AND unit_id = ?`, sqQuest?.unitId);
+      step(
+        'W8 study quest (real grok-js pack): detail = reading list + questions (no keys), run refused 409; a below-80% answer set is recorded with no XP and its 4 misses become review cards due tomorrow',
+        sqQuest?.state === 'available' && sqQuest.contentPending === false && sqD.status === 200 && sqD.json.studyQuest.questions.length === sqKeys.size &&
+          sqD.json.studyQuest.readingSteps.every((r) => r.url.startsWith('https://github.com/elirc/grok-js/blob/')) && !/answerKey/.test(sqD.text) &&
+          sqRun.status === 409 && sqRun.json?.error?.code === 'RUN_NOT_AVAILABLE' &&
+          sqFail.json?.verdict === 'fail' && sqFail.json.xp === null && sqC1.attempt === sqC0.attempt + 1 && sqC1.xp_event === sqC0.xp_event &&
+          sqFail.json.studyQuiz.reviewCards.created === 4 && sqCards.n === 4 && sqCards.d > Date.now() && sqQueue.json.items.every((i) => !i.cardKey.startsWith('quiz-miss:')),
+        sqFail.json?.result?.output,
+      );
+      const sqXp0 = (await api(base, 'GET', '/api/dashboard')).json?.xp?.total ?? 0;
+      const sqPass = await api(base, 'POST', `/api/units/${sqQuest?.unitId}/submit`, { answers: sqRight });
+      const sqXp1 = (await api(base, 'GET', '/api/dashboard')).json?.xp?.total ?? 0;
+      const sqAfter = (await api(base, 'GET', '/api/tracks/js/campaign')).json?.acts?.[0]?.quests?.find((q) => q.repo === 'grok-js');
+      step(
+        'W8 study quest pass: +50 study-quest XP (dashboard delta), quest done on the campaign map, flashcards enrolled',
+        sqPass.json?.verdict === 'pass' && sqPass.json.xp?.amount === 50 && sqXp1 === sqXp0 + 50 && sqAfter?.state === 'done' && sqPass.json.studyQuiz.flashcardsEnrolled > 0,
+        `xp ${sqXp0} -> ${sqXp1}`,
+      );
 
       // 11. errors are JSON
       const e = await api(base, 'GET', '/definitely-not-a-route');

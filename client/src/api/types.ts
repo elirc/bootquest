@@ -50,6 +50,8 @@ import type {
   RunResponse as RunResponseSchema,
   SelfAttestResponse,
   SlateItemDto,
+  StudyQuestPublic,
+  StudyQuizOutcome,
   SubmitResponse,
   TrackSummary as TrackSummarySchema,
   TracksResponse as TracksResponseSchema,
@@ -94,6 +96,8 @@ export type {
   PublicCheck,
   RevealResponse,
   SelfAttestResponse,
+  StudyQuestPublic,
+  StudyQuizOutcome,
   SubmitResponse,
   UnitDetailResponse,
   UnitLockState,
@@ -150,13 +154,15 @@ export interface TolerantUnitProse {
 export type UnitDetail = Omit<UnitDetailResponse, 'unit'> & { unit: UnitDetailResponse['unit'] & TolerantUnitProse };
 
 /**
- * Body of POST /units/:id/submit. Exactly one of `code` / `answer`. There is deliberately
+ * Body of POST /units/:id/submit. Exactly one of `code` / `answer` / `answers` (W8 study-quiz:
+ * the full answer set, one choice index per question in served order). There is deliberately
  * NO `assistance` field: the client may only declare the honor-system "I had help" boolean.
  * Reveal-assistance is derived server-side from the reveal row, never declared (W-16b).
  */
 export type Submission =
-  | { code: string; answer?: never; selfAssisted: boolean }
-  | { answer: string | number; code?: never; selfAssisted: boolean };
+  | { code: string; answer?: never; answers?: never; selfAssisted: boolean }
+  | { answer: string | number; code?: never; answers?: never; selfAssisted: boolean }
+  | { answers: number[]; code?: never; answer?: never; selfAssisted: boolean };
 
 /** Body of POST /units/:id/run (drill types only; quiz/predict are submit-only). */
 export type RunInput = { code: string; answer?: never } | { answer: string | number; code?: never };

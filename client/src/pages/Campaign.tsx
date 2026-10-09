@@ -184,6 +184,7 @@ function QuestNode({ quest, actUnlocked }: { quest: CampaignQuestDto; actUnlocke
       </span>
       <span className="chips">
         {quest.core ? <Chip tone="accent">core</Chip> : <Chip>optional</Chip>}
+        {quest.state === 'done' && <Chip tone="success">done</Chip>}
         {quest.contentPending && <Chip tone="warning">content pending</Chip>}
       </span>
       <span className="sr-only">, {STATE_LABEL[quest.state]}</span>

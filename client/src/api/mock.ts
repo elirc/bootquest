@@ -15,7 +15,7 @@ import reviewQueueJson from './fixtures/review-queue.json';
 import tracksJson from './fixtures/tracks.json';
 import unitDetailsJson from './fixtures/unit-details.json';
 import unitsJson from './fixtures/units.json';
-import { campaignFixtures, emptyPromotion, evidenceFixtures, explainBackFixtures, kataFixtures, promotionFixtures } from './fixtures/ladder';
+import { campaignFixtures, emptyPromotion, evidenceFixtures, explainBackFixtures, kataFixtures, promotionFixtures, studyQuestFixtures } from './fixtures/ladder';
 import {
   ApiError,
   type BootQuestApi,
@@ -35,6 +35,7 @@ import {
   type AttemptDetailResponse,
   type EvidenceRowDto,
   type KataFinding,
+  type SubmitResponse,
 } from './types';
 
 /** Private, fixture-only grading material. Never crosses the API boundary. */
@@ -78,7 +79,7 @@ const GRADE_DAYS: Record<ReviewGrade, number> = { again: 0, hard: 1, good: 3, ea
 /** Mock "now": end of the fixture's today, so every fixture card is due. */
 const NOW = Date.parse(`${fx.dashboard.today}T23:00:00Z`);
 const READING_XP = 5;
-const SUBMIT_KEYS = new Set(['code', 'answer', 'selfAssisted']);
+const SUBMIT_KEYS = new Set(['code', 'answer', 'answers', 'selfAssisted']);
 
 const err = (status: number, code: ApiError['code'], message: string) => new ApiError(status, code, message);
 
@@ -90,6 +91,10 @@ export interface MockApiOptions {
 export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
   const latency = opts.latencyMs ?? 0;
   const units = clone(fx.units);
+  // W8: the study-quest fixture units (csharp borrowbox quest)
+  for (const sq of Object.values(studyQuestFixtures)) units[sq.unit.trackId] = [...(units[sq.unit.trackId] ?? []), clone(sq.unit)];
+  const studyMissCards = new Set<string>();
+  const studyPassed = new Set<number>();
   const graded = new Set<number>();
   const awarded = new Set<number>();
   const revealed = new Map<number, number>(); // unitId -> reveal attemptId
@@ -116,6 +121,16 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
   const trackOf = (id: TrackId) => fx.tracks.tracks.find((t) => t.id === id)!;
 
   function detail(u: UnitSummary): DetailFixture {
+    const sq = studyQuestFixtures[String(u.id)];
+    if (sq) {
+      return {
+        code: null,
+        competencies: ['code-reading'],
+        check: { id: 9000 + u.id, threshold: 0.8, spec: { type: 'study-quiz', itemKeys: sq.public.questions.map((q) => q.itemKey), passPct: 0.8 } },
+        starter: null,
+        private: {},
+      };
+    }
     const eb = explainBackFixtures[String(u.id)];
     if (eb) {
       return {
@@ -176,13 +191,16 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
       : { pass: true, output: 'mock check passed', failures: [], durationMs: 120 };
   }
 
-  function validateSubmission(body: unknown): { code?: string; answer?: string | number; selfAssisted: boolean } {
+  function validateSubmission(body: unknown): { code?: string; answer?: string | number; answers?: number[]; selfAssisted: boolean } {
     const b = (body ?? {}) as Record<string, unknown>;
     const extra = Object.keys(b).filter((k) => !SUBMIT_KEYS.has(k));
     if (extra.length) throw err(400, 'VALIDATION', `unrecognized key(s): ${extra.join(', ')}`);
-    if ((b.code === undefined) === (b.answer === undefined)) throw err(400, 'VALIDATION', 'provide exactly one of `code` or `answer`');
+    if ([b.code, b.answer, b.answers].filter((v) => v !== undefined).length !== 1) throw err(400, 'VALIDATION', 'provide exactly one of `code`, `answer` or `answers`');
+    if (b.answers !== undefined && (!Array.isArray(b.answers) || b.answers.some((a) => !Number.isInteger(a) || (a as number) < 0))) {
+      throw err(400, 'VALIDATION', 'answers must be choice indexes');
+    }
     if (b.selfAssisted !== undefined && typeof b.selfAssisted !== 'boolean') throw err(400, 'VALIDATION', 'selfAssisted must be boolean');
-    return { code: b.code as string | undefined, answer: b.answer as string | number | undefined, selfAssisted: b.selfAssisted === true };
+    return { code: b.code as string | undefined, answer: b.answer as string | number | undefined, answers: b.answers as number[] | undefined, selfAssisted: b.selfAssisted === true };
   }
 
   const xpFor = (u: UnitSummary, spec: PublicCheck): number =>
@@ -265,6 +283,54 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
     }
   }
 
+  /** W8: mirrors the server's study-quiz submit — full answer set, >= 80%, misses -> review cards (deduped), keys never echoed. */
+  function studySubmit(u: UnitSummary, body: { answers?: number[]; selfAssisted: boolean }): SubmitResponse {
+    const sq = studyQuestFixtures[String(u.id)]!;
+    const answers = body.answers;
+    if (answers === undefined) throw err(400, 'VALIDATION', 'study-quiz checks take `answers`');
+    if (answers.length !== sq.keys.length) throw err(400, 'VALIDATION', `send exactly ${sq.keys.length} answers`);
+    const items = sq.public.questions.map((q, i) => ({ itemKey: q.itemKey, correct: answers[i] === sq.keys[i] }));
+    const correct = items.filter((i) => i.correct).length;
+    const passed = correct * 100 >= 80 * items.length;
+    let created = 0;
+    let alreadyQueued = 0;
+    for (const i of items.filter((x) => !x.correct)) {
+      if (studyMissCards.has(i.itemKey)) alreadyQueued++;
+      else {
+        studyMissCards.add(i.itemKey);
+        created++;
+      }
+    }
+    const missed = items.map((x, n) => (x.correct ? null : n + 1)).filter((n): n is number => n !== null);
+    const firstPass = passed && !studyPassed.has(u.id);
+    let xp: SubmitResponse['xp'] = null;
+    if (passed) {
+      xp = firstPass ? { id: nextId++, amount: 50, reason: null } : { id: nextId++, amount: 0, reason: 'already-awarded' };
+      studyPassed.add(u.id);
+      u.state = 'done';
+    }
+    return {
+      result: passed
+        ? { pass: true, output: `${correct}/${items.length} correct`, failures: [], durationMs: 0 }
+        : { pass: false, output: `${correct}/${items.length} correct`, failures: missed.map((n) => ({ name: `Q${n}`, message: 'incorrect' })), durationMs: 0 },
+      verdict: passed ? 'pass' : 'fail',
+      attempt: { id: nextId++, mode: body.selfAssisted ? 'assisted' : 'solo', outcome: passed ? 'pass' : 'fail' },
+      runId: nextId++,
+      xp,
+      evidenceIds: [nextId++],
+      studyQuiz: {
+        correct,
+        total: items.length,
+        score: correct / items.length,
+        passPct: 80,
+        passed,
+        items,
+        reviewCards: { created, alreadyQueued, dueAt: missed.length ? NOW + DAY_MS : null },
+        flashcardsEnrolled: firstPass ? sq.public.flashcards : 0,
+      },
+    };
+  }
+
   const ebKeyPoints = (unitId: number) =>
     explainBackFixtures[String(unitId)]!.questions.map((q, qi) => ({
       prompt: q.prompt,
@@ -321,13 +387,15 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
           const k = kataFixtures[String(id)];
           out.kata = k ? { title: k.title, diff: k.diff, contextFiles: k.contextFiles } : null;
         }
+        // W8: reading list + questions with choices only (the keys stay in the fixture)
+        if (d.check?.spec.type === 'study-quiz') out.studyQuest = studyQuestFixtures[String(id)]?.public ?? null;
         return out;
       }),
 
     runUnit: (id, input) =>
       wrap(() => {
         const { d, spec } = guard(id, { needCheck: true });
-        if (spec!.type === 'quiz' || spec!.type === 'predict-output') {
+        if (spec!.type === 'quiz' || spec!.type === 'predict-output' || spec!.type === 'study-quiz') {
           throw err(409, 'RUN_NOT_AVAILABLE', `${spec!.type} checks are submit-only (a free run would reveal the answer)`);
         }
         const body = validateSubmission(input);
@@ -338,6 +406,8 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
       wrap(() => {
         const { u, d, spec } = guard(id, { needCheck: true });
         const body = validateSubmission(submission);
+        if (spec!.type === 'study-quiz') return studySubmit(u, body);
+        if (body.answers !== undefined) throw err(400, 'VALIDATION', '`answers` is for study-quiz units');
         const result = grade(d, spec!, body);
         const wasRevealed = revealed.has(id);
         const mode = wasRevealed ? 'guided' : body.selfAssisted ? 'assisted' : 'solo';
@@ -419,7 +489,13 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
       wrap(() => {
         const c = campaignFixtures[trackId];
         if (!c) throw err(404, 'NOT_FOUND', `track ${trackId} not found`);
-        return { ...c, level: 3 };
+        // W8: a passed study quest is done, and its act's core progress follows (derived, like the server)
+        const acts = c.acts.map((a) => {
+          const quests = a.quests.map((q) => (q.unitId !== undefined && studyPassed.has(q.unitId) ? { ...q, state: 'done' as const } : q));
+          const bump = quests.filter((q, i) => q.core && q.state === 'done' && a.quests[i]!.state !== 'done').length;
+          return { ...a, quests, progress: { ...a.progress, coreDone: a.progress.coreDone + bump } };
+        });
+        return { ...c, acts, level: 3 };
       }),
 
     answerExplainBack: (id, body) =>

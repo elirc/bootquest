@@ -106,15 +106,28 @@ function Session({ cards }: { cards: ReviewQueueItem[] }) {
           <span className="muted small">{card.unitId !== null ? `unit #${card.unitId}` : 'standalone card'}</span>
         </header>
         <div className="card-face">
-          {/* W-20b: the queue carries no card text yet (content store, W2/W4); the key is the prompt. */}
-          <p className="card-front">
-            <code>{card.cardKey}</code>
-          </p>
+          {/* W8: seeded cards (study-quest misses, flashcards) carry their text; others show the key. */}
+          {card.card ? (
+            <p className="card-front" data-testid="card-front">
+              {card.card.front}
+            </p>
+          ) : (
+            <p className="card-front">
+              <code>{card.cardKey}</code>
+            </p>
+          )}
           <div className="card-back-slot">
             {revealed ? (
-              <p className="card-back" data-testid="card-back">
-                Card text is not served by the API yet. Grade how well you recalled <code>{card.cardKey}</code>.
-              </p>
+              card.card ? (
+                <div className="card-back" data-testid="card-back">
+                  <p style={{ whiteSpace: 'pre-wrap' }}>{card.card.back}</p>
+                  {card.card.source && <p className="muted small">Source: {card.card.source}</p>}
+                </div>
+              ) : (
+                <p className="card-back" data-testid="card-back">
+                  Card text is not served by the API yet. Grade how well you recalled <code>{card.cardKey}</code>.
+                </p>
+              )
             ) : (
               <span className="muted">Recall the answer, then reveal.</span>
             )}

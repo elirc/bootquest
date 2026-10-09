@@ -3,9 +3,15 @@ import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   SeedExplainBackItem,
+  SeedFlashcardItem,
   SeedPatchKataItem,
+  SeedQuizItem,
+  SeedReadingStepItem,
   SeedVariantItem,
   type SeedExplainBackItem as ExplainBackItem,
+  type SeedFlashcardItem as FlashcardItem,
+  type SeedQuizItem as QuizItem,
+  type SeedReadingStepItem as ReadingStepItem,
   type SeedPatchKataItem as PatchKataItem,
   type SeedVariantItem as VariantItem,
 } from '@bootquest/shared';
@@ -36,6 +42,20 @@ export interface SeedItemStore {
   explainBackItems(): readonly ExplainBackItem[];
   kataItems(): readonly PatchKataItem[];
   variantItems(): readonly VariantItem[];
+  /** W8: seed:quests items (quiz gate, flashcards, reading steps), grouped by source repo, pack order */
+  questPacks(): ReadonlyMap<string, QuestPackItems>;
+  quiz(key: string): QuizItem | undefined;
+  flashcard(key: string): FlashcardItem | undefined;
+}
+
+/** W8: one repo's seed:quests content (the study-quest unit is derived from it, store/study-quests.ts). */
+export interface QuestPackItems {
+  repo: string;
+  /** the pinned sha the pack was generated at (every item's provenance.sha) */
+  sha: string;
+  quizzes: readonly QuizItem[];
+  flashcards: readonly FlashcardItem[];
+  readingSteps: readonly ReadingStepItem[];
 }
 
 export const emptySeedItemStore: SeedItemStore = {
@@ -45,6 +65,9 @@ export const emptySeedItemStore: SeedItemStore = {
   explainBackItems: () => [],
   kataItems: () => [],
   variantItems: () => [],
+  questPacks: () => new Map(),
+  quiz: () => undefined,
+  flashcard: () => undefined,
 };
 
 export class SeedItemLoadError extends Error {
@@ -59,6 +82,23 @@ export function mapSeedItemStore(items: readonly unknown[]): SeedItemStore {
   const eb = new Map<string, ExplainBackItem>();
   const kata = new Map<string, PatchKataItem>();
   const variants = new Map<string, VariantItem>();
+  const quizzes = new Map<string, QuizItem>();
+  const flashcards = new Map<string, FlashcardItem>();
+  const quests = new Map<string, { repo: string; sha: string; quizzes: QuizItem[]; flashcards: FlashcardItem[]; readingSteps: ReadingStepItem[] }>();
+  const packOf = (repo: string, sha: string) => {
+    let p = quests.get(repo);
+    if (!p) {
+      p = { repo, sha, quizzes: [], flashcards: [], readingSteps: [] };
+      quests.set(repo, p);
+    }
+    if (p.sha !== sha) throw new SeedItemLoadError(`seed:quests items for ${repo} come from two shas (${p.sha.slice(0, 12)} and ${sha.slice(0, 12)}); one pack per repo`);
+    return p;
+  };
+  const seen = new Set<string>();
+  const once = (key: string, kind: string) => {
+    if (seen.has(key)) throw new SeedItemLoadError(`duplicate ${kind} item ${key}`);
+    seen.add(key);
+  };
   for (const raw of items) {
     const kind = (raw as { kind?: unknown })?.kind;
     if (kind === 'explain-back') {
@@ -73,16 +113,32 @@ export function mapSeedItemStore(items: readonly unknown[]): SeedItemStore {
       const it = SeedVariantItem.parse(raw);
       if (variants.has(it.key)) throw new SeedItemLoadError(`duplicate variant item ${it.key}`);
       variants.set(it.key, it);
+    } else if (kind === 'quiz') {
+      const it = SeedQuizItem.parse(raw);
+      once(it.key, 'quiz');
+      quizzes.set(it.key, it);
+      packOf(it.provenance.repo, it.provenance.sha).quizzes.push(it);
+    } else if (kind === 'flashcard') {
+      const it = SeedFlashcardItem.parse(raw);
+      once(it.key, 'flashcard');
+      flashcards.set(it.key, it);
+      packOf(it.provenance.repo, it.provenance.sha).flashcards.push(it);
+    } else if (kind === 'reading-step') {
+      const it = SeedReadingStepItem.parse(raw);
+      once(it.key, 'reading-step');
+      packOf(it.provenance.repo, it.provenance.sha).readingSteps.push(it);
     }
-    // other seed kinds (quiz / flashcard / reading-step) are served elsewhere
   }
   return {
     explainBack: (k) => eb.get(k),
     kata: (k) => kata.get(k),
-    size: () => eb.size + kata.size + variants.size,
+    size: () => eb.size + kata.size + variants.size + seen.size,
     explainBackItems: () => [...eb.values()],
     kataItems: () => [...kata.values()],
     variantItems: () => [...variants.values()],
+    questPacks: () => quests,
+    quiz: (k) => quizzes.get(k),
+    flashcard: (k) => flashcards.get(k),
   };
 }
 
@@ -132,10 +188,13 @@ export function readSeedPackItems(dir: string): unknown[] {
   }
 }
 
-/** Every content/seed/{explainback,patches,variants}/<name>/ dir holding items.json (default for the real entrypoint). */
+/**
+ * Every content/seed/{explainback,patches,variants,quests}/<name>/ dir holding items.json
+ * (default for the real entrypoint). W8: seed:quests packs feed the study-quest units.
+ */
 export function defaultSeedItemDirs(root: string): string[] {
   const out: string[] = [];
-  for (const gen of ['explainback', 'patches', 'variants']) {
+  for (const gen of ['explainback', 'patches', 'variants', 'quests']) {
     const base = join(root, gen);
     if (!existsSync(base)) continue;
     for (const d of readdirSync(base, { withFileTypes: true })) {

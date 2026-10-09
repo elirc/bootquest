@@ -17,6 +17,7 @@ import { createNodeTestFileRunner } from './runner-node-test-file.ts';
 import { createSyncService, resolveSyncPaths, type SyncService } from '../sync/service.ts';
 import { defaultSeedItemDirs, loadSeedItemStoreWithStats, type SeedPackStat } from '../store/seed-items.ts';
 import { DEFAULT_AUTHORED_UNITS, ladderContentEntries, loadLadderIntoDb, readAuthoredUnits, readKataDifficulty, type LadderLoadStats } from '../store/ladder.ts';
+import { loadStudyQuestsIntoDb, type StudyQuestLoadStats } from '../store/study-quests.ts';
 
 /**
  * Real entrypoint: `node --import tsx server/src/api/serve.ts`
@@ -50,6 +51,8 @@ import { DEFAULT_AUTHORED_UNITS, ladderContentEntries, loadLadderIntoDb, readAut
  *                           An unstamped / edited pack REFUSES TO START. W7: the FULL stamp is
  *                           verified (seed:check's verifier: bytes, counts, quarantine/review keys,
  *                           current seed fingerprint), and content/seed/variants/<name>/ is loaded too.
+ *                           W8: content/seed/quests/<repo>/ (seed:quests) is loaded too: the campaign's
+ *                           study quests get their quiz gates from it (store/study-quests.ts).
  *   BOOTQUEST_AUTHORED_UNITS (optional, W7) authored unit definitions (content/units/agentic.json:
  *                           G3 / G4); when serve.ts is run directly and this is unset, the repo's
  *                           file is loaded. '' = none.
@@ -130,6 +133,8 @@ export interface RunningServer {
   seedPacks: SeedPackStat[];
   /** W7: ladder wiring stats (loaded === built per family already asserted) */
   ladder: LadderLoadStats;
+  /** W8: study-quest gates derived from the stamped seed:quests packs (loaded === built per track asserted) */
+  studyQuests: StudyQuestLoadStats;
 }
 
 function splitList(raw: string | undefined): string[] {
@@ -218,6 +223,8 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
     }
     const ladderInputs = { seedItems, authored, kataDifficulty };
     const ladder = loadLadderIntoDb(db, ladderInputs, clock);
+    // W8: campaign study quests whose repo has a stamped quest pack get their quiz gate (others stay pending)
+    const studyQuests = loadStudyQuestsIntoDb(db, seedItems, clock);
     sources.push(ladderContentEntries(seedItems));
     if (authored) sources.push(new Map(Object.entries(authored.content)));
     const content = combineContentStores(sources);
@@ -247,7 +254,7 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
       });
       return closing;
     };
-    return { server, db, port, host, close, packs: packStats, campaign, csharpScratch: csharp?.appDataDir ?? null, seedPacks, ladder };
+    return { server, db, port, host, close, packs: packStats, campaign, csharpScratch: csharp?.appDataDir ?? null, seedPacks, ladder, studyQuests };
   } catch (err) {
     db.close();
     throw err;
@@ -259,7 +266,7 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
  * tracks, seed packs, ladder families, authored units). Every count printed here was already
  * asserted loaded === built by its loader (a mismatch refuses to start before this prints).
  */
-export function startupSummary(running: Pick<RunningServer, 'packs' | 'campaign' | 'seedPacks' | 'ladder'>): string[] {
+export function startupSummary(running: Pick<RunningServer, 'packs' | 'campaign' | 'seedPacks' | 'ladder'> & Partial<Pick<RunningServer, 'studyQuests'>>): string[] {
   const out: string[] = [];
   for (const p of running.packs) {
     out.push(
@@ -282,6 +289,14 @@ export function startupSummary(running: Pick<RunningServer, 'packs' | 'campaign'
       `retests ${l.retests.loaded} === ${l.retests.built} built - ${l.retests.pending.length} pending, authored ${l.authored.loaded} === ${l.authored.built}`,
   );
   for (const p of l.retests.pending) out.push(`[bootquest] ladder: retest pending: ${p}`);
+  const sq = running.studyQuests;
+  if (sq) {
+    for (const t of sq.tracks) {
+      out.push(`[bootquest] study quests ${t.track}: loaded ${t.loaded} === built ${t.built} quiz gates from quest packs, ${t.pending} still content-pending (no pack)`);
+    }
+    if (sq.unmatchedPacks.length) out.push(`[bootquest] study quests: quest pack(s) matching no campaign study quest: ${sq.unmatchedPacks.join(', ')}`);
+    for (const o of sq.orphaned) out.push(`[bootquest] study quests: ${o} lost its quest pack after attempts were recorded (gate kept for history, quest content-pending)`);
+  }
   return out;
 }
 

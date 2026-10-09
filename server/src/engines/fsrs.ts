@@ -65,11 +65,14 @@ export interface NewReviewItem {
   unitId?: number;
   contentRefId?: number;
   competencyId?: CompetencyId;
+  /** W8: first due time (epoch ms, >= now); default = now (a new card is due at once) */
+  dueAt?: number;
 }
 
 export function addReviewItem(db: Db, item: NewReviewItem, now: Clock): ReviewItemRow {
   const t = nowMs(now);
-  const card = newCard(now);
+  if (item.dueAt !== undefined && item.dueAt < t) throw new Error(`review item ${item.cardKey}: dueAt is in the past`);
+  const card = item.dueAt === undefined ? newCard(now) : createEmptyCard(new Date(item.dueAt));
   const { lastInsertRowid } = db.run(
     `INSERT INTO review_item (card_key, kind, unit_id, content_ref_id, competency_id, fsrs_state, due_at, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,

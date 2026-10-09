@@ -202,8 +202,12 @@ const QUEST_COLS = [
   'provenance',
 ] as const;
 
-/** Values in QUEST_COLS order; core / family_pick are booleans because db/hygiene reads those columns back as booleans. */
-function questValues(q: CampaignQuest, actId: number, unitId: number | null, ordinal: number): (string | number | boolean | null)[] {
+/**
+ * Values in QUEST_COLS order; core / family_pick are booleans because db/hygiene reads those columns back as booleans.
+ * W8: content_pending is the pack's flag UNLESS the quest's unit already carries a check (the study-quest
+ * loader, store/study-quests.ts, gave it its seeded quiz gate) — so a reload never re-flags a playable quest.
+ */
+function questValues(q: CampaignQuest, actId: number, unitId: number | null, ordinal: number, gated: boolean): (string | number | boolean | null)[] {
   return [
     actId,
     unitId,
@@ -220,7 +224,7 @@ function questValues(q: CampaignQuest, actId: number, unitId: number | null, ord
     q.familyPick,
     q.kind,
     ordinal,
-    q.contentPending ? 1 : 0,
+    q.contentPending && !gated ? 1 : 0,
     q.title,
     q.twinRepo,
     JSON.stringify(q.provenance),
@@ -242,7 +246,8 @@ export function loadCampaignIntoDb(db: Db, c: LoadedCampaign, now: Clock): Campa
         a.quests.forEach((q, i) => {
           keep.add(q.key);
           const [unitId, unitChanged] = upsertQuestUnit(db, file.track, a.actNo, sourceId, q, now);
-          const want = questValues(q, actId, unitId, i + 1);
+          const gated = unitId !== null && db.get('SELECT 1 AS x FROM "check" WHERE unit_id = ? LIMIT 1', unitId) !== undefined;
+          const want = questValues(q, actId, unitId, i + 1, gated);
           const have = db.get<Record<string, string | number | boolean | null> & { id: number }>(`SELECT id, ${QUEST_COLS.join(', ')} FROM quest WHERE key = ?`, q.key);
           if (!have) {
             db.run(`INSERT INTO quest (key, ${QUEST_COLS.join(', ')}) VALUES (?, ${QUEST_COLS.map(() => '?').join(', ')})`, q.key, ...want);

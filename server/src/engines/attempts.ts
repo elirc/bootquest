@@ -144,6 +144,8 @@ export interface SubmissionInput {
   result: unknown;
   /** the learner's own submission (code / answer), stored on the attempt */
   answer?: unknown;
+  /** W8: graded fraction 0..1 (study-quiz); default 1 for a pass, 0 otherwise */
+  score?: number;
 }
 
 /**
@@ -173,7 +175,7 @@ export function recordSubmission(
         mode,
         source,
         outcome: OUTCOME_FOR_VERDICT[verdict],
-        score: verdict === 'pass' ? 1 : 0,
+        score: input.score !== undefined && Number.isFinite(input.score) && input.score >= 0 && input.score <= 1 ? input.score : verdict === 'pass' ? 1 : 0,
         answer: input.answer,
       },
       t,

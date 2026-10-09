@@ -2,7 +2,7 @@
 // PRIVATE halves (key points, seeded-defect keys) live here and only leave through the
 // answer-first mock endpoints — never through getUnit.
 
-import type { CampaignResponse, CompetencyId, EvidenceRowDto, PromotionProgress, TrackId } from '../types';
+import type { CampaignResponse, CompetencyId, EvidenceRowDto, PromotionProgress, StudyQuestPublic, TrackId, UnitSummary } from '../types';
 
 export interface ExplainBackFixture {
   competencies: CompetencyId[];
@@ -164,8 +164,11 @@ export const campaignFixtures: Record<TrackId, Omit<CampaignResponse, 'level'>> 
         ordinal: 1,
         unlocked: true,
         unlockRule: { previousCorePct: 0, level: 1, staticLock: false },
-        progress: { coreDone: 0, coreTotal: 1 },
-        quests: [{ id: 31, kind: 'study-quest', title: 'LINQ: group orders by customer', repo: 'csbootcamp', rank: 1, unitId: 202, state: 'available', core: true, contentPending: false, twinRepo: null }],
+        progress: { coreDone: 0, coreTotal: 2 },
+        quests: [
+          { id: 31, kind: 'study-quest', title: 'LINQ: group orders by customer', repo: 'csbootcamp', rank: 1, unitId: 202, state: 'available', core: true, contentPending: false, twinRepo: null },
+          { id: 32, kind: 'study-quest', title: 'borrowbox', repo: 'borrowbox', rank: 2, unitId: 206, state: 'available', core: true, contentPending: false, twinRepo: null },
+        ],
       },
     ],
   },
@@ -184,5 +187,39 @@ export const campaignFixtures: Record<TrackId, Omit<CampaignResponse, 'level'>> 
         quests: [],
       },
     ],
+  },
+};
+
+// ---------------------------------------------------------------- W8 study quests
+
+export interface StudyQuestFixture {
+  unit: UnitSummary;
+  /** PUBLIC half (reading list + questions with choices) */
+  public: StudyQuestPublic;
+  /** PRIVATE: choice index per question (never leaves through getUnit / submit) */
+  keys: number[];
+}
+
+export const studyQuestFixtures: Record<string, StudyQuestFixture> = {
+  '206': {
+    unit: { id: 206, key: 'campaign/csharp/borrowbox', trackId: 'csharp', kind: 'study', title: 'Study quest: borrowbox', difficulty: 2, state: 'available', revealed: false, prerequisites: [] },
+    public: {
+      repo: 'borrowbox',
+      sha: '0123456789abcdef0123456789abcdef01234567',
+      passPct: 80,
+      readingSteps: [
+        { key: 'seed:quests:borrowbox/reading-step/a1', title: 'Concepts: locking a loan', headingPath: ['Concepts', 'Locking a loan'], path: 'docs/02-CONCEPTS.md', lines: { start: 40, end: 72 }, url: 'https://github.com/elirc/borrowbox/blob/0123456789abcdef0123456789abcdef01234567/docs/02-CONCEPTS.md#L40-L72' },
+        { key: 'seed:quests:borrowbox/reading-step/a2', title: 'API: the loans endpoint', headingPath: ['API', 'Loans'], path: 'docs/03-API.md', lines: { start: 1, end: 30 }, url: 'https://github.com/elirc/borrowbox/blob/0123456789abcdef0123456789abcdef01234567/docs/03-API.md#L1-L30' },
+      ],
+      questions: [
+        { itemKey: 'seed:quests:borrowbox/quiz/q1', prompt: 'Which object does LoanService lock on?', choices: ['the service', 'the item being lent', 'a static gate'] },
+        { itemKey: 'seed:quests:borrowbox/quiz/q2', prompt: 'What does POST /loans answer for an item already on loan?', choices: ['200', '409', '404'] },
+        { itemKey: 'seed:quests:borrowbox/quiz/q3', prompt: 'Where is the due date computed?', choices: ['the controller', 'the domain', 'the database'] },
+        { itemKey: 'seed:quests:borrowbox/quiz/q4', prompt: 'Which test proves double-lending is refused?', choices: ['LoanTests.Twice', 'ItemTests.New', 'none'] },
+        { itemKey: 'seed:quests:borrowbox/quiz/q5', prompt: 'What does a return of an unknown loan id produce?', choices: ['404', '500', '204'] },
+      ],
+      flashcards: 2,
+    },
+    keys: [1, 1, 1, 0, 0],
   },
 };

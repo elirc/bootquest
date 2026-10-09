@@ -122,11 +122,15 @@ export const MAX_CODE_CHARS = 100_000;
 export const MAX_ANSWER_CHARS = 10_000;
 
 export const MAX_REPO_PATH_CHARS = 1024;
+/** W8: a study-quest quiz gate is answered as one full set (one answer per question, in order) */
+export const MAX_STUDY_QUIZ_ANSWERS = 200;
 
 /**
  * Body of POST /api/units/:id/run and /submit. Exactly one of:
  *  - `code`     for drill-js / drill-cs (learner source)
  *  - `answer`   for quiz (choice index or exact text) / predict-output (predicted stdout)
+ *  - `answers`  for study-quiz (W8): the FULL answer set, one choice index per question in
+ *               the order GET /units/:id serves them (submit only; graded server-side, >= 80%)
  *  - `port`     for http checks: the loopback port the learner's server listens on
  *               (the server only ever targets 127.0.0.1 / ::1 — nothing else is caller-supplied)
  *  - `repoPath` for repo checks: ABSOLUTE path of a local git working tree (its root,
@@ -137,6 +141,11 @@ export const SubmissionBody = z
   .object({
     code: z.string().max(MAX_CODE_CHARS).optional(),
     answer: z.union([z.string().max(MAX_ANSWER_CHARS), z.number().int().nonnegative()]).optional(),
+    answers: z
+      .array(z.union([z.number().int().nonnegative(), z.string().max(MAX_ANSWER_CHARS)]))
+      .min(1)
+      .max(MAX_STUDY_QUIZ_ANSWERS)
+      .optional(),
     port: z.number().int().min(1).max(65535).optional(),
     repoPath: z
       .string()
@@ -147,8 +156,8 @@ export const SubmissionBody = z
     selfAssisted: z.boolean().default(false),
   })
   .strict()
-  .refine((b) => [b.code, b.answer, b.port, b.repoPath].filter((v) => v !== undefined).length === 1, {
-    message: 'provide exactly one of `code`, `answer`, `port` or `repoPath`',
+  .refine((b) => [b.code, b.answer, b.answers, b.port, b.repoPath].filter((v) => v !== undefined).length === 1, {
+    message: 'provide exactly one of `code`, `answer`, `answers`, `port` or `repoPath`',
   });
 export type SubmissionBody = z.infer<typeof SubmissionBody>;
 export type SubmissionBodyInput = z.input<typeof SubmissionBody>;
@@ -424,6 +433,63 @@ export const KataPublic = z
   .strict();
 export type KataPublic = z.infer<typeof KataPublic>;
 
+/**
+ * W8 study-quest units (spec §4 "Study quest"): the PUBLIC half of the unit's seeded quest
+ * pack — the ordered reading list (with a link into the repo at the pack's pinned sha) and
+ * the quiz-gate questions with their choices. Answer keys, explanations and flashcard text
+ * never appear here: a missed question's key arrives only as an FSRS review card (due the
+ * next day), never in the submit response.
+ */
+export const StudyQuestReadingStepDto = z
+  .object({
+    key: z.string(),
+    title: z.string(),
+    headingPath: z.array(z.string()),
+    path: z.string(),
+    lines: z.object({ start: z.number(), end: z.number() }).strict(),
+    /** https://github.com/<owner>/<repo>/blob/<sha>/<path>#L<start>-L<end> */
+    url: z.string(),
+  })
+  .strict();
+export const StudyQuestQuestionDto = z
+  .object({
+    itemKey: z.string(),
+    prompt: z.string(),
+    choices: z.array(z.string()),
+  })
+  .strict();
+export const StudyQuestPublic = z
+  .object({
+    repo: z.string(),
+    sha: z.string(),
+    /** pass mark, percent (spec §4: 80) */
+    passPct: z.number(),
+    readingSteps: z.array(StudyQuestReadingStepDto),
+    questions: z.array(StudyQuestQuestionDto),
+    /** flashcards this quest enrolls into the FSRS queue on its first pass (count only) */
+    flashcards: z.number(),
+  })
+  .strict();
+export type StudyQuestPublic = z.infer<typeof StudyQuestPublic>;
+
+/** W8: the per-question outcome of a study-quiz submit. NO key, NO correct choice — right/wrong only. */
+export const StudyQuizOutcome = z
+  .object({
+    correct: z.number(),
+    total: z.number(),
+    /** correct / total, 0..1 */
+    score: z.number(),
+    passPct: z.number(),
+    passed: z.boolean(),
+    items: z.array(z.object({ itemKey: z.string(), correct: z.boolean() }).strict()),
+    /** misses become FSRS cards (front = question, back = keyed answer + citation), due the next day; deduped */
+    reviewCards: z.object({ created: z.number(), alreadyQueued: z.number(), dueAt: z.number().nullable() }).strict(),
+    /** flashcards enrolled into the FSRS queue by this submit (first pass only) */
+    flashcardsEnrolled: z.number(),
+  })
+  .strict();
+export type StudyQuizOutcome = z.infer<typeof StudyQuizOutcome>;
+
 export const UnitDetailResponse = z
   .object({
     unit: UnitSummary.extend({ code: z.string().nullable(), competencies: z.array(CompetencyId), variationOfUnitId: z.number().nullable() }).strict(),
@@ -445,6 +511,8 @@ export const UnitDetailResponse = z
     explainBack: ExplainBackPublic.nullable().optional(),
     /** W6 patch-kata units: diff + context only (never the seeded-defect key); null = content pending */
     kata: KataPublic.nullable().optional(),
+    /** W8 study-quest units: reading list + quiz-gate questions (public half); null = content pending */
+    studyQuest: StudyQuestPublic.nullable().optional(),
     /**
      * W7 (audit #1) retest units only: whether the changed-example retest is open. Closed =
      * instructions / starter / snippet withheld and run/submit refused (409 RETEST_NOT_OPEN),
@@ -477,6 +545,8 @@ export const SubmitResponse = z
     evidenceIds: z.array(z.number()),
     /** W6: competencies this submit promoted (a passing retest can complete leg (c)); optional for older servers */
     promotions: z.array(z.lazy(() => RatingChangeDto)).optional(),
+    /** W8: study-quiz submits only — per-question right/wrong (no keys) + the review cards the misses became */
+    studyQuiz: StudyQuizOutcome.optional(),
   })
   .strict();
 export type SubmitResponse = z.infer<typeof SubmitResponse>;
@@ -525,6 +595,12 @@ export const ReviewQueueItem = z
     unitId: z.number().nullable(),
     competencyId: CompetencyId.nullable(),
     dueAt: z.number(),
+    /**
+     * W8: the card text for seeded cards (study-quest quiz misses and flashcards), resolved
+     * server-side from the stamped quest pack; absent for cards whose text is not served.
+     * Only DUE cards are listed, so a missed question's key is never shown the day it was missed.
+     */
+    card: z.object({ front: z.string(), back: z.string(), source: z.string().nullable() }).strict().optional(),
   })
   .strict();
 export const ReviewQueueResponse = z.object({ count: z.number(), items: z.array(ReviewQueueItem) }).strict();
