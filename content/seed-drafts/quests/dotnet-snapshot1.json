@@ -1,0 +1,249 @@
+{
+  "format": "bootquest-quest-drafts@1",
+  "repo": "dotnet-snapshot1",
+  "sha": "6f829980cf41791e821ffae2010c617e059e7dbc",
+  "guides": ["README.md", "LEARNING-JOURNAL.md"],
+  "items": [
+    {
+      "id": "q01-findbyid-live-record",
+      "kind": "quiz",
+      "source": { "path": "snapshots/01-domain-and-persistence/code/apps/api/src/repositories/clientCompanyRepository.ts", "lines": { "start": 9, "end": 17 } },
+      "cites": [{ "path": "snapshots/01-domain-and-persistence/code/apps/api/src/repositories/clientCompanyRepository.ts", "lineStart": 10, "lineEnd": 16 }],
+      "prompt": "In snapshot 01, a caller does `const c = await clientCompanyRepository.findById(id); c.legalName = 'Draft';` without ever calling a save method. What happens to the stored data, and why?",
+      "answer": "The stored record is renamed too: findById returns the live object from clientCompanyRecords, not a copy, so the caller mutates the store directly",
+      "distractors": [
+        "Nothing changes: the async method returns a structured clone because every Promise result is copied when it resolves",
+        "Nothing changes: findAll and findById both spread the records array, so callers only ever hold copies",
+        "The assignment throws a TypeError because the repository freezes every record it returns"
+      ],
+      "explanation": "findAll spreads the array (a shallow copy of the list) but findById returns `clientCompanyRecords.find(...)`, the very object held in memory. By snapshot 12 the agreement repository returns `{ ...agreement }` copies for exactly this reason."
+    },
+    {
+      "id": "q02-repository-interface-first",
+      "kind": "quiz",
+      "source": { "path": "snapshots/01-domain-and-persistence/NOTES.md", "lines": { "start": 9, "end": 15 } },
+      "cites": [
+        { "path": "snapshots/01-domain-and-persistence/NOTES.md", "lineStart": 10, "lineEnd": 12 },
+        { "path": "snapshots/01-domain-and-persistence/code/apps/api/src/services/clientCompanyService.ts", "lineStart": 5, "lineEnd": 6 }
+      ],
+      "prompt": "Snapshot 01 introduces a ClientCompanyRepository interface and injects it into ClientCompanyService even though storage is just an in-memory array. What is the stated payoff, and what does it cost?",
+      "answer": "A later persistence swap becomes visible and testable behind one boundary (a fake can be injected); the cost is a little ceremony before any database exists",
+      "distractors": [
+        "It makes the in-memory array thread-safe; the cost is slower reads because every call goes through a lock",
+        "It lets routes import the records array directly while the service caches them; the cost is duplicate data",
+        "It is required by Express to register async routes; the cost is one extra file per entity"
+      ],
+      "explanation": "NOTES 01: 'The interface makes later persistence swaps visible and testable. It adds a little ceremony before a database exists.' The service takes the repository through its constructor."
+    },
+    {
+      "id": "q03-list-agreements-unknown-company",
+      "kind": "quiz",
+      "source": { "path": "snapshots/05-second-entity-relationship/code/apps/api/src/services/workAgreementService.ts", "lines": { "start": 12, "end": 16 } },
+      "cites": [{ "path": "snapshots/05-second-entity-relationship/code/apps/api/src/services/workAgreementService.ts", "lineStart": 12, "lineEnd": 16 }],
+      "prompt": "GET agreements for clientCompanyId `company_typo` (no such company) in snapshot 05. What does the client get, and why is that the better design than the alternative?",
+      "answer": "A not-found ApiError, because the service checks the parent company exists before querying agreements; an empty list would make 'no agreements' and 'wrong company id' indistinguishable",
+      "distractors": [
+        "An empty agreements array, because filtering by an unknown foreign key simply matches nothing and that is the expected REST behavior",
+        "A 500 error, because findByClientCompanyId throws when no record matches the id",
+        "A 400 validation error, because the id does not match the company_ prefix format"
+      ],
+      "explanation": "listForClientCompany calls companies.findById first and throws ApiError.notFound('Client company not found') when it is missing; only then does it ask the agreement repository."
+    },
+    {
+      "id": "q04-local-entity-code-from-name",
+      "kind": "quiz",
+      "source": { "path": "snapshots/05-second-entity-relationship/code/apps/api/src/services/workAgreementService.ts", "lines": { "start": 18, "end": 35 } },
+      "cites": [
+        { "path": "snapshots/05-second-entity-relationship/code/apps/api/src/services/workAgreementService.ts", "lineStart": 26, "lineEnd": 30 },
+        { "path": "snapshots/05-second-entity-relationship/code/apps/api/src/data/workAgreementRecords.ts", "lineStart": 8, "lineEnd": 12 }
+      ],
+      "prompt": "The seed data stores workerCountry as a full name ('Ireland') with localEntityCode 'IE-EOR-01'. An operator creates an agreement with workerCountry 'Germany' through the snapshot 05 form. What localEntityCode is stored?",
+      "answer": "'GE-EOR-TBD': the code is the first two letters of the typed country upper-cased, which is not the ISO code (DE) for full country names",
+      "distractors": [
+        "'DE-EOR-TBD': the service maps the country name to its ISO 3166 code before building the entity code",
+        "'DE-EOR-03': the service looks up the next free sequence number for that country",
+        "No code: localEntityCode is left empty until an admin assigns one"
+      ],
+      "explanation": "createAgreement builds `input.workerCountry.slice(0, 2).toUpperCase() + '-EOR-TBD'`. That only works when the input is already an ISO code; with names like Ireland it would give IR, not IE."
+    },
+    {
+      "id": "q05-dashboard-n-plus-one",
+      "kind": "quiz",
+      "source": { "path": "snapshots/07-refactor-service-and-hooks/code/apps/api/src/services/workforceOperationsService.ts", "lines": { "start": 11, "end": 31 } },
+      "cites": [
+        { "path": "snapshots/07-refactor-service-and-hooks/code/apps/api/src/services/workforceOperationsService.ts", "lineStart": 12, "lineEnd": 22 },
+        { "path": "snapshots/12-full-stack-workflow/code/apps/api/src/services/workforceOperationsService.ts", "lineStart": 8, "lineEnd": 11 }
+      ],
+      "prompt": "Snapshot 07's WorkforceOperationsService.getDashboardSummary works correctly on the seed data. What goes wrong once the repository is backed by a real database with 500 client companies?",
+      "answer": "It issues one agreement query per company (1 + N round trips) inside Promise.all, so the dashboard cost grows with the company count; later snapshots replace it with a single batched countByClientIds",
+      "distractors": [
+        "Promise.all runs the lookups one after another, so the dashboard takes 500 times the latency of a single query but makes only one round trip",
+        "The counts become wrong because Promise.all returns results in completion order, not company order",
+        "It loads every agreement into memory once and filters per company, which uses too much memory but only one query"
+      ],
+      "explanation": "Each company triggers agreements.findByClientCompanyId(company.id): the classic N+1. Promise.all preserves input order and runs them concurrently, but the query count still scales with N. Snapshot 12 calls countByClientIds once."
+    },
+    {
+      "id": "q06-useapiresource-stale-response",
+      "kind": "quiz",
+      "source": { "path": "snapshots/07-refactor-service-and-hooks/code/apps/web/src/hooks/useApiResource.ts", "lines": { "start": 3, "end": 22 } },
+      "cites": [{ "path": "snapshots/07-refactor-service-and-hooks/code/apps/web/src/hooks/useApiResource.ts", "lineStart": 8, "lineEnd": 20 }],
+      "prompt": "With useApiResource, an operator opens company A, then quickly company B. A's request is slow and resolves after B's. What does the panel show, and what is missing from the hook?",
+      "answer": "A's data under company B, because reload has no cancellation or stale-request guard, so whichever response resolves last wins setData",
+      "distractors": [
+        "B's data, because React discards state updates from effects whose dependencies have since changed",
+        "An error, because useEffect throws when a previous async effect is still pending",
+        "Both lists merged, because setData appends to the previous value"
+      ],
+      "explanation": "reload awaits loader() and calls setData unconditionally; the effect has no cleanup flag or AbortController. React does not drop the late update for you."
+    },
+    {
+      "id": "q07-create-agreement-cache-hides-it",
+      "kind": "quiz",
+      "source": { "path": "snapshots/08-frontend-data-maturity/code/apps/web/src/features/agreements/AgreementPanel.tsx", "lines": { "start": 9, "end": 21 } },
+      "cites": [
+        { "path": "snapshots/08-frontend-data-maturity/code/apps/web/src/features/agreements/AgreementPanel.tsx", "lineStart": 15, "lineEnd": 20 },
+        { "path": "snapshots/08-frontend-data-maturity/code/apps/web/src/features/agreements/useAgreementQueries.ts", "lineStart": 12, "lineEnd": 19 }
+      ],
+      "prompt": "In snapshot 08, an operator submits the 'Add agreement' form. The POST succeeds and the panel calls reload(). Why does the new agreement not appear in the list?",
+      "answer": "The loader returns the cached list for that company key before fetching, and nothing invalidated the key after the create, so reload re-reads the stale cache",
+      "distractors": [
+        "The POST response is ignored and the server never saved the agreement because createWorkAgreement is fire-and-forget",
+        "reload() only re-renders the component and never calls the loader again",
+        "The new agreement is filtered out because its status is draft and the panel only lists active agreements"
+      ],
+      "explanation": "useCompanyAgreements' loader does `if (cached) return cached;`. handleSubmit calls api.createWorkAgreement then reload() without queryClient.invalidate(agreementKeys.byCompany(id)), so the cached response is served again."
+    },
+    {
+      "id": "q08-optimistic-update-not-rendered",
+      "kind": "quiz",
+      "source": { "path": "snapshots/08-frontend-data-maturity/code/apps/web/src/features/agreements/useAgreementQueries.ts", "lines": { "start": 10, "end": 37 } },
+      "cites": [
+        { "path": "snapshots/08-frontend-data-maturity/code/apps/web/src/features/agreements/useAgreementQueries.ts", "lineStart": 21, "lineEnd": 34 },
+        { "path": "snapshots/08-frontend-data-maturity/code/apps/web/src/hooks/useApiResource.ts", "lineStart": 4, "lineEnd": 12 }
+      ],
+      "prompt": "changeStatus writes the new status into the query cache before awaiting the server, as an 'optimistic' update. When does the operator actually see the new status in the select box?",
+      "answer": "Only after the server call succeeds and reload() runs: the panel renders useApiResource's state, and writing to the cache Map does not update that state or trigger a render",
+      "distractors": [
+        "Immediately, because queryClient.set notifies every subscribed component of the change",
+        "Immediately, because the Map lives in useState and mutating it re-renders the provider",
+        "Never, because the rollback branch always restores the previous cache entry"
+      ],
+      "explanation": "The cache is a Map held in useState and mutated in place (no setState), and the panel reads `data` from useApiResource. The visible change waits for `await resource.reload()` after the server responds, so the update is not optimistic from the user's point of view."
+    },
+    {
+      "id": "q09-config-no-validation",
+      "kind": "quiz",
+      "source": { "path": "snapshots/10-observability-config/code/apps/api/src/config/env.ts", "lines": { "start": 9, "end": 19 } },
+      "cites": [
+        { "path": "snapshots/10-observability-config/code/apps/api/src/config/env.ts", "lineStart": 9, "lineEnd": 17 },
+        { "path": "snapshots/10-observability-config/NOTES.md", "lineStart": 10, "lineEnd": 10 }
+      ],
+      "prompt": "NOTES 10 says the config module keeps 'defaults and validation discoverable'. A deploy sets PORT=http and LOG_LEVEL=verbose. What does loadConfig actually do?",
+      "answer": "Accepts both silently: port becomes NaN from Number('http') and logLevel is cast to 'verbose' without checking the allowed values; there is no validation step",
+      "distractors": [
+        "Throws at startup listing both invalid variables, which is the point of a central config module",
+        "Falls back to the defaults 4100 and 'info' because ?? replaces invalid values",
+        "Clamps the port to 4100 and maps unknown log levels to 'debug'"
+      ],
+      "explanation": "`??` only replaces null/undefined, and `as AppConfig['logLevel']` is a compile-time cast. The defaults are discoverable, but nothing validates the values the NOTES promise."
+    },
+    {
+      "id": "q10-request-id-trust",
+      "kind": "quiz",
+      "source": { "path": "snapshots/10-observability-config/code/apps/api/src/middleware/requestContext.ts", "lines": { "start": 11, "end": 16 } },
+      "cites": [{ "path": "snapshots/10-observability-config/code/apps/api/src/middleware/requestContext.ts", "lineStart": 12, "lineEnd": 14 }],
+      "prompt": "requestContext reuses an incoming x-request-id header when it is shorter than 128 characters. What is the benefit, and what risk does it accept?",
+      "answer": "An ID set by an upstream proxy or the frontend correlates across hops; the risk is that any client can choose or reuse IDs, so log correlation can be spoofed or collide",
+      "distractors": [
+        "It saves the cost of randomUUID on every request; the risk is that empty headers crash the middleware",
+        "It guarantees globally unique IDs because clients must generate UUIDs; the risk is the extra header bytes",
+        "It lets the server authenticate the caller by request ID; the risk is IDs longer than 128 characters"
+      ],
+      "explanation": "Only length is checked (an empty header is falsy and gets a fresh UUID). Propagating trusted upstream IDs is the point of correlation, but the value is not validated as a UUID or restricted to trusted sources."
+    },
+    {
+      "id": "q11-unexpected-error-log",
+      "kind": "quiz",
+      "source": { "path": "snapshots/10-observability-config/code/apps/api/src/middleware/errorMiddleware.ts", "lines": { "start": 5, "end": 13 } },
+      "cites": [{ "path": "snapshots/10-observability-config/code/apps/api/src/middleware/errorMiddleware.ts", "lineStart": 11, "lineEnd": 12 }],
+      "prompt": "A TypeError ('Cannot read properties of undefined') escapes a controller in snapshot 10. An operator reports the requestId from the 500 response. What can an engineer find in the logs for that request?",
+      "answer": "Only a level-error line with the requestId and errorName 'TypeError': the message and stack are not logged, so the log line says what kind of error occurred but not where",
+      "distractors": [
+        "The full message and stack trace, because logger.error serializes the whole Error object",
+        "Nothing: unexpected errors are not logged, only ApiError instances are",
+        "The stack trace in the 500 response body, since details are returned to the client"
+      ],
+      "explanation": "The non-ApiError branch logs `{ message: 'unexpected api error', requestId, errorName: error?.name }` and responds with a generic message. Correlation works; diagnosis needs error.message and error.stack too."
+    },
+    {
+      "id": "q12-search-nan-page",
+      "kind": "quiz",
+      "source": { "path": "snapshots/12-full-stack-workflow/code/apps/api/src/services/agreementSearchService.ts", "lines": { "start": 5, "end": 17 } },
+      "cites": [{ "path": "snapshots/12-full-stack-workflow/code/apps/api/src/services/agreementSearchService.ts", "lineStart": 6, "lineEnd": 16 }],
+      "prompt": "A client calls the agreement search with `?page=abc`. Given the page and pageSize clamping, what comes back?",
+      "answer": "An empty agreements array with page serialized as null: Number('abc') is NaN, Math.max(1, NaN) is NaN, and slice(NaN, NaN) returns nothing",
+      "distractors": [
+        "Page 1, because Math.max(1, ...) clamps any invalid value up to 1",
+        "A 400 validation error, because the shared AgreementSearchQuery type declares page as a number",
+        "Every matching agreement, because slice(NaN) returns the whole array"
+      ],
+      "explanation": "Math.max propagates NaN, so the clamp does not protect against non-numeric input; JSON.stringify turns NaN into null. total is still correct, which makes the bug look like an empty page."
+    },
+    {
+      "id": "q13-status-transition-path",
+      "kind": "quiz",
+      "source": { "path": "snapshots/12-full-stack-workflow/code/apps/api/src/services/agreementStatusService.ts", "lines": { "start": 5, "end": 19 } },
+      "cites": [{ "path": "snapshots/12-full-stack-workflow/code/apps/api/src/services/agreementStatusService.ts", "lineStart": 5, "lineEnd": 17 }],
+      "prompt": "An agreement is active, and an operator needs to take it back to draft to fix the role title. Under the snapshot 12 transition map, what must happen?",
+      "answer": "Two transitions: active to blocked, then blocked to draft; a direct PATCH to draft is refused with 409 invalid_status_transition",
+      "distractors": [
+        "A direct PATCH to draft works because every status may return to draft",
+        "It is impossible: active is terminal and allows no transitions",
+        "Three transitions: active to ready_for_signature to in_review to draft, walking the workflow backwards"
+      ],
+      "explanation": "allowedTransitions: active -> ['blocked']; blocked -> ['draft', 'in_review']. Anything else throws ApiError(409, 'invalid_status_transition')."
+    },
+    {
+      "id": "f01-search-bypasses-repository",
+      "kind": "flashcard",
+      "source": { "path": "snapshots/12-full-stack-workflow/code/apps/api/src/services/agreementSearchService.ts", "lines": { "start": 1, "end": 17 } },
+      "cites": [
+        { "path": "snapshots/12-full-stack-workflow/code/apps/api/src/services/agreementSearchService.ts", "lineStart": 2, "lineEnd": 9 },
+        { "path": "snapshots/01-domain-and-persistence/NOTES.md", "lineStart": 10, "lineEnd": 10 }
+      ],
+      "front": "Snapshot 12's AgreementSearchService filters agreements for the operations page. Which boundary from snapshot 01 does it break, and what fails when storage moves to a database?",
+      "back": "It imports workAgreementRecords directly instead of going through WorkAgreementRepository, so a persistence swap behind the repository leaves search reading the old in-memory array (and search cannot be faked in tests)."
+    },
+    {
+      "id": "f02-log-level-ignored",
+      "kind": "flashcard",
+      "source": { "path": "snapshots/10-observability-config/code/apps/api/src/observability/logger.ts", "lines": { "start": 1, "end": 14 } },
+      "cites": [
+        { "path": "snapshots/10-observability-config/code/apps/api/src/observability/logger.ts", "lineStart": 5, "lineEnd": 14 },
+        { "path": "snapshots/10-observability-config/code/apps/api/src/config/env.ts", "lineStart": 13, "lineEnd": 13 }
+      ],
+      "front": "Production sets LOG_LEVEL=warn in snapshot 10. Why are debug and info lines still written?",
+      "back": "config.logLevel is loaded but the logger never reads it: every logger method calls write(), which always console.logs the JSON event."
+    },
+    {
+      "id": "f03-cache-mutated-in-place",
+      "kind": "flashcard",
+      "source": { "path": "snapshots/08-frontend-data-maturity/code/apps/web/src/query/queryClient.tsx", "lines": { "start": 13, "end": 24 } },
+      "cites": [{ "path": "snapshots/08-frontend-data-maturity/code/apps/web/src/query/queryClient.tsx", "lineStart": 14, "lineEnd": 21 }],
+      "front": "The snapshot 08 query client keeps its cache in useState but its set and invalidate methods change the Map directly. What does that mean for components reading the cache?",
+      "back": "No component re-renders on set or invalidate: the Map identity never changes and no setState runs, so screens only see cache changes when something else makes them reload."
+    },
+    {
+      "id": "f04-dashboard-batched-counts",
+      "kind": "flashcard",
+      "source": { "path": "snapshots/12-full-stack-workflow/code/apps/api/src/repositories/workAgreementRepository.ts", "lines": { "start": 17, "end": 24 } },
+      "cites": [
+        { "path": "snapshots/12-full-stack-workflow/code/apps/api/src/repositories/workAgreementRepository.ts", "lineStart": 17, "lineEnd": 24 },
+        { "path": "snapshots/12-full-stack-workflow/code/apps/api/src/services/workforceOperationsService.ts", "lineStart": 8, "lineEnd": 11 }
+      ],
+      "front": "How does the later dashboard compute open-agreement counts without one query per company, and which statuses count as open?",
+      "back": "countByClientIds takes all company ids, seeds a Map with 0 for each, and makes one pass over the agreements, counting every status except active (draft, in_review, ready_for_signature and blocked)."
+    }
+  ]
+}
