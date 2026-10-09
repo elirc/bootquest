@@ -80,3 +80,8 @@ integrity unverified, re-extract if in doubt). Unconfirmed at cut-off:
 UI (main workspace — check docs/recon/ui-audit.md for appended sections +
 stray processes on ports 4178/5173), RUNNER (kata-cs-tests worktree),
 VARIANTS (bq-variants clone) — inspect per the addendum above.
+
+Final update: UI agent ALSO confirmed clean (6/8) — main workspace
+untouched @ 185d175+handoff commits, ports 4178/5173/4173 verified free,
+ui-audit.md unchanged (still PARTIAL and accurate). Only RUNNER and
+VARIANTS remained unconfirmed at cut-off.
