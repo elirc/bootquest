@@ -72,3 +72,11 @@ a WIP commit = read its message for done/not-done; uncommitted changes =
 inspect before trusting, prefer regenerating content via the deterministic
 tools over salvaging half-authored drafts. Everything else in this handoff
 remains accurate.
+
+Update before cut-off: 5 of 8 confirmed CLEAN stops (FACTORY, OPS, ACT2-A,
+KATA-2 all pristine @ 3795a39; ACT2-B also clean, and note its
+.cache/checkouts now ALSO holds organized-js-training-jstrain2@d8a8a4f7 —
+integrity unverified, re-extract if in doubt). Unconfirmed at cut-off:
+UI (main workspace — check docs/recon/ui-audit.md for appended sections +
+stray processes on ports 4178/5173), RUNNER (kata-cs-tests worktree),
+VARIANTS (bq-variants clone) — inspect per the addendum above.
