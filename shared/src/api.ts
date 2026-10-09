@@ -57,6 +57,10 @@ export const API_ERROR_CODES = [
   'NOT_VERIFIED',
   /** W6 mutation gate: a file is under the per-file floor or the total under the break */
   'MUTATION_BELOW_THRESHOLD',
+  /** W7: the seed item this answer was recorded against has been re-seeded since (stored item hash differs) */
+  'CONTENT_CHANGED',
+  /** W7: a changed-example retest unit is closed until one of its schedules is due (no free pre-solving runs) */
+  'RETEST_NOT_OPEN',
   'INTERNAL',
 ] as const;
 export const ApiErrorCode = z.enum(API_ERROR_CODES);
@@ -200,7 +204,8 @@ export const PUBLIC_CHECK_FIELDS: Readonly<Record<CheckTypeT, readonly string[]>
   repo: ['type', 'predicates', 'timeoutMs'],
   'study-quiz': ['type', 'itemKeys', 'passPct'],
   'explain-back': ['type', 'questionSetKey', 'questionCount', 'minCoverage'],
-  'patch-kata': ['type', 'kataKey', 'defectCount'],
+  // W7 (audit #9): the defect COUNT is not public before the findings are recorded (blind review)
+  'patch-kata': ['type', 'kataKey'],
   review: ['type', 'cardKey'],
   'node-test-file': ['type', 'learnerPath', 'sha', 'tsx', 'timeoutMs'],
   'self-run': ['type', 'language', 'file', 'tsc', 'inverted', 'timeoutMs'],
@@ -316,7 +321,7 @@ export const PublicCheck = z.discriminatedUnion('type', [
   z.object({ type: z.literal('repo'), predicates: z.array(PublicRepoPredicate), timeoutMs: z.number() }).strict(),
   z.object({ type: z.literal('study-quiz'), itemKeys: z.array(z.string()), passPct: z.number() }).strict(),
   z.object({ type: z.literal('explain-back'), questionSetKey: z.string(), questionCount: z.number(), minCoverage: z.number() }).strict(),
-  z.object({ type: z.literal('patch-kata'), kataKey: z.string(), defectCount: z.number() }).strict(),
+  z.object({ type: z.literal('patch-kata'), kataKey: z.string() }).strict(),
   z.object({ type: z.literal('review'), cardKey: z.string() }).strict(),
   z.object({ type: z.literal('node-test-file'), learnerPath: z.string(), sha: z.string(), tsx: z.boolean(), timeoutMs: z.number() }).strict(),
   z.object({ type: z.literal('self-run'), language: z.enum(['js', 'ts', 'cs']), file: z.string(), tsc: z.boolean(), inverted: z.boolean(), timeoutMs: z.number() }).strict(),
@@ -413,8 +418,8 @@ export const KataPublic = z
     title: z.string(),
     diff: z.string(),
     contextFiles: z.array(z.object({ path: z.string(), content: z.string() }).strict()),
-    /** how many seeded defects the key holds (the count is public; the defects are not) */
-    defectCount: z.number(),
+    // W7 (audit #9): no defect count here — "there are exactly N defects" is a search hint; the
+    // count arrives with the key, after the findings are recorded
   })
   .strict();
 export type KataPublic = z.infer<typeof KataPublic>;
@@ -440,6 +445,19 @@ export const UnitDetailResponse = z
     explainBack: ExplainBackPublic.nullable().optional(),
     /** W6 patch-kata units: diff + context only (never the seeded-defect key); null = content pending */
     kata: KataPublic.nullable().optional(),
+    /**
+     * W7 (audit #1) retest units only: whether the changed-example retest is open. Closed =
+     * instructions / starter / snippet withheld and run/submit refused (409 RETEST_NOT_OPEN),
+     * so the >= 2-day delay measures retention, not a pasted day-0 solution.
+     *   due          a retest schedule for this unit is due (the real leg (c) path)
+     *   practice     the artifact's solution was revealed: guided practice only, never a leg
+     *   not-scheduled no schedule exists (pass the artifact + its explain-back >= 80% first)
+     *   not-due      a schedule exists and opens at opensAt
+     */
+    retestGate: z
+      .object({ open: z.boolean(), reason: z.enum(['due', 'practice', 'not-scheduled', 'not-due']), opensAt: z.number().nullable() })
+      .strict()
+      .optional(),
   })
   .strict();
 export type UnitDetailResponse = z.infer<typeof UnitDetailResponse>;
@@ -717,6 +735,8 @@ export const G1_MIN_DEFECTS = 10;
 export const KataStatsResponse = z
   .object({
     katasScored: z.number(),
+    /** W7 (audit #2): scored katas NOT counted toward G1 because the answer was assisted / guided */
+    assistedCount: z.number(),
     defectsCaught: z.number(),
     defectsTotal: z.number(),
     catchRate: z.number().nullable(),
@@ -724,6 +744,35 @@ export const KataStatsResponse = z
   })
   .strict();
 export type KataStatsResponse = z.infer<typeof KataStatsResponse>;
+
+/**
+ * GET /api/ladder (W7): every live competency-ladder unit the server derived from the stamped
+ * seed packs (explain-back sets, G2 brief rubrics, the G1 kata bank, changed-example retests)
+ * plus the authored agentic units (G3 / G4), each with its campaign link by repo (display only).
+ */
+export const LadderUnitDto = z
+  .object({
+    id: z.number(),
+    key: z.string(),
+    kind: UnitKind,
+    family: z.enum(['explain-back', 'g2', 'kata', 'retest', 'authored']),
+    trackId: TrackId,
+    title: z.string(),
+    difficulty: z.number().nullable(),
+    repo: z.string().nullable(),
+    quest: z.object({ id: z.number(), key: z.string(), track: TrackId, actNo: z.number() }).strict().nullable(),
+    prerequisites: z.array(z.number()),
+    variationOfUnitId: z.number().nullable(),
+  })
+  .strict();
+export type LadderUnitDto = z.infer<typeof LadderUnitDto>;
+export const LadderResponse = z
+  .object({
+    counts: z.object({ explainBack: z.number(), g2: z.number(), katas: z.number(), retests: z.number(), authored: z.number() }).strict(),
+    units: z.array(LadderUnitDto),
+  })
+  .strict();
+export type LadderResponse = z.infer<typeof LadderResponse>;
 
 export const MutationFileStatDto = z
   .object({

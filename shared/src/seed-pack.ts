@@ -84,6 +84,12 @@ export const SeedCitation = z
     crossBlockFrom: z.number().int().positive().optional(),
     /** repo-relative file the resolver bound it to at the pinned sha */
     resolved: z.string().optional(),
+    /**
+     * W7: NOT resolved — matched a citationWhitelist entry of the exclusion registry
+     * (gitignored runtime file / file the guide tells the learner to create). Recorded
+     * on the shipped item so the exemption stays visible; never counted as resolved.
+     */
+    whitelisted: z.object({ pattern: z.string().min(1), note: z.string().min(1) }).strict().optional(),
   })
   .strict();
 export type SeedCitation = z.infer<typeof SeedCitation>;
@@ -110,7 +116,8 @@ export const SeedQuizItem = z
     ...base,
     kind: z.literal('quiz'),
     /** goal-check: "which check verifies this goal"; finding-location: "where is this defect" */
-    variety: z.enum(['goal-check', 'finding-location']),
+    /** concept: hand-authored concept check bound to the guide lines that support its key (W7) */
+    variety: z.enum(['goal-check', 'finding-location', 'concept']),
     prompt: z.string().min(1),
     choices: z.array(SeedQuizChoice).min(2),
     /** the QuizCheck the app grades with (choice, single-keyed; choices mirror choices[].text) */
@@ -123,7 +130,8 @@ export const SeedFlashcardItem = z
   .object({
     ...base,
     kind: z.literal('flashcard'),
-    shape: z.enum(['f-table', 'numbered', 'r-heading']),
+    /** hand-authored: written in a seed session from a finding the parser cannot read (W7) */
+    shape: z.enum(['f-table', 'numbered', 'r-heading', 'hand-authored']),
     /** F1 | R21 | 1 */
     label: z.string().min(1),
     severity: z.string().optional(),

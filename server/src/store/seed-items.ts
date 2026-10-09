@@ -1,18 +1,22 @@
 import { createHash } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   SeedExplainBackItem,
-  SeedItemsFile,
   SeedPatchKataItem,
-  SeedValidationStamp,
+  SeedVariantItem,
   type SeedExplainBackItem as ExplainBackItem,
   type SeedPatchKataItem as PatchKataItem,
+  type SeedVariantItem as VariantItem,
 } from '@bootquest/shared';
+// the ONE seed-pack verifier (seed:check uses it too); a runtime import only — tools/seed
+// depends on the server package, never the other way round at the package level
+import { loadSeedPack } from '../../../tools/seed/src/factory/pack.ts';
 
 /**
  * W6: the seed items the explain-back and patch-kata players are built from
- * (W5a seed packs: content/seed/explainback/<name>/ and content/seed/patches/<name>/,
+ * (W5a seed packs: content/seed/explainback/<name>/, content/seed/patches/<name>/ and,
+ * since W7, content/seed/variants/<name>/ (changed-example retests);
  * format bootquest-seed-pack@1). Check specs reference them by item key
  * (explain-back `questionSetKey`, patch-kata `kataKey`).
  *
@@ -28,9 +32,20 @@ export interface SeedItemStore {
   explainBack(key: string): ExplainBackItem | undefined;
   kata(key: string): PatchKataItem | undefined;
   size(): number;
+  /** W7: every loaded item of a kind, in load order (the ladder loader builds units from these) */
+  explainBackItems(): readonly ExplainBackItem[];
+  kataItems(): readonly PatchKataItem[];
+  variantItems(): readonly VariantItem[];
 }
 
-export const emptySeedItemStore: SeedItemStore = { explainBack: () => undefined, kata: () => undefined, size: () => 0 };
+export const emptySeedItemStore: SeedItemStore = {
+  explainBack: () => undefined,
+  kata: () => undefined,
+  size: () => 0,
+  explainBackItems: () => [],
+  kataItems: () => [],
+  variantItems: () => [],
+};
 
 export class SeedItemLoadError extends Error {
   constructor(message: string) {
@@ -43,6 +58,7 @@ export class SeedItemLoadError extends Error {
 export function mapSeedItemStore(items: readonly unknown[]): SeedItemStore {
   const eb = new Map<string, ExplainBackItem>();
   const kata = new Map<string, PatchKataItem>();
+  const variants = new Map<string, VariantItem>();
   for (const raw of items) {
     const kind = (raw as { kind?: unknown })?.kind;
     if (kind === 'explain-back') {
@@ -53,36 +69,73 @@ export function mapSeedItemStore(items: readonly unknown[]): SeedItemStore {
       const it = SeedPatchKataItem.parse(raw);
       if (kata.has(it.key)) throw new SeedItemLoadError(`duplicate patch-kata item ${it.key}`);
       kata.set(it.key, it);
+    } else if (kind === 'variant') {
+      const it = SeedVariantItem.parse(raw);
+      if (variants.has(it.key)) throw new SeedItemLoadError(`duplicate variant item ${it.key}`);
+      variants.set(it.key, it);
     }
-    // other seed kinds (quiz / flashcard / reading-step / variant) are served elsewhere
+    // other seed kinds (quiz / flashcard / reading-step) are served elsewhere
   }
-  return { explainBack: (k) => eb.get(k), kata: (k) => kata.get(k), size: () => eb.size + kata.size };
+  return {
+    explainBack: (k) => eb.get(k),
+    kata: (k) => kata.get(k),
+    size: () => eb.size + kata.size + variants.size,
+    explainBackItems: () => [...eb.values()],
+    kataItems: () => [...kata.values()],
+    variantItems: () => [...variants.values()],
+  };
 }
 
 const sha256 = (b: Buffer | string): string => createHash('sha256').update(b).digest('hex');
 
-/** Read ONE stamped seed pack dir (items.json + validation.json). */
-export function readSeedPackItems(dir: string): unknown[] {
-  const itemsPath = join(dir, 'items.json');
-  const stampPath = join(dir, 'validation.json');
-  if (!existsSync(itemsPath)) throw new SeedItemLoadError(`${dir}: no items.json`);
-  if (!existsSync(stampPath)) {
-    throw new SeedItemLoadError(`${dir}: no validation.json stamp (run the seed generator's validator to completion)`);
+/** Canonical JSON (sorted keys) — the content hash an answer is bound to (audit #8). */
+function canonical(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(canonical).join(',')}]`;
+  if (v && typeof v === 'object') {
+    return `{${Object.keys(v)
+      .sort()
+      .filter((k) => (v as Record<string, unknown>)[k] !== undefined)
+      .map((k) => `${JSON.stringify(k)}:${canonical((v as Record<string, unknown>)[k])}`)
+      .join(',')}}`;
   }
-  const bytes = readFileSync(itemsPath);
-  const stamp = SeedValidationStamp.parse(JSON.parse(readFileSync(stampPath, 'utf8')));
-  // autocrlf checkouts may rewrite LF -> CRLF: accept the LF-normalized bytes too
-  const lf = bytes.toString('utf8').replace(/\r\n/g, '\n');
-  if (stamp.itemsSha256 !== sha256(bytes) && stamp.itemsSha256 !== sha256(lf)) {
-    throw new SeedItemLoadError(`${dir}: items.json bytes do not match the validation stamp (edited after validation?)`);
-  }
-  return SeedItemsFile.parse(JSON.parse(lf)).items;
+  return JSON.stringify(v);
 }
 
-/** Every content/seed/{explainback,patches}/<name>/ dir holding items.json (default for the real entrypoint). */
+/**
+ * W7 (audit #8): the content hash of one seed item. An answer attempt stores the hash of the
+ * item it was answered against; key / self-score refuse (409 CONTENT_CHANGED) once the loaded
+ * item differs, so a re-seed can never silently re-label key-point / defect ids (which are
+ * positional) or rewrite past G1 totals.
+ */
+export function seedItemHash(item: ExplainBackItem | PatchKataItem): string {
+  return sha256(canonical(item));
+}
+
+/**
+ * Read ONE stamped seed pack dir with the FULL stamp verification (audit #7) — the same
+ * verifier seed:check uses (tools/seed/src/factory/pack.ts loadSeedPack, requireStamp):
+ * manifest + items bytes, schema, loaded === built per-kind counts, quarantine and review
+ * keys bound to the stamp, and the CURRENT seed fingerprint (validator / generator /
+ * registry / toolchain). Any mismatch refuses startup; `npm run seed:check -- --restamp`
+ * re-validates every item and re-stamps when only the fingerprint went stale.
+ */
+export function readSeedPackItems(dir: string): unknown[] {
+  if (!existsSync(join(dir, 'items.json'))) throw new SeedItemLoadError(`${dir}: no items.json`);
+  if (!existsSync(join(dir, 'validation.json'))) {
+    throw new SeedItemLoadError(`${dir}: no validation.json stamp (run the seed generator's validator to completion)`);
+  }
+  try {
+    return loadSeedPack(dir, { requireStamp: true }).items;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new SeedItemLoadError(`${msg}${/fingerprint/.test(msg) ? ' — run `npm run seed:check -- --restamp` (re-validates every item first)' : ''}`);
+  }
+}
+
+/** Every content/seed/{explainback,patches,variants}/<name>/ dir holding items.json (default for the real entrypoint). */
 export function defaultSeedItemDirs(root: string): string[] {
   const out: string[] = [];
-  for (const gen of ['explainback', 'patches']) {
+  for (const gen of ['explainback', 'patches', 'variants']) {
     const base = join(root, gen);
     if (!existsSync(base)) continue;
     for (const d of readdirSync(base, { withFileTypes: true })) {
@@ -94,6 +147,32 @@ export function defaultSeedItemDirs(root: string): string[] {
 
 export function loadSeedItemStore(dirs: readonly string[]): SeedItemStore {
   return mapSeedItemStore(dirs.flatMap((d) => readSeedPackItems(d)));
+}
+
+export interface SeedPackStat {
+  dir: string;
+  /** "<generator>/<name>" from the dir layout */
+  source: string;
+  items: number;
+  byKind: Record<string, number>;
+}
+
+/** loadSeedItemStore + one stat row per pack (the startup summary prints these; loaded === built is asserted inside). */
+export function loadSeedItemStoreWithStats(dirs: readonly string[]): { store: SeedItemStore; packs: SeedPackStat[] } {
+  const packs: SeedPackStat[] = [];
+  const all: unknown[] = [];
+  for (const d of dirs) {
+    const items = readSeedPackItems(d);
+    const byKind: Record<string, number> = {};
+    for (const it of items) {
+      const k = String((it as { kind?: unknown }).kind);
+      byKind[k] = (byKind[k] ?? 0) + 1;
+    }
+    const parts = d.split(/[\\/]/);
+    packs.push({ dir: d, source: `${parts[parts.length - 2]}/${parts[parts.length - 1]}`, items: items.length, byKind });
+    all.push(...items);
+  }
+  return { store: mapSeedItemStore(all), packs };
 }
 
 // ---------------------------------------------------------------- public / private projections
@@ -118,12 +197,12 @@ export function explainBackKey(item: ExplainBackItem) {
   }));
 }
 
+/** Public half of a kata: diff + context, and NOT the defect count (audit #9: blind review). */
 export function kataPublic(item: PatchKataItem) {
   return {
     title: item.title,
     diff: item.diff,
     contextFiles: item.contextFiles.map((f) => ({ path: f.path, content: f.content })),
-    defectCount: item.seededDefectKey.length,
   };
 }
 

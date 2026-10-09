@@ -369,7 +369,7 @@ export function KataPane({ detail }: { detail: UnitDetail }) {
         {kata.title}
       </h2>
       <p className="muted small">
-        Review this patch like a PR. It hides {kata.defectCount} seeded defect{kata.defectCount === 1 ? '' : 's'}.
+        Review this patch like a PR. Find every seeded defect you can: how many there are is shown with the key, after your findings are recorded.
       </p>
       <DiffView diff={kata.diff} />
       {kata.contextFiles.map((f) => (

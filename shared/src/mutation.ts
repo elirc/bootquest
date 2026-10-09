@@ -94,9 +94,16 @@ export function evaluateMutation(
   return { pass: failures.length === 0, overallPct, floorPct, breakPct, files: verdicts, failures };
 }
 
-/** The per-lesson floor: check.threshold (0..1) when set, else the 40% default. */
+/**
+ * Lowest per-file floor a lesson may set (W7, audit #10): a per-lesson override can tune the
+ * floor, never switch it off — threshold 0 (or any tiny value) would let a gutted file pass.
+ */
+export const MIN_FILE_FLOOR_PCT = 20;
+
+/** The per-lesson floor: check.threshold (0..1) when set (clamped to >= MIN_FILE_FLOOR_PCT), else the 40% default. */
 export function floorPctFor(threshold: number | null | undefined): number {
-  return threshold === null || threshold === undefined ? DEFAULT_FILE_FLOOR_PCT : round2(threshold * 100);
+  if (threshold === null || threshold === undefined) return DEFAULT_FILE_FLOOR_PCT;
+  return Math.max(MIN_FILE_FLOOR_PCT, round2(threshold * 100));
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);

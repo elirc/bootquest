@@ -15,7 +15,8 @@ import { createDrillCsRunner, resolveCsScratchDir, type DrillCsRunner } from './
 import { defaultRunners, type RunnerRegistry } from './runners.ts';
 import { createNodeTestFileRunner } from './runner-node-test-file.ts';
 import { createSyncService, resolveSyncPaths, type SyncService } from '../sync/service.ts';
-import { defaultSeedItemDirs, loadSeedItemStore } from '../store/seed-items.ts';
+import { defaultSeedItemDirs, loadSeedItemStoreWithStats, type SeedPackStat } from '../store/seed-items.ts';
+import { DEFAULT_AUTHORED_UNITS, ladderContentEntries, loadLadderIntoDb, readAuthoredUnits, readKataDifficulty, type LadderLoadStats } from '../store/ladder.ts';
 
 /**
  * Real entrypoint: `node --import tsx server/src/api/serve.ts`
@@ -46,7 +47,15 @@ import { defaultSeedItemDirs, loadSeedItemStore } from '../store/seed-items.ts';
  *                           validation.json) holding explain-back question sets / patch katas;
  *                           when serve.ts is run directly and this is unset, every
  *                           <repo>/content/seed/{explainback,patches}/<name>/ is loaded. '' = none.
- *                           An unstamped / edited pack REFUSES TO START.
+ *                           An unstamped / edited pack REFUSES TO START. W7: the FULL stamp is
+ *                           verified (seed:check's verifier: bytes, counts, quarantine/review keys,
+ *                           current seed fingerprint), and content/seed/variants/<name>/ is loaded too.
+ *   BOOTQUEST_AUTHORED_UNITS (optional, W7) authored unit definitions (content/units/agentic.json:
+ *                           G3 / G4); when serve.ts is run directly and this is unset, the repo's
+ *                           file is loaded. '' = none.
+ * W7 ladder wiring: after the campaign + seed items load, the ladder loader derives the
+ * explain-back / G2 / kata-bank / retest units from the seed items (store/ladder.ts) and
+ * asserts loaded === built per family; it re-runs after every successful sync.
  * A pack without a matching validation stamp (seed:validate full run), or whose
  * loaded count differs from its built count, REFUSES TO START.
  */
@@ -117,6 +126,10 @@ export interface RunningServer {
   campaign: CampaignLoadStats | null;
   /** the C# runner's app-data dir (null when the caller injected its own registry) */
   csharpScratch: string | null;
+  /** W7: one row per loaded seed pack (full stamp verified) */
+  seedPacks: SeedPackStat[];
+  /** W7: ladder wiring stats (loaded === built per family already asserted) */
+  ladder: LadderLoadStats;
 }
 
 function splitList(raw: string | undefined): string[] {
@@ -194,14 +207,27 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
     }
     const campaignDir = (env.BOOTQUEST_CAMPAIGN ?? '').trim();
     const campaign = campaignDir ? loadCampaignIntoDb(db, readCampaign(resolve(campaignDir)), clock) : null;
+    const seedDirs = splitList(env.BOOTQUEST_SEED_ITEMS).map((d) => resolve(d));
+    const { store: seedItems, packs: seedPacks } = loadSeedItemStoreWithStats(seedDirs);
+    // W7: the ladder units (explain-back / G2 / kata bank / retests) + the authored G3/G4 units
+    const authoredPath = (env.BOOTQUEST_AUTHORED_UNITS ?? '').trim();
+    const authored = authoredPath ? readAuthoredUnits(resolve(authoredPath)) : null;
+    const kataDifficulty = new Map<string, number>();
+    for (const d of new Set(seedDirs.filter((x) => /[\\/]patches[\\/][^\\/]+$/.test(x)).map((x) => join(x, '..', 'katas-index.json')))) {
+      for (const [k, v] of readKataDifficulty(d)) kataDifficulty.set(k, v);
+    }
+    const ladderInputs = { seedItems, authored, kataDifficulty };
+    const ladder = loadLadderIntoDb(db, ladderInputs, clock);
+    sources.push(ladderContentEntries(seedItems));
+    if (authored) sources.push(new Map(Object.entries(authored.content)));
     const content = combineContentStores(sources);
-    const seedItems = loadSeedItemStore(splitList(env.BOOTQUEST_SEED_ITEMS).map((d) => resolve(d)));
     // drill-cs -> the warm C# runner (lazy: no dotnet process until the first C# grade)
     csharp = opts.runners ? null : createDrillCsRunner({ appDataDir: resolveCsScratchDir(env, dbPath) });
     const sync = opts.sync ?? createSyncService(resolveSyncPaths(env));
     const runners: RunnerRegistry =
       opts.runners ?? defaultRunners({ ...(csharp ? { drillCs: csharp.runner } : {}), nodeTestFile: createNodeTestFileRunner(sync.cache) });
-    const app = createApp({ db, clock, content, runners, sync, seedItems });
+    // a sync can register new project units (signalpost U01...): re-link explain-backs + create pending retests
+    const app = createApp({ db, clock, content, runners, sync, seedItems, afterSync: () => void loadLadderIntoDb(db, ladderInputs, clock) });
 
     const server = await new Promise<Server>((ok, fail) => {
       const s = app.listen(port, host);
@@ -221,11 +247,42 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
       });
       return closing;
     };
-    return { server, db, port, host, close, packs: packStats, campaign, csharpScratch: csharp?.appDataDir ?? null };
+    return { server, db, port, host, close, packs: packStats, campaign, csharpScratch: csharp?.appDataDir ?? null, seedPacks, ladder };
   } catch (err) {
     db.close();
     throw err;
   }
+}
+
+/**
+ * W7: the startup summary — one line per loaded source with its counts (packs, campaign
+ * tracks, seed packs, ladder families, authored units). Every count printed here was already
+ * asserted loaded === built by its loader (a mismatch refuses to start before this prints).
+ */
+export function startupSummary(running: Pick<RunningServer, 'packs' | 'campaign' | 'seedPacks' | 'ladder'>): string[] {
+  const out: string[] = [];
+  for (const p of running.packs) {
+    out.push(
+      `[bootquest] pack ${p.source}: ${p.courses.length} course(s), loaded ${p.loaded} === built ${p.built} ` +
+        `(inserted ${p.inserted}, updated ${p.updated}, unchanged ${p.unchanged}, quarantined ${p.withheld}, retired now ${p.retired})`,
+    );
+  }
+  for (const t of running.campaign?.tracks ?? []) {
+    out.push(`[bootquest] campaign ${t.track}: ${t.acts} act(s), loaded ${t.loaded} === built ${t.built} quests (${t.units} playable units)`);
+  }
+  for (const s of running.seedPacks) {
+    const kinds = Object.entries(s.byKind).map(([k, n]) => `${n} ${k}`).join(', ');
+    out.push(`[bootquest] seed ${s.source}: ${s.items} item(s) (${kinds || 'none'}), stamp verified`);
+  }
+  const l = running.ladder;
+  out.push(
+    `[bootquest] ladder: explain-back ${l.explainBack.loaded} === ${l.explainBack.built} (${l.explainBack.linkedToArtifact} linked to a project artifact, ` +
+      `${l.explainBack.linkedToQuest} to a campaign quest), G2 briefs ${l.g2.loaded} === ${l.g2.built}, ` +
+      `kata bank ${l.katas.loaded} === ${l.katas.built} (${l.katas.linkedToQuest} linked to a quest), ` +
+      `retests ${l.retests.loaded} === ${l.retests.built} built - ${l.retests.pending.length} pending, authored ${l.authored.loaded} === ${l.authored.built}`,
+  );
+  for (const p of l.retests.pending) out.push(`[bootquest] ladder: retest pending: ${p}`);
+  return out;
 }
 
 /** Graceful shutdown on SIGINT/SIGTERM: stop accepting, close the DB, then exit 0. */
@@ -251,18 +308,14 @@ if (invokedDirectly) {
   if (env.BOOTQUEST_PACKS === undefined) env.BOOTQUEST_PACKS = defaultPackDirs().join(',');
   if (env.BOOTQUEST_CAMPAIGN === undefined) env.BOOTQUEST_CAMPAIGN = defaultCampaignDir();
   if (env.BOOTQUEST_SEED_ITEMS === undefined) env.BOOTQUEST_SEED_ITEMS = defaultSeedDirs().join(',');
+  if (env.BOOTQUEST_AUTHORED_UNITS === undefined) {
+    const def = DEFAULT_AUTHORED_UNITS(fileURLToPath(new URL('../../../', import.meta.url)));
+    env.BOOTQUEST_AUTHORED_UNITS = existsSync(def) ? def : '';
+  }
   startServer({ env })
     .then((running) => {
       installShutdown(running);
-      for (const p of running.packs) {
-        console.log(
-          `[bootquest] pack ${p.source}: ${p.courses.length} course(s), loaded ${p.loaded} === built ${p.built} ` +
-            `(inserted ${p.inserted}, updated ${p.updated}, unchanged ${p.unchanged}, quarantined ${p.withheld}, retired now ${p.retired})`,
-        );
-      }
-      for (const t of running.campaign?.tracks ?? []) {
-        console.log(`[bootquest] campaign ${t.track}: ${t.acts} act(s), loaded ${t.loaded} === built ${t.built} quests (${t.units} playable units)`);
-      }
+      for (const line of startupSummary(running)) console.log(line);
       console.log(`[bootquest] API listening on http://${running.host}:${running.port} (db: ${running.db.path})`);
     })
     .catch((err: unknown) => {

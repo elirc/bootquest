@@ -33,6 +33,9 @@ describe('mutation gate math (spike semantics)', () => {
     expect(OVERALL_BREAK_PCT).toBe(60);
     expect(floorPctFor(null)).toBe(40);
     expect(floorPctFor(0.55)).toBe(55);
+    // W7 (audit #10): threshold 0 must not disable the per-file floor
+    expect(floorPctFor(0)).toBe(20);
+    expect(floorPctFor(0.05)).toBe(20);
   });
 
   it('a gutted file fails the per-file floor even when the aggregate clears the break (the spike finding)', () => {

@@ -33,16 +33,21 @@ export interface CitationCheck {
   excluded: string | null;
   /** count of citations that resolved ok (whitelisted not counted) */
   ok: number;
+  /** citations exempted by the registry's citationWhitelist (recorded on the citation) */
+  whitelisted: number;
 }
 
 /** Resolve an item's citations at the pinned sha (shared by every generator that cites). */
 export function checkCitations(co: Checkout, ex: Exclusions, guide: string, citations: readonly SeedCitation[]): CitationCheck {
-  const ignores = ex.citationIgnores(co.repo);
-  const out: CitationCheck = { bound: [], errors: [], warnings: [], excluded: null, ok: 0 };
+  const out: CitationCheck = { bound: [], errors: [], warnings: [], excluded: null, ok: 0, whitelisted: 0 };
   for (const c of citations) {
     const where = `${guide}:${c.sourceLine}`;
-    if (c.path !== null && ignores.some((p) => c.path === p || c.path!.endsWith(`/${p}`))) {
-      out.bound.push(c);
+    const wl = c.path !== null ? ex.citationWhitelistHit(co.repo, c.path) : null;
+    if (wl) {
+      // visible exemption: recorded on the citation, never counted as resolved (W7)
+      out.whitelisted++;
+      const { resolved: _r, ...rest } = c;
+      out.bound.push({ ...rest, whitelisted: wl });
       continue;
     }
     const r = resolveAt(co, guide, asCitation(c, guide));

@@ -170,10 +170,17 @@ export interface LoadedSeedPack {
   stamp: SeedValidationStamp | null;
   quarantineKeys: string[];
   reviewKeys: string[];
+  /**
+   * W7 (allowStaleFingerprint only): the stamp binds everything EXCEPT the current
+   * seed fingerprint (validator/generator/registry/toolchain changed since stamping).
+   * Such a pack is still NOT valid: seed:check --restamp may re-stamp it only after a
+   * full re-validation of every item under the current validators.
+   */
+  staleFingerprint: boolean;
 }
 
 /** Read + structurally verify a seed pack (bytes, schema, counts, stamp binding). Throws on any mismatch. */
-export function loadSeedPack(dir: string, opts: { requireStamp?: boolean } = {}): LoadedSeedPack {
+export function loadSeedPack(dir: string, opts: { requireStamp?: boolean; allowStaleFingerprint?: boolean } = {}): LoadedSeedPack {
   const read = (f: string): string => {
     const p = join(dir, f);
     if (!existsSync(p)) throw new Error(`${dir}: ${f} missing`);
@@ -203,6 +210,7 @@ export function loadSeedPack(dir: string, opts: { requireStamp?: boolean } = {})
   const reviewKeys = rq.entries.map((e) => e.key).sort();
 
   let stamp: SeedValidationStamp | null = null;
+  let staleFingerprint = false;
   const sp = join(dir, 'validation.json');
   if (existsSync(sp)) {
     stamp = SeedValidationStamp.parse(JSON.parse(readFileSync(sp, 'utf8')));
@@ -212,12 +220,44 @@ export function loadSeedPack(dir: string, opts: { requireStamp?: boolean } = {})
     if (stamp.itemsSha256 !== sha256(itemsBytes)) why.push('items bytes changed since stamping');
     if (stamp.fingerprintKind !== `seed:${manifest.generator}`) why.push(`stamp kind ${stamp.fingerprintKind}`);
     const fp = seedFingerprint(manifest.generator);
-    if (stamp.fingerprint !== fp) why.push(`seed fingerprint ${stamp.fingerprint.slice(0, 12)} != current ${fp.slice(0, 12)} (validator/generator/registry/toolchain changed: re-seed)`);
+    if (stamp.fingerprint !== fp && opts.allowStaleFingerprint) staleFingerprint = true;
+    else if (stamp.fingerprint !== fp) why.push(`seed fingerprint ${stamp.fingerprint.slice(0, 12)} != current ${fp.slice(0, 12)} (validator/generator/registry/toolchain changed: re-seed)`);
     if (JSON.stringify(stamp.quarantinedKeys) !== JSON.stringify(quarantineKeys)) why.push('quarantine.json does not match the stamp');
     if (JSON.stringify(stamp.reviewKeys) !== JSON.stringify(reviewKeys)) why.push('review-queue.json does not match the stamp');
     if (why.length) throw new Error(`${dir}: stale/invalid stamp: ${why.join('; ')}`);
   } else if (opts.requireStamp) {
     throw new Error(`${dir}: no validation.json stamp — the generator's validator has not vouched for this pack`);
   }
-  return { dir, manifest, items: itemsFile.items, stamp, quarantineKeys, reviewKeys };
+  return { dir, manifest, items: itemsFile.items, stamp, quarantineKeys, reviewKeys, staleFingerprint };
+}
+
+/**
+ * W7 seed:check --restamp: rewrite a pack's stamp for the CURRENT seed fingerprint +
+ * toolchain, keeping every other bound value. The caller (checkPack) must have
+ * re-validated every shipped item and review hold under the current validators with
+ * zero problems; this function only re-derives the binding from the bytes on disk.
+ */
+export function restampSeedPack(pack: LoadedSeedPack, executions: number): SeedValidationStamp {
+  if (!pack.stamp) throw new Error(`${pack.dir}: no stamp to restamp (a never-validated pack must be re-seeded)`);
+  const m = pack.manifest;
+  const manifestBytes = readFileSync(join(pack.dir, 'manifest.json'), 'utf8');
+  const itemsBytes = readFileSync(join(pack.dir, 'items.json'), 'utf8');
+  const stamp = SeedValidationStamp.parse({
+    format: SEED_PACK_FORMAT,
+    source: `${m.generator}/${m.name}`,
+    fingerprintKind: `seed:${m.generator}`,
+    fingerprint: seedFingerprint(m.generator),
+    toolchain: seedToolchain(m.generator),
+    manifestSha256: sha256(manifestBytes),
+    itemsSha256: sha256(itemsBytes),
+    counts: m.counts,
+    quarantinedKeys: pack.quarantineKeys,
+    reviewKeys: pack.reviewKeys,
+    executions,
+  });
+  if (stamp.manifestSha256 !== pack.stamp.manifestSha256 || stamp.itemsSha256 !== pack.stamp.itemsSha256) {
+    throw new Error(`${pack.dir}: bytes changed since the original stamp; refusing to restamp`);
+  }
+  writeFileSync(join(pack.dir, 'validation.json'), stableJson(stamp));
+  return stamp;
 }

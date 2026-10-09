@@ -97,7 +97,28 @@ export const NOT_FILES = new Set([
   'angular.js', 'ember.js', 'backbone.js', 'socket.io', 'deno.js', 'bun.js', 'nest.js', 'nestjs', 'asp.net',
   // JS member expressions that look like filenames (real hit: `express.json` in newcodex3-23 docs/upskill.md)
   'express.json', 'res.json', 'req.json', 'response.json', 'request.json',
+  // Windows command shims named in run instructions (W7: `npm.cmd test` advice in W5c-js guides)
+  'npm.cmd', 'npx.cmd', 'pnpm.cmd', 'yarn.cmd', 'node.cmd', 'tsx.cmd', 'vitest.cmd', 'dotnet.cmd',
 ]);
+
+/**
+ * W7: bare conventional entry-point names that C# guides use as CONCEPT words
+ * ("put it in `Program.cs`") — a path-only mention is not a citation (it is
+ * ambiguous in every multi-project repo). With a line spec (`Program.cs:12`) or
+ * a directory (`src/Api/Program.cs`) it is still a real citation.
+ */
+export const CONCEPT_FILENAMES = new Set(['Program.cs', 'Startup.cs', 'Program.fs']);
+
+/**
+ * W7: .NET namespaces / qualified type names (`System.Text.Json`,
+ * `Microsoft.AspNetCore.Http.Results`) — a bare dotted PascalCase name rooted at
+ * System/Microsoft, or any bare name of 3+ PascalCase segments, is not a file.
+ */
+export function looksLikeNamespace(p: string): boolean {
+  if (p.includes('/')) return false;
+  if (/^(System|Microsoft)(\.[A-Z][A-Za-z0-9]*)+$/.test(p)) return true;
+  return /^[A-Z][A-Za-z0-9]*(\.[A-Z][A-Za-z0-9]*){2,}$/.test(p);
+}
 
 function normalisePath(p: string): string {
   return p.replace(/\\/g, '/');
@@ -133,6 +154,7 @@ export function looksLikeFile(p: string): boolean {
   if (!p || hasForbidden(p) || p.endsWith('/')) return false;
   if (/^\d/.test(p) && !p.includes('/')) return false; // 127.0.0.1, 1.2.3
   if (!p.includes('/') && NOT_FILES.has(p.toLowerCase())) return false;
+  if (looksLikeNamespace(p)) return false;
   const seg = lastSegment(p);
   if (EXTENSIONLESS_FILES.has(seg)) return true;
   const ext = extensionOf(seg);
@@ -389,6 +411,7 @@ export function parseCitations(text: string, guideFile: string): ParseResult {
         }
         // path-only
         const p = normalisePath(t);
+        if (CONCEPT_FILENAMES.has(p)) continue; // concept word, not a citation (W7)
         if (looksLikeFile(p)) {
           emit({ path: p, lineStart: null, lineEnd: null, form: 'path-only', raw: ev.raw, source }, ++group);
           lastFile = { path: p, source };

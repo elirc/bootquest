@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -61,6 +62,53 @@ describe('seed:check (umbrella re-verification)', () => {
     await fails(variant('tamper', (d) => writeFileSync(join(d, 'items.json'), readFileSync(join(d, 'items.json'), 'utf8').replace('"back": "', '"back": "X'))), checkouts, /items.json sha256 != manifest/);
     await fails(variant('forge', (d) => writeFileSync(join(d, 'validation.json'), readFileSync(join(d, 'validation.json'), 'utf8').replace(/"fingerprint": "[0-9a-f]{64}"/, `"fingerprint": "${'a'.repeat(64)}"`))), checkouts, /stale\/invalid stamp: seed fingerprint aaaaaaaaaaaa/);
     await fails(variant('nostamp', (d) => rmSync(join(d, 'validation.json'))), checkouts, /no validation.json stamp/);
+  }, 240_000);
+
+  it('--restamp (W7): a stale-fingerprint-only pack is restamped after a clean full re-validation; anything else is not', async () => {
+    const copy = (n: string) => {
+      const root = join(tmp, n);
+      cpSync(join(seed, 'quests'), join(root, 'quests'), { recursive: true });
+      return { root, dir: join(root, 'quests', 'ww6') };
+    };
+    const stale = (d: string) =>
+      writeFileSync(join(d, 'validation.json'), readFileSync(join(d, 'validation.json'), 'utf8').replace(/"fingerprint": "[0-9a-f]{64}"/, `"fingerprint": "${'b'.repeat(64)}"`));
+    // 1. stale only -> restamped, then a plain check passes
+    const a = copy('restamp-ok');
+    stale(a.dir);
+    const plain = await runCheck({ seedDir: a.root, checkouts });
+    expect(plain.ok).toBe(false); // without --restamp a stale stamp is a failure
+    const r1 = await runCheck({ seedDir: a.root, checkouts, restamp: true });
+    expect(r1.ok).toBe(true);
+    expect(r1.packs[0]!.restamped).toBe(true);
+    expect(readFileSync(join(a.dir, 'validation.json'), 'utf8')).not.toContain('b'.repeat(64));
+    const again = await runCheck({ seedDir: a.root, checkouts });
+    expect(again.ok).toBe(true);
+    expect(again.packs[0]!.restamped).toBe(false);
+    // 2. stale + a consistently re-hashed tampered item (only re-validation can catch it) -> NOT restamped
+    const b = copy('restamp-tamper');
+    stale(b.dir);
+    const sha = (t: string) => createHash('sha256').update(t).digest('hex');
+    const items = JSON.parse(readFileSync(join(b.dir, 'items.json'), 'utf8'));
+    // a citation re-bound to a different file: schema-valid, hash-consistent, only re-resolution can catch it
+    const it = items.items.find((i: { citations: { resolved?: string }[] }) => i.citations.some((c) => c.resolved));
+    const c = it.citations.find((x: { resolved?: string }) => x.resolved);
+    c.resolved = `${c.resolved}.moved`;
+    const itemsBytes = JSON.stringify(items, null, 1) + String.fromCharCode(10);
+    writeFileSync(join(b.dir, 'items.json'), itemsBytes);
+    const man = JSON.parse(readFileSync(join(b.dir, 'manifest.json'), 'utf8'));
+    man.items.sha256 = sha(itemsBytes);
+    const manBytes = JSON.stringify(man, null, 1) + String.fromCharCode(10);
+    writeFileSync(join(b.dir, 'manifest.json'), manBytes);
+    const st = JSON.parse(readFileSync(join(b.dir, 'validation.json'), 'utf8'));
+    st.itemsSha256 = sha(itemsBytes);
+    st.manifestSha256 = sha(manBytes);
+    writeFileSync(join(b.dir, 'validation.json'), JSON.stringify(st));
+    const log: string[] = [];
+    const r2 = await runCheck({ seedDir: b.root, checkouts, restamp: true, log: (l) => log.push(l) });
+    expect(r2.ok).toBe(false);
+    expect(r2.packs[0]!.restamped).toBe(false);
+    expect(log.join(' | ')).toMatch(/NOT restamped/);
+    expect(JSON.parse(readFileSync(join(b.dir, 'validation.json'), 'utf8')).fingerprint).toBe('b'.repeat(64));
   }, 240_000);
 
   it('canonical JSON ignores key order only', () => {

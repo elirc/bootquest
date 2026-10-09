@@ -131,7 +131,7 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
       return {
         code: null,
         competencies: k?.competencies ?? ['code-reading'],
-        check: { id: 9000 + u.id, threshold: null, spec: { type: 'patch-kata', kataKey: `seed:patch-kata:mock-${u.id}`, defectCount: k?.defects.length ?? 1 } },
+        check: { id: 9000 + u.id, threshold: null, spec: { type: 'patch-kata', kataKey: `seed:patch-kata:mock-${u.id}` } },
         starter: null,
         private: {},
       };
@@ -319,7 +319,7 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
         }
         if (d.check?.spec.type === 'patch-kata') {
           const k = kataFixtures[String(id)];
-          out.kata = k ? { title: k.title, diff: k.diff, contextFiles: k.contextFiles, defectCount: k.defects.length } : null;
+          out.kata = k ? { title: k.title, diff: k.diff, contextFiles: k.contextFiles } : null;
         }
         return out;
       }),
@@ -560,9 +560,15 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
         let caught = 0;
         let total = 0;
         let katas = 0;
+        let assistedCount = 0;
         for (const [unitId, a] of kataAnswers) {
           const sc = scores.get(a.attemptId);
           if (!sc) continue;
+          // W7 (audit #2): only SOLO answers count toward G1
+          if (attempts.get(a.attemptId)?.mode !== 'solo') {
+            assistedCount += 1;
+            continue;
+          }
           const n = kataFixtures[String(unitId)]!.defects.length;
           katas += 1;
           total += n;
@@ -571,6 +577,7 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
         const catchRate = total === 0 ? null : caught / total;
         return {
           katasScored: katas,
+          assistedCount,
           defectsCaught: caught,
           defectsTotal: total,
           catchRate,

@@ -82,10 +82,17 @@ function Player({ detail }: { detail: UnitDetail }) {
           <h2 className="panel-title" id="ins-title">
             Instructions
           </h2>
-          {prose.instructions.length > 0 ? (
+          {detail.retestGate && !detail.retestGate.open ? (
+            <RetestClosed gate={detail.retestGate} />
+          ) : prose.instructions.length > 0 ? (
             prose.instructions.map((p, i) => <p key={i}>{p}</p>)
           ) : (
             <p className="muted">No written instructions are served for this unit yet.</p>
+          )}
+          {detail.retestGate?.reason === 'practice' && (
+            <p className="muted small" data-testid="retest-practice">
+              Practice retest: the artifact&apos;s solution was revealed, so attempts here are guided and never count as the retest leg.
+            </p>
           )}
           <div className="ins-foot">
             <span className="muted">Competencies</span>
@@ -131,6 +138,20 @@ function Player({ detail }: { detail: UnitDetail }) {
 }
 
 // ---------------------------------------------------------------- reveal
+
+/** W7 (audit #1): a closed changed-example retest shows WHY it is closed, never its task. */
+function RetestClosed({ gate }: { gate: NonNullable<UnitDetail['retestGate']> }) {
+  return (
+    <div className="verdict verdict-todo" data-testid="retest-closed">
+      <Icon name="warn" />
+      <span>
+        {gate.reason === 'not-due' && gate.opensAt !== null
+          ? `This changed-example retest opens ${new Date(gate.opensAt).toLocaleString()}. Until then its task is hidden and it cannot be run or submitted, so the delay measures what you retained.`
+          : 'This changed-example retest is not scheduled. Pass its project artifact solo, then that artifact\'s explain-back with at least 80% coverage; the retest opens two or more days later.'}
+      </span>
+    </div>
+  );
+}
 
 function RevealPanel({
   unitId,
@@ -276,6 +297,7 @@ function CodePane({ detail, spec }: { detail: UnitDetail; spec: PublicCheck }) {
     } catch (e) {
       // W6: a changed-example retest submitted before its >= 2-day schedule opens is refused (409 NOT_DUE)
       if (isApiError(e, 'NOT_DUE') && detail.unit.kind === 'retest') setError(`Retest not open yet: ${e.message} (NOT_DUE)`);
+      else if (isApiError(e, 'RETEST_NOT_OPEN')) setError(`Retest not scheduled: ${e.message} (RETEST_NOT_OPEN)`);
       else setError(errorText(e));
     } finally {
       setBusy(null);

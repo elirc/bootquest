@@ -32,6 +32,20 @@ export function discoverGuides(co: Checkout): string[] {
 
 export const MAX_DISTRACTORS = 3;
 
+/**
+ * Reading-step key base per guide. Historically the guide's BASENAME (keys of every
+ * shipped pack stay byte-identical); W7 fix: when two guides of one run share a
+ * basename (multi-app repos: apps/a/docs/learning/01.md + apps/b/docs/learning/01.md)
+ * every colliding guide is keyed on its FULL repo-relative path instead, so
+ * writeSeedPack no longer crashes on duplicate keys.
+ */
+export function readingStepKeyBases(guides: readonly string[]): Map<string, string> {
+  const base = (g: string) => g.split('/').pop() ?? g;
+  const n = new Map<string, number>();
+  for (const g of guides) n.set(base(g), (n.get(base(g)) ?? 0) + 1);
+  return new Map(guides.map((g) => [g, (n.get(base(g)) ?? 0) > 1 ? g : base(g)]));
+}
+
 /** Remove code spans that are citations (they would give a location quiz away). */
 export function stripCitationSpans(s: string): string {
   return s
@@ -73,6 +87,7 @@ export function generateQuestCandidates(co: Checkout, guides: readonly string[],
   const out: QuestCandidates = { guides: [], excludedGuides: [] };
   const allFindings: FindingCtx[] = [];
   const parsed: Array<{ guide: string; gcs: GoalCheck[]; cites: SeedCitation[]; gc: GuideCandidates }> = [];
+  const stepKeyBase = readingStepKeyBases(guides);
 
   for (const guide of guides) {
     const excluded = ex.path(co.repo, guide);
@@ -142,7 +157,7 @@ export function generateQuestCandidates(co: Checkout, guides: readonly string[],
     for (const s of readingSections(lines, hs)) {
       const item: SeedReadingStepItem = {
         kind: 'reading-step',
-        key: stableKey('quests', co.repo, 'reading-step', [guide.split('/').pop() ?? guide, ...s.headingPath]),
+        key: stableKey('quests', co.repo, 'reading-step', [stepKeyBase.get(guide) ?? guide, ...s.headingPath]),
         provenance: prov(s.lineStart, s.lineEnd),
         citations: within(s.lineStart, s.lineEnd),
         title: s.title,

@@ -72,9 +72,12 @@ async function main() {
     cpSync(join(FX, 'ww6'), co, { recursive: true });
     const seedDir = join(tmp, 'seed');
     const eb = runExplainBack({ unit: 'docs/learning/testing-rationale.md', checkout: co, sha: WW6, draft: join(FX, 'drafts', 'explainback-ww6-testing-rationale.json'), out: join(seedDir, 'explainback', 'ww6-tr') });
+    // W7: explain-low gets its OWN set (answer-before-key is per question set): the generator's deterministic scaffold
+    const eb2 = runExplainBack({ unit: 'docs/learning/testing-rationale.md', checkout: co, sha: WW6, out: join(seedDir, 'explainback', 'ww6-tr-scaffold') });
     const pk = await runPatches({ draft: join(FX, 'drafts', 'patches-ww6.json'), checkout: co, sha: WW6, out: join(seedDir, 'patches', 'ww6-katas') });
-    step('seed:explainback + seed:patches validators pass and stamp their packs', eb.ok && pk.ok);
-    const seedItems = loadSeedItemStore([join(seedDir, 'explainback', 'ww6-tr'), join(seedDir, 'patches', 'ww6-katas')]);
+    step('seed:explainback (draft + scaffold) + seed:patches validators pass and stamp their packs', eb.ok && eb2.ok && pk.ok);
+    const seedItems = loadSeedItemStore([join(seedDir, 'explainback', 'ww6-tr'), join(seedDir, 'explainback', 'ww6-tr-scaffold'), join(seedDir, 'patches', 'ww6-katas')]);
+    const lowItem = seedItems.explainBack(fixture.units.find((u) => u.key === 'fixture:ladder/explain-low').checks[0].spec.questionSetKey);
     const ebKey = fixture.units.find((u) => u.key === 'fixture:ladder/explain-api').checks[0].spec.questionSetKey;
     const ebItem = seedItems.explainBack(ebKey);
     step('the stamped question set the fixture units reference is loaded', ebItem !== undefined, `${ebKey}, ${seedItems.size()} item(s)`);
@@ -211,18 +214,41 @@ async function main() {
     }
     step('same-attempt reuse: the artifact attempt cannot double as the retest (engine refuses)', /retest unit/.test(reuse), reuse);
     await api('POST', `/units/${id('explain-low')}/explain-back/answers`, { answers: ANSWERS });
-    const lowN = KP.length - 4;
-    const lowScore = await api('POST', `/units/${id('explain-low')}/explain-back/self-score`, { perKeyPoint: marks(lowN) });
+    const KP2 = lowItem.questions.flatMap((q, qi) => q.keyPoints.map((_, ki) => `q${qi + 1}k${ki + 1}`));
+    const lowN = KP2.length - 5;
+    const lowScore = await api('POST', `/units/${id('explain-low')}/explain-back/self-score`, { perKeyPoint: Object.fromEntries(KP2.map((k, i) => [k, i < lowN ? 'covered' : 'missed'])) });
     c = await comp();
     step(
-      `< 80% coverage (${lowN}/${KP.length} = ${(lowN / KP.length) * 100}%): recorded, no XP, NO retest scheduled, leg (b) shows failed`,
+      `< 80% coverage (${lowN}/${KP2.length} = ${Math.round((lowN / KP2.length) * 1000) / 10}%): recorded, no XP, NO retest scheduled, leg (b) shows failed`,
       low.json.verdict === 'pass' && lowScore.status === 200 && lowScore.json.passed === false && lowScore.json.xp === null && lowScore.json.retests.length === 0 && c.promotion.explainBack.state === 'failed',
     );
     clock.advance(2 * DAY_MS + 60_000);
+    // W7 (audit #1): with no retest scheduled the retest unit is CLOSED: no run, no submit, no task text
+    const lowCounts = ledgerCounts(db);
     const lowRetest = await api('POST', `/units/${id('project-low-retest')}/submit`, { code: fixture.solutions.retest });
-    step('...and a passing retest 2 days later still does NOT promote (leg (b) missing)', lowRetest.json.verdict === 'pass' && lowRetest.json.promotions.length === 0 && getRating(db, COMP) === 2);
+    const lowRun = await api('POST', `/units/${id('project-low-retest')}/run`, { code: fixture.solutions.retest });
+    const lowDetail = await api('GET', `/units/${id('project-low-retest')}`);
+    step(
+      '...and its retest unit stays CLOSED 2 days later (no schedule): submit + run 409 RETEST_NOT_OPEN, task withheld, nothing recorded',
+      lowRetest.status === 409 && lowRetest.json.error.code === 'RETEST_NOT_OPEN' && lowRun.status === 409 && lowRun.json.error.code === 'RETEST_NOT_OPEN' &&
+        lowDetail.json?.retestGate?.reason === 'not-scheduled' && lowDetail.json.instructions === null && lowDetail.json.check === null &&
+        JSON.stringify(ledgerCounts(db)) === JSON.stringify(lowCounts),
+      `${lowRetest.json?.error?.code} / ${lowRun.json?.error?.code}`,
+    );
+    // defense in depth (audit #12b): even a passing retest RECORDED through the engine does not promote, and the
+    // evaluator names the cause — artifact leg set, explain-back leg (b) missing
+    const lowCheck = db.get('SELECT id, spec FROM "check" WHERE unit_id = ?', id('project-low-retest'));
+    const lowGraded = await drillJsRunner(JSON.parse(lowCheck.spec), { code: fixture.solutions.retest });
+    const lowEngine = recordSubmission(db, { unitId: id('project-low-retest'), checkId: lowCheck.id, result: lowGraded }, clock);
+    recordEvidence(db, { competency: COMP, kind: 'retest', intention: 'engine-layer probe: retest without leg (b)', observation: 'real grader pass', attemptId: lowEngine.attempt.id }, clock);
+    const lowEval = evaluatePromotion(db, COMP, clock);
+    step(
+      '...and an engine-recorded passing retest still does NOT promote: legs.artifact set, legs.explainBack null (leg (b) missing)',
+      lowGraded.pass && !lowEval.eligible && lowEval.legs.artifact !== null && lowEval.legs.explainBack === null && getRating(db, COMP) === 2,
+      lowEval.missing.join(' | '),
+    );
 
-    const rescore = await api('POST', `/units/${id('explain-low')}/explain-back/self-score`, { perKeyPoint: marks(KP.length) });
+    const rescore = await api('POST', `/units/${id('explain-low')}/explain-back/self-score`, { perKeyPoint: Object.fromEntries(KP2.map((k) => [k, 'covered'])) });
     step('same-attempt reuse: re-scoring the scored answer -> 409 ALREADY_SCORED', rescore.status === 409 && rescore.json.error.code === 'ALREADY_SCORED');
     const reanswer = await api('POST', `/units/${id('explain-low')}/explain-back/answers`, { answers: ANSWERS });
     step('same-attempt reuse: answering again to get a better score -> 403 ALREADY_ANSWERED', reanswer.status === 403 && reanswer.json.error.code === 'ALREADY_ANSWERED');

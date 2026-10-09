@@ -18,7 +18,7 @@ import { HonestyRuleError, isRevealed, recordAttempt, recordSubmission, revealSo
 import { campaignState, currentLevel, questUnitUnlocked } from '../engines/campaign.ts';
 import { addDays, type Clock } from '../engines/clock.ts';
 import { promoteIfEligible, recordEvidence } from '../engines/evidence.ts';
-import { assertRetestOpen } from '../engines/ladder.ts';
+import { retestGate, type RetestGateView } from '../engines/ladder.ts';
 import { dueCount, review } from '../engines/fsrs.ts';
 import type { RatingChange } from '../engines/evidence.ts';
 import { levelProgress } from '../engines/level.ts';
@@ -154,16 +154,20 @@ export function getUnitDetail(deps: ServiceDeps, unitId: number): UnitDetailResp
   // W6: PUBLIC halves only (questions; diff + context) — key points / defect keys never leave here
   const explainBack = check ? explainBackPublicFor(deps.seedItems, check.spec) : undefined;
   const kata = check ? kataPublicFor(deps.seedItems, check.spec) : undefined;
+  // W7 (audit #1): a closed changed-example retest withholds its task (no day-0 pre-solving)
+  const gate = unit.kind === 'retest' ? retestGate(db, unit.id, deps.clock) : null;
+  const withhold = gate !== null && !gate.open;
   return {
     ...(explainBack !== undefined ? { explainBack } : {}),
     ...(kata !== undefined ? { kata } : {}),
+    ...(gate ? { retestGate: gate } : {}),
     unit: { ...summary, code: unit.code, competencies: unitCompetencies(db, unit.id), variationOfUnitId: unit.variationOfUnitId },
-    // PUBLIC projection only — the full spec never leaves the server
-    check: check ? { id: check.id, threshold: check.threshold, spec: toPublicCheck(check.spec) } : null,
+    // PUBLIC projection only — the full spec never leaves the server (and a closed retest shows none)
+    check: check && !withhold ? { id: check.id, threshold: check.threshold, spec: toPublicCheck(check.spec) } : null,
     // PUBLIC content fields only (whitelist); solution / explanation / hints stay server-side
-    instructions: entry?.instructions ?? null,
-    starter: entry?.starter ?? null,
-    snippet: entry?.snippet ?? null,
+    instructions: withhold ? null : (entry?.instructions ?? null),
+    starter: withhold ? null : (entry?.starter ?? null),
+    snippet: withhold ? null : (entry?.snippet ?? null),
     rubric: entry?.rubric ?? null,
     refs: unitRefs(db, unit.id),
   };
@@ -308,6 +312,25 @@ function assertTrackOpen(db: Db, unit: UnitRecord): void {
   }
 }
 
+/** W7 (audit #1): run AND submit on a changed-example retest need an open gate. */
+function assertRetestGate(deps: ServiceDeps, unit: UnitRecord): RetestGateView | null {
+  if (unit.kind !== 'retest') return null;
+  const g = retestGate(deps.db, unit.id, deps.clock);
+  if (g.open) return g;
+  if (g.reason === 'not-due') {
+    throw new HttpError(
+      409,
+      'NOT_DUE',
+      `this changed-example retest opens at ${new Date(g.opensAt!).toISOString()} (>= 2 days after the artifact and its explain-back); until then it can be neither run nor submitted`,
+    );
+  }
+  throw new HttpError(
+    409,
+    'RETEST_NOT_OPEN',
+    `unit ${unit.id} is a changed-example retest with no schedule: pass its artifact unit solo, then that artifact's explain-back with >= 80% coverage; the retest opens >= 2 days later`,
+  );
+}
+
 /** Map an engine honesty refusal to its HTTP shape; anything else propagates. */
 function withHonesty<T>(fn: () => T): T {
   try {
@@ -368,6 +391,7 @@ export async function runUnit(deps: ServiceDeps, unitId: number, submission: Lea
   assertTrackOpen(deps.db, unit);
   const check = requireCheck(deps.db, unit);
   refuseAnswerFirst(unit, check);
+  assertRetestGate(deps, unit);
   if (SUBMIT_ONLY_CHECKS.has(check.type)) {
     throw new HttpError(409, 'RUN_NOT_AVAILABLE', `${check.type} checks are submit-only (a free run would reveal the answer)`);
   }
@@ -397,9 +421,10 @@ export async function submitUnit(
   assertTrackOpen(db, unit);
   const check = requireCheck(db, unit);
   refuseAnswerFirst(unit, check);
-  // W6: a scheduled changed-example retest opens >= 2 days after artifact + explain-back;
-  // before that, nothing is graded or recorded (the engine's 48h rule stays the truth either way)
-  if (unit.kind === 'retest') withHonesty(() => assertRetestOpen(db, unit.id, clock));
+  // W6/W7: a changed-example retest opens >= 2 days after artifact + explain-back (or as guided
+  // practice after a reveal); before that nothing is graded or recorded (the engine's 48h rule
+  // on attempt time stays the truth either way)
+  assertRetestGate(deps, unit);
   const result = await grade(deps, check.spec, submission);
 
   return db.tx(() => {

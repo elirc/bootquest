@@ -312,3 +312,32 @@ describe('status', () => {
     expect(io.stderr.join('\n')).toMatch(/Config problem: .*not valid JSON/);
   });
 });
+
+describe('reset (W7): delegates to the server-side guarded reset', () => {
+  it('forwards --yes-really only when given, prints both streams and returns the guard exit code; never touches the network', async () => {
+    const { fetch, calls } = fakeFetch({});
+    const seen: string[][] = [];
+    const io = {
+      ...captureIo(proj, fetch),
+      runReset: (args: string[]) => {
+        seen.push(args);
+        return args.includes('--yes-really') ? { code: 0, out: ['bootquest reset: fresh database'], err: [] } : { code: 2, out: [], err: ['bootquest reset: REFUSED'] };
+      },
+    };
+    expect(await runCli(['reset'], io)).toBe(2);
+    expect(await runCli(['reset', '--yes-really'], io)).toBe(0);
+    expect(seen).toEqual([[], ['--yes-really']]);
+    expect(io.stderr.join('\n')).toMatch(/REFUSED/);
+    expect(io.stdout.join('\n')).toMatch(/fresh database/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('the real child-process path refuses without BOOTQUEST_DB (exit 2) and touches nothing', async () => {
+    const { spawnReset } = await import('../src/program.ts');
+    const env = { ...process.env };
+    delete env.BOOTQUEST_DB;
+    const r = spawnReset(['--yes-really'], env);
+    expect(r.code).toBe(2);
+    expect(r.err.join('\n')).toMatch(/BOOTQUEST_DB is not set/);
+  });
+});

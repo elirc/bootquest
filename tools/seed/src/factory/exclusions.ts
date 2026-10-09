@@ -125,6 +125,24 @@ export class Exclusions {
     return this.registry.citationWhitelist.filter((w) => w.repo === '*' || w.repo === repo).map((w) => w.pattern);
   }
 
+  /**
+   * W7 per-repo citation whitelist: the entry (repo '*' = every repo) whose pattern
+   * matches a cited path as written. Pattern forms: exact path or bare name
+   * (also matches as a '/'-suffix, the pre-W7 rule), 'dir/' prefix, or * / ** glob
+   * (pathPatternRegex). A whitelisted citation is NOT resolved: validators record
+   * the hit on the citation (visible in the shipped item) and never count it ok.
+   */
+  citationWhitelistHit(repo: string, citedPath: string): { pattern: string; note: string } | null {
+    const p = citedPath.replace(/\\/g, '/').replace(/^\.\//, '');
+    for (const w of this.registry.citationWhitelist) {
+      if (w.repo !== '*' && w.repo !== repo) continue;
+      const glob = w.pattern.includes('*') || w.pattern.endsWith('/');
+      const hitIt = glob ? pathPatternRegex(w.pattern).test(p) : p === w.pattern || p.endsWith(`/${w.pattern}`);
+      if (hitIt) return { pattern: w.pattern, note: w.note };
+    }
+    return null;
+  }
+
   /** Secret-pattern ids found in text (never returns the match itself). */
   scan(text: string): string[] {
     return this.secrets.filter((s) => s.re.test(text)).map((s) => s.id);

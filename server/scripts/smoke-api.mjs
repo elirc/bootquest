@@ -11,9 +11,16 @@
 // lesson graded by the real http runner against a fixture server booted on a
 // free port —
 // verifies ledger rows through a read connection, kills the server and
-// verifies the port is free again. Exit 0 only if every step holds.
-import { execFileSync, spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+// verifies the port is free again. W7 (M7 hardening) adds: the startup summary
+// (every pack / campaign / seed source with counts), the competency-ladder units
+// wired from the REAL stamped seed packs (loaded === built), one real explain-back
+// and one real kata played end to end, the campaign link of a ladder unit, the
+// authored G3/G4 units, a stamp refusal (tampered seed pack -> the real entrypoint
+// refuses to start), a busy-port refusal (second server on the same port) and the
+// reset guards (no BOOTQUEST_DB / no --yes-really / server running -> refused).
+// Exit 0 only if every step holds.
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -52,6 +59,35 @@ const CAMPAIGN_DIR = join(REPO, 'content', 'campaign');
 const campaignManifest = JSON.parse(readFileSync(join(CAMPAIGN_DIR, 'manifest.json'), 'utf8'));
 const campaignUnits = campaignManifest.tracks.reduce((n, t) => n + t.counts.units, 0);
 const jsCampaign = campaignManifest.tracks.find((t) => t.track === 'js');
+// W7: the stamped seed packs the real entrypoint loads by default, counted independently of the server
+const SEED_DIR = join(REPO, 'content', 'seed');
+const seedItems = ['explainback', 'patches', 'variants'].flatMap((g) =>
+  existsSync(join(SEED_DIR, g))
+    ? readdirSync(join(SEED_DIR, g))
+        .filter((n) => existsSync(join(SEED_DIR, g, n, 'items.json')))
+        .flatMap((n) => JSON.parse(readFileSync(join(SEED_DIR, g, n, 'items.json'), 'utf8')).items)
+    : [],
+);
+const ebItems = seedItems.filter((i) => i.kind === 'explain-back');
+const g2Count = ebItems.filter((i) => /^G2 BRIEF\b/.test(i.questions[0].prompt)).length;
+const kataItems = seedItems.filter((i) => i.kind === 'patch-kata');
+const variantItems = seedItems.filter((i) => i.kind === 'variant');
+const authoredUnits = JSON.parse(readFileSync(join(REPO, 'content', 'units', 'agentic.json'), 'utf8')).units;
+// variants stay PENDING on a fresh DB (their artifact units arrive with a sync), so they add no unit here
+const ladderUnitCount = ebItems.length + kataItems.length + authoredUnits.length;
+
+/** Run a node entrypoint (process.execPath --import tsx, never a shell) to completion; returns {code, out}. */
+function runNode(entry, args, env, timeoutMs = 120_000) {
+  const r = spawnSync(process.execPath, ['--import', 'tsx', entry, ...args], { cwd: REPO, env, encoding: 'utf8', timeout: timeoutMs, windowsHide: true });
+  return { code: r.status, signal: r.signal, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
+}
+/** env for a child that must NOT inherit any BOOTQUEST_* setting from the caller's shell */
+function cleanEnv(extra) {
+  const e = { ...process.env };
+  for (const k of Object.keys(e)) if (k.startsWith('BOOTQUEST_')) delete e[k];
+  return { ...e, ...extra };
+}
+const RESET = join(REPO, 'server', 'src', 'db', 'reset-cli.ts');
 
 /** Live processes whose command line mentions `needle` (Windows CIM query; [] elsewhere). */
 function processesMentioning(needle) {
@@ -103,6 +139,21 @@ function pidAlive(pid) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function api(base, method, path, body) {
+  // W7: the refusal steps block this event loop in spawnSync for several seconds; meanwhile the
+  // server's keep-alive timeout closes the pooled socket, and the next request on it sees
+  // ECONNRESET. A GET is idempotent: retry it once on a fresh connection (never a POST).
+  if (method === 'GET') {
+    try {
+      return await apiOnce(base, method, path, body);
+    } catch (err) {
+      if (err?.cause?.code !== 'ECONNRESET') throw err;
+      return apiOnce(base, method, path, body);
+    }
+  }
+  return apiOnce(base, method, path, body);
+}
+
+async function apiOnce(base, method, path, body) {
   const res = await fetch(base + path, {
     method,
     headers: body === undefined ? {} : { 'content-type': 'application/json' },
@@ -150,6 +201,12 @@ async function main() {
         BOOTQUEST_PACK_COURSES: [PACK_COURSE, ...csManifest.courses.map((c) => c.id)].join(','),
         BOOTQUEST_CS_SCRATCH: csScratch,
         BOOTQUEST_CAMPAIGN: CAMPAIGN_DIR,
+        // W7: the real default seed packs + authored units (named explicitly so a caller's shell cannot override them)
+        BOOTQUEST_SEED_ITEMS: ['explainback', 'patches', 'variants']
+          .flatMap((g) => (existsSync(join(SEED_DIR, g)) ? readdirSync(join(SEED_DIR, g)).map((n) => join(SEED_DIR, g, n)) : []))
+          .filter((d) => existsSync(join(d, 'items.json')))
+          .join(','),
+        BOOTQUEST_AUTHORED_UNITS: join(REPO, 'content', 'units', 'agentic.json'),
         // explicit test-harness opt-out of the import-gate stamp (W2b/F1): the smoke
         // must not depend on a fresh seed:validate sweep. The real serve path never sets it.
         BOOTQUEST_PACKS_ALLOW_UNSTAMPED: '1',
@@ -182,10 +239,11 @@ async function main() {
       const h = await api(base, 'GET', '/api/health');
       // 3 fixture units (2 smoke + the W3c http lesson) + the real pack course (written units carry no check)
       // + every csbootcamp drill + one placeholder unit per playable campaign quest (no checks until seed:quests)
-      const wantUnits = 3 + packCounts.total + csManifest.totals.total + campaignUnits;
-      const wantChecks = 3 + packCounts.total - packCounts.written + csManifest.totals.total;
+      // + W7: one ladder unit per explain-back set / kata + the authored G3/G4 units (each with one check)
+      const wantUnits = 3 + packCounts.total + csManifest.totals.total + campaignUnits + ladderUnitCount;
+      const wantChecks = 3 + packCounts.total - packCounts.written + csManifest.totals.total + ladderUnitCount;
       step(
-        `health (3 fixture + ${packCounts.total} BootForge ${PACK_COURSE} + ${csManifest.totals.total} csbootcamp + ${campaignUnits} campaign units: loaded === built)`,
+        `health (3 fixture + ${packCounts.total} BootForge ${PACK_COURSE} + ${csManifest.totals.total} csbootcamp + ${campaignUnits} campaign + ${ladderUnitCount} ladder/authored units: loaded === built)`,
         h.status === 200 && h.json?.ok === true && h.json.counts.units === wantUnits && h.json.counts.checks === wantChecks,
         JSON.stringify(h.json),
       );
@@ -503,6 +561,129 @@ async function main() {
         `http check vs the good fixture server: PASS (3/3 requests), +${10 * httpLesson.difficulty} code XP; fixture servers closed, ports free`,
         hg.status === 200 && hg.json.verdict === 'pass' && hg.json.result.failures.length === 0 && hg.json.xp?.amount === 10 * httpLesson.difficulty && hFree,
         `${hg.json?.result?.durationMs}ms xp=${JSON.stringify(hg.json?.xp)}`,
+      );
+
+      // 10e. W7: startup summary — one line per loaded source, with its counts
+      const seedLines = serverOut.split(/\r?\n/).filter((l) => l.startsWith('[bootquest] seed '));
+      step(
+        `startup summary: pack + campaign lines, one stamp-verified line per seed pack (${readdirSync(join(SEED_DIR, 'explainback')).length + readdirSync(join(SEED_DIR, 'patches')).filter((n) => !n.endsWith('.json')).length + (existsSync(join(SEED_DIR, 'variants')) ? readdirSync(join(SEED_DIR, 'variants')).length : 0)}), and the ladder line`,
+        /\[bootquest\] pack bootforge: .*loaded \d+ === built \d+/.test(serverOut) &&
+          /\[bootquest\] campaign js: .*loaded \d+ === built \d+/.test(serverOut) &&
+          seedLines.length > 0 &&
+          seedLines.every((l) => /stamp verified$/.test(l)) &&
+          seedLines.length === readdirSync(join(SEED_DIR, 'explainback')).length + readdirSync(join(SEED_DIR, 'patches')).filter((n) => !n.endsWith('.json')).length + (existsSync(join(SEED_DIR, 'variants')) ? readdirSync(join(SEED_DIR, 'variants')).length : 0) &&
+          /\[bootquest\] ladder: explain-back (\d+) === \1 .*kata bank (\d+) === \2 .*authored (\d+) === \3/.test(serverOut),
+        `${seedLines.length} seed line(s)`,
+      );
+
+      // 10f. W7: the competency-ladder units wired from the REAL stamped seed packs
+      const lad = await api(base, 'GET', '/api/ladder');
+      step(
+        `ladder wiring: ${ebItems.length - g2Count} explain-back + ${g2Count} G2 + ${kataItems.length} kata-bank + ${authoredUnits.length} authored units; ${variantItems.length} retest(s) pending until sync (loaded === built)`,
+        lad.status === 200 &&
+          lad.json.counts.explainBack === ebItems.length - g2Count &&
+          lad.json.counts.g2 === g2Count &&
+          lad.json.counts.katas === kataItems.length &&
+          lad.json.counts.retests === 0 &&
+          lad.json.counts.authored === authoredUnits.length &&
+          lad.json.units.filter((u) => u.family === 'kata' || u.family === 'g2' || u.family === 'authored').every((u) => u.trackId === 'agentic') &&
+          /retest pending: /.test(serverOut) === variantItems.length > 0,
+        JSON.stringify(lad.json?.counts),
+      );
+
+      // 10g. W7: one REAL explain-back set end to end (not a fixture)
+      const ebUnit = lad.json.units.find((u) => u.family === 'explain-back' && u.repo === 'jstrain2.2');
+      const ebItem = ebItems.find((i) => i.provenance.repo === 'jstrain2.2');
+      const ebD = await api(base, 'GET', `/api/units/${ebUnit?.id}`);
+      const ebLeak = ebItem.questions.flatMap((q) => q.keyPoints).some((kp) => ebD.text.includes(kp.text));
+      const ebKey0 = await api(base, 'GET', `/api/units/${ebUnit?.id}/explain-back/key`);
+      const ebAns = await api(base, 'POST', `/api/units/${ebUnit?.id}/explain-back/answers`, { answers: ebItem.questions.map((_, i) => `smoke answer ${i + 1}`) });
+      const ebKey = await api(base, 'GET', `/api/units/${ebUnit?.id}/explain-back/key`);
+      const allIds = ebItem.questions.flatMap((q, qi) => q.keyPoints.map((_, ki) => `q${qi + 1}k${ki + 1}`));
+      const ebScore = await api(base, 'POST', `/api/units/${ebUnit?.id}/explain-back/self-score`, { perKeyPoint: Object.fromEntries(allIds.map((k) => [k, 'covered'])) });
+      step(
+        'ladder flow (real explain-back, jstrain2.2): questions only, key 403 before the answer, immutable answer -> key -> self-score 100% (+20 XP, evidence)',
+        ebD.status === 200 && ebD.json.explainBack?.questions?.length === ebItem.questions.length && !ebLeak &&
+          ebKey0.status === 403 && ebAns.status === 200 && ebKey.status === 200 &&
+          ebScore.status === 200 && ebScore.json.passed === true && ebScore.json.xp?.amount === 20 && ebScore.json.evidenceIds.length > 0,
+        `unit ${ebUnit?.key}`,
+      );
+
+      // 10h. W7: one REAL kata end to end + the G1 stats
+      const kUnit = lad.json.units.find((u) => u.family === 'kata' && u.repo === 'tenantadmin');
+      const kD = await api(base, 'GET', `/api/units/${kUnit?.id}`);
+      const kF = await api(base, 'POST', `/api/units/${kUnit?.id}/kata/findings`, {
+        findings: [{ scenario: 'smoke: a cross-tenant request', evidence: 'the patched handler', consequence: 'data leaks across tenants' }],
+      });
+      const kK = await api(base, 'GET', `/api/units/${kUnit?.id}/kata/key`);
+      const kS = kK.json?.defects ? await api(base, 'POST', `/api/units/${kUnit?.id}/kata/self-score`, { perDefect: Object.fromEntries(kK.json.defects.map((d) => [d.id, 'caught'])) }) : null;
+      const kStats = await api(base, 'GET', '/api/stats/katas');
+      step(
+        'ladder flow (real kata, tenantadmin): diff + context without a defect count -> findings -> key -> catch rate 100% (+15 XP) -> G1 stats count it (solo)',
+        kD.status === 200 && typeof kD.json.kata?.diff === 'string' && !kD.text.includes('defectCount') &&
+          kF.status === 200 && kK.status === 200 && kS?.status === 200 && kS.json.catchRate === 1 && kS.json.xp?.amount === 15 &&
+          kStats.json?.katasScored === 1 && kStats.json.assistedCount === 0 && kStats.json.defectsCaught === kK.json.defects.length,
+        `unit ${kUnit?.key}, ${kK.json?.defects?.length} defect(s)`,
+      );
+
+      // 10i. W7: campaign-act link of a ladder unit (display only; ladder units never inherit an act lock)
+      const linked = lad.json.units.find((u) => u.family === 'explain-back' && u.quest && u.quest.track === 'js' && u.quest.actNo > 1);
+      const cj2 = await api(base, 'GET', '/api/tracks/js/campaign');
+      const linkedAct = cj2.json?.acts?.find((a) => a.ordinal === linked?.quest?.actNo);
+      const linkedOpen = linked ? await api(base, 'GET', `/api/units/${linked.id}`) : null;
+      step(
+        `campaign-act link: ladder explain-back for ${linked?.repo} points at its quest in js act ${linked?.quest?.actNo} (locked act) and stays playable`,
+        Boolean(linked) && linkedAct?.unlocked === false && linkedAct.quests.some((q) => q.id === linked.quest.id && q.repo === linked.repo) &&
+          linkedOpen?.status === 200 && linkedOpen.json.explainBack?.questions?.length === 3,
+        `quest ${linked?.quest?.key}`,
+      );
+
+      // 10j. W7: the authored agentic units (spec §8 G3/G4)
+      const g3 = await api(base, 'GET', `/api/units/by-key/${encodeURIComponent('agentic/g3-live-delegation')}`);
+      const g4 = await api(base, 'GET', `/api/units/by-key/${encodeURIComponent('agentic/g4-verification-engineering')}`);
+      const planted = g4.json?.unit ? await api(base, 'POST', `/api/units/${g4.json.unit.id}/run`, { code: 'export async function wrongSolutionFilter() { return { verdict: "accept", reason: "" }; }' }) : null;
+      step(
+        'G3 + G4 registered on the agentic track; G4 rejects a planted accept-everything filter (real JS runner, gate test fails)',
+        g3.json?.unit?.kind === 'repo-task' && g3.json.unit.trackId === 'agentic' && g3.json.check?.spec?.predicates?.some((p) => p.kind === 'ci-green') &&
+          g3.json.check.spec.predicates.some((p) => p.kind === 'pr-has-section') &&
+          g4.json?.unit?.kind === 'guided-project' && planted?.json?.result?.pass === false &&
+          planted.json.result.failures.some((f) => /^GATE:/.test(f.name)),
+        planted?.json?.result?.failures?.map((f) => f.name.slice(0, 30)).join(' | '),
+      );
+
+      // 10k. W7: busy-port refusal — a second real server on the SAME port refuses before touching any DB
+      const db2 = join(dir, 'second.db');
+      const busy = runNode(SERVE, [], cleanEnv({ BOOTQUEST_DB: db2, BOOTQUEST_PORT: String(port), BOOTQUEST_PACKS: '', BOOTQUEST_CAMPAIGN: '', BOOTQUEST_SEED_ITEMS: '', BOOTQUEST_AUTHORED_UNITS: '' }));
+      step(
+        'busy-port refusal: a second server on the same port exits 1 ("already in use") and never creates its DB',
+        busy.code === 1 && /already in use/.test(busy.out) && !existsSync(db2),
+        `exit ${busy.code}${busy.signal ? ` signal ${busy.signal}` : ''}`,
+      );
+
+      // 10l. W7: stamp refusal — a seed pack edited after validation refuses startup (real entrypoint)
+      const tampered = join(dir, 'tampered', 'explainback', 'pack');
+      cpSync(join(SEED_DIR, 'explainback', readdirSync(join(SEED_DIR, 'explainback'))[0]), tampered, { recursive: true });
+      writeFileSync(join(tampered, 'items.json'), readFileSync(join(tampered, 'items.json'), 'utf8').replace('"prompt": "', '"prompt": "EDITED '));
+      const port3 = await freePort();
+      const db3 = join(dir, 'tampered.db');
+      const stamp = runNode(SERVE, [], cleanEnv({ BOOTQUEST_DB: db3, BOOTQUEST_PORT: String(port3), BOOTQUEST_PACKS: '', BOOTQUEST_CAMPAIGN: '', BOOTQUEST_SEED_ITEMS: tampered, BOOTQUEST_AUTHORED_UNITS: '' }));
+      step(
+        'stamp refusal: a seed pack edited after validation -> the real entrypoint refuses to start (exit 1, names the stamp), port never bound',
+        stamp.code === 1 && /failed to start/.test(stamp.out) && /stamp|sha256/.test(stamp.out) && (await portIsFree(port3)),
+        stamp.out.split(/\r?\n/).find((l) => /failed to start/.test(l))?.slice(0, 160),
+      );
+
+      // 10m. W7: reset guards (never a default path, never without --yes-really, never while a server runs)
+      const noDb = runNode(RESET, ['--yes-really'], cleanEnv({}));
+      const before = statSync(dbPath).size;
+      const noFlag = runNode(RESET, [], cleanEnv({ BOOTQUEST_DB: dbPath, BOOTQUEST_PORT: String(port) }));
+      const running = runNode(RESET, ['--yes-really'], cleanEnv({ BOOTQUEST_DB: dbPath, BOOTQUEST_PORT: String(port) }));
+      const stillThere = existsSync(dbPath) && !readdirSync(dir).some((f) => f.includes('.reset-')) && reader.get('SELECT COUNT(*) AS n FROM attempt').n > 0;
+      step(
+        'reset guards: no BOOTQUEST_DB -> exit 2; no --yes-really -> exit 2; server running on the port -> exit 1; the DB and its ledger untouched',
+        noDb.code === 2 && /BOOTQUEST_DB is not set/.test(noDb.out) && noFlag.code === 2 && /--yes-really/.test(noFlag.out) &&
+          running.code === 1 && /listening on port/.test(running.out) && stillThere && statSync(dbPath).size >= before,
+        `exits ${noDb.code}/${noFlag.code}/${running.code}`,
       );
 
       // 11. errors are JSON

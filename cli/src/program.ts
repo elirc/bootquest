@@ -1,5 +1,7 @@
+import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { relative, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Command, CommanderError } from 'commander';
 import type { UnitDetailResponse } from '@bootquest/shared/api';
 import { ApiClient, DEFAULT_SERVER, UsageError, type FetchLike } from './client.ts';
@@ -32,7 +34,30 @@ export interface CliIo {
   version?: string;
   /** W6 test seam: how `mutate` runs Stryker (default: real child processes) */
   runTool?: ToolRunner;
+  /** W7 test seam: how `reset` runs the server's guarded reset (default: a child node process) */
+  runReset?: ResetRunner;
 }
+
+export type ResetRunner = (args: string[], env: Record<string, string | undefined>) => { code: number; out: string[]; err: string[] };
+
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+/**
+ * `bootquest reset` delegates to server/src/db/reset-cli.ts (the ONE implementation of the
+ * guards: --yes-really, explicit BOOTQUEST_DB, busy port, rename-never-delete). Spawned from the
+ * repo root so `--import tsx` resolves (the bin-shim lesson), with the caller's env.
+ */
+export const spawnReset: ResetRunner = (args, env) => {
+  const r = spawnSync(process.execPath, ['--import', 'tsx', join(REPO_ROOT, 'server', 'src', 'db', 'reset-cli.ts'), ...args], {
+    cwd: REPO_ROOT,
+    env: env as NodeJS.ProcessEnv,
+    encoding: 'utf8',
+    windowsHide: true,
+    timeout: 60_000,
+  });
+  const lines = (t: string | null) => (t ?? '').split(/\r?\n/).filter((l) => l.trim() && !/ExperimentalWarning|--trace-warnings/.test(l));
+  return { code: r.status ?? 2, out: lines(r.stdout), err: [...lines(r.stderr), ...(r.error ? [String(r.error.message)] : [])] };
+};
 
 interface GlobalOpts {
   server?: string;
@@ -264,6 +289,20 @@ export function buildProgram(io: CliIo, setExit: (code: number) => void): Comman
       });
       io.out(`Recorded: mutation evidence #${resp.evidenceIds.join(', #')} on attempt #${resp.attemptId} (server re-checked: overall ${resp.verdict.overallPct}%, floor ${resp.verdict.floorPct}%).`);
       setExit(EXIT.OK);
+    });
+
+  program
+    .command('reset')
+    .description(
+      'Start over with a FRESH, EMPTY database (W7). Refuses unless BOOTQUEST_DB is set and --yes-really is given, and while a server ' +
+        'holds the port/DB; the old DB is renamed to *.reset-<time>.bak, never deleted. Exit 0 done, 1 DB in use, 2 refused',
+    )
+    .option('--yes-really', 'confirm: move the current DB aside and start fresh')
+    .action((o: { yesReally?: boolean }) => {
+      const r = (io.runReset ?? spawnReset)(o.yesReally ? ['--yes-really'] : [], io.env);
+      for (const l of r.out) io.out(l);
+      for (const l of r.err) io.err(l);
+      setExit(r.code);
     });
 
   program

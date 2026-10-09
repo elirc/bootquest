@@ -8,7 +8,7 @@ import {
   type MutationVerdict,
 } from '@bootquest/shared';
 import type { Db } from '../db/database.ts';
-import { findVariation, getAttempt, HonestyRuleError, VERIFIED_PASS_SQL } from './attempts.ts';
+import { findVariation, getAttempt, HonestyRuleError, revealedInVariationChain, VERIFIED_PASS_SQL } from './attempts.ts';
 import { nowMs, type Clock } from './clock.ts';
 import { evaluatePromotion, isVariationOf, lastRatingChangeAt, PROMOTION_MIN_COVERAGE, RETEST_MIN_DELAY_MS } from './evidence.ts';
 
@@ -134,19 +134,50 @@ export function openRetests(db: Db, now: Clock): (RetestSchedule & { due: boolea
     .map((r) => ({ ...r, due: r.dueAt <= t }));
 }
 
+export interface RetestGateView {
+  open: boolean;
+  /**
+   *   due           a schedule for this unit is due (the real leg (c) path)
+   *   practice      the unit or its artifact (variation_of chain) was revealed: guided
+   *                 practice only — every attempt is auto-flagged, never a leg
+   *   not-scheduled no schedule exists yet (artifact + explain-back >= 80% schedule it)
+   *   not-due       a schedule exists and opens at opensAt
+   */
+  reason: 'due' | 'practice' | 'not-scheduled' | 'not-due';
+  opensAt: number | null;
+}
+
 /**
- * Refuse a retest submit before its schedule is due: when the unit has open
- * schedules and NONE is due yet, nothing may be graded or recorded (409
- * NOT_DUE at the API). Units without a schedule are not gated here — the
- * evaluator's own 48h rule on attempt time still decides whether a pass counts.
+ * W7 (audit #1): the retest GATE covers run, submit AND the unit's instructions. A
+ * changed-example retest is closed until one of its schedules is due, so the >= 2-day
+ * delay measures retention, not the paste of a day-0 solution found with free graded runs.
+ * When any open schedule is still not due, the gate follows THAT one (the newest cycle),
+ * never an older schedule that happens to be due. The reveal carve-out keeps the
+ * reveal -> variation practice path (spec §4) open: such attempts are guided by
+ * construction (deriveMode walks the variation chain), so they can never feed leg (c).
  */
-export function assertRetestOpen(db: Db, retestUnitId: number, now: Clock): void {
+export function retestGate(db: Db, retestUnitId: number, now: Clock): RetestGateView {
+  if (revealedInVariationChain(db, retestUnitId)) return { open: true, reason: 'practice', opensAt: null };
   const open = openRetests(db, now).filter((r) => r.unitId === retestUnitId);
-  if (open.length === 0 || open.some((r) => r.due)) return;
-  const first = open[0]!;
+  if (open.length === 0) return { open: false, reason: 'not-scheduled', opensAt: null };
+  const notDue = open.filter((r) => !r.due);
+  if (notDue.length > 0) return { open: false, reason: 'not-due', opensAt: Math.max(...notDue.map((r) => r.dueAt)) };
+  return { open: true, reason: 'due', opensAt: null };
+}
+
+/** Throws (HonestyRuleError NOT_DUE / NOT_VERIFIED) unless the retest gate is open. */
+export function assertRetestOpen(db: Db, retestUnitId: number, now: Clock): RetestGateView {
+  const g = retestGate(db, retestUnitId, now);
+  if (g.open) return g;
+  if (g.reason === 'not-due') {
+    throw new HonestyRuleError(
+      'NOT_DUE',
+      `this changed-example retest opens at ${new Date(g.opensAt!).toISOString()} (>= 2 days after the artifact and its explain-back); until then it can be neither run nor submitted`,
+    );
+  }
   throw new HonestyRuleError(
-    'NOT_DUE',
-    `this changed-example retest opens at ${new Date(first.dueAt).toISOString()} (>= 2 days after the artifact and its explain-back); free runs stay available`,
+    'NOT_VERIFIED',
+    'this changed-example retest is not scheduled: pass its artifact unit solo, then its explain-back with >= 80% coverage; the retest opens >= 2 days later',
   );
 }
 
@@ -272,7 +303,7 @@ export function recordMutationEvidence(
     const observation =
       `${input.tool} ${input.toolVersion}: overall ${verdict.overallPct}% (break ${verdict.breakPct}%), ` +
       `${scored.length} scored file(s), lowest ${Number.isFinite(minFile) ? minFile : 'n/a'}% (per-file floor ${verdict.floorPct}%), ` +
-      `${Math.round(input.durationMs / 1000)}s`;
+      `${Math.round(input.durationMs / 1000)}s (counts self-reported by bootquest mutate; floor + break re-evaluated by the server)`;
     const competencies = db
       .all<{ c: CompetencyId }>('SELECT competency_id AS c FROM unit_competency WHERE unit_id = ? ORDER BY competency_id', input.unitId)
       .map((r) => r.c);

@@ -94,6 +94,11 @@ function CatchRatePanel() {
             {q.data.gate.met ? <Chip tone="success">G1 gate met</Chip> : <Chip>G1 gate not met</Chip>}
           </p>
           <p className="muted small">{q.data.gate.rule}</p>
+          {q.data.assistedCount > 0 && (
+            <p className="muted small" data-testid="kata-assisted">
+              {q.data.assistedCount} assisted / guided kata{q.data.assistedCount === 1 ? '' : 's'} not counted toward G1 (solo work only).
+            </p>
+          )}
         </div>
       )}
     </Panel>

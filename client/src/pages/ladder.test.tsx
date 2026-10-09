@@ -171,5 +171,22 @@ describe('stats: G1 catch rate + evidence browser', () => {
     const panel = await screen.findByTestId('catch-rate');
     expect(panel).toHaveTextContent('2/ 2 seeded defects caught');
     expect(panel).toHaveTextContent('100% across 1 kata(s)');
+    expect(screen.queryByTestId('kata-assisted')).toBeNull();
+  });
+
+  it('W7: a self-flagged assisted kata is shown separately and never feeds the G1 numbers', async () => {
+    const api = createMockApi();
+    await api.submitKataFindings(KATA, { findings: [{ scenario: 's', evidence: 'e', consequence: 'c' }], selfAssisted: true });
+    await api.selfScoreKata(KATA, { perDefect: { d1: 'caught', d2: 'caught' } });
+    renderApp('/stats', api);
+    const panel = await screen.findByTestId('catch-rate');
+    expect(panel).toHaveTextContent('No kata self-scored yet.');
+    expect(screen.getByTestId('kata-assisted')).toHaveTextContent('1 assisted / guided kata not counted toward G1');
+  });
+
+  it('W7: the kata pane does not announce how many defects are seeded before the findings', async () => {
+    renderApp(`/play/${KATA}`);
+    await screen.findByText(/Review this patch like a PR/);
+    expect(document.body.textContent).not.toMatch(/hides \d+ seeded defect/);
   });
 });

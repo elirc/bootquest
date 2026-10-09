@@ -335,6 +335,25 @@ Opus plan review (`docs/recon/plan-review.md`) returned 2 blockers + 17 majors;
   for W5c: numbered findings lists include non-defects ("good design worth
   naming") — don't flashcard them blindly.
 
+## 2026-10-08 — W6 audit (docs/recon/w6-audit.md) — no blockers, 4 majors
+
+promotion-e2e certified trustworthy (real assertions, honest exit code).
+Majors → W7 mandatory: (1) retest units must refuse free runs until a
+schedule is due (day-0 solve-ahead oracle); (2) G1 excludes assisted
+katas (separate count); (3) answer-before-key keyed per questionSet/
+kataKey item, not per unit (+ duplicate-key refusal at load);
+(4) REAL ladder content unreachable — no real units reference the W5c
+packs, no retest/variants units exist ⇒ W7 wires explain-back/kata units
+for the seeded packs + variation retests, fixing 1–3 FIRST. Minors to
+judge in W7: reveal-on-artifact should flag its retest assisted; server
+seed-item loader should run full stamp checks like the tool; stable item
+ids (not positional) so re-seeds don't rewrite G1 history; hide kata
+defect counts pre-answer; threshold=0 must not disable the mutation
+floor; minCoverage honored; 24h-edge test. Honesty-wording note: the W6
+commit's "raw-SQL forgery all rejected" covers REPLACE/UPDATE only —
+fresh forged INSERTs into one's own unsigned DB remain possible (single-
+user spec stance, but stop overstating).
+
 ## 2026-10-08 — W5c-katas results (done in worktree, transplant queued)
 
 - Branch w5c-katas @ 4abd6107a (261 files on 1cd1796): 21 katas (8E/9M/4H,

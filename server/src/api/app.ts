@@ -18,6 +18,7 @@ import {
   KataScoreResponse,
   KataSelfScoreBody,
   KataStatsResponse,
+  LadderResponse,
   MutationMarkerBody,
   MutationMarkerResponse,
   EmptyQuery,
@@ -43,6 +44,7 @@ import { asyncRoute, errorBody, HttpError, sendJson, validate } from './http.ts'
 import { getRefContent } from './service.ts';
 import { defaultRunners, type RunnerRegistry } from './runners.ts';
 import { emptySeedItemStore, type SeedItemStore } from '../store/seed-items.ts';
+import { ladderUnits } from '../store/ladder.ts';
 import {
   answerExplainBack,
   getAttemptDetail,
@@ -94,6 +96,8 @@ export interface AppOptions {
   sync?: SyncService | null;
   /** W6 seed items: explain-back question sets + patch katas (absent = every such unit is content-pending) */
   seedItems?: SeedItemStore;
+  /** W7: runs after every successful sync (serve.ts re-links ladder units: new program units become artifacts) */
+  afterSync?: () => void;
 }
 
 /**
@@ -288,6 +292,14 @@ export function createApp(opts: AppOptions): Express {
     sendJson(res, 200, KataStatsResponse.parse(kataStats(ladder)));
   }));
 
+  // W7: the ladder units (explain-back / G2 / kata bank / retests / authored G3-G4) with campaign links
+  router.get('/ladder', asyncRoute((req, res) => {
+    validate(EmptyQuery, req.query, 'query');
+    const units = ladderUnits(deps.db);
+    const n = (f: string) => units.filter((u) => u.family === f).length;
+    sendJson(res, 200, LadderResponse.parse({ counts: { explainBack: n('explain-back'), g2: n('g2'), katas: n('kata'), retests: n('retest'), authored: n('authored') }, units }));
+  }));
+
   router.get('/reviews/queue', asyncRoute((req, res) => {
     const q = validate(ReviewQueueQuery, req.query, 'query');
     const items = reviewQueue(deps.db, nowMs(deps.clock), q.limit ?? DEFAULT_QUEUE_LIMIT);
@@ -312,6 +324,7 @@ export function createApp(opts: AppOptions): Express {
     syncInFlight = true;
     try {
       const report = await deps.sync.run(deps.db, deps.clock, body.repos ? { repos: body.repos } : {});
+      opts.afterSync?.();
       sendJson(res, 200, report);
     } catch (err) {
       if (err instanceof SyncConfigError) throw new HttpError(400, 'VALIDATION', err.message, [{ path: 'body.repos', message: err.message }]);

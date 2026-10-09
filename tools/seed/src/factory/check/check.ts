@@ -23,7 +23,7 @@ import { openCheckout, verifyBlobs, type Checkout } from '../checkout.ts';
 import { validateExplainBack } from '../explainback/explainback.ts';
 import { Exclusions } from '../exclusions.ts';
 import { defaultHarness, type Harness } from '../harness/harness.ts';
-import { loadSeedPack, type LoadedSeedPack } from '../pack.ts';
+import { loadSeedPack, restampSeedPack, type LoadedSeedPack } from '../pack.ts';
 import { validatePatchKata } from '../patches/patches.ts';
 import { checkProvenance, validateQuestItem, type ItemVerdict } from '../quests/validate.ts';
 import { REPO_ROOT } from '../report.ts';
@@ -65,6 +65,8 @@ export interface PackCheck {
   items: number;
   review: number;
   executions: number;
+  /** W7 --restamp: the stamp was stale-fingerprint-only and has been rewritten after a clean full re-validation */
+  restamped: boolean;
 }
 
 export interface CheckOptions {
@@ -73,13 +75,19 @@ export interface CheckOptions {
   exclusionsPath?: string;
   harness?: Harness;
   log?: (l: string) => void;
+  /**
+   * W7: rewrite the stamp of a pack whose ONLY problem is a stale seed fingerprint,
+   * after every shipped item re-validated 'accept' byte-identical and every review
+   * hold is still held under the CURRENT validators. Any other problem: no restamp.
+   */
+  restamp?: boolean;
 }
 
 export async function checkPack(dir: string, o: CheckOptions): Promise<PackCheck> {
-  const res: PackCheck = { dir, ok: false, problems: [], items: 0, review: 0, executions: 0 };
+  const res: PackCheck = { dir, ok: false, problems: [], items: 0, review: 0, executions: 0, restamped: false };
   let pack: LoadedSeedPack;
   try {
-    pack = loadSeedPack(dir, { requireStamp: true });
+    pack = loadSeedPack(dir, { requireStamp: true, allowStaleFingerprint: o.restamp === true });
   } catch (err) {
     res.problems.push(err instanceof Error ? err.message : String(err));
     return res;
@@ -136,6 +144,17 @@ export async function checkPack(dir: string, o: CheckOptions): Promise<PackCheck
     if (v.verdict === 'accept') res.problems.push(`${e.key}: held for review but now validates clean — re-seed so the hold is re-decided, never auto-promoted`);
   }
   res.executions = h.executions;
+  if (pack.staleFingerprint && res.problems.length === 0) {
+    // stale-only + clean full re-validation: the current validators vouch for these bytes
+    try {
+      restampSeedPack(pack, h.executions);
+      res.restamped = true;
+    } catch (err) {
+      res.problems.push(`restamp refused: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  } else if (pack.staleFingerprint) {
+    res.problems.push('stale seed fingerprint NOT restamped: the pack has other problems (fix or re-seed it)');
+  }
   res.ok = res.problems.length === 0;
   return res;
 }
@@ -144,7 +163,7 @@ export async function runCheck(o: CheckOptions): Promise<{ ok: boolean; packs: P
   const packs: PackCheck[] = [];
   for (const dir of findPacks(o.seedDir)) {
     const r = await checkPack(dir, o);
-    o.log?.(`${r.ok ? 'OK  ' : 'FAIL'} ${dir}: ${r.items} item(s) re-validated, ${r.review} held for review${r.executions ? `, ${r.executions} execution(s)` : ''}`);
+    o.log?.(`${r.ok ? 'OK  ' : 'FAIL'} ${dir}: ${r.items} item(s) re-validated, ${r.review} held for review${r.executions ? `, ${r.executions} execution(s)` : ''}${r.restamped ? ' — RESTAMPED (stale fingerprint, clean re-validation)' : ''}`);
     for (const p of r.problems) o.log?.(`     PROBLEM ${p}`);
     packs.push(r);
   }

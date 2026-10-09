@@ -80,8 +80,11 @@ export function headingPathAt(hs: readonly Heading[], line: number): string[] {
   return stack.map((h) => h.text);
 }
 
-const GOAL = /\*\*Goal:?\*\*:?/;
-const CHECK = /\*\*Check:?\*\*:?/;
+// W7: also the bullet shape `- Goal: ...` / `- Check: ...` (nettrello astraupskill/05-PRACTICE.md:9-10,
+// led by a bold label line and paired with a `- **Check:** ...` bullet); the plain-word form only
+// counts at the start of a list item, so prose mentioning "Goal:" mid-sentence is not an exercise.
+const GOAL = /\*\*Goal:?\*\*:?|^\s*[-*+]\s+Goal:/;
+const CHECK = /\*\*Check:?\*\*:?|^\s*[-*+]\s+Check:/;
 const LIST_ITEM = /^(\s*)(?:\d+[.)]|[-*+])\s+/;
 const BOLD_ONLY = /^\s*\*\*([^*].*?)\*\*\s*$/;
 
@@ -150,6 +153,8 @@ export function extractGoalChecks(lines: readonly GuideLine[], hs: readonly Head
     };
     const takeSegments = (text: string) => {
       const parts = text.split(CHECK);
+      // `- **Check:** ...` bullet: the list marker before the Check belongs to neither side
+      if (parts.length > 1) parts[0] = parts[0]!.replace(/^\s*[-*+]\s*$/, '');
       if (cur === 'goal') goal += ` ${parts[0]}`;
       else checkBuf += ` ${parts[0]}`;
       for (const p of parts.slice(1)) {

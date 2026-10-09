@@ -47,13 +47,33 @@ export function isRevealed(db: Db, unitId: number): boolean {
 }
 
 /**
+ * W7 (audit #6): true when this unit OR any unit up its variation_of chain (the artifact a
+ * changed-example retest re-checks) has ever been revealed. A retest of a revealed artifact
+ * is practice, never unassisted evidence.
+ */
+export function revealedInVariationChain(db: Db, unitId: number): boolean {
+  const row = db.get<{ x: number }>(
+    `WITH RECURSIVE chain(id, depth) AS (
+       SELECT ?, 0
+       UNION ALL
+       SELECT u.variation_of_unit_id, c.depth + 1 FROM unit u JOIN chain c ON u.id = c.id
+        WHERE u.variation_of_unit_id IS NOT NULL AND c.depth < 16
+     )
+     SELECT 1 AS x FROM attempt a JOIN chain c ON a.unit_id = c.id WHERE a.assistance_source = 'reveal' LIMIT 1`,
+    unitId,
+  );
+  return row !== undefined;
+}
+
+/**
  * Mode derivation (assistance propagation, spec §4/§6.2):
- *  - any prior reveal on the unit  -> guided (auto-flag, 'reveal')
+ *  - any prior reveal on the unit, or on its variation_of chain (W7 audit #6: the
+ *    artifact a retest re-checks) -> guided (auto-flag, 'reveal')
  *  - honor-system self flag         -> assisted ('self')
  *  - otherwise                      -> solo ('none')
  */
 export function deriveMode(db: Db, unitId: number, selfAssisted: boolean): { mode: AttemptMode; source: Assistance } {
-  if (isRevealed(db, unitId)) return { mode: 'guided', source: 'reveal' };
+  if (revealedInVariationChain(db, unitId)) return { mode: 'guided', source: 'reveal' };
   if (selfAssisted) return { mode: 'assisted', source: 'self' };
   return { mode: 'solo', source: 'none' };
 }
