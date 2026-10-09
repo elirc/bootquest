@@ -366,6 +366,23 @@ Opus plan review (`docs/recon/plan-review.md`) returned 2 blockers + 17 majors;
 - W8 (final feature) launched: study-quest quiz gates from the 17 quest
   packs, misses→FSRS cards, act-unlock proof demo.
 
+## 2026-10-09 — BUILD COMPLETE (62de638, 23 commits)
+
+- W8 study-quest gates (4bdc3c8) + act-1 completion batch (62de638):
+  both act 1s fully packed; demo:campaign 24/24 proves the REAL map
+  unlocks (15 JS passes = L3 honestly locked on the level leg; +5 C#
+  passes = 1000 XP = L4 → both act 2s open). 77 seed packs / 1,035
+  items validated; smoke 56/56; 931 tests across 5 workspaces + the
+  self-run and csharp suites; all 4 code packs stamped on final bytes.
+- Spec M1–M7 fully delivered incl. all §4 check types, 3 imports +
+  sync + campaign + two-layer progression + agentic track G1–G4.
+  Remaining content/polish lives in docs/SEEDING.md backlog and the
+  owner's roadmap report (published artifact).
+- Housekeeping: agent worktrees removed from the home repo (8 dirs with
+  Windows file locks left on disk under ~/.claude/worktrees — plain
+  disk cleanup when convenient; 1 git registration + branch remains,
+  removable after deletion).
+
 ## 2026-10-08 — W6 audit (docs/recon/w6-audit.md) — no blockers, 4 majors
 
 promotion-e2e certified trustworthy (real assertions, honest exit code).
