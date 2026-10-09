@@ -59,3 +59,16 @@ The owner switched subscriptions mid-flight; you are the successor session.
   `~\.claude\worktrees` (plus possibly new ones from this campaign).
 - Persistent memory: `~\.claude\projects\C--Users-Owner\memory\
   bootquest-gamified-platform.md` (update it when you reach a milestone).
+
+## Addendum (2026-10-09, second pause — usage limit)
+
+The 8 Phase-A agents were RELAUNCHED from their prepared baselines and then
+cut off again by a usage limit shortly after. Stop orders were sent but may
+not have been processed. Consequence: unlike the first pause, the
+workspaces may now hold PARTIAL UNCOMMITTED work or WIP: commits on top of
+3795a39. Before resuming each one, run `git -C <workspace> log --oneline -3`
+and `git status --short`: a clean tree at 3795a39 = relaunch per its §;
+a WIP commit = read its message for done/not-done; uncommitted changes =
+inspect before trusting, prefer regenerating content via the deterministic
+tools over salvaging half-authored drafts. Everything else in this handoff
+remains accurate.
