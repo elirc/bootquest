@@ -62,8 +62,8 @@ export const PackUnit = z
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: `origin type ${u.origin.type} must map to unit kind ${kindFor[u.origin.type]}`, path: ['unit', 'kind'] });
     }
     const checkType = u.unit.checks[0]?.spec.type;
-    // code drills: drill-js (BootForge, JS track) or drill-cs (csbootcamp, C# track)
-    const wantCheck: Record<PackOriginType, readonly string[]> = { code: ['drill-js', 'drill-cs'], quiz: ['quiz'], output: ['predict-output'], written: [] };
+    // code drills: drill-js (BootForge, JS track), drill-cs (csbootcamp, C# track) or self-run (jstrain, W3c)
+    const wantCheck: Record<PackOriginType, readonly string[]> = { code: ['drill-js', 'drill-cs', 'self-run'], quiz: ['quiz'], output: ['predict-output'], written: [] };
     if (u.unit.checks.length > 1) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'pack units carry at most one check', path: ['unit', 'checks'] });
     }
@@ -128,11 +128,40 @@ export const PackManifestCourse = z
   })
   .strict();
 
+/** Grader kinds a pack can be bound to (server/src/store/grader-fingerprint.ts). */
+export const PACK_GRADER_KINDS = ['js', 'csharp', 'selfrun'] as const;
+export const PackGraderKind = z.enum(PACK_GRADER_KINDS);
+export type PackGraderKind = z.infer<typeof PackGraderKind>;
+
+/**
+ * Upstream material the importer deliberately did NOT turn into units, with a
+ * count and the reason (W3c: never silent). Informational — the loader and the
+ * gate count units only.
+ */
+export const PackExclusion = z
+  .object({
+    /** upstream path or group, e.g. "bootcamp/13-dom-and-browser/exercises/*.html" */
+    what: z.string().min(1),
+    count: z.number().int().positive(),
+    reason: z.string().min(1),
+    /** upstream ids when the group is small enough to list (<= 50) */
+    ids: z.array(z.string().min(1)).optional(),
+  })
+  .strict();
+export type PackExclusion = z.infer<typeof PackExclusion>;
+
 export const PackManifest = z
   .object({
     format: z.literal(PACK_FORMAT),
     source: z.string().min(1),
     track: z.string().min(1),
+    /**
+     * The grader kind that executes this pack (W3c). Absent = derived from the
+     * track (js -> js, csharp -> csharp): BootForge / csbootcamp manifests
+     * predate the field. jstrain is track js but graded by 'selfrun'.
+     */
+    grader: PackGraderKind.optional(),
+    excluded: z.array(PackExclusion).optional(),
     importedFrom: z
       .object({
         /** owner/name of the upstream repo (may be local-only) */
@@ -198,10 +227,13 @@ export const PackValidationStamp = z
         esbuild: z.string().min(1).optional(),
         dotnetSdk: z.string().min(1).optional(),
         dotnetRef: z.string().min(1).optional(),
+        /** selfrun (W3c): the repo-pinned TypeScript that type-checks TS exercises + the tsx loader */
+        typescript: z.string().min(1).optional(),
+        tsx: z.string().min(1).optional(),
       })
       .strict(),
     /** which grader the fingerprint covers (absent on stamps written before W3a = 'js') */
-    graderKind: z.enum(['js', 'csharp']).optional(),
+    graderKind: PackGraderKind.optional(),
     /** validated per-type counts (=== manifest totals on a stamped run) */
     counts: PackCounts,
     executable: z.number().int().nonnegative(),

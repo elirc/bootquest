@@ -2,7 +2,9 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import esbuild from 'esbuild';
+import type { PackManifest } from '@bootquest/shared';
 import { discoverToolchain } from '../runners/csharp/scratch.ts';
+import { resolveTsx, resolveTypescript } from '../runners/self-run/index.ts';
 
 /**
  * The grader fingerprint binds seed:validate verdicts (journal entries) and the
@@ -19,15 +21,22 @@ import { discoverToolchain } from '../runners/csharp/scratch.ts';
  *           compiles + the drill-cs adapter; node + the .NET SDK and reference
  *           pack versions. The JS grader is NOT part of it (and vice versa), so a
  *           JS grader edit does not invalidate the C# stamp.
- * The validator (validate.ts) is in both: it decides what "validated" means.
+ *   selfrun (W3c) jstrain self-run drills + its predict-output quiz items: the
+ *           self-run runner + compose rules + BootQuest's harness (bq-check.mjs)
+ *           + the upstream harness copies it type-checks against + the script
+ *           snippet runner, the registry adapter / deterministic graders and
+ *           grade-core's normalizeOutput (runners.ts, grade-core.mjs); node,
+ *           esbuild, the repo-pinned TypeScript and tsx.
+ * The validator (validate.ts) is in all of them: it decides what "validated" means.
  */
 
-export type GraderKind = 'js' | 'csharp';
-export const GRADER_KINDS: readonly GraderKind[] = ['js', 'csharp'];
+export type GraderKind = 'js' | 'csharp' | 'selfrun';
+export const GRADER_KINDS: readonly GraderKind[] = ['js', 'csharp', 'selfrun'];
 
 const REPO = resolve(import.meta.dirname, '..', '..', '..');
 const VALIDATOR = join(REPO, 'tools', 'seed', 'src', 'validate', 'validate.ts');
 const CSHARP = join(REPO, 'server', 'src', 'runners', 'csharp');
+const SELFRUN = join(REPO, 'server', 'src', 'runners', 'self-run');
 
 export const FINGERPRINT_FILES: Readonly<Record<GraderKind, readonly string[]>> = {
   js: [
@@ -41,16 +50,37 @@ export const FINGERPRINT_FILES: Readonly<Record<GraderKind, readonly string[]>> 
     join(CSHARP, 'scratch.ts'),
     join(CSHARP, 'csbootcamp-split.ts'),
     join(CSHARP, 'fixtures', 'csbootcamp', '_lib', 'Check', 'Check.cs'),
+    // W3c: jstrain2.2's embedded harness revision (drill-cs harness 'jstrain') + the frozen-scaffolding rule
+    join(CSHARP, 'fixtures', 'jstrain-csbootcamp', '_lib', 'Check', 'Check.cs'),
+    join(CSHARP, 'fixtures', 'jstrain-csbootcamp', '_lib', 'Check', 'Spy.cs'),
+    join(SELFRUN, 'compose.ts'),
     join(REPO, 'server', 'src', 'api', 'runner-csharp.ts'),
+    VALIDATOR,
+  ],
+  selfrun: [
+    join(SELFRUN, 'index.ts'),
+    join(SELFRUN, 'compose.ts'),
+    join(SELFRUN, 'snippet.ts'),
+    join(SELFRUN, 'bq-check.mjs'),
+    join(SELFRUN, 'fixtures', 'jstrain', 'bootcamp', '_lib', 'check.js'),
+    join(SELFRUN, 'fixtures', 'jstrain', 'tsbootcamp', '_lib', 'check.ts'),
+    join(SELFRUN, 'fixtures', 'jstrain', 'tsbootcamp', '_lib', 'type-assert.ts'),
+    join(REPO, 'server', 'src', 'api', 'runners.ts'),
+    join(REPO, 'server', 'src', 'runners', 'js', 'grade-core.mjs'),
     VALIDATOR,
   ],
 };
 
-/** The grader kind that executes a pack, from its manifest track. */
+/** The grader kind that executes a pack, from its manifest track (manifests without a `grader` field). */
 export function graderKindForTrack(track: string): GraderKind {
   if (track === 'js') return 'js';
   if (track === 'csharp') return 'csharp';
   throw new Error(`no grader kind for pack track "${track}" (known: js, csharp)`);
+}
+
+/** The grader kind of a pack: its manifest's explicit `grader` (W3c), else derived from the track. */
+export function graderKindForManifest(m: Pick<PackManifest, 'track' | 'grader'>): GraderKind {
+  return m.grader ?? graderKindForTrack(m.track);
 }
 
 export interface Toolchain {
@@ -58,11 +88,14 @@ export interface Toolchain {
   esbuild?: string;
   dotnetSdk?: string;
   dotnetRef?: string;
+  typescript?: string;
+  tsx?: string;
 }
 
 /** Versions bound into a kind's fingerprint. csharp shells out to `dotnet --list-sdks` once (cached). */
 export function toolchainVersions(kind: GraderKind = 'js'): Toolchain {
   if (kind === 'js') return { node: process.version, esbuild: esbuild.version };
+  if (kind === 'selfrun') return { node: process.version, esbuild: esbuild.version, typescript: resolveTypescript().version, tsx: resolveTsx().version };
   const tc = discoverToolchain();
   return { node: process.version, dotnetSdk: tc.sdkVersion, dotnetRef: tc.refVersion };
 }

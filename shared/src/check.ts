@@ -51,8 +51,21 @@ export const DrillCsCheck = z.object({
     .object({
       tests: z.string().min(1),
       tail: z.string().default(''),
+      /**
+       * W3c (jstrain-cs): frozen scaffolding sections (`// ─── given ───`,
+       * `implementations`, `helpers`) the learner must leave as shipped; see
+       * SelfRunFrozenBlock. Optional so csbootcamp specs are unchanged.
+       */
+      frozen: z.array(z.object({ label: z.string().min(1), body: z.string().min(1) }).strict()).optional(),
     })
     .strict(),
+  /**
+   * W3c: which Check harness revision compiles the program. Absent =
+   * 'csbootcamp' (github elirc/csbootcamp: `return Report();`). 'jstrain' =
+   * jstrain2.2's embedded revision (Report at ProcessExit, Spy.cs): its own
+   * Check.dll + scratch dir, tests end at the next divider instead of Report().
+   */
+  harness: z.enum(['csbootcamp', 'jstrain']).optional(),
   timeoutMs: timeoutMs.default(10000),
 });
 
@@ -71,6 +84,20 @@ export const PredictOutputCheck = z.object({
   /** pre-captured expected stdout (normalized: CRLF->LF, rtrim lines) */
   expected: z.string(),
   normalize: z.boolean().default(true),
+  /**
+   * How the import gate re-executes the snippet (PRIVATE; absent = 'esm', the
+   * BootForge grade-core path). 'script' = `node snippet.js` in a dir whose
+   * package.json has no "type" — CommonJS with node's module-syntax detection,
+   * i.e. exactly how jstrain2.2 captured its quiz answers (W3c: ESM changes
+   * sloppy-mode `this`, nextTick-vs-promise order and `require`).
+   */
+  runAs: z.enum(['esm', 'script']).optional(),
+  /**
+   * PRIVATE import-gate cross-check: the upstream answer key's literal tokens,
+   * which must appear IN ORDER in `expected` (jstrain quiz items whose captured
+   * output contradicts their own key are never shipped as gradable).
+   */
+  keyTokens: z.array(z.string().min(1)).min(1).optional(),
 });
 
 export const GuidedStepCheck = z.object({
@@ -293,10 +320,20 @@ export const NodeTestFileCheck = z.object({
   moduleType: z.enum(['module', 'commonjs']).optional(), // workspace package.json `type` (mirrors the repo)
 });
 
+/**
+ * Frozen scaffolding of a self-run exercise (W3c): a learner-file section the
+ * reference solution leaves untouched (fixtures, fake responses, the "provided"
+ * implementations of write-the-test). The grader requires `body` verbatim in
+ * the learner's code (compared with `//` comments and trailing blanks
+ * stripped), so tampering with what the tests rely on is a structured failure.
+ */
+export const SelfRunFrozenBlock = z.object({ label: z.string().min(1), body: z.string().min(1) }).strict();
+
 /** jstrain / csbootcamp self-testing files printing `#done passed= failed= todo=`. */
 export const SelfRunCheck = z.object({
   type: z.literal('self-run'),
   language: z.enum(['js', 'ts', 'cs']),
+  /** repo-relative path of the exercise file; the runner's workspace mirrors it */
   file: relPath,
   /** TS track: run real tsc first (esbuild drops type-assertion grading) */
   tsc: z.boolean().default(false),
@@ -304,6 +341,22 @@ export const SelfRunCheck = z.object({
   /** module must FAIL by design (*-debug / *-hunts); mirrors check.inverted */
   inverted: z.boolean().default(false),
   timeoutMs: timeoutMs.default(30000),
+  /**
+   * PRIVATE grading bytes (W3c). `tests` = the exercise's protected block, from
+   * its tests divider (`tests` / `runtime tests` / `meta-tests`) to EOF: the
+   * graded program is learner head + THESE tests, never the learner's copy.
+   * `fixtures` = file contents keyed by the paths listed in `fixtures`.
+   * Optional so spec-only callers (schema tests) stay valid; the runner
+   * refuses a spec without it.
+   */
+  files: z
+    .object({
+      tests: z.string().min(1),
+      fixtures: z.record(relPath, z.string()).default({}),
+      frozen: z.array(SelfRunFrozenBlock).default([]),
+    })
+    .strict()
+    .optional(),
 });
 
 export const VitestProjectCheck = z.object({

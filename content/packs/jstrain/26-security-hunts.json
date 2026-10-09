@@ -1,0 +1,548 @@
+{
+ "format": "bootquest-pack@1",
+ "source": "jstrain",
+ "course": {
+  "id": "26-security-hunts",
+  "order": 24,
+  "title": "Security Hunts",
+  "description": "The same bug-hunt format as module 24, aimed at a different target: code that **runs perfectly and is still dangerous**. Every exercise here works for well-behaved input and passes a naive review. The failing tests play the attacker — they paste a quote into a search box, put `../` in a filename, change an id in a URL — and prove the door is open. Your job is to close it with the smallest change.",
+  "prerequisites": []
+ },
+ "modules": [
+  {
+   "id": "26-security-hunts",
+   "title": "Security Hunts",
+   "lessons": [
+    {
+     "id": "readme",
+     "title": "Security Hunts",
+     "explanation": "# 26 · Security Hunts\n\nThe same bug-hunt format as module 24, aimed at a different target: code\nthat **runs perfectly and is still dangerous**. Every exercise here works\nfor well-behaved input and passes a naive review. The failing tests play\nthe attacker — they paste a quote into a search box, put `../` in a\nfilename, change an id in a URL — and prove the door is open. Your job is\nto close it with the smallest change.\n\nThis is not paranoia drilling. Injection, XSS, broken access control, and\ntheir neighbours are the top of the OWASP list year after year, they are\nwhere real CRUD apps get breached, and they are exactly the questions a\nmid-level interview uses to tell \"writes features\" from \"ships to\nproduction\". Knowing the *name* and the *one-line fix* for each is the\nbar.\n\n## The mental model\n\nAlmost every web vulnerability is one sentence: **untrusted input crossed\na boundary without being treated as untrusted.** The boundaries differ,\nthe shape does not:\n\n| the boundary input crosses | the attack | the discipline |\n| --- | --- | --- |\n| into an SQL query | injection | parameterize — data is never code |\n| into HTML output | XSS | encode at output, for the context |\n| into a filesystem path | traversal | resolve, then prove containment |\n| into a privileged field | mass assignment | allowlist what may be set |\n| an authorization check | IDOR / broken access | authorize every object, per caller |\n| a secret's randomness | guessable tokens | draw from a CSPRNG, never Math.random |\n| into a redirect target | open redirect | resolve it, then prove it's your origin |\n| into a regex engine | ReDoS | keep the match unambiguous, cap the input |\n| into a log line | data exposure | project the fields you allow, drop the rest |\n| a state-changing request | CSRF | require a token that exists AND matches |\n\nTwo rules run underneath all of them:\n\n1. **Allowlist, never denylist.** Name what is permitted (these two\n   fields, these known columns, this base directory) and reject the\n   rest by construction. A blocklist ships a hole the day someone adds\n   a column.\n2. **Trust boundaries are where the input changes hands, not where it\n   arrives.** The value looks innocent at the edge; it turns dangerous\n   the moment it's concatenated, resolved, or spread. Guard the\n   crossing, not the front door.\n\n## The details that bite\n\n1. **\"Works for normal input\" is the vulnerability's disguise, not its\n   absence.** Every hole here passes the happy path. Read the code\n   asking \"what if this string is hostile?\", not \"does this run?\".\n2. **A denylist is a list of the attacks you have already thought of.**\n   `delete entry.password`, \"reject anything starting with http\",\n   \"strip `<script>`\" — each one ships the hole its author forgot.\n   Turn every one of them around: name what is allowed and build the\n   result from that list, so tomorrow's new field is invisible by\n   default rather than exposed by default.\n3. **A check that compares two absent values is not a check.**\n   `undefined !== undefined` is false, so a missing token matches a\n   missing token and the guard waves the request through. Assert the\n   secret EXISTS before you assert the two are equal.\n4. **Availability is a security property too.** A validator that takes\n   four seconds on a 30-byte string is a denial-of-service primitive,\n   no injection required. Nested quantifiers in a regex are the usual\n   source.\n5. **Sanitizing input is the weaker half; encoding output is the\n   reliable half.** You cannot guess every downstream context at the\n   input; you always know the context at the output. Escape there.\n6. **Authentication ≠ authorization.** Knowing who the caller is does\n   nothing until you check whether THIS caller may touch THIS object.\n   The userId being in scope is not the same as using it.\n7. **Unique is not unguessable.** Counters and timestamps are unique and\n   trivially predictable. Secrets need cryptographic randomness.\n8. **The same error for \"missing\" and \"forbidden.\"** A distinct\n   \"exists but not yours\" message is a yes/no oracle an attacker runs\n   over every id. Fail identically.\n\n## Exercises\n\n| # | file | ★ | the hole |\n| --- | --- | --- | --- |\n| 01 | `01-sql-injection.js` | ★★☆ | a search term that rewrites the query |\n| 02 | `02-html-escaping.js` | ★★☆ | a comment that ships a `<script>` to every reader |\n| 03 | `03-path-traversal.js` | ★★☆ | a filename that climbs out of its folder |\n| 04 | `04-idor-ownership.js` | ★★☆ | an id in the URL that reads a stranger's data |\n| 05 | `05-predictable-token.js` | ★★☆ | reset links you can count up to |\n| 06 | `06-mass-assignment.js` | ★★★ | a profile edit that quietly sets `role: admin` |\n| 07 | `07-open-redirect.js` | ★★☆ | a login link that lands on somebody else's site |\n| 08 | `08-redos.js` | ★★☆ | a validator one visitor can pin a core with |\n| 09 | `09-secrets-in-logs.js` | ★★☆ | a request log half the company can read |\n| 10 | `10-csrf-vacuous-check.js` | ★★★ | a token check that passes when there is no token |\n\n```\nnode exercises/01-sql-injection.js     # red — the attack succeeds\nnode solutions/01-sql-injection.js     # the fix + walkthrough\nnode ../verify.js 26                    # the whole module\nnode ../progress.js 26                  # the scoreboard\n```\n\nThe browser half of hunt 02 lives in module 13 as\n`exercises/37-debug-escaping.html` — the same injection, rendered live,\ngraded in the page. Do them back to back if you want the server and\nclient sides of escaping in one sitting.\n\nAs in module 24, red is the starting state and 🐛 in the scoreboard means\n\"still exploitable\". Read the solution's walkthrough after your attempt —\nit names the vulnerability class (the term an interviewer wants to hear),\nthe tell, the minimal fix, and where the class shows up in the wild.\n\nOne honesty note kept from the codebase's rules: these are teaching-sized\nreductions. Real defense is layered — a parameterized query AND least\nprivilege AND input validation — and you should lean on your framework's\nbuilt-in protections (auto-escaping templates, ORM parameter binding,\nauth middleware) rather than hand-rolling. The point here is to recognize\nthe shape, so you notice when a layer is missing.\n\n---\n\n**No \"Stuck?\" line here, on purpose** — reinforcement and hunt modules send you looking for the reference yourself; that retrieval is the rep. · **Next:** `bootcamp/27-sql-data`, or `bootcamp/13-dom-and-browser/exercises/37-debug-escaping.html` for the browser side of hunt 02\n"
+    }
+   ]
+  }
+ ],
+ "units": [
+  {
+   "unit": {
+    "key": "jstrain/26-security-hunts/01-sql-injection",
+    "track": "js",
+    "kind": "drill",
+    "title": "The search box that reads the whole table",
+    "phase": "26-security-hunts",
+    "difficulty": 2,
+    "competencies": [
+     "code-reading"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "self-run",
+       "language": "js",
+       "file": "bootcamp/26-security-hunts/exercises/01-sql-injection.js",
+       "tsc": false,
+       "fixtures": [],
+       "inverted": true,
+       "timeoutMs": 30000,
+       "files": {
+        "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\ntest('an ordinary search matches by substring', () => {\n  withDb((db) => {\n    eq(findUsers(db, 'Ada').map((r) => r.name), ['Ada', 'Adam']);\n  });\n});\n\ntest('a search that matches nothing returns nothing', () => {\n  withDb((db) => {\n    eq(findUsers(db, 'zzz'), []);\n  });\n});\n\ntest(\"a term with a quote is data, not code — it matches no one\", () => {\n  withDb((db) => {\n    // classic injection: close the string, OR a always-true clause\n    eq(findUsers(db, \"' OR 1=1 --\"), []);\n  });\n});\n\ntest('a term with a quote cannot leak the admin row', () => {\n  withDb((db) => {\n    const names = findUsers(db, \"xyz' OR role='admin' --\").map((r) => r.name);\n    eq(names.includes('Root'), false);\n  });\n});\n",
+        "fixtures": {},
+        "frozen": []
+       }
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "bootcamp/26-security-hunts/01-sql-injection",
+    "type": "code",
+    "module": "26-security-hunts",
+    "lesson": "readme",
+    "position": 0,
+    "format": "debugging",
+    "skills": [
+     "security",
+     "SQL injection",
+     "parameterized queries"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "jstrain/26-security-hunts/02-html-escaping",
+    "track": "js",
+    "kind": "drill",
+    "title": "The comment that runs code",
+    "phase": "26-security-hunts",
+    "difficulty": 2,
+    "competencies": [
+     "code-reading"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "self-run",
+       "language": "js",
+       "file": "bootcamp/26-security-hunts/exercises/02-html-escaping.js",
+       "tsc": false,
+       "fixtures": [],
+       "inverted": true,
+       "timeoutMs": 30000,
+       "files": {
+        "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\ntest('a plain comment renders as-is', () => {\n  eq(\n    renderComment({ author: 'Ada', body: 'nice post' }),\n    '<li><b>Ada</b>: nice post</li>'\n  );\n});\n\ntest('angle brackets in the body are escaped to entities', () => {\n  eq(\n    renderComment({ author: 'Ada', body: 'hi <3' }),\n    '<li><b>Ada</b>: hi &lt;3</li>'\n  );\n});\n\ntest('a script tag in the body cannot survive as a tag', () => {\n  const html = renderComment({ author: 'Mallory', body: '<script>steal()</script>' });\n  ok(!html.includes('<script>'), 'the literal <script> tag must not appear');\n  ok(html.includes('&lt;script&gt;'), 'it must be escaped instead');\n});\n\ntest('a hostile author name is escaped too', () => {\n  const html = renderComment({ author: '<img src=x onerror=hack>', body: 'hi' });\n  ok(!html.includes('<img'), 'the author is user input as well');\n});\n",
+        "fixtures": {},
+        "frozen": []
+       }
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "bootcamp/26-security-hunts/02-html-escaping",
+    "type": "code",
+    "module": "26-security-hunts",
+    "lesson": "readme",
+    "position": 1,
+    "format": "debugging",
+    "skills": [
+     "security",
+     "XSS",
+     "output encoding"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "jstrain/26-security-hunts/03-path-traversal",
+    "track": "js",
+    "kind": "drill",
+    "title": "The download that escapes its folder",
+    "phase": "26-security-hunts",
+    "difficulty": 2,
+    "competencies": [
+     "code-reading"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "self-run",
+       "language": "js",
+       "file": "bootcamp/26-security-hunts/exercises/03-path-traversal.js",
+       "tsc": false,
+       "fixtures": [],
+       "inverted": true,
+       "timeoutMs": 30000,
+       "files": {
+        "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\ntest('a plain filename resolves inside the base dir', () => {\n  eq(safeJoin('/srv/files', 'report.pdf'), '/srv/files/report.pdf');\n});\n\ntest('a nested path inside the base dir is fine', () => {\n  eq(safeJoin('/srv/files', 'reports/q1.pdf'), '/srv/files/reports/q1.pdf');\n});\n\ntest('climbing out with ../ is refused', () => {\n  throws(() => safeJoin('/srv/files', '../../etc/passwd'), 'outside');\n});\n\ntest('an absolute user path cannot jump to the filesystem root', () => {\n  throws(() => safeJoin('/srv/files', '/etc/passwd'), 'outside');\n});\n\ntest('a sneaky path that climbs then re-enters is still refused', () => {\n  throws(() => safeJoin('/srv/files', 'reports/../../secret'), 'outside');\n});\n",
+        "fixtures": {},
+        "frozen": []
+       }
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "bootcamp/26-security-hunts/03-path-traversal",
+    "type": "code",
+    "module": "26-security-hunts",
+    "lesson": "readme",
+    "position": 2,
+    "format": "debugging",
+    "skills": [
+     "security",
+     "path traversal",
+     "containment"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "jstrain/26-security-hunts/04-idor-ownership",
+    "track": "js",
+    "kind": "drill",
+    "title": "Reading someone else's invoice",
+    "phase": "26-security-hunts",
+    "difficulty": 2,
+    "competencies": [
+     "code-reading"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "self-run",
+       "language": "js",
+       "file": "bootcamp/26-security-hunts/exercises/04-idor-ownership.js",
+       "tsc": false,
+       "fixtures": [],
+       "inverted": true,
+       "timeoutMs": 30000,
+       "files": {
+        "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\ntest('the owner can read their own invoice', () => {\n  const store = makeStore();\n  eq(getInvoice(store, 'ada', 'inv-1').cents, 12000);\n});\n\ntest('a stranger cannot read an invoice they do not own', () => {\n  const store = makeStore();\n  throws(() => getInvoice(store, 'mallory', 'inv-1'), 'not found');\n});\n\ntest('one user cannot read another real user\\'s invoice', () => {\n  const store = makeStore();\n  throws(() => getInvoice(store, 'ada', 'inv-2'), 'not found');\n});\n\ntest('an unknown id and a not-yours id fail identically', () => {\n  const store = makeStore();\n  let unknown, notYours;\n  try { getInvoice(store, 'ada', 'inv-999'); } catch (e) { unknown = e.message; }\n  try { getInvoice(store, 'ada', 'inv-2'); } catch (e) { notYours = e.message; }\n  eq(unknown.replace('inv-999', 'ID'), notYours.replace('inv-2', 'ID'));\n});\n",
+        "fixtures": {},
+        "frozen": []
+       }
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "bootcamp/26-security-hunts/04-idor-ownership",
+    "type": "code",
+    "module": "26-security-hunts",
+    "lesson": "readme",
+    "position": 3,
+    "format": "debugging",
+    "skills": [
+     "security",
+     "access control",
+     "IDOR"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "jstrain/26-security-hunts/05-predictable-token",
+    "track": "js",
+    "kind": "drill",
+    "title": "Password-reset tokens you can guess",
+    "phase": "26-security-hunts",
+    "difficulty": 2,
+    "competencies": [
+     "code-reading"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "self-run",
+       "language": "js",
+       "file": "bootcamp/26-security-hunts/exercises/05-predictable-token.js",
+       "tsc": false,
+       "fixtures": [],
+       "inverted": true,
+       "timeoutMs": 30000,
+       "files": {
+        "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\ntest('a token is a long hex string', () => {\n  const tok = makeResetToken();\n  ok(/^[0-9a-f]{32,}$/.test(tok), `expected 32+ hex chars, got ${tok}`);\n});\n\ntest('1000 tokens are all distinct', () => {\n  const seen = new Set();\n  for (let i = 0; i < 1000; i++) seen.add(makeResetToken());\n  ok(seen.size === 1000, 'every token must be unique');\n});\n\ntest('consecutive tokens are not adjacent values', () => {\n  // if token N+1 is predictable from token N, this catches it\n  const a = BigInt('0x' + makeResetToken());\n  const b = BigInt('0x' + makeResetToken());\n  const gap = a > b ? a - b : b - a;\n  ok(gap > 1n << 64n, 'consecutive tokens must be astronomically far apart');\n});\n\ntest('tokens carry real entropy (many distinct leading bytes)', () => {\n  const firstBytes = new Set();\n  for (let i = 0; i < 200; i++) firstBytes.add(makeResetToken().slice(0, 2));\n  ok(firstBytes.size > 50, `expected varied prefixes, saw ${firstBytes.size}`);\n});\n",
+        "fixtures": {},
+        "frozen": []
+       }
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "bootcamp/26-security-hunts/05-predictable-token",
+    "type": "code",
+    "module": "26-security-hunts",
+    "lesson": "readme",
+    "position": 4,
+    "format": "debugging",
+    "skills": [
+     "security",
+     "CSPRNG",
+     "unguessable tokens"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "jstrain/26-security-hunts/06-mass-assignment",
+    "track": "js",
+    "kind": "drill",
+    "title": "The profile update that grants admin",
+    "phase": "26-security-hunts",
+    "difficulty": 3,
+    "competencies": [
+     "code-reading"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "self-run",
+       "language": "js",
+       "file": "bootcamp/26-security-hunts/exercises/06-mass-assignment.js",
+       "tsc": false,
+       "fixtures": [],
+       "inverted": true,
+       "timeoutMs": 30000,
+       "files": {
+        "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\ntest('a name change is applied', () => {\n  const user = { id: 1, name: 'Ada', email: 'a@x.com', role: 'user' };\n  eq(updateProfile(user, { name: 'Ada L.' }).name, 'Ada L.');\n});\n\ntest('name and email can both be edited', () => {\n  const user = { id: 1, name: 'Ada', email: 'a@x.com', role: 'user' };\n  const out = updateProfile(user, { name: 'Ada L.', email: 'ada@x.com' });\n  eq(out.name, 'Ada L.');\n  eq(out.email, 'ada@x.com');\n});\n\ntest('a smuggled role is ignored', () => {\n  const user = { id: 1, name: 'Ada', email: 'a@x.com', role: 'user' };\n  eq(updateProfile(user, { name: 'Ada', role: 'admin' }).role, 'user');\n});\n\ntest('id and balance cannot be overwritten from the patch', () => {\n  const user = { id: 1, name: 'Ada', email: 'a@x.com', role: 'user', balance: 0 };\n  const out = updateProfile(user, { id: 999, balance: 1000000 });\n  eq(out.id, 1);\n  eq(out.balance, 0);\n});\n\ntest('an unknown field in the patch is dropped, not stored', () => {\n  const user = { id: 1, name: 'Ada', email: 'a@x.com', role: 'user' };\n  const out = updateProfile(user, { name: 'Ada', isAdmin: true });\n  eq('isAdmin' in out, false);\n});\n",
+        "fixtures": {},
+        "frozen": []
+       }
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "bootcamp/26-security-hunts/06-mass-assignment",
+    "type": "code",
+    "module": "26-security-hunts",
+    "lesson": "readme",
+    "position": 5,
+    "format": "debugging",
+    "skills": [
+     "security",
+     "mass assignment",
+     "field allowlists"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "jstrain/26-security-hunts/07-open-redirect",
+    "track": "js",
+    "kind": "drill",
+    "title": "The login that sends you somewhere else",
+    "phase": "26-security-hunts",
+    "difficulty": 2,
+    "competencies": [
+     "code-reading"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "self-run",
+       "language": "js",
+       "file": "bootcamp/26-security-hunts/exercises/07-open-redirect.js",
+       "tsc": false,
+       "fixtures": [],
+       "inverted": true,
+       "timeoutMs": 30000,
+       "files": {
+        "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\ntest('a plain in-site path is kept', () => {\n  eq(safeRedirect('/dashboard'), '/dashboard');\n});\n\ntest('an in-site path keeps its query string', () => {\n  eq(safeRedirect('/orders?page=2'), '/orders?page=2');\n});\n\ntest('a missing next falls back to the home page', () => {\n  eq(safeRedirect(undefined), '/');\n  eq(safeRedirect(''), '/');\n});\n\ntest('an absolute URL to another site is refused', () => {\n  eq(safeRedirect('https://evil.test/pwn'), '/');\n});\n\ntest('a protocol-relative URL is refused', () => {\n  eq(safeRedirect('//evil.test/pwn'), '/');\n});\n\ntest('a backslash-smuggled host is refused', () => {\n  eq(safeRedirect('/\\\\evil.test/pwn'), '/');\n});\n\ntest('a javascript: destination is refused', () => {\n  eq(safeRedirect('javascript:alert(document.cookie)'), '/');\n});\n",
+        "fixtures": {},
+        "frozen": []
+       }
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "bootcamp/26-security-hunts/07-open-redirect",
+    "type": "code",
+    "module": "26-security-hunts",
+    "lesson": "readme",
+    "position": 6,
+    "format": "debugging",
+    "skills": [
+     "security",
+     "open redirect",
+     "URL parsing"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "jstrain/26-security-hunts/08-redos",
+    "track": "js",
+    "kind": "drill",
+    "title": "The validator that stops the server",
+    "phase": "26-security-hunts",
+    "difficulty": 2,
+    "competencies": [
+     "code-reading"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "self-run",
+       "language": "js",
+       "file": "bootcamp/26-security-hunts/exercises/08-redos.js",
+       "tsc": false,
+       "fixtures": [],
+       "inverted": true,
+       "timeoutMs": 30000,
+       "files": {
+        "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\ntest('accepts a single tag', () => {\n  eq(isValidTagList('js'), true);\n});\n\ntest('accepts a comma-separated list, spaces optional', () => {\n  eq(isValidTagList('js,node'), true);\n  eq(isValidTagList('js, node, sql'), true);\n});\n\ntest('rejects an empty list and a non-letter tag', () => {\n  eq(isValidTagList(''), false);\n  eq(isValidTagList('js, 42'), false);\n});\n\ntest('rejects a trailing comma', () => {\n  eq(isValidTagList('js, node,'), false);\n});\n\ntest('rejects a long malformed list without hanging', () => {\n  const attack = 'a'.repeat(26) + '!';\n  const started = performance.now();\n  eq(isValidTagList(attack), false);\n  const elapsed = performance.now() - started;\n  ok(elapsed < 150, `took ${elapsed.toFixed(0)}ms — should be sub-millisecond`);\n});\n",
+        "fixtures": {},
+        "frozen": []
+       }
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "bootcamp/26-security-hunts/08-redos",
+    "type": "code",
+    "module": "26-security-hunts",
+    "lesson": "readme",
+    "position": 7,
+    "format": "debugging",
+    "skills": [
+     "security",
+     "ReDoS",
+     "catastrophic backtracking"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "jstrain/26-security-hunts/09-secrets-in-logs",
+    "track": "js",
+    "kind": "drill",
+    "title": "The log that stores everyone's password",
+    "phase": "26-security-hunts",
+    "difficulty": 2,
+    "competencies": [
+     "code-reading"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "self-run",
+       "language": "js",
+       "file": "bootcamp/26-security-hunts/exercises/09-secrets-in-logs.js",
+       "tsc": false,
+       "fixtures": [],
+       "inverted": true,
+       "timeoutMs": 30000,
+       "files": {
+        "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\ntest('keeps the operational fields', () => {\n  const line = logLine(request());\n  eq(line.method, 'POST');\n  eq(line.path, '/api/checkout');\n  eq(line.status, 201);\n  eq(line.durationMs, 42);\n  eq(line.userId, 'u_1042');\n});\n\ntest('drops a top-level password field', () => {\n  ok(!('password' in logLine(request())));\n});\n\ntest('does not log the Authorization header or the session cookie', () => {\n  const text = JSON.stringify(logLine(request()));\n  ok(!text.includes('sk_live_9f3c1d'), 'bearer token reached the log');\n  ok(!text.includes('8c4e2a1b'), 'session cookie reached the log');\n});\n\ntest('does not log anything from the request body', () => {\n  const text = JSON.stringify(logLine(request()));\n  ok(!text.includes('4111111111111111'), 'card number reached the log');\n  ok(!text.includes('ada@example.com'), 'customer e-mail reached the log');\n});\n\ntest('the line has exactly the five allowed fields', () => {\n  eq(Object.keys(logLine(request())).sort(), [\n    'durationMs',\n    'method',\n    'path',\n    'status',\n    'userId',\n  ]);\n});\n",
+        "fixtures": {},
+        "frozen": [
+         {
+          "label": "a request as the framework hands it over",
+          "body": "const request = () => ({\n  method: 'POST',\n  path: '/api/checkout',\n  status: 201,\n  durationMs: 42,\n  userId: 'u_1042',\n  password: 'hunter2',\n  headers: {\n    authorization: 'Bearer sk_live_9f3c1d',\n    cookie: 'session=8c4e2a1b',\n    'user-agent': 'curl/8.4.0',\n  },\n  body: {\n    email: 'ada@example.com',\n    card: { number: '4111111111111111', cvc: '737' },\n  },\n});"
+         }
+        ]
+       }
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "bootcamp/26-security-hunts/09-secrets-in-logs",
+    "type": "code",
+    "module": "26-security-hunts",
+    "lesson": "readme",
+    "position": 8,
+    "format": "debugging",
+    "skills": [
+     "security",
+     "sensitive data exposure",
+     "allowlisting"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "jstrain/26-security-hunts/10-csrf-vacuous-check",
+    "track": "js",
+    "kind": "drill",
+    "title": "The CSRF check that checks nothing",
+    "phase": "26-security-hunts",
+    "difficulty": 3,
+    "competencies": [
+     "code-reading"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "self-run",
+       "language": "js",
+       "file": "bootcamp/26-security-hunts/exercises/10-csrf-vacuous-check.js",
+       "tsc": false,
+       "fixtures": [],
+       "inverted": true,
+       "timeoutMs": 30000,
+       "files": {
+        "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\ntest('a POST carrying the session token is allowed', () => {\n  eq(assertCsrf({ csrfToken: 'abc123' }, post('abc123')), undefined);\n});\n\ntest('a POST carrying the wrong token is refused', () => {\n  throws(() => assertCsrf({ csrfToken: 'abc123' }, post('xyz789')), 'csrf');\n});\n\ntest('a POST carrying no token is refused', () => {\n  throws(() => assertCsrf({ csrfToken: 'abc123' }, post(undefined)), 'csrf');\n});\n\ntest('safe methods pass without a token', () => {\n  eq(assertCsrf({ csrfToken: 'abc123' }, { method: 'GET', body: {} }), undefined);\n  eq(assertCsrf({ csrfToken: 'abc123' }, { method: 'HEAD', body: {} }), undefined);\n});\n\ntest('a session with no token yet cannot authorise anything', () => {\n  throws(() => assertCsrf({}, post(undefined)), 'csrf');\n});\n\ntest('two empty tokens are not a match', () => {\n  throws(() => assertCsrf({ csrfToken: '' }, post('')), 'csrf');\n});\n",
+        "fixtures": {},
+        "frozen": [
+         {
+          "label": "request helpers",
+          "body": "const post = (csrfToken) => ({\n  method: 'POST',\n  body: csrfToken === undefined ? {} : { csrfToken, amount: 500 },\n});"
+         }
+        ]
+       }
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "bootcamp/26-security-hunts/10-csrf-vacuous-check",
+    "type": "code",
+    "module": "26-security-hunts",
+    "lesson": "readme",
+    "position": 9,
+    "format": "debugging",
+    "skills": [
+     "security",
+     "CSRF",
+     "vacuous comparison"
+    ]
+   }
+  }
+ ],
+ "content": {
+  "jstrain/26-security-hunts/01-sql-injection": {
+   "instructions": "**Concepts:** security · SQL injection · parameterized queries  \n**Level:** ★★☆ core\n\n**Debug hunt:** the code below ships with a planted bug — the tests fail until you find and fix it.\n\nfindUsers(db, term) powers a \"search users by name\" box. It should\nreturn only the rows whose name CONTAINS the term:\n\n    findUsers(db, 'ada')   → [{ id: 1, name: 'Ada', role: 'user' }]\n\nThe code works for ordinary searches — and then someone typed\na quote into the box and got every row back, admins included.\n\nThe code below is fully written — and a security hole. 2 tests fail:\nthey type SQL into the search term. Find the flaw and fix it with the\nsmallest change. Don't rewrite the query's meaning.\n\nhint: look at how the term gets INTO the SQL string. A value pasted\nstraight into a query is code, not data. What does the term\n`' OR 1=1 --` turn the WHERE clause into?\n",
+   "starter": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · the search box that reads the whole table            ★★☆ core\n//  concepts: security · SQL injection · parameterized queries\n//  run: node 01-sql-injection.js\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  findUsers(db, term) powers a \"search users by name\" box. It should\n//  return only the rows whose name CONTAINS the term:\n//\n//      findUsers(db, 'ada')   → [{ id: 1, name: 'Ada', role: 'user' }]\n//\n//  The code works for ordinary searches — and then someone typed\n//  a quote into the box and got every row back, admins included.\n//\n//  The code below is fully written — and a security hole. 2 tests fail:\n//  they type SQL into the search term. Find the flaw and fix it with the\n//  smallest change. Don't rewrite the query's meaning.\n//\n//  hint: look at how the term gets INTO the SQL string. A value pasted\n//  straight into a query is code, not data. What does the term\n//  `' OR 1=1 --` turn the WHERE clause into?\n\nimport { test, eq } from '../../_lib/check.js';\nimport { DatabaseSync } from 'node:sqlite';\n\nfunction withDb(run) {\n  const db = new DatabaseSync(':memory:');\n  db.exec(`CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, role TEXT);`);\n  const stmt = db.prepare('INSERT INTO users VALUES (?, ?, ?)');\n  stmt.run(1, 'Ada', 'user');\n  stmt.run(2, 'Adam', 'user');\n  stmt.run(3, 'Root', 'admin');\n  try {\n    return run(db);\n  } finally {\n    db.close();\n  }\n}\n\nexport function findUsers(db, term) {\n  const sql = `SELECT id, name, role FROM users\n               WHERE name LIKE '%${term}%' ORDER BY id`;\n  return db.prepare(sql).all();\n}\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\ntest('an ordinary search matches by substring', () => {\n  withDb((db) => {\n    eq(findUsers(db, 'Ada').map((r) => r.name), ['Ada', 'Adam']);\n  });\n});\n\ntest('a search that matches nothing returns nothing', () => {\n  withDb((db) => {\n    eq(findUsers(db, 'zzz'), []);\n  });\n});\n\ntest(\"a term with a quote is data, not code — it matches no one\", () => {\n  withDb((db) => {\n    // classic injection: close the string, OR a always-true clause\n    eq(findUsers(db, \"' OR 1=1 --\"), []);\n  });\n});\n\ntest('a term with a quote cannot leak the admin row', () => {\n  withDb((db) => {\n    const names = findUsers(db, \"xyz' OR role='admin' --\").map((r) => r.name);\n    eq(names.includes('Root'), false);\n  });\n});\n",
+   "solution": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · the search box that reads the whole table — SOLUTION  ★★☆ core\n//  concepts: security · SQL injection · parameterized queries\n//  run: node 01-sql-injection.js\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Walkthrough:\n//  Vulnerability: SQL injection. The term was pasted into the query\n//  text, so `' OR 1=1 --` closed the string literal, added an\n//  always-true clause, and commented out the rest — the WHERE now\n//  matches every row. The user's data became part of the program.\n//  The tell: a query built with template interpolation (`${term}`) or\n//  string `+`. The database driver has one job the string never can —\n//  keeping data and code apart — and a `${}` in SQL throws that away.\n//  The minimal fix: a placeholder, and bind the term as a VALUE. The\n//  wildcards go on the JavaScript side of the boundary so the whole\n//  bound string is treated as data:\n//      const sql = `SELECT ... WHERE name LIKE ? ORDER BY id`;\n//      return db.prepare(sql).all(`%${term}%`);\n//  Now `' OR 1=1 --` is searched for literally and matches nobody.\n//  In the wild: `WHERE id = ${req.query.id}`, ORDER BY built from a\n//  user-chosen column, LIMIT from a raw param. The rule is total —\n//  parameterize every value, always, even the \"obviously safe\" ones.\n//  (When you must interpolate an identifier like a column name, it\n//  cannot be a parameter — allowlist it against known-good names.)\n\nimport { test, eq } from '../../_lib/check.js';\nimport { DatabaseSync } from 'node:sqlite';\n\nfunction withDb(run) {\n  const db = new DatabaseSync(':memory:');\n  db.exec(`CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, role TEXT);`);\n  const stmt = db.prepare('INSERT INTO users VALUES (?, ?, ?)');\n  stmt.run(1, 'Ada', 'user');\n  stmt.run(2, 'Adam', 'user');\n  stmt.run(3, 'Root', 'admin');\n  try {\n    return run(db);\n  } finally {\n    db.close();\n  }\n}\n\nexport function findUsers(db, term) {\n  const sql = `SELECT id, name, role FROM users\n               WHERE name LIKE ? ORDER BY id`;\n  return db.prepare(sql).all(`%${term}%`);\n}\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\ntest('an ordinary search matches by substring', () => {\n  withDb((db) => {\n    eq(findUsers(db, 'Ada').map((r) => r.name), ['Ada', 'Adam']);\n  });\n});\n\ntest('a search that matches nothing returns nothing', () => {\n  withDb((db) => {\n    eq(findUsers(db, 'zzz'), []);\n  });\n});\n\ntest(\"a term with a quote is data, not code — it matches no one\", () => {\n  withDb((db) => {\n    // classic injection: close the string, OR a always-true clause\n    eq(findUsers(db, \"' OR 1=1 --\"), []);\n  });\n});\n\ntest('a term with a quote cannot leak the admin row', () => {\n  withDb((db) => {\n    const names = findUsers(db, \"xyz' OR role='admin' --\").map((r) => r.name);\n    eq(names.includes('Root'), false);\n  });\n});\n",
+   "explanation": "Vulnerability: SQL injection. The term was pasted into the query\ntext, so `' OR 1=1 --` closed the string literal, added an\nalways-true clause, and commented out the rest — the WHERE now\nmatches every row. The user's data became part of the program.\nThe tell: a query built with template interpolation (`${term}`) or\nstring `+`. The database driver has one job the string never can —\nkeeping data and code apart — and a `${}` in SQL throws that away.\nThe minimal fix: a placeholder, and bind the term as a VALUE. The\nwildcards go on the JavaScript side of the boundary so the whole\nbound string is treated as data:\n    const sql = `SELECT ... WHERE name LIKE ? ORDER BY id`;\n    return db.prepare(sql).all(`%${term}%`);\nNow `' OR 1=1 --` is searched for literally and matches nobody.\nIn the wild: `WHERE id = ${req.query.id}`, ORDER BY built from a\nuser-chosen column, LIMIT from a raw param. The rule is total —\nparameterize every value, always, even the \"obviously safe\" ones.\n(When you must interpolate an identifier like a column name, it\ncannot be a parameter — allowlist it against known-good names.)"
+  },
+  "jstrain/26-security-hunts/02-html-escaping": {
+   "instructions": "**Concepts:** security · XSS · output encoding  \n**Level:** ★★☆ core\n\n**Debug hunt:** the code below ships with a planted bug — the tests fail until you find and fix it.\n\nrenderComment({ author, body }) builds the HTML string for one posted\ncomment. Whatever a user typed is TEXT and must render as text, even\nwhen it looks like markup:\n\n    renderComment({ author: 'Ada', body: 'hi <3' })\n      → '<li><b>Ada</b>: hi &lt;3</li>'\n\nA user posted a comment containing a <script> tag, and it executed in\nevery reader's browser.\n\nThe code below is fully written — and a security hole. 2 tests fail:\nthey post markup as a comment. Find the flaw and fix it with the\nsmallest change. Don't change the tag structure the tests expect.\n\nhint: the author and body come from users; the <li>/<b> wrapper comes\nfrom you. Which parts must survive as literal characters, and where\nin this function does that conversion happen — if it happens at all?\n",
+   "starter": "// ─────────────────────────────────────────────────────────────────────────\n//  02 · the comment that runs code                           ★★☆ core\n//  concepts: security · XSS · output encoding\n//  run: node 02-html-escaping.js\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  renderComment({ author, body }) builds the HTML string for one posted\n//  comment. Whatever a user typed is TEXT and must render as text, even\n//  when it looks like markup:\n//\n//      renderComment({ author: 'Ada', body: 'hi <3' })\n//        → '<li><b>Ada</b>: hi &lt;3</li>'\n//\n//  A user posted a comment containing a <script> tag, and it executed in\n//  every reader's browser.\n//\n//  The code below is fully written — and a security hole. 2 tests fail:\n//  they post markup as a comment. Find the flaw and fix it with the\n//  smallest change. Don't change the tag structure the tests expect.\n//\n//  hint: the author and body come from users; the <li>/<b> wrapper comes\n//  from you. Which parts must survive as literal characters, and where\n//  in this function does that conversion happen — if it happens at all?\n\nimport { test, eq, ok } from '../../_lib/check.js';\n\nexport function renderComment({ author, body }) {\n  return `<li><b>${author}</b>: ${body}</li>`;\n}\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\ntest('a plain comment renders as-is', () => {\n  eq(\n    renderComment({ author: 'Ada', body: 'nice post' }),\n    '<li><b>Ada</b>: nice post</li>'\n  );\n});\n\ntest('angle brackets in the body are escaped to entities', () => {\n  eq(\n    renderComment({ author: 'Ada', body: 'hi <3' }),\n    '<li><b>Ada</b>: hi &lt;3</li>'\n  );\n});\n\ntest('a script tag in the body cannot survive as a tag', () => {\n  const html = renderComment({ author: 'Mallory', body: '<script>steal()</script>' });\n  ok(!html.includes('<script>'), 'the literal <script> tag must not appear');\n  ok(html.includes('&lt;script&gt;'), 'it must be escaped instead');\n});\n\ntest('a hostile author name is escaped too', () => {\n  const html = renderComment({ author: '<img src=x onerror=hack>', body: 'hi' });\n  ok(!html.includes('<img'), 'the author is user input as well');\n});\n",
+   "solution": "// ─────────────────────────────────────────────────────────────────────────\n//  02 · the comment that runs code — SOLUTION                ★★☆ core\n//  concepts: security · XSS · output encoding\n//  run: node 02-html-escaping.js\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Walkthrough:\n//  Vulnerability: stored XSS. User text was concatenated into an HTML\n//  string, so a posted `<script>` became a real <script> tag in every\n//  reader's page. Same shape as file 01's injection — untrusted input\n//  crossing into a language (here HTML) without encoding.\n//  The tell: a template that drops a user value between tags with no\n//  escaping in sight. The fix is not to sanitize the INPUT (you'd have\n//  to guess every context); it is to ENCODE at OUTPUT, for the context\n//  you're writing into.\n//  The minimal fix: escape every user field as you interpolate it —\n//      const esc = (s) => String(s).replace(/[&<>\"']/g, (ch) => ({\n//        '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;'\n//      })[ch]);\n//      return `<li><b>${esc(author)}</b>: ${esc(body)}</li>`;\n//  Escape `&` FIRST or you double-encode the others. The <li>/<b> you\n//  wrote stays literal — only the untrusted parts are encoded.\n//  In the wild: innerHTML with user data, dangerouslySetInnerHTML,\n//  building emails or PDFs by string concat. Real apps lean on the\n//  framework's auto-escaping (React text nodes, template engines) and\n//  encode by context — HTML body vs attribute vs URL vs JS each differ.\n\nimport { test, eq, ok } from '../../_lib/check.js';\n\nconst esc = (s) =>\n  String(s).replace(\n    /[&<>\"']/g,\n    (ch) =>\n      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' }[ch])\n  );\n\nexport function renderComment({ author, body }) {\n  return `<li><b>${esc(author)}</b>: ${esc(body)}</li>`;\n}\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\ntest('a plain comment renders as-is', () => {\n  eq(\n    renderComment({ author: 'Ada', body: 'nice post' }),\n    '<li><b>Ada</b>: nice post</li>'\n  );\n});\n\ntest('angle brackets in the body are escaped to entities', () => {\n  eq(\n    renderComment({ author: 'Ada', body: 'hi <3' }),\n    '<li><b>Ada</b>: hi &lt;3</li>'\n  );\n});\n\ntest('a script tag in the body cannot survive as a tag', () => {\n  const html = renderComment({ author: 'Mallory', body: '<script>steal()</script>' });\n  ok(!html.includes('<script>'), 'the literal <script> tag must not appear');\n  ok(html.includes('&lt;script&gt;'), 'it must be escaped instead');\n});\n\ntest('a hostile author name is escaped too', () => {\n  const html = renderComment({ author: '<img src=x onerror=hack>', body: 'hi' });\n  ok(!html.includes('<img'), 'the author is user input as well');\n});\n",
+   "explanation": "Vulnerability: stored XSS. User text was concatenated into an HTML\nstring, so a posted `<script>` became a real <script> tag in every\nreader's page. Same shape as file 01's injection — untrusted input\ncrossing into a language (here HTML) without encoding.\nThe tell: a template that drops a user value between tags with no\nescaping in sight. The fix is not to sanitize the INPUT (you'd have\nto guess every context); it is to ENCODE at OUTPUT, for the context\nyou're writing into.\nThe minimal fix: escape every user field as you interpolate it —\n    const esc = (s) => String(s).replace(/[&<>\"']/g, (ch) => ({\n      '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;'\n    })[ch]);\n    return `<li><b>${esc(author)}</b>: ${esc(body)}</li>`;\nEscape `&` FIRST or you double-encode the others. The <li>/<b> you\nwrote stays literal — only the untrusted parts are encoded.\nIn the wild: innerHTML with user data, dangerouslySetInnerHTML,\nbuilding emails or PDFs by string concat. Real apps lean on the\nframework's auto-escaping (React text nodes, template engines) and\nencode by context — HTML body vs attribute vs URL vs JS each differ."
+  },
+  "jstrain/26-security-hunts/03-path-traversal": {
+   "instructions": "**Concepts:** security · path traversal · containment  \n**Level:** ★★☆ core\n\n**Debug hunt:** the code below ships with a planted bug — the tests fail until you find and fix it.\n\nsafeJoin(baseDir, userPath) builds the absolute path for a\nuser-requested file, which MUST stay inside baseDir. A request that\ntries to climb out is refused with an Error containing 'outside':\n\n    safeJoin('/srv/files', 'reports/q1.pdf')  → '/srv/files/reports/q1.pdf'\n    safeJoin('/srv/files', '../../etc/passwd') → throws 'outside'\n\nA download endpoint used this, and someone fetched /etc/passwd by\nputting ../ in the filename.\n\nThe code below is fully written — and a security hole. 3 tests fail:\nthey pass climbing paths. Find the flaw and fix it with the smallest\nchange. Keep the legitimate cases working.\n\nhint: `path.posix.join` happily resolves `..` segments — joining is\nnot checking. After you build the full path, what must be true about\nit relative to baseDir, and are you testing that anywhere?\n",
+   "starter": "// ─────────────────────────────────────────────────────────────────────────\n//  03 · the download that escapes its folder                 ★★☆ core\n//  concepts: security · path traversal · containment\n//  run: node 03-path-traversal.js\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  safeJoin(baseDir, userPath) builds the absolute path for a\n//  user-requested file, which MUST stay inside baseDir. A request that\n//  tries to climb out is refused with an Error containing 'outside':\n//\n//      safeJoin('/srv/files', 'reports/q1.pdf')  → '/srv/files/reports/q1.pdf'\n//      safeJoin('/srv/files', '../../etc/passwd') → throws 'outside'\n//\n//  A download endpoint used this, and someone fetched /etc/passwd by\n//  putting ../ in the filename.\n//\n//  The code below is fully written — and a security hole. 3 tests fail:\n//  they pass climbing paths. Find the flaw and fix it with the smallest\n//  change. Keep the legitimate cases working.\n//\n//  hint: `path.posix.join` happily resolves `..` segments — joining is\n//  not checking. After you build the full path, what must be true about\n//  it relative to baseDir, and are you testing that anywhere?\n\nimport { test, eq, throws } from '../../_lib/check.js';\nimport path from 'node:path';\n\nconst p = path.posix; // fixed separator so the test is OS-independent\n\nexport function safeJoin(baseDir, userPath) {\n  const base = p.resolve('/', baseDir);\n  const full = p.join(base, userPath);\n  return full;\n}\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\ntest('a plain filename resolves inside the base dir', () => {\n  eq(safeJoin('/srv/files', 'report.pdf'), '/srv/files/report.pdf');\n});\n\ntest('a nested path inside the base dir is fine', () => {\n  eq(safeJoin('/srv/files', 'reports/q1.pdf'), '/srv/files/reports/q1.pdf');\n});\n\ntest('climbing out with ../ is refused', () => {\n  throws(() => safeJoin('/srv/files', '../../etc/passwd'), 'outside');\n});\n\ntest('an absolute user path cannot jump to the filesystem root', () => {\n  throws(() => safeJoin('/srv/files', '/etc/passwd'), 'outside');\n});\n\ntest('a sneaky path that climbs then re-enters is still refused', () => {\n  throws(() => safeJoin('/srv/files', 'reports/../../secret'), 'outside');\n});\n",
+   "solution": "// ─────────────────────────────────────────────────────────────────────────\n//  03 · the download that escapes its folder — SOLUTION      ★★☆ core\n//  concepts: security · path traversal · containment\n//  run: node 03-path-traversal.js\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Walkthrough:\n//  Vulnerability: path traversal. `path.join` RESOLVES `..` segments —\n//  it is arithmetic on paths, not a security check — so\n//  `../../etc/passwd` walked straight out of the base directory, and an\n//  absolute `/etc/passwd` replaced it entirely.\n//  The tell: a user-controlled path joined to a base with no check on\n//  the RESULT. Building the path and validating it are two separate\n//  steps; the code did only the first.\n//  The minimal fix: after resolving, prove the full path is still\n//  inside base — and compare against `base + separator` so a sibling\n//  like `/srv/files-secret` can't pass a naive prefix test:\n//      const full = p.resolve(base, userPath);\n//      if (full !== base && !full.startsWith(base + '/'))\n//        throw new Error(`path is outside the base dir: ${userPath}`);\n//      return full;\n//  Use resolve (which normalizes) then the containment check; join\n//  alone can't protect you.\n//  In the wild: file downloads, template includes, ZIP extraction\n//  (\"zip-slip\"), avatar uploads keyed by user-supplied name. Belt and\n//  braces in production: also strip to a basename when a flat filename\n//  is all you need.\n\nimport { test, eq, throws } from '../../_lib/check.js';\nimport path from 'node:path';\n\nconst p = path.posix; // fixed separator so the test is OS-independent\n\nexport function safeJoin(baseDir, userPath) {\n  const base = p.resolve('/', baseDir);\n  const full = p.resolve(base, userPath);\n  if (full !== base && !full.startsWith(base + '/')) {\n    throw new Error(`path is outside the base dir: ${userPath}`);\n  }\n  return full;\n}\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\ntest('a plain filename resolves inside the base dir', () => {\n  eq(safeJoin('/srv/files', 'report.pdf'), '/srv/files/report.pdf');\n});\n\ntest('a nested path inside the base dir is fine', () => {\n  eq(safeJoin('/srv/files', 'reports/q1.pdf'), '/srv/files/reports/q1.pdf');\n});\n\ntest('climbing out with ../ is refused', () => {\n  throws(() => safeJoin('/srv/files', '../../etc/passwd'), 'outside');\n});\n\ntest('an absolute user path cannot jump to the filesystem root', () => {\n  throws(() => safeJoin('/srv/files', '/etc/passwd'), 'outside');\n});\n\ntest('a sneaky path that climbs then re-enters is still refused', () => {\n  throws(() => safeJoin('/srv/files', 'reports/../../secret'), 'outside');\n});\n",
+   "explanation": "Vulnerability: path traversal. `path.join` RESOLVES `..` segments —\nit is arithmetic on paths, not a security check — so\n`../../etc/passwd` walked straight out of the base directory, and an\nabsolute `/etc/passwd` replaced it entirely.\nThe tell: a user-controlled path joined to a base with no check on\nthe RESULT. Building the path and validating it are two separate\nsteps; the code did only the first.\nThe minimal fix: after resolving, prove the full path is still\ninside base — and compare against `base + separator` so a sibling\nlike `/srv/files-secret` can't pass a naive prefix test:\n    const full = p.resolve(base, userPath);\n    if (full !== base && !full.startsWith(base + '/'))\n      throw new Error(`path is outside the base dir: ${userPath}`);\n    return full;\nUse resolve (which normalizes) then the containment check; join\nalone can't protect you.\nIn the wild: file downloads, template includes, ZIP extraction\n(\"zip-slip\"), avatar uploads keyed by user-supplied name. Belt and\nbraces in production: also strip to a basename when a flat filename\nis all you need."
+  },
+  "jstrain/26-security-hunts/04-idor-ownership": {
+   "instructions": "**Concepts:** security · access control · IDOR  \n**Level:** ★★☆ core\n\n**Debug hunt:** the code below ships with a planted bug — the tests fail until you find and fix it.\n\ngetInvoice(store, userId, invoiceId) backs GET /invoices/:id. It must\nreturn the invoice ONLY when it belongs to the requesting user, and\nthrow 'not found' otherwise — the SAME error whether the id is\nunknown or simply not yours (leaking \"exists, but not yours\" is its\nown bug):\n\n    getInvoice(store, 'ada',   'inv-1')  → the invoice (Ada owns it)\n    getInvoice(store, 'mallory','inv-1') → throws 'not found'\n\nA user changed the id in the URL from their own to the next number\nand read a stranger's invoice.\n\nThe code below is fully written — and a security hole. 2 tests fail:\nthey fetch another user's id. Find the flaw and fix it with the\nsmallest change. Don't leak whether the id exists.\n\nhint: authentication is \"who are you\"; authorization is \"may YOU have\nTHIS\". The function knows the userId. Trace every path that returns\nan invoice and ask: was ownership checked on that path?\n",
+   "starter": "// ─────────────────────────────────────────────────────────────────────────\n//  04 · reading someone else's invoice                       ★★☆ core\n//  concepts: security · access control · IDOR\n//  run: node 04-idor-ownership.js\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  getInvoice(store, userId, invoiceId) backs GET /invoices/:id. It must\n//  return the invoice ONLY when it belongs to the requesting user, and\n//  throw 'not found' otherwise — the SAME error whether the id is\n//  unknown or simply not yours (leaking \"exists, but not yours\" is its\n//  own bug):\n//\n//      getInvoice(store, 'ada',   'inv-1')  → the invoice (Ada owns it)\n//      getInvoice(store, 'mallory','inv-1') → throws 'not found'\n//\n//  A user changed the id in the URL from their own to the next number\n//  and read a stranger's invoice.\n//\n//  The code below is fully written — and a security hole. 2 tests fail:\n//  they fetch another user's id. Find the flaw and fix it with the\n//  smallest change. Don't leak whether the id exists.\n//\n//  hint: authentication is \"who are you\"; authorization is \"may YOU have\n//  THIS\". The function knows the userId. Trace every path that returns\n//  an invoice and ask: was ownership checked on that path?\n\nimport { test, eq, throws } from '../../_lib/check.js';\n\nfunction makeStore() {\n  return {\n    invoices: new Map([\n      ['inv-1', { id: 'inv-1', ownerId: 'ada', cents: 12000 }],\n      ['inv-2', { id: 'inv-2', ownerId: 'grace', cents: 8000 }],\n    ]),\n  };\n}\n\nexport function getInvoice(store, userId, invoiceId) {\n  const invoice = store.invoices.get(invoiceId);\n  if (!invoice) throw new Error(`not found: ${invoiceId}`);\n  return invoice;\n}\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\ntest('the owner can read their own invoice', () => {\n  const store = makeStore();\n  eq(getInvoice(store, 'ada', 'inv-1').cents, 12000);\n});\n\ntest('a stranger cannot read an invoice they do not own', () => {\n  const store = makeStore();\n  throws(() => getInvoice(store, 'mallory', 'inv-1'), 'not found');\n});\n\ntest('one user cannot read another real user\\'s invoice', () => {\n  const store = makeStore();\n  throws(() => getInvoice(store, 'ada', 'inv-2'), 'not found');\n});\n\ntest('an unknown id and a not-yours id fail identically', () => {\n  const store = makeStore();\n  let unknown, notYours;\n  try { getInvoice(store, 'ada', 'inv-999'); } catch (e) { unknown = e.message; }\n  try { getInvoice(store, 'ada', 'inv-2'); } catch (e) { notYours = e.message; }\n  eq(unknown.replace('inv-999', 'ID'), notYours.replace('inv-2', 'ID'));\n});\n",
+   "solution": "// ─────────────────────────────────────────────────────────────────────────\n//  04 · reading someone else's invoice — SOLUTION            ★★☆ core\n//  concepts: security · access control · IDOR\n//  run: node 04-idor-ownership.js\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Walkthrough:\n//  Vulnerability: IDOR — Insecure Direct Object Reference. The handler\n//  authenticated the user (it HAD userId) but never AUTHORIZED the\n//  access: it looked the invoice up by id and returned it to anyone.\n//  Change the id in the URL, read anyone's data.\n//  The tell: a lookup by a user-supplied id that returns the record\n//  without ever comparing it to the caller's identity. Authentication\n//  and authorization are different checks; having userId in scope is\n//  not the same as USING it.\n//  The minimal fix: after fetching, verify ownership — and fail with\n//  the SAME error as \"unknown\", so you don't leak which ids exist:\n//      if (!invoice || invoice.ownerId !== userId)\n//        throw new Error(`not found: ${invoiceId}`);\n//  Collapsing the two failures into one message closes the enumeration\n//  side channel (a different error for \"exists but not yours\" hands an\n//  attacker a yes/no oracle over every id).\n//  In the wild: /orders/1002, ?account=..., a signed URL reused across\n//  users, GraphQL node(id:). The rule: authorize every object access\n//  against the caller, at the data layer, on every path.\n\nimport { test, eq, throws } from '../../_lib/check.js';\n\nfunction makeStore() {\n  return {\n    invoices: new Map([\n      ['inv-1', { id: 'inv-1', ownerId: 'ada', cents: 12000 }],\n      ['inv-2', { id: 'inv-2', ownerId: 'grace', cents: 8000 }],\n    ]),\n  };\n}\n\nexport function getInvoice(store, userId, invoiceId) {\n  const invoice = store.invoices.get(invoiceId);\n  if (!invoice || invoice.ownerId !== userId) {\n    throw new Error(`not found: ${invoiceId}`);\n  }\n  return invoice;\n}\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\ntest('the owner can read their own invoice', () => {\n  const store = makeStore();\n  eq(getInvoice(store, 'ada', 'inv-1').cents, 12000);\n});\n\ntest('a stranger cannot read an invoice they do not own', () => {\n  const store = makeStore();\n  throws(() => getInvoice(store, 'mallory', 'inv-1'), 'not found');\n});\n\ntest('one user cannot read another real user\\'s invoice', () => {\n  const store = makeStore();\n  throws(() => getInvoice(store, 'ada', 'inv-2'), 'not found');\n});\n\ntest('an unknown id and a not-yours id fail identically', () => {\n  const store = makeStore();\n  let unknown, notYours;\n  try { getInvoice(store, 'ada', 'inv-999'); } catch (e) { unknown = e.message; }\n  try { getInvoice(store, 'ada', 'inv-2'); } catch (e) { notYours = e.message; }\n  eq(unknown.replace('inv-999', 'ID'), notYours.replace('inv-2', 'ID'));\n});\n",
+   "explanation": "Vulnerability: IDOR — Insecure Direct Object Reference. The handler\nauthenticated the user (it HAD userId) but never AUTHORIZED the\naccess: it looked the invoice up by id and returned it to anyone.\nChange the id in the URL, read anyone's data.\nThe tell: a lookup by a user-supplied id that returns the record\nwithout ever comparing it to the caller's identity. Authentication\nand authorization are different checks; having userId in scope is\nnot the same as USING it.\nThe minimal fix: after fetching, verify ownership — and fail with\nthe SAME error as \"unknown\", so you don't leak which ids exist:\n    if (!invoice || invoice.ownerId !== userId)\n      throw new Error(`not found: ${invoiceId}`);\nCollapsing the two failures into one message closes the enumeration\nside channel (a different error for \"exists but not yours\" hands an\nattacker a yes/no oracle over every id).\nIn the wild: /orders/1002, ?account=..., a signed URL reused across\nusers, GraphQL node(id:). The rule: authorize every object access\nagainst the caller, at the data layer, on every path."
+  },
+  "jstrain/26-security-hunts/05-predictable-token": {
+   "instructions": "**Concepts:** security · CSPRNG · unguessable tokens  \n**Level:** ★★☆ core\n\n**Debug hunt:** the code below ships with a planted bug — the tests fail until you find and fix it.\n\nmakeResetToken() mints the secret in a password-reset link. Whoever\nholds the token can reset the account, so it must be UNGUESSABLE: no\ntwo ever equal, and knowing one tells you nothing about the next.\nShape: a long hex string.\n\n    makeResetToken()  → 'a3f9…' (32 hex chars, unpredictable)\n\nAn attacker requested one reset for their own account, saw the\ntoken's pattern, and walked it to other users' tokens.\n\nThe code below is fully written — and a security hole. 3 tests fail:\nthey check the tokens are long and unpredictable. Find the flaw and\nfix it with the smallest change. Keep makeResetToken()'s signature.\n\nhint: \"random enough to look shuffled\" and \"random enough that an\nattacker cannot predict it\" are different bars. What does this\ngenerator use as its source of surprise, and could you reproduce its\noutput if you knew the starting state?\n",
+   "starter": "// ─────────────────────────────────────────────────────────────────────────\n//  05 · password-reset tokens you can guess                  ★★☆ core\n//  concepts: security · CSPRNG · unguessable tokens\n//  run: node 05-predictable-token.js\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  makeResetToken() mints the secret in a password-reset link. Whoever\n//  holds the token can reset the account, so it must be UNGUESSABLE: no\n//  two ever equal, and knowing one tells you nothing about the next.\n//  Shape: a long hex string.\n//\n//      makeResetToken()  → 'a3f9…' (32 hex chars, unpredictable)\n//\n//  An attacker requested one reset for their own account, saw the\n//  token's pattern, and walked it to other users' tokens.\n//\n//  The code below is fully written — and a security hole. 3 tests fail:\n//  they check the tokens are long and unpredictable. Find the flaw and\n//  fix it with the smallest change. Keep makeResetToken()'s signature.\n//\n//  hint: \"random enough to look shuffled\" and \"random enough that an\n//  attacker cannot predict it\" are different bars. What does this\n//  generator use as its source of surprise, and could you reproduce its\n//  output if you knew the starting state?\n\nimport { test, ok } from '../../_lib/check.js';\n\nlet counter = 1000;\n\nexport function makeResetToken() {\n  counter += 1;\n  return `reset-${counter.toString(16)}`;\n}\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\ntest('a token is a long hex string', () => {\n  const tok = makeResetToken();\n  ok(/^[0-9a-f]{32,}$/.test(tok), `expected 32+ hex chars, got ${tok}`);\n});\n\ntest('1000 tokens are all distinct', () => {\n  const seen = new Set();\n  for (let i = 0; i < 1000; i++) seen.add(makeResetToken());\n  ok(seen.size === 1000, 'every token must be unique');\n});\n\ntest('consecutive tokens are not adjacent values', () => {\n  // if token N+1 is predictable from token N, this catches it\n  const a = BigInt('0x' + makeResetToken());\n  const b = BigInt('0x' + makeResetToken());\n  const gap = a > b ? a - b : b - a;\n  ok(gap > 1n << 64n, 'consecutive tokens must be astronomically far apart');\n});\n\ntest('tokens carry real entropy (many distinct leading bytes)', () => {\n  const firstBytes = new Set();\n  for (let i = 0; i < 200; i++) firstBytes.add(makeResetToken().slice(0, 2));\n  ok(firstBytes.size > 50, `expected varied prefixes, saw ${firstBytes.size}`);\n});\n",
+   "solution": "// ─────────────────────────────────────────────────────────────────────────\n//  05 · password-reset tokens you can guess — SOLUTION       ★★☆ core\n//  concepts: security · CSPRNG · unguessable tokens\n//  run: node 05-predictable-token.js\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Walkthrough:\n//  Vulnerability: a predictable secret. The token was a counter in hex —\n//  `reset-3e9`, `reset-3ea`, … — so seeing one reset token told an\n//  attacker every other account's token. Unique is not the same as\n//  unpredictable; an auto-increment id is perfectly unique and perfectly\n//  guessable.\n//  The tell: a security token built from a counter, a timestamp, or\n//  `Math.random()`. None of those are cryptographically random —\n//  Math.random in particular is seeded PRNG state an attacker can\n//  recover from a few outputs.\n//  The minimal fix: draw from a CSPRNG —\n//      import { randomBytes } from 'node:crypto';\n//      export function makeResetToken() {\n//        return randomBytes(16).toString('hex'); // 128 bits, 32 hex chars\n//      }\n//  16 bytes = 128 bits of entropy: unique in practice AND unguessable.\n//  In the wild: session ids, API keys, reset/verify links, CSRF tokens,\n//  filenames meant to be unlisted. Anything a bearer of the value gets\n//  to DO something with needs crypto randomness, never Math.random.\n\nimport { test, ok } from '../../_lib/check.js';\nimport { randomBytes } from 'node:crypto';\n\nexport function makeResetToken() {\n  return randomBytes(16).toString('hex');\n}\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\ntest('a token is a long hex string', () => {\n  const tok = makeResetToken();\n  ok(/^[0-9a-f]{32,}$/.test(tok), `expected 32+ hex chars, got ${tok}`);\n});\n\ntest('1000 tokens are all distinct', () => {\n  const seen = new Set();\n  for (let i = 0; i < 1000; i++) seen.add(makeResetToken());\n  ok(seen.size === 1000, 'every token must be unique');\n});\n\ntest('consecutive tokens are not adjacent values', () => {\n  // if token N+1 is predictable from token N, this catches it\n  const a = BigInt('0x' + makeResetToken());\n  const b = BigInt('0x' + makeResetToken());\n  const gap = a > b ? a - b : b - a;\n  ok(gap > 1n << 64n, 'consecutive tokens must be astronomically far apart');\n});\n\ntest('tokens carry real entropy (many distinct leading bytes)', () => {\n  const firstBytes = new Set();\n  for (let i = 0; i < 200; i++) firstBytes.add(makeResetToken().slice(0, 2));\n  ok(firstBytes.size > 50, `expected varied prefixes, saw ${firstBytes.size}`);\n});\n",
+   "explanation": "Vulnerability: a predictable secret. The token was a counter in hex —\n`reset-3e9`, `reset-3ea`, … — so seeing one reset token told an\nattacker every other account's token. Unique is not the same as\nunpredictable; an auto-increment id is perfectly unique and perfectly\nguessable.\nThe tell: a security token built from a counter, a timestamp, or\n`Math.random()`. None of those are cryptographically random —\nMath.random in particular is seeded PRNG state an attacker can\nrecover from a few outputs.\nThe minimal fix: draw from a CSPRNG —\n    import { randomBytes } from 'node:crypto';\n    export function makeResetToken() {\n      return randomBytes(16).toString('hex'); // 128 bits, 32 hex chars\n    }\n16 bytes = 128 bits of entropy: unique in practice AND unguessable.\nIn the wild: session ids, API keys, reset/verify links, CSRF tokens,\nfilenames meant to be unlisted. Anything a bearer of the value gets\nto DO something with needs crypto randomness, never Math.random."
+  },
+  "jstrain/26-security-hunts/06-mass-assignment": {
+   "instructions": "**Concepts:** security · mass assignment · field allowlists  \n**Level:** ★★★ stretch\n\n**Debug hunt:** the code below ships with a planted bug — the tests fail until you find and fix it.\n\nupdateProfile(user, patch) applies a profile edit from a request\nbody. Users may change ONLY their display name and email. Everything\nelse — role, id, balance — is off-limits and must be ignored, even\nwhen the request body includes it:\n\n    updateProfile({ id: 1, name: 'Ada', role: 'user' },\n                  { name: 'Ada L.' })\n      → { id: 1, name: 'Ada L.', role: 'user' }\n\nSomeone POSTed { \"name\": \"x\", \"role\": \"admin\" } to the profile\nendpoint and became an admin.\n\nThe code below is fully written — and a security hole. 3 tests fail:\nthey smuggle privileged fields into the patch. Find the flaw and fix\nit with the smallest change. Keep the legitimate edits working.\n\nhint: the safe question is not \"which fields should I block?\" (you\nwill forget one) but \"which fields do I ALLOW?\" Where does this code\ndecide which keys of `patch` get through — and does it decide at all?\n",
+   "starter": "// ─────────────────────────────────────────────────────────────────────────\n//  06 · the profile update that grants admin                 ★★★ stretch\n//  concepts: security · mass assignment · field allowlists\n//  run: node 06-mass-assignment.js\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  updateProfile(user, patch) applies a profile edit from a request\n//  body. Users may change ONLY their display name and email. Everything\n//  else — role, id, balance — is off-limits and must be ignored, even\n//  when the request body includes it:\n//\n//      updateProfile({ id: 1, name: 'Ada', role: 'user' },\n//                    { name: 'Ada L.' })\n//        → { id: 1, name: 'Ada L.', role: 'user' }\n//\n//  Someone POSTed { \"name\": \"x\", \"role\": \"admin\" } to the profile\n//  endpoint and became an admin.\n//\n//  The code below is fully written — and a security hole. 3 tests fail:\n//  they smuggle privileged fields into the patch. Find the flaw and fix\n//  it with the smallest change. Keep the legitimate edits working.\n//\n//  hint: the safe question is not \"which fields should I block?\" (you\n//  will forget one) but \"which fields do I ALLOW?\" Where does this code\n//  decide which keys of `patch` get through — and does it decide at all?\n\nimport { test, eq } from '../../_lib/check.js';\n\nexport function updateProfile(user, patch) {\n  return { ...user, ...patch };\n}\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\ntest('a name change is applied', () => {\n  const user = { id: 1, name: 'Ada', email: 'a@x.com', role: 'user' };\n  eq(updateProfile(user, { name: 'Ada L.' }).name, 'Ada L.');\n});\n\ntest('name and email can both be edited', () => {\n  const user = { id: 1, name: 'Ada', email: 'a@x.com', role: 'user' };\n  const out = updateProfile(user, { name: 'Ada L.', email: 'ada@x.com' });\n  eq(out.name, 'Ada L.');\n  eq(out.email, 'ada@x.com');\n});\n\ntest('a smuggled role is ignored', () => {\n  const user = { id: 1, name: 'Ada', email: 'a@x.com', role: 'user' };\n  eq(updateProfile(user, { name: 'Ada', role: 'admin' }).role, 'user');\n});\n\ntest('id and balance cannot be overwritten from the patch', () => {\n  const user = { id: 1, name: 'Ada', email: 'a@x.com', role: 'user', balance: 0 };\n  const out = updateProfile(user, { id: 999, balance: 1000000 });\n  eq(out.id, 1);\n  eq(out.balance, 0);\n});\n\ntest('an unknown field in the patch is dropped, not stored', () => {\n  const user = { id: 1, name: 'Ada', email: 'a@x.com', role: 'user' };\n  const out = updateProfile(user, { name: 'Ada', isAdmin: true });\n  eq('isAdmin' in out, false);\n});\n",
+   "solution": "// ─────────────────────────────────────────────────────────────────────────\n//  06 · the profile update that grants admin — SOLUTION      ★★★ stretch\n//  concepts: security · mass assignment · field allowlists\n//  run: node 06-mass-assignment.js\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Walkthrough:\n//  Vulnerability: mass assignment. `{ ...user, ...patch }` copies EVERY\n//  key of the request body over the user, so `{ role: 'admin' }` in the\n//  POST body wrote straight through to the record. The spread trusted\n//  whatever the client sent.\n//  The tell: a wholesale spread/merge/Object.assign of a\n//  request-derived object onto a domain object. The code decided what to\n//  keep by omission — and omission forgets.\n//  The minimal fix: an ALLOWLIST — pull only the fields users may edit,\n//  and ignore the rest by construction:\n//      const EDITABLE = ['name', 'email'];\n//      const safe = {};\n//      for (const k of EDITABLE)\n//        if (k in patch) safe[k] = patch[k];\n//      return { ...user, ...safe };\n//  Allowlist, never denylist: a blocklist of ['role','id','balance']\n//  ships a hole the day someone adds an `isAdmin` column.\n//  In the wild: Rails' original mass-assignment CVEs, `User.update(params)`,\n//  ORM `.save(req.body)`, GraphQL input types wired straight to columns.\n//  Bind inputs to an explicit DTO, not to your table.\n\nimport { test, eq } from '../../_lib/check.js';\n\nconst EDITABLE = ['name', 'email'];\n\nexport function updateProfile(user, patch) {\n  const safe = {};\n  for (const key of EDITABLE) {\n    if (key in patch) safe[key] = patch[key];\n  }\n  return { ...user, ...safe };\n}\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\ntest('a name change is applied', () => {\n  const user = { id: 1, name: 'Ada', email: 'a@x.com', role: 'user' };\n  eq(updateProfile(user, { name: 'Ada L.' }).name, 'Ada L.');\n});\n\ntest('name and email can both be edited', () => {\n  const user = { id: 1, name: 'Ada', email: 'a@x.com', role: 'user' };\n  const out = updateProfile(user, { name: 'Ada L.', email: 'ada@x.com' });\n  eq(out.name, 'Ada L.');\n  eq(out.email, 'ada@x.com');\n});\n\ntest('a smuggled role is ignored', () => {\n  const user = { id: 1, name: 'Ada', email: 'a@x.com', role: 'user' };\n  eq(updateProfile(user, { name: 'Ada', role: 'admin' }).role, 'user');\n});\n\ntest('id and balance cannot be overwritten from the patch', () => {\n  const user = { id: 1, name: 'Ada', email: 'a@x.com', role: 'user', balance: 0 };\n  const out = updateProfile(user, { id: 999, balance: 1000000 });\n  eq(out.id, 1);\n  eq(out.balance, 0);\n});\n\ntest('an unknown field in the patch is dropped, not stored', () => {\n  const user = { id: 1, name: 'Ada', email: 'a@x.com', role: 'user' };\n  const out = updateProfile(user, { name: 'Ada', isAdmin: true });\n  eq('isAdmin' in out, false);\n});\n",
+   "explanation": "Vulnerability: mass assignment. `{ ...user, ...patch }` copies EVERY\nkey of the request body over the user, so `{ role: 'admin' }` in the\nPOST body wrote straight through to the record. The spread trusted\nwhatever the client sent.\nThe tell: a wholesale spread/merge/Object.assign of a\nrequest-derived object onto a domain object. The code decided what to\nkeep by omission — and omission forgets.\nThe minimal fix: an ALLOWLIST — pull only the fields users may edit,\nand ignore the rest by construction:\n    const EDITABLE = ['name', 'email'];\n    const safe = {};\n    for (const k of EDITABLE)\n      if (k in patch) safe[k] = patch[k];\n    return { ...user, ...safe };\nAllowlist, never denylist: a blocklist of ['role','id','balance']\nships a hole the day someone adds an `isAdmin` column.\nIn the wild: Rails' original mass-assignment CVEs, `User.update(params)`,\nORM `.save(req.body)`, GraphQL input types wired straight to columns.\nBind inputs to an explicit DTO, not to your table."
+  },
+  "jstrain/26-security-hunts/07-open-redirect": {
+   "instructions": "**Concepts:** security · open redirect · URL parsing  \n**Level:** ★★☆ core\n\n**Debug hunt:** the code below ships with a planted bug — the tests fail until you find and fix it.\n\nAfter login the app bounces you back to where you were, taken from\n`?next=`. safeRedirect(next) returns a same-site destination —\npath plus query — or '/' when the value is anything else:\n\n    safeRedirect('/orders?page=2')      → '/orders?page=2'\n    safeRedirect('https://evil.test')   → '/'\n\nA phishing mail went out linking to the REAL login page with a\ncrafted `next`, and users who signed in landed on a clone of the\ndashboard that asked them to \"confirm\" their password.\n\nThe code below is fully written — and a security hole. 3 tests fail:\nthey pass destinations that leave the site. Find the flaw and fix it\nwith the smallest change. Keep the legitimate cases working.\n\nhint: \"starts with a slash\" and \"stays on this site\" are not the\nsame claim. A browser reads `//host` as a full URL, and a scheme\ndoes not have to be spelled `http`. What would happen if you parsed\nthe value against your own origin and looked at what came out?\n",
+   "starter": "// ─────────────────────────────────────────────────────────────────────────\n//  07 · the login that sends you somewhere else               ★★☆ core\n//  concepts: security · open redirect · URL parsing\n//  run: node 07-open-redirect.js\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  After login the app bounces you back to where you were, taken from\n//  `?next=`. safeRedirect(next) returns a same-site destination —\n//  path plus query — or '/' when the value is anything else:\n//\n//      safeRedirect('/orders?page=2')      → '/orders?page=2'\n//      safeRedirect('https://evil.test')   → '/'\n//\n//  A phishing mail went out linking to the REAL login page with a\n//  crafted `next`, and users who signed in landed on a clone of the\n//  dashboard that asked them to \"confirm\" their password.\n//\n//  The code below is fully written — and a security hole. 3 tests fail:\n//  they pass destinations that leave the site. Find the flaw and fix it\n//  with the smallest change. Keep the legitimate cases working.\n//\n//  hint: \"starts with a slash\" and \"stays on this site\" are not the\n//  same claim. A browser reads `//host` as a full URL, and a scheme\n//  does not have to be spelled `http`. What would happen if you parsed\n//  the value against your own origin and looked at what came out?\n\nimport { test, eq } from '../../_lib/check.js';\n\nconst SITE = 'https://app.example';\n\nexport function safeRedirect(next) {\n  if (!next) return '/';\n  if (next.startsWith('http')) return '/'; // no absolute URLs\n  return next;\n}\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\ntest('a plain in-site path is kept', () => {\n  eq(safeRedirect('/dashboard'), '/dashboard');\n});\n\ntest('an in-site path keeps its query string', () => {\n  eq(safeRedirect('/orders?page=2'), '/orders?page=2');\n});\n\ntest('a missing next falls back to the home page', () => {\n  eq(safeRedirect(undefined), '/');\n  eq(safeRedirect(''), '/');\n});\n\ntest('an absolute URL to another site is refused', () => {\n  eq(safeRedirect('https://evil.test/pwn'), '/');\n});\n\ntest('a protocol-relative URL is refused', () => {\n  eq(safeRedirect('//evil.test/pwn'), '/');\n});\n\ntest('a backslash-smuggled host is refused', () => {\n  eq(safeRedirect('/\\\\evil.test/pwn'), '/');\n});\n\ntest('a javascript: destination is refused', () => {\n  eq(safeRedirect('javascript:alert(document.cookie)'), '/');\n});\n",
+   "solution": "// ─────────────────────────────────────────────────────────────────────────\n//  07 · the login that sends you somewhere else — SOLUTION    ★★☆ core\n//  concepts: security · open redirect · URL parsing\n//  run: node 07-open-redirect.js\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Walkthrough:\n//  Vulnerability: open redirect (unvalidated redirect). The guard was a\n//  denylist of one string — \"does it start with http\" — and a denylist\n//  of one string is a hole with a lid on it. `//evil.test` is a full\n//  URL to a browser (protocol-relative: it reuses the current scheme),\n//  `/\\evil.test` is normalised to the same thing by every browser's URL\n//  parser, and `javascript:` never mentions http at all.\n//  The tell: user input reaching a `Location:` header after a check\n//  written as \"not the bad thing\" instead of \"is the one good thing\".\n//  The minimal fix: stop pattern-matching the string and let the URL\n//  parser tell you where it actually points — resolve it against your\n//  own origin and refuse anything that lands elsewhere:\n//      const url = new URL(next, SITE);\n//      if (url.origin !== SITE) return '/';\n//      return url.pathname + url.search;\n//  `new URL(next, SITE)` throws on nothing a browser would accept, and\n//  it collapses backslashes, `..` segments, and stray schemes for you —\n//  the same normalisation the browser will do, which is the point.\n//  Returning `pathname + search` instead of the raw input is the second\n//  half: you now emit a value you built, not one the attacker typed.\n//  In the wild: `?next=` / `?returnUrl=` / `?redirect_uri=` on login and\n//  logout, OAuth callbacks (where the allowlist is mandatory and exact),\n//  and \"continue shopping\" links. Phishing's favourite primitive,\n//  because the link really does start at your real domain.\n\nimport { test, eq } from '../../_lib/check.js';\n\nconst SITE = 'https://app.example';\n\nexport function safeRedirect(next) {\n  if (!next) return '/';\n  let url;\n  try {\n    url = new URL(next, SITE);\n  } catch {\n    return '/';\n  }\n  if (url.origin !== SITE) return '/';\n  return url.pathname + url.search;\n}\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\ntest('a plain in-site path is kept', () => {\n  eq(safeRedirect('/dashboard'), '/dashboard');\n});\n\ntest('an in-site path keeps its query string', () => {\n  eq(safeRedirect('/orders?page=2'), '/orders?page=2');\n});\n\ntest('a missing next falls back to the home page', () => {\n  eq(safeRedirect(undefined), '/');\n  eq(safeRedirect(''), '/');\n});\n\ntest('an absolute URL to another site is refused', () => {\n  eq(safeRedirect('https://evil.test/pwn'), '/');\n});\n\ntest('a protocol-relative URL is refused', () => {\n  eq(safeRedirect('//evil.test/pwn'), '/');\n});\n\ntest('a backslash-smuggled host is refused', () => {\n  eq(safeRedirect('/\\\\evil.test/pwn'), '/');\n});\n\ntest('a javascript: destination is refused', () => {\n  eq(safeRedirect('javascript:alert(document.cookie)'), '/');\n});\n",
+   "explanation": "Vulnerability: open redirect (unvalidated redirect). The guard was a\ndenylist of one string — \"does it start with http\" — and a denylist\nof one string is a hole with a lid on it. `//evil.test` is a full\nURL to a browser (protocol-relative: it reuses the current scheme),\n`/\\evil.test` is normalised to the same thing by every browser's URL\nparser, and `javascript:` never mentions http at all.\nThe tell: user input reaching a `Location:` header after a check\nwritten as \"not the bad thing\" instead of \"is the one good thing\".\nThe minimal fix: stop pattern-matching the string and let the URL\nparser tell you where it actually points — resolve it against your\nown origin and refuse anything that lands elsewhere:\n    const url = new URL(next, SITE);\n    if (url.origin !== SITE) return '/';\n    return url.pathname + url.search;\n`new URL(next, SITE)` throws on nothing a browser would accept, and\nit collapses backslashes, `..` segments, and stray schemes for you —\nthe same normalisation the browser will do, which is the point.\nReturning `pathname + search` instead of the raw input is the second\nhalf: you now emit a value you built, not one the attacker typed.\nIn the wild: `?next=` / `?returnUrl=` / `?redirect_uri=` on login and\nlogout, OAuth callbacks (where the allowlist is mandatory and exact),\nand \"continue shopping\" links. Phishing's favourite primitive,\nbecause the link really does start at your real domain."
+  },
+  "jstrain/26-security-hunts/08-redos": {
+   "instructions": "**Concepts:** security · ReDoS · catastrophic backtracking  \n**Level:** ★★☆ core\n\n**Debug hunt:** the code below ships with a planted bug — the tests fail until you find and fix it.\n\nisValidTagList(input) validates the tag box on the article editor.\nA valid list is one or more lowercase tags separated by commas,\nwith optional spaces around each comma — and nothing else:\n\n    isValidTagList('js, node, sql')  → true\n    isValidTagList('js,,node')       → false\n\nIt shipped, and one afternoon every request in the process started\ntiming out. The CPU was pinned at 100%; the event loop was not\nblocked on I/O, it was blocked on this function, on one input,\nfrom one visitor.\n\nThe code below is fully written — and a security hole. 2 tests fail:\none input it should reject in microseconds and does not reject in\nany useful amount of time, and one it wrongly accepts. Find the\nflaw and fix it with the smallest change.\n\nhint: count the ways the regex engine can split `aaaa` between the\ninner `+` and the outer `+`. On a string it can ALMOST match, an\nengine that backtracks has to try every one of them before it is\nallowed to say no — and \"every one of them\" doubles per character.\n",
+   "starter": "// ─────────────────────────────────────────────────────────────────────────\n//  08 · the validator that stops the server                   ★★☆ core\n//  concepts: security · ReDoS · catastrophic backtracking\n//  run: node 08-redos.js\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  isValidTagList(input) validates the tag box on the article editor.\n//  A valid list is one or more lowercase tags separated by commas,\n//  with optional spaces around each comma — and nothing else:\n//\n//      isValidTagList('js, node, sql')  → true\n//      isValidTagList('js,,node')       → false\n//\n//  It shipped, and one afternoon every request in the process started\n//  timing out. The CPU was pinned at 100%; the event loop was not\n//  blocked on I/O, it was blocked on this function, on one input,\n//  from one visitor.\n//\n//  The code below is fully written — and a security hole. 2 tests fail:\n//  one input it should reject in microseconds and does not reject in\n//  any useful amount of time, and one it wrongly accepts. Find the\n//  flaw and fix it with the smallest change.\n//\n//  hint: count the ways the regex engine can split `aaaa` between the\n//  inner `+` and the outer `+`. On a string it can ALMOST match, an\n//  engine that backtracks has to try every one of them before it is\n//  allowed to say no — and \"every one of them\" doubles per character.\n\nimport { test, eq, ok } from '../../_lib/check.js';\n\nexport function isValidTagList(input) {\n  return /^(\\s*[a-z]+\\s*,?)+$/.test(input);\n}\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\ntest('accepts a single tag', () => {\n  eq(isValidTagList('js'), true);\n});\n\ntest('accepts a comma-separated list, spaces optional', () => {\n  eq(isValidTagList('js,node'), true);\n  eq(isValidTagList('js, node, sql'), true);\n});\n\ntest('rejects an empty list and a non-letter tag', () => {\n  eq(isValidTagList(''), false);\n  eq(isValidTagList('js, 42'), false);\n});\n\ntest('rejects a trailing comma', () => {\n  eq(isValidTagList('js, node,'), false);\n});\n\ntest('rejects a long malformed list without hanging', () => {\n  const attack = 'a'.repeat(26) + '!';\n  const started = performance.now();\n  eq(isValidTagList(attack), false);\n  const elapsed = performance.now() - started;\n  ok(elapsed < 150, `took ${elapsed.toFixed(0)}ms — should be sub-millisecond`);\n});\n",
+   "solution": "// ─────────────────────────────────────────────────────────────────────────\n//  08 · the validator that stops the server — SOLUTION         ★★☆ core\n//  concepts: security · ReDoS · catastrophic backtracking\n//  run: node 08-redos.js\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Walkthrough:\n//  Vulnerability: ReDoS — regular-expression denial of service. The\n//  pattern `^(\\s*[a-z]+\\s*,?)+$` nests a `+` inside a `+` with the\n//  comma optional, so `aaaa` can be carved up as one group of four,\n//  two of two, four of one, and every arrangement in between. On a\n//  string that ALMOST matches — 26 letters and then a `!` — the engine\n//  must exhaust all of them before it may answer \"no\", and the count\n//  doubles with every extra character. One 30-byte request, one pinned\n//  core, one dead process: no payload, no injection, just arithmetic.\n//  The tell: a quantifier applied to a group that itself ends in a\n//  quantifier, with an optional separator — `(a+)+`, `(\\s*\\w+)*`,\n//  `(\\w+,?)+`. When two parts of a pattern can both claim the same\n//  character, matching stops being linear.\n//  The minimal fix: make the split unambiguous — one tag, then any\n//  number of \"comma then tag\" units, with the separator REQUIRED\n//  inside the repeated group:\n//      return /^[a-z]+(?:\\s*,\\s*[a-z]+)*$/.test(input);\n//  Now every character belongs to exactly one part of the pattern,\n//  there is nothing to backtrack over, and the trailing comma the old\n//  pattern shrugged at is rejected by construction — the same sloppiness\n//  caused both failures.\n//  In the wild: e-mail and URL validators copied off the internet, log\n//  and user-agent parsers, markdown/HTML tag matchers — anywhere a\n//  regex runs on input the user typed. Defenses beyond the rewrite:\n//  cap the input length before matching, and keep validation regexes\n//  boring enough to read.\n\nimport { test, eq, ok } from '../../_lib/check.js';\n\nexport function isValidTagList(input) {\n  return /^[a-z]+(?:\\s*,\\s*[a-z]+)*$/.test(input);\n}\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\ntest('accepts a single tag', () => {\n  eq(isValidTagList('js'), true);\n});\n\ntest('accepts a comma-separated list, spaces optional', () => {\n  eq(isValidTagList('js,node'), true);\n  eq(isValidTagList('js, node, sql'), true);\n});\n\ntest('rejects an empty list and a non-letter tag', () => {\n  eq(isValidTagList(''), false);\n  eq(isValidTagList('js, 42'), false);\n});\n\ntest('rejects a trailing comma', () => {\n  eq(isValidTagList('js, node,'), false);\n});\n\ntest('rejects a long malformed list without hanging', () => {\n  const attack = 'a'.repeat(26) + '!';\n  const started = performance.now();\n  eq(isValidTagList(attack), false);\n  const elapsed = performance.now() - started;\n  ok(elapsed < 150, `took ${elapsed.toFixed(0)}ms — should be sub-millisecond`);\n});\n",
+   "explanation": "Vulnerability: ReDoS — regular-expression denial of service. The\npattern `^(\\s*[a-z]+\\s*,?)+$` nests a `+` inside a `+` with the\ncomma optional, so `aaaa` can be carved up as one group of four,\ntwo of two, four of one, and every arrangement in between. On a\nstring that ALMOST matches — 26 letters and then a `!` — the engine\nmust exhaust all of them before it may answer \"no\", and the count\ndoubles with every extra character. One 30-byte request, one pinned\ncore, one dead process: no payload, no injection, just arithmetic.\nThe tell: a quantifier applied to a group that itself ends in a\nquantifier, with an optional separator — `(a+)+`, `(\\s*\\w+)*`,\n`(\\w+,?)+`. When two parts of a pattern can both claim the same\ncharacter, matching stops being linear.\nThe minimal fix: make the split unambiguous — one tag, then any\nnumber of \"comma then tag\" units, with the separator REQUIRED\ninside the repeated group:\n    return /^[a-z]+(?:\\s*,\\s*[a-z]+)*$/.test(input);\nNow every character belongs to exactly one part of the pattern,\nthere is nothing to backtrack over, and the trailing comma the old\npattern shrugged at is rejected by construction — the same sloppiness\ncaused both failures.\nIn the wild: e-mail and URL validators copied off the internet, log\nand user-agent parsers, markdown/HTML tag matchers — anywhere a\nregex runs on input the user typed. Defenses beyond the rewrite:\ncap the input length before matching, and keep validation regexes\nboring enough to read."
+  },
+  "jstrain/26-security-hunts/09-secrets-in-logs": {
+   "instructions": "**Concepts:** security · sensitive data exposure · allowlisting  \n**Level:** ★★☆ core\n\n**Debug hunt:** the code below ships with a planted bug — the tests fail until you find and fix it.\n\nlogLine(req) builds the object the request logger writes for every\nrequest. Logs are shipped to a third-party search tool that half the\ncompany can read, so the line must contain the five operational\nfields and NOTHING else:\n\n    method · path · status · durationMs · userId\n\nA support engineer searching the logs for a customer's order id\nfound the customer's session cookie instead.\n\nThe code below is fully written — and a security hole. 3 tests fail:\nthey search the finished line for things that must never appear in\nit. Find the flaw and fix it with the smallest change.\n\nhint: the filter names the secrets it knows about. Every field added\nto a request between now and forever is a field it has never heard\nof. Which direction should the list point?\n",
+   "starter": "// ─────────────────────────────────────────────────────────────────────────\n//  09 · the log that stores everyone's password               ★★☆ core\n//  concepts: security · sensitive data exposure · allowlisting\n//  run: node 09-secrets-in-logs.js\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  logLine(req) builds the object the request logger writes for every\n//  request. Logs are shipped to a third-party search tool that half the\n//  company can read, so the line must contain the five operational\n//  fields and NOTHING else:\n//\n//      method · path · status · durationMs · userId\n//\n//  A support engineer searching the logs for a customer's order id\n//  found the customer's session cookie instead.\n//\n//  The code below is fully written — and a security hole. 3 tests fail:\n//  they search the finished line for things that must never appear in\n//  it. Find the flaw and fix it with the smallest change.\n//\n//  hint: the filter names the secrets it knows about. Every field added\n//  to a request between now and forever is a field it has never heard\n//  of. Which direction should the list point?\n\nimport { test, eq, ok } from '../../_lib/check.js';\n\nconst SECRET_KEYS = ['password', 'token'];\n\nexport function logLine(req) {\n  const entry = { ...req };\n  for (const key of SECRET_KEYS) delete entry[key];\n  return entry;\n}\n\n// ─── a request as the framework hands it over ─────────────────────────────\n\nconst request = () => ({\n  method: 'POST',\n  path: '/api/checkout',\n  status: 201,\n  durationMs: 42,\n  userId: 'u_1042',\n  password: 'hunter2',\n  headers: {\n    authorization: 'Bearer sk_live_9f3c1d',\n    cookie: 'session=8c4e2a1b',\n    'user-agent': 'curl/8.4.0',\n  },\n  body: {\n    email: 'ada@example.com',\n    card: { number: '4111111111111111', cvc: '737' },\n  },\n});\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\ntest('keeps the operational fields', () => {\n  const line = logLine(request());\n  eq(line.method, 'POST');\n  eq(line.path, '/api/checkout');\n  eq(line.status, 201);\n  eq(line.durationMs, 42);\n  eq(line.userId, 'u_1042');\n});\n\ntest('drops a top-level password field', () => {\n  ok(!('password' in logLine(request())));\n});\n\ntest('does not log the Authorization header or the session cookie', () => {\n  const text = JSON.stringify(logLine(request()));\n  ok(!text.includes('sk_live_9f3c1d'), 'bearer token reached the log');\n  ok(!text.includes('8c4e2a1b'), 'session cookie reached the log');\n});\n\ntest('does not log anything from the request body', () => {\n  const text = JSON.stringify(logLine(request()));\n  ok(!text.includes('4111111111111111'), 'card number reached the log');\n  ok(!text.includes('ada@example.com'), 'customer e-mail reached the log');\n});\n\ntest('the line has exactly the five allowed fields', () => {\n  eq(Object.keys(logLine(request())).sort(), [\n    'durationMs',\n    'method',\n    'path',\n    'status',\n    'userId',\n  ]);\n});\n",
+   "solution": "// ─────────────────────────────────────────────────────────────────────────\n//  09 · the log that stores everyone's password — SOLUTION     ★★☆ core\n//  concepts: security · sensitive data exposure · allowlisting\n//  run: node 09-secrets-in-logs.js\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Walkthrough:\n//  Vulnerability: sensitive data exposure through logging — and\n//  underneath it, the denylist mistake. `{ ...req }` copies everything\n//  the framework attached to the request and the loop then removes the\n//  two secrets somebody happened to think of in 2022. `headers` and\n//  `body` were never on the list, so the bearer token, the session\n//  cookie, the customer's e-mail and their card number all rode along.\n//  The tell: a spread of an object you did not build, followed by\n//  `delete`. Copy-then-subtract keeps whatever you failed to name; the\n//  set of things you failed to name grows every sprint, without a diff\n//  anyone reviews.\n//  The minimal fix: turn the list around. Name what may be logged and\n//  build the line out of those fields only:\n//      const LOGGABLE = ['method','path','status','durationMs','userId'];\n//      const entry = {};\n//      for (const key of LOGGABLE) if (key in req) entry[key] = req[key];\n//      return entry;\n//  Now a new request field defaults to invisible, which is the safe\n//  default, and the `Object.keys` test becomes a real contract: adding\n//  a field to the log is a deliberate edit to one array.\n//  Note the shallow-copy trap too — even an allowlisted object field\n//  would carry its whole subtree. Log scalars, or project nested values\n//  explicitly.\n//  In the wild: request loggers, error reporters (the exception object\n//  holds the arguments that caused it), analytics events, and support\n//  tooling that renders \"the raw payload\". Logs are usually the least\n//  protected copy of your data and the one that lives longest.\n\nimport { test, eq, ok } from '../../_lib/check.js';\n\nconst LOGGABLE = ['method', 'path', 'status', 'durationMs', 'userId'];\n\nexport function logLine(req) {\n  const entry = {};\n  for (const key of LOGGABLE) {\n    if (key in req) entry[key] = req[key];\n  }\n  return entry;\n}\n\n// ─── a request as the framework hands it over ─────────────────────────────\n\nconst request = () => ({\n  method: 'POST',\n  path: '/api/checkout',\n  status: 201,\n  durationMs: 42,\n  userId: 'u_1042',\n  password: 'hunter2',\n  headers: {\n    authorization: 'Bearer sk_live_9f3c1d',\n    cookie: 'session=8c4e2a1b',\n    'user-agent': 'curl/8.4.0',\n  },\n  body: {\n    email: 'ada@example.com',\n    card: { number: '4111111111111111', cvc: '737' },\n  },\n});\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\ntest('keeps the operational fields', () => {\n  const line = logLine(request());\n  eq(line.method, 'POST');\n  eq(line.path, '/api/checkout');\n  eq(line.status, 201);\n  eq(line.durationMs, 42);\n  eq(line.userId, 'u_1042');\n});\n\ntest('drops a top-level password field', () => {\n  ok(!('password' in logLine(request())));\n});\n\ntest('does not log the Authorization header or the session cookie', () => {\n  const text = JSON.stringify(logLine(request()));\n  ok(!text.includes('sk_live_9f3c1d'), 'bearer token reached the log');\n  ok(!text.includes('8c4e2a1b'), 'session cookie reached the log');\n});\n\ntest('does not log anything from the request body', () => {\n  const text = JSON.stringify(logLine(request()));\n  ok(!text.includes('4111111111111111'), 'card number reached the log');\n  ok(!text.includes('ada@example.com'), 'customer e-mail reached the log');\n});\n\ntest('the line has exactly the five allowed fields', () => {\n  eq(Object.keys(logLine(request())).sort(), [\n    'durationMs',\n    'method',\n    'path',\n    'status',\n    'userId',\n  ]);\n});\n",
+   "explanation": "Vulnerability: sensitive data exposure through logging — and\nunderneath it, the denylist mistake. `{ ...req }` copies everything\nthe framework attached to the request and the loop then removes the\ntwo secrets somebody happened to think of in 2022. `headers` and\n`body` were never on the list, so the bearer token, the session\ncookie, the customer's e-mail and their card number all rode along.\nThe tell: a spread of an object you did not build, followed by\n`delete`. Copy-then-subtract keeps whatever you failed to name; the\nset of things you failed to name grows every sprint, without a diff\nanyone reviews.\nThe minimal fix: turn the list around. Name what may be logged and\nbuild the line out of those fields only:\n    const LOGGABLE = ['method','path','status','durationMs','userId'];\n    const entry = {};\n    for (const key of LOGGABLE) if (key in req) entry[key] = req[key];\n    return entry;\nNow a new request field defaults to invisible, which is the safe\ndefault, and the `Object.keys` test becomes a real contract: adding\na field to the log is a deliberate edit to one array.\nNote the shallow-copy trap too — even an allowlisted object field\nwould carry its whole subtree. Log scalars, or project nested values\nexplicitly.\nIn the wild: request loggers, error reporters (the exception object\nholds the arguments that caused it), analytics events, and support\ntooling that renders \"the raw payload\". Logs are usually the least\nprotected copy of your data and the one that lives longest."
+  },
+  "jstrain/26-security-hunts/10-csrf-vacuous-check": {
+   "instructions": "**Concepts:** security · CSRF · vacuous comparison  \n**Level:** ★★★ stretch\n\n**Debug hunt:** the code below ships with a planted bug — the tests fail until you find and fix it.\n\nassertCsrf(session, request) is the middleware that stands in front\nof every state-changing route. Safe methods pass through; anything\nelse must arrive with the token the server put in the session, or\nthe request is refused with an Error whose message contains 'csrf':\n\n    assertCsrf({ csrfToken: 'abc' }, post('abc'))  → returns\n    assertCsrf({ csrfToken: 'abc' }, post('xyz'))  → throws 'csrf'\n\nA pen-tester filed the report: a page on their own domain, a form\nposting to /api/transfer, no token anywhere — and the transfer went\nthrough. Every test the team had written was green.\n\nThe code below is fully written — and a security hole. 2 tests fail,\nboth describing a request that carries no token at all. Find the\nflaw and fix it with the smallest change.\n\nhint: the check asks \"are these two the same?\" — and it is perfectly\nhappy when the answer is \"yes, both absent\". What must be true about\nthe expected value BEFORE comparing it to anything is worth asking.\n",
+   "starter": "// ─────────────────────────────────────────────────────────────────────────\n//  10 · the CSRF check that checks nothing               ★★★ stretch\n//  concepts: security · CSRF · vacuous comparison\n//  run: node 10-csrf-vacuous-check.js\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  assertCsrf(session, request) is the middleware that stands in front\n//  of every state-changing route. Safe methods pass through; anything\n//  else must arrive with the token the server put in the session, or\n//  the request is refused with an Error whose message contains 'csrf':\n//\n//      assertCsrf({ csrfToken: 'abc' }, post('abc'))  → returns\n//      assertCsrf({ csrfToken: 'abc' }, post('xyz'))  → throws 'csrf'\n//\n//  A pen-tester filed the report: a page on their own domain, a form\n//  posting to /api/transfer, no token anywhere — and the transfer went\n//  through. Every test the team had written was green.\n//\n//  The code below is fully written — and a security hole. 2 tests fail,\n//  both describing a request that carries no token at all. Find the\n//  flaw and fix it with the smallest change.\n//\n//  hint: the check asks \"are these two the same?\" — and it is perfectly\n//  happy when the answer is \"yes, both absent\". What must be true about\n//  the expected value BEFORE comparing it to anything is worth asking.\n\nimport { test, eq, throws } from '../../_lib/check.js';\n\nconst SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);\n\nexport function assertCsrf(session, request) {\n  if (SAFE_METHODS.has(request.method)) return;\n  if (request.body.csrfToken !== session.csrfToken) {\n    throw new Error('csrf token mismatch');\n  }\n}\n\n// ─── request helpers ──────────────────────────────────────────────────────\n\nconst post = (csrfToken) => ({\n  method: 'POST',\n  body: csrfToken === undefined ? {} : { csrfToken, amount: 500 },\n});\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\ntest('a POST carrying the session token is allowed', () => {\n  eq(assertCsrf({ csrfToken: 'abc123' }, post('abc123')), undefined);\n});\n\ntest('a POST carrying the wrong token is refused', () => {\n  throws(() => assertCsrf({ csrfToken: 'abc123' }, post('xyz789')), 'csrf');\n});\n\ntest('a POST carrying no token is refused', () => {\n  throws(() => assertCsrf({ csrfToken: 'abc123' }, post(undefined)), 'csrf');\n});\n\ntest('safe methods pass without a token', () => {\n  eq(assertCsrf({ csrfToken: 'abc123' }, { method: 'GET', body: {} }), undefined);\n  eq(assertCsrf({ csrfToken: 'abc123' }, { method: 'HEAD', body: {} }), undefined);\n});\n\ntest('a session with no token yet cannot authorise anything', () => {\n  throws(() => assertCsrf({}, post(undefined)), 'csrf');\n});\n\ntest('two empty tokens are not a match', () => {\n  throws(() => assertCsrf({ csrfToken: '' }, post('')), 'csrf');\n});\n",
+   "solution": "// ─────────────────────────────────────────────────────────────────────────\n//  10 · the CSRF check that checks nothing — SOLUTION      ★★★ stretch\n//  concepts: security · CSRF · vacuous comparison\n//  run: node 10-csrf-vacuous-check.js\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Walkthrough:\n//  Vulnerability: cross-site request forgery, let through by a VACUOUS\n//  check — a comparison that is trivially satisfied because both sides\n//  are missing. `undefined !== undefined` is false, so a request with\n//  no token, hitting a session that never got one, sailed past the\n//  guard. The attacker does not need to steal or guess the token; they\n//  need to send NO token, to a visitor whose session has none either.\n//  The tell: an equality test on two values that may both be absent,\n//  with no precondition on the expected side. The same shape ships\n//  bugs far beyond CSRF — `user.role === requiredRole` when both are\n//  undefined, `sig === expectedSig` when the signer was skipped, any\n//  `if (a !== b) reject`. A security check must assert the secret\n//  EXISTS before it asserts the two match.\n//  The minimal fix: validate the expected value first, then compare a\n//  real string to a real string:\n//      const expected = session.csrfToken;\n//      const got = request.body.csrfToken;\n//      if (typeof expected !== 'string' || expected === '')\n//        throw new Error('csrf: session has no token');\n//      if (got !== expected) throw new Error('csrf token mismatch');\n//  Fail closed: no token established means no state-changing request\n//  is authorised, which is also the correct answer for a logged-out or\n//  expired session.\n//  In production, compare with `crypto.timingSafeEqual` over equal-length\n//  buffers so response time leaks nothing, and pair the token with\n//  `SameSite=Lax` cookies — defence in layers, because a single check is\n//  a single point of failure.\n//  In the wild: hand-rolled CSRF middleware, webhook signature checks\n//  where a missing header compares equal to a missing secret, and\n//  feature flags where \"undefined equals undefined\" quietly grants\n//  everyone the admin experience.\n\nimport { test, eq, throws } from '../../_lib/check.js';\n\nconst SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);\n\nexport function assertCsrf(session, request) {\n  if (SAFE_METHODS.has(request.method)) return;\n  const expected = session.csrfToken;\n  if (typeof expected !== 'string' || expected === '') {\n    throw new Error('csrf: session has no token');\n  }\n  if (request.body.csrfToken !== expected) {\n    throw new Error('csrf token mismatch');\n  }\n}\n\n// ─── request helpers ──────────────────────────────────────────────────────\n\nconst post = (csrfToken) => ({\n  method: 'POST',\n  body: csrfToken === undefined ? {} : { csrfToken, amount: 500 },\n});\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\ntest('a POST carrying the session token is allowed', () => {\n  eq(assertCsrf({ csrfToken: 'abc123' }, post('abc123')), undefined);\n});\n\ntest('a POST carrying the wrong token is refused', () => {\n  throws(() => assertCsrf({ csrfToken: 'abc123' }, post('xyz789')), 'csrf');\n});\n\ntest('a POST carrying no token is refused', () => {\n  throws(() => assertCsrf({ csrfToken: 'abc123' }, post(undefined)), 'csrf');\n});\n\ntest('safe methods pass without a token', () => {\n  eq(assertCsrf({ csrfToken: 'abc123' }, { method: 'GET', body: {} }), undefined);\n  eq(assertCsrf({ csrfToken: 'abc123' }, { method: 'HEAD', body: {} }), undefined);\n});\n\ntest('a session with no token yet cannot authorise anything', () => {\n  throws(() => assertCsrf({}, post(undefined)), 'csrf');\n});\n\ntest('two empty tokens are not a match', () => {\n  throws(() => assertCsrf({ csrfToken: '' }, post('')), 'csrf');\n});\n",
+   "explanation": "Vulnerability: cross-site request forgery, let through by a VACUOUS\ncheck — a comparison that is trivially satisfied because both sides\nare missing. `undefined !== undefined` is false, so a request with\nno token, hitting a session that never got one, sailed past the\nguard. The attacker does not need to steal or guess the token; they\nneed to send NO token, to a visitor whose session has none either.\nThe tell: an equality test on two values that may both be absent,\nwith no precondition on the expected side. The same shape ships\nbugs far beyond CSRF — `user.role === requiredRole` when both are\nundefined, `sig === expectedSig` when the signer was skipped, any\n`if (a !== b) reject`. A security check must assert the secret\nEXISTS before it asserts the two match.\nThe minimal fix: validate the expected value first, then compare a\nreal string to a real string:\n    const expected = session.csrfToken;\n    const got = request.body.csrfToken;\n    if (typeof expected !== 'string' || expected === '')\n      throw new Error('csrf: session has no token');\n    if (got !== expected) throw new Error('csrf token mismatch');\nFail closed: no token established means no state-changing request\nis authorised, which is also the correct answer for a logged-out or\nexpired session.\nIn production, compare with `crypto.timingSafeEqual` over equal-length\nbuffers so response time leaks nothing, and pair the token with\n`SameSite=Lax` cookies — defence in layers, because a single check is\na single point of failure.\nIn the wild: hand-rolled CSRF middleware, webhook signature checks\nwhere a missing header compares equal to a missing secret, and\nfeature flags where \"undefined equals undefined\" quietly grants\neveryone the admin experience."
+  }
+ }
+}

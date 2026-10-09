@@ -15,7 +15,7 @@ import type { UnitContentEntry } from '@bootquest/shared/api';
 import type { Db } from '../db/database.ts';
 import { nowMs, type Clock } from '../engines/clock.ts';
 import { insertCheck } from './content.ts';
-import { graderFingerprint, graderKindForTrack, toolchainVersions, type GraderKind } from './grader-fingerprint.ts';
+import { graderFingerprint, graderKindForManifest, toolchainVersions, type GraderKind } from './grader-fingerprint.ts';
 
 /**
  * Content loader for imported packs (W2). Packs (content/packs/<source>/) are
@@ -104,17 +104,17 @@ function verifyStamp(dir: string, manifest: PackManifest, manifestBytes: Buffer,
   if (stamp.manifestSha256 !== manifestSha) {
     throw new PackLoadError(`${who}: validation stamp is for manifest ${stamp.manifestSha256.slice(0, 12)}, not the current ${manifestSha.slice(0, 12)} (re-imported since validation?); ${RUN_GATE}`);
   }
-  // W3a: the stamp is bound to the grader KIND that executes this pack (js | csharp)
+  // W3a/W3c: the stamp is bound to the grader KIND that executes this pack (js | csharp | selfrun)
   let kind: GraderKind;
   let fp: string;
   try {
-    kind = graderKindForTrack(manifest.track);
+    kind = graderKindForManifest(manifest);
     fp = graderFingerprint(kind);
   } catch (err) {
     throw new PackLoadError(`${who}: cannot compute the grader fingerprint (${err instanceof Error ? err.message.slice(0, 300) : String(err)})`);
   }
   if ((stamp.graderKind ?? 'js') !== kind) {
-    throw new PackLoadError(`${who}: validation stamp is for the ${stamp.graderKind ?? 'js'} grader, but track ${manifest.track} is graded by ${kind}; ${RUN_GATE}`);
+    throw new PackLoadError(`${who}: validation stamp is for the ${stamp.graderKind ?? 'js'} grader, but pack ${manifest.source} (track ${manifest.track}) is graded by ${kind}; ${RUN_GATE}`);
   }
   if (stamp.graderFingerprint !== fp) {
     const fmtT = (t: Record<string, string | undefined>) =>

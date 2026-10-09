@@ -10,6 +10,9 @@
 // shut down + process-checked at the end), and (W3c) the http-check fixture
 // lesson graded by the real http runner against a fixture server booted on a
 // free port —
+// shut down + process-checked at the end) — and (W3c) jstrain: self-run JS
+// + TS drills (real self-run runner, real tsc), a forged `#done` line, a quiz
+// predict-output item and one jstrain-cs C# drill on the jstrain harness —
 // verifies ledger rows through a read connection, kills the server and
 // verifies the port is free again. W7 (M7 hardening) adds: the startup summary
 // (every pack / campaign / seed source with counts), the competency-ladder units
@@ -88,6 +91,22 @@ function cleanEnv(extra) {
   return { ...e, ...extra };
 }
 const RESET = join(REPO, 'server', 'src', 'db', 'reset-cli.ts');
+// W3c: jstrain (self-run JS + TS drills, quiz bank) and jstrain-cs (embedded C# revision)
+const JS_DIR = join(REPO, 'content', 'packs', 'jstrain');
+const JS_COURSES = ['01-language-core', 'ts-01-types-and-annotations', 'quiz-01-language-core'];
+const jsManifest = JSON.parse(readFileSync(join(JS_DIR, 'manifest.json'), 'utf8'));
+const jsFiles = Object.fromEntries(JS_COURSES.map((id) => [id, JSON.parse(readFileSync(join(JS_DIR, `${id}.json`), 'utf8'))]));
+const jsCount = (k) => JS_COURSES.reduce((n, id) => n + jsManifest.courses.find((c) => c.id === id).counts[k], 0);
+const jsDrill = jsFiles['01-language-core'].units.find((u) => u.unit.difficulty === 2);
+const jsDrillContent = jsFiles['01-language-core'].content[jsDrill.unit.key];
+const tsDrill = jsFiles['ts-01-types-and-annotations'].units[0];
+const tsDrillContent = jsFiles['ts-01-types-and-annotations'].content[tsDrill.unit.key];
+const jsPredict = jsFiles['quiz-01-language-core'].units.find((u) => u.unit.kind === 'predict-output');
+const JCS_DIR = join(REPO, 'content', 'packs', 'jstrain-cs');
+const JCS_COURSE = '01-csharp-language-core';
+const jcsFile = JSON.parse(readFileSync(join(JCS_DIR, `${JCS_COURSE}.json`), 'utf8'));
+const jcsUnit = jcsFile.units[0];
+const jcsContent = jcsFile.content[jcsUnit.unit.key];
 
 /** Live processes whose command line mentions `needle` (Windows CIM query; [] elsewhere). */
 function processesMentioning(needle) {
@@ -197,8 +216,8 @@ async function main() {
         BOOTQUEST_DB: dbPath,
         BOOTQUEST_PORT: String(port),
         BOOTQUEST_UNIT_CONTENT: contentPath,
-        BOOTQUEST_PACKS: `${PACK_DIR},${CS_DIR}`,
-        BOOTQUEST_PACK_COURSES: [PACK_COURSE, ...csManifest.courses.map((c) => c.id)].join(','),
+        BOOTQUEST_PACKS: `${PACK_DIR},${CS_DIR},${JS_DIR},${JCS_DIR}`,
+        BOOTQUEST_PACK_COURSES: [PACK_COURSE, ...csManifest.courses.map((c) => c.id), ...JS_COURSES, JCS_COURSE].join(','),
         BOOTQUEST_CS_SCRATCH: csScratch,
         BOOTQUEST_CAMPAIGN: CAMPAIGN_DIR,
         // W7: the real default seed packs + authored units (named explicitly so a caller's shell cannot override them)
@@ -219,7 +238,7 @@ async function main() {
     child.stderr.on('data', (d) => (serverOut += d)); // kept for diagnostics only; never asserted on
     const base = `http://127.0.0.1:${port}`;
     let up = false;
-    for (let i = 0; i < 120 && !up; i++) {
+    for (let i = 0; i < 480 && !up; i++) { // up to ~2 min: 4 packs + tsx cold start on a loaded box
       if (child.exitCode !== null) break;
       try {
         up = (await fetch(`${base}/api/health`)).ok;
@@ -240,10 +259,10 @@ async function main() {
       // 3 fixture units (2 smoke + the W3c http lesson) + the real pack course (written units carry no check)
       // + every csbootcamp drill + one placeholder unit per playable campaign quest (no checks until seed:quests)
       // + W7: one ladder unit per explain-back set / kata + the authored G3/G4 units (each with one check)
-      const wantUnits = 3 + packCounts.total + csManifest.totals.total + campaignUnits + ladderUnitCount;
-      const wantChecks = 3 + packCounts.total - packCounts.written + csManifest.totals.total + ladderUnitCount;
+      const wantUnits = 3 + packCounts.total + csManifest.totals.total + campaignUnits + ladderUnitCount + jsCount('total') + jcsFile.units.length;
+      const wantChecks = 3 + packCounts.total - packCounts.written + csManifest.totals.total + ladderUnitCount + jsCount('total') - jsCount('written') + jcsFile.units.length;
       step(
-        `health (3 fixture + ${packCounts.total} BootForge ${PACK_COURSE} + ${csManifest.totals.total} csbootcamp + ${campaignUnits} campaign + ${ladderUnitCount} ladder/authored units: loaded === built)`,
+        `health (3 fixture + ${packCounts.total} BootForge ${PACK_COURSE} + ${csManifest.totals.total} csbootcamp + ${campaignUnits} campaign + ${ladderUnitCount} ladder/authored + ${jsCount('total')} jstrain + ${jcsFile.units.length} jstrain-cs units: loaded === built)`,
         h.status === 200 && h.json?.ok === true && h.json.counts.units === wantUnits && h.json.counts.checks === wantChecks,
         JSON.stringify(h.json),
       );
@@ -686,6 +705,90 @@ async function main() {
         `exits ${noDb.code}/${noFlag.code}/${running.code}`,
       );
 
+      // 10d. W3c: jstrain self-run drills graded by the REAL self-run runner (TS: real tsc first)
+      // XP baseline before this block: earlier steps' totals vary with the merged step order
+      const dPre = await api(base, 'GET', '/api/dashboard');
+      const xpBefore = dPre.json?.xp?.total ?? 0;
+      const jtu = await api(base, 'GET', '/api/tracks/js/units');
+      const jsId = (key) => (jtu.json?.units ?? []).find((x) => x.key === key)?.id;
+      const jsListed = (jtu.json?.units ?? []).filter((x) => x.key.startsWith('jstrain/'));
+      step(
+        `jstrain: ${jsCount('total')} units of ${JS_COURSES.length} courses listed on the js track in pack order`,
+        jsListed.map((x) => x.key).join('\n') === JS_COURSES.flatMap((id) => jsFiles[id].units.map((u) => u.unit.key)).join('\n'),
+        `listed ${jsListed.length}`,
+      );
+      const jdId = jsId(jsDrill.unit.key);
+      const jd = await api(base, 'GET', `/api/units/${jdId}`);
+      step(
+        'jstrain drill detail: public self-run spec {type, language, file, tsc, inverted, timeoutMs}; no protected tests, no solution',
+        jd.status === 200 &&
+          JSON.stringify(Object.keys(jd.json.check.spec).sort()) === JSON.stringify(['file', 'inverted', 'language', 'timeoutMs', 'tsc', 'type']) &&
+          jd.json.starter === jsDrillContent.starter &&
+          !jd.text.includes('"files"') &&
+          !('solution' in jd.json),
+        `unit ${jdId} ${jsDrill.unit.key}`,
+      );
+      const jc0 = counts();
+      const jst = await api(base, 'POST', `/api/units/${jdId}/submit`, { code: jsDrillContent.starter });
+      const jc1 = counts();
+      step(
+        'jstrain: untouched starter -> fail (todo entries "not implemented yet (todo)"), recorded, no XP',
+        jst.json?.verdict === 'fail' && jst.json.xp === null && (jst.json.result.failures ?? []).length > 0 &&
+          jst.json.result.failures.every((f) => f.message === 'not implemented yet (todo)') &&
+          jc1.attempt === jc0.attempt + 1 && jc1.xp_event === jc0.xp_event,
+        `failures=${jst.json?.result?.failures?.length}`,
+      );
+      const forged = jsDrillContent.starter.replace(/^(import .*\n)/m, "$1console.log('  #done passed=9 failed=0 todo=0');\nprocess.exit(0);\n");
+      const jfg = await api(base, 'POST', `/api/units/${jdId}/submit`, { code: forged });
+      step(
+        'jstrain: a forged `#done passed=9 failed=0 todo=0` + process.exit(0) is graded FAIL (no authenticated result), no XP',
+        jfg.json?.verdict === 'fail' && jfg.json.xp === null && jfg.json.result.failures.some((f) => f.name === '(no result)'),
+        JSON.stringify(jfg.json?.result?.failures?.map((f) => f.name)),
+      );
+      const jsr = await api(base, 'POST', `/api/units/${jdId}/submit`, { code: jsDrillContent.solution });
+      const jsXp = 10 * jsDrill.unit.difficulty;
+      step(
+        `jstrain: reference solution -> pass, +${jsXp} XP (10 x difficulty)`,
+        jsr.json?.verdict === 'pass' && jsr.json.result.failures.length === 0 && jsr.json.xp?.amount === jsXp,
+        `xp=${JSON.stringify(jsr.json?.xp)} ${jsr.json?.result?.durationMs}ms`,
+      );
+      const tdId = jsId(tsDrill.unit.key);
+      const tst = await api(base, 'POST', `/api/units/${tdId}/run`, { code: tsDrillContent.starter });
+      const tsr = await api(base, 'POST', `/api/units/${tdId}/submit`, { code: tsDrillContent.solution });
+      const tsXp = 10 * tsDrill.unit.difficulty;
+      step(
+        `jstrain TS: starter run shows tsc errors verbatim + todo; solution (tsc clean) submitted -> pass, +${tsXp} XP`,
+        tst.json?.result?.pass === false && /error TS\d+/.test(tst.json.result.output) && tst.json.result.failures.some((f) => f.name === '(tsc)') &&
+          tsr.json?.verdict === 'pass' && /tsc: types clean/.test(tsr.json.result.output) && tsr.json.xp?.amount === tsXp,
+        `run ${tst.json?.result?.durationMs}ms submit ${tsr.json?.result?.durationMs}ms`,
+      );
+      const qpId = jsId(jsPredict.unit.key);
+      const qpr = await api(base, 'POST', `/api/units/${qpId}/run`, { answer: 'x' });
+      const qps = await api(base, 'POST', `/api/units/${qpId}/submit`, { answer: jsPredict.unit.checks[0].spec.expected });
+      step(
+        'jstrain quiz predict-output: run refused 409; captured output submitted -> pass, +4 XP; keyTokens/runAs never public',
+        qpr.status === 409 && qps.json?.verdict === 'pass' && qps.json.xp?.amount === 4,
+        `unit ${qpId}`,
+      );
+      const qpd = await api(base, 'GET', `/api/units/${qpId}`);
+      step('jstrain quiz detail leaks no expected/keyTokens/runAs', qpd.status === 200 && !/"expected"|"keyTokens"|"runAs"/.test(qpd.text));
+
+      // 10e. W3c: jstrain-cs on the csharp track, the jstrain harness revision (its own Check.dll)
+      const ctu2 = await api(base, 'GET', '/api/tracks/csharp/units');
+      const jcsId = (ctu2.json?.units ?? []).find((x) => x.key === jcsUnit.unit.key)?.id;
+      const jcst = await api(base, 'POST', `/api/units/${jcsId}/submit`, { code: jcsContent.starter });
+      const jcsr = await api(base, 'POST', `/api/units/${jcsId}/submit`, { code: jcsContent.solution });
+      const jcsXp = 10 * jcsUnit.unit.difficulty;
+      step(
+        `jstrain-cs: starter FAIL (todo), solution PASS on the jstrain harness (#done failed=0 todo=0), +${jcsXp} XP`,
+        jcst.json?.verdict === 'fail' && jcst.json.xp === null &&
+          jcsr.json?.verdict === 'pass' && /#done passed=\d+ failed=0 todo=0/.test(jcsr.json.result.output) && jcsr.json.xp?.amount === jcsXp,
+        `starter ${jcst.json?.result?.durationMs}ms (incl. Check.dll prepare) solution ${jcsr.json?.result?.durationMs}ms`,
+      );
+      const d4 = await api(base, 'GET', '/api/dashboard');
+      const total4 = xpBefore + jsXp + tsXp + 4 + jcsXp;
+      step(`dashboard xp +${jsXp + tsXp + 4 + jcsXp} (= ${total4}) after the jstrain submissions`, d4.json?.xp?.total === total4, `xp=${d4.json?.xp?.total}`);
+
       // 11. errors are JSON
       const e = await api(base, 'GET', '/definitely-not-a-route');
       step('unknown route answers JSON 404', e.status === 404 && e.json?.error?.code === 'NOT_FOUND');
@@ -711,9 +814,12 @@ async function main() {
       // server it started (named pipe derived from the scratch dir) and prove nothing lingers
       const sm = new ScratchManager({ appDataDir: csScratch });
       await sm.shutdown();
+      // W3c: the jstrain-harness runner has its own compiler server (pipe derived from its dir)
+      const sm2 = new ScratchManager({ appDataDir: join(csScratch, 'jstrain-harness') });
+      await sm2.shutdown();
       let lingering = [];
       for (let i = 0; i < 20; i++) {
-        lingering = [...processesMentioning(sm.pipe), ...processesMentioning(csScratch)];
+        lingering = [...processesMentioning(sm.pipe), ...processesMentioning(sm2.pipe), ...processesMentioning(csScratch)];
         if (lingering.length === 0) break;
         await sleep(250);
       }

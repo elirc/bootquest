@@ -1,0 +1,303 @@
+{
+ "format": "bootquest-pack@1",
+ "source": "jstrain",
+ "course": {
+  "id": "28-api-consumer",
+  "order": 26,
+  "title": "Consuming APIs",
+  "description": "Module 18 builds servers; this module is the other half of every CRUD job — being a good CLIENT of one. Real network calls fail, paginate, and must never double-charge, and the patterns that handle that are the same five everywhere, framework or not. All offline: every \"network\" here is a fake function you inject, so tests are instant and deterministic.",
+  "prerequisites": []
+ },
+ "modules": [
+  {
+   "id": "28-api-consumer",
+   "title": "Consuming APIs",
+   "lessons": [
+    {
+     "id": "readme",
+     "title": "Consuming APIs",
+     "explanation": "# 28 · Consuming APIs\n\nModule 18 builds servers; this module is the other half of every CRUD\njob — being a good CLIENT of one. Real network calls fail, paginate, and\nmust never double-charge, and the patterns that handle that are the same\nfive everywhere, framework or not. All offline: every \"network\" here is a\nfake function you inject, so tests are instant and deterministic.\n\n- **Retry with backoff** — survive transient failures without hammering.\n- **Cursor pagination** — drain a paged endpoint to exhaustion.\n- **Error envelopes** — turn responses and throws into one `Result`.\n- **Idempotency keys** — make retrying a POST safe.\n- **Boundary validation** — parse untrusted JSON into a shape you trust.\n\n## The mental model\n\nThe network is the least trustworthy boundary your code touches: it is\nslow, it fails halfway, and it hands you data you did not type. Three\nhabits tame it:\n\n1. **Assume failure and make it safe.** Retry transient errors with\n   EXPONENTIAL backoff (and jitter in production), and pair retries with\n   idempotency keys so a repeated write happens once. A retry without\n   idempotency is how customers get charged twice.\n2. **Return Results, don't throw across the boundary.** Collapse network\n   errors and HTTP errors into one value callers branch on. Only parse a\n   body you know is a success; an error payload has a different shape.\n3. **Validate once, at the edge.** Parse untrusted input into a known,\n   normalized shape and hand THAT to the rest of the app — \"parse, don't\n   validate\". After the boundary, code should never re-check.\n\n## Exercises\n\n| # | file | ★ | what you build |\n| --- | --- | --- | --- |\n| 01 | `01-retry-backoff.js` | ★★☆ | retry with a doubling, injected-clock backoff |\n| 02 | `02-paginate-cursors.js` | ★★☆ | follow nextCursor until it's null |\n| 03 | `03-error-envelope.js` | ★★☆ | responses + throws → one `{ ok, data \\| error }` |\n| 04 | `04-idempotency-key.js` | ★★★ | charge-once under retries |\n| 05 | `05-validate-boundary.js` | ★★★ | parse signup JSON, collect every error |\n\n01 and 04 are a pair — retries make calls reliable, idempotency makes the\nretries safe. Do them near each other.\n\n```\nnode exercises/01-retry-backoff.js   # run it, fill the TODO, re-run\nnode solutions/01-retry-backoff.js   # reference + walkthrough\nnode ../progress.js 28               # scoreboard\n```\n\n**Stuck?** `cheatsheets/promises-async.md` (combinators, the recipes) · **Deep dive:** `guides/05-http-from-first-principles.md` · **Self-check:** `quizzes/12-node-advanced.md` · **Next:** `bootcamp/29-write-the-test`\n"
+    }
+   ]
+  }
+ ],
+ "units": [
+  {
+   "unit": {
+    "key": "jstrain/28-api-consumer/01-retry-backoff",
+    "track": "js",
+    "kind": "drill",
+    "title": "Retry with exponential backoff",
+    "phase": "28-api-consumer",
+    "difficulty": 2,
+    "competencies": [
+     "data-http"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "self-run",
+       "language": "js",
+       "file": "bootcamp/28-api-consumer/exercises/01-retry-backoff.js",
+       "tsc": false,
+       "fixtures": [],
+       "inverted": false,
+       "timeoutMs": 30000,
+       "files": {
+        "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\ntest('a call that succeeds first time never sleeps', async () => {\n  const sleep = fakeSleep();\n  const fn = flaky(0);\n  eq(await withRetry(fn, { retries: 3, baseMs: 10, sleep }), 'ok');\n  eq(sleep.waits, []);\n  eq(fn.callCount(), 1);\n});\n\ntest('it retries after a failure and eventually succeeds', async () => {\n  const sleep = fakeSleep();\n  const fn = flaky(2);\n  eq(await withRetry(fn, { retries: 3, baseMs: 10, sleep }), 'ok');\n  eq(fn.callCount(), 3); // 1 + 2 retries\n});\n\ntest('the backoff doubles each attempt', async () => {\n  const sleep = fakeSleep();\n  const fn = flaky(3);\n  await withRetry(fn, { retries: 5, baseMs: 10, sleep });\n  eq(sleep.waits, [10, 20, 40]); // three waits before the 4th, winning call\n});\n\ntest('it gives up after `retries` and throws the last error', async () => {\n  const sleep = fakeSleep();\n  const fn = flaky(10);\n  await rejects(() => withRetry(fn, { retries: 2, baseMs: 5, sleep }), 'fail 3');\n  eq(fn.callCount(), 3); // 1 + 2 retries, then stop\n});\n\ntest('zero retries means one attempt, no sleeping', async () => {\n  const sleep = fakeSleep();\n  const fn = flaky(10);\n  await rejects(() => withRetry(fn, { retries: 0, baseMs: 5, sleep }), 'fail 1');\n  eq(sleep.waits, []);\n  eq(fn.callCount(), 1);\n});\n",
+        "fixtures": {},
+        "frozen": [
+         {
+          "label": "a spy sleep that records waits instead of blocking",
+          "body": "function fakeSleep() {\n  const waits = [];\n  const sleep = (ms) => { waits.push(ms); return Promise.resolve(); };\n  sleep.waits = waits;\n  return sleep;\n}\nfunction flaky(failN, value = 'ok') {\n  let calls = 0;\n  const fn = async () => {\n    calls += 1;\n    if (calls <= failN) throw new Error(`fail ${calls}`);\n    return value;\n  };\n  fn.callCount = () => calls;\n  return fn;\n}"
+         }
+        ]
+       }
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "bootcamp/28-api-consumer/01-retry-backoff",
+    "type": "code",
+    "module": "28-api-consumer",
+    "lesson": "readme",
+    "position": 0,
+    "format": "self-run",
+    "skills": [
+     "retries",
+     "exponential backoff",
+     "jitter"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "jstrain/28-api-consumer/02-paginate-cursors",
+    "track": "js",
+    "kind": "drill",
+    "title": "Drain a cursor-paginated API",
+    "phase": "28-api-consumer",
+    "difficulty": 2,
+    "competencies": [
+     "data-http"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "self-run",
+       "language": "js",
+       "file": "bootcamp/28-api-consumer/exercises/02-paginate-cursors.js",
+       "tsc": false,
+       "fixtures": [],
+       "inverted": false,
+       "timeoutMs": 30000,
+       "files": {
+        "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\ntest('a single-page result returns its items', async () => {\n  const api = pagedApi([1, 2, 3], 10);\n  eq(await fetchAll(api), [1, 2, 3]);\n});\n\ntest('it follows cursors across several pages, in order', async () => {\n  const api = pagedApi([1, 2, 3, 4, 5, 6, 7], 3);\n  eq(await fetchAll(api), [1, 2, 3, 4, 5, 6, 7]);\n});\n\ntest('it starts from an undefined cursor', async () => {\n  const api = pagedApi([1, 2, 3, 4], 2);\n  await fetchAll(api);\n  eq(api.calls[0], undefined);\n});\n\ntest('it stops exactly when nextCursor is null (no extra call)', async () => {\n  const api = pagedApi([1, 2, 3, 4], 2); // 2 pages, second has next=null\n  await fetchAll(api);\n  eq(api.calls.length, 2);\n});\n\ntest('an empty first page yields nothing', async () => {\n  const api = pagedApi([], 5);\n  eq(await fetchAll(api), []);\n});\n",
+        "fixtures": {},
+        "frozen": [
+         {
+          "label": "a fake API: pages of `size`, cursor is the next offset",
+          "body": "function pagedApi(items, size) {\n  const calls = [];\n  const fetchPage = async (cursor) => {\n    const start = cursor ?? 0;\n    calls.push(cursor);\n    const slice = items.slice(start, start + size);\n    const next = start + size < items.length ? start + size : null;\n    return { items: slice, nextCursor: next };\n  };\n  fetchPage.calls = calls;\n  return fetchPage;\n}"
+         }
+        ]
+       }
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "bootcamp/28-api-consumer/02-paginate-cursors",
+    "type": "code",
+    "module": "28-api-consumer",
+    "lesson": "readme",
+    "position": 1,
+    "format": "self-run",
+    "skills": [
+     "cursor pagination",
+     "async iteration",
+     "aggregation"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "jstrain/28-api-consumer/03-error-envelope",
+    "track": "js",
+    "kind": "drill",
+    "title": "Turn responses into a Result",
+    "phase": "28-api-consumer",
+    "difficulty": 2,
+    "competencies": [
+     "data-http"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "self-run",
+       "language": "js",
+       "file": "bootcamp/28-api-consumer/exercises/03-error-envelope.js",
+       "tsc": false,
+       "fixtures": [],
+       "inverted": false,
+       "timeoutMs": 30000,
+       "files": {
+        "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\ntest('a 200 yields ok:true with the parsed body', async () => {\n  eq(await request(respond(200, { id: 1 })), { ok: true, data: { id: 1 } });\n});\n\ntest('a 201 counts as success too', async () => {\n  const out = await request(respond(201, { created: true }));\n  eq(out.ok, true);\n  eq(out.data, { created: true });\n});\n\ntest('a 404 is a structured http error, not a throw', async () => {\n  eq(await request(respond(404, { message: 'nope' })), {\n    ok: false,\n    error: { kind: 'http', status: 404 },\n  });\n});\n\ntest('a 500 does not get parsed as success data', async () => {\n  const out = await request(respond(500, { oops: true }));\n  eq(out.ok, false);\n  eq(out.error.kind, 'http');\n  eq('data' in out, false);\n});\n\ntest('a network rejection becomes a network error envelope', async () => {\n  const out = await request(networkError('ECONNREFUSED'));\n  eq(out.ok, false);\n  eq(out.error.kind, 'network');\n  eq(out.error.message, 'ECONNREFUSED');\n});\n",
+        "fixtures": {},
+        "frozen": [
+         {
+          "label": "fake responses",
+          "body": "const respond = (status, body) => async () => ({\n  status,\n  json: async () => body,\n});\nconst networkError = (msg) => async () => {\n  throw new Error(msg);\n};"
+         }
+        ]
+       }
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "bootcamp/28-api-consumer/03-error-envelope",
+    "type": "code",
+    "module": "28-api-consumer",
+    "lesson": "readme",
+    "position": 2,
+    "format": "self-run",
+    "skills": [
+     "error envelopes",
+     "Result type",
+     "status handling"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "jstrain/28-api-consumer/04-idempotency-key",
+    "track": "js",
+    "kind": "drill",
+    "title": "Idempotency keys — charge once",
+    "phase": "28-api-consumer",
+    "difficulty": 3,
+    "competencies": [
+     "data-http"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "self-run",
+       "language": "js",
+       "file": "bootcamp/28-api-consumer/exercises/04-idempotency-key.js",
+       "tsc": false,
+       "fixtures": [],
+       "inverted": false,
+       "timeoutMs": 30000,
+       "files": {
+        "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\ntest('the first charge performs the work', () => {\n  const perform = counter();\n  const svc = makeChargeService(perform);\n  eq(svc.charge('k1', 500), { receiptId: 'r1', amountCents: 500 });\n  eq(perform.callCount(), 1);\n});\n\ntest('the same key returns the stored result without re-charging', () => {\n  const perform = counter();\n  const svc = makeChargeService(perform);\n  const first = svc.charge('k1', 500);\n  const again = svc.charge('k1', 500);\n  eq(again, first); // same receipt\n  eq(perform.callCount(), 1); // performed once\n});\n\ntest('a different key is a separate operation', () => {\n  const perform = counter();\n  const svc = makeChargeService(perform);\n  svc.charge('k1', 500);\n  const second = svc.charge('k2', 500);\n  eq(second.receiptId, 'r2');\n  eq(perform.callCount(), 2);\n});\n\ntest('three retries of one key perform exactly once', () => {\n  const perform = counter();\n  const svc = makeChargeService(perform);\n  const results = ['k9', 'k9', 'k9'].map((k) => svc.charge(k, 250));\n  eq(perform.callCount(), 1);\n  eq(results[0], results[1]);\n  eq(results[1], results[2]);\n});\n\ntest('keys are isolated per service instance', () => {\n  const svc1 = makeChargeService(counter());\n  const svc2 = makeChargeService(counter());\n  const a = svc1.charge('k1', 100);\n  const b = svc2.charge('k1', 100);\n  eq(a.receiptId, 'r1');\n  eq(b.receiptId, 'r1'); // svc2 has its own store; not shared with svc1\n});\n",
+        "fixtures": {},
+        "frozen": [
+         {
+          "label": "a perform() that mints a unique receipt and counts its calls",
+          "body": "function counter() {\n  let n = 0;\n  const perform = (amountCents) => {\n    n += 1;\n    return { receiptId: `r${n}`, amountCents };\n  };\n  perform.callCount = () => n;\n  return perform;\n}"
+         }
+        ]
+       }
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "bootcamp/28-api-consumer/04-idempotency-key",
+    "type": "code",
+    "module": "28-api-consumer",
+    "lesson": "readme",
+    "position": 3,
+    "format": "self-run",
+    "skills": [
+     "idempotency",
+     "dedupe",
+     "safe retries"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "jstrain/28-api-consumer/05-validate-boundary",
+    "track": "js",
+    "kind": "drill",
+    "title": "Validate at the boundary",
+    "phase": "28-api-consumer",
+    "difficulty": 3,
+    "competencies": [
+     "data-http"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "self-run",
+       "language": "js",
+       "file": "bootcamp/28-api-consumer/exercises/05-validate-boundary.js",
+       "tsc": false,
+       "fixtures": [],
+       "inverted": false,
+       "timeoutMs": 30000,
+       "files": {
+        "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\ntest('a clean signup parses and is normalized', () => {\n  eq(parseSignup({ name: ' Ada ', email: 'A@X.com', age: 30 }), {\n    ok: true,\n    value: { name: 'Ada', email: 'a@x.com', age: 30 },\n  });\n});\n\ntest('age is optional and omitted when absent', () => {\n  eq(parseSignup({ name: 'Ada', email: 'a@x.com' }), {\n    ok: true,\n    value: { name: 'Ada', email: 'a@x.com' },\n  });\n});\n\ntest('all errors are collected, not just the first', () => {\n  const out = parseSignup({ name: '  ', email: 'nope' });\n  eq(out.ok, false);\n  eq(out.errors.includes('name: required'), true);\n  eq(out.errors.includes('email: must contain @'), true);\n  eq(out.errors.length, 2);\n});\n\ntest('a present but out-of-range age is rejected', () => {\n  const out = parseSignup({ name: 'Ada', email: 'a@x.com', age: 5 });\n  eq(out.ok, false);\n  eq(out.errors.some((e) => e.startsWith('age')), true);\n});\n\ntest('wrong types are rejected, not coerced into nonsense', () => {\n  const out = parseSignup({ name: 42, email: null, age: '30' });\n  eq(out.ok, false);\n  // name not a string, email not a string, age not an integer\n  eq(out.errors.length, 3);\n});\n\ntest('a non-object input fails cleanly', () => {\n  const out = parseSignup(null);\n  eq(out.ok, false);\n  eq(out.errors.length > 0, true);\n});\n",
+        "fixtures": {},
+        "frozen": []
+       }
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "bootcamp/28-api-consumer/05-validate-boundary",
+    "type": "code",
+    "module": "28-api-consumer",
+    "lesson": "readme",
+    "position": 4,
+    "format": "self-run",
+    "skills": [
+     "input validation",
+     "parse-don't-validate",
+     "Result"
+    ]
+   }
+  }
+ ],
+ "content": {
+  "jstrain/28-api-consumer/01-retry-backoff": {
+   "instructions": "**Concepts:** retries · exponential backoff · jitter  \n**Level:** ★★☆ core\n\nNetworks fail transiently. A good client retries — but not instantly\nand not forever, or it becomes a self-inflicted DDoS. Build\nwithRetry(fn, { retries, baseMs, sleep }):\n  · call fn(); if it resolves, return the value\n  · if it rejects, wait then retry, up to `retries` extra times\n  · the wait DOUBLES each attempt: baseMs, 2×baseMs, 4×baseMs, …\n    (exponential backoff)\n  · out of retries → reject with the LAST error\n  · `sleep(ms)` is injected so tests don't actually wait\n\n    withRetry(flaky, { retries: 3, baseMs: 10, sleep })\n      fails twice, succeeds on the 3rd call → resolves, waited 10 then 20\n\nhint: a loop from attempt 0..retries. On failure, sleep(baseMs *\n2**attempt) before the next go. Track the last error to re-throw.\n",
+   "starter": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · retry with exponential backoff                          ★★☆ core\n//  concepts: retries · exponential backoff · jitter\n//  run: node 01-retry-backoff.js\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Networks fail transiently. A good client retries — but not instantly\n//  and not forever, or it becomes a self-inflicted DDoS. Build\n//  withRetry(fn, { retries, baseMs, sleep }):\n//    · call fn(); if it resolves, return the value\n//    · if it rejects, wait then retry, up to `retries` extra times\n//    · the wait DOUBLES each attempt: baseMs, 2×baseMs, 4×baseMs, …\n//      (exponential backoff)\n//    · out of retries → reject with the LAST error\n//    · `sleep(ms)` is injected so tests don't actually wait\n//\n//      withRetry(flaky, { retries: 3, baseMs: 10, sleep })\n//        fails twice, succeeds on the 3rd call → resolves, waited 10 then 20\n//\n//  hint: a loop from attempt 0..retries. On failure, sleep(baseMs *\n//  2**attempt) before the next go. Track the last error to re-throw.\n\nimport { test, eq, rejects } from '../../_lib/check.js';\n\nexport async function withRetry(fn, { retries, baseMs, sleep }) {\n  throw new Error('TODO');\n}\n\n// ── a spy sleep that records waits instead of blocking ───────────────────\nfunction fakeSleep() {\n  const waits = [];\n  const sleep = (ms) => { waits.push(ms); return Promise.resolve(); };\n  sleep.waits = waits;\n  return sleep;\n}\n// a fn that fails `failN` times, then succeeds\nfunction flaky(failN, value = 'ok') {\n  let calls = 0;\n  const fn = async () => {\n    calls += 1;\n    if (calls <= failN) throw new Error(`fail ${calls}`);\n    return value;\n  };\n  fn.callCount = () => calls;\n  return fn;\n}\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\ntest('a call that succeeds first time never sleeps', async () => {\n  const sleep = fakeSleep();\n  const fn = flaky(0);\n  eq(await withRetry(fn, { retries: 3, baseMs: 10, sleep }), 'ok');\n  eq(sleep.waits, []);\n  eq(fn.callCount(), 1);\n});\n\ntest('it retries after a failure and eventually succeeds', async () => {\n  const sleep = fakeSleep();\n  const fn = flaky(2);\n  eq(await withRetry(fn, { retries: 3, baseMs: 10, sleep }), 'ok');\n  eq(fn.callCount(), 3); // 1 + 2 retries\n});\n\ntest('the backoff doubles each attempt', async () => {\n  const sleep = fakeSleep();\n  const fn = flaky(3);\n  await withRetry(fn, { retries: 5, baseMs: 10, sleep });\n  eq(sleep.waits, [10, 20, 40]); // three waits before the 4th, winning call\n});\n\ntest('it gives up after `retries` and throws the last error', async () => {\n  const sleep = fakeSleep();\n  const fn = flaky(10);\n  await rejects(() => withRetry(fn, { retries: 2, baseMs: 5, sleep }), 'fail 3');\n  eq(fn.callCount(), 3); // 1 + 2 retries, then stop\n});\n\ntest('zero retries means one attempt, no sleeping', async () => {\n  const sleep = fakeSleep();\n  const fn = flaky(10);\n  await rejects(() => withRetry(fn, { retries: 0, baseMs: 5, sleep }), 'fail 1');\n  eq(sleep.waits, []);\n  eq(fn.callCount(), 1);\n});\n",
+   "solution": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · retry with exponential backoff — SOLUTION               ★★☆ core\n//  concepts: retries · exponential backoff · jitter\n//  run: node 01-retry-backoff.js\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Walkthrough:\n//  A retry loop with a doubling wait. Attempt 0 runs immediately; each\n//  failure sleeps baseMs × 2**attempt before the next try, so a\n//  struggling server gets geometrically more breathing room instead of\n//  a fixed-rate hammering. After `retries` extra attempts we stop and\n//  re-throw the LAST error — the caller still sees a real failure, just\n//  after we've given the transient one every reasonable chance.\n//  Injecting sleep is the testability move: the same code that waits\n//  real milliseconds in production waits a recorded no-op in tests, so\n//  we can assert the backoff schedule ([10, 20, 40]) without the clock.\n//  In production add JITTER — a random fraction of the delay — so a\n//  thousand clients that failed at the same instant don't all retry in\n//  lockstep (the \"thundering herd\"). And retry ONLY idempotent or\n//  safe-to-repeat operations, or pair it with an idempotency key\n//  (exercise 04) so a retried POST doesn't charge twice.\n//  Classic wrong turns: retrying on non-transient errors (a 400 will\n//  never succeed — you just wait longer to fail), no cap (infinite\n//  retries), and linear/constant delay (no relief for the server).\n\nimport { test, eq, rejects } from '../../_lib/check.js';\n\nexport async function withRetry(fn, { retries, baseMs, sleep }) {\n  let lastError;\n  for (let attempt = 0; attempt <= retries; attempt++) {\n    try {\n      return await fn();\n    } catch (err) {\n      lastError = err;\n      if (attempt < retries) await sleep(baseMs * 2 ** attempt);\n    }\n  }\n  throw lastError;\n}\n\n// ── a spy sleep that records waits instead of blocking ───────────────────\nfunction fakeSleep() {\n  const waits = [];\n  const sleep = (ms) => { waits.push(ms); return Promise.resolve(); };\n  sleep.waits = waits;\n  return sleep;\n}\nfunction flaky(failN, value = 'ok') {\n  let calls = 0;\n  const fn = async () => {\n    calls += 1;\n    if (calls <= failN) throw new Error(`fail ${calls}`);\n    return value;\n  };\n  fn.callCount = () => calls;\n  return fn;\n}\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\ntest('a call that succeeds first time never sleeps', async () => {\n  const sleep = fakeSleep();\n  const fn = flaky(0);\n  eq(await withRetry(fn, { retries: 3, baseMs: 10, sleep }), 'ok');\n  eq(sleep.waits, []);\n  eq(fn.callCount(), 1);\n});\n\ntest('it retries after a failure and eventually succeeds', async () => {\n  const sleep = fakeSleep();\n  const fn = flaky(2);\n  eq(await withRetry(fn, { retries: 3, baseMs: 10, sleep }), 'ok');\n  eq(fn.callCount(), 3);\n});\n\ntest('the backoff doubles each attempt', async () => {\n  const sleep = fakeSleep();\n  const fn = flaky(3);\n  await withRetry(fn, { retries: 5, baseMs: 10, sleep });\n  eq(sleep.waits, [10, 20, 40]);\n});\n\ntest('it gives up after `retries` and throws the last error', async () => {\n  const sleep = fakeSleep();\n  const fn = flaky(10);\n  await rejects(() => withRetry(fn, { retries: 2, baseMs: 5, sleep }), 'fail 3');\n  eq(fn.callCount(), 3);\n});\n\ntest('zero retries means one attempt, no sleeping', async () => {\n  const sleep = fakeSleep();\n  const fn = flaky(10);\n  await rejects(() => withRetry(fn, { retries: 0, baseMs: 5, sleep }), 'fail 1');\n  eq(sleep.waits, []);\n  eq(fn.callCount(), 1);\n});\n",
+   "explanation": "A retry loop with a doubling wait. Attempt 0 runs immediately; each\nfailure sleeps baseMs × 2**attempt before the next try, so a\nstruggling server gets geometrically more breathing room instead of\na fixed-rate hammering. After `retries` extra attempts we stop and\nre-throw the LAST error — the caller still sees a real failure, just\nafter we've given the transient one every reasonable chance.\nInjecting sleep is the testability move: the same code that waits\nreal milliseconds in production waits a recorded no-op in tests, so\nwe can assert the backoff schedule ([10, 20, 40]) without the clock.\nIn production add JITTER — a random fraction of the delay — so a\nthousand clients that failed at the same instant don't all retry in\nlockstep (the \"thundering herd\"). And retry ONLY idempotent or\nsafe-to-repeat operations, or pair it with an idempotency key\n(exercise 04) so a retried POST doesn't charge twice.\nClassic wrong turns: retrying on non-transient errors (a 400 will\nnever succeed — you just wait longer to fail), no cap (infinite\nretries), and linear/constant delay (no relief for the server)."
+  },
+  "jstrain/28-api-consumer/02-paginate-cursors": {
+   "instructions": "**Concepts:** cursor pagination · async iteration · aggregation  \n**Level:** ★★☆ core\n\nA list endpoint returns one page plus a cursor to the next:\n\n    fetchPage(cursor) → { items: [...], nextCursor: 'abc' | null }\n\nA null nextCursor means \"last page\". Build fetchAll(fetchPage) that\nfollows the cursors from the start (cursor undefined) and returns\nevery item, in order, across all pages.\n\n    one page,   nextCursor null      → those items\n    three pages, cursors then null   → all items concatenated\n\nhint: start with cursor undefined; loop calling fetchPage(cursor),\npush items, set cursor = nextCursor, stop when it's null. Do NOT\nassume a page count — the cursor is the only authority on \"more\".\n",
+   "starter": "// ─────────────────────────────────────────────────────────────────────────\n//  02 · drain a cursor-paginated API                            ★★☆ core\n//  concepts: cursor pagination · async iteration · aggregation\n//  run: node 02-paginate-cursors.js\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  A list endpoint returns one page plus a cursor to the next:\n//\n//      fetchPage(cursor) → { items: [...], nextCursor: 'abc' | null }\n//\n//  A null nextCursor means \"last page\". Build fetchAll(fetchPage) that\n//  follows the cursors from the start (cursor undefined) and returns\n//  every item, in order, across all pages.\n//\n//      one page,   nextCursor null      → those items\n//      three pages, cursors then null   → all items concatenated\n//\n//  hint: start with cursor undefined; loop calling fetchPage(cursor),\n//  push items, set cursor = nextCursor, stop when it's null. Do NOT\n//  assume a page count — the cursor is the only authority on \"more\".\n\nimport { test, eq } from '../../_lib/check.js';\n\nexport async function fetchAll(fetchPage) {\n  throw new Error('TODO');\n}\n\n// ── a fake API: pages of `size`, cursor is the next offset ───────────────\nfunction pagedApi(items, size) {\n  const calls = [];\n  const fetchPage = async (cursor) => {\n    const start = cursor ?? 0;\n    calls.push(cursor);\n    const slice = items.slice(start, start + size);\n    const next = start + size < items.length ? start + size : null;\n    return { items: slice, nextCursor: next };\n  };\n  fetchPage.calls = calls;\n  return fetchPage;\n}\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\ntest('a single-page result returns its items', async () => {\n  const api = pagedApi([1, 2, 3], 10);\n  eq(await fetchAll(api), [1, 2, 3]);\n});\n\ntest('it follows cursors across several pages, in order', async () => {\n  const api = pagedApi([1, 2, 3, 4, 5, 6, 7], 3);\n  eq(await fetchAll(api), [1, 2, 3, 4, 5, 6, 7]);\n});\n\ntest('it starts from an undefined cursor', async () => {\n  const api = pagedApi([1, 2, 3, 4], 2);\n  await fetchAll(api);\n  eq(api.calls[0], undefined);\n});\n\ntest('it stops exactly when nextCursor is null (no extra call)', async () => {\n  const api = pagedApi([1, 2, 3, 4], 2); // 2 pages, second has next=null\n  await fetchAll(api);\n  eq(api.calls.length, 2);\n});\n\ntest('an empty first page yields nothing', async () => {\n  const api = pagedApi([], 5);\n  eq(await fetchAll(api), []);\n});\n",
+   "solution": "// ─────────────────────────────────────────────────────────────────────────\n//  02 · drain a cursor-paginated API — SOLUTION                 ★★☆ core\n//  concepts: cursor pagination · async iteration · aggregation\n//  run: node 02-paginate-cursors.js\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Walkthrough:\n//  A while loop over an opaque cursor: start undefined, call the page,\n//  collect items, and let nextCursor decide whether to continue. The\n//  discipline is trusting the cursor as the ONLY signal of \"more\" —\n//  never a page count, never \"stop when items.length < pageSize\" (a full\n//  final page whose nextCursor is null would fool that, and a short\n//  non-final page would end you early). null means done; anything else\n//  means keep going.\n//  This is the read side of exercise 03 in module 27 — the server offers\n//  keyset/cursor pagination, and the client's job is to follow it to\n//  exhaustion without assuming its internals (the cursor might be an id,\n//  an offset, or an encoded token; you neither know nor care).\n//  For huge result sets, prefer an async generator that YIELDS each page\n//  so the caller processes as it goes instead of buffering everything —\n//  same loop, `yield items` instead of `push`.\n\nimport { test, eq } from '../../_lib/check.js';\n\nexport async function fetchAll(fetchPage) {\n  const all = [];\n  let cursor = undefined;\n  do {\n    const { items, nextCursor } = await fetchPage(cursor);\n    all.push(...items);\n    cursor = nextCursor;\n  } while (cursor !== null);\n  return all;\n}\n\nfunction pagedApi(items, size) {\n  const calls = [];\n  const fetchPage = async (cursor) => {\n    const start = cursor ?? 0;\n    calls.push(cursor);\n    const slice = items.slice(start, start + size);\n    const next = start + size < items.length ? start + size : null;\n    return { items: slice, nextCursor: next };\n  };\n  fetchPage.calls = calls;\n  return fetchPage;\n}\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\ntest('a single-page result returns its items', async () => {\n  const api = pagedApi([1, 2, 3], 10);\n  eq(await fetchAll(api), [1, 2, 3]);\n});\n\ntest('it follows cursors across several pages, in order', async () => {\n  const api = pagedApi([1, 2, 3, 4, 5, 6, 7], 3);\n  eq(await fetchAll(api), [1, 2, 3, 4, 5, 6, 7]);\n});\n\ntest('it starts from an undefined cursor', async () => {\n  const api = pagedApi([1, 2, 3, 4], 2);\n  await fetchAll(api);\n  eq(api.calls[0], undefined);\n});\n\ntest('it stops exactly when nextCursor is null (no extra call)', async () => {\n  const api = pagedApi([1, 2, 3, 4], 2);\n  await fetchAll(api);\n  eq(api.calls.length, 2);\n});\n\ntest('an empty first page yields nothing', async () => {\n  const api = pagedApi([], 5);\n  eq(await fetchAll(api), []);\n});\n",
+   "explanation": "A while loop over an opaque cursor: start undefined, call the page,\ncollect items, and let nextCursor decide whether to continue. The\ndiscipline is trusting the cursor as the ONLY signal of \"more\" —\nnever a page count, never \"stop when items.length < pageSize\" (a full\nfinal page whose nextCursor is null would fool that, and a short\nnon-final page would end you early). null means done; anything else\nmeans keep going.\nThis is the read side of exercise 03 in module 27 — the server offers\nkeyset/cursor pagination, and the client's job is to follow it to\nexhaustion without assuming its internals (the cursor might be an id,\nan offset, or an encoded token; you neither know nor care).\nFor huge result sets, prefer an async generator that YIELDS each page\nso the caller processes as it goes instead of buffering everything —\nsame loop, `yield items` instead of `push`."
+  },
+  "jstrain/28-api-consumer/03-error-envelope": {
+   "instructions": "**Concepts:** error envelopes · Result type · status handling  \n**Level:** ★★☆ core\n\nRaw fetch responses are a trap: `await res.json()` on a 500 gives you\nan error body typed as your success shape, and network throws are a\ndifferent failure path than HTTP errors. Normalize BOTH into one\nenvelope your callers can branch on without try/catch everywhere.\n\nBuild request(doFetch) where doFetch() resolves to a fake response\n{ status, json() } or REJECTS on a network error. Return:\n  · 2xx            → { ok: true,  data: <parsed body> }\n  · other status   → { ok: false, error: { kind: 'http', status } }\n  · fetch rejected → { ok: false, error: { kind: 'network', message } }\nrequest NEVER throws — every outcome is a value.\n\n    200 → { ok: true, data: {...} }\n    404 → { ok: false, error: { kind: 'http', status: 404 } }\n    throw → { ok: false, error: { kind: 'network', message: '...' } }\n\nhint: wrap the whole thing in try/catch for the network case; inside,\nbranch on res.status >= 200 && res.status < 300. Only parse the body\non success.\n",
+   "starter": "// ─────────────────────────────────────────────────────────────────────────\n//  03 · turn responses into a Result                            ★★☆ core\n//  concepts: error envelopes · Result type · status handling\n//  run: node 03-error-envelope.js\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Raw fetch responses are a trap: `await res.json()` on a 500 gives you\n//  an error body typed as your success shape, and network throws are a\n//  different failure path than HTTP errors. Normalize BOTH into one\n//  envelope your callers can branch on without try/catch everywhere.\n//\n//  Build request(doFetch) where doFetch() resolves to a fake response\n//  { status, json() } or REJECTS on a network error. Return:\n//    · 2xx            → { ok: true,  data: <parsed body> }\n//    · other status   → { ok: false, error: { kind: 'http', status } }\n//    · fetch rejected → { ok: false, error: { kind: 'network', message } }\n//  request NEVER throws — every outcome is a value.\n//\n//      200 → { ok: true, data: {...} }\n//      404 → { ok: false, error: { kind: 'http', status: 404 } }\n//      throw → { ok: false, error: { kind: 'network', message: '...' } }\n//\n//  hint: wrap the whole thing in try/catch for the network case; inside,\n//  branch on res.status >= 200 && res.status < 300. Only parse the body\n//  on success.\n\nimport { test, eq } from '../../_lib/check.js';\n\nexport async function request(doFetch) {\n  throw new Error('TODO');\n}\n\n// ── fake responses ───────────────────────────────────────────────────────\nconst respond = (status, body) => async () => ({\n  status,\n  json: async () => body,\n});\nconst networkError = (msg) => async () => {\n  throw new Error(msg);\n};\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\ntest('a 200 yields ok:true with the parsed body', async () => {\n  eq(await request(respond(200, { id: 1 })), { ok: true, data: { id: 1 } });\n});\n\ntest('a 201 counts as success too', async () => {\n  const out = await request(respond(201, { created: true }));\n  eq(out.ok, true);\n  eq(out.data, { created: true });\n});\n\ntest('a 404 is a structured http error, not a throw', async () => {\n  eq(await request(respond(404, { message: 'nope' })), {\n    ok: false,\n    error: { kind: 'http', status: 404 },\n  });\n});\n\ntest('a 500 does not get parsed as success data', async () => {\n  const out = await request(respond(500, { oops: true }));\n  eq(out.ok, false);\n  eq(out.error.kind, 'http');\n  eq('data' in out, false);\n});\n\ntest('a network rejection becomes a network error envelope', async () => {\n  const out = await request(networkError('ECONNREFUSED'));\n  eq(out.ok, false);\n  eq(out.error.kind, 'network');\n  eq(out.error.message, 'ECONNREFUSED');\n});\n",
+   "solution": "// ─────────────────────────────────────────────────────────────────────────\n//  03 · turn responses into a Result — SOLUTION                 ★★☆ core\n//  concepts: error envelopes · Result type · status handling\n//  run: node 03-error-envelope.js\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Walkthrough:\n//  Two failure modes collapse into one value. The try/catch catches the\n//  NETWORK failure (fetch rejects — DNS, connection refused, timeout);\n//  inside, the status check separates HTTP success from HTTP error. Only\n//  a 2xx gets its body parsed — parsing a 500's body as your success\n//  type is the bug this prevents, since an error payload has a different\n//  shape and quietly poisons everything downstream.\n//  Returning a Result envelope ({ ok, data } | { ok, error }) instead of\n//  throwing means callers branch on a value rather than wrapping every\n//  call in try/catch, and the two error KINDS ('http' vs 'network') let\n//  them react differently — retry a network blip (exercise 01), surface\n//  a 404, log a 500.\n//  The status ranges are the contract: 2xx success, 4xx your fault\n//  (don't retry), 5xx server's fault (maybe retry). Classic wrong turn:\n//  `if (!res.ok) throw` then `await res.json()` unconditionally — you\n//  lose the status and parse error bodies as data.\n\nimport { test, eq } from '../../_lib/check.js';\n\nexport async function request(doFetch) {\n  try {\n    const res = await doFetch();\n    if (res.status >= 200 && res.status < 300) {\n      return { ok: true, data: await res.json() };\n    }\n    return { ok: false, error: { kind: 'http', status: res.status } };\n  } catch (err) {\n    return { ok: false, error: { kind: 'network', message: err.message } };\n  }\n}\n\nconst respond = (status, body) => async () => ({\n  status,\n  json: async () => body,\n});\nconst networkError = (msg) => async () => {\n  throw new Error(msg);\n};\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\ntest('a 200 yields ok:true with the parsed body', async () => {\n  eq(await request(respond(200, { id: 1 })), { ok: true, data: { id: 1 } });\n});\n\ntest('a 201 counts as success too', async () => {\n  const out = await request(respond(201, { created: true }));\n  eq(out.ok, true);\n  eq(out.data, { created: true });\n});\n\ntest('a 404 is a structured http error, not a throw', async () => {\n  eq(await request(respond(404, { message: 'nope' })), {\n    ok: false,\n    error: { kind: 'http', status: 404 },\n  });\n});\n\ntest('a 500 does not get parsed as success data', async () => {\n  const out = await request(respond(500, { oops: true }));\n  eq(out.ok, false);\n  eq(out.error.kind, 'http');\n  eq('data' in out, false);\n});\n\ntest('a network rejection becomes a network error envelope', async () => {\n  const out = await request(networkError('ECONNREFUSED'));\n  eq(out.ok, false);\n  eq(out.error.kind, 'network');\n  eq(out.error.message, 'ECONNREFUSED');\n});\n",
+   "explanation": "Two failure modes collapse into one value. The try/catch catches the\nNETWORK failure (fetch rejects — DNS, connection refused, timeout);\ninside, the status check separates HTTP success from HTTP error. Only\na 2xx gets its body parsed — parsing a 500's body as your success\ntype is the bug this prevents, since an error payload has a different\nshape and quietly poisons everything downstream.\nReturning a Result envelope ({ ok, data } | { ok, error }) instead of\nthrowing means callers branch on a value rather than wrapping every\ncall in try/catch, and the two error KINDS ('http' vs 'network') let\nthem react differently — retry a network blip (exercise 01), surface\na 404, log a 500.\nThe status ranges are the contract: 2xx success, 4xx your fault\n(don't retry), 5xx server's fault (maybe retry). Classic wrong turn:\n`if (!res.ok) throw` then `await res.json()` unconditionally — you\nlose the status and parse error bodies as data."
+  },
+  "jstrain/28-api-consumer/04-idempotency-key": {
+   "instructions": "**Concepts:** idempotency · dedupe · safe retries  \n**Level:** ★★★ stretch\n\nRetrying a POST is dangerous: if the first request succeeded but its\nresponse was lost, the retry charges the customer twice. The fix is an\nidempotency key — the client sends the SAME key for a logical\noperation, and the server does the work at most once per key,\nreturning the stored result to any repeat.\n\nBuild makeChargeService(perform) returning { charge(key, amountCents) }:\n  · first time a key is seen → call perform(amountCents), STORE and\n    return its result\n  · same key again → return the STORED result, do NOT call perform\n  · different keys are independent operations\n\n    charge('k1', 500) → performs, returns receipt A\n    charge('k1', 500) → returns receipt A again, perform NOT called\n    charge('k2', 500) → performs again (new key)\n\nhint: a Map from key → result. Check it before doing the work; if the\nkey is present, short-circuit. The amount is not the key — the client\nsupplies the key precisely so a retry is recognizable.\n",
+   "starter": "// ─────────────────────────────────────────────────────────────────────────\n//  04 · idempotency keys — charge once                       ★★★ stretch\n//  concepts: idempotency · dedupe · safe retries\n//  run: node 04-idempotency-key.js\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Retrying a POST is dangerous: if the first request succeeded but its\n//  response was lost, the retry charges the customer twice. The fix is an\n//  idempotency key — the client sends the SAME key for a logical\n//  operation, and the server does the work at most once per key,\n//  returning the stored result to any repeat.\n//\n//  Build makeChargeService(perform) returning { charge(key, amountCents) }:\n//    · first time a key is seen → call perform(amountCents), STORE and\n//      return its result\n//    · same key again → return the STORED result, do NOT call perform\n//    · different keys are independent operations\n//\n//      charge('k1', 500) → performs, returns receipt A\n//      charge('k1', 500) → returns receipt A again, perform NOT called\n//      charge('k2', 500) → performs again (new key)\n//\n//  hint: a Map from key → result. Check it before doing the work; if the\n//  key is present, short-circuit. The amount is not the key — the client\n//  supplies the key precisely so a retry is recognizable.\n\nimport { test, eq } from '../../_lib/check.js';\n\nexport function makeChargeService(perform) {\n  throw new Error('TODO');\n}\n\n// ── a perform() that mints a unique receipt and counts its calls ─────────\nfunction counter() {\n  let n = 0;\n  const perform = (amountCents) => {\n    n += 1;\n    return { receiptId: `r${n}`, amountCents };\n  };\n  perform.callCount = () => n;\n  return perform;\n}\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\ntest('the first charge performs the work', () => {\n  const perform = counter();\n  const svc = makeChargeService(perform);\n  eq(svc.charge('k1', 500), { receiptId: 'r1', amountCents: 500 });\n  eq(perform.callCount(), 1);\n});\n\ntest('the same key returns the stored result without re-charging', () => {\n  const perform = counter();\n  const svc = makeChargeService(perform);\n  const first = svc.charge('k1', 500);\n  const again = svc.charge('k1', 500);\n  eq(again, first); // same receipt\n  eq(perform.callCount(), 1); // performed once\n});\n\ntest('a different key is a separate operation', () => {\n  const perform = counter();\n  const svc = makeChargeService(perform);\n  svc.charge('k1', 500);\n  const second = svc.charge('k2', 500);\n  eq(second.receiptId, 'r2');\n  eq(perform.callCount(), 2);\n});\n\ntest('three retries of one key perform exactly once', () => {\n  const perform = counter();\n  const svc = makeChargeService(perform);\n  const results = ['k9', 'k9', 'k9'].map((k) => svc.charge(k, 250));\n  eq(perform.callCount(), 1);\n  eq(results[0], results[1]);\n  eq(results[1], results[2]);\n});\n\ntest('keys are isolated per service instance', () => {\n  const svc1 = makeChargeService(counter());\n  const svc2 = makeChargeService(counter());\n  const a = svc1.charge('k1', 100);\n  const b = svc2.charge('k1', 100);\n  eq(a.receiptId, 'r1');\n  eq(b.receiptId, 'r1'); // svc2 has its own store; not shared with svc1\n});\n",
+   "solution": "// ─────────────────────────────────────────────────────────────────────────\n//  04 · idempotency keys — charge once — SOLUTION            ★★★ stretch\n//  concepts: idempotency · dedupe · safe retries\n//  run: node 04-idempotency-key.js\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Walkthrough:\n//  A per-key memo over a side-effecting operation. The Map is checked\n//  BEFORE performing: a seen key returns its stored result and never\n//  touches perform, so a retried request is recognized by its key and\n//  the charge happens exactly once. This is why the CLIENT generates the\n//  key (a UUID per logical action) and resends the SAME one on retry —\n//  the amount can't be the key, since two legitimate $5 charges must\n//  stay distinct.\n//  It pairs directly with exercise 01: retries make a flaky call\n//  reliable, and idempotency makes those retries SAFE for non-idempotent\n//  operations (payments, order creation, emails). Without the key, \"retry\n//  the POST\" is how customers get charged twice.\n//  Each service instance owns its own store (last test), matching a real\n//  server that persists keys in a shared table with a TTL — long enough\n//  to cover client retries, not forever. Classic wrong turns: keying on\n//  request contents instead of a client key (two identical-looking\n//  requests dedupe wrongly), or performing THEN storing without guarding\n//  concurrent duplicates (two in-flight retries both miss the map).\n\nimport { test, eq } from '../../_lib/check.js';\n\nexport function makeChargeService(perform) {\n  const seen = new Map();\n  return {\n    charge(key, amountCents) {\n      if (seen.has(key)) return seen.get(key);\n      const result = perform(amountCents);\n      seen.set(key, result);\n      return result;\n    },\n  };\n}\n\nfunction counter() {\n  let n = 0;\n  const perform = (amountCents) => {\n    n += 1;\n    return { receiptId: `r${n}`, amountCents };\n  };\n  perform.callCount = () => n;\n  return perform;\n}\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\ntest('the first charge performs the work', () => {\n  const perform = counter();\n  const svc = makeChargeService(perform);\n  eq(svc.charge('k1', 500), { receiptId: 'r1', amountCents: 500 });\n  eq(perform.callCount(), 1);\n});\n\ntest('the same key returns the stored result without re-charging', () => {\n  const perform = counter();\n  const svc = makeChargeService(perform);\n  const first = svc.charge('k1', 500);\n  const again = svc.charge('k1', 500);\n  eq(again, first);\n  eq(perform.callCount(), 1);\n});\n\ntest('a different key is a separate operation', () => {\n  const perform = counter();\n  const svc = makeChargeService(perform);\n  svc.charge('k1', 500);\n  const second = svc.charge('k2', 500);\n  eq(second.receiptId, 'r2');\n  eq(perform.callCount(), 2);\n});\n\ntest('three retries of one key perform exactly once', () => {\n  const perform = counter();\n  const svc = makeChargeService(perform);\n  const results = ['k9', 'k9', 'k9'].map((k) => svc.charge(k, 250));\n  eq(perform.callCount(), 1);\n  eq(results[0], results[1]);\n  eq(results[1], results[2]);\n});\n\ntest('keys are isolated per service instance', () => {\n  const svc1 = makeChargeService(counter());\n  const svc2 = makeChargeService(counter());\n  const a = svc1.charge('k1', 100);\n  const b = svc2.charge('k1', 100);\n  eq(a.receiptId, 'r1');\n  eq(b.receiptId, 'r1');\n});\n",
+   "explanation": "A per-key memo over a side-effecting operation. The Map is checked\nBEFORE performing: a seen key returns its stored result and never\ntouches perform, so a retried request is recognized by its key and\nthe charge happens exactly once. This is why the CLIENT generates the\nkey (a UUID per logical action) and resends the SAME one on retry —\nthe amount can't be the key, since two legitimate $5 charges must\nstay distinct.\nIt pairs directly with exercise 01: retries make a flaky call\nreliable, and idempotency makes those retries SAFE for non-idempotent\noperations (payments, order creation, emails). Without the key, \"retry\nthe POST\" is how customers get charged twice.\nEach service instance owns its own store (last test), matching a real\nserver that persists keys in a shared table with a TTL — long enough\nto cover client retries, not forever. Classic wrong turns: keying on\nrequest contents instead of a client key (two identical-looking\nrequests dedupe wrongly), or performing THEN storing without guarding\nconcurrent duplicates (two in-flight retries both miss the map)."
+  },
+  "jstrain/28-api-consumer/05-validate-boundary": {
+   "instructions": "**Concepts:** input validation · parse-don't-validate · Result  \n**Level:** ★★★ stretch\n\nUntyped JSON from the network is the least trustworthy data in your\nsystem. Validate it ONCE, at the edge, into a known shape — after\nthat, the rest of the app can trust it. This is \"parse, don't\nvalidate\": return the clean object, not just a boolean.\n\nBuild parseSignup(raw) that takes any value and returns:\n  · { ok: true, value: { name, email, age } } when raw is valid\n  · { ok: false, errors: [ 'field: reason', ... ] } otherwise, with\n    ALL problems collected (not just the first)\nRules:\n  · name  — non-empty string after trimming; stored trimmed\n  · email — string containing '@'; stored lowercased + trimmed\n  · age   — integer, 13..120 inclusive; missing age is OK → omit it\n    (optional field), but a PRESENT invalid age is an error\n\n    parseSignup({ name: ' Ada ', email: 'A@X.com', age: 30 })\n      → { ok: true, value: { name: 'Ada', email: 'a@x.com', age: 30 } }\n    parseSignup({ name: '', email: 'x' })\n      → { ok: false, errors: ['name: required', 'email: must contain @'] }\n\nhint: collect errors into an array as you check each field; the\nresult is ok only if that array is empty. Coerce/normalize as you go\nso the returned value is already clean.\n",
+   "starter": "// ─────────────────────────────────────────────────────────────────────────\n//  05 · validate at the boundary                             ★★★ stretch\n//  concepts: input validation · parse-don't-validate · Result\n//  run: node 05-validate-boundary.js\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Untyped JSON from the network is the least trustworthy data in your\n//  system. Validate it ONCE, at the edge, into a known shape — after\n//  that, the rest of the app can trust it. This is \"parse, don't\n//  validate\": return the clean object, not just a boolean.\n//\n//  Build parseSignup(raw) that takes any value and returns:\n//    · { ok: true, value: { name, email, age } } when raw is valid\n//    · { ok: false, errors: [ 'field: reason', ... ] } otherwise, with\n//      ALL problems collected (not just the first)\n//  Rules:\n//    · name  — non-empty string after trimming; stored trimmed\n//    · email — string containing '@'; stored lowercased + trimmed\n//    · age   — integer, 13..120 inclusive; missing age is OK → omit it\n//      (optional field), but a PRESENT invalid age is an error\n//\n//      parseSignup({ name: ' Ada ', email: 'A@X.com', age: 30 })\n//        → { ok: true, value: { name: 'Ada', email: 'a@x.com', age: 30 } }\n//      parseSignup({ name: '', email: 'x' })\n//        → { ok: false, errors: ['name: required', 'email: must contain @'] }\n//\n//  hint: collect errors into an array as you check each field; the\n//  result is ok only if that array is empty. Coerce/normalize as you go\n//  so the returned value is already clean.\n\nimport { test, eq } from '../../_lib/check.js';\n\nexport function parseSignup(raw) {\n  throw new Error('TODO');\n}\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\ntest('a clean signup parses and is normalized', () => {\n  eq(parseSignup({ name: ' Ada ', email: 'A@X.com', age: 30 }), {\n    ok: true,\n    value: { name: 'Ada', email: 'a@x.com', age: 30 },\n  });\n});\n\ntest('age is optional and omitted when absent', () => {\n  eq(parseSignup({ name: 'Ada', email: 'a@x.com' }), {\n    ok: true,\n    value: { name: 'Ada', email: 'a@x.com' },\n  });\n});\n\ntest('all errors are collected, not just the first', () => {\n  const out = parseSignup({ name: '  ', email: 'nope' });\n  eq(out.ok, false);\n  eq(out.errors.includes('name: required'), true);\n  eq(out.errors.includes('email: must contain @'), true);\n  eq(out.errors.length, 2);\n});\n\ntest('a present but out-of-range age is rejected', () => {\n  const out = parseSignup({ name: 'Ada', email: 'a@x.com', age: 5 });\n  eq(out.ok, false);\n  eq(out.errors.some((e) => e.startsWith('age')), true);\n});\n\ntest('wrong types are rejected, not coerced into nonsense', () => {\n  const out = parseSignup({ name: 42, email: null, age: '30' });\n  eq(out.ok, false);\n  // name not a string, email not a string, age not an integer\n  eq(out.errors.length, 3);\n});\n\ntest('a non-object input fails cleanly', () => {\n  const out = parseSignup(null);\n  eq(out.ok, false);\n  eq(out.errors.length > 0, true);\n});\n",
+   "solution": "// ─────────────────────────────────────────────────────────────────────────\n//  05 · validate at the boundary — SOLUTION                  ★★★ stretch\n//  concepts: input validation · parse-don't-validate · Result\n//  run: node 05-validate-boundary.js\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Walkthrough:\n//  One pass that collects every problem AND builds the clean value as it\n//  goes. Each field is checked independently and pushes a 'field: reason'\n//  string on failure, so the caller sees all errors at once (a form that\n//  reveals one error per submit is a validator that quit early). On\n//  success the returned value is already normalized — trimmed name,\n//  lowercased email — so downstream code never re-cleans it.\n//  This is \"parse, don't validate\": the function's output is a NARROWER\n//  thing than its input (a known shape), not a yes/no about the input.\n//  After the boundary, the rest of the app holds a value it can trust; a\n//  boolean would force every later reader to re-check.\n//  Optional age is the subtle case: ABSENT is valid and omitted from the\n//  result, but PRESENT-and-wrong is an error. Conflating \"missing\" with\n//  \"invalid\" is the classic slip — guard on `'age' in raw` (or\n//  undefined) before range-checking.\n//  In real code this is where a schema library (zod, valibot) earns its\n//  keep — same idea, one source of truth for the type and the check. The\n//  hand-rolled version here is to show what they do, not to replace them.\n\nimport { test, eq } from '../../_lib/check.js';\n\nexport function parseSignup(raw) {\n  const errors = [];\n  if (typeof raw !== 'object' || raw === null) {\n    return { ok: false, errors: ['body: must be an object'] };\n  }\n\n  const value = {};\n\n  if (typeof raw.name !== 'string' || raw.name.trim() === '') {\n    errors.push('name: required');\n  } else {\n    value.name = raw.name.trim();\n  }\n\n  if (typeof raw.email !== 'string' || !raw.email.includes('@')) {\n    errors.push('email: must contain @');\n  } else {\n    value.email = raw.email.trim().toLowerCase();\n  }\n\n  if (raw.age !== undefined) {\n    if (!Number.isInteger(raw.age) || raw.age < 13 || raw.age > 120) {\n      errors.push('age: must be an integer 13–120');\n    } else {\n      value.age = raw.age;\n    }\n  }\n\n  return errors.length ? { ok: false, errors } : { ok: true, value };\n}\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\ntest('a clean signup parses and is normalized', () => {\n  eq(parseSignup({ name: ' Ada ', email: 'A@X.com', age: 30 }), {\n    ok: true,\n    value: { name: 'Ada', email: 'a@x.com', age: 30 },\n  });\n});\n\ntest('age is optional and omitted when absent', () => {\n  eq(parseSignup({ name: 'Ada', email: 'a@x.com' }), {\n    ok: true,\n    value: { name: 'Ada', email: 'a@x.com' },\n  });\n});\n\ntest('all errors are collected, not just the first', () => {\n  const out = parseSignup({ name: '  ', email: 'nope' });\n  eq(out.ok, false);\n  eq(out.errors.includes('name: required'), true);\n  eq(out.errors.includes('email: must contain @'), true);\n  eq(out.errors.length, 2);\n});\n\ntest('a present but out-of-range age is rejected', () => {\n  const out = parseSignup({ name: 'Ada', email: 'a@x.com', age: 5 });\n  eq(out.ok, false);\n  eq(out.errors.some((e) => e.startsWith('age')), true);\n});\n\ntest('wrong types are rejected, not coerced into nonsense', () => {\n  const out = parseSignup({ name: 42, email: null, age: '30' });\n  eq(out.ok, false);\n  eq(out.errors.length, 3);\n});\n\ntest('a non-object input fails cleanly', () => {\n  const out = parseSignup(null);\n  eq(out.ok, false);\n  eq(out.errors.length > 0, true);\n});\n",
+   "explanation": "One pass that collects every problem AND builds the clean value as it\ngoes. Each field is checked independently and pushes a 'field: reason'\nstring on failure, so the caller sees all errors at once (a form that\nreveals one error per submit is a validator that quit early). On\nsuccess the returned value is already normalized — trimmed name,\nlowercased email — so downstream code never re-cleans it.\nThis is \"parse, don't validate\": the function's output is a NARROWER\nthing than its input (a known shape), not a yes/no about the input.\nAfter the boundary, the rest of the app holds a value it can trust; a\nboolean would force every later reader to re-check.\nOptional age is the subtle case: ABSENT is valid and omitted from the\nresult, but PRESENT-and-wrong is an error. Conflating \"missing\" with\n\"invalid\" is the classic slip — guard on `'age' in raw` (or\nundefined) before range-checking.\nIn real code this is where a schema library (zod, valibot) earns its\nkeep — same idea, one source of truth for the type and the check. The\nhand-rolled version here is to show what they do, not to replace them."
+  }
+ }
+}

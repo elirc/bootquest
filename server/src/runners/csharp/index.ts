@@ -2,7 +2,7 @@
 //   run(exercise, submission) → { pass, output, failures[{name,message,expected?,actual?}], durationMs }
 // Compiler errors come back VERBATIM in `output` with pass=false.
 
-import { composeGraded } from './csbootcamp-split.js';
+import { composeGraded, composeGradedJstrain } from './csbootcamp-split.js';
 import { ScratchManager, type AttemptRaw, type Shape, type XunitEngine } from './scratch.js';
 
 export interface Failure {
@@ -30,6 +30,8 @@ export type CsExercise =
       shape: 'console-check';
       /** csbootcamp exercise file (the canonical tests are taken from it) */
       exerciseSource: string;
+      /** W3c: file protocol — 'csbootcamp' (tests end at `return Report();`, default) or 'jstrain' (tests end at the next divider) */
+      format?: 'csbootcamp' | 'jstrain';
       timeoutMs?: number;
     }
   | {
@@ -47,6 +49,8 @@ export interface Submission {
 export interface CsharpRunnerOptions {
   appDataDir: string;
   checkHarnessPath?: string;
+  /** W3c: several harness files compiled together into Check.dll (jstrain revision: Check.cs + Spy.cs) */
+  checkHarnessPaths?: readonly string[];
   xunitEngine?: XunitEngine;
 }
 
@@ -64,7 +68,7 @@ export function createCsharpRunner(opts: CsharpRunnerOptions) {
       if (exercise.shape === 'console-check') {
         let program: string;
         try {
-          program = composeGraded(submission.code, exercise.exerciseSource);
+          program = exercise.format === 'jstrain' ? composeGradedJstrain(submission.code, exercise.exerciseSource) : composeGraded(submission.code, exercise.exerciseSource);
         } catch (e) {
           const msg = (e as Error).message;
           return { pass: false, output: msg, failures: [{ name: '(format)', message: msg }], durationMs: Date.now() - started };
@@ -123,7 +127,8 @@ export function parseCheckOutput(output: string): { failures: Failure[]; counts?
       counts = { passed: +m[1]!, failed: +m[2]!, todo: +m[3]! };
     } else if ((m = /^ {2}✔ (.+)$/.exec(line))) {
       passedNames.push(m[1]!);
-    } else if ((m = /^ {2}☐ (.+?) todo$/.exec(line))) {
+    } else if ((m = /^ {2}☐ (.+?)(?: ·)? todo$/.exec(line))) {
+      // github csbootcamp prints `☐ name todo`, jstrain2.2's revision `☐ name · todo`
       failures.push({ name: m[1]!, message: 'not implemented yet (todo)' });
     } else if ((m = /^ {2}✘ (.+)$/.exec(line))) {
       const detail: string[] = [];

@@ -183,12 +183,12 @@ export type GradeBody = z.infer<typeof GradeBody>;
  * listed here. Everything else is private by default, notably:
  *   drill-js       tests[].code, tests[].input   (test bodies encode expected values)
  *   quiz           answerKey
- *   predict-output expected
+ *   predict-output expected, runAs, keyTokens
  *   drill-cs       files (tests block + types tail)
  *   http           requests[].expect, body, headers (public: name, method, path)
  *   repo           predicates[].branch / path / n / pattern / heading (public: kind, name)
  *   node-test-file checkPath, checkSha256
- *   self-run       fixtures
+ *   self-run       fixtures, files (protected tests block, fixture bytes, frozen scaffolding)
  *   vitest-project testFile, env
  * Reference solutions are never part of check.spec at all: they live in the
  * content store (seed output under content/) and are served only by

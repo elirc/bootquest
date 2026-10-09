@@ -4,6 +4,7 @@ import { run as runJs } from '../runners/js/index.ts';
 import { normalizeOutput } from '../runners/js/grade-core.mjs';
 import { runHttpCheck } from '../runners/http/index.ts';
 import { RepoPathError, runRepoCheck, type GhExec } from '../runners/repo/index.ts';
+import { runSelfRun, SelfRunSpecError } from '../runners/self-run/index.ts';
 
 /**
  * What the learner sent: `code` for code checks, `answer` for quiz /
@@ -126,8 +127,29 @@ export function defaultRunners(opts: { drillCs?: Runner; nodeTestFile?: Runner; 
     repo: createRepoRunner(opts.gh ? { gh: opts.gh } : {}),
     ...(opts.drillCs ? { 'drill-cs': opts.drillCs } : {}),
     ...(opts.nodeTestFile ? { 'node-test-file': opts.nodeTestFile } : {}),
+    'self-run': selfRunRunner,
   };
 }
+
+/**
+ * self-run (W3c, jstrain2.2) via the self-run runner: learner code (whole file
+ * or head only) + the exercise's protected tests; TS runs the real tsc first.
+ * The verdict comes from the harness's authenticated result channel only;
+ * todo tests come back as failures 'not implemented yet (todo)'.
+ */
+export const selfRunRunner: Runner = async (spec, submission) => {
+  if (spec.type !== 'self-run') throw new UnsupportedCheckError(`self-run runner got ${spec.type}`);
+  if (submission.code === undefined) throw new SubmissionShapeError('self-run checks take `code`');
+  let r;
+  try {
+    r = await runSelfRun(spec, submission.code);
+  } catch (err) {
+    if (err instanceof SelfRunSpecError) throw new UnsupportedCheckError(err.message);
+    throw err;
+  }
+  return { pass: r.pass, output: r.output, failures: r.failures, durationMs: r.durationMs };
+};
+
 
 /**
  * Deterministic graders for quiz and predict-output (no process, no clock).

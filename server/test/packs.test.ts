@@ -14,7 +14,7 @@ import { startServer } from '../src/api/serve.ts';
 import { Db } from '../src/db/database.ts';
 import { migrate } from '../src/db/migrate.ts';
 import { fixedClock } from '../src/engines/clock.ts';
-import { FINGERPRINT_FILES, graderFingerprint, graderKindForTrack, toolchainVersions } from '../src/store/grader-fingerprint.ts';
+import { FINGERPRINT_FILES, graderFingerprint, graderKindForManifest, graderKindForTrack, toolchainVersions } from '../src/store/grader-fingerprint.ts';
 import { ALLOW_UNSTAMPED_ENV, loadPackIntoDb, packContentEntries, PackLoadError, readPack, type ReadPackOptions } from '../src/store/packs.ts';
 import { localNoon, makeTempDb, makeUnit, submit, type TempDb } from './helpers.ts';
 
@@ -425,7 +425,7 @@ describe('import-gate stamp (validation.json): the loader refuses a pack seed:va
     const sPath = join(dir, 'validation.json');
     const stamp = JSON.parse(readFileSync(sPath, 'utf8'));
     writeFileSync(sPath, JSON.stringify({ ...stamp, graderKind: 'csharp' }));
-    expect(() => readPack(dir)).toThrow(/stamp is for the csharp grader, but track js is graded by js/);
+    expect(() => readPack(dir)).toThrow(/stamp is for the csharp grader, but pack synth \(track js\) is graded by js/);
     writeFileSync(sPath, JSON.stringify({ ...stamp, graderKind: 'js' }));
     expect(readPack(dir).stamp?.graderKind).toBe('js');
     // the C# fingerprint covers the C# runner (not the JS grader) and vice versa; only the validator is shared
@@ -435,6 +435,26 @@ describe('import-gate stamp (validation.json): the loader refuses a pack seed:va
     expect(FINGERPRINT_FILES.csharp.some((f) => /grade-core/.test(f))).toBe(false);
     expect(graderKindForTrack('csharp')).toBe('csharp');
     expect(() => graderKindForTrack('java')).toThrow(/no grader kind/);
+  });
+
+  it('W3c: a manifest\'s explicit grader wins over its track (jstrain = track js, grader selfrun); a js stamp is refused for it', () => {
+    stampPack(dir);
+    expect(graderKindForManifest({ track: 'js' })).toBe('js');
+    expect(graderKindForManifest({ track: 'js', grader: 'selfrun' })).toBe('selfrun');
+    expect(graderKindForManifest({ track: 'csharp', grader: 'csharp' })).toBe('csharp');
+    // selfrun binds the self-run runner + harness copies + tsc/tsx versions; never the C# runner
+    const names = FINGERPRINT_FILES.selfrun.map((f) => f.replace(/\\/g, '/'));
+    for (const want of ['self-run/index.ts', 'self-run/compose.ts', 'self-run/bq-check.mjs', 'jstrain/bootcamp/_lib/check.js', 'jstrain/tsbootcamp/_lib/check.ts', 'validate/validate.ts']) {
+      expect(names.some((n) => n.endsWith(want))).toBe(true);
+    }
+    expect(names.some((n) => /runners\/csharp\//.test(n))).toBe(false);
+    expect(toolchainVersions('selfrun')).toMatchObject({ typescript: '5.9.3' });
+    expect(graderFingerprint('selfrun')).not.toBe(graderFingerprint('js'));
+    // re-declare the synthetic pack as selfrun-graded: its js stamp no longer vouches for it
+    const mPath = join(dir, 'manifest.json');
+    const m = JSON.parse(readFileSync(mPath, 'utf8'));
+    writeFileSync(mPath, JSON.stringify({ ...m, grader: 'selfrun' }));
+    expect(() => readPack(dir)).toThrow(/validation stamp is for manifest|graded by selfrun/);
   });
 
   it('a quarantine.json edited after validation (keys differ from the stamp) is refused', () => {

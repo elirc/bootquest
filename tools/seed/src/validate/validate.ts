@@ -14,9 +14,11 @@ import {
 } from '@bootquest/shared';
 import type { CanonicalRunResult, UnitContentEntry } from '@bootquest/shared/api';
 import { normalizeOutput, runSnippet } from '@bootquest/server/grade-core';
-import { graderFingerprint, graderKindForTrack, toolchainVersions, type GraderKind } from '@bootquest/server/grader-fingerprint';
+import { graderFingerprint, graderKindForManifest, toolchainVersions, type GraderKind } from '@bootquest/server/grader-fingerprint';
 import { createDrillCsRunner, type DrillCsRunner } from '@bootquest/server/runner-csharp';
 import { drillJsRunner, gradeDeterministic } from '@bootquest/server/runners';
+import { runSelfRun, starterContract, type SelfRunResult } from '@bootquest/server/runners/self-run';
+import { runScriptSnippet } from '@bootquest/server/runners/self-run/snippet';
 import { appendJournal, readJournal, type JournalEntry, type JournalVerdict } from './journal.ts';
 
 /**
@@ -39,6 +41,18 @@ import { appendJournal, readJournal, type JournalEntry, type JournalVerdict } fr
  *                  untouched starter must FAIL, and must fail as a structured
  *                  test verdict (todo/failed), not a compile error, crash or
  *                  timeout (an all-todo starter fails: todo counts as not-passed)
+ *   self-run       (W3c, jstrain) reference solution through the REAL self-run
+ *                  runner (the same runSelfRun POST /submit uses; TS runs the
+ *                  repo-pinned tsc first) must pass: tsc clean, passed > 0,
+ *                  failed == 0, todo == 0, from the authenticated result
+ *                  channel. The untouched starter must meet its contract
+ *                  (starterContract: all-todo / type-todo, or — inverted
+ *                  *-debug / *-hunts modules — ship red); a timeout is retried once
+ *   predict-output with runAs 'script' (jstrain quiz items) the snippet is
+ *                  re-run as `node snippet.js` (upstream's capture mode); with
+ *                  keyTokens, the upstream answer key's tokens must appear in
+ *                  order in the expected output (a contradicting key is never
+ *                  shipped as gradable)
  *   written        schema-validated only: counted carve-out (no check exists)
  * Counts: importer (manifest) === pack (course files) === validated (journal),
  * and on a full run also === the expected census. Quarantine ceiling: 1% of
@@ -177,7 +191,11 @@ export const realValidator: UnitValidator = async (pu, content) => {
       }
       return r;
     };
-    const ref = await grade(content.solution);
+    let ref = await grade(content.solution);
+    // W3c: same two-strikes rule as self-run — jstrain-cs 08-async-await/02-cancellation asserts a
+    // partial run from 20 ms Task.Delay steps cancelled at 45 ms (failed 1 of 3 isolated runs on this
+    // laptop). A real defect fails twice; a starved timer does not.
+    if (!ref.pass && !ref.failures.some((f) => f.name === '(compile)')) ref = await grade(content.solution);
     if (!ref.pass) reasons.push(`reference solution fails under the C# runner: ${describeFailures(ref)}${ref.failures.some((f) => f.name === '(compile)') ? ` :: ${ref.output.slice(0, 400)}` : ''}`);
     const starter = await grade(content.starter);
     if (starter.pass) reasons.push('vacuous-check: the untouched starter passes its own tests (must fail)');
@@ -186,6 +204,43 @@ export const realValidator: UnitValidator = async (pu, content) => {
       if (broken.length) reasons.push(`starter does not fail as a test verdict (${broken.map((f) => f.name).join(', ')}): ${starter.output.slice(0, 400)}`);
       else if (starter.failures.length === 0) reasons.push('starter fails without any structured failure');
     }
+    return done(reasons.length ? 'fail' : 'pass');
+  }
+
+  if (spec.type === 'self-run') {
+    if (!content.solution) {
+      reasons.push('no reference solution');
+      return done('fail');
+    }
+    if (!content.starter) {
+      reasons.push('no starter');
+      return done('fail');
+    }
+    const grade = async (code: string): Promise<SelfRunResult> => {
+      attempts++;
+      let r = await runSelfRun(spec, code);
+      if (r.timedOut || r.tsc?.timedOut) {
+        attempts++; // timeout flake under load: retry once before calling it a failure
+        r = await runSelfRun(spec, code);
+      }
+      return r;
+    };
+    let ref = await grade(content.solution);
+    if (!ref.pass) {
+      // jstrain's async drills assert timer ORDER with ~2 ms margins (e.g. 07/44 aborts at 12 ms
+      // against 10 ms steps); a loaded sweep can starve a timer. A reference fails the gate only
+      // when it fails twice in a row — a real defect is deterministic, a starved timer is not.
+      ref = await grade(content.solution);
+    }
+    if (!ref.pass) {
+      reasons.push(
+        `reference solution fails under the self-run runner (${ref.verdict}): ${describeFailures({ pass: false, output: '', failures: ref.failures, durationMs: 0 })}` +
+          (ref.counts ? '' : ` :: ${ref.output.slice(-400)}`),
+      );
+    }
+    let broken = starterContract(await grade(content.starter), spec.inverted);
+    if (broken) broken = starterContract(await grade(content.starter), spec.inverted); // same two-strikes rule
+    if (broken) reasons.push(broken.startsWith('vacuous-check') ? broken : `starter contract: ${broken}`);
     return done(reasons.length ? 'fail' : 'pass');
   }
 
@@ -208,7 +263,35 @@ export const realValidator: UnitValidator = async (pu, content) => {
     if (!gradeDeterministic(spec, { answer: spec.expected })?.pass) reasons.push('the expected output does not pass the predict grader');
     if (gradeDeterministic(spec, { answer: `${spec.expected}\n<<perturbed>>` })?.pass) reasons.push('a perturbed prediction passes');
     if (!normalizeOutput(spec.expected)) reasons.push('expected output is empty after normalization');
-    if (spec.language === 'cs') {
+    if (spec.keyTokens) {
+      const out = normalizeOutput(spec.expected);
+      let at = 0;
+      for (const tk of spec.keyTokens) {
+        const i = out.indexOf(tk, at);
+        if (i < 0) {
+          reasons.push(`ambiguous-key: upstream answer token ${JSON.stringify(tk.slice(0, 80))} is not in the captured output (in order)`);
+          break;
+        }
+        at = i + tk.length;
+      }
+    }
+    if (spec.runAs === 'script') {
+      if (spec.language !== 'js') reasons.push(`runAs script needs language js, got ${spec.language}`);
+      else if (!content.snippet) reasons.push('no snippet');
+      else {
+        attempts++;
+        let r = await runScriptSnippet(content.snippet);
+        if (r.timedOut) {
+          attempts++;
+          r = await runScriptSnippet(content.snippet);
+        }
+        if (r.timedOut) reasons.push('snippet timed out (twice)');
+        else if (r.exitCode !== 0) reasons.push(`snippet exited ${String(r.exitCode)}: ${r.stderr.slice(0, 300)}`);
+        else if (normalizeOutput(r.stdout) !== normalizeOutput(spec.expected)) {
+          reasons.push(`re-running the snippet does not reproduce the expected output (got ${JSON.stringify(normalizeOutput(r.stdout).slice(0, 200))})`);
+        }
+      }
+    } else if (spec.language === 'cs') {
       reasons.push('no snippet runner for cs');
     } else if (!content.snippet) {
       reasons.push('no snippet');
@@ -346,7 +429,7 @@ export async function runValidate(opts: ValidateOptions): Promise<ValidateReport
   let kind: GraderKind;
   let fingerprint: string;
   try {
-    kind = graderKindForTrack(manifest.track);
+    kind = graderKindForManifest(manifest);
     fingerprint = graderFingerprint(kind);
   } catch (err) {
     problems.push(`cannot compute the grader fingerprint: ${err instanceof Error ? err.message : String(err)}`);

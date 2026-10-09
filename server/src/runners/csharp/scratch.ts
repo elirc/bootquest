@@ -236,6 +236,8 @@ export interface ScratchOptions {
   appDataDir: string;
   /** Source of the csbootcamp `Check` harness compiled once for console-check. */
   checkHarnessPath?: string;
+  /** W3c: several harness sources compiled together into Check.dll (wins over checkHarnessPath). */
+  checkHarnessPaths?: readonly string[];
   xunitEngine?: XunitEngine;
 }
 
@@ -331,12 +333,17 @@ export class ScratchManager {
   }
 
   private async prepareConsole(dir: string): Promise<string> {
-    const check = readFileSync(this.opts.checkHarnessPath ?? CHECK_DEFAULT, 'utf8');
-    writeFileSync(join(dir, 'src', 'Check.cs'), check);
+    const sources = this.opts.checkHarnessPaths?.length ? this.opts.checkHarnessPaths : [this.opts.checkHarnessPath ?? CHECK_DEFAULT];
+    const harnessFiles: string[] = [];
+    sources.forEach((src, i) => {
+      const name = i === 0 ? 'Check.cs' : `CheckPart${i}.cs`;
+      writeFileSync(join(dir, 'src', name), readFileSync(src, 'utf8'));
+      harnessFiles.push(join(dir, 'src', name));
+    });
     const checkDll = join(dir, 'bin', 'Check.dll');
     this.writeCommonRsp(dir, []);
     // Check.dll once (the `#:project ../../_lib/Check/Check.csproj` of every exercise).
-    const c = await this.csc(dir, ['-target:library', `-out:${checkDll}`, join(dir, 'src', '_globals.cs'), join(dir, 'src', 'Check.cs')]);
+    const c = await this.csc(dir, ['-target:library', `-out:${checkDll}`, join(dir, 'src', '_globals.cs'), ...harnessFiles]);
     if (!c.ok) throw new Error(`console-check: Check.dll failed to compile\n${c.output}`);
     this.writeCommonRsp(dir, [checkDll]);
     writeFileSync(

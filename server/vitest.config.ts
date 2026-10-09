@@ -14,6 +14,8 @@ export default defineConfig({
       '**/node_modules/**',
       'src/runners/**/fixtures/**',
       'src/runners/csharp/runner.test.ts',
+      // own pass (vitest.selfrun.config.ts): spawns node/tsc children, run without file parallelism
+      'src/runners/self-run/**',
     ],
   },
 });
