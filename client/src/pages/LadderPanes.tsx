@@ -18,6 +18,7 @@ import {
 } from '../api/types';
 import { Icon } from '../components/Icon';
 import { Chip } from '../components/ui';
+import { InlineProse } from '../lib/prose';
 
 const fmtPct = (x: number) => `${Math.round(x * 1000) / 10}%`;
 const fmtWhen = (ms: number) =>
@@ -40,11 +41,16 @@ function ErrorLine({ error }: { error: string | null }) {
   );
 }
 
-/** Loads the key on mount if an answer already exists (403 NOT_ANSWERED = still answering). */
-function useExistingKey<T>(load: () => Promise<T>): { key: T | null; setKey: (k: T) => void; checked: boolean } {
+/**
+ * Loads the key on mount if an answer already exists. W9 (ui-audit #10): the unit detail says
+ * whether it does (`answered`), so an unanswered unit makes NO key request (no expected 403 in
+ * the console); an older server without the flag is probed as before (403 = still answering).
+ */
+function useExistingKey<T>(load: () => Promise<T>, answered: boolean | undefined): { key: T | null; setKey: (k: T) => void; checked: boolean } {
   const [key, setKey] = useState<T | null>(null);
-  const [checked, setChecked] = useState(false);
+  const [checked, setChecked] = useState(answered === false);
   useEffect(() => {
+    if (answered === false) return;
     let live = true;
     load()
       .then((k) => live && setKey(k))
@@ -64,7 +70,7 @@ export function ExplainBackPane({ detail }: { detail: UnitDetail }) {
   const api = useApi();
   const id = detail.unit.id;
   const pub = detail.explainBack ?? null;
-  const { key, setKey, checked } = useExistingKey<ExplainBackKeyResponse>(() => api.getExplainBackKey(id));
+  const { key, setKey, checked } = useExistingKey<ExplainBackKeyResponse>(() => api.getExplainBackKey(id), pub?.answered);
   const [answers, setAnswers] = useState<string[]>(() => (pub ? pub.questions.map(() => '') : []));
   const [assisted, setAssisted] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -117,7 +123,9 @@ export function ExplainBackPane({ detail }: { detail: UnitDetail }) {
         {pub.questions.map((q, i) => (
           <li key={i} className="eb-question">
             <label>
-              <span className="eb-prompt">{q.prompt}</span>
+              <span className="eb-prompt">
+                <InlineProse text={q.prompt} />
+              </span>
               <textarea
                 className="editor-text eb-answer"
                 rows={4}
@@ -138,13 +146,13 @@ export function ExplainBackPane({ detail }: { detail: UnitDetail }) {
         </button>
       </div>
       {confirming && (
-        <div className="dialog" role="alertdialog" aria-modal="true" aria-labelledby="eb-confirm-title" aria-describedby="eb-confirm-desc">
+        <div className="confirm" role="alertdialog" onKeyDown={(e) => e.key === 'Escape' && !busy && setConfirming(false)} aria-labelledby="eb-confirm-title" aria-describedby="eb-confirm-desc">
           <h3 id="eb-confirm-title">Submit your answers?</h3>
           <p id="eb-confirm-desc">
             Answers are stored <strong>immutably</strong> and cannot be edited afterwards. The key points appear only after this.
           </p>
           <div className="toolbar">
-            <button type="button" className="btn" onClick={() => setConfirming(false)} disabled={busy}>
+            <button type="button" className="btn" autoFocus onClick={() => setConfirming(false)} disabled={busy}>
               Cancel
             </button>
             <button type="button" className="btn btn-primary" onClick={() => void submit()} disabled={busy}>
@@ -192,7 +200,9 @@ function ExplainBackKeyView({ unitId, keyResp }: { unitId: number; keyResp: Expl
       <ol className="eb-questions">
         {keyResp.questions.map((q, qi) => (
           <li key={qi} className="eb-question">
-            <span className="eb-prompt">{q.prompt}</span>
+            <span className="eb-prompt">
+              <InlineProse text={q.prompt} />
+            </span>
             <div className="eb-split">
               <div className="eb-mine">
                 <span className="muted small">Your answer</span>
@@ -203,7 +213,9 @@ function ExplainBackKeyView({ unitId, keyResp }: { unitId: number; keyResp: Expl
               <ul className="checklist" aria-label={`Key points for question ${qi + 1}`}>
                 {q.keyPoints.map((kp) => (
                   <li key={kp.id} className={`checklist-item${marks[kp.id] ? ` is-${marks[kp.id]}` : ''}`}>
-                    <span className="checklist-text">{kp.text}</span>
+                    <span className="checklist-text">
+                      <InlineProse text={kp.text} />
+                    </span>
                     {kp.quote && <q className="checklist-quote">{kp.quote}</q>}
                     {kp.cite && (
                       <code className="checklist-cite">
@@ -294,9 +306,9 @@ function ExplainBackResult({ r }: { r: ExplainBackScoreResponse }) {
 // ---------------------------------------------------------------- patch-review kata
 
 /** Plain unified-diff viewer: one span per line, colored by its first character. */
-export function DiffView({ diff }: { diff: string }) {
+export function DiffView({ diff, wrap = false }: { diff: string; wrap?: boolean }) {
   return (
-    <pre className="code-block diff-view" data-testid="diff">
+    <pre className={`code-block diff-view${wrap ? ' diff-wrap' : ''}`} data-testid="diff">
       {diff.split('\n').map((line, i) => {
         const cls =
           line.startsWith('+++') || line.startsWith('---') || line.startsWith('diff ')
@@ -325,7 +337,8 @@ export function KataPane({ detail }: { detail: UnitDetail }) {
   const api = useApi();
   const id = detail.unit.id;
   const kata = detail.kata ?? null;
-  const { key, setKey } = useExistingKey<KataKeyResponse>(() => api.getKataKey(id));
+  const { key, setKey } = useExistingKey<KataKeyResponse>(() => api.getKataKey(id), kata?.answered);
+  const [wrap, setWrap] = useState(false);
   const [rows, setRows] = useState<KataFinding[]>([{ ...EMPTY_FINDING }]);
   const [assisted, setAssisted] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -365,13 +378,19 @@ export function KataPane({ detail }: { detail: UnitDetail }) {
 
   return (
     <section className="panel player-work" aria-labelledby="kata-title">
-      <h2 className="panel-title" id="kata-title">
-        {kata.title}
-      </h2>
+      {/* W9 (ui-audit #11): the kata title is already the page title — no uppercased duplicate */}
+      <header className="panel-head">
+        <h2 className="panel-title" id="kata-title">
+          Review the patch
+        </h2>
+        <button type="button" className="btn btn-sm" aria-pressed={wrap} onClick={() => setWrap((w) => !w)}>
+          {wrap ? 'No wrap' : 'Wrap lines'}
+        </button>
+      </header>
       <p className="muted small">
         Review this patch like a PR. Find every seeded defect you can: how many there are is shown with the key, after your findings are recorded.
       </p>
-      <DiffView diff={kata.diff} />
+      <DiffView diff={kata.diff} wrap={wrap} />
       {kata.contextFiles.map((f) => (
         <details key={f.path} className="streams">
           <summary>
@@ -478,13 +497,17 @@ function KataKeyView({ unitId, keyResp }: { unitId: number; keyResp: KataKeyResp
       <ul className="checklist">
         {keyResp.defects.map((d) => (
           <li key={d.id} className={`checklist-item${marks[d.id] ? ` is-${marks[d.id]}` : ''}`}>
-            <span className="checklist-text">{d.scenario}</span>
+            <span className="checklist-text">
+              <InlineProse text={d.scenario} />
+            </span>
             <code className="checklist-cite">
               {d.evidence.path}:{d.evidence.lineStart}
               {d.evidence.lineEnd !== d.evidence.lineStart ? `-${d.evidence.lineEnd}` : ''}
             </code>
             <Chip>{d.evidence.in}</Chip>
-            <span className="checklist-quote">{d.consequence}</span>
+            <span className="checklist-quote">
+              <InlineProse text={d.consequence} />
+            </span>
             <span className="seg" role="radiogroup" aria-label={`${d.id} catch`}>
               {(['caught', 'missed'] as const).map((m) => (
                 <label key={m} className={`seg-opt${marks[d.id] === m ? ' on' : ''}`}>

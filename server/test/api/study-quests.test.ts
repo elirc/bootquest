@@ -291,4 +291,47 @@ describe('study-quest API flow (real packs)', { timeout: 60_000 }, () => {
     const locked = await submit(ctx, unitOf(ctx, 'ship-it'), { answers: keysOf('ship-it') });
     expect([locked.status, locked.body.error.code]).toEqual([403, 'ACT_LOCKED']);
   });
+
+  it('W9 (ui-audit #1) no leak: a locked-act quest unit serves an act gate and NO reading list, quiz question, choice or check', async () => {
+    const id = unitOf(ctx, 'ship-it');
+    const res = await request(ctx.app).get(`/api/units/${id}`);
+    expect(res.status).toBe(200);
+    const d = UnitDetailResponse.parse(res.body);
+    expect(d.actGate).toEqual({ locked: true });
+    expect(d.unit.state).toBe('locked');
+    expect([d.check, d.instructions, d.starter, d.snippet, d.rubric]).toEqual([null, null, null, null, null]);
+    expect(d.refs).toEqual([]);
+    expect(d.studyQuest).toBeUndefined();
+    expect(d.explainBack).toBeUndefined();
+    expect(d.kata).toBeUndefined();
+    // belt and braces: not one question prompt, choice or reading-step title appears anywhere in the raw body
+    const raw = JSON.stringify(res.body);
+    const quizzes = packQuizzes('ship-it');
+    expect(quizzes.length).toBeGreaterThan(0);
+    for (const q of quizzes) {
+      expect(raw).not.toContain(JSON.stringify(q.prompt).slice(1, -1));
+      for (const c of q.choices) if (c.text.length > 12) expect(raw).not.toContain(JSON.stringify(c.text).slice(1, -1));
+    }
+    expect(raw).not.toContain('readingSteps');
+    // by-key reads take the same gate
+    const byKey = await request(ctx.app).get(`/api/units/by-key/${encodeURIComponent('campaign/js/ship-it')}`);
+    expect(UnitDetailResponse.parse(byKey.body).actGate).toEqual({ locked: true });
+    // an unlocked act's unit carries no gate and its full public half
+    const open = UnitDetailResponse.parse((await request(ctx.app).get(`/api/units/${unitOf(ctx, 'grok-js')}`)).body);
+    expect(open.actGate).toBeUndefined();
+    expect(open.studyQuest?.questions.length).toBe(keysOf('grok-js').length);
+  });
+
+  it('W9 (ui-audit #1) 403: every write on a locked-act unit refuses with ACT_LOCKED and records nothing', async () => {
+    const id = unitOf(ctx, 'ship-it');
+    const sub = await submit(ctx, id, { answers: keysOf('ship-it') });
+    expect([sub.status, sub.body.error.code]).toEqual([403, 'ACT_LOCKED']);
+    const run = await request(ctx.app).post(`/api/units/${id}/run`).send({ answer: 0 });
+    expect(run.status).toBe(403);
+    expect(run.body.error.code).toBe('ACT_LOCKED');
+    const reveal = await request(ctx.app).post(`/api/units/${id}/reveal`).send({});
+    expect(reveal.status).toBe(403);
+    expect(reveal.body.error.code).toBe('ACT_LOCKED');
+    expect(ctx.tmp.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM attempt WHERE unit_id = ?', id)!.n).toBe(0);
+  });
 });

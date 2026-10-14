@@ -5,6 +5,7 @@ import { errorText } from '../api/errors';
 import type { StudyQuestPublic, SubmitResponse, UnitDetail } from '../api/types';
 import { Icon } from '../components/Icon';
 import { Chip } from '../components/ui';
+import { InlineProse } from '../lib/prose';
 
 /**
  * W8 study quest (spec §4): an ordered reading list into the repo, then the pre-seeded quiz
@@ -109,7 +110,7 @@ function StudyQuest({ detail, sq }: { detail: UnitDetail; sq: StudyQuestPublic }
             return (
               <fieldset key={q.itemKey} className="choices" disabled={busy || submit !== null} data-testid={`question-${qi + 1}`}>
                 <legend>
-                  <strong>Q{qi + 1}.</strong> {q.prompt}
+                  <strong>Q{qi + 1}.</strong> <InlineProse text={q.prompt} />
                   {outcome && (
                     <span className={`study-mark ${outcome.correct ? 'study-right' : 'study-wrong'}`} data-testid={`mark-${qi + 1}`}>
                       {outcome.correct ? ' correct' : ' incorrect'}
@@ -125,7 +126,9 @@ function StudyQuest({ detail, sq }: { detail: UnitDetail; sq: StudyQuestPublic }
                       onChange={() => setAnswers((prev) => prev.map((a, i) => (i === qi ? ci : a)))}
                       aria-label={`Q${qi + 1} choice ${ci + 1}`}
                     />
-                    <code>{c}</code>
+                    <span className="choice-text">
+                      <InlineProse text={c} />
+                    </span>
                   </label>
                 ))}
               </fieldset>

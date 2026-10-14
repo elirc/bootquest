@@ -19,6 +19,7 @@ import { Icon } from '../components/Icon';
 import { Chip, Kbd, LoadState, PageHeader } from '../components/ui';
 import { hasModifier, isEditableTarget, isMod, useKeydown } from '../lib/keys';
 import { useAsync } from '../lib/useAsync';
+import { InlineProse, Prose, ProseBlocks, splitPrompt } from '../lib/prose';
 import { TRACK_LABEL, languageOf, unitProse } from '../lib/view';
 import { ExplainBackPane, KataPane } from './LadderPanes';
 import { StudyQuestPane } from './StudyQuestPane';
@@ -34,6 +35,23 @@ export function PlayerPage() {
     () => (ID_RE.test(unitId) ? api.getUnit(Number(unitId)) : Promise.reject(new ApiError(404, 'NOT_FOUND', `unit ${unitId} not found`))),
     [api, unitId],
   );
+  if (q.status === 'error' && isApiError(q.error, 'NOT_FOUND')) {
+    // W9 (ui-audit #13): a permanent 404 — a short message and a way out, no Retry, no empty 560px box
+    return (
+      <>
+        <PageHeader eyebrow="Exercise" title="Unit not found" />
+        <div className="panel notfound" role="alert">
+          <p className="error-text">{errorText(q.error)}</p>
+          <p>
+            There is no unit <code>{unitId}</code>. It may have been retired, or the link is mistyped.
+          </p>
+          <p>
+            <Link to="/campaign/js">Open the campaign map</Link> · <Link to="/">Back to the dashboard</Link>
+          </p>
+        </div>
+      </>
+    );
+  }
   if (q.status !== 'ready') {
     return (
       <>
@@ -56,6 +74,9 @@ function Player({ detail }: { detail: UnitDetail }) {
   // W6 answer-first units: no reveal, and (explain-back) no code shown while answering
   // W8 study quests: no reveal either (missed keys arrive as review cards)
   const answerFirst = spec?.type === 'explain-back' || spec?.type === 'patch-kata' || spec?.type === 'study-quiz';
+  // W9 (ui-audit #1): a locked campaign act serves no playable content at all
+  if (detail.actGate?.locked) return <ActLocked detail={detail} />;
+  const promptOnRight = prose.prompt !== null && (spec?.type === 'quiz' || spec?.type === 'predict-output');
 
   return (
     <>
@@ -86,24 +107,29 @@ function Player({ detail }: { detail: UnitDetail }) {
           </h2>
           {detail.retestGate && !detail.retestGate.open ? (
             <RetestClosed gate={detail.retestGate} />
-          ) : prose.instructions.length > 0 ? (
-            prose.instructions.map((p, i) => <p key={i}>{p}</p>)
+          ) : prose.instructions.trim() !== '' ? (
+            <Prose text={prose.instructions} className="ins-prose" />
+          ) : promptOnRight ? (
+            <p className="muted">The question is in the answer pane.</p>
           ) : (
             <p className="muted">No written instructions are served for this unit yet.</p>
           )}
+          {detail.refs && detail.refs.length > 0 && <RefList refs={detail.refs} />}
           {detail.retestGate?.reason === 'practice' && (
             <p className="muted small" data-testid="retest-practice">
               Practice retest: the artifact&apos;s solution was revealed, so attempts here are guided and never count as the retest leg.
             </p>
           )}
-          <div className="ins-foot">
-            <span className="muted">Competencies</span>
-            <span className="chips">
-              {unit.competencies.map((c) => (
-                <Chip key={c}>{c}</Chip>
-              ))}
-            </span>
-          </div>
+          {unit.competencies.length > 0 && (
+            <div className="ins-foot">
+              <span className="muted">Competencies</span>
+              <span className="chips">
+                {unit.competencies.map((c) => (
+                  <Chip key={c}>{c}</Chip>
+                ))}
+              </span>
+            </div>
+          )}
           {check && !isReading && !answerFirst && (
             <RevealPanel
               unitId={unit.id}
@@ -157,6 +183,74 @@ function RetestClosed({ gate }: { gate: NonNullable<UnitDetail['retestGate']> })
   );
 }
 
+/**
+ * W9 (ui-audit #1): the unit belongs to a campaign act that is still locked. The server sent no
+ * check, prose or quest content (actGate); show why and where to go instead of a dead player.
+ */
+function ActLocked({ detail }: { detail: UnitDetail }) {
+  const { unit } = detail;
+  return (
+    <>
+      <PageHeader
+        eyebrow={
+          <nav aria-label="Breadcrumb" className="crumbs">
+            <span>{TRACK_LABEL[unit.trackId]}</span>
+            {unit.code && <span>{unit.code}</span>}
+          </nav>
+        }
+        title={unit.title}
+        actions={
+          <span className="chips">
+            <Chip>{unit.kind}</Chip>
+            <Chip>locked</Chip>
+          </span>
+        }
+      />
+      <section className="panel act-locked" aria-labelledby="act-locked-title" data-testid="act-locked">
+        <h2 className="act-locked-title" id="act-locked-title">
+          <Icon name="lock" /> This quest&apos;s campaign act is locked
+        </h2>
+        <p>
+          Its reading list, questions and checks open together with the act. Clear the previous act&apos;s core quests and reach the act&apos;s level to
+          unlock it; nothing on this unit can be read, run or submitted until then.
+        </p>
+        <p>
+          <Link to={`/campaign/${unit.trackId}`} className="btn btn-primary">
+            <Icon name="map" /> See the unlock rule on the campaign map
+          </Link>
+        </p>
+      </section>
+    </>
+  );
+}
+
+/** GitHub blob link of a content ref, pinned to its sha (+ line range when known). */
+type Ref = NonNullable<UnitDetail['refs']>[number];
+const refUrl = (r: Ref) =>
+  `https://github.com/${r.repo}/blob/${r.sha}/${r.path.split('/').map(encodeURIComponent).join('/')}` +
+  (r.lineStart !== null ? `#L${r.lineStart}${r.lineEnd !== null && r.lineEnd !== r.lineStart ? `-L${r.lineEnd}` : ''}` : '');
+
+/** W9 (ui-audit #8): the material a unit reads from (program milestone, lesson guide). */
+function RefList({ refs }: { refs: Ref[] }) {
+  return (
+    <div className="ref-list" data-testid="ref-list">
+      <span className="muted small">Material</span>
+      <ul>
+        {refs.map((r) => (
+          <li key={`${r.role}-${r.id}`}>
+            <a href={refUrl(r)} target="_blank" rel="noopener noreferrer">
+              {r.title}
+            </a>{' '}
+            <span className="muted small">
+              {r.repo}@{r.sha.slice(0, 7)}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function RevealPanel({
   unitId,
   revealed,
@@ -202,13 +296,13 @@ function RevealPanel({
         <SolutionView solution={solution} />
       )}
       {confirming && (
-        <div className="dialog" role="alertdialog" aria-modal="true" aria-labelledby="reveal-title" aria-describedby="reveal-desc">
+        <div className="confirm" role="alertdialog" onKeyDown={(e) => e.key === 'Escape' && !busy && setConfirming(false)} aria-labelledby="reveal-title" aria-describedby="reveal-desc">
           <h3 id="reveal-title">Reveal the solution?</h3>
           <p id="reveal-desc">
             This exercise will be worth <strong>0 XP forever</strong>. Later submits still record, as guided attempts.
           </p>
           <div className="toolbar">
-            <button type="button" className="btn" onClick={() => setConfirming(false)} disabled={busy}>
+            <button type="button" className="btn" autoFocus onClick={() => setConfirming(false)} disabled={busy}>
               Cancel
             </button>
             <button type="button" className="btn btn-primary" onClick={() => void act('reveal')} disabled={busy}>
@@ -234,7 +328,7 @@ function SolutionView({ solution }: { solution: Solution }) {
       {solution.kind === 'output' && <pre className="code-block">{solution.expected}</pre>}
       {solution.kind === 'answer' && (
         <p>
-          Answer: <code>{solution.choice ?? String(solution.answer)}</code>
+          Answer: <InlineProse text={solution.choice ?? String(solution.answer)} />
         </p>
       )}
     </div>
@@ -440,6 +534,26 @@ function FailureRow({ f }: { f: RunFailure }) {
 
 // ---------------------------------------------------------------- quiz / predict (submit-only: no Run)
 
+/**
+ * W9 (ui-audit #2): the question is BODY text in its original case (never the uppercased
+ * .panel-title), with inline code; a fenced block in it renders as a real code block below.
+ */
+function PromptHead({ id, prompt, fallback }: { id: string; prompt: string | null; fallback: string }) {
+  const { heading, rest } = splitPrompt(prompt ?? '');
+  return (
+    <>
+      <h2 className="prompt-title" id={id}>
+        <InlineProse text={heading || fallback} />
+      </h2>
+      {rest.length > 0 && (
+        <div className="prose prompt-body">
+          <ProseBlocks blocks={rest} />
+        </div>
+      )}
+    </>
+  );
+}
+
 function AnswerVerdict({ submit, error, idle }: { submit: SubmitResponse | null; error: string | null; idle: ReactNode }) {
   if (error) {
     return (
@@ -530,9 +644,7 @@ function QuizPane({
 
   return (
     <section className="panel player-work" aria-labelledby="quiz-q">
-      <h2 className="panel-title" id="quiz-q">
-        {prompt ?? 'Choose the answer'}
-      </h2>
+      <PromptHead id="quiz-q" prompt={prompt} fallback="Choose the answer" />
       {detail.starter && <pre className="code-block">{detail.starter}</pre>}
       {byChoice ? (
         <fieldset className="choices" disabled={passed || busy}>
@@ -546,7 +658,9 @@ function QuizPane({
               <label key={i} className={`choice${choice === i ? ' choice-on' : ''}${tone}`}>
                 <input ref={i === 0 ? firstRadio : undefined} type="radio" name="quiz" checked={choice === i} onChange={() => setChoice(i)} />
                 <Kbd>{i + 1}</Kbd>
-                <code>{c}</code>
+                <span className="choice-text">
+                  <InlineProse text={c} />
+                </span>
               </label>
             );
           })}
@@ -600,9 +714,7 @@ function PredictPane({ detail, prompt }: { detail: UnitDetail; prompt: string | 
 
   return (
     <section className="panel player-work" aria-labelledby="predict-q">
-      <h2 className="panel-title" id="predict-q">
-        {prompt ?? 'Predict the output'}
-      </h2>
+      <PromptHead id="predict-q" prompt={prompt} fallback="Predict the output" />
       {detail.snippet && <pre className="code-block">{detail.snippet}</pre>}
       {!detail.snippet && detail.starter && <pre className="code-block">{detail.starter}</pre>}
       <textarea

@@ -418,6 +418,12 @@ export const ExplainBackPublic = z
     questions: z.array(z.object({ prompt: z.string() }).strict()),
     /** promotion leg (b) threshold, percent (engine PROMOTION_MIN_COVERAGE) */
     minCoveragePct: z.number(),
+    /**
+     * W9 (ui-audit #10): whether the learner's immutable answer row already exists (so
+     * GET .../key will succeed). Lets the client skip the on-mount key probe instead of
+     * eating an expected 403; absent on older servers (the client then probes as before).
+     */
+    answered: z.boolean().optional(),
   })
   .strict();
 export type ExplainBackPublic = z.infer<typeof ExplainBackPublic>;
@@ -429,6 +435,8 @@ export const KataPublic = z
     contextFiles: z.array(z.object({ path: z.string(), content: z.string() }).strict()),
     // W7 (audit #9): no defect count here — "there are exactly N defects" is a search hint; the
     // count arrives with the key, after the findings are recorded
+    /** W9 (ui-audit #10): findings already recorded (key readable) — see ExplainBackPublic.answered */
+    answered: z.boolean().optional(),
   })
   .strict();
 export type KataPublic = z.infer<typeof KataPublic>;
@@ -526,6 +534,14 @@ export const UnitDetailResponse = z
       .object({ open: z.boolean(), reason: z.enum(['due', 'practice', 'not-scheduled', 'not-due']), opensAt: z.number().nullable() })
       .strict()
       .optional(),
+    /**
+     * W9 (ui-audit #1) campaign-quest units only: present (locked: true) when every campaign
+     * act holding this unit is still locked. A locked unit's detail withholds EVERYTHING
+     * playable — check, instructions, starter, snippet, studyQuest / explainBack / kata and
+     * refs — so a direct URL can neither read nor pre-solve locked-act content; run / submit
+     * and the other write routes refuse with 403 ACT_LOCKED either way.
+     */
+    actGate: z.object({ locked: z.literal(true) }).strict().optional(),
   })
   .strict();
 export type UnitDetailResponse = z.infer<typeof UnitDetailResponse>;

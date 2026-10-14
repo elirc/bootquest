@@ -113,6 +113,8 @@ describe('explain-back: immutable answer first, then the key, then the self-scor
 
   it('key is 403 NOT_ANSWERED before the answer row exists; the answer is append-only (403 on re-answer)', async () => {
     const id = ctx.id('fixture:ladder/explain-api');
+    // W9 (ui-audit #10): detail says whether the key is readable, so the client need not probe it
+    expect(UnitDetailResponse.parse((await request(ctx.app).get(`/api/units/${id}`)).body).explainBack?.answered).toBe(false);
     expectError(await request(ctx.app).get(`/api/units/${id}/explain-back/key`), 403, 'NOT_ANSWERED');
     expectError(await request(ctx.app).post(`/api/units/${id}/explain-back/self-score`).send({ perKeyPoint: marks(16) }), 403, 'NOT_ANSWERED');
 
@@ -131,6 +133,7 @@ describe('explain-back: immutable answer first, then the key, then the self-scor
     expect(key.questions.flatMap((q) => q.keyPoints.map((k) => k.id))).toEqual(KEY_POINT_IDS);
     expect(key.questions[0]!.keyPoints[0]!.text).toBe(EB.questions[0]!.keyPoints[0]!.text);
     expect(key.scored).toBeNull();
+    expect(UnitDetailResponse.parse((await request(ctx.app).get(`/api/units/${id}`)).body).explainBack?.answered).toBe(true);
   });
 
   it('strict bodies: exactly 3 non-empty answers, no extra fields; every key point marked exactly once', async () => {
@@ -426,6 +429,9 @@ describe('patch-review kata: findings first, then the seeded-defect key, then th
     expect(key.findings).toEqual([FINDING]);
     expect(key.defects.map((d) => d.consequence)).toEqual(kata.seededDefectKey.map((d) => d.consequence));
     expect(key.defects.map((d) => d.id)).toEqual(['d1', 'd2']);
+    // W9 (ui-audit #10): the detail flips to answered once the findings row exists
+    expect(body.kata?.answered).toBe(false);
+    expect(UnitDetailResponse.parse((await request(ctx.app).get(`/api/units/${id}`)).body).kata?.answered).toBe(true);
   });
 
   it('self-score: catch rate as kata evidence + 15 XP once; G1 aggregates across the bank', async () => {

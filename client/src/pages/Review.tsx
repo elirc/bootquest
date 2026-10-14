@@ -1,3 +1,4 @@
+import { Prose, ProseBlocks, parseProse } from '../lib/prose';
 import { useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useApi } from '../api/context';
@@ -108,9 +109,9 @@ function Session({ cards }: { cards: ReviewQueueItem[] }) {
         <div className="card-face">
           {/* W8: seeded cards (study-quest misses, flashcards) carry their text; others show the key. */}
           {card.card ? (
-            <p className="card-front" data-testid="card-front">
-              {card.card.front}
-            </p>
+            <div className="card-front prose" data-testid="card-front">
+              <ProseBlocks blocks={parseProse(card.card.front)} />
+            </div>
           ) : (
             <p className="card-front">
               <code>{card.cardKey}</code>
@@ -120,7 +121,7 @@ function Session({ cards }: { cards: ReviewQueueItem[] }) {
             {revealed ? (
               card.card ? (
                 <div className="card-back" data-testid="card-back">
-                  <p style={{ whiteSpace: 'pre-wrap' }}>{card.card.back}</p>
+                  <Prose text={card.card.back} />
                   {card.card.source && <p className="muted small">Source: {card.card.source}</p>}
                 </div>
               ) : (

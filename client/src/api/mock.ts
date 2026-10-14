@@ -381,11 +381,11 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
         // PUBLIC halves only: questions; diff + context (never key points or defect keys)
         if (d.check?.spec.type === 'explain-back') {
           const eb = explainBackFixtures[String(id)];
-          out.explainBack = eb ? { questions: eb.questions.map((q) => ({ prompt: q.prompt })), minCoveragePct: 80 } : null;
+          out.explainBack = eb ? { questions: eb.questions.map((q) => ({ prompt: q.prompt })), minCoveragePct: 80, answered: ebAnswers.has(id) } : null;
         }
         if (d.check?.spec.type === 'patch-kata') {
           const k = kataFixtures[String(id)];
-          out.kata = k ? { title: k.title, diff: k.diff, contextFiles: k.contextFiles } : null;
+          out.kata = k ? { title: k.title, diff: k.diff, contextFiles: k.contextFiles, answered: kataAnswers.has(id) } : null;
         }
         // W8: reading list + questions with choices only (the keys stay in the fixture)
         if (d.check?.spec.type === 'study-quiz') out.studyQuest = studyQuestFixtures[String(id)]?.public ?? null;

@@ -4,7 +4,8 @@ import { API_MODE } from '../api/client';
 import { useApi } from '../api/context';
 import { CHORD_WINDOW_MS, GO_CHORDS, hasModifier, isEditableTarget, useKeydown } from '../lib/keys';
 import { useAsync } from '../lib/useAsync';
-import { TRACK_SHORT } from '../lib/view';
+import { TracksProvider, useTracks } from '../lib/tracks';
+import { TRACK_PLACEHOLDER, TRACK_SHORT } from '../lib/view';
 import { Icon, type IconName } from './Icon';
 import { ShortcutHelp } from './ShortcutHelp';
 import { Kbd } from './ui';
@@ -17,6 +18,14 @@ const NAV: { to: string; label: string; icon: IconName; chord: string; end?: boo
 ];
 
 export function AppShell({ children }: { children: ReactNode }) {
+  return (
+    <TracksProvider>
+      <Shell>{children}</Shell>
+    </TracksProvider>
+  );
+}
+
+function Shell({ children }: { children: ReactNode }) {
   const api = useApi();
   const navigate = useNavigate();
   const { pathname } = useLocation();
@@ -24,7 +33,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [pendingG, setPendingG] = useState(false);
   const gAt = useRef(0);
 
-  const tracks = useAsync(() => api.getTracks(), [api]);
+  const tracks = useTracks();
   // Re-read the due count on every navigation so a finished review session is reflected.
   // `count` is the total due regardless of `limit` (no separate count route).
   const due = useAsync(() => api.getReviewQueue(1), [api, pathname]);
@@ -96,7 +105,25 @@ export function AppShell({ children }: { children: ReactNode }) {
 
         <div className="side-section">
           <h2 className="side-title">Tracks</h2>
-          <ul className="track-list">
+          <ul className="track-list" aria-busy={tracks.status === 'loading'}>
+            {/* W9 (ui-audit #4): placeholder rows while loading (no empty TRACKS header, no layout shift) */}
+            {tracks.status === 'loading' &&
+              TRACK_PLACEHOLDER.map((t) => (
+                <li key={t.id} aria-hidden="true">
+                  <span className={`track-link track-skel${t.locked ? ' track-locked' : ''}`}>
+                    <span className={`track-badge${t.locked ? '' : ` track-${t.id}`}`}>{TRACK_SHORT[t.id]}</span>
+                    <span className="track-name">{t.name}</span>
+                    <span className="track-count">…</span>
+                  </span>
+                </li>
+              ))}
+            {tracks.status === 'error' && (
+              <li>
+                <button type="button" className="linkish small" onClick={tracks.reload}>
+                  Tracks failed to load — retry
+                </button>
+              </li>
+            )}
             {(tracks.data?.tracks ?? []).map((t) => (
               <li key={t.id}>
                 {t.locked ? (

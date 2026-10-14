@@ -200,16 +200,21 @@ export function effectiveMinCoverage(spec: CheckSpec): number {
 }
 
 /** Public half for GET /units/:id (null = content pending). */
-export function explainBackPublicFor(seedItems: SeedItemStore, spec: CheckSpec) {
+export function explainBackPublicFor(seedItems: SeedItemStore, spec: CheckSpec, db?: Db) {
   if (spec.type !== 'explain-back') return undefined;
   const item = seedItems.explainBack(spec.questionSetKey);
-  return item ? { questions: explainBackQuestions(item), minCoveragePct: pct(effectiveMinCoverage(spec)) } : null;
+  if (!item) return null;
+  const pub = { questions: explainBackQuestions(item), minCoveragePct: pct(effectiveMinCoverage(spec)) };
+  // W9 (ui-audit #10): same predicate as GET .../explain-back/key (the item's first answer row)
+  return db ? { ...pub, answered: firstAnswer(db, 'explainBack', spec.questionSetKey) !== undefined } : pub;
 }
 
-export function kataPublicFor(seedItems: SeedItemStore, spec: CheckSpec) {
+export function kataPublicFor(seedItems: SeedItemStore, spec: CheckSpec, db?: Db) {
   if (spec.type !== 'patch-kata') return undefined;
   const item = seedItems.kata(spec.kataKey);
-  return item ? kataPublic(item) : null;
+  if (!item) return null;
+  // W9 (ui-audit #10): same predicate as GET .../kata/key
+  return db ? { ...kataPublic(item), answered: firstAnswer(db, 'kata', spec.kataKey) !== undefined } : kataPublic(item);
 }
 
 /** POST /units/:id/explain-back/answers — the immutable answer, BEFORE any key point is readable. */

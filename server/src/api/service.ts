@@ -152,10 +152,34 @@ export function getUnitDetail(deps: ServiceDeps, unitId: number): UnitDetailResp
   const track = getTrack(db, unit.trackId);
   const check = primaryCheck(db, unit.id);
   const summary = summarize(unit, track?.locked ?? true, passedUnitIds(db), revealedUnitIds(db), new Map([[unit.id, unitPrerequisites(db, unit.id)]]));
+  // W9 (ui-audit #1): a campaign quest unit whose every act is still locked serves NOTHING
+  // playable (mirrors the closed-retest withhold below, but total): no check, prose, starter,
+  // study-quest reading list / questions, explain-back / kata halves or refs. Writes refuse
+  // with 403 ACT_LOCKED regardless (assertTrackOpen); this keeps a direct URL from reading or
+  // pre-solving locked-act content.
+  if (questUnitUnlocked(db, unit.id) === false) {
+    return {
+      actGate: { locked: true },
+      unit: {
+        ...summary,
+        state: summary.state === 'done' ? 'done' : 'locked',
+        code: unit.code,
+        competencies: unitCompetencies(db, unit.id),
+        variationOfUnitId: unit.variationOfUnitId,
+      },
+      check: null,
+      instructions: null,
+      starter: null,
+      snippet: null,
+      rubric: null,
+      refs: [],
+    };
+  }
   const entry = deps.content.get(unit.key);
   // W6: PUBLIC halves only (questions; diff + context) — key points / defect keys never leave here
-  const explainBack = check ? explainBackPublicFor(deps.seedItems, check.spec) : undefined;
-  const kata = check ? kataPublicFor(deps.seedItems, check.spec) : undefined;
+  // W9 (ui-audit #10): `answered` lets the client skip the on-mount key probe (no expected 403)
+  const explainBack = check ? explainBackPublicFor(deps.seedItems, check.spec, db) : undefined;
+  const kata = check ? kataPublicFor(deps.seedItems, check.spec, db) : undefined;
   // W8: reading list + questions with choices (never keys); null = the quest pack is not loaded
   const studyQuest = check ? studyQuestPublicFor(deps.seedItems, check.spec) : undefined;
   // W7 (audit #1): a closed changed-example retest withholds its task (no day-0 pre-solving)

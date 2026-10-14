@@ -7,7 +7,8 @@ import { Chip, LoadState, PageHeader, ProgressBar } from '../components/ui';
 import { toRoman } from '../lib/format';
 import { hasModifier, isEditableTarget, useKeydown } from '../lib/keys';
 import { useAsync } from '../lib/useAsync';
-import { TRACK_IDS, isTrackId } from '../lib/view';
+import { useTracks } from '../lib/tracks';
+import { TRACK_PLACEHOLDER, isTrackId } from '../lib/view';
 
 const STATE_LABEL: Record<QuestState, string> = {
   done: 'Done',
@@ -26,7 +27,7 @@ export function CampaignPage() {
 /** Bound to GET /api/tracks/:id/campaign (W5b): acts, derived unlock state, quests in rank order. */
 function CampaignView({ trackId }: { trackId: TrackId }) {
   const api = useApi();
-  const tracks = useAsync(() => api.getTracks(), [api]);
+  const tracks = useTracks();
   const campaign = useAsync(() => api.getCampaign(trackId), [api, trackId]);
   const mapRef = useRef<HTMLDivElement>(null);
   const track = campaign.data?.track ?? tracks.data?.tracks.find((t) => t.id === trackId);
@@ -85,7 +86,7 @@ function CampaignView({ trackId }: { trackId: TrackId }) {
 
 function TrackTabs({ tracks, current }: { tracks: TrackSummary[]; current: TrackId }) {
   const navigate = useNavigate();
-  const list: Pick<TrackSummary, 'id' | 'name' | 'locked'>[] = tracks.length ? tracks : TRACK_IDS.map((id) => ({ id, name: id, locked: false }));
+  const list: readonly Pick<TrackSummary, 'id' | 'name' | 'locked'>[] = tracks.length ? tracks : TRACK_PLACEHOLDER;
   const onKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
     e.preventDefault();

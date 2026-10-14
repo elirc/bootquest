@@ -19,7 +19,7 @@ const COMPETENCIES: { id: CompetencyId; label: string }[] = [
 ];
 const isCompetency = (v: string | null): v is CompetencyId => COMPETENCIES.some((c) => c.id === v);
 
-/** Stats: tiles + G1 catch rate + the evidence browser. XP-over-time / pass rates are W7. */
+/** Stats: tiles + G1 catch rate + the evidence browser. XP-over-time / pass rates are placeholders (the stats wave). */
 export function StatsPage() {
   const api = useApi();
   const q = useAsync(() => api.getDashboard(), [api]);
@@ -63,7 +63,8 @@ export function StatsPage() {
               <Panel key={title} title={title}>
                 <div className="placeholder">
                   <p>{body}</p>
-                  <span className="muted small">Lands in W7.</span>
+                  {/* W9 (ui-audit #9): no stale wave promise — say plainly it is not built */}
+                  <span className="muted small">Not charted yet: planned for the stats wave.</span>
                 </div>
               </Panel>
             ))}
