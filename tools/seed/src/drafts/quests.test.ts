@@ -45,7 +45,8 @@ describe('seed:quests:drafts (hand-authored items through the seed:quests valida
     const r = runQuestsWithDrafts({ root: join(FX, 'ww6'), draft: draft('ok', [good, card]), out });
     expect(r.lines.join('\n')).toMatch(/RESULT OK/);
     const items = SeedItemsFile.parse(JSON.parse(readFileSync(join(out, 'items.json'), 'utf8'))).items;
-    const hand = items.filter((i) => i.key.startsWith('seed:quests:ww6/') && (i.kind === 'quiz' ? i.variety === 'goal-check' && i.prompt === good.prompt : i.kind === 'flashcard' && i.label === 'f01'));
+    // hand items default to variety 'concept' / shape 'hand-authored' (the generator's labels stay truthful)
+    const hand = items.filter((i) => i.key.startsWith('seed:quests:ww6/') && (i.kind === 'quiz' ? i.variety === 'concept' && i.prompt === good.prompt : i.kind === 'flashcard' && i.shape === 'hand-authored' && i.label === 'f01'));
     expect(hand).toHaveLength(2);
     const pack = loadSeedPack(out, { requireStamp: true });
     expect(pack.manifest.source.inputs).toContain('draft:ok.json');
@@ -87,6 +88,26 @@ describe('seed:quests:drafts (hand-authored items through the seed:quests valida
     expect(mal.refused).toMatch(/malformed/);
     const sec = runQuestsWithDrafts({ root: join(FX, 'ww6'), draft: draft('sec', [{ ...good, explanation: `token AKIA${'A'.repeat(16)}` }]), out: join(tmp, 's') });
     expect(sec.refused).toMatch(/aws-access-key/);
+  });
+
+  it('an explicit draft variety/shape is carried onto the shipped item (defaults: concept / hand-authored)', () => {
+    const outDir = join(tmp, 'labels');
+    const r = runQuestsWithDrafts({ root: join(FX, 'ww6'), draft: draft('labels', [{ ...good, variety: 'goal-check' }, { ...card, shape: 'r-heading' }]), out: outDir });
+    expect(r.lines.join('\n')).toMatch(/RESULT OK/);
+    const items = SeedItemsFile.parse(JSON.parse(readFileSync(join(outDir, 'items.json'), 'utf8'))).items;
+    expect(items.find((i) => i.kind === 'quiz' && i.prompt === good.prompt)).toMatchObject({ variety: 'goal-check' });
+    expect(items.find((i) => i.kind === 'flashcard' && i.label === 'f01')).toMatchObject({ shape: 'r-heading' });
+    const bad = runQuestsWithDrafts({ root: join(FX, 'ww6'), draft: draft('badlabel', [{ ...good, variety: 'trivia' }]), out: join(tmp, 'labels-bad') });
+    expect(bad.refused).toMatch(/malformed/);
+  });
+
+  it('refuses a non-markdown guide; a guide pruned from the suffix index is still found (fullIndex)', () => {
+    const notMd = runQuestsWithDrafts({ root: join(FX, 'ww6'), draft: draft('notmd', [good], { guides: ['src/services/allocationRunService.ts'] }), out: join(tmp, 'notmd') });
+    expect(notMd.refused).toMatch(/not a markdown \(\.md\) file/);
+    // excludeDirs (snapshot-style pruning) narrows SUFFIX matching only — a listed guide inside such a dir must still resolve
+    const pruned = runQuestsWithDrafts({ root: join(FX, 'ww6'), draft: draft('pruned', [good, card], { excludeDirs: ['astraupskill'] }), out: join(tmp, 'pruned') });
+    expect(pruned.refused).toBeNull();
+    expect(pruned.lines.join('\n')).toMatch(/RESULT OK/);
   });
 
   it('is deterministic: same draft + tree -> byte-identical pack', () => {

@@ -173,16 +173,35 @@ export function resolveCitation(
       .join('/');
     if (suffix) {
       const pool = wantDir ? index.dirs : index.files;
-      const candidates = [...pool].filter((f) => f === suffix || f.endsWith(`/${suffix}`)).sort();
-      if (candidates.length > 1) {
-        return {
-          status: 'error',
-          reason: 'ambiguous-suffix',
-          message: `"${raw}" matches ${candidates.length} files; cite a longer path`,
-          candidates,
-        };
+      let candidates = [...pool].filter((f) => f === suffix || f.endsWith(`/${suffix}`)).sort();
+      if (candidates.length === 1) {
+        found = { via: 'suffix', rel: candidates[0]!, kind: wantDir ? 'dir' : 'file' };
+      } else if (candidates.length > 1) {
+        // Factory fix 5: app-root-aware scoping — in a multi-app tree a guide's bare suffix
+        // usually means the file in ITS OWN app. Walk the guide's ancestor dirs innermost ->
+        // outermost; the first scope with matches decides (1 -> resolve, 2+ -> ambiguous with
+        // the scoped candidates). No scope match anywhere -> the original global ambiguity.
+        // Runs ONLY when matches > 1, so every previously-unique resolution is unchanged.
+        for (let scope = guideRelDir(index, guidePath); scope !== ''; scope = scope.includes('/') ? scope.slice(0, scope.lastIndexOf('/')) : '') {
+          const scoped = candidates.filter((f) => f.startsWith(`${scope}/`));
+          if (scoped.length === 1) {
+            found = { via: 'suffix', rel: scoped[0]!, kind: wantDir ? 'dir' : 'file' };
+            break;
+          }
+          if (scoped.length > 1) {
+            candidates = scoped;
+            break;
+          }
+        }
+        if (!found) {
+          return {
+            status: 'error',
+            reason: 'ambiguous-suffix',
+            message: `"${raw}" matches ${candidates.length} files; cite a longer path`,
+            candidates,
+          };
+        }
       }
-      if (candidates.length === 1) found = { via: 'suffix', rel: candidates[0]!, kind: wantDir ? 'dir' : 'file' };
     }
   }
 

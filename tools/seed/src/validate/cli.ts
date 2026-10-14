@@ -12,6 +12,7 @@
 // (and re-executes a random 2% / min-20 sample of journaled passes first).
 import { basename, join, resolve } from 'node:path';
 import { DEFAULT_OUT_DIR } from '../bootforge/import.ts';
+import { pruneStaleQuarantine } from './prune.ts';
 import { DEFAULT_JOURNAL_DIR, formatCounts, QUARANTINE_CEILING, runValidate, shutdownValidatorRunners, validatorCsharpScratch } from './validate.ts';
 
 function arg(name: string): string | undefined {
@@ -33,6 +34,11 @@ async function main(): Promise<number> {
   console.log(`[seed:validate] pack ${packDir}`);
   console.log(`[seed:validate] journal ${journalPath}`);
   console.log(`[seed:validate] scope ${course ?? 'all courses'}, concurrency ${concurrency}`);
+
+  // fix 4: quarantine entries for courses the manifest no longer lists would otherwise
+  // never be in any run's scope again (writeQuarantine keeps out-of-scope entries) and
+  // would stay bound into every stamp — prune them before validating
+  pruneStaleQuarantine(packDir, (l) => console.log(`[seed:validate] ${l}`));
 
   let report;
   try {

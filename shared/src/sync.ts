@@ -135,6 +135,12 @@ export const RecordedCheck = z
     timeout_ms: z.number().int().positive().default(30000),
     expected_tests: z.array(z.string().min(1)).min(1),
     starter: z.object({ path: z.string().min(1), blob_sha: Hex40, sha256: Hex64 }).strict(),
+    /**
+     * U03 composite: repo-relative tsconfig of the practice project (served from the
+     * same pinned tarball as `path`); the check then also runs the repo-pinned
+     * `tsc -p <this> --noEmit` before `node --test`.
+     */
+    tsc_project: z.string().min(1).optional(),
     /** acceptance legs of the ticket this check deliberately does NOT cover (honest carve-out) */
     uncovered_legs: z.array(z.string().min(1)).default([]),
   })

@@ -1,0 +1,57 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "variants",
+ "name": "agentic-g4-verification-engineering",
+ "items": [
+  {
+   "key": "seed:variants:selfboot/variant/080228371b69ddba",
+   "provenance": {
+    "repo": "selfboot",
+    "sha": "3795a396411a3b7825230efdf695d02adb26d831",
+    "path": "content/units/agentic.json",
+    "lines": {
+     "start": 62,
+     "end": 123
+    }
+   },
+   "citations": [],
+   "kind": "variant",
+   "unitKey": "agentic/g4-verification-engineering",
+   "task": "# Changed example: what does a failing wrong-solution run actually prove?\n\nG4's filter trusts one verdict about the deliberately wrong solution's run: did it fail a NAMED test? This retest isolates that judgement in a different shape. You are NOT rebuilding the filter here (no runner, no reference, no accept/reject) — you are writing the evidence classifier it would call.\n\nWrite `splitRunEvidence(outcome)` (synchronous) where\n\n- `outcome = { loaded: boolean, pass: boolean, timedOut?: boolean, failures: [{ name, message }] }` — the result of running a test file against ONE solution.\n\nReturn `{ evidence, named, infrastructure }`:\n\n- `named` — the distinct names of the failures that a test owns, trimmed, in first-seen order. A name is test-owned when, after trimming, it is non-empty and does NOT start with `(`.\n- `infrastructure` — every other failure, in input order: its trimmed name, or `'(unnamed)'` when the name is missing or blank. Parenthesized names such as `(worker)`, `(teardown)`, `(load)`, `(timeout)` are infrastructure: no test owns them.\n- `evidence`:\n  - `'passed'` when `outcome.pass` is true;\n  - `'no-evidence'` when the solution did not load, timed out, or has no test-owned failure;\n  - `'proves-test'` otherwise (it loaded, finished, and failed at least one named test).\n\nNever mutate `outcome` (it may be frozen). The changed planted-bad case: a run that \"fails\" only with parenthesized infrastructure names proves nothing about the test.",
+   "check": {
+    "type": "drill-js",
+    "language": "js",
+    "tests": [
+     {
+      "name": "GATE: a run whose only failures are parenthesized infrastructure names is no evidence",
+      "code": "const freeze = (o) => Object.freeze({ ...o, failures: Object.freeze((o.failures || []).map((f) => Object.freeze({ ...f }))) });\nconst r = mod.splitRunEvidence(freeze({ loaded: true, pass: false, failures: [{ name: '(worker)', message: 'worker recycled mid-run' }, { name: '(teardown)', message: 'scratch dir vanished' }] }));\nassert.equal(r.evidence, 'no-evidence');\nassert.deepEqual(r.named, []);\nassert.deepEqual(r.infrastructure, ['(worker)', '(teardown)']);"
+     },
+     {
+      "name": "a loaded, finished run that fails a named test proves the test; the split keeps both sides",
+      "code": "const freeze = (o) => Object.freeze({ ...o, failures: Object.freeze((o.failures || []).map((f) => Object.freeze({ ...f }))) });\nconst r = mod.splitRunEvidence(freeze({ loaded: true, pass: false, failures: [{ name: '(worker)', message: 'recycled' }, { name: 'caps at 100', message: 'expected 100, got 500' }] }));\nassert.equal(r.evidence, 'proves-test');\nassert.deepEqual(r.named, ['caps at 100']);\nassert.deepEqual(r.infrastructure, ['(worker)']);"
+     },
+     {
+      "name": "named failures are trimmed and de-duplicated in first-seen order",
+      "code": "const freeze = (o) => Object.freeze({ ...o, failures: Object.freeze((o.failures || []).map((f) => Object.freeze({ ...f }))) });\nconst r = mod.splitRunEvidence(freeze({ loaded: true, pass: false, failures: [{ name: '  rejects blank title ', message: 'a' }, { name: 'caps at 100', message: 'b' }, { name: 'rejects blank title', message: 'c' }] }));\nassert.equal(r.evidence, 'proves-test');\nassert.deepEqual(r.named, ['rejects blank title', 'caps at 100']);\nassert.deepEqual(r.infrastructure, []);"
+     },
+     {
+      "name": "missing or blank names are infrastructure, reported as (unnamed)",
+      "code": "const freeze = (o) => Object.freeze({ ...o, failures: Object.freeze((o.failures || []).map((f) => Object.freeze({ ...f }))) });\nconst r = mod.splitRunEvidence(freeze({ loaded: true, pass: false, failures: [{ message: 'no name at all' }, { name: '   ', message: 'blank' }, { name: ' (teardown) ', message: 'x' }] }));\nassert.equal(r.evidence, 'no-evidence');\nassert.deepEqual(r.named, []);\nassert.deepEqual(r.infrastructure, ['(unnamed)', '(unnamed)', '(teardown)']);"
+     },
+     {
+      "name": "a passing run is 'passed'",
+      "code": "const freeze = (o) => Object.freeze({ ...o, failures: Object.freeze((o.failures || []).map((f) => Object.freeze({ ...f }))) });\nconst r = mod.splitRunEvidence(freeze({ loaded: true, pass: true, failures: [] }));\nassert.equal(r.evidence, 'passed');\nassert.deepEqual(r.named, []);\nassert.deepEqual(r.infrastructure, []);"
+     },
+     {
+      "name": "not loading or timing out is no evidence even beside a named failure",
+      "code": "const freeze = (o) => Object.freeze({ ...o, failures: Object.freeze((o.failures || []).map((f) => Object.freeze({ ...f }))) });\nconst crashed = mod.splitRunEvidence(freeze({ loaded: false, pass: false, failures: [{ name: 'caps at 100', message: 'never ran' }] }));\nassert.equal(crashed.evidence, 'no-evidence');\nassert.deepEqual(crashed.named, ['caps at 100']);\nconst slow = mod.splitRunEvidence(freeze({ loaded: true, pass: false, timedOut: true, failures: [{ name: 'caps at 100', message: 'x' }, { name: '(timeout)', message: 'timed out after 8000ms' }] }));\nassert.equal(slow.evidence, 'no-evidence');\nassert.deepEqual(slow.infrastructure, ['(timeout)']);"
+     }
+    ],
+    "timeoutMs": 8000
+   },
+   "referenceSolution": "export function splitRunEvidence(outcome) {\n  const named = [];\n  const infrastructure = [];\n  for (const f of outcome.failures ?? []) {\n    const name = typeof f?.name === 'string' ? f.name.trim() : '';\n    if (name !== '' && !name.startsWith('(')) {\n      if (!named.includes(name)) named.push(name);\n    } else {\n      infrastructure.push(name === '' ? '(unnamed)' : name);\n    }\n  }\n  let evidence;\n  if (outcome.pass) evidence = 'passed';\n  else if (!outcome.loaded || outcome.timedOut || named.length === 0) evidence = 'no-evidence';\n  else evidence = 'proves-test';\n  return { evidence, named, infrastructure };\n}\n",
+   "deliberatelyWrongSolution": "export function splitRunEvidence(outcome) {\n  const named = [];\n  const infrastructure = [];\n  for (const f of outcome.failures ?? []) {\n    const name = typeof f?.name === 'string' ? f.name.trim() : '';\n    if (name !== '') {\n      if (!named.includes(name)) named.push(name);\n    } else {\n      infrastructure.push('(unnamed)');\n    }\n  }\n  let evidence;\n  if (outcome.pass) evidence = 'passed';\n  else if (!outcome.loaded || outcome.timedOut || named.length === 0) evidence = 'no-evidence';\n  else evidence = 'proves-test';\n  return { evidence, named, infrastructure };\n}\n",
+   "wrongBecause": "counts every non-blank failure name as test-owned: parenthesized infrastructure failures ((worker), (teardown), (timeout)) land in `named`, so a run that 'fails' only with infrastructure noise reports 'proves-test' and the changed planted-bad case is trusted"
+  }
+ ]
+}

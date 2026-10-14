@@ -113,7 +113,8 @@ export async function checkPack(dir: string, o: CheckOptions): Promise<PackCheck
     return res;
   }
 
-  const h = o.harness ?? defaultHarness();
+  // a shared harness's runners, but a per-pack execution count (the stamp records this pack's executions)
+  const h: Harness = { runners: (o.harness ?? defaultHarness()).runners, executions: 0 };
   const validate = async (item: SeedItem): Promise<ItemVerdict> => {
     switch (m.generator) {
       case 'quests':

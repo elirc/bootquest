@@ -20,7 +20,12 @@ interface UnitRecord {
   ticket: string;
   spec: NodeTestFileSpec & { starter: { path: string; blob_sha: string; sha256: string } };
 }
+interface TscRecord {
+  project: string;
+  files: Record<string, { blob_sha: string; sha256: string }>;
+}
 let units: Record<"U01" | "U02" | "U03", UnitRecord>;
+let tscRecord: TscRecord;
 let scratch: string;
 
 const fixturePath = (rel: string) => path.join(fx, ...rel.split("/"));
@@ -47,11 +52,19 @@ async function waitDead(pid: number, ms = 5000): Promise<boolean> {
   return !isAlive(pid);
 }
 async function workspaceDirs(): Promise<string[]> {
-  return (await readdir(tmpdir())).filter((n) => n.startsWith("bq-ntf-"));
+  // the runner's default workspace parent is per-process: tmpdir()/bq-ntf-<pid>
+  try {
+    return (await readdir(path.join(tmpdir(), `bq-ntf-${process.pid}`))).filter((n) => n.startsWith("bq-ntf-"));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return []; // parent not created yet = no workspaces
+    throw err;
+  }
 }
 
 beforeAll(async () => {
-  units = JSON.parse(await readFile(path.join(fx, "checks.json"), "utf8")).units;
+  const checks = JSON.parse(await readFile(path.join(fx, "checks.json"), "utf8"));
+  units = checks.units;
+  tscRecord = checks.tsc;
   scratch = await mkdtemp(path.join(tmpdir(), "bq-p3-scratch-"));
 });
 afterAll(async () => {
@@ -65,6 +78,15 @@ describe("fixtures are the pinned upstream bytes", () => {
       const bytes = await readFile(fixturePath(f.path));
       expect(sha256Hex(bytes)).toBe(f.sha256);
       expect(gitBlobSha(bytes)).toBe(f.blob);
+    }
+  });
+
+  it("the tsconfig chain (tsc record) matches recorded sha256 and git blob sha", async () => {
+    expect(Object.keys(tscRecord.files)).toContain(tscRecord.project);
+    for (const [rel, pin] of Object.entries(tscRecord.files)) {
+      const bytes = await readFile(fixturePath(rel));
+      expect(sha256Hex(bytes), rel).toBe(pin.sha256);
+      expect(gitBlobSha(bytes), rel).toBe(pin.blob_sha);
     }
   });
 });
@@ -168,6 +190,45 @@ describe("U03 (.ts check via --import tsx from BootQuest's node_modules)", () =>
   it("without tsx the .ts check cannot run on node 22.16 (proves needs_tsx is load-bearing)", async () => {
     const r = await run(exerciseFor("U03", { needs_tsx: false }), { code: await read("solutions/u03.ts") });
     expect(r.pass).toBe(false);
+  });
+});
+
+describe("U03 composite (tsc_project: repo-pinned tsc over the pinned project BEFORE node --test)", () => {
+  const compositeExercise = async (): Promise<NodeTestFileExercise> => ({
+    ...exerciseFor("U03", { tsc_project: tscRecord.project }),
+    projectFiles: Object.fromEntries(
+      await Promise.all(Object.keys(tscRecord.files).map(async (rel) => [rel, await read(rel)] as const)),
+    ),
+  });
+
+  it("fixture solution PASSES the behavioral tests AND the real tsc -p", { timeout: 180_000 }, async () => {
+    const r = await run(await compositeExercise(), { code: await read("solutions/u03.ts") });
+    expect(r.failures).toEqual([]);
+    expect(r.pass).toBe(true);
+    expect(r.output).not.toContain("--- tsc ---"); // a clean type check adds no noise
+  });
+
+  it("a type error the stripped-types runtime would MISS fails with structured '(tsc)' failures", { timeout: 180_000 }, async () => {
+    const code = `${await read("solutions/u03.ts")}\nconst bqBad: number = "s";\n`;
+    const r = await run(await compositeExercise(), { code });
+    expect(r.pass).toBe(false);
+    expect(r.output).toContain("# pass 2"); // runtime (type-stripped) is green: ONLY the composite catches this
+    const tsc = r.failures.filter((f) => f.name === "(tsc)");
+    expect(tsc.length).toBeGreaterThan(0);
+    expect(r.failures[0]!.name).toBe("(tsc)"); // type errors come first, mirroring self-run
+    expect(tsc[0]!.message).toContain("TS2322");
+    expect(tsc[0]!.message).toContain("practice/learner/u03.ts");
+    expect(r.output).toContain("--- tsc ---");
+    expect(r.output).not.toMatch(/bq-ntf-[A-Za-z0-9]{6}/); // workspace path still redacted
+  });
+
+  it("tsc_project without the pinned projectFiles is an integrity refusal (nothing spawned)", async () => {
+    let spawned = false;
+    const ex = exerciseFor("U03", { tsc_project: tscRecord.project }); // no projectFiles
+    await expect(run(ex, { code: await read("solutions/u03.ts") }, { onSpawn: () => (spawned = true) })).rejects.toBeInstanceOf(
+      CheckIntegrityError,
+    );
+    expect(spawned).toBe(false);
   });
 });
 

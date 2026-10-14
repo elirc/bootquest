@@ -6,6 +6,7 @@
 // generator / registry / toolchain edited since stamping) is re-stamped after its full
 // re-validation comes back clean; any other problem still FAILS.
 import { resolve } from 'node:path';
+import { withFactoryHarness } from '../harness/harness.ts';
 import { DEFAULT_SEED_DIR, parseArgs } from '../report.ts';
 import { DEFAULT_CHECKOUTS, runCheck } from './check.ts';
 
@@ -14,7 +15,10 @@ const seedDir = resolve(opts.get('dir') ?? DEFAULT_SEED_DIR);
 const checkouts = resolve(opts.get('checkouts') ?? process.env.BOOTQUEST_CHECKOUTS ?? DEFAULT_CHECKOUTS);
 console.log(`[seed:check] seed packs under ${seedDir}; checkouts ${checkouts}`);
 const restamp = flags.has('restamp');
-runCheck({ seedDir, checkouts, restamp, ...(opts.has('exclusions') ? { exclusionsPath: opts.get('exclusions')! } : {}), log: (l) => console.log(l) }).then(
+// drill-js + drill-cs (kata tests on C# context files re-execute through the warm C# runner)
+withFactoryHarness((harness) =>
+  runCheck({ seedDir, checkouts, restamp, harness, ...(opts.has('exclusions') ? { exclusionsPath: opts.get('exclusions')! } : {}), log: (l) => console.log(l) }),
+).then(
   (r) => {
     console.log(`[seed:check] ${r.packs.length} pack(s): ${r.packs.filter((p) => p.ok).length} ok, ${r.packs.filter((p) => !p.ok).length} failed; ${r.packs.reduce((n, p) => n + p.items, 0)} shipped item(s) re-validated${restamp ? `; ${r.packs.filter((p) => p.restamped).length} restamped` : ''}`);
     console.log(`RESULT ${r.ok ? 'OK' : 'FAIL'}`);

@@ -3,7 +3,9 @@
  * server's grader fingerprint (server/src/store/grader-fingerprint.ts): binds a
  * stamp to the exact validator + generator bytes, the shared seed-pack schema,
  * the citation resolver, the exclusion registry and (for generators that
- * execute code) the JS grader + toolchain. Changing any of them invalidates
+ * execute code) BOTH graders the harness registers: drill-js (the JS grader +
+ * node/esbuild) and drill-cs (the C# runner sources, its Check harnesses, the
+ * drill-cs adapter + the .NET SDK / ref-pack versions). Changing any of them invalidates
  * every seed stamp, so seed:check refuses the pack until it is re-validated.
  */
 import { readdirSync, readFileSync } from 'node:fs';
@@ -32,19 +34,23 @@ export function seedFingerprintFiles(generator: SeedGenerator): string[] {
     ...sources(join(SEED_SRC, 'factory')),
   ];
   const own = sources(join(SEED_SRC, 'factory', generator));
-  const runner = EXECUTING.has(generator)
-    ? [...sources(join(SEED_SRC, 'factory', 'harness')), ...FINGERPRINT_FILES.js.filter((f) => !f.endsWith('validate.ts'))]
-    : [];
+  const graders = [...new Set([...FINGERPRINT_FILES.js, ...FINGERPRINT_FILES.csharp])].filter((f) => !f.endsWith('validate.ts'));
+  const runner = EXECUTING.has(generator) ? [...sources(join(SEED_SRC, 'factory', 'harness')), ...graders] : [];
   return [...common, ...own, ...runner];
 }
 
 export interface SeedToolchain {
   node: string;
   esbuild?: string;
+  /** executing generators: the .NET SDK + Microsoft.NETCore.App.Ref versions drill-cs compiles with */
+  dotnetSdk?: string;
+  dotnetRef?: string;
 }
 
 export function seedToolchain(generator: SeedGenerator): SeedToolchain {
-  return EXECUTING.has(generator) ? { node: process.version, esbuild: toolchainVersions('js').esbuild ?? 'unknown' } : { node: process.version };
+  if (!EXECUTING.has(generator)) return { node: process.version };
+  const cs = toolchainVersions('csharp');
+  return { node: process.version, esbuild: toolchainVersions('js').esbuild ?? 'unknown', dotnetSdk: cs.dotnetSdk ?? 'unknown', dotnetRef: cs.dotnetRef ?? 'unknown' };
 }
 
 const cache = new Map<SeedGenerator, string>();

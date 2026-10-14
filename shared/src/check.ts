@@ -312,6 +312,13 @@ export const NodeTestFileCheck = z.object({
   sha: z.string().min(7), // pinned source commit
   checkSha256: sha256.optional(), // hash-verified check file
   tsx: z.boolean().default(false), // .ts checks run with --import tsx
+  /**
+   * U03 composite: repo-relative tsconfig (e.g. practice/tsconfig.json). When set,
+   * the runner materializes the project's tsconfig chain (adapter pins it from the
+   * tarball cache at `sha`) and runs the repo-pinned `tsc -p <this> --noEmit`
+   * BEFORE `node --test`; type errors are structured '(tsc)' failures.
+   */
+  tscProject: relPath.optional(),
   timeoutMs: timeoutMs.default(30000),
   // W4: the pins the node-test-file runner needs (all PRIVATE: not in the public whitelist)
   repo: z.string().regex(/^[^/\s]+\/[^/\s]+$/).optional(), // owner/name the check file is cached from

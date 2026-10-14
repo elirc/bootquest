@@ -2,16 +2,26 @@
  * Execution harness for the wrong-solution filter (seed:variants) and the
  * defective-version check (seed:patches). It executes through the REAL
  * runners — the server's drill-js grade adapter (the code path POST /submit
- * uses) — never a reimplementation. Registry keyed by check type so drill-cs
- * plugs in later (createDrillCsRunner from @bootquest/server/runner-csharp has
- * the same Runner signature; register it with `withRunner('drill-cs', ...)`).
+ * uses) and the server's drill-cs adapter over the warm C# runner
+ * (createDrillCsRunner, @bootquest/server/runner-csharp) — never a
+ * reimplementation. Registry keyed by check type.
+ *
+ * factoryHarness() is what the CLIs use: drill-js + drill-cs. The C# runner is
+ * lazy (no dotnet process until the first drill-cs execution) and keeps its warm
+ * projects in its OWN scratch dir (.cache/factory-csharp, overridable with
+ * BOOTQUEST_FACTORY_CS_SCRATCH) — never the import gate's .cache/seed-csharp, so
+ * a factory run can never collide with a seed:validate sweep. Callers MUST await
+ * shutdown() (stops the compiler server + any live dotnet child).
  *
  * Rule: no execution = no emission. A check type with no registered runner is
  * a discard reason, never a pass.
  */
 import type { CanonicalRunResult } from '@bootquest/shared/api';
 import type { SeedRunnableCheck } from '@bootquest/shared';
+import { join } from 'node:path';
+import { createDrillCsRunner } from '@bootquest/server/runner-csharp';
 import { drillJsRunner, type Runner } from '@bootquest/server/runners';
+import { REPO_ROOT } from '../report.ts';
 
 export type HarnessRunner = (check: SeedRunnableCheck, code: string) => Promise<CanonicalRunResult>;
 
@@ -35,8 +45,51 @@ export function withRunner(h: Harness, type: SeedRunnableCheck['type'], runner: 
   return { ...h, runners: { ...h.runners, [type]: fromServerRunner(runner) } };
 }
 
+export const FACTORY_CS_SCRATCH_ENV = 'BOOTQUEST_FACTORY_CS_SCRATCH';
+
+/** The factory's C# scratch dir: BOOTQUEST_FACTORY_CS_SCRATCH, else <repo>/.cache/factory-csharp. */
+export function factoryCsScratchDir(env: Record<string, string | undefined> = process.env): string {
+  const raw = env[FACTORY_CS_SCRATCH_ENV];
+  return raw && raw.trim() ? raw.trim() : join(REPO_ROOT, '.cache', 'factory-csharp');
+}
+
+export interface ManagedHarness {
+  harness: Harness;
+  /** stop the C# runner's compiler server + live children (a no-op when no C# ran) */
+  shutdown(): Promise<void>;
+}
+
+/** drill-js + drill-cs through the server's real adapters (the CLIs' harness). */
+export function factoryHarness(opts: { csScratch?: string } = {}): ManagedHarness {
+  const cs = createDrillCsRunner({ appDataDir: opts.csScratch ?? factoryCsScratchDir() });
+  return { harness: withRunner(defaultHarness(), 'drill-cs', cs.runner), shutdown: () => cs.shutdown() };
+}
+
+/** Run with a factoryHarness and ALWAYS shut it down (also when the work throws). */
+export async function withFactoryHarness<T>(work: (h: Harness) => Promise<T>): Promise<T> {
+  const m = factoryHarness();
+  try {
+    return await work(m.harness);
+  } finally {
+    await m.shutdown();
+  }
+}
+
 /** Failures that are not a test verdict (the code never got graded). */
-export const NOT_A_VERDICT = new Set(['code loads without errors', 'code runs', 'finishes in time', 'TypeScript compiles', 'grader results', '(compile)', '(timeout)', '(program)', '(format)']);
+// drill-cs adds '(runner)' (the xunit run produced no TRX results) and '(scaffolding)' (frozen section edited)
+export const NOT_A_VERDICT = new Set([
+  'code loads without errors',
+  'code runs',
+  'finishes in time',
+  'TypeScript compiles',
+  'grader results',
+  '(compile)',
+  '(timeout)',
+  '(program)',
+  '(format)',
+  '(runner)',
+  '(scaffolding)',
+]);
 
 export type Execution =
   | { ok: true; result: CanonicalRunResult }

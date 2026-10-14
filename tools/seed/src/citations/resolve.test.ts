@@ -152,3 +152,55 @@ describe('resolveCitation: failure modes', () => {
     expect(resolveCitation(root, GUIDE, cite('route.ts', 1), narrowed)).toMatchObject({ status: 'ok', file: 'src/routes/a/route.ts', via: 'suffix' });
   });
 });
+
+describe('resolveCitation: app-root-aware suffix scoping (fix 5, multi-app trees)', () => {
+  let appsRoot: string;
+  let appsIndex: RepoIndex;
+  const tree: Record<string, string> = {
+    'budget-tracker/astraupskill/G.md': '# g\n',
+    'budget-tracker/src/model.js': 'a\nb\n',
+    'contact-book/src/model.js': 'a\n',
+    'contact-book/docs/model.js': 'x\n',
+    'focus-timer/src/util.js': 'u\n',
+    'shared.js': 's\n',
+  };
+  beforeAll(() => {
+    appsRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cite-scope-'));
+    for (const [rel, body] of Object.entries(tree)) {
+      fs.mkdirSync(path.dirname(path.join(appsRoot, rel)), { recursive: true });
+      fs.writeFileSync(path.join(appsRoot, rel), body);
+    }
+    appsIndex = buildRepoIndex(appsRoot);
+  });
+  afterAll(() => fs.rmSync(appsRoot, { recursive: true, force: true }));
+  const at = (guide: string, c: Citation) => resolveCitation(appsRoot, guide, c, appsIndex);
+
+  it('a bare suffix with matches in several apps resolves to the one inside the guide app tree', () => {
+    expect(at('budget-tracker/astraupskill/G.md', cite('model.js', 1))).toMatchObject({ status: 'ok', file: 'budget-tracker/src/model.js', via: 'suffix' });
+  });
+
+  it('the innermost scope decides: 1 match resolves, 2+ stay ambiguous with the SCOPED candidates only', () => {
+    // the guide's own dir holds a match: guide-relative resolution wins before suffix scoping even runs
+    expect(at('contact-book/docs/G.md', cite('model.js', 1))).toMatchObject({ status: 'ok', file: 'contact-book/docs/model.js', via: 'guide' });
+    // no match beside the guide, 2 in its app: ambiguous, listing only that app's candidates
+    expect(at('contact-book/astraupskill/G.md', cite('model.js', 1))).toEqual({
+      status: 'error',
+      reason: 'ambiguous-suffix',
+      message: expect.stringContaining('matches 2 files'),
+      candidates: ['contact-book/docs/model.js', 'contact-book/src/model.js'],
+    });
+  });
+
+  it('no match inside any ancestor scope keeps the original global ambiguity; unique matches never scope', () => {
+    // guide in an app that holds no model.js: global ambiguity with ALL candidates
+    expect(at('focus-timer/src/G.md', cite('model.js', 1))).toMatchObject({
+      status: 'error',
+      reason: 'ambiguous-suffix',
+      candidates: ['budget-tracker/src/model.js', 'contact-book/docs/model.js', 'contact-book/src/model.js'],
+    });
+    // a guide at the repo root has no ancestor dir to scope by
+    expect(at('G.md', cite('model.js', 1))).toMatchObject({ reason: 'ambiguous-suffix' });
+    // globally-unique suffixes resolve exactly as before, from any guide
+    expect(at('budget-tracker/astraupskill/G.md', cite('util.js', 1))).toMatchObject({ status: 'ok', file: 'focus-timer/src/util.js', via: 'suffix' });
+  });
+});

@@ -1,0 +1,161 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "patches",
+ "name": "mobiletagalog-katas",
+ "items": [
+  {
+   "key": "seed:patches:mobiletagalog/patch-kata/01334092df1dd4b5",
+   "provenance": {
+    "repo": "mobiletagalog",
+    "sha": "ac003b50290f9750383902c2928d284da00049c4",
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "lines": {
+     "start": 19,
+     "end": 19
+    }
+   },
+   "citations": [],
+   "kind": "patch-kata",
+   "title": "Sync push adapter: surface rejected events before acknowledging them",
+   "diff": "diff --git a/src/lib/pushAdapter.mjs b/src/lib/pushAdapter.mjs\n--- a/src/lib/pushAdapter.mjs\n+++ b/src/lib/pushAdapter.mjs\n@@ -8,14 +8,10 @@\n export function createPushAdapter(api, onRejected) {\n   return async (tokens, events) => {\n     const response = await api.sync(tokens.accessToken, events);\n-    const rejected = new Set(response.rejected);\n-    if (rejected.size > 0) {\n-      // Surface the poison rows BEFORE acknowledging them: once acknowledged they are\n-      // deleted from the outbox, and this report is the only trace they existed (F1).\n-      onRejected(events.filter((event) => rejected.has(event.id)));\n-    }\n     return {\n       progress: response.progress,\n+      // A successful /sync resolves every sent event: valid rows are inserted\n+      // idempotently and rejected poison rows are reported.\n       acknowledgedIds: events.map((event) => event.id),\n     };\n   };\n",
+   "contextFiles": [
+    {
+     "path": "src/lib/pushAdapter.mjs",
+     "content": "// Adapted from mobiletagalog src/lib/progress.tsx:46-55 @ ac003b5 (the ProgressProvider's\n// push dependency extracted to a factory over an injected api client plus an onRejected\n// hook, so the module runs standalone). Policy: a successful /sync resolves every sent\n// event, so poison rows the server rejects still leave the outbox (keeping them would\n// resend them, and have them rejected, on every sync forever). Finding F1 accepts that\n// drop as a policy but requires it to be a visible decision, so rejected events are\n// surfaced through onRejected before they are acknowledged.\nexport function createPushAdapter(api, onRejected) {\n  return async (tokens, events) => {\n    const response = await api.sync(tokens.accessToken, events);\n    const rejected = new Set(response.rejected);\n    if (rejected.size > 0) {\n      // Surface the poison rows BEFORE acknowledging them: once acknowledged they are\n      // deleted from the outbox, and this report is the only trace they existed (F1).\n      onRejected(events.filter((event) => rejected.has(event.id)));\n    }\n    return {\n      progress: response.progress,\n      acknowledgedIds: events.map((event) => event.id),\n    };\n  };\n}\n",
+     "origin": {
+      "kind": "adapted",
+      "repoPath": "src/lib/progress.tsx",
+      "lines": {
+       "start": 46,
+       "end": 55
+      }
+     }
+    }
+   ],
+   "seededDefectKey": [
+    {
+     "scenario": "The server accepts two events and rejects one poison row: /sync returns { accepted: 2, rejected: ['evt-2'], progress }.",
+     "evidence": {
+      "path": "src/lib/pushAdapter.mjs",
+      "lineStart": 13,
+      "lineEnd": 13,
+      "in": "patched"
+     },
+     "consequence": "The adapter acknowledges every sent id without ever looking at response.rejected, so onRejected is never called: the coordinator commits the acknowledgement and the rejected event is deleted from the outbox with no report and no log line. Dropping a poison row is a reasonable policy, but here it is an invisible one: a silent delete of learner progress. The comment describes what the SERVER reports, not anything the app does with the report (finding F1)."
+    },
+    {
+     "scenario": "The shipped adapter already acknowledges every sent id and discards response.rejected.",
+     "evidence": {
+      "path": "src/lib/progress.tsx",
+      "lineStart": 53,
+      "lineEnd": 53,
+      "in": "repo"
+     },
+     "consequence": "Production drops server-rejected events today with nothing surfaced or logged; the only symptom is progress that never reaches the server. F1 does not object to the drop itself (\"Deleting poison rows is a reasonable policy, but it should be a visible decision\"): the defect is that nothing records the decision."
+    }
+   ],
+   "test": {
+    "module": "src/lib/pushAdapter.mjs",
+    "check": {
+     "type": "drill-js",
+     "language": "js",
+     "tests": [
+      {
+       "name": "server-rejected events are surfaced, exactly once, through onRejected (finding F1)",
+       "code": "const api = { sync: async () => ({ accepted: 2, rejected: ['evt-2'], progress: { xp: 10 } }) }; const rejectedBatches = []; const push = mod.createPushAdapter(api, (events) => rejectedBatches.push(events)); const result = await push({ accessToken: 'tok' }, [{ id: 'evt-1' }, { id: 'evt-2' }, { id: 'evt-3' }]); assert.equal(rejectedBatches.length, 1, 'the rejected event was dropped without being surfaced'); assert.deepEqual(rejectedBatches[0].map((e) => e.id), ['evt-2'], 'onRejected must receive exactly the rejected events'); assert.ok(result.acknowledgedIds.includes('evt-1') && result.acknowledgedIds.includes('evt-3'), 'accepted events must be acknowledged'); assert.deepEqual(result.progress, { xp: 10 });"
+      },
+      {
+       "name": "a fully accepted batch acknowledges every id and surfaces nothing",
+       "code": "const api = { sync: async () => ({ accepted: 2, rejected: [], progress: { xp: 4 } }) }; const rejectedBatches = []; const push = mod.createPushAdapter(api, (events) => rejectedBatches.push(events)); const result = await push({ accessToken: 'tok' }, [{ id: 'a' }, { id: 'b' }]); assert.deepEqual(result.acknowledgedIds, ['a', 'b']); assert.equal(rejectedBatches.length, 0); assert.deepEqual(result.progress, { xp: 4 });"
+      },
+      {
+       "name": "the adapter passes the access token and the events through to the api",
+       "code": "const calls = []; const api = { sync: async (token, events) => { calls.push({ token, count: events.length }); return { accepted: 1, rejected: [], progress: {} }; } }; const push = mod.createPushAdapter(api, () => {}); await push({ accessToken: 'tok-9' }, [{ id: 'one' }]); assert.deepEqual(calls, [{ token: 'tok-9', count: 1 }]);"
+      }
+     ],
+     "timeoutMs": 8000
+    }
+   },
+   "findingRef": "mobiletagalog F1 (astraupskill/06-SOLUTIONS-AND-REVIEW.md:19)"
+  },
+  {
+   "key": "seed:patches:mobiletagalog/patch-kata/b550ff1ffe72c515",
+   "provenance": {
+    "repo": "mobiletagalog",
+    "sha": "ac003b50290f9750383902c2928d284da00049c4",
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "lines": {
+     "start": 13,
+     "end": 13
+    }
+   },
+   "citations": [],
+   "kind": "patch-kata",
+   "title": "Sync queue: store the real operation promise as the tail",
+   "diff": "diff --git a/src/lib/sync.mjs b/src/lib/sync.mjs\n--- a/src/lib/sync.mjs\n+++ b/src/lib/sync.mjs\n@@ -9,9 +9,8 @@\n \n   sync() {\n     const operation = this.tail.then(() => this.runOnce());\n-    // The stored tail swallows the rejection: the caller of THIS sync() still sees the\n-    // error, but the next sync() must chain onto a settled promise or it never runs.\n-    this.tail = operation.catch(() => undefined);\n+    // Store the operation itself: swallowing the rejection here would hide sync errors.\n+    this.tail = operation;\n     return operation;\n   }\n \n",
+   "contextFiles": [
+    {
+     "path": "src/lib/sync.mjs",
+     "content": "// Adapted from mobiletagalog src/lib/sync.ts:72-105 @ ac003b5 (the coordinator reduced\n// to its sync()/runOnce promise chaining over injected dependencies; token refresh and\n// generation filtering dropped so the queue behavior stands alone).\nexport class ProgressSyncCoordinator {\n  constructor(dependencies) {\n    this.dependencies = dependencies;\n    this.tail = Promise.resolve();\n  }\n\n  sync() {\n    const operation = this.tail.then(() => this.runOnce());\n    // The stored tail swallows the rejection: the caller of THIS sync() still sees the\n    // error, but the next sync() must chain onto a settled promise or it never runs.\n    this.tail = operation.catch(() => undefined);\n    return operation;\n  }\n\n  async runOnce() {\n    const batch = this.dependencies.readOutbox().slice(0, 500);\n    if (batch.length === 0) return;\n    const result = await this.dependencies.push(batch);\n    this.dependencies.commit(result.acknowledgedIds);\n  }\n}\n",
+     "origin": {
+      "kind": "adapted",
+      "repoPath": "src/lib/sync.ts",
+      "lines": {
+       "start": 72,
+       "end": 105
+      }
+     }
+    }
+   ],
+   "seededDefectKey": [
+    {
+     "scenario": "One /sync call fails (a server 500 or a network drop); the user keeps studying and the app schedules more syncs.",
+     "evidence": {
+      "path": "src/lib/sync.mjs",
+      "lineStart": 12,
+      "lineEnd": 12,
+      "in": "patched"
+     },
+     "consequence": "Every later sync() chains .then() onto a rejected tail, so runOnce never executes again: push is never called, the outbox only grows, and no error surfaces. One failed sync silently disables syncing until restart — the exact regression the course's step-7 test pins (push called twice after a failure)."
+    },
+    {
+     "scenario": "The shipped coordinator stores the swallowed tail; this one line is what keeps the queue alive after a failure.",
+     "evidence": {
+      "path": "src/lib/sync.ts",
+      "lineStart": 75,
+      "lineEnd": 75,
+      "in": "repo"
+     },
+     "consequence": "The course's mutation-testing lab showed the suite stayed green with sync.ts guards removed; exercise 4's learner-written test (second sync still calls push after a first failure) exists precisely so this guard cannot silently regress."
+    }
+   ],
+   "test": {
+    "module": "src/lib/sync.mjs",
+    "check": {
+     "type": "drill-js",
+     "language": "js",
+     "tests": [
+      {
+       "name": "a failed sync does not disable later syncs (solutions step 7: push is called twice)",
+       "code": "let calls = 0; const commits = []; const coordinator = new mod.ProgressSyncCoordinator({ readOutbox: () => [{ id: 'evt-1' }], push: async () => { calls += 1; if (calls === 1) throw new Error('HTTP 500'); return { acknowledgedIds: ['evt-1'] }; }, commit: (ids) => commits.push(ids), }); await assert.rejects(() => coordinator.sync(), /HTTP 500/); const second = await coordinator.sync().then(() => 'ran', (err) => `rejected: ${err.message}`); assert.equal(second, 'ran', 'the second sync chained onto a rejected tail and never ran'); assert.equal(calls, 2); assert.deepEqual(commits, [['evt-1']]);"
+      },
+      {
+       "name": "sequential syncs run in order and commit acknowledged ids",
+       "code": "const commits = []; const coordinator = new mod.ProgressSyncCoordinator({ readOutbox: () => [{ id: 'evt-1' }, { id: 'evt-2' }], push: async (batch) => ({ acknowledgedIds: batch.map((e) => e.id) }), commit: (ids) => commits.push(ids), }); await coordinator.sync(); await coordinator.sync(); assert.deepEqual(commits, [['evt-1', 'evt-2'], ['evt-1', 'evt-2']]);"
+      },
+      {
+       "name": "an empty outbox sync resolves without pushing",
+       "code": "let pushed = 0; const coordinator = new mod.ProgressSyncCoordinator({ readOutbox: () => [], push: async () => { pushed += 1; return { acknowledgedIds: [] }; }, commit: () => {}, }); await coordinator.sync(); assert.equal(pushed, 0);"
+      },
+      {
+       "name": "the caller of a failing sync still sees the error",
+       "code": "const coordinator = new mod.ProgressSyncCoordinator({ readOutbox: () => [{ id: 'evt-1' }], push: async () => { throw new Error('boom'); }, commit: () => {}, }); await assert.rejects(() => coordinator.sync(), /boom/);"
+      }
+     ],
+     "timeoutMs": 8000
+    }
+   },
+   "findingRef": "mobiletagalog solutions step 7 (astraupskill/06-SOLUTIONS-AND-REVIEW.md:13)"
+  }
+ ]
+}

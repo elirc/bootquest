@@ -302,7 +302,7 @@ export function createApp(opts: AppOptions): Express {
     validate(EmptyQuery, req.query, 'query');
     const units = ladderUnits(deps.db);
     const n = (f: string) => units.filter((u) => u.family === f).length;
-    sendJson(res, 200, LadderResponse.parse({ counts: { explainBack: n('explain-back'), g2: n('g2'), katas: n('kata'), retests: n('retest'), authored: n('authored') }, units }));
+    sendJson(res, 200, LadderResponse.parse({ counts: { explainBack: n('explain-back'), g2: n('g2'), katas: n('kata'), retests: n('retest'), study: n('study'), authored: n('authored') }, units }));
   }));
 
   router.get('/reviews/queue', asyncRoute((req, res) => {

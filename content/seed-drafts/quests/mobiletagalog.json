@@ -1,0 +1,215 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "mobiletagalog",
+ "sha": "ac003b50290f9750383902c2928d284da00049c4",
+ "guides": [
+  "astraupskill/02-CONCEPTS.md",
+  "astraupskill/03-WORKED-CHANGE.md",
+  "astraupskill/06-SOLUTIONS-AND-REVIEW.md"
+ ],
+ "items": [
+  {
+   "id": "q01-same-user-relogin",
+   "kind": "quiz",
+   "source": { "path": "astraupskill/02-CONCEPTS.md", "lines": { "start": 3, "end": 3 } },
+   "cites": [
+    { "path": "src/lib/sync.ts", "lineStart": 44, "lineEnd": 47 },
+    { "path": "src/lib/sync.ts", "lineStart": 99, "lineEnd": 99 }
+   ],
+   "prompt": "A sync request is pending when the user logs out and signs back into the SAME account. Why is a user-id check alone not enough to discard the old response?",
+   "answer": "The user id matches again, but the request belongs to an abandoned session; only the generation, bumped on every setSession, tells them apart",
+   "distractors": [
+    "Because the user id changes on every login, so the check always fails",
+    "Because access tokens are compared instead, and they are identical",
+    "It is enough - the server rejects requests from previous sessions"
+   ],
+   "explanation": "The coordinator increments generation on every setSession and captures it when sync is requested, so a same-identity re-login still invalidates old work."
+  },
+  {
+   "id": "q02-tail-catch",
+   "kind": "quiz",
+   "source": { "path": "astraupskill/03-WORKED-CHANGE.md", "lines": { "start": 3, "end": 3 } },
+   "cites": [{ "path": "src/lib/sync.ts", "lineStart": 72, "lineEnd": 77 }],
+   "prompt": "sync() stores this.tail = operation.catch(() => undefined) but returns operation itself. What would break if it stored this.tail = operation?",
+   "answer": "After one failed attempt every later sync() would chain onto a rejected promise, runOnce would never run, and syncing would silently stop until restart",
+   "distractors": [
+    "Nothing - the caller would simply see the error twice",
+    "Concurrent syncs would run in parallel instead of serially",
+    "The caller would no longer receive rejections from failed syncs"
+   ],
+   "explanation": "Catching only on the internal tail keeps the queue alive while the caller still observes the failure."
+  },
+  {
+   "id": "q03-batch-cap",
+   "kind": "quiz",
+   "source": { "path": "astraupskill/03-WORKED-CHANGE.md", "lines": { "start": 5, "end": 5 } },
+   "cites": [{ "path": "src/lib/sync.ts", "lineStart": 83, "lineEnd": 86 }],
+   "prompt": "The outbox holds 1,200 events when a sync starts. What does one runOnce send?",
+   "answer": "The first 500 events (readOutbox().slice(0, 500)) with the active credentials",
+   "distractors": [
+    "All 1,200 events in a single request",
+    "Events in pages of 500 until the outbox is empty, within one runOnce",
+    "Only events recorded since the previous successful sync"
+   ],
+   "explanation": "Each attempt reads at most five hundred outbox events; the rest wait for a later sync."
+  },
+  {
+   "id": "q04-stale-401",
+   "kind": "quiz",
+   "source": { "path": "astraupskill/02-CONCEPTS.md", "lines": { "start": 5, "end": 5 } },
+   "cites": [{ "path": "src/lib/sync.ts", "lineStart": 87, "lineEnd": 93 }],
+   "prompt": "A push returns 401 after the user has already logged out. What does runOnce do?",
+   "answer": "The generation check before refresh fails, so it returns without requesting new credentials for the abandoned account",
+   "distractors": [
+    "It refreshes the token and retries, then discards the result",
+    "It rethrows the 401 to the caller as an ordinary failure",
+    "It clears the outbox because the session is gone"
+   ],
+   "explanation": "Checking before refresh (line 91) and after refresh (line 93) keeps a late 401 from restoring a logged-out session."
+  },
+  {
+   "id": "q05-non401-propagates",
+   "kind": "quiz",
+   "source": { "path": "astraupskill/03-WORKED-CHANGE.md", "lines": { "start": 5, "end": 5 } },
+   "cites": [{ "path": "src/lib/sync.ts", "lineStart": 87, "lineEnd": 90 }],
+   "prompt": "push rejects with a network error that has no status. What happens?",
+   "answer": "The error is rethrown: only a 401 triggers a refresh, and nothing is committed or acknowledged",
+   "distractors": [
+    "A refresh is attempted for any failure, then push retries once",
+    "The batch is acknowledged so the outbox does not grow forever",
+    "The coordinator retries the push with exponential backoff"
+   ],
+   "explanation": "Other failures propagate without pretending progress was committed."
+  },
+  {
+   "id": "q06-ack-intersection",
+   "kind": "quiz",
+   "source": { "path": "astraupskill/02-CONCEPTS.md", "lines": { "start": 7, "end": 7 } },
+   "cites": [{ "path": "src/lib/sync.ts", "lineStart": 100, "lineEnd": 101 }],
+   "prompt": "push returns acknowledgedIds [\"a\", \"c\"] but only event a was in the sent batch; c was recorded while the request was pending. What gets deleted from the outbox?",
+   "answer": "Only a - acknowledgements are intersected with the ids of the sent batch, so c stays queued for the next sync",
+   "distractors": [
+    "Both a and c, because the server acknowledged them",
+    "Nothing - an acknowledgement for an unknown id aborts the commit",
+    "The whole outbox, since the server returned fresh progress"
+   ],
+   "explanation": "The acknowledgement boundary is narrower than clearing the outbox: only identifiers present in the sent batch may be removed."
+  },
+  {
+   "id": "q07-intersection-dead-today",
+   "kind": "quiz",
+   "source": { "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md", "lines": { "start": 21, "end": 21 } },
+   "cites": [{ "path": "src/lib/progress.tsx", "lineStart": 47, "lineEnd": 54 }],
+   "prompt": "Why can the intersection at sync.ts:100-101 never filter anything in production today?",
+   "answer": "The production push adapter builds acknowledgedIds from the sent events themselves, so nothing outside the batch can arrive",
+   "distractors": [
+    "Because the server never returns acknowledgements at all",
+    "Because the outbox is cleared before each push",
+    "Because TypeScript prevents unknown ids from reaching the filter"
+   ],
+   "explanation": "It is belt-and-braces for a future adapter that trusts a server-supplied id list; keep it and pin it with a test."
+  },
+  {
+   "id": "q08-one-transaction",
+   "kind": "quiz",
+   "source": { "path": "astraupskill/03-WORKED-CHANGE.md", "lines": { "start": 7, "end": 9 } },
+   "cites": [{ "path": "src/lib/storage.ts", "lineStart": 42, "lineEnd": 52 }],
+   "prompt": "What replaced the original separate baseline write followed by outboxClear?",
+   "answer": "commitSyncedProgress, which upserts the baseline and deletes only the acknowledged ids inside one SQLite transaction",
+   "distractors": [
+    "A server-side endpoint that clears the outbox remotely",
+    "Two writes ordered so the outbox is cleared before the baseline is saved",
+    "An in-memory cache that is flushed to SQLite on app background"
+   ],
+   "explanation": "Writing baseline and deleting acknowledgements together means a crash cannot leave one without the other."
+  },
+  {
+   "id": "q09-reread-after-commit",
+   "kind": "quiz",
+   "source": { "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md", "lines": { "start": 7, "end": 7 } },
+   "cites": [{ "path": "src/lib/sync.ts", "lineStart": 102, "lineEnd": 103 }],
+   "prompt": "Why does onCommit receive a fresh readOutbox() instead of the array read before the request?",
+   "answer": "Events recorded while the request was pending must stay visible; publishing the pre-request array would re-show acknowledged events or hide new ones",
+   "distractors": [
+    "Because the pre-request array was mutated by push and is no longer valid",
+    "Because React requires a new array reference to re-render",
+    "Because readOutbox is cheaper than copying the old array"
+   ],
+   "explanation": "Publication re-reads storage after the commit so the displayed state matches what is actually queued."
+  },
+  {
+   "id": "q10-profile-current-tokens",
+   "kind": "quiz",
+   "source": { "path": "astraupskill/02-CONCEPTS.md", "lines": { "start": 9, "end": 9 } },
+   "cites": [{ "path": "src/lib/sync.ts", "lineStart": 57, "lineEnd": 70 }],
+   "prompt": "A profile update (updateMe) returns after a token refresh happened mid-flight. How does applyUserUpdate avoid restoring the outdated access token?",
+   "answer": "After the generation and account checks, it merges the returned user into the coordinator's current tokens rather than the captured ones",
+   "distractors": [
+    "It refreshes the token again before saving the profile",
+    "It replaces the whole token set with the one captured when updateMe started",
+    "It drops the profile update whenever a refresh has occurred"
+   ],
+   "explanation": "{ ...this.tokens, user } preserves newer credentials instead of rebuilding authentication from an old closure."
+  },
+  {
+   "id": "q11-mutation-survives",
+   "kind": "quiz",
+   "source": { "path": "astraupskill/02-CONCEPTS.md", "lines": { "start": 11, "end": 11 } },
+   "cites": [{ "path": "src/lib/sync.ts", "lineStart": 99, "lineEnd": 99 }],
+   "prompt": "Deleting the generation half of the guard on sync.ts line 99 leaves all six coordinator tests green. Why?",
+   "answer": "The tests only switch to a different user or to logged out, which the user-id half already catches; no test re-logs in as the same user",
+   "distractors": [
+    "The generation check on line 80 makes line 99 redundant",
+    "The tests mock the coordinator, so line 99 never runs",
+    "Vitest skips assertions inside async callbacks by default"
+   ],
+   "explanation": "The case that needs the generation is described but untested; exercise 6's same-user test kills the mutation."
+  },
+  {
+   "id": "q12-rejected-dropped",
+   "kind": "quiz",
+   "source": { "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md", "lines": { "start": 19, "end": 19 } },
+   "cites": [{ "path": "src/lib/progress.tsx", "lineStart": 47, "lineEnd": 55 }],
+   "prompt": "The server's /sync response lists some events as rejected. What does the app do with them?",
+   "answer": "The push adapter acknowledges every sent id and ignores rejected, so those events are deleted from the outbox and never surfaced or logged",
+   "distractors": [
+    "They stay in the outbox and are retried on every sync",
+    "They are shown to the user as a sync error banner",
+    "They are moved to a separate dead-letter table for review"
+   ],
+   "explanation": "Deleting poison rows may be fine, but it should be a visible decision rather than a silent side effect."
+  },
+  {
+   "id": "f01-ownership-principle",
+   "kind": "flashcard",
+   "source": { "path": "astraupskill/03-WORKED-CHANGE.md", "lines": { "start": 11, "end": 11 } },
+   "cites": [{ "path": "src/lib/sync.ts", "lineStart": 79, "lineEnd": 82 }],
+   "front": "State the single ownership principle behind the generation checks, the adoption/logout ordering and applyUserUpdate (see runOnce, src/lib/sync.ts:79-82).",
+   "back": "Asynchronous results may mutate local account state only while their issuing session remains active. Each request captures its generation; every commit point re-checks it, and logout/adoption invalidate old work (setSession) before replacing account data."
+  },
+  {
+   "id": "f02-adoption-modes",
+   "kind": "flashcard",
+   "source": { "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md", "lines": { "start": 15, "end": 15 } },
+   "cites": [{ "path": "src/lib/sync.ts", "lineStart": 14, "lineEnd": 20 }],
+   "front": "authAdoptionMode(current, next) in src/lib/sync.ts:14-20 returns guest, same-account or account-switch. What does the provider do for guest vs account-switch?",
+   "back": "guest (current null): no wipe - guest outbox events are kept and synced under the new account. account-switch (a to b): wipe A's baseline and outbox before adopting B, so one account's events never sync as another's."
+  },
+  {
+   "id": "f03-review-criteria",
+   "kind": "flashcard",
+   "source": { "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md", "lines": { "start": 31, "end": 31 } },
+   "cites": [{ "path": "src/lib/storage.ts", "lineStart": 42, "lineEnd": 52 }],
+   "front": "Review criteria for sync changes (atomic commit at src/lib/storage.ts:42-52): list the five conditions.",
+   "back": "setSession invalidation before clearing account data; baseline write and ack deletion in one transaction; acks limited to the sent batch; publication re-reads storage; and each has a test that fails when the line is removed."
+  },
+  {
+   "id": "f04-swallowed-failures",
+   "kind": "flashcard",
+   "source": { "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md", "lines": { "start": 25, "end": 25 } },
+   "cites": [{ "path": "src/lib/progress.tsx", "lineStart": 87, "lineEnd": 87 }],
+   "front": "Finding F4: syncNow ends in .catch(() => {}) (src/lib/progress.tsx:87). What is the operational cost?",
+   "back": "Nothing records why a sync failed. The only signal is pendingCount not decreasing, so auth, network and server failures are indistinguishable and invisible."
+  }
+ ]
+}

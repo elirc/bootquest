@@ -1,0 +1,158 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "organized-experiment-tenant-search-indexer--docs-architecture-README.md",
+ "items": [
+  {
+   "key": "seed:explainback:organized-experiment-tenant-search-indexer/explain-back/3ba4fd76dad4a513",
+   "provenance": {
+    "repo": "organized-experiment-tenant-search-indexer",
+    "sha": "0c15ff9db8ebd08d79d93e3f5ec6d02ebdc4b8eb",
+    "path": "docs/architecture/README.md",
+    "lines": {
+     "start": 49,
+     "end": 49
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "G2 BRIEF — tenant-search-indexer (multi-tenant search, Next.js + Drizzle + PostgreSQL). Verified finding T3: `startTenantRebuild()` sets `rebuildingGeneration` and only `completeTenantRebuild()` clears it, so when a rebuild job throws, the job is marked FAILED but the flag stays set and every later `requestIndexRebuild()` answers 409 'A rebuild is already in progress' until someone runs manual SQL. You will delegate the fix to a coding agent. Write the brief: goal, allowed files, boundaries, test command, stop condition. Commit to your brief first, then tick the checkpoints you covered and add up the weights.",
+     "keyPoints": [
+      {
+       "text": "[w3] Goal: a REBUILD job that throws must leave the tenant able to request a new rebuild; the failure path releases `rebuildingGeneration` instead of leaving it for manual SQL.",
+       "cite": {
+        "path": "src/repositories/tenantSearchStateRepository.ts",
+        "lineStart": 66,
+        "lineEnd": 92
+       }
+      },
+      {
+       "text": "[w3] Release the flag conditionally: only for a failed REBUILD job, and only while `rebuildingGeneration` still equals that job's generation (a new repository function whose WHERE carries the generation), never a blind reset in the runner's generic catch.",
+       "cite": {
+        "path": "src/services/indexingJobRunner.ts",
+        "lineStart": 42,
+        "lineEnd": 58
+       }
+      },
+      {
+       "text": "[w2] Scope includes cleaning up the failed generation's partially written documents with the existing tenant-scoped `deleteGenerationDocuments()`, so the next rebuild does not inherit them.",
+       "cite": {
+        "path": "src/repositories/searchDocumentRepository.ts",
+        "lineStart": 122,
+        "lineEnd": 132
+       }
+      },
+      {
+       "text": "[w2] Allowed files: src/services/indexingJobRunner.ts, src/repositories/tenantSearchStateRepository.ts and one new test file under tests/ (the vitest config sets no include, so the default *.test.ts pattern picks it up).",
+       "cite": {
+        "path": "vitest.config.ts",
+        "lineStart": 10,
+        "lineEnd": 14
+       }
+      },
+      {
+       "text": "[w3] Boundary: the 409 guard in `requestIndexRebuild()` stays exactly as it is, no schema or migration change, no automatic re-queue of FAILED jobs, and findings T1/T4/T6 are out of scope.",
+       "cite": {
+        "path": "src/services/indexingService.ts",
+        "lineStart": 23,
+        "lineEnd": 33
+       }
+      },
+      {
+       "text": "[w2] Test command: `npm test` (vitest run) with the repositories and the db client mocked through vi.mock, the way the existing tenant-isolation test does it, so no PostgreSQL is needed.",
+       "cite": {
+        "path": "tests/search-service.tenant-isolation.test.ts",
+        "lineStart": 9,
+        "lineEnd": 16
+       }
+      },
+      {
+       "text": "[w2] Stop condition: a test where the rebuild snapshot throws shows the job marked FAILED and the flag released for that generation, plus a test that a failed INCREMENTAL job leaves the flag alone; the concurrent-request race is reported, not fixed.",
+       "quote": "concurrent rebuild requests can both succeed"
+      }
+     ]
+    },
+    {
+     "prompt": "G2 PRE-MORTEM — same delegation. What are the likeliest ways an agent goes wrong on this task, and what in your brief prevents each?",
+     "keyPoints": [
+      {
+       "text": "[w3] It deletes or softens the 409 check so a stale flag is simply ignored, which reopens double rebuilds instead of fixing the failure path.",
+       "cite": {
+        "path": "src/services/indexingService.ts",
+        "lineStart": 26,
+        "lineEnd": 30
+       }
+      },
+      {
+       "text": "[w3] It clears the flag in the shared catch for every failed job; incremental jobs fail routinely (T2), so an incremental failure would wipe the marker of a rebuild that is still queued and let a second rebuild for the same generation be requested.",
+       "quote": "a ticket changed twice between runs wedges incremental indexing for its tenant"
+      },
+      {
+       "text": "[w2] It resets the flag but leaves the half-written next-generation documents behind, because the snapshot upserts run outside any transaction.",
+       "cite": {
+        "path": "src/services/indexingJobRunner.ts",
+        "lineStart": 105,
+        "lineEnd": 123
+       }
+      },
+      {
+       "text": "[w2] It adds a retry loop or re-queues FAILED rebuild jobs, a new feature the brief did not ask for.",
+       "quote": "`FAILED` is terminal and nothing re-queues it"
+      },
+      {
+       "text": "[w1] It wraps the whole rebuild (snapshot reads and upserts) in one long transaction to make it 'atomic', changing the cutover design that deliberately keeps only the flip and the old-generation delete together.",
+       "cite": {
+        "path": "src/services/indexingJobRunner.ts",
+        "lineStart": 125,
+        "lineEnd": 129
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "G2 HANDBACK REVIEW — the agent says the stuck-rebuild fix is in and tests pass. What do you check before you accept it?",
+     "keyPoints": [
+      {
+       "text": "[w3] The new failure test is red on the original runner (the flag is still set after the throw) and green on the fix; ask for both runs.",
+       "cite": {
+        "path": "src/services/indexingJobRunner.ts",
+        "lineStart": 55,
+        "lineEnd": 58
+       }
+      },
+      {
+       "text": "[w3] `requestIndexRebuild()` is untouched in the diff and still throws ConflictError while a rebuild is genuinely in progress.",
+       "cite": {
+        "path": "src/services/indexingService.ts",
+        "lineStart": 26,
+        "lineEnd": 30
+       }
+      },
+      {
+       "text": "[w2] The release is keyed on the generation, so a late failure from an old job cannot clear the marker of a newer rebuild; a test or the WHERE clause shows it.",
+       "cite": {
+        "path": "src/repositories/tenantSearchStateRepository.ts",
+        "lineStart": 66,
+        "lineEnd": 80
+       }
+      },
+      {
+       "text": "[w2] src/db/schema.ts is unchanged and no drizzle migration appears in the diff.",
+       "cite": {
+        "path": "src/db/schema.ts",
+        "lineStart": 179,
+        "lineEnd": 180
+       }
+      },
+      {
+       "text": "[w1] The handback flags that tenants already stuck stay stuck until a one-off data repair, since the fix only changes future failures.",
+       "quote": "Recovery needs manual SQL."
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

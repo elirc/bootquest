@@ -7,7 +7,7 @@ import { readPack } from '@bootquest/server/packs';
 import { runSelfRun, type SelfRunSpec } from '@bootquest/server/runners/self-run';
 import { dedupAgainstGithub, exerciseName, foreignDirectives, githubCsbootcampIds, importJstrainCs, needsAspNetFramework } from './cs.ts';
 import { courseIdFor, ImportError, importJstrain, stableKey } from './import.ts';
-import { answerKey, parseQuizFile, routeItem, type QuizCapture } from './quiz.ts';
+import { answerKey, correctedKeyTokens, KEY_CORRECTIONS, parseQuizFile, routeItem, type QuizCapture } from './quiz.ts';
 import { parseJsHeader, readGitHead } from './source.ts';
 
 /** a FORMAT.md-shaped JS exercise / solution pair */
@@ -283,6 +283,28 @@ describe('jstrain importer: quiz bank routing (single-keyed or written)', () => 
     const { items } = parseQuizFile('01-language-core.md', QUIZ);
     expect(await routeItem(items[0]!, (await import('./quiz.ts')).defaultCapture)).toMatchObject({ kind: 'predict', expected: 'object\nnumber' });
   }, 30_000);
+
+  it('KEY_CORRECTIONS overlay: corrected tokens replace a wrong upstream key, and a stale / wrong correction REFUSES', async () => {
+    // the real quarantined item's shape, upstream tokens exactly as shipped
+    const md = `# 04 · Async — event loop\n\nCover.\n\n### Q10 — two independent chains\n\nWhat does this print, in what order?\n\n\`\`\`js\nsnippet();\n\`\`\`\n\n<details><summary>Answer</summary>\n\n**\`A1, B1, A2, B2, A3, B3\`** — interleaved.\n</details>\n`;
+    const { items } = parseQuizFile('04-async-event-loop.md', md);
+    const q10 = items[0]!;
+    expect(q10.course).toBe('quiz-04-async-event-loop');
+    expect(q10.slug).toBe('q10');
+    const real = 'chain A1\nchain B1\nchain A2\nchain B2\nchain A3\nchain B3\n';
+    const cap: QuizCapture = async () => ({ stdout: real, stderr: '', exitCode: 0, timedOut: false });
+    const route = await routeItem(q10, cap);
+    expect(route).toEqual({ kind: 'predict', snippet: 'snippet();\n', expected: real.trimEnd(), keyTokens: [...KEY_CORRECTIONS.get('quiz-04-async-event-loop/q10')!.tokens] });
+    // stale: the upstream answer changed since the correction was verified -> loud refusal
+    const stale = { ...q10, answer: q10.answer.replace('A1, B1, A2, B2, A3, B3', 'B1 first actually') };
+    await expect(routeItem(stale, cap)).rejects.toThrow(/key-correction overlay is stale/);
+    expect(() => correctedKeyTokens(stale, ['B1 first actually'])).toThrow(/stale/);
+    // wrong: the captured output no longer carries the corrected tokens -> loud refusal
+    const other: QuizCapture = async () => ({ stdout: 'something else entirely\n', stderr: '', exitCode: 0, timedOut: false });
+    await expect(routeItem(q10, other)).rejects.toThrow(/key-correction token .* is not in the captured output/);
+    // untouched items pass through unchanged
+    expect(correctedKeyTokens({ file: 'x.md', number: 1, course: 'quiz-01-x', slug: 'q01' }, ['a'])).toEqual(['a']);
+  });
 });
 
 describe('jstrain-cs: embedded csbootcamp, deduped against github csbootcamp (GitHub wins)', () => {

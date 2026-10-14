@@ -275,7 +275,8 @@ Opus plan review (`docs/recon/plan-review.md`) returned 2 blockers + 17 majors;
   (extra fields pass through); first full sync queues 1,468 'initial'
   items across 4 repos ⇒ SEED SESSIONS NEED include-lists/triage, raw
   queue is too wide. U03's tsc leg recorded as uncovered_legs in
-  check-specs.json (not surfaced in API yet). 24→7 competency mapping was
+  check-specs.json (not surfaced in API yet; OPS later closed it with
+  tsc_project — see the OPS note below). 24→7 competency mapping was
   the agent's judgment — REVIEW during W6.
 - Sync core lives in server/src/sync (tools/seed→server dependency would
   cycle); GitHub via REST fetch + gh auth token (no Octokit dep).
@@ -382,6 +383,19 @@ Opus plan review (`docs/recon/plan-review.md`) returned 2 blockers + 17 majors;
   Windows file locks left on disk under ~/.claude/worktrees — plain
   disk cleanup when convenient; 1 git registration + branch remains,
   removable after deletion).
+
+## 2026-10-14 — OPS: U03 tsc composite on EXISTING DBs (review fix)
+
+- A recorded-spec change (check-specs.json) only reaches a DB on its next
+  sync. Sync now RE-REGISTERS a program-unit check in place when no attempt
+  or run row references it (drift note "re-registered the check"); a
+  referenced check stays pinned (its attempts were graded by it) with the
+  drift note "kept the registered check (attempts reference it)".
+- STEP FOR EXISTING DBs after the OPS branch lands: run one sync
+  (`POST /api/sync` / `seed:sync`) and read the U03 drift line. If it says
+  "kept", the player's U03 still grades WITHOUT tsc; GET /units surfaces
+  that as an uncoveredLegs typecheck leg (judged against the REGISTERED
+  check, never the table alone) until a re-seed decision replaces it.
 
 ## 2026-10-08 — W6 audit (docs/recon/w6-audit.md) — no blockers, 4 majors
 

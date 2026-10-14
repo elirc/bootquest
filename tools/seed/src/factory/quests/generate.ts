@@ -5,7 +5,7 @@
  * Candidates are NOT shipped until validate.ts accepts them.
  */
 import type { SeedCitation, SeedFlashcardItem, SeedItem, SeedQuizItem, SeedReadingStepItem, SeedSkip } from '@bootquest/shared';
-import { parseCitations } from '../../citations/parse.ts';
+import { isIdentifierToken, parseCitations } from '../../citations/parse.ts';
 import { readTracked, type Checkout } from '../checkout.ts';
 import { asCitation, resolveAt, seedCitations } from '../cite.ts';
 import type { Exclusions } from '../exclusions.ts';
@@ -100,8 +100,19 @@ export function generateQuestCandidates(co: Checkout, guides: readonly string[],
     if (ex.admit(co.repo, guide, text)) continue;
     const lines = scanLines(text);
     const hs = headings(lines);
-    const citations = seedCitations(parseCitations(text, guide).citations, hs);
     const gc: GuideCandidates = { guide, items: [], skipped: [] };
+    // fix 3b: a path-only, line-less `cfg.lock`-shaped token that resolves to NO file at the
+    // pinned sha is a member expression the parser mistook for a filename — dropped here
+    // (counted as a skip) so it never rides on an item and quarantines it.
+    const citations = seedCitations(parseCitations(text, guide).citations, hs).filter((c) => {
+      if (!c.path || c.malformed || c.lineStart !== null || c.lineEnd !== null || c.form !== 'path-only' || !isIdentifierToken(c.path)) return true;
+      const r = resolveAt(co, guide, asCitation(c, guide));
+      if (r.status === 'error' && r.reason === 'missing-file') {
+        gc.skipped.push({ subject: `${guide}:${c.sourceLine}`, reason: `not-a-citation: \`${c.raw}\` reads as a dotted identifier and no such file exists at the pinned sha` });
+        return false;
+      }
+      return true;
+    });
     const within = (a: number, b: number) => citations.filter((c) => c.sourceLine >= a && c.sourceLine <= b);
     const prov = (a: number, b: number) => ({ repo: co.repo, sha: co.sha, path: guide, lines: { start: a, end: b } });
 

@@ -1,0 +1,80 @@
+{
+ "name": "world-katas",
+ "katas": [
+  {
+   "id": "payslip-download-by-filename",
+   "title": "Payslip download: serve the PDF straight from the filename id",
+   "findingRef": "world payslip IDOR (docs/architecture.md:151)",
+   "provenance": {
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 151,
+     "end": 151
+    }
+   },
+   "diff": "diff --git a/src/app/api/documents/payslips/getPayslip.mjs b/src/app/api/documents/payslips/getPayslip.mjs\n--- a/src/app/api/documents/payslips/getPayslip.mjs\n+++ b/src/app/api/documents/payslips/getPayslip.mjs\n@@ -11,16 +11,7 @@\n     return { status: 403, body: 'Forbidden' };\n   }\n \n-  // The id is caller-controlled: resolve it to a PayrollItem and check the caller's\n-  // organization — and an employee may only fetch their own item — before touching disk.\n-  const item = await store.findPayrollItemWithRun(params.id);\n-  if (!item || item.run.organizationId !== user.organizationId) {\n-    return { status: 404, body: 'Not Found' };\n-  }\n-  if (user.role === 'EMPLOYEE' && item.employee.userId !== user.id) {\n-    return { status: 404, body: 'Not Found' };\n-  }\n-\n+  // The id IS the filename: skip the database round-trip and read straight from disk.\n   const file = await files.read(`storage/payslips/${params.id}.pdf`);\n   if (!file) {\n     return { status: 404, body: 'Not Found' };\n",
+   "contextFiles": [
+    {
+     "path": "src/app/api/documents/payslips/getPayslip.mjs",
+     "content": "// Adapted from world src/app/api/documents/payslips/[id]/route.js:5-19 @ 25b27ed\n// (withRoute's permission check inlined; the PayrollItem lookup and organization rule\n// from docs/architecture.md's \"close the payslip IDOR\" check added over an injected\n// store and file reader so the handler runs standalone).\nexport function hasPermission(user, permission) {\n  return Array.isArray(user.permissions) && user.permissions.includes(permission);\n}\n\nexport async function getPayslip({ user, params, store, files }) {\n  if (!hasPermission(user, 'payroll.view')) {\n    return { status: 403, body: 'Forbidden' };\n  }\n\n  // The id is caller-controlled: resolve it to a PayrollItem and check the caller's\n  // organization — and an employee may only fetch their own item — before touching disk.\n  const item = await store.findPayrollItemWithRun(params.id);\n  if (!item || item.run.organizationId !== user.organizationId) {\n    return { status: 404, body: 'Not Found' };\n  }\n  if (user.role === 'EMPLOYEE' && item.employee.userId !== user.id) {\n    return { status: 404, body: 'Not Found' };\n  }\n\n  const file = await files.read(`storage/payslips/${params.id}.pdf`);\n  if (!file) {\n    return { status: 404, body: 'Not Found' };\n  }\n\n  return { status: 200, contentType: 'application/pdf', body: file };\n}\n",
+     "origin": {
+      "kind": "adapted",
+      "repoPath": "src/app/api/documents/payslips/[id]/route.js",
+      "lines": {
+       "start": 5,
+       "end": 19
+      }
+     }
+    }
+   ],
+   "seededDefectKey": [
+    {
+     "scenario": "A user in organization A holding payroll.view requests GET /api/documents/payslips/<an org-B payroll item id>.",
+     "evidence": {
+      "path": "src/app/api/documents/payslips/getPayslip.mjs",
+      "lineStart": 14,
+      "lineEnd": 14,
+      "in": "patched"
+     },
+     "consequence": "Any payroll.view holder in ANY organization downloads any payslip PDF on disk by supplying another org's item id — salary data crosses the tenant boundary. The docs' check ladder closes exactly this: load the PayrollItem with its run, verify the organization, and let an employee fetch only their own item."
+    },
+    {
+     "scenario": "The shipped route builds the path from the raw id and serves whatever exists on disk.",
+     "evidence": {
+      "path": "src/app/api/documents/payslips/[id]/route.js",
+      "lineStart": 6,
+      "lineEnd": 6,
+      "in": "repo"
+     },
+     "consequence": "Production has the IDOR today: route.js:5-19 checks only the payroll.view permission, never the organization or the employee, so any permitted caller in any org reads any payslip file (README and docs/architecture.md finding 4 both record it)."
+    }
+   ],
+   "test": {
+    "module": "src/app/api/documents/payslips/getPayslip.mjs",
+    "check": {
+     "type": "drill-js",
+     "language": "js",
+     "timeoutMs": 8000,
+     "tests": [
+      {
+       "name": "a payroll.view holder in org A cannot download an org-B payslip (docs/architecture.md finding 4)",
+       "code": "const store = { findPayrollItemWithRun: async (id) => (id === 'item-b' ? { id: 'item-b', run: { organizationId: 'org-b' }, employee: { userId: 'user-9' } } : null) }; const files = { read: async (p) => (p === 'storage/payslips/item-b.pdf' ? 'PDFBYTES-B' : null) }; const res = await mod.getPayslip({ user: { id: 'user-1', role: 'MANAGER', organizationId: 'org-a', permissions: ['payroll.view'] }, params: { id: 'item-b' }, store, files }); assert.equal(res.status, 404, 'an org-B payslip was served across the tenant boundary'); assert.notEqual(res.body, 'PDFBYTES-B');"
+      },
+      {
+       "name": "a manager downloads a payslip from their own organization",
+       "code": "const store = { findPayrollItemWithRun: async (id) => (id === 'item-a' ? { id: 'item-a', run: { organizationId: 'org-a' }, employee: { userId: 'user-2' } } : null) }; const files = { read: async (p) => (p === 'storage/payslips/item-a.pdf' ? 'PDFBYTES-A' : null) }; const res = await mod.getPayslip({ user: { id: 'user-1', role: 'MANAGER', organizationId: 'org-a', permissions: ['payroll.view'] }, params: { id: 'item-a' }, store, files }); assert.equal(res.status, 200); assert.equal(res.contentType, 'application/pdf'); assert.equal(res.body, 'PDFBYTES-A');"
+      },
+      {
+       "name": "an employee can fetch only their own payslip",
+       "code": "const store = { findPayrollItemWithRun: async (id) => (id === 'item-a' ? { id: 'item-a', run: { organizationId: 'org-a' }, employee: { userId: 'user-2' } } : null) }; const files = { read: async (p) => (p === 'storage/payslips/item-a.pdf' ? 'PDFBYTES-A' : null) }; const own = await mod.getPayslip({ user: { id: 'user-2', role: 'EMPLOYEE', organizationId: 'org-a', permissions: ['payroll.view'] }, params: { id: 'item-a' }, store, files }); assert.equal(own.status, 200); const other = await mod.getPayslip({ user: { id: 'user-3', role: 'EMPLOYEE', organizationId: 'org-a', permissions: ['payroll.view'] }, params: { id: 'item-a' }, store, files }); assert.equal(other.status, 404, \"a teammate's payslip was served to the wrong employee\");"
+      },
+      {
+       "name": "a caller without payroll.view gets 403",
+       "code": "const res = await mod.getPayslip({ user: { id: 'user-1', role: 'MANAGER', organizationId: 'org-a', permissions: [] }, params: { id: 'item-a' }, store: { findPayrollItemWithRun: async () => null }, files: { read: async () => null } }); assert.equal(res.status, 403);"
+      }
+     ]
+    }
+   }
+  }
+ ]
+}

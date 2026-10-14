@@ -35,6 +35,7 @@ import type { SeedExplainBackItem, SeedPatchKataItem, SeedVariantItem } from '@b
 import { startServer, type RunningServer } from '../../src/api/serve.ts';
 import { DAY_MS, fixedClock } from '../../src/engines/clock.ts';
 import { getRating } from '../../src/engines/evidence.ts';
+import { explainBackUnitKey, retestUnitKey } from '../../src/store/ladder.ts';
 import { createSyncService, resolveSyncPaths } from '../../src/sync/service.ts';
 import { offlineGithubClient } from '../../src/sync/github.ts';
 import { packTarball } from '../../src/sync/cache.ts';
@@ -104,7 +105,7 @@ describe.skipIf(!HAVE_CHECKOUT)('W7 real ladder content end to end (temp DB, no 
     rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
-  it('wires every committed explain-back set, G2 rubric and kata as a unit (loaded === built); the U01 retest is pending until sync', async () => {
+  it('wires every committed explain-back set, G2 rubric and kata as a unit (loaded === built); every retest is pending on first boot', async () => {
     const st = running.ladder;
     const ebItems = store.explainBackItems();
     const g2 = ebItems.filter((i) => /^G2 BRIEF\b/.test(i.questions[0]!.prompt)).length;
@@ -113,10 +114,15 @@ describe.skipIf(!HAVE_CHECKOUT)('W7 real ladder content end to end (temp DB, no 
     expect(st.explainBack.loaded).toBe(st.explainBack.built);
     expect(st.katas).toMatchObject({ built: store.kataItems().length, loaded: store.kataItems().length });
     expect(st.retests.built).toBe(store.variantItems().length);
-    expect(st.retests.pending.length).toBe(store.variantItems().length); // no signalpost units before the first sync
+    // no signalpost units before the first sync; the authored G4 unit loads AFTER retests, and the
+    // http-lab fixture unit never exists here -> on the FIRST boot every retest is pending
+    expect(st.retests.pending.length).toBe(store.variantItems().length);
     expect(st.authored).toEqual({ built: 2, loaded: 2 });
     const l = await ladder();
-    expect(l.counts).toEqual({ explainBack: st.explainBack.loaded, g2, katas: store.kataItems().length, retests: 0, authored: 2 });
+    // ww6 is the one committed quest pack matching no campaign study quest -> one standalone study unit
+    expect(st.study).toEqual({ built: 1, loaded: 1 });
+    expect(l.counts).toEqual({ explainBack: st.explainBack.loaded, g2, katas: store.kataItems().length, retests: 0, study: 1, authored: 2 });
+    expect(l.units.filter((u) => u.family === 'study').map((u) => u.repo)).toEqual(['ww6']);
     expect(l.units.filter((u) => u.family === 'kata').every((u) => u.trackId === 'agentic')).toBe(true);
     expect(l.units.filter((u) => u.family === 'g2').every((u) => u.trackId === 'agentic')).toBe(true);
     // every ordinary explain-back set's repo is a campaign quest -> linked for display
@@ -164,19 +170,49 @@ describe.skipIf(!HAVE_CHECKOUT)('W7 real ladder content end to end (temp DB, no 
     expect(stats).toMatchObject({ katasScored: 1, assistedCount: 0, defectsCaught: 1, defectsTotal: item.seededDefectKey.length });
   });
 
-  it('sync registers U01; the ladder re-links: U01 explain-back -> artifact prerequisite, the U01 retest is created', async () => {
+  it('sync registers U01..U12; the ladder re-links: each signalpost explain-back -> its artifact prerequisite, the signalpost + G4 retests are created, fixture retests stay pending', async () => {
     const s = await api<{ ok: boolean; repos: { error: string | null; program: { units: number; checked: number } | null }[] }>('POST', '/sync', { repos: ['elirc/signalpost-swe-bootcamp'] });
     expect(s.status, s.text).toBe(200);
     expect(s.json.ok).toBe(true);
     expect(s.json.repos[0]!.program).toMatchObject({ units: 12, checked: 3 });
     const l = await ladder();
-    const u01 = (await api<{ unit: { id: number } }>('GET', `/units/by-key/${encodeURIComponent('gh:elirc/signalpost-swe-bootcamp:U01')}`)).json.unit.id;
-    const eb = l.units.find((u) => u.family === 'explain-back' && u.repo === 'signalpost-swe-bootcamp')!;
-    expect(eb.prerequisites).toEqual([u01]);
+    const unitId = async (key: string): Promise<number | null> => {
+      const r = await api<{ unit: { id: number } }>('GET', `/units/by-key/${encodeURIComponent(key)}`);
+      return r.status === 200 ? r.json.unit.id : null;
+    };
+    const u01 = (await unitId('gh:elirc/signalpost-swe-bootcamp:U01'))!;
+    // explain-back pairing: each signalpost set's provenance path (docs/curriculum/<code>.md) is the
+    // program unit's guide ref, so the re-link gives each set exactly its own unit as prerequisite
+    for (const code of ['U01', 'U02', 'U03'] as const) {
+      const set = store.explainBackItems().find((i) => i.provenance.repo === 'signalpost-swe-bootcamp' && i.provenance.path === `docs/curriculum/${code}.md`);
+      expect(set, `explain-back set for ${code}`).toBeDefined();
+      const unit = l.units.find((u) => u.family === 'explain-back' && u.key === explainBackUnitKey(set!));
+      expect(unit, `explain-back unit for ${code}`).toBeDefined();
+      expect(unit!.prerequisites).toEqual([await unitId(`gh:elirc/signalpost-swe-bootcamp:${code}`)]);
+    }
+    // retests: live exactly for the variants whose artifact unit exists in this DB (signalpost after
+    // the sync; G4 via the reload the sync triggered); fixture:* artifacts never exist here
     const rt = l.units.filter((u) => u.family === 'retest');
-    expect(rt).toHaveLength(store.variantItems().length);
-    expect(rt[0]!.variationOfUnitId).toBe(u01);
-    expect(rt[0]!.trackId).toBe('js');
+    const liveVariants: SeedVariantItem[] = [];
+    for (const v of store.variantItems()) if ((await unitId(v.unitKey)) !== null) liveVariants.push(v);
+    expect(rt.map((u) => u.key).sort()).toEqual(liveVariants.map((v) => retestUnitKey(v)).sort());
+    expect(liveVariants.length).toBeLessThan(store.variantItems().length); // the http-lab variant stays pending
+    expect(store.variantItems().some((v) => v.unitKey === 'fixture:http-tasks-api')).toBe(true);
+    expect(liveVariants.some((v) => v.unitKey === 'fixture:http-tasks-api')).toBe(false);
+    const u01Variant = store.variantItems().find((v) => v.unitKey === 'gh:elirc/signalpost-swe-bootcamp:U01')!;
+    const u01Rt = rt.find((u) => u.key === retestUnitKey(u01Variant))!;
+    expect(u01Rt.variationOfUnitId).toBe(u01);
+    expect(u01Rt.trackId).toBe('js');
+    const g4Variant = store.variantItems().find((v) => v.unitKey === 'agentic/g4-verification-engineering')!;
+    const g4Rt = rt.find((u) => u.key === retestUnitKey(g4Variant))!;
+    expect(g4Rt.variationOfUnitId).toBe(await unitId('agentic/g4-verification-engineering'));
+    expect(g4Rt.trackId).toBe('agentic');
+    // honesty: revealing the retest (reveal walks only UP variation_of) must not hand over G4's hidden
+    // solution — the retest solves a different function, never the wrong-solution filter itself
+    const g4Hidden = (JSON.parse(readFileSync(join(REPO, 'content', 'units', 'agentic.json'), 'utf8')) as { content: Record<string, { solution: string }> })
+      .content['agentic/g4-verification-engineering']!.solution;
+    expect(g4Variant.referenceSolution).not.toContain('wrongSolutionFilter');
+    expect(g4Variant.referenceSolution.replace(/\s+/g, '')).not.toBe(g4Hidden.replace(/\s+/g, ''));
   }, 300_000);
 
   it('ONE FULL PROMOTION on real content: U01 artifact -> U01 explain-back -> closed at +1 day -> seeded variant passes at the due time', async () => {
@@ -185,8 +221,10 @@ describe.skipIf(!HAVE_CHECKOUT)('W7 real ladder content end to end (temp DB, no 
     expect(comp).toBeDefined();
     const before = getRating(running.db, comp);
     const l = await ladder();
-    const eb = l.units.find((u) => u.family === 'explain-back' && u.repo === 'signalpost-swe-bootcamp')!;
-    const rtUnit = l.units.find((u) => u.family === 'retest')!;
+    const ebItem = store.explainBackItems().find((i) => i.provenance.repo === 'signalpost-swe-bootcamp' && i.provenance.path === 'docs/curriculum/U01.md')!;
+    const eb = l.units.find((u) => u.key === explainBackUnitKey(ebItem))!;
+    const variant = store.variantItems().find((v) => v.unitKey === 'gh:elirc/signalpost-swe-bootcamp:U01') as SeedVariantItem;
+    const rtUnit = l.units.find((u) => u.key === retestUnitKey(variant))!;
     // the retest is closed before anything happened
     const closed0 = UnitDetailResponse.parse((await api('GET', `/units/${rtUnit.id}`)).json);
     expect(closed0.retestGate).toEqual({ open: false, reason: 'not-scheduled', opensAt: null });
@@ -198,7 +236,6 @@ describe.skipIf(!HAVE_CHECKOUT)('W7 real ladder content end to end (temp DB, no 
     expect(art.attempt.mode).toBe('solo');
     // leg (b): the U01 explain-back (code hidden), all key points covered
     clock.advance(60_000);
-    const ebItem = store.explainBackItems().find((i) => i.provenance.repo === 'signalpost-swe-bootcamp' && i.provenance.path === 'docs/curriculum/U01.md')!;
     expect((await api('POST', `/units/${eb.id}/explain-back/answers`, { answers: ['a', 'b', 'c'].map((x) => `answer ${x}`) })).status).toBe(200);
     const sc = ExplainBackScoreResponse.parse((await api('POST', `/units/${eb.id}/explain-back/self-score`, { perKeyPoint: allCovered(ebItem) })).json);
     expect(sc.passed).toBe(true);
@@ -208,7 +245,6 @@ describe.skipIf(!HAVE_CHECKOUT)('W7 real ladder content end to end (temp DB, no 
 
     // +1 day: closed, nothing runs, no task text
     clock.advance(DAY_MS);
-    const variant = store.variantItems()[0] as SeedVariantItem;
     expect((await api('POST', `/units/${rtUnit.id}/run`, { code: variant.referenceSolution })).status).toBe(409);
     expect((await api('POST', `/units/${rtUnit.id}/submit`, { code: variant.referenceSolution })).status).toBe(409);
     const closed1 = UnitDetailResponse.parse((await api('GET', `/units/${rtUnit.id}`)).json);

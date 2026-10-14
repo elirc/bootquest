@@ -17,6 +17,7 @@ import type { Db } from '../db/database.ts';
 import { nowMs, type Clock } from '../engines/clock.ts';
 import { insertUnit } from './content.ts';
 import type { SeedItemStore } from './seed-items.ts';
+import { STUDY_COMPETENCY, STUDY_QUIZ_PASS_PCT, studyQuizSpecFor } from './study-quests.ts';
 
 /**
  * W7 ladder wiring (audit #4): the REAL competency-ladder units, derived at startup from the
@@ -26,6 +27,11 @@ import type { SeedItemStore } from './seed-items.ts';
  *     units the set explains (a unit whose lesson guide ref is the set's source file, e.g.
  *     signalpost U01 after `bootquest sync`), so leg (b) links to leg (a);
  *   - one patch-kata unit per kata, all on the agentic track: the G1 "Kata bank";
+ *   - one STUDY unit per seed:quests pack whose repo is NOT a campaign study quest (kata-bank
+ *     style standalone reference material, e.g. ww6 — correctly absent from the campaign as a
+ *     ww-crud family member): the pack's quiz gate / reading list / flashcards stay playable
+ *     without inventing a quest. Key binds the gate's item keys, so a re-seeded pack retires
+ *     the old unit and creates a fresh one (never a silent in-place rebind);
  *   - one retest unit per variant item (content/seed/variants): kind 'retest', variation_of the
  *     artifact unit named by the item's unitKey. A variant whose artifact unit is not in this DB
  *     yet (e.g. signalpost before its first sync) is PENDING: counted, created on a later load;
@@ -61,6 +67,8 @@ export const explainBackUnitKey = (item: SeedExplainBackItem): string =>
   `${LADDER_PREFIX}${isG2(item) ? 'g2' : 'explain-back'}/${slug(item.provenance.repo)}/${h12(item.key)}`;
 export const kataUnitKey = (item: SeedPatchKataItem): string => `${LADDER_PREFIX}kata/${slug(item.provenance.repo)}/${h12(item.key)}`;
 export const retestUnitKey = (item: SeedVariantItem): string => `${LADDER_PREFIX}retest/${slug(item.provenance.repo)}/${h12(item.key)}`;
+/** standalone study-pack unit: the key binds the GATE (item keys), so a re-seed = new unit */
+export const studyUnitKey = (repo: string, quizItemKeys: readonly string[]): string => `${LADDER_PREFIX}study/${slug(repo)}/${h12(quizItemKeys.join('\u0000'))}`;
 
 const KATA_DIFFICULTY: Readonly<Record<string, number>> = { easy: 1, medium: 2, hard: 3 };
 const PROJECT_KINDS_SQL = PROJECT_UNIT_KINDS.map((k) => `'${k}'`).join(', ');
@@ -99,15 +107,17 @@ export function readAuthoredUnits(path: string): AuthoredUnitsFile {
 // ---------------------------------------------------------------- planning (pure)
 
 interface PlannedUnit {
-  family: 'explain-back' | 'g2' | 'kata' | 'retest';
+  family: 'explain-back' | 'g2' | 'kata' | 'retest' | 'study';
   key: string;
   track: TrackId;
-  kind: 'explain-back' | 'patch-kata' | 'retest';
+  kind: 'explain-back' | 'patch-kata' | 'retest' | 'study';
   title: string;
   difficulty: number | null;
   repo: string;
   competencies: CompetencyId[];
   check: CheckSpecInput;
+  /** study only: the gate's pass threshold (mirrors the campaign study-quiz gates) */
+  threshold?: number;
   /** retest only: the artifact unit key */
   variationOf?: string;
   /** explain-back only: the source file the set covers (artifact matching) */
@@ -144,7 +154,7 @@ function trackForRepo(repo: string, links: Map<string, CampaignLink>): TrackId {
   return /^(net|dotnet|csharp|cs)|-net$/.test(repo) ? 'csharp' : 'js';
 }
 
-function plan(items: SeedItemStore, links: Map<string, CampaignLink>, kataDifficulty: ReadonlyMap<string, number>): PlannedUnit[] {
+function plan(items: SeedItemStore, links: Map<string, CampaignLink>, kataDifficulty: ReadonlyMap<string, number>, studyQuestRepos: ReadonlySet<string>): PlannedUnit[] {
   const out: PlannedUnit[] = [];
   for (const it of items.explainBackItems()) {
     const g2 = isG2(it);
@@ -172,6 +182,26 @@ function plan(items: SeedItemStore, links: Map<string, CampaignLink>, kataDiffic
       repo: it.provenance.repo,
       competencies: ['code-reading'],
       check: { type: 'patch-kata', kataKey: it.key, defectCount: it.seededDefectKey.length },
+    });
+  }
+  // standalone study packs: a seed:quests pack (with a quiz gate) whose repo is not a campaign
+  // study quest is wired as reference material here; matched packs belong to store/study-quests.ts
+  for (const [repo, pack] of items.questPacks()) {
+    if (studyQuestRepos.has(repo)) continue;
+    const spec = studyQuizSpecFor(pack);
+    if (!spec) continue; // nothing to gate on (no quiz items): stays a merely-unmatched pack
+    const itemKeys = (spec as { itemKeys: string[] }).itemKeys;
+    out.push({
+      family: 'study',
+      key: studyUnitKey(repo, itemKeys),
+      track: trackForRepo(repo, links),
+      kind: 'study',
+      title: `Study reference: ${repo}`,
+      difficulty: null,
+      repo,
+      competencies: [STUDY_COMPETENCY],
+      check: spec,
+      threshold: STUDY_QUIZ_PASS_PCT,
     });
   }
   for (const it of items.variantItems()) {
@@ -221,6 +251,8 @@ export interface LadderLoadStats {
   g2: LadderFamilyStats;
   katas: LadderFamilyStats & { linkedToQuest: number };
   retests: LadderFamilyStats & { pending: string[] };
+  /** standalone study-pack units (quest packs matching no campaign study quest) */
+  study: LadderFamilyStats;
   authored: LadderFamilyStats;
   inserted: number;
   retired: number;
@@ -304,7 +336,7 @@ function upsertUnit(db: Db, sourceId: number, u: Omit<PlannedUnit, 'family' | 'r
         title: u.title,
         ...(u.difficulty !== null ? { difficulty: u.difficulty } : {}),
         competencies: u.competencies,
-        checks: [{ spec: u.check }],
+        checks: [{ spec: u.check, ...(u.threshold !== undefined ? { threshold: u.threshold } : {}) }],
       },
       clock,
     );
@@ -356,9 +388,19 @@ export function assertUniqueSeedItemRefs(db: Db): void {
       WHERE c.type IN ('explain-back', 'patch-kata') AND u.retired_at IS NULL
       GROUP BY ref HAVING COUNT(DISTINCT u.id) > 1`,
   );
-  if (dups.length) {
+  // study-quiz gates reference their quiz items one by one (a miss enrols the item's KEY as a review
+  // card), so a quiz item shared by two live gates — e.g. a standalone study unit and a campaign
+  // study quest on the same pack — would let one gate's review card answer the other
+  const quizDups = db.all<{ ref: string; n: number; keys: string }>(
+    `SELECT j.value AS ref, COUNT(DISTINCT u.id) AS n, group_concat(DISTINCT u.key) AS keys
+       FROM "check" c JOIN unit u ON u.id = c.unit_id, json_each(c.spec, '$.itemKeys') j
+      WHERE c.type = 'study-quiz' AND u.retired_at IS NULL
+      GROUP BY ref HAVING COUNT(DISTINCT u.id) > 1`,
+  );
+  const all = [...dups, ...quizDups];
+  if (all.length) {
     throw new LadderLoadError(
-      `seed item(s) referenced by more than one live unit (answer-before-key is per item): ${dups.map((d) => `${d.ref} <- ${d.keys}`).join('; ')}`,
+      `seed item(s) referenced by more than one live unit (answer-before-key is per item): ${all.map((d) => `${d.ref} <- ${d.keys}`).join('; ')}`,
     );
   }
 }
@@ -374,13 +416,17 @@ export function loadLadderIntoDb(db: Db, inputs: LadderInputs, clock: Clock): La
   const t = nowMs(clock);
   return db.tx(() => {
     const links = campaignLinks(db);
-    const planned = plan(inputs.seedItems, links, inputs.kataDifficulty ?? new Map());
+    const studyQuestRepos = new Set(
+      db.all<{ repo: string }>(`SELECT DISTINCT repo FROM quest WHERE quest_kind = 'study-quest' AND unit_id IS NOT NULL`).map((r) => r.repo),
+    );
+    const planned = plan(inputs.seedItems, links, inputs.kataDifficulty ?? new Map(), studyQuestRepos);
     const sourceId = upsertSource(db, LADDER_SOURCE_KEY, 'local/content-seed', t);
     const stats: LadderLoadStats = {
       explainBack: { built: 0, loaded: 0, linkedToArtifact: 0, linkedToQuest: 0 },
       g2: { built: 0, loaded: 0 },
       katas: { built: 0, loaded: 0, linkedToQuest: 0 },
       retests: { built: 0, loaded: 0, pending: [] },
+      study: { built: 0, loaded: 0 },
       authored: { built: 0, loaded: 0 },
       inserted: 0,
       retired: 0,
@@ -413,6 +459,13 @@ export function loadLadderIntoDb(db: Db, inputs: LadderInputs, clock: Clock): La
       if (p.family === 'kata') {
         stats.katas.built++;
         if (links.has(p.repo)) stats.katas.linkedToQuest++;
+        const [, ins] = upsertUnit(db, sourceId, { ...p, prerequisites: [] }, clock);
+        if (ins) stats.inserted++;
+        keep.add(p.key);
+        continue;
+      }
+      if (p.family === 'study') {
+        stats.study.built++;
         const [, ins] = upsertUnit(db, sourceId, { ...p, prerequisites: [] }, clock);
         if (ins) stats.inserted++;
         keep.add(p.key);
@@ -463,10 +516,12 @@ export function loadLadderIntoDb(db: Db, inputs: LadderInputs, clock: Clock): La
     stats.g2.loaded = live(`${LADDER_PREFIX}g2/`);
     stats.katas.loaded = live(`${LADDER_PREFIX}kata/`);
     stats.retests.loaded = live(`${LADDER_PREFIX}retest/`);
+    stats.study.loaded = live(`${LADDER_PREFIX}study/`);
     const bad: string[] = [];
     if (stats.explainBack.loaded !== stats.explainBack.built) bad.push(`explain-back ${stats.explainBack.loaded} vs ${stats.explainBack.built}`);
     if (stats.g2.loaded !== stats.g2.built) bad.push(`g2 ${stats.g2.loaded} vs ${stats.g2.built}`);
     if (stats.katas.loaded !== stats.katas.built) bad.push(`katas ${stats.katas.loaded} vs ${stats.katas.built}`);
+    if (stats.study.loaded !== stats.study.built) bad.push(`study ${stats.study.loaded} vs ${stats.study.built}`);
     if (stats.retests.loaded !== stats.retests.built - stats.retests.pending.length) {
       bad.push(`retests ${stats.retests.loaded} vs ${stats.retests.built} built - ${stats.retests.pending.length} pending`);
     }
@@ -484,7 +539,7 @@ export interface LadderUnitRow {
   id: number;
   key: string;
   kind: string;
-  family: 'explain-back' | 'g2' | 'kata' | 'retest' | 'authored';
+  family: 'explain-back' | 'g2' | 'kata' | 'retest' | 'study' | 'authored';
   trackId: string;
   title: string;
   difficulty: number | null;
@@ -495,7 +550,7 @@ export interface LadderUnitRow {
 }
 
 const FAMILY_OF = (key: string): LadderUnitRow['family'] | null => {
-  const m = /^ladder\/(explain-back|g2|kata|retest)\//.exec(key);
+  const m = /^ladder\/(explain-back|g2|kata|retest|study)\//.exec(key);
   return m ? (m[1] as LadderUnitRow['family']) : null;
 };
 

@@ -1,0 +1,53 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "variants",
+ "name": "fixture-http-tasks-api",
+ "items": [
+  {
+   "key": "seed:variants:selfboot/variant/93640c74cffa2688",
+   "provenance": {
+    "repo": "selfboot",
+    "sha": "3795a396411a3b7825230efdf695d02adb26d831",
+    "path": "server/test/fixtures/check-lessons.json",
+    "lines": {
+     "start": 3,
+     "end": 56
+    }
+   },
+   "citations": [],
+   "kind": "variant",
+   "unitKey": "fixture:http-tasks-api",
+   "task": "# Changed example: the create-task endpoint as a pure handler\n\nThe http-lab unit checks a LIVE tasks API over HTTP (POST /api/tasks answers 201 with `{id, title, done: false}` and rejects bad input). This retest drills the same contract as a pure function, graded by the JS runner — a drill-js substitution, documented in docs/SEEDING.md (backlog).\n\nExport `handleCreateTask(store, rawBody)` from your module.\n\n- `store` is the server's task list: an array of `{id, title, done}` objects you may mutate ONLY for a valid create.\n- `rawBody` is the raw request body string.\n- Malformed JSON -> return `{status: 400, body: {error: <string>}}` and leave `store` untouched.\n- A missing, non-string or whitespace-only `title` -> `{status: 400, body: {error: <string>}}` and leave `store` untouched. VALIDATE BEFORE YOU INSERT.\n- Otherwise append `{id, title, done: false}` to `store` and return `{status: 201, body: <the new task>}`. The title is stored exactly as sent.\n- `id` is server-assigned: 1 + the highest id already in `store` (so 1 for an empty store); a client-sent id is ignored.",
+   "check": {
+    "type": "drill-js",
+    "language": "js",
+    "tests": [
+     {
+      "name": "a valid create returns 201 with a server-assigned id and done:false",
+      "code": "const store = [];\nconst r = mod.handleCreateTask(store, JSON.stringify({ title: 'write the tests first' }));\nassert.equal(r.status, 201);\nassert.deepEqual(r.body, { id: 1, title: 'write the tests first', done: false });\nassert.deepEqual(store, [{ id: 1, title: 'write the tests first', done: false }]);"
+     },
+     {
+      "name": "malformed JSON is a 400 and the store is untouched",
+      "code": "const store = [{ id: 1, title: 'seeded', done: false }];\nconst r = mod.handleCreateTask(store, '{\"title\": \"oops\"');\nassert.equal(r.status, 400);\nassert.deepEqual(store, [{ id: 1, title: 'seeded', done: false }]);"
+     },
+     {
+      "name": "an invalid title is a 400 and the store is unchanged",
+      "code": "const store = [];\nassert.equal(mod.handleCreateTask(store, JSON.stringify({})).status, 400);\nassert.equal(mod.handleCreateTask(store, JSON.stringify({ title: '' })).status, 400);\nassert.equal(mod.handleCreateTask(store, JSON.stringify({ title: '   ' })).status, 400);\nassert.equal(mod.handleCreateTask(store, JSON.stringify({ title: 7 })).status, 400);\nassert.equal(store.length, 0);"
+     },
+     {
+      "name": "ids are server-assigned and increase; a client-sent id is ignored",
+      "code": "const store = [];\nconst a = mod.handleCreateTask(store, JSON.stringify({ title: 'first', id: 999 }));\nconst b = mod.handleCreateTask(store, JSON.stringify({ title: 'second' }));\nassert.equal(a.body.id, 1);\nassert.equal(b.body.id, 2);\nassert.equal(store.length, 2);"
+     },
+     {
+      "name": "a rejected create between two valid ones leaves exactly the valid tasks",
+      "code": "const store = [];\nmod.handleCreateTask(store, JSON.stringify({ title: 'keep' }));\nmod.handleCreateTask(store, JSON.stringify({ title: '' }));\nconst r = mod.handleCreateTask(store, JSON.stringify({ title: 'also keep' }));\nassert.equal(r.status, 201);\nassert.deepEqual(store.map((t) => t.title), ['keep', 'also keep']);\nassert.deepEqual(store.map((t) => t.id), [1, 2]);"
+     }
+    ],
+    "timeoutMs": 8000
+   },
+   "referenceSolution": "export function handleCreateTask(store, rawBody) {\n  let parsed;\n  try {\n    parsed = JSON.parse(rawBody);\n  } catch {\n    return { status: 400, body: { error: 'body is not valid JSON' } };\n  }\n  const title = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed.title : undefined;\n  if (typeof title !== 'string' || title.trim() === '') {\n    return { status: 400, body: { error: 'title must be a nonempty string' } };\n  }\n  let nextId = 1;\n  for (const t of store) if (t.id >= nextId) nextId = t.id + 1;\n  const task = { id: nextId, title, done: false };\n  store.push(task);\n  return { status: 201, body: task };\n}\n",
+   "deliberatelyWrongSolution": "export function handleCreateTask(store, rawBody) {\n  let parsed;\n  try {\n    parsed = JSON.parse(rawBody);\n  } catch {\n    return { status: 400, body: { error: 'body is not valid JSON' } };\n  }\n  let nextId = 1;\n  for (const t of store) if (t.id >= nextId) nextId = t.id + 1;\n  const title = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed.title : undefined;\n  const task = { id: nextId, title, done: false };\n  store.push(task); // insert first, validate afterwards\n  if (typeof title !== 'string' || title.trim() === '') {\n    return { status: 400, body: { error: 'title must be a nonempty string' } };\n  }\n  return { status: 201, body: task };\n}\n",
+   "wrongBecause": "inserts the new task into the store before validating the title, then answers 400: the response looks correct but every rejected create leaves a junk row behind — state changed on the error path, which the HTTP contract's 'store unchanged' rule forbids"
+  }
+ ]
+}

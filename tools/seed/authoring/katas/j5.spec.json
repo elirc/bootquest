@@ -1,0 +1,67 @@
+{
+ "name": "j5-katas",
+ "checkout": ".cache/checkouts/j5@fe67601eadba90a7df3c3e895c37915db276b35c",
+ "katas": [
+  {
+   "id": "session-exit-swallows-save-failure",
+   "title": "Expense session: keep exit simple — saveExpenses already prints the error",
+   "difficulty": "hard",
+   "findingRef": "j5 review finding 1 (astraupskill/06-SOLUTIONS-AND-REVIEW.md:34)",
+   "provenance": { "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md", "find": "A failed save on exit throws away the whole session and still exits 0." },
+   "contextFiles": [
+    {
+     "path": "src/expensetracker/session.mjs",
+     "repoPath": "src/expensetracker/App.java",
+     "kind": "adapted",
+     "lines": { "start": 34, "end": 69 },
+     "content": "// Adapted (ported Java -> JS) from j5 src/expensetracker/App.java:34-69 @ fe67601\n// (run/loadExpenses/saveExpenses reduced to a session driver over injected storage and\n// log; exit codes follow the course's exercise-3 answer: a refused startup and a failed\n// final save both exit non-zero, and a failed save leaves a recovery snapshot instead of\n// throwing the session away).\nexport async function runSession({ storage, commands, log }) {\n  let expenses;\n  try {\n    expenses = await storage.load();\n    log(`Loaded ${expenses.length} expense(s).`);\n  } catch (error) {\n    log(`Could not load saved expenses: ${error.message}`);\n    log('Startup stopped. The saved file was not changed; repair a copy before retrying.');\n    return { exitCode: 1, saved: false };\n  }\n\n  for (const command of commands) {\n    expenses = command(expenses);\n  }\n\n  try {\n    await storage.save(expenses);\n    log('Expenses saved to disk.');\n    return { exitCode: 0, saved: true };\n  } catch (error) {\n    log(`Could not save expenses: ${error.message}`);\n    // The session's edits exist only in memory. Exiting 0 here would tell scripts the\n    // save worked while every change was thrown away, so: write a recovery snapshot and\n    // exit non-zero (review finding 1 / exercise 3).\n    await storage.writeRecoverySnapshot(expenses);\n    log('Unsaved changes written to the recovery file.');\n    return { exitCode: 1, saved: false };\n  }\n}\n"
+    }
+   ],
+   "edits": [
+    {
+     "path": "src/expensetracker/session.mjs",
+     "find": "  } catch (error) {\n    log(`Could not save expenses: ${error.message}`);\n    // The session's edits exist only in memory. Exiting 0 here would tell scripts the\n    // save worked while every change was thrown away, so: write a recovery snapshot and\n    // exit non-zero (review finding 1 / exercise 3).\n    await storage.writeRecoverySnapshot(expenses);\n    log('Unsaved changes written to the recovery file.');\n    return { exitCode: 1, saved: false };\n  }\n",
+     "replace": "  } catch (error) {\n    // saveExpenses already told the user what happened; the session itself completed\n    // normally, so exit cleanly.\n    log(`Could not save expenses: ${error.message}`);\n    return { exitCode: 0, saved: false };\n  }\n"
+    }
+   ],
+   "defects": [
+    {
+     "scenario": "The data file became read-only during the session; the user adds an expense and picks \"Save and exit\".",
+     "in": "patched",
+     "path": "src/expensetracker/session.mjs",
+     "find": "    // saveExpenses already told the user what happened; the session itself completed",
+     "consequence": "The add is lost, the old file stays intact, and the process exits 0: a wrapping script or scheduled job records success while the whole session was thrown away. Nothing offers a retry or a recovery file — review finding 1, reproduced in the course with a read-only scratch file."
+    },
+    {
+     "scenario": "The shipped App prints the save error and returns normally; run()'s finally ignores the outcome and main exits 0.",
+     "in": "repo",
+     "path": "src/expensetracker/App.java",
+     "find": "        } catch (IOException ex) {\n            System.out.println(\"Could not save expenses: \" + ex.getMessage());\n        }",
+     "consequence": "The only write happens in run()'s finally (App.java:45-46) and this catch swallows its failure, so a failed save on exit loses the session and still exits 0. The course's exercise-3 answer: exit non-zero, or exit zero only after writing the rejected snapshot to a recovery file — and write down which you chose."
+    }
+   ],
+   "test": {
+    "module": "src/expensetracker/session.mjs",
+    "check": {
+     "type": "drill-js",
+     "language": "js",
+     "timeoutMs": 8000,
+     "tests": [
+      {
+       "name": "a failed final save exits non-zero and preserves the session in a recovery snapshot (review finding 1)",
+       "code": "const logs = []; let recovery = null; const storage = { load: async () => [{ id: 1, amount: 10 }], save: async () => { throw new Error('expenses.txt is read-only'); }, writeRecoverySnapshot: async (expenses) => { recovery = expenses; }, }; const result = await mod.runSession({ storage, commands: [(expenses) => [...expenses, { id: 2, amount: 25 }]], log: (m) => logs.push(m) }); assert.notEqual(result.exitCode, 0, 'a lost session exited 0, so scripts record success'); assert.ok(recovery !== null && recovery.length === 2, 'the unsaved session was thrown away with no recovery snapshot');"
+      },
+      {
+       "name": "a refused startup exits non-zero and never writes",
+       "code": "const writes = []; const storage = { load: async () => { throw new Error('corrupt line 3'); }, save: async (e) => writes.push(e), writeRecoverySnapshot: async (e) => writes.push(e), }; const result = await mod.runSession({ storage, commands: [], log: () => {} }); assert.notEqual(result.exitCode, 0); assert.equal(writes.length, 0);"
+      },
+      {
+       "name": "a clean run applies the session's commands, saves, and exits 0",
+       "code": "let savedRows = null; const storage = { load: async () => [{ id: 1, amount: 10 }], save: async (expenses) => { savedRows = expenses; }, writeRecoverySnapshot: async () => { throw new Error('no recovery needed on success'); }, }; const result = await mod.runSession({ storage, commands: [(expenses) => [...expenses, { id: 2, amount: 25 }]], log: () => {} }); assert.equal(result.exitCode, 0); assert.equal(result.saved, true); assert.equal(savedRows.length, 2);"
+      }
+     ]
+    }
+   }
+  }
+ ]
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { looksLikeFile, parseCitations, type Citation } from './parse.ts';
+import { isIdentifierToken, looksLikeFile, parseCitations, type Citation } from './parse.ts';
 
 const G = 'docs/guide.md';
 const parse = (md: string) => parseCitations(md, G);
@@ -232,5 +232,19 @@ describe('parseCitations: blocks, malformed and non-citations', () => {
     expect(looksLikeFile('thing.weird')).toBe(false);
     expect(looksLikeFile('.env')).toBe(true);
     expect(looksLikeFile('src/app')).toBe(false);
+  });
+
+  it('isIdentifierToken: bare lowercase-led dotted tokens (fix 3b) — the generator drops these when unresolvable', () => {
+    expect(isIdentifierToken('cfg.lock')).toBe(true);
+    expect(isIdentifierToken('payload.json')).toBe(true);
+    expect(isIdentifierToken('state.history.json')).toBe(true);
+    expect(isIdentifierToken('_private.env')).toBe(true);
+    expect(isIdentifierToken('req.body.title')).toBe(true);
+    // a dotted token with a path, an uppercase lead, a hyphen, or no dot is NOT the shape
+    expect(isIdentifierToken('src/cfg.lock')).toBe(false);
+    expect(isIdentifierToken('Program.cs')).toBe(false);
+    expect(isIdentifierToken('seed-pack.ts')).toBe(false);
+    expect(isIdentifierToken('README')).toBe(false);
+    expect(isIdentifierToken('session')).toBe(false);
   });
 });

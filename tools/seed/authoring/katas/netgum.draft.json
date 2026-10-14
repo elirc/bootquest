@@ -12,12 +12,20 @@
      "end": 114
     }
    },
-   "diff": "diff --git a/src/Netgum.Api/Endpoints/OrderEndpoints.cs b/src/Netgum.Api/Endpoints/OrderEndpoints.cs\n--- a/src/Netgum.Api/Endpoints/OrderEndpoints.cs\n+++ b/src/Netgum.Api/Endpoints/OrderEndpoints.cs\n@@ -1,4 +1,5 @@\n using Netgum.Application.Abstractions;\r\n+using Netgum.Domain.Abstractions;\r\n using Netgum.Domain.Orders;\r\n \r\n namespace Netgum.Api.Endpoints;\r\n@@ -14,11 +15,8 @@\n             IOrderRepository orders,\r\n             CancellationToken cancellationToken) =>\r\n         {\r\n-            var order = await orders.GetByIdAsync(orderId, cancellationToken).ConfigureAwait(false);\r\n-            if (order is null)\r\n-            {\r\n-                return Results.NotFound();\r\n-            }\r\n+            var order = await orders.GetByIdAsync(orderId, cancellationToken).ConfigureAwait(false)\r\n+                ?? throw new DomainException(\"Order was not found.\");\r\n \r\n             if (order.PaymentStatus != PaymentStatus.Paid)\r\n             {\r\n",
+   "diff": "diff --git a/src/Netgum.Api/Endpoints/OrderEndpoints.cs b/src/Netgum.Api/Endpoints/OrderEndpoints.cs\n--- a/src/Netgum.Api/Endpoints/OrderEndpoints.cs\n+++ b/src/Netgum.Api/Endpoints/OrderEndpoints.cs\n@@ -1,4 +1,5 @@\n using Netgum.Application.Abstractions;\r\n+using Netgum.Domain.Abstractions;\r\n using Netgum.Domain.Orders;\r\n \r\n namespace Netgum.Api.Endpoints;\r\n@@ -14,11 +15,8 @@\n             IOrderRepository orders,\r\n             CancellationToken cancellationToken) =>\r\n         {\r\n-            var order = await orders.GetByIdAsync(orderId, cancellationToken).ConfigureAwait(false);\r\n-            if (order is null)\r\n-            {\r\n-                return Results.NotFound();\r\n-            }\r\n+            var order = await orders.GetByIdAsync(orderId, cancellationToken).ConfigureAwait(false)\r\n+                ?? throw new DomainException(\"Order was not found.\");\r\n \r\n             if (order.PaymentStatus != PaymentStatus.Paid)\r\n             {\r\ndiff --git a/bootquest-kata/OrderDownload.Testable.cs b/bootquest-kata/OrderDownload.Testable.cs\n--- a/bootquest-kata/OrderDownload.Testable.cs\n+++ b/bootquest-kata/OrderDownload.Testable.cs\n@@ -55,11 +55,8 @@\n             IOrderRepository orders,\n             CancellationToken cancellationToken) =>\n         {\n-            var order = await orders.GetByIdAsync(orderId, cancellationToken).ConfigureAwait(false);\n-            if (order is null)\n-            {\n-                return Results.NotFound();\n-            }\n+            var order = await orders.GetByIdAsync(orderId, cancellationToken).ConfigureAwait(false)\n+                ?? throw new DomainException(\"Order was not found.\");\n \n             if (order.PaymentStatus != PaymentStatus.Paid)\n             {\n",
    "contextFiles": [
     {
      "path": "src/Netgum.Api/Endpoints/OrderEndpoints.cs",
      "origin": {
       "kind": "verbatim",
+      "repoPath": "src/Netgum.Api/Endpoints/OrderEndpoints.cs"
+     }
+    },
+    {
+     "path": "bootquest-kata/OrderDownload.Testable.cs",
+     "content": "// BootQuest kata module: a TESTABLE, self-contained adaptation (not a repo file) of netgum @ 2984d9b:\n//   src/Netgum.Api/Endpoints/OrderEndpoints.cs:12-34 (the GET /api/orders/{orderId}/download handler, verbatim body),\n//   src/Netgum.Api/Program.cs:47-68 (UseExceptionHandler: the status for an exception that escapes an endpoint) and\n//   src/Netgum.Domain/Abstractions/DomainException.cs.\n// Minimal-API plumbing (Results, StatusCodes, the repository) is replaced by plain stand-ins so the flow\n// compiles on its own; the handler body and the exception -> status switch are copied verbatim.\nnamespace Netgum.Kata;\n\npublic sealed class DomainException : Exception\n{\n    public DomainException(string message)\n        : base(message)\n    {\n    }\n}\n\npublic enum PaymentStatus\n{\n    Pending,\n    Paid,\n}\n\npublic sealed record Order(Guid Id, Guid ProductId, string LicenseKey, PaymentStatus PaymentStatus);\n\npublic interface IOrderRepository\n{\n    Task<Order?> GetByIdAsync(Guid orderId, CancellationToken cancellationToken);\n}\n\npublic sealed record HttpResult(int StatusCode, string? Detail = null, object? Value = null);\n\npublic static class StatusCodes\n{\n    public const int Status400BadRequest = 400;\n    public const int Status403Forbidden = 403;\n    public const int Status404NotFound = 404;\n    public const int Status409Conflict = 409;\n    public const int Status500InternalServerError = 500;\n}\n\npublic static class Results\n{\n    public static HttpResult NotFound() => new(StatusCodes.Status404NotFound);\n\n    public static HttpResult Problem(string detail, int statusCode) => new(statusCode, detail);\n\n    public static HttpResult Ok(object value) => new(200, null, value);\n}\n\npublic static class OrderEndpoints\n{\n    /// <summary>The DownloadOrder route handler (MapGet \"/{orderId:guid}/download\").</summary>\n    public static readonly Func<Guid, IOrderRepository, CancellationToken, Task<HttpResult>> DownloadOrder = async (\n            Guid orderId,\n            IOrderRepository orders,\n            CancellationToken cancellationToken) =>\n        {\n            var order = await orders.GetByIdAsync(orderId, cancellationToken).ConfigureAwait(false);\n            if (order is null)\n            {\n                return Results.NotFound();\n            }\n\n            if (order.PaymentStatus != PaymentStatus.Paid)\n            {\n                return Results.Problem(\"Order has not been paid.\", statusCode: StatusCodes.Status403Forbidden);\n            }\n\n            return Results.Ok(new\n            {\n                order.Id,\n                DownloadUrl = $\"https://files.example.test/downloads/{order.ProductId}?license={order.LicenseKey}\",\n                order.LicenseKey\n            });\n        };\n}\n\n/// <summary>The global exception handler: what the client sees when an endpoint throws.</summary>\npublic static class ExceptionHandler\n{\n    public static (int Status, string Title) Map(Exception? exception)\n    {\n        var (status, title) = exception switch\n        {\n            DomainException => (StatusCodes.Status400BadRequest, \"Business rule violation\"),\n            InvalidOperationException => (StatusCodes.Status409Conflict, \"Invalid operation\"),\n            _ => (StatusCodes.Status500InternalServerError, \"Unexpected server error\")\n        };\n\n        return (status, title);\n    }\n\n    /// <summary>Run an endpoint the way the pipeline does: its result, or the mapped status of what it threw.</summary>\n    public static async Task<int> StatusOf(Func<Task<HttpResult>> endpoint)\n    {\n        try\n        {\n            return (await endpoint().ConfigureAwait(false)).StatusCode;\n        }\n        catch (Exception exception)\n        {\n            return Map(exception).Status;\n        }\n    }\n}\n",
+     "origin": {
+      "kind": "adapted",
       "repoPath": "src/Netgum.Api/Endpoints/OrderEndpoints.cs"
      }
     }
@@ -31,7 +39,7 @@
       "lineEnd": 19,
       "in": "patched"
      },
-     "consequence": "The global handler maps every DomainException to 400 \"Business rule violation\" (Program.cs:56), so the one endpoint that returned a correct 404 now answers 400; clients can no longer tell \"no such order\" from \"you sent something invalid\"."
+     "consequence": "The global handler maps every DomainException to 400 \"Business rule violation\" (Program.cs:54), so the one endpoint that returned a correct 404 now answers 400; clients can no longer tell \"no such order\" from \"you sent something invalid\"."
     },
     {
      "scenario": "Where the status is decided.",
@@ -53,7 +61,19 @@
      },
      "consequence": "\"Consistent with CheckoutService\" is consistency with a known 404-as-400 bug (CheckoutService.cs:98)."
     }
-   ]
+   ],
+   "test": {
+    "module": "bootquest-kata/OrderDownload.Testable.cs",
+    "check": {
+     "type": "drill-cs",
+     "shape": "xunit",
+     "files": {
+      "tests": "using Netgum.Kata;\n\n// netgum has no endpoint tests upstream (tests/Netgum.Tests covers the domain + CheckoutService only):\n// these pin the behavior review finding A (astraupskill/06-SOLUTIONS-AND-REVIEW.md:108) depends on.\npublic sealed class OrderDownloadTests\n{\n    private sealed class Repo(params Order[] orders) : IOrderRepository\n    {\n        public Task<Order?> GetByIdAsync(Guid orderId, CancellationToken cancellationToken) =>\n            Task.FromResult(orders.FirstOrDefault(o => o.Id == orderId));\n    }\n\n    [Fact(DisplayName = \"download of an unknown order id answers 404, not 400 (review finding A, astraupskill/06-SOLUTIONS-AND-REVIEW.md:108)\")]\n    public async Task UnknownOrder_Is404()\n    {\n        var status = await ExceptionHandler.StatusOf(() => OrderEndpoints.DownloadOrder(Guid.NewGuid(), new Repo(), CancellationToken.None));\n\n        Assert.Equal(404, status);\n    }\n\n    [Fact(DisplayName = \"a paid order downloads (200) with its license key in the link\")]\n    public async Task PaidOrder_Downloads()\n    {\n        var order = new Order(Guid.NewGuid(), Guid.NewGuid(), \"LIC-123\", PaymentStatus.Paid);\n\n        var result = await OrderEndpoints.DownloadOrder(order.Id, new Repo(order), CancellationToken.None);\n\n        Assert.Equal(200, result.StatusCode);\n        Assert.Contains(\"license=LIC-123\", result.Value!.GetType().GetProperty(\"DownloadUrl\")!.GetValue(result.Value) as string);\n    }\n\n    [Fact(DisplayName = \"an unpaid order is refused with 403\")]\n    public async Task UnpaidOrder_Is403()\n    {\n        var order = new Order(Guid.NewGuid(), Guid.NewGuid(), \"LIC-9\", PaymentStatus.Pending);\n\n        Assert.Equal(403, await ExceptionHandler.StatusOf(() => OrderEndpoints.DownloadOrder(order.Id, new Repo(order), CancellationToken.None)));\n    }\n\n    [Fact(DisplayName = \"a DomainException is a 400 'Business rule violation' (src/Netgum.Api/Program.cs:54)\")]\n    public void DomainException_Is400()\n    {\n        Assert.Equal((400, \"Business rule violation\"), ExceptionHandler.Map(new DomainException(\"rule\")));\n    }\n}\n",
+      "tail": ""
+     },
+     "timeoutMs": 30000
+    }
+   }
   }
  ]
 }

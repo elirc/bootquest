@@ -1,0 +1,147 @@
+{
+ "name": "organized-experiment-tenant-search-indexer-katas",
+ "katas": [
+  {
+   "id": "rebuild-flip-without-drain",
+   "title": "Index rebuild: flip to the new generation as soon as the snapshot is loaded",
+   "findingRef": "tenant-search-indexer T4 (docs/architecture/README.md:50)",
+   "provenance": {
+    "path": "docs/architecture/README.md",
+    "lines": {
+     "start": 50,
+     "end": 50
+    }
+   },
+   "diff": "diff --git a/src/services/indexingJobRunner.mjs b/src/services/indexingJobRunner.mjs\n--- a/src/services/indexingJobRunner.mjs\n+++ b/src/services/indexingJobRunner.mjs\n@@ -64,15 +64,8 @@\n     snapshot.map((row) => ({ entityId: row.entityId, title: row.title, generation: nextGeneration })),\n   );\n \n-  // Finding T4's repair: events processed while the snapshot loaded went into the OLD\n-  // generation, and the cursor has already moved past them. Re-apply everything after\n-  // the snapshot-time cursor into the new generation before the flip deletes their only\n-  // copy.\n-  const catchUp = await store.listPendingSearchSyncEvents(stateBeforeFlip.lastProcessedEventId);\n-  await store.upsertSearchDocuments(\n-    catchUp.map((event) => ({ entityId: event.entityId, title: event.title, generation: nextGeneration })),\n-  );\n-\n+  // The snapshot is the complete source of truth for the new generation, and incremental\n+  // jobs keep the live index fresh in the meantime, so flip as soon as it is loaded.\n   await store.completeTenantRebuild(nextGeneration);\n   await store.deleteGenerationDocuments(stateBeforeFlip.activeGeneration);\n }\n",
+   "contextFiles": [
+    {
+     "path": "src/services/indexingJobRunner.mjs",
+     "content": "// Adapted from tenant-search-indexer src/services/indexingJobRunner.ts:67-130 @ 0c15ff9\n// (drizzle replaced by an in-memory single-tenant store; the cutover re-applies events\n// processed during the rebuild into the new generation before the flip — the repair\n// finding T4 calls for — so the module runs standalone).\nexport class InMemoryIndexStore {\n  constructor({ sourceRows, events }) {\n    this.state = { activeGeneration: 1, lastProcessedEventId: null };\n    this.documents = new Map();\n    this.sourceRows = sourceRows;\n    this.events = events ?? [];\n  }\n  async getTenantSearchState() {\n    return { ...this.state };\n  }\n  async listSourceSnapshot() {\n    return this.sourceRows.map((row) => ({ ...row }));\n  }\n  /** Events stay in the log after processing; the cursor is what advances. */\n  async listPendingSearchSyncEvents(afterEventId) {\n    return this.events\n      .filter((event) => afterEventId == null || event.id > afterEventId)\n      .map((event) => ({ ...event }));\n  }\n  async upsertSearchDocuments(documents) {\n    for (const document of documents) {\n      this.documents.set(`${document.generation}:${document.entityId}`, { ...document });\n    }\n  }\n  async markSearchSyncEventsProcessed(lastEventId) {\n    this.state.lastProcessedEventId = lastEventId;\n  }\n  async completeTenantRebuild(nextGeneration) {\n    this.state.activeGeneration = nextGeneration;\n  }\n  async deleteGenerationDocuments(generation) {\n    for (const key of [...this.documents.keys()]) {\n      if (key.startsWith(`${generation}:`)) this.documents.delete(key);\n    }\n  }\n  searchActiveGeneration(text) {\n    return [...this.documents.values()].filter(\n      (document) => document.generation === this.state.activeGeneration && document.title.includes(text),\n    );\n  }\n}\n\nexport async function runIncrementalJob(store) {\n  const state = await store.getTenantSearchState();\n  const events = await store.listPendingSearchSyncEvents(state.lastProcessedEventId);\n  if (events.length === 0) return;\n\n  // Incremental writes target the ACTIVE generation only; writing into a rebuild\n  // generation would make the flip non-deterministic.\n  await store.upsertSearchDocuments(\n    events.map((event) => ({ entityId: event.entityId, title: event.title, generation: state.activeGeneration })),\n  );\n  await store.markSearchSyncEventsProcessed(events[events.length - 1].id);\n}\n\nexport async function runRebuildJob(store, nextGeneration) {\n  const stateBeforeFlip = await store.getTenantSearchState();\n  const snapshot = await store.listSourceSnapshot();\n  await store.upsertSearchDocuments(\n    snapshot.map((row) => ({ entityId: row.entityId, title: row.title, generation: nextGeneration })),\n  );\n\n  // Finding T4's repair: events processed while the snapshot loaded went into the OLD\n  // generation, and the cursor has already moved past them. Re-apply everything after\n  // the snapshot-time cursor into the new generation before the flip deletes their only\n  // copy.\n  const catchUp = await store.listPendingSearchSyncEvents(stateBeforeFlip.lastProcessedEventId);\n  await store.upsertSearchDocuments(\n    catchUp.map((event) => ({ entityId: event.entityId, title: event.title, generation: nextGeneration })),\n  );\n\n  await store.completeTenantRebuild(nextGeneration);\n  await store.deleteGenerationDocuments(stateBeforeFlip.activeGeneration);\n}\n",
+     "origin": {
+      "kind": "adapted",
+      "repoPath": "src/services/indexingJobRunner.ts",
+      "lines": {
+       "start": 67,
+       "end": 130
+      }
+     }
+    }
+   ],
+   "seededDefectKey": [
+    {
+     "scenario": "A ticket is renamed while a REBUILD job is loading its snapshot; the incremental job indexes the rename before the flip.",
+     "evidence": {
+      "path": "src/services/indexingJobRunner.mjs",
+      "lineStart": 68,
+      "lineEnd": 68,
+      "in": "patched"
+     },
+     "consequence": "The rename was written into the old generation, which the flip deletes; the new generation holds the older snapshot title, and the cursor has already advanced past the event so no later incremental run replays it. The document stays stale until the entity changes again — finding T4, reintroduced by trusting the snapshot alone."
+    },
+    {
+     "scenario": "The shipped incremental runner always writes to the active generation while the rebuild flips and deletes it.",
+     "evidence": {
+      "path": "src/services/indexingJobRunner.ts",
+      "lineStart": 86,
+      "lineEnd": 86,
+      "in": "repo"
+     },
+     "consequence": "In production the same window exists today: incremental documents land in the generation that completeTenantRebuild + deleteGenerationDocuments (indexingJobRunner.ts:125-129) are about to drop, and nothing re-drains the events processed during the rebuild into the new generation."
+    }
+   ],
+   "test": {
+    "module": "src/services/indexingJobRunner.mjs",
+    "check": {
+     "type": "drill-js",
+     "language": "js",
+     "timeoutMs": 8000,
+     "tests": [
+      {
+       "name": "a change indexed during the rebuild survives the cutover (finding T4)",
+       "code": "const store = new mod.InMemoryIndexStore({ sourceRows: [{ entityId: 'ticket-1', title: 'Printer offline' }], events: [{ id: 1, entityId: 'ticket-1', title: 'Printer offline' }], }); await mod.runIncrementalJob(store); const takeSnapshot = store.listSourceSnapshot.bind(store); store.listSourceSnapshot = async () => { const snapshot = await takeSnapshot(); store.sourceRows = [{ entityId: 'ticket-1', title: 'Printer back online' }]; store.events.push({ id: 2, entityId: 'ticket-1', title: 'Printer back online' }); await mod.runIncrementalJob(store); return snapshot; }; await mod.runRebuildJob(store, 2); assert.equal(store.state.activeGeneration, 2); assert.equal(store.searchActiveGeneration('back online').length, 1, 'the rename indexed during the rebuild vanished at cutover');"
+      },
+      {
+       "name": "a rebuild with no concurrent changes replaces the active generation completely",
+       "code": "const store = new mod.InMemoryIndexStore({ sourceRows: [{ entityId: 'a', title: 'Alpha' }, { entityId: 'b', title: 'Beta' }], events: [], }); await mod.runRebuildJob(store, 2); assert.equal(store.state.activeGeneration, 2); assert.equal(store.searchActiveGeneration('').length, 2); assert.equal([...store.documents.keys()].every((key) => key.startsWith('2:')), true);"
+      },
+      {
+       "name": "incremental writes land in the active generation and advance the cursor",
+       "code": "const store = new mod.InMemoryIndexStore({ sourceRows: [], events: [{ id: 1, entityId: 'x', title: 'First' }] }); await mod.runIncrementalJob(store); assert.equal(store.state.lastProcessedEventId, 1); assert.equal(store.searchActiveGeneration('First').length, 1); await mod.runIncrementalJob(store); assert.equal(store.state.lastProcessedEventId, 1);"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "run-pending-all-tenants",
+   "title": "Job runner: drain the whole queue so no tenant waits for its own owner",
+   "findingRef": "tenant-search-indexer T1 (docs/architecture/README.md:47)",
+   "provenance": {
+    "path": "docs/architecture/README.md",
+    "lines": {
+     "start": 47,
+     "end": 47
+    }
+   },
+   "diff": "diff --git a/src/services/runPendingJobs.mjs b/src/services/runPendingJobs.mjs\n--- a/src/services/runPendingJobs.mjs\n+++ b/src/services/runPendingJobs.mjs\n@@ -41,8 +41,9 @@\n export async function runPendingIndexingJobs(store, context, input) {\n   requirePermission(context, 'indexing-job:run');\n \n-  // Finding T1's check: an OWNER drains their own tenant's queue, never another tenant's.\n-  const jobs = await store.listQueuedIndexingJobs({ tenantId: context.session.tenantId, limit: input.limit });\n+  // Jobs are queued globally: whoever presses \"run pending\" first drains the backlog,\n+  // so a small tenant never waits for its own owner to log in.\n+  const jobs = await store.listQueuedIndexingJobs({ limit: input.limit });\n   const results = [];\n \n   for (const job of jobs) {\n",
+   "contextFiles": [
+    {
+     "path": "src/services/runPendingJobs.mjs",
+     "content": "// Adapted from tenant-search-indexer src/services/indexingJobRunner.ts:32-65 @ 0c15ff9\n// (drizzle replaced by an in-memory job store; requirePermission reduced to the\n// indexing-job:run rule from src/lib/permissions/roles.ts; the tenant scope that\n// docs/architecture/auth-and-permissions.md:73 prescribes applied so the module runs\n// standalone).\nexport function requirePermission(context, permission) {\n  if (permission === 'indexing-job:run' && context.session.tenantRole !== 'OWNER') {\n    throw new Error(`FORBIDDEN: ${permission} requires the OWNER role.`);\n  }\n}\n\nexport class InMemoryJobStore {\n  constructor(jobs) {\n    this.jobs = jobs.map((job) => ({ status: 'QUEUED', ...job }));\n    this.executed = [];\n  }\n  /** tenantId scopes the listing; a null tenantId (platform tooling) lists every tenant's queue. */\n  async listQueuedIndexingJobs({ tenantId, limit }) {\n    return this.jobs\n      .filter((job) => job.status === 'QUEUED' && (tenantId == null || job.tenantId === tenantId))\n      .slice(0, limit)\n      .map((job) => ({ ...job }));\n  }\n  async markIndexingJobRunning(jobId) {\n    this.jobs.find((job) => job.id === jobId).status = 'RUNNING';\n  }\n  async markIndexingJobCompleted(jobId) {\n    this.jobs.find((job) => job.id === jobId).status = 'COMPLETED';\n  }\n  async markIndexingJobFailed(jobId, message) {\n    const job = this.jobs.find((row) => row.id === jobId);\n    job.status = 'FAILED';\n    job.error = message;\n  }\n  async executeJob(job) {\n    if (job.payload && job.payload.poison) throw new Error('index write failed');\n    this.executed.push(job.id);\n  }\n}\n\nexport async function runPendingIndexingJobs(store, context, input) {\n  requirePermission(context, 'indexing-job:run');\n\n  // Finding T1's check: an OWNER drains their own tenant's queue, never another tenant's.\n  const jobs = await store.listQueuedIndexingJobs({ tenantId: context.session.tenantId, limit: input.limit });\n  const results = [];\n\n  for (const job of jobs) {\n    await store.markIndexingJobRunning(job.id);\n    try {\n      await store.executeJob(job);\n      await store.markIndexingJobCompleted(job.id);\n      results.push({ jobId: job.id, status: 'COMPLETED' });\n    } catch (error) {\n      await store.markIndexingJobFailed(job.id, error instanceof Error ? error.message : 'Unknown indexing error');\n      results.push({ jobId: job.id, status: 'FAILED' });\n    }\n  }\n\n  return { processed: results.length, results };\n}\n",
+     "origin": {
+      "kind": "adapted",
+      "repoPath": "src/services/indexingJobRunner.ts",
+      "lines": {
+       "start": 32,
+       "end": 65
+      }
+     }
+    }
+   ],
+   "seededDefectKey": [
+    {
+     "scenario": "An OWNER of tenant A calls POST /api/indexing-jobs/run-pending while tenants B and C have queued jobs.",
+     "evidence": {
+      "path": "src/services/runPendingJobs.mjs",
+      "lineStart": 46,
+      "lineEnd": 46,
+      "in": "patched"
+     },
+     "consequence": "Tenant A's owner executes other tenants' indexing jobs, and the response lists their job ids and statuses — cross-tenant execution plus metadata disclosure. This is finding T1: the one place where the README's \"every query scopes by tenant\" rule stops holding."
+    },
+    {
+     "scenario": "The shipped repository query selects QUEUED jobs for every tenant.",
+     "evidence": {
+      "path": "src/repositories/indexingJobRepository.ts",
+      "lineStart": 65,
+      "lineEnd": 65,
+      "in": "repo"
+     },
+     "consequence": "listQueuedIndexingJobs(limit) has no tenantId condition and runPendingIndexingJobs passes only a limit, so any tenant OWNER who clicks run-pending drains every tenant's queue today. The fix the guide prescribes is to pass context.session.tenantId into this query."
+    }
+   ],
+   "test": {
+    "module": "src/services/runPendingJobs.mjs",
+    "check": {
+     "type": "drill-js",
+     "language": "js",
+     "timeoutMs": 8000,
+     "tests": [
+      {
+       "name": "run-pending executes only the caller's tenant's queued jobs (finding T1)",
+       "code": "const store = new mod.InMemoryJobStore([ { id: 'job-a', tenantId: 'tenant-a' }, { id: 'job-b', tenantId: 'tenant-b' }, ]); const out = await mod.runPendingIndexingJobs(store, { session: { tenantId: 'tenant-a', tenantRole: 'OWNER' } }, { limit: 10 }); assert.equal(out.processed, 1); assert.deepEqual(store.executed, ['job-a']); assert.equal(out.results.some((r) => r.jobId === 'job-b'), false, 'another tenant\\'s job id leaked into the response'); assert.equal(store.jobs.find((j) => j.id === 'job-b').status, 'QUEUED');"
+      },
+      {
+       "name": "a MEMBER cannot run pending jobs",
+       "code": "const store = new mod.InMemoryJobStore([{ id: 'job-a', tenantId: 'tenant-a' }]); await assert.rejects(() => mod.runPendingIndexingJobs(store, { session: { tenantId: 'tenant-a', tenantRole: 'MEMBER' } }, { limit: 10 }), /FORBIDDEN/); assert.deepEqual(store.executed, []);"
+      },
+      {
+       "name": "a failing job is marked FAILED and the rest still complete",
+       "code": "const store = new mod.InMemoryJobStore([ { id: 'j1', tenantId: 't1', payload: { poison: true } }, { id: 'j2', tenantId: 't1' }, ]); const out = await mod.runPendingIndexingJobs(store, { session: { tenantId: 't1', tenantRole: 'OWNER' } }, { limit: 10 }); assert.equal(out.processed, 2); assert.equal(store.jobs.find((j) => j.id === 'j1').status, 'FAILED'); assert.equal(store.jobs.find((j) => j.id === 'j1').error, 'index write failed'); assert.equal(store.jobs.find((j) => j.id === 'j2').status, 'COMPLETED');"
+      }
+     ]
+    }
+   }
+  }
+ ]
+}

@@ -216,7 +216,7 @@ export const PUBLIC_CHECK_FIELDS: Readonly<Record<CheckTypeT, readonly string[]>
   // W7 (audit #9): the defect COUNT is not public before the findings are recorded (blind review)
   'patch-kata': ['type', 'kataKey'],
   review: ['type', 'cardKey'],
-  'node-test-file': ['type', 'learnerPath', 'sha', 'tsx', 'timeoutMs'],
+  'node-test-file': ['type', 'learnerPath', 'sha', 'tsx', 'tscProject', 'timeoutMs'],
   'self-run': ['type', 'language', 'file', 'tsc', 'inverted', 'timeoutMs'],
   'vitest-project': ['type', 'project', 'timeoutMs'],
 };
@@ -332,7 +332,7 @@ export const PublicCheck = z.discriminatedUnion('type', [
   z.object({ type: z.literal('explain-back'), questionSetKey: z.string(), questionCount: z.number(), minCoverage: z.number() }).strict(),
   z.object({ type: z.literal('patch-kata'), kataKey: z.string() }).strict(),
   z.object({ type: z.literal('review'), cardKey: z.string() }).strict(),
-  z.object({ type: z.literal('node-test-file'), learnerPath: z.string(), sha: z.string(), tsx: z.boolean(), timeoutMs: z.number() }).strict(),
+  z.object({ type: z.literal('node-test-file'), learnerPath: z.string(), sha: z.string(), tsx: z.boolean(), tscProject: z.string().optional(), timeoutMs: z.number() }).strict(),
   z.object({ type: z.literal('self-run'), language: z.enum(['js', 'ts', 'cs']), file: z.string(), tsc: z.boolean(), inverted: z.boolean(), timeoutMs: z.number() }).strict(),
   z.object({ type: z.literal('vitest-project'), project: z.string(), timeoutMs: z.number() }).strict(),
 ]);
@@ -542,6 +542,13 @@ export const UnitDetailResponse = z
      * and the other write routes refuse with 403 ACT_LOCKED either way.
      */
     actGate: z.object({ locked: z.literal(true) }).strict().optional(),
+    /**
+     * Program units (gh:<repo>:UNN) only: acceptance legs the recorded check table
+     * declares its machine check deliberately does NOT cover (the honest carve-out
+     * from content/sync/check-specs.json `uncovered_legs`). Present only when
+     * non-empty; absent on every other unit kind and on older servers.
+     */
+    uncoveredLegs: z.array(z.string()).optional(),
   })
   .strict();
 export type UnitDetailResponse = z.infer<typeof UnitDetailResponse>;
@@ -847,7 +854,7 @@ export const LadderUnitDto = z
     id: z.number(),
     key: z.string(),
     kind: UnitKind,
-    family: z.enum(['explain-back', 'g2', 'kata', 'retest', 'authored']),
+    family: z.enum(['explain-back', 'g2', 'kata', 'retest', 'study', 'authored']),
     trackId: TrackId,
     title: z.string(),
     difficulty: z.number().nullable(),
@@ -860,7 +867,7 @@ export const LadderUnitDto = z
 export type LadderUnitDto = z.infer<typeof LadderUnitDto>;
 export const LadderResponse = z
   .object({
-    counts: z.object({ explainBack: z.number(), g2: z.number(), katas: z.number(), retests: z.number(), authored: z.number() }).strict(),
+    counts: z.object({ explainBack: z.number(), g2: z.number(), katas: z.number(), retests: z.number(), study: z.number(), authored: z.number() }).strict(),
     units: z.array(LadderUnitDto),
   })
   .strict();

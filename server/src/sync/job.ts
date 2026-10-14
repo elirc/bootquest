@@ -251,6 +251,11 @@ interface ProgramPlan {
   ticketKeys: Map<string, string>;
 }
 
+/** A check is referenced once any attempt or run row points at it (both tables are append-only). */
+function checkReferenced(db: Db, checkId: number): boolean {
+  return db.get('SELECT 1 AS x FROM attempt WHERE check_id = ? UNION ALL SELECT 1 AS x FROM run WHERE check_id = ? LIMIT 1', checkId, checkId) !== undefined;
+}
+
 function registerProgram(db: Db, plan: ProgramPlan, refIds: Map<string, number>, t: number): ProgramOutcome {
   const clock = () => new Date(t);
   const out: ProgramOutcome = { units: 0, checked: 0, study: 0, checkDrift: plan.checkDrift };
@@ -307,10 +312,23 @@ function registerProgram(db: Db, plan: ProgramPlan, refIds: Map<string, number>,
         db.run('INSERT INTO unit_prerequisite (unit_id, prereq_unit_id) VALUES (?, ?)', unitId, p.id);
       }
       if (check) {
-        const cur = db.get<{ spec: string }>('SELECT spec FROM "check" WHERE unit_id = ? ORDER BY id LIMIT 1', unitId);
+        const cur = db.get<{ id: number; type: string; spec: string }>('SELECT id, type, spec FROM "check" WHERE unit_id = ? ORDER BY id LIMIT 1', unitId);
         if (!cur) insertCheck(db, unitId, check, clock, { contentRefId: programRefId });
         else if (cur.spec !== JSON.stringify(check)) {
-          out.checkDrift.push(`${m.code}: recorded check spec differs from the registered one — kept the registered check (attempts reference it)`);
+          // OPS fix: an UNREFERENCED registered check (no attempt / run row points at it) is
+          // re-registered in place, so a DB synced before a recorded-spec change (e.g. U03
+          // gaining tsc_project) picks the new check up on its next sync. A referenced check
+          // stays pinned (its attempts were graded by it) and the drift is reported; GET
+          // /units then surfaces what that older check does not cover.
+          const referenced = checkReferenced(db, cur.id);
+          if (!referenced && cur.type === check.type) {
+            const timeout = 'timeoutMs' in check ? check.timeoutMs : null;
+            db.run('UPDATE "check" SET spec = ?, timeout_ms = ? WHERE id = ?', JSON.stringify(check), timeout, cur.id);
+            out.checkDrift.push(`${m.code}: recorded check spec changed — re-registered the check (no attempts referenced the old one)`);
+          } else {
+            const why = referenced ? 'attempts reference it' : `type ${cur.type} -> ${check.type} is a re-seed decision`;
+            out.checkDrift.push(`${m.code}: recorded check spec differs from the registered one — kept the registered check (${why})`);
+          }
         }
       }
     }

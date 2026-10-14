@@ -102,6 +102,53 @@ export type QuizRoute =
   | { kind: 'predict'; snippet: string; expected: string; keyTokens: string[] }
   | { kind: 'written'; reason: string };
 
+/**
+ * Per-item ANSWER-KEY corrections (kata-cs-tests wave): two upstream model answers carry
+ * literal backtick tokens that are NOT what the snippet really prints, so the import gate
+ * quarantines the items as 'ambiguous-key' (validate.ts). The gate is never weakened; the
+ * overlay replaces the upstream key's tokens with tokens of the REAL captured output
+ * (captured through the same runScriptSnippet runner, 2026-10-09, node v22), and the import
+ * REFUSES loudly when the upstream text or the real output drifts from what a correction
+ * assumes — a stale correction must never ship silently.
+ */
+export interface KeyCorrection {
+  /** the exact upstream tokens being corrected (import refuses if the source file changed) */
+  upstream: readonly string[];
+  /** corrected literal tokens; must appear in-order in the captured output */
+  tokens: readonly string[];
+  /** why the upstream key is wrong (documentation, not shipped) */
+  note: string;
+}
+
+export const KEY_CORRECTIONS: ReadonlyMap<string, KeyCorrection> = new Map<string, KeyCorrection>([
+  [
+    'quiz-04-async-event-loop/q10',
+    {
+      upstream: ['A1, B1, A2, B2, A3, B3'],
+      tokens: ['chain A1', 'chain B1', 'chain A2', 'chain B2', 'chain A3', 'chain B3'],
+      note: "the upstream key names the right ORDER but not the literal lines: the snippet prints 'chain A1' .. 'chain B3', one per line",
+    },
+  ],
+  [
+    'quiz-06-classes-prototypes/q11',
+    {
+      upstream: ['ReferenceError: Must call super constructor in derived c...'],
+      tokens: ['ReferenceError: Must call super constructor in derived c', 'base 1'],
+      note: "the upstream token's trailing '...' is prose ellipsis, never printed; the caught ReferenceError line and then 'base 1' is the real output",
+    },
+  ],
+]);
+
+/** Corrected key tokens for an item, or the upstream tokens unchanged. Throws on a stale overlay. */
+export function correctedKeyTokens(item: Pick<QuizItem, 'file' | 'number' | 'course' | 'slug'>, tokens: string[]): string[] {
+  const c = KEY_CORRECTIONS.get(`${item.course}/${item.slug}`);
+  if (!c) return tokens;
+  if (JSON.stringify(tokens) !== JSON.stringify(c.upstream)) {
+    throw new SourceError(`${item.file} Q${item.number}: key-correction overlay is stale — upstream tokens are now ${JSON.stringify(tokens)}, the correction expected ${JSON.stringify(c.upstream)}; re-verify and update KEY_CORRECTIONS`);
+  }
+  return [...c.tokens];
+}
+
 /** Decide how an item is imported (see the module comment). */
 export async function routeItem(item: QuizItem, capture: QuizCapture): Promise<QuizRoute> {
   if (!PRINT_QUESTION.test(item.question)) return { kind: 'written', reason: 'not-a-print-question' };
@@ -112,6 +159,8 @@ export async function routeItem(item: QuizItem, capture: QuizCapture): Promise<Q
   const snippet = blocks[0]![2]!;
   const { tokens } = answerKey(item.answer);
   if (tokens.length === 0) return { kind: 'written', reason: 'answer-key-has-no-literal-tokens' };
+  const keyTokens = correctedKeyTokens(item, tokens);
+  const corrected = keyTokens !== tokens;
   // Routing must not depend on machine load (the census assertion caught one item flipping on a
   // loaded box): a timeout or a disagreeing pair is retried with a fresh pair before giving up.
   let last: QuizRoute = { kind: 'written', reason: 'snippet-times-out' };
@@ -122,7 +171,18 @@ export async function routeItem(item: QuizItem, capture: QuizCapture): Promise<Q
     const out = normalizeOutput(a.stdout);
     if (!out) return { kind: 'written', reason: 'snippet-prints-nothing' };
     const b = await capture(snippet);
-    if (b.exitCode === 0 && !b.timedOut && normalizeOutput(b.stdout) === out) return { kind: 'predict', snippet, expected: out, keyTokens: tokens };
+    if (b.exitCode === 0 && !b.timedOut && normalizeOutput(b.stdout) === out) {
+      if (corrected) {
+        // a correction must HOLD against the freshly captured output, or the import refuses
+        let at = 0;
+        for (const tk of keyTokens) {
+          const i = out.indexOf(tk, at);
+          if (i < 0) throw new SourceError(`${item.file} Q${item.number}: key-correction token ${JSON.stringify(tk)} is not in the captured output (in order) — the correction itself is wrong; fix KEY_CORRECTIONS`);
+          at = i + tk.length;
+        }
+      }
+      return { kind: 'predict', snippet, expected: out, keyTokens };
+    }
     last = { kind: 'written', reason: 'nondeterministic-output' };
   }
   return last;

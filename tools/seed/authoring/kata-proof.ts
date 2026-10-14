@@ -3,15 +3,17 @@
 // For every shipped kata: re-applies the diff to its context with the factory's own
 // applyInTemp (git apply --check + apply in a ceiling-guarded temp dir) and, where the
 // kata carries a test, executes it through the factory harness (the server's real
-// drill-js grade adapter) on the clean context and on the defective version.
+// drill-js grade adapter, or drill-cs through the warm C# runner in .cache/factory-csharp)
+// on the clean context and on the defective version.
 // Prints one verbatim block per kata; exit 1 if anything does not hold.
 import { readdirSync, readFileSync, rmSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { applyInTemp } from '../src/factory/patches/patches.ts';
-import { defaultHarness, describeFailures, execute, failsAsVerdict } from '../src/factory/harness/harness.ts';
+import { describeFailures, execute, factoryHarness, failsAsVerdict } from '../src/factory/harness/harness.ts';
 
 const root = resolve(process.argv[2] ?? 'content/seed/patches');
-const h = defaultHarness();
+const managed = factoryHarness();
+const h = managed.harness;
 let bad = 0;
 let n = 0;
 for (const name of readdirSync(root).sort()) {
@@ -54,5 +56,6 @@ for (const name of readdirSync(root).sort()) {
     console.log(lines.join('\n'));
   }
 }
+await managed.shutdown();
 console.log(`kata-proof: ${n} kata(s), ${bad} problem(s), ${h.executions} execution(s)`);
 process.exit(bad ? 1 : 0);

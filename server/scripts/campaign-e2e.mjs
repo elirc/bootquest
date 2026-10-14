@@ -2,12 +2,12 @@
 //   npm run demo:campaign      (= node --import tsx server/scripts/campaign-e2e.mjs)
 //
 // Temp DBs + an injected, settable clock; the owner's DB (BOOTQUEST_DB) is never opened.
-// Content is REAL: the 27 stamped seed:quests packs (content/seed/quests, full stamp verified by
+// Content is REAL: the 48 stamped seed:quests packs (content/seed/quests, full stamp verified by
 // the server's seed loader) and the committed campaign map (content/campaign). The script reads
 // the pack files directly ONLY as the seed-time oracle for the right answers.
 //
 // Part A (the committed campaign, unmodified): the loader wires every campaign study quest whose
-//   repo has a pack (JS 18, C# 8) and leaves the rest content-pending; all 15 JS act-1 core quests
+//   repo has a pack (JS 37, C# 10) and leaves the rest content-pending; all 15 JS act-1 core quests
 //   have packs (W5c-act1) and are passed through the API: 15/15 = 100% >= 80%, but 750 XP =
 //   level 3 < the committed unlockLevel 4, so act 2 is still locked (level leg). Passing the 5 C#
 //   act-1 quests (+250 XP on the one global ledger) reaches level 4, and JS act 2 (and C# act 2)
@@ -16,7 +16,7 @@
 //   SAME real quest rows, booted on a store that withholds ONE act-1 pack (so a real core quest is
 //   genuinely pack-less) — JS act 1 = 7 pack-backed act-1 quests + that no-pack core quest (stays
 //   pending), JS act 2 =
-//   the 3 pack-backed act-2 quests (unlock: 80% of act 1 core + level 3), C# act 1 = its first 3
+//   the 22 pack-backed act-2 quests (unlock: 80% of act 1 core + level 3), C# act 1 = its first 3
 //   pack-backed quests. Walk: a failed submit (a miss -> a review card due tomorrow), then passes one by one;
 //   act 2 stays locked at 5/8 and 6/8 (pct leg) and at 7/8 = 87.5% with level 2 (level leg); the C#
 //   quests' XP lifts the one global level to 3 and act 2 flips to unlocked via GET /tracks/js/campaign;
@@ -98,11 +98,11 @@ async function main() {
   const open = [];
   try {
     // ------------------------------------------------------------ content
-    section('content: the 27 stamped seed:quests packs through the stamp-checking seed loader');
+    section('content: the 48 stamped seed:quests packs through the stamp-checking seed loader');
     const packDirs = readdirSync(QUESTS).filter((n) => existsSync(join(QUESTS, n, 'items.json'))).map((n) => join(QUESTS, n)).sort();
     const { store, packs } = loadSeedItemStoreWithStats(packDirs);
     const quizTotal = packs.reduce((n, p) => n + (p.byKind.quiz ?? 0), 0);
-    step('27 quest packs loaded, full stamp verified (quiz + flashcard + reading-step items)', packs.length === 27 && store.questPacks().size === 27, `${quizTotal} quiz items across ${packs.length} packs`);
+    step('48 quest packs loaded, full stamp verified (quiz + flashcard + reading-step items)', packs.length === 48 && store.questPacks().size === 48, `${quizTotal} quiz items across ${packs.length} packs`);
 
     // ============================================================ PART A: the committed campaign
     section('PART A — the committed campaign map (content/campaign), unmodified');
@@ -111,7 +111,7 @@ async function main() {
     open.push(A);
     const js = A.stats.tracks.find((t) => t.track === 'js');
     const cs = A.stats.tracks.find((t) => t.track === 'csharp');
-    step('loader: JS 18 + C# 8 study-quest gates, loaded === built; quests without a pack stay content-pending; ww6 matches no quest', js.built === 18 && js.loaded === 18 && cs.built === 8 && cs.loaded === 8 && A.stats.unmatchedPacks.join() === 'ww6', `js ${js.loaded}/${js.built} (${js.pending} pending), csharp ${cs.loaded}/${cs.built} (${cs.pending} pending), unmatched ${A.stats.unmatchedPacks.join(',')}`);
+    step('loader: JS 37 + C# 10 study-quest gates, loaded === built; quests without a pack stay content-pending; ww6 matches no quest', js.built === 37 && js.loaded === 37 && cs.built === 10 && cs.loaded === 10 && A.stats.unmatchedPacks.join() === 'ww6', `js ${js.loaded}/${js.built} (${js.pending} pending), csharp ${cs.loaded}/${cs.built} (${cs.pending} pending), unmatched ${A.stats.unmatchedPacks.join(',')}`);
     let camp = (await A.api('GET', '/tracks/js/campaign')).json;
     const act1 = camp.acts[0];
     const playable = act1.quests.filter((q) => q.kind === 'study-quest' && q.state === 'available');
@@ -169,7 +169,7 @@ async function main() {
     const jsAct1 = packedAct1.slice(0, 7);
     const jsAct2 = realJs.acts[1].quests.filter((q) => q.kind === 'study-quest' && hasPack(q));
     const csAct1 = realCs.acts[0].quests.filter((q) => q.kind === 'study-quest' && hasPack(q)).slice(0, 3);
-    step(`Part B store withholds ${noPack.repo}'s pack (26 of 27 loaded)`, storeB.questPacks().size === 26 && !hasPack(noPack) && jsAct1.every(hasPack));
+    step(`Part B store withholds ${noPack.repo}'s pack (47 of 48 loaded)`, storeB.questPacks().size === 47 && !hasPack(noPack) && jsAct1.every(hasPack));
     const ACT2_LEVEL = 3;
     const tracks = defaultFixtureTracks();
     tracks.js = {
@@ -187,7 +187,7 @@ async function main() {
     open.push(B);
     step(
       `map: JS act 1 = ${jsAct1.length} pack-backed + 1 no-pack core quest (${noPack.repo}); JS act 2 = ${jsAct2.length} (unlock 80% + level ${ACT2_LEVEL}); C# act 1 = ${csAct1.length}; stamped with the real seeder fingerprint`,
-      jsAct1.length === 7 && jsAct2.length === 3 && csAct1.length === 3 && B.stats.tracks.find((t) => t.track === 'js').loaded === 10 && B.stats.tracks.find((t) => t.track === 'js').pending === 1,
+      jsAct1.length === 7 && jsAct2.length === 22 && csAct1.length === 3 && B.stats.tracks.find((t) => t.track === 'js').loaded === 29 && B.stats.tracks.find((t) => t.track === 'js').pending === 1,
       JSON.stringify(B.stats.tracks),
     );
     const campB = async () => (await B.api('GET', '/tracks/js/campaign')).json;
@@ -197,7 +197,11 @@ async function main() {
 
     const act2Unit = camp.acts[1].quests[0];
     const act2Detail0 = (await B.api('GET', `/units/${act2Unit.unitId}`)).json;
-    const lockedTry = await B.api('POST', `/units/${act2Unit.unitId}/submit`, { answers: answersFor(act2Detail0, act2Unit.repo) });
+    // a locked unit detail withholds its questions (ui-audit #1), so the attempt is built straight from the
+    // seed-time oracle: the full right-answer set, which must STILL be refused
+    const lockedAnswers = [...oracle(act2Unit.repo).values()].map((q) => q.check.answerKey);
+    step(`a locked act-2 unit detail (${act2Unit.repo}) withholds its quiz: actGate.locked, no studyQuest`, act2Detail0?.actGate?.locked === true && act2Detail0.studyQuest === undefined);
+    const lockedTry = await B.api('POST', `/units/${act2Unit.unitId}/submit`, { answers: lockedAnswers });
     step(`a JS act-2 unit (${act2Unit.repo}) refuses a submit while act 2 is locked (403 ACT_LOCKED, nothing recorded)`, lockedTry.status === 403 && lockedTry.json?.error?.code === 'ACT_LOCKED');
 
     // a failed submit first: one miss on the first quest -> a review card due tomorrow
@@ -258,8 +262,10 @@ async function main() {
       camp.acts[1].unlocked === true && camp.level === ACT2_LEVEL && camp.acts[1].quests.every((q) => q.state === 'available' && !q.contentPending),
       `act 2 unlocked=${camp.acts[1].unlocked}, quests ${camp.acts[1].quests.map((q) => `${q.repo}:${q.state}`).join(', ')}`,
     );
-    const nowOpen = await B.api('POST', `/units/${act2Unit.unitId}/submit`, { answers: answersFor(act2Detail0, act2Unit.repo) });
-    step(`the act-2 unit (${act2Unit.repo}) that answered 403 now accepts a submit: pass, +50 XP, act 2 progress 1/3`, nowOpen.status === 200 && nowOpen.json.verdict === 'pass' && nowOpen.json.xp.amount === 50 && (await campB()).acts[1].progress.coreDone === 1);
+    // re-fetched: the detail served while locked held no quiz; the unlocked detail serves it
+    const act2Detail1 = (await B.api('GET', `/units/${act2Unit.unitId}`)).json;
+    const nowOpen = await B.api('POST', `/units/${act2Unit.unitId}/submit`, { answers: answersFor(act2Detail1, act2Unit.repo) });
+    step(`the act-2 unit (${act2Unit.repo}) that answered 403 now accepts a submit: pass, +50 XP, act 2 progress 1/${jsAct2.length}`, nowOpen.status === 200 && nowOpen.json.verdict === 'pass' && nowOpen.json.xp.amount === 50 && (await campB()).acts[1].progress.coreDone === 1);
 
     // misses become FSRS cards: due the next day, with their text, gradable
     clock.advance(DAY_MS);

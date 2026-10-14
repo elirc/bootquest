@@ -79,6 +79,44 @@ describe('guide shapes (real excerpts)', () => {
     expect(extractGoalChecks(orphan, headings(orphan)).skips).toEqual([{ line: 3, reason: 'check-without-goal', text: '**Check:** nothing to verify.' }]);
   });
 
+  it('`**Goal.**` / bare `**Check.**`-then-fence (buildsubbox 05-PRACTICE.md:11-23) and the `*Goal:*` emphasis form', () => {
+    const md = [
+      '## Exercise 1 — Predict the recommendation order (easy)',
+      '',
+      '**Goal.** Understand that eligibility filters first and scoring only orders what is left.',
+      '',
+      'Read `eligible` and `recommendations` and compute the score of every item.',
+      '',
+      '**Check.**',
+      '',
+      '```powershell',
+      'node -e "import(\'./src/model.js\').then(m => console.log(m.recommendations()))"',
+      '```',
+      '',
+      'Your list matches the nine printed lines exactly.',
+      '',
+      '## Exercise 2 — Reject an item priced below cost (easy)',
+      '',
+      '**Goal.** One complete red -> green loop on a validator.',
+      '',
+      '**Check.** Before the fix: `# tests 37`, `# fail 1`. After: `# pass 37`.',
+      '',
+      '## Exercise 3',
+      '',
+      '*Goal:* read the queue module. *Check:* you can name its retry rule.',
+    ].join('\n');
+    const lines = scanLines(md);
+    const { items, skips } = extractGoalChecks(lines, headings(lines));
+    expect(skips).toEqual([]);
+    expect(items).toHaveLength(3);
+    expect(items[0]).toMatchObject({ shape: 'sectioned', goal: 'Understand that eligibility filters first and scoring only orders what is left. Read `eligible` and `recommendations` and compute the score of every item.', lineStart: 3, lineEnd: 11 });
+    // the fenced block after the bare **Check.** IS the check
+    expect(items[0]!.checks).toHaveLength(1);
+    expect(items[0]!.checks[0]).toContain('node -e');
+    expect(items[1]!.checks).toEqual(['Before the fix: `# tests 37`, `# fail 1`. After: `# pass 37`.']);
+    expect(items[2]).toMatchObject({ goal: 'read the queue module.', checks: ['you can name its retry rule.'] });
+  });
+
   it('F-table findings with severity + section honesty (ww6 06: "none reproduced" => read-derived)', () => {
     const { lines, hs } = parse(join(FX, 'ww6', 'astraupskill', '06-SOLUTIONS-AND-REVIEW.md'));
     const f = extractFindings(lines, hs);
@@ -176,6 +214,20 @@ describe('seed:quests over real excerpts', () => {
     const items = loadSeedPack(out('j1')).items.filter((i): i is SeedFlashcardItem => i.kind === 'flashcard');
     expect(items.every((i) => i.observation === 'author-recorded')).toBe(true);
     expect(items.flatMap((i) => i.citations.map((c) => c.resolved))).toContain('src/todo/repository/TaskRepository.java');
+  });
+
+  it('a bare dotted identifier resolving to no file is dropped as a counted skip, never a quarantine (fix 3b)', () => {
+    const root = join(tmp, 'ident');
+    mkdirSync(join(root, 'astraupskill'), { recursive: true });
+    mkdirSync(join(root, 'src'), { recursive: true });
+    writeFileSync(join(root, 'src', 'config.js'), 'a\nb\n');
+    writeFileSync(join(root, 'astraupskill', 'G.md'), '# G\n\n## One\n\nThe exporter writes the `state.history.json` member before `src/config.js:1` runs.\n');
+    const r = runQuests({ root, sha: 'abcdef1', repo: 'identdemo', guides: ['astraupskill/G.md'], out: out('ident') });
+    expect(r.ok).toBe(true);
+    expect(r.write!.manifest.quarantined).toBe(0);
+    expect(r.write!.manifest.skipped).toContainEqual({ subject: 'astraupskill/G.md:5', reason: expect.stringContaining('not-a-citation: `state.history.json`') });
+    const step = loadSeedPack(out('ident')).items[0]!;
+    expect(step.citations.map((c) => c.raw)).toEqual(['src/config.js:1']);
   });
 
   it('guides may cite files inside snapshot trees by exact path, while bare suffixes ignore snapshot dupes', () => {

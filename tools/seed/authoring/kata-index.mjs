@@ -33,7 +33,7 @@ for (const name of readdirSync(packsDir).sort()) {
       title: it.title,
       difficulty: s.difficulty,
       defects: it.seededDefectKey.length,
-      test: it.test ? 'drill-js' : 'none',
+      test: it.test ? it.test.check.type : 'none',
       ...(it.findingRef ? { findingRef: it.findingRef } : {}),
     });
   }

@@ -16,17 +16,20 @@ export const FIX = fileURLToPath(new URL('./fixtures/sync/', import.meta.url));
 export const CHECK_SPECS = fileURLToPath(new URL('../../content/sync/check-specs.json', import.meta.url));
 export const U01_SOLUTION = readFileSync(join(P3, 'solutions', 'u01.mjs'), 'utf8');
 export const U01_STARTER = readFileSync(join(P3, 'practice', 'learner', 'u01.mjs'), 'utf8');
+export const U03_SOLUTION = readFileSync(join(P3, 'solutions', 'u03.ts'), 'utf8');
 
 /**
  * A signalpost-shaped repo snapshot built from REAL upstream bytes: program.json
- * and U01.md (test fixtures) + practice/checks + practice/learner (P3 fixtures,
- * hash-pinned), plus a reference README and the generated apps/web copy of U01.
+ * and U01.md (test fixtures) + practice/checks + practice/learner + the tsconfig
+ * chain (P3 fixtures, hash-pinned), plus a reference README and the generated apps/web copy of U01.
  */
 export function buildSignalpostTree(dir: string): string {
   mkdirSync(join(dir, 'docs', 'curriculum'), { recursive: true });
   cpSync(join(FIX, 'program.json'), join(dir, 'docs', 'curriculum', 'program.json'));
   cpSync(join(FIX, 'U01.md'), join(dir, 'docs', 'curriculum', 'U01.md'));
   cpSync(join(P3, 'practice'), join(dir, 'practice'), { recursive: true });
+  // root tsconfig (hash-pinned P3 fixture): practice/tsconfig.json extends it (U03 tsc_project composite)
+  cpSync(join(P3, 'tsconfig.json'), join(dir, 'tsconfig.json'));
   mkdirSync(join(dir, 'apps', 'web', 'public', 'guides'), { recursive: true });
   cpSync(join(FIX, 'U01.md'), join(dir, 'apps', 'web', 'public', 'guides', 'U01.md'));
   writeFileSync(join(dir, 'README.md'), '# Signalpost\n\nA fixture.\n\n## Getting started\n\nRun it.\n');

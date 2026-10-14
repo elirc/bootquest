@@ -18,7 +18,7 @@ import type { QuestPackItems, SeedItemStore } from './seed-items.ts';
  *     check left by an earlier load is removed when nothing was ever recorded against it
  *     (otherwise it is kept for history and the quest is flagged pending again);
  *   - a pack whose repo is not a campaign study quest is reported (unmatched), never invented
- *     into a quest.
+ *     into a quest; the ladder (store/ladder.ts) serves it as a standalone study unit instead.
  * Idempotent upsert; a changed quiz gate (re-seeded item keys) updates in place while no attempt
  * references the check, and REFUSES startup once attempts do (a pass must stay bound to the gate
  * it passed). loaded === built is asserted per track.

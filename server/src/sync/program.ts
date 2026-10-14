@@ -83,6 +83,7 @@ export function recordedCheckSpec(repo: string, sha: string, r: RecordedCheck): 
     checkSha256: r.sha256,
     blobSha: r.blob_sha,
     tsx: r.needs_tsx,
+    ...(r.tsc_project !== undefined ? { tscProject: r.tsc_project } : {}),
     timeoutMs: r.timeout_ms,
     moduleType: r.module_type,
     expectedTests: r.expected_tests,

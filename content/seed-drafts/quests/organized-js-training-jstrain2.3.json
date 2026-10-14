@@ -1,0 +1,204 @@
+{
+  "format": "bootquest-quest-drafts@1",
+  "repo": "organized-js-training-jstrain2.3",
+  "sha": "804c2d02134f6a79e4a63ae0bf58112eaa17a81f",
+  "guides": [
+    "_learning/03-PATTERNS.md"
+  ],
+  "items": [
+    {
+      "id": "q01-whole-state-lww",
+      "kind": "quiz",
+      "source": { "path": "src/app/api/workspace/route.js", "lines": { "start": 21, "end": 58 } },
+      "cites": [
+        { "path": "src/app/api/workspace/route.js", "lineStart": 52, "lineEnd": 52 },
+        { "path": "src/lib/sqlite.js", "lineStart": 195, "lineEnd": 205 }
+      ],
+      "prompt": "Two browser tabs loaded the same workspace. Tab A renames page X and saves; a moment later Tab B, which never saw A's rename, edits page Y and saves. What does the server keep?",
+      "answer": "Tab B's entire state - PUT replaces the whole workspace JSON, so A's rename of X is silently lost",
+      "distractors": [
+        "Both edits, because the server merges page-level changes",
+        "Tab A's state, because B's save is rejected as stale",
+        "Both edits, but X's rename is flagged as a conflict for review"
+      ],
+      "explanation": "The route upserts the full state document; the SQL is INSERT ... ON CONFLICT(workspace_id) DO UPDATE SET state_json = excluded.state_json. There is no version check or merge on the server."
+    },
+    {
+      "id": "q02-server-stamps-time",
+      "kind": "quiz",
+      "source": { "path": "src/app/api/workspace/route.js", "lines": { "start": 33, "end": 40 } },
+      "cites": [
+        { "path": "src/app/api/workspace/route.js", "lineStart": 35, "lineEnd": 38 }
+      ],
+      "prompt": "A client PUTs a workspace whose meta.updatedAt is a date in the year 2099. What updatedAt is stored?",
+      "answer": "The server's current time - the route overwrites meta.updatedAt (and workspaceId) after spreading the client's meta",
+      "distractors": [
+        "2099, because the client's meta is stored as sent",
+        "The later of the two timestamps",
+        "None - the request is rejected for a future timestamp"
+      ],
+      "explanation": "nextState.meta is { ...(state.meta || {}), workspaceId, updatedAt: new Date().toISOString() }, so later keys win over the client's values."
+    },
+    {
+      "id": "q03-remote-older-ignored",
+      "kind": "quiz",
+      "source": { "path": "src/lib/workspaceStore.js", "lines": { "start": 366, "end": 387 } },
+      "cites": [
+        { "path": "src/lib/workspaceStore.js", "lineStart": 368, "lineEnd": 372 }
+      ],
+      "prompt": "applyRemoteState receives a remote state whose meta.updatedAt equals the local meta.updatedAt. What changes locally?",
+      "answer": "Nothing - remote state is applied only when its timestamp is strictly newer than local",
+      "distractors": [
+        "Everything - remote state always replaces local state",
+        "Only pages and blocks are replaced; comments are kept",
+        "The remote state is merged key by key with local state"
+      ],
+      "explanation": "The guard returns {} when remoteUpdatedAt <= localUpdatedAt (or is NaN). When it is newer, collections are replaced wholesale, not merged."
+    },
+    {
+      "id": "q04-activity-cap",
+      "kind": "quiz",
+      "source": { "path": "src/app/api/workspace/route.js", "lines": { "start": 40, "end": 50 } },
+      "cites": [
+        { "path": "src/app/api/workspace/route.js", "lineStart": 40, "lineEnd": 49 }
+      ],
+      "prompt": "A PUT /api/workspace arrives whose state.activities already holds 200 entries. How many activities are stored afterwards, and which one is dropped?",
+      "answer": "200 - the new activity is appended and slice(-200) drops the oldest entry",
+      "distractors": [
+        "201 - the log grows without bound",
+        "200 - the new activity is discarded because the log is full",
+        "1 - the log is reset once it reaches 200"
+      ],
+      "explanation": "activities is [...existing, newEntry].slice(-200): keep the last 200, i.e. the newest."
+    },
+    {
+      "id": "q05-move-into-descendant",
+      "kind": "quiz",
+      "source": { "path": "src/lib/workspaceStore.js", "lines": { "start": 148, "end": 161 } },
+      "cites": [
+        { "path": "src/lib/workspaceStore.js", "lineStart": 150, "lineEnd": 155 },
+        { "path": "src/lib/workspaceUtils.js", "lineStart": 22, "lineEnd": 35 }
+      ],
+      "prompt": "Page A contains B, and B contains C. A user drags A onto C (movePage(A, C)). What happens?",
+      "answer": "Nothing - walking up from C reaches A, so isDescendant reports a cycle and movePage returns no changes",
+      "distractors": [
+        "A moves under C, and C becomes the root of the tree",
+        "A moves under C, and B is re-parented to the root to break the cycle",
+        "It throws, and the sidebar shows an error"
+      ],
+      "explanation": "isDescendant(pages, C, A) follows parentId links from C: C -> B -> A, finds A, returns true. movePage also ignores moving a page onto itself."
+    },
+    {
+      "id": "q06-deleted-parent-hides",
+      "kind": "quiz",
+      "source": { "path": "src/lib/workspaceUtils.js", "lines": { "start": 1, "end": 9 } },
+      "cites": [
+        { "path": "src/lib/workspaceUtils.js", "lineStart": 1, "lineEnd": 8 }
+      ],
+      "prompt": "Parent page P is soft-deleted but its child page Q is not. Does Q appear in the sidebar tree built by buildPageTree?",
+      "answer": "No - the recursion only descends through non-deleted pages, so Q is unreachable while P is in the trash",
+      "distractors": [
+        "Yes, promoted to the root level",
+        "Yes, still nested under a greyed-out P",
+        "Yes, because Q's own isDeleted flag is false"
+      ],
+      "explanation": "Each level filters parentId === parentId && !isDeleted and recurses into the survivors only. Q stays in pages but is orphaned from the visible tree."
+    },
+    {
+      "id": "q07-recent-list",
+      "kind": "quiz",
+      "source": { "path": "src/lib/workspaceStore.js", "lines": { "start": 80, "end": 86 } },
+      "cites": [
+        { "path": "src/lib/workspaceStore.js", "lineStart": 83, "lineEnd": 83 }
+      ],
+      "prompt": "recent is [B, A, C] and the user opens page A. What is recent afterwards?",
+      "answer": "[A, B, C] - A moves to the front, its old entry is removed, and the list is capped at 40",
+      "distractors": [
+        "[A, B, A, C] - every visit is recorded",
+        "[B, A, C] - pages already in the list keep their position",
+        "[B, C, A] - the newest visit goes to the end"
+      ],
+      "explanation": "[pageId, ...state.recent.filter((id) => id !== pageId)].slice(0, 40): a move-to-front, deduplicated, bounded list."
+    },
+    {
+      "id": "q08-add-block-fallback",
+      "kind": "quiz",
+      "source": { "path": "src/lib/workspaceStore.js", "lines": { "start": 203, "end": 214 } },
+      "cites": [
+        { "path": "src/lib/workspaceStore.js", "lineStart": 206, "lineEnd": 212 }
+      ],
+      "prompt": "addBlock is called with an afterBlockId that no longer exists on the page. Where is the new block inserted?",
+      "answer": "At the end of the page - findIndex returns -1, and index < 0 falls into the push branch",
+      "distractors": [
+        "At the start of the page, since -1 + 1 is 0",
+        "Nowhere - the call is ignored",
+        "Right after the first block of the page"
+      ],
+      "explanation": "Both an unknown afterBlockId and the last block's id lead to list.push; only a found, non-last index uses splice(index + 1, 0, nextBlock)."
+    },
+    {
+      "id": "q09-restore-version",
+      "kind": "quiz",
+      "source": { "path": "src/app/api/workspace/version/route.js", "lines": { "start": 27, "end": 59 } },
+      "cites": [
+        { "path": "src/app/api/workspace/version/route.js", "lineStart": 46, "lineEnd": 54 }
+      ],
+      "prompt": "PATCH /api/workspace/version restores a version of page X. What does it change in the stored workspace?",
+      "answer": "Page X's fields are overlaid with the snapshot page, X's blocks are replaced by the snapshot blocks, and meta.updatedAt is bumped",
+      "distractors": [
+        "The whole workspace is rolled back to the moment the version was saved",
+        "Only X's title is restored; blocks are left as they are",
+        "A new page is created from the snapshot next to X"
+      ],
+      "explanation": "It rewrites state.pages[pageIndex] (spread with version.snapshot.page) and state.blocksByPage[pageId], then upserts the workspace. Other pages are untouched."
+    },
+    {
+      "id": "q10-presence-ttl",
+      "kind": "quiz",
+      "source": { "path": "src/lib/workspaceStore.js", "lines": { "start": 325, "end": 364 } },
+      "cites": [
+        { "path": "src/lib/workspaceStore.js", "lineStart": 325, "lineEnd": 330 },
+        { "path": "src/lib/workspaceStore.js", "lineStart": 348, "lineEnd": 355 }
+      ],
+      "prompt": "With default arguments, how stale may a presence entry and a typing indicator become before the prune functions drop them?",
+      "answer": "Presence survives up to 13000 ms, typing indicators up to 3000 ms",
+      "distractors": [
+        "Both survive up to 13000 ms",
+        "Presence up to 3000 ms, typing up to 13000 ms",
+        "Both survive until the page is reloaded"
+      ],
+      "explanation": "prunePresence(maxAgeMs = 13000) and pruneTyping(maxAgeMs = 3000) keep entries whose now - updatedAt <= maxAgeMs."
+    },
+    {
+      "id": "f01-props-merge",
+      "kind": "flashcard",
+      "source": { "path": "src/lib/workspaceStore.js", "lines": { "start": 216, "end": 230 } },
+      "cites": [
+        { "path": "src/lib/workspaceStore.js", "lineStart": 221, "lineEnd": 226 }
+      ],
+      "front": "In updateBlock, what happens to block.props when the patch contains props, and when it does not?",
+      "back": "With patch.props the old and new props are shallow-merged ({ ...block.props, ...patch.props }); without it the existing props are kept even though the rest of the patch is spread over the block."
+    },
+    {
+      "id": "f02-offline-stores",
+      "kind": "flashcard",
+      "source": { "path": "src/lib/offlineStore.js", "lines": { "start": 1, "end": 82 } },
+      "cites": [
+        { "path": "src/lib/offlineStore.js", "lineStart": 1, "lineEnd": 4 },
+        { "path": "src/lib/offlineStore.js", "lineStart": 79, "lineEnd": 82 }
+      ],
+      "front": "Which IndexedDB object stores does the offline layer use, and in what order is the sync queue replayed?",
+      "back": "Database notion-clone-offline holds syncQueue and drafts. readSyncQueue returns queued items sorted by createdAt ascending - oldest first."
+    },
+    {
+      "id": "f03-version-snapshot-source",
+      "kind": "flashcard",
+      "source": { "path": "src/lib/sqlite.js", "lines": { "start": 207, "end": 224 } },
+      "cites": [
+        { "path": "src/lib/sqlite.js", "lineStart": 209, "lineEnd": 217 }
+      ],
+      "front": "When savePageVersion snapshots a page, where does the snapshot's content come from?",
+      "back": "From the workspace state already stored on the server (getWorkspaceState), not from the client's in-memory edits - unsaved changes are not in the version."
+    }
+  ]
+}

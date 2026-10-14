@@ -1,0 +1,165 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "patches",
+ "name": "organized-experiment-internal-case-management-system-katas",
+ "items": [
+  {
+   "key": "seed:patches:organized-experiment-internal-case-management-system/patch-kata/0f175407cd6ee3b2",
+   "provenance": {
+    "repo": "organized-experiment-internal-case-management-system",
+    "sha": "4bbcf27bf35796029c957aa1ab5801143755ab0b",
+    "path": "docs/architecture/auth-and-permissions.md",
+    "lines": {
+     "start": 91,
+     "end": 91
+    }
+   },
+   "citations": [],
+   "kind": "patch-kata",
+   "title": "Case list: let the request's filters refine the access scope",
+   "diff": "diff --git a/src/services/caseService.mjs b/src/services/caseService.mjs\n--- a/src/services/caseService.mjs\n+++ b/src/services/caseService.mjs\n@@ -20,13 +20,13 @@\n export function buildCaseListWhere(actor, filters) {\n   const accessWhere = buildCaseAccessWhere(actor);\n \n+  // Start from the access scope and let the request's filters refine it, so the team\n+  // dropdown in the UI can narrow the queue a manager is looking at.\n   return {\n+    ...accessWhere,\n     ...(filters.status ? { status: filters.status } : {}),\n     ...(filters.assignedToId ? { assignedToId: filters.assignedToId } : {}),\n     ...(filters.owningTeamId ? { owningTeamId: filters.owningTeamId } : {}),\n-    // The access scope is spread LAST. Object spread is last-writer-wins, so a client\n-    // filter may narrow what the scope allows but can never replace it (finding A1).\n-    ...accessWhere,\n   };\n }\n \n",
+   "contextFiles": [
+    {
+     "path": "src/services/caseService.mjs",
+     "content": "// Adapted from internal-case-management-system src/services/caseService.ts:94-120\n// @ 4bbcf27 (buildCaseAccessWhere from src/lib/auth/authorize.ts:42-58 and a minimal\n// where-matcher over an in-memory case list inlined; the access scope is spread AFTER the\n// client's filters — finding A1's fix shape — so the module runs standalone).\nexport class AuthorizationError extends Error {}\n\nconst ALL_CASES_ROLES = new Set(['ADMIN', 'OPERATIONS_MANAGER', 'AUDITOR']);\n\nexport function buildCaseAccessWhere(actor) {\n  if (ALL_CASES_ROLES.has(actor.role)) {\n    return {};\n  }\n  if (!actor.teamId) {\n    throw new AuthorizationError('This role requires a team assignment before it can access cases.');\n  }\n  // The team filter is centralized here so callers cannot silently forget it.\n  return { owningTeamId: actor.teamId };\n}\n\nexport function buildCaseListWhere(actor, filters) {\n  const accessWhere = buildCaseAccessWhere(actor);\n\n  return {\n    ...(filters.status ? { status: filters.status } : {}),\n    ...(filters.assignedToId ? { assignedToId: filters.assignedToId } : {}),\n    ...(filters.owningTeamId ? { owningTeamId: filters.owningTeamId } : {}),\n    // The access scope is spread LAST. Object spread is last-writer-wins, so a client\n    // filter may narrow what the scope allows but can never replace it (finding A1).\n    ...accessWhere,\n  };\n}\n\nexport function matchesWhere(record, where) {\n  return Object.entries(where).every(([field, expected]) => record[field] === expected);\n}\n\nexport async function listVisibleCases(store, actor, filters) {\n  const where = buildCaseListWhere(actor, filters);\n  const cases = await store.listCases();\n  return cases.filter((record) => matchesWhere(record, where));\n}\n",
+     "origin": {
+      "kind": "adapted",
+      "repoPath": "src/services/caseService.ts",
+      "lines": {
+       "start": 94,
+       "end": 120
+      }
+     }
+    }
+   ],
+   "seededDefectKey": [
+    {
+     "scenario": "A CASE_WORKER on team A sends GET /api/cases?owningTeamId=<team B's cuid>.",
+     "evidence": {
+      "path": "src/services/caseService.mjs",
+      "lineStart": 23,
+      "lineEnd": 23,
+      "in": "patched"
+     },
+     "consequence": "Object spread is last-writer-wins, so the client's filter replaces the access scope: the where becomes { owningTeamId: teamB } and the worker reads another team's case titles, requester names and assignee emails. Broken access control, mitigated only by cuid obscurity — finding A1 re-created."
+    },
+    {
+     "scenario": "The shipped buildCaseListWhere spreads this client filter after the access scope, and getScopedQueueSummary repeats the identical pattern.",
+     "evidence": {
+      "path": "src/services/caseService.ts",
+      "lineStart": 100,
+      "lineEnd": 100,
+      "in": "repo"
+     },
+     "consequence": "Production has the override today in both call sites (caseService.ts:96-100 and reportService.ts:19-22), and the senior note on reportService.ts:18 claims the opposite of what the code does; the existing caseService test passes only a status filter, so nothing pins the conflicting-filter case."
+    }
+   ],
+   "test": {
+    "module": "src/services/caseService.mjs",
+    "check": {
+     "type": "drill-js",
+     "language": "js",
+     "tests": [
+      {
+       "name": "a CASE_WORKER's owningTeamId filter cannot widen visibility past their team (finding A1)",
+       "code": "const store = { listCases: async () => [ { id: 'c1', owningTeamId: 'team-a', status: 'NEW', title: 'Team A case' }, { id: 'c2', owningTeamId: 'team-b', status: 'NEW', title: 'Team B case' }, ] }; const worker = { id: 'u1', role: 'CASE_WORKER', teamId: 'team-a' }; const rows = await mod.listVisibleCases(store, worker, { owningTeamId: 'team-b' }); assert.ok(rows.every((row) => row.owningTeamId === 'team-a'), 'a client filter replaced the team scope'); assert.equal(rows.some((row) => row.id === 'c2'), false);"
+      },
+      {
+       "name": "an ADMIN's team filter still narrows the list",
+       "code": "const store = { listCases: async () => [ { id: 'c1', owningTeamId: 'team-a', status: 'NEW' }, { id: 'c2', owningTeamId: 'team-b', status: 'NEW' }, ] }; const rows = await mod.listVisibleCases(store, { id: 'a1', role: 'ADMIN', teamId: null }, { owningTeamId: 'team-b' }); assert.deepEqual(rows.map((r) => r.id), ['c2']);"
+      },
+      {
+       "name": "a status filter narrows a team-scoped list without touching the scope",
+       "code": "const store = { listCases: async () => [ { id: 'c1', owningTeamId: 'team-a', status: 'NEW' }, { id: 'c3', owningTeamId: 'team-a', status: 'CLOSED' }, { id: 'c2', owningTeamId: 'team-b', status: 'NEW' }, ] }; const worker = { id: 'u1', role: 'CASE_WORKER', teamId: 'team-a' }; const rows = await mod.listVisibleCases(store, worker, { status: 'NEW' }); assert.deepEqual(rows.map((r) => r.id), ['c1']);"
+      },
+      {
+       "name": "a team role without a team assignment is refused, not widened",
+       "code": "const store = { listCases: async () => [{ id: 'c1', owningTeamId: 'team-a', status: 'NEW' }] }; await assert.rejects(() => mod.listVisibleCases(store, { id: 'u2', role: 'CASE_WORKER', teamId: null }, {}), mod.AuthorizationError);"
+      }
+     ],
+     "timeoutMs": 8000
+    }
+   },
+   "findingRef": "internal-case-management-system A1 (docs/architecture/auth-and-permissions.md:91)"
+  },
+  {
+   "key": "seed:patches:organized-experiment-internal-case-management-system/patch-kata/2c4c284dd2b3f13f",
+   "provenance": {
+    "repo": "organized-experiment-internal-case-management-system",
+    "sha": "4bbcf27bf35796029c957aa1ab5801143755ab0b",
+    "path": "docs/architecture/auth-and-permissions.md",
+    "lines": {
+     "start": 94,
+     "end": 94
+    }
+   },
+   "citations": [],
+   "kind": "patch-kata",
+   "title": "Case transitions: record the operator's comment in the audit metadata too",
+   "diff": "diff --git a/src/services/transitionCase.mjs b/src/services/transitionCase.mjs\n--- a/src/services/transitionCase.mjs\n+++ b/src/services/transitionCase.mjs\n@@ -50,6 +50,8 @@\n     metadata: {\n       from: previousStatus,\n       to: input.nextStatus,\n+      // Keep the operator's reason on the audit row so the timeline explains itself.\n+      comment: input.comment ?? null,\n     },\n   });\n \n",
+   "contextFiles": [
+    {
+     "path": "src/services/transitionCase.mjs",
+     "content": "// Adapted from internal-case-management-system src/services/caseService.ts:404-455\n// @ 4bbcf27 (Prisma replaced by an in-memory store; canViewRestrictedNotes reduced to the\n// note:view:restricted role set from src/lib/auth/permissions.ts; audit metadata limited\n// to non-sensitive transition facts — finding A2's fix — so the module runs standalone).\nconst RESTRICTED_NOTE_ROLES = new Set(['ADMIN', 'OPERATIONS_MANAGER', 'TEAM_LEAD', 'AUDITOR']);\n\nexport function canViewRestrictedNotes(actor) {\n  return RESTRICTED_NOTE_ROLES.has(actor.role);\n}\n\nexport class InMemoryCaseStore {\n  constructor(caseRecord) {\n    this.caseRecord = { notes: [], auditLogs: [], ...caseRecord };\n  }\n  async findCaseById(caseId) {\n    return this.caseRecord.id === caseId ? this.caseRecord : null;\n  }\n  async updateCaseRecord(caseId, data) {\n    Object.assign(this.caseRecord, data);\n    return this.caseRecord;\n  }\n  async createAuditLog(entry) {\n    this.caseRecord.auditLogs.push(entry);\n  }\n  async createCaseNote(note) {\n    this.caseRecord.notes.push(note);\n  }\n}\n\nexport function serializeCaseDetail(actor, caseRecord) {\n  return {\n    ...caseRecord,\n    // Restricted notes are filtered here; every other field of the record — auditLogs\n    // included — is spread through to the response as-is.\n    notes: caseRecord.notes.filter((note) => !note.isRestricted || canViewRestrictedNotes(actor)),\n  };\n}\n\nexport async function transitionCase(store, actor, caseId, input) {\n  const existingCase = await store.findCaseById(caseId);\n  const previousStatus = existingCase.status;\n  await store.updateCaseRecord(caseId, { status: input.nextStatus });\n\n  // Finding A2: the comment below may become a RESTRICTED note, but auditLogs are spread\n  // to every viewer of the case, so audit metadata records only non-sensitive facts.\n  await store.createAuditLog({\n    caseId,\n    actorId: actor.id,\n    action: 'case.transitioned',\n    metadata: {\n      from: previousStatus,\n      to: input.nextStatus,\n    },\n  });\n\n  if (input.comment) {\n    await store.createCaseNote({\n      caseId,\n      authorId: actor.id,\n      body: input.comment,\n      isRestricted: input.nextStatus === 'ESCALATED',\n    });\n  }\n\n  return serializeCaseDetail(actor, await store.findCaseById(caseId));\n}\n",
+     "origin": {
+      "kind": "adapted",
+      "repoPath": "src/services/caseService.ts",
+      "lines": {
+       "start": 404,
+       "end": 455
+      }
+     }
+    }
+   ],
+   "seededDefectKey": [
+    {
+     "scenario": "A TEAM_LEAD escalates a case with a confidential reason; a CASE_WORKER on the owning team then opens GET /api/cases/:id.",
+     "evidence": {
+      "path": "src/services/transitionCase.mjs",
+      "lineStart": 54,
+      "lineEnd": 54,
+      "in": "patched"
+     },
+     "consequence": "serializeCaseDetail filters only notes and spreads everything else, so the worker — who lacks note:view:restricted — reads the restricted escalation reason verbatim from auditLogs[].metadata.comment. The UI hiding the metadata column is UI-only protection; the API leaks it (finding A2)."
+    },
+    {
+     "scenario": "The shipped transitionCase already writes the comment into audit metadata as well as into the restricted note.",
+     "evidence": {
+      "path": "src/services/caseService.ts",
+      "lineStart": 439,
+      "lineEnd": 439,
+      "in": "repo"
+     },
+     "consequence": "Production leaks the restricted reason today: caseService.ts:430-441 stores it in metadata, serializeCaseDetail (:47-53) filters only notes, and caseRepository.ts:150-164 returns auditLogs with their full metadata JSON to anyone who can view the case."
+    }
+   ],
+   "test": {
+    "module": "src/services/transitionCase.mjs",
+    "check": {
+     "type": "drill-js",
+     "language": "js",
+     "tests": [
+      {
+       "name": "a restricted escalation comment is not readable through auditLogs (finding A2)",
+       "code": "const store = new mod.InMemoryCaseStore({ id: 'case-1', status: 'IN_PROGRESS' }); const lead = { id: 'lead-1', role: 'TEAM_LEAD' }; await mod.transitionCase(store, lead, 'case-1', { nextStatus: 'ESCALATED', comment: 'Requester is a board member; keep this confidential.' }); const worker = { id: 'worker-1', role: 'CASE_WORKER' }; const detail = mod.serializeCaseDetail(worker, await store.findCaseById('case-1')); assert.equal(detail.notes.length, 0); assert.equal(JSON.stringify(detail.auditLogs).includes('board member'), false, 'the restricted reason leaked through audit metadata');"
+      },
+      {
+       "name": "roles with note:view:restricted still see the escalation note",
+       "code": "const store = new mod.InMemoryCaseStore({ id: 'case-1', status: 'IN_PROGRESS' }); const lead = { id: 'lead-1', role: 'TEAM_LEAD' }; await mod.transitionCase(store, lead, 'case-1', { nextStatus: 'ESCALATED', comment: 'Escalating: repeat outage.' }); const detail = mod.serializeCaseDetail(lead, await store.findCaseById('case-1')); assert.equal(detail.notes.length, 1); assert.equal(detail.notes[0].body, 'Escalating: repeat outage.'); assert.equal(detail.notes[0].isRestricted, true);"
+      },
+      {
+       "name": "the audit trail still records who moved the case and between which states",
+       "code": "const store = new mod.InMemoryCaseStore({ id: 'case-1', status: 'NEW' }); await mod.transitionCase(store, { id: 'op-1', role: 'OPERATIONS_MANAGER' }, 'case-1', { nextStatus: 'IN_PROGRESS', comment: 'picking this up' }); const log = store.caseRecord.auditLogs[0]; assert.equal(log.action, 'case.transitioned'); assert.equal(log.actorId, 'op-1'); assert.equal(log.metadata.from, 'NEW'); assert.equal(log.metadata.to, 'IN_PROGRESS');"
+      },
+      {
+       "name": "a non-escalation transition comment stays a normal, visible note",
+       "code": "const store = new mod.InMemoryCaseStore({ id: 'case-1', status: 'NEW' }); await mod.transitionCase(store, { id: 'op-1', role: 'OPERATIONS_MANAGER' }, 'case-1', { nextStatus: 'IN_PROGRESS', comment: 'normal handover note' }); const worker = { id: 'worker-1', role: 'CASE_WORKER' }; const detail = mod.serializeCaseDetail(worker, await store.findCaseById('case-1')); assert.equal(detail.notes.length, 1); assert.equal(detail.notes[0].isRestricted, false);"
+      }
+     ],
+     "timeoutMs": 8000
+    }
+   },
+   "findingRef": "internal-case-management-system A2 (docs/architecture/auth-and-permissions.md:94)"
+  }
+ ]
+}

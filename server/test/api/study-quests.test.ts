@@ -4,7 +4,8 @@
  *   js     act 1: study grok-js (pack), study no-pack-repo (NO pack), reading read-r1
  *          act 2: study ship-it (pack)                [80% of act 1 core + level 2]
  *   csharp act 1: study csbootcamp (pack: 15 quiz items -> 12/15 is exactly 80%)
- * ww6's pack matches no quest (reported as unmatched).
+ * ww6's pack matches no quest (reported as unmatched) and is wired by the LADDER as a standalone
+ * study unit (store/ladder.ts, family 'study').
  */
 import { cpSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -21,6 +22,8 @@ import { loadCampaignIntoDb, readCampaign } from '../../src/store/campaign.ts';
 import { ledgerCounts } from '../../src/store/queries.ts';
 import { loadSeedItemStore, mapSeedItemStore, readSeedPackItems, SeedItemLoadError, type SeedItemStore } from '../../src/store/seed-items.ts';
 import { loadStudyQuestsIntoDb, StudyQuestLoadError } from '../../src/store/study-quests.ts';
+import { assertUniqueSeedItemRefs, ladderUnits, LadderLoadError, loadLadderIntoDb, studyUnitKey } from '../../src/store/ladder.ts';
+import { insertUnit } from '../../src/store/content.ts';
 import { defaultFixtureTracks, quest, writeCampaignFixture, type FixtureTracks } from '../campaign-fixture.ts';
 import { localNoon, makeTempDb, type TempDb } from '../helpers.ts';
 
@@ -147,6 +150,80 @@ describe('study-quest loader (store/study-quests.ts)', { timeout: 60_000 }, () =
     writeFileSync(join(dir, 'items.json'), readFileSync(join(dir, 'items.json'), 'utf8').replace('"prompt": "', '"prompt": "EDITED '));
     expect(() => readSeedPackItems(dir)).toThrow(SeedItemLoadError);
     expect(() => loadSeedItemStore([dir])).toThrow(/sha256|stamp/);
+  });
+});
+
+// ---------------------------------------------------------------- standalone study packs (ladder)
+
+describe('standalone study packs: a quest pack matching no campaign study quest is a ladder study unit (ww6)', { timeout: 60_000 }, () => {
+  const ctx = useStudyApi();
+  const ww6Keys = () => packQuizzes('ww6').map((q) => q.key);
+  const ladderStudyUnits = (ctx: Ctx) =>
+    ctx.tmp.db.all<{ id: number; key: string; kind: string; track_id: string; retired_at: number | null }>(
+      `SELECT id, key, kind, track_id, retired_at FROM unit WHERE key LIKE 'ladder/study/%' ORDER BY id`,
+    );
+
+  it('wires ww6 ONLY (campaign-matched packs stay with their quests); loaded === built; idempotent', () => {
+    const s = loadLadderIntoDb(ctx.tmp.db, { seedItems: store, authored: null }, ctx.clock);
+    expect(s.study).toEqual({ built: 1, loaded: 1 });
+    const units = ladderStudyUnits(ctx);
+    expect(units).toHaveLength(1);
+    expect(units[0]).toMatchObject({ key: studyUnitKey('ww6', ww6Keys()), kind: 'study', track_id: 'js', retired_at: null });
+    const chk = ctx.tmp.db.get<{ type: string; spec: string; threshold: number }>('SELECT type, spec, threshold FROM "check" WHERE unit_id = ?', units[0]!.id)!;
+    expect(chk.type).toBe('study-quiz');
+    expect(chk.threshold).toBe(0.8);
+    expect(JSON.parse(chk.spec)).toEqual({ type: 'study-quiz', itemKeys: ww6Keys(), passPct: 0.8 });
+    expect(ctx.tmp.db.all('SELECT competency_id AS c FROM unit_competency WHERE unit_id = ?', units[0]!.id)).toEqual([{ c: 'code-reading' }]);
+    // the campaign-matched packs are NOT duplicated as ladder units
+    for (const repo of ['grok-js', 'ship-it', 'csbootcamp']) expect(units.some((u) => u.key.includes(`/study/${repo}/`))).toBe(false);
+    // second load: nothing inserted, nothing retired, same unit
+    const again = loadLadderIntoDb(ctx.tmp.db, { seedItems: store, authored: null }, ctx.clock);
+    expect([again.study.built, again.study.loaded, again.inserted, again.retired]).toEqual([1, 1, 0, 0]);
+    expect(ladderStudyUnits(ctx).map((u) => u.id)).toEqual([units[0]!.id]);
+    // the listing names the family + repo
+    const row = ladderUnits(ctx.tmp.db).find((u) => u.id === units[0]!.id)!;
+    expect(row).toMatchObject({ family: 'study', repo: 'ww6', quest: null });
+  });
+
+  it('plays like a study quest: reading list + questions without keys, graded server-side, review cards on misses', async () => {
+    loadLadderIntoDb(ctx.tmp.db, { seedItems: store, authored: null }, ctx.clock);
+    const id = ladderStudyUnits(ctx)[0]!.id;
+    const res = await request(ctx.app).get(`/api/units/${id}`);
+    expect(res.status).toBe(200);
+    const d = UnitDetailResponse.parse(res.body);
+    expect(d.studyQuest!.repo).toBe('ww6');
+    expect(d.studyQuest!.questions.map((q) => q.prompt)).toEqual(packQuizzes('ww6').map((q) => q.prompt));
+    expect(d.studyQuest!.readingSteps.length).toBeGreaterThan(0);
+    expect(res.text).not.toMatch(/answerKey|"explanation"/);
+    const fail = SubmitResponse.parse((await submit(ctx, id, { answers: withWrong('ww6', 10) })).body);
+    expect(fail.verdict).toBe('fail');
+    expect(fail.studyQuiz!.reviewCards.created).toBe(10);
+    const pass = SubmitResponse.parse((await submit(ctx, id, { answers: keysOf('ww6') })).body);
+    expect(pass.verdict).toBe('pass');
+    expect(pass.studyQuiz!.correct).toBe(keysOf('ww6').length);
+  });
+
+  it('a re-seeded ww6 pack retires the old unit and creates a fresh one (never a silent in-place rebind)', () => {
+    loadLadderIntoDb(ctx.tmp.db, { seedItems: store, authored: null }, ctx.clock);
+    const old = ladderStudyUnits(ctx)[0]!;
+    const reseeded = mapSeedItemStore(packQuizzes('ww6').slice(1));
+    const s = loadLadderIntoDb(ctx.tmp.db, { seedItems: reseeded, authored: null }, ctx.clock);
+    expect(s.study).toEqual({ built: 1, loaded: 1 });
+    expect(s.retired).toBe(1);
+    const after = ladderStudyUnits(ctx);
+    expect(after.find((u) => u.id === old.id)!.retired_at).not.toBeNull();
+    expect(after.filter((u) => u.retired_at === null).map((u) => u.key)).toEqual([studyUnitKey('ww6', ww6Keys().slice(1))]);
+  });
+
+  it('refuses a quiz item gated by two live units (a review card of one would answer the other)', () => {
+    loadLadderIntoDb(ctx.tmp.db, { seedItems: store, authored: null }, ctx.clock);
+    insertUnit(
+      ctx.tmp.db,
+      { key: 'hand/dup-ww6', track: 'js', kind: 'study', title: 'dup', competencies: ['code-reading'], checks: [{ spec: { type: 'study-quiz', itemKeys: [ww6Keys()[0]!], passPct: 0.8 } }] },
+      ctx.clock,
+    );
+    expect(() => assertUniqueSeedItemRefs(ctx.tmp.db)).toThrow(LadderLoadError);
+    expect(() => assertUniqueSeedItemRefs(ctx.tmp.db)).toThrow(/hand\/dup-ww6/);
   });
 });
 

@@ -359,7 +359,9 @@ export const SeedValidationStamp = z
     source: z.string().min(1),
     fingerprintKind: z.string().regex(/^seed:(quests|explainback|variants|patches)$/),
     fingerprint: z.string().regex(/^[0-9a-f]{64}$/),
-    toolchain: z.object({ node: z.string().min(1), esbuild: z.string().min(1).optional() }).strict(),
+    toolchain: z
+      .object({ node: z.string().min(1), esbuild: z.string().min(1).optional(), dotnetSdk: z.string().min(1).optional(), dotnetRef: z.string().min(1).optional() })
+      .strict(),
     manifestSha256: z.string().regex(/^[0-9a-f]{64}$/),
     itemsSha256: z.string().regex(/^[0-9a-f]{64}$/),
     counts: z.object({ total: z.number().int().nonnegative(), byKind: SeedCounts }).strict(),

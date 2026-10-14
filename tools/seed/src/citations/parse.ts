@@ -110,6 +110,18 @@ export const NOT_FILES = new Set([
 export const CONCEPT_FILENAMES = new Set(['Program.cs', 'Startup.cs', 'Program.fs']);
 
 /**
+ * Factory fix 3b: a bare lowercase-led dotted token (`cfg.lock`, `payload.json`,
+ * `state.history.json`) reads as a member expression / identifier chain as often as a
+ * filename. The parser still emits it when its last segment is a KNOWN extension; the
+ * quest generator drops a path-only, line-less citation of this shape when the file
+ * does not exist at the pinned sha (counted as a skip, never silent).
+ */
+export function isIdentifierToken(p: string): boolean {
+  if (p.includes('/')) return false;
+  return /^[a-z_$][\w$]*(\.[A-Za-z_$][\w$]*)+$/.test(p);
+}
+
+/**
  * W7: .NET namespaces / qualified type names (`System.Text.Json`,
  * `Microsoft.AspNetCore.Http.Results`) — a bare dotted PascalCase name rooted at
  * System/Microsoft, or any bare name of 3+ PascalCase segments, is not a file.

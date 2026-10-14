@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import request from 'supertest';
 import type { Express } from 'express';
@@ -10,7 +10,8 @@ import { createNodeTestFileRunner } from '../../src/api/runner-node-test-file.ts
 import { defaultRunners } from '../../src/api/runners.ts';
 import { fixedClock } from '../../src/engines/clock.ts';
 import { localNoon, makeTempDb, type TempDb } from '../helpers.ts';
-import { makeSyncFixture, PINNED_SHA, SIGNALPOST, U01_SOLUTION, U01_STARTER, type SyncFixture } from '../sync-helpers.ts';
+import { CHECK_SPECS, makeSyncFixture, PINNED_SHA, SIGNALPOST, U01_SOLUTION, U01_STARTER, U03_SOLUTION, type SyncFixture } from '../sync-helpers.ts';
+import { createSyncService } from '../../src/sync/service.ts';
 
 describe('W4 API: POST /sync, GET /sync/queue, GET /refs/:id/content, node-test-file submit', { timeout: 180_000 }, () => {
   let fx: SyncFixture;
@@ -30,16 +31,17 @@ describe('W4 API: POST /sync, GET /sync/queue, GET /refs/:id/content, node-test-
     fx.cleanup();
   });
 
-  async function syncAndU01(): Promise<{ unitId: number; detail: UnitDetailResponse }> {
-    const s = await request(app).post('/api/sync').send({});
+  async function syncAndUnit(code: string, on: Express = app): Promise<{ unitId: number; detail: UnitDetailResponse }> {
+    const s = await request(on).post('/api/sync').send({});
     expect(s.status).toBe(200);
     expect(SyncReport.parse(s.body).ok).toBe(true);
-    const units = await request(app).get('/api/tracks/js/units');
-    const u = (units.body as { units: { id: number; key: string }[] }).units.find((x) => x.key === `gh:${SIGNALPOST}:U01`)!;
-    const d = await request(app).get(`/api/units/${u.id}`);
+    const units = await request(on).get('/api/tracks/js/units');
+    const u = (units.body as { units: { id: number; key: string }[] }).units.find((x) => x.key === `gh:${SIGNALPOST}:${code}`)!;
+    const d = await request(on).get(`/api/units/${u.id}`);
     expect(d.status).toBe(200);
     return { unitId: u.id, detail: UnitDetailResponse.parse(d.body) };
   }
+  const syncAndU01 = () => syncAndUnit('U01');
 
   it('POST /sync runs the job; the unit detail links its refs; the guide renders from the cache', async () => {
     const { detail } = await syncAndU01();
@@ -121,6 +123,117 @@ describe('W4 API: POST /sync, GET /sync/queue, GET /refs/:id/content, node-test-
     expect(tmp.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM run')!.n).toBe(runs);
     // every per-run workspace was removed
     expect(readdirSync(join(fx.root, 'ntf-work'))).toEqual([]);
+  });
+
+  it('U03 composite through the app: the adapter pins the tsconfig chain from the tarball cache; tsc runs BEFORE node --test', async () => {
+    const { unitId, detail } = await syncAndUnit('U03');
+    // public projection names the project (never the private pins); the carve-out is gone
+    expect(detail.check!.spec).toMatchObject({ type: 'node-test-file', tscProject: 'practice/tsconfig.json' });
+    expect(detail.uncoveredLegs).toBeUndefined();
+    const good = await request(app).post(`/api/units/${unitId}/submit`).send({ code: U03_SOLUTION });
+    expect(good.status).toBe(200);
+    expect(good.body.result.failures).toEqual([]);
+    expect(good.body.verdict).toBe('pass');
+    // a type error the type-stripping runtime never sees: only the composite fails it
+    const bad = await request(app).post(`/api/units/${unitId}/submit`).send({ code: `${U03_SOLUTION}\nconst bqBad: number = "s";\n` });
+    expect(bad.status).toBe(200);
+    expect(bad.body.verdict).toBe('fail');
+    const failures = bad.body.result.failures as { name: string; message: string }[];
+    expect(failures[0]!.name).toBe('(tsc)');
+    expect(failures[0]!.message).toContain('TS2322');
+    expect(failures.every((f) => f.name === '(tsc)')).toBe(true); // the behavioral tests themselves stayed green
+    expect(readdirSync(join(fx.root, 'ntf-work'))).toEqual([]);
+  });
+
+  it('U03 composite: a tsconfig missing from the pinned tree is a 409 CHECK_INTEGRITY refusal and NOTHING is recorded', async () => {
+    const { unitId } = await syncAndUnit('U03');
+    // practice/tsconfig.json extends ../tsconfig.json: drop the parent from the extracted per-sha tree
+    rmSync(join(fx.cacheRoot, 'elirc', 'signalpost-swe-bootcamp', PINNED_SHA, 'tsconfig.json'));
+    const before = tmp.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM attempt')!.n;
+    const r = await request(app).post(`/api/units/${unitId}/submit`).send({ code: U03_SOLUTION });
+    expect(r.status).toBe(409);
+    expect(r.body.error.code).toBe('CHECK_INTEGRITY');
+    expect(r.body.error.message).toMatch(/tsconfig .*tsconfig\.json is not available/);
+    expect(tmp.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM attempt')!.n).toBe(before);
+  });
+
+  it('uncoveredLegs: a recorded carve-out is surfaced read-only on the program unit detail (and only there)', async () => {
+    const table = JSON.parse(readFileSync(CHECK_SPECS, 'utf8')) as { repos: Record<string, { units: Record<string, { uncovered_legs?: string[] }> }> };
+    table.repos[SIGNALPOST]!.units.U01!.uncovered_legs = ['U01-02 acceptance leg X is NOT covered (test carve-out)'];
+    const specs = join(fx.root, 'check-specs.carve-out.json');
+    writeFileSync(specs, JSON.stringify(table));
+    const svc = createSyncService({ ...fx.svc.paths, checkSpecs: specs }, fx.gh);
+    const carved = createApp({ db: tmp.db, clock, sync: svc, runners: defaultRunners({ nodeTestFile: createNodeTestFileRunner(svc.cache) }) });
+    const u01 = await syncAndUnit('U01', carved);
+    expect(u01.detail.uncoveredLegs).toEqual(['U01-02 acceptance leg X is NOT covered (test carve-out)']);
+    const units = (await request(carved).get('/api/tracks/js/units')).body as { units: { id: number; key: string }[] };
+    const u02Id = units.units.find((x) => x.key === `gh:${SIGNALPOST}:U02`)!.id;
+    const u02 = await request(carved).get(`/api/units/${u02Id}`);
+    expect(u02.status).toBe(200);
+    expect(UnitDetailResponse.parse(u02.body).uncoveredLegs).toBeUndefined(); // empty list => absent
+  });
+
+  describe('U03 on a DB synced BEFORE the tsc composite (old table -> new table, same DB)', () => {
+    const OLD_LEG = "U03-02 acceptance 'practice typecheck pass' (tsc -p practice/tsconfig.json) is NOT covered by this check (pre-OPS table)";
+    function oldTableApp(): Express {
+      const table = JSON.parse(readFileSync(CHECK_SPECS, 'utf8')) as {
+        repos: Record<string, { units: Record<string, { tsc_project?: string; uncovered_legs?: string[] }> }>;
+      };
+      const u03 = table.repos[SIGNALPOST]!.units.U03!;
+      expect(u03.tsc_project).toBe('practice/tsconfig.json'); // the current table carries the composite
+      delete u03.tsc_project;
+      u03.uncovered_legs = [OLD_LEG];
+      const specs = join(fx.root, 'check-specs.pre-ops.json');
+      writeFileSync(specs, JSON.stringify(table));
+      const svc = createSyncService({ ...fx.svc.paths, checkSpecs: specs }, fx.gh);
+      const workRoot = join(fx.root, 'ntf-work-old');
+      mkdirSync(workRoot);
+      return createApp({ db: tmp.db, clock, sync: svc, runners: defaultRunners({ nodeTestFile: createNodeTestFileRunner(svc.cache, { workRoot }) }) });
+    }
+    async function resync(): Promise<string[]> {
+      const s = await request(app).post('/api/sync').send({});
+      expect(s.status).toBe(200);
+      const r = SyncReport.parse(s.body);
+      expect(r.ok).toBe(true);
+      return r.repos[0]!.program!.checkDrift;
+    }
+
+    it('unreferenced: the next sync re-registers the check, so the composite really runs and no carve-out remains', async () => {
+      const old = oldTableApp();
+      const before = await syncAndUnit('U03', old);
+      expect((before.detail.check!.spec as { tscProject?: string }).tscProject).toBeUndefined();
+      expect(before.detail.uncoveredLegs).toEqual([OLD_LEG]);
+      // switch to the current table on the SAME DB
+      const drift = await resync();
+      expect(drift).toContainEqual(expect.stringMatching(/^U03: recorded check spec changed — re-registered the check \(no attempts referenced the old one\)$/));
+      const d = UnitDetailResponse.parse((await request(app).get(`/api/units/${before.unitId}`)).body);
+      expect(d.check!.spec).toMatchObject({ type: 'node-test-file', tscProject: 'practice/tsconfig.json' });
+      expect(d.uncoveredLegs).toBeUndefined();
+      // and the re-registered check really runs tsc
+      const bad = await request(app).post(`/api/units/${before.unitId}/submit`).send({ code: `${U03_SOLUTION}\nconst bqBad: number = "s";\n` });
+      expect(bad.body.verdict).toBe('fail');
+      expect((bad.body.result.failures as { name: string }[])[0]!.name).toBe('(tsc)');
+      // a further sync is quiet (the specs now agree)
+      expect((await resync()).filter((x) => x.startsWith('U03:'))).toEqual([]);
+    });
+
+    it('referenced: the old check stays pinned, the drift is reported, AND GET /units still shows the typecheck carve-out', async () => {
+      const old = oldTableApp();
+      const before = await syncAndUnit('U03', old);
+      // an attempt graded by the OLD check: a type error the old check cannot see passes
+      const sub = await request(old).post(`/api/units/${before.unitId}/submit`).send({ code: `${U03_SOLUTION}\nconst bqBad: number = "s";\n` });
+      expect(sub.status).toBe(200);
+      expect(sub.body.verdict).toBe('pass');
+      const drift = await resync();
+      expect(drift).toContainEqual('U03: recorded check spec differs from the registered one — kept the registered check (attempts reference it)');
+      const d = UnitDetailResponse.parse((await request(app).get(`/api/units/${before.unitId}`)).body);
+      expect((d.check!.spec as { tscProject?: string }).tscProject).toBeUndefined();
+      expect(d.uncoveredLegs).toHaveLength(1);
+      expect(d.uncoveredLegs![0]).toMatch(/^U03-02 acceptance 'practice typecheck pass' \(tsc -p practice\/tsconfig\.json\) is NOT covered by this unit's registered check: it predates the tsc composite/);
+      // the honest statement matches behavior: the pinned check still does not typecheck
+      const again = await request(app).post(`/api/units/${before.unitId}/submit`).send({ code: `${U03_SOLUTION}\nconst bqBad: number = "s";\n` });
+      expect(again.body.verdict).toBe('pass');
+    });
   });
 
   it('a tampered cached check file is a 409 CHECK_INTEGRITY refusal and NOTHING is recorded', async () => {

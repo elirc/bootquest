@@ -76,17 +76,22 @@ const g2Count = ebItems.filter((i) => /^G2 BRIEF\b/.test(i.questions[0].prompt))
 const kataItems = seedItems.filter((i) => i.kind === 'patch-kata');
 const variantItems = seedItems.filter((i) => i.kind === 'variant');
 const authoredUnits = JSON.parse(readFileSync(join(REPO, 'content', 'units', 'agentic.json'), 'utf8')).units;
-// variants stay PENDING on a fresh DB (their artifact units arrive with a sync), so they add no unit here
-const ladderUnitCount = ebItems.length + kataItems.length + authoredUnits.length;
+// variants whose artifact unit is PRE-INSERTED before boot (the http-lab fixture, line ~212) are LIVE
+// retest units at startup; every other variant's artifact arrives with a sync (or, for the authored G4
+// unit, only on a LATER load — authored units load after retests), so those retests stay pending here
+const liveRetests = variantItems.filter((i) => i.unitKey === httpLesson.key).length;
+const ladderUnitCount = ebItems.length + kataItems.length + authoredUnits.length + liveRetests;
 // W8: the stamped seed:quests packs; every campaign study quest whose repo has one (with quiz items) gains a quiz gate
 const QUEST_DIR = join(SEED_DIR, 'quests');
 const questPackDirs = existsSync(QUEST_DIR) ? readdirSync(QUEST_DIR).filter((n) => existsSync(join(QUEST_DIR, n, 'items.json'))) : [];
 const questQuizzes = new Map(
   questPackDirs.map((n) => [n, JSON.parse(readFileSync(join(QUEST_DIR, n, 'items.json'), 'utf8')).items.filter((i) => i.kind === 'quiz')]),
 );
-const campaignStudyGates = campaignManifest.tracks
-  .flatMap((t) => JSON.parse(readFileSync(join(CAMPAIGN_DIR, t.file), 'utf8')).acts.flatMap((a) => a.quests))
-  .filter((q) => q.kind === 'study-quest' && q.unit !== null && (questQuizzes.get(q.repo)?.length ?? 0) > 0).length;
+const campaignQuests = campaignManifest.tracks.flatMap((t) => JSON.parse(readFileSync(join(CAMPAIGN_DIR, t.file), 'utf8')).acts.flatMap((a) => a.quests));
+const campaignStudyGates = campaignQuests.filter((q) => q.kind === 'study-quest' && q.unit !== null && (questQuizzes.get(q.repo)?.length ?? 0) > 0).length;
+// quest packs (with quiz items) matching NO campaign study quest load as standalone ladder study units (e.g. ww6)
+const studyQuestRepos = new Set(campaignQuests.filter((q) => q.kind === 'study-quest').map((q) => q.repo));
+const standaloneStudyUnits = [...questQuizzes].filter(([repo, quiz]) => quiz.length > 0 && !studyQuestRepos.has(repo)).length;
 
 /** Run a node entrypoint (process.execPath --import tsx, never a shell) to completion; returns {code, out}. */
 function runNode(entry, args, env, timeoutMs = 120_000) {
@@ -247,13 +252,17 @@ async function main() {
     child.stderr.on('data', (d) => (serverOut += d)); // kept for diagnostics only; never asserted on
     const base = `http://127.0.0.1:${port}`;
     let up = false;
-    for (let i = 0; i < 480 && !up; i++) { // up to ~2 min: 4 packs + tsx cold start on a loaded box
+    // wall-clock deadline (not an iteration cap: a fast-failing fetch must not burn the budget
+    // in seconds) — 180s covers 4 packs + tsx cold start on a loaded box; 250ms between ALL attempts
+    const bootDeadline = Date.now() + 180_000;
+    while (!up && Date.now() < bootDeadline) {
       if (child.exitCode !== null) break;
       try {
         up = (await fetch(`${base}/api/health`)).ok;
       } catch {
-        await sleep(250);
+        /* not listening yet */
       }
+      if (!up) await sleep(250);
     }
     if (!step('server boots on temp DB + free port', up, `port ${port}`)) {
       console.log(serverOut);
@@ -267,11 +276,12 @@ async function main() {
       const h = await api(base, 'GET', '/api/health');
       // 3 fixture units (2 smoke + the W3c http lesson) + the real pack course (written units carry no check)
       // + every csbootcamp drill + one placeholder unit per playable campaign quest (no checks until seed:quests)
-      // + W7: one ladder unit per explain-back set / kata + the authored G3/G4 units (each with one check)
-      const wantUnits = 3 + packCounts.total + csManifest.totals.total + campaignUnits + ladderUnitCount + jsCount('total') + jcsFile.units.length;
-      const wantChecks = 3 + packCounts.total - packCounts.written + csManifest.totals.total + ladderUnitCount + jsCount('total') - jsCount('written') + jcsFile.units.length + campaignStudyGates;
+      // + W7: one ladder unit per explain-back set / kata + the authored G3/G4 units + the retests whose
+      //   pre-seeded artifact made them live at boot (each with one check)
+      const wantUnits = 3 + packCounts.total + csManifest.totals.total + campaignUnits + ladderUnitCount + jsCount('total') + jcsFile.units.length + standaloneStudyUnits;
+      const wantChecks = 3 + packCounts.total - packCounts.written + csManifest.totals.total + ladderUnitCount + jsCount('total') - jsCount('written') + jcsFile.units.length + campaignStudyGates + standaloneStudyUnits;
       step(
-        `health (3 fixture + ${packCounts.total} BootForge ${PACK_COURSE} + ${csManifest.totals.total} csbootcamp + ${campaignUnits} campaign + ${ladderUnitCount} ladder/authored + ${jsCount('total')} jstrain + ${jcsFile.units.length} jstrain-cs units; + ${campaignStudyGates} W8 study-quest gates: loaded === built)`,
+        `health (3 fixture + ${packCounts.total} BootForge ${PACK_COURSE} + ${csManifest.totals.total} csbootcamp + ${campaignUnits} campaign + ${ladderUnitCount} ladder/authored + ${jsCount('total')} jstrain + ${jcsFile.units.length} jstrain-cs + ${standaloneStudyUnits} standalone study units; + ${campaignStudyGates} W8 study-quest gates: loaded === built)`,
         h.status === 200 && h.json?.ok === true && h.json.counts.units === wantUnits && h.json.counts.checks === wantChecks,
         JSON.stringify(h.json),
       );
@@ -608,15 +618,15 @@ async function main() {
       // 10f. W7: the competency-ladder units wired from the REAL stamped seed packs
       const lad = await api(base, 'GET', '/api/ladder');
       step(
-        `ladder wiring: ${ebItems.length - g2Count} explain-back + ${g2Count} G2 + ${kataItems.length} kata-bank + ${authoredUnits.length} authored units; ${variantItems.length} retest(s) pending until sync (loaded === built)`,
+        `ladder wiring: ${ebItems.length - g2Count} explain-back + ${g2Count} G2 + ${kataItems.length} kata-bank + ${authoredUnits.length} authored units; ${liveRetests} retest(s) live (pre-seeded fixture artifact), ${variantItems.length - liveRetests} pending until sync (loaded === built)`,
         lad.status === 200 &&
           lad.json.counts.explainBack === ebItems.length - g2Count &&
           lad.json.counts.g2 === g2Count &&
           lad.json.counts.katas === kataItems.length &&
-          lad.json.counts.retests === 0 &&
+          lad.json.counts.retests === liveRetests &&
           lad.json.counts.authored === authoredUnits.length &&
           lad.json.units.filter((u) => u.family === 'kata' || u.family === 'g2' || u.family === 'authored').every((u) => u.trackId === 'agentic') &&
-          /retest pending: /.test(serverOut) === variantItems.length > 0,
+          /retest pending: /.test(serverOut) === (variantItems.length - liveRetests > 0),
         JSON.stringify(lad.json?.counts),
       );
 

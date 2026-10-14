@@ -200,6 +200,23 @@ Together with the synced U01 program unit they form the first complete real
 artifact -> explain-back -> retest chain (proven end to end by
 `server/test/api/ladder-real.test.ts`).
 
+The variants wave-2 drafts extend the coverage: `signalpost-swe-bootcamp-u02.json`
+(U02's delayed transfer, a search whose deliberately wrong loop stops at
+`length - 1` and so fails only at the last item) and `signalpost-swe-bootcamp-u03.json`
+(U03's book-request boundary; the wrong solution narrows `pages` with `typeof`
+only, accepting `0`/`1.5`/`NaN`) run with `--checkout` as above, each paired with
+an explain-back draft in `tools/seed/authoring/explainback/`. `agentic-g4.json`
+(unit `agentic/g4-verification-engineering`: a changed task, NOT the G4 filter —
+`splitRunEvidence(outcome)` classifies one run of a wrong solution into
+`{ evidence, named, infrastructure }`; the changed planted-bad case is a run whose
+only failures are parenthesized infrastructure names, and the deliberately wrong
+classifier counts those as test-owned. Its reference solution deliberately solves a
+different function, so revealing the retest never hands over G4's hidden
+`wrongSolutionFilter`) and `http-tasks-api.json` (unit `fixture:http-tasks-api`, a
+drill-js substitution — see the backlog) cite `selfboot` files and run WITHOUT
+`--checkout`: the pin is recorded as caller-asserted, which `seed:check` accepts
+for the variants generator (it re-executes the filter instead).
+
 ### Patch katas: `seed:patches`
 
 ```sh
@@ -357,7 +374,12 @@ step.
   "Kata bank".
 - **Retest units**: from `content/seed/variants/*` packs. Each is a variation of the
   artifact unit named by the variant's `unitKey`. It stays **pending** until that unit
-  exists, for example until `bootquest sync` has registered signalpost U01.
+  exists, for example until `bootquest sync` has registered signalpost U01. Authored
+  units (G3/G4) load AFTER retests in the same pass, so a retest of an authored unit
+  (the G4 variant) is pending on a DB's FIRST boot by design and goes live on the next
+  ladder load — a sync re-link or a restart. A retest of a test fixture unit
+  (`fixture:http-tasks-api`) only ever goes live where that fixture is inserted
+  (`smoke-api.mjs` pre-seeds it, so the smoke boots with that retest live).
 - **Two live units may not reference the same question-set or kata key.** A duplicate
   refuses startup, because answer-before-key is enforced per item.
 - **G3 "live delegation"** (a repo-task with branch, CI and PR-section predicates) and
@@ -402,6 +424,9 @@ resolved); quiz variety `concept` and flashcard shape `hand-authored`;
 
 - **Choice quizzes can be re-keyed undetected:** `singleKeyedProblems` in `tools/seed/src/factory/quests/validate.ts` never checks that the keyed choice's evidence includes the goal's own key. Deferred: the authored W5c quizzes use different evidence, so a new rule needs a per-variety audit of every shipped quiz first.
 - **No drill-cs runner in the seed harness:** `tools/seed/src/factory/harness/harness.ts` registers drill-js only, so C# katas and variants cannot carry tests. Deferred: needs the warm C# runner at seed time, a fingerprint change and a C# sweep.
+- **The http-lab retest is a drill-js substitution:** `SeedRunnableCheck` is drill-js|drill-cs only, so `fixture:http-tasks-api`'s variant (`tools/seed/authoring/variants/http-tasks-api.json`) drills the create-endpoint contract as a pure `handleCreateTask(store, rawBody)` function — a retest cannot boot and probe the learner's HTTP server. Deferred: a true http variant needs a seed-time http harness (learner-server lifecycle) and a schema change.
+- **Revealing a retest does not touch its artifact:** `revealUnit` (`server/src/api/service.ts`) checks only `assertTrackOpen`, and `revealedInVariationChain` (`server/src/engines/attempts.ts`) walks only UP the `variation_of` chain, so revealing a CHILD retest never taints its artifact unit. Content keeps it harmless today (every variant's reference solution solves a different function from its artifact's), but the engine should either apply `assertRetestGate` to retest units in `revealUnit` or propagate a retest reveal to its artifact. Deferred: server rule change outside the variants content branch; needs a decision on which semantics and an XP-ledger test.
+- **U03's compile leg is not retested:** the U03 variant is runtime-meaningful on purpose — the drill-js `ts` language type-strips via esbuild and never type-checks. A compile-leg variant wants the composite repo-pinned tsc check (the node-test-file `tscProject` design in the OPS recon), which the variants harness does not run. Deferred with the drill-cs harness item.
 - **`PatchesDraft` has no `difficulty` field:** `tools/seed/src/factory/patches/run.ts`; difficulty lives only in `content/seed/patches/katas-index.json` (the server reads it for display). Deferred: changes the shipped kata schema; every kata pack would be re-seeded.
 - **Guides under `snapshots/` are refused as quest sources:** `discoverGuides` in `tools/seed/src/factory/quests/generate.ts`. Deferred: snapshot trees duplicate paths; needs a dedup and key policy decision.
 - **Near-duplicate check ignores token order:** `nearDuplicate` in `tools/seed/src/factory/util.ts`. Deferred: tightening it changes validation of shipped items.

@@ -37,6 +37,8 @@ const DraftQuiz = z
     kind: z.literal('quiz'),
     source: Source,
     cites: z.array(Cite),
+    /** what the quiz drills (seed-pack SeedQuizItem.variety); hand items default to 'concept' */
+    variety: z.enum(['concept', 'goal-check', 'finding-location']).optional(),
     prompt: z.string().min(1),
     answer: z.string().min(1),
     distractors: z.array(z.string().min(1)).min(2).max(4),
@@ -50,6 +52,8 @@ const DraftFlashcard = z
     kind: z.literal('flashcard'),
     source: Source,
     cites: z.array(Cite),
+    /** the finding shape it was written from (seed-pack SeedFlashcardItem.shape); default 'hand-authored' */
+    shape: z.enum(['hand-authored', 'f-table', 'numbered', 'r-heading']).optional(),
     severity: z.string().optional(),
     front: z.string().min(1),
     back: z.string().min(1),
@@ -91,7 +95,7 @@ export function buildDraftItem(co: Checkout, d: DraftItem): SeedItem {
       key,
       provenance,
       citations,
-      shape: 'numbered',
+      shape: d.shape ?? 'hand-authored',
       label: d.id,
       ...(d.severity ? { severity: d.severity } : {}),
       front: d.front,
@@ -109,7 +113,7 @@ export function buildDraftItem(co: Checkout, d: DraftItem): SeedItem {
     key,
     provenance,
     citations,
-    variety: 'goal-check',
+    variety: d.variety ?? 'concept',
     prompt: d.prompt,
     choices,
     check: { type: 'quiz', itemKey: key, grading: 'choice', answerKey: choices.indexOf(answer), choices: choices.map((c) => c.text) },
@@ -155,7 +159,11 @@ export function runQuestsWithDrafts(o: QuestDraftOptions): RunReport {
   for (const g of guides) {
     const hit = ex.path(co.repo, g);
     if (hit) return refusal('quests', head, `requested guide ${g} is ${hit.reason} — refusing to ingest it (${hit.entry.note})`);
-    if (!co.index.files.has(g)) return refusal('quests', head, `requested guide ${g} not found in the checkout`);
+    // only markdown is guide material: a non-.md file would be "parsed" into one
+    // contentless '(untitled guide)' reading step (parse.ts readingSections) — refuse instead
+    if (!g.toLowerCase().endsWith('.md')) return refusal('quests', head, `requested guide ${g} is not a markdown (.md) file — seed:quests reads markdown guides only`);
+    // the FULL index: excludeDirs/snapshot pruning only narrows suffix matching, it must not hide a listed guide
+    if (!co.fullIndex.files.has(g)) return refusal('quests', head, `requested guide ${g} not found in the checkout`);
   }
   head.push(`[seed:quests:drafts] guides ${guides.length}: ${guides.join(', ')}; hand-authored drafts ${drafts.items.length}`);
   let cand;

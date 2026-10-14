@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises';
+import { posix } from 'node:path';
 import type { CanonicalRunResult } from '@bootquest/shared/api';
 import { CheckIntegrityError, run as runNodeTestFile, type NodeTestFileSpec } from '../runners/node-test-file/index.ts';
 import type { GithubCache } from '../sync/cache.ts';
@@ -12,6 +14,51 @@ import { CheckRefusedError, SubmissionShapeError, UnsupportedCheckError, type Ru
  * Any pin problem is a REFUSAL (CheckRefusedError -> 409 CHECK_INTEGRITY):
  * nothing is spawned, no attempt is recorded.
  */
+/** The extends chain never legitimately needs more files than this (signalpost: 2). */
+const MAX_TSCONFIG_FILES = 8;
+
+/**
+ * U03 composite: collect the tsconfig `extends` chain from the pinned tree at `sha`
+ * (cache.treeFile — a cache miss downloads that sha's tarball once, like the check
+ * file itself). RELATIVE extends only (`./` / `../`): a package-ref extends would
+ * need node_modules the workspace deliberately lacks, so it is left for tsc to
+ * report. Depth/size-capped; a chain that escapes the repo is a refusal.
+ */
+async function collectProjectFiles(cache: GithubCache, repo: string, sha: string, project: string): Promise<Record<string, string>> {
+  const files: Record<string, string> = {};
+  const queue = [project];
+  while (queue.length > 0 && Object.keys(files).length < MAX_TSCONFIG_FILES) {
+    const rel = queue.shift()!;
+    if (rel in files) continue; // cycle / duplicate
+    let abs: string;
+    try {
+      abs = await cache.treeFile(repo, sha, rel);
+    } catch (err) {
+      throw new CheckRefusedError(
+        `tsconfig ${repo}@${sha.slice(0, 7)}:${rel} is not available (${err instanceof Error ? err.message : String(err)})`,
+      );
+    }
+    const content = await readFile(abs, 'utf8');
+    files[rel] = content;
+    let ext: unknown;
+    try {
+      ext = (JSON.parse(content) as { extends?: unknown }).extends;
+    } catch {
+      continue; // not strict JSON (jsonc?): materialize what we have; tsc reports the real problem
+    }
+    const refs = typeof ext === 'string' ? [ext] : Array.isArray(ext) ? ext.filter((x): x is string => typeof x === 'string') : [];
+    for (const r of refs) {
+      if (!r.startsWith('./') && !r.startsWith('../')) continue; // relative extends only
+      const next = posix.normalize(posix.join(posix.dirname(rel), r.endsWith('.json') ? r : `${r}.json`));
+      if (next === '..' || next.startsWith('../')) {
+        throw new CheckRefusedError(`tsconfig extends chain escapes the repo: ${rel} -> ${r}`);
+      }
+      queue.push(next);
+    }
+  }
+  return files;
+}
+
 export function createNodeTestFileRunner(cache: GithubCache, opts: { workRoot?: string } = {}): Runner {
   return async (spec, submission): Promise<CanonicalRunResult> => {
     if (spec.type !== 'node-test-file') throw new UnsupportedCheckError(`node-test-file runner got ${spec.type}`);
@@ -38,9 +85,16 @@ export function createNodeTestFileRunner(cache: GithubCache, opts: { workRoot?: 
       ...(spec.blobSha ? { blob_sha: spec.blobSha } : {}),
       ...(spec.moduleType ? { module_type: spec.moduleType } : {}),
       ...(spec.expectedTests ? { expected_tests: spec.expectedTests } : {}),
+      ...(spec.tscProject ? { tsc_project: spec.tscProject } : {}),
     };
+    // U03 composite: pin the tsconfig chain from the same per-SHA tree the check came from
+    const projectFiles = spec.tscProject ? await collectProjectFiles(cache, spec.repo, spec.sha, spec.tscProject) : undefined;
     try {
-      const r = await runNodeTestFile({ id: spec.checkPath, spec: ntf, checkFile }, { code: submission.code }, opts.workRoot ? { workRoot: opts.workRoot } : {});
+      const r = await runNodeTestFile(
+        { id: spec.checkPath, spec: ntf, checkFile, ...(projectFiles ? { projectFiles } : {}) },
+        { code: submission.code },
+        opts.workRoot ? { workRoot: opts.workRoot } : {},
+      );
       return { pass: r.pass, output: r.output, failures: r.failures, durationMs: r.durationMs };
     } catch (err) {
       if (err instanceof CheckIntegrityError) throw new CheckRefusedError(err.message);

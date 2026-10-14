@@ -286,7 +286,8 @@ export function startupSummary(running: Pick<RunningServer, 'packs' | 'campaign'
     `[bootquest] ladder: explain-back ${l.explainBack.loaded} === ${l.explainBack.built} (${l.explainBack.linkedToArtifact} linked to a project artifact, ` +
       `${l.explainBack.linkedToQuest} to a campaign quest), G2 briefs ${l.g2.loaded} === ${l.g2.built}, ` +
       `kata bank ${l.katas.loaded} === ${l.katas.built} (${l.katas.linkedToQuest} linked to a quest), ` +
-      `retests ${l.retests.loaded} === ${l.retests.built} built - ${l.retests.pending.length} pending, authored ${l.authored.loaded} === ${l.authored.built}`,
+      `retests ${l.retests.loaded} === ${l.retests.built} built - ${l.retests.pending.length} pending, standalone study packs ${l.study.loaded} === ${l.study.built}, ` +
+      `authored ${l.authored.loaded} === ${l.authored.built}`,
   );
   for (const p of l.retests.pending) out.push(`[bootquest] ladder: retest pending: ${p}`);
   const sq = running.studyQuests;
@@ -294,7 +295,7 @@ export function startupSummary(running: Pick<RunningServer, 'packs' | 'campaign'
     for (const t of sq.tracks) {
       out.push(`[bootquest] study quests ${t.track}: loaded ${t.loaded} === built ${t.built} quiz gates from quest packs, ${t.pending} still content-pending (no pack)`);
     }
-    if (sq.unmatchedPacks.length) out.push(`[bootquest] study quests: quest pack(s) matching no campaign study quest: ${sq.unmatchedPacks.join(', ')}`);
+    if (sq.unmatchedPacks.length) out.push(`[bootquest] study quests: quest pack(s) matching no campaign study quest (served as standalone ladder study units): ${sq.unmatchedPacks.join(', ')}`);
     for (const o of sq.orphaned) out.push(`[bootquest] study quests: ${o} lost its quest pack after attempts were recorded (gate kept for history, quest content-pending)`);
   }
   return out;

@@ -50,6 +50,14 @@ export interface NodeTestFileSpec {
   /** `type` field of the workspace-root package.json (mirrors the source repo). Default "module". */
   module_type?: "module" | "commonjs";
   /**
+   * U03 composite: repo-relative tsconfig path (e.g. `practice/tsconfig.json`).
+   * When set, the repo-pinned `tsc -p <this> --noEmit --pretty false` runs over the
+   * materialized workspace BEFORE `node --test`; every type error becomes a
+   * structured failure named '(tsc)' (mirrors the self-run TS grading).
+   * Requires `exercise.projectFiles` to carry the tsconfig chain's bytes.
+   */
+  tsc_project?: string;
+  /**
    * Top-level test names the check declares (recorded at seed time from a reference run).
    * When present, a pass requires every one of them reported `ok`. Strongly recommended:
    * without it, a submission that calls `process.exit(0)` at import makes node report a
@@ -66,6 +74,13 @@ export interface NodeTestFileExercise {
   spec: NodeTestFileSpec;
   /** Local path of the cached check-file bytes (per-SHA cache in W4; fixture dir in tests). */
   checkFile: string;
+  /**
+   * `tsc_project` only: repo-relative path -> file CONTENT of every tsconfig in the
+   * project's extends chain, read from the pinned source (the adapter walks the chain
+   * in the per-SHA tarball cache). Materialized into the workspace before tsc runs.
+   * Missing or incomplete when the spec names a project => CheckIntegrityError.
+   */
+  projectFiles?: Record<string, string>;
 }
 
 export interface Submission {
@@ -100,7 +115,7 @@ export interface RunOptions {
   tsxLoaderUrl?: string;
   /** Called with the spawned top-level pid (tests use it to prove the tree was reaped). */
   onSpawn?: (pid: number) => void;
-  /** Parent dir of the per-run `bq-ntf-*` workspace (default os.tmpdir()). */
+  /** Parent dir of the per-run `bq-ntf-*` workspace (default os.tmpdir()/bq-ntf-<pid>, created on demand). */
   workRoot?: string;
 }
 
@@ -174,6 +189,47 @@ export function resolveTsxLoaderUrl(): string {
     cachedTsxUrl = pathToFileURL(require.resolve("tsx")).href;
   }
   return cachedTsxUrl;
+}
+
+// ---------------------------------------------------------------------------
+// repo-pinned tsc (U03 composite; mirrors the self-run runner's TS grading)
+// ---------------------------------------------------------------------------
+
+export const TSC_TIMEOUT_MS = 120_000;
+
+let cachedTsc: { js: string; typeRoots: string } | undefined;
+/** BootQuest's own pinned TypeScript (root devDependency) — never the learner's or upstream's. */
+export function resolveTsc(): { js: string; typeRoots: string } {
+  if (!cachedTsc) {
+    const require = createRequire(import.meta.url);
+    const pkgPath = require.resolve("typescript/package.json");
+    // the workspace has no node_modules: --typeRoots points at BootQuest's own @types
+    const typesNode = path.dirname(require.resolve("@types/node/package.json"));
+    cachedTsc = { js: path.join(path.dirname(pkgPath), "lib", "tsc.js"), typeRoots: path.dirname(typesNode) };
+  }
+  return cachedTsc;
+}
+
+export interface TscError {
+  file: string;
+  line: number;
+  col: number;
+  code: string;
+  message: string;
+}
+
+/** `--pretty false` lines: `path/file.ts(12,5): error TS2322: message` (+ indented continuations). */
+export function parseTscOutput(stdout: string): TscError[] {
+  const errors: TscError[] = [];
+  for (const line of stdout.split(/\r?\n/)) {
+    const m = /^(.*?)\((\d+),(\d+)\): error (TS\d+): (.*)$/.exec(line);
+    if (m) {
+      errors.push({ file: m[1]!.replace(/\\/g, "/"), line: Number(m[2]), col: Number(m[3]), code: m[4]!, message: m[5]! });
+    } else if (errors.length && /^\s+\S/.test(line)) {
+      errors[errors.length - 1]!.message += `\n${line.trim()}`;
+    }
+  }
+  return errors;
 }
 
 // ---------------------------------------------------------------------------
@@ -355,6 +411,52 @@ function childEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
+interface Collected {
+  stdout: string;
+  stderr: string;
+  code: number | null;
+  signal: NodeJS.Signals | null;
+  timedOut: boolean;
+}
+
+/** Spawn `process.execPath args` (no shell) in `cwd`; wall-clock timeout kills the whole tree. */
+function spawnCollect(args: string[], cwd: string, timeoutMs: number, onSpawn?: (pid: number) => void): Promise<Collected> {
+  return new Promise<Collected>((resolve, reject) => {
+    const child = spawn(process.execPath, args, {
+      cwd,
+      env: childEnv(),
+      shell: false,
+      windowsHide: true,
+      detached: process.platform !== "win32",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    if (child.pid !== undefined) onSpawn?.(child.pid);
+    let out = "";
+    let err = "";
+    let timedOut = false;
+    child.stdout.setEncoding("utf8").on("data", (d: string) => {
+      out += d;
+      if (out.length > 4 * OUTPUT_LIMIT) out = out.slice(-2 * OUTPUT_LIMIT);
+    });
+    child.stderr.setEncoding("utf8").on("data", (d: string) => {
+      err += d;
+      if (err.length > 4 * OUTPUT_LIMIT) err = err.slice(-2 * OUTPUT_LIMIT);
+    });
+    const timer = setTimeout(() => {
+      timedOut = true;
+      if (child.pid !== undefined) void killTree(child.pid);
+    }, timeoutMs);
+    child.on("error", (e) => {
+      clearTimeout(timer);
+      reject(e);
+    });
+    child.on("close", (code, signal) => {
+      clearTimeout(timer);
+      resolve({ stdout: out, stderr: err, code, signal, timedOut });
+    });
+  });
+}
+
 export async function run(
   exercise: NodeTestFileExercise,
   submission: Submission,
@@ -366,7 +468,11 @@ export async function run(
   const checkBytes = await loadVerifiedCheck(exercise);
   if (spec.learner_path === spec.path) throw new CheckIntegrityError("learner_path must differ from the check path");
 
-  const root = await mkdtemp(path.join(options.workRoot ?? tmpdir(), "bq-ntf-"));
+  // Hygiene: per-PROCESS parent dir, so concurrent suites never snapshot each other's
+  // workspaces and a sweeper can tell a dead process's leftovers from a live run's.
+  const workParent = options.workRoot ?? path.join(tmpdir(), `bq-ntf-${process.pid}`);
+  await mkdir(workParent, { recursive: true });
+  const root = await mkdtemp(path.join(workParent, "bq-ntf-"));
   try {
     // 2. Mirror the source layout; check copied fresh every run and made read-only.
     const checkAbs = resolveInside(root, spec.path, "check");
@@ -378,59 +484,56 @@ export async function run(
     await chmod(checkAbs, 0o444);
     await writeFile(learnerAbs, submission.code, "utf8");
 
+    // 2b. U03 composite: materialize the pinned tsconfig chain, then the repo-pinned
+    //     tsc runs over the SAME workspace BEFORE node --test (type errors are
+    //     structured '(tsc)' failures; tsc executes no learner code).
+    const tscFailures: RunnerFailure[] = [];
+    let tscSection = "";
+    if (spec.tsc_project !== undefined) {
+      const files = exercise.projectFiles;
+      if (!files || files[spec.tsc_project] === undefined) {
+        throw new CheckIntegrityError(
+          `tsc_project ${JSON.stringify(spec.tsc_project)} requires the project's tsconfig bytes in exercise.projectFiles — refusing to run`,
+        );
+      }
+      for (const [rel, content] of Object.entries(files)) {
+        if (rel === spec.path || rel === spec.learner_path) {
+          throw new CheckIntegrityError(`project file ${JSON.stringify(rel)} collides with the check/learner path`);
+        }
+        const abs = resolveInside(root, rel, "project file");
+        await mkdir(path.dirname(abs), { recursive: true });
+        await writeFile(abs, content, "utf8");
+      }
+      const tsc = resolveTsc();
+      const r = await spawnCollect(
+        [tsc.js, "-p", spec.tsc_project, "--noEmit", "--pretty", "false", "--typeRoots", tsc.typeRoots],
+        root,
+        TSC_TIMEOUT_MS,
+        options.onSpawn,
+      );
+      const errors = parseTscOutput(r.stdout);
+      for (const e of errors.slice(0, 50)) {
+        tscFailures.push({ name: "(tsc)", message: `${e.code} ${e.file}(${e.line},${e.col}): ${e.message}` });
+      }
+      if (r.timedOut) tscFailures.push({ name: "(tsc)", message: `type check exceeded ${TSC_TIMEOUT_MS} ms; process tree killed` });
+      else if (errors.length === 0 && r.code !== 0) tscFailures.push({ name: "(tsc)", message: `type check exited ${String(r.code ?? r.signal)}` });
+      if (tscFailures.length > 0) tscSection = `--- tsc ---\n${r.stdout}${r.stderr ? `\n${r.stderr}` : ""}\n`;
+    }
+
     // 3. Spawn node --test (no shell).
     const args: string[] = [];
     if (spec.needs_tsx) args.push("--import", options.tsxLoaderUrl ?? resolveTsxLoaderUrl());
     args.push("--test", "--test-reporter=tap", "--test-reporter-destination=stdout", spec.path);
 
     const timeoutMs = spec.timeout_ms ?? DEFAULT_TIMEOUT_MS;
-    const { stdout, stderr, code, signal, timedOut } = await new Promise<{
-      stdout: string;
-      stderr: string;
-      code: number | null;
-      signal: NodeJS.Signals | null;
-      timedOut: boolean;
-    }>((resolve, reject) => {
-      const child = spawn(process.execPath, args, {
-        cwd: root,
-        env: childEnv(),
-        shell: false,
-        windowsHide: true,
-        detached: process.platform !== "win32",
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      if (child.pid !== undefined) options.onSpawn?.(child.pid);
-      let out = "";
-      let err = "";
-      let timedOut = false;
-      child.stdout.setEncoding("utf8").on("data", (d: string) => {
-        out += d;
-        if (out.length > 4 * OUTPUT_LIMIT) out = out.slice(-2 * OUTPUT_LIMIT);
-      });
-      child.stderr.setEncoding("utf8").on("data", (d: string) => {
-        err += d;
-        if (err.length > 4 * OUTPUT_LIMIT) err = err.slice(-2 * OUTPUT_LIMIT);
-      });
-      const timer = setTimeout(() => {
-        timedOut = true;
-        if (child.pid !== undefined) void killTree(child.pid);
-      }, timeoutMs);
-      child.on("error", (e) => {
-        clearTimeout(timer);
-        reject(e);
-      });
-      child.on("close", (code, signal) => {
-        clearTimeout(timer);
-        resolve({ stdout: out, stderr: err, code, signal, timedOut });
-      });
-    });
+    const { stdout, stderr, code, signal, timedOut } = await spawnCollect(args, root, timeoutMs, options.onSpawn);
 
     // 4. Post-run: the check copy must be byte-identical (defense in depth).
     const after = await readFile(checkAbs).catch(() => Buffer.alloc(0));
     const checkTampered = sha256Hex(after) !== spec.sha256.toLowerCase();
 
     const parsed = parseTap(stdout);
-    const failures = [...parsed.failures];
+    const failures = [...tscFailures, ...parsed.failures];
     const s = parsed.summary;
     if (timedOut) failures.push({ name: "timeout", message: `check exceeded ${timeoutMs} ms; process tree killed` });
     if (checkTampered) failures.push({ name: "integrity", message: "check file was modified during the run" });
@@ -477,7 +580,7 @@ export async function run(
       s.pass > 0 &&
       failures.length === 0;
 
-    let output = stdout + (stderr ? `\n--- stderr ---\n${stderr}` : "");
+    let output = tscSection + stdout + (stderr ? `\n--- stderr ---\n${stderr}` : "");
     for (const form of [pathToFileURL(root).href, root.replaceAll("\\", "\\\\"), root]) {
       output = output.split(form).join("<workspace>");
     }

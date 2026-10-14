@@ -83,8 +83,11 @@ export function headingPathAt(hs: readonly Heading[], line: number): string[] {
 // W7: also the bullet shape `- Goal: ...` / `- Check: ...` (nettrello astraupskill/05-PRACTICE.md:9-10,
 // led by a bold label line and paired with a `- **Check:** ...` bullet); the plain-word form only
 // counts at the start of a list item, so prose mentioning "Goal:" mid-sentence is not an exercise.
-const GOAL = /\*\*Goal:?\*\*:?|^\s*[-*+]\s+Goal:/;
-const CHECK = /\*\*Check:?\*\*:?|^\s*[-*+]\s+Check:/;
+// Factory fix 3a: real guides also write `**Goal.**` / `**Check.**` (buildsubbox
+// astraupskill/05-PRACTICE.md:11,17) and the single-asterisk `*Goal:*` emphasis form —
+// the bold form stays the FIRST alternative (shipped-pack counts pin on it).
+const GOAL = /\*\*Goal[.:]?\*\*:?|\*Goal:\*|^\s*[-*+]\s+Goal:/;
+const CHECK = /\*\*Check[.:]?\*\*:?|\*Check:\*|^\s*[-*+]\s+Check:/;
 const LIST_ITEM = /^(\s*)(?:\d+[.)]|[-*+])\s+/;
 const BOLD_ONLY = /^\s*\*\*([^*].*?)\*\*\s*$/;
 
@@ -181,6 +184,20 @@ export function extractGoalChecks(lines: readonly GuideLine[], hs: readonly Head
       if (cur === 'check') {
         // a check paragraph ends at a blank line / fence; another **Check:** paragraph may follow
         if (blank || x.fence) {
+          // fix 3a: a bare `**Check.**` marker directly before a fenced block (buildsubbox
+          // 05-PRACTICE.md:17-21) — the fence IS the check; consume it instead of ending empty
+          if (checks.length === 0 && !clean(checkBuf)) {
+            let k = j;
+            while (k < lines.length && lines[k]!.text.trim() === '') k++;
+            if (lines[k]?.fence && !ends(lines[k]!)) {
+              for (j = k; j < lines.length && lines[j]!.fence; j++) {
+                checkBuf += `\n${lines[j]!.text}`;
+                lineEnd = lines[j]!.n;
+              }
+              j--;
+              continue;
+            }
+          }
           flushCheck();
           let k = j;
           while (k < lines.length && lines[k]!.text.trim() === '') k++;
