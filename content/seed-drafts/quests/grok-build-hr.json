@@ -25,11 +25,11 @@
         }
       ],
       "prompt": "An HR administrator tries to approve their own pending leave request. What happens?",
-      "answer": "403: no one, not even HR, may decide their own request",
+      "answer": "403, as no one may decide their own request, not even HR",
       "distractors": [
-        "200: HR may approve any request, including their own",
-        "409: the request must first be reassigned to another HR admin",
-        "200, but the decision is flagged for audit review"
+        "200, as HR may approve any request, their own included",
+        "409, as it must first be reassigned to another HR admin",
+        "200, but the decision is flagged for a later audit review"
       ],
       "explanation": "decide rejects current.employee.userId === actor.id with 'You cannot approve or reject your own leave request.' before checking HR or direct-manager authority."
     },
@@ -51,13 +51,13 @@
         }
       ],
       "prompt": "A MANAGER who is not the employee's current direct manager tries to approve that employee's leave. What does decide check, and what happens?",
-      "answer": "403: the employee's current managerId, read from the database, is not the actor",
+      "answer": "404, as the scoped lookup reaches only the manager's current reports",
       "distractors": [
-        "200: any user with the MANAGER role may decide any employee's leave request",
-        "It trusts the managerId sent in the request body, so it succeeds when the body names the right manager",
-        "It checks a manager id baked into the JWT at login"
+        "200, as any user holding the MANAGER role may decide any employee's leave",
+        "200, as decide trusts the managerId that the request body supplies",
+        "200, as decide trusts the manager id baked into the JWT at login"
       ],
-      "explanation": "The body carries only intent (version, status, note); the server reads the current reporting relationship rather than trusting a manager id from a token or form."
+      "explanation": "decide first loads the request through scoped(), which filters by employeeScope: for a MANAGER that is their own profile or employees whose manager is them, read from the database now, so another manager's report's request is 'not found within your access' (404); the later direct-manager 403 check is defence in depth, and the body carries only intent (version, status, note)."
     },
     {
       "id": "q03-version-and-pending",
@@ -77,11 +77,11 @@
         }
       ],
       "prompt": "A manager approved a request (now version 2). HR then sends a REJECTED decision carrying version 2. Why is it still refused?",
-      "answer": "The request is no longer PENDING",
+      "answer": "It is refused because the request is no longer PENDING",
       "distractors": [
-        "It succeeds, because the version matches the current record",
-        "HR is refused because only the original manager may change a decision",
-        "It is refused because version 2 is reserved for approvals"
+        "It succeeds because the version matches the current record",
+        "It is refused because only the original manager may change it",
+        "It is refused because version 2 is for approvals"
       ],
       "explanation": "Each guard protects a different invariant: the version check catches stale drafts; the PENDING check (and status in the updateMany where) blocks re-deciding a terminal request."
     },
@@ -106,8 +106,8 @@
       "answer": "July 12-14",
       "distractors": [
         "July 13-15",
-        "None: overlap is only checked for pending requests",
-        "Both July 12-14 and July 13-15"
+        "July 13-14",
+        "July 7-9"
       ],
       "explanation": "The exclusion constraint uses daterange(startDate, endDate, '[]') with &&, for PENDING or APPROVED rows."
     },
@@ -129,11 +129,11 @@
         }
       ],
       "prompt": "Overlap is checked by the repository under an employee row lock AND by a PostgreSQL exclusion constraint. What does each layer contribute?",
-      "answer": "The application check gives cooperating requests a clear error and serializes them; the constraint protects the invariant even against writes that bypass the repository",
+      "answer": "The app check gives a clear error, the constraint stops bypassing writes",
       "distractors": [
-        "They are redundant; the constraint exists only for performance",
-        "The repository check handles approved leave, the constraint handles pending leave",
-        "The constraint gives the clear error, the repository check is a fallback for SQLite"
+        "They are redundant, and the constraint exists only for performance",
+        "The app check covers approved leave, the constraint pending leave",
+        "The constraint gives the clear error, and the app check is a SQLite fallback"
       ],
       "explanation": "Commenting out the constraint fails the test that inserts directly with Prisma, while the concurrent-HTTP test still passes because of the row lock."
     },
@@ -155,11 +155,11 @@
         }
       ],
       "prompt": "You remove status: 'PENDING' from decide's updateMany where clause and the whole suite stays green. What should you conclude?",
-      "answer": "Guards overlap: the version check and the PENDING pre-check still cover it, so find the smallest set whose removal a test notices and ask whether each guard has its own test",
+      "answer": "The guards overlap, so find the smallest set whose removal a test notices",
       "distractors": [
-        "The status filter was dead code and should be deleted",
-        "The tests are broken and should be rewritten to fail",
-        "PostgreSQL enforces the PENDING rule automatically"
+        "The status filter is dead code and should be deleted from decide",
+        "The tests are broken and should be rewritten until this change fails",
+        "PostgreSQL enforces the PENDING rule by itself through a constraint"
       ],
       "explanation": "Removing the pre-check as well makes HR's version-2 rejection return 200 and overwrite the approval; removing one of several overlapping guards proves nothing."
     },
@@ -181,11 +181,11 @@
         }
       ],
       "prompt": "chartLock takes pg_advisory_xact_lock(74219801), one constant key. What does that guarantee and what does it cost?",
-      "answer": "No concurrent edits can jointly form a cycle, but all employee writes serialize",
+      "answer": "Edits cannot jointly form a cycle, but every employee write serializes",
       "distractors": [
-        "It locks only the employee being edited, so unrelated edits proceed in parallel at no throughput cost",
-        "It prevents leave-request overlaps across the organization, at the cost of slower directory reads",
-        "It guarantees no deadlocks anywhere, at the cost of extra memory"
+        "It locks only the employee being edited, so unrelated edits run in parallel",
+        "It prevents leave overlaps across the organization, slowing directory reads",
+        "It rules out deadlocks anywhere, at the cost of extra memory"
       ],
       "explanation": "The simple, provably correct option pays in throughput; a per-chain key is finer but must lock both roots in a fixed order when a change joins two chains."
     },
@@ -207,11 +207,11 @@
         }
       ],
       "prompt": "With the constant chart lock in place, how do leave-request writes behave?",
-      "answer": "They never wait on the advisory lock; they take the employee's row lock, so a leave write and an HR edit of the same employee queue, while leave writes for different employees run in parallel",
+      "answer": "They skip the advisory lock but queue on the same employee's row lock",
       "distractors": [
-        "They also wait on the chart lock, so all leave writes are serialized",
-        "They take no locks at all and rely on the exclusion constraint",
-        "They lock the whole Employee table for the transaction"
+        "They also wait on the chart lock, so every leave write is serialized too",
+        "They take no locks and rely on the exclusion constraint alone",
+        "They lock the whole Employee table for the length of the transaction"
       ],
       "explanation": "Leave writes call lockEmployee (SELECT ... FOR UPDATE on one Employee row), not chartLock."
     },
@@ -233,11 +233,11 @@
         }
       ],
       "prompt": "Two HR administrators deactivate each other at the same time. Why does 'keep at least one active HR administrator' hold today, and what would break it?",
-      "answer": "chartLock serializes the count-then-update; a per-chain lock would let both succeed",
+      "answer": "chartLock serializes the count-then-update, which a per-chain lock breaks",
       "distractors": [
-        "A unique partial index on active HR administrators enforces it inside PostgreSQL regardless of locking",
-        "It does not hold: both deactivations succeed today, leaving the organization with no HR administrator",
-        "The frontend hides the deactivate button for the last HR admin"
+        "A unique partial index on active HR admins enforces it inside PostgreSQL",
+        "It does not hold, and both deactivations succeed today with no HR admin left",
+        "The frontend hides the deactivate button for the last HR administrator"
       ],
       "explanation": "Before narrowing a lock, list everything it serializes, not only the reason it was added."
     },
@@ -264,11 +264,11 @@
         }
       ],
       "prompt": "A plain EMPLOYEE calls GET /api/employees/options directly. What do they get?",
-      "answer": "Every active manager's and HR admin's id and name",
+      "answer": "The id and name of every active manager and HR administrator",
       "distractors": [
-        "403, like every employee mutation",
-        "Only their own profile, because employeeScope applies to every query",
-        "An empty list, because options are filtered by department"
+        "A 403, as the route uses requireHr like every employee mutation",
+        "Their own profile alone, as employeeScope limits the options query",
+        "An empty list, as the options are filtered by the caller's department"
       ],
       "explanation": "Scope is enforced on the main list but forgotten on a helper list, the pattern to look for in every review; no integration test touches the route."
     },
@@ -290,11 +290,11 @@
         }
       ],
       "prompt": "In the bounded manager filter design, a manager filters by another manager's id. Why return an empty result rather than 403?",
-      "answer": "The filter is ANDed with employeeScope, so it intersects to an empty set; a 403 would leak that the id exists",
+      "answer": "The filter intersects with employeeScope, and a 403 would leak the id exists",
       "distractors": [
-        "Because 403 responses are not cacheable by React Query",
-        "Because managers are allowed to see other managers' reports",
-        "Because validation happens after the query runs"
+        "A 403 response cannot be cached by React Query, so the list would flicker",
+        "Managers are allowed to see other managers' direct reports anyway",
+        "Validation runs after the query, so the 403 would come too late"
       ],
       "explanation": "For HR the scope is {}, so the filter is a real filter; for others it safely intersects rather than rejects."
     },
@@ -316,11 +316,11 @@
         }
       ],
       "prompt": "A manager loses a direct report to another team. What happens when they open that report's old leave history?",
-      "answer": "An empty list: history is authorized by the caller's current scope",
+      "answer": "An empty list, as history follows the caller's current scope",
       "distractors": [
-        "They still see it, because they were the manager who decided those requests at the time",
-        "404, because the leave requests were moved along with the employee to the new manager",
-        "The full history, because audit rows are public within a department"
+        "Their full history, as they decided those requests at the time",
+        "A 404, as the requests moved with the employee to the new manager",
+        "The full history, as audit rows are public within a department"
       ],
       "explanation": "Returning [] hides whether the request exists and keeps working after deletion, but using current scope means history access follows today's reporting line."
     },
