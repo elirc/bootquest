@@ -729,3 +729,26 @@ what ships until the owner picks an option.
   `/^(d+|-)$/`, and the broken test file silently did not compile because the vitest filter
   matched only the other file). When writing backslashes or escapes, build them with
   `String.fromCharCode(92)` in a node script and confirm the test count went UP.
+
+## 2026-10-15 — Learn more: readings + explanations for every quest pack (10-agent wave)
+
+- **Shape.** One FEATURE agent owned the code (seed:notes generator/validator, a read-only
+  `GET /units/:id/notes`, the `i` drawer); six agents wrote notes for the 107 existing packs and three
+  wrote 24 new packs plus their notes, all against one written contract (docs/SEEDING.md "Learn-more
+  notes"). Writing the contract BEFORE launching let content agents work in parallel with the code;
+  they stamped once milestone 1 (the validator) landed.
+- **Notes found wrong keys.** Asking authors to explain every quiz, and forbidding them to write
+  around a key they believed wrong, surfaced four wrong keys in shipped or new packs (ankijs,
+  jstrain2.2, organized-build-analytics, netgum). Explanations are a correctness review for free.
+- **Mechanical leak checks are not enough.** The validator blocks a reading that repeats a key's
+  wording, but a fresh audit found 18% of readings stated the deciding FACT in other words. A
+  cross-author leak pass (nobody checks their own) rewrote ~165 of 394 readings. The rule is now in
+  SEEDING.md; future readings need that human pass.
+- **Explanations unlock late.** Released only after a graded submit that passed, or answered that
+  question right, or reached its review card, so a failed attempt cannot be retried with the keys.
+- **Parallel merges hide count drift.** NEW-1 and NEW-2 made the identical edit 107->115 to
+  demo:campaign, so git merged silently while 123 packs shipped. Re-sum hard-coded counts after
+  every content merge.
+- **Load, not a bug.** `[vitest-worker]: Timeout calling "onTaskUpdate"` appeared while ten agents
+  ran suites at once and vanished on a quiet machine (tools/seed 1277/1277, exit 0). Re-run on a
+  quiet machine before believing it.
