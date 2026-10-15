@@ -14,7 +14,7 @@
    "source": { "path": "astraupskill/02-CONCEPTS.md", "lines": { "start": 3, "end": 8 } },
    "cites": [{ "path": "src/app/api/tasks/[id]/route.ts", "lineStart": 33, "lineEnd": 36 }],
    "prompt": "Before the fix, PATCH /api/tasks/[id] already ran updateMany with where { id, userId }. Why did Alice still manage to move her task into Bob's project?",
-   "answer": "The where clause scoped the source task; no one checked the destination project",
+   "answer": "The where clause scoped the source task, and nothing checked the destination project",
    "distractors": [
     "updateMany ignores the where clause when the data contains a foreign key column",
     "Prisma's updateMany bypasses SQLite foreign-key constraints on related rows",
@@ -31,7 +31,7 @@
    "answer": "A distinct answer would be an oracle revealing that another user's id exists",
    "distractors": [
     "Next.js route handlers have no supported way to return a 403 status code",
-    "A 403 would make the client retry the request with a refreshed session",
+    "A 403 would make the client retry the request with a refreshed session cookie",
     "Browsers cache 403 responses, so a later valid request for that id would fail too"
    ],
    "explanation": "Combining id and userId in one predicate makes absent and out-of-scope indistinguishable by design."
@@ -45,7 +45,7 @@
     { "path": "src/app/api/tasks/[id]/route.ts", "lineStart": 23, "lineEnd": 31 }
    ],
    "prompt": "Why does the PATCH guard test body.projectId !== undefined instead of if (body.projectId)?",
-   "answer": "An empty string is falsy yet still reaches updateMany, so it must be looked up",
+   "answer": "An empty string is falsy yet still reaches updateMany, so it needs the lookup",
    "distractors": [
     "The schema turns an omitted projectId into null, which a truthiness check misreads",
     "TypeScript rejects truthiness checks on optional string fields at compile time",
@@ -63,7 +63,7 @@
    "distractors": [
     "Looks up the task's current project to confirm ownership, then runs the scoped update",
     "Returns 400, because the patch schema requires projectId on each task write",
-    "Returns 404, because no project id was supplied for the guard to validate"
+    "Returns 404, because no project id was supplied for the destination guard to check"
    ],
    "explanation": "Omission means the request does not change the relationship, so no destination needs authorizing: updateMany runs scoped to { id, userId }, then the task is re-read and returned."
   },
@@ -73,7 +73,7 @@
    "source": { "path": "astraupskill/03-WORKED-CHANGE.md", "lines": { "start": 14, "end": 29 } },
    "cites": [{ "path": "src/app/api/tasks/route.ts", "lineStart": 36, "lineEnd": 46 }],
    "prompt": "Where exactly does the POST /api/tasks ownership lookup run, and why does it select only id?",
-   "answer": "Between taskSchema.parse and task.create; it needs existence-in-scope only",
+   "answer": "Between taskSchema.parse and task.create, as it just needs existence",
    "distractors": [
     "Before parsing, so that malformed bodies are rejected by the lookup itself",
     "After task.create, so the new task's id can be included in the check",
@@ -87,11 +87,11 @@
    "source": { "path": "astraupskill/03-WORKED-CHANGE.md", "lines": { "start": 39, "end": 45 } },
    "cites": [{ "path": "src/app/api/tasks/route.ts", "lineStart": 38, "lineEnd": 56 }],
    "prompt": "Why does the regression record every create/updateMany call and its arguments rather than only asserting a 404 status?",
-   "answer": "A handler that wrote first and then returned 404 would pass a status-only test",
+   "answer": "A handler that wrote first and then returned 404 would still pass a status test",
    "distractors": [
-    "Status codes are unreliable inside Next.js route handler unit tests",
+    "Status codes are unreliable inside Next.js route handler unit tests in Vitest",
     "Recording calls is how the suite measures the guard's added performance overhead",
-    "The 404 body text changes between Prisma versions, so status is not enough"
+    "The 404 body text changes between Prisma versions, so a status check is not enough"
    ],
    "explanation": "Such a handler would show the same status while still creating the forbidden relationship. The negative assertion that matters is that the forbidden relationship produces no task write."
   },
@@ -101,7 +101,7 @@
    "source": { "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md", "lines": { "start": 5, "end": 11 } },
    "cites": [{ "path": "src/app/api/tasks/route.ts", "lineStart": 38, "lineEnd": 44 }],
    "prompt": "You delete the POST guard at tasks/route.ts lines 38-44. The 'creates with the owned project' test still passes. What does that teach?",
-   "answer": "A positive case alone cannot catch a missing guard; you need a negative case too",
+   "answer": "A positive case alone misses a deleted guard, so a negative case is needed too",
    "distractors": [
     "The owned-project test is redundant and should be deleted from the suite",
     "The guard was dead code, since the create would have failed on its own",
@@ -131,9 +131,9 @@
    "prompt": "POST /api/projects with a nonexistent areaId returns a 400 with a Prisma foreign-key message; with Bob's real areaId it returns 201. Why is that a problem?",
    "answer": "handleError echoes error.message, so the responses reveal whether an id exists",
    "distractors": [
-    "Prisma messages are localized, so they break clients set to other languages",
-    "A 400 for a missing foreign key violates the HTTP specification's semantics",
-    "It is not a problem, because cuid ids are too random for anyone to guess"
+    "Prisma messages are localized, so they break clients that use other languages",
+    "A 400 for a missing foreign key violates the HTTP specification's status semantics",
+    "It is not a problem, because cuid ids are far too random for anyone to guess"
    ],
    "explanation": "handleError returns error.message for any Error, so the difference is an existence oracle and leaks internals. The fix is an ownership lookup returning the same 404 for both cases plus a generic message for non-validation errors."
   },
@@ -143,11 +143,11 @@
    "source": { "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md", "lines": { "start": 73, "end": 82 } },
    "cites": [{ "path": "src/app/api/settings/import/route.ts", "lineStart": 29, "lineEnd": 32 }],
    "prompt": "Settings import creates each row as { ...item, userId }. What can a caller still control?",
-   "answer": "Every column but userId, including ids and foreign keys, since rows have no schema",
+   "answer": "Each column but userId, including ids and foreign keys, as rows have no schema",
    "distractors": [
-    "Nothing; spreading userId last discards the caller-supplied fields of each row",
-    "Just userId, because it is the last property written into each created row",
-    "Display fields such as names, since Prisma regenerates the ids on createMany"
+    "Nothing, as spreading userId last discards the caller's other fields in each row",
+    "Just userId, because it is the last property that is written into each created row",
+    "Display fields such as names, since Prisma regenerates the ids during createMany"
    ],
    "explanation": "Spreading userId last stops forging ownership, but the caller still chooses ids and relationships: mass assignment."
   },
@@ -160,9 +160,9 @@
     { "path": "src/lib/api.ts", "lineStart": 24, "lineEnd": 26 }
    ],
    "prompt": "Alice deletes her project between her own task POST's lookup and its task.create. What does the client see?",
-   "answer": "The foreign key rejects the insert; handleError returns 400 with Prisma's message",
+   "answer": "The foreign key rejects the insert and handleError returns 400 with Prisma's message",
    "distractors": [
-    "A task pointing at the deleted project is created and left orphaned in the tasks table",
+    "A task pointing at the deleted project is created and left orphaned in the table",
     "A clean 404 'Project not found', because the guard re-checks after the create",
     "A deadlock, because the delete and the create lock the same project row"
    ],
@@ -174,7 +174,7 @@
    "source": { "path": "astraupskill/02-CONCEPTS.md", "lines": { "start": 32, "end": 35 } },
    "cites": [{ "path": "src/app/api/projects/[id]/route.ts", "lineStart": 6, "lineEnd": 10 }],
    "prompt": "Why doesn't the lookup-then-write gap let a project change owner between Alice's check and her write?",
-   "answer": "No API path writes Project.userId, so a project's owner cannot change",
+   "answer": "Because no API path writes Project.userId, so the owner cannot change",
    "distractors": [
     "Because the lookup and the write share a single Prisma transaction",
     "Because SQLite serializes writes, so the check and write cannot be interleaved",
