@@ -112,7 +112,7 @@ export function goalCheckExplanation(guide: string, g: Pick<GoalCheck, 'label' |
 export function findingLocationExplanation(guide: string, f: { label: string; severity?: string | null; lineStart: number; lineEnd: number }): string {
   const label = f.label.trim();
   if (f.severity) return `${label} (${f.severity})`;
-  if (label !== '' && !/^(d+|-)$/.test(label)) return label;
+  if (label !== '' && !/^(\d+|-)$/.test(label)) return label;
   const where = `${guide}:${f.lineStart}${f.lineEnd !== f.lineStart ? `-${f.lineEnd}` : ''}`;
   return `In ${where}, the guide records this defect at this location; the other choices are where other findings in the same guide point.`;
 }

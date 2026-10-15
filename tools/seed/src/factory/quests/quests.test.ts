@@ -405,7 +405,7 @@ describe('finding-location explanations (release review: bare "3" explanations)'
     expect(findingLocationExplanation('docs/r.md', { label: 'Missing tenant filter', lineStart: 9, lineEnd: 9 })).toBe('Missing tenant filter');
     for (const label of ['3', '12', '-', '']) {
       const s = findingLocationExplanation('docs/r.md', { label, lineStart: 9, lineEnd: 11 });
-      expect(s, label).toMatch(/^In docs/r.md:9-11, the guide records this defect/);
+      expect(s, label).toMatch(/^In docs\/r\.md:9-11, the guide records this defect/);
       expect(isArtifactExplanation(s), label).toBe(false);
     }
   });
