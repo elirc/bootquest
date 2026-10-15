@@ -1,0 +1,355 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "folio-app",
+ "repo": "folio-app",
+ "sha": "4ed89cdcfde687929ea5c7da321a7f003679ed62",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: Folio's architecture document and its ADRs",
+   "body": "Folio is a Notion-style docs app: a .NET Web API over EF Core and SQLite, and a React + TypeScript client. Workspaces contain a tree of pages; pages contain blocks; members comment, get notified, link pages together and restore old versions.\n\nEvery question in this pack comes from one file, `docs/architecture.md`, so read it top to bottom once. A good order inside it:\n\n1. Monorepo layout and server layering (how a request flows through the three projects).\n2. Page tree and block model.\n3. Permission model, including its status-code table.\n4. History, activity and notifications, links.\n5. Concurrency, rate limiting, SQLite storage choices and the request pipeline.\n\nThen read the short decision records in `docs/adr/`. The architecture page points to them for the reasoning behind its trickier choices: 0002 (status codes), 0005 (version restore), 0006 (broken links), 0008 (timestamps) and 0009 (concurrency). Each ADR states its context, the decision, and what it costs.",
+   "excerpts": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 3,
+     "lineEnd": 6,
+     "quote": "Folio is a Notion-style collaborative docs app: a **.NET 10 Web API** over EF Core + SQLite, and a **Vite + React + TypeScript** client."
+    },
+    {
+     "path": "docs/adr/README.md",
+     "lineStart": 3,
+     "lineEnd": 5,
+     "quote": "Short records of the non-obvious decisions in Folio — the context, the decision, and what it costs. They document *why* the code is the way it is, reverse-engineered from the implementation."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The whole architecture; every question in this pack comes from it."
+    },
+    {
+     "path": "docs/adr/README.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The index of decision records."
+    }
+   ]
+  },
+  {
+   "id": "r02-thin-controllers",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: thin controllers, services that decide",
+   "body": "The server is three projects with a strict dependency direction: the API project depends on Infrastructure, which depends on Domain. Domain holds plain entities and enums with no framework references.\n\nThe important habit is where logic lives. Controllers are **thin**: they call a service and translate the service's result into an HTTP status code. The result type has a small set of outcomes (success, not found, forbidden, conflict, invalid). Every business rule and every permission check lives in the services, which share one central set of page-authorization rules.\n\nThis matters when you read the rest of the architecture page. When it says \"a write is rejected\" or \"this returns 404\", the decision was made in a service and only *reported* by the controller. If you want to change a rule, change the service, not the controller.",
+   "excerpts": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 50,
+     "lineEnd": 53,
+     "quote": "Controllers are thin: they call a service and map a `ServiceResult<T>` status (`Success/NotFound/Forbidden/Conflict/Invalid`) to an HTTP status code. All business logic and authorization lives in the services."
+    },
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 107,
+     "lineEnd": 107,
+     "quote": "Central rules live in `Auth/PageAuthorization.cs` and are shared by every service."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 32,
+     "lineEnd": 57,
+     "why": "Server layering and the request flow."
+    }
+   ]
+  },
+  {
+   "id": "r03-sqlite-shapes-the-design",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: choices shaped by SQLite",
+   "body": "Folio stores everything in SQLite, a small embedded database. Several design choices in the architecture page exist because of what SQLite does and does not support, and the page is honest about that.\n\nThings to look for while reading:\n\n- **Enums stored as strings**, so the database is readable and does not break if someone reorders an enum.\n- **Block content as JSON strings**, validated at the API boundary to be a JSON object.\n- **Soft delete** with a global query filter, so trashed pages disappear from normal queries; trash and restore paths opt out on purpose.\n- **Migrations at startup**, with a test that fails the build if the model drifts from the migrations.\n\nFor each one, ask: what would go wrong without it? The SQLite storage section and ADRs 0003, 0004 and 0008 give the reasons.",
+   "excerpts": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 211,
+     "lineEnd": 213,
+     "quote": "**Enums as strings** — `MemberRole`, `PageVisibility`, `SharePermission`, and `BlockType` use `HasConversion<string>()` so the database is human-readable and stable against enum reordering."
+    },
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 221,
+     "lineEnd": 224,
+     "quote": "**Migrations, not EnsureCreated** — the app applies migrations at startup (`db.Database.Migrate()`), then seeds in Development."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 206,
+     "lineEnd": 224,
+     "why": "SQLite storage choices."
+    },
+    {
+     "path": "docs/adr/0003-migrate-not-ensurecreated.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Why migrations run at startup, and the drift guard."
+    }
+   ]
+  },
+  {
+   "id": "x-0178bacb60cb7047",
+   "target": "seed:quests:folio-app/quiz/0178bacb60cb7047",
+   "phase": "after",
+   "title": "Omitting ExpectedVersion skips the check",
+   "body": "Pages and blocks carry a `Guid Version` that changes on every successful write. A client that wants protection sends `ExpectedVersion`; if it does not match the stored version, someone else wrote in between and the write is rejected with 409. But the check is **optional**: a write that omits `ExpectedVersion` is not checked at all. The document says this keeps it backward compatible with clients that never sent a version.\n\nWhy the others are wrong:\n- **428 Precondition Required**: Folio does not require the field; it only checks it when present.\n- **queued until a fresh fetch**: nothing queues writes.\n- **409 because the version is required**: 409 is only for a version that is present and wrong.",
+   "excerpts": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 193,
+     "lineEnd": 197,
+     "quote": "A write may include `ExpectedVersion`; if it doesn't match the stored value the write is rejected with **409**. The version is rotated to a new `Guid` on every successful write. Omitting `ExpectedVersion` skips the check (backward compatible)."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-16858b669fbba2be",
+   "target": "seed:quests:folio-app/quiz/16858b669fbba2be",
+   "phase": "after",
+   "title": "The rate limiter needs to know who you are",
+   "body": "Folio's limiter is **partitioned by the authenticated user id**: each user gets their own budget of writes per time window. To read the user id, the request must already have been authenticated. ASP.NET Core runs middleware in the order it is registered, so `UseRateLimiter` must come after `UseAuthentication`; otherwise the partition key would have no user to read.\n\nWhy the others are wrong:\n- **needs CORS headers from authentication**: authentication does not set CORS headers, and CORS runs earlier in the pipeline.\n- **authentication is rate-limited**: `/api/auth/*` is exempt from the limiter.\n- **only anonymous public endpoints**: `/api/public/*` is exempt; the limiter covers authenticated writes.",
+   "excerpts": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 199,
+     "lineEnd": 204,
+     "quote": "a partitioned fixed-window limiter keyed by the authenticated user id. Only **writes** are throttled; GET/HEAD/OPTIONS, `/api/auth/*`, `/api/public/*`, and `/health` are exempt."
+    },
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 203,
+     "lineEnd": 204,
+     "quote": "`UseRateLimiter` runs **after** `UseAuthentication` so the partition key can read the caller's id."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-185230ae1a057130",
+   "target": "seed:quests:folio-app/quiz/185230ae1a057130",
+   "phase": "after",
+   "title": "404 hides existence; 403 refuses what you can see",
+   "body": "The permission table gives two different answers. A page in **another workspace** returns **404** for read and write: as far as the caller is concerned, it does not exist, so its existence is not leaked. A **Private** page in your own workspace that you do not own returns **403**: you are inside the workspace and may know the page is there, but you may not open it. ADR 0002 records the rule: 404 for cross-workspace, 403 for visible-but-forbidden.\n\nWhy the others are wrong:\n- **forbidden for both**: 403 for the foreign page would confirm it exists.\n- **not found for both**: the private page is in the caller's own workspace; the table says 403.\n- **login redirect**: both callers are authenticated members; no redirect is involved.",
+   "excerpts": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 113,
+     "lineEnd": 114,
+     "quote": "| Different workspace | **404** (existence hidden) | **404** | | `Private` page, non-Owner | **403** | **403** |"
+    },
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 120,
+     "lineEnd": 121,
+     "quote": "a resource in another workspace is reported `404` so its existence isn't leaked; a visible-but-forbidden resource is `403`."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-2e910ddd851b1267",
+   "target": "seed:quests:folio-app/quiz/2e910ddd851b1267",
+   "phase": "after",
+   "title": "Restore snapshots the present first",
+   "body": "Restore is **non-destructive**. Before anything is replaced, the current state of the page is saved as a new version labelled \"Before restore to v3\". Only then are the page's blocks replaced with version 3's snapshot. So if the restore was a mistake, you can restore the \"before\" version and get back exactly what you had. Snapshot block ids are reused on restore, so toggle nesting survives.\n\nWhy the others are wrong:\n- **replace first, then log a diff**: the snapshot comes first; replacing first would lose the current state.\n- **delete newer versions**: history is append-only; nothing is deleted.\n- **create a copy of the page**: the same page is restored in place.",
+   "excerpts": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 149,
+     "lineEnd": 152,
+     "quote": "**Restore is non-destructive**: the current state is first snapshotted into a new version labelled `Before restore to vN`, then the page's blocks are replaced with the target snapshot."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-372111cfa355675b",
+   "target": "seed:quests:folio-app/quiz/372111cfa355675b",
+   "phase": "after",
+   "title": "Only toggles have children",
+   "body": "Blocks form a small tree, but a deliberately limited one: a block may have children **only if its parent is a Toggle** (a collapsible block). `BlockService.ValidateParentAsync` enforces this when a `ParentBlockId` is set. Blocks are returned as a flat list in pre-order (each parent right before its children), and the client re-nests them using `ParentBlockId`.\n\nWhy the others are wrong:\n- **any block, three levels**: the document names a single allowed parent type and no depth rule.\n- **only under a Table**: Table is one of the 11 block types, but not a parent type.\n- **under Headings or Callouts**: those are ordinary blocks; they cannot hold children.",
+   "excerpts": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 95,
+     "lineEnd": 96,
+     "quote": "children may nest **only under a `Toggle`** (`ParentBlockId`, validated in `BlockService.ValidateParentAsync`)."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-39c10ee03a9512a0",
+   "target": "seed:quests:folio-app/quiz/39c10ee03a9512a0",
+   "phase": "after",
+   "title": "An Editor with a View share can read but not write",
+   "body": "Write access depends on both the member's role and the page's share permission. For a Workspace or Public page, an Editor can always **read** (200). To **write**, the share must be `Edit`; with share = `View`, writes return 403. Owners can always write; Viewers never write.\n\nWhy the others are wrong:\n- **Editors always write**: only Owners always write; Editors need share = Edit.\n- **write through version restore**: versioning counts as a write, so it is refused too.\n- **neither**: a View share still lets an Editor read; the table shows 200.",
+   "excerpts": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 116,
+     "lineEnd": 117,
+     "quote": "| `Workspace`/`Public`, Editor, share = `View` | 200 | **403** | | `Workspace`/`Public`, Editor, share = `Edit` | 200 | 200 |"
+    },
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 129,
+     "lineEnd": 130,
+     "quote": "creating pages, editing blocks, sharing, versioning, duplicating, and templating are writes."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-40aa7ba61bd3977a",
+   "target": "seed:quests:folio-app/quiz/40aa7ba61bd3977a",
+   "phase": "after",
+   "title": "An activity row commits with its mutation",
+   "body": "In EF Core, adding an entity to the `DbContext` only stages it. Nothing reaches the database until `SaveChangesAsync` is called, and one call saves everything staged together. `ActivityService.Add` stages the activity row and deliberately does **not** save. The service that made the change calls `SaveChangesAsync` once, so the change and its activity commit **in the same transaction**: either both are saved or neither is.\n\nWhy the others are wrong:\n- **visible before the mutation commits**: nothing is visible before the single save.\n- **lost on cancel**: if the request is cancelled before saving, the mutation is lost too; they always go together.\n- **a background flush later**: there is no background writer; the calling service saves it.",
+   "excerpts": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 158,
+     "lineEnd": 160,
+     "quote": "`Add(...)` appends an `Activity` row to the `DbContext` **without saving** — the calling service's `SaveChangesAsync` persists it, so the activity is part of the same transaction as the mutation that produced it."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-5bb6741955866701",
+   "target": "seed:quests:folio-app/quiz/5bb6741955866701",
+   "phase": "after",
+   "title": "Notified exactly once, however many reasons",
+   "body": "Comment recipients are the union of three groups: mentioned members, the page author, and earlier commenters on the page, minus the person who wrote the comment. They are collected in a `HashSet`, and a set holds each member only once. So someone who is author, mentioned and a prior commenter all at once gets **one** notification. (Prior commenters are read before the new comment is saved, so the new comment does not count itself.)\n\nWhy the others are wrong:\n- **three, one per reason**: the set removes duplicates.\n- **two**: same reason; there is no per-reason notification.\n- **none, authors are excluded**: only the actor is excluded; the author is one of the recipient groups.",
+   "excerpts": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 162,
+     "lineEnd": 165,
+     "quote": "**mentioned members ∪ the page author ∪ prior commenters on the page**, minus the actor. Recipients are deduplicated with a `HashSet`, so someone who qualifies several ways (author *and* mentioned *and* a prior commenter) is notified **exactly once**"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-9f73d0892bf3ac44",
+   "target": "seed:quests:folio-app/quiz/9f73d0892bf3ac44",
+   "phase": "after",
+   "title": "UTC DateTime because SQLite cannot compare offsets",
+   "body": "`DateTimeOffset` stores a time together with its offset from UTC. That is useful in many databases, but the architecture page states that SQLite **cannot order or compare** `DateTimeOffset` values. Sorting by date and filtering by date range are basic needs, so Folio stores every timestamp as a UTC `DateTime` instead, which SQLite can sort and compare. ADR 0008 records the decision.\n\nWhy the others are wrong:\n- **the React client cannot parse offsets**: the reason given is about the database, not the client.\n- **doubles storage size**: storage size is not mentioned.\n- **migrations reject the column**: the problem is comparing and ordering, not creating the column.",
+   "excerpts": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 208,
+     "lineEnd": 210,
+     "quote": "**UTC `DateTime`, never `DateTimeOffset`** — SQLite cannot order/compare `DateTimeOffset`, so all timestamps are stored as UTC `DateTime`."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-a5f5bd6cabf4eb0a",
+   "target": "seed:quests:folio-app/quiz/a5f5bd6cabf4eb0a",
+   "phase": "after",
+   "title": "A page cannot move under its own descendant",
+   "body": "If page A were placed under one of its own grandchildren, the tree would contain a loop: A would be its own ancestor, and walking up or down the tree would never end. So moves are **cycle-safe**: the service collects all of A's descendant ids (`DescendantIdsAsync`) and refuses a move whose new parent is A itself or any of them.\n\nWhy the others are wrong:\n- **the grandchild becomes the parent**: that is exactly the loop the check prevents.\n- **broken lazily on next load**: the document describes the move being refused up front.\n- **moved to root with position 0**: clamping applies to the position within a valid parent, not to illegal parents.",
+   "excerpts": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 88,
+     "lineEnd": 89,
+     "quote": "Moves are clamped into range and are **cycle-safe**: a page cannot be moved under itself or any descendant (`DescendantIdsAsync`)."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-c508f65162f40748",
+   "target": "seed:quests:folio-app/quiz/c508f65162f40748",
+   "phase": "after",
+   "title": "ToLookup because roots have a null parent",
+   "body": "To build the tree, the service groups pages by `ParentId`. Root pages have `ParentId == null`, so the grouping needs a null key. A .NET `Dictionary` cannot use `null` as a key, so it cannot hold the roots. `ToLookup` can. It also returns an empty sequence for a parent with no children, instead of throwing, which keeps the tree-building code simple.\n\nWhy the others are wrong:\n- **keeps Position order**: sibling order comes from the explicit `Position` field; that is not the stated reason.\n- **runs in SQL**: `ToLookup` runs in memory, like a Dictionary.\n- **loads every page twice**: neither choice changes how many times pages are loaded.",
+   "excerpts": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 83,
+     "lineEnd": 86,
+     "quote": "`ToLookup(p => p.ParentId)` — a `Dictionary` cannot hold a `null` key, but roots need one, and the lookup indexer conveniently returns an empty sequence for parents with no children."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-e10ce6127a39342e",
+   "target": "seed:quests:folio-app/quiz/e10ce6127a39342e",
+   "phase": "after",
+   "title": "Restrict means the service deletes subtrees itself",
+   "body": "A database **cascade** would delete every child page automatically when a parent is deleted. Folio configures the parent foreign key with `DeleteBehavior.Restrict`, which forbids that: the database will refuse to delete a parent that still has children. So subtree removal is done **explicitly in the service**, on purpose, where it is visible and testable. The document's point is that the database should never silently delete a whole subtree. Blocks follow the same rule.\n\nWhy the others are wrong:\n- **Restrict enables cascade**: Restrict is the opposite of cascade.\n- **a nightly cleanup job**: no such job exists; removal happens in the request.\n- **delete each child by hand in the UI**: the service does it for you.",
+   "excerpts": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 90,
+     "lineEnd": 91,
+     "quote": "The FK is configured `OnDelete(DeleteBehavior.Restrict)` so the database never silently cascades a subtree away; subtree removal is done explicitly in the service."
+    },
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 102,
+     "lineEnd": 102,
+     "quote": "Deleting a block removes its whole subtree explicitly (the FK is `Restrict`)."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-f8f8b97f77111f22",
+   "target": "seed:quests:folio-app/quiz/f8f8b97f77111f22",
+   "phase": "after",
+   "title": "Commenting and favoriting need only read access",
+   "body": "The permission model sorts actions into reads and writes. **Commenting and favoriting** need only read access, so even Viewers can comment and star a page. Everything that changes the page itself or its structure counts as a write: creating child pages, editing blocks, sharing, versioning, duplicating and templating.\n\nWhy the others are wrong:\n- **duplicating and templating**: both are listed as writes.\n- **creating child pages and editing blocks**: both are writes.\n- **sharing and versioning**: both are writes.",
+   "excerpts": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 128,
+     "lineEnd": 130,
+     "quote": "**Commenting and favoriting need only read access** (viewers can comment and star); creating pages, editing blocks, sharing, versioning, duplicating, and templating are writes."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-fe519f8a796b23a5",
+   "target": "seed:quests:folio-app/quiz/fe519f8a796b23a5",
+   "phase": "after",
+   "title": "An unseeable link target is shown as broken",
+   "body": "Outgoing links are marked `IsBroken` when the target page is gone or trashed. Folio also treats a target the caller **cannot see** (for example a page since made private) as broken. If it showed the target's live title, the link would leak information the caller is no longer allowed to have. Instead it shows the **stored token title**, which is already in the source block's text that the caller can see anyway. This mirrors how backlinks are filtered.\n\nWhy the others are wrong:\n- **a normal link with the current title**: that is the leak the rule prevents.\n- **hidden entirely**: the link stays; it is just shown as broken.\n- **a normal link that 403s on click**: showing it as normal would still reveal the current title.",
+   "excerpts": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 185,
+     "lineEnd": 187,
+     "quote": "A target the caller **cannot see** (e.g. a page since made private) is also treated as broken so its *current* title never leaks — the stored token title, which is already in the source block's visible text, is shown instead."
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}
