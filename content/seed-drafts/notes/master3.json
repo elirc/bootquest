@@ -44,7 +44,7 @@
    "target": "pack",
    "phase": "before",
    "title": "Core idea: each layer of a request answers one question",
-   "body": "A request to master3 passes several layers, and each answers a different question. Keep them apart in your head:\n\n- **Authentication** (\"who is this?\"): `authMiddleware` looks up a user from the `x-tenant-slug` and `x-user-email` headers.\n- **Validation** (\"is this input well formed?\"): the route parses the body with a Zod schema; a bad value becomes a 400.\n- **Authorization** (\"may this role do this?\"): the ticket service checks the role using small helpers from the domain package.\n- **Tenant scope** (\"which customer company's data?\"): lookups include the caller's `tenantId`, because several tenants share one database.\n- **Persistence**: the accepted change is written inside a database transaction.\n\nThe errors module decides which HTTP status each kind of thrown error becomes. When a quiz asks \"what status comes back?\", find which layer stops the request first, and what kind of error that layer throws.",
+   "body": "A request to master3 passes several layers, and each answers a different question. Keep them apart in your head:\n\n- **Authentication** (\"who is this?\"): `authMiddleware` looks up a user from the `x-tenant-slug` and `x-user-email` headers.\n- **Validation** (\"is this input well formed?\"): the route parses the body with a Zod schema.\n- **Authorization** (\"may this role do this?\"): role checks use small helpers from the domain package.\n- **Tenant scope** (\"which customer company's data?\"): several tenants share one database, so every lookup has to be limited to one of them.\n- **Persistence**: the accepted change is written to the database.\n\nThe list above is not in execution order. Open `ticketService.ts` and write down, for `updateTicket`, the actual order in which these checks run, which writes happen inside the transaction, and what kind of error each check throws. Then read `errors.ts` to see how each kind of error becomes a status. When a quiz asks \"what status comes back?\", that table of yours is the answer key.",
    "excerpts": [
     {
      "path": "astraupskill/02-CONCEPTS.md",
@@ -54,9 +54,9 @@
     },
     {
      "path": "astraupskill/01-CODEBASE-MAP.md",
-     "lineStart": 9,
-     "lineEnd": 9,
-     "quote": "`HttpError`, `asyncHandler`, `errorMiddleware` (Zod → 400, HttpError → its status, anything else → 500)"
+     "lineStart": 10,
+     "lineEnd": 10,
+     "quote": "five ticket endpoints; Zod parse, then call the service"
     }
    ],
    "readMore": [
@@ -73,7 +73,7 @@
    "target": "pack",
    "phase": "before",
    "title": "Core idea: pure domain rules, and state computed on the way out",
-   "body": "`packages/domain/src/index.ts` holds the business rules as plain functions with no framework or database: which status changes are allowed (a lookup table plus a few role rules), how long each priority gets before its SLA deadline, and which roles may edit.\n\nTwo habits make this file easy to reason about:\n\n1. **Read rules in order.** `canTransitionTicket` has several `if` lines before it ever looks at the table. The first line that returns decides the answer, so the order matters as much as the table.\n2. **Derived, not stored.** Only the deadline (`slaDueAt`) is saved in the database. The SLA *state* is calculated fresh every time a ticket is returned. So ask: \"what is stored, and when does the stored value change?\"\n\nThe same idea of a durable record shows up in the outbox: a row saved with the change, read later by the worker, instead of sending a message directly.",
+   "body": "`packages/domain/src/index.ts` holds the business rules as plain functions with no framework or database: which status changes are allowed (a lookup table plus a few role rules), how long each priority gets before its SLA deadline, and which roles may edit.\n\nTwo habits make this file easy to reason about:\n\n1. **Read rules in order.** `canTransitionTicket` has several `if` lines before it ever looks at the table. Trace each one top to bottom for a given input, because the order of the lines matters as much as the table.\n2. **Separate stored from computed.** Some SLA information is saved on the ticket row and some is calculated when a ticket is returned. Find which is which, then find every line in the service that writes the stored part, and note what triggers each write. Check the exact comparison operators at the boundaries too.\n\nThe same idea of a durable record shows up in the outbox: a row saved with the change, read later by the worker, instead of sending a message directly.",
    "excerpts": [
     {
      "path": "docs/walkthrough/important-files.md",
