@@ -7,7 +7,8 @@ import { openCheckout } from '../checkout.ts';
 import { plantAndie } from '../demo/plant.ts';
 import { Exclusions } from '../exclusions.ts';
 import { loadSeedPack } from '../pack.ts';
-import { generateQuestCandidates } from './generate.ts';
+import { hashOrder } from '../util.ts';
+import { generateQuestCandidates, goalCheckExplanation, LENGTH_TELL_RATIO, lengthTellReason, MAX_DISTRACTORS, pickGoalCheckDistractors } from './generate.ts';
 import { extractFindings, extractGoalChecks, headings, scanLines } from './parse.ts';
 import { runQuests } from './run.ts';
 import { singleKeyedProblems, validateQuestItem } from './validate.ts';
@@ -249,7 +250,10 @@ describe('seed:quests over real excerpts', () => {
   it('ww6 05+06: counts, every shipped item validated, stamp written; byte-identical on a rerun (deterministic)', () => {
     const a = runQuests({ root: join(FX, 'ww6'), sha: WW6, repo: 'ww6', guides: GUIDES_0506, out: out('ww6-a') });
     expect(a.lines).toContain('RESULT OK');
-    expect(a.write!.manifest).toMatchObject({ candidates: 41, quarantined: 0, review: 8, dropped: 0, counts: { total: 33, byKind: { flashcard: 11, quiz: 19, 'reading-step': 3 } } });
+    // 41/19 before factory-3: the 05-PRACTICE.md:33 goal-check (key 357 chars vs a longest distractor of 207) is a
+    // length tell with no length-matched set in the guide, so it is now a counted skip, not a candidate
+    expect(a.write!.manifest).toMatchObject({ candidates: 40, quarantined: 0, review: 8, dropped: 0, counts: { total: 32, byKind: { flashcard: 11, quiz: 18, 'reading-step': 3 } } });
+    expect(a.write!.manifest.skipped.filter((s) => s.reason.startsWith('length-tell')).map((s) => s.subject)).toEqual(['astraupskill/05-PRACTICE.md:33']);
     expect(a.write!.stamped).toBe(true);
     const b = runQuests({ root: join(FX, 'ww6'), sha: WW6, repo: 'ww6', guides: GUIDES_0506, out: out('ww6-b') });
     for (const f of ['items.json', 'manifest.json', 'quarantine.json', 'review-queue.json', 'validation.json']) {
@@ -344,6 +348,72 @@ describe('seed:quests over real excerpts', () => {
     expect(r.ok).toBe(true);
     const step = loadSeedPack(out('snap')).items[0]!;
     expect(step.citations.map((c) => c.resolved)).toEqual(['astraupskill/snapshots/errors.ts.original.txt', 'src/errors.ts']);
+  });
+});
+
+describe('goal-check answer-LENGTH tells (factory-3, docs/SEEDING.md backlog)', () => {
+  // a pool whose first MAX_DISTRACTORS members in the generator's hash order get lengths[0..2], the rest lengths[3..]
+  const pool = (key: string, lengths: number[]) => {
+    const ids = lengths.map((_, i) => `other-${i}`);
+    const ordered = hashOrder(ids, key, (x) => x);
+    return ordered.map((id, i) => ({ text: `${id} `.padEnd(lengths[i]!, 'x'), evidence: [id] }));
+  };
+
+  it('a pick that does not tell is the historical hash-order pick, byte for byte', () => {
+    const p = pool('k1', [100, 90, 80, 10, 10]);
+    const r = pickGoalCheckDistractors('a'.repeat(120), p, 'k1');
+    expect(r.lengthTell).toBeNull();
+    expect(r.distractors).toEqual(hashOrder(p, 'k1', (d) => d.evidence[0]!).slice(0, MAX_DISTRACTORS));
+  });
+
+  it('a telling pick is re-picked from length-matched Checks when the guide has enough', () => {
+    const p = pool('k2', [20, 20, 20, 95, 110, 130, 15]);
+    const answer = 'a'.repeat(120);
+    expect(lengthTellReason(answer, hashOrder(p, 'k2', (d) => d.evidence[0]!).slice(0, MAX_DISTRACTORS))).toMatch(/^length-tell/);
+    const r = pickGoalCheckDistractors(answer, p, 'k2');
+    expect(r.lengthTell).toBeNull();
+    expect(r.distractors.map((d) => d.text.length).sort((a, b) => a - b)).toEqual([95, 110, 130]);
+    expect(lengthTellReason(answer, r.distractors)).toBeNull();
+  });
+
+  it('with no length-matched set the item is a counted length-tell skip, never fewer distractors', () => {
+    const r = pickGoalCheckDistractors('a'.repeat(400), pool('k3', [100, 150, 20, 30]), 'k3');
+    expect(r.distractors).toEqual([]);
+    expect(r.lengthTell).toBe(`length-tell (key 400 chars > ${LENGTH_TELL_RATIO}x the longest distractor 150 chars; the guide has no length-matched set of 3 other Checks)`);
+    // exactly 1.5x is not a tell; one char more is
+    expect(lengthTellReason('a'.repeat(150), [{ text: 'b'.repeat(100) }])).toBeNull();
+    expect(lengthTellReason('a'.repeat(151), [{ text: 'b'.repeat(100) }])).toMatch(/^length-tell/);
+  });
+
+  it('no shipped-shape goal-check from the fixtures keys a Check longer than 1.5x its longest distractor', () => {
+    const co = openCheckout({ root: join(FX, 'ww6'), sha: WW6, repo: 'ww6' });
+    const quizzes = generateQuestCandidates(co, GUIDES_0506, ex).guides.flatMap((g) => g.items).filter((i): i is SeedQuizItem => i.kind === 'quiz' && i.variety === 'goal-check');
+    expect(quizzes.length).toBeGreaterThan(0);
+    for (const q of quizzes) {
+      const key = q.choices[q.check.answerKey]!.text;
+      const longest = Math.max(...q.choices.filter((_, i) => i !== q.check.answerKey).map((c) => c.text.length));
+      expect(key.length, q.key).toBeLessThanOrEqual(LENGTH_TELL_RATIO * longest);
+    }
+  });
+});
+
+describe('goal-check explanations (campaign 2 review F5)', () => {
+  it('say where the guide pairs the Goal with the Check, never the raw parser label', () => {
+    expect(goalCheckExplanation('docs/a.md', { label: '1', lineStart: 4, lineEnd: 4 })).toBe('In docs/a.md:4, the guide pairs this Goal with this Check; the other choices are the Checks of other exercises in the same guide.');
+    expect(goalCheckExplanation('docs/a.md', { label: '-', lineStart: 4, lineEnd: 6 })).toMatch(/^In docs\/a\.md:4-6, the guide pairs/);
+    expect(goalCheckExplanation('docs/a.md', { label: 'goal 2', lineStart: 4, lineEnd: 6 })).toMatch(/^In docs\/a\.md:4-6, the guide pairs/);
+    expect(goalCheckExplanation('g.md', { label: 'Level 1 — policy table', lineStart: 5, lineEnd: 7 })).toMatch(/^In g\.md:5-7 \(exercise "Level 1 — policy table"\), the guide pairs/);
+  });
+
+  it('the inline (zz9) and sectioned (ww6) generator quizzes carry real explanations', () => {
+    const z = generateQuestCandidates(openCheckout({ root: join(FX, 'zz9'), sha: ZZ9 }), ['docs/architecture/auth-and-permissions.md'], ex);
+    const w = generateQuestCandidates(openCheckout({ root: join(FX, 'ww6'), sha: WW6, repo: 'ww6' }), GUIDES_0506, ex);
+    const gcs = [...z.guides, ...w.guides].flatMap((g) => g.items).filter((i): i is SeedQuizItem => i.kind === 'quiz' && i.variety === 'goal-check');
+    expect(gcs.length).toBeGreaterThan(4);
+    for (const q of gcs) {
+      expect(q.explanation).not.toMatch(/^(\d+|-) \(.*item\)$|^goal \d+$/i);
+      expect(q.explanation).toContain(`${q.provenance.path}:${q.provenance.lines.start}`);
+    }
   });
 });
 

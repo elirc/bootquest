@@ -1,9 +1,11 @@
 // npm run seed:lint:answers [-- --all] [--max-share 0.7] [--min-quizzes 6] [--seed-dir <dir>] [--packs-dir <dir>]
 // ui-audit #24: report quest packs (and code packs) whose choice-quiz answer keys pile up at one
-// index. Read-only (no stamps touched). Exit 0 = none degenerate, 1 = degenerate pack(s) found,
-// 2 = usage error.
+// index, and (campaign 2 review F5, explanation-lint.ts) quiz explanations that are generator
+// label artifacts. Read-only (no stamps touched). Exit 0 = clean, 1 = degenerate pack(s), an
+// artifact explanation outside EXPLANATION_LINT_EXEMPT or a stale exemption; 2 = usage error.
 import { resolve } from 'node:path';
 import { DEFAULT_SEED_DIR, parseArgs, REPO_ROOT } from '../factory/report.ts';
+import { explanationLintFails, explanationLintReport, formatExplanationLintReport } from './explanation-lint.ts';
 import { answerPositionReport, DEFAULT_ANSWER_POSITION_OPTIONS, formatAnswerPositionReport } from './answer-positions.ts';
 
 const { opts, flags } = parseArgs(process.argv.slice(2));
@@ -29,4 +31,7 @@ const report = answerPositionReport(
   options,
 );
 for (const line of formatAnswerPositionReport(report, { all: flags.has('all') })) console.log(line);
-process.exit(report.offenders.length ? 1 : 0);
+const seedDir = resolve(opts.get('seed-dir') ?? DEFAULT_SEED_DIR);
+const expl = explanationLintReport(seedDir);
+for (const line of formatExplanationLintReport(expl)) console.log(line);
+process.exit(report.offenders.length || explanationLintFails(expl) ? 1 : 0);

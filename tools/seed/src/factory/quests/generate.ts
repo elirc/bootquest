@@ -55,6 +55,54 @@ export function stripCitationSpans(s: string): string {
     .trim();
 }
 
+/**
+ * Answer-LENGTH tell (docs/SEEDING.md backlog): a goal-check whose keyed Check is longer
+ * than LENGTH_TELL_RATIO x the longest distractor is identifiable unread ("pick the long
+ * one"), e.g. master3 05-PRACTICE.md:46, a Check of two concatenated `test(` blocks.
+ */
+export const LENGTH_TELL_RATIO = 1.5;
+
+/** null when the key is not a length tell against these distractors, else the skip reason. */
+export function lengthTellReason(answer: string, distractors: readonly { text: string }[]): string | null {
+  const longest = Math.max(0, ...distractors.map((d) => d.text.length));
+  if (answer.length <= LENGTH_TELL_RATIO * longest) return null;
+  return `length-tell (key ${answer.length} chars > ${LENGTH_TELL_RATIO}x the longest distractor ${longest} chars; the guide has no length-matched set of ${distractors.length} other Checks)`;
+}
+
+/**
+ * Goal-check distractors: the first MAX_DISTRACTORS other Checks in hash order (the
+ * historical pick, so every non-telling item stays byte-identical). When that pick is a
+ * length tell, re-pick the MAX_DISTRACTORS Checks closest in length to the key (log-ratio
+ * distance, ties in hash order); if even that set tells, the item is not generated
+ * (`lengthTell` carries the counted skip reason). Never pads with fewer distractors.
+ */
+export function pickGoalCheckDistractors<T extends { text: string; evidence: string[] }>(answer: string, pool: readonly T[], key: string): { distractors: T[]; lengthTell: string | null } {
+  const ordered = hashOrder(pool, key, (d) => d.evidence[0]!);
+  const first = ordered.slice(0, MAX_DISTRACTORS);
+  if (!lengthTellReason(answer, first)) return { distractors: first, lengthTell: null };
+  const dist = (d: T) => Math.abs(Math.log(Math.max(1, d.text.length) / Math.max(1, answer.length)));
+  const matched = ordered
+    .map((d, i) => ({ d, i }))
+    .sort((a, b) => dist(a.d) - dist(b.d) || a.i - b.i)
+    .slice(0, MAX_DISTRACTORS)
+    .sort((a, b) => a.i - b.i)
+    .map((x) => x.d);
+  const why = lengthTellReason(answer, matched);
+  return why ? { distractors: [], lengthTell: why } : { distractors: matched, lengthTell: null };
+}
+
+/**
+ * The review-card explanation of a generated goal-check: where the guide pairs the Goal
+ * with its Check. (It used to be the parser's raw label, e.g. "1 (inline list item)" or
+ * "goal 2", which explained nothing; campaign 2 review F5.) A bold lead label is a real
+ * exercise title and is kept; list numbers, "-" and "goal N" ordinals are not.
+ */
+export function goalCheckExplanation(guide: string, g: Pick<GoalCheck, 'label' | 'lineStart' | 'lineEnd'>): string {
+  const titled = !/^(\d+|-|goal \d+)$/i.test(g.label.trim()) && g.label.trim() !== '';
+  const where = `${guide}:${g.lineStart}${g.lineEnd !== g.lineStart ? `-${g.lineEnd}` : ''}`;
+  return `In ${where}${titled ? ` (exercise "${g.label.trim()}")` : ''}, the guide pairs this Goal with this Check; the other choices are the Checks of other exercises in the same guide.`;
+}
+
 export interface GuideCandidates {
   guide: string;
   items: SeedItem[];
@@ -190,12 +238,16 @@ export function generateQuestCandidates(co: Checkout, guides: readonly string[],
     for (const { g, key } of keyed) {
       const answer = g.checks.join(' / ');
       const pool = keyed.filter((o) => o.key !== key).map((o) => ({ text: o.g.checks.join(' / '), evidence: [o.key] }));
-      const distractors = hashOrder(pool, key, (d) => d.evidence[0]!).slice(0, MAX_DISTRACTORS);
-      if (distractors.length === 0) {
+      if (pool.length === 0) {
         p.gc.skipped.push({ subject: `${p.guide}:${g.lineStart}`, reason: 'no-distractors (only one Goal/Check exercise in the guide)' });
         continue;
       }
-      p.gc.items.push(quiz(key, 'goal-check', { repo: co.repo, sha: co.sha, path: p.guide, lines: { start: g.lineStart, end: g.lineEnd } }, within(g.lineStart, g.lineEnd), `Goal: ${g.goal}\n\nWhich check verifies this goal?`, { text: answer, evidence: [key] }, distractors, `${g.label}${g.shape === 'inline' ? ' (inline list item)' : ''}`));
+      const pick = pickGoalCheckDistractors(answer, pool, key);
+      if (pick.lengthTell) {
+        p.gc.skipped.push({ subject: `${p.guide}:${g.lineStart}`, reason: pick.lengthTell });
+        continue;
+      }
+      p.gc.items.push(quiz(key, 'goal-check', { repo: co.repo, sha: co.sha, path: p.guide, lines: { start: g.lineStart, end: g.lineEnd } }, within(g.lineStart, g.lineEnd), `Goal: ${g.goal}\n\nWhich check verifies this goal?`, { text: answer, evidence: [key] }, pick.distractors, goalCheckExplanation(p.guide, g)));
     }
   }
 

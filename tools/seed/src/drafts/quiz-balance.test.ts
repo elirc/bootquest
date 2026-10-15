@@ -1,82 +1,29 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 /**
- * Answer-leak guard for hand-authored quest drafts (campaign 2 act-3 review).
+ * Answer-leak guard for hand-authored quest drafts (campaign 2 act-3 review; release wave
+ * factory-3 rewrite after campaign 2 review F1/F2).
  *
- * Hash-seeded choice order fixes WHERE the key sits, but not a length tell:
- * if the keyed answer is usually the longest choice, "pick the longest" clears
- * the 80% study-quest gate without reading the guides. The same goes for an
- * answer that is usually the shortest, and for a key that is typically much
- * longer or shorter than its rivals (median answer/longest-distractor ratio). This guard covers the drafts that were
- * rebalanced; the older hand packs still carry the pattern (see transplant
- * notes), so the guarded list grows as packs are rebalanced. Do NOT raise the
- * thresholds to admit a pack; rewrite its choices.
+ * Hash-seeded choice order fixes WHERE the key sits, but not a length tell: if the keyed
+ * answer is usually the longest choice, "pick the longest" clears the 80% study-quest gate
+ * without reading the guides. The same goes for an answer that is usually the shortest
+ * (review F2), a key that is typically much longer or shorter than its rivals (median
+ * answer/longest-distractor ratio), a key that keeps the same length RANK, a phrasing/format
+ * frame only the key uses, and a stamped pack that never keys some answer slot.
+ *
+ * EVERY draft in content/seed-drafts/quests that has quizzes runs EVERY guard below; there
+ * is no allow-list. The only escape hatch is EXEMPT: draft -> the guards it fails TODAY.
+ * An exempt guard must still fail (so an exemption is removed the moment its draft is
+ * fixed and the map can only shrink), and a guard not listed for a draft must pass. Do NOT
+ * raise a threshold or add an exemption to admit a draft; rewrite its choices.
  */
 const ROOT = join(import.meta.dirname, '..', '..', '..', '..');
-const GUARDED = [
-  'signalpost-swe-bootcamp',
-  'astraboot1',
-  'bootlocalopusv2',
-  'gitvg-astra',
-  'organized-app-grouphelpdesk',
-  'organized-build-crmpyjs',
-  'lucasrouter',
-  '3buildagentteachgem',
-  '3buildanalytics',
-  'elihyper2',
-  'fableopusrecallv2',
-  // campaign 2 final wave, REBALANCE-1: hand drafts whose key was the longest
-  // choice in 83-100% of quizzes before the rewrite.
-  '1jstrain2.2v2',
-  'andie',
-  'buildgum',
-  'buildsubbox',
-  'devdeck',
-  'dotnet-snapshot1',
-  'eliapplybot-extension',
-  'finance-dashboard',
-  'grok-build-ecommerce',
-  'grok-js',
-  'grokjs-csharp-learning-lab',
-  'grokjs-dotnet-learning-lab',
-  'grokjs-grokbuildjs',
-  'grokjs-javascript-learning-lab',
-  'groktuts-web-dev-upskilling-lab',
-  // campaign 2 final wave, rebalance-2 (key was the longest choice in 83-100% of these)
-  'jobtrack',
-  'js1',
-  'jsdrillv2',
-  'jsprojectlearn',
-  'jstrain2.2',
-  'master',
-  'masterrnative',
-  'mobiletagalog',
-  'nettodo',
-  'newcodexjs',
-  'organized-app-job-track',
-  'organized-build-gum',
-  'organized-build-subbox',
-  'organized-dotnet-pastebin',
-  'organized-dotnet-trello',
-  // campaign 2 final wave, rebalance-3: these hand drafts keyed the longest choice in 83-100% of quizzes
-  'organized-js-training-jsdrill_sync_20260223_125137',
-  'organized-js-training-jstrain2',
-  'organized-js-training-jstrain2.2',
-  'organized-js-training-jstrain2.3',
-  'organized-js-training-jstrain3',
-  'organized-js-training-react',
-  'organized-js-training-trainjs',
-  'react',
-  'recipegen-app',
-  'recipeweb',
-  'relay-app',
-  'ship-it',
-  'trainjs',
-  'unionboot',
-];
+const DRAFTS = join(ROOT, 'content', 'seed-drafts', 'quests');
+
 const MAX_LONGEST_SHARE = 0.35;
+/** campaign 2 review F2: the shortest-choice tell (ankijs 0.42, ...) is guarded for every draft too. */
 const MAX_SHORTEST_SHARE = 0.4;
 /** Median of answer length / longest-distractor length must sit in this band. */
 const MEDIAN_RATIO_MIN = 0.8;
@@ -88,23 +35,6 @@ const MEDIAN_RATIO_MAX = 1.2;
  */
 const MAX_RANK_SHARE = 0.5;
 /**
- * campaign 2 integration (campaign2c): the rebalance-1/-2 drafts were written before the
- * rebalance-3 rank guard existed and fail it on merge. Owned by the release wave.
- * Shrink this list as they are rewritten; never grow it (an entry that passes fails the suite).
- */
-const RANK_UNGUARDED = new Set([
-  '1jstrain2.2v2',
-  'buildgum',
-  'finance-dashboard',
-  'grokjs-dotnet-learning-lab',
-  'grokjs-grokbuildjs',
-  'grokjs-javascript-learning-lab',
-  'jsdrillv2',
-  'master',
-  'masterrnative',
-]);
-
-/**
  * Format tells (REBALANCE-1 fix pass). A key written as "Verdict: reason" next
  * to distractors written as "Verdict, because reason" leaks just like length
  * does. Each blind strategy below keeps only the choices that have (or lack) a
@@ -113,48 +43,114 @@ const RANK_UNGUARDED = new Set([
  * choice, has the feature gives the strategy nothing, so it scores 1/n there.
  */
 const MAX_FORMAT_SHARE = 0.35;
+
+type Guard = 'longest' | 'shortest' | 'median-ratio' | 'rank' | 'format' | 'slots';
+
 /**
- * Act-3 GUARDED drafts that still carry a format tell (each beats 0.35 on at
- * least one strategy below); they predate this guard and are out of the
- * REBALANCE-1 scope. Shrink this list as they are rewritten; never grow it.
+ * draft -> the guards it currently FAILS. One group per release-wave content agent (the
+ * agent that owns those drafts), sorted inside each group; drafts no agent owns are in the
+ * UNASSIGNED group. Remove a guard (and then the draft) as soon as its draft is rewritten
+ * and re-seeded: an exempt guard that passes fails this suite.
  */
-const FORMAT_UNGUARDED = new Set([
-  'signalpost-swe-bootcamp',
-  'bootlocalopusv2',
-  'gitvg-astra',
-  'organized-build-crmpyjs',
-  'lucasrouter',
-  '3buildagentteachgem',
-  '3buildanalytics',
-  'elihyper2',
-  'fableopusrecallv2',
-  // campaign 2 integration (campaign2c): the rebalance-2/-3 drafts were written before the
-  // REBALANCE-1 format guard existed and fail it on merge. Owned by the release wave.
-  'jobtrack',
-  'js1',
-  'jsdrillv2',
-  'jsprojectlearn',
-  'jstrain2.2',
-  'master',
-  'masterrnative',
-  'mobiletagalog',
-  'nettodo',
-  'newcodexjs',
-  'organized-app-job-track',
-  'organized-build-gum',
-  'organized-dotnet-pastebin',
-  'organized-dotnet-trello',
-  'organized-js-training-jstrain2',
-  'organized-js-training-jstrain2.2',
-  'organized-js-training-jstrain2.3',
-  'organized-js-training-react',
-  'organized-js-training-trainjs',
-  'recipegen-app',
-  'recipeweb',
-  'relay-app',
-  'ship-it',
-  'trainjs',
-]);
+const EXEMPT: Record<string, Guard[]> = {
+  // CONTENT-1
+  '1jstrain2.2v2': ['rank'],
+  'campusops': ['format', 'slots'],
+  'folio-app': ['longest'],
+  'grokjs-grokbuildjs': ['rank'],
+  'jstrain2.2': ['format'],
+  'masterstore': ['format', 'slots'],
+  'nettodo': ['format'],
+  'organized-build-gum': ['format'],
+  'organized-js-training-jstrain2.2': ['format'],
+  'recipeview': ['format'],
+  'relay-app': ['format'],
+  'w22': ['median-ratio', 'rank', 'format'],
+
+  // CONTENT-2
+  '3buildagentteachgem': ['format'],
+  'customer-feedback-board': ['longest', 'format'],
+  'formforge': ['format'],
+  'grokjs-javascript-learning-lab': ['rank'],
+  'lucasrouter': ['format'],
+  'meterforge-upskilling': ['longest', 'format'],
+  'newcodexjs': ['format'],
+  'organized-build-jira': ['longest', 'format'],
+  'organized-js-training-jstrain2.3': ['format'],
+  'recipeweb': ['format'],
+  'ww18': ['median-ratio', 'rank'],
+
+  // CONTENT-3
+  '3buildanalytics': ['format'],
+  'e12': ['longest', 'format'],
+  'gitvg-astra': ['format'],
+  'harbor-swe-bootcamp': ['longest'],
+  'master-6': ['format'],
+  'meterforge': ['longest', 'rank', 'format'],
+  'organized-ai-learning-aiapplybotjs': ['format'],
+  'organized-dotnet-pastebin': ['format'],
+  'organized-js-training-jstrain2': ['format'],
+  'relay-upskilling': ['median-ratio', 'rank', 'format'],
+  'ww27': ['median-ratio', 'rank', 'format'],
+
+  // CONTENT-4
+  'ankijs': ['shortest'],
+  'elihyper': ['median-ratio', 'format'],
+  'grok-build-hr': ['median-ratio', 'format'],
+  'jobtrack': ['format'],
+  'master': ['rank', 'format'],
+  'mobiletagalog': ['format'],
+  'organized-anti-emponb': ['format'],
+  'organized-dotnet-trello': ['format'],
+  'organized-js-training-react': ['format'],
+  'ship-it': ['format'],
+  'ww35': ['median-ratio', 'rank', 'format'],
+
+  // CONTENT-5
+  'astra-learning-studio': ['rank', 'format'],
+  'elihyper2': ['format'],
+  'grok-build-order': ['longest', 'format'],
+  'js1': ['format'],
+  'master3': ['longest', 'format'],
+  'nethris': ['longest', 'rank', 'format'],
+  'organized-anti-helpdesk': ['longest', 'format', 'slots'],
+  'organized-dotnet-vg': ['longest', 'format'],
+  'organized-js-training-trainjs': ['format'],
+  'signalpost-swe-bootcamp': ['format'],
+  'ww39': ['median-ratio', 'format'],
+
+  // CONTENT-6
+  'bootlocalopusv2': ['format'],
+  'fableopusrecallv2': ['format'],
+  'grok-build-team': ['longest', 'rank', 'format', 'slots'],
+  'jsdrillv2': ['rank', 'format'],
+  'master7': ['format'],
+  'netpastebin': ['format'],
+  'organized-app-eliapplybot': ['rank', 'format'],
+  'organized-experiment-support-hub': ['median-ratio'],
+  'organized-study-support-desk-crm': ['median-ratio', 'format'],
+  'storefront': ['format'],
+  'ww4': ['median-ratio', 'format'],
+
+  // CONTENT-7
+  'buildgum': ['rank'],
+  'finance-dashboard': ['rank'],
+  'grokjs-dotnet-learning-lab': ['rank'],
+  'jsprojectlearn': ['format'],
+  'masterrnative': ['rank', 'format'],
+  'netslack': ['rank'],
+  'organized-build-crmpyjs': ['format'],
+  'organized-experiment-ww45': ['format'],
+  'recipegen-app': ['format'],
+  'trainjs': ['format'],
+  'zz1': ['median-ratio', 'rank', 'format'],
+
+  // UNASSIGNED
+  'dotnet-ramp': ['format'],
+  'master4': ['format'],
+  'organized-app-job-track': ['format'],
+};
+
 /** "Verdict: reason": a colon + space early in the choice, outside code braces/brackets. */
 const colonLed = (s: string): boolean => /^[^{[]{1,60}?:\s/.test(s);
 const causal = (s: string): boolean => /\b(because|since)\b/i.test(s);
@@ -188,88 +184,98 @@ FORMAT_STRATEGIES.push(['drop because/since then prefer colon-led', comboScore])
 const median = (xs: number[]): number => {
   const s = [...xs].sort((a, b) => a - b);
   const m = Math.floor(s.length / 2);
-  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+  return s.length % 2 ? s[m]! : (s[m - 1]! + s[m]!) / 2;
 };
 
 interface DraftQuiz { id: string; kind: 'quiz'; answer: string; distractors: string[] }
 interface PackQuiz { kind: string; label?: string; check: { answerKey: number }; choices: unknown[] }
 
-const quizzes = (repo: string): DraftQuiz[] => {
-  const d = JSON.parse(readFileSync(join(ROOT, 'content', 'seed-drafts', 'quests', `${repo}.json`), 'utf8')) as { items: Array<{ kind: string }> };
+const quizzes = (draft: string): DraftQuiz[] => {
+  const d = JSON.parse(readFileSync(join(DRAFTS, `${draft}.json`), 'utf8')) as { items: Array<{ kind: string }> };
   return d.items.filter((i): i is DraftQuiz => i.kind === 'quiz');
 };
 
-describe('hand-authored quiz drafts do not leak the key by length or position', () => {
-  for (const repo of GUARDED) {
-    it(`${repo}: answer is rarely the strictly longest or shortest choice`, () => {
-      const qs = quizzes(repo);
-      expect(qs.length).toBeGreaterThanOrEqual(10);
-      const longest = qs.filter((q) => q.answer.length > Math.max(...q.distractors.map((d) => d.length)));
-      const shortest = qs.filter((q) => q.answer.length < Math.min(...q.distractors.map((d) => d.length)));
-      expect(longest.length / qs.length, `longest: ${longest.map((q) => q.id).join(', ')}`).toBeLessThanOrEqual(MAX_LONGEST_SHARE);
-      expect(shortest.length / qs.length, `shortest: ${shortest.map((q) => q.id).join(', ')}`).toBeLessThanOrEqual(MAX_SHORTEST_SHARE);
-    });
+/** Every draft with at least one quiz (the drafts path writes its pack to content/seed/quests/<draft>). */
+const ALL_DRAFTS = readdirSync(DRAFTS)
+  .filter((f) => f.endsWith('.json'))
+  .map((f) => f.slice(0, -'.json'.length))
+  .filter((d) => quizzes(d).length > 0)
+  .sort();
 
-    it(`${repo}: the key is about as long as its longest distractor (median ratio)`, () => {
-      const ratios = quizzes(repo).map((q) => q.answer.length / Math.max(...q.distractors.map((d) => d.length)));
-      const m = median(ratios);
-      expect(m).toBeGreaterThanOrEqual(MEDIAN_RATIO_MIN);
-      expect(m).toBeLessThanOrEqual(MEDIAN_RATIO_MAX);
-    });
+const pct = (x: number) => x.toFixed(2);
+const keyRank = (q: DraftQuiz) => 1 + q.distractors.filter((d) => d.length > q.answer.length).length;
 
-    const formatWorst = (): number => {
-      const qs = quizzes(repo);
-      return Math.max(...FORMAT_STRATEGIES.map(([, score]) => qs.reduce((acc, q) => acc + score(q), 0) / qs.length));
-    };
-    if (FORMAT_UNGUARDED.has(repo)) {
-      it(`${repo}: still carries its known format tell (remove it from FORMAT_UNGUARDED once fixed)`, () => {
-        expect(formatWorst()).toBeGreaterThan(MAX_FORMAT_SHARE);
-      });
+/** Each guard: null when the draft passes, else why it fails. */
+const GUARDS: Record<Guard, (draft: string) => string | null> = {
+  longest: (draft) => {
+    const qs = quizzes(draft);
+    const hit = qs.filter((q) => q.answer.length > Math.max(...q.distractors.map((d) => d.length)));
+    const share = hit.length / qs.length;
+    return share <= MAX_LONGEST_SHARE ? null : `key strictly longest in ${hit.length}/${qs.length} (${pct(share)} > ${MAX_LONGEST_SHARE}): ${hit.map((q) => q.id).join(', ')}`;
+  },
+  shortest: (draft) => {
+    const qs = quizzes(draft);
+    const hit = qs.filter((q) => q.answer.length < Math.min(...q.distractors.map((d) => d.length)));
+    const share = hit.length / qs.length;
+    return share <= MAX_SHORTEST_SHARE ? null : `key strictly shortest in ${hit.length}/${qs.length} (${pct(share)} > ${MAX_SHORTEST_SHARE}): ${hit.map((q) => q.id).join(', ')}`;
+  },
+  'median-ratio': (draft) => {
+    const m = median(quizzes(draft).map((q) => q.answer.length / Math.max(...q.distractors.map((d) => d.length))));
+    return m >= MEDIAN_RATIO_MIN && m <= MEDIAN_RATIO_MAX ? null : `median key/longest-distractor ratio ${pct(m)} outside [${MEDIAN_RATIO_MIN}, ${MEDIAN_RATIO_MAX}]`;
+  },
+  rank: (draft) => {
+    const qs = quizzes(draft);
+    const byRank = new Map<number, string[]>();
+    for (const q of qs) byRank.set(keyRank(q), [...(byRank.get(keyRank(q)) ?? []), q.id]);
+    const [rank, ids] = [...byRank].sort((a, b) => b[1].length - a[1].length || a[0] - b[0])[0]!;
+    return ids.length / qs.length <= MAX_RANK_SHARE ? null : `key is length rank ${rank} in ${ids.length}/${qs.length} (> ${MAX_RANK_SHARE}): ${ids.join(', ')}`;
+  },
+  format: (draft) => {
+    const qs = quizzes(draft);
+    const bad = FORMAT_STRATEGIES.map(([name, score]) => [name, qs.reduce((acc, q) => acc + score(q), 0) / qs.length] as const).filter(([, s]) => s > MAX_FORMAT_SHARE);
+    return bad.length === 0 ? null : `format strategies beat chance: ${bad.map(([n, s]) => `"${n}" ${pct(s)}`).join(', ')} (> ${MAX_FORMAT_SHARE})`;
+  },
+  slots: (draft) => {
+    const pack = JSON.parse(readFileSync(join(ROOT, 'content', 'seed', 'quests', draft, 'items.json'), 'utf8')) as { items: PackQuiz[] };
+    const qs = pack.items.filter((i) => i.kind === 'quiz');
+    const width = Math.min(...qs.map((q) => q.choices.length));
+    const used = new Set(qs.map((q) => q.check.answerKey));
+    const missing = Array.from({ length: width }, (_, s) => s).filter((s) => !used.has(s));
+    return missing.length === 0 ? null : `stamped pack never keys answer slot(s) ${missing.join(', ')}`;
+  },
+};
+const GUARD_NAMES = Object.keys(GUARDS) as Guard[];
+
+describe('the EXEMPT map is well-formed', () => {
+  it('names only real drafts with quizzes and real guards, each at most once, never an empty list', () => {
+    for (const [draft, guards] of Object.entries(EXEMPT)) {
+      expect(ALL_DRAFTS, `${draft} is not a draft with quizzes`).toContain(draft);
+      expect(guards.length, draft).toBeGreaterThan(0);
+      expect(new Set(guards).size, `${draft} lists a guard twice`).toBe(guards.length);
+      for (const g of guards) expect(GUARD_NAMES, `${draft}: unknown guard ${g}`).toContain(g);
     }
-    if (!FORMAT_UNGUARDED.has(repo)) {
-      it(`${repo}: no phrasing or format tell beats chance (colon / because / absolute / semicolon)`, () => {
-        const qs = quizzes(repo);
-        for (const [name, score] of FORMAT_STRATEGIES) {
-          const s = qs.reduce((acc, q) => acc + score(q), 0) / qs.length;
-          expect(s, `strategy "${name}" scores ${s.toFixed(2)}`).toBeLessThanOrEqual(MAX_FORMAT_SHARE);
-        }
-      });
-    }
+  });
 
-    const rankShare = (): number => {
-      const qs = quizzes(repo);
-      const byRank = new Map<number, number>();
-      for (const q of qs) {
-        const rank = 1 + q.distractors.filter((d) => d.length > q.answer.length).length;
-        byRank.set(rank, (byRank.get(rank) ?? 0) + 1);
+  it('every draft has a quiz pack big enough to judge', () => {
+    expect(ALL_DRAFTS.length).toBeGreaterThan(0);
+    for (const d of ALL_DRAFTS) expect(quizzes(d).length, d).toBeGreaterThanOrEqual(10);
+  });
+});
+
+describe('hand-authored quiz drafts do not leak the key by length, rank, format or position', () => {
+  for (const draft of ALL_DRAFTS) {
+    const exempt = new Set(EXEMPT[draft] ?? []);
+    for (const guard of GUARD_NAMES) {
+      if (exempt.has(guard)) {
+        it(`${draft}: still fails ${guard} (remove it from EXEMPT once fixed)`, () => {
+          expect(GUARDS[guard](draft), `${draft} now passes ${guard}: delete that exemption`).not.toBeNull();
+        });
+      } else {
+        it(`${draft}: ${guard}`, () => {
+          expect(GUARDS[guard](draft)).toBeNull();
+        });
       }
-      return Math.max(...byRank.values()) / qs.length;
-    };
-    if (!RANK_UNGUARDED.has(repo)) {
-      it(`${repo}: no single key-length rank holds most quizzes`, () => {
-        const qs = quizzes(repo);
-        const byRank = new Map<number, string[]>();
-        for (const q of qs) {
-          const rank = 1 + q.distractors.filter((d) => d.length > q.answer.length).length;
-          byRank.set(rank, [...(byRank.get(rank) ?? []), q.id]);
-        }
-        for (const [rank, ids] of byRank) {
-          expect(ids.length / qs.length, `key is length rank ${rank} in: ${ids.join(', ')}`).toBeLessThanOrEqual(MAX_RANK_SHARE);
-        }
-      });
-    } else {
-      it(`${repo}: still carries its known rank tell (remove it from RANK_UNGUARDED once fixed)`, () => {
-        expect(rankShare()).toBeGreaterThan(MAX_RANK_SHARE);
-      });
     }
-
-    it(`${repo}: the stamped pack uses every answer slot`, () => {
-      const pack = JSON.parse(readFileSync(join(ROOT, 'content', 'seed', 'quests', repo, 'items.json'), 'utf8')) as { items: PackQuiz[] };
-      const qs = pack.items.filter((i) => i.kind === 'quiz');
-      const width = Math.min(...qs.map((q) => q.choices.length));
-      const used = new Set(qs.map((q) => q.check.answerKey));
-      for (let slot = 0; slot < width; slot++) expect(used.has(slot), `slot ${slot} never keyed`).toBe(true);
-    });
   }
 });
 
