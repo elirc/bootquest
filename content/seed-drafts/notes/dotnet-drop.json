@@ -1,0 +1,309 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "dotnet-drop",
+ "repo": "dotnet-drop",
+ "sha": "d7ae725e4646d103648e52c8e34cff0daf47d093",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: a chunked upload, from session to saved file",
+   "body": "NetDropbox is a Dropbox-style file service in ASP.NET Core with EF Core. A client uploads a large file in pieces: it opens an upload session that declares the file's size, final SHA-256 digest and chunk size, sends each chunk by index, and then asks the server to complete the upload. This pack follows the **astraupskill/** course about making that path safe:\n\n1. **01-CODEBASE-MAP.md**: who owns which rule, with a line map.\n2. **02-CONCEPTS.md**: integrity, immutable chunks, quota preflight and atomicity.\n3. **03-WORKED-CHANGE.md**: the before/after of the change, file by file.\n\nOne caution before you start. The filesystem storage adapter the course describes is not committed to git (the README's status note explains this), so its excerpt cannot be checked. Every quiz in this pack is answerable from committed files: UploadSession, UserStorageAccount, the two upload handlers and ExceptionMiddleware.",
+   "excerpts": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "`src/NetDropbox.Infrastructure/Storage/FileSystemChunkStorage.cs` is **not in git**."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The course route and the status note about the missing storage file."
+    },
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": 11,
+     "lineEnd": 28,
+     "why": "The line map: every rule with its owner and exact lines."
+    }
+   ]
+  },
+  {
+   "id": "r02-sessions-and-chunks",
+   "target": "pack",
+   "phase": "before",
+   "title": "Core idea: a session declares the bytes, each chunk must fit them",
+   "body": "An upload session is a contract written before any bytes arrive. UploadSession.Create validates the declaration and works out how many chunks to expect; ExpectedChunkSize says how long each index must be. Work both out by hand for a few declarations: a size that divides evenly, one that does not, and a size of zero. Then compare the chunk-count arithmetic with what the worked change says it replaced, and ask why floating point was a poor tool there.\n\nNext read UploadChunkHandler top to bottom and number its checks. For each check note what it compares, which exception it throws and with which HttpStatusCode. Pay attention to which checks run before the storage call and which after, and to what the handler does with the database row once storage has answered. Finally open ExceptionMiddleware and write down how each exception type becomes a status.",
+   "excerpts": [
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "Its ExpectedChunkSize method defines the byte boundary for an index."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/NetDropbox.Domain/UploadSession.cs",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The session declaration, chunk arithmetic and lifecycle."
+    },
+    {
+     "path": "src/NetDropbox.Application/Uploads/UploadChunk.cs",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The chunk handler: lookup, checks, storage call and row write."
+    }
+   ]
+  },
+  {
+   "id": "r03-completion-and-boundaries",
+   "target": "pack",
+   "phase": "before",
+   "title": "Core idea: validate everything, then change state once",
+   "body": "Completing an upload turns accepted chunks into a stored file. CompleteUploadHandler does many things, and the order matters. List every step in the order it appears, and mark each one as a read-only check, an external write (blob storage or the queue), or a change to tracked database entities. Find the single SaveChangesAsync and note what comes after it.\n\nThen read the first paragraph of 02-CONCEPTS.md and ask what a SHA-256 digest proves about an upload and what it cannot prove; check how the handler uses the value Hashing.Sha256WithLengthAsync returns. Read UserStorageAccount next: compare EnsureCanReserve, Reserve and Release, and note which ones change state and what each does at the edges. Last, read the paragraph on atomicity and name, for each step after the save, which resource would be left inconsistent if it failed.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "Atomicity must always name its resource."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/NetDropbox.Application/Uploads/CompleteUpload.cs",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The completion handler, from index check to enqueue."
+    },
+    {
+     "path": "src/NetDropbox.Domain/UserStorageAccount.cs",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Quota preflight, reservation and release."
+    }
+   ]
+  },
+  {
+   "id": "x-q01-chunk-boundaries",
+   "target": "seed:quests:dotnet-drop/quiz/6ed46be99f5e2045",
+   "phase": "after",
+   "title": "The last chunk is the remainder",
+   "body": "**Key: three chunks, and index 2 must hold exactly 2 bytes.**\n\nCreate computes ((totalSize - 1) / chunkSize) + 1 = ((10 - 1) / 4) + 1 = 2 + 1 = 3. ExpectedChunkSize(2) computes the offset 2 * 4 = 8 and returns Math.Min(4, 10 - 8) = 2. The handler passes that expected size to storage, and a chunk of any other length is not committed.\n\nWhy the others are wrong:\n- **Two chunks with 6 bytes last**: chunks never exceed ChunkSize, so ten bytes need three.\n- **Every chunk 4 bytes**: that would be 12 bytes, more than declared.\n- **Any size up to 4**: the expected size is an exact length, not a maximum.",
+   "excerpts": [
+    {
+     "path": "src/NetDropbox.Domain/UploadSession.cs",
+     "lineStart": 72,
+     "lineEnd": 72,
+     "quote": "return Math.Min(ChunkSize, TotalSize - offset);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02-empty-upload",
+   "target": "seed:quests:dotnet-drop/quiz/67406f57e673f19e",
+   "phase": "after",
+   "title": "An empty file is one empty chunk",
+   "body": "**Key: one chunk, whose expected size is 0 bytes.**\n\nCreate special-cases zero: `totalSize == 0 ? 1 : ((totalSize - 1) / chunkSize) + 1`, so an empty file still needs one chunk. ExpectedChunkSize returns 0 when TotalSize is 0. The codebase map lists it as a rule: zero bytes = 1 chunk.\n\nWhy the others are wrong:\n- **Zero chunks**: completion requires the index set 0..TotalChunks-1, and TotalChunks is 1.\n- **Create throws**: only a negative size is rejected.\n- **A full padded chunk**: nothing pads; the expected size is 0.",
+   "excerpts": [
+    {
+     "path": "src/NetDropbox.Domain/UploadSession.cs",
+     "lineStart": 42,
+     "lineEnd": 42,
+     "quote": "var requiredChunks = totalSize == 0 ? 1 : ((totalSize - 1) / chunkSize) + 1;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q03-integer-ceiling",
+   "target": "seed:quests:dotnet-drop/quiz/f43f4bcc238fdce1",
+   "phase": "after",
+   "title": "Integer ceiling, then an explicit int guard",
+   "body": "**Key: integer ceiling division, then a check that the count fits an int.**\n\nThe new code computes the count in long arithmetic as ((totalSize - 1) / chunkSize) + 1, which rounds up exactly, then throws DomainException(\"Upload requires too many chunks.\") when it exceeds int.MaxValue, and only then casts to int. The old version went through double and an unchecked cast, which can lose precision and, for huge counts, wrap.\n\nWhy the others are wrong:\n- **Decimal division**: no decimal type is used.\n- **Math.Ceiling then an unchecked cast**: that is close to the old behavior the change removed.\n- **A checked block**: the guard is an explicit comparison, not checked arithmetic.",
+   "excerpts": [
+    {
+     "path": "src/NetDropbox.Domain/UploadSession.cs",
+     "lineStart": 43,
+     "lineEnd": 43,
+     "quote": "if (requiredChunks > int.MaxValue) throw new DomainException(\"Upload requires too many chunks.\");"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q04-changed-retry",
+   "target": "seed:quests:dotnet-drop/quiz/12a7b7e6146c8404",
+   "phase": "after",
+   "title": "Different bytes at an accepted index: 409 up front",
+   "body": "**Key: a 409, raised before IChunkStorage is even called.**\n\nThe handler loads the existing UploadChunk for the session and index. When it exists and its checksum differs from the request's (compared ignoring case), it throws AppException(\"An accepted chunk cannot be replaced with different content.\", Conflict). StoreAsync comes later, so storage never sees the new bytes.\n\nWhy the others are wrong:\n- **200 and replaced**: accepted chunks are immutable; the concepts guide calls different content a conflict.\n- **400 after storing**: the check happens before storage, and the status is 409.\n- **200 keeping the old checksum**: the request is refused; nothing returns 200.",
+   "excerpts": [
+    {
+     "path": "src/NetDropbox.Application/Uploads/UploadChunk.cs",
+     "lineStart": 46,
+     "lineEnd": 46,
+     "quote": "throw new AppException(\"An accepted chunk cannot be replaced with different content.\", System.Net.HttpStatusCode.Conflict);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q05-identical-retry",
+   "target": "seed:quests:dotnet-drop/quiz/4db63ceefc79d80d",
+   "phase": "after",
+   "title": "An identical retry is accepted without a new row",
+   "body": "**Key: it returns the accepted indexes and leaves the chunk rows unchanged.**\n\nThe existing row's checksum equals the request's, so the conflict check passes. Storage commits, and the handler reaches `if (existing is null)`; the row exists, so no Add and no SaveChangesAsync happen. It then returns the ordered list of accepted indexes. That is idempotency as the concepts guide defines it: a retry preserves the accepted result.\n\nWhy the others are wrong:\n- **409 because the index exists**: the 409 is only for a different checksum.\n- **A second row**: the existing-row guard prevents it, and the unique index on (UploadSessionId, Index) would reject it anyway.\n- **400 after a re-hash**: Committed is true, so the 400 branch is not reached.",
+   "excerpts": [
+    {
+     "path": "src/NetDropbox.Application/Uploads/UploadChunk.cs",
+     "lineStart": 72,
+     "lineEnd": 72,
+     "quote": "if (existing is null)"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q06-size-reason",
+   "target": "seed:quests:dotnet-drop/quiz/6d3d6345adafb107",
+   "phase": "after",
+   "title": "Not committed: the handler says whether size or checksum failed",
+   "body": "**Key: a 400 saying the chunk size does not match the session boundary.**\n\nWhen storage returns Committed = false, the handler chooses the message by comparing stored.Size with session.ExpectedChunkSize(request.Index). A different size gives \"Chunk size does not match the session boundary.\"; an equal size means the checksum was the problem. Either way it throws AppException with BadRequest, which ExceptionMiddleware turns into 400.\n\nWhy the others are wrong:\n- **The checksum message**: that branch applies only when the sizes match.\n- **409**: conflicts are for an accepted index with different content.\n- **413**: no handler or middleware produces that status.",
+   "excerpts": [
+    {
+     "path": "src/NetDropbox.Application/Uploads/UploadChunk.cs",
+     "lineStart": 66,
+     "lineEnd": 68,
+     "quote": "\"Chunk size does not match the session boundary.\""
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07-missing-chunks",
+   "target": "seed:quests:dotnet-drop/quiz/8a818b99434f995a",
+   "phase": "after",
+   "title": "Completion needs the exact index set first",
+   "body": "**Key: a 409 \"Upload is missing chunks.\" before anything is assembled.**\n\nCompleteUploadHandler reads the session's chunk indexes in order and requires both `chunkIndexes.Length == TotalChunks` and SequenceEqual with Enumerable.Range(0, TotalChunks). Indexes {0, 2} fail, so it throws AppException with Conflict. The quota preflight and OpenAssembledAsync come after this check.\n\nWhy the others are wrong:\n- **400 for a short file**: the length comparison is never reached.\n- **Saved without index 1**: the exact-set check exists to prevent that.\n- **Waits for the chunk**: the handler does not wait; it fails immediately.",
+   "excerpts": [
+    {
+     "path": "src/NetDropbox.Application/Uploads/CompleteUpload.cs",
+     "lineStart": 42,
+     "lineEnd": 43,
+     "quote": "throw new AppException(\"Upload is missing chunks.\", System.Net.HttpStatusCode.Conflict);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08-declared-size-lie",
+   "target": "seed:quests:dotnet-drop/quiz/c38a1dccc604630b",
+   "phase": "after",
+   "title": "A matching digest does not prove the declared size",
+   "body": "**Key: a 400 for the size mismatch, raised before blob storage is reached.**\n\nHashing.Sha256WithLengthAsync returns a HashedContent with both Checksum and Length. The handler compares Length with session.TotalSize first and throws \"Final file size does not match the upload session.\" (BadRequest), then compares the digest. The blob lookup and blobs.SaveAsync come after both checks, so nothing external is written. Quota is charged from TotalSize, which is why a truthful size matters.\n\nWhy the others are wrong:\n- **Succeeds because the digest matches**: the length check fails first; a digest and a length answer different questions.\n- **Checksum mismatch after saving**: the digest matches, and the failure happens before the blob step.\n- **Succeeds charging 4 bytes**: that is the accounting hole the length check closes.",
+   "excerpts": [
+    {
+     "path": "src/NetDropbox.Application/Uploads/CompleteUpload.cs",
+     "lineStart": 50,
+     "lineEnd": 51,
+     "quote": "throw new AppException(\"Final file size does not match the upload session.\", System.Net.HttpStatusCode.BadRequest);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09-quota-preflight",
+   "target": "seed:quests:dotnet-drop/quiz/c9675f62fbe95927",
+   "phase": "after",
+   "title": "Quota is checked read-only, before any expensive work",
+   "body": "**Key: 400 from a DomainException, decided before assembly starts.**\n\nAfter the index check, the handler loads the user and calls user.EnsureCanReserve(session.TotalSize). EnsureCanReserve compares against the remaining capacity by subtraction and throws DomainException(\"Storage quota exceeded.\") without changing state. ExceptionMiddleware maps DomainException to 400. OpenAssembledAsync, hashing and the blob write all come later.\n\nWhy the others are wrong:\n- **413**: nothing maps quota to Payload Too Large.\n- **409 after the blob write**: the worked change moved quota before the blob write precisely to avoid that.\n- **507 via AppException**: the quota check throws DomainException, not AppException, and no code uses 507.",
+   "excerpts": [
+    {
+     "path": "src/NetDropbox.Domain/UserStorageAccount.cs",
+     "lineStart": 45,
+     "lineEnd": 46,
+     "quote": "throw new DomainException(\"Storage quota exceeded.\");"
+    },
+    {
+     "path": "src/NetDropbox.Api/Support/ExceptionMiddleware.cs",
+     "lineStart": 20,
+     "lineEnd": 20,
+     "quote": "DomainException => StatusCodes.Status400BadRequest,"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10-release-clamp",
+   "target": "seed:quests:dotnet-drop/quiz/14439f78c9a2dad9",
+   "phase": "after",
+   "title": "Release never takes usage below zero",
+   "body": "**Key: 0, since Release clamps the result at zero.**\n\nRelease throws only when bytes is negative. Otherwise it sets UsedBytes = Math.Max(0, UsedBytes - bytes): 3 - 5 is -2, and Math.Max(0, -2) is 0.\n\nWhy the others are wrong:\n- **-2**: the Math.Max call is the lower bound.\n- **3, ignored**: the subtraction still happens, it is just clamped.\n- **A DomainException**: releasing more than is used is not an error here; only negative input throws.",
+   "excerpts": [
+    {
+     "path": "src/NetDropbox.Domain/UserStorageAccount.cs",
+     "lineStart": 52,
+     "lineEnd": 52,
+     "quote": "UsedBytes = Math.Max(0, UsedBytes - bytes);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q11-after-save-failure",
+   "target": "seed:quests:dotnet-drop/quiz/381485b19aaa117e",
+   "phase": "after",
+   "title": "Work after the save is outside its transaction",
+   "body": "**Key: the file version and scan job are saved, yet the scan message is lost.**\n\nLine 85 commits one EF unit of work: blob reference, file node, version, ProcessingJob, quota reservation and the completed session. Chunk deletion and EnqueueAsync run afterwards. If the enqueue throws, the committed rows stay, the queued message never exists, and the request fails with a 500 from the middleware. The concepts guide says neither boundary makes the blob write and queue call part of one global transaction.\n\nWhy the others are wrong:\n- **Everything rolls back**: the transaction already committed; the queue is an in-memory channel outside it.\n- **The blob is deleted**: the code deliberately avoids deleting a content-addressed blob after an uncertain failure.\n- **Retried in-process**: there is no retry loop around the enqueue.",
+   "excerpts": [
+    {
+     "path": "src/NetDropbox.Application/Uploads/CompleteUpload.cs",
+     "lineStart": 85,
+     "lineEnd": 87,
+     "quote": "await queue.EnqueueAsync(new ProcessingMessage(file.Id, version.Id, scanJob.Id), cancellationToken);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q12-blob-dedupe",
+   "target": "seed:quests:dotnet-drop/quiz/a899e7c89c474bab",
+   "phase": "after",
+   "title": "Blobs are content-addressed and shared across users",
+   "body": "**Key: it reuses the existing blob row and adds a reference.**\n\nThe handler looks up a blob by ContentHash only, with no owner filter. For byte-identical content the hash matches, so it calls blob.AddReference(), which increments RefCount, and skips blobs.SaveAsync. A new blob is written only when no row has that hash.\n\nWhy the others are wrong:\n- **A second copy**: the content-addressed lookup prevents it.\n- **Overwrite**: the existing blob is never rewritten.\n- **Rejected as a duplicate**: different users may hold the same content; each gets its own file node and version pointing at the shared blob.",
+   "excerpts": [
+    {
+     "path": "src/NetDropbox.Application/Uploads/CompleteUpload.cs",
+     "lineStart": 63,
+     "lineEnd": 65,
+     "quote": "blob.AddReference();"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q13-owner-scoped",
+   "target": "seed:quests:dotnet-drop/quiz/b1d89ff2606200d2",
+   "phase": "after",
+   "title": "Someone else's session simply does not exist for you",
+   "body": "**Key: 404 \"Upload session not found.\", as the lookup is owner-scoped.**\n\nUploadChunkHandler loads the session with `x.Id == request.SessionId && x.OwnerId == request.UserId`. For user B the query returns null and the ?? throws AppException(\"Upload session not found.\", NotFound). The response is the same as for an id that does not exist, so B learns nothing about A's session.\n\nWhy the others are wrong:\n- **403**: the code never separates exists-but-not-yours from missing.\n- **Stored under A's session**: the owner filter stops that before any storage call.\n- **409 not open**: the open-and-not-expired check runs only after a session is found.",
+   "excerpts": [
+    {
+     "path": "src/NetDropbox.Application/Uploads/UploadChunk.cs",
+     "lineStart": 31,
+     "lineEnd": 31,
+     "quote": "x.Id == request.SessionId && x.OwnerId == request.UserId"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}
