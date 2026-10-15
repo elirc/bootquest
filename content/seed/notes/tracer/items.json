@@ -1,0 +1,553 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "notes",
+ "name": "tracer",
+ "items": [
+  {
+   "key": "seed:notes:tracer/note/0181f8accbe14f57",
+   "provenance": {
+    "repo": "tracer",
+    "sha": "a554af85dfa7e82e80e8a9ddec8f3ade19d040e9",
+    "path": "packages/shared/src/store.ts",
+    "lines": {
+     "start": 75,
+     "end": 82
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q07-overlay-rollback",
+   "pack": "tracer",
+   "target": "seed:quests:tracer/quiz/a9e4e6f9ef0196cd",
+   "phase": "after",
+   "title": "Why rollback is just dropping a pending entry",
+   "body": "The overlay store never changes `committed` for an optimistic edit. The edit is only an entry in `pending`. What the screen shows is `materialize(state)`: a copy of committed with each pending mutation applied on top. Remove the pending entry and the next materialize no longer includes the edit. ADR-0007 says it in one line: rollback means drop a pending mutation.\n\n- An undo copy is wrong: there is nothing to restore, because committed was never touched.\n- An inverse delta is wrong: the server does not send undo messages; it simply never confirms the edit.\n- Reloading from IndexedDB is wrong: IndexedDB is for booting offline, not for rollback.",
+   "excerpts": [
+    {
+     "path": "packages/shared/src/store.ts",
+     "lineStart": 75,
+     "lineEnd": 82,
+     "quote": "export function materialize<T extends Entity>(state: StoreState<T>): T[] { const view: Record<string, T> = { ...state.committed }; for (const m of state.pending) { if (m.op === \"delete\") delete view[m.entityId]; else if (m.value) view[m.entityId] = m.value; } return Object.values(view); }"
+    },
+    {
+     "path": "docs/adr/0007-overlay-store.md",
+     "lineStart": 18,
+     "lineEnd": 20,
+     "quote": "The view is **`materialize(committed, pending)`**: committed truth with the pending overlay applied on top. **We never mutate committed optimistically.** Rollback = drop a pending mutation; rebase = re-materialize over new committed (automatic every render). A server delta whose `mutationId`"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:tracer/note/07baa628cf120c0a",
+   "provenance": {
+    "repo": "tracer",
+    "sha": "a554af85dfa7e82e80e8a9ddec8f3ade19d040e9",
+    "path": "apps/api/src/lib/pagination.ts",
+    "lines": {
+     "start": 17,
+     "end": 26
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q02-decode-bad-cursor",
+   "pack": "tracer",
+   "target": "seed:quests:tracer/quiz/0129ab169dfe7fb8",
+   "phase": "after",
+   "title": "Why a malformed cursor just means the first page",
+   "body": "`decodeCursor` base64url-decodes the text and splits it on \"|\". With no \"|\" there is only one part, so `id` is `undefined`, and the guard `if (!createdAt || !id) return null` returns null. Any thrown error is caught and also turns into null. In the route, a null cursor means no keyset predicate is added, so the query starts from the top.\n\n- Throwing a 400 is wrong: the function catches errors itself, and BAD_FILTER is the code for a bad `filter` parameter.\n- An empty id is wrong: the guard rejects a missing id instead of building a cursor.\n- createdAt holding the whole text is wrong for the same reason: the guard returns before any object is built.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/lib/pagination.ts",
+     "lineStart": 17,
+     "lineEnd": 26,
+     "quote": "export function decodeCursor(raw: string | undefined): Cursor | null { if (!raw) return null; try { const [createdAt, id] = Buffer.from(raw, \"base64url\").toString(\"utf8\").split(\"|\"); if (!createdAt || !id) return null; return { createdAt, id }; } catch { return null; } }"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:tracer/note/455261338c18c863",
+   "provenance": {
+    "repo": "tracer",
+    "sha": "a554af85dfa7e82e80e8a9ddec8f3ade19d040e9",
+    "path": "docs/adr/0012-degraded-mode-over-redundancy.md",
+    "lines": {
+     "start": 9,
+     "end": 13
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q12-drill-finding",
+   "pack": "tracer",
+   "target": "seed:quests:tracer/quiz/5e332923090b19fd",
+   "phase": "after",
+   "title": "What the fanout drill actually found",
+   "body": "The drill killed pub/sub in the middle of a collaboration session. Clients kept working from their local overlay, then caught up from `lastSeq` once they reconnected, so nothing was lost; updates were only late. The ADR says the real finding was elsewhere: the API reported itself healthy while fanout was dead, so nobody was paged. The decision adds a fanout-liveness alert and reconnect backoff with jitter instead of pub/sub redundancy.\n\n- Lost edits is wrong: the overlay kept them and the log replay delivered the rest.\n- A lagging log is wrong: the durable log was the part that kept working.\n- A reconnect stampede did not happen; backoff with jitter is added to prevent one in future.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0012-degraded-mode-over-redundancy.md",
+     "lineStart": 9,
+     "lineEnd": 13,
+     "quote": "The fanout (Redis pub/sub, in the production topology) is a *hint*, not the source of truth — the `MutationLog` is truth (ADR-0006). The incident drill (S15) killed pub/sub mid-collaboration on staging and confirmed the design claim: clients kept working from their local overlay store, and on reconnect they caught up from `lastSeq` off the durable log. Nothing was lost; updates were merely delayed until reconnect."
+    },
+    {
+     "path": "docs/adr/0012-degraded-mode-over-redundancy.md",
+     "lineStart": 21,
+     "lineEnd": 23,
+     "quote": "- Add a **fanout-liveness alert** — the drill's real finding was that the API stayed \"healthy\" while fanout was dead, so no page fired. That gap, not the outage itself, was the incident. - Add **reconnect backoff with jitter** on the fanout client so recovery doesn't stampede."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:tracer/note/4be21026236eba72",
+   "provenance": {
+    "repo": "tracer",
+    "sha": "a554af85dfa7e82e80e8a9ddec8f3ade19d040e9",
+    "path": "docs/LEARNER-GUIDE.md",
+    "lines": {
+     "start": 10,
+     "end": 12
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r01-start-here",
+   "pack": "tracer",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: a course disguised as an issue tracker",
+   "body": "Tracer is a Linear-style issue tracker built as 15 annotated pull requests. The big story is a migration: Sprints 1-5 build a classic REST app with a query cache, then Sprints 6-7 replace it with a local-first sync engine.\n\nThis quest is built from the architecture decision records (ADRs) in `docs/adr/`. Each ADR has the same shape: context, decision, the alternatives that lost, and the consequences. Read the alternatives carefully: the guide says that if you cannot explain why the losing side lost, you have not learned the decision.\n\nSuggested order: ADR-0003 (sessions), 0004 (cursor pagination), 0005 (fractional indexing), then the sync trio 0006, 0007 and 0008, and finally 0012 (what an incident drill taught). Each ADR ends with a Links list; open those files, because the quizzes ask what the code does.",
+   "excerpts": [
+    {
+     "path": "docs/LEARNER-GUIDE.md",
+     "lineStart": 10,
+     "lineEnd": 12,
+     "quote": "keyboard-driven UX performance. Its central arc: we build the app as a *classic* REST + query-cache web app (Sprints 1–5), then **migrate it to a local-first sync engine** (Sprints 6–7). You watch a senior team replace an architecture under a live product. That's the most valuable thing here."
+    },
+    {
+     "path": "docs/LEARNER-GUIDE.md",
+     "lineStart": 47,
+     "lineEnd": 49,
+     "quote": "- **The planted debate.** Each PR has a design-decision thread with both sides argued and a resolution. Read the losing side charitably; if you can't explain why it lost, you haven't learned the decision. - **The ADRs** in `docs/adr/` — the durable \"why\" behind the architecture."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/LEARNER-GUIDE.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "How to study the course: predict, review, then do the lab."
+    },
+    {
+     "path": "docs/sync-protocol.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The wire protocol behind the sync ADRs."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:tracer/note/4c46e8a1bfd3d135",
+   "provenance": {
+    "repo": "tracer",
+    "sha": "a554af85dfa7e82e80e8a9ddec8f3ade19d040e9",
+    "path": "docs/adr/0005-fractional-indexing.md",
+    "lines": {
+     "start": 27,
+     "end": 28
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q04-fractional-flaw",
+   "pack": "tracer",
+   "target": "seed:quests:tracer/quiz/485c8a4ecc1409e6",
+   "phase": "after",
+   "title": "Flaw #2: fractional keys that keep growing",
+   "body": "ADR-0005 names the flaw itself: when you keep inserting between the same two neighbours, each new key is longer than the last. The source comment on `keyBetween` points to the fix, and `evenKeys` in the same file is that fix: in Sprint 12 it reassigns a whole column to evenly spaced keys of equal, short length, and `maxKeyLength` is the metric that tells you when to run it.\n\n- Two clients minting one key is not flaw #2: at this point the server computes keys, and Sprint 07 resolves collisions through the sync engine, not a lock.\n- Precision loss is the problem with floating-point positions, the alternative the ADR rejected.\n- The alphabet is already in ascending ASCII order, so plain string comparison is correct.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0005-fractional-indexing.md",
+     "lineStart": 27,
+     "lineEnd": 28,
+     "quote": "- **Known flaw (#2):** keys grow in length without bound when you repeatedly insert between the same two neighbours. Fine at product scale; a rebalancing pass + a key-length metric land in Sprint 12."
+    },
+    {
+     "path": "packages/shared/src/order.ts",
+     "lineStart": 57,
+     "lineEnd": 62,
+     "quote": "/** * Rebalancing (S12, harvest of flaw #2). When repeated same-slot inserts have grown the keys long, * we reassign the whole column to `n` evenly-spaced, SHORT keys. The new keys are uniform length, * so future inserts between them start short again. A rebalance emits ordinary mutations (each issue * gets a new sortOrder), so it flows through the sync engine like any other change. */"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:tracer/note/5be7c3e8ed0f4eb7",
+   "provenance": {
+    "repo": "tracer",
+    "sha": "a554af85dfa7e82e80e8a9ddec8f3ade19d040e9",
+    "path": "packages/shared/src/order.ts",
+    "lines": {
+     "start": 6,
+     "end": 7
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q03-key-between",
+   "pack": "tracer",
+   "target": "seed:quests:tracer/quiz/df19d3d94efb42c4",
+   "phase": "after",
+   "title": "Tracing keyBetween(\"a\", \"b\") digit by digit",
+   "body": "The alphabet is `0-9`, then `A-Z`, then `a-z`, so \"a\" is index 36, \"b\" is 37 and \"V\" is 31. At position 0, x = 36 and y = 37. They differ, but their midpoint rounds down to 36, which equals x, so the function copies \"a\" and moves one position deeper. At position 1, \"a\" has no more characters (padded with 0) and \"b\" has none either (padded with 62), so the midpoint is 31: the result is \"a\" + \"V\".\n\n- \"ab\" is wrong: its second digit is index 37, but the second digit comes from the midpoint of 0 and 62.\n- \"a5\" is wrong for the same reason: that midpoint is 31 (\"V\"), not 5.\n- The one-character \"V\" is what `keyBetween(null, null)` returns; with \"a\" and \"b\" as bounds the first digit must stay \"a\".",
+   "excerpts": [
+    {
+     "path": "packages/shared/src/order.ts",
+     "lineStart": 6,
+     "lineEnd": 7,
+     "quote": "const DIGITS = \"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz\"; const BASE = DIGITS.length; // 62"
+    },
+    {
+     "path": "packages/shared/src/order.ts",
+     "lineStart": 23,
+     "lineEnd": 40,
+     "quote": "for (;;) { // Pad `a` with the minimum digit and `b` with one-past-max so nulls fall out naturally. const x = i < lo.length ? idx(lo[i]!) : 0; const y = i < hi.length ? idx(hi[i]!) : BASE; if (x === y) { out += DIGITS[x]; i++; continue; } const mid = Math.floor((x + y) / 2); if (mid === x) { // Digits are adjacent — copy this one and go deeper (the boundary tightens). out += DIGITS[x]; i++; continue; } return out + DIGITS[mid]; }"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:tracer/note/66246c5c1a560ecc",
+   "provenance": {
+    "repo": "tracer",
+    "sha": "a554af85dfa7e82e80e8a9ddec8f3ade19d040e9",
+    "path": "apps/api/src/routes/issues.ts",
+    "lines": {
+     "start": 88,
+     "end": 100
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q09-resent-create",
+   "pack": "tracer",
+   "target": "seed:quests:tracer/quiz/2e29d97928a50ca4",
+   "phase": "after",
+   "title": "Why a resent create returns the first issue",
+   "body": "The create handler checks for a `mutationId` first. If one is given, it searches the mutation log for that workspace and id. When it finds a match, it loads the issue that mutation created and returns it, instead of creating another row. ADR-0007 calls this exactly-once-in-effect: the client may send the create twice, but it takes effect once.\n\n- 409 is wrong: the handler returns the existing issue as a normal success, so the client can ack it.\n- A second issue is the bug this code fixes (the double-submit and ack-loss arc).\n- 400 is wrong: resending the same mutationId is expected behaviour after a lost ack.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/routes/issues.ts",
+     "lineStart": 88,
+     "lineEnd": 100,
+     "quote": "// Exactly-once-in-effect: if we've already applied this mutationId, return the existing issue // rather than creating a second one. This is the fix for the double-submit / ack-loss arc — a // client that resends because it never saw the ack must not end up with two issues. if (body.mutationId) { const seen = await prisma.mutationLog.findFirst({ where: { workspaceId: accessTeam.workspaceId, mutationId: body.mutationId }, }); if (seen) { const existing = await prisma.issue.findFirst({ where: { id: seen.entityId }, include: { state: true, assignee: true }, }); if (existing) return serialize(existing, accessTeam.key);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:tracer/note/6bbfeb9ddb3d8965",
+   "provenance": {
+    "repo": "tracer",
+    "sha": "a554af85dfa7e82e80e8a9ddec8f3ade19d040e9",
+    "path": "docs/adr/0006-mutation-log-sync.md",
+    "lines": {
+     "start": 17,
+     "end": 19
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q06-missed-delta",
+   "pack": "tracer",
+   "target": "seed:quests:tracer/quiz/31b728a5009737eb",
+   "phase": "after",
+   "title": "Why a missed delta is never a lost change",
+   "body": "ADR-0006 states the rule: the log is truth, the fanout is a hint. Each mutation is stored with a monotonic per-workspace `seq`. A client remembers the last `seq` it applied. When it reconnects or bootstraps, it asks for everything after that number and replays it. The source comment says a dropped publish is never a lost mutation.\n\n- Server resends until ack is wrong: the fanout is fire-and-forget; recovery is the client's replay.\n- Staying missing is wrong: replay from `lastSeq` fills the gap.\n- Asking other clients is wrong: this is a server-ordered design, not peer-to-peer; ADR-0012 shows the same catch-up working when pub/sub died.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0006-mutation-log-sync.md",
+     "lineStart": 17,
+     "lineEnd": 19,
+     "quote": "as a durable fact, and fans the delta out. Clients bootstrap from their `lastSeq` and then receive live deltas. **The log is truth; the fanout is a hint** — a client that misses a delta replays from its `lastSeq`."
+    },
+    {
+     "path": "apps/api/src/lib/mutations.ts",
+     "lineStart": 18,
+     "lineEnd": 20,
+     "quote": "* the seq is allocated atomically per workspace inside the same transaction — then fans the delta * out. Rule to memorize: the log is truth, the fanout is a hint. If a client misses the hint it * catches up by replaying from its lastSeq, so a dropped publish is never a lost mutation."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:tracer/note/6cfc1852c431649c",
+   "provenance": {
+    "repo": "tracer",
+    "sha": "a554af85dfa7e82e80e8a9ddec8f3ade19d040e9",
+    "path": "docs/adr/0004-cursor-pagination.md",
+    "lines": {
+     "start": 18,
+     "end": 22
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r03-ordering-without-rewrites",
+   "pack": "tracer",
+   "target": "pack",
+   "phase": "before",
+   "title": "Ordering lists cheaply: keysets and fractional keys",
+   "body": "Two ADRs solve an ordering problem without touching many rows.\n\nADR-0004 is about reading a long list page by page. Instead of page numbers, the server hands back an opaque token that encodes where the last page ended, and the next query starts strictly after that point using an index. Look at how the token is built and decoded in `apps/api/src/lib/pagination.ts`, and at the matching query in `apps/api/src/routes/issues.ts`.\n\nADR-0005 is about dragging an issue to a new position. Each issue has a string key, and keys compare as plain strings. To place an issue between two others you compute a new key that sorts between their keys. Open `packages/shared/src/order.ts` and trace `keyBetween` by hand for a couple of inputs before you take the quiz.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0004-cursor-pagination.md",
+     "lineStart": 18,
+     "lineEnd": 22,
+     "quote": "- **OFFSET/LIMIT.** Familiar page numbers. Rejected on two counts: (1) correctness — under concurrent inserts/deletes, OFFSET skips or repeats rows across pages (an issue tracker is constantly mutating); (2) performance — the database must scan and discard `OFFSET` rows, which is O(n) and degrades as you page deeper. Cursor pagination is stable under writes and stays O(log n) via the index."
+    },
+    {
+     "path": "packages/shared/src/order.ts",
+     "lineStart": 5,
+     "lineEnd": 7,
+     "quote": "// The alphabet is in ascending ASCII order so plain string comparison gives the right order. const DIGITS = \"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz\"; const BASE = DIGITS.length; // 62"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/adr/0005-fractional-indexing.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Why fractional keys beat integer positions and floats."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:tracer/note/832e1d4f1d02fc62",
+   "provenance": {
+    "repo": "tracer",
+    "sha": "a554af85dfa7e82e80e8a9ddec8f3ade19d040e9",
+    "path": "docs/adr/0008-durable-vs-ephemeral.md",
+    "lines": {
+     "start": 16,
+     "end": 18
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q11-presence-path",
+   "pack": "tracer",
+   "target": "seed:quests:tracer/quiz/8e3986e38c45c742",
+   "phase": "after",
+   "title": "Why presence uses its own short-lived path",
+   "body": "ADR-0008 sorts collaborative state by one question: does it need to be correct across devices and survive a reload? Comments do, so they go through `recordMutation` like any other entity. Presence does not. It is a heartbeat every few seconds per viewer and is useless moments later. Logging it would add huge numbers of rows, slow every bootstrap, and store data nobody queries, so it travels on an in-memory `presenceBus` and simply expires.\n\n- Needing a team id is wrong: `teamId` is optional (`string | null`) in the log input.\n- Encryption is not mentioned anywhere in the decision.\n- Other workspaces is wrong: presence is about viewers of one team, not cross-workspace delivery.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0008-durable-vs-ephemeral.md",
+     "lineStart": 16,
+     "lineEnd": 18,
+     "quote": "- **Presence is ephemeral → a separate, in-memory path.** Presence messages are broadcast over the same socket but on a distinct logical channel (an in-process `presenceBus`) and are **never written to the mutation log**. Stale viewers simply expire."
+    },
+    {
+     "path": "docs/adr/0008-durable-vs-ephemeral.md",
+     "lineStart": 21,
+     "lineEnd": 24,
+     "quote": "- **Put presence in the mutation log too** (uniformity). Rejected: presence is high-churn (a heartbeat every few seconds per viewer) and worthless a moment later — logging it would bloat the log with millions of \"still here\" rows an hour, slow every bootstrap, and record data no one will ever query. Durability is a *choice per state kind*, not a global policy."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:tracer/note/9d0e2216215031ab",
+   "provenance": {
+    "repo": "tracer",
+    "sha": "a554af85dfa7e82e80e8a9ddec8f3ade19d040e9",
+    "path": "apps/api/src/lib/mutations.ts",
+    "lines": {
+     "start": 22,
+     "end": 23
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q05-publish-after-commit",
+   "pack": "tracer",
+   "target": "seed:quests:tracer/quiz/68f3ffae48aab235",
+   "phase": "after",
+   "title": "Why the fanout happens only after commit",
+   "body": "`recordMutation` does its database work inside `prisma.$transaction`: it bumps the workspace sequence and writes the log row. Only after that resolves does it call `fanout.publish`. The comment gives the reason: if clients were told about a mutation before the transaction committed, a rollback would leave them showing a change that never happened.\n\n- A deadlock is not the reason: publishing is an in-process call with no database lock.\n- A commit timestamp is not used: order comes from the `seq` allocated in the transaction.\n- Clients dropping early deltas is invented: nothing in the client checks indexing; the risk is showing state that rolls back.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/lib/mutations.ts",
+     "lineStart": 22,
+     "lineEnd": 23,
+     "quote": "* We publish AFTER the transaction commits: announcing an uncommitted mutation would let clients * see state that then rolls back."
+    },
+    {
+     "path": "apps/api/src/lib/mutations.ts",
+     "lineStart": 58,
+     "lineEnd": 58,
+     "quote": "fanout.publish(input.workspaceId, delta);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:tracer/note/a135b2a7ae6970a4",
+   "provenance": {
+    "repo": "tracer",
+    "sha": "a554af85dfa7e82e80e8a9ddec8f3ade19d040e9",
+    "path": "apps/api/src/routes/issues.ts",
+    "lines": {
+     "start": 224,
+     "end": 232
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q01-cursor-tiebreaker",
+   "pack": "tracer",
+   "target": "seed:quests:tracer/quiz/e6dfa7d8b36ca068",
+   "phase": "after",
+   "title": "Why the cursor needs the id tie-breaker",
+   "body": "The list is ordered by `createdAt desc, id desc`, and the next page uses this keyset predicate: rows with `createdAt` before the cursor, OR rows with the same `createdAt` and a smaller `id`. If the cursor held only `createdAt`, the second branch could not exist, and any rows sharing the boundary timestamp but not yet shown would be skipped. ADR-0004 calls the tie-breaker mandatory.\n\n- Jumping to numbered pages is wrong: cursors give \"next page\" only; that is the trade the ADR accepts.\n- Encoding is not the issue: `encodeCursor` joins the two fields with \"|\" and base64url-encodes any string.\n- Authorization is wrong: team access is checked by `requireTeamAccess`, not by the cursor.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/routes/issues.ts",
+     "lineStart": 224,
+     "lineEnd": 232,
+     "quote": "...(cursor ? [ { OR: [ { createdAt: { lt: new Date(cursor.createdAt) } }, { createdAt: new Date(cursor.createdAt), id: { lt: cursor.id } }, ], }, ]"
+    },
+    {
+     "path": "docs/adr/0004-cursor-pagination.md",
+     "lineStart": 27,
+     "lineEnd": 28,
+     "quote": "- The cursor + ordering + index must stay in sync; the tie-breaker `id` is mandatory or rows with equal `createdAt` can be skipped."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:tracer/note/ac760b6b3dd8e6f8",
+   "provenance": {
+    "repo": "tracer",
+    "sha": "a554af85dfa7e82e80e8a9ddec8f3ade19d040e9",
+    "path": "packages/shared/src/store.ts",
+    "lines": {
+     "start": 62,
+     "end": 68
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q08-ack-by-mutation-id",
+   "pack": "tracer",
+   "target": "seed:quests:tracer/quiz/4396a5cb196e94cc",
+   "phase": "after",
+   "title": "What an ack does to a pending edit",
+   "body": "When the server confirms an edit, its delta carries the same `mutationId` the client generated. Two pure functions handle it. `applyServerDelta` writes the server's value into `committed`. `ackMutation` filters the matching entry out of `pending`. After that, the screen shows the server's value from committed truth, and the optimistic copy is gone.\n\n- Keeping the entry is wrong: it would shadow later foreign edits with a stale optimistic value.\n- Ignoring the delta is wrong: committed must learn the server's value, which may differ under per-field LWW.\n- Resending is wrong: the ack ends the mutation's life; resending happens only when no ack arrives.",
+   "excerpts": [
+    {
+     "path": "packages/shared/src/store.ts",
+     "lineStart": 62,
+     "lineEnd": 68,
+     "quote": "/** Drop a pending mutation once its confirming delta (same mutationId) has hit committed. */ export function ackMutation<T extends Entity>( state: StoreState<T>, mutationId: string, ): StoreState<T> { return { ...state, pending: state.pending.filter((m) => m.mutationId !== mutationId) }; }"
+    },
+    {
+     "path": "docs/adr/0007-overlay-store.md",
+     "lineStart": 20,
+     "lineEnd": 21,
+     "quote": "re-materialize over new committed (automatic every render). A server delta whose `mutationId` matches a pending one **acks** it (drops it from pending). The state lives in IndexedDB, so the app"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:tracer/note/b2aee7d113db6b22",
+   "provenance": {
+    "repo": "tracer",
+    "sha": "a554af85dfa7e82e80e8a9ddec8f3ade19d040e9",
+    "path": "apps/api/src/auth/session.ts",
+    "lines": {
+     "start": 13,
+     "end": 19
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q10-session-storage",
+   "pack": "tracer",
+   "target": "seed:quests:tracer/quiz/c4bacf211808ce87",
+   "phase": "after",
+   "title": "Why only a hash of the session token is stored",
+   "body": "`createSession` makes a random token, stores `tokenHash: hashToken(token)` with the user id and an expiry 30 days out, and returns the raw token for the cookie. `getUserByToken` hashes the incoming cookie value and looks up that hash. So a copy of the database does not contain usable cookies, and revoking a session is deleting its row (ADR-0003).\n\n- The raw token is wrong: only the hash is written.\n- A JWT copy is wrong: ADR-0003 rejected JWTs because they cannot be revoked instantly.\n- An OAuth access token is wrong: OAuth is only used at sign-in; the session row holds no provider token.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/auth/session.ts",
+     "lineStart": 13,
+     "lineEnd": 19,
+     "quote": "export async function createSession(userId: string): Promise<string> { const token = randomToken(); await prisma.session.create({ data: { tokenHash: hashToken(token), userId, expiresAt: new Date(Date.now() + TTL_MS) }, }); return token; }"
+    },
+    {
+     "path": "apps/api/src/auth/session.ts",
+     "lineStart": 35,
+     "lineEnd": 42,
+     "quote": "export async function getUserByToken(token: string | undefined): Promise<User | null> { if (!token) return null; const session = await prisma.session.findUnique({ where: { tokenHash: hashToken(token) }, include: { user: true }, }); if (!session || session.expiresAt < new Date()) return null; return session.user;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:tracer/note/e690e2c00527efca",
+   "provenance": {
+    "repo": "tracer",
+    "sha": "a554af85dfa7e82e80e8a9ddec8f3ade19d040e9",
+    "path": "docs/adr/0006-mutation-log-sync.md",
+    "lines": {
+     "start": 15,
+     "end": 17
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r02-log-and-overlay",
+   "pack": "tracer",
+   "target": "pack",
+   "phase": "before",
+   "title": "Two ideas behind the sync engine: a log and an overlay",
+   "body": "The server side keeps a mutation log. Every write to an issue goes through one function, gets the next sequence number for its workspace, is stored as a permanent row, and is then announced to connected clients. The announcement can be lost; the stored row cannot.\n\nThe client side keeps two layers. One layer is what the server has confirmed. The other is a list of local edits the server has not confirmed yet. What you see on screen is the first layer with the second applied on top.\n\nKeep both pictures in mind while reading ADR-0006 and ADR-0007, and look at the pure functions in `packages/shared/src/store.ts`. They are small, have no network code, and are tested with property tests.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0006-mutation-log-sync.md",
+     "lineStart": 15,
+     "lineEnd": 17,
+     "quote": "We use a **server-ordered mutation log with per-field LWW**. Every issue-domain write goes through one write path (`recordMutation`) that assigns a monotonic per-workspace `seq`, records the mutation as a durable fact, and fans the delta out. Clients bootstrap from their `lastSeq` and then receive"
+    },
+    {
+     "path": "packages/shared/src/store.ts",
+     "lineStart": 1,
+     "lineEnd": 4,
+     "quote": "// The offline-first store model (S07), as pure functions so convergence is unit-testable with no // IndexedDB and no network. The key idea: NEVER mutate committed truth optimistically. Keep // server-confirmed state in `committed` and layer un-acked local mutations on top as an overlay. // Rollback = drop a pending mutation; rebase = recompute the overlay against new committed truth."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "apps/api/src/lib/mutations.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The single server write path for synced entities."
+    },
+    {
+     "path": "packages/shared/src/store.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The client overlay model as pure functions."
+    }
+   ]
+  }
+ ]
+}
