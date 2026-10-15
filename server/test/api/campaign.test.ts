@@ -108,6 +108,60 @@ describe('GET /api/tracks/:id/campaign', { timeout: 30_000 }, () => {
   });
 });
 
+describe('B3 skill-tree fields on GET /api/tracks/:id/campaign (additive)', { timeout: 30_000 }, () => {
+  const ctx = useCampaignApi();
+
+  it('every quest carries inProgress=false and prerequisites=[] on a fresh ledger', async () => {
+    const body = await campaign(ctx.app, 'js');
+    for (const q of body.acts.flatMap((a) => a.quests)) expect(q).toMatchObject({ inProgress: false, prerequisites: [] });
+    const java = await campaign(ctx.app, 'java');
+    for (const q of java.acts.flatMap((a) => a.quests)) expect(q).toMatchObject({ inProgress: false, prerequisites: [] });
+  });
+
+  it('a failed submit marks an available quest in progress; the pass turns it done (not in progress)', async () => {
+    const a = unitOf(ctx.db, 'campaign/js/study-a');
+    insertCheck(ctx.db, a, { type: 'study-quiz', itemKeys: ['q1'] }, ctx.clock);
+    await request(ctx.app).post(`/api/units/${a}/submit`).send({ answer: 'nope' });
+    let q = (await campaign(ctx.app, 'js')).acts[0]!.quests[0]!;
+    expect(q).toMatchObject({ state: 'available', inProgress: true });
+    await request(ctx.app).post(`/api/units/${a}/submit`).send({ answer: 'pass' });
+    q = (await campaign(ctx.app, 'js')).acts[0]!.quests[0]!;
+    expect(q).toMatchObject({ state: 'done', inProgress: false });
+  });
+
+  it('a quest in a locked act is never in progress, even with ledger rows on its unit', async () => {
+    const r3 = unitOf(ctx.db, 'campaign/js/read-r3');
+    // a stray historical row (e.g. from before the act re-locked); the act gate still wins
+    ctx.db.run(
+      `INSERT INTO attempt (unit_id, mode, assisted, assistance_source, outcome, created_at) VALUES (?, 'solo', 0, 'none', 'fail', ?)`,
+      r3,
+      ctx.clock().getTime(),
+    );
+    const act2 = (await campaign(ctx.app, 'js')).acts[1]!;
+    const q = act2.quests.find((x) => x.unitId === r3)!;
+    expect(q).toMatchObject({ state: 'locked', inProgress: false });
+  });
+
+  it('unit_prerequisite rows between quest units surface as quest-id prerequisites; non-quest prereqs are left out', async () => {
+    const a = unitOf(ctx.db, 'campaign/js/study-a');
+    const r1 = unitOf(ctx.db, 'campaign/js/read-r1');
+    const r3 = unitOf(ctx.db, 'campaign/js/read-r3');
+    const outside = insertUnit(
+      ctx.db,
+      { key: 'fixture/outside', track: 'js', kind: 'drill', title: 'Outside', difficulty: 1 },
+      ctx.clock,
+    );
+    ctx.db.run('INSERT INTO unit_prerequisite (unit_id, prereq_unit_id) VALUES (?, ?)', r3, r1);
+    ctx.db.run('INSERT INTO unit_prerequisite (unit_id, prereq_unit_id) VALUES (?, ?)', r3, a);
+    ctx.db.run('INSERT INTO unit_prerequisite (unit_id, prereq_unit_id) VALUES (?, ?)', r1, outside);
+    const body = await campaign(ctx.app, 'js');
+    const all = body.acts.flatMap((x) => x.quests);
+    const qid = (u: number) => all.find((x) => x.unitId === u)!.id;
+    expect(all.find((x) => x.unitId === r3)!.prerequisites).toEqual([qid(a), qid(r1)].sort((x, y) => x - y));
+    expect(all.find((x) => x.unitId === r1)!.prerequisites).toEqual([]);
+  });
+});
+
 describe('campaign slate slot, end to end through the API', { timeout: 30_000 }, () => {
   const ctx = useCampaignApi();
 

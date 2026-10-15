@@ -491,7 +491,7 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
         if (!c) throw err(404, 'NOT_FOUND', `track ${trackId} not found`);
         // W8: a passed study quest is done, and its act's core progress follows (derived, like the server)
         const acts = c.acts.map((a) => {
-          const quests = a.quests.map((q) => (q.unitId !== undefined && studyPassed.has(q.unitId) ? { ...q, state: 'done' as const } : q));
+          const quests = a.quests.map((q) => (q.unitId !== undefined && studyPassed.has(q.unitId) ? { ...q, state: 'done' as const, inProgress: false } : q));
           const bump = quests.filter((q, i) => q.core && q.state === 'done' && a.quests[i]!.state !== 'done').length;
           return { ...a, quests, progress: { ...a.progress, coreDone: a.progress.coreDone + bump } };
         });
