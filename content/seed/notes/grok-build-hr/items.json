@@ -8,10 +8,10 @@
    "provenance": {
     "repo": "grok-build-hr",
     "sha": "6e13516255310fa59be284a7425611620ac71ffa",
-    "path": "backend/src/repositories/scope.ts",
+    "path": "astraupskill/02-CONCEPTS.md",
     "lines": {
-     "start": 91,
-     "end": 96
+     "start": 28,
+     "end": 28
     }
    },
    "citations": [],
@@ -21,19 +21,13 @@
    "target": "pack",
    "phase": "before",
    "title": "Versions, row locks and the chart lock",
-   "body": "Three tools stop concurrent writes from damaging data.\n\n**Versions.** Each row has a `version` counter. An update says \"I expect version N\". If the row has moved on, the update is refused with a 409 and the user's draft is kept, so a stale tab cannot overwrite newer work.\n\n**Row locks.** `lockEmployee` runs `SELECT ... FOR UPDATE` on one Employee row. A second transaction that wants the same row waits until the first one commits.\n\n**The advisory lock.** `chartLock` takes a PostgreSQL advisory lock with one fixed number. Every transaction that calls it waits for every other one that holds it. Employee writes call it while they check the reporting chart.\n\nThe database adds its own guard too: an exclusion constraint on leave dates, so that rule holds even for writes that skip the repository code.\n\nWhen you study a guard, ask two questions: what invariant does it protect, and what does it cost?",
+   "body": "Three tools in this codebase deal with concurrent writes. Learn what each one is before the quizzes ask what it guarantees.\n\n**Versions.** Each row has a `version` counter, and an update states the version it expects. Read how a mismatch is reported and what happens to the user's draft.\n\n**Row locks.** `lockEmployee` runs `SELECT ... FOR UPDATE` on one Employee row. Note which repository functions call it, and for which kinds of write.\n\n**The advisory lock.** `chartLock` takes a PostgreSQL advisory lock. Look at the key it uses, and list every function that calls it. From that list, work out which writes can run at the same time and which cannot.\n\nThe database schema adds guards of its own too; find the constraint on leave dates in the migration and compare it with the overlap check in the repository.\n\nFor every guard, ask two questions: what invariant does it protect, and what does it cost? The concepts chapter has a section on exactly that question for the chart lock.",
    "excerpts": [
     {
-     "path": "backend/src/repositories/scope.ts",
-     "lineStart": 91,
-     "lineEnd": 96,
-     "quote": "export async function lockEmployee(tx: Tx, id: string) { const rows = await tx.$queryRaw< { id: string }[] >`SELECT id FROM \"Employee\" WHERE id=${identity.parse(id)} FOR UPDATE`; if (!rows.length) throw new AppError(404, \"Employee not found.\"); }"
-    },
-    {
-     "path": "backend/src/repositories/employeeRepository.ts",
-     "lineStart": 21,
-     "lineEnd": 25,
-     "quote": "// One constant key: every chart write waits for every other. Correct and simple; the finer // per-chain key (hashtextextended(rootManagerId, 0)) is discussed in astraupskill/02-CONCEPTS.md. async function chartLock(tx: Tx) { await tx.$queryRaw`SELECT 1 AS locked FROM pg_advisory_xact_lock(74219801)`; }"
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 28,
+     "lineEnd": 28,
+     "quote": "## What the single chart lock costs"
     },
     {
      "path": "astraupskill/02-CONCEPTS.md",
@@ -132,10 +126,10 @@
    "provenance": {
     "repo": "grok-build-hr",
     "sha": "6e13516255310fa59be284a7425611620ac71ffa",
-    "path": "backend/src/repositories/scope.ts",
+    "path": "astraupskill/02-CONCEPTS.md",
     "lines": {
-     "start": 6,
-     "end": 13
+     "start": 1,
+     "end": 1
     }
    },
    "citations": [],
@@ -145,19 +139,19 @@
    "target": "pack",
    "phase": "before",
    "title": "Role, scope and the leave state machine",
-   "body": "A **role** (EMPLOYEE, MANAGER, HR_ADMIN) is a label on the account. It is not enough to decide what a person may do. The code also uses a **scope**: a database filter that decides which rows a caller can even see.\n\n`employeeScope` in `scope.ts` builds that filter. HR gets an empty filter (every row). A manager gets \"my own profile, or people whose manager is me\". An employee gets only their own profile. Because the filter is applied in each query, it follows the reporting line stored in the database now.\n\nLeave requests also move through fixed **states**. A request starts PENDING. From PENDING it can become APPROVED or REJECTED (by a manager or HR, never the requester), or CANCELLED by its owner. An APPROVED request can still be cancelled by its owner. Nothing else is allowed, so a finished decision cannot be silently replaced with a new status.\n\nWhen you read a repository function, look for these two checks: the scope filter in the query, and the status guard before the update.",
+   "body": "A **role** (EMPLOYEE, MANAGER, HR_ADMIN) is a label on the account. It is not enough to decide what a person may do. The code also uses a **scope**: a database filter that decides which rows a caller can even see.\n\n`employeeScope` in `scope.ts` builds that filter. Read it one role at a time and write down, for each role, which employees the filter lets through, and which table and column it reads to decide that. Then ask: if a fact in the database changes tomorrow (say, who reports to whom), when would the filter notice?\n\nLeave requests also move through fixed **states**, drawn as a diagram at the top of `02-CONCEPTS.md`. For every arrow in that diagram, note who may move a request along it and what is checked first. For every state, note which arrows leave it.\n\nWhen you read a repository function, look for two things: the scope filter in the query, and the status guard before the update. Then work out what the caller receives when either one does not match.",
    "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 1,
+     "lineEnd": 1,
+     "quote": "# Ownership, state machines, intervals, and transactions"
+    },
     {
      "path": "backend/src/repositories/scope.ts",
      "lineStart": 6,
-     "lineEnd": 13,
-     "quote": "export function employeeScope(actor: Actor): Prisma.EmployeeWhereInput { const userId = identity.parse(actor.id); if (actor.role === \"HR_ADMIN\") return {}; if (actor.role === \"MANAGER\") return { OR: [{ userId }, { manager: { userId } }] }; if (actor.role === \"EMPLOYEE\") return { userId }; throw new AppError(403, \"Unsupported account role.\"); }"
-    },
-    {
-     "path": "astraupskill/02-CONCEPTS.md",
-     "lineStart": 16,
-     "lineEnd": 16,
-     "quote": "Only an owner can edit or delete a pending request. Accepted decisions are not overwritten with arbitrary status strings."
+     "lineEnd": 7,
+     "quote": "export function employeeScope(actor: Actor): Prisma.EmployeeWhereInput {"
     }
    ],
    "readMore": [

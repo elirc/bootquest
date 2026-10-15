@@ -276,8 +276,8 @@
     "sha": "3fa45f3577721f54dfec2bbec6eea09ea7b22ee6",
     "path": "astraupskill/02-CONCEPTS.md",
     "lines": {
-     "start": 3,
-     "end": 8
+     "start": 1,
+     "end": 1
     }
    },
    "citations": [],
@@ -287,19 +287,13 @@
    "target": "pack",
    "phase": "before",
    "title": "Protecting a row is not protecting its relationships",
-   "body": "A database **foreign key** only promises that the referenced row exists. It says nothing about *who* owns it. So \"project B exists\" and \"Alice may put her task in project B\" are two different questions.\n\nThe concepts guide uses Alice, task A and Bob's project B. Filtering a write by the task id and Alice's user id makes sure Alice can only touch her own task: that protects the *source* row. But if the same write sets the task's project to B, the user filter on the task says nothing about B. Every resource whose relationship changes needs its own check, scoped to the current user.\n\nThe guide then shows the matching idea for errors: a lookup that combines the submitted id with the user id cannot tell \"absent\" from \"someone else's\", and the route answers both the same way on purpose. Keep the two ideas apart when you read the code: one predicate per resource, and the same answer for every \"not yours\".",
+   "body": "A database **foreign key** only promises that the referenced row exists. It says nothing about *who* owns it. So \"project B exists\" and \"Alice may put her task in project B\" are two different questions.\n\nThe concepts guide works through one example: user Alice, her task A, and Bob's project B. Before you read its answer, take the PATCH handler and list every row the request touches: the task being changed, and any project it is being moved to. For each row, find the predicate in the code that checks it belongs to the current user, if there is one.\n\nThe guide then discusses what a lookup that combines a submitted id with the user id can and cannot tell apart, and how the route chooses to answer. Read that paragraph and ask what a caller could learn if the route answered the two cases differently.\n\nKeep both ideas in mind when you read the four open findings in `06-SOLUTIONS-AND-REVIEW.md`.",
    "excerpts": [
     {
      "path": "astraupskill/02-CONCEPTS.md",
-     "lineStart": 3,
-     "lineEnd": 8,
-     "quote": "Consider user Alice, task A and project B. Task A belongs to Alice; project B belongs to Bob. A PATCH constrained by task A's identifier and Alice's user ID correctly protects the task row. It still permits a bad relationship if it writes project B without checking who owns B. Authorization is therefore not a single check at the beginning of the request. It must cover every resource whose relationship the operation changes."
-    },
-    {
-     "path": "astraupskill/02-CONCEPTS.md",
-     "lineStart": 10,
-     "lineEnd": 14,
-     "quote": "The destination lookup combines two predicates: the submitted project ID and the authenticated user's ID. A result proves the requested relationship is allowed at that moment. No result means either the project is absent or it is outside the user's scope. Returning the same not-found shape avoids revealing which explanation applies (an *id oracle*). The task write must still keep its"
+     "lineStart": 1,
+     "lineEnd": 1,
+     "quote": "# Existence, ownership and optional fields"
     }
    ],
    "readMore": [
@@ -615,13 +609,13 @@
    "target": "pack",
    "phase": "before",
    "title": "Reading the destination guard in the POST handler",
-   "body": "Here is the guard that was inserted into the POST handler. Read it slowly:\n\n- `prisma.project.findFirst` looks for **one** project.\n- The `where` has **two** conditions: the id the client sent, and the id of the logged-in user (`auth.user.id`). Both must match.\n- `select: { id: true }` asks only for the id column, because the handler only needs to know whether such a row exists.\n- If nothing comes back, the handler returns early with a 404 and the write below it never runs.\n\nThe PATCH handler in `src/app/api/tasks/[id]/route.ts` uses the same lookup, wrapped in a condition about whether the body supplied a project id at all. Before you answer any question about PATCH, open that file and read the condition exactly as written; small differences such as \"is it present?\" versus \"is it truthy?\" matter. Then look at `handleError` in `src/lib/api.ts` to see what the client receives when something throws.",
+   "body": "Here is the guard that was inserted into the POST handler. Read it slowly, together with the lines just above and below it in `src/app/api/tasks/route.ts`:\n\n- `prisma.project.findFirst` looks for **one** project.\n- The `where` has **two** conditions: the id the client sent, and the id of the logged-in user (`auth.user.id`).\n- `select` chooses which columns come back. Ask why this guard asks for so little.\n- Note where the lookup sits relative to `taskSchema.parse` and to the write, and what the handler does when nothing comes back.\n\nThe PATCH handler in `src/app/api/tasks/[id]/route.ts` uses the same lookup, wrapped in a condition about the body's `projectId`. Before you answer any question about PATCH, open that file and copy the condition exactly as written, then test it by hand with a missing field, an empty string and a real id. Then look at `handleError` in `src/lib/api.ts` to see what the client receives when something throws.",
    "excerpts": [
     {
      "path": "src/app/api/tasks/route.ts",
      "lineStart": 38,
      "lineEnd": 44,
-     "quote": "const project = await prisma.project.findFirst({ where: { id: body.projectId, userId: auth.user.id }, select: { id: true }, }); if (!project) { return Response.json({ error: \"Project not found\" }, { status: 404 }); }"
+     "quote": "const project = await prisma.project.findFirst({ where: { id: body.projectId, userId: auth.user.id },"
     }
    ],
    "readMore": [

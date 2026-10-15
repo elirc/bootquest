@@ -44,19 +44,13 @@
    "target": "pack",
    "phase": "before",
    "title": "Five questions, five layers of 'is this allowed?'",
-   "body": "The validation page splits \"is this allowed?\" into five different questions, each answered by a different piece of code:\n\n- **Well-formed input?** DataAnnotations on the DTOs, checked by `[ApiController]`. Failure: 400.\n- **Business rules?** `PolicyEngine.Evaluate`. Failure: 422.\n- **Logged in?** The bearer-token handler. Failure: 401.\n- **Right role?** `[Authorize(Roles=...)]` on the controller action. Failure: 403.\n- **This exact resource?** Checks inside `ExpenseService`. Failure: 403.\n\nA role check only says \"you are some manager\". The service must still check that you are allowed to touch **this** expense; skipping that is called IDOR (insecure direct object reference).\n\nAlso notice the *default-deny* style: each `switch` on the role ends with an arm such as `_ => false`, so anything not listed gets nothing.",
+   "body": "The validation page splits \"is this allowed?\" into five different questions: is the input well-formed, does it satisfy the business rules, is the caller logged in, does the caller have the right role, and may the caller touch this exact resource? Each is answered by a different piece of code: DTO attributes checked by `[ApiController]`, `PolicyEngine`, the bearer-token handler, `[Authorize(Roles=...)]`, and checks inside `ExpenseService`.\n\nBefore the quizzes, fill in a table yourself from the page and the code: for each question, which file answers it and which HTTP status a failure produces. Then compare what a role attribute can know about a request with what a check inside the service can know.\n\nFinally, read each `switch` on the role in `ExpenseService` from top to bottom, and note what happens for a role that is not listed in it.",
    "excerpts": [
     {
      "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
-     "lineStart": 5,
-     "lineEnd": 11,
-     "quote": "| Question | Mechanism | Where | HTTP on failure | | --- | --- | --- | --- | | Is the input well-formed? | DataAnnotations + `[ApiController]` | [`Dtos.cs`](../../../backend/Dtos/Dtos.cs) | 400 | | Does it satisfy business rules? | `PolicyEngine` | [`PolicyEngine.Evaluate`](../../../backend/Services/PolicyEngine.cs#L34-L66) | 422 | | Are you logged in? | `[Authorize]` + auth handler | [`TokenAuthenticationHandler`](../../../backend/Security/TokenAuthenticationHandler.cs) | 401 | | Do you have the role? | `[Authorize(Roles=…)]` | controller actions | 403 | | May you touch *this* resource? | service checks | `ExpenseService` | 403 |"
-    },
-    {
-     "path": "backend/Services/ExpenseService.cs",
-     "lineStart": 190,
-     "lineEnd": 196,
-     "quote": "private bool CanView(User actor, Expense expense) => actor.Role switch { UserRole.Employee => expense.EmployeeId == actor.Id, UserRole.Manager => expense.EmployeeId == actor.Id || IsDirectReport(expense.EmployeeId, actor.Id), UserRole.Finance => true, _ => false };"
+     "lineStart": 13,
+     "lineEnd": 13,
+     "quote": "Understanding which layer answers which question is the core of this page."
     }
    ],
    "readMore": [
@@ -73,19 +67,19 @@
    "target": "pack",
    "phase": "before",
    "title": "An in-memory store and an in-process queue",
-   "body": "Two design facts explain most of this pack.\n\n**The store is in memory.** `DataStore` is a handful of `ConcurrentDictionary` objects registered as a singleton. Changing an object *is* saving it: there is no commit and no transaction.\n\n**Background work runs inside the same process.** A request puts a delegate into a bounded `Channel`; a `BackgroundService` takes jobs out one by one, opens a new DI scope for each, and runs it. If a job throws, the error is logged and the loop goes on.\n\nBecause the queue lives in memory, the reliability page lists what it does **not** give you: durability, retries and full idempotency. Keep this table in mind when you read about the reimbursement flow and the outbox pattern.\n\nNew words: *idempotent* means running something twice has the same effect as running it once. *At-most-once* means a job runs once or not at all.",
+   "body": "Two design facts explain most of this pack.\n\n**The store is in memory.** `DataStore` is a handful of `ConcurrentDictionary` objects registered as a singleton. Changing an object *is* saving it: there is no commit and no transaction.\n\n**Background work runs inside the same process.** A request puts a delegate into a bounded `Channel`, and a `BackgroundService` takes jobs out and runs them. Read `BackgroundTaskQueue` and `QueuedHostedService` and note three things: what a producer does when the channel is full, how each job gets its services, and what happens when a job throws.\n\nThen read the reliability page's table of what this kind of queue does and does not give you, and ask for each row what a crash at the worst moment would leave behind.\n\nNew words: *idempotent* means running something twice has the same effect as running it once. *At-most-once* and *at-least-once* describe whether a job may be lost or may run more than once.",
    "excerpts": [
     {
      "path": "docs/upskill/03-architecture-and-patterns/02-data-model-and-persistence.md",
      "lineStart": 34,
      "lineEnd": 38,
-     "quote": "**\"Transactions\" here are just object mutation.** When `Submit` changes status and appends history ([`ExpenseService` L176-178](../../../backend/Services/ExpenseService.cs#L176-L178)), there's no commit — the object is already in the dictionary, so the change is \"persisted\" the instant it's made. This is convenient and also the source of the concurrency caveats (no isolation, no atomic multi-entity update)."
+     "quote": "**\"Transactions\" here are just object mutation.**"
     },
     {
      "path": "docs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
-     "lineStart": 30,
-     "lineEnd": 38,
-     "quote": "This is an **in-process, in-memory, at-most-once** queue. Be explicit about what that means: | Property | Status | Consequence | | --- | --- | --- | | Durability | ❌ none | Process crash loses all queued + in-flight jobs | | Retries | ❌ none | A transient failure (or a thrown OCR) leaves the entity stuck | | Idempotency | ⚠️ partial | `ProcessReimbursement` re-checks `CanSystemTransition` ([L51](../../../backend/Background/BackgroundJobs.cs#L51)) so a double-run is safe; `ProcessReceipt` has no such guard | | Delivery | at-most-once | Enqueue isn't transactional with the state change | | Visibility | ⚠️ logs only | No metric/alert for \"stuck in Reimbursing\" |"
+     "lineStart": 12,
+     "lineEnd": 15,
+     "quote": "a `BackgroundService` is the consumer"
     }
    ],
    "readMore": [
