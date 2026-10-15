@@ -1,0 +1,305 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "e20",
+ "repo": "e20",
+ "sha": "134a82ab8b36a81e4c6631191e23ab8409b8f784",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: a small ERP as a CRUD engineering workshop",
+   "body": "e20 is a compact ERP: customers, suppliers, items and warehouses, then sales, purchasing, stock and an illustrative general ledger, served by one Node and SQLite process with a browser workbench. The `astraupskill/` folder is a workshop built on it.\n\nRead in this order:\n\n1. `astraupskill/01-CODEBASE-MAP.md`: the request path and where authorization lives.\n2. `astraupskill/02-CONCEPTS.md`: atomicity, optimistic concurrency, identity versus permission, money and stock units, replay.\n3. `astraupskill/03-WORKED-CHANGE.md`: one receipt traced through failure and success.\n4. `astraupskill/04-TESTING-AND-DEBUGGING.md`: what a convincing test asserts.\n\nNearly all business logic is in `src/domain/erp-service.ts` (one large `ERPService` class). The codebase map lists the line of every public method; jump there rather than scrolling.",
+   "excerpts": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "This course uses the ERP that is already in this folder."
+    },
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": 78,
+     "lineEnd": 78,
+     "quote": "All of it is in the service; `src/domain/security.ts` only hashes passwords and tokens."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The course outline and glossary."
+    },
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The map of files and method line numbers."
+    }
+   ]
+  },
+  {
+   "id": "r02-transactions-and-versions",
+   "target": "pack",
+   "phase": "before",
+   "title": "One transaction per operation, one version per record",
+   "body": "Two mechanisms protect data, and the concepts page explains why both exist.\n\n- **The write transaction.** Every request runs inside `store.access(...)`; for writes, `SnapshotDatabase.access` in `src/domain/database.ts` wraps the whole callback. A submit method may change status, post stock and post GL entries step by step inside it. Ask what other requests can see while the callback runs, and what is left if it throws halfway.\n- **The record version.** `editMaster` receives `{ version, data }`. Read how it compares the sent version with the stored one, and where that comparison sits relative to the write.\n\nThen read `submitPurchaseReceipt` top to bottom: the role check, the status check at the top, the per-line loop with its validations, `postStock` per line, and one `postGL` call for the document. Note which value each ledger call uses (the line, or the document total). The integrity tests named in `03-WORKED-CHANGE.md` pin this behaviour.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "## Atomicity includes every side effect in the database"
+    },
+    {
+     "path": "src/domain/database.ts",
+     "lineStart": 1,
+     "lineEnd": 1,
+     "quote": "import { DatabaseSync } from \"node:sqlite\";"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "tests/integrity.test.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Rollback, replay and identical-line tests."
+    },
+    {
+     "path": "src/domain/database.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The SQLite adapter and its write transaction."
+    }
+   ]
+  },
+  {
+   "id": "r03-identity-money-units",
+   "target": "pack",
+   "phase": "before",
+   "title": "Identity, roles, money and units",
+   "body": "Three layers decide whether a request may proceed, and all run inside the transaction:\n\n1. `login` and `authenticate`: read what makes a login fail, how long a session is valid, and what `store.assertContextCompany` demands of every request.\n2. `requireRoles`: the first line of most public methods. In `editMaster`, find the policy table and note which roles each collection accepts.\n3. `canReadEntity`: entity-level reads for comments, attachments and search.\n\nFor values, `src/domain/state-schema.ts` defines `money`, `quantity` and `cents`. Read each schema's constraints. Then look at how `validatePayment` and `submitSalesInvoice` use `cents`, and which stored fields each one reads.\n\nFinally, in `editMaster`'s remove branch, read what it checks before deleting a record.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 42,
+     "lineEnd": 42,
+     "quote": "## Identity, membership, and permission are separate checks"
+    },
+    {
+     "path": "src/domain/state-schema.ts",
+     "lineStart": 21,
+     "lineEnd": 21,
+     "quote": "export const cents = (v: number) => Math.round(v * 100);"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": 76,
+     "lineEnd": 84,
+     "why": "Where authorization lives: the three layers with line numbers."
+    },
+    {
+     "path": "src/domain/state-schema.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Shared input schemas for money, quantity and dates."
+    }
+   ]
+  },
+  {
+   "id": "x-receipt-rollback",
+   "target": "seed:quests:e20/quiz/69191bacc0201713",
+   "phase": "after",
+   "title": "A late failure undoes the early steps",
+   "body": "`submitPurchaseReceipt` sets the status to submitted, bumps the version, then loops over lines. The first line posts stock; the second throws \"Purchase receipt lines require warehouseId\". The whole call runs inside one write transaction, so the throw rolls back the status, the version and the first posting. The integrity test compares a full snapshot before and after.\n\n- *Submitted with the first line posted* is the original defect that the worked change fixes.\n- *A default warehouse*: there is none; a missing warehouse is an error.\n- *First line posted, still draft*: the rollback removes the posting as well.",
+   "excerpts": [
+    {
+     "path": "src/domain/erp-service.ts",
+     "lineStart": 1025,
+     "lineEnd": 1026,
+     "quote": "throw new DomainError(\"Purchase receipt lines require warehouseId\");"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-receipt-replay",
+   "target": "seed:quests:e20/quiz/67c6552f0d1008d3",
+   "phase": "after",
+   "title": "The status is the replay guard",
+   "body": "The first thing `submitPurchaseReceipt` does after loading the receipt is `if (receipt.status === \"submitted\") return receipt;`. A repeated submit returns the stored document and posts nothing, which is why a client that lost the first response can safely retry the same submit.\n\n- *Posts again*: the early return happens before any posting.\n- *409*: there is no error for a repeat; the guard returns the result.\n- *A second copy*: submit never creates documents, it only changes the one it loaded.",
+   "excerpts": [
+    {
+     "path": "src/domain/erp-service.ts",
+     "lineStart": 991,
+     "lineEnd": 993,
+     "quote": "if (receipt.status === \"submitted\") {"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-identical-lines",
+   "target": "seed:quests:e20/quiz/c36237497b03443b",
+   "phase": "after",
+   "title": "Equal values are still two lines",
+   "body": "The loop calls `postStock` once per line, so two identical lines give two ledger rows of +2 units and value 60 each: +4 units, value 120. GL is posted once for the document: inventory debit `receipt.total` (120) against a credit to goods received not billed.\n\n- *Deduplicated to one row*: that was the old ledger helper's bug, which the concepts page describes.\n- *GL debit of 60*: the debit uses the receipt total, not one line.\n- *One merged row*: there is no merging; each line posts separately.",
+   "excerpts": [
+    {
+     "path": "src/domain/erp-service.ts",
+     "lineStart": 1029,
+     "lineEnd": 1035,
+     "quote": "this.postStock(context, receipt.documentType, receipt.id, {"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-stale-version",
+   "target": "seed:quests:e20/quiz/b27ad1b1b0a316c0",
+   "phase": "after",
+   "title": "A stale baseline is refused, not merged",
+   "body": "`editMaster` parses `{ version, data }`, loads the record, and throws DomainError(\"Record changed; reload current data before retrying\", 409) when `record.version !== envelope.version`. Tab B sent 4 against a stored 5, so nothing is written, and the browser keeps B's draft.\n\n- *Newest request wins*: that is the silent overwrite the version check exists to prevent.\n- *Merge to version 6*: there is no merge logic anywhere.\n- *Saved with a warning*: the check throws before the write and before any audit entry.",
+   "excerpts": [
+    {
+     "path": "src/domain/erp-service.ts",
+     "lineStart": 2176,
+     "lineEnd": 2180,
+     "quote": "\"Record changed; reload current data before retrying\","
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-overpayment",
+   "target": "seed:quests:e20/quiz/3b163e407a974673",
+   "phase": "after",
+   "title": "Cents comparison, then a full rollback",
+   "body": "`submitPayment` calls `validatePayment` before touching the status. It compares `cents(100.01)` = 10001 with `cents(100.00)` = 10000 and throws \"Payment exceeds outstanding balance\" with 409. Nothing was changed yet, and the transaction discards the attempt anyway.\n\n- *Paid with a credit*: no credit or overpayment handling exists.\n- *Posts 100.00*: amounts are never trimmed; the comparison refuses.\n- *400 with GL already posted*: the status is 409, and validation runs before any GL call.",
+   "excerpts": [
+    {
+     "path": "src/domain/erp-service.ts",
+     "lineStart": 2066,
+     "lineEnd": 2067,
+     "quote": "if (cents(payment.amount) > cents(invoice.outstandingAmount))"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-inactive-login",
+   "target": "seed:quests:e20/quiz/9cdb276805fd2317",
+   "phase": "after",
+   "title": "One message for every login failure",
+   "body": "`login` verifies the password and then throws DomainError(\"Invalid credentials\", 401) when `!valid || !user?.active`. A deactivated user with the right password gets exactly the same answer as a wrong password, and no session is created.\n\n- *403 Account disabled*: the code does not reveal the account state.\n- *A session that fails later*: the check happens before the session is pushed.\n- *200*: an inactive user never passes the condition.",
+   "excerpts": [
+    {
+     "path": "src/domain/erp-service.ts",
+     "lineStart": 225,
+     "lineEnd": 226,
+     "quote": "if (!valid || !user?.active)"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-session-expiry",
+   "target": "seed:quests:e20/quiz/4cee52782b40b886",
+   "phase": "after",
+   "title": "Thirty minutes from login, no sliding",
+   "body": "`login` stores `expiresAt: Date.now() + 30 * 60_000`. `authenticate` only matches a session whose `expiresAt > now`, so after 31 minutes there is no match and it throws \"Invalid session\" (401). Nothing in `authenticate` extends the expiry.\n\n- *Extended on use*: no code updates `expiresAt` after login.\n- *403 company scope*: the session check fails first, before the company is considered.\n- *Checked only at login*: `authenticate` checks expiry on every request.",
+   "excerpts": [
+    {
+     "path": "src/domain/erp-service.ts",
+     "lineStart": 254,
+     "lineEnd": 256,
+     "quote": "(s) => s.tokenHash === tokenHash(token) && s.expiresAt > this.store.now(),"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-fractional-qty",
+   "target": "seed:quests:e20/quiz/a65840898e419962",
+   "phase": "after",
+   "title": "Whole units by schema",
+   "body": "The shared `quantity` schema is `z.number().int().min(1).max(100_000)`. 1.5 fails `.int()`, so validation rejects the line and nothing is created. The concepts page calls whole units a scope choice of this workshop; supporting fractions would need a documented scale and rounding policy.\n\n- *Rounded to 2 on submit*: input never gets that far.\n- *Stored as 1.5*: the schema forbids fractions.\n- *Truncated to 1*: zod rejects; it does not coerce.",
+   "excerpts": [
+    {
+     "path": "src/domain/state-schema.ts",
+     "lineStart": 20,
+     "lineEnd": 20,
+     "quote": "export const quantity = z.number().int().min(1).max(100_000);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-snapshot-cost",
+   "target": "seed:quests:e20/quiz/ef8c6f44ab4b16f3",
+   "phase": "after",
+   "title": "The line keeps the cost it was created with",
+   "body": "When the draft is created, each line records `isStockItem` and `standardCost`. On submit, `inventoryCredit` sums `line.quantity * cents(line.standardCost) / 100` over stock lines: 3 * 12.50 = 37.50, debited to cost of goods sold and credited to inventory. The catalog edit to 15.00 does not reach the line.\n\n- *45.00* would read the current catalog cost; the code reads the line.\n- *0* would need the line to stop being a stock item; it is not affected by price edits.\n- *41.25*: nothing averages costs.",
+   "excerpts": [
+    {
+     "path": "src/domain/erp-service.ts",
+     "lineStart": 770,
+     "lineEnd": 774,
+     "quote": "(line.isStockItem ? line.quantity * cents(line.standardCost) : 0) / 100,"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-delete-history",
+   "target": "seed:quests:e20/quiz/12b5e2127b63eedc",
+   "phase": "after",
+   "title": "Records with discussion are retained",
+   "body": "In `editMaster`'s remove branch, the version must match first. Then it checks for any comment or attachment on that entity and throws DomainError(\"Record has discussion history; retain it\", 409). Only a record with no discussion history is removed from its collection.\n\n- *Orphaned comment*: the delete never happens.\n- *Cascade delete*: comments are never deleted by this code.\n- *Archived as inactive*: remove does not change the status; that would be a normal edit.",
+   "excerpts": [
+    {
+     "path": "src/domain/erp-service.ts",
+     "lineStart": 2190,
+     "lineEnd": 2190,
+     "quote": "throw new DomainError(\"Record has discussion history; retain it\", 409);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-project-user-customer",
+   "target": "seed:quests:e20/quiz/1c3b492ce3434312",
+   "phase": "after",
+   "title": "Linking to a customer is not editing one",
+   "body": "The `customers` policy in `editMaster` lists `roles: [\"sales_user\"]`, and the method calls `requireRoles(context, [\"company_admin\", ...policy.roles])`. A project_user has neither role (nor system_admin), so `requireRoles` throws \"Forbidden\" (403). Project users may receive customer names through the reference lists, but not edit customer records.\n\n- *Saved because project users link customers*: reading a reference list is a different, smaller permission.\n- *404*: the role check runs before the record is looked up.\n- *Saved after approval*: no approval flow applies to master data edits.",
+   "excerpts": [
+    {
+     "path": "src/domain/erp-service.ts",
+     "lineStart": 2157,
+     "lineEnd": 2157,
+     "quote": "this.requireRoles(context, [\"company_admin\", ...policy.roles]);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-company-required",
+   "target": "seed:quests:e20/quiz/029fccd2920fb822",
+   "phase": "after",
+   "title": "The company is never implied",
+   "body": "After the session check, `authenticate` calls `store.assertContextCompany(user, requestedCompanyId)`, which throws \"Forbidden company scope; select an explicit company\" (403) when no company id is sent, even if the user belongs to just one company.\n\n- *Defaults to the only company*: the code never picks one for the user.\n- *401*: the session itself is valid; the refusal is about scope, so 403.\n- *First company in the store*: membership is required and nothing is chosen implicitly.",
+   "excerpts": [
+    {
+     "path": "src/domain/store.ts",
+     "lineStart": 166,
+     "lineEnd": 170,
+     "quote": "\"Forbidden company scope; select an explicit company\","
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}

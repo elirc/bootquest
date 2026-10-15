@@ -1,0 +1,425 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "e20",
+ "sha": "134a82ab8b36a81e4c6631191e23ab8409b8f784",
+ "guides": [
+  "astraupskill/01-CODEBASE-MAP.md",
+  "astraupskill/02-CONCEPTS.md",
+  "astraupskill/03-WORKED-CHANGE.md",
+  "astraupskill/04-TESTING-AND-DEBUGGING.md"
+ ],
+ "items": [
+  {
+   "id": "q01-receipt-rollback",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/03-WORKED-CHANGE.md",
+    "lines": {
+     "start": 3,
+     "end": 21
+    }
+   },
+   "cites": [
+    {
+     "path": "src/domain/erp-service.ts",
+     "lineStart": 980,
+     "lineEnd": 1031
+    },
+    {
+     "path": "tests/integrity.test.ts",
+     "lineStart": 161,
+     "lineEnd": 174
+    }
+   ],
+   "prompt": "A draft purchase receipt has two stock lines: the first names a warehouse, the second does not. submitPurchaseReceipt runs inside store.access. What is persisted afterwards?",
+   "answer": "Nothing changes; the receipt stays draft with no stock or GL rows",
+   "distractors": [
+    "The receipt is submitted, and only the first of its two stock lines is posted",
+    "The receipt is submitted, and the second line goes to a default",
+    "The first line is posted, but the receipt stays in draft status"
+   ],
+   "explanation": "The loop throws \"Purchase receipt lines require warehouseId\" on the second line. Because the whole operation runs in one write transaction, the status change, version bump and first stock posting are all rolled back."
+  },
+  {
+   "id": "q02-receipt-replay",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/03-WORKED-CHANGE.md",
+    "lines": {
+     "start": 36,
+     "end": 36
+    }
+   },
+   "cites": [
+    {
+     "path": "src/domain/erp-service.ts",
+     "lineStart": 991,
+     "lineEnd": 993
+    }
+   ],
+   "prompt": "A purchase receipt was submitted successfully, and the client, unsure the response arrived, sends the same submit request again. What does the second call do?",
+   "answer": "It returns the existing receipt, posting no new stock or GL",
+   "distractors": [
+    "Posts the stock again, since each submit is treated as a new event",
+    "Rejected with 409: the receipt is no longer a draft document",
+    "Creates a second receipt copy, then posts that copy to the ledgers"
+   ],
+   "explanation": "submitPurchaseReceipt returns the receipt immediately when its status is already submitted. The document status is the replay guard, so nothing is posted twice."
+  },
+  {
+   "id": "q03-identical-lines-kept",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/03-WORKED-CHANGE.md",
+    "lines": {
+     "start": 23,
+     "end": 32
+    }
+   },
+   "cites": [
+    {
+     "path": "src/domain/erp-service.ts",
+     "lineStart": 1013,
+     "lineEnd": 1044
+    },
+    {
+     "path": "tests/integrity.test.ts",
+     "lineStart": 175,
+     "lineEnd": 185
+    }
+   ],
+   "prompt": "A receipt has two identical lines, each quantity 2 of the same item into the same warehouse at rate USD 30. After submit, what is recorded?",
+   "answer": "Two stock ledger rows (+4 units, 120) and an inventory debit of 120",
+   "distractors": [
+    "One stock ledger row, since the two equal lines are deduplicated",
+    "Two stock ledger rows, but the GL debit counts only one line: 60",
+    "One merged row of +4 units and value 120, with an inventory debit"
+   ],
+   "explanation": "Each line calls postStock, so both movements are kept even though their values are equal. postGL debits inventory with the receipt total, 120, and credits goods received not billed."
+  },
+  {
+   "id": "q04-stale-version",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 22,
+     "end": 40
+    }
+   },
+   "cites": [
+    {
+     "path": "src/domain/erp-service.ts",
+     "lineStart": 2176,
+     "lineEnd": 2180
+    }
+   ],
+   "prompt": "A customer is at version 5 after tab A saved. Tab B still holds version 4 and sends its edit with \"version\": 4. What does editMaster do?",
+   "answer": "Throws a 409 asking the client to reload current data",
+   "distractors": [
+    "Saves tab B, since the newest request always wins the race",
+    "Merges both edits and moves the record to version 6",
+    "Saved: tab B wins, and a warning goes to the audit log"
+   ],
+   "explanation": "editMaster compares record.version with the envelope version and throws DomainError(\"Record changed; reload current data before retrying\", 409) on a mismatch. Nothing is written."
+  },
+  {
+   "id": "q05-overpayment",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 50,
+     "end": 59
+    }
+   },
+   "cites": [
+    {
+     "path": "src/domain/erp-service.ts",
+     "lineStart": 2066,
+     "lineEnd": 2067
+    },
+    {
+     "path": "astraupskill/04-TESTING-AND-DEBUGGING.md",
+     "lineStart": 42,
+     "lineEnd": 47
+    }
+   ],
+   "prompt": "A sales invoice has an outstanding amount of USD 100.00, and a draft payment of USD 100.01 references it. What happens on submitPayment?",
+   "answer": "A 409, and the payment stays draft, the invoice unchanged",
+   "distractors": [
+    "It posts, and the invoice is marked paid with a 0.01 credit",
+    "It posts 100.00; the extra cent is silently dropped",
+    "A 400, but the GL lines for the payment are already posted"
+   ],
+   "explanation": "validatePayment compares cents: 10001 > 10000, so it throws \"Payment exceeds outstanding balance\" with 409 before any status change or ledger posting, and the transaction leaves everything as it was."
+  },
+  {
+   "id": "q06-inactive-login",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 42,
+     "end": 46
+    }
+   },
+   "cites": [
+    {
+     "path": "src/domain/erp-service.ts",
+     "lineStart": 219,
+     "lineEnd": 226
+    }
+   ],
+   "prompt": "A user who has been deactivated (active: false) logs in with the correct password. What does login return?",
+   "answer": "401 Invalid credentials, as for a wrong password",
+   "distractors": [
+    "403 Account disabled, naming the reason for the refusal",
+    "A session that fails on the very first request it makes",
+    "200, since the password itself is valid"
+   ],
+   "explanation": "login refuses when the password is invalid OR the user is not active, with the same DomainError(\"Invalid credentials\", 401). No session is created."
+  },
+  {
+   "id": "q07-session-expiry",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 44,
+     "end": 44
+    }
+   },
+   "cites": [
+    {
+     "path": "src/domain/erp-service.ts",
+     "lineStart": 250,
+     "lineEnd": 262
+    }
+   ],
+   "prompt": "A user logged in 31 minutes ago and has made no requests since. The next request presents that bearer token with a company id. What does authenticate do?",
+   "answer": "It throws 401, since a session lasts 30 minutes",
+   "distractors": [
+    "Accepts it and extends the session by another 30 minutes",
+    "Throws 403, as the company scope has expired with it",
+    "Accepts it, because expiry is only checked at login"
+   ],
+   "explanation": "Sessions are created with expiresAt 30 minutes after login, and authenticate only matches a session whose expiresAt is still in the future. Nothing extends a session on use."
+  },
+  {
+   "id": "q08-fractional-quantity",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 61,
+     "end": 61
+    }
+   },
+   "cites": [
+    {
+     "path": "src/domain/state-schema.ts",
+     "lineStart": 20,
+     "lineEnd": 20
+    }
+   ],
+   "prompt": "A client creates a stock entry line with quantity 1.5 of an item. What happens?",
+   "answer": "Validation rejects it, because quantity must be an integer",
+   "distractors": [
+    "It is stored, then rounded to 2 when the entry is submitted",
+    "Stored as 1.5: stock is tracked in decimal units here",
+    "It is truncated to 1, and a warning is added to the entry"
+   ],
+   "explanation": "The shared quantity schema is z.number().int().min(1).max(100_000). 1.5 fails .int(), so the request is refused before anything is created. Whole units are a scope choice of this workshop."
+  },
+  {
+   "id": "q09-snapshot-cost",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/03-WORKED-CHANGE.md",
+    "lines": {
+     "start": 40,
+     "end": 40
+    }
+   },
+   "cites": [
+    {
+     "path": "src/domain/erp-service.ts",
+     "lineStart": 767,
+     "lineEnd": 800
+    }
+   ],
+   "prompt": "A sales invoice draft is created for 3 units while the item's standardCost is 12.50. Before submitting, the catalog standardCost is changed to 15.00. What cost of goods sold does submitSalesInvoice post?",
+   "answer": "37.50, from the cost snapshotted on the line",
+   "distractors": [
+    "45.00, taken from the current catalog standard cost",
+    "0; the cost changed after the draft was made",
+    "41.25, an average of the two costs"
+   ],
+   "explanation": "Invoice lines snapshot isStockItem and standardCost when the draft is created. Submission computes COGS from line.standardCost: 3 * 12.50 = 37.50; later catalog edits do not rewrite accepted lines."
+  },
+  {
+   "id": "q10-delete-with-comments",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 46,
+     "end": 47
+    }
+   },
+   "cites": [
+    {
+     "path": "src/domain/erp-service.ts",
+     "lineStart": 2181,
+     "lineEnd": 2191
+    }
+   ],
+   "prompt": "A company admin deletes a customer (with the correct version) that has one comment attached to it. What does editMaster do?",
+   "answer": "A 409, since the record has discussion history",
+   "distractors": [
+    "Deletes the customer and keeps the comment as an orphan",
+    "Deletes both the customer and its comment as a cascade",
+    "Archives the customer by setting its status to inactive"
+   ],
+   "explanation": "On remove, editMaster checks for comments or attachments on that entity and throws DomainError(\"Record has discussion history; retain it\", 409). Only records with no discussion history are spliced out."
+  },
+  {
+   "id": "q11-project-user-customer",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/01-CODEBASE-MAP.md",
+    "lines": {
+     "start": 80,
+     "end": 82
+    }
+   },
+   "cites": [
+    {
+     "path": "src/domain/erp-service.ts",
+     "lineStart": 2105,
+     "lineEnd": 2157
+    },
+    {
+     "path": "src/domain/erp-service.ts",
+     "lineStart": 2499,
+     "lineEnd": 2506
+    }
+   ],
+   "prompt": "A user with only the project_user role sends an edit for a customer record through editMaster. What happens?",
+   "answer": "403 Forbidden, as customers need sales_user or company_admin",
+   "distractors": [
+    "The edit is saved, as project users may link customers",
+    "A 404, because project users cannot see the customer",
+    "The edit is saved, but only after an admin approves it"
+   ],
+   "explanation": "The customers policy lists roles [\"sales_user\"], and editMaster calls requireRoles with company_admin plus those roles. project_user is neither (and not system_admin), so it throws Forbidden 403."
+  },
+  {
+   "id": "q12-company-header-required",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/01-CODEBASE-MAP.md",
+    "lines": {
+     "start": 80,
+     "end": 80
+    }
+   },
+   "cites": [
+    {
+     "path": "src/domain/store.ts",
+     "lineStart": 161,
+     "lineEnd": 174
+    }
+   ],
+   "prompt": "A user who belongs to exactly one company sends a valid, unexpired bearer token but no company id with the request. What does authenticate return?",
+   "answer": "A 403 until an explicit company is chosen",
+   "distractors": [
+    "Their only company, chosen by default",
+    "401, as the session needs a company",
+    "The first company in the whole store"
+   ],
+   "explanation": "assertContextCompany throws \"Forbidden company scope; select an explicit company\" (403) when no company id is sent or the user is not a member. Even a one-company user must name it."
+  },
+  {
+   "id": "f01-two-mechanisms",
+   "kind": "flashcard",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 40,
+     "end": 40
+    }
+   },
+   "cites": [
+    {
+     "path": "src/domain/database.ts",
+     "lineStart": 60,
+     "lineEnd": 80
+    }
+   ],
+   "front": "Why does this ERP need both a SQLite write transaction and a record version check?",
+   "back": "The transaction makes competing database writes take turns (and rolls back partial work). The expected version checks whether the human's editing baseline is still current once that turn begins. One serialises writes; the other detects stale edits."
+  },
+  {
+   "id": "f02-assert-the-invariant",
+   "kind": "flashcard",
+   "source": {
+    "path": "astraupskill/04-TESTING-AND-DEBUGGING.md",
+    "lines": {
+     "start": 42,
+     "end": 47
+    }
+   },
+   "cites": [
+    {
+     "path": "astraupskill/04-TESTING-AND-DEBUGGING.md",
+     "lineStart": 42,
+     "lineEnd": 52
+    }
+   ],
+   "front": "For a rejected overpayment, what should a test assert beyond the 409?",
+   "back": "That the payment is still draft, the invoice balance is unchanged, and no payment ledger row or audit event was accepted. The integrity tests compare a complete persisted snapshot before and after."
+  },
+  {
+   "id": "f03-authz-inside-transaction",
+   "kind": "flashcard",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 16,
+     "end": 16
+    }
+   },
+   "cites": [
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": 80,
+     "lineEnd": 84
+    }
+   ],
+   "front": "Why must authentication and role checks run inside the store.access callback?",
+   "back": "Checking a user's role before loading current data leaves a gap in which revoked permissions still work. authenticate reads the user and roles from the state loaded inside the transaction, so a role revoked a moment ago applies to the next request."
+  },
+  {
+   "id": "f04-replay-vs-equality",
+   "kind": "flashcard",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 65,
+     "end": 69
+    }
+   },
+   "cites": [
+    {
+     "path": "src/domain/erp-service.ts",
+     "lineStart": 991,
+     "lineEnd": 993
+    }
+   ],
+   "front": "What is the difference between replay protection and deduplicating equal values?",
+   "back": "Two identical lines are still two legitimate lines and must both be kept. Replay protection is document-level: re-submitting an already posted document returns its existing result. A new create after a lost response is a different request and can make another draft."
+  }
+ ]
+}
