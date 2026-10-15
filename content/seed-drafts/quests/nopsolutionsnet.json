@@ -1,0 +1,459 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "nopsolutionsnet",
+ "sha": "775cf097d1081607acba483ae587915381321c30",
+ "guides": [
+  "nopCommerce/fabledocs/03-architecture-and-patterns/02-data-model-and-persistence.md",
+  "nopCommerce/fabledocs/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+  "nopCommerce/fabledocs/03-architecture-and-patterns/04-side-effects-async-and-reliability.md"
+ ],
+ "items": [
+  {
+   "id": "q01-consumer-throws",
+   "kind": "quiz",
+   "source": {
+    "path": "nopCommerce/fabledocs/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+    "lines": {
+     "start": 19,
+     "end": 28
+    }
+   },
+   "cites": [
+    {
+     "path": "nopCommerce/src/Libraries/Nop.Services/Events/EventPublisher.cs",
+     "lineStart": 25,
+     "lineEnd": 50
+    },
+    {
+     "path": "nopCommerce/fabledocs/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+     "lineStart": 26,
+     "lineEnd": 28
+    }
+   ],
+   "prompt": "During checkout, one IConsumer<OrderPlacedEvent> throws an exception. What does the code that published the event see?",
+   "answer": "Nothing; the publisher logs it and goes on to the next one",
+   "distractors": [
+    "The exception, rethrown after every remaining consumer has run",
+    "An AggregateException holding each consumer that failed",
+    "A rollback of the order, because consumers share its transaction"
+   ],
+   "explanation": "PublishAsync wraps each HandleEventAsync in try/catch, logs exception.Message through ILogger and continues the foreach. A publish never fails from the caller's point of view, and there is no shared transaction to roll back."
+  },
+  {
+   "id": "q02-null-logger-return",
+   "kind": "quiz",
+   "source": {
+    "path": "nopCommerce/fabledocs/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+    "lines": {
+     "start": 21,
+     "end": 26
+    }
+   },
+   "cites": [
+    {
+     "path": "nopCommerce/src/Libraries/Nop.Services/Events/EventPublisher.cs",
+     "lineStart": 35,
+     "lineEnd": 45
+    },
+    {
+     "path": "nopCommerce/fabledocs/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+     "lineStart": 26,
+     "lineEnd": 26
+    }
+   ],
+   "prompt": "Inside EventPublisher's catch block, suppose resolving ILogger returned null while handling the second of five consumers. What happens to consumers three to five?",
+   "answer": "They are skipped, as the catch returns from the method",
+   "distractors": [
+    "They still run; the null logger only loses the log entry",
+    "They run after a retry of the second consumer succeeds",
+    "They are queued and run by the next scheduled task"
+   ],
+   "explanation": "The nested try does `if (logger == null) return;`, which exits PublishAsync entirely, so the foreach never reaches the remaining consumers. The guide calls it a latent edge."
+  },
+  {
+   "id": "q03-lock-check-then-set",
+   "kind": "quiz",
+   "source": {
+    "path": "nopCommerce/fabledocs/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+    "lines": {
+     "start": 81,
+     "end": 83
+    }
+   },
+   "cites": [
+    {
+     "path": "nopCommerce/src/Libraries/Nop.Core/Caching/DistributedCacheLocker.cs",
+     "lineStart": 33,
+     "lineEnd": 55
+    },
+    {
+     "path": "nopCommerce/fabledocs/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+     "lineStart": 83,
+     "lineEnd": 83
+    }
+   ],
+   "prompt": "Two web nodes run the same scheduled task at the same moment. Both call DistributedCacheLocker.PerformActionWithLockAsync. What can happen?",
+   "answer": "Both may run the task, as the get and the set are separate calls",
+   "distractors": [
+    "Only one runs: SetStringAsync fails if the key already exists",
+    "Only one runs, since Redis serializes the whole method call",
+    "Neither runs, because each sees the other node's lock key"
+   ],
+   "explanation": "The method reads the key with GetStringAsync and returns only if it is non-empty, then sets it with SetStringAsync. Nothing makes check-then-set atomic, so both nodes can see it absent and both run the action."
+  },
+  {
+   "id": "q04-lock-finally-remove",
+   "kind": "quiz",
+   "source": {
+    "path": "nopCommerce/fabledocs/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+    "lines": {
+     "start": 81,
+     "end": 83
+    }
+   },
+   "cites": [
+    {
+     "path": "nopCommerce/src/Libraries/Nop.Core/Caching/DistributedCacheLocker.cs",
+     "lineStart": 50,
+     "lineEnd": 54
+    },
+    {
+     "path": "nopCommerce/src/Libraries/Nop.Services/ScheduleTasks/ScheduleTaskRunner.cs",
+     "lineStart": 137,
+     "lineEnd": 141
+    }
+   ],
+   "prompt": "An hourly task runs for 10 minutes on node A. Its lock key expires, node B starts the task and sets the key again, and then A finishes first. What does A's finally block do?",
+   "answer": "It removes the key, so the lock of node B goes with it",
+   "distractors": [
+    "It leaves the key alone, since A no longer owns the lock",
+    "It throws, because the key now holds a different owner value",
+    "It extends B's lock by another 299 seconds before returning"
+   ],
+   "explanation": "The finally calls RemoveAsync(resource) unconditionally, with no owner token check, so a slow first runner deletes the second runner's key. The key lifetime is min(Seconds, 300) - 1 = 299 s for an hourly task."
+  },
+  {
+   "id": "q05-lockout-off-default",
+   "kind": "quiz",
+   "source": {
+    "path": "nopCommerce/fabledocs/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 40,
+     "end": 43
+    }
+   },
+   "cites": [
+    {
+     "path": "nopCommerce/src/Libraries/Nop.Services/Installation/InstallRequiredData.cs",
+     "lineStart": 1627,
+     "lineEnd": 1627
+    },
+    {
+     "path": "nopCommerce/src/Libraries/Nop.Services/Customers/CustomerRegistrationService.cs",
+     "lineStart": 157,
+     "lineEnd": 172
+    }
+   ],
+   "prompt": "A fresh install keeps FailedPasswordAllowedAttempts at its installer value. A customer then enters a wrong password 50 times in a row. What is the result?",
+   "answer": "They are never locked out, though FailedLoginAttempts reaches 50",
+   "distractors": [
+    "They are locked out for 30 minutes after the fifth failed attempt",
+    "They are locked out on the first failure, as 0 attempts are allowed",
+    "The counter stays at 0, since counting is off along with lockout"
+   ],
+   "explanation": "The installer sets FailedPasswordAllowedAttempts = 0, and the lockout branch runs only when it is > 0. FailedLoginAttempts++ happens before that check, so the counter still grows."
+  },
+  {
+   "id": "q06-stale-counter",
+   "kind": "quiz",
+   "source": {
+    "path": "nopCommerce/fabledocs/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 74,
+     "end": 79
+    }
+   },
+   "cites": [
+    {
+     "path": "nopCommerce/src/Libraries/Nop.Services/Customers/CustomerRegistrationService.cs",
+     "lineStart": 157,
+     "lineEnd": 172
+    }
+   ],
+   "prompt": "Lockout was off and a customer built up FailedLoginAttempts = 7. An admin now sets FailedPasswordAllowedAttempts to 5. What happens on the customer's next wrong password?",
+   "answer": "Locked out at once, as the count of 8 already meets 5",
+   "distractors": [
+    "Nothing yet: the count restarts at 0 when the setting changes",
+    "They get 5 more tries, counted from the moment of the change",
+    "They are locked out only after reaching 12, i.e. 7 plus 5"
+   ],
+   "explanation": "The wrong-password branch increments the stored counter to 8 and locks when it is >= the allowed attempts, then resets the counter to 0. Nothing resets the counter when the setting changes."
+  },
+  {
+   "id": "q07-locked-right-password",
+   "kind": "quiz",
+   "source": {
+    "path": "nopCommerce/fabledocs/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 23,
+     "end": 38
+    }
+   },
+   "cites": [
+    {
+     "path": "nopCommerce/src/Libraries/Nop.Services/Customers/CustomerRegistrationService.cs",
+     "lineStart": 146,
+     "lineEnd": 158
+    },
+    {
+     "path": "nopCommerce/fabledocs/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 32,
+     "lineEnd": 32
+    }
+   ],
+   "prompt": "A customer whose CannotLoginUntilDateUtc is still in the future enters the correct password. What does ValidateCustomerAsync return?",
+   "answer": "LockedOut, since the lockout check runs before the password check",
+   "distractors": [
+    "Successful, because the correct password clears the lockout",
+    "WrongPassword, since login is refused during a lockout window",
+    "MultiFactorAuthenticationRequired, as a lockout forces MFA"
+   ],
+   "explanation": "The gates run in order: lookup, Deleted, NotActive, NotRegistered, then lockout. The lockout gate returns LockedOut before PasswordsMatch is evaluated; only a successful login clears CannotLoginUntilDateUtc."
+  },
+  {
+   "id": "q08-shared-message",
+   "kind": "quiz",
+   "source": {
+    "path": "nopCommerce/fabledocs/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 36,
+     "end": 38
+    }
+   },
+   "cites": [
+    {
+     "path": "nopCommerce/src/Presentation/Nop.Web/Controllers/CustomerController.cs",
+     "lineStart": 509,
+     "lineEnd": 527
+    },
+    {
+     "path": "nopCommerce/fabledocs/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 38,
+     "lineEnd": 38
+    }
+   ],
+   "prompt": "On the login page, which CustomerLoginResults values share the one generic \"wrong credentials\" message?",
+   "answer": "CustomerNotExist and NotRegistered, plus WrongPassword",
+   "distractors": [
+    "Deleted, NotActive and LockedOut, hiding account state",
+    "Every failure result, so that no account state is revealed",
+    "Only WrongPassword; each other result has its own message"
+   ],
+   "explanation": "The switch maps Deleted, NotActive and LockedOut to their own resources, while CustomerNotExist, NotRegistered, WrongPassword and default fall through to Account.Login.WrongCredentials. Those distinct messages are finding F1."
+  },
+  {
+   "id": "q09-getbyid-deleted",
+   "kind": "quiz",
+   "source": {
+    "path": "nopCommerce/fabledocs/03-architecture-and-patterns/02-data-model-and-persistence.md",
+    "lines": {
+     "start": 35,
+     "end": 53
+    }
+   },
+   "cites": [
+    {
+     "path": "nopCommerce/src/Libraries/Nop.Data/EntityRepository.cs",
+     "lineStart": 122,
+     "lineEnd": 122
+    },
+    {
+     "path": "nopCommerce/fabledocs/03-architecture-and-patterns/02-data-model-and-persistence.md",
+     "lineStart": 53,
+     "lineEnd": 53
+    }
+   ],
+   "prompt": "A product was soft-deleted (Deleted = true). Code calls the repository's GetByIdAsync(productId) with no other arguments. What comes back?",
+   "answer": "The product, because includeDeleted defaults to true",
+   "distractors": [
+    "null, because soft-deleted rows are filtered out by default",
+    "A NotFoundException, raised for any soft-deleted entity",
+    "A copy of the product with Deleted reset to false"
+   ],
+   "explanation": "GetByIdAsync declares bool includeDeleted = true, so soft-deleted rows load; callers such as the storefront ProductController re-check product.Deleted themselves. Order history relies on the default."
+  },
+  {
+   "id": "q10-predicate-delete",
+   "kind": "quiz",
+   "source": {
+    "path": "nopCommerce/fabledocs/03-architecture-and-patterns/02-data-model-and-persistence.md",
+    "lines": {
+     "start": 54,
+     "end": 54
+    }
+   },
+   "cites": [
+    {
+     "path": "nopCommerce/src/Libraries/Nop.Data/EntityRepository.cs",
+     "lineStart": 497,
+     "lineEnd": 506
+    },
+    {
+     "path": "nopCommerce/fabledocs/03-architecture-and-patterns/02-data-model-and-persistence.md",
+     "lineStart": 48,
+     "lineEnd": 48
+    }
+   ],
+   "prompt": "Guest cleanup calls the repository's DeleteAsync(predicate) on Customer, which implements ISoftDeletedEntity. What happens to matching rows?",
+   "answer": "Hard-deleted, with no deleted events published",
+   "distractors": [
+    "They are marked Deleted = true, like the single-entity overload",
+    "They are hard-deleted, and one deleted event fires per row",
+    "They are marked deleted and removed later by a scheduled task"
+   ],
+   "explanation": "The predicate overload runs BulkDeleteEntitiesAsync inside a transaction scope and returns the count; it never checks ISoftDeletedEntity and never calls the event publisher."
+  },
+  {
+   "id": "q11-update-list-not-atomic",
+   "kind": "quiz",
+   "source": {
+    "path": "nopCommerce/fabledocs/03-architecture-and-patterns/02-data-model-and-persistence.md",
+    "lines": {
+     "start": 107,
+     "end": 109
+    }
+   },
+   "cites": [
+    {
+     "path": "nopCommerce/src/Libraries/Nop.Data/EntityRepository.cs",
+     "lineStart": 410,
+     "lineEnd": 425
+    },
+    {
+     "path": "nopCommerce/src/Libraries/Nop.Data/DataProviders/BaseDataProvider.cs",
+     "lineStart": 285,
+     "lineEnd": 291
+    }
+   ],
+   "prompt": "Code calls the repository's UpdateAsync with a list of 5 products, and the 3rd UPDATE throws. What state is the database left in?",
+   "answer": "Products 1 and 2 stay updated; the rest are not",
+   "distractors": [
+    "No product is updated, as the list runs in one transaction",
+    "All 5 are updated, because the error is caught and retried",
+    "Products 1 and 2 roll back once the exception is thrown"
+   ],
+   "explanation": "Unlike InsertAsync(list) and DeleteAsync(list), UpdateAsync(list) opens no transaction scope, and the provider loops over UpdateEntityAsync, one statement and connection each. Earlier updates are already committed."
+  },
+  {
+   "id": "q12-reset-before-warnings",
+   "kind": "quiz",
+   "source": {
+    "path": "nopCommerce/fabledocs/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 70,
+     "end": 70
+    }
+   },
+   "cites": [
+    {
+     "path": "nopCommerce/src/Libraries/Nop.Services/Orders/ShoppingCartService.cs",
+     "lineStart": 1583,
+     "lineEnd": 1604
+    },
+    {
+     "path": "nopCommerce/fabledocs/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 70,
+     "lineEnd": 70
+    }
+   ],
+   "prompt": "A customer's add-to-cart is rejected for being out of stock. What happened to their selected shipping and payment choices?",
+   "answer": "They were cleared, because ResetCheckoutDataAsync ran first",
+   "distractors": [
+    "They were kept, since a rejected add has no side effects",
+    "They were cleared only if the cart then became empty",
+    "They were copied to a backup and restored after the warning"
+   ],
+   "explanation": "AddToCartAsync calls ResetCheckoutDataAsync(customer, storeId) before any item warnings are computed, so a rejected add still wipes shipping option, pickup point, payment method and reward-points choice."
+  },
+  {
+   "id": "f01-three-questions",
+   "kind": "flashcard",
+   "source": {
+    "path": "nopCommerce/fabledocs/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+    "lines": {
+     "start": 1,
+     "end": 3
+    }
+   },
+   "cites": [
+    {
+     "path": "nopCommerce/fabledocs/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+     "lineStart": 3,
+     "lineEnd": 3
+    }
+   ],
+   "front": "The three reliability questions to ask of any side effect",
+   "back": "What if it fails? What if it runs twice? How would we know? Then match the reliability budget to the cost of loss: in nopCommerce only queued email is durable and retried (max 3 tries)."
+  },
+  {
+   "id": "f02-login-gates",
+   "kind": "flashcard",
+   "source": {
+    "path": "nopCommerce/fabledocs/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 23,
+     "end": 36
+    }
+   },
+   "cites": [
+    {
+     "path": "nopCommerce/fabledocs/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 30,
+     "lineEnd": 35
+    }
+   ],
+   "front": "nopCommerce login gates, in order",
+   "back": "CAPTCHA -> validator -> phone branch -> lookup (CustomerNotExist) -> Deleted / NotActive / NotRegistered -> lockout window (before the password) -> password (count, maybe lock, WrongPassword) -> MFA required? -> success bookkeeping -> sign-in (migrate guest cart)."
+  },
+  {
+   "id": "f03-repository-semantics",
+   "kind": "flashcard",
+   "source": {
+    "path": "nopCommerce/fabledocs/03-architecture-and-patterns/02-data-model-and-persistence.md",
+    "lines": {
+     "start": 35,
+     "end": 56
+    }
+   },
+   "cites": [
+    {
+     "path": "nopCommerce/fabledocs/03-architecture-and-patterns/02-data-model-and-persistence.md",
+     "lineStart": 39,
+     "lineEnd": 49
+    }
+   ],
+   "front": "Which EntityRepository methods are transactional?",
+   "back": "InsertAsync(list), DeleteAsync(list) and DeleteAsync(predicate) use CreateTransactionScope. Single-entity Insert/Update/Delete are single statements. UpdateAsync(list) is NOT atomic: a loop of single updates. There is no unit of work."
+  },
+  {
+   "id": "f04-type-defaults",
+   "kind": "flashcard",
+   "source": {
+    "path": "nopCommerce/fabledocs/03-architecture-and-patterns/02-data-model-and-persistence.md",
+    "lines": {
+     "start": 19,
+     "end": 27
+    }
+   },
+   "cites": [
+    {
+     "path": "nopCommerce/fabledocs/03-architecture-and-patterns/02-data-model-and-persistence.md",
+     "lineStart": 25,
+     "lineEnd": 27
+    }
+   ],
+   "front": "nopCommerce schema defaults when a builder says nothing",
+   "back": "string -> AsString(int.MaxValue).Nullable(), decimal -> decimal(18,4), DateTime -> provider datetime2; an Id identity key is added; ForeignKey<T> defaults to onDelete Rule.Cascade."
+  }
+ ]
+}
