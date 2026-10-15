@@ -1,0 +1,591 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "notes",
+ "name": "nettrello",
+ "items": [
+  {
+   "key": "seed:notes:nettrello/note/05a72f62cf8a006a",
+   "provenance": {
+    "repo": "nettrello",
+    "sha": "0b5c3bc0f6fe5d51fa15fbecfe9c00a49b8930bc",
+    "path": "src/NetTrello.Api/Domain/Board.cs",
+    "lines": {
+     "start": 88,
+     "end": 90
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q02-move-check-order",
+   "pack": "nettrello",
+   "target": "seed:quests:nettrello/quiz/2ddaf7632c513e85",
+   "phase": "after",
+   "title": "Why a move to a missing column reports column.not_found first",
+   "body": "`Board.MoveCard` runs its checks in a fixed order. Line 89 looks up the target column, and `FindColumn` throws `column.not_found` if it does not exist. Only on line 90 does `Guard.NonNegative` look at the position. So when both things are wrong (a missing column and position -1), the missing column wins. Because every check runs before the card is removed (line 104), the board snapshot is unchanged. Seeing `column.not_found` with an unchanged board proves both the order and the safety.\n\nWhy the others are wrong:\n- `validation.non_negative` would mean the position check ran first, which is the opposite of the code.\n- `column.card_limit` is the capacity check, which comes later and needs an existing target column.\n- A 200 with a clamped position never happens here: the negative position is rejected, and the move never reaches the clamping code.",
+   "excerpts": [
+    {
+     "path": "src/NetTrello.Api/Domain/Board.cs",
+     "lineStart": 88,
+     "lineEnd": 90,
+     "quote": "var sourceColumn = FindColumnContainingCard(cardId); var targetColumn = FindColumn(targetColumnId); Guard.NonNegative(position, nameof(position));"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 7,
+     "lineEnd": 7,
+     "quote": "A negative position aimed at a missing column therefore reports `column.not_found`, not `validation.non_negative`."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:nettrello/note/0e312a019fc8aa01",
+   "provenance": {
+    "repo": "nettrello",
+    "sha": "0b5c3bc0f6fe5d51fa15fbecfe9c00a49b8930bc",
+    "path": "src/NetTrello.Api/Contracts/BoardDtos.cs",
+    "lines": {
+     "start": 65,
+     "end": 67
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q06-empty-patch",
+   "pack": "nettrello",
+   "target": "seed:quests:nettrello/quiz/99edcd955fb5073e",
+   "phase": "after",
+   "title": "Why an empty PATCH is a 400 that leaves the version alone",
+   "body": "`ResolveAgainst` starts by checking whether all six fields are `Undefined`. For `{}` they are, so it throws `card.patch_empty` with status 400 (`BadRequest`). This happens while the request is being resolved, before `Card.Update` or `Board.Touch` run. `Touch` is what raises the version, so the version stays where it was.\n\nWhy the others are wrong:\n- 200 with the version up by one is what a valid change such as `{\"title\":\"Renamed\"}` gets.\n- `card.field_invalid` is for a field that is present but has the wrong type, such as a null title; and no error path raises the version.\n- `board.version_conflict` (409) needs a stale `X-Board-Version` header; an empty body is rejected for its content, not for a version mismatch.",
+   "excerpts": [
+    {
+     "path": "src/NetTrello.Api/Contracts/BoardDtos.cs",
+     "lineStart": 65,
+     "lineEnd": 67,
+     "quote": "if (Title.ValueKind == JsonValueKind.Undefined && Description.ValueKind == JsonValueKind.Undefined && Priority.ValueKind == JsonValueKind.Undefined && AssigneeId.ValueKind == JsonValueKind.Undefined && DueDate.ValueKind == JsonValueKind.Undefined && Labels.ValueKind == JsonValueKind.Undefined) { throw DomainException.BadRequest(\"card.patch_empty\", \"At least one card field is required.\");"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "Each error is raised while resolving the request, before `Card.Update` or `Board.Touch`, so the aggregate version and timestamp stay unchanged."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:nettrello/note/231db528818b591e",
+   "provenance": {
+    "repo": "nettrello",
+    "sha": "0b5c3bc0f6fe5d51fa15fbecfe9c00a49b8930bc",
+    "path": "src/NetTrello.Api/Domain/BoardColumn.cs",
+    "lines": {
+     "start": 53,
+     "end": 55
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q05-clamp-past-end",
+   "pack": "nettrello",
+   "target": "seed:quests:nettrello/quiz/89b2aced5ed8efba",
+   "phase": "after",
+   "title": "Finding B: the clamp that accepts position 99",
+   "body": "In a same-column move, `Board.MoveCard` calls `RepositionCard`. Line 53 there rejects a negative position, but line 55 inserts the card at `Math.Clamp(nextPosition, 0, _cards.Count)`. A clamp forces a number into a range, so 99 quietly becomes \"the last slot\". The client gets a 200 and the card lands at the end. The review says this might be the intended UX, but no test pins it.\n\nWhy the others are wrong:\n- `BoardService.cs:88` only forwards the request to `board.MoveCard`; it does no range work.\n- `BoardEndpoints.cs:53` parses the `X-Board-Version` header as an integer (finding A territory).\n- `BoardDtos.cs:120` is the `card.priority_invalid` throw in the PATCH parser, unrelated to moves.",
+   "excerpts": [
+    {
+     "path": "src/NetTrello.Api/Domain/BoardColumn.cs",
+     "lineStart": 53,
+     "lineEnd": 55,
+     "quote": "var nextPosition = Guard.NonNegative(position, nameof(position)); _cards.Remove(card); _cards.Insert(Math.Clamp(nextPosition, 0, _cards.Count), card);"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 78,
+     "lineEnd": 82,
+     "quote": "a position past the end is silently clamped"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:nettrello/note/3df05664ba0bac42",
+   "provenance": {
+    "repo": "nettrello",
+    "sha": "0b5c3bc0f6fe5d51fa15fbecfe9c00a49b8930bc",
+    "path": "src/NetTrello.Api/Endpoints/BoardEndpoints.cs",
+    "lines": {
+     "start": 46,
+     "end": 51
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q04-missing-version-header",
+   "pack": "nettrello",
+   "target": "seed:quests:nettrello/quiz/687466e70330aaed",
+   "phase": "after",
+   "title": "Finding A, HTTP side: a missing header becomes null",
+   "body": "Review finding A says the version check is opt-in. The HTTP half of that is `ReadExpectedVersion` in `BoardEndpoints.cs`, lines 48-51: if the request has no `X-Board-Version` header, it simply returns `null`. The service later treats `null` as \"no expected version\" and skips the comparison, so the client gets last-writer-wins.\n\nWhy the other locations are wrong:\n- `BoardColumn.cs:55` is the clamp in `RepositionCard`; that is finding B (positions past the end).\n- `ExceptionHandlingMiddleware.cs:31-34` maps `BadHttpRequestException` to `request.invalid`; that is finding C.\n- `InMemoryBoardRepository.cs:78` stores a clone of the updated board; it is the clone boundary, not the version header.",
+   "excerpts": [
+    {
+     "path": "src/NetTrello.Api/Endpoints/BoardEndpoints.cs",
+     "lineStart": 46,
+     "lineEnd": 51,
+     "quote": "private static int? ReadExpectedVersion(HttpRequest request) { if (!request.Headers.TryGetValue(\"X-Board-Version\", out var value)) { return null; }"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 72,
+     "lineEnd": 74,
+     "quote": "**A. The version check is opt-in.** `BoardEndpoints.cs:48-51` returns `null` when `X-Board-Version` is absent, and `BoardService.cs:112` skips the comparison for `null`. A client that omits the header gets last-writer-wins."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/course/worked-examples/break-the-version-check.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The course worked example that develops finding A."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:nettrello/note/5cc01daa1f195392",
+   "provenance": {
+    "repo": "nettrello",
+    "sha": "0b5c3bc0f6fe5d51fa15fbecfe9c00a49b8930bc",
+    "path": "src/NetTrello.Api/Application/BoardService.cs",
+    "lines": {
+     "start": 112,
+     "end": 115
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q08-one-winner",
+   "pack": "nettrello",
+   "target": "seed:quests:nettrello/quiz/c5e08257bf069c67",
+   "phase": "after",
+   "title": "Two writers with one version: exactly one wins",
+   "body": "The repository's `UpdateAsync` waits on a `SemaphoreSlim`, so only one callback runs at a time. The first callback sees the expected version, succeeds, and its clone is stored with the version raised by one. The second callback then compares its (now stale) expected version against the stored one, finds they differ, and throws `board.version_conflict`. So the proof is: one success, one conflict, and Version up by exactly one.\n\nWhy the others are wrong:\n- Both failing would mean the first check also failed, but the first writer's version matches.\n- Version up by two would mean both changes landed, which is the lost check the test guards against.\n- Last writer wins is what happens only when no version is sent (finding A); here both send one.",
+   "excerpts": [
+    {
+     "path": "src/NetTrello.Api/Application/BoardService.cs",
+     "lineStart": 112,
+     "lineEnd": 115,
+     "quote": "if (expectedVersion is not null && board.Version != expectedVersion.Value) { throw DomainException.Conflict(\"board.version_conflict\", \"The board changed since it was last loaded. Refresh and try again.\"); }"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "`SemaphoreSlim` admits one callback; it stores a clone and increments version. The next callback sees a different version and throws `board.version_conflict`."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:nettrello/note/7232d291e5d4f497",
+   "provenance": {
+    "repo": "nettrello",
+    "sha": "0b5c3bc0f6fe5d51fa15fbecfe9c00a49b8930bc",
+    "path": "astraupskill/05-PRACTICE.md",
+    "lines": {
+     "start": 53,
+     "end": 53
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q11-red-first-lab",
+   "pack": "nettrello",
+   "target": "seed:quests:nettrello/quiz/e73c813e6bdbcfe1",
+   "phase": "after",
+   "title": "Why the red-first lab predicts 4 red and 17 green",
+   "body": "The lab reverts behaviour, not whole files: copy the old `Card`, and replace only the body of `MoveCard`. The old code mutated first and threw later. The old `Update` assigned title, description and priority before `NormalizeLabels` threw, and the old move removed the card from its source before finding the target. The error codes still match, so the first assertion of each test passes. The whole-board snapshot assertion then fails. That gives 4 red (the blank-label test and the three rejected-move tests) and 17 green. The guide marks this as derived from the source, not a recorded run.\n\nWhy the others are wrong:\n- All green would mean the code check is enough; the lab exists to show it is not.\n- All 21 red because of compile errors is what a whole-file copy of the Board or BoardDtos snapshot causes. The lab tells you not to do that.",
+   "excerpts": [
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 53,
+     "lineEnd": 53,
+     "quote": "**Check (derived from the source on 2026-10-06, not from a recorded run; confirm with yours):** 4 red, 17 green."
+    },
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 58,
+     "lineEnd": 58,
+     "quote": "The red tests fail on the *second* assertion, not the first: the exception code alone cannot see a partial mutation. That is the case for snapshot assertions."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 44,
+     "lineEnd": 58,
+     "why": "The full lab steps, including why a whole-file copy does not compile."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:nettrello/note/943746d0aba18172",
+   "provenance": {
+    "repo": "nettrello",
+    "sha": "0b5c3bc0f6fe5d51fa15fbecfe9c00a49b8930bc",
+    "path": "src/NetTrello.Api/Domain/Board.cs",
+    "lines": {
+     "start": 89,
+     "end": 90
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q12-negative-position-guard",
+   "pack": "nettrello",
+   "target": "seed:quests:nettrello/quiz/fe118b82a9942595",
+   "phase": "after",
+   "title": "Finding B, the other side: the negative-position guard",
+   "body": "Finding B is about an asymmetry. A position past the end is clamped, but a negative one is a 400. The rejection is `Guard.NonNegative(position, nameof(position))` on `Board.cs:90`. It runs after the target lookup (line 89) and well before `sourceColumn.RemoveCard` (line 104), so no card has been removed when it throws.\n\nWhy the others are wrong:\n- `BoardEndpoints.cs:48` checks whether the `X-Board-Version` header exists (finding A).\n- `InMemoryBoardRepository.cs:45` is the `Clone()` in `GetAsync` (exercise 6, read isolation).\n\nNeither looks at a move position.",
+   "excerpts": [
+    {
+     "path": "src/NetTrello.Api/Domain/Board.cs",
+     "lineStart": 89,
+     "lineEnd": 90,
+     "quote": "var targetColumn = FindColumn(targetColumnId); Guard.NonNegative(position, nameof(position));"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 78,
+     "lineEnd": 79,
+     "quote": "A negative position is a 400 (`Board.cs:90`)"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:nettrello/note/af0e656414f4a005",
+   "provenance": {
+    "repo": "nettrello",
+    "sha": "0b5c3bc0f6fe5d51fa15fbecfe9c00a49b8930bc",
+    "path": "src/NetTrello.Api/Application/BoardService.cs",
+    "lines": {
+     "start": 112,
+     "end": 112
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q09-optional-version-compare",
+   "pack": "nettrello",
+   "target": "seed:quests:nettrello/quiz/c8920198d92cc986",
+   "phase": "after",
+   "title": "Finding A, service side: the comparison only when supplied",
+   "body": "`MutateAsync` puts the version check inside the repository callback. Line 112 reads `if (expectedVersion is not null && board.Version != expectedVersion.Value)`. The first half means: if no version was supplied, skip the check entirely. Together with the endpoint returning `null` for a missing header, that makes the check opt-in.\n\nWhy the others are wrong:\n- `InMemoryBoardRepository.cs:77` runs the callback on a clone of the existing board; it does not know about versions.\n- `Board.cs:90` is `Guard.NonNegative(position, ...)` in `MoveCard`, the move's position check (finding B's 400 side).",
+   "excerpts": [
+    {
+     "path": "src/NetTrello.Api/Application/BoardService.cs",
+     "lineStart": 112,
+     "lineEnd": 112,
+     "quote": "if (expectedVersion is not null && board.Version != expectedVersion.Value)"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 72,
+     "lineEnd": 74,
+     "quote": "and `BoardService.cs:112` skips the comparison for `null`."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:nettrello/note/b522792c0fb57b12",
+   "provenance": {
+    "repo": "nettrello",
+    "sha": "0b5c3bc0f6fe5d51fa15fbecfe9c00a49b8930bc",
+    "path": "src/NetTrello.Api/Infrastructure/InMemoryBoardRepository.cs",
+    "lines": {
+     "start": 45,
+     "end": 45
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q03-clone-on-read",
+   "pack": "nettrello",
+   "target": "seed:quests:nettrello/quiz/33265a7c262d1cb1",
+   "phase": "after",
+   "title": "Where reads are isolated: the Clone() in GetAsync",
+   "body": "Exercise 6 asks why changing a board you got from `GetAsync` does not change what the next read sees. The answer is line 45 of the repository: `GetAsync` never hands out the stored object, it returns `stored.Clone()`. You edit your own copy; the dictionary still holds the original. (Line 78 clones on the write side too, so later edits to the stored result cannot leak in either.)\n\nWhy the other lines are wrong:\n- `BoardService.cs:77` is `board.GetCard(cardId)` inside the PATCH callback: it reads a card from the working board, it does not copy anything.\n- `BoardColumn.cs:54` removes a card from its own list during a same-column reorder.\n- `Board.cs:104` is the move's `RemoveCard` call, the first mutating line of `MoveCard`.\n\nNone of those three creates a copy, so none can isolate a reader.",
+   "excerpts": [
+    {
+     "path": "src/NetTrello.Api/Infrastructure/InMemoryBoardRepository.cs",
+     "lineStart": 45,
+     "lineEnd": 45,
+     "quote": "var board = _boards.TryGetValue(boardId, out var stored) ? stored.Clone() : null;"
+    },
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 30,
+     "lineEnd": 30,
+     "quote": "the property is the `Clone()` on read (`InMemoryBoardRepository.cs:45`) and on store (line 78)."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:nettrello/note/b7fa61d90c47f83b",
+   "provenance": {
+    "repo": "nettrello",
+    "sha": "0b5c3bc0f6fe5d51fa15fbecfe9c00a49b8930bc",
+    "path": "src/NetTrello.Api/Domain/Board.cs",
+    "lines": {
+     "start": 104,
+     "end": 107
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r03-validate-then-mutate",
+   "pack": "nettrello",
+   "target": "pack",
+   "phase": "before",
+   "title": "Validate everything first, then change the board",
+   "body": "The second idea in this course is ordering. A method that can fail should do all of its checks before it changes any state. If it removes a card from its column first and only then discovers a problem, it throws the right error but leaves the board half-changed.\n\n`Board.MoveCard` is the example. It finds the source column, finds the target column, checks the position, handles the same-column case, checks the target's card limit, and only at the end removes and inserts the card. `Touch(now)` then bumps the board version once.\n\nTwo more safety layers sit around the domain. The repository hands every callback a clone of the stored board and stores a clone only if the callback succeeds, and a `SemaphoreSlim` lets only one update run at a time. Tests prove \"nothing changed\" by comparing a whole-board snapshot (including `Version` and `UpdatedAt`) taken before the rejected call with one taken after.",
+   "excerpts": [
+    {
+     "path": "src/NetTrello.Api/Domain/Board.cs",
+     "lineStart": 104,
+     "lineEnd": 107,
+     "quote": "var card = sourceColumn.RemoveCard(cardId); card.MoveTo(position, now); targetColumn.AddCard(card); Touch(now);"
+    },
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": 14,
+     "lineEnd": 14,
+     "quote": "The old move removed the card before finding the destination and before validating position."
+    },
+    {
+     "path": "src/NetTrello.Api/Infrastructure/InMemoryBoardRepository.cs",
+     "lineStart": 77,
+     "lineEnd": 79,
+     "quote": "var updated = update(existing.Clone()); _boards[boardId] = updated.Clone(); return updated.Clone();"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/07-TRACE-LAB.md",
+     "lineStart": 3,
+     "lineEnd": 7,
+     "why": "Trace B (a failed move) and Trace C (two competing writes)."
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 32,
+     "lineEnd": 32,
+     "why": "Why the safe sequence validates every value that can throw before mutating."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:nettrello/note/cf6630273bdeb906",
+   "provenance": {
+    "repo": "nettrello",
+    "sha": "0b5c3bc0f6fe5d51fa15fbecfe9c00a49b8930bc",
+    "path": "src/NetTrello.Api/Middleware/ExceptionHandlingMiddleware.cs",
+    "lines": {
+     "start": 31,
+     "end": 34
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q10-request-invalid-mapping",
+   "pack": "nettrello",
+   "target": "seed:quests:nettrello/quiz/dde7402b00bc1dfc",
+   "phase": "after",
+   "title": "Finding C: where request.invalid is written",
+   "body": "When minimal APIs cannot bind a body and `ThrowOnBadRequest` is on (the Development default), the framework throws `BadHttpRequestException`. The middleware catches that exception at lines 31-34 and writes a 400 problem body with code `request.invalid`. In Production the framework writes a bare 400 itself, so this code never appears; and no HTTP test sends an unknown property.\n\nWhy the others are wrong:\n- `BoardDtos.cs:67` throws `card.patch_empty` for an empty body; it is our parser, not the framework error mapping.\n- `BoardService.cs:112-115` is the expected-version check that throws `board.version_conflict`.",
+   "excerpts": [
+    {
+     "path": "src/NetTrello.Api/Middleware/ExceptionHandlingMiddleware.cs",
+     "lineStart": 31,
+     "lineEnd": 34,
+     "quote": "catch (BadHttpRequestException exception) { await WriteProblemAsync(context, StatusCodes.Status400BadRequest, \"request.invalid\", exception.Message); }"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 91,
+     "lineEnd": 94,
+     "quote": "In Production the framework writes a bare 400 itself and the problem body with a `code` never appears."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:nettrello/note/d5c917185e084949",
+   "provenance": {
+    "repo": "nettrello",
+    "sha": "0b5c3bc0f6fe5d51fa15fbecfe9c00a49b8930bc",
+    "path": "astraupskill/01-CODEBASE-MAP.md",
+    "lines": {
+     "start": 7,
+     "end": 7
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r02-omitted-versus-null",
+   "pack": "nettrello",
+   "target": "pack",
+   "phase": "before",
+   "title": "Omitted versus explicit null in a JSON PATCH",
+   "body": "A PATCH request should change only the fields the client sent. That sounds simple, but C# makes it easy to get wrong: if the request class has a normal nullable property, a missing field and a field sent as `null` both arrive as `null`, and the server cannot tell \"leave it alone\" from \"clear it\".\n\nNetTrello solves this by keeping each request field as a raw `JsonElement`. Its `ValueKind` tells three cases apart:\n\n- `Undefined`: the field was not in the body, so keep the stored value;\n- `Null`: the client sent `null`, so clear the field (if it is allowed to be empty);\n- anything else: the client sent a value, which must be checked.\n\n`ResolveAgainst(current)` does this for all six card fields at once and returns a complete set of values for the domain. The domain itself never sees JSON. Before you open the quizzes, read the trace lab section and the parser in `Contracts/BoardDtos.cs`.",
+   "excerpts": [
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": 7,
+     "lineEnd": 7,
+     "quote": "The DTO uses nonnullable `JsonElement`: `JsonValueKind.Undefined` means omitted, while `JsonValueKind.Null` means explicit JSON null. That distinction is the central wire contract."
+    },
+    {
+     "path": "src/NetTrello.Api/Contracts/BoardDtos.cs",
+     "lineStart": 94,
+     "lineEnd": 97,
+     "quote": "private static string? ReadNullableString(JsonElement value, string current, string name) { if (value.ValueKind == JsonValueKind.Undefined) return current; if (value.ValueKind == JsonValueKind.Null) return null;"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/07-TRACE-LAB.md",
+     "lineStart": 15,
+     "lineEnd": 35,
+     "why": "Trace A and the section on why omitted and explicit-null differ."
+    },
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Why the old required-property request turned a title-only PATCH into a wipe of every other field."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:nettrello/note/daf1307ca4b28236",
+   "provenance": {
+    "repo": "nettrello",
+    "sha": "0b5c3bc0f6fe5d51fa15fbecfe9c00a49b8930bc",
+    "path": "src/NetTrello.Api/Application/BoardService.cs",
+    "lines": {
+     "start": 77,
+     "end": 79
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q07-patch-reads-current-card",
+   "pack": "nettrello",
+   "target": "seed:quests:nettrello/quiz/bcf92917dc57abe1",
+   "phase": "after",
+   "title": "Where the PATCH reads the current card",
+   "body": "An omitted field can only be \"kept\" if something reads its current value. In `BoardService.UpdateCardAsync`, inside the repository callback, line 77 gets the card from the cloned board, line 78 passes it to `request.ResolveAgainst(card)` so omitted fields are filled from it, and line 79 hands the complete values to `board.UpdateCard`. That is the spot the practice chapter asks you to mark.\n\nWhy the others are wrong:\n- `BoardEndpoints.cs:46-51` is `ReadExpectedVersion`; it reads the version header, not the card.\n- `InMemoryBoardRepository.cs:78` stores a clone of the finished board after the callback; by then the card has already been resolved.",
+   "excerpts": [
+    {
+     "path": "src/NetTrello.Api/Application/BoardService.cs",
+     "lineStart": 77,
+     "lineEnd": 79,
+     "quote": "var card = board.GetCard(cardId); var values = request.ResolveAgainst(card); board.UpdateCard(cardId, values.Title, values.Description, values.Priority, values.AssigneeId, values.DueDate, values.Labels, _clock.UtcNow);"
+    },
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "mark where the current card is read (`BoardService.cs:77-79`)"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:nettrello/note/dff05ed3a74092fd",
+   "provenance": {
+    "repo": "nettrello",
+    "sha": "0b5c3bc0f6fe5d51fa15fbecfe9c00a49b8930bc",
+    "path": "astraupskill/01-CODEBASE-MAP.md",
+    "lines": {
+     "start": 3,
+     "end": 3
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r01-start-here",
+   "pack": "nettrello",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: a small board API and the order to read its course",
+   "body": "NetTrello is a small ASP.NET Core API for a Trello-style board (columns that hold cards), plus a React client you can ignore for this pack. The course lives in `astraupskill/`. Read it in this order:\n\n1. `01-CODEBASE-MAP.md` - who owns what: the thin endpoint file, `BoardService`, the domain classes (`Board`, `BoardColumn`, `Card`) and the in-memory repository.\n2. `03-WORKED-CHANGE.md` - the two repairs the course is about: a PATCH that keeps omitted fields, and moves that check everything before changing anything.\n3. `07-TRACE-LAB.md` - three requests followed step by step through the code.\n4. `05-PRACTICE.md` - nine exercises, each with a Goal and a Check.\n5. `06-SOLUTIONS-AND-REVIEW.md` - the answers and three verified review findings (A, B, C).\n\nKeep the source open beside the chapters. The big question the course keeps asking is \"what can I observe after a request is rejected?\" A good rejection leaves the board exactly as it was: same cards, same order, same version number.",
+   "excerpts": [
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "The endpoint file stays thin: it binds request records, reads `X-Board-Version`, invokes the service, and returns an HTTP result."
+    },
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "The domain owns invariants."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The course overview: goals of the bounded improvement, prerequisites and a time estimate per chapter."
+    },
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The full map, including the PATCH and move call graphs you will trace."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:nettrello/note/fb66016bd0516a3a",
+   "provenance": {
+    "repo": "nettrello",
+    "sha": "0b5c3bc0f6fe5d51fa15fbecfe9c00a49b8930bc",
+    "path": "src/NetTrello.Api/Contracts/BoardDtos.cs",
+    "lines": {
+     "start": 125,
+     "end": 128
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q01-assignee-not-a-guid",
+   "pack": "nettrello",
+   "target": "seed:quests:nettrello/quiz/16d35cc2a2df2530",
+   "phase": "after",
+   "title": "Why a bad assigneeId gets the generic card.field_invalid code",
+   "body": "The assignee field is parsed by `ReadNullableGuid`. It keeps the old value when the field is omitted, clears it on `null`, and accepts a string only if `Guid.TryParse` succeeds. Anything else, including the string `\"not-a-guid\"`, falls through to one throw that uses the field-generic code `card.field_invalid`. So that is the code the new theory row must expect. The solutions chapter calls this a small reporting gap: the client has to read the message to learn which field failed.\n\nWhy the others are wrong:\n- `request.invalid` is written by the middleware only for a `BadHttpRequestException` from the framework, not for a value our parser rejects.\n- `card.priority_invalid` is the dedicated code for an unknown priority, thrown by `ReadPriority`.\n- `card.assignee_invalid` does not exist in the code; GUID and date fields never got dedicated codes.",
+   "excerpts": [
+    {
+     "path": "src/NetTrello.Api/Contracts/BoardDtos.cs",
+     "lineStart": 125,
+     "lineEnd": 128,
+     "quote": "if (value.ValueKind == JsonValueKind.Undefined) return current; if (value.ValueKind == JsonValueKind.Null) return null; if (value.ValueKind == JsonValueKind.String && Guid.TryParse(value.GetString(), out var parsed)) return parsed; throw DomainException.BadRequest(\"card.field_invalid\", $\"{name} must be a GUID or null.\");"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 61,
+     "lineEnd": 63,
+     "quote": "Exercise 9: `card.field_invalid`. It is a real, if minor, reporting gap: a client cannot tell which field failed from the code alone and must parse the message. Priority and labels got dedicated codes; GUID and date fields did not."
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}

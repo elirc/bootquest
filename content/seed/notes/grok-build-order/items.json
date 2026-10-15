@@ -1,0 +1,625 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "notes",
+ "name": "grok-build-order",
+ "items": [
+  {
+   "key": "seed:notes:grok-build-order/note/0c58ee26d4a371d4",
+   "provenance": {
+    "repo": "grok-build-order",
+    "sha": "077788551cd8a7eaca53bc067decb558a98440a0",
+    "path": "backend/src/repositories/orderRepository.ts",
+    "lines": {
+     "start": 12,
+     "end": 12
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q08-lock-order",
+   "pack": "grok-build-order",
+   "target": "seed:quests:grok-build-order/quiz/8443408bed728cb0",
+   "phase": "after",
+   "title": "Two sort rules for one lock order",
+   "body": "To avoid deadlocks, every transaction should lock product rows in the same order. `create` sorts cart lines with JavaScript `localeCompare`. Cancellation instead walks `order.items`, which the database returns sorted by `orderBy: { productId: 'asc' }`. With Prisma `cuid()` ids those two orders agree today. But ids with mixed case or punctuation could sort differently under the two rules, and then two transactions could lock the same rows in opposite orders. Using one plain comparison everywhere removes the question.\n\nWhy the others are wrong:\n- **localeCompare is too slow:** carts have at most 50 items; the review is about consistency, not speed.\n- **Cancellation should not lock rows:** it updates product stock, and an update takes a row lock.\n- **The database ignores orderBy in a transaction:** it does not; the order comes from the database sort.",
+   "excerpts": [
+    {
+     "path": "backend/src/repositories/orderRepository.ts",
+     "lineStart": 12,
+     "lineEnd": 12,
+     "quote": "const requested = [...input.items].sort((a, b) => a.productId.localeCompare(b.productId));"
+    },
+    {
+     "path": "backend/src/repositories/orderRepository.ts",
+     "lineStart": 4,
+     "lineEnd": 4,
+     "quote": "const details = { items: { orderBy: { productId: 'asc' as const } } };"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 13,
+     "lineEnd": 13,
+     "quote": "With ids whose collation differs from `localeCompare` (mixed case, punctuation), two transactions could take row locks in opposite orders."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:grok-build-order/note/2c22c3ee386a2622",
+   "provenance": {
+    "repo": "grok-build-order",
+    "sha": "077788551cd8a7eaca53bc067decb558a98440a0",
+    "path": "backend/src/validation.ts",
+    "lines": {
+     "start": 9,
+     "end": 9
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q06-not-authorization",
+   "pack": "grok-build-order",
+   "target": "seed:quests:grok-build-order/quiz/4fd43c011c8b65d0",
+   "phase": "after",
+   "title": "Consistency is not authorization",
+   "body": "Transactions make the data consistent: all writes or none. They say nothing about **who** is allowed to make a request. In this project the customer reference `userId` is just a string in the request body, and `cors()` accepts every origin, so any local client can cancel or fulfill any order id. The concepts chapter states that transactions do not establish authorization.\n\nWhy the others are wrong (these *are* established):\n- **Price history:** order items copy `productName` and `price` at creation, so old orders keep the paid price.\n- **Atomicity:** the reservation loop runs inside one transaction; a throw rolls back every earlier reservation.\n- **Non-negative stock:** the conditional decrement with `stock: { gte }` never lets stock drop below 0.",
+   "excerpts": [
+    {
+     "path": "backend/src/validation.ts",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "userId: z.string().trim().min(1).max(100),"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 38,
+     "lineEnd": 38,
+     "quote": "Customer references are caller-controlled, so transactions do not establish authorization."
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 17,
+     "lineEnd": 17,
+     "quote": "`cors()` accepts every origin (`app.ts:12`) and `userId` is caller-supplied (`validation.ts:9`)"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:grok-build-order/note/4aa053ea5e0b0c29",
+   "provenance": {
+    "repo": "grok-build-order",
+    "sha": "077788551cd8a7eaca53bc067decb558a98440a0",
+    "path": "backend/src/repositories/orderRepository.ts",
+    "lines": {
+     "start": 35,
+     "end": 39
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q11-status-guard",
+   "pack": "grok-build-order",
+   "target": "seed:quests:grok-build-order/quiz/e2a513c1e6dea3b6",
+   "phase": "after",
+   "title": "Only one cancellation can match PENDING",
+   "body": "`transition` pre-checks that the order is PENDING, and then repeats that rule inside the write: `updateMany({ where: { id, status: PENDING }, data: { status: target } })`. Two racing cancellations both get past the pre-check, but only one `updateMany` can match a PENDING row; after it commits, the order is CANCELLED and the other one changes 0 rows and throws 409. The stock restore runs after that check, so it runs only for the winner.\n\nWhy the others are wrong:\n- **A trigger reverses it:** there is no trigger; the second request never reaches the restore.\n- **The order's version column:** `Order` has no version column, so the review says transitions are guarded by status, not version.\n- **Absolute value:** the restore is an `increment`, so doing it twice would matter. That is why the guard is needed.",
+   "excerpts": [
+    {
+     "path": "backend/src/repositories/orderRepository.ts",
+     "lineStart": 35,
+     "lineEnd": 39,
+     "quote": "if (order.status !== OrderStatus.PENDING) throw new HttpError(409, 'Only pending orders can transition.'); const changed = await tx.order.updateMany({ where: { id, status: OrderStatus.PENDING }, data: { status: target } }); if (!changed.count) throw new HttpError(409, 'Order status changed. Refresh and retry.'); if (target === OrderStatus.CANCELLED) { for (const item of order.items) await tx.product.update({ where: { id: item.productId }, data: { stock: { increment: item.quantity }, version: { increment: 1 } } });"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 15,
+     "lineEnd": 15,
+     "quote": "Because `Order` has no version column (`schema.prisma:27-35`)"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:grok-build-order/note/54115995ebe42174",
+   "provenance": {
+    "repo": "grok-build-order",
+    "sha": "077788551cd8a7eaca53bc067decb558a98440a0",
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "lines": {
+     "start": 157,
+     "end": 157
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q05-tx-not-db",
+   "pack": "grok-build-order",
+   "target": "seed:quests:grok-build-order/quiz/4dd3ff3861259867",
+   "phase": "after",
+   "title": "Why the ledger must write through tx",
+   "body": "Inside `db.$transaction(async tx => ...)`, only writes made through `tx` belong to the transaction. A write made through the outer `db` client is a separate statement that commits by itself. So if the order later fails and the transaction rolls back, a ledger row written with `db` would stay behind and describe a stock change that never happened. The guide calls this \"the exact bug the exercise is checking for\". The stock change and its ledger row must commit together.\n\nWhy the others are wrong:\n- **db is not connected inside a callback:** `db` still works; that is why the bug is easy to write.\n- **Rejected by the unique index while tx is open:** the unique index is about duplicate movements, not about which client writes.\n- **tx is faster / bulk:** speed is not the reason; atomicity is.",
+   "excerpts": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 157,
+     "lineEnd": 157,
+     "quote": "`tx`, not `db`. Using `db` there is the exact bug the exercise is checking for: the ledger row would survive a rolled-back reservation and the balance would stop explaining the stock."
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 127,
+     "lineEnd": 127,
+     "quote": "the stock delta and its explanation commit together"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:grok-build-order/note/5cde6d34549e504a",
+   "provenance": {
+    "repo": "grok-build-order",
+    "sha": "077788551cd8a7eaca53bc067decb558a98440a0",
+    "path": "backend/src/repositories/orderRepository.ts",
+    "lines": {
+     "start": 20,
+     "end": 23
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q01-rollback",
+   "pack": "grok-build-order",
+   "target": "seed:quests:grok-build-order/quiz/1f57719bb7f7a8e4",
+   "phase": "after",
+   "title": "One failed reservation rolls back the others",
+   "body": "`create` runs the whole reservation loop and the order insert inside one `db.$transaction`. When the second product has too little stock, the code throws an `HttpError(409, ...)`. A throw inside an interactive transaction aborts it, so PostgreSQL undoes every earlier write made through `tx`, including the first product's decrement. The customer gets a 409 and both products keep their original stock.\n\nWhy the others are wrong:\n- **Stays decremented until cancelled:** there is no order to cancel; the transaction never committed.\n- **Admin restocks by hand:** the rollback restores it automatically.\n- **Partial order / back-order:** the code has no back-order feature; it is all or nothing.",
+   "excerpts": [
+    {
+     "path": "backend/src/repositories/orderRepository.ts",
+     "lineStart": 20,
+     "lineEnd": 23,
+     "quote": "if (product.stock < item.quantity) throw new HttpError(409, `Insufficient stock for ${product.name}.`); // The condition and decrement are one database write, not a read-then-write promise. const reserved = await tx.product.updateMany({ where: { id: product.id, version: product.version, stock: { gte: item.quantity } }, data: { stock: { decrement: item.quantity }, version: { increment: 1 } } }); if (!reserved.count) throw new HttpError(409, 'Inventory changed during checkout. Refresh and retry.');"
+    },
+    {
+     "path": "backend/src/repositories/orderRepository.ts",
+     "lineStart": 27,
+     "lineEnd": 28,
+     "quote": "// Failure here rolls back every earlier reservation in the same transaction. return tx.order.create({ data: { userId: input.userId, total, items: { create: lines } }, include: details });"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 7,
+     "lineEnd": 7,
+     "quote": "An exception aborts the transaction, restoring earlier writes."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:grok-build-order/note/8b1b4fd8768d3c23",
+   "provenance": {
+    "repo": "grok-build-order",
+    "sha": "077788551cd8a7eaca53bc067decb558a98440a0",
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 19,
+     "end": 19
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q03-write-boundary",
+   "pack": "grok-build-order",
+   "target": "seed:quests:grok-build-order/quiz/47e9f75222d5cb8d",
+   "phase": "after",
+   "title": "The where clause, not the if, prevents overselling",
+   "body": "Follow the race table. Both transactions read `stock=1, version=3` and both pass the JavaScript check `product.stock < quantity`. Then T1 runs `updateMany` with `stock: { gte: 1 }` in its `where`; it changes the row. T2 waits on T1's row lock, and when its own `updateMany` runs, PostgreSQL re-checks the `where` against the committed row. It matches nothing, `count` is 0, and T2 throws 409. The condition is checked inside the write, so it cannot be out of date.\n\nWhy the others are wrong:\n- **Transaction runs them one after another from the start:** both transactions read the same row at steps 1-2; they only queue at the write.\n- **The JavaScript check:** step 3 shows both requests pass it; it is a courtesy check for a nice message.\n- **Unique constraint on order items:** the schema's `@@unique([orderId, productId])` only stops one order listing a product twice; two different orders can each hold the same product.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 19,
+     "lineEnd": 19,
+     "quote": "JavaScript check passes too — **both believe they can buy**"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 24,
+     "lineEnd": 24,
+     "quote": "the JavaScript comparison is a *courtesy check* that produces a friendly message in the ordinary case, and it is worthless as a guarantee because both requests pass it."
+    },
+    {
+     "path": "backend/src/repositories/orderRepository.ts",
+     "lineStart": 22,
+     "lineEnd": 23,
+     "quote": "const reserved = await tx.product.updateMany({ where: { id: product.id, version: product.version, stock: { gte: item.quantity } }, data: { stock: { decrement: item.quantity }, version: { increment: 1 } } }); if (!reserved.count) throw new HttpError(409, 'Inventory changed during checkout. Refresh and retry.');"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:grok-build-order/note/93483eba56078c06",
+   "provenance": {
+    "repo": "grok-build-order",
+    "sha": "077788551cd8a7eaca53bc067decb558a98440a0",
+    "path": "backend/src/validation.ts",
+    "lines": {
+     "start": 5,
+     "end": 5
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q04-restore-cap",
+   "pack": "grok-build-order",
+   "target": "seed:quests:grok-build-order/quiz/4c0e9c9affc8f8da",
+   "phase": "after",
+   "title": "An unbounded restore can break the edit form",
+   "body": "Validation says editable stock must be an integer between 0 and 2,000,000,000. But cancellation restores stock with `stock: { increment: item.quantity }` and no upper check. A restore can push a product past the cap. After that, opening the product and saving the unchanged form sends that stock value back, and validation rejects it with 400. The review lesson: every writer of a column must respect the same bounds.\n\nWhy the others are wrong:\n- **Wraps to negative:** the review says it can grow \"up to PostgreSQL's integer limit\"; nothing describes wrap-around.\n- **Clamped inside the update:** the increment has no clamp; it is unconditional.\n- **409 like the ecommerce project:** that sibling refuses with 409; this project does not, which is the finding.",
+   "excerpts": [
+    {
+     "path": "backend/src/validation.ts",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "stock: z.number().int().min(0).max(2_000_000_000)"
+    },
+    {
+     "path": "backend/src/repositories/orderRepository.ts",
+     "lineStart": 39,
+     "lineEnd": 39,
+     "quote": "data: { stock: { increment: item.quantity }, version: { increment: 1 } }"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 11,
+     "lineEnd": 11,
+     "quote": "a restore can push a product past that cap (up to PostgreSQL's integer limit), after which saving the unchanged edit form fails validation with a 400."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:grok-build-order/note/ba028c63c5e8e66c",
+   "provenance": {
+    "repo": "grok-build-order",
+    "sha": "077788551cd8a7eaca53bc067decb558a98440a0",
+    "path": "backend/src/repositories/orderRepository.ts",
+    "lines": {
+     "start": 10,
+     "end": 10
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r02-transactions",
+   "pack": "grok-build-order",
+   "target": "pack",
+   "phase": "before",
+   "title": "Transactions and the conditional update",
+   "body": "A **transaction** groups several database writes so they all commit or all roll back. In this code, `db.$transaction(async tx => ...)` opens one, and every write inside uses `tx`. If any line throws, PostgreSQL undoes everything written through `tx` so far.\n\nA transaction alone does not stop two customers racing for the same row. For that the code uses a **conditional update**: `updateMany` with a `where` that describes what the row must still look like, plus the change in `data`. It returns `count`, the number of rows it changed. A `count` of 0 means the row no longer matched, so the code throws a 409.\n\nThe key idea: a JavaScript `if` runs on values you read earlier, which may already be out of date. A condition inside the `where` is checked by the database at the moment of the write.\n\nRead the race table in `02-CONCEPTS.md` (lines 15-22) slowly, one step at a time.",
+   "excerpts": [
+    {
+     "path": "backend/src/repositories/orderRepository.ts",
+     "lineStart": 10,
+     "lineEnd": 10,
+     "quote": "return db.$transaction(async tx => {"
+    },
+    {
+     "path": "backend/src/repositories/orderRepository.ts",
+     "lineStart": 21,
+     "lineEnd": 23,
+     "quote": "// The condition and decrement are one database write, not a read-then-write promise. const reserved = await tx.product.updateMany({ where: { id: product.id, version: product.version, stock: { gte: item.quantity } }, data: { stock: { decrement: item.quantity }, version: { increment: 1 } } }); if (!reserved.count) throw new HttpError(409, 'Inventory changed during checkout. Refresh and retry.');"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "The database evaluates the condition at the write boundary."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 11,
+     "lineEnd": 24,
+     "why": "The full last-unit race table, step by step."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:grok-build-order/note/ba21554acb455b6c",
+   "provenance": {
+    "repo": "grok-build-order",
+    "sha": "077788551cd8a7eaca53bc067decb558a98440a0",
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 3,
+     "end": 3
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r01-start-here",
+   "pack": "grok-build-order",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: an order system and its invariants",
+   "body": "This pack studies a small React + Express + Prisma + PostgreSQL shop: products with stock, and orders that reserve that stock. The goal of the course is to explain a change across browser, HTTP, business rules and database, and to prove it still works when two people act at once.\n\nSuggested reading order:\n\n1. `astraupskill/README.md` - pacing table and the **glossary** (invariant, transaction, optimistic locking, conditional update, snapshot, terminal state). Read the glossary first; the chapters use these words without stopping.\n2. `astraupskill/01-CODEBASE-MAP.md` - which file does what.\n3. `astraupskill/02-CONCEPTS.md` - the core ideas. It is dense; the README plans a second pass.\n4. `astraupskill/03-WORKED-CHANGE.md` and `04-TESTING-AND-DEBUGGING.md`.\n5. `astraupskill/05-PRACTICE.md`, then `06-SOLUTIONS-AND-REVIEW.md` (only after your own attempt).\n\nKeep `backend/src/repositories/orderRepository.ts` open: it is only 45 lines, and almost every quiz points into it.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "An invariant is a condition that must remain true after a successful operation."
+    },
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 29,
+     "lineEnd": 30,
+     "quote": "- **Invariant** — a condition that is true before an operation and must still be true after it succeeds. Example: stock is never negative. - **Transaction** — a group of database writes that all commit or all roll back. Here, `db.$transaction(async tx => ...)` in the repositories."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Pacing table and the glossary of terms the chapters assume."
+    },
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "A map of the backend and frontend files before you read the concepts."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:grok-build-order/note/ce011f67cfde0925",
+   "provenance": {
+    "repo": "grok-build-order",
+    "sha": "077788551cd8a7eaca53bc067decb558a98440a0",
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "lines": {
+     "start": 21,
+     "end": 21
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q09-overlapping-guards",
+   "pack": "grok-build-order",
+   "target": "seed:quests:grok-build-order/quiz/b4bc9275e927771a",
+   "phase": "after",
+   "title": "Removing one of two guards changes no test",
+   "body": "The reservation `where` has two clauses: `version: product.version` and `stock: { gte: item.quantity }`. Exercise 0 says that removing either one alone leaves all tests green. The loser's `UPDATE` waits for the winner's row lock, then re-checks its `where` against the committed row, and the remaining stock clause is enough to make it match nothing. The stale-form test keeps passing too, because the version is incremented in `data`, not guarded in `where`. Only removing both clauses lets the decrement reach the `Product_stock_nonnegative` constraint.\n\nWhy the others are wrong:\n- **\"Prevents stale inventory forms\" fails:** that protection comes from `version: { increment: 1 }` in `data` and the product PATCH check.\n- **Last-unit race sells twice:** the stock clause still stops the loser.\n- **Prisma requires version in the where:** it does not; a `where` can hold any fields.",
+   "excerpts": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 21,
+     "lineEnd": 21,
+     "quote": "removing either `version: product.version` or `stock: { gte: item.quantity }` alone leaves all 24 tests green."
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 21,
+     "lineEnd": 21,
+     "quote": "\"Prevents stale inventory forms\" keeps passing because the version is incremented in `data`, not guarded in `where`."
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 23,
+     "lineEnd": 23,
+     "quote": "overlapping guards hide each other from the tests"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:grok-build-order/note/d034b230796c89d5",
+   "provenance": {
+    "repo": "grok-build-order",
+    "sha": "077788551cd8a7eaca53bc067decb558a98440a0",
+    "path": "backend/src/repositories/productRepository.ts",
+    "lines": {
+     "start": 12,
+     "end": 15
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r03-versions-and-snapshots",
+   "pack": "grok-build-order",
+   "target": "pack",
+   "phase": "before",
+   "title": "Versions, stale forms and copied history",
+   "body": "**Versions.** Each Product row has a `version` number that goes up on every change. The product editor remembers the version it loaded. When it saves, PATCH sends that version, and the update only applies `where: { id, version }`. If someone else changed the row first, nothing matches and the server answers 409. This is called *optimistic locking*: nobody holds a lock while a human is typing.\n\n**State.** An order starts PENDING and can become CANCELLED or FULFILLED. Those two are terminal: they cannot change again.\n\n**Snapshots.** When an order is created, each line copies the product's name and price at that moment into the order item. Later catalog edits change the Product row, not the old order rows.\n\nAlso notice what this code does *not* do: there is no request idempotency and no real authentication. The concepts chapter lists both as limits.",
+   "excerpts": [
+    {
+     "path": "backend/src/repositories/productRepository.ts",
+     "lineStart": 12,
+     "lineEnd": 15,
+     "quote": "const result = await tx.product.updateMany({ where: { id, version }, data: { ...fields, price: new Prisma.Decimal(fields.price), version: { increment: 1 } } }); if (!result.count) { if (!await tx.product.findUnique({ where: { id } })) throw new HttpError(404, 'Product not found.'); throw new HttpError(409, 'Product changed. Refresh inventory before retrying.');"
+    },
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 37,
+     "lineEnd": 37,
+     "quote": "- **Snapshot** — a copy of a value written at the moment of a business event. `OrderItem.productName` and `OrderItem.price` are snapshots of the catalog at purchase time."
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 38,
+     "lineEnd": 38,
+     "quote": "These guarantees have limits."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 26,
+     "lineEnd": 38,
+     "why": "Optimistic product editing, money and state transitions."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:grok-build-order/note/d5af89531e22f3dc",
+   "provenance": {
+    "repo": "grok-build-order",
+    "sha": "077788551cd8a7eaca53bc067decb558a98440a0",
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "lines": {
+     "start": 191,
+     "end": 191
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q02-idempotency-loser",
+   "pack": "grok-build-order",
+   "target": "seed:quests:grok-build-order/quiz/2c50bb45172ae0bd",
+   "phase": "after",
+   "title": "Why the idempotency loser reports a stock conflict",
+   "body": "In the Exercise 4 sketch, the key lookup happens first, then the normal reservation loop, then the key insert at the end. Two requests with the same key can both miss the lookup and both enter the loop. The second one then waits on the first one's product row lock. When it runs, the version clause at line 22 no longer matches, so it throws 409 \"Inventory changed\" **before** it ever reaches the key insert. The fix is to serialize on the key first (an advisory lock), before the lookup.\n\nWhy the others are wrong:\n- **Fingerprint differs:** both requests describe the same cart, and the sketch already sorts before hashing.\n- **Deadlock + retry:** the second request waits on a lock, it does not deadlock; a retry would hit the same race.\n- **Key insert fails first / catch everything:** the loser fails earlier, and the guide warns that catching every exception turns a connection failure into a wrong 200.",
+   "excerpts": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 191,
+     "lineEnd": 191,
+     "quote": "because of the version clause at line 22, usually fails with 409 \"Inventory changed\" *before* it reaches the key insert"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 191,
+     "lineEnd": 191,
+     "quote": "Serialize on the key first, before the lookup"
+    },
+    {
+     "path": "backend/src/repositories/orderRepository.ts",
+     "lineStart": 22,
+     "lineEnd": 22,
+     "quote": "version: product.version"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:grok-build-order/note/dbe1908c6606c37f",
+   "provenance": {
+    "repo": "grok-build-order",
+    "sha": "077788551cd8a7eaca53bc067decb558a98440a0",
+    "path": "backend/src/repositories/orderRepository.ts",
+    "lines": {
+     "start": 25,
+     "end": 25
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q12-price-snapshot",
+   "pack": "grok-build-order",
+   "target": "seed:quests:grok-build-order/quiz/f071953e88634d1d",
+   "phase": "after",
+   "title": "Order lines keep the name and price they were sold at",
+   "body": "When `create` builds each order line, it copies `productName: product.name` and `price: product.price` into the line, and those rows are saved with the order. Renaming the product or changing its price later only edits the Product row. The old order's items still hold the copied values, so it shows the old name and the old price. The README calls these values *snapshots*: copies written at the moment of a business event.\n\nWhy the others are wrong:\n- **Journal at the new price** and **Journal at the original price:** the order never reads the current product name; it stored its own copy.\n- **An error:** changing a product does not invalidate old orders; referenced order history remains valid.",
+   "excerpts": [
+    {
+     "path": "backend/src/repositories/orderRepository.ts",
+     "lineStart": 25,
+     "lineEnd": 25,
+     "quote": "lines.push({ productId: product.id, productName: product.name, quantity: item.quantity, price: product.price });"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 32,
+     "lineEnd": 32,
+     "quote": "OrderItem stores the catalog name and price at creation, so later renaming Notebook to Journal does not rewrite an earlier purchase description."
+    },
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 37,
+     "lineEnd": 37,
+     "quote": "- **Snapshot** — a copy of a value written at the moment of a business event. `OrderItem.productName` and `OrderItem.price` are snapshots of the catalog at purchase time."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:grok-build-order/note/f2a87295830b2453",
+   "provenance": {
+    "repo": "grok-build-order",
+    "sha": "077788551cd8a7eaca53bc067decb558a98440a0",
+    "path": "backend/src/repositories/productRepository.ts",
+    "lines": {
+     "start": 12,
+     "end": 15
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q10-stale-editor",
+   "pack": "grok-build-order",
+   "target": "seed:quests:grok-build-order/quiz/b5d5373974f2b414",
+   "phase": "after",
+   "title": "A stale editor gets 409 and must not auto-retry",
+   "body": "The product `update` only applies `where: { id, version }`. The editor sends version 4, but the order bumped it to 5, so `count` is 0 and the server answers 409 \"Product changed. Refresh inventory before retrying.\" The draft still holds stock 10, which is out of date. If the UI quietly resent it with version 5, the server would accept it and put back the 2 units the order consumed. So the UI keeps the draft but disables that stale write until the user explicitly reloads current data.\n\nWhy the others are wrong:\n- **Server merges to 8:** there is no merge logic; a mismatched version is refused.\n- **Succeeds and returns to 10:** that is exactly the lost update the version check exists to stop.\n- **Resend automatically with version 5:** the guide says that \"would defeat the purpose of the check\".",
+   "excerpts": [
+    {
+     "path": "backend/src/repositories/productRepository.ts",
+     "lineStart": 12,
+     "lineEnd": 15,
+     "quote": "const result = await tx.product.updateMany({ where: { id, version }, data: { ...fields, price: new Prisma.Decimal(fields.price), version: { increment: 1 } } }); if (!result.count) { if (!await tx.product.findUnique({ where: { id } })) throw new HttpError(404, 'Product not found.'); throw new HttpError(409, 'Product changed. Refresh inventory before retrying.');"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 28,
+     "lineEnd": 28,
+     "quote": "On conflict, the UI preserves the draft but disables that stale write until the learner explicitly reloads current data. It does not quietly attach version `5` to old stock; that would defeat the purpose of the check."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:grok-build-order/note/f99ee531a12a65e9",
+   "provenance": {
+    "repo": "grok-build-order",
+    "sha": "077788551cd8a7eaca53bc067decb558a98440a0",
+    "path": "backend/src/repositories/orderRepository.ts",
+    "lines": {
+     "start": 13,
+     "end": 13
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q07-spurious-409",
+   "pack": "grok-build-order",
+   "target": "seed:quests:grok-build-order/quiz/742e2373529157f6",
+   "phase": "after",
+   "title": "Why a popular product gets spurious 409s",
+   "body": "Reservation reads products with a plain `findMany` (no lock) and then requires the version it read: `where: { id, version: product.version, stock: { gte } }`. Both customers read version 3. T1 updates and bumps the version to 4. T2 waits on the row lock, then PostgreSQL re-checks `version: 3` against the new row: no match, `count` is 0, 409. There were 99 units left, so nothing was wrong with T2's order. The review says the version clause buys little here and costs real orders.\n\nWhy the others are wrong:\n- **Deadlock:** T2 simply waits for one row lock; there is no cycle of locks.\n- **Stock clause fails:** with 99 left, `stock >= 1` still holds; it is the version clause that fails.\n- **It cannot happen:** it can, whenever the two requests overlap.",
+   "excerpts": [
+    {
+     "path": "backend/src/repositories/orderRepository.ts",
+     "lineStart": 13,
+     "lineEnd": 13,
+     "quote": "const products = await tx.product.findMany({ where: { id: { in: requested.map(item => item.productId) } } });"
+    },
+    {
+     "path": "backend/src/repositories/orderRepository.ts",
+     "lineStart": 22,
+     "lineEnd": 22,
+     "quote": "where: { id: product.id, version: product.version, stock: { gte: item.quantity } }"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "T2 waits on the row lock and then re-checks `version: 3` against the new row, matches nothing, and returns 409 \"Inventory changed during checkout\"."
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}
