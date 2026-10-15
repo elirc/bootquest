@@ -1,0 +1,441 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "organized-study-enterprise-billing-platform",
+ "repo": "organized-study-enterprise-billing-platform",
+ "sha": "ce5709d4b7ffea056e0fab7cb30ae65e8687af43",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: a billing monolith, its docs, and its known gaps",
+   "body": "This repo is a teaching-sized SaaS billing system: an Express API (`apps/api`), a BullMQ worker (`apps/worker`), a React console (`apps/web`), shared business rules (`packages/domain`) and a Prisma schema (`packages/db`). It is deliberately unfinished, and the docs say where.\n\nRead in this order:\n\n1. `README.md`, including the section that lists the known gaps.\n2. `docs/walkthroughs/README.md`, then the walkthroughs for domain rules, API app composition, billing routes and worker jobs. Each ends with **Line by line**, **Look for** and **Exercises**.\n3. `docs/system-design-current.md`, which strings the same files into end-to-end workflows.\n\nThe docs were checked against this snapshot but never run (the design doc says so). Treat every line reference as a pointer and read the code it names. The quiz asks what the code does today, which is not always what the design section says it intends. When the two differ, the code wins.",
+   "excerpts": [
+    {
+     "path": "docs/system-design-current.md",
+     "lineStart": 14,
+     "lineEnd": 14,
+     "quote": "The frontend calls the API. The API enforces tenant context and permissions, writes database records, records audit logs, and emits outbox events."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "README.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Overview, local setup and the list of verified gaps."
+    },
+    {
+     "path": "docs/walkthroughs/README.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The reading order for the six code walkthroughs."
+    }
+   ]
+  },
+  {
+   "id": "r02-money-and-invoices",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: integer cents and the invoice calculation",
+   "body": "Billing code stores money as whole **cents** in an integer, so 29.00 dollars is `2900`. Floating-point dollars drift by fractions of a cent, and invoices must add up exactly.\n\nOpen `packages/domain/src/money.ts` and `packages/domain/src/invoice-calculator.ts` side by side. Questions to answer from the code:\n\n- What does `money()` refuse, and what currency does it use when none is given?\n- What does `addMoney` return for each kind of input it can get, and where does its result's currency come from?\n- How are percentages and basis points (1 basis point is 0.01%) turned into cents, and where is `Math.round` called?\n- In `calculateInvoice`, write the steps down in the order the code runs them, and note which amount each step works on.\n\nThen find the two places that build invoices from a subscription (one in the worker, one in the API) and compare how each picks the price, the coupon and the tax rate. Try one invoice by hand with the numbers from Exercise 1 in the design doc before you check the result.",
+   "excerpts": [
+    {
+     "path": "packages/domain/src/money.ts",
+     "lineStart": 9,
+     "lineEnd": 11,
+     "quote": "throw new Error(\"Money amounts must be stored as integer cents.\");"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "packages/domain/src/invoice-calculator.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The whole invoice calculation in one short function."
+    },
+    {
+     "path": "docs/walkthroughs/domain-rules.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Line notes and review findings on the domain package."
+    }
+   ]
+  },
+  {
+   "id": "r03-requests-and-workflows",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: who is calling, what may they do, and what runs later",
+   "body": "Three pieces decide what any request does.\n\n**Tenant context.** `attachTenantContext` in `apps/api/src/shared/auth.ts` works out the organization and user from two development headers. Read it and note what it does when a header is missing and when no membership matches. Then read the error handler at the bottom of `apps/api/src/app.ts` and write down every status it can produce and the rule that picks one.\n\n**Permissions.** `packages/domain/src/permissions.ts` maps five roles to actions. Make a small table of role against permission, then note which permission each billing route asserts.\n\n**Idempotency and background work.** `runIdempotent` has several branches; for each, note what it reads, whether it runs the work, and when it writes the key row. Note what exactly is hashed. Finally read `attemptPayment` and `processOutboxBatch` in the worker, and list which statuses each one reads before acting and which it writes.",
+   "excerpts": [
+    {
+     "path": "docs/system-design-current.md",
+     "lineStart": 60,
+     "lineEnd": 60,
+     "quote": "runs the work directly if there is no `idempotency-key` header"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "apps/api/src/shared/auth.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Tenant context from headers and the permission check."
+    },
+    {
+     "path": "apps/api/src/shared/idempotent.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The idempotency helper used by subscription creation."
+    },
+    {
+     "path": "docs/walkthroughs/worker-jobs.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The worker loop, its jobs and the outbox, with review notes."
+    }
+   ]
+  },
+  {
+   "id": "x-q01",
+   "target": "seed:quests:organized-study-enterprise-billing-platform/quiz/78a854c8125df737",
+   "phase": "after",
+   "title": "Why the Pro invoice comes to 8476 cents",
+   "body": "Three seats at 2900 cents make an 8700 subtotal. `calculateInvoice` applies the coupon to that sum first: 10% off leaves 7830, so the discount is **870**. Tax is then charged on the discounted 7830: 7830 times 825/10000 is 645.975, which `Math.round` makes **646**. The total is the discounted subtotal plus tax, **8476**, the figure Exercise 1 of the design doc expects.\n\n- *Tax 718, total 8548* charges tax on the undiscounted 8700.\n- *Tax 645, total 8475* truncates instead of rounding.\n- *Discount 0, tax 718, total 9418* ignores the coupon entirely.",
+   "excerpts": [
+    {
+     "path": "packages/domain/src/invoice-calculator.ts",
+     "lineStart": 35,
+     "lineEnd": 39,
+     "quote": "const discountedSubtotal = input.couponPercentOff"
+    },
+    {
+     "path": "packages/domain/src/invoice-calculator.ts",
+     "lineStart": 39,
+     "lineEnd": 39,
+     "quote": "const tax = applyTax(discountedSubtotal, input.taxBasisPoints ?? 0);"
+    },
+    {
+     "path": "packages/domain/src/money.ts",
+     "lineStart": 52,
+     "lineEnd": 52,
+     "quote": "const tax = Math.round(value.cents * (basisPoints / 10_000));"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02",
+   "target": "seed:quests:organized-study-enterprise-billing-platform/quiz/c81d55cea8377054",
+   "phase": "after",
+   "title": "Why an empty EUR invoice reports a USD subtotal",
+   "body": "`calculateInvoice` sums the line subtotals with `addMoney`. With no lines, `addMoney` returns `money(0)` straight away, and `money` defaults its currency to USD; the invoice currency is never passed to it. So the subtotal is 0 USD. The domain walkthrough points this out, and its Exercise 3 asks you to pass the currency in.\n\n- *EUR from the input currency* is wrong: only the line subtotals and the discount use `input.currency`; the empty sum does not.\n- *It throws* is wrong: the empty case returns before the reducer that checks currencies.\n- *EUR subtotal, USD tax* is backwards: the tax is computed from the USD subtotal, so both are USD; it is the discount that comes out in EUR.",
+   "excerpts": [
+    {
+     "path": "packages/domain/src/money.ts",
+     "lineStart": 17,
+     "lineEnd": 19,
+     "quote": "if (values.length === 0) { return money(0); }"
+    },
+    {
+     "path": "packages/domain/src/money.ts",
+     "lineStart": 8,
+     "lineEnd": 8,
+     "quote": "export function money(cents: number, currency: CurrencyCode = \"USD\"): Money {"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q03",
+   "target": "seed:quests:organized-study-enterprise-billing-platform/quiz/7b3e0727679652d4",
+   "phase": "after",
+   "title": "Why a request with no headers acts as the acme owner",
+   "body": "There is no real authentication yet. `attachTenantContext` reads `x-org-slug` and `x-user-email`, and when either is missing it substitutes a default: the slug `acme` and `config.defaultUserEmail`, which itself defaults to `owner@acme.test`. The seeded membership for that pair exists, so the request runs with the owner's role and permissions. The design doc lists header auth as a temporary trade-off.\n\n- *401* is wrong: nothing in the API ever returns 401.\n- *An anonymous read-only caller* is wrong: there is no anonymous role; the defaults name a real member.\n- *A 400 from an empty lookup* is wrong: the lookup is not empty, because the defaults fill both values.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/shared/auth.ts",
+     "lineStart": 14,
+     "lineEnd": 15,
+     "quote": "const organizationSlug = String(request.header(\"x-org-slug\") ?? \"acme\");"
+    },
+    {
+     "path": "apps/api/src/config.ts",
+     "lineStart": 6,
+     "lineEnd": 6,
+     "quote": "DEFAULT_USER_EMAIL: z.string().email().default(\"owner@acme.test\")"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q04",
+   "target": "seed:quests:organized-study-enterprise-billing-platform/quiz/627192225baa0f5a",
+   "phase": "after",
+   "title": "Why a missing membership is a 400",
+   "body": "When no membership joins that user and organization, `attachTenantContext` throws a plain `Error` with a \"No membership found\" message and passes it to `next`. The app has one error handler, and its only rule is: if the message contains \"Missing permission\", answer 403; otherwise answer **400**. This message does not contain that text, so the caller gets 400. The design doc notes the same thing.\n\n- *401* would be the conventional answer for an unknown caller, but this handler never produces it.\n- *403* is used only for the \"Missing permission\" message from `assertPermission`.\n- *404* is never produced by this handler either.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/shared/auth.ts",
+     "lineStart": 28,
+     "lineEnd": 30,
+     "quote": "if (!membership) { throw new Error(`No membership found for ${userEmail} in organization ${organizationSlug}. Run db:seed first.`);"
+    },
+    {
+     "path": "apps/api/src/app.ts",
+     "lineStart": 60,
+     "lineEnd": 60,
+     "quote": "const status = message.includes(\"Missing permission\") ? 403 : 400;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q05",
+   "target": "seed:quests:organized-study-enterprise-billing-platform/quiz/edcceb44a80a7f1d",
+   "phase": "after",
+   "title": "Why support cannot queue a payment",
+   "body": "The pay route begins with `assertPermission(request, \"payments:manage\")`. In the role table, support holds only `org:read`, `billing:read` and `audit:read`, so the check throws \"Missing permission payments:manage.\" The error handler sees that text and answers **403**, and nothing is queued.\n\n- *202, support may queue but not refund* is wrong: there is no separate refund permission, and support fails the one check this route makes.\n- *202, the route only checks the invoice exists* is wrong: the permission check comes before the invoice lookup.\n- *403, only owners may queue* has the right status for the wrong reason: admin and billing_manager also hold `payments:manage`.",
+   "excerpts": [
+    {
+     "path": "packages/domain/src/permissions.ts",
+     "lineStart": 36,
+     "lineEnd": 36,
+     "quote": "support: [\"org:read\", \"billing:read\", \"audit:read\"],"
+    },
+    {
+     "path": "apps/api/src/modules/billing.routes.ts",
+     "lineStart": 235,
+     "lineEnd": 235,
+     "quote": "const tenant = assertPermission(request, \"payments:manage\");"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q06",
+   "target": "seed:quests:organized-study-enterprise-billing-platform/quiz/d6dde59fcaa83d6a",
+   "phase": "after",
+   "title": "Why the same idempotency key can still create two subscriptions",
+   "body": "`runIdempotent` is check-then-act. It looks the key up, finds nothing, runs the work, and only after the work returns does it upsert the key row with the response. Two requests that arrive together both find no key, both run the subscription transaction, and both commit. The README lists this as a known gap and the billing-routes walkthrough suggests inserting the key row before running the work.\n\n- *Waits on a row lock* is wrong: no lock is taken, and the key row does not exist yet to lock.\n- *Refused as a key reused with another payload* needs a different body; these bodies match.\n- *The second insert rolls back* is wrong: each subscription commits in its own transaction before the key is written, and no unique rule ties a subscription to a key.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/shared/idempotent.ts",
+     "lineStart": 10,
+     "lineEnd": 12,
+     "quote": "if (!input.key) { return input.run(); }"
+    },
+    {
+     "path": "apps/api/src/shared/idempotent.ts",
+     "lineStart": 34,
+     "lineEnd": 35,
+     "quote": "const response = await input.run(); await prisma.idempotencyKey.upsert({"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07",
+   "target": "seed:quests:organized-study-enterprise-billing-platform/quiz/c4a84b8cf8b2ff77",
+   "phase": "after",
+   "title": "Why an explicit default still replays the stored response",
+   "body": "The route parses the body with `createSubscriptionSchema` first and passes the parsed object to `runIdempotent` as the payload. The schema fills `periodDays` with 30 when it is missing, so the first request's payload already contains `periodDays: 30`. The retry spells it out, and the parsed objects are equal. The hash uses a stable stringify that sorts object keys, so the order of fields does not matter either. Same key, same hash, and a stored response: it is returned.\n\n- *400, different hash* would be right only if the raw body were hashed.\n- *A second subscription* is wrong: the stored response is found first.\n- *409* is wrong: a real payload mismatch throws a plain Error, which this API reports as 400, not 409.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/modules/billing.routes.ts",
+     "lineStart": 129,
+     "lineEnd": 129,
+     "quote": "const body = createSubscriptionSchema.parse(request.body);"
+    },
+    {
+     "path": "apps/api/src/modules/billing.routes.ts",
+     "lineStart": 359,
+     "lineEnd": 359,
+     "quote": "periodDays: z.number().int().positive().max(366).default(30),"
+    },
+    {
+     "path": "packages/domain/src/idempotency.ts",
+     "lineStart": 17,
+     "lineEnd": 18,
+     "quote": "return `{${Object.keys(object) .sort()"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08",
+   "target": "seed:quests:organized-study-enterprise-billing-platform/quiz/787b77c16f7393a4",
+   "phase": "after",
+   "title": "Why a retry after a Redis failure duplicates the subscription",
+   "body": "Inside `run`, the subscription, audit log and outbox event commit in one Prisma transaction. Only then does the route call `billingQueue.add`. If Redis is down that call throws, so `run` throws, and `runIdempotent` never reaches the upsert that stores the key. The committed subscription stays. The retry finds no key, runs the work again and creates a second subscription; the design doc describes exactly this.\n\n- *Replays from its key row* is wrong: no key row was stored.\n- *The first was rolled back* is wrong: the transaction had already committed before the enqueue.\n- *Marked in progress* is wrong: there is no in-progress marker; the key row is written only after success.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/modules/billing.routes.ts",
+     "lineStart": 182,
+     "lineEnd": 182,
+     "quote": "await billingQueue.add(\"generate-invoice\", {"
+    },
+    {
+     "path": "docs/system-design-current.md",
+     "lineStart": 64,
+     "lineEnd": 64,
+     "quote": "a retry with the same key creates a second subscription."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09",
+   "target": "seed:quests:organized-study-enterprise-billing-platform/quiz/beed133ce2884351",
+   "phase": "after",
+   "title": "Why the dashboard total misses most open invoices",
+   "body": "The dashboard does not ask the database for a sum. It loads the **8 newest invoices** of any status and then, in JavaScript, keeps the open ones and adds their totals. With 5 newer paid invoices, those 8 rows are the 5 paid ones plus the 3 newest open ones, so `openInvoiceTotal` covers 3 of the 12 open invoices. Exercise 3 of the billing-routes walkthrough replaces this with an aggregate.\n\n- *All 12 through an aggregate* describes the fix, not the code.\n- *The 8 newest open invoices* would need the status filter in the query; it is applied after the 8 rows are fetched.\n- *All 17, paid included* is wrong: the filter keeps only status open.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/modules/billing.routes.ts",
+     "lineStart": 28,
+     "lineEnd": 29,
+     "quote": "orderBy: { createdAt: \"desc\" }, take: 8"
+    },
+    {
+     "path": "apps/api/src/modules/billing.routes.ts",
+     "lineStart": 42,
+     "lineEnd": 42,
+     "quote": "openInvoiceTotal: invoices.filter((invoice) => invoice.status === \"open\")"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10",
+   "target": "seed:quests:organized-study-enterprise-billing-platform/quiz/44f1be33462c63b7",
+   "phase": "after",
+   "title": "Why a void invoice can still end up paid",
+   "body": "`attemptPayment` checks only one status: it returns early if the invoice is already paid. A void invoice passes that check. The mock provider declines only when the total is divisible by 7, and 8476 is not, so a succeeded Payment is created and the invoice is updated to paid. The domain package has an invoice state machine that forbids leaving void, but no job or route calls it.\n\n- *Throws \"Cannot transition...\"* is what Exercise 4 of the design doc makes happen after you wire `transitionInvoice` in.\n- *Returns early, void is terminal* is wrong: only `paid` is checked.\n- *A failed payment* is wrong: the success rule depends only on the total.",
+   "excerpts": [
+    {
+     "path": "apps/worker/src/jobs.ts",
+     "lineStart": 116,
+     "lineEnd": 118,
+     "quote": "if (invoice.status === \"paid\") {"
+    },
+    {
+     "path": "apps/worker/src/jobs.ts",
+     "lineStart": 120,
+     "lineEnd": 120,
+     "quote": "const succeeds = invoice.total % 7 !== 0;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q11",
+   "target": "seed:quests:organized-study-enterprise-billing-platform/quiz/504934c63bf4227c",
+   "phase": "after",
+   "title": "Why a crashed outbox event is stuck forever",
+   "body": "`processOutboxBatch` selects only events whose status is pending. For each one it first writes processing, then logs and writes processed. A crash between those writes leaves the row in processing, and no query ever selects processing rows, so it is never retried. The worker walkthrough calls this state a trap and its Exercise 4 adds a `lockedAt` column to reclaim such rows.\n\n- *Retried after a 30-second backoff* and *failed after five tries* both describe the `catch` block, which only runs when an error is thrown inside the loop, not when the process dies.\n- *Back to pending on the next poll* is wrong: the 5-second poll does not touch processing rows.",
+   "excerpts": [
+    {
+     "path": "apps/worker/src/outbox-processor.ts",
+     "lineStart": 5,
+     "lineEnd": 7,
+     "quote": "where: { status: \"pending\", availableAt: { lte: new Date() }"
+    },
+    {
+     "path": "apps/worker/src/outbox-processor.ts",
+     "lineStart": 36,
+     "lineEnd": 36,
+     "quote": "status: attempts >= 5 ? \"failed\" : \"pending\","
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q12",
+   "target": "seed:quests:organized-study-enterprise-billing-platform/quiz/668d095ba86fbfa8",
+   "phase": "after",
+   "title": "Why one tenant can mark another tenant's payment paid",
+   "body": "The mock webhook calls only `requireTenant`, so any member of any organization may use it. It then updates the payment by `id` alone, with no organization filter, and on `payment.succeeded` it also marks that payment's invoice paid. A beta member who knows an acme payment id therefore changes acme's payment and invoice. The audit and outbox rows are even written under acme's organization id, taken from the payment. The README lists this as the first known gap.\n\n- *404* is what the design doc's Exercise 3 fix would return.\n- *403* is wrong: the route asserts no permission at all.\n- *Recorded but left alone* is wrong: the event row is created and then the payment is updated in the same request.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/modules/payments.routes.ts",
+     "lineStart": 30,
+     "lineEnd": 30,
+     "quote": "const tenant = requireTenant(request);"
+    },
+    {
+     "path": "apps/api/src/modules/payments.routes.ts",
+     "lineStart": 51,
+     "lineEnd": 52,
+     "quote": "const payment = await tx.payment.update({ where: { id: body.paymentId },"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-g1",
+   "target": "seed:quests:organized-study-enterprise-billing-platform/quiz/7a23dfb01bb3cb07",
+   "phase": "after",
+   "title": "Matching the end-to-end trace to its check",
+   "body": "This goal runs the whole happy path: create a Pro subscription, let the worker invoice it, then queue a payment. The check that verifies it is the one that names the resulting numbers (subtotal 8700, discount 870, tax 646, total 8476), explains why the mock payment succeeds, and lists the three outbox events moving to processed.\n\n- The check about a second invoice with the next `INV-` number belongs to the duplicate-invoice exercise.\n- The check about a 404 for another organization's payment id belongs to the webhook-scoping exercise.\n- The check about \"Cannot transition invoice from void to paid.\" belongs to the state-machine exercise.",
+   "excerpts": [
+    {
+     "path": "docs/system-design-current.md",
+     "lineStart": 108,
+     "lineEnd": 109,
+     "quote": "the new invoice has subtotal 8700, discount 870, tax 646 and total 8476 (all in cents)"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-g2",
+   "target": "seed:quests:organized-study-enterprise-billing-platform/quiz/1b74685a3b2d78a3",
+   "phase": "after",
+   "title": "Matching the duplicate-invoice goal to its check",
+   "body": "The goal calls the manual invoice endpoint again for a subscription that already has an invoice. The check that verifies it expects a **second invoice for the same period** with the next `INV-` number, because only the worker checks for an existing invoice in the period, and then asks you to add that check to the API copy.\n\n- The check listing subtotal 8700 and total 8476 verifies the end-to-end trace.\n- The check about a 404 for a payment id from acme verifies the webhook fix.\n- The check about a void invoice failing the job verifies wiring in the state machine.",
+   "excerpts": [
+    {
+     "path": "docs/system-design-current.md",
+     "lineStart": 111,
+     "lineEnd": 112,
+     "quote": "a second invoice is created for the same period with the next `INV-` number."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-g3",
+   "target": "seed:quests:organized-study-enterprise-billing-platform/quiz/cb3d6f7b1eb8f0cc",
+   "phase": "after",
+   "title": "Matching the webhook-scoping goal to its check",
+   "body": "The goal changes the webhook's payment lookup to include `organizationId` and return 404 when nothing matches. The check that verifies it sends a request with `x-org-slug` set to another organization and a payment id from acme, and expects **404 with the payment's status unchanged**. That is the cross-tenant write the README lists, now closed.\n\n- The check with the invoice totals verifies the end-to-end trace.\n- The check about a second `INV-` number verifies the duplicate-invoice gap.\n- The check about the void-to-paid error verifies the state-machine exercise.",
+   "excerpts": [
+    {
+     "path": "docs/system-design-current.md",
+     "lineStart": 115,
+     "lineEnd": 115,
+     "quote": "and a payment ID from `acme` returns 404, and the payment's status is unchanged."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-g4",
+   "target": "seed:quests:organized-study-enterprise-billing-platform/quiz/b048c484e13069da",
+   "phase": "after",
+   "title": "Matching the state-machine goal to its check",
+   "body": "The goal puts `transitionInvoice(invoice.status, \"paid\")` in front of the status writes in `attemptPayment` and the webhook. The check that verifies it sets an invoice to void and queues a payment: the job must now fail with \"Cannot transition invoice from void to paid.\" instead of recording a successful payment, because void has no allowed transitions.\n\n- The check with subtotal 8700 and total 8476 verifies the end-to-end trace.\n- The check about a second invoice for the same period verifies the duplicate-invoice exercise.\n- The check about a 404 for another organization's payment verifies the webhook exercise.",
+   "excerpts": [
+    {
+     "path": "docs/system-design-current.md",
+     "lineStart": 118,
+     "lineEnd": 118,
+     "quote": "now fails the job with \"Cannot transition invoice from void to paid.\" instead of creating a successful payment."
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}
