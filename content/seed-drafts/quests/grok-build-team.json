@@ -26,11 +26,11 @@
         }
       ],
       "prompt": "A Cedar member sends a valid token with x-org-id: demo_maple, an organization they do not belong to. What happens?",
-      "answer": "403 after a membership lookup, before any project or task query",
+      "answer": "403 after the membership lookup, before any project or task query runs",
       "distractors": [
-        "200 with an empty project list, because every Maple query is filtered by the caller's own memberships",
-        "401, because the token's subject was issued for Cedar and cannot be used with another organization",
-        "404, because the organization id is hidden"
+        "200 with an empty project list, as Maple queries filter by the caller",
+        "401, because a token issued for Cedar cannot be used for another org",
+        "404, because the server hides that the Maple organization exists at all"
       ],
       "explanation": "The header selects; the membership row authorizes. The only query touching Maple is findUnique on (userId, organizationId)."
     },
@@ -52,11 +52,11 @@
         }
       ],
       "prompt": "An authenticated request arrives with no x-org-id header at all. What does attachTenantContext return?",
-      "answer": "400, before the membership lookup",
+      "answer": "400 for a malformed request, before the membership lookup runs",
       "distractors": [
-        "403, after looking up the caller's default organization",
-        "200, using the first organization the user belongs to",
-        "401, because the tenant context is missing"
+        "403 after looking up the caller's default organization membership",
+        "200, scoped to the first organization the caller belongs to",
+        "401, because the tenant context counts as missing credentials"
       ],
       "explanation": "identity.safeParse on the header fails, so the request is rejected as malformed before any database read."
     },
@@ -78,11 +78,11 @@
         }
       ],
       "prompt": "A user was removed from Cedar an hour ago but still holds a valid token. Their next Cedar request returns what, and why?",
-      "answer": "403: the membership row is read per request and is gone",
+      "answer": "403, because the membership row is read per request and is now gone",
       "distractors": [
-        "200 until the token expires",
-        "401, because removal revokes the token",
-        "200 with read-only access"
+        "200 until the token expires, as the role was baked into the token",
+        "401, because removing a member revokes every token they hold",
+        "200 with read-only access until an owner reassigns their tasks"
       ],
       "explanation": "Role is not a global user property baked into the token; it is read per request for the selected organization."
     },
@@ -109,11 +109,11 @@
         }
       ],
       "prompt": "A user is OWNER of Cedar and a regular MEMBER of Maple. They try to change a Maple project. What happens?",
-      "answer": "403: their Maple role is MEMBER",
+      "answer": "403, because the role comes from their Maple membership, MEMBER",
       "distractors": [
-        "200: OWNER anywhere grants owner rights everywhere",
-        "200: project changes only need membership",
-        "404: Maple projects are invisible to Cedar owners"
+        "200, because an OWNER role anywhere grants owner rights in every team",
+        "200, because changing a project only requires being a team member",
+        "404, because Maple projects are invisible to owners of Cedar"
       ],
       "explanation": "Treating role as a global user property would grant incorrect privileges; requireManager checks the per-organization role."
     },
@@ -135,11 +135,11 @@
         }
       ],
       "prompt": "A Cedar task is assigned to a user who exists only in Maple. What does the API respond?",
-      "answer": "400: they have no membership in the task's organization",
+      "answer": "400, as the user has no membership in the task's organization",
       "distractors": [
-        "200: any real user can be assigned",
-        "403: only owners can assign outsiders",
-        "200, and the user is added to Cedar automatically"
+        "200, as any registered user in the system can be assigned a task",
+        "403, as only team owners are allowed to assign outside users",
+        "200, and the user is added to Cedar as a member automatically"
       ],
       "explanation": "A real user is not necessarily a member of the selected team; the API check gives a helpful response and the compound foreign key is the database backstop."
     },
@@ -166,11 +166,11 @@
         }
       ],
       "prompt": "Why does the assignee foreign key reference OrganizationMember(userId, organizationId) instead of just User(id)?",
-      "answer": "A User FK proves existence; the composite FK proves membership in the task's organization",
+      "answer": "A User FK proves the user exists, the composite FK proves team membership",
       "distractors": [
-        "Because PostgreSQL cannot reference the User table from Task when both tables live in the same schema",
-        "To make assignee lookups faster through the composite index that the foreign key creates automatically",
-        "Because User ids are not unique across organizations"
+        "PostgreSQL cannot reference the User table from Task inside one schema",
+        "It makes assignee lookups faster via the index the foreign key creates for it",
+        "User ids are not unique across organizations, so the pair is needed"
       ],
       "explanation": "The referenced pair needs its own unique constraint, which is why OrganizationMember carries @@unique([userId, organizationId])."
     },
@@ -192,11 +192,11 @@
         }
       ],
       "prompt": "The composite FK uses PostgreSQL's default MATCH SIMPLE. What does that mean for an unassigned task, and what is the trap for future composite references?",
-      "answer": "If any referencing column is null the constraint is not checked, which allows assigneeId null; a null tenant column would also skip the check, so keep it NOT NULL or use MATCH FULL",
+      "answer": "Any null referencing column skips the check, so keep the tenant NOT NULL",
       "distractors": [
         "Null columns always fail the check, so unassigned tasks need a placeholder user",
-        "MATCH SIMPLE checks only the first column of the pair",
-        "MATCH SIMPLE makes the constraint deferrable until commit"
+        "MATCH SIMPLE checks only the first column of the pair, which is assigneeId",
+        "MATCH SIMPLE defers the check until commit, so tasks are briefly unchecked"
       ],
       "explanation": "It is safe here only because Task.organizationId is NOT NULL."
     },
@@ -218,11 +218,11 @@
         }
       ],
       "prompt": "Two clients submit task edits with version 4. The first succeeds (version 5). What must the second client NOT do after its conflict?",
-      "answer": "Silently replace its expected version with 5 and retry the old content, which would overwrite the accepted edit unseen",
+      "answer": "Swap in version 5 and resend its old content, overwriting the accepted edit",
       "distractors": [
-        "Show an error, because conflicts should be invisible to users",
-        "Keep its draft, because drafts should be discarded on conflict",
-        "Export its pending values with their baseline"
+        "Show the user a conflict error together with the draft they can recover",
+        "Keep its unsaved draft apart from the baseline record that it started editing",
+        "Export its pending values together with their baseline for later reuse"
       ],
       "explanation": "The conditional updateMany on version gives one winner; the loser keeps its baseline and draft separately and needs an explicit load-current action."
     },
@@ -249,11 +249,11 @@
         }
       ],
       "prompt": "A team ADMIN wants to edit the wording of another member's comment. What does the API allow?",
-      "answer": "Delete it as moderation, but not edit its words",
+      "answer": "Deleting it as moderation, though never rewriting its words",
       "distractors": [
-        "The edit, because admins can change any team content",
-        "Neither: comments are immutable once posted",
-        "The edit, but the audit row names the original author"
+        "Editing its words, because admins can change any team content",
+        "Neither, because comments are immutable once they are posted",
+        "Editing it, with the audit row naming the original author"
       ],
       "explanation": "Allowing an administrator to rewrite another author's comment would misrepresent who said it; authorship differs from moderation."
     },
@@ -275,11 +275,11 @@
         }
       ],
       "prompt": "A task update sends dueDate '2031-02-29' and an extra organizationId field. What does validation do?",
-      "answer": "Rejects it: 2031 is not a leap year so Feb 29 is not a real calendar date, and the strict schema also rejects the unknown organizationId",
+      "answer": "Rejects both the impossible Feb 29 in 2031 and the unknown organizationId",
       "distractors": [
-        "Accepts it and rolls the date to March 1",
-        "Accepts the date and ignores organizationId",
-        "Accepts it and moves the task to the given organization"
+        "Accepts it, rolling the date forward to March 1 and ignoring the extra field",
+        "Accepts the date as given and silently drops the unknown organizationId",
+        "Accepts it and moves the task into the organization named in the body"
       ],
       "explanation": "Due dates are real YYYY-MM-DD calendar values validated including leap years; unknown properties are rejected rather than passed through to Prisma."
     },
@@ -301,11 +301,11 @@
         }
       ],
       "prompt": "A comment create commits but the connection breaks before the response. The user clicks submit again. What happens?",
-      "answer": "A duplicate comment is created: the transaction guaranteed the commit, not delivery, and there is no durable idempotency design",
+      "answer": "A duplicate comment is created, since commit does not guarantee delivery",
       "distractors": [
-        "The second request is rejected as a duplicate by the transaction",
-        "The disabled button prevents the retry entirely",
-        "The first comment is rolled back because the response failed"
+        "The transaction rejects the second request as a duplicate of the first",
+        "The disabled submit button prevents any retry from being sent at all",
+        "The first comment is rolled back, since its response never arrived"
       ],
       "explanation": "A disabled button helps with local double clicks but does not solve an ambiguous network retry; the project documents this limit."
     },
@@ -327,11 +327,11 @@
         }
       ],
       "prompt": "A valid Maple member requests a Cedar task id under a Maple project path. What do they get?",
-      "answer": "404: the query is scoped to the selected organization",
+      "answer": "404, because the query is scoped to the selected organization",
       "distractors": [
         "403, because the task belongs to another organization",
-        "200, because task ids are globally unique",
-        "409, because the version does not match"
+        "200, because task ids are globally unique across organizations",
+        "409, because the version in the request does not match the row"
       ],
       "explanation": "Membership in Maple passes the tenant middleware, but tenant scoping in every query makes another organization's rows not found."
     },

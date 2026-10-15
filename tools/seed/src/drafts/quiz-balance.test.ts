@@ -64,17 +64,6 @@ const EXEMPT: Record<string, Guard[]> = {
   // CONTENT-5
 
   // CONTENT-6
-  'bootlocalopusv2': ['format'],
-  'fableopusrecallv2': ['format'],
-  'grok-build-team': ['longest', 'rank', 'format', 'slots'],
-  'jsdrillv2': ['rank', 'format'],
-  'master7': ['format'],
-  'netpastebin': ['format'],
-  'organized-app-eliapplybot': ['rank', 'format'],
-  'organized-experiment-support-hub': ['median-ratio'],
-  'organized-study-support-desk-crm': ['median-ratio', 'format'],
-  'storefront': ['format'],
-  'ww4': ['median-ratio', 'format'],
 
   // CONTENT-7
   'buildgum': ['rank'],
