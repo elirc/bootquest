@@ -1,0 +1,442 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "organized-study-hoppscotch-app",
+ "sha": "ff054e5a2b5196f14101b094237cad85a766b68f",
+ "guides": [
+  "hoppscotch/fabledocs/upskill/03-architecture-and-patterns/02-data-model-and-persistence.md",
+  "hoppscotch/fabledocs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+  "hoppscotch/fabledocs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+  "hoppscotch/fabledocs/upskill/03-architecture-and-patterns/05-pattern-catalog.md",
+  "hoppscotch/fabledocs/upskill/03-architecture-and-patterns/06-architecture-critique.md",
+  "hoppscotch/fabledocs/upskill/09-reference/risk-register.md"
+ ],
+ "items": [
+  {
+   "id": "q01-pubsub-implementation",
+   "kind": "quiz",
+   "source": {
+    "path": "hoppscotch/fabledocs/upskill/03-architecture-and-patterns/06-architecture-critique.md",
+    "lines": {
+     "start": 19,
+     "end": 20
+    }
+   },
+   "cites": [
+    {
+     "path": "hoppscotch/packages/hoppscotch-backend/src/pubsub/pubsub.service.ts",
+     "lineStart": 5,
+     "lineEnd": 18
+    }
+   ],
+   "prompt": "PubSubService's header comment says it picks a simple local PubSub for dev and Redis for production. Which PubSub does onModuleInit actually create?",
+   "answer": "The in-memory graphql-subscriptions PubSub, in every environment",
+   "distractors": [
+    "A Redis-backed PubSub whenever NODE_ENV is set to the value production",
+    "A Redis PubSub, falling back to memory if Redis is down",
+    "Whichever PubSub class the PUBSUB_DRIVER setting names"
+   ],
+   "explanation": "onModuleInit unconditionally runs this.pubsub = new LocalPubSub(), the graphql-subscriptions class imported as LocalPubSub. The comment describes a choice the code does not make; the critique (P2) and risk R2 call it a single-replica constraint. The code is keyed, not the comment."
+  },
+  {
+   "id": "q02-two-replicas",
+   "kind": "quiz",
+   "source": {
+    "path": "hoppscotch/fabledocs/upskill/03-architecture-and-patterns/06-architecture-critique.md",
+    "lines": {
+     "start": 19,
+     "end": 20
+    }
+   },
+   "cites": [
+    {
+     "path": "hoppscotch/fabledocs/upskill/09-reference/risk-register.md",
+     "lineStart": 8,
+     "lineEnd": 8
+    },
+    {
+     "path": "hoppscotch/packages/hoppscotch-backend/src/pubsub/pubsub.service.ts",
+     "lineStart": 14,
+     "lineEnd": 26
+    }
+   ],
+   "prompt": "The backend runs as two replicas behind a load balancer. A user subscribed through replica B renames a team collection, and the mutation lands on replica A. What does the subscriber see?",
+   "answer": "No live update, as A publishes only to its own process memory",
+   "distractors": [
+    "The update, relayed from A to B through the shared Postgres",
+    "The update twice, once from each replica's publish call",
+    "An error frame, because B rejects events it did not publish"
+   ],
+   "explanation": "PubSubService wraps an in-process PubSub, so A's publish reaches only subscribers connected to A. Nothing bridges replicas: there is no Redis channel and no database notification. Risk R2 rates this certain at more than one replica; the critique's P2 fix is a Redis-backed PubSub behind the same injectable."
+  },
+  {
+   "id": "q03-leave-team-race",
+   "kind": "quiz",
+   "source": {
+    "path": "hoppscotch/fabledocs/upskill/03-architecture-and-patterns/06-architecture-critique.md",
+    "lines": {
+     "start": 16,
+     "end": 17
+    }
+   },
+   "cites": [
+    {
+     "path": "hoppscotch/packages/hoppscotch-backend/src/team/team.service.ts",
+     "lineStart": 205,
+     "lineEnd": 221
+    }
+   ],
+   "prompt": "A team has exactly two OWNER members, and both call leaveTeam at the same moment. What can the current code produce?",
+   "answer": "A team with zero owners, as each call counts two before deleting",
+   "distractors": [
+    "One success and one TEAM_ONLY_ONE_OWNER error, every time",
+    "A unique-constraint error that the retry loop then absorbs",
+    "A deadlock, because both calls lock the same membership rows first"
+   ],
+   "explanation": "leaveTeam reads prisma.teamMember.count(...OWNER) outside any transaction, checks ownerCount === 1, then deletes. Two concurrent calls can both read 2, both pass the check and both delete. No lock is taken, so no deadlock, and leaveTeam has no retry loop. The critique labels this a hypothesis; the logic supports it."
+  },
+  {
+   "id": "q04-guard-missing-role",
+   "kind": "quiz",
+   "source": {
+    "path": "hoppscotch/fabledocs/upskill/03-architecture-and-patterns/06-architecture-critique.md",
+    "lines": {
+     "start": 11,
+     "end": 11
+    }
+   },
+   "cites": [
+    {
+     "path": "hoppscotch/packages/hoppscotch-backend/src/team/guards/gql-team-member.guard.ts",
+     "lineStart": 21,
+     "lineEnd": 26
+    }
+   ],
+   "prompt": "A new resolver uses GqlTeamMemberGuard but forgets the @RequiresTeamRole decorator. What does the guard do when it runs?",
+   "answer": "It throws BUG_TEAM_NO_REQUIRE_TEAM_ROLE for every caller",
+   "distractors": [
+    "It lets any authenticated team member through to the resolver",
+    "It falls back to requiring the OWNER role for the request",
+    "It skips the role check and only verifies team membership"
+   ],
+   "explanation": "canActivate reads the requiresTeamRole metadata first and throws Error(BUG_TEAM_NO_REQUIRE_TEAM_ROLE) when it is missing, before it even looks at the user. The critique lists this as a strength: guards that throw BUG_* on misconfiguration fail closed instead of silently passing."
+  },
+  {
+   "id": "q05-guard-literal-teamid",
+   "kind": "quiz",
+   "source": {
+    "path": "hoppscotch/fabledocs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 34,
+     "end": 42
+    }
+   },
+   "cites": [
+    {
+     "path": "hoppscotch/packages/hoppscotch-backend/src/team/guards/gql-team-member.guard.ts",
+     "lineStart": 34,
+     "lineEnd": 42
+    }
+   ],
+   "prompt": "A mutation takes collectionID, not teamID, but is decorated with GqlTeamMemberGuard and @RequiresTeamRole. A real team member calls it. What happens?",
+   "answer": "The guard throws BUG_TEAM_NO_TEAM_ID before checking membership",
+   "distractors": [
+    "The guard looks up the collection's team and checks that membership",
+    "The guard passes, since the caller is a member of some team",
+    "The guard returns false and Nest answers with a plain 403"
+   ],
+   "explanation": "The guard destructures { teamID } from the GraphQL args and throws BUG_TEAM_NO_TEAM_ID when it is absent. It never resolves a child ID to a team; that is the job of the collection-specific guards in team-collection/guards. This is the guide's 'hard dependency on the literal arg teamID'."
+  },
+  {
+   "id": "q06-parent-other-team",
+   "kind": "quiz",
+   "source": {
+    "path": "hoppscotch/fabledocs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 31,
+     "end": 31
+    }
+   },
+   "cites": [
+    {
+     "path": "hoppscotch/packages/hoppscotch-backend/src/team-collection/team-collection.service.ts",
+     "lineStart": 461,
+     "lineEnd": 465
+    }
+   ],
+   "prompt": "createCollection is called for team A with a parentID that belongs to team B. Where and how does the service stop it?",
+   "answer": "Before the transaction, returning E.left(TEAM_NOT_OWNER)",
+   "distractors": [
+    "Inside the transaction, when the FOR UPDATE lock finds no rows",
+    "At commit, when a foreign-key check rejects the new row",
+    "It does not; the collection is grafted under team B's parent"
+   ],
+   "explanation": "isOwnerCheck(parentID, teamID) runs right after the title check; O.isNone returns E.left(TEAM_NOT_OWNER) and no transaction is opened. The schema has no constraint tying a child's teamID to its parent's, which is why the guide calls this service check the thing that stops grafting into someone else's tree."
+  },
+  {
+   "id": "q07-first-order-index",
+   "kind": "quiz",
+   "source": {
+    "path": "hoppscotch/fabledocs/upskill/03-architecture-and-patterns/05-pattern-catalog.md",
+    "lines": {
+     "start": 54,
+     "end": 58
+    }
+   },
+   "cites": [
+    {
+     "path": "hoppscotch/packages/hoppscotch-backend/src/team-collection/team-collection.service.ts",
+     "lineStart": 476,
+     "lineEnd": 501
+    },
+    {
+     "path": "hoppscotch/packages/hoppscotch-backend/src/prisma/prisma.service.ts",
+     "lineStart": 150,
+     "lineEnd": 159
+    }
+   ],
+   "prompt": "createCollection adds the first child under a parent that has no children yet. What orderIndex does the new row get, and what runs before that read?",
+   "answer": "orderIndex 1, written after the sibling rows are locked FOR UPDATE",
+   "distractors": [
+    "orderIndex 0, the first slot of a zero-based sibling list",
+    "orderIndex 1, taken from an advisory lock counter for the team",
+    "No orderIndex yet; a background job numbers new siblings later"
+   ],
+   "explanation": "Inside $transaction it calls lockTeamCollectionByTeamAndParent (raw SELECT \"orderIndex\" ... FOR UPDATE on the team+parent siblings), reads the highest orderIndex, and writes lastCollection ? lastCollection.orderIndex + 1 : 1. The lock runs whether or not siblings exist; no advisory lock is used."
+  },
+  {
+   "id": "q08-null-parent-unique",
+   "kind": "quiz",
+   "source": {
+    "path": "hoppscotch/fabledocs/upskill/03-architecture-and-patterns/05-pattern-catalog.md",
+    "lines": {
+     "start": 181,
+     "end": 185
+    }
+   },
+   "cites": [
+    {
+     "path": "hoppscotch/packages/hoppscotch-backend/prisma/schema.prisma",
+     "lineStart": 56,
+     "lineEnd": 56
+    },
+    {
+     "path": "hoppscotch/packages/hoppscotch-backend/src/prisma/prisma.service.ts",
+     "lineStart": 155,
+     "lineEnd": 157
+    }
+   ],
+   "prompt": "TeamCollection has @@unique([teamID, parentID, orderIndex]). Why can two ROOT collections of one team still end up with the same orderIndex if the app lock is skipped?",
+   "answer": "Postgres treats NULL parentIDs as distinct, so those rows never collide",
+   "distractors": [
+    "Prisma leaves a null parentID out of the unique index, so it is skipped",
+    "The constraint is only checked once the transaction has committed",
+    "Root collections are stored under a separate synthetic parent row"
+   ],
+   "explanation": "Root collections have parentID NULL, and a Postgres unique index treats NULLs as distinct by default, so [teamID, NULL, 3] twice is allowed. That is why lockTeamCollectionByTeamAndParent has its own parentID IS NULL branch. Prisma does not rewrite the index, the default constraint is checked per statement (not deferred), and there is no synthetic root row."
+  },
+  {
+   "id": "q09-delete-not-found",
+   "kind": "quiz",
+   "source": {
+    "path": "hoppscotch/fabledocs/upskill/03-architecture-and-patterns/05-pattern-catalog.md",
+    "lines": {
+     "start": 76,
+     "end": 80
+    }
+   },
+   "cites": [
+    {
+     "path": "hoppscotch/packages/hoppscotch-backend/src/team-collection/team-collection.service.ts",
+     "lineStart": 572,
+     "lineEnd": 580
+    }
+   ],
+   "prompt": "Inside deleteCollectionAndUpdateSiblingsOrderIndex, the delete fails with Prisma P2025 because another request already deleted the collection. What happens next?",
+   "answer": "The transaction callback returns, so the sibling reindex is skipped",
+   "distractors": [
+    "The error becomes a ConflictException and the loop retries it",
+    "The sibling reindex still runs and shifts the orderIndex values twice",
+    "TEAM_COL_REORDERING_FAILED is returned to the original caller"
+   ],
+   "explanation": "The inner catch checks deleteError?.code === PrismaError.RECORD_NOT_FOUND and returns from the transaction callback, skipping updateMany; the loop then breaks and the method returns E.right(true). Only other delete errors are rethrown and wrapped in ConflictException. Pattern 7 calls this idempotency: the end state is the same whoever deleted it."
+  },
+  {
+   "id": "q10-publish-crash-gap",
+   "kind": "quiz",
+   "source": {
+    "path": "hoppscotch/fabledocs/upskill/03-architecture-and-patterns/05-pattern-catalog.md",
+    "lines": {
+     "start": 96,
+     "end": 101
+    }
+   },
+   "cites": [
+    {
+     "path": "hoppscotch/packages/hoppscotch-backend/src/team-collection/team-collection.service.ts",
+     "lineStart": 505,
+     "lineEnd": 514
+    },
+    {
+     "path": "hoppscotch/fabledocs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+     "lineStart": 25,
+     "lineEnd": 25
+    }
+   ],
+   "prompt": "createCollection publishes coll_added after its $transaction block. The process dies after the commit but before publish runs. What results?",
+   "answer": "The row stays committed and live subscribers never get the event",
+   "distractors": [
+    "The transaction is rolled back since the publish never happened",
+    "The event is replayed from an outbox table when the process restarts",
+    "PubSub retries the publish once the backend comes back up"
+   ],
+   "explanation": "Publish-after-commit avoids ghost events for rolled-back writes, but the commit is already durable when the crash hits, and the in-memory PubSub holds nothing across a restart. The side-effects guide notes the absence of any queue or outbox; Pattern 9 says the repo accepts this at-most-once gap because subscribers can refetch."
+  },
+  {
+   "id": "q11-expired-magic-link",
+   "kind": "quiz",
+   "source": {
+    "path": "hoppscotch/fabledocs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+    "lines": {
+     "start": 35,
+     "end": 35
+    }
+   },
+   "cites": [
+    {
+     "path": "hoppscotch/packages/hoppscotch-backend/src/auth/auth.service.ts",
+     "lineStart": 281,
+     "lineEnd": 304
+    }
+   ],
+   "prompt": "A user clicks an EXPIRED magic link and has no 'magic' Account row yet. What does the verify path do?",
+   "answer": "It creates the magic Account row, then returns MAGIC_LINK_EXPIRED",
+   "distractors": [
+    "It returns MAGIC_LINK_EXPIRED and writes nothing to the database",
+    "It signs the user in, since expiry is enforced only in the client",
+    "It deletes the expired token, then creates the magic Account row"
+   ],
+   "explanation": "The provider-account check and createProviderAccount (lines 285-297) run before the comparison currentTime > expiresOn (299-304), which then returns MAGIC_LINK_EXPIRED with 401. The token is deleted only on the success path, later. Risk R3 and Ticket 3 propose moving the expiry check up to just after the token lookup."
+  },
+  {
+   "id": "q12-verify-admin-first-user",
+   "kind": "quiz",
+   "source": {
+    "path": "hoppscotch/fabledocs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 40,
+     "end": 40
+    }
+   },
+   "cites": [
+    {
+     "path": "hoppscotch/packages/hoppscotch-backend/src/auth/auth.service.ts",
+     "lineStart": 371,
+     "lineEnd": 387
+    },
+    {
+     "path": "hoppscotch/packages/hoppscotch-backend/src/auth/auth.controller.ts",
+     "lineStart": 193,
+     "lineEnd": 193
+    }
+   ],
+   "prompt": "On a fresh instance with exactly one user, that non-admin user's browser sends GET /auth/verify/admin. What does verifyAdmin do?",
+   "answer": "Promotes that user to admin and returns isAdmin: true",
+   "distractors": [
+    "Returns isAdmin: false until an InfraToken grants the role",
+    "Returns isAdmin: false and records a pending admin request",
+    "Rejects the call, as only the CLI may create the first admin"
+   ],
+   "explanation": "verifyAdmin returns true at once for an admin; otherwise, when usersService.getUsersCount() is 1, it calls makeAdmin(user.uid) and returns isAdmin: true. The route is a @Get, which is why the guides flag it as a GET endpoint with a side effect."
+  },
+  {
+   "id": "f01-five-layers",
+   "kind": "flashcard",
+   "source": {
+    "path": "hoppscotch/fabledocs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 5,
+     "end": 13
+    }
+   },
+   "cites": [
+    {
+     "path": "hoppscotch/fabledocs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 9,
+     "lineEnd": 13
+    }
+   ],
+   "front": "Name the five checks a Hoppscotch backend request can cross, in order, with what each one catches.",
+   "back": "1. Rate limit (ThrottlerBehindProxyGuard): abuse volume. 2. Shape/DTO (class-validator, GraphQL types): malformed input. 3. AuthN (GqlAuthGuard/JwtAuthGuard, JWT from cookie): anonymous callers. 4. AuthZ (GqlTeamMemberGuard + @RequiresTeamRole): wrong tenant or role. 5. Business validation in services: legal-but-wrong operations (title length, parent ownership, single owner)."
+  },
+  {
+   "id": "f02-refresh-rotation",
+   "kind": "flashcard",
+   "source": {
+    "path": "hoppscotch/fabledocs/upskill/03-architecture-and-patterns/05-pattern-catalog.md",
+    "lines": {
+     "start": 173,
+     "end": 177
+    }
+   },
+   "cites": [
+    {
+     "path": "hoppscotch/packages/hoppscotch-backend/src/auth/auth.service.ts",
+     "lineStart": 110,
+     "lineEnd": 119
+    },
+    {
+     "path": "hoppscotch/packages/hoppscotch-backend/prisma/schema.prisma",
+     "lineStart": 101,
+     "lineEnd": 101
+    }
+   ],
+   "front": "How are Hoppscotch refresh tokens stored, and what side effect follows from storing them that way?",
+   "back": "The refresh token is a JWT (about 7 days); only its argon2 hash is saved, in the single User.refreshToken field, and every refresh verifies then rotates it. One stored hash means one active refresh session per user: signing in elsewhere overwrites it and the older session can no longer refresh. There is no reuse detection."
+  },
+  {
+   "id": "f03-user-delete-survivors",
+   "kind": "flashcard",
+   "source": {
+    "path": "hoppscotch/fabledocs/upskill/03-architecture-and-patterns/02-data-model-and-persistence.md",
+    "lines": {
+     "start": 30,
+     "end": 30
+    }
+   },
+   "cites": [
+    {
+     "path": "hoppscotch/packages/hoppscotch-backend/prisma/schema.prisma",
+     "lineStart": 51,
+     "lineEnd": 51
+    },
+    {
+     "path": "hoppscotch/packages/hoppscotch-backend/prisma/schema.prisma",
+     "lineStart": 262,
+     "lineEnd": 262
+    }
+   ],
+   "front": "From the schema: when a user is deleted, what survives, and what happens when a team collection folder is deleted?",
+   "back": "Nearly everything cascades from User or Team. MockServer.creatorUid uses onDelete: SetNull, so the user's mock servers survive, ownerless. TeamCollection's parent relation is onDelete: Cascade, so deleting a folder deletes its whole subtree with no app code."
+  },
+  {
+   "id": "f04-idempotency-litmus",
+   "kind": "flashcard",
+   "source": {
+    "path": "hoppscotch/fabledocs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+    "lines": {
+     "start": 21,
+     "end": 23
+    }
+   },
+   "cites": [
+    {
+     "path": "hoppscotch/packages/hoppscotch-backend/src/team-collection/team-collection.service.ts",
+     "lineStart": 560,
+     "lineEnd": 612
+    }
+   ],
+   "front": "What litmus test does the side-effects guide give for idempotency, and why is create-with-max+1 locked rather than retried freely?",
+   "back": "Ask: if this ran twice, would state differ? Delete-that-tolerates-already-deleted passes. Create with orderIndex = max + 1 fails it (two runs make two rows), so it is protected by the sibling FOR UPDATE lock and the unique constraint instead. Retries are for transient errors only, bounded, with linear backoff (retryCount * 100 ms)."
+  }
+ ]
+}
