@@ -276,7 +276,7 @@ and `restamp:all` includes notes packs like every other seed pack.
 mechanical check only sees wording that matches a key. A reading can still give a quiz away by
 stating, in other words, the specific fact that decides it ("the parser reads only the first value",
 "the guard runs before the body is parsed"). In the 2026-10-15 wave a fresh audit found this in 18%
-of sampled readings, and the cross-author leak pass then rewrote about 165 of the 394. A `before`
+of sampled readings, and the cross-author leak pass then rewrote 231 of the 394. A `before`
 reading MAY orient, name files and functions, explain a general concept, and say what to look for
 ("list which keys validatePayload inspects"). It MUST NOT state the outcome a quiz in the same pack
 asks about: a status code, which value wins, whether something is checked or rolled back, the order

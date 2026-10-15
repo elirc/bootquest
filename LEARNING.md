@@ -742,7 +742,7 @@ what ships until the owner picks an option.
   jstrain2.2, organized-build-analytics, netgum). Explanations are a correctness review for free.
 - **Mechanical leak checks are not enough.** The validator blocks a reading that repeats a key's
   wording, but a fresh audit found 18% of readings stated the deciding FACT in other words. A
-  cross-author leak pass (nobody checks their own) rewrote ~165 of 394 readings. The rule is now in
+  cross-author leak pass (nobody checks their own) rewrote 231 of 394 readings. The rule is now in
   SEEDING.md; future readings need that human pass.
 - **Explanations unlock late.** Released only after a graded submit that passed, or answered that
   question right, or reached its review card, so a failed attempt cannot be retried with the keys.
