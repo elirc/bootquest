@@ -38,7 +38,7 @@
    "target": "pack",
    "phase": "before",
    "title": "Concept: heuristic agents are ordered rule lists",
-   "body": "Each agent is a `run(request)` function that starts from default values and then walks a list of regular-expression checks over the input text. Two shapes appear, and they behave differently.\n\nIn the failed job agent, every check is its own `if`. Several can match the same error message, and each one that matches assigns the shared variables again, so a later block can replace what an earlier block decided. In the log anomaly agent, the signature checks are an `if / else if` chain, so only the FIRST matching branch runs.\n\nWhen you predict an agent's output, list which regexes match, then apply them in source order with that difference in mind. Also check the steps after the rules: attempt counts and linked incidents adjust risk and escalation at the end. The registry adds one more gate before any of this runs: the target type must be one the agent supports.",
+   "body": "Each agent is a `run(request)` function that starts from default values and then walks a list of regular-expression checks over the input text, followed by a few adjustments at the end. The agents are not all written the same way, and the shape of the rule list changes what the output is when more than one rule could apply.\n\nWhen you predict an agent's output, do it in three steps. First, list every regex in the agent and mark which ones match your input text. Second, look at how the checks are connected: are they separate `if` statements, or one `if / else if` chain? Work out what that means when two of them match, and which assignment wins. Third, read whatever runs after the rules (attempt counts, linked incidents, scores) and note which outputs it can still change.\n\nAlso read `packages/agents/src/registry.ts` before you trust that an agent ran at all: note what it checks about the request before calling `run`.",
    "excerpts": [
     {
      "path": "packages/agents/src/failed-job-investigation.ts",
@@ -47,10 +47,10 @@
      "quote": "let likelyCause = \"Unknown transient processing failure.\";"
     },
     {
-     "path": "packages/agents/src/log-anomaly.ts",
-     "lineStart": 53,
-     "lineEnd": 53,
-     "quote": "if (/auth|login|token|permission|sso/.test(messages)) {"
+     "path": "docs/03-agent-system-guide.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "The agent system is local, deterministic, and fully mocked. It is designed to feel like a real agent architecture without calling OpenAI, Anthropic, LangChain, or any external API."
     }
    ],
    "readMore": [
@@ -67,19 +67,13 @@
    "target": "pack",
    "phase": "before",
    "title": "Concept: agent runs and jobs go through a database worker",
-   "body": "After the hardening pass, clicking \"Run Agent\" no longer runs the agent inside the request. The server action writes an `AgentRun` row and an `AGENT_RUN` background job, and a separate worker process picks the job up later.\n\nThree things to watch in `packages/db/src/worker.ts`. First, how a worker claims a job: it finds a candidate, then updates it with a `where` that repeats the expected status, and checks how many rows changed. Second, what the worker does with `attempts` and `maxAttempts` when a job throws, and who increments `attempts` (the claim, or someone else?). Third, how the agent run row moves through its statuses and where an error message is stored.\n\nThe guide calls this \"a database-backed worker, not a full queue system\". Keep that limit in mind.",
+   "body": "After the hardening pass, clicking \"Run Agent\" no longer runs the agent inside the request. The server action writes an `AgentRun` row and an `AGENT_RUN` background job, and a separate worker process picks the job up later.\n\nThree things to trace in `packages/db/src/worker.ts`. First, how a worker claims a job: write down the read and the write it uses, and what the claim returns when it does not get the job. Then imagine two workers running that code at the same instant. Second, follow `attempts` and `maxAttempts`: find every line that changes `attempts`, note what values `queueAgentRun` gives a new job, and compute what the failure branch decides for it. Third, follow the agent run row through its statuses and find where an error message is stored.\n\nThe guide calls this \"a database-backed worker, not a full queue system\". Keep that limit in mind.",
    "excerpts": [
     {
      "path": "docs/10-production-hardening-implementation.md",
      "lineStart": 120,
      "lineEnd": 120,
-     "quote": "The worker claims queued or retrying jobs, marks them running, executes handlers, updates status, and writes audit events."
-    },
-    {
-     "path": "packages/db/src/worker.ts",
-     "lineStart": 47,
-     "lineEnd": 48,
-     "quote": "where: { id: candidate.id, status: { in: [\"QUEUED\", \"RETRYING\"] } },"
+     "quote": "- The worker claims queued or retrying jobs, marks them running, executes handlers, updates status, and writes audit events."
     }
    ],
    "readMore": [
@@ -304,7 +298,7 @@
    "target": "seed:quests:organized-build-agenthelpdesk/quiz/8ab3f01f9b6b8028",
    "phase": "after",
    "title": "Nobody increments attempts on a worker run",
-   "body": "`queueAgentRun` creates the `AGENT_RUN` job with `attempts: 0` and `maxAttempts: 1`. `claimNextJob` sets status, lock and start time, but does not change `attempts`. When processing throws, the worker computes `job.attempts >= job.maxAttempts ? \"DEAD_LETTERED\" : \"FAILED\"`; 0 >= 1 is false, so the job is FAILED.\n\n- DEAD_LETTERED would need attempts to reach 1 first, which only `retryJobAction` does.\n- RETRYING is set by the retry action, not by the worker.\n- \"The claim raised attempts\" is wrong: the claim data has no `attempts` field.\n\nSo `canRetryJob(FAILED, 0, 1)` is true and an operator can retry it once.",
+   "body": "`queueAgentRun` creates the `AGENT_RUN` job with `attempts: 0` and `maxAttempts: 1`. `claimNextJob` sets status, lock and start time, but does not change `attempts`. When processing throws, the worker computes `job.attempts >= job.maxAttempts ? \"DEAD_LETTERED\" : \"FAILED\"`; 0 >= 1 is false, so the job is FAILED.\n\n- DEAD_LETTERED is not what the worker's failure branch picks here: the worker would only choose it once attempts reached maxAttempts, which only `retryJobAction` advances. (An operator can still dead-letter a job by hand: `deadLetterJobAction` in `apps/web/lib/actions.ts` sets status DEAD_LETTERED directly, but that is a separate manual action, not the worker's result.)\n- RETRYING is set by the retry action, not by the worker.\n- \"The claim raised attempts\" is wrong: the claim data has no `attempts` field.\n\nSo `canRetryJob(FAILED, 0, 1)` is true and an operator can retry it once.",
    "excerpts": [
     {
      "path": "apps/web/lib/actions.ts",
@@ -317,6 +311,18 @@
      "lineStart": 110,
      "lineEnd": 110,
      "quote": "const nextStatus = job.attempts >= job.maxAttempts ? \"DEAD_LETTERED\" : \"FAILED\";"
+    },
+    {
+     "path": "apps/web/lib/actions.ts",
+     "lineStart": 524,
+     "lineEnd": 524,
+     "quote": "export async function deadLetterJobAction(formData: FormData) {"
+    },
+    {
+     "path": "apps/web/lib/actions.ts",
+     "lineStart": 533,
+     "lineEnd": 533,
+     "quote": "status: \"DEAD_LETTERED\","
     }
    ],
    "readMore": []

@@ -161,7 +161,7 @@
    "target": "pack",
    "phase": "before",
    "title": "Start here: a payments lab built around one idempotent endpoint",
-   "body": "This repo is a small Next.js + Prisma payments console. Its name comes from `POST /api/payments`, which must create exactly one payment even when a client retries. Around it sit a refund route, an unauthenticated provider webhook, a webhook relay and a reconciliation job.\n\nRead in this order. `docs/learning/concepts-demonstrated.md` names each concept and then says what you actually find in the code, gaps included. `docs/learning/flow-traces.md` follows requests file by file; the numbered flows 7-10 at the end are the interesting ones (races and a forged webhook). `docs/architecture/request-lifecycle.md` repeats the traces line by line and lists findings L1-L5. `docs/architecture/auth-and-permissions.md` covers sessions, the role matrix and findings A1-A4. `docs/learning/testing-rationale.md` says which claims were checked and how.\n\nThe docs were corrected after review, so trust the line-numbered sections over the short quick maps at the top.",
+   "body": "This repo is a small Next.js + Prisma payments console. Its name comes from `POST /api/payments`, which must create exactly one payment even when a client retries. Around it sit a refund route, a provider webhook, a webhook relay and a reconciliation job.\n\nRead in this order. `docs/learning/concepts-demonstrated.md` names each concept and then says what you actually find in the code, gaps included. `docs/learning/flow-traces.md` follows requests file by file; the numbered flows at the end trace the hardest cases. `docs/architecture/request-lifecycle.md` repeats the traces line by line and lists findings L1-L5. `docs/architecture/auth-and-permissions.md` covers sessions, the role matrix and findings A1-A4. `docs/learning/testing-rationale.md` says which claims were checked and how.\n\nThe docs were corrected after review, so trust the line-numbered sections over the short quick maps at the top. For every route you trace, write down which guard (if any) runs first.",
    "excerpts": [
     {
      "path": "docs/learning/concepts-demonstrated.md",
@@ -429,10 +429,10 @@
    "provenance": {
     "repo": "organized-experiment-idempotent-payments-lab",
     "sha": "7e9832bab90cba8b26fffebb884edc0a7397cee0",
-    "path": "src/lib/idempotency/requestFingerprint.ts",
+    "path": "docs/learning/concepts-demonstrated.md",
     "lines": {
-     "start": 18,
-     "end": 20
+     "start": 64,
+     "end": 64
     }
    },
    "citations": [],
@@ -442,19 +442,19 @@
    "target": "pack",
    "phase": "before",
    "title": "Concept: an idempotency record is a key, a fingerprint and a saved answer",
-   "body": "An idempotency key lets a client say \"this is the same request as before\". The server must then decide three things: is it really the same request, has the first one finished, and what should a repeat return?\n\nIn this repo the answer lives in an `IdempotencyRecord` row. It stores the route, the client key, a SHA-256 fingerprint of the request body, a status, and the response that was sent. The fingerprint comes from `stableStringify()`, which sorts object keys before hashing, so key order in the JSON does not matter. A repeat with a matching fingerprint and a finished record gets the saved response back, marked as replayed.\n\nWhile reading, ask: who is part of the identity? Look at what the unique constraint covers and what the fingerprint is computed from. Then ask what makes two simultaneous requests safe: the read at the top of the function, or something in the database.",
+   "body": "An idempotency key lets a client say \"this is the same request as before\". The server must then decide three things: is it really the same request, has the first one finished, and what should a repeat return?\n\nIn this repo the answer lives in an `IdempotencyRecord` row. It stores the route, the client key, a SHA-256 fingerprint of the request, a status, and the response that was sent. The fingerprint is built by `stableStringify()` in `src/lib/idempotency/requestFingerprint.ts`.\n\nWhile reading, work out four things for yourself from the code: which columns the unique constraint on the record covers; exactly which value is hashed (the raw request, or something produced after validation); what each branch of `createPaymentWithIdempotency` returns for a repeat whose fingerprint matches, differs, or belongs to an unfinished record; and what actually protects two requests that arrive at the same moment. Also check where the admin console generates its key.",
    "excerpts": [
     {
-     "path": "src/lib/idempotency/requestFingerprint.ts",
-     "lineStart": 18,
-     "lineEnd": 20,
-     "quote": "const entries = Object.entries(value as Record<string, unknown>).sort(([left], [right]) =>"
+     "path": "docs/learning/concepts-demonstrated.md",
+     "lineStart": 64,
+     "lineEnd": 64,
+     "quote": "### Idempotency — the concept the repo is named after"
     },
     {
      "path": "prisma/schema.prisma",
-     "lineStart": 135,
-     "lineEnd": 135,
-     "quote": "@@unique([route, key])"
+     "lineStart": 121,
+     "lineEnd": 121,
+     "quote": "model IdempotencyRecord {"
     }
    ],
    "readMore": [
@@ -613,8 +613,8 @@
     "sha": "7e9832bab90cba8b26fffebb884edc0a7397cee0",
     "path": "docs/learning/concepts-demonstrated.md",
     "lines": {
-     "start": 76,
-     "end": 76
+     "start": 73,
+     "end": 73
     }
    },
    "citations": [],
@@ -624,13 +624,13 @@
    "target": "pack",
    "phase": "before",
    "title": "Concept: where the reads sit relative to the transaction",
-   "body": "A database transaction only protects what happens inside it. A value you read BEFORE `prisma.$transaction(...)` opens can be changed by another request before your writes commit, and nothing will warn you.\n\nThis repo has four transactions: payment create, webhook processing, refund and the reconciliation write-out. The create path keeps all of its work inside one transaction. The webhook and refund paths load the payment (and, for refunds, the sum of earlier refunds) first, check rules against those values, and only then open the transaction for the writes.\n\nA second trap: in an interactive Prisma transaction, anything written through `tx` is undone if the callback throws. Writing an error record through `tx` and then re-throwing does not leave that record behind. Keep both ideas in mind when you trace the refund and webhook services.",
+   "body": "A database transaction only protects what happens inside it. A value you read before `prisma.$transaction(...)` opens can be changed by another request before your writes commit, and nothing will warn you. Interactive Prisma transactions also have a rule about failure: writes made through the `tx` client belong to the transaction, so what survives depends on whether the callback finishes or throws.\n\nThis repo has four transactions: payment create, webhook processing, refund and the reconciliation write-out. For each one, make a short table yourself: every read and every write, and whether it happens before the transaction opens, inside it through `tx`, or after it.\n\nThen ask two questions of each path. If two requests run it at the same moment, could both act on the same earlier read? And if something throws halfway through the callback, which of the rows it wrote would still exist afterwards? Answer them from the code in `refundService.ts` and `webhookService.ts`, not from the summaries.",
    "excerpts": [
     {
      "path": "docs/learning/concepts-demonstrated.md",
-     "lineStart": 76,
-     "lineEnd": 76,
-     "quote": "The webhook and refund paths do their *reads* outside the transaction"
+     "lineStart": 73,
+     "lineEnd": 73,
+     "quote": "### Transactions as a consistency boundary"
     },
     {
      "path": "src/services/refundService.ts",

@@ -13,9 +13,9 @@
    "excerpts": [
     {
      "path": "astraupskill/01-CODEBASE-MAP.md",
-     "lineStart": 22,
-     "lineEnd": 22,
-     "quote": "Trace a success by following `body -> payloadHash -> tx.webhookEvent.findUnique -> tx.payment.findFirst -> tx.invoice.findFirst"
+     "lineStart": 24,
+     "lineEnd": 24,
+     "quote": "Exercise: mark each operation above as read, state write, or side effect."
     }
    ],
    "readMore": [
@@ -38,19 +38,19 @@
    "target": "pack",
    "phase": "before",
    "title": "Concept: what makes two webhook deliveries \"the same event\"",
-   "body": "Payment providers retry. The same event can arrive twice, so the service needs a rule for \"this is a repeat, acknowledge it\" versus \"this is new work\".\n\nHere the rule has two parts. The provider event id is globally unique in the database (`providerEventId String @unique`). On top of that, the service hashes the normalized request body with SHA-256 over a key-sorted JSON string, so reordering keys does not change the hash. An existing row is only a harmless repeat when it belongs to the same tenant AND its stored payload hashes to the same value. Anything else is a conflict, because one id would then carry two meanings.\n\nWatch where the hash is computed: after Zod has parsed the body, not on the raw bytes. That detail decides several edge cases. Also notice that `processedAt` matters: only a processed event short-circuits.",
+   "body": "Payment providers retry. The same event can arrive twice, so the service needs a rule for \"this is a repeat, acknowledge it\" versus \"this is new work\" versus \"this is not allowed\".\n\nTwo mechanisms are involved. The database schema puts a uniqueness constraint on the provider event id, and the service computes a SHA-256 hash of the request with `hashRequestPayload`, built on a key-sorting `stableStringify`.\n\nWhile reading `processMockPaymentWebhook`, answer these from the code, not from memory. Is the event id unique per tenant or across the whole table? Exactly which value is hashed, and what has already happened to the input by the time the hash is taken (look at what `parseMockWebhook` does to each field)? When a row with the same event id already exists, which fields are compared, and what does each outcome of that comparison return? And what role does `processedAt` play in deciding whether an existing row counts as finished?",
    "excerpts": [
     {
      "path": "packages/domain/src/idempotency.ts",
      "lineStart": 3,
      "lineEnd": 5,
-     "quote": "return createHash(\"sha256\").update(stableStringify(payload)).digest(\"hex\");"
+     "quote": "export function hashRequestPayload(payload: unknown): string { return createHash(\"sha256\").update(stableStringify(payload)).digest(\"hex\"); }"
     },
     {
      "path": "apps/api/src/modules/payments.service.ts",
-     "lineStart": 36,
-     "lineEnd": 37,
-     "quote": "const payloadHash = hashRequestPayload(body);"
+     "lineStart": 34,
+     "lineEnd": 34,
+     "quote": "export async function processMockPaymentWebhook(tenant: TenantContext, input: unknown) {"
     }
    ],
    "readMore": [
@@ -71,9 +71,9 @@
    "excerpts": [
     {
      "path": "apps/api/src/shared/auth.ts",
-     "lineStart": 15,
-     "lineEnd": 16,
-     "quote": "const organizationSlug = String(request.header(\"x-org-slug\") ?? \"acme\");"
+     "lineStart": 8,
+     "lineEnd": 8,
+     "quote": "export async function attachTenantContext(request: Request, _response: Response, next: NextFunction) {"
     },
     {
      "path": "apps/api/src/modules/payments.service.ts",
@@ -156,7 +156,7 @@
    "target": "seed:quests:master2/quiz/28779329e0f9fc67",
    "phase": "after",
    "title": "A late failure cannot undo a success",
-   "body": "For a payment already `succeeded`, `alreadySucceeded` is true and `succeeded` is false. Line 85 skips the payment and invoice updates. Line 102 still sets `processedAt` on the event, line 105 picks the audit action `payment.failed.ignored`, and the guard at line 110 (`!(alreadySucceeded && !succeeded)`) skips the outbox write.\n\nThe audit row exists so an operator can see the notification arrived and was deliberately refused.\n\n- \"Set to failed and reopen the invoice\" is the regression the guard prevents.\n- \"409 invoice.transition_invalid\" only applies to a SUCCESS event for a draft or void invoice (line 69).\n- \"duplicate: true\" is the replay path for an already-processed event with the same id; this event id is new.",
+   "body": "The provider event id is new, so `existing` is null and line 73 creates the webhook event row inside the transaction. For a payment already `succeeded`, `alreadySucceeded` is true and `succeeded` is false, so line 85 skips the payment and invoice updates. Line 102 still sets `processedAt` on that new event row, line 105 picks the audit action `payment.failed.ignored`, and the guard at line 110 (`!(alreadySucceeded && !succeeded)`) skips the outbox write.\n\nThe event row and the audit row exist so an operator can see the notification arrived and was deliberately refused.\n\n- \"Set to failed and reopen the invoice\" is the regression the guard prevents.\n- \"409 invoice.transition_invalid\" only applies to a SUCCESS event for a draft or void invoice (line 69).\n- \"duplicate: true\" is the replay path for an already-processed event with the same id; this event id is new.",
    "excerpts": [
     {
      "path": "apps/api/src/modules/payments.service.ts",
