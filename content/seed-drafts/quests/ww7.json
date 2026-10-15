@@ -1,0 +1,428 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "ww7",
+ "sha": "dd32882cf3d2dcc8dca50f370cb865d93b64a7e6",
+ "guides": [
+  "docs/architecture/request-lifecycle.md",
+  "docs/architecture/README.md"
+ ],
+ "items": [
+  {
+   "id": "q01-analyst-invalid-body",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/request-lifecycle.md",
+    "lines": {
+     "start": 38,
+     "end": 38
+    }
+   },
+   "cites": [
+    {
+     "path": "src/lib/http/route-helpers.ts",
+     "lineStart": 35,
+     "lineEnd": 47
+    },
+    {
+     "path": "src/lib/auth/permissions.ts",
+     "lineStart": 16,
+     "lineEnd": 33
+    }
+   ],
+   "prompt": "An ANALYST sends PATCH /api/workflows/:id with a body that would also fail schema validation. Which status comes back?",
+   "answer": "403 FORBIDDEN, because the permission check runs first",
+   "distractors": [
+    "500, as the ZodError from the body is caught as unknown",
+    "400 with the list of field errors from the schema parse",
+    "404 WORKFLOW_NOT_FOUND, as analysts see no workflows"
+   ],
+   "explanation": "executeRoute asserts the route permission before it parses the body, and workflow:write is not in the analyst matrix, so the AppError(403) is thrown first."
+  },
+  {
+   "id": "q02-operator-other-workflow",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/request-lifecycle.md",
+    "lines": {
+     "start": 16,
+     "end": 16
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/workflow-dispatch-service.ts",
+     "lineStart": 40,
+     "lineEnd": 48
+    },
+    {
+     "path": "src/lib/auth/permissions.ts",
+     "lineStart": 35,
+     "lineEnd": 38
+    }
+   ],
+   "prompt": "Operator B manually triggers an ACTIVE workflow that operator A created. What does the dispatch service return?",
+   "answer": "404 WORKFLOW_NOT_FOUND, as operators only see their own",
+   "distractors": [
+    "403 WORKFLOW_SCOPE_VIOLATION from the ownership check itself",
+    "201, as any operator may trigger an active workflow",
+    "409 WORKFLOW_NOT_ACTIVE for another owner's workflow"
+   ],
+   "explanation": "findById applies the \"own\" visibility scope for operators, so the workflow is not found and the 404 is thrown before assertCanManageWorkflow is ever reached."
+  },
+  {
+   "id": "q03-trigger-paused",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/request-lifecycle.md",
+    "lines": {
+     "start": 15,
+     "end": 15
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/workflow-dispatch-service.ts",
+     "lineStart": 48,
+     "lineEnd": 52
+    }
+   ],
+   "prompt": "An operator manually triggers their own workflow while it is PAUSED. What is the response?",
+   "answer": "409 WORKFLOW_NOT_ACTIVE; only ACTIVE ones can run",
+   "distractors": [
+    "201, as a manual trigger also works when paused",
+    "422, as paused workflows must be republished first",
+    "403, as a paused workflow is locked to admins"
+   ],
+   "explanation": "After the scoped load and the ownership check, triggerWorkflowManually throws 409 WORKFLOW_NOT_ACTIVE for any status other than ACTIVE."
+  },
+  {
+   "id": "q04-manual-schedule-trigger",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/request-lifecycle.md",
+    "lines": {
+     "start": 15,
+     "end": 15
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/workflow-dispatch-service.ts",
+     "lineStart": 50,
+     "lineEnd": 59
+    }
+   ],
+   "prompt": "An operator manually triggers their own ACTIVE workflow whose trigger type is SCHEDULE. What happens?",
+   "answer": "A run is queued with triggerSource \"manual\" and 201",
+   "distractors": [
+    "409, since scheduled workflows are started by cron alone",
+    "422, since a manual run needs an event name to be set",
+    "A run is queued, and nextScheduledAt moves ahead"
+   ],
+   "explanation": "triggerWorkflowManually checks only that the workflow is ACTIVE; it never looks at triggerType. It enqueues with source \"manual\" and does not touch nextScheduledAt."
+  },
+  {
+   "id": "q05-retries-and-delays",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/request-lifecycle.md",
+    "lines": {
+     "start": 27,
+     "end": 27
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/workflow-execution-service.ts",
+     "lineStart": 163,
+     "lineEnd": 178
+    },
+    {
+     "path": "src/repositories/workflow-run-repository.ts",
+     "lineStart": 70,
+     "lineEnd": 70
+    }
+   ],
+   "prompt": "A step has maxRetries 2 and its HTTP action throws every time. How often does it run, and what waits come between the attempts?",
+   "answer": "Three attempts, with waits of 15 s and then 30 s",
+   "distractors": [
+    "Two attempts, with one wait of 15 s in between",
+    "Four attempts, waiting 15 s, 30 s and then 45 s",
+    "Two retries after the first try, each after 30 s"
+   ],
+   "explanation": "The job's maxAttempts is maxRetries + 1 = 3. On failure readyAt is now + attempts * 15 000 ms, so 15 s after the first failure and 30 s after the second; the third failure marks the step failed and the job dead."
+  },
+  {
+   "id": "q06-worker-dies-leased",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/request-lifecycle.md",
+    "lines": {
+     "start": 86,
+     "end": 86
+    }
+   },
+   "cites": [
+    {
+     "path": "src/repositories/workflow-job-repository.ts",
+     "lineStart": 16,
+     "lineEnd": 36
+    }
+   ],
+   "prompt": "A worker leases a job and then its process is killed. The lease was for 30 seconds. What happens to the job afterwards?",
+   "answer": "It stays LEASED, as leasing only takes AVAILABLE rows",
+   "distractors": [
+    "After 30 s another worker leases it again under a new token",
+    "It is reset to AVAILABLE by the scheduler on its next tick",
+    "It is marked dead once leasedUntil has passed without work"
+   ],
+   "explanation": "leaseNextAvailableJob selects status = 'AVAILABLE' AND readyAt <= NOW(); nothing turns an expired LEASED row back into AVAILABLE, so the run stays RUNNING."
+  },
+  {
+   "id": "q07-scheduler-downtime",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/request-lifecycle.md",
+    "lines": {
+     "start": 44,
+     "end": 44
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/workflow-dispatch-service.ts",
+     "lineStart": 87,
+     "lineEnd": 100
+    }
+   ],
+   "prompt": "An hourly SCHEDULE workflow was due at 01:00, 02:00 and 03:00, but the scheduler was down until 03:30. What happens on its first tick?",
+   "answer": "One run is created, and the next time is set from 03:30",
+   "distractors": [
+    "Three runs are created, one for each missed interval",
+    "No run is created; the missed ticks are simply skipped",
+    "Three runs are created and the next time is 04:00"
+   ],
+   "explanation": "dispatchScheduledRuns enqueues once per due workflow, then sets nextScheduledAt with getNextScheduledAt(cron, now), so missed ticks collapse into one catch-up run."
+  },
+  {
+   "id": "q08-short-step-name",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/request-lifecycle.md",
+    "lines": {
+     "start": 76,
+     "end": 76
+    }
+   },
+   "cites": [
+    {
+     "path": "src/lib/http/route-helpers.ts",
+     "lineStart": 46,
+     "lineEnd": 62
+    }
+   ],
+   "prompt": "An operator saves a workflow whose step name is one character long, below the schema's min(2). What does the API return?",
+   "answer": "500 with \"An unexpected server error occurred.\"",
+   "distractors": [
+    "400, with each of the zod field errors in the response",
+    "422 with a WORKFLOW_STEP_REQUIRED code",
+    "201, as step names are not validated yet"
+   ],
+   "explanation": "bodySchema.parse throws a ZodError, which is not an AppError, so executeRoute's catch returns the generic 500, without logging it."
+  },
+  {
+   "id": "q09-missing-path-condition",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/concepts-demonstrated.md",
+    "lines": {
+     "start": 82,
+     "end": 82
+    }
+   },
+   "cites": [
+    {
+     "path": "src/lib/workflow/conditions.ts",
+     "lineStart": 13,
+     "lineEnd": 21
+    },
+    {
+     "path": "src/lib/workflow/conditions.ts",
+     "lineStart": 33,
+     "lineEnd": 40
+    }
+   ],
+   "prompt": "A step condition says context.riskScore lt 50, but no earlier step ever wrote riskScore. Does the step run?",
+   "answer": "Yes: the missing value reads as null, and Number(null) is 0",
+   "distractors": [
+    "No: a missing path makes every comparison in the rule false",
+    "No: a missing value is NaN, and NaN is never below 50",
+    "Yes: conditions are skipped for keys that are not present"
+   ],
+   "explanation": "readPath returns null for a missing segment; lt compares Number(null) < Number(50), which is 0 < 50, so the rule matches and the step runs."
+  },
+  {
+   "id": "q10-missing-template-token",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/testing-rationale.md",
+    "lines": {
+     "start": 44,
+     "end": 44
+    }
+   },
+   "cites": [
+    {
+     "path": "src/lib/workflow/templates.ts",
+     "lineStart": 13,
+     "lineEnd": 27
+    }
+   ],
+   "prompt": "A step's HTTP URL is \"https://api.test/orders/{{payload.orderId}}\", but the trigger payload has no orderId. What URL is called?",
+   "answer": "\"https://api.test/orders/\" with the token replaced by an empty string",
+   "distractors": [
+    "The URL unchanged, with the literal {{payload.orderId}} placeholder",
+    "\"https://api.test/orders/undefined\", since the lookup returns undefined",
+    "None: the step throws a missing-variable error and enters retrying"
+   ],
+   "explanation": "lookupToken returns \"\" for a segment that is not present, and resolveTemplateStrings substitutes String(\"\"), so the placeholder disappears and the request goes to /orders/."
+  },
+  {
+   "id": "q11-paused-to-draft",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/request-lifecycle.md",
+    "lines": {
+     "start": 58,
+     "end": 58
+    }
+   },
+   "cites": [
+    {
+     "path": "src/lib/workflow/status-machine.ts",
+     "lineStart": 15,
+     "lineEnd": 35
+    }
+   ],
+   "prompt": "An operator tries to move their PAUSED workflow back to DRAFT. What does assertValidWorkflowTransition do?",
+   "answer": "Throws 409 INVALID_WORKFLOW_TRANSITION for the move",
+   "distractors": [
+    "Allows it, as PAUSED may return to any earlier status",
+    "Allows it only when no runs have been created so far",
+    "Throws 422, as DRAFT is not a valid target status"
+   ],
+   "explanation": "allowedTransitions lists PAUSED: [ACTIVE, ARCHIVED]. A same-state request returns early, but PAUSED to DRAFT is not allowed and throws 409."
+  },
+  {
+   "id": "q12-analyst-sees-more",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/auth-and-permissions.md",
+    "lines": {
+     "start": 18,
+     "end": 18
+    }
+   },
+   "cites": [
+    {
+     "path": "src/lib/auth/permissions.ts",
+     "lineStart": 35,
+     "lineEnd": 38
+    }
+   ],
+   "prompt": "An ANALYST and an OPERATOR who created no workflows both call GET /api/workflows. What do they each see?",
+   "answer": "The analyst sees every workflow; the operator sees none",
+   "distractors": [
+    "Both see every workflow, as reads are open to all",
+    "Neither sees any, as both of them created nothing",
+    "The operator sees every workflow; the analyst sees shared ones"
+   ],
+   "explanation": "getWorkflowVisibilityScope returns \"all\" for ADMIN and ANALYST and \"own\" for OPERATOR, so a read-only analyst sees more than an operator does."
+  },
+  {
+   "id": "f01-execute-route",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/architecture/request-lifecycle.md",
+    "lines": {
+     "start": 38,
+     "end": 38
+    }
+   },
+   "cites": [
+    {
+     "path": "src/lib/http/route-helpers.ts",
+     "lineStart": 30,
+     "lineEnd": 64
+    }
+   ],
+   "front": "In what order does executeRoute handle a request, and how are errors mapped?",
+   "back": "Load the session actor; if the route needs a permission, 401 without an actor, then assertPermission (403); then parse the body; then run the handler. AppError keeps its status; anything else (ZodError, SyntaxError, Prisma errors) becomes a generic 500 and is not logged."
+  },
+  {
+   "id": "f02-retry-model",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/architecture/request-lifecycle.md",
+    "lines": {
+     "start": 27,
+     "end": 28
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/workflow-execution-service.ts",
+     "lineStart": 163,
+     "lineEnd": 178
+    },
+    {
+     "path": "src/repositories/workflow-run-repository.ts",
+     "lineStart": 239,
+     "lineEnd": 270
+    }
+   ],
+   "front": "How does a failed step get retried in FlowForge?",
+   "back": "In the worker catch: attempts = job.attempts + 1. If attempts < maxAttempts (maxRetries + 1), markStepRetrying resets the same job row to AVAILABLE with readyAt = now + attempts * 15 s and the step to RETRYING, in one transaction. Otherwise the step is marked failed and the job dead."
+  },
+  {
+   "id": "f03-lease-gap",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/architecture/request-lifecycle.md",
+    "lines": {
+     "start": 84,
+     "end": 87
+    }
+   },
+   "cites": [
+    {
+     "path": "src/repositories/workflow-job-repository.ts",
+     "lineStart": 16,
+     "lineEnd": 36
+    }
+   ],
+   "front": "Why can a run stay RUNNING forever, and what is the fix?",
+   "back": "The lease query only takes AVAILABLE rows, so a job leased by a worker that died stays LEASED. Fix: also select LEASED rows whose leasedUntil < NOW(), and check leaseToken when completing so a slow worker cannot finish a job re-leased to someone else."
+  },
+  {
+   "id": "f04-schedule-race",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/architecture/request-lifecycle.md",
+    "lines": {
+     "start": 99,
+     "end": 102
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/workflow-dispatch-service.ts",
+     "lineStart": 87,
+     "lineEnd": 100
+    }
+   ],
+   "front": "How can one scheduled tick produce two runs?",
+   "back": "The scheduler loop and the internal dispatch route can run dispatchScheduledRuns concurrently; it reads due workflows, enqueues, then advances nextScheduledAt with no lock. Fix: claim with a conditional update on nextScheduledAt and enqueue only if one row changed."
+  }
+ ]
+}
