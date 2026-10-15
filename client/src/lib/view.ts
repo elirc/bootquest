@@ -1,7 +1,7 @@
 // Client-only display helpers over the server contract. Nothing here computes a number the
 // server owns (XP, level, streak); these are labels and presentation constants only.
 
-import type { PublicCheck, TrackId, UnitDetail } from '../api/types';
+import type { PublicCheck, TrackId, TrackProgress, UnitDetail } from '../api/types';
 import { proseChunks } from './prose';
 
 /** Every TrackId, in sidebar order. `satisfies` + the exhaustive record below keep it in sync. */
@@ -100,4 +100,24 @@ export function readingTitle(title: string, path: string): string {
 export function campaignSourceOf(unitKey: string): { trackId: string; repo: string } | null {
   const m = /^campaign\/([^/]+)\/(.+)$/.exec(unitKey);
   return m ? { trackId: m[1]!, repo: m[2]! } : null;
+}
+
+/**
+ * Campaign 2 B2 (ui-audit #26): the ONE tooltip text for a track's percentage. The number itself
+ * is server-computed (TrackProgress in shared/src/api.ts); the sidebar, the campaign page and the
+ * stats page all show it with this explanation, so they agree by construction.
+ */
+export function progressTitle(p: TrackProgress): string {
+  const core = `Campaign core quests: ${p.coreDone}/${p.coreTotal}`;
+  const practice = `practice units: ${p.practiceDone}/${p.practiceTotal}`;
+  if (p.basis === 'campaign-core') return `${p.pct}% = campaign core quests done (${p.coreDone}/${p.coreTotal}, all acts, content-pending included). Practice units: ${p.practiceDone}/${p.practiceTotal}, not counted in the %.`;
+  if (p.basis === 'practice') return `${p.pct}% = practice units done (${p.practiceDone}/${p.practiceTotal}); this track has no campaign core quests.`;
+  return `No progress counted (${core}; ${practice}).`;
+}
+
+/** The percentage as shown: '<1%' once something counted is done but the floor is still 0; '–' when nothing is counted. */
+export function progressLabel(p: TrackProgress): string {
+  if (p.basis === 'none') return '–';
+  const done = p.basis === 'campaign-core' ? p.coreDone : p.practiceDone;
+  return p.pct === 0 && done > 0 ? '<1%' : `${p.pct}%`;
 }

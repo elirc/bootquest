@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { CheckSpec } from './check.ts';
-import { Assessor, Assistance, CompetencyId, EvidenceKind, ReviewGrade, RunVerdict, TrackId, UnitKind, XpZeroReason, type CheckType as CheckTypeT } from './enums.ts';
+import { Assessor, Assistance, CheckType, CompetencyId, EvidenceKind, ReviewGrade, RunVerdict, TrackId, UnitKind, XpZeroReason, type CheckType as CheckTypeT } from './enums.ts';
 import { MUTATION_TOOLS } from './mutation.ts';
 import { RunnerFailure } from './schemas.ts';
 import { RefLink } from './sync.ts';
@@ -404,8 +404,31 @@ export const UnitSummary = z
   .strict();
 export type UnitSummary = z.infer<typeof UnitSummary>;
 
+/**
+ * Campaign 2 B2 (ui-audit #26): ONE server-owned definition of "how far along is this track",
+ * shared by the sidebar, the campaign page and the stats page so they can never disagree.
+ *   basis 'campaign-core': the track has campaign core quests -> pct = floor(coreDone / coreTotal * 100)
+ *                          (the same per-act core counts the campaign map shows, summed over every act;
+ *                          content-pending core quests stay in the total: they are not done);
+ *   basis 'practice':      no campaign core quests -> pct = floor(practiceDone / practiceTotal * 100)
+ *                          (practice = the track's live non-campaign units: doneCount / unitCount);
+ *   basis 'none':          locked track, or nothing to count -> pct 0.
+ * Floored, so 100 means every counted item is done (99.6% never shows as 100%).
+ */
+export const TrackProgress = z
+  .object({
+    pct: z.number().int().min(0).max(100),
+    basis: z.enum(['campaign-core', 'practice', 'none']),
+    coreDone: z.number().int().min(0),
+    coreTotal: z.number().int().min(0),
+    practiceDone: z.number().int().min(0),
+    practiceTotal: z.number().int().min(0),
+  })
+  .strict();
+export type TrackProgress = z.infer<typeof TrackProgress>;
+
 export const TrackSummary = z
-  .object({ id: TrackId, name: z.string(), locked: z.boolean(), unitCount: z.number(), doneCount: z.number() })
+  .object({ id: TrackId, name: z.string(), locked: z.boolean(), unitCount: z.number(), doneCount: z.number(), progress: TrackProgress })
   .strict();
 
 export const TracksResponse = z.object({ tracks: z.array(TrackSummary) }).strict();
@@ -1016,3 +1039,133 @@ export type AttemptDetailResponse = z.infer<typeof AttemptDetailResponse>;
 
 // GET /api/tracks/:id/campaign (W5b) — schemas live with the campaign pack format
 export { CampaignActDto, CampaignQuestDto, CampaignResponse, QuestState } from './campaign.ts';
+
+// ---------------------------------------------------------------- campaign 2 B2: stats (read-only)
+//
+// Every number below is computed server-side from the append-only ledgers (xp_event, attempt + run,
+// review_item + review_log) and the derived campaign state. Day keys are the owner's LOCAL calendar
+// days ('YYYY-MM-DD', the same keys the streak / heatmap use).
+
+const StatsDayKey = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+
+/** XP split by track; `none` = XP events without a track (e.g. review XP). */
+export const XpByTrack = z
+  .object({ js: z.number(), csharp: z.number(), java: z.number(), agentic: z.number(), none: z.number() })
+  .strict();
+export type XpByTrack = z.infer<typeof XpByTrack>;
+
+export const XP_STATS_DAYS = 90;
+
+/**
+ * GET /api/stats/xp.
+ *   days:  exactly XP_STATS_DAYS contiguous local days ending `today` (zero days included);
+ *   weeks: all-time, Monday-start local weeks, contiguous from the week of the FIRST XP event to the
+ *          current week (zero weeks included); empty when the ledger has no XP event at all.
+ *   totals.events: xp_event rows that EARNED XP (amount > 0); zero-amount rows (revealed, daily cap,
+ *          already awarded) are ledger rows but not counted, and never start the weekly series.
+ */
+export const XpStatsResponse = z
+  .object({
+    today: StatsDayKey,
+    days: z.array(z.object({ day: StatsDayKey, total: z.number(), byTrack: XpByTrack }).strict()),
+    weeks: z.array(z.object({ weekStart: StatsDayKey, total: z.number(), byTrack: XpByTrack }).strict()),
+    totals: z.object({ allTime: z.number(), lastDays: z.number(), events: z.number() }).strict(),
+  })
+  .strict();
+export type XpStatsResponse = z.infer<typeof XpStatsResponse>;
+
+/**
+ * One pass-rate row. A GRADED attempt is an attempt with a machine submit run (reading self-attests,
+ * written answers, explain-back / kata self-scores and the reveal row itself are not graded attempts).
+ *   passes:         graded attempts that are a VERIFIED pass (outcome pass + a passing submit run) made
+ *                   WITHOUT a reveal (solo or self-assisted). A submit after the solution was revealed
+ *                   (mode 'guided') stays in `attempts` but is never a pass;
+ *   guidedPasses:   verified passes made after a reveal (mode 'guided'), reported so they are visible,
+ *                   never counted in `passes` or `passRate`;
+ *   units:          distinct units with at least one graded attempt;
+ *   firstTryPasses: units whose FIRST graded attempt was a verified pass made SOLO (no self-assist,
+ *                   no reveal) — the honest "first-try" number;
+ *   rates are null when their denominator is 0 (never a fake 0%).
+ */
+export const PassRateRow = z
+  .object({
+    attempts: z.number().int().min(0),
+    passes: z.number().int().min(0),
+    guidedPasses: z.number().int().min(0),
+    passRate: z.number().min(0).max(1).nullable(),
+    units: z.number().int().min(0),
+    firstTryPasses: z.number().int().min(0),
+    firstTryRate: z.number().min(0).max(1).nullable(),
+  })
+  .strict();
+export type PassRateRow = z.infer<typeof PassRateRow>;
+
+/** GET /api/stats/pass-rates: groups with zero graded attempts are omitted; order is stable (enum order). */
+export const PassRatesResponse = z
+  .object({
+    overall: PassRateRow,
+    byTrack: z.array(PassRateRow.extend({ trackId: TrackId }).strict()),
+    byCheckType: z.array(PassRateRow.extend({ checkType: CheckType }).strict()),
+  })
+  .strict();
+export type PassRatesResponse = z.infer<typeof PassRatesResponse>;
+
+export const REVIEW_FORECAST_DAYS = 14;
+export const REVIEW_RETENTION_WINDOW_DAYS = 30;
+
+/**
+ * GET /api/stats/reviews (review cards only — changed-example retest items are excluded, exactly
+ * like the review queue's due count).
+ *   forecast: REVIEW_FORECAST_DAYS local days from today; today's bucket includes every overdue card
+ *             (`overdue` says how many of them were due before today); `later` = cards due after the window.
+ *   retention: share of graded reviews NOT rated 'again' (recalled / reviews), null with no reviews;
+ *             `window` covers the last REVIEW_RETENTION_WINDOW_DAYS local days including today.
+ */
+const RetentionDto = z
+  .object({ reviews: z.number().int().min(0), recalled: z.number().int().min(0), rate: z.number().min(0).max(1).nullable() })
+  .strict();
+export const ReviewStatsResponse = z
+  .object({
+    today: StatsDayKey,
+    cards: z.number().int().min(0),
+    dueNow: z.number().int().min(0),
+    overdue: z.number().int().min(0),
+    later: z.number().int().min(0),
+    forecast: z.array(z.object({ day: StatsDayKey, due: z.number().int().min(0) }).strict()),
+    retention: z.object({ window: RetentionDto, allTime: RetentionDto }).strict(),
+    ratings: z.object({ again: z.number(), hard: z.number(), good: z.number(), easy: z.number() }).strict(),
+  })
+  .strict();
+export type ReviewStatsResponse = z.infer<typeof ReviewStatsResponse>;
+
+/** GET /api/stats/campaign: per track the shared TrackProgress, per act the campaign map's own counts. */
+export const CampaignProgressResponse = z
+  .object({
+    tracks: z.array(
+      z
+        .object({
+          trackId: TrackId,
+          name: z.string(),
+          locked: z.boolean(),
+          progress: TrackProgress,
+          acts: z.array(
+            z
+              .object({
+                actNo: z.number().int(),
+                title: z.string(),
+                unlocked: z.boolean(),
+                coreDone: z.number().int().min(0),
+                coreTotal: z.number().int().min(0),
+                /** core quests whose quiz gate is not seeded yet (cannot be done until content lands) */
+                corePending: z.number().int().min(0),
+                readingDone: z.number().int().min(0),
+                readingTotal: z.number().int().min(0),
+              })
+              .strict(),
+          ),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+export type CampaignProgressResponse = z.infer<typeof CampaignProgressResponse>;
