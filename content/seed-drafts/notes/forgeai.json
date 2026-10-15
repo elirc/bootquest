@@ -1,0 +1,353 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "forgeai",
+ "repo": "forgeai",
+ "sha": "a6c6c51b034ae56a38aa0685a7357f3ce86b55c4",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: the Forge Engineering Academy lessons",
+   "body": "Forge is a multi-tenant commerce system (a Fastify API, a Next.js web app and PostgreSQL) built to teach production engineering. The lessons live in `docs/upskilling/` and each one points at real code and a named integration test.\n\nRead in this order, as `docs/upskilling/learning-path.md` suggests:\n\n1. `docs/architecture/repository-map.md`, then `docs/upskilling/security/tenant-isolation.md`: from login to an authorized tenant context.\n2. `docs/upskilling/databases/transactions-and-concurrency.md`: checkout, stock reservation and the transaction helper.\n3. `docs/upskilling/distributed-systems/durable-jobs.md`: the payment job, leases and retries.\n4. `docs/upskilling/code-reading/checkout.md`: twelve questions to answer from the code, with a table of where to start for each.\n\nEach lesson has an **Exercise** with a **Check**. The quiz asks you to predict what the system does in a specific situation, so read the cited lines for each lesson before you answer, and run the named tests if you can.",
+   "excerpts": [
+    {
+     "path": "docs/upskilling/README.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "Learn production engineering by following and modifying the working system."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/upskilling/learning-path.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The recommended order through the lessons."
+    },
+    {
+     "path": "docs/upskilling/code-reading/checkout.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The checkout code-reading tour and its hint table."
+    }
+   ]
+  },
+  {
+   "id": "r02-gates-and-tenants",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: the gates in front of every request",
+   "body": "A request to Forge passes several separate checks, and the order matters as much as the checks. Read `apps/api/src/app.ts` and `apps/api/src/modules/identity/service.ts` and note, for each gate, what it inspects, which error code it throws and with which status:\n\n- the `onRequest` hook near the top of `app.ts`: which methods it applies to and which headers it compares;\n- `getSession`: what makes a token unacceptable;\n- `authorize`: how it finds the membership for the tenant in the URL, and what it does when there is none;\n- `requireWrite` and `requireAdmin`: which roles each refuses.\n\nThen open the checkout route and list what it parses and checks, in the order the code does it. The lesson's Exercise asks what a viewer sees; work it out from that order before you run the curl commands. Note also why the API might prefer one status over another when a user is not a member of a tenant.",
+   "excerpts": [
+    {
+     "path": "docs/upskilling/security/tenant-isolation.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "Authorization decides which action that user may take on which tenant"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "apps/api/src/modules/identity/service.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Login, sessions, authorize and the role checks."
+    },
+    {
+     "path": "apps/api/src/app.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Hooks, the error handler and every route."
+    }
+   ]
+  },
+  {
+   "id": "r03-checkout-and-jobs",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: one transaction for checkout, a durable job for payment",
+   "body": "`checkout` in `commerce/service.ts` and `reserve` in `inventory/service.ts` are the heart of the concurrency lesson. While reading, write down:\n\n- what is done to the cart lines before the fingerprint is computed, and what goes into the advisory-lock key;\n- what the lookup by `(tenant, actor, key)` does in each case it handles;\n- the exact `WHERE` clause of the reservation `UPDATE`, and what `reserve` does when it returns no row;\n- which client every write runs on, and what `transaction()` in `packages/database/src/index.ts` does on an error.\n\nThen follow the payment job in `platform/jobs.ts`, `payments/provider.ts` and `payments/service.ts`. Note which job states and lease conditions `claimJob` selects, how the provider looks up an earlier result, which conditions `applyPaymentResult` checks before writing, and how `retryDelayMs` grows with the attempt number. Look up PostgreSQL's READ COMMITTED behaviour for concurrent updates of the same row.",
+   "excerpts": [
+    {
+     "path": "docs/upskilling/databases/transactions-and-concurrency.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "A conditional update also protects a business decision when multiple transactions compete."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/upskilling/databases/transactions-and-concurrency.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The checkout and reservation lesson."
+    },
+    {
+     "path": "docs/upskilling/distributed-systems/durable-jobs.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The payment job lesson, with exact line references."
+    }
+   ]
+  },
+  {
+   "id": "x-q01",
+   "target": "seed:quests:forgeai/quiz/f4c61d7f29241e5b",
+   "phase": "after",
+   "title": "Why a viewer sees FORBIDDEN, not a validation error",
+   "body": "The checkout route works in a fixed order: parse the tenant id from the URL, call `authorize(..., true)`, parse the idempotency-key header, and only then parse the body with `checkoutSchema`. With `write` set to true, `authorize` calls `requireWrite`, which throws **403 FORBIDDEN** for the viewer role. The empty `lines` array would fail the schema's `.min(1)`, but parsing never runs. The lesson's Check expects exactly this.\n\n- *VALIDATION_FAILED* would need the body to be parsed before authorization.\n- *NOT_FOUND* is for users with no membership; the viewer is a member.\n- *INVALID_ORIGIN* is wrong: the question says the Origin and header are correct, so the hook passes.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/app.ts",
+     "lineStart": 189,
+     "lineEnd": 189,
+     "quote": "const principal = await authorize(pool, request.cookies[cookieName], tenantId, true);"
+    },
+    {
+     "path": "apps/api/src/modules/identity/service.ts",
+     "lineStart": 68,
+     "lineEnd": 69,
+     "quote": "if (principal.role === 'viewer') throw new DomainError(403, 'FORBIDDEN', 'Your role cannot make changes.');"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02",
+   "target": "seed:quests:forgeai/quiz/7a9e62cf7e31d676",
+   "phase": "after",
+   "title": "Why a missing x-forge-request header is refused first",
+   "body": "An `onRequest` hook runs for every request before the route handler. For any method other than GET, HEAD and OPTIONS it requires two things: `Origin` equal to `WEB_ORIGIN`, and `x-forge-request` equal to \"1\". Missing either one throws **403 INVALID_ORIGIN**. This is the CSRF defence for the session cookie, and because it runs first, the session is never read.\n\n- *Origin alone is enough* is wrong: the condition uses `||`, so either failure rejects.\n- *401* is wrong: the hook rejects before authentication.\n- *FORBIDDEN for the role* is wrong: role checks happen later, inside `authorize`.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/app.ts",
+     "lineStart": 57,
+     "lineEnd": 57,
+     "quote": "if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)) {"
+    },
+    {
+     "path": "apps/api/src/app.ts",
+     "lineStart": 62,
+     "lineEnd": 62,
+     "quote": "throw new DomainError(403, 'INVALID_ORIGIN', 'A same-origin request is required.');"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q03",
+   "target": "seed:quests:forgeai/quiz/9555f7daad5f89b6",
+   "phase": "after",
+   "title": "Why another tenant's URL gives 404",
+   "body": "`authorize` loads the caller's current memberships and looks for one with the tenant id from the URL. Harbor's owner has none in Northstar, so it throws **404 NOT_FOUND** \"Workspace not found.\" The lesson explains the choice: a 403 would confirm that the tenant exists, which leaks information to someone guessing ids.\n\n- *403 FORBIDDEN* is reserved for members whose role cannot write.\n- *200 with an empty list* is wrong: no query runs without a principal.\n- *401* is wrong: the session is valid for the user, whatever tenant they ask for.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/modules/identity/service.ts",
+     "lineStart": 62,
+     "lineEnd": 62,
+     "quote": "if (!membership) throw new DomainError(404, 'NOT_FOUND', 'Workspace not found.');"
+    },
+    {
+     "path": "docs/upskilling/security/tenant-isolation.md",
+     "lineStart": 21,
+     "lineEnd": 21,
+     "quote": "It does not return 403, because a 403 would confirm that the tenant exists."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q04",
+   "target": "seed:quests:forgeai/quiz/41c2eeca102611f4",
+   "phase": "after",
+   "title": "Why reordered cart lines still replay the order",
+   "body": "Before hashing, `checkout` sorts the lines by product id. The fingerprint is a SHA-256 of that normalized input, so the same items in another order produce the same hash. The lookup by tenant, actor and key finds the earlier order, the hashes match, and `checkout` returns it with `replayed: true`. The route then answers **200** and sets `idempotency-replayed: true`.\n\n- *409 IDEMPOTENCY_CONFLICT* needs a different fingerprint; reordering does not change it.\n- *A second order with 201* is wrong: the existing order is found first.\n- *400 for line order* is wrong: the schema does not care about order, only about duplicate product ids.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/modules/commerce/service.ts",
+     "lineStart": 42,
+     "lineEnd": 42,
+     "quote": "lines: [...rawInput.lines].sort((a, b) => a.productId.localeCompare(b.productId)),"
+    },
+    {
+     "path": "apps/api/src/app.ts",
+     "lineStart": 199,
+     "lineEnd": 199,
+     "quote": "return reply.status(result.replayed ? 200 : 201)"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q05",
+   "target": "seed:quests:forgeai/quiz/bc0f77f17982321f",
+   "phase": "after",
+   "title": "How the advisory lock coalesces two identical requests",
+   "body": "Inside the checkout transaction the first statement is `pg_advisory_xact_lock` on a hash of tenant, user and key. The second request's transaction blocks on that lock until the first commits and releases it. Its next statement looks up the order by `(tenant, actor, key)`; under READ COMMITTED a new statement sees the committed row, the fingerprints match, and the second request returns the same order as a replay.\n\n- *The unique index rejects the second insert* would happen without the lock; with it, the second never reaches the insert.\n- *Both create orders* is exactly what the lock prevents.\n- *Fails at once with a lock timeout* is wrong: the second request waits for the lock instead of failing; the 5-second `lock_timeout` only bounds how long it may wait.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/modules/commerce/service.ts",
+     "lineStart": 47,
+     "lineEnd": 48,
+     "quote": "await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [ principal.tenantId + ':' + principal.userId + ':' + key,"
+    },
+    {
+     "path": "apps/api/src/modules/commerce/service.ts",
+     "lineStart": 61,
+     "lineEnd": 61,
+     "quote": "return { id: existing.rows[0].id, replayed: true };"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q06",
+   "target": "seed:quests:forgeai/quiz/bf3319c14fb3a39d",
+   "phase": "after",
+   "title": "How one statement decides who gets the last item",
+   "body": "`reserve` is a single conditional `UPDATE` that adds to `reserved` only where `on_hand - reserved >= quantity`. The first checkout's update succeeds. The second one waits for the row lock, and when the first commits, PostgreSQL rechecks its `WHERE` against the updated row; now no row qualifies, nothing is returned, and `reserve` throws **409 INSUFFICIENT_STOCK**. The winner gets **201**.\n\n- *201 for both* is the read-then-write bug this statement avoids.\n- *Blocks until a timeout* is wrong: the wait ends when the first transaction commits.\n- *409 for both* is wrong: the first update matches and its checkout commits.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/modules/inventory/service.ts",
+     "lineStart": 17,
+     "lineEnd": 17,
+     "quote": "AND on_hand - reserved >= $3 RETURNING warehouse_id"
+    },
+    {
+     "path": "docs/upskilling/databases/transactions-and-concurrency.md",
+     "lineStart": 30,
+     "lineEnd": 30,
+     "quote": "a conflicting updater waits and then rechecks the condition against the updated row."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07",
+   "target": "seed:quests:forgeai/quiz/410bff7a1f0b4dbc",
+   "phase": "after",
+   "title": "Why a failed second line leaves nothing behind",
+   "body": "Every checkout write (the order, its lines, each reservation, the payment intent, the job and the audit row) runs on the one client that `transaction()` checked out. When the second `reserve` throws, the error leaves `work`, the helper runs `ROLLBACK`, and the first reservation disappears together with everything else. The lesson's failure scenario describes this case.\n\n- *A failed order with its reservation* would need separate commits.\n- *A reservation released later by a sweeper* is wrong: there is nothing to sweep, and no such job.\n- *Order and lines without reservations* is wrong: they are in the same transaction as the reservations.",
+   "excerpts": [
+    {
+     "path": "packages/database/src/index.ts",
+     "lineStart": 33,
+     "lineEnd": 35,
+     "quote": "} catch (error) { try { await client.query('ROLLBACK');"
+    },
+    {
+     "path": "docs/upskilling/databases/transactions-and-concurrency.md",
+     "lineStart": 53,
+     "lineEnd": 53,
+     "quote": "Forge rolls back the order, lines, reservations, intent and job together."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08",
+   "target": "seed:quests:forgeai/quiz/69fa9638188ad2f6",
+   "phase": "after",
+   "title": "How a timeout after capture recovers without a second charge",
+   "body": "On attempt 1 the simulator inserts the charge into `simulated_provider_payments` and then throws `PROVIDER_TIMEOUT_AFTER_CAPTURE`, which the job runner records as a retryable failure. On attempt 2, `capture` first looks up a payment whose `idempotency_key` is the order id. It finds the stored success (same amount) and returns it, so the job applies it and the order becomes **confirmed**, with one provider row.\n\n- *A fresh key on attempt 2* is wrong: the key is always the order id.\n- *Dead-lettered* is wrong: the code is in the known list and attempts is below 5.\n- *Throws again* is wrong twice: the chaos throw needs `attempt === 1`, and the lookup returns before it.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/modules/payments/provider.ts",
+     "lineStart": 32,
+     "lineEnd": 32,
+     "quote": "if (previous.rows[0]) {"
+    },
+    {
+     "path": "apps/api/src/modules/payments/provider.ts",
+     "lineStart": 51,
+     "lineEnd": 51,
+     "quote": "if (mode === 'payment_timeout' && input.attempt === 1)"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09",
+   "target": "seed:quests:forgeai/quiz/fa79408a91753823",
+   "phase": "after",
+   "title": "How fencing stops a worker that lost its lease",
+   "body": "`applyPaymentResult` starts by re-reading the job `FOR UPDATE` with three conditions: the caller's `lease_token`, state running, and an unexpired lease. When worker B reclaimed the job, the claim wrote a new random token, so A's token matches nothing. The query returns zero rows and the function returns `false` before touching the order. `processOneJob` does not check that return value, which the checkout tour's review notes flag as a silent failure.\n\n- *Confirms the order* is what fencing prevents; B will finalize it instead.\n- *PAYMENT_RESULT_MISMATCH* is only thrown after the lease check passes.\n- *Waits for B* is wrong: there is no waiting; the check simply fails.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/modules/payments/service.ts",
+     "lineStart": 20,
+     "lineEnd": 20,
+     "quote": "SELECT id FROM jobs WHERE id=$1 AND lease_token=$2 AND state='running' AND lease_until > now() FOR UPDATE"
+    },
+    {
+     "path": "apps/api/src/modules/payments/service.ts",
+     "lineStart": 23,
+     "lineEnd": 23,
+     "quote": "if (!lease.rowCount) return false;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10",
+   "target": "seed:quests:forgeai/quiz/ec041a190e18cc20",
+   "phase": "after",
+   "title": "How a crashed worker's job is picked up again",
+   "body": "A claim gives the job `lease_until = now() + 30 seconds`. The claim query selects two kinds of rows: pending jobs that are due, and running jobs whose lease has expired, both only while `attempts` is below 5. Thirty-five seconds after the crash the lease is over and attempts is 2, so the next poll leases the job again with a new token and increments attempts.\n\n- *Stays running until an admin replays it* describes dead jobs, not expired leases.\n- *Dead-lettered for a crash* is wrong: only an exhausted retry budget dead-letters.\n- *Five minutes of backoff* is wrong: backoff is set on a recorded failure, and a crash records none.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/platform/jobs.ts",
+     "lineStart": 34,
+     "lineEnd": 34,
+     "quote": "(state='running' AND lease_until < now())"
+    },
+    {
+     "path": "docs/upskilling/distributed-systems/durable-jobs.md",
+     "lineStart": 25,
+     "lineEnd": 25,
+     "quote": "A `running` job whose lease has expired is eligible again."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q11",
+   "target": "seed:quests:forgeai/quiz/2c0a21b06a1e1704",
+   "phase": "after",
+   "title": "Working out the retry delay after a third failure",
+   "body": "The failure path sets `available_at` to now plus `retryDelayMs(job.attempts)`. For attempt 3 the base is `min(60000, 1000 * 2^(3 - 1))`, which is 4000 ms, and it is multiplied by `0.5 + random * 0.5`, a factor from 0.5 up to (not including) 1.0. So the delay lands between about 2 and 4 seconds. Unlike a fixed jitter, this random factor spreads out jobs that failed together.\n\n- *Exactly 4 seconds* ignores the random factor.\n- *4 to 8 seconds* treats the jitter as added on top rather than multiplied in.\n- *Exactly 60 seconds* is the cap, which would need attempt 7, beyond the five-attempt budget.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/platform/jobs.ts",
+     "lineStart": 21,
+     "lineEnd": 21,
+     "quote": "Math.min(60_000, 1000 * 2 ** Math.max(0, attempt - 1)) * (0.5 + random() * 0.5),"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q12",
+   "target": "seed:quests:forgeai/quiz/f9dad153f2fe891d",
+   "phase": "after",
+   "title": "What a declined payment does to reserved stock",
+   "body": "While the order is `awaiting_payment`, a declined result sets it to `payment_failed` and calls `settleReservations` with the outcome `released`. That marks each held reservation released and runs an inventory update that subtracts the quantity from `reserved` and subtracts **0** from `on_hand`: the stock becomes available again without being shipped. A success would instead insert a shipment; stock is consumed later, at shipment.\n\n- *Consumed* is the shipment path, which reduces `on_hand` too.\n- *Kept as held for a reconciliation job* is wrong: the decline path settles them at once; the lesson's note about retained reservations is about uncertain payments.\n- *Deleted with a zero shipment* is wrong: no shipment is written for a decline.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/modules/payments/service.ts",
+     "lineStart": 48,
+     "lineEnd": 48,
+     "quote": "await settleReservations(client, job.tenant_id, job.aggregate_id, 'released');"
+    },
+    {
+     "path": "apps/api/src/modules/inventory/service.ts",
+     "lineStart": 56,
+     "lineEnd": 56,
+     "quote": "outcome === 'consumed' ? reservation.quantity : 0,"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}

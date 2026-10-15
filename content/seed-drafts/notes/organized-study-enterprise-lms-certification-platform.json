@@ -1,0 +1,361 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "organized-study-enterprise-lms-certification-platform",
+ "repo": "organized-study-enterprise-lms-certification-platform",
+ "sha": "e7026226f78ad9de559340d973da40f95041f492",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: an enterprise LMS, read file by file",
+   "body": "This repo is a learning management system for companies: organizations enroll their people in versioned courses, learners work through lessons, quizzes and assignments, and completion can issue a certificate. It has an Express + Prisma API (`apps/api`), a BullMQ worker (`apps/worker`), a Next.js front end (`apps/web`) and pure business rules in `packages/domain`.\n\nRead in this order:\n\n1. `docs/code-walkthroughs/important-files.md`: one section per key file, then a section of line references and review notes for this snapshot.\n2. `docs/architecture/final-system-design.md`: how to run it, the learner workflow as implemented, and a numbered list of review findings.\n3. A few `docs/features/*.md` plans, if you want to see how each feature was meant to work.\n\nThe docs say plainly that they were checked by reading, not by running. For every quiz question, open the route or helper it names and read the lines yourself; when intent and code differ, the code decides.",
+   "excerpts": [
+    {
+     "path": "docs/code-walkthroughs/important-files.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "These walkthroughs cover the most architecturally important files in the first codebase."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/code-walkthroughs/important-files.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The file-by-file walkthrough and its review notes."
+    },
+    {
+     "path": "docs/architecture/final-system-design.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Workflows, review findings and exercises for this snapshot."
+    }
+   ]
+  },
+  {
+   "id": "r02-learner-workflow",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: the learner workflow, step by step",
+   "body": "`apps/api/src/routes/learner.routes.ts` holds the core slice: dashboard, enroll, lesson progress, quiz attempts, assignment submissions and completion. Read it one route at a time and fill in a table with these columns for each:\n\n- **Who may call it**: which middleware the router installs, and whether the route compares the record it loads with the caller.\n- **What it reads**: the query and its filter. For enroll, note exactly how the course version is chosen.\n- **What it writes, in order**, and whether the writes share a transaction.\n- **Which pure helper it calls** from `packages/domain`.\n\nThen read `completion.ts` and `quiz.ts` in `packages/domain/src`. For each exported function, note its inputs and what it returns for edge cases such as empty arrays. Check which of these helpers the routes actually call, and which they skip. Finally read `errorHandler` in `apps/api/src/http.ts` and note which errors keep their status.",
+   "excerpts": [
+    {
+     "path": "docs/code-walkthroughs/important-files.md",
+     "lineStart": 185,
+     "lineEnd": 185,
+     "quote": "Pick one workflow and trace database writes in order. Enrollment is the best first example."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "apps/api/src/routes/learner.routes.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Every learner route in one file."
+    },
+    {
+     "path": "packages/domain/src/completion.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Completion percentage and certificate eligibility helpers."
+    }
+   ]
+  },
+  {
+   "id": "r03-tenancy-and-async",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: organization checks and the async side",
+   "body": "**Tenant context.** Requests name an organization with the `x-organization-id` header. `apps/api/src/middleware/auth.ts` has two pieces: `requireAuth` (the JWT and the user's memberships) and `requireOrganizationRole(roles)`. Read both and write down what each one proves. Then, for the authoring and admin routes, note which routers install the role check, and for each route whether it compares the organization of the record it touches with the header. The difference between \"my role in org X\" and \"this record is in org X\" is the idea to take away.\n\n**Async work.** The API writes a `DomainEvent` and an `OutboxMessage` through `apps/api/src/events.ts`. The worker in `apps/worker/src/worker.ts` defines processors for four queues in `queues.ts`. Search the whole repo for the code that puts jobs on those queues, and note what you find.",
+   "excerpts": [
+    {
+     "path": "docs/code-walkthroughs/important-files.md",
+     "lineStart": 150,
+     "lineEnd": 150,
+     "quote": "Tenant context must be explicit. This API uses an organization header so routes do not guess which tenant a user is acting in."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "apps/api/src/middleware/auth.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Token verification and the organization role check."
+    },
+    {
+     "path": "apps/worker/src/worker.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The four background processors."
+    }
+   ]
+  },
+  {
+   "id": "x-q01",
+   "target": "seed:quests:organized-study-enterprise-lms-certification-platform/quiz/259624f54819545e",
+   "phase": "after",
+   "title": "Why anyone signed in can complete someone else's enrollment",
+   "body": "The learner router installs only `requireAuth`, so any valid token gets in. The complete route then loads the enrollment by the id in the path and never compares `enrollment.userId` with the caller. An instructor who knows a learner's enrollment id therefore completes it: the status becomes COMPLETED, and a certificate is issued if the inputs allow. This is finding 1 in the design doc, and Exercise 2 there adds the missing check.\n\n- *403, only the learner may complete* describes the fix, not the code.\n- *404 by user id* is wrong: the lookup uses the enrollment id alone.\n- *400 without the header* is wrong: no learner route requires `x-organization-id`.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/routes/learner.routes.ts",
+     "lineStart": 12,
+     "lineEnd": 12,
+     "quote": "learnerRouter.use(requireAuth);"
+    },
+    {
+     "path": "apps/api/src/routes/learner.routes.ts",
+     "lineStart": 216,
+     "lineEnd": 216,
+     "quote": "where: { id: String(request.params.enrollmentId) }"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02",
+   "target": "seed:quests:organized-study-enterprise-lms-certification-platform/quiz/bda59edf7683634e",
+   "phase": "after",
+   "title": "Why completion with no progress still says COMPLETED",
+   "body": "The complete route computes its inputs and then, before deciding anything, updates the enrollment to `status: \"COMPLETED\"` with a `completedAt`. Only after that does it ask `canIssueCertificate`, which requires `completionPercent === 100`. With 0 of 4 lessons done the percentage is 0, so no certificate is created, but the status change has already been written.\n\n- *409, stays ACTIVE* is what Exercise 3 in the design doc makes the route do once it reads the completion rule.\n- *A certificate too* is wrong: the 100% condition fails.\n- *400 for the completion rule* is wrong: the route never reads `completionRuleJson`.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/routes/learner.routes.ts",
+     "lineStart": 228,
+     "lineEnd": 231,
+     "quote": "const completedEnrollment = await prisma.enrollment.update({ data: { completedAt: new Date(), status: \"COMPLETED\""
+    },
+    {
+     "path": "packages/domain/src/completion.ts",
+     "lineStart": 41,
+     "lineEnd": 41,
+     "quote": "input.completionPercent === 100 &&"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q03",
+   "target": "seed:quests:organized-study-enterprise-lms-certification-platform/quiz/96f8f83423fac1b0",
+   "phase": "after",
+   "title": "Why no assignment submissions still counts as complete",
+   "body": "`requiredAssignmentsComplete` is computed as `submissions.every((s) => s.status === \"GRADED\")`. In JavaScript, `every` on an empty array returns `true`, because there is no element that fails. With all lessons done (100%) and one passed attempt, all four inputs to `canIssueCertificate` are true and a certificate is created. The design doc's finding 2 points out that assignments are therefore never actually required.\n\n- *Withheld until graded* would need the route to know which assignments exist; it only looks at submissions.\n- *409 asking for a submission* is wrong: the route has no such check.\n- *Pending grading* is wrong: certificates have no pending state here; one is either created or not.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/routes/learner.routes.ts",
+     "lineStart": 226,
+     "lineEnd": 226,
+     "quote": "const requiredAssignmentsComplete = enrollment.submissions.every((submission) => submission.status === \"GRADED\");"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q04",
+   "target": "seed:quests:organized-study-enterprise-lms-certification-platform/quiz/614a8c4103d01527",
+   "phase": "after",
+   "title": "Why completing twice is a 500",
+   "body": "On the second call the route again writes COMPLETED, and the inputs again pass `canIssueCertificate`, so it tries `prisma.certificate.create` for the same enrollment. `Certificate.enrollmentId` is unique, so Prisma throws a unique-constraint error. `errorHandler` keeps the status only for `HttpError`; any other `Error` becomes **500** with its raw message. The status update before it has already been saved.\n\n- *200 with the existing certificate* would need the route to look for one first; it does not.\n- *409* is wrong for the same reason: there is no prior check, and Prisma errors are not mapped to 409.\n- *A second certificate* is wrong: the unique index prevents it.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/routes/learner.routes.ts",
+     "lineStart": 245,
+     "lineEnd": 245,
+     "quote": "certificate = await prisma.certificate.create({"
+    },
+    {
+     "path": "apps/api/src/http.ts",
+     "lineStart": 41,
+     "lineEnd": 42,
+     "quote": "if (error instanceof Error) { response.status(500).json({ error: error.message });"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q05",
+   "target": "seed:quests:organized-study-enterprise-lms-certification-platform/quiz/d7b59f1cabc71650",
+   "phase": "after",
+   "title": "Why a new learner lands in the draft version",
+   "body": "The enroll route loads the course with its versions ordered by `versionNumber` descending and takes the first one. There is no filter on status and it does not use `Course.currentVersionId`, which publishing sets. As soon as an instructor starts version 2, the highest number is the draft, so new enrollments point at it. The design doc lists this as finding 3, against the versioning feature's own goal.\n\n- *Version 1, the current published version* is what `currentVersionId` would give; the route ignores it.\n- *Refused while a draft exists* is wrong: nothing checks for drafts.\n- *Version 1 until 2 is published* is wrong: publication status is not consulted at all.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/routes/learner.routes.ts",
+     "lineStart": 57,
+     "lineEnd": 57,
+     "quote": "include: { versions: { orderBy: { versionNumber: \"desc\" }, take: 1 } },"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q06",
+   "target": "seed:quests:organized-study-enterprise-lms-certification-platform/quiz/8845e8d27dc3976a",
+   "phase": "after",
+   "title": "Why a half-right multi-select answer scores zero",
+   "body": "`scoreQuiz` builds the learner's selection for each question, sorts both the selection and the correct option ids, and adds the question's points only if the two arrays are exactly equal. [A] and [A, C] differ in length, so the question earns 0. Sorting means the order of the clicks does not matter, but every correct option must be chosen and no wrong one.\n\n- *1 point of half credit* is wrong: there is no partial credit in the code.\n- *2 points because A is correct* is wrong: one right option is not the full set.\n- *1 point, with half deducted* is wrong for the same reason; nothing is deducted, the question just earns nothing.",
+   "excerpts": [
+    {
+     "path": "packages/domain/src/quiz.ts",
+     "lineStart": 10,
+     "lineEnd": 10,
+     "quote": "return arraysEqual(selected, correct) ? total + question.points : total;"
+    },
+    {
+     "path": "packages/domain/src/quiz.ts",
+     "lineStart": 39,
+     "lineEnd": 39,
+     "quote": "return [...values].sort();"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07",
+   "target": "seed:quests:organized-study-enterprise-lms-certification-platform/quiz/4c5411096b30a5cd",
+   "phase": "after",
+   "title": "Why each attempt gets its own question order",
+   "body": "When `randomizeQuestionOrder` is on, the route calls `selectRandomizedQuestionIds` with a seed made of the enrollment id and the next attempt number. The shuffle uses a small seeded generator, so the same seed always gives the same order; the attempt number changes the seed. That keeps an attempt reproducible, and the route stores the order it used as `questionOrder`.\n\n- *The current time* is wrong: no clock is involved in the seed.\n- *The quiz id* is wrong, and answers are not shuffled at all.\n- *Math.random* is wrong: `seededRandom` is a deterministic linear congruential generator.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/routes/learner.routes.ts",
+     "lineStart": 146,
+     "lineEnd": 146,
+     "quote": "`${input.enrollmentId}-${attemptCount + 1}`"
+    },
+    {
+     "path": "packages/domain/src/quiz.ts",
+     "lineStart": 46,
+     "lineEnd": 49,
+     "quote": "function seededRandom(seed: string): () => number { let state = 0;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08",
+   "target": "seed:quests:organized-study-enterprise-lms-certification-platform/quiz/1479ac448b79b9fd",
+   "phase": "after",
+   "title": "Why a bad enum value comes back as 500",
+   "body": "The progress route parses the body with a zod schema whose `status` is `z.enum([\"IN_PROGRESS\", \"COMPLETED\"])`. \"DONE\" fails, so `parse` throws a `ZodError`. The error handler gives a custom status only to `HttpError`; every other `Error`, including a `ZodError`, is answered with **500** and the error's raw message. The design doc lists this as finding 8.\n\n- *400 with the issues* is the usual convention, but nothing here maps zod errors to 400.\n- *422* is also a convention this handler never uses.\n- *404* is wrong: validation fails before any database lookup.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/routes/learner.routes.ts",
+     "lineStart": 100,
+     "lineEnd": 100,
+     "quote": "status: z.enum([\"IN_PROGRESS\", \"COMPLETED\"]) }).parse(request.body);"
+    },
+    {
+     "path": "apps/api/src/http.ts",
+     "lineStart": 41,
+     "lineEnd": 42,
+     "quote": "if (error instanceof Error) { response.status(500).json({ error: error.message });"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09",
+   "target": "seed:quests:organized-study-enterprise-lms-certification-platform/quiz/8dd2f6470288335e",
+   "phase": "after",
+   "title": "Why the dashboard is empty without the header",
+   "body": "The dashboard route reads `x-organization-id` with a fallback of the empty string, then filters enrollments on that organization id and the caller's user id. No enrollment has an empty organization id, so the query matches nothing and the route answers **200** with an empty list. There is no middleware on the learner router that would reject a missing header. Exercise 1 in the design doc observes exactly this.\n\n- *400 for the header* is what `requireOrganizationRole` would do, but the learner router does not use it.\n- *All of their enrollments* would need the filter to skip a missing value.\n- *403* is wrong: nothing checks the organization at all.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/routes/learner.routes.ts",
+     "lineStart": 18,
+     "lineEnd": 18,
+     "quote": "const organizationId = String(request.headers[\"x-organization-id\"] ?? \"\");"
+    },
+    {
+     "path": "apps/api/src/routes/learner.routes.ts",
+     "lineStart": 29,
+     "lineEnd": 31,
+     "quote": "where: { organizationId, userId: authed.user!.id"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10",
+   "target": "seed:quests:organized-study-enterprise-lms-certification-platform/quiz/a68f6bef81b89d24",
+   "phase": "after",
+   "title": "A new version is a draft that copies the latest rule",
+   "body": "The versions route loads the course with its highest-numbered version (`orderBy versionNumber desc, take 1`) and creates a new `CourseVersion` with `versionNumber: (latest?.versionNumber ?? 0) + 1`, `status: \"DRAFT\"` and `completionRuleJson: latest?.completionRuleJson ?? {...}`. With one version holding a minimum score of 90, the new row is **version 2, a draft, with the 90 rule copied**.\n\n- *Version 2 as PUBLISHED* is wrong: the status is hard-coded to DRAFT; publishing is the separate `/versions/:versionId/publish` route.\n- *Reset to the default 80* is wrong: 80 is only the fallback when no earlier version exists.\n- *Version 1 again* is wrong: the route always creates a new row with the next number.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/routes/authoring.routes.ts",
+     "lineStart": 76,
+     "lineEnd": 84,
+     "quote": "versionNumber: (latest?.versionNumber ?? 0) + 1"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q11",
+   "target": "seed:quests:organized-study-enterprise-lms-certification-platform/quiz/d91eafe49ce2404e",
+   "phase": "after",
+   "title": "What bulk import does to a user who already exists",
+   "body": "The import upserts each learner by email. The `create` branch makes a new user with a LEARNER membership in the importing organization and the shared password. The `update` branch, used when the email already exists, only sets `name`. So an existing user from another organization is renamed, gets no membership here, and is still pushed onto `imported` and counted in the audit log. The design doc lists this as finding 6.\n\n- *Gets a membership and keeps the name* is the reverse of what `update` does.\n- *409 for a taken email* is wrong: the upsert handles the existing row instead of failing.\n- *Skipped and listed separately* is wrong: the response has only an `imported` list.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/routes/admin.routes.ts",
+     "lineStart": 127,
+     "lineEnd": 130,
+     "quote": "update: { name: learner.name }, where: { email: learner.email } }); imported.push(user);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q12",
+   "target": "seed:quests:organized-study-enterprise-lms-certification-platform/quiz/859c98e5e2486ad3",
+   "phase": "after",
+   "title": "Enrollment writes are separate, not one transaction",
+   "body": "The enroll route awaits three independent writes: `prisma.enrollment.create`, then `prisma.lessonProgress.createMany`, then `recordDomainEvent` (which writes the domain event and the outbox message). None of them runs inside `prisma.$transaction`, so each commits on its own. If `createMany` throws, the enrollment is already committed, and the code after it, including the domain event, never runs. The walkthrough review notes call this out: separate writes with no transaction.\n\n- *Nothing is left* would need a transaction around the writes.\n- *The enrollment and its domain event* is wrong: the event is recorded after `createMany`, which threw.\n- *The worker retries the progress rows* is wrong: no worker creates lesson progress; nothing enqueues jobs at all.",
+   "excerpts": [
+    {
+     "path": "docs/code-walkthroughs/important-files.md",
+     "lineStart": 382,
+     "lineEnd": 382,
+     "quote": "enrollment, lesson-progress rows and the domain event are separate writes with no transaction"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-g1",
+   "target": "seed:quests:organized-study-enterprise-lms-certification-platform/quiz/bf8d9f500c984397",
+   "phase": "after",
+   "title": "Matching the cross-tenant goal to its check",
+   "body": "The goal sets up a second organization with its own instructor and has that instructor publish a Northwind version while sending their own organization's id. The matching check expects the call to **succeed**, then asks you to add an organization check and confirm the same call returns 404. That proves and fixes the cross-organization write.\n\n- The check counting one `Enrollment`, its `LessonProgress` rows and a PENDING outbox message belongs to the enrollment trace.\n- The check about the catalog page showing the seeded course from the database belongs to connecting a page to the API.",
+   "excerpts": [
+    {
+     "path": "docs/code-walkthroughs/important-files.md",
+     "lineStart": 418,
+     "lineEnd": 418,
+     "quote": "Add an organization check (load the version's course and compare `organizationId`) and confirm it now returns 404."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-g2",
+   "target": "seed:quests:organized-study-enterprise-lms-certification-platform/quiz/dd432be18dd1e2ad",
+   "phase": "after",
+   "title": "Matching the connect-a-page goal to its check",
+   "body": "The goal makes the catalog page call `apiGet(\"/catalog/courses\", session)` with a real token instead of rendering demo data. The matching check expects the page to show the **seeded published course from the database**, and renaming that course in Prisma Studio to change what the page shows; only live data would follow the rename.\n\n- The check about one `Enrollment` and a PENDING outbox message belongs to the enrollment trace.\n- The check that the cross-organization publish succeeds and then returns 404 belongs to the cross-tenant exercise.",
+   "excerpts": [
+    {
+     "path": "docs/code-walkthroughs/important-files.md",
+     "lineStart": 421,
+     "lineEnd": 421,
+     "quote": "the catalog shows the seeded published course from the database"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}

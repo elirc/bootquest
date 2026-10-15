@@ -1,0 +1,335 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "organized-anti-testbuild",
+ "repo": "organized-anti-testbuild",
+ "sha": "6db43f627ccb1faaf4c2b503719693ec4a950751",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: GlobalWorkforce OS and how to read it",
+   "body": "This repo is an employer-of-record style platform: platform staff manage client tenants, and each tenant has companies, workers, contracts, onboarding plans, documents, payroll and support cases. The API is NestJS with Prisma (`apps/api`), the web app is React (`apps/web`), and shared zod schemas live in `packages/shared`.\n\nRead in this order:\n\n1. `docs/02-architecture.md` for the module layout.\n2. `docs/04-auth-security-rbac.md` for authentication, tenant isolation and the role matrix.\n3. `docs/05-api-reference.md` for the main endpoints.\n4. `docs/08-learning-guide-for-junior-to-mid-level-engineers.md`, which traces one request end to end and lists ten change tasks.\n\nThe docs describe the intended design. The quiz asks what the code does, so treat each statement in the docs as a claim to check against the controller and service it is about. When the two differ, the code decides.",
+   "excerpts": [
+    {
+     "path": "docs/08-learning-guide-for-junior-to-mid-level-engineers.md",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "When navigating a large corporate codebase, **do not read files alphabetically**. Instead, trace a single user action end-to-end:"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/04-auth-security-rbac.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The security design and the RBAC matrix to check against the code."
+    },
+    {
+     "path": "docs/08-learning-guide-for-junior-to-mid-level-engineers.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The end-to-end request trace and the change tasks."
+    }
+   ]
+  },
+  {
+   "id": "r02-guards",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: three guards and the decorators they read",
+   "body": "Almost every controller is annotated `@UseGuards(JwtAuthGuard, TenantGuard, RolesGuard)`. The three files are in `apps/api/src/common/guards/` and are short; read all three.\n\nWhat to note for each:\n\n- **JwtAuthGuard**: where the token comes from, what is placed on `request.user`, and which exception a bad token produces.\n- **TenantGuard**: the two branches (cross-tenant roles and everyone else). For each branch, write down which request locations it reads a tenant id from, in which order, and what it does when they disagree with the token.\n- **RolesGuard**: what it does when a handler has no `@Roles` metadata, and which role, if any, it treats specially.\n\nThen go through `contracts.controller.ts` and `workers.controller.ts` method by method. For each, note its `@Roles` list (or that it has none) and any role checks written inside the method body. Compare your list with the RBAC table in `docs/04-auth-security-rbac.md`.",
+   "excerpts": [
+    {
+     "path": "docs/04-auth-security-rbac.md",
+     "lineStart": 32,
+     "lineEnd": 32,
+     "quote": "Endpoints are annotated with `@Roles(...)` metadata and checked by `RolesGuard`:"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "apps/api/src/common/guards/tenant.guard.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Tenant binding and the mismatch check."
+    },
+    {
+     "path": "apps/api/src/common/guards/roles.guard.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "How @Roles metadata is enforced."
+    }
+   ]
+  },
+  {
+   "id": "r03-business-rules",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: the business rules behind contracts, workers and tickets",
+   "body": "Three services hold rules that the quiz asks about.\n\n**Contracts** (`contracts.service.ts`). `validTransitions` is a small state machine. Draw it as a diagram: every status, and an arrow for each allowed move. Then read `updateStatus` in the controller to see what extra checks apply when the caller is a worker, and in which layer each check lives. Also note how `findOne` treats a contract from another tenant.\n\n**Worker status** (`workers.service.ts`, `updateStatus`). Read the rule for moving a worker to ACTIVE: which record it loads, which two conditions it combines, and what it records in the audit log. Note who is allowed to call the route.\n\n**Support cases** (`support-cases.service.ts`). `isInternal` appears in two places: when a ticket is read and when a comment is written. For each, note which roles are treated as internal and what happens for everyone else.\n\nFinally, read the worker profile `update` route and list what it validates.",
+   "excerpts": [
+    {
+     "path": "docs/04-auth-security-rbac.md",
+     "lineStart": 52,
+     "lineEnd": 52,
+     "quote": "Workers cannot transition themselves to `ACTIVE`."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "apps/api/src/modules/contracts/contracts.service.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The contract transition matrix and tenant checks."
+    },
+    {
+     "path": "apps/api/src/modules/support-cases/support-cases.service.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Ticket reads and comments, with the isInternal handling."
+    }
+   ]
+  },
+  {
+   "id": "x-q01",
+   "target": "seed:quests:organized-anti-testbuild/quiz/218ba6b5a90070a6",
+   "phase": "after",
+   "title": "Why CLIENT_HR can move a contract despite the RBAC table",
+   "body": "The status route in `contracts.controller.ts` has no `@Roles` decorator. `RolesGuard` reads the metadata, finds no required roles, and returns true for everyone. Inside the method the only role check is for WORKER. TenantGuard passes because the contract is in the user's own tenant, and DRAFT to IN_REVIEW is an allowed transition, so the change succeeds. The table in the security doc says CLIENT_HR is denied for contracts; the code does not enforce it.\n\n- *403 from RolesGuard* would need a `@Roles` list on that route.\n- *403 from the controller* is wrong: the method checks only the WORKER role.\n- *400, only CLIENT_ADMIN may submit* is wrong: no transition depends on the caller's role.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/common/guards/roles.guard.ts",
+     "lineStart": 21,
+     "lineEnd": 23,
+     "quote": "if (!requiredRoles || requiredRoles.length === 0) { return true; }"
+    },
+    {
+     "path": "apps/api/src/modules/contracts/contracts.controller.ts",
+     "lineStart": 83,
+     "lineEnd": 84,
+     "quote": "@Patch(':id/status') async updateStatus("
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02",
+   "target": "seed:quests:organized-anti-testbuild/quiz/b54e4f2a205bb68f",
+   "phase": "after",
+   "title": "Why a client admin can override onboarding",
+   "body": "The route allows PLATFORM_ADMIN, INTERNAL_OPS and CLIENT_ADMIN. In the service, moving to ACTIVE throws only when onboarding is incomplete **and** no `overrideReason` was given. Nothing checks who supplied the reason, so a client admin who sends one activates the worker, and the reason is written to the audit log with the status change. The docs say the override belongs to internal ops; the code does not enforce that.\n\n- *Only internal ops may override* is the documented intent, not the check.\n- *403 from RolesGuard* is wrong: CLIENT_ADMIN is in the route's list.\n- *Must reference an approved document* is wrong: the reason is free text, and only its presence is tested.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/modules/workers/workers.service.ts",
+     "lineStart": 245,
+     "lineEnd": 245,
+     "quote": "if (!isCompleted && !overrideReason) {"
+    },
+    {
+     "path": "apps/api/src/modules/workers/workers.controller.ts",
+     "lineStart": 88,
+     "lineEnd": 88,
+     "quote": "@Roles(UserRole.PLATFORM_ADMIN, UserRole.INTERNAL_OPS, UserRole.CLIENT_ADMIN)"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q03",
+   "target": "seed:quests:organized-anti-testbuild/quiz/ed38308a52c89e2c",
+   "phase": "after",
+   "title": "Why naming another tenant in the query is refused",
+   "body": "For client and worker roles, TenantGuard first binds `request.tenantId` from the verified token. It then looks for a tenant id the caller asked for, in the route params, the query, the body or the `x-tenant-id` header, and throws a ForbiddenException (403) if one is present and differs from the token's tenant. A `?tenantId=` for tenant B is such a mismatch.\n\n- *Ignores it and filters by A* would be safe too, but the guard rejects instead of ignoring.\n- *Binds tenant B* is what happens only for cross-tenant roles.\n- *404* is wrong: the guard throws ForbiddenException, which is 403.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/common/guards/tenant.guard.ts",
+     "lineStart": 51,
+     "lineEnd": 51,
+     "quote": "if (requestedTenantId && requestedTenantId !== user.tenantId) {"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q04",
+   "target": "seed:quests:organized-anti-testbuild/quiz/8bdb1b8204f6d66d",
+   "phase": "after",
+   "title": "Why another tenant's contract id gives 403, not 404",
+   "body": "The contract is loaded by `id` alone, without a tenant filter. Only after the row is found does `findOne` compare its `tenantId` with the caller's and throw a ForbiddenException, \"Contract belongs to another tenant\". So the response is 403, and its wording confirms that the id exists in some other tenant, a small information leak that a tenant-scoped query returning 404 would avoid.\n\n- *404, filtered by tenant A first* describes the safer design, not this code.\n- *200* is wrong: the tenant comparison throws.\n- *401* is wrong: the token is valid; tenants are not part of authentication.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/modules/contracts/contracts.service.ts",
+     "lineStart": 43,
+     "lineEnd": 44,
+     "quote": "const contract = await this.prisma.employmentContract.findUnique({ where: { id },"
+    },
+    {
+     "path": "apps/api/src/modules/contracts/contracts.service.ts",
+     "lineStart": 57,
+     "lineEnd": 58,
+     "quote": "if (tenantId && contract.tenantId !== tenantId) { throw new ForbiddenException('Access denied: Contract belongs to another tenant');"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q05",
+   "target": "seed:quests:organized-anti-testbuild/quiz/33c365b49c81e139",
+   "phase": "after",
+   "title": "Why signing a draft fails in the service, not the controller",
+   "body": "For a worker, the controller checks two things: the contract is the worker's own, and the requested status is SIGNED. Both pass. The service then looks up the allowed moves for the current status. DRAFT allows only IN_REVIEW, so `updateStatus` throws a BadRequestException (400) listing the allowed transitions. A contract can be signed only once it is SENT.\n\n- *403 from the controller* is wrong: the controller never looks at the current status.\n- *200 in any state* is wrong: the transition matrix applies to workers too.\n- *Blocked from the route* is wrong: workers may use it to request SIGNED.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/modules/contracts/contracts.service.ts",
+     "lineStart": 20,
+     "lineEnd": 20,
+     "quote": "[ContractStatus.DRAFT]: [ContractStatus.IN_REVIEW],"
+    },
+    {
+     "path": "apps/api/src/modules/contracts/contracts.controller.ts",
+     "lineStart": 104,
+     "lineEnd": 104,
+     "quote": "if (body.status !== ContractStatus.SIGNED) {"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q06",
+   "target": "seed:quests:organized-anti-testbuild/quiz/bb70effa6280d142",
+   "phase": "after",
+   "title": "Why a SENT contract cannot go back to DRAFT",
+   "body": "`validTransitions` gives SENT a single next state, SIGNED. The service rejects any other target with a BadRequestException (400) that lists what is allowed. Returning to DRAFT is possible only earlier in the life cycle: from IN_REVIEW and from APPROVED. Once a contract has been sent to the worker, the matrix treats it as out of the client's hands until it is signed.\n\n- *Any non-terminal state may return to DRAFT* is wrong: SENT, SIGNED and ACTIVE cannot.\n- *Allowed, with an audit entry* is wrong: the check fails before any write.\n- *403, only internal ops may roll back* is wrong: the matrix does not depend on role.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/modules/contracts/contracts.service.ts",
+     "lineStart": 23,
+     "lineEnd": 23,
+     "quote": "[ContractStatus.SENT]: [ContractStatus.SIGNED],"
+    },
+    {
+     "path": "apps/api/src/modules/contracts/contracts.service.ts",
+     "lineStart": 21,
+     "lineEnd": 22,
+     "quote": "[ContractStatus.IN_REVIEW]: [ContractStatus.APPROVED, ContractStatus.DRAFT], [ContractStatus.APPROVED]: [ContractStatus.SENT, ContractStatus.DRAFT],"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07",
+   "target": "seed:quests:organized-anti-testbuild/quiz/5e69643f694de576",
+   "phase": "after",
+   "title": "What happens to an isInternal flag sent by a worker",
+   "body": "`addComment` decides whether the caller is an internal user: PLATFORM_ADMIN or INTERNAL_OPS. Only for those roles does it keep the `isInternal` value from the input; for everyone else it stores `false`. The worker's comment is saved as a normal, public comment. The API reference describes this: the flag is forced to false for non-operations roles.\n\n- *Stored as internal and hidden* is wrong: the flag is overwritten before the insert.\n- *Rejected with 403* is wrong: the service silently ignores the flag rather than refusing.\n- *Internal but visible* is not a state the code has: a comment is either filtered or not.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/modules/support-cases/support-cases.service.ts",
+     "lineStart": 177,
+     "lineEnd": 177,
+     "quote": "const isInternal = isInternalUser ? input.isInternal : false;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08",
+   "target": "seed:quests:organized-anti-testbuild/quiz/8855b91bff42c1be",
+   "phase": "after",
+   "title": "Why a client admin sees two of three comments",
+   "body": "When a ticket is read, `findOne` loads all comments and then, unless the role is PLATFORM_ADMIN or INTERNAL_OPS, keeps only those with `isInternal` false. A CLIENT_ADMIN is a client role, so the one internal comment is removed and two remain.\n\n- *Three, admins see everything* is wrong: client admins are not internal users here.\n- *One, only their own* is wrong: the filter is on the internal flag, not the author.\n- *Three with redaction* is wrong: internal comments are dropped from the array, not edited.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/modules/support-cases/support-cases.service.ts",
+     "lineStart": 76,
+     "lineEnd": 76,
+     "quote": "ticket.comments = ticket.comments.filter((c) => !c.isInternal);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09",
+   "target": "seed:quests:organized-anti-testbuild/quiz/266698b470090958",
+   "phase": "after",
+   "title": "Why a worker can change their own job title",
+   "body": "The profile update route has no `@Roles` list and no validation pipe; its body is typed `any`. The only check is that a worker edits their own id. The service then writes `jobTitle`, `startDate` and the other profile fields from the input. So both changes are saved. Learning task 5 in the guide is to add exactly this restriction, with a 403 as its check.\n\n- *403, phone only* is the rule the task asks you to build.\n- *400 from the zod pipe* is wrong: this route has no pipe.\n- *startDate ignored* is wrong: the service converts and saves it when present.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/modules/workers/workers.controller.ts",
+     "lineStart": 72,
+     "lineEnd": 72,
+     "quote": "@Body() input: any, // Allow partial updates"
+    },
+    {
+     "path": "apps/api/src/modules/workers/workers.service.ts",
+     "lineStart": 201,
+     "lineEnd": 201,
+     "quote": "jobTitle: input.jobTitle,"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10",
+   "target": "seed:quests:organized-anti-testbuild/quiz/3f48fb6587e0c8d5",
+   "phase": "after",
+   "title": "Which tenant id wins for a platform admin's create",
+   "body": "For PLATFORM_ADMIN and INTERNAL_OPS, TenantGuard marks the request cross-tenant, binds `request.tenantId` from the header first, and never rejects a mismatch. The contract create handler does not use that bound value: for a cross-tenant caller it computes `req.body.tenantId || req.headers['x-tenant-id']`. With both present the body wins, so the contract is created under tenant A. Two places choosing in opposite orders is a trap worth remembering.\n\n- *Tenant B* is what `request.tenantId` holds, but the handler ignores it here.\n- *Refused for the mismatch* applies only to client and worker roles.\n- *Both* is wrong: one create call makes one contract.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/modules/contracts/contracts.controller.ts",
+     "lineStart": 59,
+     "lineEnd": 61,
+     "quote": "const targetTenantId = req.isCrossTenant ? req.body.tenantId || req.headers['x-tenant-id'] : req.tenantId;"
+    },
+    {
+     "path": "apps/api/src/common/guards/tenant.guard.ts",
+     "lineStart": 28,
+     "lineEnd": 28,
+     "quote": "const headerTenantId = request.headers['x-tenant-id'] || request.query.tenantId || request.body.tenantId;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q11",
+   "target": "seed:quests:organized-anti-testbuild/quiz/471bd2517b665928",
+   "phase": "after",
+   "title": "Why CLIENT_HR can list contracts",
+   "body": "`findAll` in the contracts controller has no `@Roles` decorator, so RolesGuard lets every authenticated role through. The method blocks only WORKER. For a client role it passes the request's tenant id to the service, which filters on it. CLIENT_HR therefore gets all of its own tenant's contracts, whatever the RBAC table says.\n\n- *403, not on the role list* would need a `@Roles` list on this method.\n- *Only those they drafted* is wrong: the filter is the tenant, not the author.\n- *Only workers and admins* is wrong: workers are the one role this method refuses.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/modules/contracts/contracts.controller.ts",
+     "lineStart": 30,
+     "lineEnd": 30,
+     "quote": "if (user.role === UserRole.WORKER) {"
+    },
+    {
+     "path": "apps/api/src/modules/contracts/contracts.controller.ts",
+     "lineStart": 34,
+     "lineEnd": 34,
+     "quote": "const filterTenantId = req.isCrossTenant ? undefined : req.tenantId;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q12",
+   "target": "seed:quests:organized-anti-testbuild/quiz/4692603ee6f0e644",
+   "phase": "after",
+   "title": "The one role RolesGuard lets through every list",
+   "body": "After reading the required roles, `RolesGuard` returns true for PLATFORM_ADMIN before comparing anything. Every other role, INTERNAL_OPS included, must appear in the route's `@Roles` list. Most routes do list INTERNAL_OPS, which is why the two roles often look alike, but the guard itself special-cases only one.\n\n- *Both pass any list* is wrong: INTERNAL_OPS goes through the normal comparison.\n- *PLATFORM_ADMIN must be listed* is wrong: the early return makes listing it unnecessary.\n- *Any cross-tenant role passes* is wrong: RolesGuard does not read `isCrossTenant`.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/common/guards/roles.guard.ts",
+     "lineStart": 33,
+     "lineEnd": 35,
+     "quote": "if (user.role === UserRole.PLATFORM_ADMIN) { return true; }"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}

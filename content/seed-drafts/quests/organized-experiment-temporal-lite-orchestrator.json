@@ -1,0 +1,429 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "organized-experiment-temporal-lite-orchestrator",
+ "sha": "dd524de9c564191108dafcc572a2741f789b6842",
+ "guides": [
+  "docs/learning/flow-traces.md",
+  "docs/learning/concepts-demonstrated.md",
+  "docs/architecture/README.md"
+ ],
+ "items": [
+  {
+   "id": "q01-first-retry-delay",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/flow-traces.md",
+    "lines": {
+     "start": 74,
+     "end": 74
+    }
+   },
+   "cites": [
+    {
+     "path": "src/lib/workflows/retry.ts",
+     "lineStart": 13,
+     "lineEnd": 19
+    },
+    {
+     "path": "src/services/workflow-engine-service.ts",
+     "lineStart": 552,
+     "lineEnd": 554
+    }
+   ],
+   "prompt": "A task step with initialDelayMs 60000 fails on its first attempt (attemptCount 1). How long until the task becomes available again?",
+   "answer": "65 000 ms: 60 000 plus 5 000 of capped jitter",
+   "distractors": [
+    "60 000 ms exactly, as the first retry has no jitter",
+    "120 000 ms, as the delay doubles on each attempt",
+    "66 000 ms: 60 000 plus a 10% jitter of 6 000"
+   ],
+   "explanation": "rawDelay is 60000 * 2^(1-1) = 60000; jitter is min(5000, floor(6000)) = 5000; the result is 65000, under the one-hour cap."
+  },
+  {
+   "id": "q02-unregistered-handler",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/flow-traces.md",
+    "lines": {
+     "start": 84,
+     "end": 89
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/worker-service.ts",
+     "lineStart": 82,
+     "lineEnd": 92
+    },
+    {
+     "path": "src/services/workflow-engine-service.ts",
+     "lineStart": 538,
+     "lineEnd": 538
+    }
+   ],
+   "prompt": "A saved workflow version uses handlerKey \"send-invoice\", which has no registered handler. What happens when a run reaches that step?",
+   "answer": "It is re-queued forever while its attemptCount stays at 0",
+   "distractors": [
+    "It fails the whole run once its maxAttempts retries are used up",
+    "The version was refused at save time for the unknown key",
+    "The worker throws, exits with code 1, and stops polling"
+   ],
+   "explanation": "The missing-handler branch calls failTaskStep without markTaskExecutionStarted, so attemptCount never increments and 0 < maxAttempts holds on every pass. The schema only requires a non-empty handlerKey. This is finding F2."
+  },
+  {
+   "id": "q03-killed-worker",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/flow-traces.md",
+    "lines": {
+     "start": 95,
+     "end": 99
+    }
+   },
+   "cites": [
+    {
+     "path": "src/repositories/task-repository.ts",
+     "lineStart": 55,
+     "lineEnd": 74
+    }
+   ],
+   "prompt": "Worker A leases task T, marks the step RUNNING, and is then killed with SIGKILL. Worker B keeps polling. What happens to T?",
+   "answer": "It stays LEASED, and B does not claim it again",
+   "distractors": [
+    "B reclaims it once the 30-second leaseExpiresAt passes",
+    "B restarts it from the RUNNING step on its next poll",
+    "It is marked FAILED and then retried with the backoff"
+   ],
+   "explanation": "The claim selects only status AVAILABLE rows. leaseExpiresAt is written but no code reads it, so a LEASED row left by a dead worker is stuck and the run stays RUNNING (finding F1)."
+  },
+  {
+   "id": "q04-two-workers-claim",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/concepts-demonstrated.md",
+    "lines": {
+     "start": 87,
+     "end": 87
+    }
+   },
+   "cites": [
+    {
+     "path": "src/repositories/task-repository.ts",
+     "lineStart": 55,
+     "lineEnd": 74
+    }
+   ],
+   "prompt": "Exactly one task is AVAILABLE, and two workers run claimNextAvailableTask at the same instant. What is the outcome?",
+   "answer": "One leases it; the other skips the locked row and gets nothing",
+   "distractors": [
+    "The second waits until the first commits, and then it leases the task",
+    "Both lease it, and the handler runs once in each worker",
+    "The second gets a deadlock error and the worker exits"
+   ],
+   "explanation": "FOR UPDATE SKIP LOCKED makes the second worker skip a row the first has locked instead of waiting, and select-plus-update in one statement leaves no window for a double claim. The second claim returns no row, so that worker is idle."
+  },
+  {
+   "id": "q05-statuses-during-wait",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/flow-traces.md",
+    "lines": {
+     "start": 80,
+     "end": 80
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/workflow-engine-service.ts",
+     "lineStart": 557,
+     "lineEnd": 579
+    }
+   ],
+   "prompt": "A webhook step failed its first attempt and a retry is scheduled. During the wait, what do the run and the step show?",
+   "answer": "The run is RUNNING and the step QUEUED, with lastError set",
+   "distractors": [
+    "The run is RETRYING and the step FAILED, with nextWakeAt set",
+    "The run is FAILED and the step QUEUED until the retry passes",
+    "The run is WAITING and the step RUNNING, holding its lease"
+   ],
+   "explanation": "failTaskStep moves the step FAILED then QUEUED and puts the same task row back to AVAILABLE; it updates the run's lastError and nextWakeAt but never its status, and there is no RETRYING status."
+  },
+  {
+   "id": "q06-approver-admin-request",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/README.md",
+    "lines": {
+     "start": 67,
+     "end": 67
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/approval-service.ts",
+     "lineStart": 29,
+     "lineEnd": 31
+    },
+    {
+     "path": "src/repositories/approval-repository.ts",
+     "lineStart": 16,
+     "lineEnd": 20
+    }
+   ],
+   "prompt": "An approval request has requiredRole ADMIN. An APPROVER who knows its id posts an APPROVE decision directly to the endpoint. What happens?",
+   "answer": "It is resolved: the service checks the role but not requiredRole",
+   "distractors": [
+    "403, as this request requires a decision made by an ADMIN user",
+    "404, as the request is not in this approver's queue",
+    "409, as an approver may only reject such a request"
+   ],
+   "explanation": "submitApprovalDecision only requires APPROVER or ADMIN. requiredRole is used to filter the pending list, not to authorize the decision, so the call goes through (finding F4)."
+  },
+  {
+   "id": "q07-same-key-other-body",
+   "kind": "quiz",
+   "source": {
+    "path": "src/services/workflow-run-service.ts",
+    "lines": {
+     "start": 51,
+     "end": 56
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/workflow-run-service.ts",
+     "lineStart": 51,
+     "lineEnd": 56
+    }
+   ],
+   "prompt": "A user starts a run with idempotencyKey \"batch-001\", then starts another with the same key but a different workflowDefinitionId. What comes back?",
+   "answer": "The first run, unchanged, as the new body is not compared",
+   "distractors": [
+    "409, as the key was reused with a different request body",
+    "A new run, as a different definition makes a new request",
+    "400, as an idempotency key can be used only one time"
+   ],
+   "explanation": "startWorkflowRun scopes the key to the user and returns any existing run with that key before reading the new body; no payload fingerprint is stored or checked."
+  },
+  {
+   "id": "q08-short-key-500",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/flow-traces.md",
+    "lines": {
+     "start": 118,
+     "end": 119
+    }
+   },
+   "cites": [
+    {
+     "path": "src/app/api/workflow-runs/route.ts",
+     "lineStart": 30,
+     "lineEnd": 38
+    },
+    {
+     "path": "src/lib/validation/api-schemas.ts",
+     "lineStart": 27,
+     "lineEnd": 33
+    },
+    {
+     "path": "src/lib/api/route-helpers.ts",
+     "lineStart": 47,
+     "lineEnd": 60
+    }
+   ],
+   "prompt": "POST /api/workflow-runs arrives with an idempotencyKey of only three characters. Which status does the API return?",
+   "answer": "500 with \"Internal server error.\" as the message",
+   "distractors": [
+    "400, with each zod issue listed in the details",
+    "422, because the key fails a length rule",
+    "201, and the run starts with the three-character key"
+   ],
+   "explanation": "startWorkflowRunSchema requires min(6); parse throws a ZodError, which is not an ApiError, so jsonError returns the generic 500 (finding F5). The issues appear only in the server log."
+  },
+  {
+   "id": "q09-missing-path-condition",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/concepts-demonstrated.md",
+    "lines": {
+     "start": 124,
+     "end": 124
+    }
+   },
+   "cites": [
+    {
+     "path": "src/lib/workflows/expression.ts",
+     "lineStart": 18,
+     "lineEnd": 48
+    }
+   ],
+   "prompt": "A CONDITION step tests context path riskScore with gte 70, but no earlier step ever wrote riskScore. What does evaluateCondition return?",
+   "answer": "false, since Number(undefined) is NaN and NaN >= 70 is false",
+   "distractors": [
+    "true, since a missing value is treated as passing the comparison",
+    "It throws, as the path does not exist in the context",
+    "false, since undefined is first coerced to 0 by Number"
+   ],
+   "explanation": "getPathValue returns undefined for the missing key; gte compares Number(left) >= Number(right), and NaN compared with anything is false. Number(undefined) is NaN, not 0."
+  },
+  {
+   "id": "q10-runonce-on-retry",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/README.md",
+    "lines": {
+     "start": 54,
+     "end": 54
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/worker-service.ts",
+     "lineStart": 32,
+     "lineEnd": 67
+    }
+   ],
+   "prompt": "fetch-account-profile's runOnce stored its result, then completeTaskStep threw and the step is retried. What does runOnce do on the retry?",
+   "answer": "It returns the stored response and does not run factory again",
+   "distractors": [
+    "It runs factory again, as every new attempt gets its own fresh key",
+    "It throws, as a record already exists for that action",
+    "It runs factory again and overwrites the stored record"
+   ],
+   "explanation": "The key is stepRunId:actionType, and a retry keeps the same step row, so findIdempotencyRecord finds the response and returns it. The gap is the other order: a crash after the side effect but before the record is stored re-runs it."
+  },
+  {
+   "id": "q11-jitter-in-lockstep",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/README.md",
+    "lines": {
+     "start": 50,
+     "end": 50
+    }
+   },
+   "cites": [
+    {
+     "path": "src/lib/workflows/retry.ts",
+     "lineStart": 13,
+     "lineEnd": 19
+    }
+   ],
+   "prompt": "Ten tasks with the same retry policy all fail at the same moment on their first attempt. When do their retries come due?",
+   "answer": "Close to the same moment, as the jitter is a fixed share",
+   "distractors": [
+    "Spread across five seconds, as the jitter is random for each task",
+    "Spread evenly, since each task adds its own attempt offset",
+    "One after another, since the claim leases tasks in order"
+   ],
+   "explanation": "calculateRetryDelayMs adds min(5000, 10% of the delay), a value with no randomness, so identical inputs give identical delays and the tasks retry together. The README calls this out."
+  },
+  {
+   "id": "q12-two-users-same-key",
+   "kind": "quiz",
+   "source": {
+    "path": "src/services/workflow-run-service.ts",
+    "lines": {
+     "start": 51,
+     "end": 52
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/workflow-run-service.ts",
+     "lineStart": 42,
+     "lineEnd": 56
+    }
+   ],
+   "prompt": "Two different operators each start a run of the same workflow using the idempotency key \"batch-001\". How many runs exist afterwards?",
+   "answer": "Two, as each key is prefixed with the user id first",
+   "distractors": [
+    "One, as the second operator gets the first run",
+    "One, as the second start fails on the unique key index",
+    "Two, but the second one is left PENDING with no step"
+   ],
+   "explanation": "startWorkflowRun stores the key as `${user.id}:${idempotencyKey}`, so the two operators' keys differ and each gets its own run, seeded normally."
+  },
+  {
+   "id": "f01-claim-mechanism",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/learning/concepts-demonstrated.md",
+    "lines": {
+     "start": 87,
+     "end": 89
+    }
+   },
+   "cites": [
+    {
+     "path": "src/repositories/task-repository.ts",
+     "lineStart": 55,
+     "lineEnd": 74
+    }
+   ],
+   "front": "How does claimNextAvailableTask stop two workers taking the same task, and what does it not do?",
+   "back": "One statement: a CTE selects the oldest AVAILABLE row with availableAt <= NOW() FOR UPDATE SKIP LOCKED and the UPDATE sets it LEASED with owner, token and lease expiry. It does not reclaim LEASED rows whose lease has expired; nothing reads leaseExpiresAt."
+  },
+  {
+   "id": "f02-retry-path",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/learning/flow-traces.md",
+    "lines": {
+     "start": 69,
+     "end": 78
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/workflow-engine-service.ts",
+     "lineStart": 526,
+     "lineEnd": 593
+    }
+   ],
+   "front": "Summarize failTaskStep when a retry is allowed.",
+   "back": "In one transaction: step RUNNING to FAILED with lastError; if attemptCount < maxAttempts, compute nextAttemptAt with calculateRetryDelayMs, put the same task row back to AVAILABLE with availableAt = nextAttemptAt and the lease cleared, move the step FAILED to QUEUED, set the run lastError and nextWakeAt, and append TASK_RETRIED."
+  },
+  {
+   "id": "f03-not-temporal",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/architecture/README.md",
+    "lines": {
+     "start": 58,
+     "end": 58
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/workflow-engine-service.ts",
+     "lineStart": 339,
+     "lineEnd": 361
+    }
+   ],
+   "front": "Which durable-execution guarantees does this repo NOT provide, per its own comparison with Temporal?",
+   "back": "No deterministic replay (events are an audit log, state lives in mutable rows), no lease recovery for crashed workers, no durable timers (nextWakeAt is never read), and no cancellation. It is a durable job queue with a state machine and an audit log."
+  },
+  {
+   "id": "f04-validation-500",
+   "kind": "flashcard",
+   "source": {
+    "path": "src/lib/api/route-helpers.ts",
+    "lines": {
+     "start": 47,
+     "end": 60
+    }
+   },
+   "cites": [
+    {
+     "path": "src/lib/api/route-helpers.ts",
+     "lineStart": 47,
+     "lineEnd": 60
+    }
+   ],
+   "front": "Why does bad client input come back as HTTP 500 here, and what is the fix?",
+   "back": "Routes call schema.parse(), which throws ZodError; jsonError only maps ApiError to its status and sends everything else to the generic 500 branch. Map ZodError to 400 in jsonError (finding F5)."
+  }
+ ]
+}
