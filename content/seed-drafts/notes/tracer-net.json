@@ -9,7 +9,7 @@
    "target": "pack",
    "phase": "before",
    "title": "Start here: read tracer-net through its decision records",
-   "body": "tracer-net is an issue tracker API (think a small Linear) in ASP.NET Core with EF Core on SQLite. Its best teaching material is `docs/adr/`: ten short Architecture Decision Records. Each one has the same shape: Context (the problem), Decision, Consequences, and \"Where it lives in the code\" with file and line pointers.\n\nRead them in number order. For each ADR, open the files its last section names and find the exact lines. This quest asks about ADRs 0001 to 0008: API keys, the 404 rule, the activity spine, the webhook outbox, signatures, relations, ranking and cycles.\n\nA good habit: before reading the Decision, write down how you would solve the Context yourself, then compare.",
+   "body": "tracer-net is an issue tracker API (think a small Linear) in ASP.NET Core with EF Core on SQLite. Its best teaching material is `docs/adr/`: ten short Architecture Decision Records. Each one has the same shape: Context (the problem), Decision, Consequences, and \"Where it lives in the code\" with file and line pointers.\n\nRead them in number order. For each ADR, open the files its last section names and find the exact lines. This quest asks about ADRs 0001 to 0008: API keys, status codes across the team boundary, the activity spine, the webhook outbox, signatures, relations, ranking and cycles.\n\nA good habit: before reading the Decision, write down how you would solve the Context yourself, then compare.",
    "excerpts": [
     {
      "path": "docs/adr/README.md",
@@ -43,20 +43,14 @@
    "id": "r02-one-transaction",
    "target": "pack",
    "phase": "before",
-   "title": "Core idea: one transaction for the change and its side effects",
-   "body": "When an issue changes, three other things must happen: an audit entry, outgoing webhooks, and in-app notifications. If any of them is done separately, they can disagree: a change might be audited but never announced.\n\ntracer-net's answer is to add every one of those rows to the same EF Core `DbContext` as the change itself, and let a single save commit them all. The webhook is not sent during the request; a row saying \"this delivery is due\" is written, and a background worker sends it later. This pattern is called a transactional outbox. Read ADR 0003 and then ADR 0004 with that picture in mind.",
+   "title": "Core idea: a change and the things that must follow it",
+   "body": "When an issue changes, three other things must happen: an audit entry, outgoing webhooks, and in-app notifications. If they are handled carelessly they can disagree: a change might be audited but never announced, or announced but never saved.\n\nRead ADR 0003 and ADR 0004, then open `ActivityRecorder` and the controllers that call it. For each of the four kinds of row (the change, the Activity, the webhook delivery, the notification), note which `DbContext` it is added to, which line calls `SaveChanges`, and whether anything is sent over the network during the request. Then read the webhook worker and note, step by step, when it sends a delivery and when it saves the result. Ask what each design would leave behind if the process stopped between two of those lines.",
    "excerpts": [
     {
      "path": "docs/adr/0003-activity-spine-single-source.md",
      "lineStart": 7,
      "lineEnd": 11,
      "quote": "If each subscribed to changes independently, they would drift"
-    },
-    {
-     "path": "docs/adr/0004-transactional-outbox-webhooks.md",
-     "lineStart": 15,
-     "lineEnd": 17,
-     "quote": "Write a `WebhookDelivery` row **in the same transaction as the change**"
     }
    ],
    "readMore": [
@@ -78,14 +72,14 @@
    "id": "r03-status-codes-leak",
    "target": "pack",
    "phase": "before",
-   "title": "Core idea: a status code is information an attacker can read",
-   "body": "An HTTP status code tells the caller something. If asking about another team's id gives a different answer from asking about a random id, a caller can probe ids and learn which teams exist. ADR 0002 designs the codes so that this probing learns nothing.\n\nThe same thinking appears in the API-key handler (ADR 0001): some failures are deliberately given the same message. While reading, keep asking \"what could a stranger learn from this answer?\". Then look at `TeamAccess.cs`, the single place where the team boundary is decided.",
+   "title": "Core idea: a status code is information too",
+   "body": "An HTTP status code and an error message tell the caller something, and a caller can send many requests and compare the answers. That makes error responses part of a security design, not only a convenience for clients.\n\nADR 0002 is about the team boundary. Read it and `TeamAccess.cs`, the single place where that boundary is decided, and write down the status code for each case: an id from your own team, an id from another team, and an id that does not exist. Do the same for the two API-key routes, noting which check each one runs first.\n\nADR 0001 covers the API-key handler. List each way a presented key can be rejected (unknown, revoked, malformed) and the exact result the handler returns for each. Keep asking: what could a stranger learn by comparing these answers?",
    "excerpts": [
     {
      "path": "docs/adr/0002-403-vs-404-existence-hiding.md",
      "lineStart": 7,
-     "lineEnd": 11,
-     "quote": "the status code is a signal an attacker can read"
+     "lineEnd": 8,
+     "quote": "Authorization is drawn on the team boundary."
     }
    ],
    "readMore": [

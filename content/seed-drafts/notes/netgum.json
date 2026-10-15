@@ -12,12 +12,6 @@
    "body": "Netgum is a small .NET 8 shop for digital products. This quest is about one method pair in `CheckoutService`: `CreateSessionAsync` (start a checkout) and `CompleteOrderAsync` (settle it after the payment provider answers).\n\nRead in this order:\n\n1. `01-CODEBASE-MAP.md` for the layers: Api, Application, Domain, Infrastructure.\n2. `02-CONCEPTS.md` for the ideas: preflight checks, one clock read, terminal states.\n3. `03-WORKED-CHANGE.md` for the before/after of the real code.\n4. `04-TESTING-AND-DEBUGGING.md` and `07-TRACE-LAB.md` to see how the tests prove the ordering.\n\nKeep `CheckoutService.cs` open beside the guides. Every claim in the guides points at a line in that file, and the quiz asks about those lines. The payment gateway and email sender are fakes, so nothing here is a real payment system.",
    "excerpts": [
     {
-     "path": "astraupskill/README.md",
-     "lineStart": 3,
-     "lineEnd": 3,
-     "quote": "The improvement is to validate deterministic input before an external gateway call or tracked entity mutation, then make paid and failed completion terminal and idempotent."
-    },
-    {
      "path": "astraupskill/01-CODEBASE-MAP.md",
      "lineStart": 3,
      "lineEnd": 3,
@@ -44,19 +38,13 @@
    "target": "pack",
    "phase": "before",
    "title": "Core idea: a gateway call and a tracked write are side effects",
-   "body": "Two kinds of step in checkout cannot be taken back cheaply.\n\n- Calling the payment gateway can create a real charge intent at the provider.\n- Changing a property on an object that EF Core tracks (stock, coupon count) marks it dirty, and the next save writes it.\n\nSo the guide sorts the work into \"checks that change nothing\" and \"steps with effects\", and wants every check first. A check that changes nothing is called a preflight. The domain classes gained small preflight methods for exactly this. When you read `CreateSessionAsync`, label each line as check or effect, and see where the first effect happens.",
+   "body": "Two kinds of step in checkout cannot be taken back cheaply.\n\n- Calling the payment gateway can create a real charge intent at the provider.\n- Changing a property on an object that EF Core tracks (stock, coupon count) marks it dirty, and the next save writes it.\n\nSo the guide sorts the work into \"checks that change nothing\" and \"steps with effects\", and calls a check that changes nothing a preflight. When you read `CreateSessionAsync`, label each line as check or effect and see where the first effect happens. Then open the domain classes (`Order`, `Product`, `ProductVariant`, `Coupon`) and, for every method the service calls, note whether it can throw, whether it changes any field, and which fields.",
    "excerpts": [
     {
      "path": "astraupskill/02-CONCEPTS.md",
      "lineStart": 3,
      "lineEnd": 3,
      "quote": "Deterministic validation belongs before the provider because a provider call can create a real charge intent."
-    },
-    {
-     "path": "astraupskill/02-CONCEPTS.md",
-     "lineStart": 3,
-     "lineEnd": 3,
-     "quote": "Tracked aggregate mutation belongs after the candidate order is valid because EF is observing the same object that the test holds."
     }
    ],
    "readMore": [
@@ -72,15 +60,9 @@
    "id": "r03-terminal-states",
    "target": "pack",
    "phase": "before",
-   "title": "Core idea: Paid and Failed are terminal, and completion can be called twice",
-   "body": "A payment provider, a retrying client or a user double-click can make the completion endpoint run more than once for the same order. The order has a small state machine: it starts Pending and can move to Paid or to Failed, and nothing moves out of those two.\n\nIdempotent means: calling it again gives the same answer and repeats no side effect (no second provider status query, no second save, no second email). Read how `CompleteOrderAsync` checks the stored state before doing work, and in which order it does its reads. The tests prove this with counters on fake collaborators.",
+   "title": "Core idea: completion can be called more than once",
+   "body": "A payment provider, a retrying client or a user double-click can make the completion endpoint run more than once for the same order. The order has a small state machine with three values: Pending, Paid and Failed.\n\nIn plain words, an operation is idempotent when calling it again gives the same answer and repeats no side effect. Read `CompleteOrderAsync` from top to bottom and list, in order, every read it makes (the order, the product, the gateway status), every write and every email, and the condition that guards each one. Then trace it three times: for a Pending order, a Paid order and a Failed order, and also for a product lookup that comes back null. The tests prove the intended behaviour with counters on fake collaborators, so compare your trace with those counters.",
    "excerpts": [
-    {
-     "path": "astraupskill/02-CONCEPTS.md",
-     "lineStart": 11,
-     "lineEnd": 11,
-     "quote": "Terminal completion is a persisted state machine. Pending can become Paid or Failed."
-    },
     {
      "path": "src/Netgum.Domain/Orders/PaymentStatus.cs",
      "lineStart": 5,

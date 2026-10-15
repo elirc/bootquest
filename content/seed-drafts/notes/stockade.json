@@ -13,15 +13,15 @@
    "excerpts": [
     {
      "path": "astraupskill/01-CODEBASE-MAP.md",
-     "lineStart": 3,
-     "lineEnd": 3,
-     "quote": "ReadApi.List resolves the authenticated account through Session.Account before handling the requested resource. The health branch uses that account's MerchantId in every operational count and in the reconciliation history query. Client-supplied display data does not choose the merchant whose refunds are counted."
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "RefundHealthTests creates two merchants, their owner accounts, orders, and refund fixtures in an isolated PostgreSQL database."
     },
     {
      "path": "astraupskill/01-CODEBASE-MAP.md",
      "lineStart": 7,
      "lineEnd": 7,
-     "quote": "On the frontend, src/lib/health.ts exports HealthStat and healthStats. The Panels component calls this mapping and renders label, value, and optional help. Keeping the mapping in a small pure function makes the semantics testable without starting a browser or importing the full panel tree."
+     "quote": "On the frontend, src/lib/health.ts exports HealthStat and healthStats. The Panels component calls this mapping and renders label, value, and optional help."
     }
    ],
    "readMore": [
@@ -44,7 +44,7 @@
    "target": "pack",
    "phase": "before",
    "title": "Splitting a set at a boundary without gaps or overlap",
-   "body": "The core idea is a partition. Take every refund that is still pending for one merchant and split it into two groups by attempt count. Every pending row must land in exactly one group, so the two group sizes add up to the total.\n\nThree separate conditions decide where a row is counted: its state, its attempt count, and its merchant. Each one can be wrong on its own. A wrong comparison operator makes the groups overlap or leave a gap. A missing state check lets finished refunds in. A missing merchant check leaks another store's numbers.\n\nWhen you read the queries, check each condition separately, and check the boundary value itself, not just values far away from it. That is exactly how the test fixture is built.",
+   "body": "The core idea is a partition. Take every refund that is still pending for one merchant and split it into groups by attempt count. In a correct partition every row lands in exactly one group, so the group sizes add up to the total.\n\nSeveral separate conditions decide where a row is counted: its state, its attempt count, and its merchant. Each one can be wrong on its own, and a test that only exercises one of them cannot catch a mistake in the others.\n\nWhen you read the queries in `ReadApi.cs`, write down every predicate of each count query side by side: which state it requires, which comparison operator and number it uses for attempts, and whether it filters by merchant. Then try values on both sides of the boundary and exactly on it. That is how the test fixture is built, so compare your list with the fixture rows too.",
    "excerpts": [
     {
      "path": "astraupskill/02-CONCEPTS.md",
@@ -73,19 +73,13 @@
    "target": "pack",
    "phase": "before",
    "title": "The background worker decides what counts as stuck",
-   "body": "The health counts only make sense next to the worker that produces them. `Worker.cs` runs a loop: each tick it selects a batch of orders and refunds that still need work, processes them, then waits before the next tick. When a provider call for a refund fails, the worker adds one to that refund's attempt counter. Rows past the limit are no longer selected.\n\nAn administrator can push a row back into the loop with an authorized command in `Team.cs`. The dashboard only describes the state; it does not change it.\n\nRead the selection queries at the top of `ExecuteAsync`, the delay at the end of the loop, and the failure branch of `ProcessRefund`. The review findings in `06-SOLUTIONS-AND-REVIEW.md` point at these exact lines.",
+   "body": "The health counts only make sense next to the worker that produces them. `Worker.cs` runs a loop: each tick it selects a batch of orders and refunds that still need work, processes them, and waits before the next tick. A failed provider call changes the refund row in some way, and the selection query decides which rows the worker picks up again.\n\n`Team.cs` holds the authorized administrator commands, and `src/lib/health.ts` turns the counts into cards with labels and help text.\n\nRead the selection queries at the top of `ExecuteAsync`, the delay at the end of the loop, and the failure branch of `ProcessRefund`. For each, note the exact numbers and conditions it uses. Then read the refund command in `Team.cs` and the card text in `health.ts`, and ask which of them can change a row and which only describe it. The review findings in `06-SOLUTIONS-AND-REVIEW.md` point at these lines.",
    "excerpts": [
     {
-     "path": "services/Fulfil/Services/Worker.cs",
-     "lineStart": 26,
-     "lineEnd": 26,
-     "quote": "var refunds = await db.Refunds.Where(x => x.State == \"pending\" && x.Attempts < 12).Select(x => x.Id).Take(20).ToListAsync(stoppingToken);"
-    },
-    {
-     "path": "services/Fulfil/Services/Worker.cs",
-     "lineStart": 34,
-     "lineEnd": 34,
-     "quote": "await Task.Delay(1500, stoppingToken);"
+     "path": "astraupskill/07-TRACE-LAB.md",
+     "lineStart": 1,
+     "lineEnd": 1,
+     "quote": "# Trace one exhausted refund to its label"
     }
    ],
    "readMore": [

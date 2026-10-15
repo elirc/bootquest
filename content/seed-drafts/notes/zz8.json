@@ -9,19 +9,19 @@
    "target": "pack",
    "phase": "before",
    "title": "Start here: two risky writes in an HR app",
-   "body": "zz8 is a Next.js and Prisma HR application. The `astraupskill/` course follows two write paths that used to be blind updates: an employee submitting a self-review, and a background worker claiming an integration job. Both were rewritten as guarded, transactional claims.\n\nRead the README for the chapter order and time estimates, then `01-CODEBASE-MAP.md` to see who calls whom. `02-CONCEPTS.md` is the key chapter: it explains both workflows and ends with a glossary that every later chapter relies on. `03-WORKED-CHANGE.md` shows the exact predicates and the new `claimToken` column, and `07-TRACE-LAB.md` follows one request across six boundaries.\n\nThe tests in this course use in-memory doubles, so read the \"Honest limits\" section to know what they do not prove.",
+   "body": "zz8 is a Next.js and Prisma HR application. The `astraupskill/` course follows two write paths that used to be blind updates: an employee submitting a self-review, and a background worker claiming an integration job. The course rewrites both and asks you to judge what the rewrite does and does not guarantee.\n\nRead the README for the chapter order and time estimates, then `01-CODEBASE-MAP.md` to see who calls whom. `02-CONCEPTS.md` is the key chapter: it explains both workflows and ends with a glossary that every later chapter relies on. `03-WORKED-CHANGE.md` shows the exact predicates and the new `claimToken` column, and `07-TRACE-LAB.md` follows one request across six boundaries.\n\nThe tests in this course use in-memory doubles, so read the \"Honest limits\" section to know what they do not prove.",
    "excerpts": [
     {
      "path": "astraupskill/README.md",
-     "lineStart": 3,
-     "lineEnd": 3,
-     "quote": "This course follows two high-risk write paths in an existing Next.js + Prisma HR application: an employee submitting a self-review, and a background worker claiming an integration job. Both were blind updates; both are now guarded, transactional claims. Every example names the real file and function, so you can open the implementation beside the lesson."
+     "lineStart": 21,
+     "lineEnd": 21,
+     "quote": "| 2 | [02-CONCEPTS.md](02-CONCEPTS.md) | Review-workflow and queue concepts, plus the **glossary** | 25 min |"
     },
     {
      "path": "astraupskill/README.md",
-     "lineStart": 45,
-     "lineEnd": 45,
-     "quote": "The tests use deterministic repository doubles and an in-memory Prisma double. They demonstrate conditional-update contracts and transaction grouping; they do **not** prove PostgreSQL locking, isolation levels or cross-process behaviour. [VERIFICATION.md](VERIFICATION.md) says exactly what is and is not established, and sketches the integration test that would close the gap."
+     "lineStart": 29,
+     "lineEnd": 29,
+     "quote": "About four hours end to end. Chapters 1–4 are the reading; 5–7 are the work."
     }
    ],
    "readMore": [
@@ -43,14 +43,14 @@
    "id": "r02-compare-and-set",
    "target": "pack",
    "phase": "before",
-   "title": "Let the database decide: compare-and-set updates",
-   "body": "Both workflows rely on one idea. Instead of reading a row, checking it in application code, and then writing, the code puts every condition into the write itself. A Prisma `updateMany` with all the predicates in its `where` clause changes the row only if it still qualifies at that instant, and the returned count tells you whether you won.\n\nThe read that happens earlier is still useful, for example to give a friendly error, but it is not a guarantee: two requests can both read the same state before either writes. The gap between the read and the write is called the race window, and only a predicate inside the write closes it.\n\nAs you read, list each predicate in the two `updateMany` calls and say which attack or race it blocks.",
+   "title": "Read the writes: what each updateMany's where clause contains",
+   "body": "Both workflows are about the moment a row changes. There are two broad ways to guard such a change: read the row, check it in application code, then write; or put the conditions into the write itself. Find out which of the two each workflow uses today, and look at both the read and the write.\n\nFor the self-review, follow `findSelfReviewContext` and then the `updateMany` inside `submitSelfReview`. For the queue, read `claimQueuedJobs`. For each `updateMany`, list every field in its `where` clause and say which attack or race that field is meant to block. Then look at what the code does with the value the call returns, and what the caller is told in each case.\n\nThe glossary at the end of `02-CONCEPTS.md` names the terms you will need, such as the race window.",
    "excerpts": [
     {
      "path": "astraupskill/02-CONCEPTS.md",
      "lineStart": 61,
      "lineEnd": 61,
-     "quote": "| **Race window** | The gap between reading a row and writing it. Here: both requests run `findSelfReviewContext` and see `IN_PROGRESS` before either runs `updateMany`. Only a predicate inside the write closes it. |"
+     "quote": "| **Race window** | The gap between reading a row and writing it."
     }
    ],
    "readMore": [
@@ -72,14 +72,14 @@
    "id": "r03-claim-tokens",
    "target": "pack",
    "phase": "before",
-   "title": "Queues need ownership, not just a status",
-   "body": "A queue worker does two things at different times: it claims a job, then later it completes it. Between those moments a lot can happen. The job can fail, an operator can retry it, and a second worker can claim it while the first is still running old code.\n\nThe course solves this with a random token written onto the row at claim time. Later writes must present the same token, so only the current owner can finish the job. Think of it like a numbered ticket at a counter: an old ticket no longer matches.\n\nWhile reading `integration-repository.ts`, note which method writes the token, which method checks it, which method clears it, and which fields each method leaves alone. The chapter also explains what this project deliberately does not have yet.",
+   "title": "Queues: follow the claimToken through the repository",
+   "body": "A queue worker does two things at different times: it claims a job, then later it completes it. Between those moments a lot can happen. The job can fail, an operator can retry it, a worker can crash, and a second worker can claim the job while the first is still running old code.\n\nThe course adds a `claimToken` column for this. While reading `integration-repository.ts`, note which method writes the token, which method checks it, which method clears it, and which fields (status, attemptCount, the token) each method sets or leaves alone. Then trace the scenarios above one by one and write down the row after each step, including what each method returns when its `where` clause matches nothing.\n\nFinally, read the worker loop and note the order of its calls.",
    "excerpts": [
     {
      "path": "astraupskill/02-CONCEPTS.md",
      "lineStart": 57,
      "lineEnd": 57,
-     "quote": "| **Claim token / lease** | A random value (`crypto.randomUUID()`) written onto a row when a worker takes ownership of it. Later writes must present the same token, so a worker that fell behind cannot finish a job that has since been retried. A \"lease\" is the same idea with an expiry; this project has no expiry — see chapter 3. |"
+     "quote": "| **Claim token / lease** | A random value (`crypto.randomUUID()`) written onto a row when a worker takes ownership of it."
     }
    ],
    "readMore": [
@@ -124,7 +124,7 @@
    "target": "seed:quests:zz8/quiz/1d676a3a1028b125",
    "phase": "after",
    "title": "Why a failing audit insert undoes the submission",
-   "body": "The status change, the response create and the audit create all go through the same `tx` client inside one `db.$transaction`. A throw inside the callback discards everything written through `tx`, so the assignment keeps the status it had and no response row survives. The glossary states the invariant: an audit entry can never exist for a change that did not commit, and the reverse holds too.\n\n- SUBMITTED without audit is what you would get if the audit write moved outside the transaction; variation 2 in chapter 3 shows a test failing exactly that way.\n- Keeping the response is wrong for the same reason: it was written through `tx`.\n- There is no catch block that resets the status; rollback does the work.",
+   "body": "The status change, the response create and the audit create all go through the same `tx` client inside one `db.$transaction`. A throw inside the callback discards everything written through `tx`, so the assignment keeps the status it had and no response row survives. The glossary states the invariant: an audit entry can never exist for a change that did not commit, and the reverse holds too.\n\n- SUBMITTED without audit is what you would get if the audit write moved outside the transaction; variation 2 in chapter 3 shows a test failing exactly that way.\n- APPROVED is a real status (schema.prisma:49-54), but this transaction never sets it; it only moves the assignment to SUBMITTED, and that write is rolled back too.\n- There is no catch block that resets the status; rollback does the work.",
    "excerpts": [
     {
      "path": "src/repositories/review-repository.ts",
