@@ -128,7 +128,7 @@
    "target": "seed:quests:dotnet-auth/quiz/5d6f62142d4af4e0",
    "phase": "after",
    "title": "PKCE ties the code to a secret the app never sent",
-   "body": "The key is right. At authorize time the app sends only `code_challenge = SHA256(verifier)`, stored on the code row. At exchange time it must present the raw verifier; the server hashes it and compares with `FixedTimeEquals`. An attacker with the code but not the verifier fails \"PKCE verification failed.\"\n\n- Codes are not bound to IP addresses.\n- Codes are random strings, not encrypted with a client secret; a SPA has no secret.\n- The token endpoint never asks for the user's password.",
+   "body": "The key is right. At authorize time the app sends only `code_challenge` (with S256, `SHA256(verifier)`), stored on the code row. At exchange time it must present the raw verifier; the server hashes it (or, for plain, uses it as is) and compares with `FixedTimeEquals`. An attacker with the code but not the verifier fails \"PKCE verification failed.\"\n\n- Codes are not bound to IP addresses.\n- Codes are random strings, not encrypted with a client secret; a SPA has no secret.\n- The token endpoint never asks for the user's password.",
    "excerpts": [
     {
      "path": "src/NetAuth0.Application/OAuth/OAuthService.cs",
@@ -150,7 +150,7 @@
    "target": "seed:quests:dotnet-auth/quiz/d39ecdbf1b7583c9",
    "phase": "after",
    "title": "The plain method removes the hash",
-   "body": "The key is right. In the exchange switch, `\"plain\" => request.CodeVerifier`: the expected challenge is the verifier itself. So the value sent at authorize time is the same secret needed at exchange time, and anyone who saw the first request can redeem the code.\n\n- The redirect comparison runs for every method.\n- Code lifetime is fixed at 5 minutes whatever the method.\n- `ValidatePkce` still requires a challenge when the client requires PKCE.",
+   "body": "The key is right. In the exchange switch, `\"plain\" => request.CodeVerifier`: the expected challenge is the verifier itself. So the value sent at authorize time is the same secret needed at exchange time, and anyone who saw the first request can redeem the code.\n\n- The redirect comparison runs for every method.\n- Code lifetime is fixed at 5 minutes whatever the method.\n- The audit entry for an issued code records the app name and scope, not the challenge.",
    "excerpts": [
     {
      "path": "src/NetAuth0.Application/OAuth/OAuthService.cs",
@@ -172,7 +172,7 @@
    "target": "seed:quests:dotnet-auth/quiz/0833c5f6c1888252",
    "phase": "after",
    "title": "Single-use holds only one request at a time",
-   "body": "The key is right. Both requests load the row while `ConsumedAt` is still null, so both pass `IsActive`. `code.Consume(...)` only changes memory and is saved later. The `AuthorizationCode` mapping has a unique index on `CodeHash` but no concurrency token, so the second save does not fail.\n\n- No 409 can come from EF without a concurrency token.\n- The code takes no row lock.\n- ConsumedAt is set after validation, near the end.",
+   "body": "The key is right. Both requests load the row while `ConsumedAt` is still null, so both pass `IsActive`. `code.Consume(...)` only changes memory and is saved later. The `AuthorizationCode` mapping has a unique index on `CodeHash` but no concurrency token, so the second save does not fail.\n\n- No 409 can come from EF without a concurrency token.\n- Neither read waits: on Postgres a plain SELECT takes no row lock, and the code asks for none.\n- ConsumedAt is set after validation, near the end.",
    "excerpts": [
     {
      "path": "src/NetAuth0.Application/OAuth/OAuthService.cs",
@@ -194,7 +194,7 @@
    "target": "seed:quests:dotnet-auth/quiz/b93357dc7ca4b0bf",
    "phase": "after",
    "title": "The second redirect check binds code and redirect",
-   "body": "The key is right. The code row stores the redirect URI used at authorize time, and the exchange compares it with the one presented now (`redirect_uri mismatch.`). That proves the party redeeming the code saw the same redirect the code was issued for, which blocks mix-up attacks.\n\n- Authorize did validate it, exactly; this is a second, different check.\n- Tokens are returned in the HTTP response to the caller, not posted to the URI.\n- Client secrets are checked separately, earlier in the exchange.",
+   "body": "The key is right. The code row stores the redirect URI used at authorize time, and the exchange compares it with the one presented now (`redirect_uri mismatch.`). That proves the party redeeming the code saw the same redirect the code was issued for, which blocks mix-up attacks.\n\n- Authorize did validate it; this second check binds the code to that same redirect.\n- Tokens are returned in the HTTP response to the caller, not posted to the URI.\n- Client secrets are checked separately, earlier in the exchange.",
    "excerpts": [
     {
      "path": "src/NetAuth0.Application/OAuth/OAuthService.cs",
@@ -238,7 +238,7 @@
    "target": "seed:quests:dotnet-auth/quiz/280996e4d4be9f53",
    "phase": "after",
    "title": "Expiry is checked before reuse",
-   "body": "The key is right. The first test after loading is `if (existing.ExpiresAt <= clock.UtcNow)`: the token is revoked, saved, and the call fails with \"Refresh token expired.\" The reuse check comes after, so it never runs for an expired token.\n\n- No family revocation or reuse audit happens on this path.\n- Expiry is checked; it is the very first check.\n- Users are blocked only by an admin action, not by this method.",
+   "body": "The key is right. The first test after loading is `if (existing.ExpiresAt <= clock.UtcNow)`: the token is revoked, saved, and the call fails with \"Refresh token expired.\" The reuse check comes after, so it never runs for an expired token.\n\n- No family revocation or reuse audit happens on this path.\n- Expiry is checked; it is the very first check.\n- This method never blocks or locks a user.",
    "excerpts": [
     {
      "path": "src/NetAuth0.Application/OAuth/OAuthService.cs",
@@ -260,7 +260,7 @@
    "target": "seed:quests:dotnet-auth/quiz/6cc2e4ff337c5d48",
    "phase": "after",
    "title": "The refresh path forgets the blocked flag",
-   "body": "The key is right. Lines 205-207 load the `User` for the token, but nothing reads `user.IsBlocked` before new tokens are issued. The authorize path checks it (`\"User is blocked.\"`, lines 36-40), and so does login, so the refresh path is the odd one out.\n\n- That error message exists only on authorize and login.\n- Nothing revokes the family for a blocked user here.\n- The new access token carries the usual claims.",
+   "body": "The key is right. Lines 205-207 load the `User` for the token, but nothing reads `user.IsBlocked` before new tokens are issued. The authorize path checks it (`\"User is blocked.\"`, line 39), and login checks it too (throwing \"Account is temporarily locked.\"), so the refresh path is the odd one out.\n\n- \"User is blocked.\" exists only on the authorize path, and refresh never reaches any such check.\n- Nothing revokes the family for a blocked user here.\n- The new access token carries the usual claims.",
    "excerpts": [
     {
      "path": "src/NetAuth0.Application/OAuth/OAuthService.cs",
@@ -320,7 +320,7 @@
    "target": "seed:quests:dotnet-auth/quiz/de17c21da3307c7a",
    "phase": "after",
    "title": "Without an audience check, any client's token fits",
-   "body": "The key is right. The JwtBearer options set `ValidateIssuer = true` but `ValidateAudience = false`, so the API never asks which application the token was minted for. If a token for some other client carries the right permission claims, the admin API accepts it.\n\n- Lifetime is still validated; expired tokens fail.\n- Issuer is validated, so foreign issuers fail.\n- Signature validation stays on, so unsigned tokens fail.",
+   "body": "The key is right. The JwtBearer options set `ValidateIssuer = true` but `ValidateAudience = false`, so the API never asks which application the token was minted for. If a token for some other client carries the right permission claims, the admin API accepts it.\n\n- Lifetime is still validated: no `ClockSkew` is set, so JwtBearer's default 5-minute skew applies and tokens fail soon after expiry.\n- Issuer is validated, so foreign issuers fail.\n- Signature validation stays on, so unsigned tokens fail.",
    "excerpts": [
     {
      "path": "src/NetAuth0.Api/Program.cs",

@@ -128,7 +128,7 @@
    "target": "seed:quests:netgum/quiz/51bcc88b51133fcc",
    "phase": "after",
    "title": "The Failed check comes first, before any read",
-   "body": "The key is right: lines 102-105 return `ToReceipt(order, \"Unknown product\")` as soon as the stored status is Failed. The product query (line 107) and the provider status call (line 114) are below that return, so a repeat call does neither.\n\n- No second status call or save happens; the guide and the tests count exactly one status query.\n- `MarkPaymentFailed` is not called again, and if it were it would throw \"Only pending orders can fail payment.\"\n- The product is not loaded on this branch at all; the failed receipt never uses the name.",
+   "body": "The key is right: lines 102-105 return `ToReceipt(order, \"Unknown product\")` as soon as the stored status is Failed. The product query (line 107) and the provider status call (line 114) are below that return, so a repeat call does neither.\n\n- No second status call or save happens; the guide and the tests count exactly one status query.\n- `MarkPaymentFailed` is not called again, and if it were it would throw \"Only pending orders can fail payment.\"\n- The product is not loaded on this branch at all; the failed receipt says \"Unknown product\".",
    "excerpts": [
     {
      "path": "src/Netgum.Application/Checkout/CheckoutService.cs",
@@ -331,10 +331,10 @@
    "provenance": {
     "repo": "netgum",
     "sha": "2984d9b817641444ac5886255f10f08788fc2882",
-    "path": "astraupskill/03-WORKED-CHANGE.md",
+    "path": "src/Netgum.Application/Checkout/CheckoutService.cs",
     "lines": {
-     "start": 43,
-     "end": 43
+     "start": 59,
+     "end": 59
     }
    },
    "citations": [],
@@ -343,9 +343,15 @@
    "pack": "netgum",
    "target": "seed:quests:netgum/quiz/0808a7c45dfcfe39",
    "phase": "after",
-   "title": "What the second preflight can and cannot do",
-   "body": "The key is right: after the gateway await, line 59 calls `product.ValidatePurchase(request.VariantId)` again. If the last unit went in the meantime, it throws \"Variant is sold out.\" But the payment intent was already created during the await, and nothing undoes it. The guide names compensation as a separate design.\n\n- Nothing cancels or voids the intent; the code has no compensation step.\n- Stock cannot reach -1: `ReserveOne` throws at zero.\n- No row version is configured, so no `DbUpdateConcurrencyException` and no retry exist here.",
+   "title": "What a throw after the gateway call leaves behind",
+   "body": "The key is right. `CreatePaymentIntentAsync` runs before line 59, so by the time the second `ValidatePurchase` throws, the provider already holds a payment intent. Nothing in `CreateSessionAsync` cancels it; the guide names compensation as a separate design. Everything else comes after line 59 (`Order.CreatePending`, `ReserveInventory`, `MarkRedeemed`, `_orders.Add`, `SaveChangesAsync`), so no order row, stock change or coupon change is saved.\n\nA caution about this re-check: it reads the product this request already loaded and is tracking, so a sale made through another request's context is not seen here. The concepts chapter says the post-await check narrows the race but does not close it.\n\n- No cancel call exists; the intent stays at the provider.\n- `Order.CreatePending` runs only after both re-checks pass.\n- `ReserveInventory` is also after line 59, so stock is untouched.",
    "excerpts": [
+    {
+     "path": "src/Netgum.Application/Checkout/CheckoutService.cs",
+     "lineStart": 59,
+     "lineEnd": 59,
+     "quote": "product.ValidatePurchase(request.VariantId);"
+    },
     {
      "path": "astraupskill/03-WORKED-CHANGE.md",
      "lineStart": 43,
@@ -353,10 +359,10 @@
      "quote": "They do not roll back a provider intent created during the await, which is why the code and course call out compensation as a separate concern."
     },
     {
-     "path": "src/Netgum.Application/Checkout/CheckoutService.cs",
-     "lineStart": 59,
-     "lineEnd": 59,
-     "quote": "product.ValidatePurchase(request.VariantId);"
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 27,
+     "lineEnd": 27,
+     "quote": "The post-await `ValidatePurchase` narrows the race but does not close it"
     }
    ],
    "readMore": []
@@ -520,7 +526,7 @@
    "target": "seed:quests:netgum/quiz/deb7a6fb6a106372",
    "phase": "after",
    "title": "Why the tests keep real repositories in the path",
-   "body": "The key is right: the guide says a mock that never loads a real aggregate could pass while `Include` or value-object mapping is broken. With EF InMemory and the production `ProductRepository` and `OrderRepository`, the test loads the product graph the same way the app does. Only the external edges (gateway, email, unit of work) are replaced by counting doubles.\n\n- InMemory does not enforce relational constraints or SQL transactions; the guides say so repeatedly.\n- The repository is an interface; the test could mock it, and chooses not to.\n- No migrations exist yet; the architecture doc lists them as future work.",
+   "body": "The key is right: the guide says a mock that never loads a real aggregate could pass while `Include` or value-object mapping is broken. With EF InMemory and the production `ProductRepository` and `OrderRepository`, the test loads the product graph the same way the app does. Only the external edges (gateway, email, unit of work) are replaced by counting doubles.\n\n- InMemory does not enforce relational constraints or SQL transactions; the guides say so repeatedly.\n- `ProductRepository` is internal, but `InternalsVisibleTo(\"Netgum.Tests\")` lets the tests construct it, which they do.\n- No migrations exist yet; the architecture doc lists them as future work.",
    "excerpts": [
     {
      "path": "astraupskill/04-TESTING-AND-DEBUGGING.md",
