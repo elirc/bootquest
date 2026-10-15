@@ -1,0 +1,520 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "harbor-swe-bootcamp",
+ "sha": "051e4f02416d2d37ba079c302c1726d698f87878",
+ "guides": [
+  "docs/learning/request-tracing.md",
+  "docs/learning/data-and-queries.md",
+  "docs/learning/testing-workshop.md",
+  "docs/learning/debugging-labs.md",
+  "docs/learning/reliability.md"
+ ],
+ "items": [
+  {
+   "id": "q01-foreign-workspace-403",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/request-tracing.md",
+    "lines": {
+     "start": 34,
+     "end": 38
+    }
+   },
+   "cites": [
+    {
+     "path": "src/Harbor.Api/Infrastructure/WorkspaceScopeFilter.cs",
+     "lineStart": 11,
+     "lineEnd": 11
+    },
+    {
+     "path": "docs/learning/request-tracing.md",
+     "lineStart": 34,
+     "lineEnd": 38
+    }
+   ],
+   "prompt": "A valid API key for workspace A is sent to a list route for workspace B. Why can the scope filter answer 403 without querying whether B exists?",
+   "answer": "It compares the route's workspace with the caller's workspace claim, without touching the database",
+   "distractors": [
+    "It first loads workspace B and returns 403 only when B exists, otherwise 404",
+    "The authentication handler already rejected the key with 401 before the filter could run",
+    "It returns 404 for every workspace mismatch, so that existence is never revealed to callers"
+   ],
+   "explanation": "WorkspaceScopeFilter's 403 is a claim comparison. By-ID endpoints are different: they fold ID and caller workspace into one lookup and answer 404 (ADR 0002)."
+  },
+  {
+   "id": "q02-binding-vs-segment-422",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/request-tracing.md",
+    "lines": {
+     "start": 40,
+     "end": 49
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/request-tracing.md",
+     "lineStart": 42,
+     "lineEnd": 49
+    }
+   ],
+   "prompt": "A conversation-list request carries a well-formed segment GUID that does not exist in the caller's tenant. Which response does it get, and at which stage?",
+   "answer": "422 ProblemDetails from the controller, once BuildAsync returns null",
+   "distractors": [
+    "400 from model binding, before the controller action ever runs",
+    "404 from the workspace scope filter, since the segment is not visible",
+    "403, because the segment belongs to another tenant than the API key"
+   ],
+   "explanation": "Malformed values (bad dates, unknown sort names, reversed bounds) fail binding/validation with 400 before the action. A missing segment has a valid shape, so it reaches the controller, which keeps the 422 contract."
+  },
+  {
+   "id": "q03-shared-membership",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/request-tracing.md",
+    "lines": {
+     "start": 55,
+     "end": 60
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/request-tracing.md",
+     "lineStart": 57,
+     "lineEnd": 60
+    }
+   ],
+   "prompt": "Why do the List and Overview endpoints build their result set from one shared conversation query component?",
+   "answer": "So both endpoints interpret the same filter identically",
+   "distractors": [
+    "So EF can cache one compiled query plan shared by both endpoints",
+    "So the overview can reuse the list's paging and tag loading",
+    "Because Infrastructure projects may never reference controller code"
+   ],
+   "explanation": "The controller chooses how to use the query (List adds ordering, tags, paging; Overview adds an aggregate); the shared component defines which conversations belong."
+  },
+  {
+   "id": "q04-count-then-page-not-snapshot",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/request-tracing.md",
+    "lines": {
+     "start": 67,
+     "end": 72
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/request-tracing.md",
+     "lineStart": 69,
+     "lineEnd": 72
+    }
+   ],
+   "prompt": "The list endpoint counts the matches, then fetches one page. What does that two-statement design imply?",
+   "answer": "A writer between the two statements can change the data, so it is not an export snapshot",
+   "distractors": [
+    "The count and the page always agree, because EF runs both statements in one implicit transaction",
+    "The total is computed in memory from the rows on the fetched page",
+    "The page is fetched first so the count can skip the rows already returned to the client"
+   ],
+   "explanation": "They are separate statements; nothing freezes the data between them. A snapshot is a different requirement (see the export jobs)."
+  },
+  {
+   "id": "q05-early-tolistasync",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/data-and-queries.md",
+    "lines": {
+     "start": 7,
+     "end": 12
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/data-and-queries.md",
+     "lineStart": 9,
+     "lineEnd": 12
+    }
+   ],
+   "prompt": "A refactor moves ToListAsync() before the Where/OrderBy/Take calls, and the endpoint still returns the same rows. What changed?",
+   "answer": "A bounded query became a full-table load, with filtering and paging done in memory",
+   "distractors": [
+    "Nothing; EF defers ToListAsync until the last LINQ operator has been applied",
+    "The query now fails at runtime, because Take cannot be called after ToListAsync",
+    "Only the SQL formatting changed; the database still applies the WHERE and the limit"
+   ],
+   "explanation": "IQueryable describes database work; ToListAsync executes it. Materialising early can preserve the visible result while changing the cost completely."
+  },
+  {
+   "id": "q06-filter-after-paging",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/data-and-queries.md",
+    "lines": {
+     "start": 33,
+     "end": 37
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/data-and-queries.md",
+     "lineStart": 35,
+     "lineEnd": 37
+    }
+   ],
+   "prompt": "A queue has 500 matching conversations and the page size is 2. If the implementation applied the filter AFTER paging, what would you expect?",
+   "answer": "Too few rows on the page and a wrong X-Total-Count",
+   "distractors": [
+    "Two rows and X-Total-Count 500, just slower",
+    "The same rows but in a different order",
+    "A 400 because the page size is smaller than the match count"
+   ],
+   "explanation": "Membership, order and page are different operations. Filtering after paging can return too few rows and the wrong total; counting after paging only counts that page."
+  },
+  {
+   "id": "q07-overview-unassigned",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/data-and-queries.md",
+    "lines": {
+     "start": 39,
+     "end": 43
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/data-and-queries.md",
+     "lineStart": 40,
+     "lineEnd": 43
+    }
+   ],
+   "prompt": "The overview returns open, snoozed, closed, unassigned and total for one filtered population. Which relation holds?",
+   "answer": "open + snoozed + closed = total; unassigned overlaps them",
+   "distractors": [
+    "open + snoozed + closed + unassigned = total, since each conversation is in one bucket",
+    "Each count ignores its own filter, the way search facets do",
+    "total counts only the conversations on the current list page"
+   ],
+   "explanation": "The overview is not a set of facets; with state=Open the closed count is simply zero."
+  },
+  {
+   "id": "q08-half-open-window",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/data-and-queries.md",
+    "lines": {
+     "start": 49,
+     "end": 59
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/data-and-queries.md",
+     "lineStart": 54,
+     "lineEnd": 59
+    }
+   ],
+   "prompt": "How should the createdFrom / createdBefore bounds be interpreted, and why?",
+   "answer": "createdFrom <= CreatedAt < createdBefore, so adjacent windows neither overlap nor leave a gap",
+   "distractors": [
+    "createdFrom <= CreatedAt <= createdBefore, with the end set to 23:59:59.999",
+    "createdFrom < CreatedAt < createdBefore, excluding both edges to avoid duplicates",
+    "Both bounds compare last-activity time, truncated to the day"
+   ],
+   "explanation": "A half-open window composes cleanly. An invented .999 end-of-day can miss rows because the database can store more precision; bounds describe creation time, not last activity."
+  },
+  {
+   "id": "q09-tiebreak-id",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/data-and-queries.md",
+    "lines": {
+     "start": 66,
+     "end": 76
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/data-and-queries.md",
+     "lineStart": 68,
+     "lineEnd": 75
+    }
+   ],
+   "prompt": "Harbor appends Id ascending to every supported conversation ordering. What does that fix, and what does it not?",
+   "answer": "It makes ordering total so static data pages reproducibly; a changing queue can still repeat or skip rows",
+   "distractors": [
+    "It freezes the queue, so later pages can never repeat or skip a row even while writers insert",
+    "It turns offset paging into keyset paging, because Id is now the cursor",
+    "It only speeds the query up by letting SQLite walk the primary key index"
+   ],
+   "explanation": "Rows can tie on timestamps; a unique order is required for pagination. Inserts or removals before the current offset still shift pages - a cursor or snapshot addresses that."
+  },
+  {
+   "id": "q10-cast-before-multiply",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/data-and-queries.md",
+    "lines": {
+     "start": 81,
+     "end": 89
+    }
+   },
+   "cites": [
+    {
+     "path": "src/Harbor.Api/Infrastructure/Paging.cs",
+     "lineStart": 55,
+     "lineEnd": 55
+    },
+    {
+     "path": "docs/learning/data-and-queries.md",
+     "lineStart": 81,
+     "lineEnd": 89
+    }
+   ],
+   "prompt": "page and size each bind successfully as int, but their product can overflow. How does Harbor compute the paging offset safely?",
+   "answer": "It widens page to long before subtracting and multiplying",
+   "distractors": [
+    "It multiplies in int, then casts the product to long before Skip",
+    "It multiplies in int and rejects the request when the result is negative",
+    "It uses checked int arithmetic and lets the OverflowException become a 500"
+   ],
+   "explanation": "The cast must happen before the multiplication; casting the product only widens a value that may already have overflowed. Harbor also returns an empty page when the offset is beyond the count."
+  },
+  {
+   "id": "q11-parity-hides-leak",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/testing-workshop.md",
+    "lines": {
+     "start": 48,
+     "end": 53
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/testing-workshop.md",
+     "lineStart": 50,
+     "lineEnd": 53
+    }
+   ],
+   "prompt": "A test asserts that the list endpoint and the overview endpoint agree for several filters. Why is that not enough?",
+   "answer": "If both forget the workspace predicate they agree while leaking another tenant's data",
+   "distractors": [
+    "Parity tests are flaky, because the two endpoints read in different transactions",
+    "The overview rounds its counts, so exact parity with the list can never be asserted",
+    "List paging means the two endpoints can never agree on totals in the first place"
+   ],
+   "explanation": "Parity proves consistency, not correctness. Check totals too: aggregates can leak without returning the foreign row."
+  },
+  {
+   "id": "q12-ensurecreated-gap",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/testing-workshop.md",
+    "lines": {
+     "start": 70,
+     "end": 76
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/testing-workshop.md",
+     "lineStart": 72,
+     "lineEnd": 75
+    }
+   ],
+   "prompt": "HarborApiFactory builds the test schema with EnsureCreated. What can the HTTP suite therefore miss?",
+   "answer": "A model change with no migration: tests pass on today's model while existing databases never change",
+   "distractors": [
+    "Any SQLite translation problem, because EnsureCreated switches the suite to an in-memory provider",
+    "Seed data problems, because EnsureCreated deletes all rows after each test class",
+    "Foreign-key violations, because EnsureCreated disables constraint checking in SQLite"
+   ],
+   "explanation": "Development startup uses migrations; that is why the separate MigrationDriftTests guard exists. A clean migration test still differs from upgrading a populated database."
+  },
+  {
+   "id": "q13-time-without-sleep",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/testing-workshop.md",
+    "lines": {
+     "start": 59,
+     "end": 67
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/testing-workshop.md",
+     "lineStart": 61,
+     "lineEnd": 66
+    }
+   ],
+   "prompt": "You must test 'at the SLA deadline' versus 'one tick later'. What approach does the workshop recommend?",
+   "answer": "Pass exact now values around the deadline into the domain methods",
+   "distractors": [
+    "Sleep 100 ms past the deadline, then assert that the breach was recorded",
+    "Run the test repeatedly and accept it if most of the runs pass",
+    "Move the machine clock forward from inside the test host process"
+   ],
+   "explanation": "Domain methods take now. A real-clock sleep cannot reliably establish a one-tick boundary."
+  },
+  {
+   "id": "q14-outbox-boundary",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/reliability.md",
+    "lines": {
+     "start": 6,
+     "end": 15
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/reliability.md",
+     "lineStart": 8,
+     "lineEnd": 15
+    }
+   ],
+   "prompt": "Harbor queues webhook deliveries in the same database save as the conversation change. What does that guarantee?",
+   "answer": "The change and its queued delivery commit together, but the subscriber is not in the transaction",
+   "distractors": [
+    "The subscriber receives each webhook exactly once, even across dispatcher crashes and retries",
+    "The HTTP call to the subscriber is rolled back as well whenever SaveChangesAsync fails",
+    "Deliveries are sent inline over HTTP, before SaveChangesAsync returns to the controller"
+   ],
+   "explanation": "This is a transactional outbox: Webhooks.cs adds pending delivery entities and does not send HTTP inline."
+  },
+  {
+   "id": "q15-stale-human-edit",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/reliability.md",
+    "lines": {
+     "start": 38,
+     "end": 42
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/reliability.md",
+     "lineStart": 38,
+     "lineEnd": 42
+    }
+   ],
+   "prompt": "Conversation has a version token and conflicting tracked writes raise a 409. A human reads a page, a colleague edits it, then the first human submits an update. What happens?",
+   "answer": "It normally succeeds and overwrites, because the new request loads the latest version",
+   "distractors": [
+    "It fails with 409, because the browser sent the version it originally read",
+    "EF merges both edits field by field, keeping each human's changes",
+    "The second request blocks until the colleague's transaction has closed"
+   ],
+   "explanation": "The token protects overlapping tracked database writes inside the server. No edit token travels to the browser, so conditional writes would be needed."
+  },
+  {
+   "id": "q16-dedupe-key",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/reliability.md",
+    "lines": {
+     "start": 49,
+     "end": 57
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/reliability.md",
+     "lineStart": 54,
+     "lineEnd": 57
+    }
+   ],
+   "prompt": "A webhook receiver wants to ignore deliveries it has already processed. What should it deduplicate on?",
+   "answer": "A stable delivery identifier, because the signing timestamp can change per attempt",
+   "distractors": [
+    "The signing timestamp, since each delivery attempt is signed exactly once",
+    "The HMAC signature, which is unique for every delivery Harbor sends",
+    "Nothing: reject anything older than the timestamp tolerance instead"
+   ],
+   "explanation": "HMAC proves integrity and a timestamp tolerance limits old replays; neither establishes that the delivery was never processed before."
+  },
+  {
+   "id": "f01-no-scheduler",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/learning/reliability.md",
+    "lines": {
+     "start": 63,
+     "end": 77
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/reliability.md",
+     "lineStart": 65,
+     "lineEnd": 75
+    }
+   ],
+   "front": "Who drains Harbor's webhook outbox and wakes snoozed conversations, and how much does one dispatch call do?",
+   "back": "Nobody automatically: there are only manual endpoints (wake-due, dispatch); the hosted services handle publication and exports. DispatchAsync claims one ready delivery at a time under a lease, at most 50 per call, serially, with limited retries - so eventual delivery is not promised."
+  },
+  {
+   "id": "f02-evidence-statement",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/learning/testing-workshop.md",
+    "lines": {
+     "start": 82,
+     "end": 85
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/testing-workshop.md",
+     "lineStart": 84,
+     "lineEnd": 85
+    }
+   ],
+   "front": "What is the testing workshop's evidence-statement template?",
+   "back": "Given [fixture], when [operation], assert [observable result]. This catches [defect]. It does not prove [limit]."
+  },
+  {
+   "id": "f03-fixture-row-purpose",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/learning/testing-workshop.md",
+    "lines": {
+     "start": 22,
+     "end": 35
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/testing-workshop.md",
+     "lineStart": 28,
+     "lineEnd": 30
+    }
+   ],
+   "front": "In the queue filter test, why add an unrelated conversation that contains no search term?",
+   "back": "Without it, a broken 'return everything' implementation could pass. Each fixture row should have a clearly different job: name the incorrect implementation it catches."
+  },
+  {
+   "id": "f04-two-writer-conflict",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/learning/reliability.md",
+    "lines": {
+     "start": 21,
+     "end": 36
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/reliability.md",
+     "lineStart": 30,
+     "lineEnd": 36
+    }
+   ],
+   "front": "Walk two writers through Harbor's optimistic concurrency: both load V1, A saves first. What happens to B, and what does the API return?",
+   "back": "A's save changes the version; B's update still uses V1 as the original token, matches no row, and EF throws DbUpdateConcurrencyException, which the API maps to 409."
+  }
+ ]
+}

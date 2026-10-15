@@ -1,0 +1,452 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "netcleanarch",
+ "sha": "bfb1e6905302b44c6f9c9a2d090f697d86e61026",
+ "guides": [
+  "CleanArchitecture/fabledocs3/adr-003-behaviour-pipeline.md",
+  "CleanArchitecture/fabledocs3/adr-009-in-process-precommit-domain-events.md",
+  "CleanArchitecture/fabledocs/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+  "CleanArchitecture/fabledocs/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+  "CleanArchitecture/fabledocs2/03-data-access.md"
+ ],
+ "items": [
+  {
+   "id": "q01-auth-before-validation",
+   "kind": "quiz",
+   "source": {
+    "path": "CleanArchitecture/fabledocs3/adr-003-behaviour-pipeline.md",
+    "lines": {
+     "start": 11,
+     "end": 19
+    }
+   },
+   "cites": [
+    {
+     "path": "CleanArchitecture/src/Application/DependencyInjection.cs",
+     "lineStart": 16,
+     "lineEnd": 23
+    },
+    {
+     "path": "CleanArchitecture/fabledocs3/adr-003-behaviour-pipeline.md",
+     "lineStart": 11,
+     "lineEnd": 19
+    }
+   ],
+   "prompt": "In the MediatR pipeline, AuthorizationBehaviour is registered before ValidationBehaviour. What does that ordering protect?",
+   "answer": "Anonymous callers never get validation feedback that could leak which resources exist",
+   "distractors": [
+    "Validation errors get logged together with the authenticated user's name",
+    "Validators can safely assume the request's IDs already belong to the caller",
+    "Performance timing then excludes the cost of the authorization database lookups"
+   ],
+   "explanation": "The ADR calls the order load-bearing: exception logging wraps authorization, authorization precedes validation, and performance timing is innermost so it measures only the handler."
+  },
+  {
+   "id": "q02-why-behaviour-not-filter",
+   "kind": "quiz",
+   "source": {
+    "path": "CleanArchitecture/fabledocs3/adr-003-behaviour-pipeline.md",
+    "lines": {
+     "start": 21,
+     "end": 24
+    }
+   },
+   "cites": [
+    {
+     "path": "CleanArchitecture/fabledocs3/adr-003-behaviour-pipeline.md",
+     "lineStart": 23,
+     "lineEnd": 23
+    }
+   ],
+   "prompt": "Why are cross-cutting concerns implemented as MediatR behaviours rather than ASP.NET Core MVC filters or middleware?",
+   "answer": "They must also apply to non-HTTP entry points, such as tests sending through ISender",
+   "distractors": [
+    "MVC filters cannot read the request body, so FluentValidation could not run there",
+    "Middleware runs after the handler has finished, which is too late to stop a bad request",
+    "Behaviours are faster because they skip model binding and the routing middleware"
+   ],
+   "explanation": "The functional test that denies an anonymous user proves authorization works with zero HTTP involved - only possible because it is a behaviour."
+  },
+  {
+   "id": "q03-perf-innermost",
+   "kind": "quiz",
+   "source": {
+    "path": "CleanArchitecture/fabledocs3/adr-003-behaviour-pipeline.md",
+    "lines": {
+     "start": 17,
+     "end": 19
+    }
+   },
+   "cites": [
+    {
+     "path": "CleanArchitecture/fabledocs3/adr-003-behaviour-pipeline.md",
+     "lineStart": 19,
+     "lineEnd": 19
+    }
+   ],
+   "prompt": "PerformanceBehaviour is the innermost behaviour. What does its 500 ms warning therefore measure?",
+   "answer": "Only the handler itself",
+   "distractors": [
+    "The whole HTTP request, including model binding",
+    "Authorization plus validation, but not the handler",
+    "Only the time spent inside the EF interceptors"
+   ],
+   "explanation": "Being innermost, its stopwatch wraps only next() into the handler."
+  },
+  {
+   "id": "q04-pipeline-io-cost",
+   "kind": "quiz",
+   "source": {
+    "path": "CleanArchitecture/fabledocs3/adr-003-behaviour-pipeline.md",
+    "lines": {
+     "start": 33,
+     "end": 35
+    }
+   },
+   "cites": [
+    {
+     "path": "CleanArchitecture/fabledocs3/adr-003-behaviour-pipeline.md",
+     "lineStart": 35,
+     "lineEnd": 35
+    }
+   ],
+   "prompt": "Which hidden cost does the behaviour pipeline add to every authenticated request?",
+   "answer": "A database lookup of the username for log labels in two behaviours",
+   "distractors": [
+    "Every request is validated twice, once on each pass through the pipeline",
+    "Each behaviour opens and commits its own DbContext transaction",
+    "The pipeline serialises requests, so only one handler can run at a time"
+   ],
+   "explanation": "The ADR lists I/O in the pipeline as a negative consequence, alongside hidden coupling."
+  },
+  {
+   "id": "q05-roles-or-semantics",
+   "kind": "quiz",
+   "source": {
+    "path": "CleanArchitecture/fabledocs/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 47,
+     "end": 48
+    }
+   },
+   "cites": [
+    {
+     "path": "CleanArchitecture/src/Application/Common/Behaviours/AuthorizationBehaviour.cs",
+     "lineStart": 35,
+     "lineEnd": 59
+    },
+    {
+     "path": "CleanArchitecture/fabledocs/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 47,
+     "lineEnd": 48
+    }
+   ],
+   "prompt": "A request carries [Authorize(Roles=\"A\")] and [Authorize(Roles=\"B\")]; the user is only in role B. What does AuthorizationBehaviour decide?",
+   "answer": "Authorized: one flag spans all attributes, so they OR together",
+   "distractors": [
+    "Forbidden: every attribute must be satisfied, as in ASP.NET Core itself",
+    "Forbidden: only the first [Authorize] attribute is ever evaluated",
+    "An exception, because two role attributes on one request are rejected at startup"
+   ],
+   "explanation": "The role loop sets authorized=true on any match across all attributes - a subtle divergence from ASP.NET Core's AND semantics."
+  },
+  {
+   "id": "q06-idor-gap",
+   "kind": "quiz",
+   "source": {
+    "path": "CleanArchitecture/fabledocs/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 36,
+     "end": 43
+    }
+   },
+   "cites": [
+    {
+     "path": "CleanArchitecture/fabledocs/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 38,
+     "lineEnd": 38
+    }
+   ],
+   "prompt": "Every TodoList endpoint requires authentication. What can an authenticated user still do, and why?",
+   "answer": "Read or change other users' lists, because nothing records or checks an owner",
+   "distractors": [
+    "Nothing harmful, because RequireAuthorization scopes every query to the caller",
+    "Only read other lists, because write commands are filtered by the CreatedBy column",
+    "Only see list titles, because the items are loaded through a per-user global filter"
+   ],
+   "explanation": "Authorization answers 'authenticated?' and 'in role?', never 'is this yours?'. Broken object-level authorization is OWASP API Top 10 #1."
+  },
+  {
+   "id": "q07-colour-500",
+   "kind": "quiz",
+   "source": {
+    "path": "CleanArchitecture/fabledocs/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 16,
+     "end": 16
+    }
+   },
+   "cites": [
+    {
+     "path": "CleanArchitecture/fabledocs/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 16,
+     "lineEnd": 16
+    }
+   ],
+   "prompt": "A client sends colour \"#BADBAD\". What status does it get, and why?",
+   "answer": "500, because the domain exception is not mapped like validation failures",
+   "distractors": [
+    "400 ValidationProblemDetails, the same as any other invalid field",
+    "422, because the domain rejects the value after validation passes",
+    "200, because the colour is silently replaced with the default palette entry"
+   ],
+   "explanation": "Domain invariant violations and validation failures produce different contracts. The guide's preferred fix is both a validator rule and an exception mapping."
+  },
+  {
+   "id": "q08-validation-authority",
+   "kind": "quiz",
+   "source": {
+    "path": "CleanArchitecture/fabledocs/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 3,
+     "end": 12
+    }
+   },
+   "cites": [
+    {
+     "path": "CleanArchitecture/fabledocs/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 9,
+     "lineEnd": 9
+    }
+   ],
+   "prompt": "Which validation layer does the guide call the contract authority, and what is its weakness for cross-row rules such as a unique list title?",
+   "answer": "FluentValidation in the pipeline; its uniqueness check races because nothing locks",
+   "distractors": [
+    "Model binding; it cannot see the database, so uniqueness can never be checked there",
+    "Domain invariants; they only throw after SaveChanges has already written the row",
+    "UI hints; a maxLength attribute is trivially bypassed with curl or Postman"
+   ],
+   "explanation": "Validators aggregate every rule and can run async DB checks, but a check-then-insert across rows has no lock."
+  },
+  {
+   "id": "q09-event-on-transition",
+   "kind": "quiz",
+   "source": {
+    "path": "CleanArchitecture/fabledocs3/adr-009-in-process-precommit-domain-events.md",
+    "lines": {
+     "start": 11,
+     "end": 11
+    }
+   },
+   "cites": [
+    {
+     "path": "CleanArchitecture/src/Domain/Entities/TodoItem.cs",
+     "lineStart": 14,
+     "lineEnd": 26
+    },
+    {
+     "path": "CleanArchitecture/fabledocs3/adr-009-in-process-precommit-domain-events.md",
+     "lineStart": 11,
+     "lineEnd": 11
+    }
+   ],
+   "prompt": "When does TodoItem raise TodoItemCompletedEvent?",
+   "answer": "Only when Done changes from false to true, inside the setter",
+   "distractors": [
+    "Every time Done is assigned true, even if it was already true",
+    "When the handler calls Publish after SaveChanges has succeeded",
+    "Whenever any property of an already completed item is changed"
+   ],
+   "explanation": "The invariant lives in the setter, so events fire correctly from every path, including seeds and tests."
+  },
+  {
+   "id": "q10-precommit-ghost",
+   "kind": "quiz",
+   "source": {
+    "path": "CleanArchitecture/fabledocs3/adr-009-in-process-precommit-domain-events.md",
+    "lines": {
+     "start": 27,
+     "end": 29
+    }
+   },
+   "cites": [
+    {
+     "path": "CleanArchitecture/fabledocs3/adr-009-in-process-precommit-domain-events.md",
+     "lineStart": 28,
+     "lineEnd": 28
+    }
+   ],
+   "prompt": "Domain events are published by a SaveChanges interceptor before the commit. A handler sends an email, then the save fails. What happened?",
+   "answer": "A ghost notification: the email left even though the change never committed",
+   "distractors": [
+    "Nothing: the email is queued in the same transaction and rolled back",
+    "The save is retried until it succeeds, so the email becomes true",
+    "The interceptor publishes again after the retry, sending two emails"
+   ],
+   "explanation": "Pre-commit dispatch means external side effects escape the transaction; a handler throwing would instead abort the user's save."
+  },
+  {
+   "id": "q11-same-context-atomic",
+   "kind": "quiz",
+   "source": {
+    "path": "CleanArchitecture/fabledocs3/adr-009-in-process-precommit-domain-events.md",
+    "lines": {
+     "start": 23,
+     "end": 24
+    }
+   },
+   "cites": [
+    {
+     "path": "CleanArchitecture/fabledocs3/adr-009-in-process-precommit-domain-events.md",
+     "lineStart": 24,
+     "lineEnd": 24
+    }
+   ],
+   "prompt": "What is the main benefit the authors bought by dispatching domain events before commit?",
+   "answer": "Handlers writing to the same DbContext commit atomically with the trigger",
+   "distractors": [
+    "Events survive a process crash, because they are persisted before dispatch",
+    "Handlers run on a background thread, off the user's HTTP request",
+    "External side effects such as emails are delivered exactly once"
+   ],
+   "explanation": "No dual-write for the in-DB case. The alternative, after-commit dispatch, inverts the failure mode: save succeeds, handler fails, event lost."
+  },
+  {
+   "id": "q12-sync-over-async",
+   "kind": "quiz",
+   "source": {
+    "path": "CleanArchitecture/fabledocs3/adr-009-in-process-precommit-domain-events.md",
+    "lines": {
+     "start": 30,
+     "end": 30
+    }
+   },
+   "cites": [
+    {
+     "path": "CleanArchitecture/src/Infrastructure/Data/Interceptors/DispatchDomainEventsInterceptor.cs",
+     "lineStart": 17,
+     "lineEnd": 19
+    },
+    {
+     "path": "CleanArchitecture/fabledocs3/adr-009-in-process-precommit-domain-events.md",
+     "lineStart": 30,
+     "lineEnd": 30
+    }
+   ],
+   "prompt": "On the synchronous SavingChanges path, the interceptor calls DispatchDomainEvents(...).GetAwaiter().GetResult(). Why is that called a landmine?",
+   "answer": "It blocks on async work, which deadlocks wherever a synchronization context exists",
+   "distractors": [
+    "It swallows every exception thrown by the domain event handlers",
+    "It dispatches each event twice, once per SaveChanges overload",
+    "It moves the save onto a new thread-pool thread, which breaks the transaction"
+   ],
+   "explanation": "Sync-over-async deadlocks when the awaited continuation needs the context the caller is blocking."
+  },
+  {
+   "id": "q13-outbox-upgrade",
+   "kind": "quiz",
+   "source": {
+    "path": "CleanArchitecture/fabledocs3/adr-009-in-process-precommit-domain-events.md",
+    "lines": {
+     "start": 15,
+     "end": 18
+    }
+   },
+   "cites": [
+    {
+     "path": "CleanArchitecture/fabledocs3/adr-009-in-process-precommit-domain-events.md",
+     "lineStart": 18,
+     "lineEnd": 18
+    }
+   ],
+   "prompt": "When should this codebase move from in-process events to a transactional outbox?",
+   "answer": "As soon as a handler performs external I/O such as sending email",
+   "distractors": [
+    "Never: in-process dispatch already guarantees at-least-once delivery",
+    "Only once an event has more than one handler registered for it",
+    "As soon as the database provider moves from SQLite to SQL Server"
+   ],
+   "explanation": "Today every handler only logs, so the ghost-notification risk is latent; the outbox is the standard answer for reliable external side effects."
+  },
+  {
+   "id": "f01-two-auth-points",
+   "kind": "flashcard",
+   "source": {
+    "path": "CleanArchitecture/fabledocs/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 27,
+     "end": 34
+    }
+   },
+   "cites": [
+    {
+     "path": "CleanArchitecture/fabledocs/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 31,
+     "lineEnd": 34
+    }
+   ],
+   "front": "Name the two authorization enforcement points in netcleanarch and what each buys.",
+   "back": "Endpoint groups with RequireAuthorization(): fail fast with a proper HTTP 401 challenge. [Authorize] on request records enforced by AuthorizationBehaviour: works without HTTP and survives new transports. Inconsistency: only GetTodosQuery carries [Authorize]."
+  },
+  {
+   "id": "f02-senior-ownership-checklist",
+   "kind": "flashcard",
+   "source": {
+    "path": "CleanArchitecture/fabledocs/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 40,
+     "end": 41
+    }
+   },
+   "cites": [
+    {
+     "path": "CleanArchitecture/fabledocs/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 41,
+     "lineEnd": 41
+    }
+   ],
+   "front": "What does a senior check, in order, to rule out IDOR in a CRUD codebase?",
+   "back": "1) Does the resource have an owner/tenant column? 2) Is every read filtered by it? 3) Does every write verify it before mutating? 4) Is the check centralized (global query filter / policy) or copy-pasted? 5) Do tests prove cross-user denial?"
+  },
+  {
+   "id": "f03-cookie-vs-bearer",
+   "kind": "flashcard",
+   "source": {
+    "path": "CleanArchitecture/fabledocs/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 20,
+     "end": 23
+    }
+   },
+   "cites": [
+    {
+     "path": "CleanArchitecture/fabledocs/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 22,
+     "lineEnd": 23
+    }
+   ],
+   "front": "Cookie vs bearer auth: which attack each shifts onto you, and when each fits.",
+   "back": "Cookie: HttpOnly so XSS cannot read it, but sent automatically so CSRF becomes your problem; fits an SPA served by the API. Bearer: sent explicitly so CSRF is mostly moot, but client storage makes XSS your problem; fits public APIs, cross-origin and mobile."
+  },
+  {
+   "id": "f04-events-are-calls",
+   "kind": "flashcard",
+   "source": {
+    "path": "CleanArchitecture/fabledocs3/adr-009-in-process-precommit-domain-events.md",
+    "lines": {
+     "start": 29,
+     "end": 29
+    }
+   },
+   "cites": [
+    {
+     "path": "CleanArchitecture/fabledocs3/adr-009-in-process-precommit-domain-events.md",
+     "lineStart": 29,
+     "lineEnd": 29
+    }
+   ],
+   "front": "Why does ADR-009 call these domain events 'synchronous method calls in disguise', and what delivery guarantee do they have?",
+   "back": "Publish awaits all handlers inline, so their latency and failures land on the user's request. Delivery is at-most-once, in-process, and lost on crash."
+  }
+ ]
+}
