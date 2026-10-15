@@ -1,0 +1,433 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "zz1",
+ "sha": "a561c1b62f7d7ff9b445c7c15700f10b312d7a0f",
+ "guides": [
+  "astraupskill/02-CONCEPTS.md",
+  "astraupskill/03-WORKED-CHANGE.md",
+  "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+  "docs/architecture/auth-and-tenant-isolation.md"
+ ],
+ "excludeDirs": [
+  "astraupskill/snapshots"
+ ],
+ "items": [
+  {
+   "id": "q01-null-reread",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 3,
+     "end": 3
+    }
+   },
+   "cites": [
+    {
+     "path": "src/repositories/dealRepository.ts",
+     "lineStart": 76,
+     "lineEnd": 83
+    }
+   ],
+   "prompt": "dealRepository.update runs updateMany and then a scoped reread. The reread returns null but no exception was thrown. What does that mean for the service?",
+   "answer": "Treat it as not found: no tenant-owned row is proven updated",
+   "distractors": [
+    "The update succeeded; a null reread only means the read cache was cold at the time",
+    "Retry the update",
+    "Nothing: updateMany guarantees the row exists whenever it completes without throwing"
+   ],
+   "explanation": "A null reread is meaningful without a provider exception; treating it as success lets dependent writes describe a state that does not exist."
+  },
+  {
+   "id": "q02-guard-before-history",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 5,
+     "end": 5
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/dealService.ts",
+     "lineStart": 98,
+     "lineEnd": 100
+    }
+   ],
+   "prompt": "Where does the deal_not_found guard sit in moveDealStage, and what invariant does that placement buy?",
+   "answer": "Right after the update, before history and audit",
+   "distractors": [
+    "Before the update, so a missing deal never reaches the database at all",
+    "After the audit write, so failed moves are still recorded in the audit log",
+    "Inside the repository"
+   ],
+   "explanation": "Placing the guard immediately after dealRepository.update means history and audit are only attempted after a non-null updated deal is observed; on failure their call counters stay zero."
+  },
+  {
+   "id": "q03-guard-not-concurrency-fix",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "lines": {
+     "start": 5,
+     "end": 5
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/dealService.ts",
+     "lineStart": 98,
+     "lineEnd": 100
+    }
+   ],
+   "prompt": "Does the null-reread guard prove the returned deal is fresh?",
+   "answer": "No: it proves existence, not freshness",
+   "distractors": [
+    "Yes: a non-null reread is always the latest committed version of the row",
+    "Yes, serializable isolation guarantees it",
+    "No, so the service should add a second reread of its own to be certain"
+   ],
+   "explanation": "Adding another reread in the service would duplicate repository responsibility and add latency without evidence."
+  },
+  {
+   "id": "q04-dont-catch-everything",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "lines": {
+     "start": 7,
+     "end": 7
+    }
+   },
+   "cites": [
+    {
+     "path": "src/lib/http/responses.ts",
+     "lineStart": 50,
+     "lineEnd": 58
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 7,
+     "lineEnd": 7
+    }
+   ],
+   "prompt": "A reviewer proposes catching any database exception in moveDealStage and returning deal_not_found. Why reject it?",
+   "answer": "It would report outages and unrelated errors as a missing deal",
+   "distractors": [
+    "Because 404 responses are cached by browsers and proxies for a long time",
+    "Prisma errors can't be caught in a transaction",
+    "It is fine, as long as the error message says that a race may have occurred"
+   ],
+   "explanation": "Unknown failures should reach the generic 500 path; only the observed null result maps to not-found."
+  },
+  {
+   "id": "q05-three-meanings-one-response",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 7,
+     "end": 7
+    }
+   },
+   "cites": [
+    {
+     "path": "src/lib/db/tenantContext.ts",
+     "lineStart": 24,
+     "lineEnd": 29
+    }
+   ],
+   "prompt": "A scoped lookup returns null. It might be a deleted row, another tenant's row, or a stale id. How should the service respond?",
+   "answer": "One safe not-found response for all three",
+   "distractors": [
+    "403 for the other tenant's row and 404 for the other two cases",
+    "410 Gone for deletions",
+    "Inspect the database provider's error text to decide which of the three it was"
+   ],
+   "explanation": "Tenant scope is added by the repository; distinguishing the cases would leak cross-tenant existence."
+  },
+  {
+   "id": "q06-tenant-scope-overwrites",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/auth-and-tenant-isolation.md",
+    "lines": {
+     "start": 70,
+     "end": 70
+    }
+   },
+   "cites": [
+    {
+     "path": "src/lib/db/tenantContext.ts",
+     "lineStart": 24,
+     "lineEnd": 29
+    }
+   ],
+   "prompt": "withTenantScope(ctx /* tenantId A */, { organizationId: \"B\", status: \"NEW\" }) returns what organizationId?",
+   "answer": "\"A\": the tenant key is written after the spread",
+   "distractors": [
+    "\"B\": the caller's explicit filter wins over the context",
+    "Both, combined into an OR condition on organizationId",
+    "It throws cross_tenant_access because the two tenants differ"
+   ],
+   "explanation": "Writing the tenant key after the spread means callers cannot widen or redirect the scope."
+  },
+  {
+   "id": "q07-cross-tenant-fk",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/auth-and-tenant-isolation.md",
+    "lines": {
+     "start": 93,
+     "end": 93
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/activityService.ts",
+     "lineStart": 64,
+     "lineEnd": 67
+    },
+    {
+     "path": "src/lib/db/tenantContext.ts",
+     "lineStart": 31,
+     "lineEnd": 36
+    }
+   ],
+   "prompt": "POST /api/activities with a leadId copied from another organization. What happens today?",
+   "answer": "The activity is created in your org and attached to their lead, because tenant scoping covers the primary row, not the ids it points to",
+   "distractors": [
+    "404, because the lead lookup is tenant-scoped",
+    "403 cross_tenant_access, raised by assertSameTenant before the activity is created",
+    "The foreign key is silently dropped and the activity is saved with no lead"
+   ],
+   "explanation": "Tenant scoping covers the primary row, not foreign-key ids; the schema only requires the lead to exist. The unused assertSameTenant (or loading each parent through its scoped repository) is the intended fix."
+  },
+  {
+   "id": "q08-missing-vs-bad-cookie",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/auth-and-tenant-isolation.md",
+    "lines": {
+     "start": 20,
+     "end": 20
+    }
+   },
+   "cites": [
+    {
+     "path": "src/lib/auth/session.ts",
+     "lineStart": 59,
+     "lineEnd": 69
+    },
+    {
+     "path": "src/lib/middleware/withAuth.ts",
+     "lineStart": 21,
+     "lineEnd": 23
+    }
+   ],
+   "prompt": "GET /api/org/me with no cookie, then with atlas_session=garbage. What codes come back?",
+   "answer": "401 auth_required, then 401 invalid_session",
+   "distractors": [
+    "401 invalid_session for both requests, since neither carries a valid token",
+    "401 auth_required for both",
+    "200 with an anonymous session for the missing cookie, then 401 for the garbage one"
+   ],
+   "explanation": "A missing cookie returns null and the caller decides; a bad signature or expiry throws inside getOptionalSession."
+  },
+  {
+   "id": "q09-jwt-but-live-membership",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/auth-and-tenant-isolation.md",
+    "lines": {
+     "start": 26,
+     "end": 26
+    }
+   },
+   "cites": [
+    {
+     "path": "src/lib/middleware/withTenantGuard.ts",
+     "lineStart": 13,
+     "lineEnd": 30
+    }
+   ],
+   "prompt": "A rep's JWT is valid for 7 days. An admin sets the rep's membership to DISABLED. When is the rep blocked?",
+   "answer": "Next request: 403 inactive_membership",
+   "distractors": [
+    "Only when the JWT expires, since the token itself carries the membership",
+    "Immediately, through server-side revocation",
+    "Never for read routes, because they skip the tenant guard to stay fast"
+   ],
+   "explanation": "The session loads the membership without a status filter; requireOrgRequest is what rejects non-ACTIVE memberships, so a route that skips it loses the check."
+  },
+  {
+   "id": "q10-guard-before-parse",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/request-lifecycle.md",
+    "lines": {
+     "start": 84,
+     "end": 84
+    }
+   },
+   "cites": [
+    {
+     "path": "src/lib/middleware/withTenantGuard.ts",
+     "lineStart": 25,
+     "lineEnd": 27
+    }
+   ],
+   "prompt": "A SALES_REP POSTs {} (an invalid body) to /api/org/invitations. Which status comes back?",
+   "answer": "403 permission_denied: the guard runs before parsing",
+   "distractors": [
+    "422 validation_error, because the empty body fails createInvitationSchema",
+    "400",
+    "201, because SALES_REP holds the permission to invite users"
+   ],
+   "explanation": "requireOrgRequest(..., 'org.users.write') sits on the line before createInvitationSchema.parse, so the parse never runs."
+  },
+  {
+   "id": "q11-assignment-boundary",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/auth-and-tenant-isolation.md",
+    "lines": {
+     "start": 64,
+     "end": 66
+    }
+   },
+   "cites": [
+    {
+     "path": "src/lib/permissions/assignment.ts",
+     "lineStart": 18,
+     "lineEnd": 32
+    }
+   ],
+   "prompt": "A SALES_MANAGER assigns a lead to a colleague whose membership is DISABLED. What happens?",
+   "answer": "It succeeds: the target's status is never checked",
+   "distractors": [
+    "403, because disabled members cannot own any records in the organization",
+    "404 membership_not_found, because disabled memberships are filtered out of the lookup",
+    "Reassigned to the manager"
+   ],
+   "explanation": "Assignment is an authorization boundary (leads.assign, tenant-scoped lookup) but the target status is never checked."
+  },
+  {
+   "id": "q12-transaction-rollback",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/request-lifecycle.md",
+    "lines": {
+     "start": 36,
+     "end": 36
+    }
+   },
+   "cites": [
+    {
+     "path": "src/lib/http/responses.ts",
+     "lineStart": 61,
+     "lineEnd": 68
+    },
+    {
+     "path": "src/services/leadService.ts",
+     "lineStart": 96,
+     "lineEnd": 96
+    },
+    {
+     "path": "src/services/leadService.ts",
+     "lineStart": 146,
+     "lineEnd": 146
+    }
+   ],
+   "prompt": "During POST /api/leads, auditService.logOrgEvent throws after the lead and its histories were inserted. What is the end state?",
+   "answer": "A 500, and the Lead count is unchanged because every write shared the transaction client and rolled back together",
+   "distractors": [
+    "201 with the lead saved but no audit row",
+    "A 500, but the lead and its histories remain because they committed earlier",
+    "A 422, because audit failures are reported as validation errors"
+   ],
+   "explanation": "createLead opens prisma.$transaction and passes tx to every write, so a failure after it starts rolls the whole transaction back."
+  },
+  {
+   "id": "f01-four-review-points",
+   "kind": "flashcard",
+   "source": {
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "lines": {
+     "start": 7,
+     "end": 7
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/dealService.ts",
+     "lineStart": 98,
+     "lineEnd": 100
+    }
+   ],
+   "front": "Four points to score when reviewing the deal-stage null guard",
+   "back": "Uses the shared error contract (notFoundError, deal_not_found); sits directly after the repository result; failure skips history and audit; the success path is unchanged. Also: the message must not claim a specific database race was observed."
+  },
+  {
+   "id": "f02-tenant-guard-order",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/architecture/auth-and-tenant-isolation.md",
+    "lines": {
+     "start": 42,
+     "end": 49
+    }
+   },
+   "cites": [
+    {
+     "path": "src/lib/middleware/withTenantGuard.ts",
+     "lineStart": 13,
+     "lineEnd": 30
+    }
+   ],
+   "front": "The four checks requireOrgRequest runs, in order",
+   "back": "1) tenantId and membership present (403 tenant_scope_required); 2) membership ACTIVE (403 inactive_membership); 3) org ACTIVE or TRIALING (403 organization_unavailable); 4) role holds the permission, if one was passed (403 permission_denied)."
+  },
+  {
+   "id": "f03-claims-not-read",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/architecture/auth-and-tenant-isolation.md",
+    "lines": {
+     "start": 28,
+     "end": 28
+    }
+   },
+   "cites": [
+    {
+     "path": "src/lib/auth/session.ts",
+     "lineStart": 61,
+     "lineEnd": 66
+    }
+   ],
+   "front": "Where does the tenant come from: the JWT's activeOrganizationId claim or the database?",
+   "back": "The database. activeOrganizationId is written into the token but never read back; getOptionalSession extracts only sub and activeMembershipId, and the tenant is derived from the reloaded membership."
+  },
+  {
+   "id": "f04-unlogged-500",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/architecture/request-lifecycle.md",
+    "lines": {
+     "start": 13,
+     "end": 13
+    }
+   },
+   "cites": [
+    {
+     "path": "src/lib/http/responses.ts",
+     "lineStart": 50,
+     "lineEnd": 58
+    }
+   ],
+   "front": "What does route() do with an unexpected error, and what is missing?",
+   "back": "Returns 500 { error: { code: 'internal_server_error' } }. The original error is not logged anywhere in the function, and requestId is never written to a log or AuditLog, so a 500 leaves almost no server-side trace."
+  }
+ ]
+}
