@@ -1,0 +1,425 @@
+{
+  "format": "bootquest-quest-drafts@1",
+  "repo": "formforge",
+  "sha": "bd6e6bac0812a1e48476f542bf50ab3b9f405f82",
+  "guides": [
+    "docs/concepts/03-reducers-and-derived-state.md",
+    "docs/concepts/07-effects-debounce-and-concurrency.md",
+    "docs/concepts/08-recursive-unions-and-rule-graphs.md",
+    "docs/concepts/09-state-machines-and-resume.md",
+    "docs/concepts/10-trust-boundaries-and-retries.md",
+    "docs/concepts/11-cursors-csv-and-accessible-data.md",
+    "docs/concepts/13-optimistic-state-and-diffs.md",
+    "docs/sprints/flaw-ledger.md",
+    "docs/runbooks/postmortem-simulated-autosave-race.md"
+  ],
+  "items": [
+    {
+      "id": "q01-debounce-not-concurrency",
+      "kind": "quiz",
+      "source": {
+        "path": "docs/runbooks/postmortem-simulated-autosave-race.md",
+        "lines": {
+          "start": 19,
+          "end": 23
+        }
+      },
+      "cites": [
+        {
+          "path": "apps/web/src/useAutosave.tsx",
+          "lineStart": 31,
+          "lineEnd": 45
+        }
+      ],
+      "prompt": "In the simulated autosave incident, an older save finished after a newer edit and showed stale state. Why did the 500 ms debounce not prevent it?",
+      "answer": "Debounce limits when saves start; it does not serialize requests already in flight",
+      "distractors": [
+        "The debounce delay was too short; raising it to two seconds makes the older save always finish first",
+        "The browser cancelled the newer request because two fetches to the same URL were open at once",
+        "The server ignored the expected version, so any delay would have failed"
+      ],
+      "explanation": "The fix chains writes on a queue, passes the latest accepted version to the next request, and lets only the newest request update visible state."
+    },
+    {
+      "id": "q02-latest-request-gate",
+      "kind": "quiz",
+      "source": {
+        "path": "docs/sprints/flaw-ledger.md",
+        "lines": {
+          "start": 9,
+          "end": 9
+        }
+      },
+      "cites": [
+        {
+          "path": "apps/web/src/useAutosave.tsx",
+          "lineStart": 37,
+          "lineEnd": 44
+        }
+      ],
+      "prompt": "Request 1 and request 2 are queued by useAutosave and request 1 resolves 'saved' with version 5 after request 2 was created. What does the hook do with request 1's result?",
+      "answer": "It records version 5 for the next save, but does not update visible state, because request 1 is no longer the latest request",
+      "distractors": [
+        "It shows 'Saved version 5' and then overwrites it when request 2 finishes",
+        "It discards the version, so request 2 is sent with the old version and conflicts",
+        "It cancels request 2, since a newer save has already completed"
+      ],
+      "explanation": "Inside the queued callback, version.current is updated on 'saved', then the result returns early when requestId !== latestRequest.current; requests run one at a time on the promise chain."
+    },
+    {
+      "id": "q03-multi-node-cycle",
+      "kind": "quiz",
+      "source": {
+        "path": "docs/concepts/08-recursive-unions-and-rule-graphs.md",
+        "lines": {
+          "start": 5,
+          "end": 5
+        }
+      },
+      "cites": [
+        {
+          "path": "packages/core/src/rules.ts",
+          "lineStart": 55,
+          "lineEnd": 76
+        }
+      ],
+      "prompt": "Visibility rules make A depend on B, B on C and C on A. Each reference is a valid field id and no rule depends on itself. How does the validator catch this?",
+      "answer": "DFS with visiting/visited sets finds a node already on the active path",
+      "distractors": [
+        "The direct self-reference check, since following A's dependencies eventually leads back to A",
+        "It cannot: valid ids guarantee a valid graph, so the rule set is accepted",
+        "By counting dependencies; any field with more than one is rejected"
+      ],
+      "explanation": "Valid node ids do not guarantee a valid graph; pairwise checks miss A → B → C → A, the counterexample in the flaw ledger. The fix strengthens the model with graph traversal."
+    },
+    {
+      "id": "q04-back-follows-history",
+      "kind": "quiz",
+      "source": {
+        "path": "docs/concepts/09-state-machines-and-resume.md",
+        "lines": {
+          "start": 5,
+          "end": 5
+        }
+      },
+      "cites": [
+        {
+          "path": "packages/core/src/flow.ts",
+          "lineStart": 38,
+          "lineEnd": 53
+        }
+      ],
+      "prompt": "A respondent branches from page 1 straight to page 3, skipping page 2. Where does Back take them, and why?",
+      "answer": "Page 1: Back pops the actual visit history",
+      "distractors": [
+        "Page 2, the previous element of the pages array",
+        "Nowhere: Back is disabled after any branch",
+        "The first page of the form, resetting their answers"
+      ],
+      "explanation": "nextSession appends the target page to visitedPageIds; backSession drops the last entry and returns to the new last one."
+    },
+    {
+      "id": "q05-branch-first-match",
+      "kind": "quiz",
+      "source": {
+        "path": "docs/concepts/09-state-machines-and-resume.md",
+        "lines": {
+          "start": 5,
+          "end": 5
+        }
+      },
+      "cites": [
+        {
+          "path": "packages/core/src/flow.ts",
+          "lineStart": 42,
+          "lineEnd": 44
+        }
+      ],
+      "prompt": "Two branches from the current page both match the answers. Where does nextSession go?",
+      "answer": "To the first matching branch in declaration order; with no match it advances to the next declared page, or completes after the last",
+      "distractors": [
+        "To the branch whose target page is furthest ahead",
+        "It throws because the flow is ambiguous",
+        "To the next declared page, ignoring branches when more than one matches"
+      ],
+      "explanation": "Branch order is product behavior: flow.branches.find(...) picks the first match, else flow.pages[currentIndex + 1], else completed."
+    },
+    {
+      "id": "q06-idempotent-submission",
+      "kind": "quiz",
+      "source": {
+        "path": "docs/concepts/10-trust-boundaries-and-retries.md",
+        "lines": {
+          "start": 5,
+          "end": 5
+        }
+      },
+      "cites": [
+        {
+          "path": "packages/data/src/submissions.ts",
+          "lineStart": 28,
+          "lineEnd": 43
+        }
+      ],
+      "prompt": "A submission commits but the response is lost, and the client retries with the same idempotency key. What does the repository return?",
+      "answer": "The original submission, marked 'duplicate'; no second record",
+      "distractors": [
+        "A new submission, because a retry is always a new request with new answers",
+        "A 409 conflict, telling the client to generate a new key and submit again",
+        "The original only if the answers are byte-identical; otherwise a second record"
+      ],
+      "explanation": "Retrying is correct only when the operation is idempotent: the client supplies a stable request key and the repository returns the original result for duplicate attempts."
+    },
+    {
+      "id": "q07-cursor-tiebreaker",
+      "kind": "quiz",
+      "source": {
+        "path": "docs/concepts/11-cursors-csv-and-accessible-data.md",
+        "lines": {
+          "start": 3,
+          "end": 3
+        }
+      },
+      "cites": [
+        {
+          "path": "packages/core/src/responses.ts",
+          "lineStart": 22,
+          "lineEnd": 29
+        }
+      ],
+      "prompt": "Why does the response cursor encode [submittedAt, id] and sort by id when timestamps tie?",
+      "answer": "Timestamps can tie; the id makes the sort total so pages never skip or repeat",
+      "distractors": [
+        "Because ids are shorter than timestamps, which keeps the encoded cursor small enough for URLs",
+        "Because the id encodes the page number, so the cursor can fall back to offset pagination",
+        "So that newest-first and oldest-first produce the same order"
+      ],
+      "explanation": "A cursor says 'continue after this stable identity'; only a total order makes that identity unambiguous. Offset pagination fails differently, because N shifts when new responses arrive."
+    },
+    {
+      "id": "q08-csv-formula",
+      "kind": "quiz",
+      "source": {
+        "path": "docs/concepts/11-cursors-csv-and-accessible-data.md",
+        "lines": {
+          "start": 5,
+          "end": 5
+        }
+      },
+      "cites": [
+        {
+          "path": "packages/core/src/responses.ts",
+          "lineStart": 43,
+          "lineEnd": 47
+        }
+      ],
+      "prompt": "A respondent answers =HYPERLINK(\"http://x\",\"a,b\"). What does escapeCsvCell produce?",
+      "answer": "A quoted cell whose text starts with an apostrophe to neutralize the formula, with each inner quote doubled",
+      "distractors": [
+        "The raw text, because CSV has no special characters",
+        "The text with commas removed and quotes stripped",
+        "An empty cell, since formula-like answers are dropped"
+      ],
+      "explanation": "Leading = + - @ get an apostrophe prefix; any quote, comma or line break forces quoting with quotes doubled. CSV is a serialization format, not string joining."
+    },
+    {
+      "id": "q09-derive-selected-field",
+      "kind": "quiz",
+      "source": {
+        "path": "docs/concepts/03-reducers-and-derived-state.md",
+        "lines": {
+          "start": 5,
+          "end": 5
+        }
+      },
+      "cites": [
+        {
+          "path": "packages/core/src/builder.ts",
+          "lineStart": 3,
+          "lineEnd": 3
+        },
+        {
+          "path": "apps/web/src/FormBuilder.tsx",
+          "lineStart": 71,
+          "lineEnd": 71
+        }
+      ],
+      "prompt": "Why does the builder store only the selected field's id and look the field up during render?",
+      "answer": "A copied field would need syncing after every edit or deletion",
+      "distractors": [
+        "Because React state cannot hold objects, only strings",
+        "To make the selected field immutable while it is being edited",
+        "Because the id is needed for the URL, and the object is too large"
+      ],
+      "explanation": "Field list, settings and preview are three projections of one schema; a stored copy would go stale."
+    },
+    {
+      "id": "q10-optimistic-rollback",
+      "kind": "quiz",
+      "source": {
+        "path": "docs/sprints/flaw-ledger.md",
+        "lines": {
+          "start": 11,
+          "end": 11
+        }
+      },
+      "cites": [
+        {
+          "path": "apps/web/src/CollaborationPanel.tsx",
+          "lineStart": 20,
+          "lineEnd": 31
+        }
+      ],
+      "prompt": "An optimistic comment is rendered with a temporary id and the server rejects it. What does a correct repair do?",
+      "answer": "Remove it by temporary id and keep its text for retry",
+      "distractors": [
+        "Leave it visible with a pending badge until the page reloads",
+        "Refetch all comments, which hides the error and discards the text",
+        "Retry the request automatically until the server accepts it"
+      ],
+      "explanation": "The Sprint 13 flaw left a rejected comment pending forever; a deferred-then-rejected promise in the test exposes the missing rollback."
+    },
+    {
+      "id": "q11-diff-by-identity",
+      "kind": "quiz",
+      "source": {
+        "path": "docs/concepts/13-optimistic-state-and-diffs.md",
+        "lines": {
+          "start": 7,
+          "end": 7
+        }
+      },
+      "cites": [
+        {
+          "path": "packages/core/src/collaboration.ts",
+          "lineStart": 29,
+          "lineEnd": 47
+        }
+      ],
+      "prompt": "A version diff compares fields by array position. A user only reorders two fields. What history does it report?",
+      "answer": "A removal plus an addition, which teaches the wrong history; diffFormSchemas instead matches fields by stable id, so a pure reorder reports no field removed, added or changed",
+      "distractors": [
+        "Exactly the reorder, because positions changed",
+        "No change at all, since the field set is identical",
+        "An error, because diffs cannot handle reordering"
+      ],
+      "explanation": "Version diffs follow the same identity rule as React keys: build maps keyed by field.id, then report removed, added and per-property changes."
+    },
+    {
+      "id": "q12-row-key-identity",
+      "kind": "quiz",
+      "source": {
+        "path": "docs/sprints/flaw-ledger.md",
+        "lines": {
+          "start": 7,
+          "end": 8
+        }
+      },
+      "cites": [
+        {
+          "path": "apps/web/src/FormBuilder.tsx",
+          "lineStart": 108,
+          "lineEnd": 108
+        },
+        {
+          "path": "apps/web/src/FormBuilder.tsx",
+          "lineStart": 26,
+          "lineEnd": 32
+        }
+      ],
+      "prompt": "A field's settings panel is expanded, then the field is moved up one row, and the expanded panel now appears on a different field. What was the planted flaw?",
+      "answer": "Rows were keyed by array position; key by field.id and restore focus by id",
+      "distractors": [
+        "The reducer swapped the wrong two fields when moving, so the expanded field was actually the moved one",
+        "The settings panel read its field from a stale closure, which is fixed by wrapping onSelect in useCallback",
+        "Expanded state was saved to the URL and reloaded"
+      ],
+      "explanation": "React identity is domain identity, not display position; the same Sprint 4 flaw also lost keyboard focus after a move."
+    },
+    {
+      "id": "f01-controlled-promises",
+      "kind": "flashcard",
+      "source": {
+        "path": "docs/concepts/07-effects-debounce-and-concurrency.md",
+        "lines": {
+          "start": 7,
+          "end": 7
+        }
+      },
+      "cites": [
+        {
+          "path": "apps/web/src/useAutosave.tsx",
+          "lineStart": 37,
+          "lineEnd": 44
+        }
+      ],
+      "front": "How should you test debounced autosave for safety, not just for timing?",
+      "back": "A controlled clock for the debounce, a controlled repository for version conflicts, and deferred promises resolved out of order for request races. A passing timer test does not prove overlapping requests are safe."
+    },
+    {
+      "id": "f02-resume-is-untrusted",
+      "kind": "flashcard",
+      "source": {
+        "path": "docs/concepts/09-state-machines-and-resume.md",
+        "lines": {
+          "start": 7,
+          "end": 7
+        }
+      },
+      "cites": [
+        {
+          "path": "packages/core/src/flow.ts",
+          "lineStart": 59,
+          "lineEnd": 62
+        }
+      ],
+      "front": "Why parse a saved multi-page session before resuming it?",
+      "back": "Serialized browser data is untrusted input and the flow may have changed. Parse JSON, check page identities and value shapes, and fall back safely (undefined) instead of resuming into an impossible state."
+    },
+    {
+      "id": "f03-validate-published-snapshot",
+      "kind": "flashcard",
+      "source": {
+        "path": "docs/concepts/10-trust-boundaries-and-retries.md",
+        "lines": {
+          "start": 7,
+          "end": 7
+        }
+      },
+      "cites": [
+        {
+          "path": "apps/api/src/app.ts",
+          "lineStart": 102,
+          "lineEnd": 108
+        },
+        {
+          "path": "packages/data/src/publications.ts",
+          "lineStart": 38,
+          "lineEnd": 52
+        }
+      ],
+      "front": "Which form version should the server validate a submission against?",
+      "back": "The immutable published snapshot the respondent saw, not whichever draft exists when the request arrives."
+    },
+    {
+      "id": "f04-counterexample-first",
+      "kind": "flashcard",
+      "source": {
+        "path": "docs/concepts/14-debugging-from-counterexamples.md",
+        "lines": {
+          "start": 3,
+          "end": 10
+        }
+      },
+      "cites": [
+        {
+          "path": "packages/core/src/rules.ts",
+          "lineStart": 57,
+          "lineEnd": 75
+        }
+      ],
+      "front": "What makes a good bug fix, per the counterexample method?",
+      "back": "Name prior state, action and wrong observable result; turn the smallest counterexample into a failing test first; then strengthen the model (stable keys, focus restoration, serialized requests, graph traversal, rollback by temporary id) instead of special-casing the example."
+    }
+  ]
+}

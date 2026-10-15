@@ -1,0 +1,408 @@
+{
+  "format": "bootquest-quest-drafts@1",
+  "repo": "grok-build-hr",
+  "sha": "6e13516255310fa59be284a7425611620ac71ffa",
+  "guides": [
+    "astraupskill/02-CONCEPTS.md",
+    "astraupskill/07-TRACE-LAB.md"
+  ],
+  "items": [
+    {
+      "id": "q01-hr-self-approval",
+      "kind": "quiz",
+      "source": {
+        "path": "astraupskill/02-CONCEPTS.md",
+        "lines": {
+          "start": 3,
+          "end": 3
+        }
+      },
+      "cites": [
+        {
+          "path": "backend/src/repositories/leaveRepository.ts",
+          "lineStart": 223,
+          "lineEnd": 238
+        }
+      ],
+      "prompt": "An HR administrator tries to approve their own pending leave request. What happens?",
+      "answer": "403: no one, not even HR, may decide their own request",
+      "distractors": [
+        "200: HR may approve any request, including their own",
+        "409: the request must first be reassigned to another HR admin",
+        "200, but the decision is flagged for audit review"
+      ],
+      "explanation": "decide rejects current.employee.userId === actor.id with 'You cannot approve or reject your own leave request.' before checking HR or direct-manager authority."
+    },
+    {
+      "id": "q02-current-manager-only",
+      "kind": "quiz",
+      "source": {
+        "path": "astraupskill/03-WORKED-CHANGE.md",
+        "lines": {
+          "start": 15,
+          "end": 17
+        }
+      },
+      "cites": [
+        {
+          "path": "backend/src/repositories/leaveRepository.ts",
+          "lineStart": 228,
+          "lineEnd": 238
+        }
+      ],
+      "prompt": "A MANAGER who is not the employee's current direct manager tries to approve that employee's leave. What does decide check, and what happens?",
+      "answer": "403: the employee's current managerId, read from the database, is not the actor",
+      "distractors": [
+        "200: any user with the MANAGER role may decide any employee's leave request",
+        "It trusts the managerId sent in the request body, so it succeeds when the body names the right manager",
+        "It checks a manager id baked into the JWT at login"
+      ],
+      "explanation": "The body carries only intent (version, status, note); the server reads the current reporting relationship rather than trusting a manager id from a token or form."
+    },
+    {
+      "id": "q03-version-and-pending",
+      "kind": "quiz",
+      "source": {
+        "path": "astraupskill/03-WORKED-CHANGE.md",
+        "lines": {
+          "start": 19,
+          "end": 19
+        }
+      },
+      "cites": [
+        {
+          "path": "backend/src/repositories/leaveRepository.ts",
+          "lineStart": 239,
+          "lineEnd": 251
+        }
+      ],
+      "prompt": "A manager approved a request (now version 2). HR then sends a REJECTED decision carrying version 2. Why is it still refused?",
+      "answer": "The request is no longer PENDING",
+      "distractors": [
+        "It succeeds, because the version matches the current record",
+        "HR is refused because only the original manager may change a decision",
+        "It is refused because version 2 is reserved for approvals"
+      ],
+      "explanation": "Each guard protects a different invariant: the version check catches stale drafts; the PENDING check (and status in the updateMany where) blocks re-deciding a terminal request."
+    },
+    {
+      "id": "q04-inclusive-overlap",
+      "kind": "quiz",
+      "source": {
+        "path": "astraupskill/02-CONCEPTS.md",
+        "lines": {
+          "start": 18,
+          "end": 18
+        }
+      },
+      "cites": [
+        {
+          "path": "backend/prisma/migrations/202609090001_hr_workspace/migration.sql",
+          "lineStart": 139,
+          "lineEnd": 143
+        }
+      ],
+      "prompt": "An employee has approved leave July 10-12. Which new request is rejected as overlapping?",
+      "answer": "July 12-14",
+      "distractors": [
+        "July 13-15",
+        "None: overlap is only checked for pending requests",
+        "Both July 12-14 and July 13-15"
+      ],
+      "explanation": "The exclusion constraint uses daterange(startDate, endDate, '[]') with &&, for PENDING or APPROVED rows."
+    },
+    {
+      "id": "q05-two-overlap-layers",
+      "kind": "quiz",
+      "source": {
+        "path": "astraupskill/02-CONCEPTS.md",
+        "lines": {
+          "start": 20,
+          "end": 20
+        }
+      },
+      "cites": [
+        {
+          "path": "backend/prisma/migrations/202609090001_hr_workspace/migration.sql",
+          "lineStart": 141,
+          "lineEnd": 143
+        }
+      ],
+      "prompt": "Overlap is checked by the repository under an employee row lock AND by a PostgreSQL exclusion constraint. What does each layer contribute?",
+      "answer": "The application check gives cooperating requests a clear error and serializes them; the constraint protects the invariant even against writes that bypass the repository",
+      "distractors": [
+        "They are redundant; the constraint exists only for performance",
+        "The repository check handles approved leave, the constraint handles pending leave",
+        "The constraint gives the clear error, the repository check is a fallback for SQLite"
+      ],
+      "explanation": "Commenting out the constraint fails the test that inserts directly with Prisma, while the concurrent-HTTP test still passes because of the row lock."
+    },
+    {
+      "id": "q06-overlapping-guards",
+      "kind": "quiz",
+      "source": {
+        "path": "astraupskill/04-TESTING-AND-DEBUGGING.md",
+        "lines": {
+          "start": 21,
+          "end": 23
+        }
+      },
+      "cites": [
+        {
+          "path": "backend/src/repositories/leaveRepository.ts",
+          "lineStart": 239,
+          "lineEnd": 243
+        }
+      ],
+      "prompt": "You remove status: 'PENDING' from decide's updateMany where clause and the whole suite stays green. What should you conclude?",
+      "answer": "Guards overlap: the version check and the PENDING pre-check still cover it, so find the smallest set whose removal a test notices and ask whether each guard has its own test",
+      "distractors": [
+        "The status filter was dead code and should be deleted",
+        "The tests are broken and should be rewritten to fail",
+        "PostgreSQL enforces the PENDING rule automatically"
+      ],
+      "explanation": "Removing the pre-check as well makes HR's version-2 rejection return 200 and overwrite the approval; removing one of several overlapping guards proves nothing."
+    },
+    {
+      "id": "q07-chart-lock-cost",
+      "kind": "quiz",
+      "source": {
+        "path": "astraupskill/02-CONCEPTS.md",
+        "lines": {
+          "start": 30,
+          "end": 30
+        }
+      },
+      "cites": [
+        {
+          "path": "backend/src/repositories/employeeRepository.ts",
+          "lineStart": 21,
+          "lineEnd": 25
+        }
+      ],
+      "prompt": "chartLock takes pg_advisory_xact_lock(74219801), one constant key. What does that guarantee and what does it cost?",
+      "answer": "No concurrent edits can jointly form a cycle, but all employee writes serialize",
+      "distractors": [
+        "It locks only the employee being edited, so unrelated edits proceed in parallel at no throughput cost",
+        "It prevents leave-request overlaps across the organization, at the cost of slower directory reads",
+        "It guarantees no deadlocks anywhere, at the cost of extra memory"
+      ],
+      "explanation": "The simple, provably correct option pays in throughput; a per-chain key is finer but must lock both roots in a fixed order when a change joins two chains."
+    },
+    {
+      "id": "q08-leave-writes-and-chart-lock",
+      "kind": "quiz",
+      "source": {
+        "path": "astraupskill/02-CONCEPTS.md",
+        "lines": {
+          "start": 32,
+          "end": 32
+        }
+      },
+      "cites": [
+        {
+          "path": "backend/src/repositories/scope.ts",
+          "lineStart": 91,
+          "lineEnd": 96
+        }
+      ],
+      "prompt": "With the constant chart lock in place, how do leave-request writes behave?",
+      "answer": "They never wait on the advisory lock; they take the employee's row lock, so a leave write and an HR edit of the same employee queue, while leave writes for different employees run in parallel",
+      "distractors": [
+        "They also wait on the chart lock, so all leave writes are serialized",
+        "They take no locks at all and rely on the exclusion constraint",
+        "They lock the whole Employee table for the transaction"
+      ],
+      "explanation": "Leave writes call lockEmployee (SELECT ... FOR UPDATE on one Employee row), not chartLock."
+    },
+    {
+      "id": "q09-last-hr-admin",
+      "kind": "quiz",
+      "source": {
+        "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+        "lines": {
+          "start": 9,
+          "end": 9
+        }
+      },
+      "cites": [
+        {
+          "path": "backend/src/repositories/employeeRepository.ts",
+          "lineStart": 173,
+          "lineEnd": 181
+        }
+      ],
+      "prompt": "Two HR administrators deactivate each other at the same time. Why does 'keep at least one active HR administrator' hold today, and what would break it?",
+      "answer": "chartLock serializes the count-then-update; a per-chain lock would let both succeed",
+      "distractors": [
+        "A unique partial index on active HR administrators enforces it inside PostgreSQL regardless of locking",
+        "It does not hold: both deactivations succeed today, leaving the organization with no HR administrator",
+        "The frontend hides the deactivate button for the last HR admin"
+      ],
+      "explanation": "Before narrowing a lock, list everything it serializes, not only the reason it was added."
+    },
+    {
+      "id": "q10-options-endpoint",
+      "kind": "quiz",
+      "source": {
+        "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+        "lines": {
+          "start": 7,
+          "end": 7
+        }
+      },
+      "cites": [
+        {
+          "path": "backend/src/routes/employeeRoutes.ts",
+          "lineStart": 12,
+          "lineEnd": 17
+        },
+        {
+          "path": "backend/src/repositories/scope.ts",
+          "lineStart": 6,
+          "lineEnd": 13
+        }
+      ],
+      "prompt": "A plain EMPLOYEE calls GET /api/employees/options directly. What do they get?",
+      "answer": "Every active manager's and HR admin's id and name",
+      "distractors": [
+        "403, like every employee mutation",
+        "Only their own profile, because employeeScope applies to every query",
+        "An empty list, because options are filtered by department"
+      ],
+      "explanation": "Scope is enforced on the main list but forgotten on a helper list, the pattern to look for in every review; no integration test touches the route."
+    },
+    {
+      "id": "q11-forged-manager-filter",
+      "kind": "quiz",
+      "source": {
+        "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+        "lines": {
+          "start": 29,
+          "end": 29
+        }
+      },
+      "cites": [
+        {
+          "path": "backend/src/repositories/scope.ts",
+          "lineStart": 9,
+          "lineEnd": 10
+        }
+      ],
+      "prompt": "In the bounded manager filter design, a manager filters by another manager's id. Why return an empty result rather than 403?",
+      "answer": "The filter is ANDed with employeeScope, so it intersects to an empty set; a 403 would leak that the id exists",
+      "distractors": [
+        "Because 403 responses are not cacheable by React Query",
+        "Because managers are allowed to see other managers' reports",
+        "Because validation happens after the query runs"
+      ],
+      "explanation": "For HR the scope is {}, so the filter is a real filter; for others it safely intersects rather than rejects."
+    },
+    {
+      "id": "q12-history-newest-audit",
+      "kind": "quiz",
+      "source": {
+        "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+        "lines": {
+          "start": 15,
+          "end": 15
+        }
+      },
+      "cites": [
+        {
+          "path": "backend/src/repositories/leaveRepository.ts",
+          "lineStart": 293,
+          "lineEnd": 307
+        }
+      ],
+      "prompt": "A manager loses a direct report to another team. What happens when they open that report's old leave history?",
+      "answer": "An empty list: history is authorized by the caller's current scope",
+      "distractors": [
+        "They still see it, because they were the manager who decided those requests at the time",
+        "404, because the leave requests were moved along with the employee to the new manager",
+        "The full history, because audit rows are public within a department"
+      ],
+      "explanation": "Returning [] hides whether the request exists and keeps working after deletion, but using current scope means history access follows today's reporting line."
+    },
+    {
+      "id": "f01-draft-intent-version",
+      "kind": "flashcard",
+      "source": {
+        "path": "astraupskill/02-CONCEPTS.md",
+        "lines": {
+          "start": 22,
+          "end": 22
+        }
+      },
+      "cites": [
+        {
+          "path": "backend/src/repositories/leaveRepository.ts",
+          "lineStart": 239,
+          "lineEnd": 243
+        }
+      ],
+      "front": "Why must a draft loaded at version 1 send expected version 1 even if another tab saved version 2?",
+      "back": "The version records the state the user actually reviewed. Attaching the latest version to an old draft would bypass conflict detection; conditional writes include the baseline version and the UI keeps the rejected input for export and reconciliation."
+    },
+    {
+      "id": "f02-lock-reread",
+      "kind": "flashcard",
+      "source": {
+        "path": "astraupskill/03-WORKED-CHANGE.md",
+        "lines": {
+          "start": 17,
+          "end": 17
+        }
+      },
+      "cites": [
+        {
+          "path": "backend/src/repositories/leaveRepository.ts",
+          "lineStart": 220,
+          "lineEnd": 222
+        }
+      ],
+      "front": "Why does decide read the leave request, lock the employee row, then read it again?",
+      "back": "The first scoped read authorizes and finds which employee to lock; the second is needed because a competing operation may have completed while the lock was being acquired. Decide only on the post-lock read."
+    },
+    {
+      "id": "f03-page-reset-late",
+      "kind": "flashcard",
+      "source": {
+        "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+        "lines": {
+          "start": 11,
+          "end": 11
+        }
+      },
+      "cites": [
+        {
+          "path": "frontend/src/features/employees/pages/EmployeesPage.tsx",
+          "lineStart": 41,
+          "lineEnd": 44
+        }
+      ],
+      "front": "useEffect(() => setPage(1), [query, active]) resets pagination after a filter change. What is wrong?",
+      "back": "It runs one render late: for one render the query key pairs the new filter with the old page, so React Query fetches e.g. page 3 of the filtered list first. Reset the page in the same event handler that changes the filter."
+    },
+    {
+      "id": "f04-assert-persisted-state",
+      "kind": "flashcard",
+      "source": {
+        "path": "astraupskill/04-TESTING-AND-DEBUGGING.md",
+        "lines": {
+          "start": 29,
+          "end": 29
+        }
+      },
+      "cites": [
+        {
+          "path": "backend/src/repositories/leaveRepository.ts",
+          "lineStart": 242,
+          "lineEnd": 251
+        }
+      ],
+      "front": "How do you test an approval race properly?",
+      "back": "Send two decisions with the same saved version (approve and reject). Expect exactly one success and one 409, then read the row and audit: version advanced once, the recorded decider is the winner, the losing note did not overwrite. Asserting 'no 500' alone misses the bug."
+    }
+  ]
+}
