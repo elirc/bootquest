@@ -1,0 +1,615 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "notes",
+ "name": "organized-anti-helpdesk",
+ "items": [
+  {
+   "key": "seed:notes:organized-anti-helpdesk/note/3d55619a776a3081",
+   "provenance": {
+    "repo": "organized-anti-helpdesk",
+    "sha": "b09b34a042e809978d9c133a5fb87cdfdc489f10",
+    "path": "backend/src/modules/tickets/tickets.repository.ts",
+    "lines": {
+     "start": 25,
+     "end": 30
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q12-cross-tenant-404",
+   "pack": "organized-anti-helpdesk",
+   "target": "seed:quests:organized-anti-helpdesk/quiz/d1c54508261bccef",
+   "phase": "after",
+   "title": "Why another tenant's ticket comes back as 404",
+   "body": "**Key: 404: findById filters by id AND the caller's organizationId, so the row is invisible.**\n\nThe agent's token is valid, so `authenticate` lets them in with `organizationId: 'org-A'`. `getTicket` calls `findById('ticket-B-999', 'org-A')`, whose `where` has both `id` and `organizationId`. The ticket belongs to org-B, so no row matches and the result is `null`. The service turns `null` into `AppError('Ticket not found', 404)`. A 404 tells the attacker nothing, not even that the ticket exists.\n\nWhy the others are wrong:\n- *401 because the JWT was minted for another org*: the token is genuine for org-A; authentication succeeds.\n- *403 from enforceTenantIsolation comparing the ticket's org*: the middleware never loads the ticket; with no organizationId parameter it just passes.\n- *200 because agents read everything*: every read goes through the org-scoped `findById`.",
+   "excerpts": [
+    {
+     "path": "backend/src/modules/tickets/tickets.repository.ts",
+     "lineStart": 25,
+     "lineEnd": 30,
+     "quote": "return prisma.ticket.findFirst({ where: { id, organizationId, },"
+    },
+    {
+     "path": "backend/src/modules/tickets/tickets.service.ts",
+     "lineStart": 50,
+     "lineEnd": 53,
+     "quote": "throw new AppError('Ticket not found', 404);"
+    },
+    {
+     "path": "docsclaude/03-server-mastery/05-auth-and-multi-tenancy.md",
+     "lineStart": 64,
+     "lineEnd": 65,
+     "quote": "The service layer then throws a `404 Not Found` error, preventing the attacker from even confirming the ticket exists."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:organized-anti-helpdesk/note/536e197d3ff184d5",
+   "provenance": {
+    "repo": "organized-anti-helpdesk",
+    "sha": "b09b34a042e809978d9c133a5fb87cdfdc489f10",
+    "path": "docsclaude/03-server-mastery/05-auth-and-multi-tenancy.md",
+    "lines": {
+     "start": 25,
+     "end": 32
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q06-deactivated-user",
+   "pack": "organized-anti-helpdesk",
+   "target": "seed:quests:organized-anti-helpdesk/quiz/6cd3a1c42139b886",
+   "phase": "after",
+   "title": "What authenticate does for a deactivated user with a valid token",
+   "body": "**Key: rejects it with 401, as the user is reloaded on each request and isActive is checked.**\n\n`authenticate` does not trust the token alone. After `verifyAccessToken`, it loads the user from the database with `prisma.user.findUnique` on every request, then throws if the user is missing or `!user.isActive`. The `catch` turns any failure into `AppError('Unauthorized', 401, 'UNAUTHORIZED')`. So deactivation takes effect on the very next request.\n\nWhy the others are wrong:\n- *Lets it through until the token expires*: `isActive` is read from the fresh database row, not from the JWT payload.\n- *403 with a 'deactivated' message*: the code uses 401, and the catch replaces the message with a generic 'Unauthorized'.\n- *Refreshes the token and logs out on the client*: this middleware only calls `next` with an error; it does no refreshing.",
+   "excerpts": [
+    {
+     "path": "docsclaude/03-server-mastery/05-auth-and-multi-tenancy.md",
+     "lineStart": 25,
+     "lineEnd": 32,
+     "quote": "if (!user || !user.isActive) { throw new AppError('User not found or inactive', 401, 'UNAUTHORIZED'); }"
+    },
+    {
+     "path": "docsclaude/03-server-mastery/05-auth-and-multi-tenancy.md",
+     "lineStart": 36,
+     "lineEnd": 38,
+     "quote": "next(new AppError('Unauthorized', 401, 'UNAUTHORIZED'));"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "backend/src/middleware/auth.middleware.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The middleware itself."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:organized-anti-helpdesk/note/6c5a5053009628a0",
+   "provenance": {
+    "repo": "organized-anti-helpdesk",
+    "sha": "b09b34a042e809978d9c133a5fb87cdfdc489f10",
+    "path": "docsclaude/CRITIQUE.md",
+    "lines": {
+     "start": 47,
+     "end": 47
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q02-path-params-unvalidated",
+   "pack": "organized-anti-helpdesk",
+   "target": "seed:quests:organized-anti-helpdesk/quiz/16c378d6273029f5",
+   "phase": "after",
+   "title": "The critique's third gap: unvalidated path parameters",
+   "body": "**Key: ticket UUIDs in the path reach Postgres without Zod checks, so bad strings hit the DB.**\n\nCRITIQUE.md lists three system gaps; the third is \"No path param validation\". You can see it in the controller: `get` passes `req.params.id` straight to `ticketsService.getTicket`. No schema checks that it looks like a UUID first, so any string travels into the database query.\n\nWhy the others are wrong:\n- *Zod and Prisma both validate, so double checks*: the gap is the opposite, the path id is not validated by Zod at all.\n- *Double URL-decoding*: the critique says nothing about decoding.\n- *Organization id taken from the path*: the controller passes `req.user.organizationId`, which comes from the authenticated user, not the URL.",
+   "excerpts": [
+    {
+     "path": "docsclaude/CRITIQUE.md",
+     "lineStart": 47,
+     "lineEnd": 47,
+     "quote": "3. **No path param validation:** HTTP endpoint path parameters (like ticket UUIDs) are queried directly without Zod verification, allowing invalid input strings to reach Postgres."
+    },
+    {
+     "path": "backend/src/modules/tickets/tickets.controller.ts",
+     "lineStart": 14,
+     "lineEnd": 19,
+     "quote": "const result = await ticketsService.getTicket( req.params.id, req.user.organizationId, req.user );"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "backend/src/middleware/validate.middleware.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The Zod middleware that could be applied to params as well."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:organized-anti-helpdesk/note/6daa210f8bf5b085",
+   "provenance": {
+    "repo": "organized-anti-helpdesk",
+    "sha": "b09b34a042e809978d9c133a5fb87cdfdc489f10",
+    "path": "backend/src/modules/comments/comments.service.ts",
+    "lines": {
+     "start": 17,
+     "end": 20
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q09-internal-notes-leak",
+   "pack": "organized-anti-helpdesk",
+   "target": "seed:quests:organized-anti-helpdesk/quiz/9cce4571cd6c1f8a",
+   "phase": "after",
+   "title": "Why GET /api/tickets/:id can leak internal notes",
+   "body": "**Key: no: findById includes every comment with no isInternal filter, so internal notes reach the requester.**\n\nThere are two ways to read comments. The comments endpoint builds its own `where` and, for requesters, adds `where.isInternal = false`. But the ticket endpoint uses `ticketsRepository.findById`, whose `include` pulls in `comments` with only an `orderBy`. No filter on `isInternal`. `getTicket` then returns the ticket as is. So a requester reading their own ticket gets every comment, internal ones included. The guide lists \"Allowing requesters to read internal notes\" as a pitfall.\n\nWhy the others are wrong:\n- *Prisma applies the service's where to every include*: a `where` applies only to the query it is written in.\n- *403 because comments must come from the comments endpoint*: `getTicket` only blocks requesters from *other people's* tickets.\n- *getTicket strips internal comments*: it checks access and returns the ticket unchanged.",
+   "excerpts": [
+    {
+     "path": "backend/src/modules/comments/comments.service.ts",
+     "lineStart": 17,
+     "lineEnd": 20,
+     "quote": "if (user.role === Role.REQUESTER) { where.isInternal = false; }"
+    },
+    {
+     "path": "backend/src/modules/tickets/tickets.repository.ts",
+     "lineStart": 38,
+     "lineEnd": 40,
+     "quote": "comments: { orderBy: { createdAt: 'asc' },"
+    },
+    {
+     "path": "docsclaude/03-server-mastery/05-auth-and-multi-tenancy.md",
+     "lineStart": 116,
+     "lineEnd": 116,
+     "quote": "7. **Allowing requesters to read internal notes:** Not filtering comment visibility based on user roles."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:organized-anti-helpdesk/note/8418cf2a528bdd7b",
+   "provenance": {
+    "repo": "organized-anti-helpdesk",
+    "sha": "b09b34a042e809978d9c133a5fb87cdfdc489f10",
+    "path": "backend/src/modules/tickets/ticket-status-machine.ts",
+    "lines": {
+     "start": 4,
+     "end": 4
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q04-open-to-resolved",
+   "pack": "organized-anti-helpdesk",
+   "target": "seed:quests:organized-anti-helpdesk/quiz/392bbe744efdf8ae",
+   "phase": "after",
+   "title": "Why a requester cannot jump a ticket from OPEN to RESOLVED",
+   "body": "**Key: 400 Invalid transition: the state machine only lets OPEN move to IN_PROGRESS.**\n\n`changeStatus` runs two checks in order. First, a requester may only target RESOLVED or CLOSED; RESOLVED passes this check. Second, `canTransition(ticket.status, status)` looks up `ALLOWED_TRANSITIONS`. For OPEN the only allowed next state is IN_PROGRESS, so OPEN to RESOLVED fails and the service throws `Invalid transition from OPEN to RESOLVED` with status 400.\n\nWhy the others are wrong:\n- *200, requesters may resolve from any state*: the state machine applies to everyone, including requesters.\n- *200 but moved to IN_PROGRESS*: the code never substitutes a different status; it throws.\n- *403, requesters can never change status*: requesters may move tickets to RESOLVED or CLOSED; the 403 is only for other targets.",
+   "excerpts": [
+    {
+     "path": "backend/src/modules/tickets/ticket-status-machine.ts",
+     "lineStart": 4,
+     "lineEnd": 4,
+     "quote": "[TicketStatus.OPEN]: [TicketStatus.IN_PROGRESS],"
+    },
+    {
+     "path": "backend/src/modules/tickets/tickets.service.ts",
+     "lineStart": 165,
+     "lineEnd": 174,
+     "quote": "const allowedRequesterTargets: TicketStatus[] = [TicketStatus.RESOLVED, TicketStatus.CLOSED];"
+    },
+    {
+     "path": "backend/src/modules/tickets/tickets.service.ts",
+     "lineStart": 172,
+     "lineEnd": 174,
+     "quote": "throw new AppError(`Invalid transition from ${ticket.status} to ${status}`, 400);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:organized-anti-helpdesk/note/9055554c4e6c4164",
+   "provenance": {
+    "repo": "organized-anti-helpdesk",
+    "sha": "b09b34a042e809978d9c133a5fb87cdfdc489f10",
+    "path": "docsclaude/03-server-mastery/05-auth-and-multi-tenancy.md",
+    "lines": {
+     "start": 46,
+     "end": 46
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r02-tenant-scoping-in-queries",
+   "pack": "organized-anti-helpdesk",
+   "target": "pack",
+   "phase": "before",
+   "title": "Core idea: tenant isolation belongs inside the database query",
+   "body": "An **IDOR** bug (\"insecure direct object reference\") happens when a user changes an id in a URL and gets someone else's data. In a multi-tenant app that means one company reading another company's tickets.\n\nThe guide's main rule: never look a record up by its id alone. Pass the caller's `organizationId` all the way down and put it in the `where` clause next to the id. Then a ticket from another tenant simply does not match, as if it did not exist.\n\nMiddleware can add checks on top of this, and the guide walks one cross-tenant request through every layer so you can see which layer does the real work. Trace it yourself with the code open.",
+   "excerpts": [
+    {
+     "path": "docsclaude/03-server-mastery/05-auth-and-multi-tenancy.md",
+     "lineStart": 46,
+     "lineEnd": 46,
+     "quote": "An IDOR attack occurs when an attacker modifies a resource identifier (like a ticket UUID) in a request to access data belonging to another tenant."
+    },
+    {
+     "path": "docsclaude/03-server-mastery/05-auth-and-multi-tenancy.md",
+     "lineStart": 104,
+     "lineEnd": 104,
+     "quote": "Always pass the active tenant ID down to the query level to build physical isolation barriers."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "backend/src/modules/tickets/tickets.repository.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Compare the where clauses of findById, update and delete."
+    },
+    {
+     "path": "backend/src/middleware/tenant.middleware.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The extra tenant check run on routes; short and worth reading in full."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:organized-anti-helpdesk/note/a78afafa7394b4aa",
+   "provenance": {
+    "repo": "organized-anti-helpdesk",
+    "sha": "b09b34a042e809978d9c133a5fb87cdfdc489f10",
+    "path": "docsclaude/README.md",
+    "lines": {
+     "start": 29,
+     "end": 31
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r01-start-here-antihelpdesk",
+   "pack": "organized-anti-helpdesk",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: a multi-tenant helpdesk and the four guides this pack uses",
+   "body": "AntiHelpdesk is a support-ticket web app used by many companies at once. Each company is an **organization** (a \"tenant\"), and every ticket, comment and log row carries an `organizationId`. The backend is Express + Prisma on PostgreSQL; the frontend is React with TanStack Query.\n\nThis pack draws on four pages of the `docsclaude/` curriculum. Read them in this order:\n\n1. **docsclaude/README.md**: the three ground rules (tenant scoping, role rules, the status workflow).\n2. **03-server-mastery/05-auth-and-multi-tenancy.md**: how a request is authenticated and how tenant isolation is enforced.\n3. **04-architecture-and-patterns/03-transactions-and-audit.md**: the activity feed, the audit log and why several writes should be one transaction.\n4. **02-frontend-deep-dive/06-data-fetching-and-cache.md**: query keys and cache invalidation on the client.\n5. **CRITIQUE.md**: the author's own list of gaps found in the code.\n\nEach guide links exact files and line ranges. Open them: several quizzes ask what the code *really* does, which is sometimes less than the guide's headline suggests.",
+   "excerpts": [
+    {
+     "path": "docsclaude/README.md",
+     "lineStart": 29,
+     "lineEnd": 31,
+     "quote": "1. **Multi-Tenant Scoping:** All operations on tickets, comments, or activities must explicitly isolate database queries using `organizationId`. A failure here is a catastrophic data breach."
+    },
+    {
+     "path": "docsclaude/README.md",
+     "lineStart": 38,
+     "lineEnd": 38,
+     "quote": "You must open these links in your IDE to cross-reference as you read."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docsclaude/README.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The eight-week syllabus and the ground rules every module assumes."
+    },
+    {
+     "path": "docsclaude/CRITIQUE.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Short list of the real weaknesses the curriculum turns into lessons."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:organized-anti-helpdesk/note/bdd2a40451eded7d",
+   "provenance": {
+    "repo": "organized-anti-helpdesk",
+    "sha": "b09b34a042e809978d9c133a5fb87cdfdc489f10",
+    "path": "backend/src/modules/tickets/tickets.service.ts",
+    "lines": {
+     "start": 234,
+     "end": 241
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q11-assign-logs-out-of-sync",
+   "pack": "organized-anti-helpdesk",
+   "target": "seed:quests:organized-anti-helpdesk/quiz/c559086796c10822",
+   "phase": "after",
+   "title": "Can assignTicket's logs get out of sync?",
+   "body": "**Key: yes: the update, the ASSIGNED activity and the audit event are all separate writes.**\n\n`assignTicket` first validates: requesters cannot assign, the ticket must be readable, and the assignee must be in the same organization and not a requester. Those checks run *before* any write. Then come three unconnected `await`s: `ticketsRepository.update`, `prisma.ticketActivity.create` with action ASSIGNED, and `auditService.logEvent`. A failure between them leaves the assignment saved but the logs incomplete, the same weakness as `changeStatus`.\n\nWhy the others are wrong:\n- *The repository update and audit share one transaction*: there is no `$transaction` here; `logEvent` uses its own `prisma.auditEvent.create`.\n- *Validation first, so nothing can fail after*: validation cannot stop a network or database failure during the writes.\n- *Only for REQUESTER assignees*: assigning to a requester throws 400 before any write, so that case writes nothing at all.",
+   "excerpts": [
+    {
+     "path": "backend/src/modules/tickets/tickets.service.ts",
+     "lineStart": 234,
+     "lineEnd": 241,
+     "quote": "throw new AppError('Cannot assign ticket to a requester', 400); } } const updatedTicket = await ticketsRepository.update(id, organizationId, { assignedToId });"
+    },
+    {
+     "path": "backend/src/modules/tickets/tickets.service.ts",
+     "lineStart": 255,
+     "lineEnd": 255,
+     "quote": "await auditService.logEvent({"
+    },
+    {
+     "path": "docsclaude/04-architecture-and-patterns/03-transactions-and-audit.md",
+     "lineStart": 99,
+     "lineEnd": 99,
+     "quote": "1. **Non-atomic multi-write mutations:** Updating a model and its log table in separate, unconnected queries."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:organized-anti-helpdesk/note/c0ce34dfbc21a7d4",
+   "provenance": {
+    "repo": "organized-anti-helpdesk",
+    "sha": "b09b34a042e809978d9c133a5fb87cdfdc489f10",
+    "path": "frontend/src/features/tickets/pages/TicketListPage.tsx",
+    "lines": {
+     "start": 41,
+     "end": 43
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q05-missing-key-element",
+   "pack": "organized-anti-helpdesk",
+   "target": "seed:quests:organized-anti-helpdesk/quiz/4628fc47db7bb0f5",
+   "phase": "after",
+   "title": "What breaks if a filter is left out of the queryKey",
+   "body": "**Key: changing the status filter would keep showing the cached page for the previous filter.**\n\nTanStack Query decides whether to fetch by comparing the `queryKey`. The list's key includes every value the request depends on: page, status, priority, search and sort. If `status` were dropped, switching the status filter would leave the key unchanged, so the library would think it already has the data and keep showing the old list. The guide lists this as the first pitfall: \"Leaving out variables inside the query key\".\n\nWhy the others are wrong:\n- *TypeScript refuses to compile*: TypeScript does not compare `queryFn`'s variables with the key; this is a runtime caching bug.\n- *Refetches on every render*: a key without a filter is still a stable key and is cached; the problem is too *few* fetches.\n- *queryFn reads status from the URL, so it refetches*: the function only runs when the key says the query is new; reading a new value inside it does not trigger a fetch.",
+   "excerpts": [
+    {
+     "path": "frontend/src/features/tickets/pages/TicketListPage.tsx",
+     "lineStart": 41,
+     "lineEnd": 43,
+     "quote": "queryKey: ['tickets', page, status, priority, search, sortBy, sortDirection],"
+    },
+    {
+     "path": "docsclaude/02-frontend-deep-dive/06-data-fetching-and-cache.md",
+     "lineStart": 64,
+     "lineEnd": 64,
+     "quote": "1. **Incorrect query key dependency arrays:** Leaving out variables inside the query key, causing the UI to show stale data when parameters change."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:organized-anti-helpdesk/note/c2bcadf77329578a",
+   "provenance": {
+    "repo": "organized-anti-helpdesk",
+    "sha": "b09b34a042e809978d9c133a5fb87cdfdc489f10",
+    "path": "backend/src/modules/tickets/tickets.repository.ts",
+    "lines": {
+     "start": 124,
+     "end": 133
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q03-update-where-is-id-only",
+   "pack": "organized-anti-helpdesk",
+   "target": "seed:quests:organized-anti-helpdesk/quiz/2f9729bae8758af3",
+   "phase": "after",
+   "title": "What really protects a ticket update from another tenant",
+   "body": "**Key: only the earlier getTicket(id, organizationId, user), as the update's where is { id }.**\n\nLook at `ticketsRepository.update`. It accepts `organizationId` but the `where` contains only `id`; the comments inside it debate the fix and never add the field. So the update itself would change any ticket with that id. What stops a cross-tenant change today is that `changeStatus` (and the other service methods) first call `this.getTicket(id, organizationId, user)`, which uses the scoped `findById` and throws 404 for another tenant's ticket. Safety depends on every caller remembering that read. This is the \"Querying by ID alone\" pitfall.\n\nWhy the others are wrong:\n- *enforceTenantIsolation looks up the ticket's org*: that middleware only compares `organizationId` values in params or body; it does no lookup.\n- *A compound unique index on (id, organizationId)*: the Ticket model declares only `@@index` lines on organizationId combos, no such unique.\n- *The where includes organizationId*: it does not.",
+   "excerpts": [
+    {
+     "path": "backend/src/modules/tickets/tickets.repository.ts",
+     "lineStart": 124,
+     "lineEnd": 133,
+     "quote": "where: { id, // Wait, standard Prisma update requires unique input for where."
+    },
+    {
+     "path": "backend/src/modules/tickets/tickets.service.ts",
+     "lineStart": 163,
+     "lineEnd": 163,
+     "quote": "const ticket = await this.getTicket(id, organizationId, user);"
+    },
+    {
+     "path": "docsclaude/03-server-mastery/05-auth-and-multi-tenancy.md",
+     "lineStart": 110,
+     "lineEnd": 110,
+     "quote": "1. **Querying by ID alone:** Doing `prisma.ticket.findUnique({ where: { id } })`, bypassing tenant isolation checking."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:organized-anti-helpdesk/note/cdcac2fcd4eca405",
+   "provenance": {
+    "repo": "organized-anti-helpdesk",
+    "sha": "b09b34a042e809978d9c133a5fb87cdfdc489f10",
+    "path": "frontend/src/features/tickets/pages/TicketDetailPage.tsx",
+    "lines": {
+     "start": 87,
+     "end": 91
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q10-status-change-invalidation",
+   "pack": "organized-anti-helpdesk",
+   "target": "seed:quests:organized-anti-helpdesk/quiz/bcc92a83042e3d82",
+   "phase": "after",
+   "title": "Which caches a status change invalidates",
+   "body": "**Key: only ['ticket', id], so the list entries keyed ['tickets', ...] stay stale after it.**\n\n`handleStatusChange` sends the PATCH and then makes one call: `invalidateQueries({ queryKey: ['ticket', id] })`. That refreshes the detail view. The list page caches its data under keys that start with `'tickets'` (plural). Matching compares array elements, and the string `'ticket'` is not equal to `'tickets'`, so the list entries are not touched and can show the old status until they refetch for another reason.\n\nWhy the others are wrong:\n- *None, it patches in place*: the handler calls `invalidateQueries`; it does not edit cached data.\n- *['ticket', id] and ['comments', id]*: that pair belongs to the comment mutation; the status handler invalidates only one key.\n- *Prefix-matches 'tickets'*: prefix matching works on whole array elements, not on characters inside a string.",
+   "excerpts": [
+    {
+     "path": "frontend/src/features/tickets/pages/TicketDetailPage.tsx",
+     "lineStart": 87,
+     "lineEnd": 91,
+     "quote": "queryClient.invalidateQueries({ queryKey: ['ticket', id] });"
+    },
+    {
+     "path": "docsclaude/02-frontend-deep-dive/06-data-fetching-and-cache.md",
+     "lineStart": 65,
+     "lineEnd": 65,
+     "quote": "2. **Missing invalidation triggers:** Mutating a ticket status but forgetting to invalidate `['ticket', id]`."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:organized-anti-helpdesk/note/d2564b1b0c818537",
+   "provenance": {
+    "repo": "organized-anti-helpdesk",
+    "sha": "b09b34a042e809978d9c133a5fb87cdfdc489f10",
+    "path": "backend/src/middleware/tenant.middleware.ts",
+    "lines": {
+     "start": 14,
+     "end": 19
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q08-tenant-middleware-scope",
+   "pack": "organized-anti-helpdesk",
+   "target": "seed:quests:organized-anti-helpdesk/quiz/8ff394fb73d62534",
+   "phase": "after",
+   "title": "What enforceTenantIsolation actually compares",
+   "body": "**Key: that an organizationId in the params or body matches the user's, letting requests without one pass.**\n\nThe middleware reads two values: `req.params.organizationId` and `req.body.organizationId`. If either is present and differs from `req.user.organizationId`, it returns 403 \"Tenant mismatch\". If neither is present, it just calls `next()`. That is why the guide's walkthrough shows it passing a `GET /api/tickets/ticket-B-999` request straight through: there is an id but no organizationId parameter.\n\nWhy the others are wrong:\n- *Checks the role against an org in the query string*: it reads params and body, never the query string, and never looks at roles.\n- *Compares the JWT claim with the Host subdomain*: it does not read headers.\n- *Looks up every resource id in the database*: it does no database work at all; ticket ids are protected by the repository's `organizationId` filter.",
+   "excerpts": [
+    {
+     "path": "backend/src/middleware/tenant.middleware.ts",
+     "lineStart": 14,
+     "lineEnd": 19,
+     "quote": "if (organizationId && organizationId !== req.user.organizationId) { return next(new AppError('Forbidden: Tenant mismatch', 403, 'TENANT_MISMATCH'));"
+    },
+    {
+     "path": "docsclaude/03-server-mastery/05-auth-and-multi-tenancy.md",
+     "lineStart": 84,
+     "lineEnd": 86,
+     "quote": "| -> Detects request has parameter id but no explicit organizationId parameter."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:organized-anti-helpdesk/note/d4deba7039ed73a7",
+   "provenance": {
+    "repo": "organized-anti-helpdesk",
+    "sha": "b09b34a042e809978d9c133a5fb87cdfdc489f10",
+    "path": "frontend/src/features/tickets/pages/TicketDetailPage.tsx",
+    "lines": {
+     "start": 71,
+     "end": 75
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q01-invalidate-not-patch",
+   "pack": "organized-anti-helpdesk",
+   "target": "seed:quests:organized-anti-helpdesk/quiz/0f3fda5acb370ea0",
+   "phase": "after",
+   "title": "Why the comment mutation invalidates instead of patching the cache",
+   "body": "**Key: a refetch returns server truth, including generated columns and other actors' changes.**\n\nAfter a comment is posted, `onSuccess` calls `invalidateQueries` for `['comments', id]` and `['ticket', id]`. TanStack Query marks them stale and fetches them again. The guide's senior aside explains why: other people may be changing the same ticket at the same time, and the database fills in columns (ids, timestamps) the client did not send. Only a fresh fetch shows exactly what the server stored.\n\nWhy the others are wrong:\n- *Invalidation is synchronous while patching needs a round trip*: backwards; invalidation causes a background fetch, and patching the cache locally needs no network at all.\n- *Caches are read-only*: the guide's own drill 2 asks you to write an optimistic update that changes cached state locally, so the cache can be changed.\n- *The POST response is empty*: the reason given is server truth and concurrent actors, not an empty response.",
+   "excerpts": [
+    {
+     "path": "frontend/src/features/tickets/pages/TicketDetailPage.tsx",
+     "lineStart": 71,
+     "lineEnd": 75,
+     "quote": "queryClient.invalidateQueries({ queryKey: ['comments', id] }); queryClient.invalidateQueries({ queryKey: ['ticket', id] });"
+    },
+    {
+     "path": "docsclaude/02-frontend-deep-dive/06-data-fetching-and-cache.md",
+     "lineStart": 58,
+     "lineEnd": 58,
+     "quote": "Real systems have multiple concurrent actors; fetching from the server ensures you get the exact, single source of truth including any auto-generated database columns."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:organized-anti-helpdesk/note/edd5d24b927bfa3f",
+   "provenance": {
+    "repo": "organized-anti-helpdesk",
+    "sha": "b09b34a042e809978d9c133a5fb87cdfdc489f10",
+    "path": "backend/src/modules/tickets/tickets.service.ts",
+    "lines": {
+     "start": 186,
+     "end": 188
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q07-status-without-logs",
+   "pack": "organized-anti-helpdesk",
+   "target": "seed:quests:organized-anti-helpdesk/quiz/6cf8a175b94fedc6",
+   "phase": "after",
+   "title": "What a dropped connection mid-changeStatus leaves behind",
+   "body": "**Key: the ticket shows the new status, but there is no STATUS_CHANGED activity or audit event.**\n\n`changeStatus` does three separate writes, each its own `await`: first `ticketsRepository.update`, then `prisma.ticketActivity.create` with action STATUS_CHANGED, then `auditService.logEvent`. They are not inside a transaction. If the connection drops right after the first one, the ticket row is already changed and the next two writes never happen. The guide calls this the \"Transaction Contamination Fragility\" and fixes it with `prisma.$transaction`.\n\nWhy the others are wrong:\n- *The audit event is written first*: it is written last.\n- *Prisma rolls back the update*: there is no transaction, so nothing ties the update to the later writes.\n- *Activity exists but status unchanged*: the update is the first write, the activity the second.",
+   "excerpts": [
+    {
+     "path": "backend/src/modules/tickets/tickets.service.ts",
+     "lineStart": 186,
+     "lineEnd": 188,
+     "quote": "const updatedTicket = await ticketsRepository.update(id, organizationId, updatedData); await prisma.ticketActivity.create({"
+    },
+    {
+     "path": "docsclaude/04-architecture-and-patterns/03-transactions-and-audit.md",
+     "lineStart": 78,
+     "lineEnd": 78,
+     "quote": "the ticket's status changes but *no audit record is logged*."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:organized-anti-helpdesk/note/f8b9b0ce3c6add77",
+   "provenance": {
+    "repo": "organized-anti-helpdesk",
+    "sha": "b09b34a042e809978d9c133a5fb87cdfdc489f10",
+    "path": "docsclaude/02-frontend-deep-dive/06-data-fetching-and-cache.md",
+    "lines": {
+     "start": 9,
+     "end": 9
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r03-cache-keys-and-atomic-writes",
+   "pack": "organized-anti-helpdesk",
+   "target": "pack",
+   "phase": "before",
+   "title": "Core idea: query keys, invalidation and grouped writes",
+   "body": "Two ideas recur in this pack, one on each side of the network.\n\n**Client cache.** TanStack Query stores each server response under a `queryKey` array. Think of the key like the dependency list of a React hook: when any value in it changes, the library treats it as a different query. After you change data on the server (a \"mutation\"), you tell the cache which keys are now out of date with `invalidateQueries`, and it refetches them.\n\n**Server writes.** One user action can need several database writes: update the ticket, add an activity row, add an audit event. If those are separate `await` calls, a crash between them leaves some writes done and others missing. Prisma's `$transaction` groups them so they all commit or all roll back.",
+   "excerpts": [
+    {
+     "path": "docsclaude/02-frontend-deep-dive/06-data-fetching-and-cache.md",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "TanStack Query automatically executes new fetches when any parameter changes, acting like a React dependency array."
+    },
+    {
+     "path": "docsclaude/04-architecture-and-patterns/03-transactions-and-audit.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "If any part of this operation fails, the entire database modification must rollback."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "frontend/src/features/tickets/pages/TicketDetailPage.tsx",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Every useQuery key and every invalidateQueries call on the ticket detail page."
+    },
+    {
+     "path": "docsclaude/04-architecture-and-patterns/03-transactions-and-audit.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The illustrative $transaction rewrite and the pitfall checklist."
+    }
+   ]
+  }
+ ]
+}

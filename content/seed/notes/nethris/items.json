@@ -1,0 +1,775 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "notes",
+ "name": "nethris",
+ "items": [
+  {
+   "key": "seed:notes:nethris/note/0e1dd8c966524cfe",
+   "provenance": {
+    "repo": "nethris",
+    "sha": "6b58c91230eaa23d68a5b0fccf9bb1b7511a1cef",
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "lines": {
+     "start": 67,
+     "end": 67
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q14-red-first-finding",
+   "pack": "nethris",
+   "target": "seed:quests:nethris/quiz/bb3316aece812232",
+   "phase": "after",
+   "title": "One red test per guard means thin coverage",
+   "body": "**Key: each guarantee rests on a single test, so losing that test loses the protection.**\n\nIn the red-first lab you remove one guard at a time (the UUID key check, the 428 guard, the audit-log role minimum, and the session delete on logout) and see which tests fail. The reasoned answers in 06 show exactly one red test per row. That is not good news to celebrate; it is the review finding. If someone deletes or weakens that one test, the guard could be removed and the suite would stay green. For example, AuditLogs has no role check of its own, so MinimumRole and its one test are the only gate.\n\nWhy the others are wrong:\n- **Over-tested, redundant coverage**: one test per guarantee is the minimum, not too much.\n- **The guards are unnecessary**: each removal broke a real behaviour (a 201 under an empty key, a readable audit log). The guards matter; the safety net under them is thin.\n- **The tests are flaky**: a flaky test fails at random. These are predicted to fail each time their guard is removed.",
+   "excerpts": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 67,
+     "lineEnd": 67,
+     "quote": "Every row turns exactly one test red. Each guarantee depends on a single test, which is the finding to write in your review."
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 64,
+     "lineEnd": 64,
+     "quote": "`AuditLogs` (`HrisApi.Reads.cs:202-210`) has no role check of its own. `MinimumRole` is the only gate."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 85,
+     "lineEnd": 96,
+     "why": "The lab itself: which guard to disable, how to keep it compiling, and what to predict."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:nethris/note/38200f1a0adea19d",
+   "provenance": {
+    "repo": "nethris",
+    "sha": "6b58c91230eaa23d68a5b0fccf9bb1b7511a1cef",
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 7,
+     "end": 7
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q01-demotion-next-request",
+   "pack": "nethris",
+   "target": "seed:quests:nethris/quiz/09d3aa6caf3dfd19",
+   "phase": "after",
+   "title": "Why a demotion takes effect on the very next request",
+   "body": "**Key: the next request sees the demotion, because each request reloads session, account and role from the database.**\n\nThe JWT that Nethris signs carries only stable identity: which account, which session. It does not decide permission. On every request, HrisAuth.Require looks up the session row (it must still exist and not be expired), loads the current account and its employee, and compares the account's role from the database against the minimum the route needs. So at 09:10 the Admin changes Jordan's role in the database, and Jordan's next request reads that new role.\n\nWhy the others are wrong:\n- **HR access until a page reload**: reloading is irrelevant; the server never trusts a role kept in the browser.\n- **A 401 on every request**: a role change does not delete the session. Jordan is still signed in, just with less power (a too-low role gets Forbidden, not 401).\n- **Full HR access until 17:00**: that would be true only if the role were trusted from inside the token. The guide uses this exact scenario to show why Nethris does not do that.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 7,
+     "lineEnd": 7,
+     "quote": "Trusting a role embedded in an eight-hour token would preserve the old permission. Loading the current role makes the next request observe the change."
+    },
+    {
+     "path": "server/Nethris.Api/Security/HrisAuth.cs",
+     "lineStart": 24,
+     "lineEnd": 28,
+     "quote": "if (user.Role < minimum) throw HrisError.Forbidden();"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:nethris/note/38f92e72a8da8f96",
+   "provenance": {
+    "repo": "nethris",
+    "sha": "6b58c91230eaa23d68a5b0fccf9bb1b7511a1cef",
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 17,
+     "end": 17
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q12-immediate-transaction",
+   "pack": "nethris",
+   "target": "seed:quests:nethris/quiz/a8eede0523db4f41",
+   "phase": "after",
+   "title": "Why the write lock is taken before reading the balance",
+   "body": "**Key: it reserves the write lock before reading, so concurrent approvers take turns.**\n\nPicture two HR reviewers approving two requests from the same employee at the same moment. If each one read the balance first and only later asked to write, both could read the same old balance, both decide \"enough\", and both subtract. An \"immediate\" SQLite transaction grabs the write reservation at the start, before any reading. The second approver must wait until the first commits, and then reads the already reduced balance.\n\nIn HrisApi.Handle the transaction is opened with deferred set to false for writes, which is the immediate mode.\n\nWhy the others are wrong:\n- **Lets other readers see the deduction early**: a transaction hides uncommitted changes; that is the point of it.\n- **Skips the WAL file to run faster**: the guide's reason is correctness under concurrency, not speed.\n- **Lets SaveChanges commit each write immediately**: the opposite. With an outer transaction, SaveChanges is not the final commit; everything commits together at the end.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 17,
+     "lineEnd": 17,
+     "quote": "“Immediate” means the connection obtains the write reservation before reading state that it intends to change. This makes two concurrent approvers take turns rather than both deciding from an old balance."
+    },
+    {
+     "path": "server/Nethris.Api/HrisApi.cs",
+     "lineStart": 54,
+     "lineEnd": 54,
+     "quote": "await using var transaction = connection.BeginTransaction(deferred: !route.IsWrite);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:nethris/note/3ddfdeaf78198927",
+   "provenance": {
+    "repo": "nethris",
+    "sha": "6b58c91230eaa23d68a5b0fccf9bb1b7511a1cef",
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 9,
+     "end": 9
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q11-accountrole-rejected",
+   "pack": "nethris",
+   "target": "seed:quests:nethris/quiz/8be674352b6b36c9",
+   "phase": "after",
+   "title": "Why an employee edit that sets accountRole is refused",
+   "body": "**Key: rejected, because HR cannot set account roles in employee requests.**\n\nAn employee record (the HR data) and a user account (the sign-in with its security role) are different things. Only Admin may create or change accounts. The guide states the rule directly: HR cannot include accountRole in an employee request, and unknown input properties are rejected. In the code, the API's JSON settings refuse properties they do not know (UnmappedMemberHandling is set to Disallow), so a body that sneaks in an extra field is refused rather than partly saved.\n\nWhy the others are wrong:\n- **Queued for Admin approval**: there is no approval queue for role changes anywhere in the workshop.\n- **Ignored silently, other fields saved**: the guide says unknown input properties are rejected, not dropped. Silent dropping would hide a client bug.\n- **Applied because HR manages employee data**: HR manages ordinary employee data, but a security role is not employee data. A business title (JobRole) does not grant access either.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "HR can manage ordinary employee data, but cannot edit an Admin employee or include accountRole in an employee request. Unknown input properties are rejected."
+    },
+    {
+     "path": "server/Nethris.Api/HrisApi.cs",
+     "lineStart": 22,
+     "lineEnd": 22,
+     "quote": "UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:nethris/note/5f34a56099f1329b",
+   "provenance": {
+    "repo": "nethris",
+    "sha": "6b58c91230eaa23d68a5b0fccf9bb1b7511a1cef",
+    "path": "server/Nethris.Api/HrisApi.cs",
+    "lines": {
+     "start": 50,
+     "end": 54
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r02-one-request-one-transaction",
+   "pack": "nethris",
+   "target": "pack",
+   "phase": "before",
+   "title": "Core idea: every API request runs inside one transaction",
+   "body": "Almost every behaviour in Nethris comes from one design choice: the API opens one database transaction per HTTP request, and nothing is sent back until that transaction commits.\n\nA transaction is an all-or-nothing group of database writes. If the request saves a department, then an audit row, then a receipt, and the receipt insert fails, the department insert is undone too. The database never ends up telling half a story.\n\nIn HrisApi.cs you can see the transaction being opened at the top of Handle. Reads use a \"deferred\" transaction; writes use an \"immediate\" one. The code calls SaveChanges more than once, but SaveChanges is not the final step while an outer transaction is open: the commit at the end is.\n\nWhy this matters for you: when you reason about any write (an edit, a PTO approval, a retry), ask \"what is inside the one transaction, and when does it commit?\" The trace at the end of 01-CODEBASE-MAP.md walks through exactly that for a department save.",
+   "excerpts": [
+    {
+     "path": "server/Nethris.Api/HrisApi.cs",
+     "lineStart": 50,
+     "lineEnd": 54,
+     "quote": "// One request, one connection, one transaction: deferred for reads, immediate for writes."
+    },
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": 38,
+     "lineEnd": 38,
+     "quote": "Two SaveChanges calls still belong to one transaction. A failure inserting the receipt rolls back the earlier department insert."
+    },
+    {
+     "path": "server/Nethris.Api/HrisApi.Mutations.cs",
+     "lineStart": 58,
+     "lineEnd": 60,
+     "quote": "// The record change, its audit row and its receipt commit together or not at all."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The \"Trace a department write\" section follows one save through every step of the transaction."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:nethris/note/5f3839960c9d98b0",
+   "provenance": {
+    "repo": "nethris",
+    "sha": "6b58c91230eaa23d68a5b0fccf9bb1b7511a1cef",
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 37,
+     "end": 37
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q02-quarter-hour-units",
+   "pack": "nethris",
+   "target": "seed:quests:nethris/quiz/0e877498fb1de6ed",
+   "phase": "after",
+   "title": "Why 120 minus 7.75 hours is stored as 449",
+   "body": "**Key: 449 units (112.25 hours); 0.1 hours is rejected.**\n\nThe database does not store decimal hours. It stores whole quarter-hours, so one hour is 4 units. 120 hours is 480 units, 7.75 hours is 31 units, and 480 - 31 = 449 units, which is 112.25 hours.\n\nHrisRules.QuarterUnits does the conversion. It multiplies hours by 4 and checks that the result has no fractional part. 0.1 x 4 = 0.4, which is not a whole number, so it throws an Invalid error. Nothing is rounded.\n\nWhy the others are wrong:\n- **112 units; 0.1 rounded up**: 112 is roughly the hours, not the units, and the code refuses instead of rounding.\n- **449 units; 0.1 rounded down and accepted**: the number is right but silent rounding is exactly what the guide says does not happen.\n- **11225 units**: that treats hours like money in cents (x100). Quarter-hours multiply by 4.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 37,
+     "lineEnd": 37,
+     "quote": "7.75 hours becomes 31 quarter units. 120 hours becomes 480 units. Subtracting 31 from 480 yields 449, or 112.25 hours."
+    },
+    {
+     "path": "server/Nethris.Api/Domain/HrisRules.cs",
+     "lineStart": 32,
+     "lineEnd": 36,
+     "quote": "decimal.Truncate(hours * 4m) != hours * 4m"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:nethris/note/73b1d813c84212ba",
+   "provenance": {
+    "repo": "nethris",
+    "sha": "6b58c91230eaa23d68a5b0fccf9bb1b7511a1cef",
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "lines": {
+     "start": 96,
+     "end": 96
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q09-428-vs-409",
+   "pack": "nethris",
+   "target": "seed:quests:nethris/quiz/888e6b49f4deb79f",
+   "phase": "after",
+   "title": "Old version gets 409; missing If-Match gets 428",
+   "body": "**Key: 409 for the old version, 428 for the missing header.**\n\nTwo different checks run, in two places.\n\n1. **HrisRequest.Expected** only asks \"did the client state a version for this record, in the right shape?\" The tag must start with the quoted record id and a dash, end with a quote, and hold a positive number. If the header is missing or malformed, it throws 428 (Precondition Required). It never looks at the stored row.\n2. **HrisRules.Version** runs later, against the loaded row. If the stated version differs from the stored one, it throws a Conflict, which is 409.\n\nThe first request has a well-formed tag for the right record, so it passes step 1 and fails step 2: 409. The second has no If-Match at all, so it fails step 1: 428.\n\nWhy the others are wrong:\n- **428 for both**: the old-version tag is well formed, so it passes the 428 check.\n- **409 for both**: with no header there is no version to compare; Expected stops it first.\n- **412 and 400**: Nethris uses neither of these statuses for this contract.",
+   "excerpts": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 96,
+     "lineEnd": 96,
+     "quote": "it never compares the version with the stored row."
+    },
+    {
+     "path": "server/Nethris.Api/HrisRequest.cs",
+     "lineStart": 44,
+     "lineEnd": 44,
+     "quote": "throw new HrisError(428, \"precondition\", \"Send the record's strong ETag in If-Match.\");"
+    },
+    {
+     "path": "server/Nethris.Api/Domain/HrisRules.cs",
+     "lineStart": 46,
+     "lineEnd": 48,
+     "quote": "if (value.Version != expected) throw HrisError.Conflict(\"This record changed. Reload and review your draft before saving.\");"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:nethris/note/75659aaf01059e4b",
+   "provenance": {
+    "repo": "nethris",
+    "sha": "6b58c91230eaa23d68a5b0fccf9bb1b7511a1cef",
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 23,
+     "end": 23
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q08-no-auto-refresh-etag",
+   "pack": "nethris",
+   "target": "seed:quests:nethris/quiz/814952098377bc9d",
+   "phase": "after",
+   "title": "Why the browser must not quietly retry with the new ETag",
+   "body": "**Key: it would silently overwrite Jordan's change instead of letting Maya review it.**\n\nMaya's draft was built on version 4. Jordan then saved version 5 with a new manager. If the browser fetched the version 5 ETag and resent Maya's draft on its own, the version would now match and Maya's old values would replace Jordan's change. Nobody would have looked at the conflict. The ETag exists to stop that. So the editor shows the current saved values beside the draft and makes Maya choose. Only after that review may she keep her draft and send it with the latest version as a new attempt.\n\nThe debugging chapter says the same thing about tests: do not \"fix\" a stale save by refreshing the version before every PUT.\n\nWhy the others are wrong:\n- **Strong ETags cannot be refreshed while a draft exists**: nothing stops a refresh; the reason not to do it is the lost change.\n- **The server would reject it because the key was already used**: a new attempt gets a new key; the key is not the problem.\n- **It would lose Maya's draft, which lives in the ETag**: an ETag is only id plus version; the draft is kept in the editor.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 23,
+     "lineEnd": 23,
+     "quote": "Refreshing the ETag automatically would silently overwrite Jordan's change. Instead, the editor shows current saved values alongside the draft and requires explicit review."
+    },
+    {
+     "path": "astraupskill/04-TESTING-AND-DEBUGGING.md",
+     "lineStart": 53,
+     "lineEnd": 53,
+     "quote": "Do not “fix” the test by refreshing the version immediately before every PUT."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:nethris/note/98059e85803496d6",
+   "provenance": {
+    "repo": "nethris",
+    "sha": "6b58c91230eaa23d68a5b0fccf9bb1b7511a1cef",
+    "path": "astraupskill/01-CODEBASE-MAP.md",
+    "lines": {
+     "start": 3,
+     "end": 3
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r01-start-here",
+   "pack": "nethris",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: how to read the Nethris workshop",
+   "body": "Nethris is a small HR system: employees, departments, job roles, accounts and time-off (PTO) requests. A React page in the browser talks over HTTP to a C# API, and SQLite holds the data.\n\nRead the guides in this order:\n\n1. **astraupskill/README.md** - what the course is, the tools you need, and a glossary. Keep the glossary open; it defines ETag, If-Match, idempotency key, receipt and fingerprint.\n2. **01-CODEBASE-MAP.md** - which file owns which job, and two traces (a directory read and a department write).\n3. **02-CONCEPTS.md** - the ideas the quizzes test: identity vs permission, one transaction, versions, receipts, units, and state transitions.\n4. **03-WORKED-CHANGE.md** - one real fix (PTO approval) followed from bug to tests.\n5. **04-TESTING-AND-DEBUGGING.md** - what each test layer proves and how to debug.\n6. **05-PRACTICE.md**, then **06-SOLUTIONS-AND-REVIEW.md** - try the exercises before reading the answers.\n\nWhen a guide names a file and line, open that file. The guides are explanations; the code is the truth.",
+   "excerpts": [
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "The browser and API are two programs connected by HTTP. SQLite is the persisted source of truth."
+    },
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "This course targets a junior engineer who can write functions and wants to become comfortable owning a complete web feature"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The glossary table defines every header and term the later chapters use."
+    },
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The reading-path table tells you which file answers which question."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:nethris/note/98d9e4b100323aaa",
+   "provenance": {
+    "repo": "nethris",
+    "sha": "6b58c91230eaa23d68a5b0fccf9bb1b7511a1cef",
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 31,
+     "end": 31
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q13-key-reuse-different-body",
+   "pack": "nethris",
+   "target": "seed:quests:nethris/quiz/b681c342730ef698",
+   "phase": "after",
+   "title": "Same key with a different body is a conflict, not a replay",
+   "body": "**Key: a conflict, because the fingerprint stored for that key differs from this body.**\n\nWhen a write arrives, Mutate looks for an earlier receipt with the same account and key. If it finds one, Replay compares fingerprints. The fingerprint is a hash of method, path, query, If-Match and the exact body. A different body gives a different hash, so the server throws a Conflict (409): \"This operation key was already used for a different request.\" A key promises \"this is the same request again\"; a changed body breaks that promise, which points to a client bug.\n\nWhy the others are wrong:\n- **Returns the first request's result**: that only happens when the fingerprint also matches. Replaying here would hide that the new body was never applied.\n- **Runs the new body under the same key**: then one key would stand for two different outcomes and retries would become ambiguous.\n- **A 428 because If-Match must change**: 428 is about a missing or malformed If-Match header, not about bodies.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 31,
+     "lineEnd": 31,
+     "quote": "Reusing the key with the same fingerprint returns the recorded result. Reusing it with different content returns a conflict."
+    },
+    {
+     "path": "server/Nethris.Api/HrisApi.Mutations.cs",
+     "lineStart": 73,
+     "lineEnd": 75,
+     "quote": "throw HrisError.Conflict(\"This operation key was already used for a different request.\");"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:nethris/note/a0fe15e36f179476",
+   "provenance": {
+    "repo": "nethris",
+    "sha": "6b58c91230eaa23d68a5b0fccf9bb1b7511a1cef",
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "lines": {
+     "start": 107,
+     "end": 107
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q03-enum-tryparse-isdefined",
+   "pack": "nethris",
+   "target": "seed:quests:nethris/quiz/323e54b0228515e9",
+   "phase": "after",
+   "title": "Why the status filter needs IsDefined after TryParse",
+   "body": "**Key: TryParse alone accepts numeric strings like \"7\" that are not defined statuses.**\n\nIn C#, an enum is really a number with names attached. Enum.TryParse converts the text \"7\" into the enum value 7, even though EmploymentStatus only names Active, OnLeave and Terminated. Enum.IsDefined then asks \"is this value one of the named members?\" and says no. Together they mean: only a real status name gets through. Anything else must throw HrisError.Invalid (a 422), mirroring the departmentId filter, instead of silently returning an empty page.\n\nThe same idea already lives in the code: HrisRules.EnumValue uses Enum.IsDefined to refuse unknown values.\n\nWhy the others are wrong:\n- **IsDefined makes the comparison case-insensitive**: case is controlled by the ignoreCase argument, which is set to false. IsDefined only checks membership.\n- **TryParse throws and IsDefined catches it**: TryParse returns false rather than throwing; IsDefined is not an exception handler.\n- **IsDefined is needed for EF Core SQL translation**: the check runs on the parsed value before it is used in any query.",
+   "excerpts": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 107,
+     "lineEnd": 107,
+     "quote": "because `TryParse` alone accepts numeric strings such as `\"7\"`."
+    },
+    {
+     "path": "server/Nethris.Api/Domain/HrisRules.cs",
+     "lineStart": 44,
+     "lineEnd": 45,
+     "quote": "Enum.IsDefined(value) ? value : throw HrisError.Invalid(\"Unknown enum value.\");"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:nethris/note/b3a0468c3fb09c87",
+   "provenance": {
+    "repo": "nethris",
+    "sha": "6b58c91230eaa23d68a5b0fccf9bb1b7511a1cef",
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "lines": {
+     "start": 21,
+     "end": 21
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q15-filter-before-count",
+   "pack": "nethris",
+   "target": "seed:quests:nethris/quiz/cf797c048ad7870d",
+   "phase": "after",
+   "title": "Why the filter goes into the one query behind count and page",
+   "body": "**Key: into the one IQueryable that feeds both the count and the page.**\n\nThe directory read builds one query variable, adds each filter to it, and then uses that same variable twice: once with Skip and Take for the current page, and once with CountAsync for the total. If the status filter is added to that variable, the page and the total always describe the same set of employees.\n\nWhy the others are wrong:\n- **In React, after the page arrives**: the browser only has the twelve loaded cards, so matches on later pages are never seen, and the total is still unfiltered.\n- **After Skip and Take**: filtering a page that was already cut gives short or empty pages, and the counts no longer match the pages.\n- **Only into the page query**: the total would count employees the page can never show, so the pager lies. The guide warns that nothing in a screenshot reveals this.",
+   "excerpts": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 21,
+     "lineEnd": 21,
+     "quote": "Parse and validate the requested enum, then compose it into the IQueryable before CountAsync and the ordered page query. Use the same filtered query for the total and items."
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 101,
+     "lineEnd": 104,
+     "quote": "await HrisRequest.Send(http, new Page<EmployeeView>(items, await query.CountAsync(), page.Offset, page.Limit));"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "server/Nethris.Api/HrisApi.Reads.cs",
+     "lineStart": 87,
+     "lineEnd": 118,
+     "why": "The existing directory read, with the search and departmentId filters composed into one query."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:nethris/note/c753aeaa837b5240",
+   "provenance": {
+    "repo": "nethris",
+    "sha": "6b58c91230eaa23d68a5b0fccf9bb1b7511a1cef",
+    "path": "astraupskill/05-PRACTICE.md",
+    "lines": {
+     "start": 83,
+     "end": 83
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q07-goal-reload-retry",
+   "pack": "nethris",
+   "target": "seed:quests:nethris/quiz/68a8b9ab76c928e3",
+   "phase": "after",
+   "title": "Exercise 8: the check that proves the key does its job",
+   "body": "**The Goal (Exercise 8)** is about the Idempotency-Key. Today the uncertain Operation lives only in memory, so a page reload loses it even though the server keeps the receipt for 24 hours. You are asked to persist that Operation so a reload can still offer \"retry the exact operation\".\n\n**The keyed Check fits because it tests exactly that key.** First it makes you prove the current key guard matters: delete the Guid.TryParseExact check, run the xUnit suite, and see that only AMutationWithoutAValidIdempotencyKey_IsRejected goes red. Then it extends the browser's lost-response scenario: reload after the dropped response, sign in again, and assert that one retry gives one department. That is the reload feature from the Goal.\n\n**The other Check belongs to Exercise 7** (the stale-edit review panel). It talks about the 409 conflict, the stale-edit scenario and an employee's ETag version advancing once. Those are about versions and stale drafts, not about keys, receipts or reloads.\n\nNote: 06 explains why a reload retry still works under a new session: receipts are looked up by account and key, not by session.",
+   "excerpts": [
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 83,
+     "lineEnd": 83,
+     "quote": "For the reload feature, extend `check_browser.py`'s lost-response scenario: reload after the dropped response, sign in again, and assert one retry yields one department."
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 54,
+     "lineEnd": 54,
+     "quote": "That works because receipts are scoped by account and key (`HrisApi.Mutations.cs:31`), not by session."
+    },
+    {
+     "path": "server/Nethris.Api/HrisApi.Mutations.cs",
+     "lineStart": 22,
+     "lineEnd": 25,
+     "quote": "if (!Guid.TryParseExact(key, \"D\", out _))"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:nethris/note/d45079f177051c6f",
+   "provenance": {
+    "repo": "nethris",
+    "sha": "6b58c91230eaa23d68a5b0fccf9bb1b7511a1cef",
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 45,
+     "end": 45
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q04-pending-vs-approved",
+   "pack": "nethris",
+   "target": "seed:quests:nethris/quiz/3e1be2582eebad9c",
+   "phase": "after",
+   "title": "Pending hours reserve; approved hours already left",
+   "body": "**Key: pending hours reserve balance, and approved hours have already reduced it.**\n\nFollow the numbers in the worked change. An employee with 120 hours submits 7.75 hours. While the request is pending, the stored balance stays at 120, but those 7.75 hours are reserved: you cannot request more than what is left after reservations. When HR gives final approval, the 7.75 hours are subtracted for real and the stored balance becomes 112.25. From then on the approved hours are already gone from the balance.\n\nSo available hours = stored balance minus pending hours. Subtracting approved hours again would count them twice; the guide calls double subtraction the trap.\n\nWhy the others are wrong:\n- **Subtract approved hours only**: approved hours are already out of the stored balance, and ignoring pending ones would let someone over-book.\n- **Subtract both**: approved hours would be removed twice.\n- **Ignore pending hours until approval**: several pending requests could then reserve the same hours.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 45,
+     "lineEnd": 45,
+     "quote": "Do not subtract both again when computing availability."
+    },
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": 51,
+     "lineEnd": 51,
+     "quote": "The request reserves 7.75 hours before approval without deducting it twice."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": 43,
+     "lineEnd": 49,
+     "why": "The table shows the stored hours staying at 120 until HR approval, then dropping to 112.25."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:nethris/note/d721fe295b102e9d",
+   "provenance": {
+    "repo": "nethris",
+    "sha": "6b58c91230eaa23d68a5b0fccf9bb1b7511a1cef",
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 33,
+     "end": 33
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q05-versions-vs-receipts",
+   "pack": "nethris",
+   "target": "seed:quests:nethris/quiz/534e459df6aeb5a5",
+   "phase": "after",
+   "title": "Versions and receipts guard against different failures",
+   "body": "**Key: versions detect stale intent; receipts recover one intent's outcome.**\n\nTwo different things can go wrong when you save.\n\n1. **Someone else saved first.** Your edit was based on version 4 but the row is now version 5. The version (sent in If-Match) lets the server notice that your intent is stale and refuse it.\n2. **You do not know if your save worked.** The network dropped the response. The receipt, stored under your Idempotency-Key, lets an exact retry get back the original result instead of doing the work again.\n\nThe guide puts it in one line: they solve different problems, so Nethris uses both.\n\nWhy the others are wrong:\n- **Receipts replace versions**: a receipt says nothing about whether another writer changed the row; both stay in use.\n- **Versions recover lost responses; receipts detect concurrent edits**: this swaps the two jobs.\n- **Both prevent duplicates; a receipt is just the HTTP name for a version**: a version is a counter on the row; a receipt is a stored response kept for 24 hours. They are separate things.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 33,
+     "lineEnd": 33,
+     "quote": "A version and a receipt solve different problems. Versions detect stale intent. Receipts recover the outcome of one particular intent."
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 29,
+     "lineEnd": 29,
+     "quote": "A network error does not establish that a save failed."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:nethris/note/e3803137e8fe0374",
+   "provenance": {
+    "repo": "nethris",
+    "sha": "6b58c91230eaa23d68a5b0fccf9bb1b7511a1cef",
+    "path": "astraupskill/05-PRACTICE.md",
+    "lines": {
+     "start": 71,
+     "end": 71
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q10-goal-stale-review",
+   "pack": "nethris",
+   "target": "seed:quests:nethris/quiz/894ed5c7abf3e345",
+   "phase": "after",
+   "title": "Exercise 7: the check that proves the stale-edit review",
+   "body": "**The Goal (Exercise 7)** improves the review panel that appears after a stale save. It should show only fields that really conflict, add a \"Discard my draft\" choice, and never allow a submit without an ETag (which would earn a 428).\n\n**The keyed Check fits because it tests stale edits and versions.** It reruns the browser suite so the existing stale-edit scenario still passes. Then it adds a server test for employees: an accepted save followed by a stale one, asserting the 409 and the body's code \"conflict\" thrown from HrisRules.Version, and finally reading the row to confirm its ETag version advanced exactly once. Every step is about what happens when a draft is based on an old version.\n\n**The other Check belongs to Exercise 8** (idempotency key and reload). It removes the Guid.TryParseExact key check and extends the lost-response scenario with a reload. That tests receipts and keys, not the stale-edit panel.",
+   "excerpts": [
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 71,
+     "lineEnd": 71,
+     "quote": "Add an `ApiScenarioTests` case for `employees/{id}` that does accepted-then-stale and asserts both the 409 and the body's `code`"
+    },
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 65,
+     "lineEnd": 65,
+     "quote": "Make the review panel answer \"what actually conflicts?\" and give the user a real choice."
+    },
+    {
+     "path": "server/Nethris.Api/Domain/HrisRules.cs",
+     "lineStart": 46,
+     "lineEnd": 48,
+     "quote": "public static void Version(IVersioned value, long expected)"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 48,
+     "lineEnd": 50,
+     "why": "The solution sketch for Exercise 7: three values per field and how Discard my draft should behave."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:nethris/note/e4adbb51cf0c8a4e",
+   "provenance": {
+    "repo": "nethris",
+    "sha": "6b58c91230eaa23d68a5b0fccf9bb1b7511a1cef",
+    "path": "astraupskill/README.md",
+    "lines": {
+     "start": 56,
+     "end": 56
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r03-headers-that-carry-safety",
+   "pack": "nethris",
+   "target": "pack",
+   "phase": "before",
+   "title": "Core idea: the two headers every edit carries",
+   "body": "Every change the browser sends to Nethris carries extra information in HTTP headers. Two of them matter most.\n\n**If-Match** carries an ETag, a short label made of the record id plus its version number. It tells the server which version of the record the user was looking at when they started editing. The server uses it to notice when someone else saved in between.\n\n**Idempotency-Key** carries a random UUID made once per user attempt. The server stores a receipt (the response it sent) under that key. If the browser never received the response and sends the exact same request again, the server can recognise it instead of doing the work twice.\n\nThe server also computes a fingerprint: a hash of the method, path, query, If-Match and body. It is how the server decides whether a repeated key really is \"the same request\".\n\nRead the glossary rows below, then find each header in the code: the If-Match reader in HrisRequest.cs and the key check at the top of Mutate in HrisApi.Mutations.cs.",
+   "excerpts": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 56,
+     "lineEnd": 56,
+     "quote": "the server sends `ETag: \"<id>-<version>\"`, the client echoes it in `If-Match`"
+    },
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 58,
+     "lineEnd": 58,
+     "quote": "A client-generated UUID (`Idempotency-Key`) sent with every mutation"
+    },
+    {
+     "path": "server/Nethris.Api/HrisApi.Mutations.cs",
+     "lineStart": 64,
+     "lineEnd": 67,
+     "quote": "var material = method + \"\\n\" + http.Request.Path + \"\\n\" + http.Request.QueryString + \"\\n\" + http.Request.Headers.IfMatch + \"\\n\" + body;"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "server/Nethris.Api/HrisRequest.cs",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Holds the If-Match parser and the JSON response helpers."
+    },
+    {
+     "path": "client/src/workshopApi.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Shows how the browser freezes one operation (method, path, body, key, ETag) for retries."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:nethris/note/fc7b1e5849031df4",
+   "provenance": {
+    "repo": "nethris",
+    "sha": "6b58c91230eaa23d68a5b0fccf9bb1b7511a1cef",
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 11,
+     "end": 11
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q16-signout-generation",
+   "pack": "nethris",
+   "target": "seed:quests:nethris/quiz/ff029027a1ac134f",
+   "phase": "after",
+   "title": "How sign-out stops a late response from coming back",
+   "body": "**Key: sign-out bumps the request generation and clears caches, so old reads are ignored.**\n\nEvery refresh in Workshop.tsx takes a ticket number: it increments loadId and remembers its own value as generation. When its response arrives, it checks whether generation still equals loadId.current. Signing out calls clearWorkspace, which increments loadId first and then clears the cached page, references and editor. So a refresh that started before sign-out finds its ticket is out of date and returns without touching the screen, whether it succeeded or failed.\n\nWhy the others are wrong:\n- **The server rejects the late response**: the response may already have been produced while the session was valid. The server cannot take back a response it already sent.\n- **Clearing the token is enough**: the guide says clearing only the token would still let the late response restore stale state.\n- **The fetch is aborted on sign-out**: the code does not abort anything. It ignores the late result by comparing generations.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 11,
+     "lineEnd": 11,
+     "quote": "Clearing only the token would let that late response restore stale session state or cached views."
+    },
+    {
+     "path": "client/src/Workshop.tsx",
+     "lineStart": 35,
+     "lineEnd": 36,
+     "quote": "// Invalidate old reads before clearing cached views. A late response must not restore a signed-out session."
+    },
+    {
+     "path": "client/src/Workshop.tsx",
+     "lineStart": 42,
+     "lineEnd": 45,
+     "quote": "if (generation !== loadId.current) return false;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:nethris/note/fe47c17e4fb664ab",
+   "provenance": {
+    "repo": "nethris",
+    "sha": "6b58c91230eaa23d68a5b0fccf9bb1b7511a1cef",
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 39,
+     "end": 39
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q06-capture-now-local",
+   "pack": "nethris",
+   "target": "seed:quests:nethris/quiz/5f368f785fc8d1b2",
+   "phase": "after",
+   "title": "Why \"now\" is captured before the EF expiry query",
+   "body": "**Key: putting UtcNow inside the provider expression caused a real setup failure.**\n\nAn EF Core query is not run as C#. EF translates the lambda you write into SQL. Timestamps here are stored as integer Unix milliseconds. When DateTimeOffset.UtcNow sat directly inside the expression, that failed during development. Reading it into a local variable first turns it into a plain parameter, which EF can convert and bind like any other value. You can see the pattern in the receipt clean-up: `var now = DateTimeOffset.UtcNow;` and then `r.ExpiresAt <= now`.\n\nWhy the others are wrong:\n- **SQLite stores local time**: timestamps are stored as integer Unix milliseconds, not local time strings.\n- **UtcNow is evaluated once per row, which is slow**: the guide gives a failure, not a speed problem, as the reason.\n- **The local variable lets tests freeze the clock**: nothing in the guide ties this to test clocks; it is about the query EF has to translate.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 39,
+     "lineEnd": 39,
+     "quote": "Capture “now” into a local value before composing an EF expiry query; leaving DateTimeOffset.UtcNow inside a provider expression caused a real setup failure during development."
+    },
+    {
+     "path": "astraupskill/04-TESTING-AND-DEBUGGING.md",
+     "lineStart": 47,
+     "lineEnd": 47,
+     "quote": "Capturing now into a local variable lets EF bind the converted parameter."
+    },
+    {
+     "path": "server/Nethris.Api/HrisApi.Mutations.cs",
+     "lineStart": 29,
+     "lineEnd": 30,
+     "quote": "await db.Receipts.Where(r => r.ExpiresAt <= now).ExecuteDeleteAsync();"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}

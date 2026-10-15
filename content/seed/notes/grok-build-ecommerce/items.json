@@ -1,0 +1,678 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "notes",
+ "name": "grok-build-ecommerce",
+ "items": [
+  {
+   "key": "seed:notes:grok-build-ecommerce/note/06c6e661d9391be8",
+   "provenance": {
+    "repo": "grok-build-ecommerce",
+    "sha": "ba68fa4affaf452f3592003cb1e83ea35c72d90e",
+    "path": "backend/src/repositories/orderRepository.ts",
+    "lines": {
+     "start": 196,
+     "end": 199
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q03-read-lock-read",
+   "pack": "grok-build-ecommerce",
+   "target": "seed:quests:grok-build-ecommerce/quiz/4d33d99d9f52388d",
+   "phase": "after",
+   "title": "Why transition reads, locks, then reads again",
+   "body": "`transition` calls `rowIn` (a read limited to orders this caller may see), then `SELECT ... FOR UPDATE` to lock the row, then `rowIn` again. The first read is an authorization step: `rowIn` throws 404 if the order is outside the caller's scope, so a customer cannot even take a lock on another customer's order. The second read happens after the lock is granted. While this request waited for the lock, another one may have changed the order, so only the second read shows the state that the version check on the next line can trust.\n\nWhy the others are wrong:\n- \"items first, customer second\": both reads are the same `rowIn` call with the same includes.\n- \"Prisma requires an ordinary read before a raw query\": the guide gives no such rule; it explains the order as authorize, lock, re-read.\n- \"The second read is redundant\": the first may be stale by the time the lock is granted.",
+   "excerpts": [
+    {
+     "path": "backend/src/repositories/orderRepository.ts",
+     "lineStart": 196,
+     "lineEnd": 199,
+     "quote": "await rowIn(tx, value, id); await tx.$queryRaw`SELECT id FROM \"Order\" WHERE id=${id} FOR UPDATE`; const row = await rowIn(tx, value, id); if (row.version !== input.version) throw conflict();"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 7,
+     "lineEnd": 7,
+     "quote": "The first read stops a customer from taking a row lock on another customer's order; the second is needed because the first may be stale by the time the lock is granted."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "backend/src/repositories/orderRepository.ts",
+     "lineStart": 29,
+     "lineEnd": 36,
+     "why": "rowIn: the scoped read that throws 404."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:grok-build-ecommerce/note/215d687c4bdf2b6f",
+   "provenance": {
+    "repo": "grok-build-ecommerce",
+    "sha": "ba68fa4affaf452f3592003cb1e83ea35c72d90e",
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 7,
+     "end": 7
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r02-version-and-checkout-key",
+   "pack": "grok-build-ecommerce",
+   "target": "pack",
+   "phase": "before",
+   "title": "Core idea: a version and a checkout key solve different problems",
+   "body": "Two numbers in this app look alike but do different jobs.\n\nA record version is a counter stored on each product and order. An editor sends back the version it started from, and the write only happens if the row still has that version. If someone else saved first, the version has moved on and the stale write gets a conflict instead of silently replacing newer data.\n\nA checkout key is a UUID the browser makes once when you confirm checkout. It names one attempt to create one order. It is saved on the order in the database, scoped to the customer. If the same attempt is sent again, the server can find the order it already made instead of making a second one. The server also stores a fingerprint (a hash) of the cart, so it can tell \"the same attempt again\" from \"a different cart under an old key\".\n\nThe chapter adds a third identity, the logged-in customer, and explains why none of the three can stand in for another.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 7,
+     "lineEnd": 7,
+     "quote": "A record version identifies the accepted state an editor started from. Product updates and order transitions include that version in a conditional write."
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "A checkout key identifies a logical create attempt. It is scoped to the customer and stored durably on the resulting order."
+    },
+    {
+     "path": "backend/src/repositories/orderRepository.ts",
+     "lineStart": 25,
+     "lineEnd": 28,
+     "quote": "export const fingerprint = (input: CheckoutInput) =>"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 3,
+     "lineEnd": 9,
+     "why": "The full section on customer identity, record version and retry identity."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:grok-build-ecommerce/note/27331c568f556f44",
+   "provenance": {
+    "repo": "grok-build-ecommerce",
+    "sha": "ba68fa4affaf452f3592003cb1e83ea35c72d90e",
+    "path": "backend/src/repositories/orderRepository.ts",
+    "lines": {
+     "start": 103,
+     "end": 110
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q06-replay-cancelled-order",
+   "pack": "grok-build-ecommerce",
+   "target": "seed:quests:grok-build-ecommerce/quiz/99eae81ca6b7b37f",
+   "phase": "after",
+   "title": "Why replaying a cancelled checkout reserves nothing",
+   "body": "The retry has the same key and the same cart, so checkout finds the existing order and the hash matches. The code returns `{ order: orderDto(existing), replayed: true }` right there. That return comes before the product-locking loop and before any stock update, so nothing is reserved. The order is returned as it is now, which is CANCELLED. A receipt describes something that already happened; replaying it does not do it again.\n\nWhy the others are wrong:\n- \"A new order is placed\": the lookup is by customer and key, and an order with that key exists, cancelled or not.\n- \"409, a cancelled order cannot be replayed\": the replay path never looks at status; 409 only comes from a different cart.\n- \"Reopened as PENDING\": nothing on this path changes the order or touches stock.",
+   "excerpts": [
+    {
+     "path": "backend/src/repositories/orderRepository.ts",
+     "lineStart": 103,
+     "lineEnd": 110,
+     "quote": "return { order: orderDto(existing), replayed: true };"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 15,
+     "lineEnd": 15,
+     "quote": "A replay returns the order's current status, so retrying a cancelled order reports CANCELLED without reserving stock again."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": 26,
+     "lineEnd": 30,
+     "why": "Step 3 of the worked change describes the replay path."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:grok-build-ecommerce/note/3cee17662a6c73a1",
+   "provenance": {
+    "repo": "grok-build-ecommerce",
+    "sha": "ba68fa4affaf452f3592003cb1e83ea35c72d90e",
+    "path": "backend/src/repositories/orderRepository.ts",
+    "lines": {
+     "start": 103,
+     "end": 108
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q01-changed-cart-same-key",
+   "pack": "grok-build-ecommerce",
+   "target": "seed:quests:grok-build-ecommerce/quiz/29b99e66458035de",
+   "phase": "after",
+   "title": "Why a changed cart under a used key gets 409",
+   "body": "Checkout first looks up an order with this customer and key. One exists, so it compares the stored `requestHash` with the fingerprint of the new request. The fingerprint is a SHA-256 hash of the sorted item list, so adding an item changes it. The hashes differ, and the code throws a 409: \"This checkout key was already used for different items.\"\n\nWhy the others are wrong:\n- \"A new order is created, key regenerated\": the server never makes a new key; the key comes from the client, and the existing order with that key is found first.\n- \"The original order is returned\": that only happens when the hash matches. Returning it here would be the silent wrong answer that 03b step c describes.\n- \"The new item is appended\": there is no code that edits an existing order's items on checkout; the only paths are replay, conflict, or create.",
+   "excerpts": [
+    {
+     "path": "backend/src/repositories/orderRepository.ts",
+     "lineStart": 103,
+     "lineEnd": 108,
+     "quote": "if (existing.requestHash !== hash) throw new AppError( 409, \"This checkout key was already used for different items. Review the original order.\", );"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "changing the cart under a used key conflicts."
+    },
+    {
+     "path": "astraupskill/03b-BREAK-IT.md",
+     "lineStart": 17,
+     "lineEnd": 17,
+     "quote": "That is the worst outcome of the three: no error, wrong result."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "backend/src/repositories/orderRepository.ts",
+     "lineStart": 21,
+     "lineEnd": 28,
+     "why": "fingerprint and sortedItems, the hash this check compares."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:grok-build-ecommerce/note/45b5d466691392da",
+   "provenance": {
+    "repo": "grok-build-ecommerce",
+    "sha": "ba68fa4affaf452f3592003cb1e83ea35c72d90e",
+    "path": "backend/src/repositories/orderRepository.ts",
+    "lines": {
+     "start": 94,
+     "end": 110
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q11-lost-response-retry",
+   "pack": "grok-build-ecommerce",
+   "target": "seed:quests:grok-build-ecommerce/quiz/f06a78ba57ca60af",
+   "phase": "after",
+   "title": "Why a retry after a lost response returns the same order",
+   "body": "The first request committed, so an order with this customer and key is in the database. The retry takes the same advisory lock, finds that order with `findUnique` on the customer/key pair, compares fingerprints, and they match because the cart is the same. It returns `{ order, replayed: true }` without locking products or reserving stock. The worked change adds that the route answers 200 for a replay and 201 for a first create.\n\nWhy the others are wrong:\n- \"A second order\": that is what a plain POST would do; the key exists precisely so a retry is not a new create.\n- \"A new order replaces the first and releases its stock\": no code path replaces or releases on checkout.\n- \"409, the key was already used once\": reuse alone is fine. 409 comes only when the cart differs from the stored fingerprint.",
+   "excerpts": [
+    {
+     "path": "backend/src/repositories/orderRepository.ts",
+     "lineStart": 94,
+     "lineEnd": 110,
+     "quote": "return { order: orderDto(existing), replayed: true };"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "Repeating the same key with the same normalized cart returns that order; changing the cart under a used key conflicts."
+    },
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": 34,
+     "lineEnd": 34,
+     "quote": "If the order was already committed, retry returns HTTP 200 with the existing identity; a first successful create returns HTTP 201."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:grok-build-ecommerce/note/54e21714cbc61675",
+   "provenance": {
+    "repo": "grok-build-ecommerce",
+    "sha": "ba68fa4affaf452f3592003cb1e83ea35c72d90e",
+    "path": "backend/src/lib/validation.ts",
+    "lines": {
+     "start": 69,
+     "end": 72
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q02-lowercase-request-id",
+   "pack": "grok-build-ecommerce",
+   "target": "seed:quests:grok-build-ecommerce/quiz/4930f113a6323c6e",
+   "phase": "after",
+   "title": "Why the checkout requestId is lower-cased once",
+   "body": "The same UUID can be written in upper or lower case. The parser lower-cases it before anything else uses it. That one value then builds the advisory lock key (`value.id + \":\" + input.requestId`) and is used for the receipt lookup by `checkoutKey`. If either place used the raw spelling, two casings of one key would be different text, so they could take different locks and both miss each other's receipt. The review notes an integration test that treats different casings as one receipt key.\n\nWhy the others are wrong:\n- \"hashtextextended is case-insensitive\": it hashes the text it is given; the guide's point is that two spellings could pass the lock separately.\n- \"to look consistent in the admin UI\": the guide gives retry identity, not display, as the reason.\n- \"PostgreSQL rejects upper-case UUIDs\": nothing in the source or guide says so; the reason is that every use must agree.",
+   "excerpts": [
+    {
+     "path": "backend/src/lib/validation.ts",
+     "lineStart": 69,
+     "lineEnd": 72,
+     "quote": ".transform((value) => value.toLowerCase()),"
+    },
+    {
+     "path": "backend/src/repositories/orderRepository.ts",
+     "lineStart": 92,
+     "lineEnd": 93,
+     "quote": "const lockKey = value.id + \":\" + input.requestId;"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 15,
+     "lineEnd": 15,
+     "quote": "If either path used the raw spelling, two casings of one key could pass the lock separately."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:grok-build-ecommerce/note/5b20b2c1360d529b",
+   "provenance": {
+    "repo": "grok-build-ecommerce",
+    "sha": "ba68fa4affaf452f3592003cb1e83ea35c72d90e",
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 13,
+     "end": 13
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r03-failure-after-success",
+   "pack": "grok-build-ecommerce",
+   "target": "pack",
+   "phase": "before",
+   "title": "Core idea: a save can succeed even when you see an error",
+   "body": "The tricky case in this course is not a request that fails. It is a request that succeeds on the server, but the reply never reaches the browser (Wi-Fi drops, the tab times out). The customer sees an error, yet the order and its stock reservation are already committed in PostgreSQL.\n\nIf the browser then retried with a brand-new key, the server would see a new attempt. So the cart panel freezes the cart and keeps the original key in memory, and a retry re-sends exactly the same body. That memory copy is lost on reload, which is why the course mentions exporting pending work.\n\nAll of checkout runs inside one database transaction: it either commits completely (order, line snapshots, stock changes, audit rows) or rolls back completely. The course journal habit fits here: \"the browser displayed a network error\" is an observation; \"no order exists\" is a hypothesis you must check against the database.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 13,
+     "lineEnd": 13,
+     "quote": "A transaction can commit before the browser loses its connection. The customer then sees an error while the order and stock reservation already exist."
+    },
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": 30,
+     "lineEnd": 30,
+     "quote": "Failure of any step rolls back all those effects, including the receipt key."
+    },
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 18,
+     "lineEnd": 18,
+     "quote": "\"No order exists\" is a hypothesis that must be checked against the database or order history."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The worked change: how the frontend captures a stable request and when it adopts a response."
+    },
+    {
+     "path": "frontend/src/features/cart/CartPanel.tsx",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Where the frozen cart and key live in the browser."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:grok-build-ecommerce/note/63b35d1efc07b2da",
+   "provenance": {
+    "repo": "grok-build-ecommerce",
+    "sha": "ba68fa4affaf452f3592003cb1e83ea35c72d90e",
+    "path": "backend/src/repositories/orderRepository.ts",
+    "lines": {
+     "start": 147,
+     "end": 150
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q10-who-owns-the-order",
+   "pack": "grok-build-ecommerce",
+   "target": "seed:quests:grok-build-ecommerce/quiz/d5034df17a87d352",
+   "phase": "after",
+   "title": "Why the token, not the body, decides the order owner",
+   "body": "When checkout creates the order it writes `userId: value.id`. `value` is the actor that the auth middleware built from the verified token and the current database row. Nothing in the request body decides the owner. The concepts chapter is explicit: a client must not be able to choose another customer as the order owner.\n\nWhy the others are wrong:\n- \"The checkout key\": the key only names one create attempt so a retry finds the same order. The chapter says a key cannot replace authorization.\n- \"The userId field in the body, validated against the token\": checkout does not accept a submitted `userId` at all; the codebase map says the checkout body does not accept customer identity.\n- \"The record version of the cart\": versions protect against stale edits of a row; they say nothing about who someone is.",
+   "excerpts": [
+    {
+     "path": "backend/src/repositories/orderRepository.ts",
+     "lineStart": 147,
+     "lineEnd": 150,
+     "quote": "const row = await tx.order.create({ data: { userId: value.id,"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "A submitted `userId` is not accepted at checkout because a client must not choose another customer's order owner."
+    },
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": 11,
+     "lineEnd": 11,
+     "quote": "It does not accept customer identity, prices, totals, or status."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "backend/src/middleware/auth.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "How the verified actor and its ownership scope are built."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:grok-build-ecommerce/note/76bb3c0df87f8004",
+   "provenance": {
+    "repo": "grok-build-ecommerce",
+    "sha": "ba68fa4affaf452f3592003cb1e83ea35c72d90e",
+    "path": "backend/src/lib/errors.ts",
+    "lines": {
+     "start": 38,
+     "end": 41
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q05-duplicate-sku-message",
+   "pack": "grok-build-ecommerce",
+   "target": "seed:quests:grok-build-ecommerce/quiz/86104a259542b00f",
+   "phase": "after",
+   "title": "Why a duplicate SKU shows a vague 409",
+   "body": "The database has a unique rule on SKU, so inserting a duplicate raises Prisma error P2002. The error mapper in `errors.ts` puts P2002 (unique), P2003 (foreign key) and P2034 (serialization) in one list and gives all three the same 409 text: \"The record changed or is still referenced.\" The admin is never told the SKU is taken. That is why the review lists it as a finding: the response is safe but unhelpful, and a targeted check for P2002 on the `sku` target would be a small, testable improvement.\n\nWhy the others are wrong:\n- \"400 from zod\": zod checks the shape of the input; whether a SKU already exists can only be known by the database.\n- \"'SKU already exists', a specific 409\": no such message exists; adding it is the suggested fix.\n- \"500, P2002 not handled\": P2002 is in the handled list, so it becomes 409, not 500.",
+   "excerpts": [
+    {
+     "path": "backend/src/lib/errors.ts",
+     "lineStart": 38,
+     "lineEnd": 41,
+     "quote": "if ([\"P2002\", \"P2003\", \"P2034\"].includes(error.code)) { status = 409; message = \"The record changed or is still referenced. Refresh current records before retrying.\";"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 13,
+     "lineEnd": 13,
+     "quote": "A targeted check for P2002 on the `sku` target would be a small, testable improvement."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:grok-build-ecommerce/note/7e2aa924be952b22",
+   "provenance": {
+    "repo": "grok-build-ecommerce",
+    "sha": "ba68fa4affaf452f3592003cb1e83ea35c72d90e",
+    "path": "backend/src/repositories/orderRepository.ts",
+    "lines": {
+     "start": 21,
+     "end": 24
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q09-sorted-lock-order",
+   "pack": "grok-build-ecommerce",
+   "target": "seed:quests:grok-build-ecommerce/quiz/bf9cd06370fcb7fc",
+   "phase": "after",
+   "title": "Why checkout locks products in sorted id order",
+   "body": "A deadlock happens when transaction 1 holds lock X and waits for Y, while transaction 2 holds Y and waits for X; neither can move. If two carts both contain products X and Y but listed in opposite orders, locking in cart order could produce exactly that. Checkout instead loops over `sortedItems(input)`, which sorts by `productId`, so every checkout locks shared products in the same order and that circle cannot form between checkouts. The same sorted list also feeds the cart fingerprint.\n\nWhy the others are wrong:\n- \"So the receipt lists items alphabetically\": sorting is about lock order and the fingerprint; the guide does not mention display.\n- \"PostgreSQL only grants FOR UPDATE locks in key order\": the code sorts the items itself; the database does not impose this.\n- \"Cheapest product first\": the sort compares `productId` strings, not prices.",
+   "excerpts": [
+    {
+     "path": "backend/src/repositories/orderRepository.ts",
+     "lineStart": 21,
+     "lineEnd": 24,
+     "quote": "const sortedItems = (input: CheckoutInput) => [...input.items].sort((a, b) => a.productId < b.productId ? -1 : a.productId > b.productId ? 1 : 0, );"
+    },
+    {
+     "path": "backend/src/repositories/orderRepository.ts",
+     "lineStart": 120,
+     "lineEnd": 121,
+     "quote": "const product = await lockProduct(tx, item.productId);"
+    },
+    {
+     "path": "astraupskill/03b-BREAK-IT.md",
+     "lineStart": 13,
+     "lineEnd": 13,
+     "quote": "Note that `sortedItems` also sets the product lock order for checkout; unsorted locking reintroduces a deadlock risk between two multi-product carts."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:grok-build-ecommerce/note/8ed2b431a2e547c9",
+   "provenance": {
+    "repo": "grok-build-ecommerce",
+    "sha": "ba68fa4affaf452f3592003cb1e83ea35c72d90e",
+    "path": "backend/src/repositories/orderRepository.ts",
+    "lines": {
+     "start": 37,
+     "end": 39
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q04-last-unit",
+   "pack": "grok-build-ecommerce",
+   "target": "seed:quests:grok-build-ecommerce/quiz/53051b1118b8d5e4",
+   "phase": "after",
+   "title": "Why only one customer gets the last unit",
+   "body": "For each product, checkout calls `lockProduct`: it runs `SELECT ... FOR UPDATE` on the product row, then reads the row. The first transaction gets the lock, sees stock 1, reserves it and commits. The second was waiting on that lock; when it gets it, it reads the row fresh and sees stock 0. The `product.stock < item.quantity` check then throws a 409 \"Insufficient stock\".\n\nWhy the others are wrong:\n- \"Both fail with a serialization error\": the row lock makes the second wait, not fail; the first commits normally.\n- \"Both succeed and stock drops to -1\": the stock check refuses it, and the reservation `updateMany` also requires `stock: { gte: line.quantity }`.\n- \"Waitlisted until restock\": there is no waitlist anywhere in the checkout code.",
+   "excerpts": [
+    {
+     "path": "backend/src/repositories/orderRepository.ts",
+     "lineStart": 37,
+     "lineEnd": 39,
+     "quote": "await tx.$queryRaw`SELECT id FROM \"Product\" WHERE id=${id} FOR UPDATE`; const row = await tx.product.findUnique({ where: { id } });"
+    },
+    {
+     "path": "backend/src/repositories/orderRepository.ts",
+     "lineStart": 127,
+     "lineEnd": 133,
+     "quote": "if (product.stock < item.quantity) throw new AppError( 409, \"Insufficient stock for \" +"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 25,
+     "lineEnd": 25,
+     "quote": "Two customers competing for the last unit cannot both succeed."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:grok-build-ecommerce/note/977fb0cd0f6cb0bf",
+   "provenance": {
+    "repo": "grok-build-ecommerce",
+    "sha": "ba68fa4affaf452f3592003cb1e83ea35c72d90e",
+    "path": "backend/src/repositories/orderRepository.ts",
+    "lines": {
+     "start": 199,
+     "end": 199
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q12-double-cancel",
+   "pack": "grok-build-ecommerce",
+   "target": "seed:quests:grok-build-ecommerce/quiz/f1250769b4325ebe",
+   "phase": "after",
+   "title": "Why a double-clicked Cancel cannot restore stock twice",
+   "body": "Both cancel requests carry the same version, say 1. The first locks the order row (`FOR UPDATE`), re-reads it, sees version 1 and PENDING, restores stock, and sets the order to CANCELLED at version 2, all in one transaction. The second request was waiting on that lock. When it gets the lock, its re-read shows version 2 and status CANCELLED, so `row.version !== input.version` throws a conflict, before any stock is touched. The final `updateMany` is also conditional on version and status, as a last guard.\n\nWhy the others are wrong:\n- \"The frontend disables the button, and that is the only guard\": the server checks version and status under a lock.\n- \"Restoration writes an absolute value\": it uses `stock: { increment: item.quantity }`, a delta, which is exactly why a second restore would be harmful.\n- \"A nightly job corrects the count\": there is no such job; the second cancellation simply fails.",
+   "excerpts": [
+    {
+     "path": "backend/src/repositories/orderRepository.ts",
+     "lineStart": 199,
+     "lineEnd": 199,
+     "quote": "if (row.version !== input.version) throw conflict();"
+    },
+    {
+     "path": "backend/src/repositories/orderRepository.ts",
+     "lineStart": 240,
+     "lineEnd": 244,
+     "quote": "const changed = await tx.order.updateMany({ where: { id, version: input.version, status: row.status },"
+    },
+    {
+     "path": "backend/src/repositories/orderRepository.ts",
+     "lineStart": 226,
+     "lineEnd": 226,
+     "quote": "stock: { increment: item.quantity },"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 25,
+     "lineEnd": 25,
+     "quote": "A second cancellation cannot restore the same units again."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:grok-build-ecommerce/note/aed5fabe3f0518ff",
+   "provenance": {
+    "repo": "grok-build-ecommerce",
+    "sha": "ba68fa4affaf452f3592003cb1e83ea35c72d90e",
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "lines": {
+     "start": 89,
+     "end": 89
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q08-reservation-bumps-version",
+   "pack": "grok-build-ecommerce",
+   "target": "seed:quests:grok-build-ecommerce/quiz/ac2d048743e79b21",
+   "phase": "after",
+   "title": "Why reserving stock also bumps the product version",
+   "body": "The admin product update writes every field from the form, including the absolute `stock` number, and it is guarded only by the version. Picture an admin who opened the edit form when stock was 10. A customer then buys 3, so stock is 7. If checkout did not change the version, the admin's save would still match and would write stock back to 10, erasing the reservation. Because the reservation does `version: { increment: 1 }`, the admin's old version no longer matches and the stale save conflicts instead.\n\nWhy the others are wrong:\n- \"Prisma increments version automatically\": the code increments it explicitly in the `data` of the update.\n- \"To invalidate a cached product page\": the guide gives the stale admin form as the reason, not caching.\n- \"To count sales\": admin edits and cancellations also bump the version, so it is not a sales count.",
+   "excerpts": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 89,
+     "lineEnd": 89,
+     "quote": "In this codebase that loses data: `update` writes every field, including absolute `stock`, from the admin's form (`productRepository.ts:81-88`), guarded only by the version."
+    },
+    {
+     "path": "backend/src/repositories/orderRepository.ts",
+     "lineStart": 165,
+     "lineEnd": 168,
+     "quote": "stock: { decrement: line.quantity }, version: { increment: 1 },"
+    },
+    {
+     "path": "backend/src/repositories/productRepository.ts",
+     "lineStart": 81,
+     "lineEnd": 86,
+     "quote": "where: { id, version: expected }, data: { ...input,"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 16,
+     "lineEnd": 16,
+     "why": "The two-admin-tabs experiment that shows this in the running app."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:grok-build-ecommerce/note/c5961907e5acaf32",
+   "provenance": {
+    "repo": "grok-build-ecommerce",
+    "sha": "ba68fa4affaf452f3592003cb1e83ea35c72d90e",
+    "path": "astraupskill/README.md",
+    "lines": {
+     "start": 10,
+     "end": 11
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r01-start-here-reading-order",
+   "pack": "grok-build-ecommerce",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: how to read the commerce course",
+   "body": "This repo is a small shop: an Express + Prisma backend on PostgreSQL and a React frontend. The course in `astraupskill/` uses it to teach what keeps create, update and delete safe when two people act at once, or when the browser cannot tell whether a save worked.\n\nRead in this order (it is the order the course README gives):\n\n1. The root `README.md` setup, with fictional data, so you have seen checkout and the admin screens.\n2. `01-CODEBASE-MAP.md`: which file owns which job. The most important one is `backend/src/repositories/orderRepository.ts`.\n3. `02-CONCEPTS.md`: the ideas the quizzes test. Read it twice.\n4. `03-WORKED-CHANGE.md`, then `03b-BREAK-IT.md`, which removes one guard at a time and names the test that should fail.\n5. `04-TESTING-AND-DEBUGGING.md`, `05-PRACTICE.md`, `07-TRACE-LAB.md`.\n6. `06-SOLUTIONS-AND-REVIEW.md` last: a code review of the shipped code with line numbers you can open.\n\nKeep `orderRepository.ts` open beside every chapter; almost every quiz points into it.",
+   "excerpts": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 10,
+     "lineEnd": 11,
+     "quote": "Read [the codebase map](01-CODEBASE-MAP.md). Trace the verified customer identity, strict checkout input, key lock, product locks, current prices, order insertion, stock reservation, audit, and response."
+    },
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 22,
+     "lineEnd": 22,
+     "quote": "After chapter 03 read [03b: break it first](03b-BREAK-IT.md)."
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "Part 1 reviews the code as it ships, with line evidence you can open."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "One paragraph per file: what each backend and frontend file is responsible for."
+    },
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 24,
+     "lineEnd": 26,
+     "why": "Prerequisites: SQL transactions, HTTP status codes and React state."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:grok-build-ecommerce/note/d4fa1e77665e7fca",
+   "provenance": {
+    "repo": "grok-build-ecommerce",
+    "sha": "ba68fa4affaf452f3592003cb1e83ea35c72d90e",
+    "path": "backend/src/repositories/productRepository.ts",
+    "lines": {
+     "start": 115,
+     "end": 121
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q07-product-history-limit",
+   "pack": "grok-build-ecommerce",
+   "target": "seed:quests:grok-build-ecommerce/quiz/9eea52e8cae1ba8b",
+   "phase": "after",
+   "title": "Why product edit history drops out of view",
+   "body": "`history` in `productRepository.ts` returns audit events for a product, newest first, with `take: 30`, and no total or \"more\" signal. Admin edits are audited, but so is every checkout: it writes one RESERVE event per product, and every cancellation writes a RESTORE event. On a popular product, a few dozen orders push the admin's edit events past the newest 30, so the admin view no longer shows them. Order history has the same limit, but an order makes at most four events, so it is not a real problem there.\n\nWhy the others are wrong:\n- \"Each checkout overwrites the previous audit row\": `audit` adds a new event each time; the old rows are still in the table.\n- \"Admin edits are not audited\": product update calls `audit(... \"UPDATE\" ...)`.\n- \"30-day retention job\": the limit is a count (`take: 30`), not an age, and no cleanup job is involved.",
+   "excerpts": [
+    {
+     "path": "backend/src/repositories/productRepository.ts",
+     "lineStart": 115,
+     "lineEnd": 121,
+     "quote": "orderBy: [{ createdAt: \"desc\" }, { id: \"desc\" }], take: 30,"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 11,
+     "lineEnd": 11,
+     "quote": "Every checkout writes a `RESERVE` event per product (`orderRepository.ts:171-179`) and every cancellation a `RESTORE` event (lines 230-238)"
+    },
+    {
+     "path": "backend/src/repositories/productRepository.ts",
+     "lineStart": 93,
+     "lineEnd": 93,
+     "quote": "await audit(tx, value, \"PRODUCT\", id, \"UPDATE\", expected + 1);"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}
