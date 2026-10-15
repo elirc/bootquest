@@ -1,0 +1,627 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "zz1",
+ "repo": "zz1",
+ "sha": "a561c1b62f7d7ff9b445c7c15700f10b312d7a0f",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: Atlas CRM, a multi-tenant SaaS backend",
+   "body": "zz1 holds \"Atlas CRM\", a Next.js and Prisma CRM where many organizations (tenants) share one database. Every request must stay inside the caller's own organization. This pack draws on two sets of docs.\n\nSuggested reading order:\n\n1. `docs/architecture/README.md`: the folder map, the route table, and its numbered findings.\n2. `docs/architecture/auth-and-tenant-isolation.md`: one request followed from cookie to repository, naming the exact line of each security decision, then senior-review findings and five Goal/Check exercises. Most quizzes come from here.\n3. `docs/architecture/request-lifecycle.md`: whole requests traced step by step, including where transactions start and which failures roll back.\n4. `astraupskill/README.md` and its chapters: a short course on one change in the deal service (what to do when an update's re-read finds nothing).\n\nRead the auth guide with the five files it names open side by side, as it suggests. The quizzes come in three shapes: predict a status code, pick the evidence for a Goal, or locate a review finding in the code.",
+   "excerpts": [
+    {
+     "path": "docs/architecture/README.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "is a backend-heavy Next.js 15 SaaS application organized around explicit request boundaries, tenant-aware authorization, and service-layer workflow code."
+    },
+    {
+     "path": "docs/architecture/auth-and-tenant-isolation.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "This document follows a request from cookie to repository and names the exact lines where each security decision is made."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/architecture/auth-and-tenant-isolation.md",
+     "lineStart": 1,
+     "lineEnd": 88,
+     "why": "Sessions, guards, RBAC and repository scoping, section by section."
+    },
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The deal-transition integrity course and its chapter order."
+    }
+   ]
+  },
+  {
+   "id": "r02-request-layers",
+   "target": "pack",
+   "phase": "before",
+   "title": "The layers every CRM request passes through",
+   "body": "A request in Atlas CRM goes through four layers, each in its own file:\n\n1. **Session** (`src/lib/auth/session.ts`): read the cookie, verify the JWT, and reload the user and membership from the database.\n2. **Base context** (`withAuth.ts`): turn \"no session\" into an error and build a request context with a tenant id.\n3. **Tenant guard** (`withTenantGuard.ts`): a fixed list of checks run in order, each with its own 403 code, ending with the role-permission check.\n4. **Repository scoping** (`src/lib/db/tenantContext.ts` and `src/repositories/`): every query gets the caller's organization added to its filter.\n\nTwo habits make this guide easy to use. First, keep the guard's order in your head: a request that fails an early check never reaches a later one, or the body parser after it. Second, for each layer ask what it does **not** check. The guide names several gaps, such as what the session reload does not filter, and what a scoped query does not cover.",
+   "excerpts": [
+    {
+     "path": "docs/architecture/auth-and-tenant-isolation.md",
+     "lineStart": 42,
+     "lineEnd": 42,
+     "quote": "`requireOrgRequest(ctx, permission?)` (`src/lib/middleware/withTenantGuard.ts:13-30`) runs four checks in this order:"
+    },
+    {
+     "path": "docs/architecture/auth-and-tenant-isolation.md",
+     "lineStart": 51,
+     "lineEnd": 51,
+     "quote": "Every service in `src/services` takes this type, so TypeScript prevents calling a tenant service with an unauthenticated context."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/architecture/auth-and-tenant-isolation.md",
+     "lineStart": 53,
+     "lineEnd": 66,
+     "why": "The RBAC section: which role holds which permission."
+    }
+   ]
+  },
+  {
+   "id": "r03-reread-course",
+   "target": "pack",
+   "phase": "before",
+   "title": "The deal course: an update followed by a re-read",
+   "body": "The `astraupskill/` course studies one small but important pattern. To update a row safely inside one tenant, the deal repository runs `updateMany` with a tenant-scoped filter and then **re-reads** the row with another scoped query. If the id belongs to another tenant, or the row was deleted a moment ago, the update touches zero rows and the re-read returns `null`. No exception is thrown.\n\nThe course asks what the service should do with that `null`, and where exactly the check belongs relative to the writes that follow it (stage history and an audit entry). It is careful about what its evidence proves: the tests use injected doubles to check the order of calls, not real database behaviour under concurrency.\n\nAs you read, separate three ideas the course keeps apart: what a null result tells you, what a non-null result does **not** tell you, and which errors should and should not be turned into a not-found response. The solutions chapter lists what a reviewer should score.",
+   "excerpts": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "`dealRepository.update` uses a tenant-scoped `updateMany` and then rereads the deal. A concurrent delete or scope mismatch can therefore produce `null`."
+    },
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "The evidence demonstrates control flow and side-effect ordering, while leaving provider isolation and concurrent scheduling for an integration test."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 1,
+     "lineEnd": 8,
+     "why": "Concepts: reread after a conditional update."
+    }
+   ]
+  },
+  {
+   "id": "x-q01-invitation-tokens",
+   "target": "seed:quests:zz1/quiz/00144e7dfe07bb1e",
+   "phase": "after",
+   "title": "Where invitation tokens leak to managers",
+   "body": "This is a finding-location question: the finding comes from the guide's senior-review list, and the right answer is the file:line the guide gives as its evidence. Finding 3: managers can read invitation tokens. Listing invitations needs only `org.users.read`, which `SALES_MANAGER` holds, and the list returns full invitation rows including their secret `token`.\n\nThe key, `src/app/api/org/invitations/route.ts:20`, is the GET handler's guard: `requireOrgRequest(baseCtx, ORG_PERMISSIONS.ORG_USERS_READ)`. That one permission choice decides who can see the tokens; the next line returns `listByOrganization` unfiltered. (Creating an invitation, line 28, needs `org.users.write`.)\n\nWhat the other locations hold:\n- `authService.ts:14-73` is `demoLogin`, the passwordless login of finding 1.\n- `workspace-shell.tsx:32-38` is the UI branch that shows the login card on any error (finding 5).\n- `organizationService.ts:123-127` is the query that returns the newest audit rows to `/api/org/me` (finding 4).",
+   "excerpts": [
+    {
+     "path": "src/app/api/org/invitations/route.ts",
+     "lineStart": 20,
+     "lineEnd": 21,
+     "quote": "const ctx = requireOrgRequest(baseCtx, ORG_PERMISSIONS.ORG_USERS_READ); return invitationRepository.listByOrganization(prisma, ctx.tenantId);"
+    },
+    {
+     "path": "docs/architecture/auth-and-tenant-isolation.md",
+     "lineStart": 94,
+     "lineEnd": 94,
+     "quote": "`GET /api/org/invitations` requires only `org.users.read` (`src/app/api/org/invitations/route.ts:20`), which `SALES_MANAGER` holds (`policy.ts:42`)."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02-audit-overexposure",
+   "target": "seed:quests:zz1/quiz/09df506ac2bb4957",
+   "phase": "after",
+   "title": "Where /api/org/me over-exposes the audit log",
+   "body": "This is a finding-location question: the finding comes from the guide's senior-review list, and the right answer is the file:line the guide gives as its evidence. Finding 4: audit log over-exposure. The `/api/org/me` workspace endpoint, which every member calls, also returns the organization's ten newest audit rows. A `SALES_REP` does not hold `audit_log.read`, yet receives them.\n\nThe key, `src/services/organizationService.ts:123-127`, is the query `prisma.auditLog.findMany({ where: { organizationId: ctx.tenantId }, orderBy: ..., take: 10 })` inside `getCurrentOrganizationWorkspace`. It is correctly tenant-scoped, but nothing checks the reader's role, and the route calls `requireOrgRequest(baseCtx)` with no permission.\n\nWhat the other locations hold:\n- `invitations/route.ts:20` is the permission check on listing invitations (finding 3).\n- `activityService.ts:64-67` passes the caller's parent ids straight into the new activity (finding 2).\n- `workspace-shell.tsx:32-38` is the UI branch that shows the login card on any error (finding 5).",
+   "excerpts": [
+    {
+     "path": "src/services/organizationService.ts",
+     "lineStart": 123,
+     "lineEnd": 126,
+     "quote": "prisma.auditLog.findMany({ where: { organizationId: ctx.tenantId }, orderBy: { createdAt: \"desc\" }, take: 10"
+    },
+    {
+     "path": "docs/architecture/README.md",
+     "lineStart": 74,
+     "lineEnd": 74,
+     "quote": "`SALES_REP` does not hold `audit_log.read` (`policy.ts:60-75`), yet receives audit rows."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q03-fix-finding-2",
+   "target": "seed:quests:zz1/quiz/1fd259e210a0b46d",
+   "phase": "after",
+   "title": "Goal: fix the cross-tenant foreign key on one path",
+   "body": "This is a Goal/Check pair from the exercises at the end of the auth and tenant isolation guide: the Goal says what to show, and the Check is the experiment that shows it. The Goal is to fix finding 2 (cross-tenant foreign keys) for one code path, and the Check says how to know the fix works.\n\nThe keyed Check: in `activityService.createActivity`, load each parent id the request provides through its **tenant-scoped** repository (`leadRepository.findById` and so on), and throw `notFoundError` when the result is `null`. Then a request with another organization's `leadId` must return 404 and create no Activity row. That proves both halves: the foreign id is refused, and nothing was written.\n\nWhy the other checks do not fit:\n- Disabling a membership and expecting 403 `inactive_membership` is the Check for \"prove revocation is live\".\n- The two cookie requests are the Check for the missing-vs-bad cookie Goal.\n- Listing a `SALES_REP`'s non-403 routes is the Check for mapping a role to its routes.",
+   "excerpts": [
+    {
+     "path": "docs/architecture/auth-and-tenant-isolation.md",
+     "lineStart": 110,
+     "lineEnd": 110,
+     "quote": "load each provided parent id through its tenant-scoped repository (`leadRepository.findById`, etc.) and throw `notFoundError` when it returns `null`."
+    },
+    {
+     "path": "docs/architecture/auth-and-tenant-isolation.md",
+     "lineStart": 93,
+     "lineEnd": 93,
+     "quote": "Tenant scoping covers the primary row, not the ids that point to related rows."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q04-one-not-found",
+   "target": "seed:quests:zz1/quiz/2054d3e0ea99577e",
+   "phase": "after",
+   "title": "Why every kind of missing row gets the same not-found",
+   "body": "The key is right: one safe not-found response for all three cases, with no hint which it was. The repository adds `organizationId` to every lookup, so a row in another tenant simply does not match. From the service's point of view, \"deleted\", \"belongs to someone else\" and \"never existed\" all look the same: `null`. If the service answered differently (403 for another tenant, 410 for deleted), a caller could probe ids and learn that a row exists in some other organization. The concepts chapter says all three should become the same safe not-found response.\n\nWhy the others are wrong:\n- \"410 for deletions\": the service cannot tell a deletion apart, and doing so would leak information anyway.\n- \"Inspect the provider's error text\": a scoped miss throws no error; the chapter also says no text parsing was added.\n- \"403 for the other tenant\": that reveals the row exists elsewhere.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 7,
+     "lineEnd": 7,
+     "quote": "A missing result could mean deletion, wrong tenant, or a stale identifier. All three should become the same safe not-found response at this service boundary."
+    },
+    {
+     "path": "src/lib/db/tenantContext.ts",
+     "lineStart": 24,
+     "lineEnd": 28,
+     "quote": "organizationId: ctx.tenantId"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q05-existence-not-freshness",
+   "target": "seed:quests:zz1/quiz/28bcbecc245af82e",
+   "phase": "after",
+   "title": "What the null-reread guard does and does not prove",
+   "body": "The key is right: no. It proves the row exists, not that the returned copy is fresh. The guard `if (!updated) throw notFoundError(...)` only distinguishes \"a row came back\" from \"nothing came back\". It says nothing about whether another request changed that row between the update and the re-read. The solutions chapter calls a stale returned object a separate defect, to be checked with a real-database test that also decides whether the transaction isolation level is enough.\n\nWhy the others are wrong:\n- \"Yes, serializable isolation guarantees it\": the course never establishes the isolation level; it leaves that for an integration test.\n- \"No, so add a second reread in the service\": the chapter rejects that without evidence: it duplicates the repository's job and adds latency.\n- \"Yes, a non-null reread is always the latest\": a later write by another request can still land after it.",
+   "excerpts": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "the current service guard proves existence, not freshness."
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "Adding another reread in the service would duplicate repository responsibility and increase latency, so it needs evidence."
+    },
+    {
+     "path": "src/services/dealService.ts",
+     "lineStart": 98,
+     "lineEnd": 100,
+     "quote": "if (!updated) { throw notFoundError(\"deal_not_found\", \"The deal disappeared before the stage update completed.\");"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q06-revocation-live",
+   "target": "seed:quests:zz1/quiz/2fd26dfb7df6154a",
+   "phase": "after",
+   "title": "Goal: prove that revoking a membership takes effect at once",
+   "body": "This is a Goal/Check pair from the exercises at the end of the auth and tenant isolation guide: the Goal says what to show, and the Check is the experiment that shows it. The Goal is to show that disabling someone works **without** waiting for their session to expire.\n\nThe keyed Check: sign in as the seeded rep, then change that membership's status to `DISABLED` directly in the database. The very next `GET /api/leads` should return 403 with code `inactive_membership`, and the rep never signed out. That works because the session reloads the membership on every request and the tenant guard checks its status.\n\nWhy the other checks do not fit:\n- The two cookie requests prove the missing-vs-bad cookie asymmetry, not revocation.\n- The `withTenantScope` unit test proves the tenant key overwrites a caller's filter.\n- The `SALES_REP` route list maps a role's permissions; it involves no status change.",
+   "excerpts": [
+    {
+     "path": "docs/architecture/auth-and-tenant-isolation.md",
+     "lineStart": 107,
+     "lineEnd": 107,
+     "quote": "The next `GET /api/leads` should return 403 with `error.code` = `inactive_membership`, without signing out."
+    },
+    {
+     "path": "src/lib/middleware/withTenantGuard.ts",
+     "lineStart": 17,
+     "lineEnd": 18,
+     "quote": "if (orgCtx.membership.status !== MembershipStatus.ACTIVE) { throw forbiddenError(\"inactive_membership\","
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07-guard-before-parse",
+   "target": "seed:quests:zz1/quiz/488428546ebb1f88",
+   "phase": "after",
+   "title": "Why an invalid body from a rep gets 403, not 422",
+   "body": "The key is right: 403 `permission_denied`, because the guard runs before the body is parsed. In the POST handler, line 28 calls `requireOrgRequest(baseCtx, ORG_PERMISSIONS.ORG_USERS_WRITE)`, and only line 29 parses the body with `createInvitationSchema`. A `SALES_REP` lacks `org.users.write`, so the guard's permission check throws 403 and the parse never runs. The request-lifecycle guide has this exact exercise: predict 403, not 422.\n\nWhy the others are wrong:\n- \"201, reps may invite\": the role map gives `org.users.write` only to organization admins.\n- \"422 validation_error first\": validation is after the guard in the code.\n- \"400 bad_request for an empty body\": `{}` is valid JSON; and the request never gets that far.",
+   "excerpts": [
+    {
+     "path": "src/app/api/org/invitations/route.ts",
+     "lineStart": 28,
+     "lineEnd": 29,
+     "quote": "const ctx = requireOrgRequest(baseCtx, ORG_PERMISSIONS.ORG_USERS_WRITE); const input = createInvitationSchema.parse(await request.json());"
+    },
+    {
+     "path": "docs/architecture/request-lifecycle.md",
+     "lineStart": 84,
+     "lineEnd": 84,
+     "quote": "Predict 403 (not 422) from `route.ts:28-29`, then confirm."
+    },
+    {
+     "path": "src/lib/middleware/withTenantGuard.ts",
+     "lineStart": 25,
+     "lineEnd": 27,
+     "quote": "if (permission) { assertOrgPermission(orgCtx, permission); }"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08-cookie-asymmetry-goal",
+   "target": "seed:quests:zz1/quiz/55448c0cb2585bff",
+   "phase": "after",
+   "title": "Goal: see the missing-vs-bad cookie asymmetry",
+   "body": "This is a Goal/Check pair from the exercises at the end of the auth and tenant isolation guide: the Goal says what to show, and the Check is the experiment that shows it. The Goal is to observe that two kinds of \"not logged in\" are handled differently: no cookie at all, and a cookie that is present but invalid.\n\nThe keyed Check calls `GET /api/org/me` twice: with no cookie (expect 401 `auth_required`) and with `atlas_session=garbage` (expect 401 `invalid_session`), and asks which line produces each. A missing cookie makes `getOptionalSession` return `null`, and `withAuth.ts` turns that into `auth_required`. A bad cookie fails JWT verification and throws `invalid_session` inside the session code.\n\nWhy the other checks do not fit:\n- Disabling a membership tests revocation, with a valid cookie.\n- Loading each parent id through its repository is the fix for finding 2.\n- The `withTenantScope` test is about query scoping, not cookies.",
+   "excerpts": [
+    {
+     "path": "src/lib/auth/session.ts",
+     "lineStart": 55,
+     "lineEnd": 57,
+     "quote": "if (!token) { return null; }"
+    },
+    {
+     "path": "src/lib/auth/session.ts",
+     "lineStart": 67,
+     "lineEnd": 68,
+     "quote": "throw unauthorizedError(\"invalid_session\", \"Your session is invalid or has expired.\");"
+    },
+    {
+     "path": "src/lib/middleware/withAuth.ts",
+     "lineStart": 21,
+     "lineEnd": 22,
+     "quote": "throw unauthorizedError(\"auth_required\", \"You must be signed in to access this endpoint.\");"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09-cross-tenant-fk",
+   "target": "seed:quests:zz1/quiz/5add3446c23235f0",
+   "phase": "after",
+   "title": "Where cross-tenant foreign keys slip through",
+   "body": "This is a finding-location question: the finding comes from the guide's senior-review list, and the right answer is the file:line the guide gives as its evidence. Finding 2: cross-tenant foreign keys. Tenant scoping protects the **row being created** (the activity gets the caller's organization) but not the **ids it points to**. A `leadId` copied from another organization is stored as-is, attaching your activity to their lead.\n\nThe key, `src/services/activityService.ts:64-67`, is where `activityRepository.create` receives `leadId: input.leadId`, `contactId`, `dealId` and `companyId` straight from the request, with no scoped lookup of any of them. The schema only requires that the lead exists. The unused `assertSameTenant` in `tenantContext.ts` is the intended fix.\n\nWhat the other locations hold:\n- `organizationService.ts:123-127` is the query that returns the newest audit rows to `/api/org/me` (finding 4).\n- `workspace-shell.tsx:32-38` is the UI branch that shows the login card on any error (finding 5).\n- `authService.ts:14-73` is `demoLogin`, the passwordless login of finding 1.",
+   "excerpts": [
+    {
+     "path": "src/services/activityService.ts",
+     "lineStart": 64,
+     "lineEnd": 67,
+     "quote": "leadId: input.leadId, contactId: input.contactId, dealId: input.dealId, companyId: input.companyId"
+    },
+    {
+     "path": "docs/architecture/auth-and-tenant-isolation.md",
+     "lineStart": 93,
+     "lineEnd": 93,
+     "quote": "`POST /api/activities` with a `leadId` copied from another organization creates an activity in your org attached to their lead"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10-membership-reload",
+   "target": "seed:quests:zz1/quiz/6ab376eecd27d176",
+   "phase": "after",
+   "title": "When a disabled rep with a valid token is blocked",
+   "body": "The key is right: on their very next request, because every request reloads the membership. The JWT only carries the user id and the active membership id. On each request, `getOptionalSession` loads that membership from the database, with its **current** status, and the tenant guard then rejects any membership that is not ACTIVE with 403 `inactive_membership`. The token stays valid for its seven days, but it no longer gets the rep anywhere.\n\nWhy the others are wrong:\n- \"A revocation list drops the token\": no such list exists; the token is still valid, the membership is not.\n- \"Only when the JWT expires\": the membership's status is never read from the token.\n- \"Never for read routes\": CRM read routes call `requireOrgRequest` too. The guide's warning is only for a *future* route that skips it.",
+   "excerpts": [
+    {
+     "path": "docs/architecture/auth-and-tenant-isolation.md",
+     "lineStart": 26,
+     "lineEnd": 26,
+     "quote": "Because the membership is reloaded on every request, demoting or disabling someone takes effect on their next request even though their JWT is still valid for up to seven days."
+    },
+    {
+     "path": "src/lib/middleware/withTenantGuard.ts",
+     "lineStart": 17,
+     "lineEnd": 19,
+     "quote": "throw forbiddenError(\"inactive_membership\", \"Your membership is not active for this organization.\");"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q11-cookie-codes",
+   "target": "seed:quests:zz1/quiz/778a4c41a91c0fe9",
+   "phase": "after",
+   "title": "What no cookie and a garbage cookie each return",
+   "body": "The key is right: 401 `auth_required` for the first, then 401 `invalid_session` for the second. With no cookie, `getOptionalSession` finds no token and returns `null`: \"no session\" is not an error at that layer. The caller, `requireAuthenticatedRequest`, then throws `auth_required`. With `atlas_session=garbage`, a token exists, so `jwtVerify` runs and fails, and the `catch` throws `invalid_session` before any `null` could be returned. The guide calls this an asymmetry: missing means \"no session\", bad means \"error\".\n\nWhy the others are wrong:\n- \"200 with an anonymous session\": `/api/org/me` requires a session.\n- \"invalid_session for both\": a missing cookie never reaches verification.\n- \"auth_required for both\": a bad token throws its own error inside the session code.",
+   "excerpts": [
+    {
+     "path": "src/lib/auth/session.ts",
+     "lineStart": 55,
+     "lineEnd": 56,
+     "quote": "if (!token) { return null;"
+    },
+    {
+     "path": "src/lib/auth/session.ts",
+     "lineStart": 61,
+     "lineEnd": 68,
+     "quote": "const verified = await jwtVerify(token, getSessionSecret());"
+    },
+    {
+     "path": "docs/architecture/auth-and-tenant-isolation.md",
+     "lineStart": 20,
+     "lineEnd": 20,
+     "quote": "Note the asymmetry: a *missing* cookie is \"no session\", a *bad* cookie is an error."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q12-tenant-key-last",
+   "target": "seed:quests:zz1/quiz/7ce569b5f5b69c29",
+   "phase": "after",
+   "title": "Why withTenantScope always ends up with the caller's tenant",
+   "body": "The key is right: `\"A\"`. `withTenantScope` returns `{ ...where, organizationId: ctx.tenantId }`. In an object literal, when the same key appears twice, the **later** one wins. The caller's `where` is spread first, including its `organizationId: \"B\"`, and then `organizationId` is written again with the context's tenant, `\"A\"`. So callers cannot widen or redirect the scope, by accident or on purpose.\n\nWhy the others are wrong:\n- \"B, the caller's filter is spread last\": the spread comes first, not last.\n- \"Throws cross_tenant_access\": that error lives in the separate `assertSameTenant`, which this function never calls.\n- \"Both, combined into an OR\": a plain object cannot hold two values for one key; nothing builds an OR.",
+   "excerpts": [
+    {
+     "path": "src/lib/db/tenantContext.ts",
+     "lineStart": 25,
+     "lineEnd": 28,
+     "quote": "return { ...(where ?? ({} as T)), organizationId: ctx.tenantId };"
+    },
+    {
+     "path": "docs/architecture/auth-and-tenant-isolation.md",
+     "lineStart": 70,
+     "lineEnd": 70,
+     "quote": "Because the tenant key is written *last*, a caller-supplied `organizationId` inside `where` is overwritten, not merged."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q13-demo-login",
+   "target": "seed:quests:zz1/quiz/92d4729383cf56fb",
+   "phase": "after",
+   "title": "Where anyone can choose who to log in as",
+   "body": "This is a finding-location question: the finding comes from the guide's senior-review list, and the right answer is the file:line the guide gives as its evidence. Finding 1: unauthenticated identity selection. The login route takes an email (and optionally an organization) and signs you in as that user, with no password or second factor. Whoever knows a seeded email, including the platform admin's, becomes that user, and the route is not limited to a demo environment.\n\nThe key, `src/services/authService.ts:14-73`, is the whole `demoLogin` function: it loads the user by email, picks a membership, and the route then sets a signed session cookie. Nothing in that range asks for proof of identity. The guide's suggested fix is real credentials, or refusing this route in production.\n\nWhat the other locations hold:\n- `organizationService.ts:123-127` is the query that returns the newest audit rows to `/api/org/me` (finding 4).\n- `invitations/route.ts:20` is the permission check on listing invitations (finding 3).\n- `activityService.ts:64-67` passes the caller's parent ids straight into the new activity (finding 2).",
+   "excerpts": [
+    {
+     "path": "docs/architecture/auth-and-tenant-isolation.md",
+     "lineStart": 8,
+     "lineEnd": 8,
+     "quote": "`demoLogin()` (`src/services/authService.ts:14-73`) loads the user by lower-cased email"
+    },
+    {
+     "path": "docs/architecture/auth-and-tenant-isolation.md",
+     "lineStart": 13,
+     "lineEnd": 13,
+     "quote": "**There is no password or second factor anywhere in this flow.** Whoever knows a seeded email becomes that user"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q14-disabled-assignee",
+   "target": "seed:quests:zz1/quiz/935a167f678b689c",
+   "phase": "after",
+   "title": "Assigning a lead to a disabled member",
+   "body": "The key is right: the assignment succeeds, because the target membership's status is not checked. `resolveAssignableMembership` checks two things for a different owner: that the caller holds `leads.assign` (a manager does), and that `membershipRepository.findById` finds the target **in this organization**. A disabled member is still in the organization, so the lookup succeeds and the membership is returned. Nothing looks at its `status`. The guide states it plainly.\n\nWhy the others are wrong:\n- \"403, disabled members cannot own records\": no such rule is in the code.\n- \"Reassigned to the manager\": the caller is only the default when no owner is requested.\n- \"404 because disabled memberships are filtered out\": the lookup filters by organization, not by status; 404 `membership_not_found` is for an owner from another org.",
+   "excerpts": [
+    {
+     "path": "src/lib/permissions/assignment.ts",
+     "lineStart": 28,
+     "lineEnd": 32,
+     "quote": "const membership = await membershipRepository.findById(db, ctx.tenantId, targetMembershipId);"
+    },
+    {
+     "path": "docs/architecture/auth-and-tenant-isolation.md",
+     "lineStart": 66,
+     "lineEnd": 66,
+     "quote": "It does **not** check the target membership's status. An admin can assign a lead to a `DISABLED` or `INVITED` member."
+    },
+    {
+     "path": "docs/architecture/auth-and-tenant-isolation.md",
+     "lineStart": 65,
+     "lineEnd": 65,
+     "quote": "An owner from another org therefore gives 404 `membership_not_found`"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q15-audit-failure-rollback",
+   "target": "seed:quests:zz1/quiz/c2510afe8fc383c9",
+   "phase": "after",
+   "title": "What an audit failure inside createLead leaves behind",
+   "body": "The key is right: a 500, and the Lead count is unchanged because the shared transaction rolled back. `createLead` opens `prisma.$transaction` and passes its client `tx` to every write: the lead, its status history, its assignment history and the audit row. A **transaction** commits all of its writes together or none of them. When `logOrgEvent` throws, the transaction is abandoned and the earlier inserts are undone. The error then reaches `route()`, whose `catch` turns an unexpected error into a 500. The request-lifecycle guide has this as its first exercise.\n\nWhy the others are wrong:\n- \"422\": validation errors happen before the transaction; an audit failure is not one.\n- \"201 without the audit row\": the audit write shares the same transaction.\n- \"500, but the lead stays\": the lead was inside the transaction, so it rolls back too.",
+   "excerpts": [
+    {
+     "path": "docs/architecture/request-lifecycle.md",
+     "lineStart": 25,
+     "lineEnd": 25,
+     "quote": "`createLead()` opens `prisma.$transaction` (`:96`). Every step below shares that transaction client `tx`."
+    },
+    {
+     "path": "docs/architecture/request-lifecycle.md",
+     "lineStart": 83,
+     "lineEnd": 83,
+     "quote": "confirm with `SELECT count(*) FROM \"Lead\"` that the count did not change and the response was 500."
+    },
+    {
+     "path": "src/lib/http/responses.ts",
+     "lineStart": 62,
+     "lineEnd": 66,
+     "quote": "} catch (error) { return errorResponse(error);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q16-guard-placement",
+   "target": "seed:quests:zz1/quiz/c6314813e9e9e252",
+   "phase": "after",
+   "title": "Where the deal_not_found guard sits, and why",
+   "body": "The key is right: right after `dealRepository.update`, before the stage history and audit writes. In `moveDealStage`, the update returns the re-read deal; the very next statement is `if (!updated) throw notFoundError(\"deal_not_found\", ...)`; only after it come `createStageHistory` and `auditService.logOrgEvent`. That order buys one invariant: history and audit are written only after a non-null updated deal has been seen. In the failure case, their call counters stay at zero.\n\nWhy the others are wrong:\n- \"After the audit write\": then a failed move would be audited as if it had happened.\n- \"Before the update\": the guard checks the update's own result, so it must come after it.\n- \"Inside the repository\": the repository just returns `findById`'s result; the check is a service decision.",
+   "excerpts": [
+    {
+     "path": "src/services/dealService.ts",
+     "lineStart": 98,
+     "lineEnd": 102,
+     "quote": "if (!updated) { throw notFoundError(\"deal_not_found\", \"The deal disappeared before the stage update completed.\"); } await dealRepository.createStageHistory(ctx, tx, {"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "That ordering gives the workflow a clear invariant: history and audit are only attempted after a non-null updated deal is observed."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q17-role-routes-goal",
+   "target": "seed:quests:zz1/quiz/ce09324d6e9b32fb",
+   "phase": "after",
+   "title": "Goal: map a role to the routes it can reach",
+   "body": "This is a Goal/Check pair from the exercises at the end of the auth and tenant isolation guide: the Goal says what to show, and the Check is the experiment that shows it. The Goal is a table-reading exercise: for one role, which routes answer with something other than 403?\n\nThe keyed Check combines the route table in `docs/architecture/README.md` (which permission each route asks for) with the `SALES_REP` entry of the role map in `policy.ts:60-75` (which permissions the role holds). Its expected answer: every route except the two platform routes, listing and changing org users, and both methods of `/api/org/invitations`.\n\nWhy the other checks do not fit:\n- Disabling a membership tests revocation for one user, not a role's reach.\n- Loading parent ids through repositories is the fix for finding 2.\n- The `withTenantScope` unit test is about query scoping.\nOnly the route-table check compares permissions with routes.",
+   "excerpts": [
+    {
+     "path": "docs/architecture/auth-and-tenant-isolation.md",
+     "lineStart": 111,
+     "lineEnd": 111,
+     "quote": "list every route a `SALES_REP` gets a non-403 response from."
+    },
+    {
+     "path": "docs/architecture/auth-and-tenant-isolation.md",
+     "lineStart": 56,
+     "lineEnd": 56,
+     "quote": "`SALES_REP` (`:60-75`) additionally lacks `org.users.read`, `leads.assign` and `audit_log.read`."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q18-no-catch-all",
+   "target": "seed:quests:zz1/quiz/db2857261368a95b",
+   "phase": "after",
+   "title": "Why not turn every database error into deal_not_found",
+   "body": "The key is right: it would report outages and unrelated uniqueness errors as a missing deal. The guard maps exactly one observed fact, a `null` re-read, to not-found. A catch-all would also relabel a dropped database connection, a timeout or a unique-constraint violation as \"the deal disappeared\". The user would get a misleading 404, and operators would never see the real failure. Unknown errors should reach the generic 500 path in `responses.ts`. The solutions chapter says such a proposal should be rejected.\n\nWhy the others are wrong:\n- \"404s are cached for a long time\": caching is not the reason the course gives.\n- \"Errors cannot be caught inside a transaction\": they can; the point is that they should not be relabelled.\n- \"Fine if the message mentions a race\": the chapter says the message should not claim a race that was not observed.",
+   "excerpts": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 7,
+     "lineEnd": 7,
+     "quote": "Any proposal to catch arbitrary database exceptions and label them not-found should be rejected because it would misclassify outages and unrelated uniqueness errors."
+    },
+    {
+     "path": "src/lib/http/responses.ts",
+     "lineStart": 50,
+     "lineEnd": 57,
+     "quote": "code: \"internal_server_error\", message: \"An unexpected error occurred.\""
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q19-null-reread",
+   "target": "seed:quests:zz1/quiz/e15ea77cb46e6778",
+   "phase": "after",
+   "title": "What a null re-read after updateMany means",
+   "body": "The key is right: treat it as not found, because no tenant-owned row is proven to have been updated. `dealRepository.update` runs `updateMany` with a tenant-scoped `where`, then returns `this.findById(...)`. `updateMany` does not throw when it matches zero rows; it just reports a count, which this code ignores. So a `null` from the re-read is the only signal that the row was not there for this tenant. The concepts chapter: treating it as success lets later writes describe a state that does not exist.\n\nWhy the others are wrong:\n- \"Success; the read cache was cold\": there is no cache; `findById` queries the database.\n- \"updateMany guarantees the row exists\": it succeeds with zero matches.\n- \"Retry once for a transient lock\": a lock would not make a missing row appear; the course maps `null` to not-found.",
+   "excerpts": [
+    {
+     "path": "src/repositories/dealRepository.ts",
+     "lineStart": 77,
+     "lineEnd": 82,
+     "quote": "await db.deal.updateMany({ where: withTenantScope(ctx, { id: dealId }), data }); return this.findById(ctx, db, dealId);"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "A null reread is meaningful even when no provider exception was thrown. Treating it as a success leaks an ambiguous result to the route and allows dependent writes to describe a state that does not exist."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q20-foreign-lead-id",
+   "target": "seed:quests:zz1/quiz/e35eb4a4f12b0a9c",
+   "phase": "after",
+   "title": "What happens with another organization's leadId today",
+   "body": "The key is right: the activity is created in your organization and attached to their lead, because only the primary row is scoped. `createActivity` hands `leadId: input.leadId` straight to `activityRepository.create`, which sets the new activity's `organizationId` to yours. Nobody loads the lead through a scoped lookup, and the database only checks that a lead with that id exists somewhere. Finding 2 describes exactly this.\n\nWhy the others are wrong:\n- \"403 from assertSameTenant\": that function exists but is never called; the guide calls it unused.\n- \"404 from a scoped lead lookup\": there is no lookup; that is the fix proposed in exercise 4.\n- \"The foreign key is dropped\": the id is stored as sent.",
+   "excerpts": [
+    {
+     "path": "docs/architecture/auth-and-tenant-isolation.md",
+     "lineStart": 93,
+     "lineEnd": 93,
+     "quote": "The unused `assertSameTenant()` (`tenantContext.ts:31-36`) is the intended fix."
+    },
+    {
+     "path": "src/lib/db/tenantContext.ts",
+     "lineStart": 31,
+     "lineEnd": 34,
+     "quote": "if (ctx.tenantId !== organizationId) {"
+    },
+    {
+     "path": "docs/architecture/auth-and-tenant-isolation.md",
+     "lineStart": 93,
+     "lineEnd": 93,
+     "quote": "the schema only requires that the lead exists"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q21-bootstrap-error-ui",
+   "target": "seed:quests:zz1/quiz/e4fb747ddf192df8",
+   "phase": "after",
+   "title": "Where every bootstrap error looks like \"please log in\"",
+   "body": "This is a finding-location question: the finding comes from the guide's senior-review list, and the right answer is the file:line the guide gives as its evidence. Finding 5: the UI treats every bootstrap error as a logged-out state. If loading the workspace fails for **any** reason (a 403 `organization_unavailable`, a 500), the user sees the login card. Support cannot tell the cases apart from a screenshot.\n\nThe key, `src/components/layout/workspace-shell.tsx:32-38`, is the branch `if (workspace.error) { return ( ... DemoLoginCard ... ) }`. It checks only *that* there is an error, never which status or code it carries.\n\nWhat the other locations hold:\n- `invitations/route.ts:20` is the permission check on listing invitations (finding 3).\n- `activityService.ts:64-67` passes the caller's parent ids straight into the new activity (finding 2).\n- `organizationService.ts:123-127` is the query that returns the newest audit rows to `/api/org/me` (finding 4).",
+   "excerpts": [
+    {
+     "path": "src/components/layout/workspace-shell.tsx",
+     "lineStart": 32,
+     "lineEnd": 35,
+     "quote": "if (workspace.error) {"
+    },
+    {
+     "path": "docs/architecture/auth-and-tenant-isolation.md",
+     "lineStart": 96,
+     "lineEnd": 96,
+     "quote": "A 403 `organization_unavailable` or a 500 looks identical to a logged-out state, which makes support tickets hard to triage."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q22-overwrite-goal",
+   "target": "seed:quests:zz1/quiz/f623e2474201bbb0",
+   "phase": "after",
+   "title": "Goal: confirm withTenantScope overwrites rather than merges",
+   "body": "This is a Goal/Check pair from the exercises at the end of the auth and tenant isolation guide: the Goal says what to show, and the Check is the experiment that shows it. The Goal is to prove one precise property of the scoping helper: a caller-supplied `organizationId` is replaced, not combined.\n\nThe keyed Check is a small unit test: call `withTenantScope` with a context for tenant A and a filter that asks for organization B, and assert the result's `organizationId` is `\"A\"`. That directly observes the \"tenant key written last\" behaviour.\n\nWhy the other checks do not fit:\n- The two cookie requests are about sessions, not query filters.\n- Listing a `SALES_REP`'s routes is about permissions.\n- Disabling a membership is about revocation.\nNone of them calls `withTenantScope` or looks at a query filter.",
+   "excerpts": [
+    {
+     "path": "docs/architecture/auth-and-tenant-isolation.md",
+     "lineStart": 109,
+     "lineEnd": 109,
+     "quote": "call `withTenantScope({ tenantId: \"A\" } as any, { organizationId: \"B\", status: \"NEW\" })` and assert the result's `organizationId` is `\"A\"`."
+    },
+    {
+     "path": "src/lib/db/tenantContext.ts",
+     "lineStart": 24,
+     "lineEnd": 24,
+     "quote": "export function withTenantScope"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}

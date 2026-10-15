@@ -1,0 +1,595 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "notes",
+ "name": "borrowbox",
+ "items": [
+  {
+   "key": "seed:notes:borrowbox/note/0752200c564553a0",
+   "provenance": {
+    "repo": "borrowbox",
+    "sha": "60bc18022e664bc96683b1e25a8c98bcc2f00db6",
+    "path": "astraupskill/04-TESTING-AND-DEBUGGING.md",
+    "lines": {
+     "start": 6,
+     "end": 6
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q10-fixed-clock",
+   "pack": "borrowbox",
+   "target": "seed:quests:borrowbox/quiz/e5a91fdbed7bb890",
+   "phase": "after",
+   "title": "Making before / equal / after deterministic",
+   "body": "The goal: every run of the test must see exactly the same \"now\", so the three boundary cases (one before, exactly equal, one after) are exact. The testing chapter gives the setup: a tiny `FixedClock` record that implements `IClock`, set before the services are constructed, with expiry and due dates written relative to it.\n\nThis works because the services read time only through `IClock` (for example `(clock ?? new SystemClock()).UtcNow` in `ReserveAsync`).\n\nWhy the other setups fall short:\n- \"`DateTimeOffset.UtcNow` with a one-second margin\": a margin can never test the *equal* case, and the real clock moves while the test runs. The chapter says to replace `UtcNow` with the fixed clock.\n- \"Resolve `SystemClock` from the production container\": that is still the real clock, so nothing is fixed.",
+   "excerpts": [
+    {
+     "path": "astraupskill/04-TESTING-AND-DEBUGGING.md",
+     "lineStart": 6,
+     "lineEnd": 6,
+     "quote": "private sealed record FixedClock(DateTimeOffset UtcNow) : IClock;"
+    },
+    {
+     "path": "astraupskill/04-TESTING-AND-DEBUGGING.md",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "Tests should set the clock before constructing services, then pass expiry or due dates relative to that fixed value. This makes before, equal, and after cases deterministic."
+    },
+    {
+     "path": "astraupskill/04-TESTING-AND-DEBUGGING.md",
+     "lineStart": 17,
+     "lineEnd": 17,
+     "quote": "If a test uses `DateTimeOffset.UtcNow`, replace it with the fixed clock."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:borrowbox/note/19b7c20f85f786c9",
+   "provenance": {
+    "repo": "borrowbox",
+    "sha": "60bc18022e664bc96683b1e25a8c98bcc2f00db6",
+    "path": "src/BorrowBox.Core/Loans/Loan.cs",
+    "lines": {
+     "start": 13,
+     "end": 14
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q07-utc-calendar-date",
+   "pack": "borrowbox",
+   "target": "seed:quests:borrowbox/quiz/9e9b32522486c4c2",
+   "phase": "after",
+   "title": "Where the due date is compared to the UTC checkout date",
+   "body": "The finding: the loan due date is a calendar date (`DateOnly`), and it is compared with the **UTC** date of checkout. At 23:45 UTC a same-day due date is fine; fifteen minutes later the UTC date has moved on, and the same due date would be \"before checkout\".\n\nThe key, `Loan.cs:13`, is in the `Loan` constructor: `if (dueOn < DateOnly.FromDateTime(checkedOutAt.UtcDateTime))`. `.UtcDateTime` is what makes it the UTC day, and `<` is why the same day is allowed.\n\nWhat the other lines actually are:\n- `SqliteEquipmentStore.cs:45`: the conditional checkout result, `changed == 1`.\n- `Reservation.cs:15`: the reservation expiry check; it compares two instants, not dates.",
+   "excerpts": [
+    {
+     "path": "src/BorrowBox.Core/Loans/Loan.cs",
+     "lineStart": 13,
+     "lineEnd": 14,
+     "quote": "if (dueOn < DateOnly.FromDateTime(checkedOutAt.UtcDateTime)) throw new BorrowBoxException(\"loan.due_date_invalid\", \"Due date cannot be before checkout.\");"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 66,
+     "lineEnd": 66,
+     "quote": "so a same-day due date is legal even fifteen minutes before midnight UTC — and would be *illegal* fifteen minutes later."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:borrowbox/note/4859247e4eb8c5ff",
+   "provenance": {
+    "repo": "borrowbox",
+    "sha": "60bc18022e664bc96683b1e25a8c98bcc2f00db6",
+    "path": "src/BorrowBox.Infrastructure/Equipment/SqliteEquipmentStore.cs",
+    "lines": {
+     "start": 40,
+     "end": 45
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q01-conditional-update",
+   "pack": "borrowbox",
+   "target": "seed:quests:borrowbox/quiz/09757d230cf52aa5",
+   "phase": "after",
+   "title": "Where BorrowBox already uses a conditional UPDATE",
+   "body": "The finding: on a real database you do not take a C# `lock`. Instead you send one UPDATE that only matches the row if it is still Available, and you look at how many rows changed. 1 means you won the race; 0 means someone else did.\n\nThe key, `SqliteEquipmentStore.cs:38-46`, is `TryCheckOutAsync` in the SQLite store. It uses `ExecuteUpdateAsync` with `row.Status == Available` in the `Where`, and returns the item only when `changed == 1`. The concepts chapter names these exact lines.\n\nWhy the other locations are wrong:\n- `InMemoryEquipmentStore.cs:41-46`: this is the in-memory version, the C# `lock` the finding says gets replaced.\n- `Loan.cs:74-80`: this is `CheckOutAsync` in the checkout service. It builds the `Loan` and *calls* `TryCheckOutAsync`; it does not run any UPDATE itself.",
+   "excerpts": [
+    {
+     "path": "src/BorrowBox.Infrastructure/Equipment/SqliteEquipmentStore.cs",
+     "lineStart": 40,
+     "lineEnd": 45,
+     "quote": ".Where(row => row.Id == id && row.Status == nameof(EquipmentStatus.Available)) .ExecuteUpdateAsync("
+    },
+    {
+     "path": "src/BorrowBox.Infrastructure/Equipment/SqliteEquipmentStore.cs",
+     "lineStart": 45,
+     "lineEnd": 45,
+     "quote": "return changed == 1 ? await GetAsync(id, cancellationToken).ConfigureAwait(false) : null;"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 50,
+     "lineEnd": 50,
+     "quote": "`changed == 1` means you won; `changed == 0` means somebody else did"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:borrowbox/note/4b0b0bee4a45e4d7",
+   "provenance": {
+    "repo": "borrowbox",
+    "sha": "60bc18022e664bc96683b1e25a8c98bcc2f00db6",
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "lines": {
+     "start": 92,
+     "end": 92
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q09-race-test-scope",
+   "pack": "borrowbox",
+   "target": "seed:quests:borrowbox/quiz/c674d7db156c8d31",
+   "phase": "after",
+   "title": "What the two-competing-checkouts test really proves",
+   "body": "The goal is to state exactly what this test proves, no more. The test uses a \"racing\" fake store that makes two readers arrive together, then lets one `TryCheckOutAsync` win. It asserts that exactly one attempt succeeded. Because both are forced into the race and exactly one success is required, the test proves the per-item checkout is guarded.\n\nWhy the other statements fall short:\n- \"A failed checkout rolls back loan and equipment together\": the stores have no rollback, and the test does not look at rollback.\n- \"Two services cannot break the loan limit with two different items\": the solutions chapter says this is exactly what the test does **not** prove; the README calls it a documented race.\n- \"Both succeed and the second is ignored\": the assertion requires one success, not two.",
+   "excerpts": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 92,
+     "lineEnd": 92,
+     "quote": "This proves the per-item checkout operation is guarded. It does not prove that two services atomically observe a borrower’s active-loan count when they check out different equipment."
+    },
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "borrower-limit checks across different equipment remain a documented race."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:borrowbox/note/6b67de1b7b99d4b3",
+   "provenance": {
+    "repo": "borrowbox",
+    "sha": "60bc18022e664bc96683b1e25a8c98bcc2f00db6",
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "lines": {
+     "start": 138,
+     "end": 138
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q03-transaction-verdict",
+   "pack": "borrowbox",
+   "target": "seed:quests:borrowbox/quiz/22e671e316369c63",
+   "phase": "after",
+   "title": "What a database transaction would and would not fix",
+   "body": "The goal asks for the course's verdict, which is in Solution 10, point 3. A transaction makes a group of database writes all-or-nothing. That fixes the \"storage half\" of a problem: the equipment row and the reservation row would roll back together. So the reservation/checkout **ordering** defect is a storage-atomicity problem.\n\nThe other three repairs are about decisions, not storage:\n- `returnedAt < CheckedOutAt` is a domain rule; no isolation level rejects a nonsense time.\n- \"equipment must still be CheckedOut\" is a precondition; a transaction makes a wrong write atomic, not correct.\n- the expiry status check stops a write that is valid on its own; a transaction commits it.\n\nWhy the other answers are wrong:\n- \"All four, including C# objects\": the chapter says EF Core rolls back the database, not your objects.\n- \"None, SQLite has no transactions\": the chapter shows wrapping `ReserveAsync` in `BeginTransactionAsync`.\n- \"Only the return-time rule\": that is the one rule the chapter says no isolation level enforces.",
+   "excerpts": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 138,
+     "lineEnd": 138,
+     "quote": "It does nothing about three of the four repairs in this course:"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 139,
+     "lineEnd": 139,
+     "quote": "No isolation level rejects a nonsensical timestamp."
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 143,
+     "lineEnd": 143,
+     "quote": "because EF Core rolls back the database, not your C# objects."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:borrowbox/note/7dc58447e5fe7a74",
+   "provenance": {
+    "repo": "borrowbox",
+    "sha": "60bc18022e664bc96683b1e25a8c98bcc2f00db6",
+    "path": "astraupskill/05-PRACTICE.md",
+    "lines": {
+     "start": 36,
+     "end": 36
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q02-reserve-damages-nothing",
+   "pack": "borrowbox",
+   "target": "seed:quests:borrowbox/quiz/1b8dfe7fab381b13",
+   "phase": "after",
+   "title": "Proving a rejected reservation damages nothing",
+   "body": "The goal has two halves: the call must be refused, **and** nothing must change. So the check needs three parts: the domain exception is thrown, the equipment is still Available, and the reservation store is empty. That is exactly Exercise 1 in the practice chapter.\n\nWhy it works: in the repaired `ReserveAsync`, `new Reservation(...)` runs before `equipment.Reserve()`. An expiry at 09:00 against a 10:00 clock fails in the constructor, so the equipment is never touched and nothing is added.\n\nWhy the other checks fall short:\n- \"The call succeeds and the worker releases it later\": an expiry in the past must be refused, not accepted.\n- \"Only `Assert.ThrowsAsync`\": the practice chapter says a test that names only the exception cannot catch a mutation leak. If `Reserve()` ran first, the exception would still be thrown.\n- \"Status Expired and equipment Reserved\": the call throws, so no reservation comes back at all.",
+   "excerpts": [
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 36,
+     "lineEnd": 36,
+     "quote": "Inject a clock at 10:00 and call `ReserveAsync` with expiry 09:00. Assert the domain exception, Available equipment, and zero reservations."
+    },
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 85,
+     "lineEnd": 85,
+     "quote": "A test that names only the exception cannot catch a mutation leak."
+    },
+    {
+     "path": "src/BorrowBox.Core/Reservations/Reservation.cs",
+     "lineStart": 76,
+     "lineEnd": 77,
+     "quote": "var reservation = new Reservation(Guid.NewGuid(), equipment.Id, borrower.Id, (clock ?? new SystemClock()).UtcNow, expiresAt); equipment.Reserve();"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:borrowbox/note/7f90c0db729d385d",
+   "provenance": {
+    "repo": "borrowbox",
+    "sha": "60bc18022e664bc96683b1e25a8c98bcc2f00db6",
+    "path": "src/BorrowBox.Core/Reservations/Reservation.cs",
+    "lines": {
+     "start": 15,
+     "end": 15
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q04-expiry-equal-illegal",
+   "pack": "borrowbox",
+   "target": "seed:quests:borrowbox/quiz/27aebb3035048310",
+   "phase": "after",
+   "title": "Where an expiry equal to the reservation time is refused",
+   "body": "The finding: an expiry exactly equal to the reservation instant must be refused with `reservation.expiry_invalid`. So the line we want uses `<=`, not `<`.\n\nThe key, `Reservation.cs:15`, is in the `Reservation` constructor: `if (expiresAt <= reservedAt) throw ... \"reservation.expiry_invalid\"`. Because of `<=`, equal times throw. The concepts chapter explains why: an item that is already due should never become Active.\n\nWhat the other lines actually are:\n- `InMemoryEquipmentStore.cs:43`: the \"is the item Available?\" check inside the checkout lock.\n- `Loan.cs:13`: the loan due-date check, which compares calendar dates and allows equality.\n- `SqliteEquipmentStore.cs:41`: the `Where` clause of the conditional checkout UPDATE.",
+   "excerpts": [
+    {
+     "path": "src/BorrowBox.Core/Reservations/Reservation.cs",
+     "lineStart": 15,
+     "lineEnd": 15,
+     "quote": "if (expiresAt <= reservedAt) throw new BorrowBoxException(\"reservation.expiry_invalid\", \"Expiry must be after reservation time.\");"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 40,
+     "lineEnd": 40,
+     "quote": "Equality fails because `Reservation`'s constructor tests `expiresAt <= reservedAt` (`Reservation.cs:15`), not `<`."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:borrowbox/note/8b34ebb86907ca39",
+   "provenance": {
+    "repo": "borrowbox",
+    "sha": "60bc18022e664bc96683b1e25a8c98bcc2f00db6",
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "lines": {
+     "start": 134,
+     "end": 134
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q11-read-back-new-context",
+   "pack": "borrowbox",
+   "target": "seed:quests:borrowbox/quiz/f020ace04eb37633",
+   "phase": "after",
+   "title": "Why a SQLite test must read back through a new context",
+   "body": "The goal is to prove what is **stored**, not what a variable says. With the in-memory store, your local `equipment` is the stored object, so checking it is enough. With `SqliteEquipmentStore` it is not: `GetAsync` uses `AsNoTracking()` and builds a fresh object from the row. Your local variable was never written back. The only honest check is to open a new `BorrowBoxDbContext`, read the row, and assert its Status is Available.\n\nWhy the other checks fall short:\n- \"Assert the local variable's Status\": the solutions chapter says against SQLite that proves nothing at all.\n- \"Assert only that the exception was thrown\": it says nothing about the stored state.\n- \"Assert `ExecuteUpdateAsync` returned 1\": that call is part of checkout, not reservation; and 1 would mean the row *was* changed.",
+   "excerpts": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 134,
+     "lineEnd": 134,
+     "quote": "`SqliteEquipmentStore.GetAsync` uses `AsNoTracking()` and maps a row to a fresh `EquipmentItem`."
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 134,
+     "lineEnd": 134,
+     "quote": "Against SQLite that same assertion proves nothing at all — your local `equipment` was never persisted after the mutation. You must assert on a value read back through a new context."
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 128,
+     "lineEnd": 129,
+     "quote": "var stored = await new SqliteEquipmentStore(readContext).GetAsync(equipment.Id, CancellationToken.None);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:borrowbox/note/a241a3265cb28f28",
+   "provenance": {
+    "repo": "borrowbox",
+    "sha": "60bc18022e664bc96683b1e25a8c98bcc2f00db6",
+    "path": "src/BorrowBox.Infrastructure/Equipment/InMemoryEquipmentStore.cs",
+    "lines": {
+     "start": 41,
+     "end": 43
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q05-per-item-lock",
+   "pack": "borrowbox",
+   "target": "seed:quests:borrowbox/quiz/3a328f49b33ea0f1",
+   "phase": "after",
+   "title": "Where the in-memory checkout lock lives",
+   "body": "The finding: in the teaching setup (in-memory stores), two checkouts of the same item must give exactly one winner. That needs a lock around \"is it Available? then check it out\".\n\nThe key, `InMemoryEquipmentStore.cs:41`, is `lock (item)` inside `TryCheckOutAsync`. Inside the lock, it returns null unless the status is Available, then calls `item.CheckOut()`. The lock is per item, so two requests for the same item take turns, and the second one sees CheckedOut and loses.\n\nWhat the other lines actually are:\n- `SqliteEquipmentStore.cs:30`: the start of `SaveAsync` in the SQLite store, loading a row to update. The SQLite store is not used in the teaching configuration.\n- `Loan.cs:76`: `new Loan(...)` in the checkout service; it builds the candidate loan, it does not lock anything.\n- `Reservation.cs:77`: `equipment.Reserve()` in the reservation workflow, a different operation.",
+   "excerpts": [
+    {
+     "path": "src/BorrowBox.Infrastructure/Equipment/InMemoryEquipmentStore.cs",
+     "lineStart": 41,
+     "lineEnd": 43,
+     "quote": "lock (item) { if (item.Status != EquipmentStatus.Available) return Task.FromResult"
+    },
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": 17,
+     "lineEnd": 17,
+     "quote": "`InMemoryEquipmentStore.TryCheckOutAsync` locks the item and changes it only if Available."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:borrowbox/note/ac43f64643956cf0",
+   "provenance": {
+    "repo": "borrowbox",
+    "sha": "60bc18022e664bc96683b1e25a8c98bcc2f00db6",
+    "path": "astraupskill/README.md",
+    "lines": {
+     "start": 3,
+     "end": 3
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r01-start-here",
+   "pack": "borrowbox",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: BorrowBox and validate-before-mutate",
+   "body": "BorrowBox is a small .NET equipment-lending demo: staff reserve, check out and return items. The course in `astraupskill/` follows one repair across four workflows: **validate before you mutate**. Build and check the new object (a `Reservation` or `Loan`) first, and only then change the live equipment record.\n\nSuggested reading order (the course README asks for chapters in order):\n\n1. `astraupskill/README.md`: the summary of the repair and the reading route.\n2. `01-CODEBASE-MAP.md`: Core (the rules), Infrastructure (the stores), API.\n3. `02-CONCEPTS.md`: state machines, captured time, live references, and the table translating each idea to a real database.\n4. `03-WORKED-CHANGE.md`, then `04-TESTING-AND-DEBUGGING.md`.\n5. `05-PRACTICE.md`; try the exercises before opening `06-SOLUTIONS-AND-REVIEW.md`.\n\nHalf the quizzes in this pack ask \"where in the code is this rule?\", so keep `Loan.cs`, `Reservation.cs` and the two equipment stores open. The other half ask \"which test check would really prove this goal?\"; for those, chapter 04 is the key reading.",
+   "excerpts": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "The selected improvement is validate-before-mutate in reservation, checkout, return, and expiry workflows."
+    },
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "Read the chapters in order. Chapter 01 maps the Core, Infrastructure, and API layers."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 23,
+     "lineEnd": 35,
+     "why": "The reading route table with time estimates per chapter."
+    },
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Where each workflow lives and what the stores really hold."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:borrowbox/note/acaf646690942a7e",
+   "provenance": {
+    "repo": "borrowbox",
+    "sha": "60bc18022e664bc96683b1e25a8c98bcc2f00db6",
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 39,
+     "end": 39
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r03-time-boundaries",
+   "pack": "borrowbox",
+   "target": "pack",
+   "phase": "before",
+   "title": "Time and boundary equality: before, equal, after",
+   "body": "Many bugs live at a boundary: what happens when two times are exactly equal? BorrowBox makes a deliberate choice for each rule, and the concepts chapter spells them out case by case. Reservation creation, expiry processing, loan due dates and return times each use a different comparison. Some compare instants (exact moments), and one compares calendar dates.\n\nTo test these rules you need control over \"now\". The code reads the time from an injected `IClock` instead of calling the system clock directly. Production registers `SystemClock`; tests can pass their own clock with a fixed value. Then \"one minute before\", \"exactly equal\" and \"one minute after\" are exact values, not guesses based on how fast the test ran.\n\nWhen you read `Reservation.cs` and `Loan.cs`, find each comparison operator (`<`, `<=`) and say out loud which side of the boundary it allows.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 39,
+     "lineEnd": 39,
+     "quote": "Equality deserves explicit language."
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 39,
+     "lineEnd": 39,
+     "quote": "Return timestamps are instants and may equal checkout, but never precede it. Tests should name these boundary decisions rather than relying on “near now” values."
+    },
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "It registers `SystemClock` as `IClock`"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/04-TESTING-AND-DEBUGGING.md",
+     "lineStart": 1,
+     "lineEnd": 13,
+     "why": "How to set up a fixed clock and test each boundary."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:borrowbox/note/af5d622c7c06238b",
+   "provenance": {
+    "repo": "borrowbox",
+    "sha": "60bc18022e664bc96683b1e25a8c98bcc2f00db6",
+    "path": "src/BorrowBox.Core/Loans/Loan.cs",
+    "lines": {
+     "start": 33,
+     "end": 34
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q06-return-guard",
+   "pack": "borrowbox",
+   "target": "seed:quests:borrowbox/quiz/5e951e1a1ed41d5f",
+   "phase": "after",
+   "title": "Which guard keeps a return from going before checkout",
+   "body": "The finding: one guard keeps `ReturnedAt` unset when someone tries to return a loan at a time before it was checked out. Remove it, and the return-before-checkout test fails because `ReturnedAt` gets a value.\n\nThe key, `Loan.cs:33`, is inside `Loan.Return`: `if (returnedAt < CheckedOutAt) throw ... \"loan.return_time_invalid\"`. The very next line sets `ReturnedAt`. So without the guard, the bad time would be stored. The solutions chapter lists this exact mutation exercise.\n\nWhat the other lines actually are:\n- `SqliteEquipmentStore.cs:45`: the `changed == 1` result of the conditional checkout UPDATE; nothing to do with returns.\n- `Reservation.cs:15`: the reservation expiry check, a different entity and a different rule.",
+   "excerpts": [
+    {
+     "path": "src/BorrowBox.Core/Loans/Loan.cs",
+     "lineStart": 33,
+     "lineEnd": 34,
+     "quote": "if (returnedAt < CheckedOutAt) throw new BorrowBoxException(\"loan.return_time_invalid\", \"Return time cannot be before checkout.\"); ReturnedAt = returnedAt.ToUniversalTime();"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 100,
+     "lineEnd": 100,
+     "quote": "Remove the `returnedAt < CheckedOutAt` guard and the return-before-checkout test should fail because `ReturnedAt` becomes non-null."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:borrowbox/note/b5cc651e43d3ddd0",
+   "provenance": {
+    "repo": "borrowbox",
+    "sha": "60bc18022e664bc96683b1e25a8c98bcc2f00db6",
+    "path": "src/BorrowBox.Core/Reservations/Reservation.cs",
+    "lines": {
+     "start": 87,
+     "end": 89
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q12-cancel-order",
+   "pack": "borrowbox",
+   "target": "seed:quests:borrowbox/quiz/f51935ba67928ad1",
+   "phase": "after",
+   "title": "Proving CancelAsync checks equipment first",
+   "body": "The goal is about **order**: the service must check the equipment state before it changes the reservation. To see order, set up a mismatch: an Active reservation whose equipment is Available (not Reserved). If the check comes first, the call throws `equipment.not_reserved` and the reservation is still Active. If the transition came first, the reservation would already be Cancelled when the error appeared.\n\nIn the code, `CancelAsync` tests `equipment.Status != EquipmentStatus.Reserved` and throws before `reservation.Cancel()`.\n\nWhy the other observations fall short:\n- \"Cancelling twice returns the same reservation\": the second cancel fails the Active check, and it says nothing about equipment.\n- \"Cancelled, equipment stays Available\": that is the bug the goal wants to catch.\n- \"Throws `reservation.not_found`\": the reservation exists; that code is for a missing id.",
+   "excerpts": [
+    {
+     "path": "src/BorrowBox.Core/Reservations/Reservation.cs",
+     "lineStart": 87,
+     "lineEnd": 89,
+     "quote": "if (equipment.Status != EquipmentStatus.Reserved) throw new BorrowBoxException(\"equipment.not_reserved\", \"Equipment is not reserved for this reservation.\"); reservation.Cancel();"
+    },
+    {
+     "path": "astraupskill/04-TESTING-AND-DEBUGGING.md",
+     "lineStart": 23,
+     "lineEnd": 23,
+     "quote": "An active reservation paired with Available equipment should throw `equipment.not_reserved` before `reservation.Status` changes."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:borrowbox/note/e2eccf9c65cdffdb",
+   "provenance": {
+    "repo": "borrowbox",
+    "sha": "60bc18022e664bc96683b1e25a8c98bcc2f00db6",
+    "path": "src/BorrowBox.Core/Reservations/Reservation.cs",
+    "lines": {
+     "start": 120,
+     "end": 121
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q08-expiry-selection",
+   "pack": "borrowbox",
+   "target": "seed:quests:borrowbox/quiz/adab5b1cc147cad3",
+   "phase": "after",
+   "title": "Where the expiry run picks due reservations",
+   "body": "The finding: a reservation whose deadline is exactly `now` counts as due. So the selection must use `<=`.\n\nThe key, `Reservation.cs:121`, is inside `ReservationExpiryService.ExpireDueAsync`: the `Where` keeps items with `Status == Active && ExpiresAt <= now`. Note the contrast with the constructor on line 15, which forbids equality when *creating* a reservation. The concepts chapter says these two rules are separate on purpose.\n\nWhat the other lines actually are:\n- `InMemoryEquipmentStore.cs:43`: the Available check inside the in-memory checkout lock.\n- `SqliteEquipmentStore.cs:41`: the `Where` of the SQLite conditional checkout UPDATE.\n- `Loan.cs:13`: the loan due-date check against the UTC checkout date.",
+   "excerpts": [
+    {
+     "path": "src/BorrowBox.Core/Reservations/Reservation.cs",
+     "lineStart": 120,
+     "lineEnd": 121,
+     "quote": "item.Status == ReservationStatus.Active && item.ExpiresAt <= now))"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 39,
+     "lineEnd": 39,
+     "quote": "Expiry processing uses an inclusive comparison because a reservation whose deadline is exactly now is due."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:borrowbox/note/ef6e47a391b6b54b",
+   "provenance": {
+    "repo": "borrowbox",
+    "sha": "60bc18022e664bc96683b1e25a8c98bcc2f00db6",
+    "path": "astraupskill/01-CODEBASE-MAP.md",
+    "lines": {
+     "start": 21,
+     "end": 21
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r02-live-references",
+   "pack": "borrowbox",
+   "target": "pack",
+   "phase": "before",
+   "title": "Live references: why the in-memory store changes what a test proves",
+   "body": "By default BorrowBox keeps its data in in-memory stores built on `ConcurrentDictionary`. The important detail: these stores keep the **same object** you gave them. `GetAsync` hands back that same live object, not a copy. So if a service changes an `EquipmentItem` and then throws, the change is already \"saved\", because there is nothing else to save.\n\nThis has two effects you need for this pack:\n\n- A test must capture plain values (a status, a count) before and after the call. Comparing an object with itself always passes.\n- A database store behaves differently. A database read gives you a fresh object, and a change only lands when it is written. The concepts chapter has a table translating each in-memory idea into its database version, and the SQLite equipment store in the repo already does some of them for real.\n\nWhen you meet a \"which assertion proves it\" quiz, ask: does this check look at the stored state, or only at a variable in the test?",
+   "excerpts": [
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": 21,
+     "lineEnd": 21,
+     "quote": "`AddAsync` and `SaveAsync` store the same object, not a clone. That is useful for demonstrating side effects but does not provide multi-record durability."
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 31,
+     "lineEnd": 31,
+     "quote": "A test that compares the same reference before and after cannot detect mutation."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 41,
+     "lineEnd": 52,
+     "why": "The in-memory to EF Core translation table."
+    }
+   ]
+  }
+ ]
+}

@@ -1,0 +1,413 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "master-6",
+ "repo": "master-6",
+ "sha": "714d3f412cd803170186b211100b5f9d5177bbf6",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: an LMS learner workflow, from enrollment to completion",
+   "body": "This project is a learning-management system (LMS): organizations publish courses, learners enroll, make progress through lessons, take quizzes, submit assignments and complete the course, sometimes earning a certificate. The API is an Express router using Prisma (a TypeScript database library); the rules for \"is this course complete?\" live in a small domain package.\n\nThe `astraupskill/` course follows the learner side only. Its README asks you to read the chapters in order:\n\n1. `astraupskill/README.md`, including the prerequisites and glossary table.\n2. `01-CODEBASE-MAP.md`: where the schema, router, domain helper, events and tests are.\n3. `02-CONCEPTS.md`: ownership, published versions, requirement sets, timestamps, replay, and the outbox.\n4. `03-WORKED-CHANGE.md`, then `04-TESTING-AND-DEBUGGING.md`.\n5. `05-PRACTICE.md`; try it before `06-SOLUTIONS-AND-REVIEW.md`, whose second half is eight senior review findings.\n6. `07-TRACE-LAB.md`.\n\nKeep `apps/api/src/routes/learner.routes.ts` and `packages/domain/src/completion.ts` open; almost every quiz points into one of them.",
+   "excerpts": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "The code is an Express router backed by Prisma, with completion predicates in the domain package."
+    },
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "Read them in order when you are new to the feature, or jump directly to the file that matches a review question."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 5,
+     "lineEnd": 40,
+     "why": "Chapter list and the glossary mapping each term to code."
+    },
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Where each part of the learner workflow lives."
+    }
+   ]
+  },
+  {
+   "id": "r02-enrolled-version",
+   "target": "pack",
+   "phase": "before",
+   "title": "An enrollment pins a course version",
+   "body": "The key idea of this course: a course can have several **versions**. Authors edit a draft version while learners use the published one. When a learner enrolls, the enrollment stores which version they joined (`courseVersionId`), and it stays attached to that version even after a newer one is published.\n\nSo every learner action has to agree with three things at once: the logged-in user, the organization chosen by the `x-organization-id` header, and the version stored on the enrollment. Lessons, quizzes and assignments all belong to a specific version, not just to the course.\n\nThe completion rule (what a learner must do to finish) is also stored on the version, as `completionRuleJson`. It lists required lessons, quizzes and assignments, plus optional thresholds. Pay close attention in the concepts chapter to the difference between a list that is **empty** and a list that is **left out**; the route treats them differently on purpose, and a test guards both forms.",
+   "excerpts": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "a learner action is valid only when three identities agree: the authenticated user, the organization selected by `x-organization-id`, and the course version stored on the enrollment."
+    },
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 20,
+     "lineEnd": 20,
+     "quote": "A later draft may exist, but an existing learner remains attached to the published `courseVersionId` selected at enrollment."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 7,
+     "lineEnd": 15,
+     "why": "Requirement sets and the empty-versus-omitted distinction."
+    }
+   ]
+  },
+  {
+   "id": "r03-durable-side-effects",
+   "target": "pack",
+   "phase": "before",
+   "title": "Transactions, audit rows and the outbox",
+   "body": "When something important happens (an enrollment, a completion), the route does more than one write: the business row, an audit log row, and a domain event. These are wrapped in one Prisma `$transaction` so they commit together or not at all.\n\nThe domain event helper also writes an **outbox** row in the same transaction. The outbox pattern is a common way to send messages to other systems safely: instead of calling another service directly (which could fail after your database commit), you store \"a message should go out\" in your own database, and a separate worker sends it later. The concepts chapter is honest that the worker in this repo is only a placeholder, and it explains what a real one must do, step by step.\n\nAlso note what the tests can and cannot show. They use mocked Prisma and call the real router. That proves which calls happen and in what grouping, but not real rollback or what happens when two requests race. Several review findings in chapter 06 are about exactly those races.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 11,
+     "lineEnd": 11,
+     "quote": "Side effects are grouped with their business write by passing the Prisma transaction client to `auditLog` or `recordDomainEvent`."
+    },
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 18,
+     "lineEnd": 18,
+     "quote": "it does not prove rollback, concurrent uniqueness, generated SQL, or production delivery of an outbox message."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 17,
+     "lineEnd": 21,
+     "why": "What the OutboxMessage row is for, and what a real relay needs."
+    }
+   ]
+  },
+  {
+   "id": "x-q01-derived-code",
+   "target": "seed:quests:master-6/quiz/318f8096f7d83d8f",
+   "phase": "after",
+   "title": "Why a certificate code derived from the enrollment id is unsafe",
+   "body": "The key is right: anyone who sees the enrollment id can compute the code, and two ids with the same last 8 characters collide. The code is built as `CERT-${enrollment.id.slice(-8).toUpperCase()}`. The enrollment id is not secret: it shows up in event payloads, URLs and the certificate's `artifactUrl`. And the public verify route needs no login and returns the learner's name and course title. Also, the code column is unique, so two different enrollments whose ids end the same way would make a real completion fail with a 500. Finding 6's fix: generate an independent random code and retry on collision.\n\nWhy the others are wrong:\n- \"It changes on re-completion\": the code is computed from the id, which never changes.\n- \"Only hard to read; collisions are impossible\": only 8 characters are used, so whole-id uniqueness does not carry over.\n- \"The verify route requires authentication\": finding 6 says it has no auth.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/routes/learner.routes.ts",
+     "lineStart": 311,
+     "lineEnd": 311,
+     "quote": "verificationCode: `CERT-${enrollment.id.slice(-8).toUpperCase()}`"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 134,
+     "lineEnd": 139,
+     "quote": "Anyone who sees an enrollment ID can compute the code. The ID appears in event payloads, URLs and `artifactUrl` (line 306). Two IDs with the same tail also collide on the unique code"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 134,
+     "lineEnd": 135,
+     "quote": "(`certificate.routes.ts` lines 7-32, no auth) returns learner name and course title."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02-draft-pointer",
+   "target": "seed:quests:master-6/quiz/3f74eba0aac86eb4",
+   "phase": "after",
+   "title": "What enrolling does when the current version is a draft",
+   "body": "The key is right: the version lookup requires PUBLISHED, finds nothing, and the enrollment fails with 404. Enrollment checks published status twice. The course query requires `status: \"PUBLISHED\"`. Then the version query looks for the id in `currentVersionId` **and** the same course **and** `status: \"PUBLISHED\"`. A pointer to a DRAFT version fails that last condition, so `version` is null, and the route throws 404 \"Published course version not found\". The concepts chapter says this is what stops a stale or draft pointer from being enrolled.\n\nWhy the others are wrong:\n- \"Enrolled in the draft because the course is PUBLISHED\": the version has its own status check.\n- \"Succeeds but shows no lessons\": the route throws before any enrollment is created.\n- \"Silently enrolled in the newest published version\": the query looks only at the pointer's id; it never searches for another version.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/routes/learner.routes.ts",
+     "lineStart": 69,
+     "lineEnd": 74,
+     "quote": "await prisma.courseVersion.findFirst({ where: { id: course.currentVersionId, courseId: course.id, status: \"PUBLISHED\" } })"
+    },
+    {
+     "path": "apps/api/src/routes/learner.routes.ts",
+     "lineStart": 72,
+     "lineEnd": 73,
+     "quote": "throw new HttpError(404, \"Published course version not found\");"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "This prevents a stale pointer, a draft pointer, or a version from another course from being enrolled."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q03-retake-race",
+   "target": "seed:quests:master-6/quiz/4ecf3de4cb4cdd0b",
+   "phase": "after",
+   "title": "Whether two racing attempts can exceed the retake limit",
+   "body": "The key is right: no, the unique `attemptNumber` constraint stops it, but the loser gets an unmapped 500. The count and the create run in one transaction, but at PostgreSQL's default READ COMMITTED level the second transaction does not see the first one's uncommitted row. So both read `attemptCount = n`, both pass the limit check, and both try to create attempt number `n + 1`. The schema has `@@unique([quizId, enrollmentId, attemptNumber])`, so the database rejects the second insert. The limit holds. But that error (Prisma code P2002) is not mapped to a status, so the user sees a 500. Finding 5's fix: map it to 409 or retry once.\n\nWhy the others are wrong:\n- \"Yes, only with randomized order\": both paths go through the same count and create.\n- \"READ COMMITTED makes the second read wait\": it does not wait for uncommitted rows; that is why both read `n`.\n- \"Yes, both are created\": the unique constraint prevents the second row.",
+   "excerpts": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 124,
+     "lineEnd": 129,
+     "quote": "so two concurrent attempts can both read `attemptCount = n` and both try to create `attemptNumber: n + 1`."
+    },
+    {
+     "path": "apps/api/prisma/schema.prisma",
+     "lineStart": 291,
+     "lineEnd": 291,
+     "quote": "@@unique([quizId, enrollmentId, attemptNumber])"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 128,
+     "lineEnd": 130,
+     "quote": "but the unmapped `P2002` reaches the user as a 500. Map it to `409 \"Quiz retake limit reached\"`, or retry once."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q04-complete-without-certificate",
+   "target": "seed:quests:master-6/quiz/4f69c3c4137ab6b2",
+   "phase": "after",
+   "title": "Completing a course without earning a certificate",
+   "body": "The key is right: the enrollment completes, with its audit row and event, but no certificate is issued. Two different checks are involved. `isCourseComplete` uses the rule: only one lesson is required, and it is done, so completion is allowed. `canIssueCertificate` is separate and demands `completionPercent === 100`. Only one of two progress rows is complete, so the percent is 50 and no certificate. The transaction then updates the enrollment, writes the audit row and event, and skips the certificate create (`eligibleForCertificate ? ... : null`).\n\nWhy the others are wrong:\n- \"Certificate created but enrollment stays IN_PROGRESS\": the opposite; the enrollment is completed and the certificate is skipped.\n- \"Completion plus a certificate\": the certificate helper needs 100 percent, not just the rule.\n- \"A 409 because every row must be COMPLETED\": explicit required lesson ids decide completion; the concepts chapter says a rule can permit completion without all rows complete.",
+   "excerpts": [
+    {
+     "path": "packages/domain/src/completion.ts",
+     "lineStart": 48,
+     "lineEnd": 51,
+     "quote": "input.enrollmentStatus === \"COMPLETED\" && input.completionPercent === 100 &&"
+    },
+    {
+     "path": "apps/api/src/routes/learner.routes.ts",
+     "lineStart": 304,
+     "lineEnd": 304,
+     "quote": "const certificate = eligibleForCertificate ? await tx.certificate.create({"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 41,
+     "lineEnd": 44,
+     "quote": "It completes; percent is 50; `canIssueCertificate` is false because it requires exactly 100."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q05-instanceof-p2002",
+   "target": "seed:quests:master-6/quiz/6370a611fd6846c3",
+   "phase": "after",
+   "title": "Why the enrollment route checks the error's type, not just its code",
+   "body": "The key is right: any object with `code: \"P2002\"`, even from an unrelated helper, would have been reported as \"already enrolled\". The old catch was `(error as { code?: string }).code === \"P2002\"`. That accepts any thrown object that happens to have that property. The worked-change chapter calls it duck typing across a trust boundary. The fix checks `error instanceof Prisma.PrismaClientKnownRequestError && error.code === \"P2002\"`, so only a real Prisma unique-constraint error becomes 409, and the test builds a look-alike that must **not** be mapped.\n\nWhy the others are wrong:\n- \"Prisma renamed the code\": the new check still uses `\"P2002\"`.\n- \"The 409 leaked other users' enrollments\": the chapter's reason is wrong errors being mapped, not information leaks.\n- \"instanceof is cheaper\": performance is not mentioned; the principle is matching type and code.",
+   "excerpts": [
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": 72,
+     "lineEnd": 72,
+     "quote": "a bug that throws `{ code: \"P2002\" }` from an unrelated helper would be reported to the user as \"already enrolled\"."
+    },
+    {
+     "path": "apps/api/src/routes/learner.routes.ts",
+     "lineStart": 101,
+     "lineEnd": 101,
+     "quote": "if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === \"P2002\") throw new HttpError(409, \"Already enrolled in this course version\");"
+    },
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": 72,
+     "lineEnd": 72,
+     "quote": "match the error's *type* and its code, not the shape of a property."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q06-progress-timestamps",
+   "target": "seed:quests:master-6/quiz/65957e330e6d43cc",
+   "phase": "after",
+   "title": "What happens to lesson timestamps on COMPLETED, IN_PROGRESS, COMPLETED",
+   "body": "The key is right: `startedAt` is kept, while `completedAt` is cleared and then set to the new time, so the first completion time is lost. Read the two lines of the update:\n\n- `startedAt: current.startedAt ?? now` keeps an existing start time, so it never changes after the first write.\n- `completedAt: status === \"COMPLETED\" ? (current.completedAt ?? now) : null`.\n\nStep through it. First COMPLETED: `completedAt` is null, so it becomes now. IN_PROGRESS: the ternary picks `null`, clearing it. COMPLETED again: `current.completedAt` is null, so `?? now` uses the new time.\n\nWhy the others are wrong:\n- \"startedAt is reset\": `?? now` only fills it when it is empty.\n- \"completedAt keeps the first time\": the IN_PROGRESS write already set it to null, so there is nothing for `??` to keep.\n- \"The second COMPLETED is rejected\": the solutions note nothing checks this.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/routes/learner.routes.ts",
+     "lineStart": 125,
+     "lineEnd": 126,
+     "quote": "completedAt: input.status === \"COMPLETED\" ? (current.completedAt ?? now) : null, startedAt: current.startedAt ?? now,"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 46,
+     "lineEnd": 49,
+     "quote": "`COMPLETED` again: `completedAt` is null, so it becomes the new `now`; the first completion time is lost."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07-deterministic-seed",
+   "target": "seed:quests:master-6/quiz/6e4352afb006d42d",
+   "phase": "after",
+   "title": "Why a retried randomized attempt gets the same questions",
+   "body": "The key is right: the retry gets the same question set, because the seed uses `attemptCount`, which the rolled-back request never changed. For a randomized quiz, `selectRandomizedQuestionIds` is seeded with `${enrollmentId}-${attemptCount + 1}`. A seed makes \"random\" choice repeatable: same seed, same picks. A failed, rolled-back request did not create a `QuizAttempt` row, so the count is the same next time, and so is the seed. That matters because a learner cannot force errors to \"reroll\" for easier questions.\n\nWhy the others are wrong:\n- \"A fresh set; the count was already incremented\": the count is a query of existing rows, and a rolled-back create leaves no row.\n- \"The previous attempt's questions are reused for comparable scores\": the seed changes with the attempt number, so a real next attempt gets a new selection.\n- \"The seed includes the request timestamp\": the seed is only the enrollment id and attempt number.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/routes/learner.routes.ts",
+     "lineStart": 176,
+     "lineEnd": 177,
+     "quote": "selectRandomizedQuestionIds(questionIds, quiz.questionCount ?? questionIds.length, `${input.enrollmentId}-${attemptCount + 1}`)"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 52,
+     "lineEnd": 56,
+     "quote": "did not create a `QuizAttempt`, so `attemptCount` is unchanged and the retry reuses the seed"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08-double-completion",
+   "target": "seed:quests:master-6/quiz/7f1e2ead8fa67813",
+   "phase": "after",
+   "title": "Two simultaneous first completions with no certificate",
+   "body": "The key is right: both requests pass the guard and commit duplicate audit rows and events; the fix is to predicate the update on status. The \"already completed?\" check (line 275) is a read **before** the transaction. Both requests read IN_PROGRESS at the same moment and both continue. Inside the transaction, `enrollment.update` has no status condition in its `where`, so both updates succeed. With no certificate there is no unique constraint to collide on, so both commit: two audit rows, two events and outbox messages, and an overwritten `completedAt`. Finding 2's smallest fix: use `updateMany` with `status: { not: \"COMPLETED\" }` and stop when the count is 0.\n\nWhy the others are wrong:\n- \"The second blocks on the pre-read\": a plain read does not lock or wait.\n- \"Prisma serializes transactions per row\": it does not; the finding shows both commit.\n- \"Certificate.enrollmentId @unique rejects it\": that only helps when a certificate is created, which this rule does not do.",
+   "excerpts": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 85,
+     "lineEnd": 87,
+     "quote": "The terminal guard is a pre-read (line 275); the transaction's `enrollment.update` (lines 300-303) has no status predicate. Two simultaneous first requests both pass the guard."
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 91,
+     "lineEnd": 93,
+     "quote": "If no certificate is issued, both commit: two audit rows, two `enrollment.completed` events and outbox messages"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 95,
+     "lineEnd": 95,
+     "quote": "`tx.enrollment.updateMany({ where: { id, status: { not: \"COMPLETED\" } }, data })`"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09-quiz-version-check",
+   "target": "seed:quests:master-6/quiz/9a4bc1d2be46c524",
+   "phase": "after",
+   "title": "Why the quiz must belong to the enrolled version",
+   "body": "The key is right: both versions share the same `courseId`, so the route checks the quiz's `courseVersionId` and answers 404. Version 1 and the draft version 2 are versions of **one** course. A quiz in the draft has the same `courseId` as the learner's enrollment, so a `courseId` check would let it through. The route instead compares `quiz.courseVersionId !== enrollment.courseVersionId` and throws 404 \"Quiz not found\" before the transaction opens. The concepts chapter states the rule: every learner write must prove the content belongs to the enrolled version.\n\nWhy the others are wrong:\n- \"courseId is enough; drafts are unreachable\": the quiz is fetched by id alone, so a draft quiz id is reachable; only the version check stops it.\n- \"403, only instructors may submit\": the route returns 404 \"Quiz not found\", not a role error.\n- \"Accepts and tags it for migration\": no such tagging exists; the request is refused.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/routes/learner.routes.ts",
+     "lineStart": 166,
+     "lineEnd": 167,
+     "quote": "if (!quiz || quiz.courseVersionId !== enrollment.courseVersionId) { throw new HttpError(404, \"Quiz not found\");"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "Checking only `courseId` would let a learner submit a quiz from a draft or from an unrelated version of the same course."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10-publish-then-mark",
+   "target": "seed:quests:master-6/quiz/a52a4935311b970e",
+   "phase": "after",
+   "title": "Why a relay should publish first and mark sent second",
+   "body": "The key is right: a crash then causes a duplicate, which consumers can de-duplicate, while marking first would lose the message. Picture both orders. **Mark, then publish**: the row says SENT, the relay crashes before publishing, and nobody will ever try again, so the message is lost. **Publish, then mark**: the message goes out, the relay crashes before marking, and another worker later publishes it again, so it arrives twice. A duplicate can be fixed downstream by checking the message id; a lost message cannot be recovered. That gives *at-least-once* delivery, as the concepts chapter says.\n\nWhy the others are wrong:\n- \"Marking first is preferred\": the guide calls the duplicate the right failure to choose.\n- \"Order stops mattering with SKIP LOCKED and a lease\": those stop two workers taking the same rows; they do not change what a crash between steps does.\n- \"Exactly-once, no duplicates\": the guide says consumers must de-duplicate, so duplicates can happen.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 21,
+     "lineEnd": 21,
+     "quote": "Delivery is then *at least once*, and consumers must de-duplicate by message id."
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 21,
+     "lineEnd": 21,
+     "quote": "Predict what happens if the worker marks the row sent *before* publishing (a lost message on crash) versus after (a duplicate on crash), and why the duplicate is the right failure to choose."
+    },
+    {
+     "path": "apps/worker/src/worker.ts",
+     "lineStart": 61,
+     "lineEnd": 66,
+     "quote": "await prisma.outboxMessage.update({ data: { attempts: { increment: 1 }, processedAt: new Date(), status: \"SENT\""
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q11-empty-vs-omitted",
+   "target": "seed:quests:master-6/quiz/d2b55b49348e0ec5",
+   "phase": "after",
+   "title": "An empty assignment list versus a missing one",
+   "body": "The key is right: rule A requires no assignment, while rule B derives every assignment of the enrolled version and requires each to be GRADED. `completionRuleFor` uses `requiredAssignmentIds ?? (...)`. The `??` operator only falls back when the left side is null or undefined. Rule A's `[]` is an actual (empty) array, so it is kept, and `[].every(...)` is true: nothing to grade. Rule B left the field out, so the fallback runs: `requireAssignmentsGraded === true` gives every assignment id of the version. The concepts chapter calls this a data-model decision.\n\nWhy the others are wrong:\n- \"Both require nothing\": rule B derives ids from the flag.\n- \"A requires every assignment, B none\": this reverses the two.\n- \"Both require every assignment; [] becomes undefined\": nothing coalesces `[]`; the guide warns that doing so would silently make a no-assessment course assessment-bound.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/routes/learner.routes.ts",
+     "lineStart": 380,
+     "lineEnd": 380,
+     "quote": "requiredAssignmentIds: requiredAssignmentIds ?? (requireAssignmentsGraded === true ? version.assignments.map((assignment) => assignment.id) : undefined),"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 13,
+     "lineEnd": 13,
+     "quote": "Likewise, `requireAssignmentsGraded: true` with no explicit assignment IDs derives all assignments in the enrolled version, while an explicit empty list leaves the set empty."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q12-required-quiz-no-attempt",
+   "target": "seed:quests:master-6/quiz/f66734a0ea51d13e",
+   "phase": "after",
+   "title": "Why a required quiz with no attempt blocks completion",
+   "body": "The key is right: each required quiz id needs some matching passed attempt, and `some()` over no attempts is false. With `requiredQuizIds` set, the domain helper runs `requiredQuizIds.every(quizId => quizAttempts.some(attempt => ...))`. For `quiz-1`, `some` looks for an attempt with that quiz id, `passed`, and a score of at least 80. With no attempts at all, `some` returns false, so `every` is false, and completion is refused.\n\nWhy the others are wrong:\n- \"The score defaults to 100\": there is no default score; with no attempt there is nothing to score.\n- \"Fails only when a minimum is set\": the `passed` check applies to required quizzes either way; the minimum is an extra condition.\n- \"The route throws 404 for an unattempted quiz\": the completion route returns 409 \"Completion requirements are not met\", not a 404.",
+   "excerpts": [
+    {
+     "path": "packages/domain/src/completion.ts",
+     "lineStart": 32,
+     "lineEnd": 35,
+     "quote": "requiredQuizIds.every((quizId) => input.quizAttempts.some((attempt) => attempt.quizId === quizId && attempt.passed &&"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 31,
+     "lineEnd": 32,
+     "quote": "`[].some(...)` is `false`, so an absent attempt can never satisfy a required ID."
+    },
+    {
+     "path": "apps/api/src/routes/learner.routes.ts",
+     "lineStart": 290,
+     "lineEnd": 290,
+     "quote": "if (!complete) throw new HttpError(409, \"Completion requirements are not met\");"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}

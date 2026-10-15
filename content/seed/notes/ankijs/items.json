@@ -1,0 +1,631 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "notes",
+ "name": "ankijs",
+ "items": [
+  {
+   "key": "seed:notes:ankijs/note/0a9cd713cd60c611",
+   "provenance": {
+    "repo": "ankijs",
+    "sha": "3578850d56e052c2bffd9cddc524f97be77926d3",
+    "path": "docs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+    "lines": {
+     "start": 7,
+     "end": 7
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r02-outbox-and-transactions",
+   "pack": "ankijs",
+   "target": "pack",
+   "phase": "before",
+   "title": "The outbox: how offline changes reach the server later",
+   "body": "Because the app works offline, it cannot send each change to the server the moment it happens. Instead, every write that should sync also adds a small bookkeeping row to a local table called the **outbox**. The outbox row just says \"table X, row Y needs pushing\". Later, the sync loop reads the outbox, loads the current version of each row, and sends it.\n\nTwo ideas make this safe:\n\n- **Transactions.** A Dexie transaction is a group of writes that either all happen or none do. The data-model guide lists which writes are grouped together, for example a card review. If the change and its outbox row were saved separately, a crash in between could leave a change that never syncs.\n- **Idempotency.** An idempotent operation can be repeated without changing the result. The outbox is keyed by table and row, so it does not grow without limit for a busy row.\n\nWhen you read `src/db/sync/outbox.ts`, look at what `enqueueOutbox` does when an entry already exists, and what `removeOutboxIfUnchanged` compares before deleting.",
+   "excerpts": [
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+     "lineStart": 7,
+     "lineEnd": 7,
+     "quote": "| IndexedDB write | Repository calls | `src/db/repos/*.ts` | Must be transactional with outbox when synced. |"
+    },
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/02-data-model-and-persistence.md",
+     "lineStart": 20,
+     "lineEnd": 23,
+     "quote": "- Note capture: note + outbox (`src/db/repos/noteRepo.ts:18-20`)."
+    },
+    {
+     "path": "src/db/sync/outbox.ts",
+     "lineStart": 26,
+     "lineEnd": 33,
+     "quote": "if (current?.queued_at === entry.queued_at) { await db.outbox.delete(entry.id); }"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+     "lineStart": 16,
+     "lineEnd": 22,
+     "why": "The reliability concepts list: idempotency, retries, single-flight and compensation, each with an anchor."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:ankijs/note/448594ac1235bbd8",
+   "provenance": {
+    "repo": "ankijs",
+    "sha": "3578850d56e052c2bffd9cddc524f97be77926d3",
+    "path": "src/db/sync/auth.ts",
+    "lines": {
+     "start": 60,
+     "end": 70
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q01-adoption-blocked",
+   "pack": "ankijs",
+   "target": "seed:quests:ankijs/quiz/0e374f2c3ac601ed",
+   "phase": "after",
+   "title": "Why sign-in refuses to adopt another account's rows",
+   "body": "The key is right: it refuses and writes an `auth_blocked` row to `sync_meta`. `adoptLocalData` first scans decks, cards, notes and review logs. Any row whose `user_id` is set and is not the new user's id is collected. If even one is found, it saves the message \"This device has data belonging to another account.\" and returns. Nothing is changed.\n\nOnly when no foreign rows exist does it open a transaction and give the rows with `user_id === null` (local-only data) to the new user, queuing each for sync. The guides add that this path has no tests yet.\n\nWhy the others are wrong:\n- \"Deletes the foreign rows\": nothing is deleted; the function just returns.\n- \"Reassigns every local row\": that would let one account inherit another's data, which is exactly what the check stops.\n- \"Adopts null rows and ignores the rest\": the null rows are only adopted when there are no foreign rows at all.",
+   "excerpts": [
+    {
+     "path": "src/db/sync/auth.ts",
+     "lineStart": 60,
+     "lineEnd": 70,
+     "quote": "if (row.user_id && row.user_id !== uid) ownedUsers.add(row.user_id);"
+    },
+    {
+     "path": "src/db/sync/auth.ts",
+     "lineStart": 64,
+     "lineEnd": 69,
+     "quote": "key: 'auth_blocked', value: 'This device has data belonging to another account.',"
+    },
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 29,
+     "lineEnd": 29,
+     "quote": "Adoption blocks mismatched existing user ids (`src/db/sync/auth.ts:55-69`)."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:ankijs/note/67fb9b93373d0279",
+   "provenance": {
+    "repo": "ankijs",
+    "sha": "3578850d56e052c2bffd9cddc524f97be77926d3",
+    "path": "src/db/sync/engine.ts",
+    "lines": {
+     "start": 55,
+     "end": 61
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q11-single-flight",
+   "pack": "ankijs",
+   "target": "seed:quests:ankijs/quiz/db74bffbb71bd868",
+   "phase": "after",
+   "title": "Why overlapping sync triggers share one run",
+   "body": "The key is right: the second caller gets the in-flight promise, so no second loop starts. `running` is a module-level variable. `syncNow` first checks `if (running) return running;`. If a sync is already going, the caller just waits on the same promise. Otherwise it starts `syncLoop()`, stores the promise, and clears `running` in `finally` when the loop ends, whether it succeeded or failed. The reliability guide calls this **single-flight**.\n\nWhy the others are wrong:\n- \"Cancels and restarts\": nothing cancels the running promise.\n- \"Throws 'sync already running'\": no such error exists; it returns the promise.\n- \"Both run and push the outbox twice\": that is the overlap `running` prevents.",
+   "excerpts": [
+    {
+     "path": "src/db/sync/engine.ts",
+     "lineStart": 55,
+     "lineEnd": 61,
+     "quote": "if (running) return running; running = syncLoop().finally(() => { running = null; }); return running;"
+    },
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+     "lineStart": 20,
+     "lineEnd": 20,
+     "quote": "- **Single-flight:** `running` prevents overlapping sync loops"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:ankijs/note/756943cd739c3cdc",
+   "provenance": {
+    "repo": "ankijs",
+    "sha": "3578850d56e052c2bffd9cddc524f97be77926d3",
+    "path": "src/db/sync/merge.ts",
+    "lines": {
+     "start": 46,
+     "end": 50
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q06-card-merge-split",
+   "pack": "ankijs",
+   "target": "seed:quests:ankijs/quiz/7753c4258bf8a000",
+   "phase": "after",
+   "title": "How text and scheduling merge separately",
+   "body": "The key is right: the card ends up with A's new text and B's new scheduling state. `mergeCard` makes two separate decisions. `useRemoteContent` compares `content_updated_at` (front, back, deck, suspended). `useRemoteSrs` compares `srs_updated_at` (due, stability, reps, and the other spaced-repetition fields). A's edit only moved the content timestamp; B's review only moved the SRS timestamp. So each side wins for its own part. On a tie, `newerOrTie` picks the remote value.\n\nWhy the others are wrong:\n- \"Only the newer of the two edits\": that would be one timestamp for the whole card; this code uses two.\n- \"Two separate cards\": merge always returns one card for one id.\n- \"A's text with the old SRS state\": B's review has the newer `srs_updated_at`, so B's scheduling wins.",
+   "excerpts": [
+    {
+     "path": "src/db/sync/merge.ts",
+     "lineStart": 46,
+     "lineEnd": 50,
+     "quote": "const useRemoteSrs = newerOrTie(remote.srs_updated_at, local.srs_updated_at);"
+    },
+    {
+     "path": "src/db/sync/merge.ts",
+     "lineStart": 56,
+     "lineEnd": 59,
+     "quote": "front: useRemoteContent ? remote.front : local.front, back: useRemoteContent ? remote.back : local.back, suspended: useRemoteContent ? remote.suspended : local.suspended, due: useRemoteSrs ? remote.due : local.due,"
+    },
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/06-architecture-critique.md",
+     "lineStart": 8,
+     "lineEnd": 8,
+     "quote": "**Conflict split for cards:** content and SRS can merge independently"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:ankijs/note/88ffc6f9d518ab80",
+   "provenance": {
+    "repo": "ankijs",
+    "sha": "3578850d56e052c2bffd9cddc524f97be77926d3",
+    "path": "src/db/sync/engine.ts",
+    "lines": {
+     "start": 146,
+     "end": 150
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q08-rls-not-client-filter",
+   "pack": "ankijs",
+   "target": "seed:quests:ankijs/quiz/8a4a39f03e7c6025",
+   "phase": "after",
+   "title": "Why the client's user_id filter is not the security",
+   "body": "The key is right: client filters can be left out; Postgres row-level security (RLS) is the real guard. The pull query adds `.eq('user_id', uid)`, but that line runs in the user's browser. Anyone can edit or skip it. The server migration turns on RLS for every synced table and adds a policy `using (user_id = auth.uid())`. The database itself then refuses rows that belong to someone else, whatever the query says. This is IDOR prevention: stopping a user from reading another user's records by asking for them directly.\n\nWhy the others are wrong:\n- \"Cards are encrypted per user\": nothing in the schema or sync code encrypts cards.\n- \"The anon key is scoped to one user\": the policy checks `auth.uid()`, the signed-in user, not the key; the guides never describe a per-user key.\n- \"Supabase rejects queries without a user_id filter\": no such rule exists; the RLS policy is what limits rows.",
+   "excerpts": [
+    {
+     "path": "src/db/sync/engine.ts",
+     "lineStart": 146,
+     "lineEnd": 150,
+     "quote": ".from(tableName) .select('*') .eq('user_id', uid)"
+    },
+    {
+     "path": "supabase/migrations/0001_init.sql",
+     "lineStart": 186,
+     "lineEnd": 187,
+     "quote": "for all using (user_id = auth.uid()) with check (user_id = auth.uid())"
+    },
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 25,
+     "lineEnd": 25,
+     "quote": "- IDOR prevention lives server-side in RLS, not just in client filters."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:ankijs/note/938ebaf1808225d8",
+   "provenance": {
+    "repo": "ankijs",
+    "sha": "3578850d56e052c2bffd9cddc524f97be77926d3",
+    "path": "src/db/sync/engine.ts",
+    "lines": {
+     "start": 186,
+     "end": 188
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q12-missing-deck-skip",
+   "pack": "ankijs",
+   "target": "seed:quests:ankijs/quiz/ea9c82a93e85570e",
+   "phase": "after",
+   "title": "What happens to a pulled card whose deck is missing",
+   "body": "The key is right: the card is skipped, and the cursor still moves past it. Inside `mergeRows`, the `cards` case looks up the card's deck locally. If there is none, it hits `break` and moves on to the next row without saving the card. Back in `pullRemote`, the cursor is set to the `server_updated_at` of the **last** row in the page, whatever happened to the rows before it. So the next pull will not ask for that card again until it changes on the server. The risk register lists this as \"Lost remote card until later pull\".\n\nWhy the others are wrong:\n- \"The whole pull fails and retries\": no error is thrown; `break` just leaves the switch.\n- \"A placeholder deck is created\": no code creates a deck here.\n- \"Saved with a null deck_id\": the `put` is never reached for this card.",
+   "excerpts": [
+    {
+     "path": "src/db/sync/engine.ts",
+     "lineStart": 186,
+     "lineEnd": 188,
+     "quote": "const deck = await db.decks.get(remote.deck_id); if (!deck) break;"
+    },
+    {
+     "path": "src/db/sync/engine.ts",
+     "lineStart": 156,
+     "lineEnd": 160,
+     "quote": "const last = rows.at(-1)?.server_updated_at; if (last) { cursor = last; await db.sync_meta.put({ key: `cursor:${tableName}`, value: cursor });"
+    },
+    {
+     "path": "docs/upskill/08-reference/risk-register.md",
+     "lineStart": 8,
+     "lineEnd": 8,
+     "quote": "| Missing-deck card skipped on pull | `src/db/sync/engine.ts:186-187` | Lost remote card until later pull |"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:ankijs/note/95b09d3ecf84bae4",
+   "provenance": {
+    "repo": "ankijs",
+    "sha": "3578850d56e052c2bffd9cddc524f97be77926d3",
+    "path": "src/db/repos/cardRepo.ts",
+    "lines": {
+     "start": 50,
+     "end": 55
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q05-review-transaction",
+   "pack": "ankijs",
+   "target": "seed:quests:ankijs/quiz/4e5bf08466a92607",
+   "phase": "after",
+   "title": "Why grading a card is one transaction",
+   "body": "The key is right: so a crash cannot leave a review half-written or unqueued for sync. `applyReview` opens one Dexie transaction over `cards`, `review_logs` and `outbox`, and inside it writes the card, the review log, and two outbox entries. A transaction is all-or-nothing. If the card were saved but its outbox entry were not, that review would never reach the server.\n\nWhy the others are wrong:\n- \"The outbox entry must exist before the card row\": the order inside the transaction is card first, then outbox; the point is that they commit together, not their order.\n- \"Dexie allows only one table per transaction otherwise\": the same file uses multi-table transactions everywhere; there is no such limit.\n- \"To batch requests for speed\": the guide lists it as a transaction boundary for correctness, not as a speed trick.",
+   "excerpts": [
+    {
+     "path": "src/db/repos/cardRepo.ts",
+     "lineStart": 50,
+     "lineEnd": 55,
+     "quote": "await db.transaction('rw', db.cards, db.review_logs, db.outbox, async () => { await db.cards.put(finalCard); await db.review_logs.put(finalLog);"
+    },
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/02-data-model-and-persistence.md",
+     "lineStart": 21,
+     "lineEnd": 21,
+     "quote": "- Card review: card + review log + two outbox entries (`src/db/repos/cardRepo.ts:50-54`)."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:ankijs/note/9878cd67f0bd38c1",
+   "provenance": {
+    "repo": "ankijs",
+    "sha": "3578850d56e052c2bffd9cddc524f97be77926d3",
+    "path": "src/db/sync/engine.ts",
+    "lines": {
+     "start": 70,
+     "end": 79
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r03-sync-loop-and-trust",
+   "pack": "ankijs",
+   "target": "pack",
+   "phase": "before",
+   "title": "The sync loop: push, pull, merge, and who is trusted",
+   "body": "`syncLoop` in `src/db/sync/engine.ts` does two things in order. **Push**: send outbox rows to Supabase. **Pull**: ask Supabase for rows changed since a saved **cursor** (a timestamp remembered per table in `sync_meta`), then merge them into the local database. Pulled rows are written straight to Dexie without touching the outbox, so they do not bounce back to the server.\n\nThree things to watch when you read it:\n\n- Many triggers call `syncNow`: page load, coming online, a new outbox entry, the tab becoming visible, and a timer. Look at the module-level variables at the top of the file.\n- Errors are stored in `sync_meta` as `last_error` so the UI can show them, and a retry is scheduled.\n- Security is not the client's job. The validation guide is direct about this: the server enforces who owns which rows. The client code still filters, but read the guide on why that is not the protection.\n\nThe merge step (`src/db/sync/merge.ts`) decides which side wins for each field when local and remote both changed.",
+   "excerpts": [
+    {
+     "path": "src/db/sync/engine.ts",
+     "lineStart": 70,
+     "lineEnd": 79,
+     "quote": "await pushOutbox(session.user.id); setSyncState('pulling'); await pullRemote(session.user.id);"
+    },
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 19,
+     "lineEnd": 19,
+     "quote": "Server authorization is row-level: every synced table has RLS and a policy requiring `user_id = auth.uid()` (`supabase/migrations/0001_init.sql:176-188`)."
+    },
+    {
+     "path": "docs/upskill/01-codebase-cartography/05-key-flows.md",
+     "lineStart": 127,
+     "lineEnd": 127,
+     "quote": "**What juniors usually miss:** pull writes directly to Dexie to avoid re-enqueue"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/upskill/01-codebase-cartography/05-key-flows.md",
+     "lineStart": 102,
+     "lineEnd": 133,
+     "why": "The sync push/pull trace table, step by step."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:ankijs/note/aa9cd68c4162c0bd",
+   "provenance": {
+    "repo": "ankijs",
+    "sha": "3578850d56e052c2bffd9cddc524f97be77926d3",
+    "path": "src/features/inbox/ConvertNoteDialog.tsx",
+    "lines": {
+     "start": 32,
+     "end": 43
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q03-convert-not-atomic",
+   "pack": "ankijs",
+   "target": "seed:quests:ankijs/quiz/1ab9ed6ebdf66b2d",
+   "phase": "after",
+   "title": "What an interrupted note conversion leaves behind",
+   "body": "The key is right: the cards exist but the note is not marked converted. In `ConvertNoteDialog`, each press of \"create\" calls `createOne`, which saves a card with `createCard` right away. Only later, when the dialog finishes, does `finish` call `markConverted`. These are separate writes from the UI, not one transaction. If the app closes in between, the saved cards stay and the mark never happens. The critique lists this as a confirmed risk and suggests moving both steps into one repository transaction helper.\n\nWhy the others are wrong:\n- \"Note marked but cards missing\": the order is the other way round; cards are created first.\n- \"Nothing is saved; Dexie rolls back the dialog\": there is no transaction around the dialog, so nothing can roll back.\n- \"Cards created a second time on reopen\": nothing replays the old dialog; the created ids live only in React state.",
+   "excerpts": [
+    {
+     "path": "src/features/inbox/ConvertNoteDialog.tsx",
+     "lineStart": 32,
+     "lineEnd": 43,
+     "quote": "const card = await createCard({ deck_id: deckId, front, back, note_id: note.id });"
+    },
+    {
+     "path": "src/features/inbox/ConvertNoteDialog.tsx",
+     "lineStart": 40,
+     "lineEnd": 43,
+     "quote": "if (ids.length > 0) await markConverted(note.id, ids);"
+    },
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/06-architecture-critique.md",
+     "lineStart": 17,
+     "lineEnd": 17,
+     "quote": "| Convert note is two transactions. | `src/features/inbox/ConvertNoteDialog.tsx:32-43` | Medium | Move create+mark into repo transaction helper. | Partial-failure test. |"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:ankijs/note/ac23d6e9a2ed8271",
+   "provenance": {
+    "repo": "ankijs",
+    "sha": "3578850d56e052c2bffd9cddc524f97be77926d3",
+    "path": "src/db/repos/cardRepo.ts",
+    "lines": {
+     "start": 60,
+     "end": 65
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q09-undo-compensation",
+   "pack": "ankijs",
+   "target": "seed:quests:ankijs/quiz/94f4a2b38be5ff04",
+   "phase": "after",
+   "title": "What undo does to sync state",
+   "body": "The key is right: undo restores the card, deletes the log, and drops the log's outbox entry. `undoReview` opens a new transaction. It puts the saved `cardBefore` back with a fresh `srs_updated_at`, deletes the review log, queues the card for sync, and then finds and deletes the outbox entry for that review log. The reliability guide calls this **compensation**: a new action that cancels an earlier one, rather than rewinding it.\n\nThe fresh timestamp matters: it makes the restored state the newest SRS state, so a merge will keep it.\n\nWhy the others are wrong:\n- \"Rolls back the original transaction from a saved handle\": a committed Dexie transaction cannot be reopened; this is a new transaction.\n- \"Appends a compensating negative review log\": the log is deleted, not countered.\n- \"Only restores the card; the log still syncs\": the code removes the log's outbox entry so it does not sync.",
+   "excerpts": [
+    {
+     "path": "src/db/repos/cardRepo.ts",
+     "lineStart": 60,
+     "lineEnd": 65,
+     "quote": "await db.cards.put({ ...cardBefore, srs_updated_at: timestamp }); await db.review_logs.delete(logId);"
+    },
+    {
+     "path": "src/db/repos/cardRepo.ts",
+     "lineStart": 64,
+     "lineEnd": 65,
+     "quote": "if (outboxLog?.id !== undefined) await db.outbox.delete(outboxLog.id);"
+    },
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+     "lineStart": 21,
+     "lineEnd": 21,
+     "quote": "- **Compensation:** undo restores card and removes local review log"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:ankijs/note/b9e233b6d8dbeea9",
+   "provenance": {
+    "repo": "ankijs",
+    "sha": "3578850d56e052c2bffd9cddc524f97be77926d3",
+    "path": "src/db/repos/dataRepo.ts",
+    "lines": {
+     "start": 147,
+     "end": 151
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q07-deep-import-validation",
+   "pack": "ankijs",
+   "target": "seed:quests:ankijs/quiz/838c52d8f4fca50a",
+   "phase": "after",
+   "title": "Why a backup with a card missing its due date is refused",
+   "body": "The key is right: import throws before writing anything, so no data is imported. `importData` runs two checks in a row. First `isBackup` checks only the top-level shape: version 1 and four arrays. This backup passes it. Then `validateRows` checks every row. For cards it requires `due`, `created_at`, `content_updated_at` and `srs_updated_at` to all be valid dates. A missing `due` fails that test, and the function throws \"Invalid card in backup. No data was imported.\" Both checks run before `db.transaction` opens, so nothing has been written yet.\n\nA warning about the guides: the risk register and the validation chapter still describe import validation as shallow, citing `dataRepo.ts:15-25`. That describes older code. At this commit the per-row validators the register suggested already exist. Trust the code over the table.\n\nWhy the others are wrong:\n- \"Accepts it, isBackup only checks shape\": true of `isBackup` alone, but `validateRows` runs right after it.\n- \"Fills in today's date\": no code invents a missing value.\n- \"Drops only the bad card\": one bad row throws for the whole file.",
+   "excerpts": [
+    {
+     "path": "src/db/repos/dataRepo.ts",
+     "lineStart": 147,
+     "lineEnd": 151,
+     "quote": "if (!isBackup(value)) throw new Error(\"This file is not a Recall backup.\"); validateRows(value);"
+    },
+    {
+     "path": "src/db/repos/dataRepo.ts",
+     "lineStart": 99,
+     "lineEnd": 104,
+     "quote": "card.due, card.created_at, card.content_updated_at, card.srs_updated_at, ].every(date)"
+    },
+    {
+     "path": "src/db/repos/dataRepo.ts",
+     "lineStart": 117,
+     "lineEnd": 117,
+     "quote": "throw new Error(\"Invalid card in backup. No data was imported.\");"
+    },
+    {
+     "path": "docs/upskill/08-reference/risk-register.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "| Shallow import validation | `src/db/repos/dataRepo.ts:15-25` | Corrupt local data |"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:ankijs/note/cd4165d2b6e8624b",
+   "provenance": {
+    "repo": "ankijs",
+    "sha": "3578850d56e052c2bffd9cddc524f97be77926d3",
+    "path": "src/db/sync/engine.ts",
+    "lines": {
+     "start": 150,
+     "end": 151
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q10-server-cursor",
+   "pack": "ankijs",
+   "target": "seed:quests:ankijs/quiz/db5c8e1d41a768a4",
+   "phase": "after",
+   "title": "Why the pull cursor uses server time",
+   "body": "The key is right: client clocks and late offline pushes would let rows fall behind the cursor. The cursor means \"I have everything changed after this time\". If it used each row's client `updated_at`, a device that was offline for a day would later push rows stamped with yesterday's time. Other devices have already moved their cursor past yesterday, so those rows would be skipped forever. Client clocks can also simply be wrong.\n\n`server_updated_at` is set by a database trigger to `now()` whenever the server row is written. So a late push still gets a new, later time, and every device's next pull sees it.\n\nWhy the others are wrong:\n- \"Client updated_at is not stored on the server\": push sends the whole row, and the problem is ordering, not storage.\n- \"It is only faster because it is indexed\": the index helps, but the reason given is correctness.\n- \"Would download your own rows twice\": no part of the code or guide describes this.",
+   "excerpts": [
+    {
+     "path": "src/db/sync/engine.ts",
+     "lineStart": 150,
+     "lineEnd": 151,
+     "quote": ".gt('server_updated_at', cursor) .order('server_updated_at', { ascending: true })"
+    },
+    {
+     "path": "supabase/migrations/0001_init.sql",
+     "lineStart": 67,
+     "lineEnd": 67,
+     "quote": "new.server_updated_at = now();"
+    },
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/02-data-model-and-persistence.md",
+     "lineStart": 29,
+     "lineEnd": 29,
+     "quote": "- Pull cursors use `server_updated_at`, not client `updated_at`"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:ankijs/note/da9f23a5bf03c01f",
+   "provenance": {
+    "repo": "ankijs",
+    "sha": "3578850d56e052c2bffd9cddc524f97be77926d3",
+    "path": "src/db/sync/engine.ts",
+    "lines": {
+     "start": 84,
+     "end": 87
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q02-backoff",
+   "pack": "ankijs",
+   "target": "seed:quests:ankijs/quiz/119774d82b33f70b",
+   "phase": "after",
+   "title": "How the retry delay grows while the server is down",
+   "body": "The key is right: the delay doubles from 5 seconds up to a 5-minute cap and goes back to 5 seconds on success. `backoffMs` starts at `5_000`. In the `catch` of `syncLoop`, a timer is set to call `syncNow` after `backoffMs`, and then `backoffMs = Math.min(backoffMs * 2, 300_000)`. 300,000 ms is 5 minutes. A successful run sets `backoffMs = 5_000` again.\n\nWhy the others are wrong:\n- \"Stops after three failures\": there is no failure counter; the timer is set on every error.\n- \"Retries immediately in a loop\": the retry waits `backoffMs`, never zero.\n- \"A fixed 60 s retry from the interval timer only\": the 60-second interval exists, but the error path also schedules its own growing retry.",
+   "excerpts": [
+    {
+     "path": "src/db/sync/engine.ts",
+     "lineStart": 84,
+     "lineEnd": 87,
+     "quote": "retryTimer = window.setTimeout(() => { void syncNow(); }, backoffMs); backoffMs = Math.min(backoffMs * 2, 300_000);"
+    },
+    {
+     "path": "src/db/sync/engine.ts",
+     "lineStart": 77,
+     "lineEnd": 78,
+     "quote": "await db.sync_meta.delete('last_error'); backoffMs = 5_000;"
+    },
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+     "lineStart": 19,
+     "lineEnd": 19,
+     "quote": "- **Retries:** sync stores last error and backs off"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:ankijs/note/e808bb75282f7eba",
+   "provenance": {
+    "repo": "ankijs",
+    "sha": "3578850d56e052c2bffd9cddc524f97be77926d3",
+    "path": "src/db/sync/outbox.ts",
+    "lines": {
+     "start": 9,
+     "end": 14
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q04-outbox-dedupe",
+   "pack": "ankijs",
+   "target": "seed:quests:ankijs/quiz/31e4225a0599e5f1",
+   "phase": "after",
+   "title": "Why five offline edits leave one outbox entry",
+   "body": "The key is right: there is one entry, and its `queued_at` is refreshed on each edit. `enqueueOutbox` looks up an existing outbox row by the compound index `[table_name+row_id]`. If one exists, it only updates `queued_at` and returns. A new row is added only the first time.\n\nOne entry is enough because push does not store the change itself. It loads the **current** card from the database when it syncs, so it always sends the latest state. That is the idempotency the reliability guide names.\n\nWhy the others are wrong:\n- \"Zero; edits go into the pull cursor\": the cursor is for pulling remote changes, not for local edits.\n- \"Two: the first and the latest\": the lookup finds the existing entry every time after the first.\n- \"Five, replayed in order\": entries are not a log of edits, and the dedupe stops them piling up.",
+   "excerpts": [
+    {
+     "path": "src/db/sync/outbox.ts",
+     "lineStart": 9,
+     "lineEnd": 14,
+     "quote": "const existing = await db.outbox.where('[table_name+row_id]').equals([table_name, row_id]).first(); if (existing?.id !== undefined) { await db.outbox.update(existing.id, { queued_at }); return; }"
+    },
+    {
+     "path": "src/db/sync/engine.ts",
+     "lineStart": 111,
+     "lineEnd": 114,
+     "quote": "const rows = (await rowsFor( tableName, group.map((entry) => entry.row_id), )).map((row) => ({ ...row, user_id: uid }));"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:ankijs/note/e8d6cb38f6d8b289",
+   "provenance": {
+    "repo": "ankijs",
+    "sha": "3578850d56e052c2bffd9cddc524f97be77926d3",
+    "path": "docs/upskill/README.md",
+    "lines": {
+     "start": 5,
+     "end": 5
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r01-start-here",
+   "pack": "ankijs",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: a local-first flashcard app with optional sync",
+   "body": "Recall (this repo) is a React + TypeScript flashcard app. The browser is the main database: everything is saved first in IndexedDB through a library called Dexie. Syncing to a Supabase server is optional and only happens when you sign in. Most quizzes in this pack are about what happens at the edges: writes, sync, sign-in and import.\n\nSuggested reading order:\n\n1. `docs/upskill/README.md`, then `00-fast-track.md` for the first ten files to open.\n2. `01-codebase-cartography/05-key-flows.md`: trace \"Quick Capture\" and \"Study Review And Undo\", then \"Optional Sync Push/Pull\".\n3. `03-architecture-and-patterns/02-data-model-and-persistence.md` (tables and transaction boundaries).\n4. `03-architecture-and-patterns/04-side-effects-async-and-reliability.md` (idempotency, retries, single-flight).\n5. `03-validation-auth-and-permissions.md`, then `06-architecture-critique.md` and `08-reference/risk-register.md`.\n\nKeep `src/db/sync/engine.ts` open while you read: most of the sync quizzes point into it. Note that the guides cite line numbers, and a few have drifted a little from the code; always read the code itself.",
+   "excerpts": [
+    {
+     "path": "docs/upskill/README.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "The browser owns the primary data store through Dexie/IndexedDB (`src/db/schema.ts:80-101`)."
+    },
+    {
+     "path": "docs/upskill/README.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "Supabase is optional: auth and sync are disabled if env vars are missing (`src/db/sync/supabaseClient.ts:5-19`)."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/upskill/00-fast-track.md",
+     "lineStart": 24,
+     "lineEnd": 37,
+     "why": "A table of the first ten files to open, and what to ignore in each."
+    },
+    {
+     "path": "docs/upskill/01-codebase-cartography/05-key-flows.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Step-by-step traces of capture, study, sync, sign-in and import."
+    }
+   ]
+  }
+ ]
+}
