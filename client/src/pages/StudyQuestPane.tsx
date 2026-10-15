@@ -6,6 +6,8 @@ import type { StudyQuestPublic, SubmitResponse, UnitDetail } from '../api/types'
 import { Icon } from '../components/Icon';
 import { Chip } from '../components/ui';
 import { InlineProse } from '../lib/prose';
+import { useTracksRefresh } from '../lib/tracks';
+import { readingTitle } from '../lib/view';
 
 /**
  * W8 study quest (spec §4): an ordered reading list into the repo, then the pre-seeded quiz
@@ -38,6 +40,7 @@ function StudyQuest({ detail, sq }: { detail: UnitDetail; sq: StudyQuestPublic }
   const [submit, setSubmit] = useState<SubmitResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(detail.unit.state === 'done');
+  const refreshTracks = useTracksRefresh();
   const complete = answers.every((a) => a !== null);
   const answered = answers.filter((a) => a !== null).length;
 
@@ -49,6 +52,7 @@ function StudyQuest({ detail, sq }: { detail: UnitDetail; sq: StudyQuestPublic }
       const r = await api.submitUnit(unitId, { answers: answers as number[], selfAssisted: assisted });
       setSubmit(r);
       if (r.verdict === 'pass') setDone(true);
+      refreshTracks(); // W10: a pass changes campaign / track progress (and may unlock an act)
     } catch (e) {
       setError(errorText(e));
     } finally {
@@ -79,7 +83,7 @@ function StudyQuest({ detail, sq }: { detail: UnitDetail; sq: StudyQuestPublic }
         {sq.readingSteps.map((r) => (
           <li key={r.key}>
             <a href={r.url} target="_blank" rel="noopener noreferrer">
-              {r.title}
+              {readingTitle(r.title, r.path)}
             </a>{' '}
             <span className="muted small">
               {r.path}:{r.lines.start}-{r.lines.end}

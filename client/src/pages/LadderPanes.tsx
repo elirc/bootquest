@@ -19,6 +19,7 @@ import {
 import { Icon } from '../components/Icon';
 import { Chip } from '../components/ui';
 import { InlineProse } from '../lib/prose';
+import { useTracksRefresh } from '../lib/tracks';
 
 const fmtPct = (x: number) => `${Math.round(x * 1000) / 10}%`;
 const fmtWhen = (ms: number) =>
@@ -170,6 +171,7 @@ function ExplainBackKeyView({ unitId, keyResp }: { unitId: number; keyResp: Expl
   const api = useApi();
   const allIds = keyResp.questions.flatMap((q) => q.keyPoints.map((k) => k.id));
   const [marks, setMarks] = useState<Record<string, 'covered' | 'missed'>>({});
+  const refreshTracks = useTracksRefresh();
   const [result, setResult] = useState<ExplainBackScoreResponse | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -182,6 +184,7 @@ function ExplainBackKeyView({ unitId, keyResp }: { unitId: number; keyResp: Expl
     setError(null);
     try {
       setResult(await api.selfScoreExplainBack(unitId, { perKeyPoint: marks }));
+      refreshTracks(); // W10: a self-score completes the unit (track progress)
     } catch (e) {
       setError(errorText(e));
     } finally {
@@ -465,6 +468,7 @@ export function KataPane({ detail }: { detail: UnitDetail }) {
 function KataKeyView({ unitId, keyResp }: { unitId: number; keyResp: KataKeyResponse }) {
   const api = useApi();
   const [marks, setMarks] = useState<Record<string, 'caught' | 'missed'>>({});
+  const refreshTracks = useTracksRefresh();
   const [result, setResult] = useState<KataScoreResponse | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -476,6 +480,7 @@ function KataKeyView({ unitId, keyResp }: { unitId: number; keyResp: KataKeyResp
     setError(null);
     try {
       setResult(await api.selfScoreKata(unitId, { perDefect: marks }));
+      refreshTracks(); // W10: a self-score completes the unit (track progress)
     } catch (e) {
       setError(errorText(e));
     } finally {

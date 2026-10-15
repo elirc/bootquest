@@ -78,3 +78,26 @@ export function unitProse(detail: UnitDetail): { instructions: string; prompt: s
   }
   return { instructions: rest.join('\n\n'), prompt };
 }
+
+/** The factory's title for a guide with no headings (tools/seed quests parse); never shown as-is. */
+export const UNTITLED_GUIDE = '(untitled guide)';
+
+/**
+ * W10: a reading item titled with the factory placeholder shows the guide's file name instead
+ * (client-only fallback; the seeded title itself is untouched). Any other title is returned as is.
+ */
+export function readingTitle(title: string, path: string): string {
+  if (title.trim() !== UNTITLED_GUIDE) return title;
+  const base = path.split(/[\\/]/).filter((p) => p !== '').pop();
+  return base ?? title;
+}
+
+/**
+ * W10 (ui-audit #8): what the unit's own data says about where a campaign quest unit comes from.
+ * Campaign quest units are keyed `campaign/<track>/<repo>` by the campaign seeder; anything else
+ * yields null (we never guess a source the unit does not name).
+ */
+export function campaignSourceOf(unitKey: string): { trackId: string; repo: string } | null {
+  const m = /^campaign\/([^/]+)\/(.+)$/.exec(unitKey);
+  return m ? { trackId: m[1]!, repo: m[2]! } : null;
+}
