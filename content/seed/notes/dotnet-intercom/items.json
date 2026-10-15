@@ -1,0 +1,510 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "notes",
+ "name": "dotnet-intercom",
+ "items": [
+  {
+   "key": "seed:notes:dotnet-intercom/note/09fd535c948d69d7",
+   "provenance": {
+    "repo": "dotnet-intercom",
+    "sha": "74e0a28945f68e3d04c75ea5d86a2ed6d531050b",
+    "path": "src/NetIntercom.Api/Program.cs",
+    "lines": {
+     "start": 38,
+     "end": 39
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q10-presence-node",
+   "pack": "dotnet-intercom",
+   "target": "seed:quests:dotnet-intercom/quiz/34cc1d3cec26f149",
+   "phase": "after",
+   "title": "In-process presence breaks routing across nodes",
+   "body": "**Key: the agent as offline, because presence is held in node memory.**\n\nProgram.cs registers PresenceTracker as a singleton and exposes it as IPresenceService. Its state is a ConcurrentDictionary inside one process. Node B has its own tracker with no entry for an agent connected to node A, and ConversationRouter consults presence, so routing on node B treats the agent as offline.\n\nWhy the others are wrong:\n- **A Redis backplane**: none is configured; the review proposes one.\n- **Stored in Postgres**: presence is never written to the database.\n- **Routing refuses multiple nodes**: nothing detects a second node; the assumption is silent, which is the review's complaint.",
+   "excerpts": [
+    {
+     "path": "src/NetIntercom.Api/Program.cs",
+     "lineStart": 38,
+     "lineEnd": 39,
+     "quote": "builder.Services.AddSingleton<PresenceTracker>();"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:dotnet-intercom/note/375ed77b3b558b95",
+   "provenance": {
+    "repo": "dotnet-intercom",
+    "sha": "74e0a28945f68e3d04c75ea5d86a2ed6d531050b",
+    "path": "src/NetIntercom.Api/Infrastructure/ApiExceptionHandler.cs",
+    "lines": {
+     "start": 16,
+     "end": 16
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r03-identity-and-errors",
+   "pack": "dotnet-intercom",
+   "target": "pack",
+   "phase": "before",
+   "title": "Core idea: two kinds of identity, and how failures become statuses",
+   "body": "NetIntercom has two kinds of callers. Agents log in with email and password and get a short access token plus a refresh token that rotates. Visitors are anonymous: the widget calls /widget/session, which finds or creates a Visitor row and issues a visitor token.\n\nRead TokenService and note every lifetime setting and its default. Read Refresh and trace what happens to the presented token and to the new one. Then read StartConversation's Handle method carefully: write down exactly which request values it uses to find an existing visitor, and, line by line, what each assignment does when the request value is null.\n\nFinally, read ApiExceptionHandler. List each exception type in its switch with the status and title it produces, and note what happens to an exception the switch does not list. Then check Program.cs for the rate limiter partition key and for how the Hangfire dashboard is protected.",
+   "excerpts": [
+    {
+     "path": "src/NetIntercom.Api/Infrastructure/ApiExceptionHandler.cs",
+     "lineStart": 16,
+     "lineEnd": 16,
+     "quote": "public async ValueTask<bool> TryHandleAsync(HttpContext httpContext, Exception exception, CancellationToken ct)"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/NetIntercom.Infrastructure/Auth/TokenService.cs",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Agent and visitor token creation and the lifetime options."
+    },
+    {
+     "path": "src/NetIntercom.Api/Infrastructure/ApiExceptionHandler.cs",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The exception-to-ProblemDetails mapping."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:dotnet-intercom/note/489bd2a76dbcdf82",
+   "provenance": {
+    "repo": "dotnet-intercom",
+    "sha": "74e0a28945f68e3d04c75ea5d86a2ed6d531050b",
+    "path": "src/NetIntercom.Api/Realtime/VisitorHub.cs",
+    "lines": {
+     "start": 51,
+     "end": 51
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q05-typing-unchecked",
+   "pack": "dotnet-intercom",
+   "target": "seed:quests:dotnet-intercom/quiz/592d261fc0e3d932",
+   "phase": "after",
+   "title": "Typing skips the ownership check that Join has",
+   "body": "**Key: the typing event reaches that conversation's agent group.**\n\nJoinConversation checks with AnyAsync that the conversation's VisitorId is the caller's, and throws a HubException if not. Typing has no such check: it loads the caller's visitor row for a display name and sends \"typing\" to the agent hub's group conv:{conversationId}. SignalR lets any caller send to any group by name.\n\nWhy the others are wrong:\n- **A HubException**: only JoinConversation throws one.\n- **Nothing, never joined**: sending to a group does not require being a member of it, and the target is the agent hub's group.\n- **Connection closed**: nothing in Typing aborts the connection.",
+   "excerpts": [
+    {
+     "path": "src/NetIntercom.Api/Realtime/VisitorHub.cs",
+     "lineStart": 51,
+     "lineEnd": 51,
+     "quote": "await _agentHub.Clients.Group($\"conv:{conversationId}\").SendAsync(\"typing\", new"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:dotnet-intercom/note/5423b40d1c61216b",
+   "provenance": {
+    "repo": "dotnet-intercom",
+    "sha": "74e0a28945f68e3d04c75ea5d86a2ed6d531050b",
+    "path": "src/NetIntercom.Api/Program.cs",
+    "lines": {
+     "start": 117,
+     "end": 118
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q12-rate-limit-partition",
+   "pack": "dotnet-intercom",
+   "target": "seed:quests:dotnet-intercom/quiz/6c067405d622fa52",
+   "phase": "after",
+   "title": "Behind a proxy, RemoteIpAddress is the proxy",
+   "body": "**Key: clients share a single partition, keyed by the proxy's IP.**\n\nBoth limiter policies use context.Connection.RemoteIpAddress as the partition key. Behind a reverse proxy, the TCP peer for every request is the proxy, and without UseForwardedHeaders ASP.NET Core does not replace it with the client address. Every request therefore lands in the same partition, and the limit acts as a global throttle.\n\nWhy the others are wrong:\n- **X-Forwarded-For**: nothing reads it, since the forwarded-headers middleware is not registered.\n- **Per visitor sub claim / per agent id**: the partition key is the connection address, not a claim.",
+   "excerpts": [
+    {
+     "path": "src/NetIntercom.Api/Program.cs",
+     "lineStart": 117,
+     "lineEnd": 118,
+     "quote": "context.Connection.RemoteIpAddress?.ToString() ?? \"unknown\","
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:dotnet-intercom/note/57dc0654e2ef2845",
+   "provenance": {
+    "repo": "dotnet-intercom",
+    "sha": "74e0a28945f68e3d04c75ea5d86a2ed6d531050b",
+    "path": "docs/architecture-review.md",
+    "lines": {
+     "start": 149,
+     "end": 149
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r02-realtime-design",
+   "pack": "dotnet-intercom",
+   "target": "pack",
+   "phase": "before",
+   "title": "Core idea: REST writes, hubs deliver, the database is the truth",
+   "body": "Chat systems have to decide where a message becomes real. NetIntercom's answer: every write goes through a REST endpoint and a MediatR handler that saves to PostgreSQL; the SignalR hubs only fan events out to connected clients; and a client that reconnects asks the database what it missed through a catch-up query with an ?after= parameter.\n\nThings to look for as you read the code behind the review:\n\n- In the visitor hub, compare the two hub methods side by side and list what each checks before it does anything.\n- Find both catch-up queries and note the exact comparison operator they use on CreatedAtUtc. Then think through two messages saved with the same timestamp.\n- Find where presence state lives (PresenceTracker) and how it is registered in Program.cs. Ask what a second API instance would see.\n- Open CheckSlaBreaches and AppDbContext together: list which entities have a concurrency token, and follow what one sweep does from load to notify.",
+   "excerpts": [
+    {
+     "path": "docs/architecture-review.md",
+     "lineStart": 149,
+     "lineEnd": 149,
+     "quote": "Writes go through REST, hubs only fan out, reconnect catch-up reads the DB."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/NetIntercom.Api/Realtime/VisitorHub.cs",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The visitor hub: joining a conversation and typing indicators."
+    },
+    {
+     "path": "src/NetIntercom.Application/Sla/CheckSlaBreaches.cs",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The recurring SLA sweep."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:dotnet-intercom/note/58308da3a774faf9",
+   "provenance": {
+    "repo": "dotnet-intercom",
+    "sha": "74e0a28945f68e3d04c75ea5d86a2ed6d531050b",
+    "path": "src/NetIntercom.Infrastructure/Auth/TokenService.cs",
+    "lines": {
+     "start": 74,
+     "end": 74
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q03-visitor-token-life",
+   "pack": "dotnet-intercom",
+   "target": "seed:quests:dotnet-intercom/quiz/d95776573ccb7302",
+   "phase": "after",
+   "title": "Visitor tokens: thirty days, no revocation",
+   "body": "**Key: 30 days, and nothing in the code can revoke it any earlier.**\n\nCreateVisitorToken writes the JWT with an expiry of UtcNow.AddDays(VisitorTokenDays), and VisitorTokenDays defaults to 30 (appsettings.json sets 30 too). The token is self-contained and the server keeps no list of visitor tokens, so there is nothing to revoke. The review suggests short-lived tokens or a token-version claim.\n\nWhy the others are wrong:\n- **15 minutes**: that is AccessTokenMinutes, for agents.\n- **14 days, revoked on rotation**: that is the agent refresh token; visitors have none.\n- **Revoked when the row changes**: no claim ties the token to a row version.",
+   "excerpts": [
+    {
+     "path": "src/NetIntercom.Infrastructure/Auth/TokenService.cs",
+     "lineStart": 74,
+     "lineEnd": 74,
+     "quote": "return WriteToken(claims, _clock.UtcNow.AddDays(_options.VisitorTokenDays));"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:dotnet-intercom/note/656baefdbe3abe76",
+   "provenance": {
+    "repo": "dotnet-intercom",
+    "sha": "74e0a28945f68e3d04c75ea5d86a2ed6d531050b",
+    "path": "src/NetIntercom.Application/Widget/StartConversation.cs",
+    "lines": {
+     "start": 60,
+     "end": 60
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q02-null-name-kept",
+   "pack": "dotnet-intercom",
+   "target": "seed:quests:dotnet-intercom/quiz/574916cb02e0a182",
+   "phase": "after",
+   "title": "A null request field leaves the stored value alone",
+   "body": "**Key: it keeps its old value, because the update uses the ?? operator.**\n\nLines 60-63 are written as `visitor.Name = request.Name ?? visitor.Name;` and the same for Email, ExternalId and AttributesJson. The null-coalescing operator returns the right-hand side when the left is null, so a null in the request writes the current value back. The review's warning about overwriting applies when the caller does send a value.\n\nWhy the others are wrong:\n- **Set to null**: only a non-null request value replaces the field.\n- **Empty string from the validator**: nothing substitutes an empty string.\n- **Reset to \"Visitor\"**: that is a display fallback used when sending typing events, not a stored value.",
+   "excerpts": [
+    {
+     "path": "src/NetIntercom.Application/Widget/StartConversation.cs",
+     "lineStart": 60,
+     "lineEnd": 60,
+     "quote": "visitor.Name = request.Name ?? visitor.Name;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:dotnet-intercom/note/788cbed0dae8ebab",
+   "provenance": {
+    "repo": "dotnet-intercom",
+    "sha": "74e0a28945f68e3d04c75ea5d86a2ed6d531050b",
+    "path": "src/NetIntercom.Application/Widget/StartConversation.cs",
+    "lines": {
+     "start": 51,
+     "end": 52
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q01-external-id-takeover",
+   "pack": "dotnet-intercom",
+   "target": "seed:quests:dotnet-intercom/quiz/2786903c75f5ee17",
+   "phase": "after",
+   "title": "The session endpoint trusts whatever externalId is sent",
+   "body": "**Key: the caller is issued that visitor's token, with their history.**\n\nStartWidgetSessionHandler looks up a visitor whose ExternalId equals the request's externalId, or whose AnonymousId matches, then issues a visitor JWT for that row and returns the conversation history. Nothing proves the caller owns the externalId, which is why the review rates this HIGH and calls it the front door.\n\nWhy the others are wrong:\n- **403 on mismatch**: the predicate is an OR, so a matching externalId alone is enough.\n- **A new row**: a row is created only when nothing matches.\n- **401 without an HMAC**: userHash verification is the review's recommended fix; the code has none.",
+   "excerpts": [
+    {
+     "path": "src/NetIntercom.Application/Widget/StartConversation.cs",
+     "lineStart": 51,
+     "lineEnd": 52,
+     "quote": "v => request.ExternalId != null && v.ExternalId == request.ExternalId || v.AnonymousId == request.AnonymousId, ct);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:dotnet-intercom/note/87a36f7c645933e4",
+   "provenance": {
+    "repo": "dotnet-intercom",
+    "sha": "74e0a28945f68e3d04c75ea5d86a2ed6d531050b",
+    "path": "src/NetIntercom.Api/Infrastructure/ApiExceptionHandler.cs",
+    "lines": {
+     "start": 31,
+     "end": 31
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q07-domain-422",
+   "pack": "dotnet-intercom",
+   "target": "seed:quests:dotnet-intercom/quiz/981bec3e83d964cb",
+   "phase": "after",
+   "title": "Domain rule violations are 422 here",
+   "body": "**Key: 422, titled \"Domain rule violated\", with the message as detail.**\n\nApiExceptionHandler's switch has the arm `DomainException => Problem(StatusCodes.Status422UnprocessableEntity, \"Domain rule violated\", exception.Message)`. A domain exception therefore produces a 422 ProblemDetails with a correlationId extension.\n\nWhy the others are wrong:\n- **409 Conflict**: no arm returns 409; some APIs use it for state conflicts, but this one does not.\n- **400 Validation failed**: that is the FluentValidation ValidationException arm, which groups errors per property.\n- **500**: only exceptions that match no arm fall through to the 500 branch.",
+   "excerpts": [
+    {
+     "path": "src/NetIntercom.Api/Infrastructure/ApiExceptionHandler.cs",
+     "lineStart": 31,
+     "lineEnd": 31,
+     "quote": "DomainException => Problem(StatusCodes.Status422UnprocessableEntity, \"Domain rule violated\", exception.Message),"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:dotnet-intercom/note/93da01a9cac8d253",
+   "provenance": {
+    "repo": "dotnet-intercom",
+    "sha": "74e0a28945f68e3d04c75ea5d86a2ed6d531050b",
+    "path": "src/NetIntercom.Api/Program.cs",
+    "lines": {
+     "start": 189,
+     "end": 189
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q11-hangfire-dashboard",
+   "pack": "dotnet-intercom",
+   "target": "seed:quests:dotnet-intercom/quiz/a6bf8ed8cb4dd004",
+   "phase": "after",
+   "title": "A JWT-protected dashboard is unreachable from a browser",
+   "body": "**Key: a 401, since the browser request lacks an Authorization header.**\n\nThe dashboard is mapped with RequireAuthorization(\"Admin\"), and the default authentication scheme is JwtBearer. Typing the URL into a browser sends cookies but no bearer token, so authentication fails and the challenge is a 401. The review calls this secure but accidental, and not usable as the README describes.\n\nWhy the others are wrong:\n- **Hangfire's own login page**: Hangfire has no login page; access is decided by authorization filters and endpoint policies.\n- **403 for a Hangfire role**: the caller is never authenticated, so it is 401, not 403.\n- **A redirect to the inbox login**: JwtBearer challenges with 401; it does not redirect.",
+   "excerpts": [
+    {
+     "path": "src/NetIntercom.Api/Program.cs",
+     "lineStart": 189,
+     "lineEnd": 189,
+     "quote": "app.MapHangfireDashboard(\"/hangfire\").RequireAuthorization(\"Admin\");"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:dotnet-intercom/note/9636bdc348dc8b44",
+   "provenance": {
+    "repo": "dotnet-intercom",
+    "sha": "74e0a28945f68e3d04c75ea5d86a2ed6d531050b",
+    "path": "src/NetIntercom.Infrastructure/Persistence/AppDbContext.cs",
+    "lines": {
+     "start": 79,
+     "end": 79
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q06-xmin-conflict",
+   "pack": "dotnet-intercom",
+   "target": "seed:quests:dotnet-intercom/quiz/f45ec192175260a6",
+   "phase": "after",
+   "title": "A concurrency token without a handler means a 500",
+   "body": "**Key: a 500, because ApiExceptionHandler falls to its default branch.**\n\nConversation.RowVersion is configured with IsRowVersion(), which Npgsql maps to the PostgreSQL xmin system column. When the second agent saves, the row's xmin differs from the one it loaded, so EF throws DbUpdateConcurrencyException. ApiExceptionHandler's switch has arms for Validation, NotFound, Forbidden, Unauthorized and Domain exceptions; this one matches none, so problem stays null and the handler writes a 500.\n\nWhy the others are wrong:\n- **409**: mapping the exception to 409 is the review's suggested fix.\n- **422**: that is the DomainException arm; no domain rule is evaluated by the save.\n- **Last write wins**: the token is what prevents that silent overwrite.",
+   "excerpts": [
+    {
+     "path": "src/NetIntercom.Infrastructure/Persistence/AppDbContext.cs",
+     "lineStart": 79,
+     "lineEnd": 79,
+     "quote": "e.Property(c => c.RowVersion).IsRowVersion();"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:dotnet-intercom/note/9a17462e7bb864fb",
+   "provenance": {
+    "repo": "dotnet-intercom",
+    "sha": "74e0a28945f68e3d04c75ea5d86a2ed6d531050b",
+    "path": "src/NetIntercom.Application/Auth/Refresh.cs",
+    "lines": {
+     "start": 38,
+     "end": 41
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q04-refresh-reuse",
+   "pack": "dotnet-intercom",
+   "target": "seed:quests:dotnet-intercom/quiz/6250b3fff8c7dc58",
+   "phase": "after",
+   "title": "Reusing a rotated refresh token only fails that one call",
+   "body": "**Key: it answers 401 for that call; the newer tokens stay valid.**\n\nRefresh hashes the presented token and finds the stored row. Because the row was revoked at the last rotation, IsActive is false and the handler throws UnauthorizedException, which ApiExceptionHandler maps to 401. It does nothing else, so the token issued at the last rotation keeps working. That missing family revocation is the review's finding.\n\nWhy the others are wrong:\n- **Revokes every token**: that is the recommended reuse-detection response, not current code.\n- **Issues a fresh pair**: the IsActive check fails first.\n- **409**: no concurrency handling is involved; the exception is UnauthorizedException.",
+   "excerpts": [
+    {
+     "path": "src/NetIntercom.Application/Auth/Refresh.cs",
+     "lineStart": 38,
+     "lineEnd": 41,
+     "quote": "if (stored is null || !stored.IsActive(_clock.UtcNow) || !stored.AgentUser.IsActive)"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:dotnet-intercom/note/a5ceaafee870a9dc",
+   "provenance": {
+    "repo": "dotnet-intercom",
+    "sha": "74e0a28945f68e3d04c75ea5d86a2ed6d531050b",
+    "path": "src/NetIntercom.Application/Widget/WidgetQueries.cs",
+    "lines": {
+     "start": 36,
+     "end": 36
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q09-after-tie",
+   "pack": "dotnet-intercom",
+   "target": "seed:quests:dotnet-intercom/quiz/5fda63149ced2bba",
+   "phase": "after",
+   "title": "A strict > cursor drops ties at the boundary",
+   "body": "**Key: it is skipped, because the query filters on CreatedAtUtc > after.**\n\nThe widget catch-up query (and the agent one in GetConversation) keeps messages with CreatedAtUtc strictly greater than AfterUtc. A missed message whose timestamp equals the last-seen one is not greater, so it is excluded. Ties happen because one SaveChanges batch stamps every message with the same IClock.UtcNow.\n\nWhy the others are wrong:\n- **The filter includes the after time**: it would with >=, which is one of the review's suggested fixes.\n- **The server dedupes by Id**: deduplication happens in the widget, on the client.\n- **Timestamps must be unique**: the (ConversationId, CreatedAtUtc) index is not unique.",
+   "excerpts": [
+    {
+     "path": "src/NetIntercom.Application/Widget/WidgetQueries.cs",
+     "lineStart": 36,
+     "lineEnd": 36,
+     "quote": "m.CreatedAtUtc > request.AfterUtc"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:dotnet-intercom/note/c92e40e3d53fc85a",
+   "provenance": {
+    "repo": "dotnet-intercom",
+    "sha": "74e0a28945f68e3d04c75ea5d86a2ed6d531050b",
+    "path": "docs/architecture-review.md",
+    "lines": {
+     "start": 5,
+     "end": 5
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q08-sla-overlap",
+   "pack": "dotnet-intercom",
+   "target": "seed:quests:dotnet-intercom/quiz/b62b37386bde83ec",
+   "phase": "after",
+   "title": "Overlapping sweeps double the escalation, without an error",
+   "body": "**Key: both mark it breached, save and notify: the escalation is sent twice.**\n\nEach sweep loads Running, overdue timers into its own DbContext. Both see Status == Running, so MarkBreached's guard passes in both runs. SlaTimer has no concurrency token, so neither UPDATE detects the other, and each run saves and then calls SlaBreachedAsync. The review's section 2.3 says the loser throws DomainException, but the status note at the top of the review corrects this.\n\nWhy the others are wrong:\n- **DomainException fails the batch**: the in-memory status is Running in both contexts.\n- **xmin conflict**: only Conversation has a row version; SlaTimer does not.\n- **Unique index**: the (Status, BreachAtUtc) index is a plain, non-unique index.",
+   "excerpts": [
+    {
+     "path": "docs/architecture-review.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "Both mark, save and notify without error, and the result is duplicate escalations, not a failed batch."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:dotnet-intercom/note/d8a425bc0721f704",
+   "provenance": {
+    "repo": "dotnet-intercom",
+    "sha": "74e0a28945f68e3d04c75ea5d86a2ed6d531050b",
+    "path": "docs/architecture-review.md",
+    "lines": {
+     "start": 11,
+     "end": 11
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r01-start-here",
+   "pack": "dotnet-intercom",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: reading an architecture review against the code",
+   "body": "NetIntercom is an Intercom-style support chat: an ASP.NET Core API with MediatR handlers, EF Core over PostgreSQL, SignalR hubs for agents and visitors, Hangfire jobs, and two React front ends (an agent inbox and an embeddable widget). This pack is built on one document, **docs/architecture-review.md**, a senior engineer's review of the whole codebase.\n\nThe review is organised by theme: security, correctness, architecture and scalability, what is done well, and a priority table. Every finding names a file and line. Read it like a reviewer would: for each finding, open the cited lines first, decide for yourself what the code does, and only then read the review's conclusion. Then check whether you agree.\n\nTreat every claim in the review, including its notes, as something to confirm in the code rather than to accept. When the review and the code disagree, the code decides.",
+   "excerpts": [
+    {
+     "path": "docs/architecture-review.md",
+     "lineStart": 11,
+     "lineEnd": 11,
+     "quote": "Findings are ordered by severity within each section."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "README.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "What NetIntercom does, how to run it and the realtime design in brief."
+    },
+    {
+     "path": "docs/architecture-review.md",
+     "lineStart": 146,
+     "lineEnd": 153,
+     "why": "What the reviewer says is done well and should be kept."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:dotnet-intercom/note/da1e5797f2f01d1c",
+   "provenance": {
+    "repo": "dotnet-intercom",
+    "sha": "74e0a28945f68e3d04c75ea5d86a2ed6d531050b",
+    "path": "src/NetIntercom.Domain/Entities/OfficeHours.cs",
+    "lines": {
+     "start": 26,
+     "end": 28
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q13-office-hours-zone",
+   "pack": "dotnet-intercom",
+   "target": "seed:quests:dotnet-intercom/quiz/80cfd18ed6e65cf7",
+   "phase": "after",
+   "title": "A bad time zone silently becomes UTC",
+   "body": "**Key: it quietly treats the team as being in UTC.**\n\nIsOpenAt calls TimeZoneInfo.FindSystemTimeZoneById(TimeZoneId) inside a try block; the catch for TimeZoneNotFoundException sets zone = TimeZoneInfo.Utc and carries on. There is no logging, so a typo shifts the team's hours and changes routing with no signal. The review suggests logging or validating TimeZoneId when it is saved.\n\nWhy the others are wrong:\n- **The exception reaches the router**: the catch swallows it.\n- **Treated as closed**: the method continues with UTC and evaluates the hours normally.\n- **The server's local zone**: the fallback is TimeZoneInfo.Utc, not TimeZoneInfo.Local.",
+   "excerpts": [
+    {
+     "path": "src/NetIntercom.Domain/Entities/OfficeHours.cs",
+     "lineStart": 26,
+     "lineEnd": 28,
+     "quote": "zone = TimeZoneInfo.Utc;"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}

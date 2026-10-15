@@ -1,0 +1,483 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "dotnet-stripe",
+ "sha": "8f402575b200ba258dbd43b5802642c1ecbfa63e",
+ "guides": [
+  "docs2/03-architecture-and-patterns/04-side-effects-async-and-reliability.md"
+ ],
+ "items": [
+  {
+   "id": "q01-future-timestamp",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/webhooks.md",
+    "lines": {
+     "start": 9,
+     "end": 18
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/webhooks.md",
+     "lineStart": 15,
+     "lineEnd": 18
+    },
+    {
+     "path": "src/Billing.Api/Infrastructure/WebhookSignatureVerifier.cs",
+     "lineStart": 24,
+     "lineEnd": 28
+    }
+   ],
+   "prompt": "A correctly signed webhook arrives with an X-Webhook-Timestamp one hour in the future. What does WebhookSignatureVerifier decide?",
+   "answer": "Valid, because only timestamps over five minutes old are rejected",
+   "distractors": [
+    "Invalid, since the five-minute tolerance applies in both directions",
+    "Invalid, since FromUnixTimeSeconds refuses any future timestamp",
+    "Valid only when it is within five minutes of the server's clock"
+   ],
+   "explanation": "Line 25 rejects when DateTimeOffset.UtcNow - timestamp > 5 minutes. For a future timestamp the difference is negative, so the check never fires. The guide calls this out: a far-future signed request can be replayed indefinitely, and Math.Abs would fix it. FromUnixTimeSeconds accepts future values."
+  },
+  {
+   "id": "q02-stale-timestamp",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/webhooks.md",
+    "lines": {
+     "start": 9,
+     "end": 18
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/webhooks.md",
+     "lineStart": 15,
+     "lineEnd": 15
+    },
+    {
+     "path": "src/Billing.Api/Infrastructure/WebhookSignatureVerifier.cs",
+     "lineStart": 24,
+     "lineEnd": 28
+    },
+    {
+     "path": "src/Billing.Api/Program.cs",
+     "lineStart": 230,
+     "lineEnd": 233
+    }
+   ],
+   "prompt": "A webhook's signature is correct for its payload, but its timestamp is six minutes old. What does the endpoint return?",
+   "answer": "401, from Results.Unauthorized once IsValid returns false",
+   "distractors": [
+    "400 \"Invalid webhook payload.\", from the payload check",
+    "200, because the HMAC signature itself is still valid",
+    "403, because a stale signature is treated as forbidden"
+   ],
+   "explanation": "IsValid returns false at line 25 before the HMAC is even computed, and the endpoint answers Results.Unauthorized() (401). The payload is only deserialized after verification passes, and nothing returns 403."
+  },
+  {
+   "id": "q03-uppercase-hex",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/webhooks.md",
+    "lines": {
+     "start": 9,
+     "end": 13
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/webhooks.md",
+     "lineStart": 12,
+     "lineEnd": 12
+    },
+    {
+     "path": "src/Billing.Api/Infrastructure/WebhookSignatureVerifier.cs",
+     "lineStart": 34,
+     "lineEnd": 39
+    }
+   ],
+   "prompt": "A provider sends X-Webhook-Signature as uppercase hex of the correct HMAC. Is it accepted?",
+   "answer": "Yes, since both sides are lowercased before they are compared",
+   "distractors": [
+    "No, since FixedTimeEquals compares the bytes exactly as sent",
+    "No, since the verifier only accepts a base64-encoded signature",
+    "Yes, but only after the verifier re-signs the uppercase form"
+   ],
+   "explanation": "The expected digest is ToHexString(...).ToLowerInvariant() and the header value is Trim().ToLowerInvariant(), so both byte arrays passed to FixedTimeEquals are lowercase. The comparison is exact, but on normalised strings; the format is hex, and nothing re-signs."
+  },
+  {
+   "id": "q04-fixed-time",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/webhooks.md",
+    "lines": {
+     "start": 9,
+     "end": 13
+    }
+   },
+   "cites": [
+    {
+     "path": "src/Billing.Api/Infrastructure/WebhookSignatureVerifier.cs",
+     "lineStart": 37,
+     "lineEnd": 39
+    }
+   ],
+   "prompt": "Why does WebhookSignatureVerifier compare signatures with CryptographicOperations.FixedTimeEquals instead of string equality?",
+   "answer": "Its run time does not depend on where the bytes first differ",
+   "distractors": [
+    "It accepts signatures that differ from the digest only in case",
+    "It runs faster than string.Equals on long hexadecimal digests",
+    "It decodes the hex first, and compares the raw HMAC bytes"
+   ],
+   "explanation": "FixedTimeEquals takes the same time for any two equal-length inputs, so an attacker cannot learn how many leading characters of a forged signature are right by timing responses. Case-insensitivity comes from the ToLowerInvariant calls, not from FixedTimeEquals; speed is not its purpose; and here it compares UTF-8 bytes of the hex strings."
+  },
+  {
+   "id": "q05-event-replay",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/webhooks.md",
+    "lines": {
+     "start": 20,
+     "end": 23
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/webhooks.md",
+     "lineStart": 22,
+     "lineEnd": 23
+    },
+    {
+     "path": "src/Billing.Api/Program.cs",
+     "lineStart": 243,
+     "lineEnd": 244
+    },
+    {
+     "path": "src/Billing.Api/Infrastructure/BillingEngine.cs",
+     "lineStart": 157,
+     "lineEnd": 179
+    }
+   ],
+   "prompt": "The provider retries a payment.succeeded webhook with the same eventId and no Idempotency-Key header. What happens?",
+   "answer": "The result is applied again, adding another Payment row",
+   "distractors": [
+    "The first 200 response is replayed, looked up by eventId",
+    "A 409, since that eventId has already been processed",
+    "It is skipped, since the invoice is already marked Paid"
+   ],
+   "explanation": "The endpoint never stores eventId; it only echoes it in the response. Without an Idempotency-Key the middleware passes the request through, so ApplyPaymentResult runs again: it saves the invoice as Paid again (with a new PaidAt), adds another Payment and enqueues another outbound webhook. Nothing checks the invoice's current status."
+  },
+  {
+   "id": "q06-no-key-bypass",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 3,
+     "end": 8
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 6,
+     "lineEnd": 7
+    },
+    {
+     "path": "src/Billing.Api/Infrastructure/IdempotencyMiddleware.cs",
+     "lineStart": 17,
+     "lineEnd": 21
+    }
+   ],
+   "prompt": "A client retries POST /api/invoices/{id}/pay without sending an Idempotency-Key header. What does IdempotencyMiddleware do?",
+   "answer": "It calls the next middleware straight away, so the handler runs again",
+   "distractors": [
+    "It returns a 400, as unsafe /api methods must carry the header",
+    "It replays the first response, matched on the hash of the body",
+    "It returns a 409, since the same body was seen within the TTL"
+   ],
+   "explanation": "Lines 17-21: when the header is missing the middleware awaits next(context) and returns. The architecture note's status box says the same: requests without the header bypass the middleware entirely. Nothing requires the header and no body-only cache exists."
+  },
+  {
+   "id": "q07-short-key",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 32,
+     "end": 34
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 34,
+     "lineEnd": 34
+    },
+    {
+     "path": "src/Billing.Api/Infrastructure/IdempotencyMiddleware.cs",
+     "lineStart": 23,
+     "lineEnd": 29
+    }
+   ],
+   "prompt": "A POST to /api/customers sends Idempotency-Key: abc123. What does the middleware do?",
+   "answer": "It returns 400, since the key is under 8 characters",
+   "distractors": [
+    "It accepts the key and caches the response for 24 hours",
+    "It pads the key with zeros to eight characters, then runs",
+    "It ignores the header and lets the handler run as normal"
+   ],
+   "explanation": "After trimming, a key shorter than 8 or longer than 200 characters gets a 400 with \"Idempotency-Key must be between 8 and 200 characters.\" and the handler never runs. abc123 is six characters. There is no padding and no silent ignore."
+  },
+  {
+   "id": "q08-key-new-body",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 32,
+     "end": 34
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 34,
+     "lineEnd": 34
+    },
+    {
+     "path": "src/Billing.Api/Infrastructure/IdempotencyMiddleware.cs",
+     "lineStart": 35,
+     "lineEnd": 42
+    }
+   ],
+   "prompt": "A client reuses an Idempotency-Key from a successful POST but sends a different JSON body to the same path. What comes back?",
+   "answer": "A 409 saying the key was reused with a different payload",
+   "distractors": [
+    "The first response, replayed with Idempotency-Replayed: true",
+    "A fresh response, since the body hash makes it a new request",
+    "A 400 saying an idempotency key may be used only once"
+   ],
+   "explanation": "The cache key is method + path + key, so the entry is found; its RequestHash (method, path and body) differs, so the middleware writes 409 \"Idempotency key reused with a different request payload.\". Replay needs the same hash, and keys may be reused with the same body."
+  },
+  {
+   "id": "q09-failed-not-cached",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 3,
+     "end": 8
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 5,
+     "lineEnd": 6
+    },
+    {
+     "path": "src/Billing.Api/Infrastructure/IdempotencyMiddleware.cs",
+     "lineStart": 63,
+     "lineEnd": 67
+    }
+   ],
+   "prompt": "The first POST with a given Idempotency-Key got a 400 from the handler. The client sends the identical request again. What happens?",
+   "answer": "The handler runs again, because only 2xx responses are cached",
+   "distractors": [
+    "The cached 400 is replayed with an Idempotency-Replayed header",
+    "A 409, since the key has already been used for one request",
+    "A 400 straight from the middleware, without calling the handler"
+   ],
+   "explanation": "After the handler runs, store.Set is called only when the status is between 200 and 299. A 400 leaves nothing in the store, so the retry finds no entry and goes to the handler again. The status note in docs/architecture.md says exactly this."
+  },
+  {
+   "id": "q10-concurrent-first",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 3,
+     "end": 8
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 7,
+     "lineEnd": 8
+    },
+    {
+     "path": "src/Billing.Api/Infrastructure/IdempotencyMiddleware.cs",
+     "lineStart": 35,
+     "lineEnd": 35
+    },
+    {
+     "path": "src/Billing.Api/Infrastructure/IdempotencyMiddleware.cs",
+     "lineStart": 55,
+     "lineEnd": 66
+    }
+   ],
+   "prompt": "Two identical first requests with the same Idempotency-Key arrive at the same moment. What does the middleware do?",
+   "answer": "Both run the handler, since nothing is stored until a response exists",
+   "distractors": [
+    "The second waits on the store's lock until the first one has finished",
+    "The second gets a 409, since the key is reserved by the first lookup",
+    "The second gets the first response, replayed from the in-memory store"
+   ],
+   "explanation": "Both requests call TryGet (line 35) and find nothing, because store.Set only happens after next(context) completes (line 66). The lock in IdempotencyStore protects the dictionary for each call; it does not hold across the handler. The status note says both run the handler."
+  },
+  {
+   "id": "q11-key-scope",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 32,
+     "end": 34
+    }
+   },
+   "cites": [
+    {
+     "path": "src/Billing.Api/Infrastructure/IdempotencyMiddleware.cs",
+     "lineStart": 32,
+     "lineEnd": 33
+    }
+   ],
+   "prompt": "A client sends the same Idempotency-Key and body to POST /api/customers and then to POST /api/plans. What does the second request get?",
+   "answer": "A normal run of its handler, since the cache key includes the path",
+   "distractors": [
+    "A 409, since that key was already used with another request",
+    "The /api/customers response, replayed for the second path",
+    "A 400, since a key must be unique across every API path"
+   ],
+   "explanation": "cacheKey is $\"{Method}:{Path}:{idempotencyKey}\", so the same key on another path is a different entry; TryGet finds nothing and the handler runs. A 409 needs an entry under the same cache key with a different request hash."
+  },
+  {
+   "id": "q12-from-major",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 28,
+     "end": 30
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 30,
+     "lineEnd": 30
+    },
+    {
+     "path": "src/Billing.Api/Domain/Money.cs",
+     "lineStart": 12,
+     "lineEnd": 16
+    },
+    {
+     "path": "src/Billing.Api/Domain/Money.cs",
+     "lineStart": 58,
+     "lineEnd": 59
+    }
+   ],
+   "prompt": "What does Money.FromMajor(19.995m, \" usd \") produce?",
+   "answer": "2000 minor units in USD, with the midpoint rounded away from zero",
+   "distractors": [
+    "1999 minor units in USD, since the extra fraction is truncated",
+    "2000 minor units with the currency kept exactly as \" usd \"",
+    "1999.5 minor units, since MinorUnits stores the exact decimal"
+   ],
+   "explanation": "FromMajor multiplies by 100 (1999.5) and calls decimal.Round(..., 0, MidpointRounding.AwayFromZero), giving 2000, then the constructor normalises the currency with Trim().ToUpperInvariant(). MinorUnits is a long, so no fraction is kept."
+  },
+  {
+   "id": "q13-failed-after-paid",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/webhooks.md",
+    "lines": {
+     "start": 20,
+     "end": 23
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/webhooks.md",
+     "lineStart": 22,
+     "lineEnd": 23
+    },
+    {
+     "path": "src/Billing.Api/Infrastructure/BillingEngine.cs",
+     "lineStart": 164,
+     "lineEnd": 169
+    }
+   ],
+   "prompt": "An invoice is already Paid. A validly signed payment.failed webhook for it then arrives. What happens to the invoice?",
+   "answer": "It goes back to Open, with a failed Payment added",
+   "distractors": [
+    "Nothing changes, because a Paid invoice can no longer move",
+    "It is set to Void, and the earlier payment is reversed",
+    "A 409 is returned, since the invoice is already settled"
+   ],
+   "explanation": "ApplyPaymentResult never looks at the current status: for succeeded = false it saves invoice with { Status = Open } and records a Failed payment. There is no state guard, no Void transition and no 409 on this path; the guide's point that events are not deduplicated makes such out-of-order results possible."
+  },
+  {
+   "id": "f01-webhook-gaps",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/webhooks.md",
+    "lines": {
+     "start": 9,
+     "end": 26
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/webhooks.md",
+     "lineStart": 15,
+     "lineEnd": 26
+    }
+   ],
+   "front": "Three gaps in NetBilling's inbound webhook handling.",
+   "back": "1) Timestamp tolerance is past-only, so far-future signed requests replay forever (fix: Math.Abs); 2) eventId is echoed but never stored, so provider retries re-apply results; 3) the Idempotency-Key header is optional and real providers don't send it."
+  },
+  {
+   "id": "f02-idempotency-limits",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 3,
+     "end": 8
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 5,
+     "lineEnd": 8
+    }
+   ],
+   "front": "What the idempotency middleware does NOT guarantee.",
+   "back": "Only 2xx responses are cached; requests without the header bypass it; two concurrent first requests with the same key both run the handler, because nothing is reserved until the response is stored."
+  },
+  {
+   "id": "f03-production-migration",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 20,
+     "end": 26
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 22,
+     "lineEnd": 26
+    }
+   ],
+   "front": "What should replace the in-memory store in production?",
+   "back": "Relational tables (customers, plans, subscriptions, usage, invoices and lines, payments, coupons, idempotency keys, webhook events); a transactional outbox for webhooks; a durable queue for payment and invoice jobs; tenant scoping and RBAC; a reporting currency or FX layer."
+  }
+ ]
+}
