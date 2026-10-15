@@ -47,6 +47,12 @@ const MAX_LONGEST_SHARE = 0.35;
 const MAX_SHORTEST_SHARE = 0.4;
 /** Typical key length vs. its longest rival: outside this band, "pick the longest/shortest" still wins on average. */
 const MEDIAN_RATIO_BAND = [0.8, 1.2] as const;
+/**
+ * No single length rank may dominate: if the key is (say) the second-longest choice in most quizzes,
+ * "pick the second-longest" becomes the tell (rebalance-3 review: 58% in react and jsdrill_sync).
+ * Rank = 1 + number of distractors strictly longer than the key, so ties never count against the guard's author.
+ */
+const MAX_RANK_SHARE = 0.5;
 
 interface DraftQuiz { id: string; kind: 'quiz'; answer: string; distractors: string[] }
 interface PackQuiz { kind: string; label?: string; check: { answerKey: number }; choices: unknown[] }
@@ -73,6 +79,18 @@ describe('hand-authored quiz drafts do not leak the key by length or position', 
       const median = ratios.length % 2 ? ratios[mid]! : (ratios[mid - 1]! + ratios[mid]!) / 2;
       expect(median).toBeGreaterThanOrEqual(MEDIAN_RATIO_BAND[0]);
       expect(median).toBeLessThanOrEqual(MEDIAN_RATIO_BAND[1]);
+    });
+
+    it(`${repo}: no single key-length rank holds most quizzes`, () => {
+      const qs = quizzes(repo);
+      const byRank = new Map<number, string[]>();
+      for (const q of qs) {
+        const rank = 1 + q.distractors.filter((d) => d.length > q.answer.length).length;
+        byRank.set(rank, [...(byRank.get(rank) ?? []), q.id]);
+      }
+      for (const [rank, ids] of byRank) {
+        expect(ids.length / qs.length, `key is length rank ${rank} in: ${ids.join(', ')}`).toBeLessThanOrEqual(MAX_RANK_SHARE);
+      }
     });
 
     it(`${repo}: the stamped pack uses every answer slot`, () => {
