@@ -1,0 +1,193 @@
+{
+  "format": "bootquest-quest-drafts@1",
+  "repo": "organized-build-crmpyjs",
+  "sha": "efb0335ab155030993965f9d613118869c5ec935",
+  "guides": [
+    "docs/upskill/01-codebase-cartography/05-key-flows.md",
+    "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "docs/upskill/03-architecture-and-patterns/06-architecture-critique.md",
+    "docs/upskill/08-reference/risk-register.md"
+  ],
+  "items": [
+    {
+      "id": "q01-health-db-down",
+      "kind": "quiz",
+      "source": { "path": "docs/upskill/01-codebase-cartography/05-key-flows.md", "lines": { "start": 37, "end": 47 } },
+      "cites": [ { "path": "backend/src/app.ts", "lineStart": 23, "lineEnd": 41 } ],
+      "prompt": "The database is down but the API process is running. What do GET /health and GET /health/db return?",
+      "answer": "/health still returns status ok; /health/db fails because its SELECT 1 query errors",
+      "distractors": [
+        "Both fail, because /health checks the Prisma connection first",
+        "Both return ok, because Prisma connected successfully at startup",
+        "/health fails and /health/db returns database: disconnected"
+      ],
+      "explanation": "/health returns a static JSON status and never touches the DB ('can succeed even if DB is down'); /health/db runs prisma.$queryRaw`SELECT 1` and passes errors to next()."
+    },
+    {
+      "id": "q02-health-db-proves",
+      "kind": "quiz",
+      "source": { "path": "docs/upskill/01-codebase-cartography/05-key-flows.md", "lines": { "start": 42, "end": 42 } },
+      "cites": [ { "path": "docs/upskill/01-codebase-cartography/05-key-flows.md", "lineStart": 42, "lineEnd": 42 } ],
+      "prompt": "/health/db returns ok. Which claim does that actually support?",
+      "answer": "The API can reach the database, but not that writes are healthy",
+      "distractors": [
+        "The database accepts writes and the migrations are current",
+        "The whole system, including Redis, is healthy",
+        "Login works end to end for seeded users"
+      ],
+      "explanation": "The trace row: 'executes SELECT 1 ... only verifies DB connectivity, not write health.'"
+    },
+    {
+      "id": "q03-connect-before-listen",
+      "kind": "quiz",
+      "source": { "path": "docs/upskill/01-codebase-cartography/05-key-flows.md", "lines": { "start": 12, "end": 16 } },
+      "cites": [ { "path": "docs/upskill/01-codebase-cartography/05-key-flows.md", "lineStart": 12, "lineEnd": 16 } ],
+      "prompt": "What startup invariant does server.ts maintain by awaiting prisma.$connect() before app.listen?",
+      "answer": "No listener is bound until config parsing and the Prisma connection are ready",
+      "distractors": [
+        "The app listens first so health checks pass while Prisma connects",
+        "Env parsing is deferred until the first request arrives",
+        "Prisma reconnects automatically, so listen order does not matter"
+      ],
+      "explanation": "'The invariant is \"no listener until config and Prisma are ready.\"' Env is parsed eagerly at import time, so a missing variable crashes startup early."
+    },
+    {
+      "id": "q04-refresh-expiry-drift",
+      "kind": "quiz",
+      "source": { "path": "docs/upskill/08-reference/risk-register.md", "lines": { "start": 7, "end": 7 } },
+      "cites": [ { "path": "backend/src/modules/auth/auth.service.ts", "lineStart": 89, "lineEnd": 96 } ],
+      "prompt": "An operator sets JWT_REFRESH_EXPIRES_IN to 1d. What happens to the RefreshToken rows that login writes?",
+      "answer": "They still expire after 7 days, because the DB expiry is hard-coded, not derived from config",
+      "distractors": [
+        "They expire after 1 day, because expiresAt is read from the env",
+        "They never expire, because only the JWT carries an expiry",
+        "Login fails at startup, because the two expiries must match"
+      ],
+      "explanation": "auth.service.ts writes `expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)`; the risk register calls this refresh-token expiry drift and suggests deriving it from config."
+    },
+    {
+      "id": "q05-refresh-hashed",
+      "kind": "quiz",
+      "source": { "path": "docs/upskill/01-codebase-cartography/05-key-flows.md", "lines": { "start": 75, "end": 79 } },
+      "cites": [ { "path": "backend/src/modules/auth/auth.service.ts", "lineStart": 89, "lineEnd": 96 } ],
+      "prompt": "Someone dumps the RefreshToken table. What do they get for each row's token?",
+      "answer": "A hash of the refresh token, not the raw token, plus its id, user and expiry",
+      "distractors": [
+        "The raw signed refresh JWT, ready to replay",
+        "The user's bcrypt password hash, used to re-sign tokens",
+        "The access token, since refresh tokens are never persisted"
+      ],
+      "explanation": "Login stores `tokenHash: hashToken(refreshToken)`; 'The refresh token is persisted hashed, not raw.'"
+    },
+    {
+      "id": "q06-rbac-not-wired",
+      "kind": "quiz",
+      "source": { "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md", "lines": { "start": 24, "end": 26 } },
+      "cites": [ { "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md", "lineStart": 20, "lineEnd": 26 } ],
+      "prompt": "The repo defines permissions, a role-to-permission map and a requirePermission middleware. What role-based enforcement do feature routes actually get today?",
+      "answer": "None: no route uses requirePermission yet, so RBAC is defined but not exercised",
+      "distractors": [
+        "Every /api route, because requirePermission is mounted globally in app.ts",
+        "Only admin routes, which use requirePermission with a wildcard",
+        "All authenticated routes, because authMiddleware checks permissions too"
+      ],
+      "explanation": "'No route currently uses requirePermission, so RBAC is defined but not yet exercised by a feature route.'"
+    },
+    {
+      "id": "q07-jwt-validity-limit",
+      "kind": "quiz",
+      "source": { "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md", "lines": { "start": 30, "end": 32 } },
+      "cites": [ { "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md", "lineStart": 31, "lineEnd": 31 } ],
+      "prompt": "authMiddleware verifies a JWT successfully. What does that verification NOT establish?",
+      "answer": "That the user still has permission for the specific resource being requested",
+      "distractors": [
+        "That the token was signed with the server's secret",
+        "That the token has not expired yet",
+        "That req.user can be hydrated with id, email and role"
+      ],
+      "explanation": "'JWT verification proves token validity, not that the user still has permission for every resource shape.'"
+    },
+    {
+      "id": "q08-generic-error-wrapper",
+      "kind": "quiz",
+      "source": { "path": "docs/upskill/01-codebase-cartography/05-key-flows.md", "lines": { "start": 69, "end": 69 } },
+      "cites": [ { "path": "frontend/src/api/client.ts", "lineStart": 19, "lineEnd": 22 } ],
+      "prompt": "The backend answers a failed login with 401 and code INVALID_CREDENTIALS. What does the frontend's apiRequest give the caller?",
+      "answer": "A plain Error carrying only the message; the structured code is lost",
+      "distractors": [
+        "A typed ApiError with status 401 and code INVALID_CREDENTIALS",
+        "undefined, because non-OK responses resolve like 204s",
+        "The raw Response object so the caller can read the JSON"
+      ],
+      "explanation": "apiRequest does `throw new Error(errorBody?.message ?? 'Request failed')`; the trace notes it 'loses structured error codes', weakening typed UI handling."
+    },
+    {
+      "id": "q09-req-user-hidden-contract",
+      "kind": "quiz",
+      "source": { "path": "docs/upskill/01-codebase-cartography/05-key-flows.md", "lines": { "start": 101, "end": 110 } },
+      "cites": [ { "path": "docs/upskill/01-codebase-cartography/05-key-flows.md", "lineStart": 107, "lineEnd": 109 } ],
+      "prompt": "The /me controller reads req.user!.id. What makes that non-null assertion safe?",
+      "answer": "Only the route registering authMiddleware before the controller; TypeScript does not check it",
+      "distractors": [
+        "Express always populates req.user from the Authorization header",
+        "The declaration merge in express.d.ts guarantees req.user at runtime",
+        "Zod validates req.user before every controller runs"
+      ],
+      "explanation": "req.user exists only via declaration merging (types) plus the middleware (runtime); 'req.user! is safe only because route registration order is correct.'"
+    },
+    {
+      "id": "q10-client-guard",
+      "kind": "quiz",
+      "source": { "path": "docs/upskill/01-codebase-cartography/05-key-flows.md", "lines": { "start": 129, "end": 133 } },
+      "cites": [ { "path": "docs/upskill/01-codebase-cartography/05-key-flows.md", "lineStart": 129, "lineEnd": 133 } ],
+      "prompt": "RequireAuth redirects logged-out users to /login. What does it protect?",
+      "answer": "Only the UI experience; anyone can still call the backend directly unless the server checks auth",
+      "distractors": [
+        "The API data, because protected routes never load without a session",
+        "Both UI and API, because it validates the token's signature",
+        "The session blob, because it validates local storage with a schema"
+      ],
+      "explanation": "'Validation and authorization: None on the client. This is UX gating only.' and 'A user can still call backend endpoints directly unless the server also checks auth.'"
+    },
+    {
+      "id": "q11-seed-partial-state",
+      "kind": "quiz",
+      "source": { "path": "docs/upskill/08-reference/risk-register.md", "lines": { "start": 9, "end": 9 } },
+      "cites": [ { "path": "docs/upskill/01-codebase-cartography/05-key-flows.md", "lineStart": 161, "lineEnd": 163 } ],
+      "prompt": "The seed script throws halfway through inserting opportunities. What state is the dev database left in?",
+      "answer": "Partially seeded, because the many writes are not wrapped in one outer transaction",
+      "distractors": [
+        "Unchanged, because Prisma rolls back the whole script on error",
+        "Empty, because the script deletes everything again on failure",
+        "Fully seeded, because Prisma retries failed creates automatically"
+      ],
+      "explanation": "'There is no transaction wrapping the whole seed, so partial state is possible on failure.' The register suggests intentionally failing mid-seed as the test."
+    },
+    {
+      "id": "f01-storage-hydration",
+      "kind": "flashcard",
+      "source": { "path": "docs/upskill/08-reference/risk-register.md", "lines": { "start": 8, "end": 8 } },
+      "cites": [ { "path": "frontend/src/auth/auth.store.ts", "lineStart": 34, "lineEnd": 35 } ],
+      "severity": "Medium",
+      "front": "crmpyjs auth.store rehydrates the session with a direct cast from parsed JSON. Risk, test and fix?",
+      "back": "Malformed or wrong-shape storage causes boot/runtime bugs. Test: malformed storage hydration. Fix: validate the storage payload with a schema; the critique also suggests storing only the refresh token and deriving the user via /me."
+    },
+    {
+      "id": "f02-hardcoded-base-url",
+      "kind": "flashcard",
+      "source": { "path": "docs/upskill/08-reference/risk-register.md", "lines": { "start": 5, "end": 5 } },
+      "cites": [ { "path": "frontend/src/api/client.ts", "lineStart": 1, "lineEnd": 1 } ],
+      "severity": "High",
+      "front": "The frontend client.ts holds a literal API base URL on line 1. Impact and fix?",
+      "back": "It breaks when the app runs on another host or environment. Move it to Vite env config (fallback only for local dev) and test both dev and production builds before merging."
+    },
+    {
+      "id": "f03-what-seniors-check",
+      "kind": "flashcard",
+      "source": { "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md", "lines": { "start": 34, "end": 38 } },
+      "cites": [ { "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md", "lineStart": 36, "lineEnd": 38 } ],
+      "front": "Three auth questions a senior asks of this CRM backend?",
+      "back": "Is every sensitive route protected at the server layer? Are role names the only auth source, or are there resource ownership checks too? Do persisted refresh tokens have lifecycle parity with the JWT expiry config?"
+    }
+  ]
+}
