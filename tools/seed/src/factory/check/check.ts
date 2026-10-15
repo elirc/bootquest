@@ -17,13 +17,14 @@
  */
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import type { SeedItem } from '@bootquest/shared';
+import type { SeedItem, SeedNoteItem } from '@bootquest/shared';
 import { SeedReviewQueue } from '@bootquest/shared';
 import { openCheckout, verifyBlobs, type Checkout } from '../checkout.ts';
 import { validateExplainBack } from '../explainback/explainback.ts';
 import { Exclusions } from '../exclusions.ts';
 import { defaultHarness, type Harness } from '../harness/harness.ts';
 import { loadSeedPack, restampSeedPack, type LoadedSeedPack } from '../pack.ts';
+import { BINDING_RE, loadQuestPackView, notesCoverageProblems, validateNote, type QuestPackView } from '../notes/notes.ts';
 import { validatePatchKata } from '../patches/patches.ts';
 import { checkProvenance, validateQuestItem, type ItemVerdict } from '../quests/validate.ts';
 import { REPO_ROOT } from '../report.ts';
@@ -113,6 +114,28 @@ export async function checkPack(dir: string, o: CheckOptions): Promise<PackCheck
     return res;
   }
 
+  // seed:notes: the quest pack the notes annotate (<seed>/quests/<name>) must still be the exact
+  // bytes the notes were validated against (its items.json sha256 is bound in the manifest inputs)
+  let quests: QuestPackView | null = null;
+  if (m.generator === 'notes') {
+    const binding = m.source.inputs.map((i) => BINDING_RE.exec(i)).find((x) => x !== null);
+    if (!binding) {
+      res.problems.push('notes manifest has no quests:<pack>@items-sha256:<hex> binding input');
+      return res;
+    }
+    try {
+      quests = loadQuestPackView(join(dir, '..', '..', 'quests', binding[1]!));
+    } catch (err) {
+      res.problems.push(`quest pack ${binding[1]}: ${err instanceof Error ? err.message : String(err)}`);
+      return res;
+    }
+    if (quests.itemsSha256 !== binding[2]) {
+      res.problems.push(`quest pack ${binding[1]} items.json changed since the notes were validated (${quests.itemsSha256.slice(0, 12)} != bound ${binding[2]!.slice(0, 12)}): re-run seed:notes`);
+      return res;
+    }
+    for (const p of notesCoverageProblems(pack.items.filter((i): i is SeedNoteItem => i.kind === 'note'), quests)) res.problems.push(p);
+  }
+
   // a shared harness's runners, but a per-pack execution count (the stamp records this pack's executions)
   const h: Harness = { runners: (o.harness ?? defaultHarness()).runners, executions: 0 };
   const validate = async (item: SeedItem): Promise<ItemVerdict> => {
@@ -132,6 +155,8 @@ export async function checkPack(dir: string, o: CheckOptions): Promise<PackCheck
       }
       case 'patches':
         return validatePatchKata(co!, ex, h, item);
+      case 'notes':
+        return validateNote(co!, ex, quests!, item);
     }
   };
   for (const item of pack.items) {
