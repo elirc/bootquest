@@ -50,6 +50,61 @@ const MAX_SHORTEST_SHARE = 0.4;
 const MEDIAN_RATIO_MIN = 0.8;
 const MEDIAN_RATIO_MAX = 1.2;
 
+/**
+ * Format tells (REBALANCE-1 fix pass). A key written as "Verdict: reason" next
+ * to distractors written as "Verdict, because reason" leaks just like length
+ * does. Each blind strategy below keeps only the choices that have (or lack) a
+ * surface feature and guesses among them; its expected score over a draft must
+ * stay near chance (0.25 for four choices). An item where every choice, or no
+ * choice, has the feature gives the strategy nothing, so it scores 1/n there.
+ */
+const MAX_FORMAT_SHARE = 0.35;
+/**
+ * Act-3 GUARDED drafts that still carry a format tell (each beats 0.35 on at
+ * least one strategy below); they predate this guard and are out of the
+ * REBALANCE-1 scope. Shrink this list as they are rewritten; never grow it.
+ */
+const FORMAT_UNGUARDED = new Set([
+  'signalpost-swe-bootcamp',
+  'bootlocalopusv2',
+  'gitvg-astra',
+  'organized-build-crmpyjs',
+  'lucasrouter',
+  '3buildagentteachgem',
+  '3buildanalytics',
+  'elihyper2',
+  'fableopusrecallv2',
+]);
+/** "Verdict: reason": a colon + space early in the choice, outside code braces/brackets. */
+const colonLed = (s: string): boolean => /^[^{[]{1,60}?:\s/.test(s);
+const causal = (s: string): boolean => /\b(because|since)\b/i.test(s);
+const absolute = (s: string): boolean =>
+  /\b(always|never|only|all|every|none|no|any|must|cannot|entirely|completely|whole)\b/i.test(s);
+const semicolon = (s: string): boolean => s.includes(';');
+
+/** Expected score of "guess uniformly among the choices that pass `keep`". */
+const keepScore = (q: DraftQuiz, keep: (s: string) => boolean): number => {
+  const choices = [q.answer, ...q.distractors];
+  let pool = choices.filter(keep);
+  if (pool.length === 0) pool = choices;
+  return pool.includes(q.answer) ? 1 / pool.length : 0;
+};
+/** The reviewer's combined strategy: drop because/since choices, then prefer colon-led ones. */
+const comboScore = (q: DraftQuiz): number => {
+  const choices = [q.answer, ...q.distractors];
+  let pool = choices.filter((c) => !causal(c));
+  if (pool.length === 0) pool = choices;
+  const colon = pool.filter(colonLed);
+  if (colon.length > 0) pool = colon;
+  return pool.includes(q.answer) ? 1 / pool.length : 0;
+};
+const FORMAT_STRATEGIES: Array<[string, (q: DraftQuiz) => number]> = [];
+for (const [name, f] of [['colon-led', colonLed], ['because/since', causal], ['absolute-word', absolute], ['semicolon', semicolon]] as const) {
+  FORMAT_STRATEGIES.push([`prefer ${name}`, (q) => keepScore(q, f)]);
+  FORMAT_STRATEGIES.push([`eliminate ${name}`, (q) => keepScore(q, (s) => !f(s))]);
+}
+FORMAT_STRATEGIES.push(['drop because/since then prefer colon-led', comboScore]);
+
 const median = (xs: number[]): number => {
   const s = [...xs].sort((a, b) => a - b);
   const m = Math.floor(s.length / 2);
@@ -82,6 +137,16 @@ describe('hand-authored quiz drafts do not leak the key by length or position', 
       expect(m).toBeLessThanOrEqual(MEDIAN_RATIO_MAX);
     });
 
+    if (!FORMAT_UNGUARDED.has(repo)) {
+      it(`${repo}: no phrasing or format tell beats chance (colon / because / absolute / semicolon)`, () => {
+        const qs = quizzes(repo);
+        for (const [name, score] of FORMAT_STRATEGIES) {
+          const s = qs.reduce((acc, q) => acc + score(q), 0) / qs.length;
+          expect(s, `strategy "${name}" scores ${s.toFixed(2)}`).toBeLessThanOrEqual(MAX_FORMAT_SHARE);
+        }
+      });
+    }
+
     it(`${repo}: the stamped pack uses every answer slot`, () => {
       const pack = JSON.parse(readFileSync(join(ROOT, 'content', 'seed', 'quests', repo, 'items.json'), 'utf8')) as { items: PackQuiz[] };
       const qs = pack.items.filter((i) => i.kind === 'quiz');
@@ -90,4 +155,43 @@ describe('hand-authored quiz drafts do not leak the key by length or position', 
       for (let slot = 0; slot < width; slot++) expect(used.has(slot), `slot ${slot} never keyed`).toBe(true);
     });
   }
+});
+
+describe('format-tell strategies detect the tells they name', () => {
+  const mk = (answer: string, distractors: string[]): DraftQuiz => ({ id: 'x', kind: 'quiz', answer, distractors });
+  const score = (name: string, qs: DraftQuiz[]): number => {
+    const s = FORMAT_STRATEGIES.find(([n]) => n === name);
+    if (!s) throw new Error(`no strategy ${name}`);
+    return qs.reduce((acc, q) => acc + s[1](q), 0) / qs.length;
+  };
+  // The REBALANCE-1 review's shape: "Verdict: reason" keys, "Verdict, because reason" distractors.
+  const leaky = Array.from({ length: 10 }, () =>
+    mk('400 Validation failed: PUT parses with the create schema', [
+      '200 with the task updated, since PUT accepts partial bodies',
+      '404 Task not found, because the service swallows the error',
+      '500 Failed to update task, because the column is unknown',
+    ]),
+  );
+  const uniform = Array.from({ length: 10 }, () =>
+    mk('400 Validation failed: PUT parses with the create schema', [
+      '200 with the task updated: PUT accepts partial bodies',
+      '404 Task not found: the service swallows the error',
+      '500 Failed to update task: the column is unknown',
+    ]),
+  );
+
+  it('scores a colon-key / because-distractor draft far above the cap', () => {
+    expect(score('prefer colon-led', leaky)).toBe(1);
+    expect(score('eliminate because/since', leaky)).toBe(1);
+    expect(score('drop because/since then prefer colon-led', leaky)).toBe(1);
+  });
+
+  it('scores a uniformly framed draft at chance', () => {
+    for (const [name] of FORMAT_STRATEGIES) expect(score(name, uniform)).toBeCloseTo(0.25);
+  });
+
+  it('does not read a colon inside a code object literal as a verdict frame', () => {
+    expect(colonLed('Status 200 with { data: deletedTask }')).toBe(false);
+    expect(colonLed('Nowhere: it is defined but never used')).toBe(true);
+  });
 });
