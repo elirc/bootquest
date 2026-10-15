@@ -64,6 +64,9 @@ import type {
   TrackUnitsResponse as TrackUnitsResponseSchema,
   UnitDetailResponse,
   UnitLockState,
+  UnitNotesResponse,
+  NoteDto,
+  RefContentResponse,
   UnitSummary,
   WrittenAnswerResponse,
   XpOutcome as XpOutcomeSchema,
@@ -72,6 +75,9 @@ import type {
 // ---------------------------------------------------------------- re-exported wire types
 
 export type {
+  UnitNotesResponse,
+  NoteDto,
+  RefContentResponse,
   AnswerRecordedResponse,
   AttemptDetailResponse,
   TrackProgress,
@@ -252,6 +258,15 @@ export interface BootQuestApi {
   getReviewStats(): Promise<ReviewStatsResponse>;
   /** GET /api/stats/campaign — per track the shared TrackProgress + per-act counts. */
   getCampaignProgress(): Promise<CampaignProgressResponse>;
+  // ---- "Learn more" (read-only)
+  /**
+   * GET /api/units/:id/notes — readings (always, for an open unit) + explanations (only after
+   * the learner's recorded answer covers them; withheld ones are a COUNT). 403 TRACK_LOCKED /
+   * ACT_LOCKED for a locked unit.
+   */
+  getUnitNotes(unitId: number): Promise<UnitNotesResponse>;
+  /** GET /api/refs/:id/content — the markdown of ONE registered ref (the refs viewer). */
+  getRefContent(refId: number): Promise<RefContentResponse>;
 }
 
 /** Codes the client can raise itself on top of the server's envelope codes. */

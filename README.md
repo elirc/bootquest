@@ -135,6 +135,13 @@ Content is not in the DB, so the next `npm run serve` loads all of it again. Exi
   server will release the key points or seeded-defect key (403 NOT_ANSWERED until then).
   This is enforced per question set or kata item, across units. You then self-score per
   key point or defect. The server computes coverage or catch rate from your marks.
+- **Learn more never answers for you.** The `i` / "Learn more" drawer (`GET /units/:id/notes`)
+  is read-only. Readings are served before you answer. `seed:notes` proved that none of them
+  contains, or closely matches, a keyed answer of its quest pack. A quiz's explanation is released
+  only after a recorded study-quiz submit covers it, and only once one of these is true: you passed,
+  you answered that question right, or its missed-question review card is due. Before that you see
+  a count, never a title. A code unit's explanation follows a verified pass or a reveal. Its
+  solution follows a reveal only.
 - **Append-only ledger.** SQLite triggers abort UPDATE, DELETE and REPLACE on attempts,
   runs, evidence, XP events and review logs. `competency_rating` changes must be tied to
   promotion or demotion evidence.

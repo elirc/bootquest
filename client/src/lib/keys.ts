@@ -58,6 +58,8 @@ export const SHORTCUTS: ShortcutDoc[] = [
   { keys: ['Ctrl', 'Enter'], label: 'Run checks', scope: 'Exercise' },
   { keys: ['Ctrl', 'Shift', 'Enter'], label: 'Submit attempt', scope: 'Exercise' },
   { keys: ['1–4'], label: 'Pick quiz answer', scope: 'Exercise' },
+  { keys: ['i'], label: 'Learn more: readings, explanations after you answer', scope: 'Exercise' },
   { keys: ['Space'], label: 'Show answer', scope: 'Review' },
   { keys: ['1', '2', '3', '4'], label: 'Again / Hard / Good / Easy', scope: 'Review' },
+  { keys: ['i'], label: 'Learn more about the card (after showing the answer)', scope: 'Review' },
 ];

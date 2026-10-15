@@ -7,6 +7,7 @@ import { isApiError, type ReviewGrade, type ReviewQueueItem } from '../api/types
 import { useDueReport } from '../components/AppShell';
 import { Icon } from '../components/Icon';
 import { Chip, Kbd, LoadState, PageHeader, ProgressBar } from '../components/ui';
+import { LearnMoreButton } from '../components/LearnMore';
 import { hasModifier, isEditableTarget, useKeydown } from '../lib/keys';
 import { useAsync } from '../lib/useAsync';
 
@@ -16,6 +17,12 @@ export const GRADES: { grade: ReviewGrade; key: string; label: string; hint: str
   { grade: 'good', key: '3', label: 'Good', hint: 'recalled' },
   { grade: 'easy', key: '4', label: 'Easy', hint: 'instant' },
 ];
+
+/** the quest item a seeded card is about ('quiz-miss:<key>' / 'flashcard:<key>'), else null */
+export function seededItemKey(cardKey: string): string | null {
+  const m = /^(?:quiz-miss|flashcard):(.+)$/.exec(cardKey);
+  return m ? m[1]! : null;
+}
 
 export function ReviewPage() {
   const api = useApi();
@@ -126,6 +133,9 @@ function Session({ cards }: { cards: ReviewQueueItem[] }) {
                 <div className="card-back" data-testid="card-back">
                   <Prose text={card.card.back} />
                   {card.card.source && <p className="muted small">Source: {card.card.source}</p>}
+                  {card.unitId !== null && seededItemKey(card.cardKey) && (
+                    <LearnMoreButton key={card.id} unitId={card.unitId} target={seededItemKey(card.cardKey)!} subject="this card" hotkey />
+                  )}
                 </div>
               ) : (
                 <p className="card-back" data-testid="card-back">

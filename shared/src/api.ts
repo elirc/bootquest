@@ -1212,6 +1212,9 @@ export type CampaignProgressResponse = z.infer<typeof CampaignProgressResponse>;
 
 // ---------------------------------------------------------------- "Learn more" notes (GET /units/:id/notes)
 
+/** the refs viewer's payload (GET /refs/:id/content), re-exported for the client (which maps only shared/api) */
+export { RefContentResponse } from './sync.ts';
+
 /**
  * The "Learn more" panel of a unit. READ-ONLY: the endpoint writes nothing, and it applies the
  * same honesty gates as the rest of the API:

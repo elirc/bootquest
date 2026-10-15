@@ -24,6 +24,7 @@ import { InlineProse, Prose, ProseBlocks, splitPrompt } from '../lib/prose';
 import { TRACK_LABEL, campaignSourceOf, languageOf, readingTitle, unitProse } from '../lib/view';
 import { ExplainBackPane, KataPane } from './LadderPanes';
 import { StudyQuestPane } from './StudyQuestPane';
+import { LearnMoreButton } from '../components/LearnMore';
 import { WrittenPane } from './WrittenPane';
 
 type Solution = RevealResponse['solution'];
@@ -101,6 +102,7 @@ function Player({ detail }: { detail: UnitDetail }) {
                 <Chip tone="warning">Guided · 0 XP</Chip>
               </span>
             )}
+            <LearnMoreButton unitId={unit.id} hotkey />
           </span>
         }
       />
