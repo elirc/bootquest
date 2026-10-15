@@ -96,13 +96,19 @@
    "target": "seed:quests:dotnet-ai-rag/quiz/4ab695ad21632468",
    "phase": "after",
    "title": "Tokens are lowercase runs of letters and digits",
-   "body": "**Key: billing-api becomes two tokens; BillingService becomes billingservice.**\n\nTokens() lowercases the whole string with ToLowerInvariant and then matches the regex [a-z0-9]+. A dash is not in the character class, so billing-api splits into billing and api. Lowercasing happens before matching, so there is no capital letter left to split on, and BillingService is one token.\n\nWhy the others are wrong:\n- **Split at the dash and the capital**: there is no camel-case splitting.\n- **billing-api stays one token**: the dash ends a match.\n- **Dashes and capitals kept**: the regex drops the dash and lowercasing removes the capital.",
+   "body": "**Key: auth, service, v2 and 1, all lowercase.**\n\nTokens() lowercases the whole string with ToLowerInvariant and returns every match of the regex [a-z0-9]+. Any character outside that class ends a run. In \"Auth-Service v2.1\" the dash, the space and the dot all end runs, so the matches are auth, service, v2 and 1. A letter followed by a digit stays in one run, which is why v2 is a single token.\n\nWhy the others are wrong:\n- **auth-service and v2.1**: the regex splits at every non-alphanumeric character, not only at spaces.\n- **auth, service, v, 2 and 1**: letters and digits belong to the same character class, so v2 is not split.\n- **authservice and v21**: dropped punctuation is a boundary; nothing joins neighbouring runs.",
    "excerpts": [
     {
      "path": "src/Application/Retrieval/LexicalRetriever.cs",
      "lineStart": 54,
      "lineEnd": 58,
      "quote": "TokenPattern().Matches(value.ToLowerInvariant()).Select(match => match.Value);"
+    },
+    {
+     "path": "src/Application/Retrieval/LexicalRetriever.cs",
+     "lineStart": 57,
+     "lineEnd": 57,
+     "quote": "[GeneratedRegex(\"[a-z0-9]+\", RegexOptions.CultureInvariant)]"
     }
    ],
    "readMore": []
@@ -127,14 +133,20 @@
    "id": "x-q03-set-and-threshold",
    "target": "seed:quests:dotnet-ai-rag/quiz/61c6cad7d7b10ef9",
    "phase": "after",
-   "title": "Repeats count once, and 1 is below the threshold",
-   "body": "**Key: it scores 1 and is dropped by the default minimum score of 3.**\n\nScore() turns each field into a HashSet of tokens, so ten copies of queue in the content are one set entry. A content match is worth 1, and queue is nowhere else, so the score is 1. Search's default minimumScore is 3, and the Where on line 27 keeps only matches at or above it.\n\nWhy the others are wrong:\n- **Scores 10**: sets make repetition irrelevant.\n- **Returned as the only match**: the threshold filter removes it.\n- **Capped at three**: there is no cap; the field contributes 1 or 0.",
+   "title": "A single tag match reaches the threshold exactly",
+   "body": "**Key: it scores 3 and is kept, as the minimum of 3 is inclusive.**\n\nScore() turns each field into a HashSet of tokens, so three copies of failover in the tags are one entry. A tag match is worth 3, and failover appears nowhere else, so the score is 3. Search's default minimumScore is 3, and the filter is `HeuristicScore >= minimumScore`, so a score equal to the minimum passes and the runbook is returned.\n\nWhy the others are wrong:\n- **Scores 9**: sets make repetition irrelevant; the field contributes 3 or 0.\n- **Dropped because it must beat the minimum**: the comparison is >=, not >.\n- **Scores 1**: 1 is the content weight; tags weigh 3.",
    "excerpts": [
     {
      "path": "src/Application/Retrieval/LexicalRetriever.cs",
      "lineStart": 27,
      "lineEnd": 27,
      "quote": ".Where(match => match.HeuristicScore >= minimumScore)"
+    },
+    {
+     "path": "src/Application/Retrieval/LexicalRetriever.cs",
+     "lineStart": 38,
+     "lineEnd": 38,
+     "quote": "var tags = Tokens(document.Tags).ToHashSet(StringComparer.Ordinal);"
     }
    ],
    "readMore": []
@@ -143,14 +155,14 @@
    "id": "x-q04-fixture-score",
    "target": "seed:quests:dotnet-ai-rag/quiz/d282d96578c727da",
    "phase": "after",
-   "title": "Score the fixture runbook: 8 + 5 + 3 + 1",
-   "body": "**Key: 17: billing 8, capture 5, payments 3, payment 1.**\n\nThe runbook's title is Billing capture timeout runbook, its tags billing,payments,timeout, and its content mentions payment, capture and billing. billing appears in all three fields (4 + 3 + 1 = 8), capture in the title and content (4 + 1), payments only in the tags (3), and payment only in the content (1). Every other query term scores 0.\n\nWhy the others are wrong:\n- **24 with timeout**: the incident text says time out, two tokens, so timeout never matches.\n- **16 with merged payment terms**: there is no stemming; payment and payments are separate terms.\n- **12 from title and tags only**: content matches count 1 each.",
+   "title": "Field weights add up for every matched term",
+   "body": "**Key: 15: disk 8, storage 3 and alert 4, added together.**\n\nFor each query term, Score() adds 4 if the term is in the title, 3 if it is in the tags and 1 if it is in the content, then adds that term score to the total. disk is in the title, the tags and the content (4 + 3 + 1 = 8). storage is only in the tags (3). alert is only in the title (4). The total is 8 + 3 + 4 = 15, which also passes the default minimum of 3.\n\nWhy the others are wrong:\n- **11, best field only**: the three field weights are summed, not maxed.\n- **14, content ignored**: a content match adds 1.\n- **12, a flat 4 per term**: the weight depends on which fields contain the term.",
    "excerpts": [
     {
-     "path": "astraupskill/02-CONCEPTS.md",
-     "lineStart": 53,
-     "lineEnd": 54,
-     "quote": "**`timeout` never matched.** The runbook says `timeout` (title and tags, 7 points"
+     "path": "src/Application/Retrieval/LexicalRetriever.cs",
+     "lineStart": 44,
+     "lineEnd": 46,
+     "quote": "var termScore = (title.Contains(term) ? 4 : 0) + (tags.Contains(term) ? 3 : 0) + (content.Contains(term) ? 1 : 0);"
     }
    ],
    "readMore": []
