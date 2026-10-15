@@ -15,7 +15,7 @@ import type {
 import { BarChart, DataTable, Legend, RateChart, ShareBar, type BarDatum, type ChartSeries } from '../components/StatsCharts';
 import { Chip, LoadState, PageHeader, Panel, ProgressBar } from '../components/ui';
 import { fmtRate, longDate, monthStarts, shortDate, weekdayLabel } from '../lib/chart';
-import { fmtInt } from '../lib/format';
+import { fmtInt, fmtStamp } from '../lib/format';
 import { buildHeatGrid } from '../lib/heatmap';
 import { useAsync } from '../lib/useAsync';
 import { progressLabel, progressTitle, TRACK_LABEL } from '../lib/view';
@@ -292,7 +292,10 @@ function ReviewStats({ data }: { data: ReviewStatsResponse }) {
     values: { due: d.due },
   }));
   const ahead = data.forecast.reduce((s, d) => s + d.due, 0);
-  const labels = data.forecast.map((d, i) => ({ i, text: i === 0 ? 'Today' : weekdayLabel(d.day).slice(0, 2) }));
+  // W11: every day gets its weekday (a wide "Today" in the same row pushed tomorrow's label out);
+  // "Today" sits on its own row under the first bar
+  const labels = data.forecast.map((d, i) => ({ i, text: weekdayLabel(d.day).slice(0, 2) }));
+  const todayLabel = data.forecast.length > 0 ? [{ i: 0, text: 'Today' }] : [];
   const ratingsTotal = data.ratings.again + data.ratings.hard + data.ratings.good + data.ratings.easy;
   return (
     <div data-testid="review-stats">
@@ -322,7 +325,8 @@ function ReviewStats({ data }: { data: ReviewStatsResponse }) {
             data={rows}
             series={[{ id: 'due', label: 'Due', className: 'series-due' }]}
             xLabels={labels}
-            height={150}
+            subLabels={todayLabel}
+            height={163}
             unit="due"
             valueLabels
             summary={`Review cards due over the next ${data.forecast.length} days: ${fmtInt(ahead)}, of which ${fmtInt(data.forecast[0]?.due ?? 0)} today.`}
@@ -331,6 +335,8 @@ function ReviewStats({ data }: { data: ReviewStatsResponse }) {
           <p className="muted small">
             Today includes <span className="num">{fmtInt(data.overdue)}</span> overdue · <span className="num">{fmtInt(data.later)}</span> due later · <span className="num">{fmtInt(data.cards)}</span> cards
           </p>
+          {/* W11: the forecast's own table sits under the forecast (it used to follow the Grades block) */}
+          <DataTable caption="Review cards due per day" head={['Day', 'Due']} rows={rows.map((r) => [r.label, fmtInt(r.values.due ?? 0)])} />
         </>
       )}
       <h3 className="chart-h">Grades</h3>
@@ -344,11 +350,6 @@ function ReviewStats({ data }: { data: ReviewStatsResponse }) {
           summary={`Review grades: ${RATING_PARTS.map((p) => `${p.label} ${data.ratings[p.id]}`).join(', ')}.`}
         />
       )}
-      <DataTable
-        caption="Review cards due per day"
-        head={['Day', 'Due']}
-        rows={rows.map((r) => [r.label, fmtInt(r.values.due ?? 0)])}
-      />
       <p className="muted small">Retention = graded reviews not marked Again ({fmtInt(ret.window.recalled)}/{fmtInt(ret.window.reviews)} in the last 30 days).</p>
     </div>
   );
@@ -525,7 +526,7 @@ function EvidenceItem({ e }: { e: EvidenceRowDto }) {
         {e.assistance !== 'none' && <Chip tone="warning">assisted ({e.assistance})</Chip>}
         {e.verified && <Chip tone="success">verified</Chip>}
         {value && <span className="muted">{value}</span>}
-        <span className="muted small">{new Date(e.createdAt).toISOString().slice(0, 16).replace('T', ' ')}</span>
+        <span className="muted small">{fmtStamp(e.createdAt)}</span>
       </div>
       <p className="evidence-obs">
         {e.observation}

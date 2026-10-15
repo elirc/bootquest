@@ -129,7 +129,7 @@ function Player({ detail }: { detail: UnitDetail }) {
                   : 'The questions are in the answer pane.'}
             </p>
           ) : isReading && (detail.refs ?? []).length === 0 ? (
-            <ReadingEmpty unitKey={unit.key} trackId={unit.trackId} />
+            <ReadingEmpty unitId={unit.id} unitKey={unit.key} trackId={unit.trackId} />
           ) : (
             <p className="muted">No written instructions are served for this unit yet.</p>
           )}
@@ -228,8 +228,8 @@ function ActLocked({ detail }: { detail: UnitDetail }) {
           </span>
         }
       />
-      <section className="panel act-locked" aria-labelledby="act-locked-title" data-testid="act-locked">
-        <h2 className="act-locked-title" id="act-locked-title">
+      <section className="panel unit-locked" aria-labelledby="act-locked-title" data-testid="act-locked">
+        <h2 className="unit-locked-title" id="act-locked-title">
           <Icon name="lock" /> This quest&apos;s campaign act is locked
         </h2>
         <p>
@@ -237,7 +237,7 @@ function ActLocked({ detail }: { detail: UnitDetail }) {
           unlock it; nothing on this unit can be read, run or submitted until then.
         </p>
         <p>
-          <Link to={`/campaign/${unit.trackId}`} className="btn btn-primary">
+          <Link to={`/campaign/${unit.trackId}?unit=${unit.id}`} className="btn btn-primary">
             <Icon name="map" /> See the unlock rule on the campaign map
           </Link>
         </p>
@@ -252,14 +252,15 @@ function ActLocked({ detail }: { detail: UnitDetail }) {
  * data names (its campaign quest and source repo); nothing is invented, so no GitHub link is
  * built for a repo whose owner the unit does not carry.
  */
-function ReadingEmpty({ unitKey, trackId }: { unitKey: string; trackId: UnitDetail['unit']['trackId'] }) {
+function ReadingEmpty({ unitId, unitKey, trackId }: { unitId: number; unitKey: string; trackId: UnitDetail['unit']['trackId'] }) {
   const src = campaignSourceOf(unitKey);
+  // W11: the map link targets THIS quest (Campaign's `?unit=` focus: scrolled to, focused, marked)
   return (
     <div className="reading-empty" data-testid="reading-empty">
       <p>No reading material is served for this unit yet: it has no written instructions and no linked guide.</p>
       {src ? (
         <p>
-          It is a reading quest on the <Link to={`/campaign/${trackId}`}>{TRACK_LABEL[trackId]} campaign map</Link>, sourced from the repo{' '}
+          It is a reading quest on the <Link to={`/campaign/${trackId}?unit=${unitId}`}>{TRACK_LABEL[trackId]} campaign map</Link>, sourced from the repo{' '}
           <code>{src.repo}</code>. Work through that repo directly, then mark the unit as read.
         </p>
       ) : (
@@ -308,7 +309,7 @@ function RefList({ refs }: { refs: Ref[] }) {
         {refs.map((r) => (
           <li key={`${r.role}-${r.id}`}>
             <a href={refUrl(r)} target="_blank" rel="noopener noreferrer">
-              {readingTitle(r.title, r.path)}
+              <InlineProse text={readingTitle(r.title, r.path)} />
             </a>{' '}
             <span className="muted small">
               {r.repo}@{r.sha.slice(0, 7)}

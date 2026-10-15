@@ -57,6 +57,7 @@ export function BarChart({
   data,
   series,
   xLabels,
+  subLabels = [],
   height = 200,
   unit,
   summary,
@@ -67,6 +68,8 @@ export function BarChart({
   data: readonly BarDatum[];
   series: readonly ChartSeries[];
   xLabels: readonly { i: number; text: string }[];
+  /** W11: a second, left-anchored label row under the first (e.g. "Today" under its weekday) */
+  subLabels?: readonly { i: number; text: string }[];
   height?: number;
   unit: string;
   summary: string;
@@ -81,7 +84,8 @@ export function BarChart({
   const totals = data.map((d) => series.reduce((s, x) => s + (d.values[x.id] ?? 0), 0));
   const scale = niceScale(Math.max(0, ...totals));
   const plotW = Math.max(40, width - M.left - M.right);
-  const plotH = height - M.top - M.bottom;
+  const subH = subLabels.length > 0 ? 13 : 0; // the second label row's extra height
+  const plotH = height - M.top - M.bottom - subH;
   const base = M.top + plotH;
   const bs = bands(data.length, M.left, plotW);
   const labels = placeLabels(
@@ -162,10 +166,17 @@ export function BarChart({
         })}
         <line className="chart-axis" x1={M.left} x2={width - M.right} y1={base + 0.5} y2={base + 0.5} />
         {labels.map((l) => (
-          <text key={`${l.i}-${l.text}`} x={l.anchorX} y={height - 6} textAnchor="middle" className="chart-tick">
+          <text key={`${l.i}-${l.text}`} x={l.anchorX} y={height - 6 - subH} textAnchor="middle" className="chart-tick">
             {l.text}
           </text>
         ))}
+        {subLabels
+          .filter((l) => bs[l.i])
+          .map((l) => (
+            <text key={`sub-${l.i}`} x={bs[l.i]!.x} y={height - 4} textAnchor="start" className="chart-tick chart-sub-tick">
+              {l.text}
+            </text>
+          ))}
         {/* hit targets: the full band, taller and wider than the mark */}
         {bs.map((b, i) => (
           <rect key={`hit-${i}`} className="chart-hit" x={b.bx} y={M.top} width={b.bw} height={plotH} onMouseEnter={() => setSel(i)} />

@@ -1,5 +1,5 @@
 import { useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from 'react';
-import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
+import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useApi } from '../api/context';
 import type { CampaignActDto, CampaignQuestDto, QuestState, TrackId, TrackProgress, TrackSummary } from '../api/types';
 import { Icon } from '../components/Icon';
@@ -40,6 +40,22 @@ function CampaignView({ trackId }: { trackId: TrackId }) {
     refreshTracks({ join: true });
   }, [refreshTracks]);
   const [view, setView] = useCampaignView(); // B3: list or skill tree, remembered
+  // W11: `?unit=<unitId>` targets one quest (e.g. from a reading unit): it is scrolled to, focused and
+  // marked in either view. Only a quest the campaign payload itself lists can be targeted.
+  const [params] = useSearchParams();
+  const targetUnit = Number(params.get('unit'));
+  const target =
+    campaign.status === 'ready' && Number.isInteger(targetUnit) && targetUnit > 0
+      ? campaign.data.acts.flatMap((a) => a.quests).find((q) => q.unitId === targetUnit)
+      : undefined;
+  const targetId = target?.id;
+  useEffect(() => {
+    if (targetId === undefined || view !== 'list') return;
+    const el = mapRef.current?.querySelector<HTMLElement>(`[data-quest="${targetId}"] [data-step]`);
+    if (!el) return;
+    el.focus({ preventScroll: true });
+    el.scrollIntoView?.({ block: 'center' });
+  }, [targetId, view]);
 
   // j / k walk the quests (including locked ones, which are focusable but not actionable).
   useKeydown((e) => {
@@ -83,14 +99,14 @@ function CampaignView({ trackId }: { trackId: TrackId }) {
             </div>
           ) : view === 'tree' ? (
             <div role="tabpanel" aria-label="Campaign skill tree">
-              <SkillTree key={trackId} acts={campaign.data.acts} trackLocked={locked} level={campaign.data.level} />
+              <SkillTree key={trackId} acts={campaign.data.acts} trackLocked={locked} level={campaign.data.level} targetQuestId={targetId} />
             </div>
           ) : (
             <ol className="acts" role="tabpanel" aria-label="Campaign acts">
               {[...campaign.data.acts]
                 .sort((a, b) => a.ordinal - b.ordinal)
                 .map((act) => (
-                  <ActCard key={act.id} act={act} level={campaign.data.level} />
+                  <ActCard key={act.id} act={act} level={campaign.data.level} targetQuestId={targetId} />
                 ))}
             </ol>
           )
@@ -167,11 +183,12 @@ function unlockText(act: CampaignActDto, level: number): string {
   if (r.staticLock) return 'Locked: content arrives after V1.';
   const parts: string[] = [];
   if (r.previousCorePct > 0) parts.push(`${r.previousCorePct}% of the previous act's core quests`);
-  if (r.level > 1) parts.push(`level ${r.level} (you are level ${level})`);
+  // W11: a level the learner already has is shown as met, not as an open requirement
+  if (r.level > 1) parts.push(level >= r.level ? `level ${r.level} (reached)` : `level ${r.level} (you are level ${level})`);
   return `Unlocks at ${parts.length ? parts.join(' and ') : 'start'}.`;
 }
 
-function ActCard({ act, level }: { act: CampaignActDto; level: number }) {
+function ActCard({ act, level, targetQuestId }: { act: CampaignActDto; level: number; targetQuestId?: number }) {
   const { coreDone, coreTotal } = act.progress;
   const state = !act.unlocked ? 'locked' : coreTotal > 0 && coreDone >= coreTotal ? 'complete' : 'in-progress';
   return (
@@ -204,7 +221,7 @@ function ActCard({ act, level }: { act: CampaignActDto; level: number }) {
       ) : (
         <ol className="path">
           {act.quests.map((q) => (
-            <QuestNode key={q.id} quest={q} actUnlocked={act.unlocked} />
+            <QuestNode key={q.id} quest={q} actUnlocked={act.unlocked} target={q.id === targetQuestId} />
           ))}
         </ol>
       )}
@@ -212,7 +229,7 @@ function ActCard({ act, level }: { act: CampaignActDto; level: number }) {
   );
 }
 
-function QuestNode({ quest, actUnlocked }: { quest: CampaignQuestDto; actUnlocked: boolean }) {
+function QuestNode({ quest, actUnlocked, target = false }: { quest: CampaignQuestDto; actUnlocked: boolean; target?: boolean }) {
   const actionable = actUnlocked && quest.state !== 'locked' && quest.unitId !== undefined;
   const cls = NODE_CLASS[quest.state];
   const body = (
@@ -223,6 +240,7 @@ function QuestNode({ quest, actUnlocked }: { quest: CampaignQuestDto; actUnlocke
       </span>
       <span className="step-main">
         <span className="step-title">{quest.title}</span>
+        {/* W11: the meta line wraps at phone width, so the full repo name is always visible text */}
         <span className="step-meta">
           {quest.kind} · {quest.repo}
           {quest.twinRepo && <> · twin of {quest.twinRepo}</>}
@@ -237,7 +255,7 @@ function QuestNode({ quest, actUnlocked }: { quest: CampaignQuestDto; actUnlocke
     </>
   );
   return (
-    <li className={`step step-${cls}`} data-quest={quest.id}>
+    <li className={`step step-${cls}${target ? ' step-target' : ''}`} data-quest={quest.id} aria-current={target ? 'location' : undefined}>
       {actionable ? (
         <Link to={`/play/${quest.unitId}`} className="step-box" data-step data-state={quest.state}>
           {body}

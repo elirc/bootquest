@@ -776,6 +776,12 @@ export function answerWrittenUnit(deps: ServiceDeps, unitId: number, body: { ans
   const unit = requireUnit(db, unitId);
   assertTrackOpen(db, unit);
   requireWritten(unit);
+  // W11: the answer is stored immutably, so the untouched starter template is refused, not
+  // recorded — otherwise one stray submit burns the unit's only real first answer
+  const starter = deps.content.get(unit.key)?.starter;
+  if (starter && starter.trim() !== '' && body.answer.trim() === starter.trim()) {
+    throw new HttpError(422, 'UNTOUCHED_TEMPLATE', `unit ${unit.id}: the answer is the unchanged starter template; write your answer into it first`);
+  }
   const attempt = recordAttempt(db, { unitId: unit.id, selfAssisted: body.selfAssisted, answer: { text: body.answer } }, clock);
   return { attemptId: attempt.id, mode: attempt.mode, outcome: 'submitted' };
 }

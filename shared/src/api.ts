@@ -66,6 +66,8 @@ export const API_ERROR_CODES = [
   'CONTENT_CHANGED',
   /** W7: a changed-example retest unit is closed until one of its schedules is due (no free pre-solving runs) */
   'RETEST_NOT_OPEN',
+  /** W11: a written answer identical to the unit's starter template (nothing written; it would be stored immutably) */
+  'UNTOUCHED_TEMPLATE',
   'INTERNAL',
 ] as const;
 export const ApiErrorCode = z.enum(API_ERROR_CODES);

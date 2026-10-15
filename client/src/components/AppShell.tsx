@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { API_MODE } from '../api/client';
 import { useApi } from '../api/context';
@@ -16,6 +16,14 @@ const NAV: { to: string; label: string; icon: IconName; chord: string; end?: boo
   { to: '/review', label: 'Review', icon: 'cards', chord: 'r' },
   { to: '/stats', label: 'Stats', icon: 'chart', chord: 's' },
 ];
+
+/**
+ * W11: the Review page reports the server's `remainingDue` after each grade so the nav badge
+ * counts down during a session (it was only re-read on navigation, so it sat at the starting
+ * count while the learner graded). Outside the shell it is a no-op.
+ */
+const DueReportContext = createContext<(remaining: number) => void>(() => undefined);
+export const useDueReport = () => useContext(DueReportContext);
 
 export function AppShell({ children }: { children: ReactNode }) {
   return (
@@ -37,6 +45,11 @@ function Shell({ children }: { children: ReactNode }) {
   // Re-read the due count on every navigation so a finished review session is reflected.
   // `count` is the total due regardless of `limit` (no separate count route).
   const due = useAsync(() => api.getReviewQueue(1), [api, pathname]);
+  // a live count reported on this page (W11); a navigation re-reads the server count instead
+  const [reported, setReported] = useState<{ path: string; n: number } | null>(null);
+  const reportDue = useCallback((n: number) => setReported({ path: pathname, n }), [pathname]);
+  useEffect(() => setReported(null), [pathname]); // leaving and coming back re-reads the server count
+  const dueCount = reported && reported.path === pathname ? reported.n : due.data?.count;
 
   useKeydown((e) => {
     if (e.defaultPrevented || hasModifier(e) || isEditableTarget(e.target)) return;
@@ -91,9 +104,9 @@ function Shell({ children }: { children: ReactNode }) {
             <NavLink key={n.to} to={n.to} end={n.end} className="nav-link">
               <Icon name={n.icon} />
               <span className="nav-label">{n.label}</span>
-              {n.to === '/review' && due.data && due.data.count > 0 && (
-                <span className="nav-badge" aria-label={`${due.data.count} due`}>
-                  {due.data.count}
+              {n.to === '/review' && dueCount !== undefined && dueCount > 0 && (
+                <span className="nav-badge" aria-label={`${dueCount} due`}>
+                  {dueCount}
                 </span>
               )}
               <span className="nav-chord" aria-hidden="true">
@@ -162,7 +175,9 @@ function Shell({ children }: { children: ReactNode }) {
       </aside>
 
       <main id="main" className="main">
-        <div className="main-inner">{children}</div>
+        <DueReportContext.Provider value={reportDue}>
+          <div className="main-inner">{children}</div>
+        </DueReportContext.Provider>
       </main>
 
       <div className={`chord-hint${pendingG ? ' chord-hint-on' : ''}`} aria-live="polite">

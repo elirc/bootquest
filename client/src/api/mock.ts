@@ -517,6 +517,8 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
         if (Object.keys(b).some((k) => k !== 'answer' && k !== 'selfAssisted')) throw err(400, 'VALIDATION', 'unrecognized key');
         if (typeof body.answer !== 'string' || body.answer.trim() === '') throw err(400, 'VALIDATION', 'answer must not be empty');
         if (typeof body.selfAssisted !== 'boolean') throw err(400, 'VALIDATION', 'selfAssisted must be boolean');
+        const starter = writtenFixtures[String(id)]?.starter;
+        if (starter && starter.trim() !== '' && body.answer.trim() === starter.trim()) throw err(422, 'UNTOUCHED_TEMPLATE', `unit ${id}: the answer is the unchanged starter template`);
         const attemptId = recordAttempt(u, { text: body.answer }, body.selfAssisted);
         // append-only, like the server: later answers are new rows; the model answer stays anchored on the FIRST
         if (!writtenAnswers.has(id)) writtenAnswers.set(id, { attemptId, answer: body.answer, at: NOW });

@@ -6,6 +6,8 @@
 > Two content findings (#24, #25) are routed to the content/factory owners, not fixed here.
 > 2026-10-14 **W10 polish** (section at the end, branch `ui-polish`): the routed prose / tracks-refresh / uncovered-legs /
 > empty-reading / untitled-guide items, plus re-audit findings #27-#28, all fixed.
+> 2026-10-14 **W11 final sweep** (section at the end, branch `ui-final`): the post-W10 screens (B2 stats charts, B3 skill
+> tree, B4 written player, merged track refresh) on a seeded multi-day DB; findings W11-1..W11-13, all fixed.
 
 Audit of the live stack at 3795a39: server `BOOTQUEST_DB=<temp> BOOTQUEST_PORT=4178 node --import tsx server/src/api/serve.ts`
 (all packs loaded: 3,987 pack units, 259/67/4 campaign quests, 26 study-quest gates), client `npm run build:client` +
@@ -317,3 +319,76 @@ Observed, not changed: at 400px a short page title lets the header chips sit bes
 wraps them under the title (drill, kata), both readable (W9 #21 behaviour); the study reading list repeats the file name
 in the path line after the basename fallback (the path carries the directory and line range, so it stays); sidebar
 track % stays 0% after campaign progress (#26, practice units only).
+
+
+---
+
+## W11 final sweep (2026-10-14, branch `ui-final`)
+
+Scope: everything that landed after W10's sweep (B2 stats charts, B3 skill tree, B4 written player, the merged
+track-progress / tracks-refresh behaviour) plus a re-look at every player type, at 1440x900 and 400x850.
+
+Rig (session scratchpad `w11/`, not committed): a FRESH temp DB booted through the real entrypoint defaults (all 107
+quest packs, 4 code packs, campaign, seed items) by `serve-clock.mts`, a wrapper around `startServer` whose clock is
+`Date.now() + <ms in clock-offset.txt>` re-read per call; server on 4322, vite dev on 5322 (`BOOTQUEST_PORT=4322`),
+headless Chrome over CDP on 9422 (the W9/W10 `cdp.mjs`). `seed-activity.mjs` drove REAL API submits day by day from 130
+days ago to today: bootforge quizzes (some wrong first; answers looked up in the SERVED choice order, since #24 shuffles
+it), JS drills (some starter fails first; two after a reveal = guided), predict-output (wrong then right), C# drills
+(starter fail + pass, real `csc`), reading self-attests, study-quiz gates (fail-only and echo-solved) and review grades
+across all four ratings; six days cleared the full slate (5 new JS + 5 new C# drill passes, a campaign step, the review
+queue), so the streak, banked slate days and heatmap statuses are server-derived, not faked. Then today: 9 more js act-1
+gates (js act 2 unlocked, act 3 locked) and 10 cards made due with the W9 node:sqlite recipe. Rig gotcha: the clock may
+only move FORWARD between calls that reach `closeElapsedDays` (any `/dashboard` or slate read). A first attempt read
+`/dashboard` at real time between batches, which closed every later day as "missed" before its activity was written (a
+rig artifact; a real learner cannot travel back), so the DB was rebuilt in one forward pass. Final state: level 8, 3,830
+XP, 66 active / 5 slate / 47 partial days, streak 4, 493 graded submits, 219 review cards, 62 due.
+
+Sweep (`cap.mjs`, `ix.mjs`, `verify.mjs`): dashboard, campaign js / csharp (list), skill tree (default, keyboard focus
+ring, act collapsed via Enter, Collapse all / Expand all, Enter on an available quest, locked node inert, `v` toggle,
+csharp tree), stats (empty state on the fresh DB AND populated: tiles, XP daily + weekly, pass rates, review forecast,
+grades, campaign progress, catch rate, evidence, data tables open, arrow-key readouts), study quest, JS and C# drill,
+explain-back, kata, written (before, typed, confirm, after with model answer + rubric ticked by keyboard, reload),
+reading, quiz, locked-act unit, review (Space reveal, keyboard grades 1-4, grade-bar focus ring). Automated per screen:
+document-level horizontal overflow (none, any screen, both widths), console errors / warnings (none), SVG chart text
+outside its svg box, clipped text (scrollWidth > clientWidth under overflow hidden / ellipsis), and cumulative layout
+shift (PerformanceObserver: max 0.0067 on /stats while the async panels fill, 0 on review / written, 0.0001 campaign).
+
+Numbers cross-checked by hand against the seeding tally and each other: stats tiles (3,661 XP in 120 days, 66 active, 5
+slate, avg 55 = 3,661 / 66); the XP chart's 90-day and all-time totals against the dashboard's 3,830; pass rates (63% =
+311 of 493, the by-track and by-check-type rows each sum to 311/493, "1 pass after a reveal not counted"); the review
+panel (due now = forecast day 0; forecast + "due later" = 219 cards; 30-day retention 286/325 = 88%; all-time from the
+grade shares); campaign progress (8% = 12/146 js core, 2% = 1/48 csharp); streak semantics (partial days hold, missed
+days reset: 4 = slate days 5..2, then a partial day 1); act unlock state against level 8.
+
+### Findings
+
+| id | sev | screen | issue | fix | status |
+|----|-----|--------|-------|-----|--------|
+| W11-1 | bad | campaign list | the act header's core progress bar was invisible: `.bar` has no width and `.act-side` is an end-aligned flex column, so it collapsed to 0px on every act | `.act-side .bar { width: 96px }` (`app.css`); live: 96px on all 5 acts | FIXED |
+| W11-2 | bad | campaign list | CSS class collision: W9's locked-unit panel rule `.act-locked` (Player) also matched the campaign ActCard state class `act act-locked`, so locked act cards were narrowed to 720px (820 for the others) and their unlock line lost its warning colour and 48px indent (`.act-locked p { margin: 0; color: var(--text-2) }`) | the Player panel is `.unit-locked` now (`Player.tsx`, `app.css`); live: all act cards 820px, gate line `rgb(210,153,34)`, `margin-left: 48px` | FIXED |
+| W11-3 | polish | campaign list + tree | the unlock rule listed a level the learner already had as an open requirement ("level 8 (you are level 8)") | a met level reads "level 8 (reached)" in both views (`Campaign.tsx` `unlockText`, `CampaignTree.tsx` `unlockLine`) | FIXED |
+| W11-4 | polish | stats, review forecast | the x-axis dropped TOMORROW's label (the wide "Today" label overlapped it), so the tallest bar (tomorrow's misses) was unlabelled at both widths | every bar keeps its weekday; "Today" is a second, left-anchored row under the first bar (`BarChart` `subLabels`, `Stats.tsx`) | FIXED |
+| W11-5 | polish | stats, reviews panel | the forecast's "Data table" rendered below the Grades block (reading as the grades' table) and also when there were no cards | the table sits under the forecast, only when cards exist | FIXED |
+| W11-6 | bad | written player | Submit was enabled on the untouched starter template: one confirm click stored the empty template IMMUTABLY (no second chance at the unit) | Submit stays disabled while the answer equals the template, with a one-line reason under the field (`WrittenPane.tsx`). Fix pass: the server enforces it too: `answerWrittenUnit` refuses an answer whose trimmed text equals the trimmed starter with 422 `UNTOUCHED_TEMPLATE` (new shared error code; mock mirrors it; `errorText` maps it to a learner line), so a non-UI caller cannot store the template either. Live: POST of unit 2567's starter -> 422, model answer still 403 | FIXED |
+| W11-7 | bad (a11y) | written player | after "Store answer" the form and its focused button unmounted and keyboard focus fell to `<body>` | focus moves to the "Compare with the model answer" heading (`tabIndex=-1`) after a store in this session | FIXED |
+| W11-8 | polish (wrong number) | nav badge during a review session | the Review badge kept the session's starting count while grading (it was only re-read on navigation): still 62 after four grades | the Review page reports each grade's server `remainingDue` to the shell (`useDueReport`, `AppShell.tsx`), cleared on navigation; live: 59 -> 57 after two grades | FIXED |
+| W11-9 | polish | study quest reading list | step titles showed literal backticks (`` `Try` ``, `` `null` ``) | titles render through `InlineProse` (`<code>`), in the study list and the unit refs; live: 0 titles with a backtick, 26 code spans on /play/4250 | FIXED |
+| W11-10 | polish | written / explain-back / kata / evidence | stored timestamps were UTC ("stored Oct 15, 04:04 AM UTC") while the app's day keys are LOCAL days (the dashboard said Wednesday Oct 14), so a late-evening answer looked like tomorrow's | one local formatter (`lib/format.ts` `fmtWhen`, `fmtStamp`) in the written, explain-back, kata (+ retest date) and evidence views | FIXED |
+| W11-11 | polish | campaign list, 400px | the repo meta line ellipsizes with no way to read the full repo name | fix pass: the first fix was only a `title` tooltip, which touch and keyboard cannot reach. `.step-meta` now wraps (`overflow-wrap: anywhere`, no nowrap / ellipsis), so the full repo name is visible text at every width; the tooltip was dropped. Live at 400: `grokjs-javascript-learning-lab` scrollWidth 209 -> 192 = clientWidth (wraps) | FIXED |
+| W11-12 | routed (W10 review minor) | program unit | the uncovered-legs warning border was a raw rgba | `--warning-line` token in `tokens.css`, used by `.uncovered` and `.verdict-todo` | FIXED |
+| W11-13 | routed | reading (empty) / locked unit | ReadingEmpty linked only the track map; the Campaign page could not target a quest | Campaign accepts `?unit=<unitId>`: the quest the campaign payload lists for that unit is marked (`step-target` / `tree-q-target`, `aria-current="location"`), scrolled to and focused, and the tree expands its act. ReadingEmpty and the locked-unit panel link `/campaign/<track>?unit=<id>`; a junk id targets nothing; a locked target stays inert. Live: /play/4036 -> `astra4.2` focused in the list; /play/4055 -> act 3 expanded, locked node q:66 focused. Fix pass (review major): at 400px the tree target was focused but NOT in view (rect top 3062 in an 850px viewport): the focus effect scrolled on the first render, laid out at the 960px fallback width, and the measured-width relayout then moved the node down. `useWidth` now reports `measured`, and the pending focus/scroll waits for the measured layout. Live re-check (`tree-probe.mjs`, direct load and the locked-panel link): 400px top 426..476 of 850, 1440px top 417..483 of 900, both in view, q:66 focused | FIXED |
+
+Tests: `client/src/pages/w11-final.test.tsx` (17: CSS regressions for W11-1/2/12 read from the stylesheets, unlock text
+in both views and both cases, `?unit=` list + tree + junk id, untouched template, focus after store, local timestamps,
+forecast labels + table placement + no-cards, reading-title code, live badge countdown). The two existing href
+assertions for the locked panel (`ui-audit.test.tsx`) and ReadingEmpty (`w10-polish.test.tsx`) now expect the
+quest-targeted URL (stricter, same intent). Client suite 181 -> 198. No server change.
+
+Fix pass (review of W11): tests +4 client (`w11-final.test.tsx`: the tree target is scrolled to only on the MEASURED phone-width layout, which fails on the old code; `.step-meta` wraps and shows the repo as text; the mock refuses the untouched template with 422; a server `UNTOUCHED_TEMPLATE` refusal renders as a learner line and stores nothing) and +1 server (`api.test.ts`: the untouched starter, also trimmed or padded, is refused with 422 and records no attempt; any edit is accepted). Client suite 198 -> 202, server +1. The W11-13 'scrolled to' claim was only true at 1440 until this pass.
+
+Checked, not defects: the 1px "SVG text outside the box" hits are the glyph side bearing of rate-chart row labels drawn
+at x=0 (no visible clipping at either width); the heatmap's last column holds only Mon-Wed of the current week (future
+days are not drawn); "0 / 0 seeded defects caught" with "No kata self-scored yet." for a learner with no katas; the stats
+chart focus ring is the SVG's own outline (arrow keys read the bars); a written unit that is not a campaign quest still
+says "Back to campaign" (harmless; there is no better home). Only the dark theme exists (tokens.css), so no light-theme
+check was made.

@@ -74,14 +74,22 @@ const QUEST_LABEL: Record<QuestNodeState, string> = {
 
 const FALLBACK_WIDTH = 960; // jsdom / first paint before the box is measured
 
-function useWidth(ref: RefObject<HTMLElement>): number {
-  const [width, setWidth] = useState(FALLBACK_WIDTH);
+/**
+ * The tree box's width. `measured` turns true once the box has been measured (or found
+ * unmeasurable, as in jsdom): until then the layout is the FALLBACK_WIDTH guess, and any node
+ * position read from it (a scroll target) is wrong at phone width.
+ */
+function useWidth(ref: RefObject<HTMLElement>): { width: number; measured: boolean } {
+  const [state, setState] = useState({ width: FALLBACK_WIDTH, measured: false });
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
     const measure = () => {
       const w = el.clientWidth;
-      if (w > 0) setWidth(w);
+      setState((prev) => {
+        const width = w > 0 ? w : prev.width;
+        return prev.measured && prev.width === width ? prev : { width, measured: true };
+      });
     };
     measure();
     if (typeof ResizeObserver === 'undefined') {
@@ -92,22 +100,39 @@ function useWidth(ref: RefObject<HTMLElement>): number {
     ro.observe(el);
     return () => ro.disconnect();
   }, [ref]);
-  return width;
+  return state;
 }
 
-export function SkillTree({ acts, trackLocked, level }: { acts: readonly CampaignActDto[]; trackLocked: boolean; level: number }) {
+export function SkillTree({
+  acts,
+  trackLocked,
+  level,
+  targetQuestId,
+}: {
+  acts: readonly CampaignActDto[];
+  trackLocked: boolean;
+  level: number;
+  /** W11: a quest to reveal (its act is expanded), focus and mark — the Campaign page's `?unit=` target */
+  targetQuestId?: number;
+}) {
   const boxRef = useRef<HTMLDivElement>(null);
-  const width = useWidth(boxRef);
-  const [expanded, setExpanded] = useState<Set<number>>(() => defaultExpanded(acts));
+  const { width, measured } = useWidth(boxRef);
+  const targetAct = targetQuestId === undefined ? undefined : acts.find((a) => a.quests.some((q) => q.id === targetQuestId));
+  const [expanded, setExpanded] = useState<Set<number>>(() => {
+    const open = defaultExpanded(acts);
+    if (targetAct) open.add(targetAct.id);
+    return open;
+  });
   const layout = useMemo(() => layoutTree(acts, { width, expanded }), [acts, width, expanded]);
   const actById = useMemo(() => new Map(acts.map((a) => [a.id, a])), [acts]);
   const questById = useMemo(() => new Map(acts.flatMap((a) => a.quests.map((q) => [q.id, q] as const))), [acts]);
   const nodes = useRef(new Map<string, HTMLElement>());
   const [active, setActive] = useState<string>(() => {
+    if (targetAct) return `q:${targetQuestId}`;
     const first = layout.quests.find((q) => q.state === 'in-progress' || q.state === 'available');
     return first?.key ?? layout.rows[0]?.[0] ?? '';
   });
-  const pendingFocus = useRef<string | null>(null);
+  const pendingFocus = useRef<string | null>(targetAct ? `q:${targetQuestId}` : null);
 
   // a collapsed act drops its cards: the roving stop falls back to that act's gate
   const allKeys = useMemo(() => new Set(layout.rows.flat()), [layout]);
@@ -118,8 +143,12 @@ export function SkillTree({ acts, trackLocked, level }: { acts: readonly Campaig
   })();
 
   useEffect(() => {
-    if (pendingFocus.current === null) return;
-    nodes.current.get(pendingFocus.current)?.focus();
+    // wait for the measured-width layout: scrolling to a node placed by the fallback layout
+    // left a phone-width target ~2,000px below the fold once the real layout settled (W11 fix)
+    if (pendingFocus.current === null || !measured) return;
+    const el = nodes.current.get(pendingFocus.current);
+    el?.focus({ preventScroll: true });
+    el?.scrollIntoView?.({ block: 'center' });
     pendingFocus.current = null;
   });
 
@@ -216,6 +245,7 @@ export function SkillTree({ acts, trackLocked, level }: { acts: readonly Campaig
               box={box}
               quest={quest}
               actUnlocked={act.unlocked}
+              target={box.id === targetQuestId}
               tabIndex={box.key === activeKey ? 0 : -1}
               nodeRef={register(box.key)}
               onFocus={() => setActive(box.key)}
@@ -233,7 +263,7 @@ function unlockLine(act: CampaignActDto, level: number): string | null {
   if (r.staticLock) return 'locked: content arrives after V1';
   const parts: string[] = [];
   if (r.previousCorePct > 0) parts.push(`${r.previousCorePct}% of act ${act.ordinal - 1} core`);
-  if (r.level > 1) parts.push(`level ${r.level} (you: ${level})`);
+  if (r.level > 1) parts.push(level >= r.level ? `level ${r.level} (reached)` : `level ${r.level} (you: ${level})`); // W11: met = reached
   return parts.length ? `unlocks at ${parts.join(' + ')}` : null;
 }
 
@@ -303,6 +333,7 @@ function QuestNode({
   box,
   quest,
   actUnlocked,
+  target = false,
   tabIndex,
   nodeRef,
   onFocus,
@@ -310,12 +341,13 @@ function QuestNode({
   box: QuestBox;
   quest: CampaignQuestDto;
   actUnlocked: boolean;
+  target?: boolean;
   tabIndex: number;
   nodeRef: (el: HTMLElement | null) => void;
   onFocus: () => void;
 }) {
   const style = { left: box.x, top: box.y, width: box.w, height: box.h };
-  const cls = `tree-quest tree-q-${box.state}`;
+  const cls = `tree-quest tree-q-${box.state}${target ? ' tree-q-target' : ''}`;
   const meta = quest.kind === 'reading' ? 'reading' : quest.core ? 'core' : 'optional';
   const body = (
     <>
@@ -343,6 +375,7 @@ function QuestNode({
     'data-step': '',
     'data-state': quest.state,
     'data-quest': quest.id,
+    'aria-current': target ? ('location' as const) : undefined,
     tabIndex,
     onFocus,
   };

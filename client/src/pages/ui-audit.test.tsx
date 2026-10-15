@@ -95,7 +95,7 @@ describe('#1 locked campaign act', () => {
     renderApp('/play/102', api);
     const panel = await screen.findByTestId('act-locked');
     expect(panel).toHaveTextContent('campaign act is locked');
-    expect(within(panel).getByRole('link', { name: /campaign map/ })).toHaveAttribute('href', '/campaign/js');
+    expect(within(panel).getByRole('link', { name: /campaign map/ })).toHaveAttribute('href', '/campaign/js?unit=102'); // W11: targets this quest
     expect(screen.queryByRole('button', { name: /Submit|Reveal|Run|Check answer/ })).not.toBeInTheDocument();
     expect(document.querySelector('.editor')).toBeNull();
   });
