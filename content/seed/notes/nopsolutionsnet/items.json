@@ -95,10 +95,10 @@
    "provenance": {
     "repo": "nopsolutionsnet",
     "sha": "775cf097d1081607acba483ae587915381321c30",
-    "path": "nopCommerce/src/Libraries/Nop.Services/Installation/InstallRequiredData.cs",
+    "path": "nopCommerce/src/Libraries/Nop.Services/Customers/CustomerRegistrationService.cs",
     "lines": {
-     "start": 1627,
-     "end": 1627
+     "start": 161,
+     "end": 167
     }
    },
    "citations": [],
@@ -107,20 +107,14 @@
    "pack": "nopsolutionsnet",
    "target": "seed:quests:nopsolutionsnet/quiz/f893341960e74e19",
    "phase": "after",
-   "title": "Why lockout never triggers on a fresh install",
-   "body": "The installer writes `FailedPasswordAllowedAttempts = 0`. In the wrong-password branch the code first runs `customer.FailedLoginAttempts++`, then locks out only if the setting is `> 0` and the counter has reached it. With 0 the lock condition is false, so the customer is never locked out, while the counter keeps rising on every failure.\n\n- No five-attempt default exists; the installer value is 0.\n- 0 does not mean lock on the first failure; it disables the branch.\n- Counting is not switched off; the increment comes before the check.",
+   "title": "Why the attempt that triggers a lockout says WrongPassword",
+   "body": "`ValidateCustomerAsync` checks the lockout window before it compares passwords, and at that moment no lock exists, so the password check runs and fails. The wrong-password branch increments the counter to 3; because the setting is above 0 and 3 >= 3, it sets `CannotLoginUntilDateUtc` to now plus `FailedPasswordLockoutMinutes` and resets the counter to 0. Then it returns `WrongPassword`. The customer sees `LockedOut` only on their next attempt inside the window.\n\n- LockedOut comes from the earlier gate, which already passed for this attempt.\n- The comparison is `>=`, so the third failure starts the lock.\n- Lockout never touches `Active`, so NotActive does not apply.",
    "excerpts": [
     {
-     "path": "nopCommerce/src/Libraries/Nop.Services/Installation/InstallRequiredData.cs",
-     "lineStart": 1627,
-     "lineEnd": 1627,
-     "quote": "FailedPasswordAllowedAttempts = 0,"
-    },
-    {
      "path": "nopCommerce/src/Libraries/Nop.Services/Customers/CustomerRegistrationService.cs",
-     "lineStart": 160,
-     "lineEnd": 162,
-     "quote": "customer.FailedLoginAttempts++; if (_customerSettings.FailedPasswordAllowedAttempts > 0 &&"
+     "lineStart": 161,
+     "lineEnd": 167,
+     "quote": "customer.CannotLoginUntilDateUtc = DateTime.UtcNow.AddMinutes(_customerSettings.FailedPasswordLockoutMinutes);"
     }
    ],
    "readMore": []
@@ -214,7 +208,7 @@
    "target": "pack",
    "phase": "before",
    "title": "Concept: persistence without a unit of work",
-   "body": "If you know EF Core, nopCommerce's data layer will surprise you. It uses Linq2Db with a generic `EntityRepository<T>`, and there is no change tracker and no unit of work: each repository call opens its own connection and runs its own statement. Whether two writes succeed or fail together depends entirely on whether something wrapped them in a `TransactionScope`.\n\nTwo more ideas recur. **Soft delete** marks a row as deleted instead of removing it, so history that points at the row still resolves; the price is that every read must decide whether it wants deleted rows. **Schema by convention** means the table definition comes from C# types plus a few explicit overrides.\n\nWhat to look for in `Nop.Data/EntityRepository.cs`:\n\n- the default value of every optional parameter on `GetByIdAsync`;\n- which of the list overloads call `CreateTransactionScope`, and how `BaseDataProvider` implements the others;\n- how the two `DeleteAsync` overloads (entity and predicate) treat `ISoftDeletedEntity`, and which one calls the event publisher.\n\nThen read the `TypeMapping` table and the `ForeignKey` helper in `FluentMigratorExtensions.cs`.",
+   "body": "If you know EF Core, nopCommerce's data layer will surprise you. It uses Linq2Db with a generic `EntityRepository<T>`, and there is no change tracker and no unit of work: each repository call opens its own connection and runs its own statement. Whether two writes succeed or fail together depends entirely on whether something wrapped them in a `TransactionScope`.\n\nTwo more ideas recur. **Soft delete** marks a row as deleted instead of removing it, so history that points at the row still resolves; the price is that every read must decide whether it wants deleted rows. **Schema by convention** means the table definition comes from C# types plus a few explicit overrides.\n\nWhat to look for in `Nop.Data/EntityRepository.cs`:\n\n- the default value of every optional parameter on `GetByIdAsync`;\n- which of the list overloads call `CreateTransactionScope`, and how `BaseDataProvider` implements the others;\n- how the two `DeleteAsync` overloads (entity and predicate) treat `ISoftDeletedEntity`, and whether each calls the event publisher.\n\nThen read the `TypeMapping` table and the `ForeignKey` helper in `FluentMigratorExtensions.cs`.",
    "excerpts": [
     {
      "path": "nopCommerce/fabledocs/03-architecture-and-patterns/02-data-model-and-persistence.md",
@@ -367,8 +361,8 @@
     "sha": "775cf097d1081607acba483ae587915381321c30",
     "path": "nopCommerce/src/Libraries/Nop.Services/Events/EventPublisher.cs",
     "lines": {
-     "start": 35,
-     "end": 44
+     "start": 30,
+     "end": 33
     }
    },
    "citations": [],
@@ -377,20 +371,14 @@
    "pack": "nopsolutionsnet",
    "target": "seed:quests:nopsolutionsnet/quiz/7e63f329f295db67",
    "phase": "after",
-   "title": "Why a failing consumer never reaches checkout",
-   "body": "`PublishAsync` resolves every consumer and awaits them one by one, each inside its own `try`. A `catch` logs `exception.Message` through `ILogger` and the `foreach` moves on to the next consumer. Nothing is rethrown, so the caller (here `PlaceOrderAsync`) sees a normal completion. The guide sums it up: a publish never fails from the caller's point of view.\n\n- Nothing is rethrown, before or after the loop.\n- There is no aggregation of errors; each one is logged on its own.\n- Repository calls run their own statements, so there is no shared transaction to roll back.",
+   "title": "Why StopProcessing ends the consumer loop",
+   "body": "`PublishAsync` resolves every consumer and awaits them one by one. Right after a successful `HandleEventAsync`, still inside the `try`, it tests `@event is IStopProcessingEvent { StopProcessing: true }` and executes `break`. The second consumer set the flag, so the `foreach` ends there and consumers three and four are never called.\n\n- The flag is not just a marker: the publisher reads it and leaves the loop.\n- The later consumers never run, so there is nothing of theirs to discard.\n- No exception is needed; the check runs on the success path.",
    "excerpts": [
     {
      "path": "nopCommerce/src/Libraries/Nop.Services/Events/EventPublisher.cs",
-     "lineStart": 35,
-     "lineEnd": 44,
-     "quote": "await logger.ErrorAsync(exception.Message, exception);"
-    },
-    {
-     "path": "nopCommerce/fabledocs/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
-     "lineStart": 28,
-     "lineEnd": 28,
-     "quote": "Consequence: a publish *never fails* from the caller's point of view."
+     "lineStart": 30,
+     "lineEnd": 33,
+     "quote": "if (@event is IStopProcessingEvent { StopProcessing: true }) break;"
     }
    ],
    "readMore": []
@@ -466,8 +454,8 @@
     "sha": "775cf097d1081607acba483ae587915381321c30",
     "path": "nopCommerce/src/Libraries/Nop.Data/EntityRepository.cs",
     "lines": {
-     "start": 122,
-     "end": 122
+     "start": 96,
+     "end": 105
     }
    },
    "citations": [],
@@ -476,14 +464,14 @@
    "pack": "nopsolutionsnet",
    "target": "seed:quests:nopsolutionsnet/quiz/b4a5e2cae162e0f4",
    "phase": "after",
-   "title": "Why GetByIdAsync returns a soft-deleted product",
-   "body": "`GetByIdAsync` declares `bool includeDeleted = true`. Called with only an id, it does not apply the soft-delete filter, so a product with `Deleted = true` is returned like any other. Order history depends on this default; the storefront product page re-checks `product.Deleted` itself and returns 404.\n\n- No filter applies by default, so the result is not null.\n- The repository throws nothing for soft-deleted rows.\n- The entity is returned as stored; `Deleted` stays true.",
+   "title": "Why includeDeleted: false returns null",
+   "body": "`GetByIdAsync` builds its query with `AddDeletedFilter(Table, includeDeleted)`. With `includeDeleted: false` and an entity that implements `ISoftDeletedEntity`, the helper adds `Where(entry => !entry.Deleted)`, so the soft-deleted product is not in the query and `FirstOrDefaultAsync` returns null. The default is `includeDeleted = true`, so callers that want deleted rows hidden must say so.\n\n- A single-id lookup goes through the same filter helper as the others.\n- The repository returns null; it does not throw for a missing row.\n- Nothing modifies the entity; a filtered row is simply not loaded.",
    "excerpts": [
     {
      "path": "nopCommerce/src/Libraries/Nop.Data/EntityRepository.cs",
-     "lineStart": 122,
-     "lineEnd": 122,
-     "quote": "bool includeDeleted = true"
+     "lineStart": 96,
+     "lineEnd": 105,
+     "quote": "return query.OfType<ISoftDeletedEntity>().Where(entry => !entry.Deleted).OfType<TEntity>();"
     }
    ],
    "readMore": []
@@ -622,7 +610,7 @@
    "target": "seed:quests:nopsolutionsnet/quiz/ac4323b316f21cca",
    "phase": "after",
    "title": "Why a rejected add-to-cart still clears checkout choices",
-   "body": "`AddToCartAsync` calls `ResetCheckoutDataAsync(customer, storeId)` before it looks up the cart item or computes any warnings. That reset clears the selected shipping option, offered options, pickup point, delivery date, payment method and reward-points choice. The out-of-stock warning comes later and returns the warnings, but the reset has already happened. The guide's rule: validate, then mutate.\n\n- The add does have side effects before validation, so the choices are lost.\n- The reset does not depend on the cart becoming empty.\n- Nothing backs up or restores the cleared data.",
+   "body": "`AddToCartAsync` calls `ResetCheckoutDataAsync(customer, storeId)` before it looks up the cart item or computes the item warnings (only a few early guards, such as a non-positive quantity, return before it). That reset clears the selected shipping option, offered options, pickup point, delivery date, payment method and reward-points choice. The out-of-stock warning comes later and returns the warnings, but the reset has already happened. The guide's rule: validate, then mutate.\n\n- The add does have side effects before validation, so the choices are lost.\n- The reset does not depend on the cart becoming empty.\n- Nothing backs up or restores the cleared data.",
    "excerpts": [
     {
      "path": "nopCommerce/src/Libraries/Nop.Services/Orders/ShoppingCartService.cs",
@@ -709,7 +697,7 @@
    "target": "pack",
    "phase": "before",
    "title": "Concept: best-effort side effects and the login gates",
-   "body": "Chapter 04 asks three questions of every side effect: what if it fails, what if it runs twice, and how would we know? Keep them in mind while reading these files.\n\n- `Nop.Services/Events/EventPublisher.cs`: twenty lines. Trace exactly what happens when a consumer throws, including every statement in the nested `try` inside the `catch`.\n- `Nop.Core/Caching/DistributedCacheLocker.cs`: list the cache calls in order. Ask whether anything makes the read and the write one atomic step, and what the `finally` deletes.\n- `ScheduleTaskRunner.ExecuteAsync`: work out the lock lifetime formula for a few task periods.\n\nChapter 03 is about login. In `CustomerRegistrationService.ValidateCustomerAsync`, write down the gates in order and, for the wrong-password branch, which fields change and under which condition. Then read the installer value of `FailedPasswordAllowedAttempts`, and the `switch` in `CustomerController` that turns each result into a message. Finally, in `ShoppingCartService.AddToCartAsync`, note which side effects come before the first warning check.",
+   "body": "Chapter 04 asks three questions of every side effect: what if it fails, what if it runs twice, and how would we know? Keep them in mind while reading these files.\n\n- `Nop.Services/Events/EventPublisher.cs`: twenty lines. Trace the loop for a consumer that throws and for one that succeeds, including every statement in the nested `try` inside the `catch` and the check after each `await`.\n- `Nop.Core/Caching/DistributedCacheLocker.cs`: list the cache calls in order. Note how each call reaches the cache and what the `finally` block does.\n- `ScheduleTaskRunner.ExecuteAsync`: work out the lock lifetime formula for a few task periods.\n\nChapter 03 is about login. In `CustomerRegistrationService.ValidateCustomerAsync`, write down the gates in order and, for the wrong-password branch, which fields change and under which condition. Then read the installer value of `FailedPasswordAllowedAttempts`, and the `switch` in `CustomerController` that turns each result into a message. Finally, in `ShoppingCartService.AddToCartAsync`, list the calls in order, up to and including the first warning check.",
    "excerpts": [
     {
      "path": "nopCommerce/fabledocs/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",

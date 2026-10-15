@@ -21,23 +21,18 @@
    "cites": [
     {
      "path": "nopCommerce/src/Libraries/Nop.Services/Events/EventPublisher.cs",
-     "lineStart": 25,
-     "lineEnd": 50
-    },
-    {
-     "path": "nopCommerce/fabledocs/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
-     "lineStart": 26,
-     "lineEnd": 28
+     "lineStart": 20,
+     "lineEnd": 33
     }
    ],
-   "prompt": "During checkout, one IConsumer<OrderPlacedEvent> throws an exception. What does the code that published the event see?",
-   "answer": "Nothing; the publisher logs it and goes on to the next one",
+   "prompt": "An event type implements IStopProcessingEvent. Of four registered consumers, the second handles the event and sets StopProcessing = true without throwing. What happens to consumers three and four?",
+   "answer": "They do not run, since the loop breaks after the second",
    "distractors": [
-    "The exception, rethrown after every remaining consumer has run",
-    "An AggregateException holding each consumer that failed",
-    "A rollback of the order, because consumers share its transaction"
+    "They still run; the flag just marks the event as handled",
+    "They run, but the publisher discards whatever they changed",
+    "They are skipped if the second consumer also threw"
    ],
-   "explanation": "PublishAsync wraps each HandleEventAsync in try/catch, logs exception.Message through ILogger and continues the foreach. A publish never fails from the caller's point of view, and there is no shared transaction to roll back."
+   "explanation": "After each successful HandleEventAsync, PublishAsync checks @event is IStopProcessingEvent { StopProcessing: true } and breaks out of the foreach, so later consumers never run. The check sits inside the try after the await, so it applies to a consumer that completed normally."
   },
   {
    "id": "q02-null-logger-return",
@@ -138,30 +133,25 @@
    "source": {
     "path": "nopCommerce/fabledocs/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
     "lines": {
-     "start": 40,
+     "start": 23,
      "end": 43
     }
    },
    "cites": [
-    {
-     "path": "nopCommerce/src/Libraries/Nop.Services/Installation/InstallRequiredData.cs",
-     "lineStart": 1627,
-     "lineEnd": 1627
-    },
     {
      "path": "nopCommerce/src/Libraries/Nop.Services/Customers/CustomerRegistrationService.cs",
      "lineStart": 157,
      "lineEnd": 172
     }
    ],
-   "prompt": "A fresh install keeps FailedPasswordAllowedAttempts at its installer value. A customer then enters a wrong password 50 times in a row. What is the result?",
-   "answer": "They are never locked out, though FailedLoginAttempts reaches 50",
+   "prompt": "FailedPasswordAllowedAttempts is set to 3 and a customer has 2 failed attempts recorded. They enter a wrong password a third time. What does ValidateCustomerAsync return for this attempt?",
+   "answer": "WrongPassword, while it starts the lockout window",
    "distractors": [
-    "They are locked out for 30 minutes after the fifth failed attempt",
-    "They are locked out on the first failure, as 0 attempts are allowed",
-    "The counter stays at 0, since counting is off along with lockout"
+    "LockedOut, as the third failure reaches the limit",
+    "WrongPassword, and the lock starts on the fourth",
+    "NotActive, as the account is disabled at the limit"
    ],
-   "explanation": "The installer sets FailedPasswordAllowedAttempts = 0, and the lockout branch runs only when it is > 0. FailedLoginAttempts++ happens before that check, so the counter still grows."
+   "explanation": "The wrong-password branch increments the counter to 3, sees 3 >= 3, sets CannotLoginUntilDateUtc and resets the counter, then returns WrongPassword. LockedOut comes from the earlier gate, so it is returned on the next attempt inside the window."
   },
   {
    "id": "q06-stale-counter",
@@ -264,23 +254,23 @@
    "cites": [
     {
      "path": "nopCommerce/src/Libraries/Nop.Data/EntityRepository.cs",
-     "lineStart": 122,
-     "lineEnd": 122
+     "lineStart": 96,
+     "lineEnd": 105
     },
     {
-     "path": "nopCommerce/fabledocs/03-architecture-and-patterns/02-data-model-and-persistence.md",
-     "lineStart": 53,
-     "lineEnd": 53
+     "path": "nopCommerce/src/Libraries/Nop.Data/EntityRepository.cs",
+     "lineStart": 122,
+     "lineEnd": 133
     }
    ],
-   "prompt": "A product was soft-deleted (Deleted = true). Code calls the repository's GetByIdAsync(productId) with no other arguments. What comes back?",
-   "answer": "The product, because includeDeleted defaults to true",
+   "prompt": "A product was soft-deleted (Deleted = true). Code calls the repository's GetByIdAsync(productId, includeDeleted: false) with no cache key. What comes back?",
+   "answer": "null, because the deleted filter drops that row",
    "distractors": [
-    "null, because soft-deleted rows are filtered out by default",
-    "A NotFoundException, raised for any soft-deleted entity",
-    "A copy of the product with Deleted reset to false"
+    "The product, since a single-id lookup skips filters",
+    "A NotFoundException for the filtered entity",
+    "The product, but with its Deleted flag reset to false"
    ],
-   "explanation": "GetByIdAsync declares bool includeDeleted = true, so soft-deleted rows load; callers such as the storefront ProductController re-check product.Deleted themselves. Order history relies on the default."
+   "explanation": "With includeDeleted false, AddDeletedFilter adds Where(!Deleted) for an ISoftDeletedEntity such as Product, and FirstOrDefaultAsync over the filtered query returns null. The default is includeDeleted = true, which is why callers must ask for the filter explicitly."
   },
   {
    "id": "q10-predicate-delete",
