@@ -24,6 +24,7 @@ import { InlineProse, Prose, ProseBlocks, splitPrompt } from '../lib/prose';
 import { TRACK_LABEL, campaignSourceOf, languageOf, readingTitle, unitProse } from '../lib/view';
 import { ExplainBackPane, KataPane } from './LadderPanes';
 import { StudyQuestPane } from './StudyQuestPane';
+import { WrittenPane } from './WrittenPane';
 
 type Solution = RevealResponse['solution'];
 
@@ -72,6 +73,8 @@ function Player({ detail }: { detail: UnitDetail }) {
   const [revealed, setRevealed] = useState(unit.revealed);
   const [solution, setSolution] = useState<Solution | null>(null);
   const isReading = unit.kind === 'reading';
+  // B4: a written unit's question lives in its answer pane (with the answer box under it)
+  const isWritten = unit.kind === 'written';
   // W6 answer-first units: no reveal, and (explain-back) no code shown while answering
   // W8 study quests: no reveal either (missed keys arrive as review cards)
   const answerFirst = spec?.type === 'explain-back' || spec?.type === 'patch-kata' || spec?.type === 'study-quiz';
@@ -108,6 +111,10 @@ function Player({ detail }: { detail: UnitDetail }) {
           </h2>
           {detail.retestGate && !detail.retestGate.open ? (
             <RetestClosed gate={detail.retestGate} />
+          ) : isWritten ? (
+            <p className="muted" data-testid="written-ins">
+              The question is in the answer pane. Write your answer first; the model answer and its rubric open only after your answer is stored.
+            </p>
           ) : prose.instructions.trim() !== '' ? (
             <Prose text={prose.instructions} className="ins-prose" />
           ) : promptOnRight ? (
@@ -158,6 +165,8 @@ function Player({ detail }: { detail: UnitDetail }) {
 
         {isReading ? (
           <ReadingPane unitId={unit.id} initiallyDone={unit.state === 'done'} />
+        ) : isWritten ? (
+          <WrittenPane detail={detail} />
         ) : !spec ? (
           <section className="panel player-work" aria-label="Solution">
             <p className="muted">This unit has no browser check. It is completed outside the player.</p>

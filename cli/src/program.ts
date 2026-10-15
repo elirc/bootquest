@@ -6,7 +6,7 @@ import { Command, CommanderError } from 'commander';
 import type { UnitDetailResponse } from '@bootquest/shared/api';
 import { ApiClient, DEFAULT_SERVER, UsageError, type FetchLike } from './client.ts';
 import { ConfigError, loadConfig, resolveSubmissionFile, type ProjectConfig } from './config.ts';
-import { formatDashboard, formatError, formatProject, formatRun, formatSubmit, formatSync } from './format.ts';
+import { formatDashboard, formatError, formatProject, formatRun, formatSubmit, formatSync, formatToday } from './format.ts';
 import { classifyUnit, resolveUnit, type Delivery } from './units.ts';
 import { formatMutation, MutateError, mutateProject, spawnTool, type ToolRunner } from './mutate.ts';
 
@@ -16,6 +16,7 @@ import { formatMutation, MutateError, mutateProject, spawnTool, type ToolRunner 
  *   1  run/submit completed but did not pass (fail / todo / crashed / timeout / error verdict)
  *   2  could not do the job: usage error, bad .bootquest.json, server unreachable,
  *      server refused (error envelope), unit kind the CLI does not deliver
+ * Exception: `today` is informational and always exits 0 (a down server is reported in text).
  */
 export const EXIT = { OK: 0, NOT_PASSED: 1, ERROR: 2 } as const;
 
@@ -210,6 +211,24 @@ export function buildProgram(io: CliIo, setExit: (code: number) => void): Comman
       };
       io.out('');
       io.out(formatProject(detail, config.path, file ? { path: display(io.cwd, file), exists: existsSync(file) } : null, how[delivery.mode]));
+    });
+
+  program
+    .command('today')
+    .description(
+      "today's slate (slots + done state), reviews due, streak + freeze tokens and next up per track. " +
+        'Read-only (one GET); always exits 0, also when the server is down (it says so)',
+    )
+    .action(async (_o: unknown, cmd: Command) => {
+      try {
+        const client = new ApiClient(serverUrl(cmd.optsWithGlobals<GlobalOpts>(), io.env), io.fetch);
+        io.out(formatToday(await client.dashboard(), client.server));
+      } catch (err) {
+        // informational command: an unreachable / refusing server is reported, never an error exit
+        io.out("Today: unavailable - the server could not be read, so nothing is shown and nothing changed.");
+        io.err(formatError(err));
+      }
+      setExit(EXIT.OK);
     });
 
   const PORT_HELP = 'http units: the local port your server listens on (default: the unit\'s port hint)';

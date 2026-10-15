@@ -114,6 +114,17 @@ describe('http client: real routes', () => {
     for (const c of calls) expect(JSON.stringify(c.body)).not.toContain('assistance');
   });
 
+  it('B4 written units: POST /answer sends only {answer, selfAssisted}; GET /model-answer', async () => {
+    const { calls, impl } = fakeFetch(() => ok({}));
+    const api = createHttpApi('/api', impl);
+    const sneaky = { answer: 'mine', selfAssisted: true, xp: 50, assessor: 'pipeline' } as unknown as { answer: string; selfAssisted: boolean };
+    await api.answerWritten(9, sneaky);
+    await api.getModelAnswer(9);
+    expect(calls.map((c) => `${c.method} ${c.url}`)).toEqual(['POST /api/units/9/answer', 'GET /api/units/9/model-answer']);
+    expect(calls[0]!.body).toEqual({ answer: 'mine', selfAssisted: true });
+    expect(calls[1]!.body).toBeUndefined();
+  });
+
   it('run sends only {code} or {answer}', async () => {
     const { calls, impl } = fakeFetch(() => ok({ result: {} }));
     const api = createHttpApi('/api', impl);

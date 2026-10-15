@@ -10,6 +10,7 @@ import {
   UnitKeyParams,
   toPublicCheck,
   UnitDetailResponse,
+  ModelAnswerResponse,
 } from '../src/api.ts';
 
 const S = 'SECRET_MARKER';
@@ -199,6 +200,32 @@ describe('UnitDetailResponse public content fields', () => {
     for (const leak of ['solution', 'explanation', 'hints', 'answerKey', 'expected']) {
       expect(UnitDetailResponse.safeParse({ ...base, [leak]: 'x' }).success, leak).toBe(false);
     }
+  });
+});
+
+describe('B4 written units', () => {
+  it('detail carries an optional strict `written` flag (no other field rides along)', () => {
+    const written = {
+      unit: {
+        id: 2, key: 'w', trackId: 'js', kind: 'written', title: 't', difficulty: 1, state: 'available', revealed: false,
+        prerequisites: [], code: null, competencies: [], variationOfUnitId: null,
+      },
+      check: null,
+      instructions: 'Explain it.',
+      starter: null,
+      snippet: null,
+      rubric: null,
+      written: { answered: false },
+    };
+    expect(UnitDetailResponse.parse(written)).toEqual(written);
+    expect(UnitDetailResponse.safeParse({ ...written, written: { answered: true, modelAnswer: 'x' } }).success).toBe(false);
+  });
+
+  it('the model-answer response carries the stored learner answer it is compared with', () => {
+    const m = { attemptId: 3, answer: 'mine', answeredAt: 1, modelAnswer: 'key', rubric: [{ id: 'a', label: 'A' }] };
+    expect(ModelAnswerResponse.parse(m)).toEqual(m);
+    const { answer: _a, ...noAnswer } = m;
+    expect(ModelAnswerResponse.safeParse(noAnswer).success).toBe(false);
   });
 });
 

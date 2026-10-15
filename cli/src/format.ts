@@ -157,6 +157,44 @@ export function formatDashboard(d: DashboardResponse, server: string): string {
   return lines.join('\n');
 }
 
+/** Slate slot wording (mirrors the web dashboard's labels; the server owns the slots). */
+export function slateLabel(item: DashboardResponse['slate']['items'][number]): string {
+  switch (item.kind) {
+    case 'drill-set':
+      return `${item.track ? `${item.track} ` : ''}drill set${item.size ? ` (${item.size} drill${item.size === 1 ? '' : 's'})` : ''}`;
+    case 'campaign-step':
+      return 'campaign step';
+    case 'review-clear':
+      return 'clear the review queue';
+    default:
+      return String((item as { kind: unknown }).kind);
+  }
+}
+
+/**
+ * `bootquest today` (B4): today's slate with done state, reviews due, streak + freeze tokens
+ * and next-up per track. Every number is the server's (GET /api/dashboard); nothing is derived.
+ */
+export function formatToday(d: DashboardResponse, server: string): string {
+  const s = d.streak;
+  const items = d.slate.items;
+  const done = items.filter((i) => i.done).length;
+  const lines = [`BootQuest today: ${d.today}  (${server})`, `Slate: ${done}/${items.length} done (${d.slate.status})`];
+  if (items.length === 0) lines.push('  (no slate slots today)');
+  for (const i of items) lines.push(`  [${i.done ? 'x' : ' '}] ${slateLabel(i)}`);
+  lines.push(
+    `Reviews due: ${d.reviewQueue.due}`,
+    `Streak: ${s.current} day${s.current === 1 ? '' : 's'} (longest ${s.longest}) - today ${s.todayComplete ? 'complete' : 'not complete yet'}`,
+    `Freeze tokens: ${s.tokens}`,
+    'Next up:',
+  );
+  if (d.nextUp.length === 0) lines.push('  (nothing)');
+  for (const n of d.nextUp) {
+    lines.push(n.unit ? `  ${n.trackId.padEnd(8)} ${n.unit.title} [${n.unit.kind}] id ${n.unit.id}` : `  ${n.trackId.padEnd(8)} (nothing available)`);
+  }
+  return lines.join('\n');
+}
+
 export function formatProject(detail: UnitDetailResponse, configPath: string, file: { path: string; exists: boolean } | null, delivery: string): string {
   const u = detail.unit;
   const check = detail.check;

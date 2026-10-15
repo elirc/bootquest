@@ -35,6 +35,7 @@ import type {
   KataScoreResponse,
   KataStatsResponse,
   KeyPointDto,
+  ModelAnswerResponse,
   PromotionLegState,
   PromotionProgress,
   QuestState,
@@ -64,6 +65,7 @@ import type {
   UnitDetailResponse,
   UnitLockState,
   UnitSummary,
+  WrittenAnswerResponse,
   XpOutcome as XpOutcomeSchema,
 } from '@bootquest/shared/api';
 
@@ -93,6 +95,7 @@ export type {
   KataScoreResponse,
   KataStatsResponse,
   KeyPointDto,
+  ModelAnswerResponse,
   PromotionLegState,
   PromotionProgress,
   QuestState,
@@ -112,6 +115,7 @@ export type {
   UnitDetailResponse,
   UnitLockState,
   UnitSummary,
+  WrittenAnswerResponse,
 };
 
 // shared/src/api.ts exports these schemas without a sibling type alias; infer them here.
@@ -204,6 +208,13 @@ export interface BootQuestApi {
   getSolution(unitId: number): Promise<RevealResponse>;
   /** POST /api/units/:id/self-attest — reading units only, once (409 ALREADY_ATTESTED). */
   selfAttest(unitId: number): Promise<SelfAttestResponse>;
+  /**
+   * POST /api/units/:id/answer — written units only: stores the learner's answer IMMUTABLY
+   * (ungraded, no XP). Only `answer` + the boolean `selfAssisted` ever leave the client.
+   */
+  answerWritten(unitId: number, body: { answer: string; selfAssisted: boolean }): Promise<WrittenAnswerResponse>;
+  /** GET /api/units/:id/model-answer — 403 NOT_ANSWERED until the learner's own answer row exists. */
+  getModelAnswer(unitId: number): Promise<ModelAnswerResponse>;
   /** GET /api/reviews/queue[?limit=n] — `count` is the total due regardless of limit. */
   getReviewQueue(limit?: number): Promise<ReviewQueueResponse>;
   /** POST /api/reviews/:itemId/grade — 409 NOT_DUE for a card that is not due yet. */

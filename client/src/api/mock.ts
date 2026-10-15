@@ -6,6 +6,8 @@
 //  - GET /solution -> 403 NOT_REVEALED until revealed
 //  - self-attest: reading units only (409 WRONG_UNIT_KIND), once (409 ALREADY_ATTESTED)
 //  - submit bodies are strict: exactly one of code/answer + boolean selfAssisted (anything else -> 400 VALIDATION)
+//  - written units (B4): POST /answer stores the answer immutably (no XP); GET /model-answer is
+//    403 NOT_ANSWERED until then; the detail's rubric is null until answered (it can quote the key)
 // State lives per instance, so tests can make a fresh one.
 
 import competenciesJson from './fixtures/competencies.json';
@@ -16,6 +18,7 @@ import tracksJson from './fixtures/tracks.json';
 import unitDetailsJson from './fixtures/unit-details.json';
 import unitsJson from './fixtures/units.json';
 import { campaignFixtures, emptyPromotion, evidenceFixtures, explainBackFixtures, kataFixtures, promotionFixtures, studyQuestFixtures } from './fixtures/ladder';
+import { writtenFixtures } from './fixtures/written';
 import {
   ApiError,
   type BootQuestApi,
@@ -100,6 +103,9 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
   const units = clone(fx.units);
   // W8: the study-quest fixture units (csharp borrowbox quest)
   for (const sq of Object.values(studyQuestFixtures)) units[sq.unit.trackId] = [...(units[sq.unit.trackId] ?? []), clone(sq.unit)];
+  // B4: the written-unit fixtures (answer first, then the model answer)
+  for (const w of Object.values(writtenFixtures)) units[w.unit.trackId] = [...(units[w.unit.trackId] ?? []), clone(w.unit)];
+  const writtenAnswers = new Map<number, { attemptId: number; answer: string; at: number }>();
   const studyMissCards = new Set<string>();
   const studyPassed = new Set<number>();
   const graded = new Set<number>();
@@ -169,6 +175,8 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
         private: {},
       };
     }
+    const w = writtenFixtures[String(u.id)];
+    if (w) return { code: w.code, competencies: w.competencies, instructions: w.instructions, check: null, starter: w.starter, private: {} };
     const eb = explainBackFixtures[String(u.id)];
     if (eb) {
       return {
@@ -422,6 +430,12 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
         }
         // W8: reading list + questions with choices only (the keys stay in the fixture)
         if (d.check?.spec.type === 'study-quiz') out.studyQuest = studyQuestFixtures[String(id)]?.public ?? null;
+        // B4: the rubric is withheld until the learner's own answer is recorded
+        if (u.kind === 'written') {
+          const answered = writtenAnswers.has(id);
+          out.written = { answered };
+          out.rubric = answered ? (writtenFixtures[String(id)]?.rubric ?? null) : null;
+        }
         return out;
       }),
 
@@ -493,6 +507,31 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
         attested.add(id);
         u.state = 'done';
         return { attemptId: nextId++, xp: { id: nextId++, amount: READING_XP, reason: null } };
+      }),
+
+    answerWritten: (id, body) =>
+      wrap(() => {
+        const { u } = guard(id, { needCheck: false });
+        if (u.kind !== 'written') throw err(409, 'WRONG_UNIT_KIND', `unit ${id} is ${u.kind}; written answers are for written units only`);
+        const b = body as unknown as Record<string, unknown>;
+        if (Object.keys(b).some((k) => k !== 'answer' && k !== 'selfAssisted')) throw err(400, 'VALIDATION', 'unrecognized key');
+        if (typeof body.answer !== 'string' || body.answer.trim() === '') throw err(400, 'VALIDATION', 'answer must not be empty');
+        if (typeof body.selfAssisted !== 'boolean') throw err(400, 'VALIDATION', 'selfAssisted must be boolean');
+        const attemptId = recordAttempt(u, { text: body.answer }, body.selfAssisted);
+        // append-only, like the server: later answers are new rows; the model answer stays anchored on the FIRST
+        if (!writtenAnswers.has(id)) writtenAnswers.set(id, { attemptId, answer: body.answer, at: NOW });
+        return { attemptId, mode: attempts.get(attemptId)!.mode, outcome: 'submitted' as const };
+      }),
+
+    getModelAnswer: (id) =>
+      wrap(() => {
+        const { u } = guard(id, { needCheck: false });
+        if (u.kind !== 'written') throw err(409, 'WRONG_UNIT_KIND', `unit ${id} is ${u.kind}; model answers are for written units only`);
+        const a = writtenAnswers.get(id);
+        if (!a) throw err(403, 'NOT_ANSWERED', `unit ${id}: record your own answer first`);
+        const w = writtenFixtures[String(id)];
+        if (!w) throw err(404, 'NO_SOLUTION', `unit ${id} has no model answer in the content store`);
+        return { attemptId: a.attemptId, answer: a.answer, answeredAt: a.at, modelAnswer: w.modelAnswer, rubric: w.rubric };
       }),
 
     getReviewQueue: (limit) =>

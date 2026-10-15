@@ -288,6 +288,9 @@ export function getUnitDetail(deps: ServiceDeps, unitId: number): UnitDetailResp
   const gate = unit.kind === 'retest' ? retestGate(db, unit.id, deps.clock) : null;
   const withhold = gate !== null && !gate.open;
   const uncoveredLegs = uncoveredLegsFor(deps, unit.key, check);
+  // B4: a written unit's rubric is withheld until the learner's own answer is recorded (a
+  // rubric line can quote the model answer's key point: no answer oracle in the detail)
+  const writtenAnswered = unit.kind === 'written' ? firstWrittenAnswer(db, unit.id) !== null : null;
   return {
     ...(explainBack !== undefined ? { explainBack } : {}),
     ...(kata !== undefined ? { kata } : {}),
@@ -302,7 +305,8 @@ export function getUnitDetail(deps: ServiceDeps, unitId: number): UnitDetailResp
     instructions: withhold ? null : (entry?.instructions ?? null),
     starter: withhold ? null : (entry?.starter ?? null),
     snippet: withhold ? null : (entry?.snippet ?? null),
-    rubric: entry?.rubric ?? null,
+    rubric: writtenAnswered === true ? (entry?.rubric ?? null) : null,
+    ...(writtenAnswered !== null ? { written: { answered: writtenAnswered } } : {}),
     refs: unitRefs(db, unit.id),
   };
 }
@@ -777,15 +781,15 @@ export function answerWrittenUnit(deps: ServiceDeps, unitId: number, body: { ans
 }
 
 /** The learner's FIRST recorded non-empty written answer on this unit, if any. */
-function firstWrittenAnswer(db: Db, unitId: number): number | null {
-  const row = db.get<{ id: number }>(
-    `SELECT id FROM attempt
+function firstWrittenAnswer(db: Db, unitId: number): { id: number; text: string; createdAt: number } | null {
+  const row = db.get<{ id: number; text: string; created_at: number }>(
+    `SELECT id, json_extract(answer, '$.text') AS text, created_at FROM attempt
       WHERE unit_id = ? AND outcome = 'submitted' AND check_id IS NULL
         AND length(trim(json_extract(answer, '$.text'), ' ' || char(9, 10, 13))) > 0
       ORDER BY id LIMIT 1`,
     unitId,
   );
-  return row?.id ?? null;
+  return row ? { id: row.id, text: String(row.text), createdAt: row.created_at } : null;
 }
 
 /**
@@ -797,11 +801,13 @@ export function getModelAnswer(deps: ServiceDeps, unitId: number): ModelAnswerRe
   const { db } = deps;
   const unit = requireUnit(db, unitId);
   requireWritten(unit);
-  const attemptId = firstWrittenAnswer(db, unit.id);
-  if (attemptId === null) throw new HttpError(403, 'NOT_ANSWERED', `unit ${unit.id}: record your own answer first (POST /api/units/${unit.id}/answer)`);
+  // B4: a locked track / campaign act serves nothing playable, the model answer included
+  assertTrackOpen(db, unit);
+  const first = firstWrittenAnswer(db, unit.id);
+  if (first === null) throw new HttpError(403, 'NOT_ANSWERED', `unit ${unit.id}: record your own answer first (POST /api/units/${unit.id}/answer)`);
   const entry = deps.content.get(unit.key);
   if (!entry?.solution) throw new HttpError(404, 'NO_SOLUTION', `unit ${unit.id} has no model answer in the content store`);
-  return { attemptId, modelAnswer: entry.solution, rubric: entry.rubric ?? [] };
+  return { attemptId: first.id, answer: first.text, answeredAt: first.createdAt, modelAnswer: entry.solution, rubric: entry.rubric ?? [] };
 }
 
 // ---------------------------------------------------------------- reviews

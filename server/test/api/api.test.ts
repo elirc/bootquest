@@ -408,8 +408,11 @@ describe('written units: answer first (immutable), THEN the model answer (F9)', 
     const detail = await request(app).get(`/api/units/${id}`);
     expect(detail.status).toBe(200);
     expect(detail.body.check).toBeNull();
-    expect(detail.body.rubric).toEqual([{ id: 'race', label: 'Names the race' }]);
+    // B4: the rubric is withheld until an answer is recorded (a rubric line can quote the key)
+    expect(detail.body.rubric).toBeNull();
+    expect(detail.body.written).toEqual({ answered: false });
     expect(detail.text).not.toContain('MODEL-ANSWER-MARKER');
+    expect(detail.text).not.toContain('Names the race');
     // reveal / solution stay closed for written units (no check)
     expectApiError(await request(app).post(`/api/units/${id}/reveal`).send({}), 409, 'NO_CHECK');
     expect(ledgerCounts(ctx.db).attempt).toBe(0);
@@ -431,11 +434,43 @@ describe('written units: answer first (immutable), THEN the model answer (F9)', 
 
     const m = await request(app).get(`/api/units/${id}/model-answer`);
     expect(m.status).toBe(200);
-    expect(ModelAnswerResponse.parse(m.body)).toEqual({ attemptId: body.attemptId, modelAnswer: MODEL, rubric: [{ id: 'race', label: 'Names the race' }] });
+    expect(ModelAnswerResponse.parse(m.body)).toEqual({
+      attemptId: body.attemptId,
+      answer: 'The stock check and decrement race under concurrency.',
+      answeredAt: ctx.db.get<{ t: number }>('SELECT created_at AS t FROM attempt WHERE id = ?', body.attemptId)!.t,
+      modelAnswer: MODEL,
+      rubric: [{ id: 'race', label: 'Names the race' }],
+    });
+    // B4: once answered, the detail says so and serves the rubric (still never the model answer)
+    const answered = await request(app).get(`/api/units/${id}`);
+    expect(answered.body.written).toEqual({ answered: true });
+    expect(answered.body.rubric).toEqual([{ id: 'race', label: 'Names the race' }]);
+    expect(answered.text).not.toContain('MODEL-ANSWER-MARKER');
     // a later answer is a NEW row; the model answer stays anchored on the first one
     const second = await request(app).post(`/api/units/${id}/answer`).send({ answer: 'second try' });
     expect(second.body.attemptId).toBeGreaterThan(body.attemptId);
-    expect((await request(app).get(`/api/units/${id}/model-answer`)).body.attemptId).toBe(body.attemptId);
+    const still = (await request(app).get(`/api/units/${id}/model-answer`)).body;
+    expect([still.attemptId, still.answer]).toEqual([body.attemptId, 'The stock check and decrement race under concurrency.']);
+  });
+
+  it('B4: a written unit on a locked track refuses the answer and the model answer (even with a raw answer row on file)', async () => {
+    const locked = ctx.db.get<{ id: string }>('SELECT id FROM track WHERE locked = 1 LIMIT 1');
+    expect(locked).toBeDefined();
+    const id = insertUnit(ctx.db, { key: 'fixture:written-locked', track: locked!.id as 'java', kind: 'written', title: 'locked written', competencies: ['code-reading'] }, ctx.clock);
+    const lockedApp = createApp({
+      db: ctx.db,
+      clock: ctx.clock,
+      runners: {},
+      content: mapContentStore({ ...fixture.content, 'fixture:written-locked': { instructions: 'Explain it.', solution: MODEL, rubric: [{ id: 'race', label: 'Names the race' }] } }),
+    });
+    expectApiError(await request(lockedApp).post(`/api/units/${id}/answer`).send({ answer: 'mine' }), 403, 'TRACK_LOCKED');
+    // a raw (non-API) answer row still does not open the key on a locked track
+    ctx.db.run(
+      `INSERT INTO attempt (unit_id, check_id, mode, assisted, assistance_source, outcome, answer, created_at) VALUES (?, NULL, 'solo', 0, 'none', 'submitted', ?, 0)`,
+      id,
+      JSON.stringify({ text: 'mine' }),
+    );
+    expectApiError(await request(lockedApp).get(`/api/units/${id}/model-answer`), 403, 'TRACK_LOCKED');
   });
 
   it('refuses empty / whitespace answers (nothing written), extra fields, non-written units and missing units', async () => {

@@ -116,6 +116,9 @@ const jsDrillContent = jsFiles['01-language-core'].content[jsDrill.unit.key];
 const tsDrill = jsFiles['ts-01-types-and-annotations'].units[0];
 const tsDrillContent = jsFiles['ts-01-types-and-annotations'].content[tsDrill.unit.key];
 const jsPredict = jsFiles['quiz-01-language-core'].units.find((u) => u.unit.kind === 'predict-output');
+// B4: a real jstrain written (verbal) item: its rubric quotes the model answer's key point
+const jsWritten = jsFiles['quiz-01-language-core'].units.find((u) => u.unit.kind === 'written');
+const jsWrittenContent = jsFiles['quiz-01-language-core'].content[jsWritten.unit.key];
 const JCS_DIR = join(REPO, 'content', 'packs', 'jstrain-cs');
 const JCS_COURSE = '01-csharp-language-core';
 const jcsFile = JSON.parse(readFileSync(join(JCS_DIR, `${JCS_COURSE}.json`), 'utf8'));
@@ -815,6 +818,30 @@ async function main() {
       );
       const qpd = await api(base, 'GET', `/api/units/${qpId}`);
       step('jstrain quiz detail leaks no expected/keyTokens/runAs', qpd.status === 200 && !/"expected"|"keyTokens"|"runAs"/.test(qpd.text));
+
+      // 10d'. B4: a real written unit: no model answer and NO rubric (it quotes the key) before the
+      // learner's own answer is stored; then the model answer + rubric; no XP, no evidence
+      const wId = jsId(jsWritten.unit.key);
+      const wd0 = await api(base, 'GET', `/api/units/${wId}`);
+      const wKey0 = await api(base, 'GET', `/api/units/${wId}/model-answer`);
+      const wc0 = counts();
+      const wAns = await api(base, 'POST', `/api/units/${wId}/answer`, { answer: 'SMOKE written answer' });
+      const wc1 = counts();
+      const wKey1 = await api(base, 'GET', `/api/units/${wId}/model-answer`);
+      const wd1 = await api(base, 'GET', `/api/units/${wId}`);
+      const rubricLabels = (jsWrittenContent.rubric ?? []).map((r) => JSON.stringify(r.label).slice(1, -1));
+      step(
+        'jstrain written: detail serves no rubric / model answer before the answer (403 NOT_ANSWERED); stored answer (no XP) -> model answer + rubric',
+        wd0.status === 200 && wd0.json.rubric === null && wd0.json.written?.answered === false && rubricLabels.length > 0 &&
+          rubricLabels.every((l) => !wd0.text.includes(l)) && !wd0.text.includes(JSON.stringify(jsWrittenContent.solution).slice(1, -1)) &&
+          wKey0.status === 403 && wKey0.json?.error?.code === 'NOT_ANSWERED' &&
+          wAns.status === 200 && wAns.json.outcome === 'submitted' &&
+          wc1.attempt === wc0.attempt + 1 && wc1.xp_event === wc0.xp_event && wc1.evidence === wc0.evidence &&
+          wKey1.status === 200 && wKey1.json.attemptId === wAns.json.attemptId && wKey1.json.answer === 'SMOKE written answer' &&
+          wKey1.json.modelAnswer === jsWrittenContent.solution &&
+          wd1.json?.written?.answered === true && JSON.stringify(wd1.json.rubric) === JSON.stringify(jsWrittenContent.rubric),
+        `unit ${wId} ${jsWritten.unit.key}`,
+      );
 
       // 10e. W3c: jstrain-cs on the csharp track, the jstrain harness revision (its own Check.dll)
       const ctu2 = await api(base, 'GET', '/api/tracks/csharp/units');
