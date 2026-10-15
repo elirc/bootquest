@@ -1,0 +1,401 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "ww18",
+ "repo": "ww18",
+ "sha": "d032dc72c858b75d920b7605ec0ebbafcd7e1758",
+ "notes": [
+  {
+   "id": "r01-start-here-quote-lab",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: the ww18 quote policy lab and its reading order",
+   "body": "ww18 is a demo \"quote-to-cash\" app: sales people build price quotes for business customers, some quotes need review by a deal desk, finance or legal, and approved quotes become orders. The course zooms in on one file, `src/domain/quote-policy.ts`, which holds the pricing and routing rules, and on its caller `src/services/quote-service.ts`, which saves the results.\n\nRead the `astraupskill/` chapters in number order:\n\n1. **README.md**: what the policy does, with line numbers.\n2. **01-CODEBASE-MAP.md**: who calls the policy and the lifecycle map.\n3. **02-CONCEPTS.md**: the numeric and lifecycle ideas most quizzes test.\n4. **03-WORKED-CHANGE.md** and **04-TESTING-AND-DEBUGGING.md**: the lab test file and how it loads the policy.\n5. **05-PRACTICE.md**: exercises with a Goal and a Check. Predict before you read the Check.\n6. **06-SOLUTIONS-AND-REVIEW.md**: the senior review findings table.\n7. **07-TRACE-LAB.md**: line-by-line traces.\n\nThe policy file is only 130 lines. Read all of it once before the quizzes.",
+   "excerpts": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "This course is about the **pure pricing and lifecycle policy** at its centre: [`src/domain/quote-policy.ts`](../src/domain/quote-policy.ts)."
+    },
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "`src/services/quote-service.ts` calls `evaluateQuoteDraft` in four places:"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/domain/quote-policy.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The whole policy: rule lookup, totals, reasons, flags and the lifecycle map."
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Eight review findings with locations and severity."
+    }
+   ]
+  },
+  {
+   "id": "r02-pure-policy-and-service",
+   "target": "pack",
+   "phase": "before",
+   "title": "Core idea: a pure policy and a service that does the writing",
+   "body": "The code is split on purpose. The **policy** is \"pure\": given products, draft lines and a contract term, it returns a decision (totals, review reasons and three yes/no flags) or throws an error. It never touches the database, checks who is logged in, or writes anything. That makes it easy to test with plain inputs.\n\nThe **service** does everything else: it loads data, calls the policy, and then inside `prisma.$transaction` turns the flags into deal-desk cases and approval rows and changes the quote's status.\n\nThis split tells you where to look for which kind of bug. A wrong number or a wrong flag is a policy question; read the arithmetic and the comparisons. A duplicate row, a stuck status or a permission surprise is a service question; read what is checked *before* the transaction, what is written *inside* it, and what each write returns.",
+   "excerpts": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 16,
+     "lineEnd": 16,
+     "quote": "The policy is pure. It never queries a database, authorizes a session, writes approvals, or audits. `quote-service.ts` turns its flags into deal-desk cases and approval rows inside `prisma.$transaction`."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/services/quote-service.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The orchestration layer: submit, deal-desk resolution, approvals and finalize."
+    },
+    {
+     "path": "astraupskill/04-TESTING-AND-DEBUGGING.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "How the lab test loads the pure policy without a database."
+    }
+   ]
+  },
+  {
+   "id": "r03-quote-lifecycle-map",
+   "target": "pack",
+   "phase": "before",
+   "title": "Core idea: the quote lifecycle is a lookup table",
+   "body": "A quote moves through statuses: DRAFT, then possibly PENDING_DEAL_DESK and PENDING_APPROVAL, then APPROVED or REJECTED, and finally CONVERTED_TO_ORDER. The allowed moves are written as a table, `allowedTransitions`, mapping each status to the list of statuses it may go to next. `ensureQuoteTransition(current, next)` looks the move up and throws a 409 error if it is not listed.\n\nThings worth noticing in the table: REJECTED and CONVERTED_TO_ORDER list nothing, so they are final. Moving to the *same* status is not listed anywhere, so it is refused. DRAFT may go straight to APPROVED when no review is needed.\n\nThe service calls `ensureQuoteTransition` before every status write. A table like this is easy to read and test, but remember it only checks the *move*, not whether two requests are making the move at the same time.",
+   "excerpts": [
+    {
+     "path": "src/domain/quote-policy.ts",
+     "lineStart": 117,
+     "lineEnd": 124,
+     "quote": "DRAFT: [\"PENDING_DEAL_DESK\", \"PENDING_APPROVAL\", \"APPROVED\", \"REJECTED\"], PENDING_DEAL_DESK: [\"PENDING_APPROVAL\", \"REJECTED\"],"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 31,
+     "lineEnd": 31,
+     "quote": "`ensureQuoteTransition` makes REJECTED and CONVERTED_TO_ORDER terminal and forbids same-status moves."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The lifecycle map as a table and every call site of ensureQuoteTransition."
+    }
+   ]
+  },
+  {
+   "id": "x-q01-admin-cannot-approve",
+   "target": "seed:quests:ww18/quiz/200b040086592093",
+   "phase": "after",
+   "title": "Why an org admin with quote:approve still gets 403",
+   "body": "**Key: it gets 403 every time, as no approval row targets an admin role.**\n\nThe permission list gives `ORG_ADMIN` the `quote:approve` action, so the route lets the admin in. But `decideQuoteApproval` then looks for a pending approval row whose `approverRole` equals the caller's role. The approval plan only creates FINANCE and LEGAL rows, so for ORG_ADMIN nothing matches and the service throws `AppError(403, ...)`. The permission matrix promises something the service never allows (review finding 7).\n\nWhy the others are wrong:\n- *Approves the FINANCE row by inheritance*: the match is exact (`approval.approverRole === role`); there is no role inheritance.\n- *200 with no change*: the code throws 403 when no row is found; it never returns success.\n- *Approves every row as an override*: no override branch exists in `decideQuoteApproval`.",
+   "excerpts": [
+    {
+     "path": "src/services/quote-service.ts",
+     "lineStart": 279,
+     "lineEnd": 281,
+     "quote": "return approvals.find((approval) => approval.approverRole === role && approval.status === \"PENDING\");"
+    },
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 39,
+     "lineEnd": 39,
+     "quote": "The plan only ever creates `FINANCE` and `LEGAL` rows (32-52), so an admin always gets 403 at line 371."
+    },
+    {
+     "path": "src/lib/auth/permissions.ts",
+     "lineStart": 42,
+     "lineEnd": 47,
+     "quote": "ORG_ADMIN: [ \"opportunity:create\", \"opportunity:read\", \"quote:create\", \"quote:submit\", \"quote:approve\","
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02-flags-from-reason-text",
+   "target": "seed:quests:ww18/quiz/5ed4501f471fdee5",
+   "phase": "after",
+   "title": "Why rewording a reason string changes routing",
+   "body": "**Key: requiresDealDesk turns false, as the flags are matched on the reason text.**\n\nThe policy first collects human-readable reason strings, then sets the flags by searching those strings: `requiresDealDesk` is true only if some reason `includes(\"deal desk\")`. If the message is reworded to say \"DD discount threshold\", the words \"deal desk\" are gone, so the search finds nothing and the flag goes false. The deal-desk case is silently skipped. The guide calls this brittle (finding 6).\n\nWhy the others are wrong:\n- *The build fails*: the reason is built with a template string and added to a plain string `Set`; any text compiles.\n- *The Set removes it*: a `Set` only drops exact duplicates; a reworded string is still kept.\n- *Nothing, flags come from numbers*: the numbers decide whether a reason is *added*, but the flags are read back from the reason *text*.",
+   "excerpts": [
+    {
+     "path": "src/domain/quote-policy.ts",
+     "lineStart": 108,
+     "lineEnd": 108,
+     "quote": "requiresDealDesk: reasonList.some((reason) => reason.includes(\"deal desk\")),"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 27,
+     "lineEnd": 27,
+     "quote": "That is brittle: rewording a message, for example changing \"deal desk\" in the string at line 89, silently changes routing."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q03-deal-desk-implies-finance",
+   "target": "seed:quests:ww18/quiz/5f68b092d6dbe83a",
+   "phase": "after",
+   "title": "Why a deal-desk discount also needs finance approval",
+   "body": "**Key: yes, as a deal-desk reason also counts as a finance reason.**\n\nAt 20%, the line is above the deal-desk threshold (15), so the deal-desk reason is added. It is not above the finance threshold (30), so no finance reason is added. But look at how `requiresFinanceApproval` is computed: it is true if any reason includes \"finance approval\" **or** \"deal desk\". The deal-desk reason is enough. The guide: \"a deal-desk exception always ends in finance approval too\".\n\nWhy the others are wrong:\n- *Only with a non-standard term*: the term only adds a legal reason; it does not affect the finance flag.\n- *Deal desk replaces finance*: the code adds finance on top of deal desk, it does not replace it.\n- *No, 20 is below 30*: that is true for the finance *reason*, but the finance *flag* is also set by the deal-desk reason.",
+   "excerpts": [
+    {
+     "path": "src/domain/quote-policy.ts",
+     "lineStart": 109,
+     "lineEnd": 111,
+     "quote": "requiresFinanceApproval: reasonList.some( (reason) => reason.includes(\"finance approval\") || reason.includes(\"deal desk\") ),"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 27,
+     "lineEnd": 27,
+     "quote": "`requiresFinanceApproval` is also true whenever a deal-desk reason exists (line 110)."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q04-rounded-threshold",
+   "target": "seed:quests:ww18/quiz/60a47159e3fda4ff",
+   "phase": "after",
+   "title": "The highest unit price that still triggers finance review",
+   "body": "**Key: 8,950, as 10.5% rounds to 11 and 11 > 10.**\n\nTwo details combine. `calculatePercentDiscount` rounds the discount to a whole percent with `Math.round`. The finance check is a strict `>`. So a discount triggers review only once it *rounds* to 11 or more, which happens from 10.5% up. With a list price of 10,000 cents, 10.5% off is 8,950. One cent more (8,951) is 10.49%, which rounds to 10 and does not trigger. The guide sums it up: the effective threshold is \"at least 10.5%\".\n\nWhy the others are wrong:\n- *9,000, exactly 10%*: 10 > 10 is false; the guide says an exact 10% \"does **not** escalate\".\n- *8,960, 10.4%*: 10.4 rounds to 10, and 10 > 10 is false (exercise 7).\n- *8,999*: 0.01% rounds to 0, nowhere near the threshold.",
+   "excerpts": [
+    {
+     "path": "src/lib/money.ts",
+     "lineStart": 17,
+     "lineEnd": 17,
+     "quote": "return Math.round(((listPriceCents - unitPriceCents) / listPriceCents) * 100);"
+    },
+    {
+     "path": "src/domain/quote-policy.ts",
+     "lineStart": 92,
+     "lineEnd": 92,
+     "quote": "if (line.discountPct > product.autoApprovalDiscountPct) {"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 19,
+     "lineEnd": 19,
+     "quote": "So the effective finance threshold is \"at least 10.5%\", not \"above 10%\"."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q05-set-dedupes-reasons",
+   "target": "seed:quests:ww18/quiz/62ca2b9f43654e2b",
+   "phase": "after",
+   "title": "Why two lines of one SKU give a single deal-desk reason",
+   "body": "**Key: one, as identical reason strings collapse in the Set.**\n\nReasons are stored in a `Set`, which keeps only one copy of each distinct value. The deal-desk message is built from the product's SKU: `${product.sku} exceeds the deal desk discount threshold.` Two lines with the same SKU produce exactly the same string, so the second `add` changes nothing. The guide notes the tests assert three *distinct* reasons for this reason.\n\nWhy the others are wrong:\n- *Two, the second marked duplicate*: a `Set` has no \"duplicate\" marker; it simply ignores the repeat.\n- *Zero, lines merged before the policy*: `evaluateQuoteDraft` maps every draft line on its own; nothing merges lines by SKU first.\n- *Two, one per line*: reasons are per distinct message, not per line, because of the `Set`.",
+   "excerpts": [
+    {
+     "path": "src/domain/quote-policy.ts",
+     "lineStart": 82,
+     "lineEnd": 82,
+     "quote": "const reasons = new Set<string>();"
+    },
+    {
+     "path": "src/domain/quote-policy.ts",
+     "lineStart": 88,
+     "lineEnd": 89,
+     "quote": "reasons.add(`${product.sku} exceeds the deal desk discount threshold.`);"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 27,
+     "lineEnd": 27,
+     "quote": "Reasons are collected in a `Set` (line 82), so two lines of the same SKU produce one reason each type"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q06-ignored-update-count",
+   "target": "seed:quests:ww18/quiz/7552914ec77d0e08",
+   "phase": "after",
+   "title": "Why a guarded updateMany is not a guard on its own",
+   "body": "**Key: the service ignores the affected-row count, so a zero-row decision proceeds.**\n\n`updateApprovalDecision` only updates rows still in `status: \"PENDING\"`. If a second, duplicate decision arrives after the row was decided, the `updateMany` matches zero rows. That is useful information, but `decideQuoteApproval` just `await`s the call and never looks at the returned count. It carries on to the rejection or finalize logic as if the update had happened (finding 4). A guarded write only protects you if the caller checks the count and treats zero as a conflict.\n\nWhy the others are wrong:\n- *updateMany throws on zero matches*: the guide's point is that it returns a count which the service ignores; zero matches is not an error.\n- *Prisma retries until a row matches*: there is no retry logic anywhere in this path.\n- *The WHERE omits status*: it includes `status: \"PENDING\"`.",
+   "excerpts": [
+    {
+     "path": "src/repositories/quote-repository.ts",
+     "lineStart": 131,
+     "lineEnd": 137,
+     "quote": "return db.quoteApproval.updateMany({ where: { tenantId, quoteId, approverRole, status: \"PENDING\" },"
+    },
+    {
+     "path": "src/services/quote-service.ts",
+     "lineStart": 375,
+     "lineEnd": 382,
+     "quote": "await quoteRepository.updateApprovalDecision("
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 35,
+     "lineEnd": 35,
+     "quote": "but the service ignores its count. A duplicate decision that matched zero rows still proceeds to the rejection or finalize logic."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07-concurrent-approvers-stall",
+   "target": "seed:quests:ww18/quiz/8bcaa04f5c0e535a",
+   "phase": "after",
+   "title": "Why two simultaneous approvals can leave a quote stuck",
+   "body": "**Key: it stays stuck in PENDING_APPROVAL with zero pending approvals left over.**\n\nEach approver's transaction marks its own row APPROVED, then re-reads the quote and asks \"are any approvals still PENDING?\". Under READ COMMITTED a transaction only sees changes that other transactions have *committed*. Neither has committed yet, so each still sees the other's row as PENDING and returns early without calling `finalizeApprovedQuote`. Then both commit. Now both rows are APPROVED, but nobody finalized the quote (finding 3).\n\nWhy the others are wrong:\n- *APPROVED once, the second waits*: nothing makes one transaction wait; they update different approval rows and the code takes no lock on the quote.\n- *APPROVED twice, two orders*: neither reaches the finalize call, so there is not even one order.\n- *REJECTED as a conflict*: REJECTED is set only when an approver sends a REJECTED decision.\n\nThe guide's fixes: a row lock on the quote, or one \"finalize if none pending\" step after commit.",
+   "excerpts": [
+    {
+     "path": "src/services/quote-service.ts",
+     "lineStart": 408,
+     "lineEnd": 415,
+     "quote": "const hasPendingApprovals = refreshedQuote.approvals.some((approval) => approval.status === \"PENDING\"); if (hasPendingApprovals) {"
+    },
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 35,
+     "lineEnd": 35,
+     "quote": "Under READ COMMITTED, each transaction can still see the **other** approval as PENDING, because neither has committed. Both then return early at 410-415, and nobody calls `finalizeApprovedQuote`."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08-float-only-in-percent",
+   "target": "seed:quests:ww18/quiz/9d9082fef66d31db",
+   "phase": "after",
+   "title": "Where floating point touches money in the policy",
+   "body": "**Key: only in the discount percentage, which drives routing and never amounts.**\n\nEvery money amount is a whole number of cents. `subtotalCents` and `totalCents` multiply integer cents by integer quantities and add them up, and `discountCents` is one integer minus another. The only division is in `calculatePercentDiscount`, which divides and then rounds to a whole percent. That percentage is compared with thresholds to decide routing; it is never used to compute an amount.\n\nWhy the others are wrong:\n- *Nowhere, BigInt everywhere*: the code uses ordinary JavaScript numbers; there is no BigInt.\n- *In discountCents, from the percentage*: `discountCents` is `subtotalCents - totalCents`; the percentage is not involved.\n- *Subtotal and total divide by 100*: neither divides; they multiply cents by quantity.",
+   "excerpts": [
+    {
+     "path": "src/domain/quote-policy.ts",
+     "lineStart": 79,
+     "lineEnd": 81,
+     "quote": "const subtotalCents = sumMoney(lines.map((line) => line.listPriceCents * line.quantity)); const totalCents = sumMoney(lines.map((line) => line.unitPriceCents * line.quantity)); const discountCents = subtotalCents - totalCents;"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 23,
+     "lineEnd": 23,
+     "quote": "There is no float arithmetic on money except inside the percentage calculation, and that result is only used for routing, never for amounts."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09-submit-check-then-act",
+   "target": "seed:quests:ww18/quiz/aa3e3ef394e3a0c0",
+   "phase": "after",
+   "title": "What goes wrong with two concurrent submits",
+   "body": "**Key: both pass the DRAFT check outside the transaction and create duplicate cases.**\n\n`submitQuote` loads the quote and checks `quote.status !== \"DRAFT\"` *before* `prisma.$transaction` starts. Two calls arriving together both read DRAFT, both pass, and both enter their own transaction. The status writes inside are not conditional on the old status, so neither notices the other, and each creates its own deal-desk case or approval rows (finding 5). This is \"check-then-act\": the check and the action are separated, so the world can change in between.\n\nWhy the others are wrong:\n- *The second status write throws a unique-constraint error*: finding 5 says status writes \"are not conditional\"; nothing rejects the second write.\n- *A cached response for the second call*: there is no response cache or idempotency key in `submitQuote`.\n- *Deadlock until timeout*: the review describes both calls succeeding and creating duplicates, not blocking.",
+   "excerpts": [
+    {
+     "path": "src/services/quote-service.ts",
+     "lineStart": 208,
+     "lineEnd": 220,
+     "quote": "if (quote.status !== \"DRAFT\") {"
+    },
+    {
+     "path": "src/services/quote-service.ts",
+     "lineStart": 220,
+     "lineEnd": 220,
+     "quote": "return prisma.$transaction(async (tx) => {"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 36,
+     "lineEnd": 36,
+     "quote": "`submitQuote` checks `status === \"DRAFT\"` outside the transaction, and status writes are not conditional. Two concurrent submits can both pass and create two deal-desk cases or duplicate approvals."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10-closed-interval",
+   "target": "seed:quests:ww18/quiz/c5908a2fd930c62e",
+   "phase": "after",
+   "title": "Which quantities a 5-10 price rule covers",
+   "body": "**Key: 5 through 10, with both endpoints included.**\n\n`findApplicableRule` picks a rule when `quantity >= rule.minQuantity && quantity <= rule.maxQuantity`. Both comparisons include equality, so 5 matches (5 >= 5) and 10 matches (10 <= 10). In maths this is a \"closed interval\", written [5, 10].\n\nWhy the others are wrong:\n- *6 through 10, lower bound exclusive*: that would need `>` instead of `>=` on the minimum.\n- *5 through 9*: that would need `<` instead of `<=` on the maximum.\n- *6 through 9*: that would need both comparisons strict; neither is.",
+   "excerpts": [
+    {
+     "path": "src/domain/quote-policy.ts",
+     "lineStart": 46,
+     "lineEnd": 47,
+     "quote": "(rule) => quantity >= rule.minQuantity && quantity <= rule.maxQuantity"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "Both endpoints are included."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q11-overlap-first-match",
+   "target": "seed:quests:ww18/quiz/cc8218120472ce7c",
+   "phase": "after",
+   "title": "Which rule wins when two price rules overlap",
+   "body": "**Key: the first match in the array, so pricing depends on row order.**\n\n`findApplicableRule` uses `Array.prototype.find`, which returns the first element that passes the test and stops. If two rules both cover quantity 10, whichever comes first in `product.priceRules` wins. That order is just whatever the repository happens to return, so the price can depend on database row order (finding 8). Nothing sorts the rules or rejects overlaps.\n\nWhy the others are wrong:\n- *Overlaps rejected with 409*: no code checks for overlaps; 409 in this file comes only from `ensureQuoteTransition`.\n- *The higher floor wins*: `find` never compares floors.\n- *The newest rule, sorted by createdAt*: the policy does no sorting; the guide says the order comes from \"whatever the repository returns\".",
+   "excerpts": [
+    {
+     "path": "src/domain/quote-policy.ts",
+     "lineStart": 46,
+     "lineEnd": 48,
+     "quote": "product.priceRules.find( (rule) => quantity >= rule.minQuantity && quantity <= rule.maxQuantity ) ?? null"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "If two rules overlap, the **first** in the array wins. The array order comes from whatever the repository returns, so overlapping rules make pricing depend on query order."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q12-no-rule-no-checks",
+   "target": "seed:quests:ww18/quiz/da831dcaf43cccd7",
+   "phase": "after",
+   "title": "What happens when no price rule covers the quantity",
+   "body": "**Key: no 422 and no legal routing, as with no rule the floor and term checks never run.**\n\nWhen no rule matches, `rule` is `null`. The floor check is `if (rule && line.unitPriceCents < rule.floorPriceCents)` and the term check is `if (rule && ...)`. With `rule` null, the `rule &&` part is false, so both checks are skipped. A 1-cent price is accepted with no floor error and no legal reason. The discount-threshold reasons still run, because they read product fields, not the rule. The review rates this High (finding 1).\n\nWhy the others are wrong:\n- *Legal, as a missing rule counts as a non-standard term*: the term check also needs `rule`; it is skipped.\n- *404, product treated as missing*: 404 is thrown only when the *product* is not found; here the product exists.\n- *422 from an implicit zero-cent floor*: there is no implicit floor; without a rule, no floor is checked.",
+   "excerpts": [
+    {
+     "path": "src/domain/quote-policy.ts",
+     "lineStart": 67,
+     "lineEnd": 69,
+     "quote": "if (rule && line.unitPriceCents < rule.floorPriceCents) {"
+    },
+    {
+     "path": "src/domain/quote-policy.ts",
+     "lineStart": 96,
+     "lineEnd": 96,
+     "quote": "if (rule && !((rule.allowedTermMonths as number[]).includes(contractTermMonths))) {"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "A line whose quantity falls outside every configured range is therefore accepted at **any** price, with no floor and no legal routing."
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}
