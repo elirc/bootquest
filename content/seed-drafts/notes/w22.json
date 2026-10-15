@@ -1,0 +1,500 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "w22",
+ "repo": "w22",
+ "sha": "a0d6e0d96e72867c149937f1ad5bb66d1f254b8e",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: refunds in an idempotent payments lab",
+   "body": "This pack uses a payments lab: a Next.js app with Prisma on PostgreSQL, a simulated payment provider, webhooks, refunds and reconciliation. The lesson centres on one change to `createRefundForPayment`: its reads moved inside the database transaction. The README is honest about what that fix does and does not do.\n\nReading order, from the README's table:\n\n1. `astraupskill/01-CODEBASE-MAP.md`: the refund path hop by hop.\n2. `astraupskill/02-CONCEPTS.md`: six short sections; read all of them.\n3. `astraupskill/03-WORKED-CHANGE.md` and `04-TESTING-AND-DEBUGGING.md`.\n4. `astraupskill/05-PRACTICE.md`: seven levels, each with a Goal and a Check.\n5. `astraupskill/06-SOLUTIONS-AND-REVIEW.md`: answers and ten senior-review findings across the whole app. Several quizzes come from those findings.\n\nKeep `src/services/refundService.ts` (lines 17-101) and `src/lib/domain/paymentStateMachine.ts` open as you read.",
+   "excerpts": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 3,
+     "lineEnd": 6,
+     "quote": "a Next.js 15 App Router app with Prisma on PostgreSQL"
+    },
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 3,
+     "lineEnd": 4,
+     "quote": "Keep `src/services/refundService.ts` and `src/lib/domain/paymentStateMachine.ts` open."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 28,
+     "lineEnd": 40,
+     "why": "The chapter table: what each guide gives you."
+    },
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The refund path hop by hop with file and line numbers."
+    }
+   ]
+  },
+  {
+   "id": "r02-scope-isolation-idempotency",
+   "target": "pack",
+   "phase": "before",
+   "title": "Three different guarantees: scope, isolation, idempotency",
+   "body": "The concepts guide keeps three ideas apart. Learn the words first:\n\n- **Transaction scope (atomicity).** Every read and write inside `prisma.$transaction(async (tx) => ...)` uses the same connection, between one BEGIN and one COMMIT. If something throws, all writes in it roll back together.\n- **Isolation.** How much one running transaction can see of another. PostgreSQL's default, READ COMMITTED, lets each statement see data committed by others, but it does not make two transactions wait for each other.\n- **Idempotency.** Making a *repeated* request harmless, usually with an `Idempotency-Key` header and a stored record of the first answer.\n\nA fix can give you one of these without the others. While reading section 2 of the concepts guide, write down which of the three each of its \"standard fixes\" provides, and check which endpoints in this app have an idempotency key at all.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 17,
+     "lineEnd": 18,
+     "quote": "Passing `tx` means every read and write runs on the same connection inside one `BEGIN ... COMMIT`. If a later write fails, earlier writes in the callback roll back."
+    },
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 16,
+     "lineEnd": 19,
+     "quote": "Prisma interactive transactions run at the database's default isolation level (READ COMMITTED on PostgreSQL)"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 37,
+     "lineEnd": 43,
+     "why": "Section 4: why idempotency is a different problem from transactions."
+    }
+   ]
+  },
+  {
+   "id": "r03-refund-allowance",
+   "target": "pack",
+   "phase": "before",
+   "title": "How the refund allowance is computed and checked",
+   "body": "Whether a refund is allowed depends on four facts: which payment, its current status, its original amount, and how much has already been refunded successfully. In `createRefundForPayment` (`refundService.ts`):\n\n1. Load the payment (404 if missing).\n2. Sum the SUCCEEDED refunds for it.\n3. Work out what is left to refund.\n4. Call `assertRefundAllowed` in the state machine, which throws a `RouteError` with a code when the refund is not allowed.\n5. Create the refund (PENDING), write an event, mark it SUCCEEDED, maybe mark the payment REFUNDED, write another event.\n\nRead `assertRefundAllowed` (lines 50-63) and note the *order* of its two checks and the *name* of its third parameter compared with what step 3 passes in. Then read section 6 of the concepts guide on how `jsonError` turns errors into responses.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 5,
+     "lineEnd": 7,
+     "quote": "Whether a refund of N is allowed depends on four facts: the payment id, the payment's current status, the original amount"
+    },
+    {
+     "path": "src/services/refundService.ts",
+     "lineStart": 28,
+     "lineEnd": 31,
+     "quote": "const payment = await findPaymentById(input.paymentId, tx); if (!payment) { throw new RouteError(404, \"PAYMENT_NOT_FOUND\", \"Payment not found.\"); }"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 52,
+     "lineEnd": 58,
+     "why": "Errors as contract: RouteError, ZodError and everything else."
+    }
+   ]
+  },
+  {
+   "id": "x-q01-gc-one-client",
+   "target": "seed:quests:w22/quiz/0351e28dfb13ab88",
+   "phase": "after",
+   "title": "Level 2's check: seven operations, each passed tx",
+   "body": "**Key: \"seven operations inside the transaction (two reads, one create, one refund transition, up to one payment transition, two events), each passing `tx` as its last argument.\"**\n\nThis is a goal-check question: each level of `05-PRACTICE.md` has a **Goal** and a **Check**, and the wrong choices are the Checks of other levels.\n\nLevel 2's goal is to prove every database call in the refund workflow uses the transaction client. The check is the list you get by reading `createRefundForPayment`: `findPaymentById` and `sumSuccessfulRefundsForPayment` (reads), `createRefund`, two `createPaymentEvent` calls, `transitionRefundStatus`, and `transitionPaymentStatus` when the refund is full, each ending with `tx`.\n\nWhy the others do not fit:\n- *Six rows with error codes and lines*: Level 1, predicting single requests.\n- *Compare with the test ledgers at :40, 44, 48*: Level 3, failure boundaries.\n- *A plan with two calls and a barrier*: Level 5, integration test design.",
+   "excerpts": [
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 22,
+     "lineEnd": 25,
+     "quote": "**Goal:** prove every database operation shares one client."
+    },
+    {
+     "path": "src/services/refundService.ts",
+     "lineStart": 32,
+     "lineEnd": 32,
+     "quote": "const refundedAmount = await sumSuccessfulRefundsForPayment(payment.id, tx);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02-gc-reconciliation",
+   "target": "seed:quests:w22/quiz/279a8da0cffbf7e4",
+   "phase": "after",
+   "title": "Level 6's check: name the issue and the forgotten table",
+   "body": "**Key: \"name the issue type and explain which table the refund path forgot to update.\"**\n\nThis is a goal-check question: each level of `05-PRACTICE.md` has a **Goal** and a **Check**, and the wrong choices are the Checks of other levels.\n\nLevel 6 asks you to predict what reconciliation records after a full refund. Reconciliation compares the local payment status with what the provider's record implies. The refund path updates the `Payment` row but not the provider's record, so the two disagree. The check asks for exactly that: the issue type, and which table was not updated.\n\nWhy the others do not fit:\n- *Whether a SUPPORT user's request reaches jsonError*: Level 7, the auth wrapper.\n- *Compare with the test ledgers*: Level 3, failure boundaries.\n- *A plan with two calls and a barrier*: Level 5, the concurrency integration test.",
+   "excerpts": [
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 50,
+     "lineEnd": 54,
+     "quote": "**Goal:** find the reconciliation false positive."
+    },
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 54,
+     "lineEnd": 54,
+     "quote": "**Check:** name the issue type and explain which table the refund path forgot to update."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 44,
+     "lineEnd": 51,
+     "why": "The Level 6 answer, once you have tried it."
+    }
+   ]
+  },
+  {
+   "id": "x-q03-double-submit-refund",
+   "target": "seed:quests:w22/quiz/436529c67f6fdbf6",
+   "phase": "after",
+   "title": "A double-clicked refund form makes two refunds",
+   "body": "**Key: two refunds; only an idempotency key on the refund endpoint would stop it.**\n\nEach click sends a separate request, and each request runs its own transaction. A transaction makes *one* request all-or-nothing; it knows nothing about other requests. If the balance allows both (for example 100 left and two refunds of 40), both pass the check and both commit. Only an idempotency key, where the second request carries the same key and gets the first answer back, would make the repeat harmless. The refund endpoint has none; only payment creation does.\n\nWhy the others are wrong:\n- *Reuses the payment's idempotency record*: that record belongs to the create-payment route.\n- *The transaction rejects repeats*: transactions do not detect duplicate requests.\n- *Both fail on a PENDING refund*: PENDING refunds are not even counted, and nothing aborts on seeing one.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 39,
+     "lineEnd": 41,
+     "quote": "A transaction makes one request atomic; idempotency makes a *repeated* request harmless. The refund endpoint has no idempotency key, so a double-submitted refund form creates two refunds if the balance allows."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q04-gc-failure-stops",
+   "target": "seed:quests:w22/quiz/4ec6952be1c52073",
+   "phase": "after",
+   "title": "Level 3's check: compare with the test ledgers",
+   "body": "**Key: \"compare with the ledgers in `tests/runtime-refund-scope.test.mjs:40, 44, 48`.\"**\n\nThis is a goal-check question: each level of `05-PRACTICE.md` has a **Goal** and a **Check**, and the wrong choices are the Checks of other levels.\n\nLevel 3 asks where the workflow stops for three failures: a missing payment, a FAILED payment, and the `REFUND_REQUESTED` event write throwing. The runtime test records, for each of those cases, which repository calls ran (a \"ledger\"), so comparing your prediction with those three lines is the check.\n\nWhy the others do not fit:\n- *A plan with two calls and a barrier*: Level 5.\n- *Whether a SUPPORT user's request reaches jsonError*: Level 7.\n- *Name the issue type and the forgotten table*: Level 6.\n\nNone of those is about a single request stopping part-way.",
+   "excerpts": [
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 29,
+     "lineEnd": 32,
+     "quote": "**Goal:** know where each failure stops the workflow. For (a) missing payment, (b) FAILED payment, (c) the `REFUND_REQUESTED` event write throwing, say which calls ran and which did not."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "tests/runtime-refund-scope.test.mjs",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The five runtime cases and the call ledgers they assert."
+    }
+   ]
+  },
+  {
+   "id": "x-q05-ui-fresh-key",
+   "target": "seed:quests:w22/quiz/56e87f351b37d717",
+   "phase": "after",
+   "title": "A fresh key per click defeats idempotency",
+   "body": "**Key: the create hook generates a fresh Idempotency-Key on every single mutation call.**\n\nThe server stores the first answer under the key and replays it when the same key comes back. But the browser hook builds the header as `crypto.randomUUID()` inside the request function, so every submit gets a brand-new random key. To the server, the second click is a new request, so it creates a second payment. A retry only helps if it carries the *same* key as the first try; the review lists this as finding 8.\n\nWhy the others are wrong:\n- *The key is stored after commit*: the problem is that the keys differ, not timing.\n- *The browser strips the header*: `fetch` sends custom headers; the hook sets one.\n- *The server ignores keys for identical bodies*: identical bodies are exactly when the key replays the first response.",
+   "excerpts": [
+    {
+     "path": "src/hooks/usePaymentActions.ts",
+     "lineStart": 31,
+     "lineEnd": 33,
+     "quote": "headers: { \"Idempotency-Key\": crypto.randomUUID(), },"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 86,
+     "lineEnd": 87,
+     "quote": "generates a fresh `Idempotency-Key` on every mutation call, so a double-submitted form creates two payments."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q06-status-before-amount",
+   "target": "seed:quests:w22/quiz/6942a258a025912f",
+   "phase": "after",
+   "title": "Status is checked before amount",
+   "body": "**Key: PAYMENT_NOT_REFUNDABLE, because the status check runs before the amount check.**\n\n`assertRefundAllowed` has two `if` statements. The first (lines 55-57) throws when the status is not SUCCEEDED. A FAILED payment fails that check, so the function throws `PAYMENT_NOT_REFUNDABLE` and stops. The amount check on lines 60-62 never runs, even though 500 is also too much.\n\nWhy the others are wrong:\n- *Both codes collected*: the function throws on the first problem; it does not collect a list.\n- *REFUND_AMOUNT_EXCEEDS_CAPTURE because 500 is bigger*: that check is never reached.\n- *INVALID_PAYMENT_TRANSITION*: refunds are checked by `assertRefundAllowed`, which does not throw that code.",
+   "excerpts": [
+    {
+     "path": "src/lib/domain/paymentStateMachine.ts",
+     "lineStart": 55,
+     "lineEnd": 57,
+     "quote": "if (currentStatus !== \"SUCCEEDED\") { throw new RouteError(409, \"PAYMENT_NOT_REFUNDABLE\", \"Only succeeded payments can be refunded.\"); }"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 12,
+     "lineEnd": 13,
+     "quote": "A FAILED payment therefore gets `PAYMENT_NOT_REFUNDABLE` even if the amount is also too large."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07-key-not-user-scoped",
+   "target": "seed:quests:w22/quiz/6dbda2e2528cd2d4",
+   "phase": "after",
+   "title": "The idempotency key is shared across users",
+   "body": "**Key: a replay of A's response, including A's payment id, since the key is not user-scoped.**\n\n`findIdempotencyRecord(route, input.idempotencyKey)` looks up the record by route and key only; the user is not part of the lookup. The fingerprint (`buildRequestFingerprint(input.body)`) covers only the body. B's key and body match A's record, so the hash check passes and, since A's request completed, the service returns `buildCompletedReplay(existingRecord)`: A's response, with A's payment id. The review lists this as finding 7.\n\nWhy the others are wrong:\n- *409 because the user differs*: that 409 fires only when the body hash differs.\n- *A brand-new payment*: there is no per-user key namespace.\n- *400 MISSING_IDEMPOTENCY_KEY*: that is only for a request with no key at all.",
+   "excerpts": [
+    {
+     "path": "src/services/paymentService.ts",
+     "lineStart": 66,
+     "lineEnd": 68,
+     "quote": "const route = \"POST:/api/payments\"; const requestHash = buildRequestFingerprint(input.body); const existingRecord = await findIdempotencyRecord(route, input.idempotencyKey);"
+    },
+    {
+     "path": "src/services/paymentService.ts",
+     "lineStart": 79,
+     "lineEnd": 81,
+     "quote": "if (existingRecord.status === \"COMPLETED\" && existingRecord.responseBody) { return buildCompletedReplay(existingRecord); }"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08-read-committed-race",
+   "target": "seed:quests:w22/quiz/76693c93d126a0e9",
+   "phase": "after",
+   "title": "Two concurrent refunds both pass and both commit",
+   "body": "**Key: 140: both transactions read 60, both pass the check, and both commit.**\n\nUnder READ COMMITTED a transaction only sees rows other transactions have *committed*. Timeline: A sums SUCCEEDED refunds and gets 60; B does the same before A commits and also gets 60. Each has 40 left to refund, so `40 > 40` is false and both pass. Each inserts its refund and commits. The total is 60 + 40 + 40 = 140 on a 100 payment. Passing `tx` made each request atomic, but nothing made B wait for A.\n\nWhy the others are wrong:\n- *100, the second waits*: a transaction does not lock rows it only reads; that needs `FOR UPDATE` or serializable isolation.\n- *100, the second commit fails*: READ COMMITTED does not check whether data you read changed.\n- *60, deadlock*: neither transaction locks the payment row, so there is nothing to deadlock on.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 20,
+     "lineEnd": 22,
+     "quote": "Under READ COMMITTED, transaction A and transaction B can both run the aggregate at line 32, both see `refunded = 60` on a 100 payment, both pass a 40-unit check, and both commit — 140 refunded against a 100 payment."
+    },
+    {
+     "path": "src/services/refundService.ts",
+     "lineStart": 32,
+     "lineEnd": 34,
+     "quote": "const remainingRefundableAmount = payment.amountMinor - refundedAmount;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09-gc-single-requests",
+   "target": "seed:quests:w22/quiz/997f12fe018a6b12",
+   "phase": "after",
+   "title": "Level 1's check: six rows, each refusal with code and line",
+   "body": "**Key: \"six rows; each refusal names its error code and the line that throws it.\"**\n\nThis is a goal-check question: each level of `05-PRACTICE.md` has a **Goal** and a **Check**, and the wrong choices are the Checks of other levels.\n\nLevel 1 lists six single-request cases (different refunded totals, request sizes and payment statuses) and asks for the outcome of each: allowed or which error code, plus the payment status afterwards. One row per case, and for each refusal the code and the line in `paymentStateMachine.ts` that throws it, is exactly the shape of that answer.\n\nWhy the others do not fit:\n- *Whether a SUPPORT user reaches jsonError*: Level 7.\n- *A two-column timeline of both aggregates*: Level 4, the concurrency gap; Level 1 has no concurrency.\n- *Name the issue type and the forgotten table*: Level 6.",
+   "excerpts": [
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 8,
+     "lineEnd": 9,
+     "quote": "**Goal:** predict the outcome of single requests. Payment amount 100. For each case give: allowed or code, payment status afterwards."
+    },
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 18,
+     "lineEnd": 18,
+     "quote": "**Check:** six rows; each refusal names its error code and the line that throws it."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10-gc-concurrency-gap",
+   "target": "seed:quests:w22/quiz/9ee1c0c9260cba37",
+   "phase": "after",
+   "title": "Level 4's check: a two-column timeline and one fix",
+   "body": "**Key: \"a two-column timeline showing both aggregates returning 60 and both commits succeeding; then pick one fix from 02, section 2, and show where in `refundService.ts` it goes.\"**\n\nThis is a goal-check question: each level of `05-PRACTICE.md` has a **Goal** and a **Check**, and the wrong choices are the Checks of other levels.\n\nLevel 4's goal is to explain what the transaction does *not* protect. A timeline with one column per request is the clearest way to show that both reads see 60 before either commits. The second half of the check asks you to choose one of the three fixes (row lock, serializable with retry, or a guarded running total) and place it in the code.\n\nWhy the others do not fit:\n- *Six rows with error codes*: Level 1, single requests.\n- *A plan with two calls and a barrier*: Level 5 designs a real database test; Level 4 is the explanation.\n- *Name the issue type and the forgotten table*: Level 6.",
+   "excerpts": [
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 36,
+     "lineEnd": 37,
+     "quote": "**Goal:** explain what the transaction does not protect."
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 22,
+     "lineEnd": 24,
+     "quote": "Three standard fixes: 1. Lock the payment row first (`SELECT ... FOR UPDATE` through `$queryRaw`) so B waits for A."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q11-partial-under-lock",
+   "target": "seed:quests:w22/quiz/a3933ec5bf8f26ea",
+   "phase": "after",
+   "title": "Under the lock, a partial refund leaves the status SUCCEEDED",
+   "body": "**Key: A's refund was partial, so the payment stays SUCCEEDED and B fails on amount (20 > 10).**\n\nWith the row lock, B waits until A commits. A refunds 20 on a payment that had 70: the total is now 90, not 100, so `fullyRefunded` is false and the payment status is not changed; it stays SUCCEEDED. When B runs, the status check passes. B then computes 100 - 90 = 10 left, and `20 > 10` throws `REFUND_AMOUNT_EXCEEDS_CAPTURE`. In the 40 + 40 case, A's refund was full, flipping the status to REFUNDED, which is why B got the status error there.\n\nWhy the others are wrong:\n- *Queued requests check amount first*: the order of checks is fixed in the code.\n- *The lock is released before the check*: B reads after A commits, and does see A's refund.\n- *PARTIALLY_REFUNDED skips the check*: the code never sets such a status.",
+   "excerpts": [
+    {
+     "path": "src/services/refundService.ts",
+     "lineStart": 64,
+     "lineEnd": 67,
+     "quote": "const fullyRefunded = refundedAmount + refund.amountMinor === payment.amountMinor; if (fullyRefunded) {"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 35,
+     "lineEnd": 36,
+     "quote": "With a smaller pair — say two 20-unit refunds against a remaining 30 — B would instead see a refunded total of 90 and fail with `REFUND_AMOUNT_EXCEEDS_CAPTURE`."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q12-gc-auth-wrapper",
+   "target": "seed:quests:w22/quiz/acc555bda6d2c2d6",
+   "phase": "after",
+   "title": "Level 7's check: does the 403 reach jsonError, and why",
+   "body": "**Key: \"say whether a SUPPORT user's refund request reaches `jsonError`, and why.\"**\n\nThis is a goal-check question: each level of `05-PRACTICE.md` has a **Goal** and a **Check**, and the wrong choices are the Checks of other levels.\n\nLevel 7 asks you to apply one question, \"where is the `try`?\", to the auth wrapper. A `catch` only handles errors thrown inside its own `try`. So you read `withRouteAuth` and the refund route and work out whether the permission error is thrown inside or outside the handler's `try`. The check asks for that yes/no answer and the reason.\n\nWhy the others do not fit:\n- *A plan with two calls and a barrier*: Level 5.\n- *Compare with the test ledgers*: Level 3.\n- *A two-column timeline*: Level 4.\n\nOnly Level 7 involves a SUPPORT user and the guard.",
+   "excerpts": [
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 58,
+     "lineEnd": 60,
+     "quote": "**Goal:** apply \"where is the try?\" to the guard."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 53,
+     "lineEnd": 57,
+     "why": "The Level 7 answer, once you have tried it."
+    }
+   ]
+  },
+  {
+   "id": "x-q13-rejected-rolled-back",
+   "target": "seed:quests:w22/quiz/bab4a99342fdc141",
+   "phase": "after",
+   "title": "Marking a webhook REJECTED and rethrowing undoes the mark",
+   "body": "**Key: nothing survives: the rethrow rolls back the event row and its REJECTED mark.**\n\nInside the transaction callback, the `catch` calls `markWebhookEventRejected(..., tx)` and then `throw error`. Because the callback throws, Prisma rolls back the *whole* transaction. Every write made with `tx` is undone: the `createWebhookEvent` insert earlier in the callback and the REJECTED update just made. No `WebhookEvent` row is left. The review (finding 4) notes that only the outbound `WebhookDelivery`, written elsewhere, records the failure.\n\nWhy the others are wrong:\n- *Both rows, Prisma commits each statement*: in an interactive transaction nothing is committed until the callback finishes successfully.\n- *The REJECTED row commits independently*: it used `tx`, so it shares the rollback.\n- *The RECEIVED insert commits first*: it is in the same transaction.",
+   "excerpts": [
+    {
+     "path": "src/services/webhookService.ts",
+     "lineStart": 123,
+     "lineEnd": 126,
+     "quote": "} catch (error) { const message = error instanceof Error ? error.message : \"Unknown webhook processing error\"; await markWebhookEventRejected(webhookEvent.id, message, tx); throw error;"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 73,
+     "lineEnd": 76,
+     "quote": "Failed webhooks leave no `WebhookEvent` row; only the outbound `WebhookDelivery` records the failure"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q14-pending-reserves-nothing",
+   "target": "seed:quests:w22/quiz/c271d8c2234efafe",
+   "phase": "after",
+   "title": "A PENDING refund does not count against the balance",
+   "body": "**Key: the sum counts only SUCCEEDED refunds, so a PENDING refund reserves no money.**\n\n`sumSuccessfulRefundsForPayment` adds up refunds `where: { paymentId, status: RefundStatus.SUCCEEDED }`. New refunds are created PENDING. Today that gap is tiny, because the service marks the refund SUCCEEDED a few lines later in the same transaction. With a real provider that confirms minutes later, a PENDING refund would sit outside the sum all that time, and a second operator would see the full balance still available.\n\nWhy the others are wrong:\n- *PENDING refunds are deleted*: nothing deletes them.\n- *The aggregate runs outside the transaction*: after the fix it runs inside, with `tx`.\n- *Cached per operator session*: there is no cache; the sum is a fresh query.",
+   "excerpts": [
+    {
+     "path": "src/repositories/refundRepository.ts",
+     "lineStart": 29,
+     "lineEnd": 33,
+     "quote": "const aggregate = await db.refund.aggregate({ where: { paymentId, status: RefundStatus.SUCCEEDED, },"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 31,
+     "lineEnd": 35,
+     "quote": "In a real integration where the provider confirms asynchronously, a PENDING refund would sit outside the sum for minutes, and two operators could each refund the full balance."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q15-misleading-param",
+   "target": "seed:quests:w22/quiz/cd4ea3c08807497f",
+   "phase": "after",
+   "title": "capturedAmountMinor actually receives the remaining amount",
+   "body": "**Key: the remaining refundable amount, amountMinor minus the SUCCEEDED refunds.**\n\nLine 33 computes `remainingRefundableAmount = payment.amountMinor - refundedAmount`, and line 34 passes it as the third argument of `assertRefundAllowed`. That parameter is named `capturedAmountMinor`, which suggests the original charge, but it gets what is *left*. The comparison `refundAmountMinor > capturedAmountMinor` is therefore \"more than is left to refund\", which is correct; only the name misleads.\n\nWhy the others are wrong:\n- *Every refund row, PENDING included*: the sum filters to SUCCEEDED.\n- *The original captured amount*: that is `payment.amountMinor`, before subtracting.\n- *The typed amount*: that is the second argument, `input.amountMinor`.",
+   "excerpts": [
+    {
+     "path": "src/services/refundService.ts",
+     "lineStart": 33,
+     "lineEnd": 34,
+     "quote": "const remainingRefundableAmount = payment.amountMinor - refundedAmount; assertRefundAllowed(payment.status, input.amountMinor, remainingRefundableAmount);"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 8,
+     "lineEnd": 10,
+     "quote": "The parameter name in `assertRefundAllowed` is misleading — it is called `capturedAmountMinor`"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q16-lock-then-status",
+   "target": "seed:quests:w22/quiz/cdc18844fb7665a0",
+   "phase": "after",
+   "title": "With a row lock, the second refund sees REFUNDED",
+   "body": "**Key: 409 PAYMENT_NOT_REFUNDABLE: after waiting it sees the first refund flipped it to REFUNDED.**\n\n`SELECT ... FOR UPDATE` locks the payment row, so B's transaction waits until A commits. A refunds 40 on top of 60: exactly 100, so A also sets the payment status to REFUNDED. When B continues, `findPaymentById` reads the committed row and sees REFUNDED. `assertRefundAllowed` checks status first, so B fails with `PAYMENT_NOT_REFUNDABLE` before the amount is looked at.\n\nWhy the others are wrong:\n- *REFUND_AMOUNT_EXCEEDS_CAPTURE*: true that nothing is left, but the status check runs first and fails first.\n- *A deadlock*: both lock the same single row in the same order; one simply waits.\n- *200, the lock changes nothing*: B's reads happen after A committed, so B sees A's changes.",
+   "excerpts": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 32,
+     "lineEnd": 35,
+     "quote": "B's `findPaymentById` then sees A's committed status change to REFUNDED, so B fails with `PAYMENT_NOT_REFUNDABLE` (the status check runs before the amount check)."
+    },
+    {
+     "path": "src/services/refundService.ts",
+     "lineStart": 66,
+     "lineEnd": 71,
+     "quote": "nextStatus: \"REFUNDED\","
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q17-guard-outside-try",
+   "target": "seed:quests:w22/quiz/dfd472183ec8199e",
+   "phase": "after",
+   "title": "The permission error is thrown before the handler's try",
+   "body": "**Key: no: requirePermission throws in withRouteAuth before the handler's try/catch starts.**\n\n`withRouteAuth` returns a function that first runs `requirePermission(...)` on line 32 and only then calls `handler(...)` on line 34. The handler's `try`/`catch` (which calls `jsonError`) is inside the handler. A SUPPORT user without the refund permission makes line 32 throw, so the handler never starts and its `catch` never sees the error. Next.js handles it as an uncaught error, not with the documented `{ error: { code: \"FORBIDDEN\" } }` body.\n\nWhy the others are wrong:\n- *withRouteAuth wraps the handler in try/catch*: lines 28-35 have no `try`.\n- *Next.js middleware calls jsonError globally*: nothing in the code does that.\n- *An empty 204*: `requirePermission` throws; it does not return a response.",
+   "excerpts": [
+    {
+     "path": "src/lib/auth/guards.ts",
+     "lineStart": 32,
+     "lineEnd": 34,
+     "quote": "const session = requirePermission(await getSessionForRequest(request), options.permission); const params = context.params ? await context.params : ({} as TParams); return handler({ request, params, session });"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 55,
+     "lineEnd": 57,
+     "quote": "The `RouteError` rejects the route function itself and is handled by Next.js as an uncaught error, not by `jsonError`."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q18-status-mismatch",
+   "target": "seed:quests:w22/quiz/fdebd3d521a4b9f1",
+   "phase": "after",
+   "title": "Full refunds cause a STATUS_MISMATCH on every reconciliation",
+   "body": "**Key: STATUS_MISMATCH: the refund path never updates ProviderPayment.status.**\n\nA full refund sets the local `Payment.status` to REFUNDED. The simulated provider's own record, `ProviderPayment`, still says SUCCEEDED because the refund path never touches it. Reconciliation turns the provider status SUCCEEDED into an expected local status of SUCCEEDED, compares it with REFUNDED, and records a mismatch. Nothing ever fixes the provider row, so the same issue appears on every run.\n\nWhy the others are wrong:\n- *Reconciliation skips REFUNDED payments*: the comparison runs and finds a difference.\n- *MISSING_WEBHOOK*: a SUCCEED-mode payment already has a webhook delivery, so this is a plain status mismatch.\n- *AMOUNT_MISMATCH*: `amountMinor` is the original charge and is not supposed to change on refund.",
+   "excerpts": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 46,
+     "lineEnd": 51,
+     "quote": "but never updates `ProviderPayment.status`, which stays SUCCEEDED. Reconciliation maps SUCCEEDED -> SUCCEEDED (`reconciliationService.ts:58`), compares with REFUNDED (line 60)"
+    },
+    {
+     "path": "src/services/reconciliationService.ts",
+     "lineStart": 58,
+     "lineEnd": 60,
+     "quote": "const expectedLocalStatus = resolveLocalStatusFromProviderStatus(providerPayment.status); if (payment.status !== expectedLocalStatus) {"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}
