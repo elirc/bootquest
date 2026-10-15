@@ -6,7 +6,7 @@
 import { spawnSync } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { REPO_ROOT } from '../report.ts';
 import { FIXTURES as FX, plantAndie } from './plant.ts';
 
@@ -46,6 +46,7 @@ async function main(): Promise<number> {
     const forged = join(tmp, 'seed-forged');
 
     const quests = (args: string[]) => args;
+    const notes = (draft: string, o: string) => [join(checkouts, `ww6@${WW6_SHA}`), '--draft', join(D, draft), '--quests', join(seedDir, 'quests'), '--out', o];
     const cases: Case[] = [
       { id: 'Q1', what: 'quests: unresolvable citations (P4 CORRUPTED-REVIEW.md)', gen: 'quests', args: quests([join(REPO_ROOT, 'tools/seed/src/citations/fixtures/ww6'), '--sha', WW6_SHA, '--repo', 'ww6', '--guides', 'astraupskill/CORRUPTED-REVIEW.md', '--out', out('q1')]), exit: 'nonzero', expect: ['QUARANTINED', '-> line-out-of-range', '-> missing-file', '-> ambiguous-suffix', 'STAMP none'] },
       { id: 'Q2', what: 'quests: multi-keyed quiz (two exercises share a Check)', gen: 'quests', args: [join(FX, 'planted', 'multikey'), '--sha', 'deadbeefcafe', '--repo', 'planted-multikey', '--out', out('q2')], exit: 'nonzero', expect: ['ambiguous: choices', '(near-)duplicates'] },
@@ -70,6 +71,12 @@ async function main(): Promise<number> {
       { id: 'P3', what: 'patches: test that passes on the defective version', gen: 'patches', args: [join(D, 'planted-patches-test-passes-defect.json'), '--checkout', join(FX, 'ww6'), '--sha', WW6_SHA, '--repo', 'ww6', '--out', out('p3')], exit: 'nonzero', expect: ['the test PASSES on the defective version'] },
       { id: 'P4', what: 'patches: defect evidence past end of file', gen: 'patches', args: [join(D, 'planted-patches-bad-evidence.json'), '--checkout', join(FX, 'ww6'), '--sha', WW6_SHA, '--repo', 'ww6', '--out', out('p4')], exit: 'nonzero', expect: ['evidence src/services/allocationEngineService.ts:400-401 (repo) -> line-out-of-range'] },
       { id: 'C0', what: 'seed:quests writes a good pack for the seed:check cases (positive control)', gen: 'quests', args: [join(checkouts, `ww6@${WW6_SHA}`), '--sha', WW6_SHA, '--guides', 'astraupskill/05-PRACTICE.md,astraupskill/06-SOLUTIONS-AND-REVIEW.md', '--out', goodPack], exit: 0, expect: ['STAMP written', 'RESULT OK'] },
+      // seed:notes against the C0 quest pack (the notes validator reads the quest pack's quiz keys)
+      { id: 'N1', what: 'notes: excerpt quote that is not in its cited lines', gen: 'notes', args: notes('planted-notes-bad-quote.json', out('n1')), exit: 'nonzero', expect: ['quote is not verbatim in those lines', 'STAMP none'] },
+      { id: 'N2', what: 'notes: excerpt line range past end of file', gen: 'notes', args: notes('planted-notes-line-out-of-range.json', out('n2')), exit: 'nonzero', expect: ['docs/learning/testing-rationale.md:900-902): line out of range', 'STAMP none'] },
+      { id: 'N3', what: 'notes: before-note (reading) that leaks a keyed quiz answer', gen: 'notes', args: notes('planted-notes-leaky-before.json', out('n3')), exit: 'nonzero', expect: ['leaks an answer: body contains the keyed answer of quiz c6a7224a750a4855', 'STAMP none'] },
+      { id: 'N4', what: 'notes: after-note (explanation) targeting a flashcard, not a quiz', gen: 'notes', args: notes('planted-notes-after-on-flashcard.json', out('n4')), exit: 'nonzero', expect: ['an after note must target a quiz', 'COVERAGE coverage: 1 quiz(zes) without an accepted after note', 'STAMP none'] },
+      { id: 'N+', what: 'notes: full-coverage draft (positive control; K0 re-verifies it with the quest pack binding)', gen: 'notes', args: notes('notes-ww6.json', join(seedDir, 'notes', 'ww6')), exit: 0, expect: ['shipped 20 (note 20)', 'STAMP written', 'RESULT OK'] },
     ];
 
     let failed = 0;
@@ -96,7 +103,7 @@ async function main(): Promise<number> {
       const r = spawnSync(process.execPath, ['--import', 'tsx', CLI('check'), '--dir', dir, '--checkouts', checkouts], { cwd: REPO_ROOT, encoding: 'utf8', windowsHide: true, timeout: 180000 });
       record({ id, what, gen: 'check', args: [], exit, expect }, r.status ?? -1, `${r.stdout ?? ''}${r.stderr ?? ''}`);
     };
-    check('K0', 'seed:check over the good pack (positive control)', seedDir, 0, ['OK ', 'RESULT OK']);
+    check('K0', 'seed:check over the good packs: quests + notes (positive control)', seedDir, 0, ['OK ', `notes${sep}ww6: 20 item(s) re-validated`, 'RESULT OK']);
     cpSync(seedDir, tampered, { recursive: true });
     const itemsPath = join(tampered, 'quests', 'ww6', 'items.json');
     writeFileSync(itemsPath, readFileSync(itemsPath, 'utf8').replace('"back": "', '"back": "EDITED '));
