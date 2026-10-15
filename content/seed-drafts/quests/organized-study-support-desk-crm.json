@@ -1,0 +1,419 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "organized-study-support-desk-crm",
+ "sha": "fed8472af12f1d5e4724688e0741d4ec491f26e4",
+ "guides": [
+  "docs/features/002-rbac-and-tenant-isolation.md",
+  "docs/features/003-outbox-worker-notifications.md",
+  "docs/features/004-search-filtering-sla.md"
+ ],
+ "items": [
+  {
+   "id": "q01-patch-leaks-notes",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/final-system-design.md",
+    "lines": {
+     "start": 92,
+     "end": 92
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/modules/tickets/ticketService.ts",
+     "lineStart": 13,
+     "lineEnd": 20
+    },
+    {
+     "path": "apps/api/src/modules/tickets/ticketService.ts",
+     "lineStart": 167,
+     "lineEnd": 181
+    }
+   ],
+   "prompt": "GET /api/tickets/:id hides internal notes from a VIEWER. How can a viewer still read them?",
+   "answer": "PATCH tags: the write response returns every comment unfiltered",
+   "distractors": [
+    "By requesting the ticket list, which includes the full comment thread for every row",
+    "They cannot; a Prisma middleware applies the visibility filter to every query",
+    "By posting an internal note"
+   ],
+   "explanation": "Only getTicket overrides the comments include with visibleCommentWhere; write responses reuse the raw include (finding 1)."
+  },
+  {
+   "id": "q02-anonymous-is-agent",
+   "kind": "quiz",
+   "source": {
+    "path": "README.md",
+    "lines": {
+     "start": 50,
+     "end": 50
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/middleware/auth.ts",
+     "lineStart": 19,
+     "lineEnd": 41
+    }
+   ],
+   "prompt": "A request reaches /api/tickets with no x-tenant-slug or x-user-email header. Who is it treated as?",
+   "answer": "agent@acme.test, the default identity",
+   "distractors": [
+    "Nobody: it gets 401 because both identity headers are required",
+    "A read-only viewer",
+    "The first admin user of the first tenant, ordered by creation date"
+   ],
+   "explanation": "Header-based demo auth with defaults means an anonymous request is an agent: intentionally temporary, but worth knowing."
+  },
+  {
+   "id": "q03-transition-500",
+   "kind": "quiz",
+   "source": {
+    "path": "README.md",
+    "lines": {
+     "start": 55,
+     "end": 55
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/domain/src/index.ts",
+     "lineStart": 39,
+     "lineEnd": 43
+    },
+    {
+     "path": "apps/api/src/middleware/errors.ts",
+     "lineStart": 21,
+     "lineEnd": 34
+    }
+   ],
+   "prompt": "An agent PATCHes a NEW ticket to CLOSED. Which status code comes back, and why?",
+   "answer": "500: the domain throws a plain Error",
+   "distractors": [
+    "409, the conventional conflict response for an invalid status transition",
+    "403, because agents may never close tickets from any status",
+    "400 from Zod"
+   ],
+   "explanation": "assertTicketTransition throws a plain Error, and the error middleware maps only ZodError (400) and HttpError (its status) to client codes; everything else becomes 500. Throw an HttpError(409) or map a domain error class instead."
+  },
+  {
+   "id": "q04-agent-close-rule",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/features/002-rbac-and-tenant-isolation.md",
+    "lines": {
+     "start": 45,
+     "end": 45
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/domain/src/index.ts",
+     "lineStart": 32,
+     "lineEnd": 37
+    }
+   ],
+   "prompt": "From which statuses may an AGENT move a ticket to CLOSED?",
+   "answer": "Only RESOLVED or PENDING: agents get a special case before the shared transition table is consulted",
+   "distractors": [
+    "OPEN, PENDING or RESOLVED, the same as any other role",
+    "None",
+    "Any status at all, because agents bypass the transition table"
+   ],
+   "explanation": "canTransitionTicket special-cases to === CLOSED for agents before consulting the shared table (which also allows OPEN -> CLOSED for others)."
+  },
+  {
+   "id": "q05-same-status",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/walkthrough/important-files.md",
+    "lines": {
+     "start": 93,
+     "end": 93
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/domain/src/index.ts",
+     "lineStart": 32,
+     "lineEnd": 34
+    }
+   ],
+   "prompt": "A VIEWER sends PATCH with status equal to the ticket's current status. Does assertTicketTransition stop it?",
+   "answer": "No: from === to returns true first",
+   "distractors": [
+    "Yes: viewers can never send a status field in a PATCH request",
+    "Yes: same-status moves are always rejected by the domain package",
+    "Only if CLOSED"
+   ],
+   "explanation": "Order of checks matters: the identity shortcut comes first, so a viewer's no-op status passes."
+  },
+  {
+   "id": "q06-ticket-number-race",
+   "kind": "quiz",
+   "source": {
+    "path": "README.md",
+    "lines": {
+     "start": 56,
+     "end": 56
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/modules/tickets/ticketService.ts",
+     "lineStart": 100,
+     "lineEnd": 110
+    },
+    {
+     "path": "prisma/schema.prisma",
+     "lineStart": 125,
+     "lineEnd": 125
+    }
+   ],
+   "prompt": "Two tickets are created concurrently in the same tenant. What can happen?",
+   "answer": "Both pick the same next number; the second fails the unique index with a 500",
+   "distractors": [
+    "Nothing: the transaction serializes the two reads",
+    "Both succeed with duplicate numbers, because there is no unique index on number",
+    "The second silently receives number + 2 through an automatic retry"
+   ],
+   "explanation": "Reading 'highest + 1' inside a READ COMMITTED transaction does not reserve the number; use a sequence/counter row or retry on conflict."
+  },
+  {
+   "id": "q07-worker-stops",
+   "kind": "quiz",
+   "source": {
+    "path": "README.md",
+    "lines": {
+     "start": 57,
+     "end": 57
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/worker/src/worker.ts",
+     "lineStart": 36,
+     "lineEnd": 44
+    }
+   ],
+   "prompt": "The database is unreachable for one polling pass, so findMany throws. What happens to the worker?",
+   "answer": "Polling ends for good, because the loop's promise rejects before setTimeout schedules the next pass",
+   "distractors": [
+    "It retries the same pass after the configured poll interval",
+    "It marks every pending event FAILED and then continues polling",
+    "Node restarts the worker process automatically after the crash"
+   ],
+   "explanation": "The loop's promise rejects before setTimeout schedules the next pass; only per-event errors are caught. Wrapping processOutboxBatch in try/catch and always rescheduling keeps the worker alive."
+  },
+  {
+   "id": "q08-two-workers",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/features/003-outbox-worker-notifications.md",
+    "lines": {
+     "start": 46,
+     "end": 46
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/worker/src/worker.ts",
+     "lineStart": 6,
+     "lineEnd": 18
+    }
+   ],
+   "prompt": "You start two worker processes. What happens to each PENDING event?",
+   "answer": "Both may process it: there is no claim step",
+   "distractors": [
+    "Exactly one worker, thanks to the PROCESSING status",
+    "The second worker blocks on a row lock until the first one finishes the event",
+    "Prisma's findMany skips rows that another connection has already read"
+   ],
+   "explanation": "Selecting PENDING then updating by id is not a claim; FOR UPDATE SKIP LOCKED with RETURNING is the suggested fix."
+  },
+  {
+   "id": "q09-failed-terminal",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/features/003-outbox-worker-notifications.md",
+    "lines": {
+     "start": 46,
+     "end": 46
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/worker/src/worker.ts",
+     "lineStart": 26,
+     "lineEnd": 31
+    }
+   ],
+   "prompt": "An event's handler throws once and is marked FAILED. When is it retried?",
+   "answer": "Never: only PENDING events are selected",
+   "distractors": [
+    "On the next poll, up to five attempts in total",
+    "After an exponential backoff computed from the attempts counter",
+    "When the API writes the next outbox event for the same ticket"
+   ],
+   "explanation": "FAILED is terminal; a crash between the two status updates also leaves events stuck in PROCESSING."
+  },
+  {
+   "id": "q10-outbox-why",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/features/003-outbox-worker-notifications.md",
+    "lines": {
+     "start": 16,
+     "end": 20
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/modules/tickets/ticketService.ts",
+     "lineStart": 167,
+     "lineEnd": 204
+    }
+   ],
+   "prompt": "What classic bug does writing an OutboxEvent in the same transaction as the ticket change prevent?",
+   "answer": "A saved change whose notification is lost unrecorded",
+   "distractors": [
+    "Two agents editing the same ticket at the same moment",
+    "Customers receiving notifications rendered in the wrong time zone",
+    "The worker reading uncommitted ticket data from another transaction"
+   ],
+   "explanation": "Writing the OutboxEvent in the same transaction means the change and its pending side effect commit or roll back together; the classic bug is a DB write that succeeds while the notification fails before anything records that it still needs sending."
+  },
+  {
+   "id": "q11-priority-resets-sla",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/final-system-design.md",
+    "lines": {
+     "start": 76,
+     "end": 76
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/modules/tickets/ticketService.ts",
+     "lineStart": 176,
+     "lineEnd": 179
+    }
+   ],
+   "prompt": "A NORMAL ticket created 20 hours ago is raised to URGENT. When is it now due?",
+   "answer": "Two hours from now, because slaDueAt is recalculated from the current time",
+   "distractors": [
+    "Already breached: two hours after creation was 18 hours ago",
+    "Still 4 hours from now: the original NORMAL deadline is kept",
+    "Two hours from the last customer reply on the ticket"
+   ],
+   "explanation": "When the priority changes, updateTicket recalculates slaDueAt with calculateSlaDueAt(new Date(), priority), i.e. from now, not from creation."
+  },
+  {
+   "id": "q12-first-response-race",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/final-system-design.md",
+    "lines": {
+     "start": 95,
+     "end": 95
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/modules/tickets/ticketService.ts",
+     "lineStart": 212,
+     "lineEnd": 232
+    }
+   ],
+   "prompt": "Two agents post the first public reply at the same moment. Why can firstResponseAt be overwritten?",
+   "answer": "It is read before the transaction, so both see null and both write",
+   "distractors": [
+    "The WHERE firstResponseAt IS NULL guard is ignored by Prisma",
+    "Because internal notes also set firstResponseAt when they are the first comment",
+    "It cannot; the comment insert locks the ticket row until the transaction commits"
+   ],
+   "explanation": "The check is outside the transaction and the update is unconditional by id; a conditional update (where firstResponseAt: null) would make the first writer win."
+  },
+  {
+   "id": "f01-viewers-can-write",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/architecture/final-system-design.md",
+    "lines": {
+     "start": 93,
+     "end": 93
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/modules/admin/adminRoutes.ts",
+     "lineStart": 22,
+     "lineEnd": 22
+    }
+   ],
+   "front": "Which write actions are open to a VIEWER in the support desk?",
+   "back": "Creating tickets, changing priority or tags, posting public replies to customers and ingesting email. Only status changes and assignment are checked; requireRole guards just the audit-log route."
+  },
+  {
+   "id": "f02-sla-states",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/features/004-search-filtering-sla.md",
+    "lines": {
+     "start": 44,
+     "end": 44
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/domain/src/index.ts",
+     "lineStart": 56,
+     "lineEnd": 68
+    }
+   ],
+   "front": "How getSlaState classifies a ticket",
+   "back": "PENDING, RESOLVED and CLOSED are PAUSED; no due date is MET; past due is BREACHED; within one hour of due is AT_RISK; otherwise MET. Leaving PENDING keeps the original slaDueAt, so paused time still counts."
+  },
+  {
+   "id": "f03-outbox-retry-design",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/features/003-outbox-worker-notifications.md",
+    "lines": {
+     "start": 50,
+     "end": 51
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/worker/src/worker.ts",
+     "lineStart": 6,
+     "lineEnd": 34
+    }
+   ],
+   "front": "Two upgrades that make the outbox worker production-shaped",
+   "back": "Retry: add availableAt and select status in (PENDING, FAILED) with attempts < 5 and availableAt <= now. Claim: UPDATE ... SET status = 'PROCESSING' WHERE id IN (SELECT ... FOR UPDATE SKIP LOCKED LIMIT 10) RETURNING * so concurrent workers never share an event."
+  },
+  {
+   "id": "f04-unused-helpers",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/architecture/final-system-design.md",
+    "lines": {
+     "start": 98,
+     "end": 98
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/domain/src/index.ts",
+     "lineStart": 70,
+     "lineEnd": 76
+    }
+   ],
+   "front": "What happens to the domain package's visibility rule in practice?",
+   "back": "canViewInternalNote and canManageUsers exist but are unused; the visibility rule is re-implemented inline in visibleCommentWhere, so the domain package and the service can drift apart."
+  }
+ ]
+}
