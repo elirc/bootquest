@@ -84,6 +84,27 @@ const unitOf = (ctx: Ctx, repo: string, track = 'js') => ctx.tmp.db.get<{ id: nu
 const pendingFlag = (ctx: Ctx, repo: string, track = 'js') => ctx.tmp.db.get<{ p: number }>('SELECT content_pending AS p FROM quest WHERE key = ?', `campaign/${track}/${repo}`)!.p;
 const submit = async (ctx: Ctx, unitId: number, body: unknown) => request(ctx.app).post(`/api/units/${unitId}/submit`).send(body as object);
 
+/** every pack quiz item by key (the seed-time oracle, read straight from items.json) */
+const quizByKey = (repo: string) => new Map(packQuizzes(repo).map((q) => [q.key, q]));
+const storedTexts = (q: QuizItem) => q.check.choices ?? q.choices.map((c) => c.text);
+/**
+ * ui-audit #24: choices are SERVED in a stable per-unit permutation, so an answer set known in the
+ * STORED (keyed) frame is translated the way a learner would: find each stored choice's TEXT in
+ * the served list of GET /units/:id. Throws (never guesses) when a text is not served.
+ */
+async function served(ctx: Ctx, unitId: number, repo: string, stored: readonly number[]): Promise<number[]> {
+  const d = UnitDetailResponse.parse((await request(ctx.app).get(`/api/units/${unitId}`)).body);
+  const qs = d.studyQuest!.questions;
+  expect(qs).toHaveLength(stored.length);
+  const byKey = quizByKey(repo);
+  return qs.map((q, i) => {
+    const text = storedTexts(byKey.get(q.itemKey)!)[stored[i]!]!;
+    const at = q.choices.indexOf(text);
+    if (at === -1) throw new Error(`${q.itemKey}: stored choice ${stored[i]} not served`);
+    return at;
+  });
+}
+
 // ---------------------------------------------------------------- loader
 
 describe('study-quest loader (store/study-quests.ts)', { timeout: 60_000 }, () => {
@@ -126,7 +147,7 @@ describe('study-quest loader (store/study-quests.ts)', { timeout: 60_000 }, () =
     expect(ctx.tmp.db.get('SELECT 1 AS x FROM "check" WHERE unit_id = ?', unitOf(ctx, 'grok-js'))).toBeUndefined();
     // back again, then an attempt, then the pack leaves: history keeps its gate
     loadStudyQuestsIntoDb(ctx.tmp.db, store, ctx.clock);
-    expect((await submit(ctx, unitOf(ctx, 'grok-js'), { answers: withWrong('grok-js', 5) })).status).toBe(200);
+    expect((await submit(ctx, unitOf(ctx, 'grok-js'), { answers: await served(ctx, unitOf(ctx, 'grok-js'), 'grok-js', withWrong('grok-js', 5)) })).status).toBe(200);
     s = loadStudyQuestsIntoDb(ctx.tmp.db, empty, ctx.clock);
     expect(s.orphaned).toEqual(['campaign/js/grok-js']);
     expect(pendingFlag(ctx, 'grok-js')).toBe(1);
@@ -138,7 +159,7 @@ describe('study-quest loader (store/study-quests.ts)', { timeout: 60_000 }, () =
     const reseeded = mapSeedItemStore(quizzes.slice(1)); // as if the pack lost its first item
     expect(loadStudyQuestsIntoDb(ctx.tmp.db, reseeded, ctx.clock).updated).toBe(1);
     loadStudyQuestsIntoDb(ctx.tmp.db, store, ctx.clock);
-    expect((await submit(ctx, unitOf(ctx, 'grok-js'), { answers: keysOf('grok-js') })).status).toBe(200);
+    expect((await submit(ctx, unitOf(ctx, 'grok-js'), { answers: await served(ctx, unitOf(ctx, 'grok-js'), 'grok-js', keysOf('grok-js')) })).status).toBe(200);
     expect(() => loadStudyQuestsIntoDb(ctx.tmp.db, reseeded, ctx.clock)).toThrow(StudyQuestLoadError);
     expect(() => loadStudyQuestsIntoDb(ctx.tmp.db, reseeded, ctx.clock)).toThrow(/re-seeded/);
   });
@@ -195,10 +216,10 @@ describe('standalone study packs: a quest pack matching no campaign study quest 
     expect(d.studyQuest!.questions.map((q) => q.prompt)).toEqual(packQuizzes('ww6').map((q) => q.prompt));
     expect(d.studyQuest!.readingSteps.length).toBeGreaterThan(0);
     expect(res.text).not.toMatch(/answerKey|"explanation"/);
-    const fail = SubmitResponse.parse((await submit(ctx, id, { answers: withWrong('ww6', 10) })).body);
+    const fail = SubmitResponse.parse((await submit(ctx, id, { answers: await served(ctx, id, 'ww6', withWrong('ww6', 10)) })).body);
     expect(fail.verdict).toBe('fail');
     expect(fail.studyQuiz!.reviewCards.created).toBe(10);
-    const pass = SubmitResponse.parse((await submit(ctx, id, { answers: keysOf('ww6') })).body);
+    const pass = SubmitResponse.parse((await submit(ctx, id, { answers: await served(ctx, id, 'ww6', keysOf('ww6')) })).body);
     expect(pass.verdict).toBe('pass');
     expect(pass.studyQuiz!.correct).toBe(keysOf('ww6').length);
   });
@@ -274,7 +295,8 @@ describe('study-quest API flow (real packs)', { timeout: 60_000 }, () => {
     expect(d.check?.spec).toEqual({ type: 'study-quiz', itemKeys: quizzes.map((q) => q.key), passPct: 0.8 });
     expect(sq.passPct).toBe(80);
     expect(sq.questions.map((q) => q.prompt)).toEqual(quizzes.map((q) => q.prompt));
-    expect(sq.questions[0]!.choices).toEqual(quizzes[0]!.check.choices);
+    // ui-audit #24: every question serves exactly its stored choices (as a set), in the unit's served order
+    for (const [i, q] of quizzes.entries()) expect([...sq.questions[i]!.choices].sort()).toEqual([...storedTexts(q)].sort());
     expect(sq.readingSteps.length).toBe(17);
     expect(sq.readingSteps[0]!.url).toMatch(/^https:\/\/github\.com\/elirc\/grok-js\/blob\/[0-9a-f]{40}\/.+#L\d+-L\d+$/);
     expect(sq.flashcards).toBe(4);
@@ -295,7 +317,7 @@ describe('study-quest API flow (real packs)', { timeout: 60_000 }, () => {
 
   it('a failed submit is recorded and free; each miss becomes ONE review card due tomorrow (deduped on re-attempts), with front = question, back = keyed answer + citation', async () => {
     const id = unitOf(ctx, 'grok-js');
-    const fail = SubmitResponse.parse((await submit(ctx, id, { answers: withWrong('grok-js', 3) })).body);
+    const fail = SubmitResponse.parse((await submit(ctx, id, { answers: await served(ctx, id, 'grok-js', withWrong('grok-js', 3)) })).body);
     expect(fail.verdict).toBe('fail');
     expect(fail.xp).toBeNull();
     expect(fail.studyQuiz).toMatchObject({ correct: 11, total: 14, passed: false, passPct: 80, reviewCards: { created: 3, alreadyQueued: 0 } });
@@ -309,7 +331,7 @@ describe('study-quest API flow (real packs)', { timeout: 60_000 }, () => {
     // not due today
     expect(ReviewQueueResponse.parse((await request(ctx.app).get('/api/reviews/queue')).body).count).toBe(0);
     // re-attempt missing the same + one more: one new card, three deduped
-    const again = SubmitResponse.parse((await submit(ctx, id, { answers: withWrong('grok-js', 4) })).body);
+    const again = SubmitResponse.parse((await submit(ctx, id, { answers: await served(ctx, id, 'grok-js', withWrong('grok-js', 4)) })).body);
     expect(again.studyQuiz!.reviewCards).toMatchObject({ created: 1, alreadyQueued: 3 });
     expect(ctx.tmp.db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM review_item WHERE kind = 'quiz-miss'`)!.n).toBe(4);
     // tomorrow: the cards are due, with their text
@@ -330,7 +352,7 @@ describe('study-quest API flow (real packs)', { timeout: 60_000 }, () => {
 
   it('pass: +50 study-quest XP once, evidence, quest done (act progress), campaign slate slot ticked, flashcards enrolled; a re-pass pays 0', async () => {
     const id = unitOf(ctx, 'grok-js');
-    const pass = SubmitResponse.parse((await submit(ctx, id, { answers: withWrong('grok-js', 2) })).body); // 12/14 = 85.7%
+    const pass = SubmitResponse.parse((await submit(ctx, id, { answers: await served(ctx, id, 'grok-js', withWrong('grok-js', 2)) })).body); // 12/14 = 85.7%
     expect(pass.verdict).toBe('pass');
     expect(pass.result.failures).toEqual([]);
     expect(pass.xp).toMatchObject({ amount: 50, reason: null });
@@ -345,7 +367,7 @@ describe('study-quest API flow (real packs)', { timeout: 60_000 }, () => {
     expect(dash.slate.items.find((i) => i.slot === 'campaign')?.done).toBe(true);
     expect(dash.xp.total).toBe(50);
 
-    const again = SubmitResponse.parse((await submit(ctx, id, { answers: keysOf('grok-js') })).body);
+    const again = SubmitResponse.parse((await submit(ctx, id, { answers: await served(ctx, id, 'grok-js', keysOf('grok-js')) })).body);
     expect(again.xp).toMatchObject({ amount: 0, reason: 'already-awarded' });
     expect(again.studyQuiz!.flashcardsEnrolled).toBe(0);
     expect(ctx.tmp.db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM review_item WHERE kind = 'card'`)!.n).toBe(4);
@@ -354,14 +376,14 @@ describe('study-quest API flow (real packs)', { timeout: 60_000 }, () => {
   it('exactly 80% passes, 73% fails (csbootcamp: 15 questions)', async () => {
     const id = unitOf(ctx, 'csbootcamp', 'csharp');
     expect(keysOf('csbootcamp')).toHaveLength(15);
-    const low = SubmitResponse.parse((await submit(ctx, id, { answers: withWrong('csbootcamp', 4) })).body);
+    const low = SubmitResponse.parse((await submit(ctx, id, { answers: await served(ctx, id, 'csbootcamp', withWrong('csbootcamp', 4)) })).body);
     expect([low.verdict, low.studyQuiz!.correct]).toEqual(['fail', 11]);
-    const edge = SubmitResponse.parse((await submit(ctx, id, { answers: withWrong('csbootcamp', 3) })).body);
+    const edge = SubmitResponse.parse((await submit(ctx, id, { answers: await served(ctx, id, 'csbootcamp', withWrong('csbootcamp', 3)) })).body);
     expect([edge.verdict, edge.studyQuiz!.correct, edge.xp?.amount]).toEqual(['pass', 12, 50]);
   });
 
   it('honest act gate: the no-pack core quest holds act 2 shut (1/2 = 50% < 80%); act 2 units refuse (ACT_LOCKED)', async () => {
-    await submit(ctx, unitOf(ctx, 'grok-js'), { answers: keysOf('grok-js') });
+    expect((await submit(ctx, unitOf(ctx, 'grok-js'), { answers: await served(ctx, unitOf(ctx, 'grok-js'), 'grok-js', keysOf('grok-js')) })).body.verdict).toBe('pass');
     const camp = CampaignResponse.parse((await request(ctx.app).get('/api/tracks/js/campaign')).body);
     expect(camp.acts[0]!.progress).toEqual({ coreDone: 1, coreTotal: 2 });
     expect(camp.acts[1]!.unlocked).toBe(false);
@@ -410,5 +432,117 @@ describe('study-quest API flow (real packs)', { timeout: 60_000 }, () => {
     expect(reveal.status).toBe(403);
     expect(reveal.body.error.code).toBe('ACT_LOCKED');
     expect(ctx.tmp.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM attempt WHERE unit_id = ?', id)!.n).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------- ui-audit #24: served choice order
+
+describe('ui-audit #24 (HONESTY): choices are served in a stable secret permutation, so an all-key-0 pack cannot be passed by position', { timeout: 120_000 }, () => {
+  const ZERO_PACKS = ['csharp-tut', 'csharp-interview', 'dotnet-snapshot'];
+  let zeroStore: SeedItemStore;
+  beforeAll(() => {
+    zeroStore = loadSeedItemStore(ZERO_PACKS.map((p) => join(QUESTS, p)));
+  }, 120_000);
+
+  const ctx = {} as Ctx & { units: Map<string, number> };
+  beforeEach(() => {
+    ctx.tmp = makeTempDb();
+    ctx.clock = fixedClock(localNoon(2026, 10, 1));
+    ctx.units = new Map();
+    for (const repo of ZERO_PACKS) {
+      const spec = { type: 'study-quiz' as const, itemKeys: packQuizzes(repo).map((q) => q.key), passPct: 0.8 };
+      ctx.units.set(repo, insertUnit(ctx.tmp.db, { key: `hand/zero/${repo}`, track: 'csharp', kind: 'study', title: repo, competencies: ['code-reading'], checks: [{ spec }] }, ctx.clock));
+    }
+    ctx.app = createApp({ db: ctx.tmp.db, clock: ctx.clock, runners: defaultRunners(), seedItems: zeroStore });
+  });
+  afterEach(() => ctx.tmp.cleanup());
+
+  const detail = async (app: Express, id: number) => UnitDetailResponse.parse((await request(app).get(`/api/units/${id}`)).body).studyQuest!.questions;
+
+  it('precondition: these real packs key EVERY question at stored choice 0 (the bias the server must not serve)', () => {
+    for (const repo of ZERO_PACKS) {
+      const keys = keysOf(repo);
+      expect(keys.length, repo).toBeGreaterThanOrEqual(6);
+      expect(new Set(keys), repo).toEqual(new Set([0]));
+    }
+  });
+
+  it('an all-zeros submit FAILS on every all-key-0 pack (recorded, no XP); the right answers in SERVED order PASS', async () => {
+    for (const repo of ZERO_PACKS) {
+      const id = ctx.units.get(repo)!;
+      const zeros = keysOf(repo).map(() => 0);
+      const fail = SubmitResponse.parse((await submit(ctx, id, { answers: zeros })).body);
+      expect(fail.verdict, `${repo} all-zeros`).toBe('fail');
+      expect(fail.xp, repo).toBeNull();
+      expect(fail.studyQuiz!.correct, repo).toBeLessThan(Math.ceil(zeros.length * 0.8));
+      const pass = SubmitResponse.parse((await submit(ctx, id, { answers: await served(ctx, id, repo, keysOf(repo)) })).body);
+      expect(pass.verdict, `${repo} served keys`).toBe('pass');
+      expect(pass.studyQuiz!.correct).toBe(zeros.length);
+    }
+  });
+
+  it('the served order is STABLE: re-fetch, by-key read and a fresh app on the same DB all serve it; it is a permutation of the stored choices and not the authored order', async () => {
+    for (const repo of ZERO_PACKS) {
+      const id = ctx.units.get(repo)!;
+      const a = await detail(ctx.app, id);
+      expect(await detail(ctx.app, id)).toEqual(a);
+      const byKey = UnitDetailResponse.parse((await request(ctx.app).get(`/api/units/by-key/${encodeURIComponent(`hand/zero/${repo}`)}`)).body);
+      expect(byKey.studyQuest!.questions).toEqual(a);
+      const fresh = createApp({ db: ctx.tmp.db, clock: ctx.clock, runners: defaultRunners(), seedItems: zeroStore });
+      expect(await detail(fresh, id)).toEqual(a);
+      const byKeyItems = quizByKey(repo);
+      for (const q of a) expect([...q.choices].sort()).toEqual([...storedTexts(byKeyItems.get(q.itemKey)!)].sort());
+      // 13+ questions of 3-4 choices all landing on the identity permutation: ~(1/6)^13 or less
+      expect(a.map((q) => q.choices)).not.toEqual(a.map((q) => storedTexts(byKeyItems.get(q.itemKey)!)));
+    }
+  });
+
+  it('the served key positions are spread (no single index holds most keys), and a second DB serves a different order', async () => {
+    const positions: number[] = [];
+    const orders: string[][] = [];
+    for (const repo of ZERO_PACKS) {
+      const id = ctx.units.get(repo)!;
+      const qs = await detail(ctx.app, id);
+      orders.push(qs.map((q) => q.choices.join('|')));
+      const byKeyItems = quizByKey(repo);
+      for (const q of qs) positions.push(q.choices.indexOf(storedTexts(byKeyItems.get(q.itemKey)!)[0]!));
+    }
+    expect(positions.every((p) => p >= 0)).toBe(true);
+    const counts = new Map<number, number>();
+    for (const p of positions) counts.set(p, (counts.get(p) ?? 0) + 1);
+    // 40 keys over 3-4 slots: expected ~10-13 per slot; 60% at one slot is > 5 sigma
+    expect(Math.max(...counts.values()) / positions.length).toBeLessThan(0.6);
+
+    // a different DB has its own secret: its served order differs (collision ~ 1/24^13)
+    const other = makeTempDb();
+    try {
+      const repo = ZERO_PACKS[0]!;
+      const spec = { type: 'study-quiz' as const, itemKeys: packQuizzes(repo).map((q) => q.key), passPct: 0.8 };
+      // same unit id on the fresh DB (the first insert), so only the secret differs
+      const otherId = insertUnit(other.db, { key: `hand/zero/${repo}`, track: 'csharp', kind: 'study', title: repo, competencies: ['code-reading'], checks: [{ spec }] }, ctx.clock);
+      expect(otherId).toBe(ctx.units.get(repo));
+      const app2 = createApp({ db: other.db, clock: ctx.clock, runners: defaultRunners(), seedItems: zeroStore });
+      expect((await detail(app2, otherId)).map((q) => q.choices.join('|'))).not.toEqual(orders[0]);
+    } finally {
+      other.cleanup();
+    }
+  });
+
+  it('a missed item\'s review card quotes the keyed choice TEXT (no served or stored index anywhere)', async () => {
+    const repo = 'csharp-tut';
+    const id = ctx.units.get(repo)!;
+    const qs = await detail(ctx.app, id);
+    const byKeyItems = quizByKey(repo);
+    // miss question 1 deliberately: answer a served index whose text is NOT the key
+    const right = await served(ctx, id, repo, keysOf(repo));
+    const answers = right.map((r, i) => (i === 0 ? (r + 1) % qs[0]!.choices.length : r));
+    const sub = SubmitResponse.parse((await submit(ctx, id, { answers })).body);
+    expect(sub.studyQuiz!.items[0]!.correct).toBe(false);
+    ctx.clock.advance(DAY_MS);
+    const queue = ReviewQueueResponse.parse((await request(ctx.app).get('/api/reviews/queue')).body);
+    const item = byKeyItems.get(qs[0]!.itemKey)!;
+    const card = queue.items.find((i) => i.cardKey === `quiz-miss:${item.key}`)!;
+    expect(card.card!.front).toBe(item.prompt);
+    expect(card.card!.back.startsWith(storedTexts(item)[0]!)).toBe(true);
   });
 });

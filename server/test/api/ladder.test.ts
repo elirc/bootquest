@@ -29,6 +29,7 @@ import { revealSolution } from '../../src/engines/attempts.ts';
 import { retestGate } from '../../src/engines/ladder.ts';
 import { assertUniqueSeedItemRefs } from '../../src/store/ladder.ts';
 import { insertUnit } from '../../src/store/content.ts';
+import { mapContentStore } from '../../src/api/content-store.ts';
 import { ledgerCounts } from '../../src/store/queries.ts';
 import { loadSeedItemStore, mapSeedItemStore, SeedItemLoadError } from '../../src/store/seed-items.ts';
 import { localNoon, makeTempDb, type TempDb } from '../helpers.ts';
@@ -385,6 +386,55 @@ describe('the promotion cycle through the HTTP API (artifact -> explain-back -> 
     expect(sub.attempt.mode).toBe('guided'); // the reveal on the variation_of ancestor taints the retest
     expect(sub.xp?.amount ?? 0).toBe(0);
     expect(sub.promotions).toEqual([]);
+  });
+
+  it('campaign 2 (HONESTY): reveal on a CLOSED retest is refused (409, nothing recorded) and never hands over its reference; once due it reveals as guided practice, never a leg', async () => {
+    const project = ctx.id('fixture:ladder/project-api');
+    const retest = ctx.id('fixture:ladder/project-api-retest');
+    const eb = ctx.id('fixture:ladder/explain-api');
+    const REF = `${fixture.solutions.retest}\n// reference-marker-7f3a`;
+    // the same DB, now with a content store that HOLDS the retest's reference solution (the leak is real)
+    const app = createApp({
+      db: ctx.tmp.db,
+      clock: ctx.clock,
+      runners: { http: fakeHttp, 'drill-js': fakeDrill },
+      seedItems: mapSeedItemStore(fixture.seedItems),
+      content: mapContentStore({ 'fixture:ladder/project-api-retest': { solution: REF } }),
+    });
+    const noLeak = (res: request.Response) => expect(res.text).not.toContain('reference-marker-7f3a');
+
+    // 1. unscheduled: refused like run/submit, nothing written, solution still 403
+    let before = ledgerCounts(ctx.tmp.db);
+    let rv = await request(app).post(`/api/units/${retest}/reveal`).send({});
+    expectError(rv, 409, 'RETEST_NOT_OPEN');
+    noLeak(rv);
+    expect(ledgerCounts(ctx.tmp.db)).toEqual(before);
+    expectError(await request(app).get(`/api/units/${retest}/solution`), 403, 'NOT_REVEALED');
+
+    // 2. scheduled but not due: refused NOT_DUE, nothing written
+    expect((await request(app).post(`/api/units/${project}/submit`).send({ port: GOOD_PORT })).status).toBe(200);
+    await request(app).post(`/api/units/${eb}/explain-back/answers`).send({ answers: ANSWERS }).expect(200);
+    const score = ExplainBackScoreResponse.parse((await request(app).post(`/api/units/${eb}/explain-back/self-score`).send({ perKeyPoint: marks(14) })).body);
+    const dueAt = score.retests[0]!.dueAt;
+    ctx.clock.advance(DAY_MS);
+    before = ledgerCounts(ctx.tmp.db);
+    rv = await request(app).post(`/api/units/${retest}/reveal`).send({});
+    expectError(rv, 409, 'NOT_DUE');
+    noLeak(rv);
+    expect(ledgerCounts(ctx.tmp.db)).toEqual(before);
+    expect(ctx.tmp.db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM attempt WHERE unit_id = ?`, retest)!.n).toBe(0);
+    expectError(await request(app).get(`/api/units/${retest}/solution`), 403, 'NOT_REVEALED');
+
+    // 3. due: the reveal works (guided row first), and the retest can no longer be a promotion leg
+    ctx.clock.set(dueAt);
+    rv = await request(app).post(`/api/units/${retest}/reveal`).send({});
+    expect(rv.status, rv.text).toBe(200);
+    expect(rv.body.solution).toEqual({ kind: 'code', code: REF });
+    const sub = SubmitResponse.parse((await request(app).post(`/api/units/${retest}/submit`).send({ code: fixture.solutions.retest })).body);
+    expect(sub.verdict).toBe('pass');
+    expect(sub.attempt.mode).toBe('guided');
+    expect(sub.promotions).toEqual([]);
+    expect(getRating(ctx.tmp.db, 'data-http')).toBe(1);
   });
 
   it('an assisted artifact never anchors a promotion', async () => {

@@ -419,6 +419,18 @@ async function planProgram(
     if (sha256Hex(pinnedBytes) !== rec.sha256 || gitBlobSha(pinnedBytes) !== rec.blob_sha) {
       throw new ProgramError(`${m.code}: recorded check ${rec.path} does not hash to its pin at ${table.sha} — the table is wrong`);
     }
+    // campaign 2 (OPS review): the recorded tsconfig-chain pins must hold at the recorded sha too
+    for (const [p, pin] of Object.entries(rec.tsc_files ?? {})) {
+      let bytes: Buffer;
+      try {
+        bytes = readFileSync(await deps.cache.treeFile(repo, table.sha, p));
+      } catch (err) {
+        throw new ProgramError(`${m.code}: recorded tsconfig ${p} is not in the tree at ${table.sha} — the table is wrong (${err instanceof Error ? err.message : String(err)})`);
+      }
+      if (sha256Hex(bytes) !== pin.sha256 || gitBlobSha(bytes) !== pin.blob_sha) {
+        throw new ProgramError(`${m.code}: recorded tsconfig ${p} does not hash to its pin at ${table.sha} — the table is wrong`);
+      }
+    }
     // drift at the synced sha is reported, never auto-re-pinned
     if (sha !== table.sha) {
       const here = join(dir, ...rec.path.split('/'));

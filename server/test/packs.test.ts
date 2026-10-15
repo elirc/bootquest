@@ -17,6 +17,7 @@ import { fixedClock } from '../src/engines/clock.ts';
 import { FINGERPRINT_FILES, graderFingerprint, graderKindForManifest, graderKindForTrack, toolchainVersions } from '../src/store/grader-fingerprint.ts';
 import { ALLOW_UNSTAMPED_ENV, loadPackIntoDb, packContentEntries, PackLoadError, readPack, type ReadPackOptions } from '../src/store/packs.ts';
 import { localNoon, makeTempDb, makeUnit, submit, type TempDb } from './helpers.ts';
+import { servedQuizAnswer } from './api/harness.ts';
 
 const REPO = fileURLToPath(new URL('../../', import.meta.url));
 const BOOTFORGE = join(REPO, 'content', 'packs', 'bootforge');
@@ -108,7 +109,7 @@ describe('migration 004 (written unit kind, FK-off table rebuild)', () => {
       const before = db.get('SELECT * FROM unit WHERE id = ?', unitId);
 
       // 007 (W5b campaign) and 008 (W6 ladder rebuilds) also apply here; the enumeration was stale since W5b
-      expect(migrate(db)).toEqual([4, 5, 6, 7, 8]);
+      expect(migrate(db)).toEqual([4, 5, 6, 7, 8, 9]);
       // 005 only adds the nullable retired_at column (live by default)
       expect(db.get('SELECT * FROM unit WHERE id = ?', unitId)).toEqual({ ...(before as object), retired_at: null });
       expect(db.get<{ unit_id: number }>('SELECT unit_id FROM attempt WHERE id = ?', attempt.id)!.unit_id).toBe(unitId);
@@ -152,7 +153,7 @@ describe('migration 008 (W6: evidence + review_item rebuilds)', () => {
       const evBefore = db.all('SELECT * FROM evidence ORDER BY id');
       const riBefore = db.all('SELECT * FROM review_item ORDER BY id');
 
-      expect(migrate(db)).toEqual([8]);
+      expect(migrate(db)).toEqual([8, 9]);
       expect(db.all('SELECT * FROM evidence ORDER BY id')).toEqual(evBefore);
       expect(db.all('SELECT * FROM review_item ORDER BY id')).toEqual(riBefore);
       expect(db.all('PRAGMA foreign_key_check')).toEqual([]);
@@ -305,7 +306,8 @@ describe('pack loader', () => {
     const bId = tmp.db.get<{ id: number }>('SELECT id FROM unit WHERE key = ?', keyOf('c1', 'b'))!.id;
     // the learner used b before it was quarantined: append-only history must keep its FK target
     const app1 = createApp({ db: tmp.db, clock, runners: defaultRunners(), content: entriesContentStore(packContentEntries(first)) });
-    expect((await request(app1).post(`/api/units/${bId}/submit`).send({ answer: 1 })).body.verdict).toBe('pass');
+    // the keyed stored choice 1, answered where it is SERVED (ui-audit #24)
+    expect((await request(app1).post(`/api/units/${bId}/submit`).send({ answer: await servedQuizAnswer(app1, tmp.db, bId, 1) })).body.verdict).toBe('pass');
     const history = tmp.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM attempt WHERE unit_id = ?', bId)!.n;
     expect(history).toBe(1);
 

@@ -54,11 +54,18 @@ function oracle(repo) {
   const items = JSON.parse(readFileSync(join(QUESTS, repo, 'items.json'), 'utf8')).items;
   return new Map(items.filter((i) => i.kind === 'quiz').map((q) => [q.key, q]));
 }
-/** answers in the served question order; `wrong` = indexes to answer with a non-key choice */
+/**
+ * answers in the served question order; `wrong` = indexes to answer with a non-key choice.
+ * ui-audit #24: choices are SERVED in a stable per-unit secret permutation, so the key is found by
+ * its TEXT in the served choices (as a learner would), never by its stored index.
+ */
 function answersFor(detail, repo, wrong = []) {
   const o = oracle(repo);
   return detail.studyQuest.questions.map((q, i) => {
-    const key = o.get(q.itemKey).check.answerKey;
+    const item = o.get(q.itemKey);
+    const texts = item.check.choices ?? item.choices.map((c) => c.text);
+    const key = q.choices.indexOf(texts[item.check.answerKey]);
+    if (key === -1) throw new Error(`${q.itemKey}: the keyed choice is not among the served choices`);
     return wrong.includes(i) ? (key + 1) % q.choices.length : key;
   });
 }

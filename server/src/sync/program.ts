@@ -84,6 +84,7 @@ export function recordedCheckSpec(repo: string, sha: string, r: RecordedCheck): 
     blobSha: r.blob_sha,
     tsx: r.needs_tsx,
     ...(r.tsc_project !== undefined ? { tscProject: r.tsc_project } : {}),
+    ...(r.tsc_files !== undefined ? { tscFiles: Object.fromEntries(Object.entries(r.tsc_files).map(([p, f]) => [p, f.sha256])) } : {}),
     timeoutMs: r.timeout_ms,
     moduleType: r.module_type,
     expectedTests: r.expected_tests,

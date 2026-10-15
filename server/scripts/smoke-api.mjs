@@ -171,6 +171,25 @@ function pidAlive(pid) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * ui-audit #24: choices are SERVED in a stable per-unit secret permutation, so a STORED choice index
+ * (fixture / pack oracle) is translated the way a learner answers: by finding the stored choice's
+ * TEXT in the served list. Throws (never guesses) when the text is not served.
+ */
+async function servedChoice(base, unitId, storedChoices, storedIndex) {
+  const d = await api(base, 'GET', `/api/units/${unitId}`);
+  const at = (d.json?.check?.spec?.choices ?? []).indexOf(storedChoices[storedIndex]);
+  if (at === -1) throw new Error(`unit ${unitId}: stored choice ${storedIndex} is not among the served choices`);
+  return at;
+}
+/** the same translation for a study-quiz question (its served choices + the pack item's stored texts) */
+function servedStudyChoice(question, item, storedIndex) {
+  const texts = item.check.choices ?? item.choices.map((c) => c.text);
+  const at = question.choices.indexOf(texts[storedIndex]);
+  if (at === -1) throw new Error(`${question.itemKey}: stored choice ${storedIndex} is not served`);
+  return at;
+}
+
 async function api(base, method, path, body) {
   // W7: the refusal steps block this event loop in spawnSync for several seconds; meanwhile the
   // server's keep-alive timeout closes the pooled socket, and the next request on it sees
@@ -316,7 +335,10 @@ async function main() {
       );
 
       // 4. submit wrong: recorded, no XP
-      const w = await api(base, 'POST', `/api/units/${quizId}/submit`, { answer: fixture.submissions.quizWrong });
+      const quizChoices = fixture.units.find((u) => u.key === 'smoke:quiz-typeof-null').checks[0].spec.choices;
+      const quizWrongServed = await servedChoice(base, quizId, quizChoices, fixture.submissions.quizWrong);
+      const quizRightServed = await servedChoice(base, quizId, quizChoices, fixture.submissions.quizRight);
+      const w = await api(base, 'POST', `/api/units/${quizId}/submit`, { answer: quizWrongServed });
       const c2 = counts();
       step(
         'submit wrong: attempt recorded, no XP',
@@ -325,12 +347,12 @@ async function main() {
       );
 
       // 5. submit right: XP row
-      const ok1 = await api(base, 'POST', `/api/units/${quizId}/submit`, { answer: fixture.submissions.quizRight });
+      const ok1 = await api(base, 'POST', `/api/units/${quizId}/submit`, { answer: quizRightServed });
       const c3 = counts();
       step('submit right: XP row (+2)', ok1.json?.verdict === 'pass' && ok1.json.xp?.amount === 2 && c3.xp_event === c2.xp_event + 1, JSON.stringify(ok1.json?.xp));
 
       // 6. submit right again: already-awarded 0
-      const ok2 = await api(base, 'POST', `/api/units/${quizId}/submit`, { answer: fixture.submissions.quizRight });
+      const ok2 = await api(base, 'POST', `/api/units/${quizId}/submit`, { answer: quizRightServed });
       step('submit right again: 0 XP already-awarded', ok2.json?.xp?.amount === 0 && ok2.json.xp.reason === 'already-awarded', JSON.stringify(ok2.json?.xp));
 
       // 7. reveal the drill: row first, then solution
@@ -460,7 +482,8 @@ async function main() {
 
       const quizUnitId = idOf(bfQuiz.unit.key);
       const qd = await api(base, 'GET', `/api/units/${quizUnitId}`);
-      const bq = await api(base, 'POST', `/api/units/${quizUnitId}/submit`, { answer: bfQuiz.unit.checks[0].spec.answerKey });
+      const bfSpec = bfQuiz.unit.checks[0].spec;
+      const bq = await api(base, 'POST', `/api/units/${quizUnitId}/submit`, { answer: await servedChoice(base, quizUnitId, bfSpec.choices, bfSpec.answerKey) });
       step(
         'BootForge quiz: public prompt + choices, key hidden; keyed answer submitted -> pass, +2 XP',
         qd.json?.instructions === packCourse.content[bfQuiz.unit.key].instructions &&
@@ -813,8 +836,9 @@ async function main() {
       const sqCamp = await api(base, 'GET', '/api/tracks/js/campaign');
       const sqQuest = sqCamp.json?.acts?.[0]?.quests?.find((q) => q.repo === 'grok-js');
       const sqD = await api(base, 'GET', `/api/units/${sqQuest?.unitId}`);
-      const sqKeys = new Map((questQuizzes.get('grok-js') ?? []).map((q) => [q.key, q.check.answerKey])); // seed-time oracle
-      const sqRight = (sqD.json?.studyQuest?.questions ?? []).map((q) => sqKeys.get(q.itemKey));
+      const sqKeys = new Map((questQuizzes.get('grok-js') ?? []).map((q) => [q.key, q])); // seed-time oracle
+      // ui-audit #24: the keyed choice where it is SERVED (by its text), not its stored index
+      const sqRight = (sqD.json?.studyQuest?.questions ?? []).map((q) => servedStudyChoice(q, sqKeys.get(q.itemKey), sqKeys.get(q.itemKey).check.answerKey));
       const sqWrong = sqRight.map((a, i) => (i < 4 ? (a + 1) % sqD.json.studyQuest.questions[i].choices.length : a));
       const sqRun = await api(base, 'POST', `/api/units/${sqQuest?.unitId}/run`, { answers: sqRight });
       const sqC0 = counts();

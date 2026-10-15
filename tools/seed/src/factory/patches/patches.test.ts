@@ -1,4 +1,5 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -8,6 +9,12 @@ import { loadSeedPack } from '../pack.ts';
 import { REPO_ROOT } from '../report.ts';
 import { applyInTemp, diffTargets, sliceLines } from './patches.ts';
 import { runPatches } from './run.ts';
+
+/** a usable .NET SDK on PATH (`dotnet --list-sdks` exits 0 and lists at least one SDK) */
+const HAVE_DOTNET_SDK = (() => {
+  const r = spawnSync('dotnet', ['--list-sdks'], { encoding: 'utf8', timeout: 30_000, windowsHide: true });
+  return r.status === 0 && /\d+\.\d+/.test(r.stdout ?? '');
+})();
 
 const FX = join(import.meta.dirname, '..', 'fixtures');
 const D = join(FX, 'drafts');
@@ -63,7 +70,9 @@ describe('seed:patches', () => {
     expect(existsSync(bad.dir)).toBe(false);
   });
 
-  describe('drill-cs kata tests run through the factory harness (warm C# runner, own scratch dir)', () => {
+  // campaign 2 (OPS review): this block compiles C# through the warm runner, so it needs a working
+  // .NET SDK; on a machine without one it is SKIPPED (reported as skipped, never silently passed).
+  describe.skipIf(!HAVE_DOTNET_SDK)('drill-cs kata tests run through the factory harness (warm C# runner, own scratch dir)', () => {
     // a dedicated, persistent scratch dir: warm after the first run, never shared with seed:validate or the CLIs
     const managed = factoryHarness({ csScratch: join(REPO_ROOT, '.cache', 'factory-csharp-test') });
     afterAll(() => managed.shutdown(), 120_000);

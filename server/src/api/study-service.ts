@@ -3,6 +3,7 @@ import type { CanonicalRunResult, StudyQuestPublic } from '@bootquest/shared/api
 import { FLASHCARD_CARD_PREFIX, gradeStudyQuiz, QUIZ_MISS_CARD_PREFIX, StudyQuizShapeError, type StudyQuizGrade } from '../engines/study-quest.ts';
 import type { QuestPackItems, SeedItemStore } from '../store/seed-items.ts';
 import { HttpError } from './http.ts';
+import { servedChoices, toStoredAnswer, type ChoiceOrderer } from './choice-order.ts';
 
 /**
  * W8 study-quest service helpers: the PUBLIC projection of a quest pack (reading list with
@@ -31,11 +32,16 @@ function gateItems(store: SeedItemStore, spec: Extract<CheckSpec, { type: 'study
   return items.every((i): i is SeedQuizItem => i !== undefined) ? items : null;
 }
 
+/** The item's choice TEXTS in stored (authored, keyed) order. */
+function storedChoices(q: SeedQuizItem): string[] {
+  return q.check.choices ?? q.choices.map((c) => c.text);
+}
+
 /**
  * PUBLIC half of a study-quest unit: undefined for other check types; null when the gate's
  * quiz items are not loaded on this server (content pending).
  */
-export function studyQuestPublicFor(store: SeedItemStore, spec: CheckSpec): StudyQuestPublic | null | undefined {
+export function studyQuestPublicFor(store: SeedItemStore, spec: CheckSpec, order: ChoiceOrderer): StudyQuestPublic | null | undefined {
   if (spec.type !== 'study-quiz') return undefined;
   const items = gateItems(store, spec);
   const pack = packFor(store, spec);
@@ -52,8 +58,12 @@ export function studyQuestPublicFor(store: SeedItemStore, spec: CheckSpec): Stud
       lines: { start: r.provenance.lines.start, end: r.provenance.lines.end },
       url: repoLink(pack.repo, r.provenance.sha, r.provenance.path, r.provenance.lines),
     })),
-    // choices are public (the quiz public-spec machinery: QuizCheck `choices`); answerKey never leaves
-    questions: items.map((q) => ({ itemKey: q.key, prompt: q.prompt, choices: q.check.choices ?? q.choices.map((c) => c.text) })),
+    // choices are public (the quiz public-spec machinery: QuizCheck `choices`); answerKey never leaves.
+    // ui-audit #24: served in the unit's stable per-item permutation, never in authored order
+    questions: items.map((q) => {
+      const stored = storedChoices(q);
+      return { itemKey: q.key, prompt: q.prompt, choices: servedChoices(stored, order(q.key, stored.length)) };
+    }),
     flashcards: pack.flashcards.length,
   };
 }
@@ -75,6 +85,7 @@ export function gradeStudySubmission(
   store: SeedItemStore,
   spec: Extract<CheckSpec, { type: 'study-quiz' }>,
   answers: readonly (number | string)[] | undefined,
+  order: ChoiceOrderer,
 ): StudyGradeResult {
   if (answers === undefined) {
     throw new HttpError(400, 'VALIDATION', 'study-quiz checks take `answers`: the full answer set, one choice index per question in order', [
@@ -85,7 +96,10 @@ export function gradeStudySubmission(
   if (!items) throw new HttpError(409, 'CONTENT_PENDING', 'this study quest\'s quiz items are not loaded on this server (its stamped quest pack is missing)');
   let grade: StudyQuizGrade;
   try {
-    grade = gradeStudyQuiz(items, answers, spec.passPct);
+    // ui-audit #24: answers arrive as SERVED choice indexes; grade them in the stored (keyed) frame.
+    // (A wrong-length set is left whole so gradeStudyQuiz refuses it with its own message.)
+    const stored = answers.length === items.length ? items.map((q, i) => toStoredAnswer(answers[i]!, order(q.key, storedChoices(q).length))) : answers;
+    grade = gradeStudyQuiz(items, stored, spec.passPct);
   } catch (err) {
     if (err instanceof StudyQuizShapeError) throw new HttpError(400, 'VALIDATION', err.message, [{ path: 'body.answers', message: err.message }]);
     throw err;
@@ -119,7 +133,8 @@ export function reviewCardText(store: SeedItemStore, cardKey: string): { front: 
   if (cardKey.startsWith(QUIZ_MISS_CARD_PREFIX)) {
     const q = store.quiz(cardKey.slice(QUIZ_MISS_CARD_PREFIX.length));
     if (!q) return undefined;
-    const choices = q.check.choices ?? q.choices.map((c) => c.text);
+    // the keyed choice by TEXT: a card never depends on (or reveals) any served position
+    const choices = storedChoices(q);
     const keyed = typeof q.check.answerKey === 'number' ? (choices[q.check.answerKey] ?? String(q.check.answerKey)) : String(q.check.answerKey);
     return { front: q.prompt, back: q.explanation ? `${keyed}\n\n${q.explanation}` : keyed, source: citeOf(q) };
   }

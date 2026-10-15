@@ -319,6 +319,11 @@ export const NodeTestFileCheck = z.object({
    * BEFORE `node --test`; type errors are structured '(tsc)' failures.
    */
   tscProject: relPath.optional(),
+  /**
+   * campaign 2 (OPS review, PRIVATE): repo-relative path -> sha256 of every tsconfig in the
+   * tscProject extends chain at `sha`. When set, the adapter refuses a chain that differs.
+   */
+  tscFiles: z.record(relPath, sha256).optional(),
   timeoutMs: timeoutMs.default(30000),
   // W4: the pins the node-test-file runner needs (all PRIVATE: not in the public whitelist)
   repo: z.string().regex(/^[^/\s]+\/[^/\s]+$/).optional(), // owner/name the check file is cached from

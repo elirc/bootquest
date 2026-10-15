@@ -48,8 +48,9 @@ import type { UnitContentStore } from './content-store.ts';
 import { competencyRowsWithPromotion, explainBackPublicFor, kataPublicFor } from './ladder-service.ts';
 import type { SeedItemStore } from '../store/seed-items.ts';
 import { HttpError } from './http.ts';
+import { choiceOrdererFor, servedChoices, toServedIndex, toStoredAnswer } from './choice-order.ts';
 import { CheckRefusedError, gradeDeterministic, SubmissionShapeError, UnsupportedCheckError, type LearnerSubmission, type RunnerRegistry } from './runners.ts';
-import { existsSync } from 'node:fs';
+import { statSync } from 'node:fs';
 import type { SyncService } from '../sync/service.ts';
 import { loadCheckSpecTable } from '../sync/config.ts';
 import { recordedCheckSpec } from '../sync/program.ts';
@@ -80,6 +81,21 @@ function requireUnit(db: Db, id: number): UnitRecord {
   const unit = getUnit(db, id);
   if (!unit) throw new HttpError(404, 'NOT_FOUND', `unit ${id} not found`);
   return unit;
+}
+
+/**
+ * ui-audit #24: a single-question choice quiz's spec as the learner sees it — choices in the
+ * unit's stable served permutation (the answerKey stays in the stored frame and is private).
+ */
+function servedQuizSpec(db: Db, unitId: number, spec: CheckSpec): CheckSpec {
+  if (spec.type !== 'quiz' || spec.grading !== 'choice' || !spec.choices) return spec;
+  return { ...spec, choices: servedChoices(spec.choices, choiceOrdererFor(db, unitId)(spec.itemKey, spec.choices.length)) };
+}
+
+/** ui-audit #24: a quiz submission's served choice index -> the stored index the key is in. */
+function storedQuizSubmission<S extends { answer?: unknown }>(db: Db, unitId: number, spec: CheckSpec, submission: S): S {
+  if (spec.type !== 'quiz' || spec.grading !== 'choice' || !spec.choices || submission.answer === undefined) return submission;
+  return { ...submission, answer: toStoredAnswer(submission.answer, choiceOrdererFor(db, unitId)(spec.itemKey, spec.choices.length)) };
 }
 
 function requireCheck(db: Db, unit: UnitRecord): CheckRecord {
@@ -163,14 +179,53 @@ export function getTrackUnits(deps: ServiceDeps, trackId: string) {
  * uncovered; any other difference between the registered and the recorded spec is
  * reported as "this check predates the current recorded spec".
  */
+/**
+ * campaign 2 (OPS review): GET /units/:id used to re-read + Zod-parse the recorded check table on
+ * EVERY program-unit detail. Cached per path, invalidated when the file's mtime or size changes;
+ * a malformed table is reported LOUDLY once per file version (console.error) instead of being
+ * swallowed silently on every request. Exported for tests only.
+ */
+interface CheckTableCacheEntry {
+  mtimeMs: number;
+  size: number;
+  table: ReturnType<typeof loadCheckSpecTable> | null;
+}
+const checkTableCache = new Map<string, CheckTableCacheEntry>();
+export const checkTableCacheStats = { parses: 0, malformedReports: 0 };
+
+export function cachedCheckSpecTable(path: string, report: (line: string) => void = (l) => console.error(l)): ReturnType<typeof loadCheckSpecTable> | null {
+  let st: { mtimeMs: number; size: number };
+  try {
+    st = statSync(path);
+  } catch {
+    checkTableCache.delete(path);
+    return null; // no table: nothing to surface (sync reports a missing table where it matters)
+  }
+  const hit = checkTableCache.get(path);
+  if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit.table;
+  checkTableCacheStats.parses++;
+  let table: CheckTableCacheEntry['table'] = null;
+  try {
+    table = loadCheckSpecTable(path);
+  } catch (err) {
+    checkTableCacheStats.malformedReports++;
+    report(
+      `[bootquest] the recorded check table ${path} is MALFORMED (${err instanceof Error ? err.message.split('\n')[0] : String(err)}): ` +
+        `uncovered-leg carve-outs are NOT shown on program units until it is fixed (sync refuses it too)`,
+    );
+  }
+  checkTableCache.set(path, { mtimeMs: st.mtimeMs, size: st.size, table });
+  return table;
+}
+
 function uncoveredLegsFor(deps: ServiceDeps, unitKey: string, check: CheckRecord | undefined): string[] | undefined {
   if (!deps.sync) return undefined;
   const m = /^gh:(.+):(U\d{2})$/.exec(unitKey);
   if (!m) return undefined;
   try {
-    const p = deps.sync.paths.checkSpecs;
-    if (!existsSync(p)) return undefined;
-    const table = loadCheckSpecTable(p).repos[m[1]!];
+    const all = cachedCheckSpecTable(deps.sync.paths.checkSpecs);
+    if (!all) return undefined;
+    const table = all.repos[m[1]!];
     const rec = table?.units[m[2]!];
     if (!table || !rec) return undefined;
     const legs = [...rec.uncovered_legs];
@@ -232,7 +287,7 @@ export function getUnitDetail(deps: ServiceDeps, unitId: number): UnitDetailResp
   const explainBack = check ? explainBackPublicFor(deps.seedItems, check.spec, db) : undefined;
   const kata = check ? kataPublicFor(deps.seedItems, check.spec, db) : undefined;
   // W8: reading list + questions with choices (never keys); null = the quest pack is not loaded
-  const studyQuest = check ? studyQuestPublicFor(deps.seedItems, check.spec) : undefined;
+  const studyQuest = check ? studyQuestPublicFor(deps.seedItems, check.spec, choiceOrdererFor(db, unit.id)) : undefined;
   // W7 (audit #1): a closed changed-example retest withholds its task (no day-0 pre-solving)
   const gate = unit.kind === 'retest' ? retestGate(db, unit.id, deps.clock) : null;
   const withhold = gate !== null && !gate.open;
@@ -245,7 +300,8 @@ export function getUnitDetail(deps: ServiceDeps, unitId: number): UnitDetailResp
     ...(uncoveredLegs !== undefined ? { uncoveredLegs } : {}),
     unit: { ...summary, code: unit.code, competencies: unitCompetencies(db, unit.id), variationOfUnitId: unit.variationOfUnitId },
     // PUBLIC projection only — the full spec never leaves the server (and a closed retest shows none)
-    check: check && !withhold ? { id: check.id, threshold: check.threshold, spec: toPublicCheck(check.spec) } : null,
+    // (ui-audit #24: a choice quiz's choices in the unit's stable served order, never authored order)
+    check: check && !withhold ? { id: check.id, threshold: check.threshold, spec: toPublicCheck(servedQuizSpec(db, unit.id, check.spec)) } : null,
     // PUBLIC content fields only (whitelist); solution / explanation / hints stay server-side
     instructions: withhold ? null : (entry?.instructions ?? null),
     starter: withhold ? null : (entry?.starter ?? null),
@@ -520,10 +576,12 @@ export async function submitUnit(
   let study: StudyGradeResult | null = null;
   let result: CanonicalRunResult;
   if (check.spec.type === 'study-quiz' && (submission.answers !== undefined || !deps.runners['study-quiz'])) {
-    study = gradeStudySubmission(deps.seedItems, check.spec, submission.answers);
+    study = gradeStudySubmission(deps.seedItems, check.spec, submission.answers, choiceOrdererFor(db, unit.id));
     result = study.result;
   } else {
-    result = await grade(deps, check.spec, submission);
+    // ui-audit #24: a choice quiz's `answer` is a SERVED index; the key lives in the stored frame
+    // (the attempt row still records what the learner sent, in the frame they saw)
+    result = await grade(deps, check.spec, storedQuizSubmission(db, unit.id, check.spec, submission));
   }
 
   return db.tx(() => {
@@ -634,7 +692,12 @@ function solutionFor(deps: ServiceDeps, unit: UnitRecord, check: CheckRecord): R
   const spec = check.spec;
   if (spec.type === 'quiz') {
     const choice = typeof spec.answerKey === 'number' ? (spec.choices?.[spec.answerKey] ?? null) : null;
-    return { kind: 'answer', answer: spec.answerKey, choice };
+    // ui-audit #24: the revealed index points where the learner SEES the key (served order)
+    const answer =
+      typeof spec.answerKey === 'number' && spec.grading === 'choice' && spec.choices
+        ? toServedIndex(spec.answerKey, choiceOrdererFor(deps.db, unit.id)(spec.itemKey, spec.choices.length))
+        : spec.answerKey;
+    return { kind: 'answer', answer, choice };
   }
   if (spec.type === 'predict-output') return { kind: 'output', expected: spec.expected };
   const code = deps.content.get(unit.key)?.solution;
@@ -662,6 +725,12 @@ export function revealUnit(deps: ServiceDeps, unitId: number): RevealResponse {
   const unit = requireUnit(db, unitId);
   assertTrackOpen(db, unit);
   const check = requireCheck(db, unit);
+  // campaign 2 (HONESTY, SEEDING backlog "revealing a retest"): a changed-example retest's
+  // reference is withheld exactly as long as its task is (W7 audit #1): before the gate opens
+  // the reveal refuses (409 NOT_DUE / RETEST_NOT_OPEN) and writes nothing, so a closed retest
+  // cannot be pre-read. A retest that was ALREADY revealed (its gate was open then) keeps
+  // answering idempotently: the learner holds that solution and the unit is guided forever.
+  if (!isRevealed(db, unit.id)) assertRetestGate(deps, unit);
   const solution = solutionFor(deps, unit, check);
   if (!solution) throw new HttpError(404, 'NO_SOLUTION', `unit ${unit.id} has no reference solution in the content store`);
   if (!isRevealed(db, unit.id)) revealSolution(db, unit.id, clock); // autocommit: durable before we answer

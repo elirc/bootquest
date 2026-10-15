@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { posix } from 'node:path';
 import type { CanonicalRunResult } from '@bootquest/shared/api';
@@ -23,8 +24,19 @@ const MAX_TSCONFIG_FILES = 8;
  * file itself). RELATIVE extends only (`./` / `../`): a package-ref extends would
  * need node_modules the workspace deliberately lacks, so it is left for tsc to
  * report. Depth/size-capped; a chain that escapes the repo is a refusal.
+ *
+ * campaign 2 (OPS review): every failure to obtain a chain file is a REFUSAL
+ * (CheckRefusedError -> 409 CHECK_INTEGRITY), never a raw 500; and when the check
+ * carries the recorded pins (`tscFiles`, from check-specs.json `tsc_files`), the chain
+ * must be EXACTLY that set of files with exactly those sha256s, or nothing runs.
  */
-async function collectProjectFiles(cache: GithubCache, repo: string, sha: string, project: string): Promise<Record<string, string>> {
+async function collectProjectFiles(
+  cache: GithubCache,
+  repo: string,
+  sha: string,
+  project: string,
+  pins?: Readonly<Record<string, string>>,
+): Promise<Record<string, string>> {
   const files: Record<string, string> = {};
   const queue = [project];
   while (queue.length > 0 && Object.keys(files).length < MAX_TSCONFIG_FILES) {
@@ -38,7 +50,25 @@ async function collectProjectFiles(cache: GithubCache, repo: string, sha: string
         `tsconfig ${repo}@${sha.slice(0, 7)}:${rel} is not available (${err instanceof Error ? err.message : String(err)})`,
       );
     }
-    const content = await readFile(abs, 'utf8');
+    let bytes: Buffer;
+    try {
+      bytes = await readFile(abs);
+    } catch (err) {
+      throw new CheckRefusedError(
+        `tsconfig ${repo}@${sha.slice(0, 7)}:${rel} could not be read from the cache (${err instanceof Error ? err.message : String(err)})`,
+      );
+    }
+    if (pins) {
+      const want = pins[rel];
+      if (want === undefined) {
+        throw new CheckRefusedError(`tsconfig chain file ${rel} has no recorded pin (the chain at ${sha.slice(0, 7)} differs from check-specs tsc_files) — refusing to run`);
+      }
+      const got = createHash('sha256').update(bytes).digest('hex');
+      if (got !== want) {
+        throw new CheckRefusedError(`tsconfig ${rel} at ${sha.slice(0, 7)} does not hash to its recorded pin (sha256 ${got.slice(0, 12)}… != ${want.slice(0, 12)}…) — refusing to run`);
+      }
+    }
+    const content = bytes.toString('utf8');
     files[rel] = content;
     let ext: unknown;
     try {
@@ -54,6 +84,12 @@ async function collectProjectFiles(cache: GithubCache, repo: string, sha: string
         throw new CheckRefusedError(`tsconfig extends chain escapes the repo: ${rel} -> ${r}`);
       }
       queue.push(next);
+    }
+  }
+  if (pins) {
+    const missing = Object.keys(pins).filter((p) => !(p in files));
+    if (missing.length > 0) {
+      throw new CheckRefusedError(`recorded tsconfig pin(s) ${missing.join(', ')} are not part of the ${project} extends chain at ${sha.slice(0, 7)} — refusing to run`);
     }
   }
   return files;
@@ -88,7 +124,7 @@ export function createNodeTestFileRunner(cache: GithubCache, opts: { workRoot?: 
       ...(spec.tscProject ? { tsc_project: spec.tscProject } : {}),
     };
     // U03 composite: pin the tsconfig chain from the same per-SHA tree the check came from
-    const projectFiles = spec.tscProject ? await collectProjectFiles(cache, spec.repo, spec.sha, spec.tscProject) : undefined;
+    const projectFiles = spec.tscProject ? await collectProjectFiles(cache, spec.repo, spec.sha, spec.tscProject, spec.tscFiles) : undefined;
     try {
       const r = await runNodeTestFile(
         { id: spec.checkPath, spec: ntf, checkFile, ...(projectFiles ? { projectFiles } : {}) },

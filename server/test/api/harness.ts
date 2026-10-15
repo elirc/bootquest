@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import request from 'supertest';
 import { afterEach, beforeEach } from 'vitest';
 import type { Express } from 'express';
 import { createApp } from '../../src/api/app.ts';
@@ -64,4 +65,20 @@ export function useApi(opts: { realRunners?: boolean } = {}): ApiCtx {
   });
   afterEach(() => ctx.tmp.cleanup());
   return ctx;
+}
+
+/**
+ * ui-audit #24: choices are SERVED in a stable per-unit permutation, so a test that knows the
+ * STORED (authored, keyed) index answers with the index the learner would click: it finds the
+ * stored choice's TEXT in the served list from GET /units/:id, exactly as a learner would.
+ */
+export async function servedQuizAnswer(app: Express, db: Db, unitId: number, storedIndex: number): Promise<number> {
+  const spec = JSON.parse(db.get<{ spec: string }>('SELECT spec FROM "check" WHERE unit_id = ?', unitId)!.spec) as { choices?: string[] };
+  const text = spec.choices?.[storedIndex];
+  if (text === undefined) throw new Error(`unit ${unitId} has no stored choice ${storedIndex}`);
+  const res = await request(app).get(`/api/units/${unitId}`);
+  const served = (res.body as { check?: { spec?: { choices?: string[] } } }).check?.spec?.choices ?? [];
+  const i = served.indexOf(text);
+  if (i === -1) throw new Error(`unit ${unitId}: stored choice "${text}" is not among the served choices`);
+  return i;
 }

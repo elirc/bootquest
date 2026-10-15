@@ -25,7 +25,7 @@ import { toPlain } from '../../src/api/http.ts';
 import { insertUnit } from '../../src/store/content.ts';
 import { ledgerCounts } from '../../src/store/queries.ts';
 import { graduate, promoteTo } from '../helpers.ts';
-import { fixture, useApi } from './harness.ts';
+import { fixture, servedQuizAnswer, useApi } from './harness.ts';
 
 function expectApiError(res: request.Response, status: number, code: string): void {
   expect(res.status).toBe(status);
@@ -231,7 +231,8 @@ describe('POST /api/units/:id/submit', () => {
 
   it('wrong submit is recorded (attempt + run + evidence) but earns nothing', async () => {
     const id = ctx.id('fixture:quiz-typeof');
-    const res = await request(ctx.app).post(`/api/units/${id}/submit`).send({ answer: 2 });
+    // stored choice 2 is not the key (1): answered where the learner sees it (served order, ui-audit #24)
+    const res = await request(ctx.app).post(`/api/units/${id}/submit`).send({ answer: await servedQuizAnswer(ctx.app, ctx.db, id, 2) });
     expect(res.status).toBe(200);
     const body = SubmitResponse.parse(res.body);
     expect(body.verdict).toBe('fail');
@@ -244,10 +245,11 @@ describe('POST /api/units/:id/submit', () => {
 
   it('awards XP once, then already-awarded 0', async () => {
     const id = ctx.id('fixture:quiz-typeof');
-    const first = SubmitResponse.parse((await request(ctx.app).post(`/api/units/${id}/submit`).send({ answer: 1 })).body);
+    const right = await servedQuizAnswer(ctx.app, ctx.db, id, 1);
+    const first = SubmitResponse.parse((await request(ctx.app).post(`/api/units/${id}/submit`).send({ answer: right })).body);
     expect(first.verdict).toBe('pass');
     expect(first.xp).toMatchObject({ amount: 2, reason: null });
-    const second = SubmitResponse.parse((await request(ctx.app).post(`/api/units/${id}/submit`).send({ answer: 1 })).body);
+    const second = SubmitResponse.parse((await request(ctx.app).post(`/api/units/${id}/submit`).send({ answer: right })).body);
     expect(second.xp).toMatchObject({ amount: 0, reason: 'already-awarded' });
     const runs = ctx.db.all<{ kind: string; verdict: string }>('SELECT kind, verdict FROM run ORDER BY id');
     expect(runs).toEqual([
@@ -270,7 +272,7 @@ describe('POST /api/units/:id/submit', () => {
 
   it('self-assist flag only ever downgrades: attempt becomes assisted, evidence carries it', async () => {
     const id = ctx.id('fixture:quiz-typeof');
-    const body = SubmitResponse.parse((await request(ctx.app).post(`/api/units/${id}/submit`).send({ answer: 1, selfAssisted: true })).body);
+    const body = SubmitResponse.parse((await request(ctx.app).post(`/api/units/${id}/submit`).send({ answer: await servedQuizAnswer(ctx.app, ctx.db, id, 1), selfAssisted: true })).body);
     expect(body.attempt.mode).toBe('assisted');
     expect(ctx.db.get<{ assistance: string }>('SELECT assistance FROM evidence')!.assistance).toBe('self');
   });
@@ -282,7 +284,8 @@ describe('POST /api/units/:id/submit', () => {
         { key: `slate:q${i}`, track: 'csharp', kind: 'quiz', title: `q${i}`, checks: [{ spec: { type: 'quiz', itemKey: `s${i}`, grading: 'choice', answerKey: 0, choices: ['a', 'b'] } }] },
         ctx.clock,
       );
-      expect(SubmitResponse.parse((await request(ctx.app).post(`/api/units/${id}/submit`).send({ answer: 0 })).body).verdict).toBe('pass');
+      const answer = await servedQuizAnswer(ctx.app, ctx.db, id, 0);
+      expect(SubmitResponse.parse((await request(ctx.app).post(`/api/units/${id}/submit`).send({ answer })).body).verdict).toBe('pass');
     }
     let dash = DashboardResponse.parse((await request(ctx.app).get('/api/dashboard')).body);
     expect(dash.slate.items.find((i) => i.slot === 'drill:csharp')!.done).toBe(false);
@@ -363,9 +366,13 @@ describe('POST /api/units/:id/reveal', () => {
     expect(unit.unit.revealed).toBe(true);
   });
 
-  it('quiz reveal returns the key; no solution in the store -> 404 and NO row written', async () => {
-    const quiz = RevealResponse.parse((await request(ctx.app).post(`/api/units/${ctx.id('fixture:quiz-typeof')}/reveal`).send()).body);
-    expect(quiz.solution).toEqual({ kind: 'answer', answer: 1, choice: '"object"' });
+  it('quiz reveal returns the key (index in SERVED order + its text); no solution in the store -> 404 and NO row written', async () => {
+    const id = ctx.id('fixture:quiz-typeof');
+    const servedKey = await servedQuizAnswer(ctx.app, ctx.db, id, 1);
+    const quiz = RevealResponse.parse((await request(ctx.app).post(`/api/units/${id}/reveal`).send()).body);
+    expect(quiz.solution).toEqual({ kind: 'answer', answer: servedKey, choice: '"object"' });
+    const detail = UnitDetailResponse.parse((await request(ctx.app).get(`/api/units/${id}`)).body);
+    expect((detail.check!.spec as { choices: string[] }).choices[servedKey]).toBe('"object"');
 
     const before = ledgerCounts(ctx.db);
     expectApiError(await request(ctx.app).post(`/api/units/${ctx.id('fixture:drill-mul')}/reveal`).send(), 404, 'NO_SOLUTION');

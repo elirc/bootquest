@@ -141,10 +141,21 @@ export const RecordedCheck = z
      * `tsc -p <this> --noEmit` before `node --test`.
      */
     tsc_project: z.string().min(1).optional(),
+    /**
+     * campaign 2 (OPS review): the recorded pins of EVERY file in tsc_project's relative
+     * `extends` chain (repo-relative path -> sha256 over the exact bytes + git blob sha at
+     * `sha`). When present, sync verifies them like the check file, and the runner adapter
+     * refuses (409 CHECK_INTEGRITY) a chain whose files differ from this set or its hashes.
+     */
+    tsc_files: z.record(z.string().min(1), z.object({ blob_sha: Hex40, sha256: Hex64 }).strict()).optional(),
     /** acceptance legs of the ticket this check deliberately does NOT cover (honest carve-out) */
     uncovered_legs: z.array(z.string().min(1)).default([]),
   })
-  .strict();
+  .strict()
+  .refine((r) => r.tsc_files === undefined || (r.tsc_project !== undefined && r.tsc_files[r.tsc_project] !== undefined), {
+    message: 'tsc_files needs tsc_project, and must pin the tsc_project file itself',
+    path: ['tsc_files'],
+  });
 export const CheckSpecTable = z
   .object({
     _provenance: z.string().min(1),

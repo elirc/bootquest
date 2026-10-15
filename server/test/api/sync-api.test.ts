@@ -130,6 +130,13 @@ describe('W4 API: POST /sync, GET /sync/queue, GET /refs/:id/content, node-test-
     // public projection names the project (never the private pins); the carve-out is gone
     expect(detail.check!.spec).toMatchObject({ type: 'node-test-file', tscProject: 'practice/tsconfig.json' });
     expect(detail.uncoveredLegs).toBeUndefined();
+    // campaign 2 (OPS review): the registered check carries the recorded chain pins; they stay PRIVATE
+    const table = JSON.parse(readFileSync(CHECK_SPECS, 'utf8')) as { repos: Record<string, { units: Record<string, { tsc_files: Record<string, { sha256: string }> }> }> };
+    const pins = Object.fromEntries(Object.entries(table.repos[SIGNALPOST]!.units.U03!.tsc_files).map(([p, f]) => [p, f.sha256]));
+    expect(Object.keys(pins).sort()).toEqual(['practice/tsconfig.json', 'tsconfig.json']);
+    const registered = JSON.parse(tmp.db.get<{ spec: string }>('SELECT spec FROM "check" WHERE unit_id = ?', unitId)!.spec) as { tscFiles?: Record<string, string> };
+    expect(registered.tscFiles).toEqual(pins);
+    expect('tscFiles' in (detail.check!.spec as object)).toBe(false);
     const good = await request(app).post(`/api/units/${unitId}/submit`).send({ code: U03_SOLUTION });
     expect(good.status).toBe(200);
     expect(good.body.result.failures).toEqual([]);
@@ -157,6 +164,20 @@ describe('W4 API: POST /sync, GET /sync/queue, GET /refs/:id/content, node-test-
     expect(tmp.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM attempt')!.n).toBe(before);
   });
 
+  it('U03 composite: a TAMPERED cached tsconfig (valid JSON, same extends) is a 409 CHECK_INTEGRITY refusal against its recorded pin; NOTHING is recorded', async () => {
+    const { unitId } = await syncAndUnit('U03');
+    const f = join(fx.cacheRoot, 'elirc', 'signalpost-swe-bootcamp', PINNED_SHA, 'tsconfig.json');
+    chmodSync(f, 0o644);
+    // loosen the parent config: a learner-side edit that would silently weaken the type check
+    writeFileSync(f, JSON.stringify({ compilerOptions: { strict: false, noEmit: true } }));
+    const before = tmp.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM attempt')!.n;
+    const r = await request(app).post(`/api/units/${unitId}/submit`).send({ code: `${U03_SOLUTION}\nconst bqBad: number = "s";\n` });
+    expect(r.status).toBe(409);
+    expect(r.body.error.code).toBe('CHECK_INTEGRITY');
+    expect(r.body.error.message).toMatch(/tsconfig tsconfig\.json .*does not hash to its recorded pin/);
+    expect(tmp.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM attempt')!.n).toBe(before);
+  });
+
   it('uncoveredLegs: a recorded carve-out is surfaced read-only on the program unit detail (and only there)', async () => {
     const table = JSON.parse(readFileSync(CHECK_SPECS, 'utf8')) as { repos: Record<string, { units: Record<string, { uncovered_legs?: string[] }> }> };
     table.repos[SIGNALPOST]!.units.U01!.uncovered_legs = ['U01-02 acceptance leg X is NOT covered (test carve-out)'];
@@ -177,11 +198,12 @@ describe('W4 API: POST /sync, GET /sync/queue, GET /refs/:id/content, node-test-
     const OLD_LEG = "U03-02 acceptance 'practice typecheck pass' (tsc -p practice/tsconfig.json) is NOT covered by this check (pre-OPS table)";
     function oldTableApp(): Express {
       const table = JSON.parse(readFileSync(CHECK_SPECS, 'utf8')) as {
-        repos: Record<string, { units: Record<string, { tsc_project?: string; uncovered_legs?: string[] }> }>;
+        repos: Record<string, { units: Record<string, { tsc_project?: string; tsc_files?: unknown; uncovered_legs?: string[] }> }>;
       };
       const u03 = table.repos[SIGNALPOST]!.units.U03!;
       expect(u03.tsc_project).toBe('practice/tsconfig.json'); // the current table carries the composite
       delete u03.tsc_project;
+      delete u03.tsc_files; // the pre-OPS table had neither (tsc_files without tsc_project is refused by the schema)
       u03.uncovered_legs = [OLD_LEG];
       const specs = join(fx.root, 'check-specs.pre-ops.json');
       writeFileSync(specs, JSON.stringify(table));
