@@ -1,0 +1,444 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "3buildagenthelpdesk",
+ "sha": "4237cf99cb75bfafe0221e6a1848c7d2498087f3",
+ "guides": [
+  "fabledocs/02-feature-backlog-user-stories.md",
+  "fabledocs/01-how-this-app-works.md"
+ ],
+ "items": [
+  {
+   "id": "q01-backoff-cap-plus-jitter",
+   "kind": "quiz",
+   "source": {
+    "path": "fabledocs/02-feature-backlog-user-stories.md",
+    "lines": {
+     "start": 953,
+     "end": 964
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/domain/src/jobs.ts",
+     "lineStart": 103,
+     "lineEnd": 138
+    }
+   ],
+   "prompt": "calculateBackoffMs(30, jobId) runs for a job whose id-derived jitter value (idJitter) is 500. What delay does it return?",
+   "answer": "3,604,000 ms: the one-hour cap plus 500 * 8 ms of jitter",
+   "distractors": [
+    "3,600,000 ms: jitter is dropped once the cap applies",
+    "3,600,500 ms: the cap plus the raw jitter value of 500",
+    "4,500,000 ms: the cap plus a quarter of it as jitter"
+   ],
+   "explanation": "The exponent is capped at 20 and the base is clamped to BACKOFF_MAX_MS (one hour). Jitter is idJitter(jobId) * 8, and the final min() compares against BACKOFF_MAX_MS + jitter, so a capped delay still carries its jitter: 3,600,000 + 4,000."
+  },
+  {
+   "id": "q02-lease-and-heartbeat-edges",
+   "kind": "quiz",
+   "source": {
+    "path": "fabledocs/02-feature-backlog-user-stories.md",
+    "lines": {
+     "start": 1023,
+     "end": 1032
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/domain/src/jobs.ts",
+     "lineStart": 163,
+     "lineEnd": 192
+    }
+   ],
+   "prompt": "A RUNNING job's lockedAt is exactly JOB_LEASE_MS (5 minutes) old, and a worker's lastSeenAt is exactly 60 seconds old. What do isLeaseExpired and workerHealth report?",
+   "answer": "Lease still valid; that worker already counts as stale",
+   "distractors": [
+    "Lease expired, so the job is reclaimed; worker reads stale",
+    "Neither boundary has tripped: valid lease, healthy worker",
+    "Both boundaries trip, so expect a reclaim and a dead worker"
+   ],
+   "explanation": "isLeaseExpired uses a strict > against JOB_LEASE_MS, so exactly five minutes is not yet expired. workerHealth uses >= WORKER_STALE_MS, so exactly a minute is stale. The story text says \"over a minute\" for stale; the code keys the boundary as inclusive."
+  },
+  {
+   "id": "q03-reclaim-keeps-attempts",
+   "kind": "quiz",
+   "source": {
+    "path": "fabledocs/02-feature-backlog-user-stories.md",
+    "lines": {
+     "start": 1023,
+     "end": 1036
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/db/src/worker.ts",
+     "lineStart": 52,
+     "lineEnd": 66
+    }
+   ],
+   "prompt": "A worker is killed mid-job. Its row (attempts 1, maxAttempts 3) is still RUNNING with a lockedAt ten minutes old. What does the next worker's reclaimExpiredLeases do to it?",
+   "answer": "Sets it to RETRYING, clears the lock, and leaves attempts at 1",
+   "distractors": [
+    "Sets it to QUEUED, clears the lock, and resets attempts to 0",
+    "Sets it to FAILED and raises attempts to 2 before rescheduling",
+    "Leaves it RUNNING until an operator retries it from /jobs"
+   ],
+   "explanation": "The reaper is one updateMany over RUNNING rows whose lockedAt is older than the lease: status RETRYING, lockedAt and lockedBy null, and attempts deliberately untouched."
+  },
+  {
+   "id": "q04-manual-retry-due-now",
+   "kind": "quiz",
+   "source": {
+    "path": "fabledocs/02-feature-backlog-user-stories.md",
+    "lines": {
+     "start": 961,
+     "end": 968
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/web/lib/actions.ts",
+     "lineStart": 725,
+     "lineEnd": 760
+    },
+    {
+     "path": "packages/domain/src/jobs.ts",
+     "lineStart": 14,
+     "lineEnd": 16
+    }
+   ],
+   "prompt": "An operator clicks Retry on a RETRYING job (attempts 2, maxAttempts 3) whose runAt is twenty minutes away. What does retryJobAction change?",
+   "answer": "runAt becomes now; attempts stays at 2",
+   "distractors": [
+    "attempts becomes 3; runAt stays twenty minutes out",
+    "It throws, as only FAILED jobs are eligible to retry",
+    "attempts becomes 3, so the job is dead-lettered"
+   ],
+   "explanation": "canRetryJob accepts FAILED or RETRYING with attempts < maxAttempts. The action then sets status RETRYING and runAt to now, and never touches attempts: the worker owns that counter."
+  },
+  {
+   "id": "q05-requeue-mixed-batch",
+   "kind": "quiz",
+   "source": {
+    "path": "fabledocs/02-feature-backlog-user-stories.md",
+    "lines": {
+     "start": 1077,
+     "end": 1085
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/web/lib/actions.ts",
+     "lineStart": 1351,
+     "lineEnd": 1406
+    },
+    {
+     "path": "packages/domain/src/jobs.ts",
+     "lineStart": 32,
+     "lineEnd": 36
+    }
+   ],
+   "prompt": "An operator selects five dead-lettered jobs on /jobs/dead-letter, two of them with requeueCount 3, and gives a 30-character reason. What happens?",
+   "answer": "Three go back to QUEUED with attempts 0; two are reported as blocked",
+   "distractors": [
+    "All five go back to QUEUED, since a valid reason overrides the limit",
+    "None are requeued: one ineligible job aborts the whole batch",
+    "Three go back to QUEUED with their attempts kept; two are blocked"
+   ],
+   "explanation": "requeueDeadLetterJobsAction filters with canRequeueJob (requeueCount < MAX_REQUEUES, 3). Eligible jobs get status QUEUED, attempts 0 and runAt now; the redirect carries requeued=3 and blocked=2."
+  },
+  {
+   "id": "q06-dead-letter-normalised-group",
+   "kind": "quiz",
+   "source": {
+    "path": "fabledocs/02-feature-backlog-user-stories.md",
+    "lines": {
+     "start": 1063,
+     "end": 1070
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/domain/src/jobs.ts",
+     "lineStart": 47,
+     "lineEnd": 88
+    }
+   ],
+   "prompt": "Two dead-lettered WEBHOOK_DELIVERY jobs failed with \"Timeout after 9500ms on hook 4f3a2b1c9d\" and \"timeout after 12000ms on hook 7e6d5c4b3a\". How does groupDeadLetters treat them?",
+   "answer": "One group of 2, normalised to \"timeout after <n>ms on hook <id>\"",
+   "distractors": [
+    "Two groups, because the raw messages differ in case and in ids",
+    "One group of 2, but only when both share one requestContextId",
+    "Two groups: this normaliser leaves hex ids and durations alone"
+   ],
+   "explanation": "normalizeErrorMessage lowercases, turns runs of 8+ hex characters into <id>, then digits into <n>. Both messages collapse to the same text, and the group key is type plus that text."
+  },
+  {
+   "id": "q07-title-contains-ignores-equals",
+   "kind": "quiz",
+   "source": {
+    "path": "fabledocs/02-feature-backlog-user-stories.md",
+    "lines": {
+     "start": 797,
+     "end": 834
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/domain/src/routing.ts",
+     "lineStart": 106,
+     "lineEnd": 119
+    }
+   ],
+   "prompt": "A routing rule has one condition: field TITLE_CONTAINS, operator \"equals\", value \"Login\". A new ticket titled \"Cannot login after reset\" has no team or user chosen. Does the condition match?",
+   "answer": "Yes: title fields are a lowercase substring test whatever the operator",
+   "distractors": [
+    "No: \"equals\" needs the whole title to be exactly \"login\"",
+    "No: the value keeps its capital L, so the case blocks it",
+    "Yes, but only because a blank operator defaults to contains"
+   ],
+   "explanation": "conditionMatches lowercases and trims both sides, and treats TITLE_CONTAINS and DESCRIPTION_CONTAINS as substring fields regardless of the operator. \"cannot login after reset\" includes \"login\"."
+  },
+  {
+   "id": "q08-explicit-team-skips-routing",
+   "kind": "quiz",
+   "source": {
+    "path": "fabledocs/02-feature-backlog-user-stories.md",
+    "lines": {
+     "start": 836,
+     "end": 845
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/web/lib/actions.ts",
+     "lineStart": 211,
+     "lineEnd": 247
+    }
+   ],
+   "prompt": "An agent creates a ticket and picks the Billing team on the form. An active routing rule would match it, assign Platform, set priority HIGH and add the tag \"sso\". What is stored?",
+   "answer": "Billing, the submitted priority, and no tag from the rule",
+   "distractors": [
+    "Billing, but with priority HIGH and the \"sso\" tag added",
+    "Platform and HIGH, since an active rule outranks the form",
+    "Billing with HIGH priority, and the rule's matchCount rises"
+   ],
+   "explanation": "createTicketAction only evaluates rules when both assignedTeamId and assignedUserId are blank. With Billing chosen, routing stays null, so priority, tags and matchCount are untouched."
+  },
+  {
+   "id": "q09-canned-reply-leaves-gaps",
+   "kind": "quiz",
+   "source": {
+    "path": "fabledocs/02-feature-backlog-user-stories.md",
+    "lines": {
+     "start": 270,
+     "end": 288
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/domain/src/canned-replies.ts",
+     "lineStart": 32,
+     "lineEnd": 53
+    }
+   ],
+   "prompt": "A canned reply body is \"Hi {{customerName}}, about {{ ticketTitle }} ({{priority}}), from {{agentName}}\". It is rendered with values for customerName (\"Ana\") and ticketTitle (\"SSO loop\") only. What comes out?",
+   "answer": "Hi Ana, about SSO loop ({{priority}}), from {{agentName}}",
+   "distractors": [
+    "Hi Ana, about SSO loop (), from",
+    "Hi Ana, about {{ ticketTitle }} ({{priority}}), from {{agentName}}",
+    "An error, since priority is not a known variable"
+   ],
+   "explanation": "The placeholder pattern allows spaces inside the braces. Unknown names such as priority are left as written, and a known name with no value (agentName) is also left alone instead of being blanked."
+  },
+  {
+   "id": "q10-api-401-then-403",
+   "kind": "quiz",
+   "source": {
+    "path": "fabledocs/02-feature-backlog-user-stories.md",
+    "lines": {
+     "start": 1489,
+     "end": 1499
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/web/lib/api-auth.ts",
+     "lineStart": 36,
+     "lineEnd": 69
+    }
+   ],
+   "prompt": "Request one to /api/v1/tickets uses a revoked key that does hold read:tickets. Request two uses a valid, unrevoked key that lacks read:tickets. Which statuses come back?",
+   "answer": "401 for the revoked key, then 403 for the missing scope",
+   "distractors": [
+    "Both get 403, as each key exists but may not read tickets",
+    "401 first, then 404 so that a scope list cannot be probed",
+    "A 410 Gone for the revoked one and 401 for the scopeless one"
+   ],
+   "explanation": "authenticateApiRequest returns the same 401 for a missing, unknown, revoked or expired key. Only a real, usable key reaches the scope check, which answers 403. The 404 rule is for records in another organization."
+  },
+  {
+   "id": "q11-reverse-duplicate-link",
+   "kind": "quiz",
+   "source": {
+    "path": "fabledocs/02-feature-backlog-user-stories.md",
+    "lines": {
+     "start": 466,
+     "end": 476
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/domain/src/ticket-links.ts",
+     "lineStart": 60,
+     "lineEnd": 93
+    }
+   ],
+   "prompt": "Ticket A already has a DUPLICATE_OF link to B. Someone then proposes B RELATED_TO A, and separately B DUPLICATE_OF A. What does validateTicketLink return for each?",
+   "answer": "ok for RELATED_TO, rejected for the reverse DUPLICATE_OF",
+   "distractors": [
+    "Rejected for both, since A and B are already linked",
+    "ok for both, as only an exact repeat is refused",
+    "RELATED_TO is refused while the other direction is accepted"
+   ],
+   "explanation": "The validator refuses self-links, an exact repeat (same pair and type), and the reverse of an existing DUPLICATE_OF. A RELATED_TO in the other direction is none of these."
+  },
+  {
+   "id": "q12-business-hours-friday",
+   "kind": "quiz",
+   "source": {
+    "path": "fabledocs/02-feature-backlog-user-stories.md",
+    "lines": {
+     "start": 729,
+     "end": 745
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/domain/src/tickets.ts",
+     "lineStart": 58,
+     "lineEnd": 85
+    },
+    {
+     "path": "packages/domain/src/business-hours.ts",
+     "lineStart": 83,
+     "lineEnd": 110
+    }
+   ],
+   "prompt": "An organization has a BusinessCalendar row with the default values (Monday to Friday, 09:00 to 17:00 UTC). A HIGH ticket (8-hour target) and a CRITICAL ticket (2-hour target) are both created on a Friday at 16:00 UTC. When is each due?",
+   "answer": "HIGH on Monday at 16:00 UTC; CRITICAL on Friday at 18:00 UTC",
+   "distractors": [
+    "Saturday 00:00 for HIGH and Friday 18:00 for CRITICAL (UTC)",
+    "Both slip to Monday: HIGH at 16:00 and CRITICAL at 10:00 UTC",
+    "HIGH waits until 17:00 on Monday; CRITICAL is 18:00 Friday"
+   ],
+   "explanation": "With a calendar, calculateSlaDueAt uses addBusinessHours for every priority except CRITICAL. HIGH spends 1 hour on Friday and 7 on Monday, ending at 16:00. CRITICAL stays on elapsed hours."
+  },
+  {
+   "id": "q13-alert-threshold-before-cooldown",
+   "kind": "quiz",
+   "source": {
+    "path": "fabledocs/02-feature-backlog-user-stories.md",
+    "lines": {
+     "start": 1219,
+     "end": 1236
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/domain/src/log-alerts.ts",
+     "lineStart": 43,
+     "lineEnd": 101
+    }
+   ],
+   "prompt": "A log alert rule (thresholdCount 5, minAnomalyScore 70, cooldownMinutes 60) last fired 30 minutes ago. Now 3 matching logs arrive with an anomaly score of 90. What does evaluateLogAlertRule return?",
+   "answer": "No fire, with a reason that cites the threshold of 5",
+   "distractors": [
+    "No fire, with a reason that cites the 60-minute cooldown",
+    "A fire, as a score of 90 outweighs the low count",
+    "No fire, with a reason that cites the anomaly score"
+   ],
+   "explanation": "The checks run inactive, then threshold, then score, then cooldown. Three logs fail the threshold first, so that reason is returned; inCooldown is still reported as true alongside it."
+  },
+  {
+   "id": "f01-deterministic-jitter",
+   "kind": "flashcard",
+   "source": {
+    "path": "fabledocs/02-feature-backlog-user-stories.md",
+    "lines": {
+     "start": 953,
+     "end": 955
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/domain/src/jobs.ts",
+     "lineStart": 106,
+     "lineEnd": 124
+    }
+   ],
+   "front": "Why does calculateBackoffMs derive jitter from the job id instead of Math.random()?",
+   "back": "Jitter exists so jobs that fail in the same tick do not all retry in the same tick. Random jitter would give that spread but make the function untestable. Hashing the id gives both: different ids spread out, and the same (attempt, jobId) always produces the same delay."
+  },
+  {
+   "id": "f02-at-least-once",
+   "kind": "flashcard",
+   "source": {
+    "path": "fabledocs/02-feature-backlog-user-stories.md",
+    "lines": {
+     "start": 1036,
+     "end": 1036
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/db/src/worker.ts",
+     "lineStart": 41,
+     "lineEnd": 66
+    }
+   ],
+   "front": "What delivery guarantee does the lease reaper give, and which job types does that make risky?",
+   "back": "At-least-once. A reclaimed job can run twice if the original worker was only slow, not dead. AGENT_RUN is safe (deterministic, overwrites its own output); a real email or webhook sender would need idempotency."
+  },
+  {
+   "id": "f03-api-error-shapes",
+   "kind": "flashcard",
+   "source": {
+    "path": "fabledocs/02-feature-backlog-user-stories.md",
+    "lines": {
+     "start": 1489,
+     "end": 1505
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/web/lib/api-auth.ts",
+     "lineStart": 28,
+     "lineEnd": 80
+    }
+   ],
+   "front": "How does the read-only /api/v1 choose between 401, 403 and 404?",
+   "back": "401 with one identical body for a missing, malformed, unknown, revoked or expired key (no hint which). 403 when the key is real but lacks the scope. 404, never 403, for a record in another organization, so ids cannot be probed. Hashes are compared with timingSafeEqual."
+  },
+  {
+   "id": "f04-requeue-not-transactional",
+   "kind": "flashcard",
+   "source": {
+    "path": "fabledocs/02-feature-backlog-user-stories.md",
+    "lines": {
+     "start": 1085,
+     "end": 1085
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/web/lib/actions.ts",
+     "lineStart": 1369,
+     "lineEnd": 1403
+    }
+   ],
+   "front": "Story D3 asks for a 200-job requeue to be a single transaction. What does the shipped requeueDeadLetterJobsAction do?",
+   "back": "It loops over the eligible jobs and issues one update plus one audit event per job, with no prisma.$transaction. A failure halfway leaves some jobs requeued and others not; the acceptance criterion is not met by the code."
+  }
+ ]
+}
