@@ -1,0 +1,507 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "organized-experiment-idempotent-payments-lab",
+ "repo": "organized-experiment-idempotent-payments-lab",
+ "sha": "7e9832bab90cba8b26fffebb884edc0a7397cee0",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: a payments lab built around one idempotent endpoint",
+   "body": "This repo is a small Next.js + Prisma payments console. Its name comes from `POST /api/payments`, which must create exactly one payment even when a client retries. Around it sit a refund route, an unauthenticated provider webhook, a webhook relay and a reconciliation job.\n\nRead in this order. `docs/learning/concepts-demonstrated.md` names each concept and then says what you actually find in the code, gaps included. `docs/learning/flow-traces.md` follows requests file by file; the numbered flows 7-10 at the end are the interesting ones (races and a forged webhook). `docs/architecture/request-lifecycle.md` repeats the traces line by line and lists findings L1-L5. `docs/architecture/auth-and-permissions.md` covers sessions, the role matrix and findings A1-A4. `docs/learning/testing-rationale.md` says which claims were checked and how.\n\nThe docs were corrected after review, so trust the line-numbered sections over the short quick maps at the top.",
+   "excerpts": [
+    {
+     "path": "docs/learning/concepts-demonstrated.md",
+     "lineStart": 62,
+     "lineEnd": 62,
+     "quote": "This section says what you will find when you get there — the specific mechanism, its exact boundary, and the gap a reviewer should notice."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/services/paymentService.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The create path: 192 lines that every idempotency question in this quest is about."
+    },
+    {
+     "path": "docs/architecture/request-lifecycle.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Line-by-line traces A-D and the L-findings."
+    }
+   ]
+  },
+  {
+   "id": "r02-idempotency-record",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: an idempotency record is a key, a fingerprint and a saved answer",
+   "body": "An idempotency key lets a client say \"this is the same request as before\". The server must then decide three things: is it really the same request, has the first one finished, and what should a repeat return?\n\nIn this repo the answer lives in an `IdempotencyRecord` row. It stores the route, the client key, a SHA-256 fingerprint of the request body, a status, and the response that was sent. The fingerprint comes from `stableStringify()`, which sorts object keys before hashing, so key order in the JSON does not matter. A repeat with a matching fingerprint and a finished record gets the saved response back, marked as replayed.\n\nWhile reading, ask: who is part of the identity? Look at what the unique constraint covers and what the fingerprint is computed from. Then ask what makes two simultaneous requests safe: the read at the top of the function, or something in the database.",
+   "excerpts": [
+    {
+     "path": "src/lib/idempotency/requestFingerprint.ts",
+     "lineStart": 18,
+     "lineEnd": 20,
+     "quote": "const entries = Object.entries(value as Record<string, unknown>).sort(([left], [right]) =>"
+    },
+    {
+     "path": "prisma/schema.prisma",
+     "lineStart": 135,
+     "lineEnd": 135,
+     "quote": "@@unique([route, key])"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "prisma/schema.prisma",
+     "lineStart": 121,
+     "lineEnd": 136,
+     "why": "The IdempotencyRecord model with its status, lockedAt and response columns."
+    }
+   ]
+  },
+  {
+   "id": "r03-reads-outside-tx",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: where the reads sit relative to the transaction",
+   "body": "A database transaction only protects what happens inside it. A value you read BEFORE `prisma.$transaction(...)` opens can be changed by another request before your writes commit, and nothing will warn you.\n\nThis repo has four transactions: payment create, webhook processing, refund and the reconciliation write-out. The create path keeps all of its work inside one transaction. The webhook and refund paths load the payment (and, for refunds, the sum of earlier refunds) first, check rules against those values, and only then open the transaction for the writes.\n\nA second trap: in an interactive Prisma transaction, anything written through `tx` is undone if the callback throws. Writing an error record through `tx` and then re-throwing does not leave that record behind. Keep both ideas in mind when you trace the refund and webhook services.",
+   "excerpts": [
+    {
+     "path": "docs/learning/concepts-demonstrated.md",
+     "lineStart": 76,
+     "lineEnd": 76,
+     "quote": "The webhook and refund paths do their *reads* outside the transaction"
+    },
+    {
+     "path": "src/services/refundService.ts",
+     "lineStart": 36,
+     "lineEnd": 36,
+     "quote": "return prisma.$transaction(async (tx) => {"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/architecture/request-lifecycle.md",
+     "lineStart": 93,
+     "lineEnd": 106,
+     "why": "Trace C walks the refund path step by step."
+    }
+   ]
+  },
+  {
+   "id": "x-q01-concurrent-same-key",
+   "target": "seed:quests:organized-experiment-idempotent-payments-lab/quiz/ca8d0ee005378b9b",
+   "phase": "after",
+   "title": "The unique index, not the pre-read, makes the race safe",
+   "body": "Request 2 runs `findIdempotencyRecord` at line 68 and sees nothing, because request 1 has not committed. It then opens its own transaction and inserts the record at line 88. PostgreSQL makes an insert that collides with an UNCOMMITTED row on a unique index wait. When request 1 commits, request 2 fails with `P2002`; the catch (lines 168-185) re-reads the now-committed record, the hashes match, the status is `COMPLETED`, and `buildCompletedReplay` returns the original body with `replayed: true`.\n\n- \"Both create a payment\" ignores `@@unique([route, key])`.\n- \"409 IN_PROGRESS\" cannot happen: the IN_PROGRESS row is never visible outside request 1's transaction.\n- \"Prisma retries in a loop\" is wrong: there is no retry; the catch makes one decision.",
+   "excerpts": [
+    {
+     "path": "src/services/paymentService.ts",
+     "lineStart": 168,
+     "lineEnd": 173,
+     "quote": "const collision = await findIdempotencyRecord(route, input.idempotencyKey);"
+    },
+    {
+     "path": "docs/learning/flow-traces.md",
+     "lineStart": 92,
+     "lineEnd": 92,
+     "quote": "Request 2's insert now fails with `P2002`; Prisma aborts request 2's transaction."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02-same-key-new-amount",
+   "target": "seed:quests:organized-experiment-idempotent-payments-lab/quiz/23842569b9badd41",
+   "phase": "after",
+   "title": "A reused key with a new body is refused up front",
+   "body": "The record is found by route and key. Its `requestHash` was computed from the first body; the new body has `amountMinor: 501`, so its fingerprint differs. Line 71 compares them and throws `RouteError(409, \"IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD\", ...)`. This happens before line 86, so no transaction is opened and nothing is written.\n\n- \"A 202 replay\" would only happen if the hashes matched; the service compares the hash, not just the key.\n- \"A second payment for 501\" is exactly what the check prevents: a key may only ever mean one request.\n- \"400 MISSING_IDEMPOTENCY_KEY\" is for a request with no header at all (line 62).",
+   "excerpts": [
+    {
+     "path": "src/services/paymentService.ts",
+     "lineStart": 71,
+     "lineEnd": 75,
+     "quote": "if (existingRecord.requestHash !== requestHash) {"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q03-currency-normalized",
+   "target": "seed:quests:organized-experiment-idempotent-payments-lab/quiz/74fd1ab4b575d73e",
+   "phase": "after",
+   "title": "The fingerprint is taken after zod normalizes the body",
+   "body": "The route parses the body with `createPaymentSchema` before the service sees it. The currency field is `z.string().trim().length(3).transform((value) => value.toUpperCase())`: \" usd\" is trimmed to \"usd\" (length 3, so it passes) and upper-cased to \"USD\". The service then fingerprints that parsed object, so both requests produce the same hash and the retry is replayed.\n\n- \"409 because the raw bytes differ\" is wrong: raw bytes are never hashed.\n- \"400, four characters\" is wrong: `.trim()` runs before the `.length(3)` check.\n- \"Currency is left out of the fingerprint\" is wrong: the whole parsed body is hashed.",
+   "excerpts": [
+    {
+     "path": "src/lib/validation/paymentSchemas.ts",
+     "lineStart": 18,
+     "lineEnd": 18,
+     "quote": "currency: z.string().trim().length(3).transform((value) => value.toUpperCase()),"
+    },
+    {
+     "path": "docs/learning/concepts-demonstrated.md",
+     "lineStart": 67,
+     "lineEnd": 67,
+     "quote": "so `\" usd\"` and `\"USD\"` with the same key are treated as the same request, not a mismatch"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q04-ui-new-key",
+   "target": "seed:quests:organized-experiment-idempotent-payments-lab/quiz/bd1f7bad7e912be2",
+   "phase": "after",
+   "title": "The browser hook mints a key per call",
+   "body": "`useCreatePayment()` builds its request inside `mutationFn`, and the header is `\"Idempotency-Key\": crypto.randomUUID()`. A new UUID is generated every time the mutation runs, so a retry after a timeout is a new key, the server finds no record, and a second payment is created. The idempotency layer only helps API clients that deliberately resend the same key.\n\n- \"The same key as before\" would need the key stored once per user intent, for example in component state; the docs list that as the fix.\n- \"No key at all, 400\" is wrong: every call sends a header.\n- \"409 IN_PROGRESS\" needs the same key, which the retry does not have.",
+   "excerpts": [
+    {
+     "path": "src/hooks/usePaymentActions.ts",
+     "lineStart": 32,
+     "lineEnd": 32,
+     "quote": "\"Idempotency-Key\": crypto.randomUUID(),"
+    },
+    {
+     "path": "docs/learning/flow-traces.md",
+     "lineStart": 60,
+     "lineEnd": 60,
+     "quote": "so every submit — including a user's retry after a timeout — is a brand-new key"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q05-refund-race-60",
+   "target": "seed:quests:organized-experiment-idempotent-payments-lab/quiz/4f28e0fc2b2bd4be",
+   "phase": "after",
+   "title": "Finding L2: the refund limit is checked on stale numbers",
+   "body": "`createRefundForPayment` reads the payment (line 25), sums earlier successful refunds (line 31) and runs `assertRefundAllowed` (line 34), all before `prisma.$transaction` opens at line 36. With two simultaneous requests both read a refunded total of 0, both see 100 remaining, both pass the check, and both insert and succeed: 120 refunded on a 100 charge. Neither flips the payment, because 0 + 60 is not 100.\n\n- \"Fails REFUND_AMOUNT_EXCEEDS_CAPTURE inside the transaction\" is wrong: the check never runs inside the transaction.\n- \"Waits on a row lock\" is wrong: nothing locks the payment row, and the schema does not bound the sum.\n- \"Each flips the payment to REFUNDED\" is wrong for the same 0 + 60 reason.",
+   "excerpts": [
+    {
+     "path": "src/services/refundService.ts",
+     "lineStart": 31,
+     "lineEnd": 34,
+     "quote": "const refundedAmount = await sumSuccessfulRefundsForPayment(payment.id);"
+    },
+    {
+     "path": "docs/learning/testing-rationale.md",
+     "lineStart": 49,
+     "lineEnd": 49,
+     "quote": "**both succeed, 120 refunded**"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q06-refund-race-50",
+   "target": "seed:quests:organized-experiment-idempotent-payments-lab/quiz/88e7c3e8caaeb060",
+   "phase": "after",
+   "title": "Fully refunded money, yet the payment still says SUCCEEDED",
+   "body": "Inside each transaction the service computes `fullyRefunded = refundedAmount + refund.amountMinor === payment.amountMinor`. `refundedAmount` is the value read before the transaction, which was 0 for both racers. 0 + 50 is not 100, so neither request runs the `REFUNDED` transition. The payment ends `SUCCEEDED` with its full amount refunded, and the UI still offers it as refundable.\n\n- \"REFUNDED\" would need one request to see the other's refund in its total; neither does.\n- \"FAILED\" is not even a legal move from SUCCEEDED, and no code path tries it here.\n- \"PENDING until reconciliation\" is wrong: reconciliation never corrects state, and nothing moves a payment back to PENDING.",
+   "excerpts": [
+    {
+     "path": "src/services/refundService.ts",
+     "lineStart": 65,
+     "lineEnd": 65,
+     "quote": "const fullyRefunded = refundedAmount + refund.amountMinor === payment.amountMinor;"
+    },
+    {
+     "path": "docs/learning/testing-rationale.md",
+     "lineStart": 50,
+     "lineEnd": 50,
+     "quote": "**100 refunded, payment still `SUCCEEDED`**"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07-support-reconciliation",
+   "target": "seed:quests:organized-experiment-idempotent-payments-lab/quiz/c91619f738788140",
+   "phase": "after",
+   "title": "Finding A1: the auth check runs outside the try",
+   "body": "`withRouteAuth()` returns a function whose first line is `const session = requirePermission(await getSessionForRequest(request), options.permission);`. For a SUPPORT session `requirePermission` throws a 403 `RouteError`. That throw happens before `handler(...)` is called, and the `try { ... } catch { return jsonError(error); }` lives inside the handler, so nothing converts the error into JSON. It escapes the route and Next.js answers with an unstructured error.\n\n- \"A JSON 403 from jsonError()\" is what the docs first claimed; the correction shows it never runs.\n- \"A redirect to /\" is the PAGE guard (`requirePagePermission`), not the API route.\n- \"202\" is wrong: SUPPORT lacks RECONCILIATION_RUN; read access does not grant it.",
+   "excerpts": [
+    {
+     "path": "src/lib/auth/guards.ts",
+     "lineStart": 32,
+     "lineEnd": 32,
+     "quote": "const session = requirePermission(await getSessionForRequest(request), options.permission);"
+    },
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 65,
+     "lineEnd": 65,
+     "quote": "outside the handler's `try/catch`"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08-rejected-webhook-trace",
+   "target": "seed:quests:organized-experiment-idempotent-payments-lab/quiz/8b5e00d8d050e462",
+   "phase": "after",
+   "title": "Finding L3: a rejection written through tx is rolled back",
+   "body": "FAILED is terminal, so `assertAllowedPaymentTransition(\"FAILED\", \"SUCCEEDED\")` throws a 409 inside the transaction. The catch at lines 123-127 calls `markWebhookEventRejected(webhookEvent.id, message, tx)` and then rethrows. Because the error leaves the `prisma.$transaction` callback, Prisma rolls back EVERYTHING written through `tx`: the REJECTED update, the new WebhookEvent row, the provider-mirror update and the WEBHOOK_RECEIVED event.\n\n- \"A REJECTED row with the message\" is what the code intends, not what survives.\n- \"The mirror moves to SUCCEEDED\" is wrong: that update was also made through `tx`.\n- \"A WEBHOOK_RECEIVED event\" is wrong for the same reason.\n\nFix shape: record the rejection in a separate write after the failed transaction.",
+   "excerpts": [
+    {
+     "path": "src/services/webhookService.ts",
+     "lineStart": 125,
+     "lineEnd": 126,
+     "quote": "await markWebhookEventRejected(webhookEvent.id, message, tx);"
+    },
+    {
+     "path": "docs/learning/concepts-demonstrated.md",
+     "lineStart": 77,
+     "lineEnd": 77,
+     "quote": "Writing an error record through `tx` and then re-throwing (`webhookService.ts:123-127`) erases the error record."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09-forged-webhook",
+   "target": "seed:quests:organized-experiment-idempotent-payments-lab/quiz/ffb18f87bfc28db6",
+   "phase": "after",
+   "title": "Finding L5: an open state-mutation endpoint",
+   "body": "The webhook route's `POST` is a plain function: no `withRouteAuth`, no signature check and no schema; the parsed body is passed on through a bare type cast. The service finds the provider mirror and the payment by id, maps REFUNDED to local REFUNDED, and the state machine allows `SUCCEEDED -> REFUNDED`. So the payment and the mirror become REFUNDED and the event trail says `provider-webhook`, but no `Refund` row exists because the refund service was never called.\n\n- \"401 UNAUTHENTICATED\" is wrong: the route is not wrapped in `withRouteAuth`.\n- \"409 INVALID_PAYMENT_TRANSITION\" is wrong: SUCCEEDED may become REFUNDED.\n- \"400 VALIDATION_ERROR\" is wrong: the webhook has no zod schema at all.",
+   "excerpts": [
+    {
+     "path": "src/app/api/webhooks/provider/route.ts",
+     "lineStart": 6,
+     "lineEnd": 6,
+     "quote": "const payload = await parseJson(request, (body) => body as Record<string, unknown>);"
+    },
+    {
+     "path": "src/lib/domain/paymentStateMachine.ts",
+     "lineStart": 12,
+     "lineEnd": 12,
+     "quote": "SUCCEEDED: [\"REFUNDED\"],"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10-failed-delivery-retry",
+   "target": "seed:quests:organized-experiment-idempotent-payments-lab/quiz/096b6033a4f011f4",
+   "phase": "after",
+   "title": "Finding L4: failed deliveries are dead letters",
+   "body": "`markWebhookDeliveryFailed` sets `status: FAILED` and `nextAttemptAt: new Date(Date.now() + 60_000)`. But the relay's query, `listPendingWebhookDeliveries`, filters on `status: WebhookDeliveryStatus.PENDING` and nothing else; no code anywhere reads `nextAttemptAt`. A FAILED row is therefore never picked up again. There is even an index on `[status, nextAttemptAt]` for a query that does not exist.\n\n- \"Next Deliver click after nextAttemptAt\" describes the design the column suggests, not the code.\n- \"A timer in the simulator\" is wrong: delivery only runs when an operator triggers it from the UI.\n- \"Five tries, then a dead-letter table\" mixes in another system; this repo has no attempt limit or dead-letter table for deliveries.",
+   "excerpts": [
+    {
+     "path": "src/repositories/webhookRepository.ts",
+     "lineStart": 31,
+     "lineEnd": 33,
+     "quote": "status: WebhookDeliveryStatus.PENDING,"
+    },
+    {
+     "path": "src/repositories/webhookRepository.ts",
+     "lineStart": 62,
+     "lineEnd": 62,
+     "quote": "nextAttemptAt: new Date(Date.now() + 60_000),"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q11-admin-vs-ops",
+   "target": "seed:quests:organized-experiment-idempotent-payments-lab/quiz/89c18770ef1f9c0c",
+   "phase": "after",
+   "title": "ADMIN and OPS are the same role in practice",
+   "body": "`rolePermissions` in `src/lib/permissions.ts` is the single source of truth for RBAC. The OPS and ADMIN entries list the same five permissions in the same order: PAYMENT_CREATE, PAYMENT_READ_ANY, PAYMENT_REFUND, WEBHOOK_DELIVER and RECONCILIATION_RUN. Nothing else in the code checks the role name for extra powers, so \"admin\" grants nothing beyond OPS.\n\n- RECONCILIATION_RUN, PAYMENT_REFUND and WEBHOOK_DELIVER all appear in the OPS list, so none of the distractors names a permission OPS is missing.\n- The \"view but not start\" and \"request but not issue\" splits do not exist: a permission is either in the list or not.",
+   "excerpts": [
+    {
+     "path": "src/lib/permissions.ts",
+     "lineStart": 23,
+     "lineEnd": 29,
+     "quote": "OPS: [ Permission.PAYMENT_CREATE, Permission.PAYMENT_READ_ANY, Permission.PAYMENT_REFUND, Permission.WEBHOOK_DELIVER, Permission.RECONCILIATION_RUN, ],"
+    },
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 13,
+     "lineEnd": 13,
+     "quote": "`ADMIN` has the same operational permissions as `OPS` in this codebase."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q12-global-key",
+   "target": "seed:quests:organized-experiment-idempotent-payments-lab/quiz/b781a0afed7d19b0",
+   "phase": "after",
+   "title": "Finding A4: the idempotency scope ignores the caller",
+   "body": "The record's identity is `(route, key)`, and the fingerprint hashes only the parsed body; `session.userId` appears in neither. When user B sends the same key and an identical body, the lookup finds user A's COMPLETED record, the hashes match, and B receives a replay of A's response, including A's `paymentId` and `reference`. No payment is created for B.\n\n- \"409, the record belongs to another user\" would need the record to store or compare the caller; it does not.\n- \"A new payment because the fingerprint includes session.userId\" is the suggested FIX, not the current code.\n- \"FORBIDDEN_OWNER_OVERRIDE\" only fires when a customer tries to set `ownerUserId`, and the replay returns before owner resolution runs.",
+   "excerpts": [
+    {
+     "path": "src/services/paymentService.ts",
+     "lineStart": 66,
+     "lineEnd": 67,
+     "quote": "const requestHash = buildRequestFingerprint(input.body);"
+    },
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 71,
+     "lineEnd": 71,
+     "quote": "the second user receives the first user's `paymentId` and `reference` as a \"replay\""
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-gc-ownership-live",
+   "target": "seed:quests:organized-experiment-idempotent-payments-lab/quiz/1a80c9af232e4936",
+   "phase": "after",
+   "title": "Making the ownership branch live needs a customer read route",
+   "body": "This goal comes from Exercise 2 in `auth-and-permissions.md`. The ownership code (`buildPaymentListScope()` returning `{ ownerUserId }`) is correct but unreachable, because every read route requires `PAYMENT_READ_ANY`, which CUSTOMER lacks. The matching check therefore asks you to sketch a `GET /api/payments` route guarded by `PAYMENT_READ_OWN` that calls `listVisiblePayments()`, and to say what the existing test guarantees.\n\nThe other choices are the checks of the neighbouring exercises: moving `guards.ts` line 32 into a try/catch is Exercise 1 (finding A1), writing down two colliding requests is Exercise 3 (finding A4), and listing where Session rows are deleted is Exercise 4 (session hygiene).",
+   "excerpts": [
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 78,
+     "lineEnd": 78,
+     "quote": "sketch a `GET /api/payments` route guarded by `PAYMENT_READ_OWN` that calls `listVisiblePayments()`"
+    },
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 50,
+     "lineEnd": 50,
+     "quote": "**The ownership code is unreachable today.**"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-gc-transaction-scope",
+   "target": "seed:quests:organized-experiment-idempotent-payments-lab/quiz/4732a07410d8a7bd",
+   "phase": "after",
+   "title": "Seeing the pattern means listing the reads before each transaction",
+   "body": "This is item 3 of the concept check ladder in `concepts-demonstrated.md`. The transaction-scope pattern is about which reads happen before `$transaction` opens. The section \"Transactions as a consistency boundary\" names four transactions: payment create, webhook processing, refund and reconciliation. The matching check asks you to list the earlier reads for each and say whether a concurrent writer could invalidate them (for refunds and webhooks it can).\n\nThe other two choices belong to ladder items 1 and 2: naming the schema line and catch block behind safe concurrent creates, and pointing at the lines that make deliveries atomic and that stop failed ones from being retried.",
+   "excerpts": [
+    {
+     "path": "docs/learning/concepts-demonstrated.md",
+     "lineStart": 120,
+     "lineEnd": 120,
+     "quote": "for each of the four transactions listed above, list which reads happen before `$transaction`"
+    },
+    {
+     "path": "docs/learning/concepts-demonstrated.md",
+     "lineStart": 75,
+     "lineEnd": 75,
+     "quote": "Payment create (`paymentService.ts:87`), webhook processing (`webhookService.ts:53`), refund (`refundService.ts:36`)"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-gc-reason-about-a4",
+   "target": "seed:quests:organized-experiment-idempotent-payments-lab/quiz/4e124c2732fd2fb7",
+   "phase": "after",
+   "title": "Reasoning about A4 means building the colliding pair",
+   "body": "Finding A4 says idempotency keys are global: the record is unique on `(route, key)` and the fingerprint hashes only the body. The way to reason about it is concrete: write down two requests (user, key, body) such that user B receives user A's payment id, then name the one-line change in `paymentService.ts` that stops it, such as putting `session.userId` into the fingerprint, which needs no migration.\n\nThe other choices belong to the other exercises in the same file: the try/catch around `guards.ts` line 32 (A1), the customer read route that makes the ownership branch live, and the list of places a Session row is deleted.",
+   "excerpts": [
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 79,
+     "lineEnd": 79,
+     "quote": "write down the two requests (user, key, body) that cause user B to receive user A's payment id"
+    },
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 71,
+     "lineEnd": 71,
+     "quote": "Fix: include `session.userId` in the unique key or in the fingerprint."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-gc-confirm-a1",
+   "target": "seed:quests:organized-experiment-idempotent-payments-lab/quiz/a8d417bdceba37a7",
+   "phase": "after",
+   "title": "Confirming A1 means moving the auth call inside a try",
+   "body": "Finding A1: `withRouteAuth()` calls `requirePermission()` at `guards.ts:32`, before the handler runs, so its `RouteError` never reaches the handler's `jsonError()`. To confirm it, you move line 32 into a `try/catch` that returns `jsonError(error)` and check that the SUPPORT call to reconciliation now gets the JSON 403 body, then explain why the handler's own `try` could never catch it.\n\nThe other choices are the checks of Exercises 2-4 in `auth-and-permissions.md`: a customer read route for the ownership branch, the colliding requests for A4, and the list of places Session rows are deleted.",
+   "excerpts": [
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 77,
+     "lineEnd": 77,
+     "quote": "move line 32 into a `try/catch` that returns `jsonError(error)`"
+    },
+    {
+     "path": "src/lib/auth/guards.ts",
+     "lineStart": 32,
+     "lineEnd": 34,
+     "quote": "return handler({ request, params, session });"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-gc-session-hygiene",
+   "target": "seed:quests:organized-experiment-idempotent-payments-lab/quiz/ae3083338aa58c22",
+   "phase": "after",
+   "title": "Session hygiene starts with where rows are deleted",
+   "body": "Sessions are resolved by `getSessionForRequest()`, which treats an expired row as \"no session\" but never deletes it, so the Session table grows until logout. The hygiene exercise therefore asks you to list every place a Session row is deleted (only `deleteSessionByToken()` via logout, plus the cascade when a user is deleted) and to propose a cleanup for expired sessions.\n\nThe other choices are the checks of the neighbouring exercises in `auth-and-permissions.md`: the colliding requests for A4, the try/catch around `guards.ts` line 32 for A1, and the customer read route that makes the ownership branch live.",
+   "excerpts": [
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 80,
+     "lineEnd": 80,
+     "quote": "list every place a `Session` row is deleted"
+    },
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 58,
+     "lineEnd": 58,
+     "quote": "Both treat an expired row as \"no session\" (lines 32 and 56) but never delete it"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-gc-create-safe",
+   "target": "seed:quests:organized-experiment-idempotent-payments-lab/quiz/b5a34d7e9c4ea07e",
+   "phase": "after",
+   "title": "Safe concurrent creates rest on a schema line and a catch block",
+   "body": "Ladder item 1 asks why the create path is safe under concurrency. The answer is two pieces of code plus one database behaviour: `@@unique([route, key])` at `prisma/schema.prisma:135`, the `P2002` catch at `paymentService.ts:168-188` that re-reads and replays, and PostgreSQL making an insert that collides with an uncommitted unique row wait. So the matching check asks you to name the schema line, the catch block and that behaviour.\n\nThe other choices are ladder items 2 and 3: the outbox-versus-retry lines, and the reads that happen before each of the four transactions.",
+   "excerpts": [
+    {
+     "path": "docs/learning/concepts-demonstrated.md",
+     "lineStart": 118,
+     "lineEnd": 118,
+     "quote": "name the schema line and the catch block that together make it safe"
+    },
+    {
+     "path": "docs/architecture/request-lifecycle.md",
+     "lineStart": 74,
+     "lineEnd": 74,
+     "quote": "In PostgreSQL an `INSERT` that collides with an *uncommitted* row on a unique index waits for the other transaction to finish."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-gc-outbox-vs-retry",
+   "target": "seed:quests:organized-experiment-idempotent-payments-lab/quiz/e408c139f6889cca",
+   "phase": "after",
+   "title": "Outbox and retry are different properties",
+   "body": "An outbox makes the message commit atomically with the business row; retry is about trying again after failure. This repo has the first and not the second. `WebhookDelivery` rows are written in the same create transaction as the payment, and `listPendingWebhookDeliveries` selects only PENDING rows, so a FAILED delivery is never retried. The matching check asks you to point at those two lines.\n\nThe other choices are ladder items 1 and 3: the schema line and catch block behind safe concurrent creates, and the reads before each of the four transactions.",
+   "excerpts": [
+    {
+     "path": "docs/learning/concepts-demonstrated.md",
+     "lineStart": 119,
+     "lineEnd": 119,
+     "quote": "point to the line that makes delivery rows atomic with payments, and the line that prevents failed rows from being retried"
+    },
+    {
+     "path": "docs/learning/concepts-demonstrated.md",
+     "lineStart": 103,
+     "lineEnd": 103,
+     "quote": "the same shape as a transactional outbox: the \"message\" commits atomically with the business row"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}

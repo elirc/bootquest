@@ -1,0 +1,456 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "organized-experiment-idempotent-payments-lab",
+ "sha": "7e9832bab90cba8b26fffebb884edc0a7397cee0",
+ "guides": [
+  "docs/learning/concepts-demonstrated.md",
+  "docs/learning/flow-traces.md",
+  "docs/learning/testing-rationale.md",
+  "docs/architecture/auth-and-permissions.md",
+  "docs/architecture/request-lifecycle.md"
+ ],
+ "items": [
+  {
+   "id": "q01-concurrent-same-key",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/flow-traces.md",
+    "lines": {
+     "start": 85,
+     "end": 96
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/paymentService.ts",
+     "lineStart": 86,
+     "lineEnd": 95
+    },
+    {
+     "path": "src/services/paymentService.ts",
+     "lineStart": 168,
+     "lineEnd": 185
+    },
+    {
+     "path": "prisma/schema.prisma",
+     "lineStart": 135,
+     "lineEnd": 135
+    }
+   ],
+   "prompt": "An API client retries POST /api/payments with the same Idempotency-Key and body while request 1 is still inside its transaction. What happens to request 2?",
+   "answer": "Its insert waits on the unique index, fails with P2002, then replays the stored 202 body",
+   "distractors": [
+    "Both requests create a payment, since the pre-read at line 68 ran before either one committed",
+    "It gets 409 IDEMPOTENCY_REQUEST_IN_PROGRESS, because the pre-read sees the IN_PROGRESS row",
+    "Prisma retries its transaction in a loop; it gives up once request 1 has rolled back"
+   ],
+   "explanation": "The pre-read at paymentService.ts:68 misses (request 1 has not committed). Request 2's insert at :88 collides with the uncommitted row on @@unique([route, key]) and waits; after request 1 commits it fails with P2002, the catch re-reads the COMPLETED record (:173-184) and buildCompletedReplay returns the original body with replayed: true."
+  },
+  {
+   "id": "q02-same-key-new-amount",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/request-lifecycle.md",
+    "lines": {
+     "start": 66,
+     "end": 66
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/paymentService.ts",
+     "lineStart": 66,
+     "lineEnd": 77
+    }
+   ],
+   "prompt": "A client reuses a completed Idempotency-Key but changes amountMinor from 500 to 501. What does createPaymentWithIdempotency return?",
+   "answer": "409 IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD before any transaction opens",
+   "distractors": [
+    "A 202 replay of the first payment, as only the key is looked up and compared",
+    "A second payment for 501, because a different body hash always means a new request",
+    "400 MISSING_IDEMPOTENCY_KEY; a completed key cannot be used a second time"
+   ],
+   "explanation": "The stored record is found by (route, key) and its requestHash differs from the new fingerprint (paymentService.ts:71), so the service throws 409 before opening any transaction. Changing amountMinor by 1 changes the hash (scratch check C2)."
+  },
+  {
+   "id": "q03-currency-normalized",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/concepts-demonstrated.md",
+    "lines": {
+     "start": 67,
+     "end": 67
+    }
+   },
+   "cites": [
+    {
+     "path": "src/lib/validation/paymentSchemas.ts",
+     "lineStart": 18,
+     "lineEnd": 18
+    },
+    {
+     "path": "src/lib/idempotency/requestFingerprint.ts",
+     "lineStart": 9,
+     "lineEnd": 29
+    }
+   ],
+   "prompt": "Two requests share one key. The first sends currency \"USD\", the retry sends \" usd\" with every other field equal. How is the retry treated?",
+   "answer": "As a replay, since zod trims then upper-cases currency before hashing",
+   "distractors": [
+    "As a mismatch: 409, since the raw JSON bytes of the two bodies are different",
+    "As invalid input, rejected 400 because \" usd\" is four characters, not three",
+    "As a fresh payment, because currency is left out of the request fingerprint"
+   ],
+   "explanation": "createPaymentSchema declares currency z.string().trim().length(3).transform(toUpperCase) (paymentSchemas.ts:18), and the service hashes the PARSED body, so both requests fingerprint the same object."
+  },
+  {
+   "id": "q04-ui-new-key",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/flow-traces.md",
+    "lines": {
+     "start": 60,
+     "end": 60
+    }
+   },
+   "cites": [
+    {
+     "path": "src/hooks/usePaymentActions.ts",
+     "lineStart": 29,
+     "lineEnd": 35
+    }
+   ],
+   "prompt": "In the admin console a create request times out, and the user clicks Create again with the same form values. What does the server see?",
+   "answer": "A brand-new Idempotency-Key, so a second payment can be created",
+   "distractors": [
+    "The same key as before, so the server replays the first payment",
+    "No key at all on the retry, which the server rejects with a 400 error",
+    "A 409 IN_PROGRESS while the first request is still committing"
+   ],
+   "explanation": "useCreatePayment calls crypto.randomUUID() inside mutationFn (usePaymentActions.ts:32), so every submit carries a fresh key and the browser UI never benefits from replay."
+  },
+  {
+   "id": "q05-refund-race-60",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/request-lifecycle.md",
+    "lines": {
+     "start": 123,
+     "end": 123
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/refundService.ts",
+     "lineStart": 25,
+     "lineEnd": 36
+    }
+   ],
+   "prompt": "Two 60-unit refunds for one 100-unit SUCCEEDED payment are submitted at the same moment. What is the end state?",
+   "answer": "Both succeed, refunding 120 in total, since each read a refunded total of 0",
+   "distractors": [
+    "The second one fails REFUND_AMOUNT_EXCEEDS_CAPTURE inside its transaction",
+    "One waits on the payment row lock, then is rejected with a 409 conflict",
+    "Both succeed, and each one flips the payment to REFUNDED on its own"
+   ],
+   "explanation": "findPaymentById, sumSuccessfulRefundsForPayment and assertRefundAllowed all run before the transaction at refundService.ts:36, with no row lock and no schema bound on the sum. 0 + 60 never equals 100, so neither flips the payment (Finding L2, check C9)."
+  },
+  {
+   "id": "q06-refund-race-50",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/flow-traces.md",
+    "lines": {
+     "start": 117,
+     "end": 117
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/refundService.ts",
+     "lineStart": 31,
+     "lineEnd": 32
+    },
+    {
+     "path": "src/services/refundService.ts",
+     "lineStart": 65,
+     "lineEnd": 76
+    }
+   ],
+   "prompt": "Two 50-unit refunds for a 100-unit SUCCEEDED payment race each other and both succeed. Which status does the payment end with?",
+   "answer": "SUCCEEDED, because each computed fullyRefunded from a stale total of 0",
+   "distractors": [
+    "REFUNDED, since the second refund brings the refunded total up to 100",
+    "FAILED; the state machine rejects the second refund as a duplicate",
+    "PENDING, until a reconciliation run recomputes the refunded total itself"
+   ],
+   "explanation": "fullyRefunded is refundedAmount + refund.amountMinor === payment.amountMinor (refundService.ts:65), where refundedAmount was read before the transaction. Both see 0 + 50, so the payment stays SUCCEEDED with the full amount refunded (check C10)."
+  },
+  {
+   "id": "q07-support-reconciliation",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/auth-and-permissions.md",
+    "lines": {
+     "start": 65,
+     "end": 65
+    }
+   },
+   "cites": [
+    {
+     "path": "src/lib/auth/guards.ts",
+     "lineStart": 28,
+     "lineEnd": 35
+    },
+    {
+     "path": "src/app/api/admin/reconciliation/run/route.ts",
+     "lineStart": 6,
+     "lineEnd": 16
+    }
+   ],
+   "prompt": "A SUPPORT user calls POST /api/admin/reconciliation/run directly. What does the client receive?",
+   "answer": "An unstructured error, as the 403 RouteError escapes the handler's try",
+   "distractors": [
+    "A JSON 403 body whose error.code is FORBIDDEN, produced for it by jsonError()",
+    "A redirect to /, the page guard's branch for a missing permission",
+    "202 with a run summary, as SUPPORT holds the PAYMENT_READ_ANY grant"
+   ],
+   "explanation": "withRouteAuth calls requirePermission at guards.ts:32, before handler(...) runs, so the throw happens outside the try/catch that would call jsonError (Finding A1, check C12)."
+  },
+  {
+   "id": "q08-rejected-webhook-trace",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/concepts-demonstrated.md",
+    "lines": {
+     "start": 77,
+     "end": 77
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/webhookService.ts",
+     "lineStart": 53,
+     "lineEnd": 67
+    },
+    {
+     "path": "src/services/webhookService.ts",
+     "lineStart": 123,
+     "lineEnd": 127
+    }
+   ],
+   "prompt": "A provider webhook asks to move a FAILED payment to SUCCEEDED. Which record of the rejection survives in the database?",
+   "answer": "None, as the REJECTED write rolls back with the event row it marks",
+   "distractors": [
+    "A WebhookEvent row with processingStatus REJECTED and the error message",
+    "The provider mirror moves to SUCCEEDED while the payment itself stays FAILED",
+    "A WEBHOOK_RECEIVED payment event, as it was written before the guard threw"
+   ],
+   "explanation": "assertAllowedPaymentTransition throws 409 inside the transaction; the catch at webhookService.ts:123-127 writes REJECTED through tx and rethrows, so Prisma rolls back that write, the event row, the mirror update and the WEBHOOK_RECEIVED event (Finding L3)."
+  },
+  {
+   "id": "q09-forged-webhook",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/request-lifecycle.md",
+    "lines": {
+     "start": 129,
+     "end": 129
+    }
+   },
+   "cites": [
+    {
+     "path": "src/app/api/webhooks/provider/route.ts",
+     "lineStart": 4,
+     "lineEnd": 13
+    },
+    {
+     "path": "src/lib/domain/paymentStateMachine.ts",
+     "lineStart": 10,
+     "lineEnd": 15
+    }
+   ],
+   "prompt": "An unauthenticated caller posts status \"REFUNDED\" for a real prov_pay_ id whose payment is SUCCEEDED. What happens?",
+   "answer": "The payment is moved to REFUNDED while the Refund table stays empty",
+   "distractors": [
+    "401 UNAUTHENTICATED, as the webhook route sits behind withRouteAuth",
+    "409 INVALID_PAYMENT_TRANSITION, because that move is not permitted",
+    "Its zod payload schema rejects it with 400 VALIDATION_ERROR"
+   ],
+   "explanation": "The webhook route has no guard, signature or schema (route.ts:4-10), and SUCCEEDED -> REFUNDED is an allowed edge (paymentStateMachine.ts:12). The audit trail shows actor provider-webhook (Finding L5, Flow 10)."
+  },
+  {
+   "id": "q10-failed-delivery-retry",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/request-lifecycle.md",
+    "lines": {
+     "start": 127,
+     "end": 127
+    }
+   },
+   "cites": [
+    {
+     "path": "src/repositories/webhookRepository.ts",
+     "lineStart": 29,
+     "lineEnd": 37
+    },
+    {
+     "path": "src/repositories/webhookRepository.ts",
+     "lineStart": 53,
+     "lineEnd": 65
+    }
+   ],
+   "prompt": "A WebhookDelivery fails and is marked FAILED with nextAttemptAt set 60 seconds ahead. When is it delivered again?",
+   "answer": "Never, because the relay query selects PENDING rows alone",
+   "distractors": [
+    "On the next Deliver click, but not before nextAttemptAt has passed",
+    "After 60 seconds, by a timer that runs inside the provider simulator",
+    "Up to 5 times; after that it moves to a dead-letter table"
+   ],
+   "explanation": "markWebhookDeliveryFailed schedules nextAttemptAt (webhookRepository.ts:62), but the relay query filters status: PENDING only and nothing reads nextAttemptAt (Finding L4)."
+  },
+  {
+   "id": "q11-admin-vs-ops",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/auth-and-permissions.md",
+    "lines": {
+     "start": 13,
+     "end": 13
+    }
+   },
+   "cites": [
+    {
+     "path": "src/lib/permissions.ts",
+     "lineStart": 20,
+     "lineEnd": 37
+    }
+   ],
+   "prompt": "In this codebase, which permission does ADMIN hold that OPS does not?",
+   "answer": "Nothing extra, since the two roles list the same five permissions",
+   "distractors": [
+    "RECONCILIATION_RUN, which OPS may view but not start",
+    "PAYMENT_REFUND, since OPS can only request refunds, not issue them",
+    "WEBHOOK_DELIVER, the one operational grant that OPS lacks"
+   ],
+   "explanation": "rolePermissions gives OPS and ADMIN identical lists: create, read any, refund, deliver webhooks, run reconciliation (permissions.ts:23-36), so admin grants nothing extra."
+  },
+  {
+   "id": "q12-global-key",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/auth-and-permissions.md",
+    "lines": {
+     "start": 71,
+     "end": 71
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/paymentService.ts",
+     "lineStart": 66,
+     "lineEnd": 80
+    },
+    {
+     "path": "prisma/schema.prisma",
+     "lineStart": 135,
+     "lineEnd": 135
+    }
+   ],
+   "prompt": "User A and user B each send POST /api/payments with the same Idempotency-Key and an identical body, A first. What does B get?",
+   "answer": "A replay carrying user A's paymentId instead of a payment of its own",
+   "distractors": [
+    "A 409, because the stored record belongs to a different user than B",
+    "A new payment for B, since the fingerprint includes session.userId",
+    "403 FORBIDDEN_OWNER_OVERRIDE from resolvePaymentOwnerForCreate()"
+   ],
+   "explanation": "IdempotencyRecord is unique on (route, key) and the fingerprint hashes only the body (paymentService.ts:67), so B's request matches A's COMPLETED record and is replayed (Finding A4)."
+  },
+  {
+   "id": "f01-create-transaction",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/architecture/request-lifecycle.md",
+    "lines": {
+     "start": 67,
+     "end": 71
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/paymentService.ts",
+     "lineStart": 86,
+     "lineEnd": 166
+    }
+   ],
+   "front": "What runs inside the single create-payment transaction, in order?",
+   "back": "Insert the IN_PROGRESS idempotency record; resolve and check the owner (404 OWNER_NOT_FOUND); create the PENDING payment; PAYMENT_CREATED event; dispatch to the provider simulator (mirror, PROVIDER_ACCEPTED, WebhookDelivery unless PARTIAL_SUCCESS); mark the record COMPLETED with 202 and the body. Any throw rolls back all of it, including the idempotency row."
+  },
+  {
+   "id": "f02-transitions",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/learning/concepts-demonstrated.md",
+    "lines": {
+     "start": 82,
+     "end": 82
+    }
+   },
+   "cites": [
+    {
+     "path": "src/lib/domain/paymentStateMachine.ts",
+     "lineStart": 10,
+     "lineEnd": 23
+    }
+   ],
+   "front": "The payment state machine: allowed edges and the same-state rule",
+   "back": "PENDING -> SUCCEEDED or FAILED; SUCCEEDED -> REFUNDED; FAILED and REFUNDED are terminal. Same-state is a no-op (returns early). Every other pair is 409 INVALID_PAYMENT_TRANSITION. 7 of 16 pairs pass: 4 self-loops + 3 edges."
+  },
+  {
+   "id": "f03-unique-is-the-guard",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/architecture/request-lifecycle.md",
+    "lines": {
+     "start": 74,
+     "end": 74
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/paymentService.ts",
+     "lineStart": 68,
+     "lineEnd": 68
+    },
+    {
+     "path": "prisma/schema.prisma",
+     "lineStart": 135,
+     "lineEnd": 135
+    }
+   ],
+   "front": "What really makes duplicate creates safe: the pre-read or the constraint?",
+   "back": "The @@unique([route, key]) constraint. The findIdempotencyRecord pre-read at paymentService.ts:68 is outside any transaction and is only an optimization; the insert inside the transaction blocks on an uncommitted duplicate and fails with P2002, which the catch turns into a replay."
+  },
+  {
+   "id": "f04-refund-skips-guard",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/learning/concepts-demonstrated.md",
+    "lines": {
+     "start": 40,
+     "end": 40
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/refundService.ts",
+     "lineStart": 65,
+     "lineEnd": 76
+    }
+   ],
+   "front": "Which REFUNDED write skips assertAllowedPaymentTransition()?",
+   "back": "The refund path: refundService.ts:68-75 sets the payment to REFUNDED when the sum equals the amount without calling the transition guard. Only assertRefundAllowed (status SUCCEEDED, amount <= remaining) runs, before the transaction, at line 34."
+  }
+ ]
+}
