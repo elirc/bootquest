@@ -1,0 +1,618 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "notes",
+ "name": "relay-app",
+ "items": [
+  {
+   "key": "seed:notes:relay-app/note/00789904d40cd2ec",
+   "provenance": {
+    "repo": "relay-app",
+    "sha": "79e71dcbc4acc5d5bbae401cda5c2bc75b0eedaf",
+    "path": "server/Relay.Infrastructure/Scheduling/ScheduleDispatcher.cs",
+    "lines": {
+     "start": 42,
+     "end": 52
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-advance-first",
+   "pack": "relay-app",
+   "target": "seed:quests:relay-app/quiz/84eec9ce162a6012",
+   "phase": "after",
+   "title": "Why the scheduler moves the next run time before running",
+   "body": "In `ScheduleDispatcher`, for each due schedule the code first sets `LastRunAtUtc = now` and `NextRunAtUtc = ComputeNextRun(...)`, and only then calls `RunFlowAsync`. The comment says why: \"Advance first so a mis-firing flow can't wedge the schedule.\" *Wedge* means get stuck. If the run came first and kept failing, the schedule would still look due and would fire again on every tick. Advancing first means each due slot is consumed once, whatever the flow does.\n\nWhy the others are wrong:\n- The flow does not read its own next run time; the order is about the schedule.\n- The save happens once at the end of the tick, after the runs, so it is not \"save before dispatch\".\n- Missed slots are not replayed one by one: a schedule fires once and re-arms to the next future slot.\n\n(Finding 10 notes a limit: a throw before that final save loses the advance.)",
+   "excerpts": [
+    {
+     "path": "server/Relay.Infrastructure/Scheduling/ScheduleDispatcher.cs",
+     "lineStart": 42,
+     "lineEnd": 52,
+     "quote": "{ // Advance first so a mis-firing flow can't wedge the schedule. schedule.LastRunAtUtc = now; schedule.NextRunAtUtc = ComputeNextRun(schedule.CronExpression, now); schedule.UpdatedAtUtc = now; if (schedule.Flow?.IsEnabled == true) { await _executor.RunFlowAsync(schedule.FlowId, RunTrigger.Schedule, null, ct); triggered++; }"
+    },
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 124,
+     "lineEnd": 125,
+     "quote": "A schedule that missed many slots fires **once** per tick and re-arms to the next future slot."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:relay-app/note/01b9538dfa0d0764",
+   "provenance": {
+    "repo": "relay-app",
+    "sha": "79e71dcbc4acc5d5bbae401cda5c2bc75b0eedaf",
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 3,
+     "end": 7
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r01-start-here",
+   "pack": "relay-app",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: Relay's flows, runs and the docs to read in order",
+   "body": "Relay is a small Zapier-style server (ASP.NET Core + EF Core + SQLite) with a React client. A **flow** is a trigger plus ordered action **steps**. Executing a flow creates a **run**, with one log line per step.\n\nRead in this order:\n\n1. **docs/architecture.md** from the top. \"Monorepo layout\" shows the three server projects; \"Executor & the ports design\" and \"Retry, backoff & dead-letter model\" explain how a run moves through its steps.\n2. The same file's \"Scheduling over the clock port\", \"Secrets: envelope encryption + rotation\", \"Webhook verification\" and \"Concurrency model\". Each is a short list of rules; the quizzes test those rules one by one.\n3. **docs/adr/0001** (ports-based executor) and **docs/adr/0004** (write-only secrets): the decision and its known gaps.\n4. **docs/testing.md**: how the tests are built and what they do not cover.\n5. The \"Senior review findings\" table at the end of architecture.md: real weaknesses, each with a file and line to open.\n\nRead each rule, then open the code it names (for example `FlowExecutor.cs` or `ScheduleDispatcher.cs`) and find the line that makes it true.",
+   "excerpts": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 3,
+     "lineEnd": 7,
+     "quote": "relay-app is a Zapier-style integrations platform: workspaces install **connectors** as **connections**, compose them into **flows** (a trigger + ordered action steps), and execute those flows as **runs** — manually, on a **schedule**, or via inbound **webhooks** — with per-step logging, retries, a dead-letter queue, metrics, and envelope-encrypted secrets."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The main guide: every rule the quizzes test lives here."
+    },
+    {
+     "path": "docs/adr/README.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Index of all ten decision records, for the why behind each rule."
+    },
+    {
+     "path": "docs/testing.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Test kinds, fakes and the honest list of untested behaviour."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:relay-app/note/202cb1bf9d605e3c",
+   "provenance": {
+    "repo": "relay-app",
+    "sha": "79e71dcbc4acc5d5bbae401cda5c2bc75b0eedaf",
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 204,
+     "end": 209
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-stale-token-409",
+   "pack": "relay-app",
+   "target": "seed:quests:relay-app/quiz/5dcfd829e121a4d4",
+   "phase": "after",
+   "title": "Why a stale concurrency token changes nothing",
+   "body": "`Flow.ConcurrencyToken` gets a fresh GUID on every update. A client sends back the token it last saw as `expectedConcurrencyToken`. If that no longer matches, someone else saved in between, and the PUT \"short-circuits to **409** before any work\". 409 means Conflict. Because it stops before any work, none of the new steps are written: \"A losing writer applies **nothing** — no partial step replacement leaks through.\" The client must reload and try again itself.\n\nWhy the others are wrong:\n- Steps are not replaced while only the name is rejected; nothing at all is applied.\n- The server does not retry for you; it returns 409.\n- There is no merging of two writers' steps.\n\n(Separate point from finding 5: if the client leaves the token out entirely, the update is last-write-wins.)",
+   "excerpts": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 204,
+     "lineEnd": 209,
+     "quote": "- **Optimistic concurrency on flows** — `Flow.ConcurrencyToken` is an EF concurrency token, rotated to a fresh GUID on every update. `PUT` accepts an `expectedConcurrencyToken`; a mismatch short-circuits to **409** before any work, and a `DbUpdateConcurrencyException` (a writer that beat us between load and save) also maps to **409**. A losing writer applies **nothing** — no partial step replacement leaks through."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:relay-app/note/2d534f38c2acd8f9",
+   "provenance": {
+    "repo": "relay-app",
+    "sha": "79e71dcbc4acc5d5bbae401cda5c2bc75b0eedaf",
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 158,
+     "end": 162
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-rotate-reseal",
+   "pack": "relay-app",
+   "target": "seed:quests:relay-app/quiz/d27f4d35d8979455",
+   "phase": "after",
+   "title": "What rotating a connection secret changes and keeps",
+   "body": "Rotation is written as `Rotate = Protect(Reveal(envelope))`. Read it from the inside out: `Reveal` decrypts the stored envelope back to the plaintext secret, and `Protect` encrypts that same plaintext again. `Protect` always asks the KMS for a brand-new data key. So the stored ciphertext changes, but the secret value is the same. The point is to stop relying on the old data key while keeping the credential working.\n\nWhy the others are wrong:\n- Nothing is changed at the connector's side; the value is preserved. (Re-issuing a *webhook signing* secret is different: that mints a fresh one.)\n- The secret is not deleted; it is re-encrypted in place.\n- A new data key is used, not the old one with a new nonce.",
+   "excerpts": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 158,
+     "lineEnd": 162,
+     "quote": "- **Rotation** (`Rotate = Protect(Reveal(envelope))`) re-seals the same plaintext under a brand-new data key, so the stored ciphertext changes while the value is preserved. `POST .../rotate-secret` re-encrypts a connection's secret; re-issuing a webhook signing secret mints a fresh one (old signatures stop verifying)."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:relay-app/note/31f891c90a0317a8",
+   "provenance": {
+    "repo": "relay-app",
+    "sha": "79e71dcbc4acc5d5bbae401cda5c2bc75b0eedaf",
+    "path": "docs/adr/0001-ports-based-executor.md",
+    "lines": {
+     "start": 14,
+     "end": 17
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r02-ports",
+   "pack": "relay-app",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: ports and adapters, and why runs never call the network",
+   "body": "A **port** is an interface the core code depends on. An **adapter** is a class that implements it. The executor only knows `IActionDispatcher`; it does not know whether a real service, a simulation or a test fake sits behind it.\n\nRelay uses this idea everywhere something is slow, random or external:\n\n- `IActionDispatcher`: the app plugs in `SimulatedActionDispatcher`, tests plug in `FakeActionDispatcher` with a call counter.\n- `IClock`: tests use `FakeClock`, which they can set and move forward.\n- `IDelayer`: tests use `FakeDelayer`, which records waits without sleeping.\n- `IKeyManagementService`: tests use `FakeKms`.\n\nWhy it matters: a test can check exactly which steps ran and which waits were requested, with no network and no real time passing. When you read a rule like \"backoff\" or \"due schedules\", ask which port it goes through, then look at the matching fake in docs/testing.md to see how the rule is tested.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0001-ports-based-executor.md",
+     "lineStart": 14,
+     "lineEnd": 17,
+     "quote": "Define execution as a **port**: `IActionDispatcher.DispatchAsync(request)` returns a `StepExecutionResult`. `FlowExecutor` (the `IFlowExecutor`) depends only on that port. The app supplies `SimulatedActionDispatcher`, which returns a deterministic success per connector/action and fails when a step's config JSON contains"
+    },
+    {
+     "path": "docs/testing.md",
+     "lineStart": 41,
+     "lineEnd": 46,
+     "quote": "hands out fresh contexts to defeat the identity map when asserting round trips. - **`FakeClock`** (`IClock`) — a settable/advanceable clock for deterministic scheduling, webhook-freshness, and metrics-window tests. - **`FakeKms`** (`IKeyManagementService`) — wraps data keys by XOR against a fixed mask; exercises the envelope round trip + rotation with no crypto dependency. - **`FakeActionDispatcher`** (`IActionDispatcher`) — a per-request `Handler` and a"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/adr/0001-ports-based-executor.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The full decision, consequences and where it lives in code."
+    },
+    {
+     "path": "docs/adr/0002-cron-over-a-clock-port.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The same idea applied to time and scheduling."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:relay-app/note/3495b1ca8906dc3a",
+   "provenance": {
+    "repo": "relay-app",
+    "sha": "79e71dcbc4acc5d5bbae401cda5c2bc75b0eedaf",
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 230,
+     "end": 232
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-nullable-dto",
+   "pack": "relay-app",
+   "target": "seed:quests:relay-app/quiz/64f0ee425236247d",
+   "phase": "after",
+   "title": "Why request records use nullable value types",
+   "body": "In C#, a value type such as `int` or `bool` always has a value. If a JSON request leaves the field out, a plain `int` gets its default value 0, and validation cannot tell \"the client sent 0\" from \"the client sent nothing\". Making the field `int?` (nullable) means a missing field stays `null`, so validation can see that it is missing and the API answers 400 Bad Request. The doc: value-type fields are nullable \"so a missing value is a `400`, not a silent bind to `default`.\"\n\nWhy the others are wrong:\n- C# records can hold non-nullable struct fields; that is not the reason.\n- The goal is the opposite of allowing omission: a missing required value is rejected.\n- This is about request validation, not database columns.",
+   "excerpts": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 230,
+     "lineEnd": 232,
+     "quote": "- **Record-DTO validation** — validation attributes target **constructor parameters**; value-type request fields are **nullable** so a missing value is a `400`, not a silent bind to `default`."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:relay-app/note/36f9a7246b58b9eb",
+   "provenance": {
+    "repo": "relay-app",
+    "sha": "79e71dcbc4acc5d5bbae401cda5c2bc75b0eedaf",
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 236,
+     "end": 238
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-tenancy-404",
+   "pack": "relay-app",
+   "target": "seed:quests:relay-app/quiz/ee2fdf2e87cbbf79",
+   "phase": "after",
+   "title": "Why a foreign workspace answers 404, not 403",
+   "body": "`WorkspaceAuthorizationFilter` runs two checks in a fixed order. First **tenancy**: does this user belong to the workspace in the URL? If not, the answer is 404 Not Found, and this happens \"before role\". Only for members does the second check run: does their workspace role allow this action? If not, 403 Forbidden.\n\nWhy the others are wrong:\n- 401 is for an unauthenticated request; this user has a valid JWT.\n- The role alone does not grant access; tenancy is checked first.\n- The role check does not run first; and 403 is for members whose role is too low.",
+   "excerpts": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 236,
+     "lineEnd": 238,
+     "quote": "- **Auth pipeline** — JWT bearer with a fallback \"require authenticated user\" policy; a global `WorkspaceAuthorizationFilter` enforces tenancy (foreign workspace → **404**, before role) and role (`RequireWorkspaceRole` → **403**)."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:relay-app/note/384cac27cdb76649",
+   "provenance": {
+    "repo": "relay-app",
+    "sha": "79e71dcbc4acc5d5bbae401cda5c2bc75b0eedaf",
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 59,
+     "end": 60
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-one-exec-path",
+   "pack": "relay-app",
+   "target": "seed:quests:relay-app/quiz/f118d2af2defa141",
+   "phase": "after",
+   "title": "Why every trigger shares one execution path",
+   "body": "`FlowExecutor` is \"the sole `IFlowExecutor`\". Manual runs, schedules, webhooks and replays all call the same `RunFlowAsync`; they only pass a different trigger, payload and maybe `fromStepOrder`. The executor sends each step through the `IActionDispatcher` port. Because it depends only on that port, \"the same code path runs a manual trigger, a scheduled tick, a webhook delivery, and a dead-letter replay.\" In tests, `FakeActionDispatcher` takes the dispatcher's place.\n\nWhy the others are wrong:\n- Replays do not use a webhook path; they call the same executor with `fromStepOrder`.\n- There are no per-trigger subclasses; there is one executor.\n- There is no queued path; the webhook controller and the scheduler both await `RunFlowAsync` directly.",
+   "excerpts": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 59,
+     "lineEnd": 60,
+     "quote": "Flow execution never makes a real external call. `FlowExecutor` (the sole `IFlowExecutor`) drives steps through the `IActionDispatcher` **port**:"
+    },
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 81,
+     "lineEnd": 82,
+     "quote": "Because the executor depends only on the port, the same code path runs a manual trigger, a scheduled tick, a webhook delivery, and a dead-letter replay."
+    },
+    {
+     "path": "server/Relay.Api/Controllers/HooksController.cs",
+     "lineStart": 99,
+     "lineEnd": 100,
+     "quote": "var run = await _executor.RunFlowAsync( webhook.FlowId, RunTrigger.Webhook, body, ct, idempotencyKey: idempotencyKey);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:relay-app/note/6cf7cb270a4f2687",
+   "provenance": {
+    "repo": "relay-app",
+    "sha": "79e71dcbc4acc5d5bbae401cda5c2bc75b0eedaf",
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 171,
+     "end": 174
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-hmac-body",
+   "pack": "relay-app",
+   "target": "seed:quests:relay-app/quiz/8f6936ef635d9ffe",
+   "phase": "after",
+   "title": "What signing the body adds to a webhook signature",
+   "body": "The signature is an HMAC (a keyed hash) over the text `{timestamp}.{body}`, made with a secret only the sender and Relay know. An attacker who captures one request can resend it, but if they change the body, the signature no longer matches and Relay answers 401. So including the body protects the content of a captured request.\n\nWhy the others are wrong:\n- Resending the *same* body still has a valid signature. That replay is limited by other checks: the ±5 minute timestamp window and the `Idempotency-Key`. Finding 7 says signed webhooks can be replayed within that window.\n- The URL token is still the credential; the doc calls it \"the unguessable token\".\n- An HMAC proves who sent it and that the content was not changed. It does not encrypt anything, so it is no reason to skip TLS.",
+   "excerpts": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 171,
+     "lineEnd": 174,
+     "quote": "1. **Signature** — the caller sends `X-Relay-Timestamp` and `X-Relay-Signature`, a lowercase-hex HMAC-SHA256 over `{timestamp}.{body}`. Because the body is part of the signed string, a captured request can't be replayed with a different body. Verification is constant-time (`CryptographicOperations.FixedTimeEquals`)."
+    },
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 176,
+     "lineEnd": 178,
+     "quote": "2. **Timestamp window** — the timestamp must be within ±5 minutes of the clock (absolute drift, so mild forward skew is tolerated). Outside the window → `401` (anti-replay). The check reads the `IClock` port."
+    },
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 168,
+     "lineEnd": 169,
+     "quote": "Inbound webhooks (`POST /api/hooks/{token}`) are public (the unguessable token is the credential) and optionally hardened with a per-endpoint HMAC signing secret:"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:relay-app/note/7c9064594049933e",
+   "provenance": {
+    "repo": "relay-app",
+    "sha": "79e71dcbc4acc5d5bbae401cda5c2bc75b0eedaf",
+    "path": "docs/testing.md",
+    "lines": {
+     "start": 89,
+     "end": 89
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r03-tests-and-gaps",
+   "pack": "relay-app",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: what Relay's tests prove, and what they cannot see",
+   "body": "docs/testing.md sorts the server tests into four kinds: pure domain logic, executor tests over in-memory SQLite with a fake dispatcher, persistence tests (migrations, indexes), and full HTTP tests through `WebApplicationFactory`.\n\nJust as useful is its last section, \"What the suite does not cover\". Every test sends one request at a time. So bugs that only show up when two requests arrive together cannot fail any test. Concurrency is only tested as *staleness*: a request carrying an old token.\n\nThis matters when you read the \"Senior review findings\" table in architecture.md. Some findings are about races and crashes, and the suite gives no signal for them. A green test run means the documented single-request rules hold; it says nothing about timing between requests. When a quiz describes two things happening \"at the same moment\", reason from the code (what is checked, and when the save happens), not from the fact that tests pass.",
+   "excerpts": [
+    {
+     "path": "docs/testing.md",
+     "lineStart": 89,
+     "lineEnd": 89,
+     "quote": "There is no `Task.WhenAll` in `server/Relay.Tests`. Concurrency is tested only as *staleness* (a PUT with an old token)"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/testing.md",
+     "lineStart": 85,
+     "lineEnd": 95,
+     "why": "The full list of untested behaviour."
+    },
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 244,
+     "lineEnd": 262,
+     "why": "The senior review findings table, each with a file and line."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:relay-app/note/83ed1484c0b25f3e",
+   "provenance": {
+    "repo": "relay-app",
+    "sha": "79e71dcbc4acc5d5bbae401cda5c2bc75b0eedaf",
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 210,
+     "end": 213
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-executedelete-order",
+   "pack": "relay-app",
+   "target": "seed:quests:relay-app/quiz/bfdf4194c9600a14",
+   "phase": "after",
+   "title": "Why steps are deleted with ExecuteDeleteAsync, then inserted",
+   "body": "The database has a unique index on `(FlowId, Order)`: within one flow, no two steps may have the same Order. If you edited steps in place with the change tracker, a save could at some point hold an old row with Order 2 and a new row with Order 2 together, and the unique index would reject the save. Relay avoids that. Inside one transaction, `ExecuteDeleteAsync` deletes all old step rows directly in the database (bypassing the change tracker), and then the new rows are inserted. So the index \"never sees two rows share an order mid-save\". Import uses the same pattern.\n\nWhy the others are wrong:\n- `ExecuteDeleteAsync` deletes rows; it does not renumber anything.\n- The change tracker can delete many rows; the problem is the order of operations against the unique index.\n- Bypassing the change tracker means the deleted rows are not tracked, so they cannot be restored from it.",
+   "excerpts": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 210,
+     "lineEnd": 213,
+     "quote": "- **Ordered step replacement** — a flow's steps are replaced wholesale inside a transaction: `ExecuteDeleteAsync` removes the old rows (bypassing the change tracker) and the new rows are inserted, so the unique `(FlowId, Order)` index never sees two rows share an order mid-save. Import uses the same pattern."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/adr/0006-executedelete-step-replacement.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The decision record behind this pattern."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:relay-app/note/b85d3b19e7e9215a",
+   "provenance": {
+    "repo": "relay-app",
+    "sha": "79e71dcbc4acc5d5bbae401cda5c2bc75b0eedaf",
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 102,
+     "end": 105
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-replay-new-run",
+   "pack": "relay-app",
+   "target": "seed:quests:relay-app/quiz/4dc53bd5627aae3d",
+   "phase": "after",
+   "title": "What replaying a failed run from step 3 really does",
+   "body": "Replay calls the executor again with `fromStepOrder` set to 3. The executor creates a run as it always does, and for each step it skips it \"if step.Order < fromStepOrder\". Steps 1 and 2 are logged as \"Skipped (replay from step N)\" and are not dispatched, so work that already succeeded is not repeated. Dispatch starts at step 3. The doc says plainly: \"Replay produces a new `Run`\".\n\nWhy the others are wrong:\n- The original run is not changed; the replay is a separate run with its own status.\n- Earlier steps are skipped on purpose, so the replay does not re-execute every step.\n- Nothing resumes the old run in place; a new one is created (\"a replay of a replay is just another run\").",
+   "excerpts": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 102,
+     "lineEnd": 105,
+     "quote": "**Replay** re-runs a failed run from a chosen action step: `fromStepOrder` skips every earlier action step (logged \"Skipped (replay from step N)\") and dispatches from that point onward — so already-completed work isn't repeated. Replay produces a new `Run`; a replay of a replay is just another run."
+    },
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 66,
+     "lineEnd": 68,
+     "quote": "├─ creates a Run (status Running) and logs step 0 = the trigger ├─ for each ordered step: │ • skip if step.Order < fromStepOrder (replay)"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:relay-app/note/c0c0382699631c8b",
+   "provenance": {
+    "repo": "relay-app",
+    "sha": "79e71dcbc4acc5d5bbae401cda5c2bc75b0eedaf",
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 142,
+     "end": 146
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-kms-sees-keys",
+   "pack": "relay-app",
+   "target": "seed:quests:relay-app/quiz/a3ae1985f1743a36",
+   "phase": "after",
+   "title": "Why the KMS only ever sees data keys",
+   "body": "Envelope encryption uses two keys. For each secret, `EnvelopeSecretProtector` asks the KMS for a fresh **data key** (DEK). The KMS returns it twice: in plain form and wrapped (encrypted under the master key). The protector encrypts the secret itself locally with AES-GCM using the plain DEK, zeros the plain DEK, and stores only the wrapped DEK next to the ciphertext. The KMS never receives the secret text. The doc: \"It never sees secret payloads — only data keys.\"\n\nWhy the others are wrong:\n- Payloads are not sent to the KMS; the protector encrypts them with the DEK.\n- The master key wraps data keys, not payloads.\n- No payload goes to the KMS for auditing; it only handles data keys.",
+   "excerpts": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 142,
+     "lineEnd": 146,
+     "quote": "plaintext ─► EnvelopeSecretProtector.Protect │ GenerateDataKey() ──► KMS returns { plaintext DEK, wrapped DEK } │ AES-GCM encrypt(plaintext, DEK) → nonce, tag, cipher │ zero the plaintext DEK └► envelope JSON { V, WrappedKey, Nonce, Tag, Cipher }"
+    },
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 150,
+     "lineEnd": 152,
+     "quote": "- **`LocalKeyManagementService`** (the app's KMS stand-in) wraps each data key with AES-GCM under a master key derived (SHA-256) from `Secrets:MasterKey`. It never sees secret payloads — only data keys."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:relay-app/note/dbf14ea4b4e76bae",
+   "provenance": {
+    "repo": "relay-app",
+    "sha": "79e71dcbc4acc5d5bbae401cda5c2bc75b0eedaf",
+    "path": "server/Relay.Api/Controllers/HooksController.cs",
+    "lines": {
+     "start": 86,
+     "end": 100
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-idempotency-race",
+   "pack": "relay-app",
+   "target": "seed:quests:relay-app/quiz/cc9d087b16f6f63f",
+   "phase": "after",
+   "title": "Why two simultaneous duplicate webhooks both run the flow",
+   "body": "`HooksController` does idempotency as \"check, then insert\". First it looks for a run with the same `(FlowId, IdempotencyKey)`. If none is found, it runs the flow. The run is saved only at the end of execution. When two identical requests arrive together, both do the lookup before either has saved, so both find nothing and both run the flow: the side effects happen twice. Then both try to save, and the unique index lets only one in. The second save fails and the request returns 500. That is review finding 1, rated High.\n\nWhy the others are wrong:\n- The lookup uses `AsNoTracking()` and takes no row lock, so nothing waits.\n- The unique index acts only at save time, after the second run has already executed its steps.\n- There is no cleanup job; the second run is never stored.",
+   "excerpts": [
+    {
+     "path": "server/Relay.Api/Controllers/HooksController.cs",
+     "lineStart": 86,
+     "lineEnd": 100,
+     "quote": "var idempotencyKey = ReadIdempotencyKey(); if (idempotencyKey is not null) { var existing = await _db.Runs.AsNoTracking() .FirstOrDefaultAsync(r => r.FlowId == webhook.FlowId && r.IdempotencyKey == idempotencyKey, ct); if (existing is not null) { await LogDelivery(webhook, true, WebhookDeliveryOutcome.Duplicate, existing.Id, \"Deduplicated by idempotency key.\", ct); await _db.SaveChangesAsync(ct); return Accepted(new { runId = existing.Id, status = existing.Status.ToString(), deduplicated = true }); } } var run = await _executor.RunFlowAsync( webhook.FlowId, RunTrigger.Webhook, body, ct, idempotencyKey: idempotencyKey);"
+    },
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 251,
+     "lineEnd": 251,
+     "quote": "Webhook idempotency is check-then-insert; concurrent duplicates both run the flow, then the second save fails on the unique index → 500."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:relay-app/note/f41ece83e672af76",
+   "provenance": {
+    "repo": "relay-app",
+    "sha": "79e71dcbc4acc5d5bbae401cda5c2bc75b0eedaf",
+    "path": "server/Relay.Infrastructure/Execution/FlowExecutor.cs",
+    "lines": {
+     "start": 132,
+     "end": 138
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-backoff-between",
+   "pack": "relay-app",
+   "target": "seed:quests:relay-app/quiz/413147cb6387e2b1",
+   "phase": "after",
+   "title": "Why three failed attempts mean only two backoff waits",
+   "body": "In `FlowExecutor` the retry loop runs the step, then checks `if (result.Success || attempts >= maxAttempts) break;`. Only after that check does it call `_delayer.DelayAsync(...)`. So with 3 attempts that all fail:\n\n- attempt 1 fails, not the last one, so wait;\n- attempt 2 fails, not the last one, so wait;\n- attempt 3 fails, is the last one, so break with no wait.\n\nThat is two waits, between the attempts only. The doc says the same: backoff applies between attempts, \"never after the final attempt or after a success\".\n\nWhy the others are wrong:\n- Backoff is per step (`step.BackoffSeconds`), inside the step's retry loop, not per run.\n- There is a wait after attempt 1 as well, not only before the final attempt.\n- After the third, final attempt the loop breaks before any wait.",
+   "excerpts": [
+    {
+     "path": "server/Relay.Infrastructure/Execution/FlowExecutor.cs",
+     "lineStart": 132,
+     "lineEnd": 138,
+     "quote": "if (result.Success || attempts >= maxAttempts) break; // Backoff between attempts (instant under a fake delayer in tests). if (step.BackoffSeconds > 0) { await _delayer.DelayAsync(TimeSpan.FromSeconds(step.BackoffSeconds), ct); }"
+    },
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 91,
+     "lineEnd": 94,
+     "quote": "- Between failed attempts the executor waits via the `IDelayer` port (`TaskDelayer` in the app; `FakeDelayer` records requested delays without sleeping in tests). Backoff applies **between** attempts only — never after the final attempt or after a success."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:relay-app/note/f83f661b2759982d",
+   "provenance": {
+    "repo": "relay-app",
+    "sha": "79e71dcbc4acc5d5bbae401cda5c2bc75b0eedaf",
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 97,
+     "end": 100
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-failed-step-skips",
+   "pack": "relay-app",
+   "target": "seed:quests:relay-app/quiz/f81caef80fa83e5e",
+   "phase": "after",
+   "title": "What happens to later steps after a step gives up",
+   "body": "When step 2 uses up all its attempts, the run's status becomes **Failed** and its `Error` is set. The executor still goes through steps 3 and 4, but because \"a prior step already failed\" it does not dispatch them. It writes a log entry for each with status Skipped and the message \"Skipped after an earlier step failed.\" The run is kept, and failed runs are listed at `GET /api/workspaces/{ws}/dead-letter`, where they can be replayed.\n\nWhy the others are wrong:\n- Nothing is queued; the later steps are skipped for this run. Retrying means a replay, which is a new run.\n- Nothing is deleted; the failed run is kept and shows up in dead-letter.\n- The later steps do not run, and there is no \"partially succeeded\" status.",
+   "excerpts": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 97,
+     "lineEnd": 100,
+     "quote": "When a step exhausts its attempts, the run is marked **Failed**, its `Error` is set, and every later step is logged **Skipped** (\"Skipped after an earlier step failed\"). Failed runs surface in the **dead-letter** list (`GET /api/workspaces/{ws}/dead-letter`)."
+    },
+    {
+     "path": "server/Relay.Infrastructure/Execution/FlowExecutor.cs",
+     "lineStart": 102,
+     "lineEnd": 103,
+     "quote": "Status = RunStatus.Skipped, Message = \"Skipped after an earlier step failed.\","
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:relay-app/note/f95bc626a7539454",
+   "provenance": {
+    "repo": "relay-app",
+    "sha": "79e71dcbc4acc5d5bbae401cda5c2bc75b0eedaf",
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 114,
+     "end": 118
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-vixie-cron",
+   "pack": "relay-app",
+   "target": "seed:quests:relay-app/quiz/a24bbd62008a1b14",
+   "phase": "after",
+   "title": "How a cron line with both a date and a weekday matches",
+   "body": "A cron expression has five fields: minute, hour, day-of-month, month, day-of-week. Relay follows **Vixie semantics** (the rule classic Unix cron uses): when both day-of-month and day-of-week are restricted (not `*`), a day matches if **either** one matches. So \"day 1, Monday\" fires on every 1st of the month and on every Monday, not only on a Monday that is also the 1st.\n\nWhy the others are wrong:\n- The expression is valid and matches many days, so it is not rejected. (Even a never-matching one would not loop forever: the search has a bounded horizon.)\n- Day-of-month is not ignored; it is one of the two fields either of which can match.\n- \"Both must match\" is AND; Vixie semantics use OR here.",
+   "excerpts": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 114,
+     "lineEnd": 118,
+     "quote": "- **`CronExpression`** — a standard 5-field parser (minute hour day-of-month month day-of-week) supporting `*`, numbers, lists (`,`), ranges (`a-b`) and steps (`*/n`). Day-of-week accepts `0` or `7` for Sunday. It uses **Vixie semantics**: when both day-of-month and day-of-week are restricted, a day matches if **either** matches. `GetNextOccurrence` searches minute-by-minute in pure UTC"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}
