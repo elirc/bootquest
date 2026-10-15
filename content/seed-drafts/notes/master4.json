@@ -38,14 +38,8 @@
    "target": "pack",
    "phase": "before",
    "title": "On hand, reserved and available-to-promise",
-   "body": "Three numbers describe one SKU in one warehouse:\n\n- **onHand**: units physically there.\n- **reserved**: units already promised to orders but not shipped yet.\n- **available-to-promise (ATP)**: what a *new* order may still claim, computed as `onHand - reserved` and never allowed below zero.\n\nWith 42 on hand and 20 reserved, ATP is 22. Reserving raises `reserved`; shipping later lowers both `onHand` and `reserved`.\n\nAn order is made of lines, and nothing stops two lines naming the same SKU. Those lines do not each get their own 22: they compete for the same stock. Keep that idea of a shared **demand pool** in mind when you read `planReservation`: look for where it adds up quantities per SKU before comparing with ATP, and what it does with a line whose quantity is not a sensible whole number.",
+   "body": "Three numbers describe one SKU in one warehouse:\n\n- **onHand**: units physically there.\n- **reserved**: units already promised to orders but not shipped yet.\n- **available-to-promise (ATP)**: what a *new* order may still claim. Find `availableToPromise` in `src/shared/inventoryRules.ts` and read exactly how it is computed, including what it does when the data is odd.\n\nThe concepts guide's first example uses 42 on hand and 20 reserved. Work out the ATP yourself, then follow what reserving and shipping each do to the two stored numbers.\n\nAn order is made of lines, and nothing stops two lines naming the same SKU. Before reading `planReservation`, decide on paper how *you* would judge two lines for one SKU against one ATP. Then read the function and compare: where does it compare quantities with ATP, per line or per SKU, and what does it do with a line whose quantity is not a sensible whole number?",
    "excerpts": [
-    {
-     "path": "src/shared/inventoryRules.ts",
-     "lineStart": 25,
-     "lineEnd": 27,
-     "quote": "export function availableToPromise(balance: Pick<InventoryBalance, 'onHand' | 'reserved'>) { return Math.max(0, balance.onHand - balance.reserved) }"
-    },
     {
      "path": "astraupskill/02-CONCEPTS.md",
      "lineStart": 3,
@@ -67,19 +61,13 @@
    "target": "pack",
    "phase": "before",
    "title": "Plan, apply, transaction: three different jobs",
-   "body": "The reservation code has three layers of protection, and each does a different job:\n\n1. **Planning** (`planReservation`) is a pure function. It looks at the order lines and the balances and returns a *decision*: ok or not, plus a list of failures to report back.\n2. **Applying** (`applyReservation`) is a guarded state change on one balance. The service calls it again inside the write loop, as a second check.\n3. **The transaction** (`db.$transaction` in the service) makes the many writes (stock, reservation rows, order status, event, outbox, audit) succeed or fail together.\n\nThe concepts guide is careful about what these do *not* give you. Both checks compare against the balances read at the start, and the stock update itself has no condition. Read that paragraph, then read the service from line 36 to the end of the transaction and label each write with which layer protects it.",
+   "body": "The reservation code has three layers, and each does a different job:\n\n1. **Planning** (`planReservation`) is a pure function. It looks at the order lines and the balances and returns a *decision*.\n2. **Applying** (`applyReservation`) is a guarded state change on one balance. Find where the service calls it.\n3. **The transaction** (`db.$transaction` in the service) groups the many writes: stock, reservation rows, order status, event, outbox, audit.\n\nCompare how the two rule functions report a problem: does each return something or throw, and why might a pure decision and a state change differ there?\n\nThe concepts guide is careful about what these layers do *not* give you. Before reading that paragraph, read the service from line 36 to the end of the transaction and note, for each write, which values it relies on and when they were read. Then ask what two requests running at the same moment would each see. Finally, follow the path for a refused order and list every write it still makes.",
    "excerpts": [
     {
      "path": "astraupskill/02-CONCEPTS.md",
      "lineStart": 13,
      "lineEnd": 13,
      "quote": "The shared helper makes the decision deterministic and reusable; the transaction makes the multi-record workflow atomic."
-    },
-    {
-     "path": "src/server/modules/orders/orders.service.ts",
-     "lineStart": 91,
-     "lineEnd": 93,
-     "quote": "// The pure rule is the guard at the write, not only at the plan: it throws (and the // transaction rolls back) if the aggregate would exceed available-to-promise. applyReservation(balance, quantity)"
     }
    ],
    "readMore": [

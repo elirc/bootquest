@@ -44,7 +44,7 @@
    "target": "pack",
    "phase": "before",
    "title": "Transactions and the conditional update",
-   "body": "A **transaction** groups several database writes so they all commit or all roll back. In this code, `db.$transaction(async tx => ...)` opens one, and every write inside uses `tx`. If any line throws, PostgreSQL undoes everything written through `tx` so far.\n\nA transaction alone does not stop two customers racing for the same row. For that the code uses a **conditional update**: `updateMany` with a `where` that describes what the row must still look like, plus the change in `data`. It returns `count`, the number of rows it changed. A `count` of 0 means the row no longer matched, so the code throws a 409.\n\nThe key idea: a JavaScript `if` runs on values you read earlier, which may already be out of date. A condition inside the `where` is checked by the database at the moment of the write.\n\nRead the race table in `02-CONCEPTS.md` (lines 15-22) slowly, one step at a time.",
+   "body": "A **transaction** groups several database writes into one unit. In this code, `db.$transaction(async tx => ...)` opens one, and the writes inside it go through `tx`. The README glossary defines the terms; read it first.\n\nThe course's main question is what a transaction does and does not protect. A JavaScript `if` runs on values you read earlier. A **conditional update** (`updateMany` with a `where` that describes what the row must still look like) reports `count`, the number of rows it changed.\n\nWhile reading `orderRepository.ts`, write down for each step of the reservation loop: what is read, what is checked in JavaScript, what is checked in the `where`, and what happens to the earlier writes if a later line throws.\n\nThen read the race table in `02-CONCEPTS.md` (lines 15-22) slowly, one step at a time, and fill in your own copy before you look at its last column.",
    "excerpts": [
     {
      "path": "backend/src/repositories/orderRepository.ts",
@@ -53,16 +53,10 @@
      "quote": "return db.$transaction(async tx => {"
     },
     {
-     "path": "backend/src/repositories/orderRepository.ts",
-     "lineStart": 21,
-     "lineEnd": 23,
-     "quote": "// The condition and decrement are one database write, not a read-then-write promise. const reserved = await tx.product.updateMany({ where: { id: product.id, version: product.version, stock: { gte: item.quantity } }, data: { stock: { decrement: item.quantity }, version: { increment: 1 } } }); if (!reserved.count) throw new HttpError(409, 'Inventory changed during checkout. Refresh and retry.');"
-    },
-    {
-     "path": "astraupskill/02-CONCEPTS.md",
-     "lineStart": 9,
-     "lineEnd": 9,
-     "quote": "The database evaluates the condition at the write boundary."
+     "path": "astraupskill/README.md",
+     "lineStart": 30,
+     "lineEnd": 30,
+     "quote": "- **Transaction** — a group of database writes that all commit or all roll back."
     }
    ],
    "readMore": [
@@ -79,19 +73,13 @@
    "target": "pack",
    "phase": "before",
    "title": "Versions, stale forms and copied history",
-   "body": "**Versions.** Each Product row has a `version` number that goes up on every change. The product editor remembers the version it loaded. When it saves, PATCH sends that version, and the update only applies `where: { id, version }`. If someone else changed the row first, nothing matches and the server answers 409. This is called *optimistic locking*: nobody holds a lock while a human is typing.\n\n**State.** An order starts PENDING and can become CANCELLED or FULFILLED. Those two are terminal: they cannot change again.\n\n**Snapshots.** When an order is created, each line copies the product's name and price at that moment into the order item. Later catalog edits change the Product row, not the old order rows.\n\nAlso notice what this code does *not* do: there is no request idempotency and no real authentication. The concepts chapter lists both as limits.",
+   "body": "Three more ideas from the glossary run through the course.\n\n**Versions.** Each Product row has a `version` number. The product editor remembers the version it loaded and sends it when it saves. Read `productRepository.ts` and note what the update's `where` contains, what the server answers when it matches nothing, and how it tells a missing product apart from a changed one. Then look at what the editor screen does with that answer.\n\n**State.** An order has a status. Find every place that changes it and note what each update requires the current status to be.\n\n**Snapshots.** When an order is created, look at which fields of each order item are copied from the product and which are references to it. Then ask what a later catalog edit could and could not change about an old order.\n\nFinally, read the section of the concepts chapter that lists the limits of these guarantees, and keep it next to you for the questions about what the project does *not* do.",
    "excerpts": [
     {
-     "path": "backend/src/repositories/productRepository.ts",
-     "lineStart": 12,
-     "lineEnd": 15,
-     "quote": "const result = await tx.product.updateMany({ where: { id, version }, data: { ...fields, price: new Prisma.Decimal(fields.price), version: { increment: 1 } } }); if (!result.count) { if (!await tx.product.findUnique({ where: { id } })) throw new HttpError(404, 'Product not found.'); throw new HttpError(409, 'Product changed. Refresh inventory before retrying.');"
-    },
-    {
      "path": "astraupskill/README.md",
-     "lineStart": 37,
-     "lineEnd": 37,
-     "quote": "- **Snapshot** — a copy of a value written at the moment of a business event. `OrderItem.productName` and `OrderItem.price` are snapshots of the catalog at purchase time."
+     "lineStart": 32,
+     "lineEnd": 32,
+     "quote": "- **Optimistic concurrency / optimistic locking**"
     },
     {
      "path": "astraupskill/02-CONCEPTS.md",

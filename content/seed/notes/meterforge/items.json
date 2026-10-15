@@ -286,19 +286,13 @@
    "target": "pack",
    "phase": "before",
    "title": "Core idea: the stored id and the caller's key are different things",
-   "body": "Every stored usage event has two kinds of identity, and mixing them up causes most retry bugs.\n\n- **Entity identity** is the id the server assigns to the event when it builds it. The client never chooses it.\n- **Request identity** is the external event ID the *client* sends. Together with the tenant, it forms the storage key `(TenantId, ExternalEventId)`. It exists so a client can send the same fact again when it does not know whether the first attempt arrived.\n\nLook at the small table in the concepts chapter and predict each row before reading its right-hand side. Notice that the tenant is part of the key, so two tenants can use the same external ID without touching each other.\n\nThe second idea in the chapter is that *validation* (is this input allowed?), *normalization* (what is the canonical form, such as trimmed text and UTC time?) and *equality* (is this the same business fact?) are three separate decisions. Keep them apart in your head when you read the `UsageEvent` constructor.",
+   "body": "Every stored usage event has two kinds of identity, and mixing them up causes most retry bugs.\n\n- **Entity identity** is the id the server assigns to the event when it builds it. The client never chooses it.\n- **Request identity** is the external event ID the *client* sends. Together with the tenant, it forms the storage key `(TenantId, ExternalEventId)`. It exists so a client can send the same fact again when it does not know whether the first attempt arrived.\n\nLook at the small table in the concepts chapter, cover its right-hand side, and predict each row before you read it. Notice that the tenant is part of the key, so two tenants can use the same external ID without touching each other.\n\nThe second idea in the chapter is that *validation* (is this input allowed?), *normalization* (what is the canonical form, such as trimmed text and UTC time?) and *equality* (is this the same business fact?) are three separate decisions. Keep them apart in your head when you read the `UsageEvent` constructor.",
    "excerpts": [
     {
      "path": "astraupskill/02-CONCEPTS.md",
      "lineStart": 7,
      "lineEnd": 7,
      "quote": "The storage key is the pair `(TenantId, ExternalEventId)`."
-    },
-    {
-     "path": "astraupskill/02-CONCEPTS.md",
-     "lineStart": 11,
-     "lineEnd": 17,
-     "quote": "```text tenant-a + evt-1 + quantity 10 -> created E1 tenant-a + evt-1 + quantity 10 -> replay E1 tenant-a + evt-1 + quantity 11 -> conflict; E1 remains 10 tenant-b + evt-1 + quantity 10 -> created E2 tenant-a + evt-2 + quantity 10 -> created E3 ```"
     },
     {
      "path": "astraupskill/02-CONCEPTS.md",
@@ -334,19 +328,13 @@
    "target": "pack",
    "phase": "before",
    "title": "Core idea: one store operation chooses the winner",
-   "body": "When two requests with the same key arrive at the same moment, only one event may end up stored. The course calls it the *winner*. The repaired code picks the winner in a single store call, `GetOrAddAsync`, which in memory is `ConcurrentDictionary.GetOrAdd`: \"store this if the key is free, otherwise give me what is already there\".\n\nThen the service compares the stored event with the candidate it just built. If the business data differs, it throws the `usage.idempotency_conflict` error. If the stored id is not the candidate's id, someone else got there first, so this call is a replay.\n\nRead the old sequence in section 3 of the concepts chapter (find, then add) and its timeline table. Ask: each step is thread-safe, so why is the *sequence* not? That question, and what changes when the same idea moves to a Postgres table (section 7), carries most of this pack.",
+   "body": "When two requests with the same key arrive at the same moment, only one event may end up stored. The course calls it the *winner*. The repaired code picks the winner in a single store call, `GetOrAddAsync`, which in memory is `ConcurrentDictionary.GetOrAdd`: \"store this if the key is free, otherwise give me what is already there\".\n\nThen read what the service does with `stored` and the candidate it just built, and work out why it needs to compare them at all: what does each possible outcome of that comparison mean for the caller?\n\nRead the old sequence in section 3 of the concepts chapter (find, then add) and its timeline table. Ask: each step is thread-safe, so why is the *sequence* not? That question, and what changes when the same idea moves to a Postgres table (section 7), carries most of this pack.",
    "excerpts": [
     {
      "path": "src/MeterForge.Infrastructure/Usage/InMemoryUsageEventStore.cs",
      "lineStart": 20,
      "lineEnd": 20,
      "quote": "var stored = _events.GetOrAdd((candidate.TenantId, candidate.ExternalEventId), candidate);"
-    },
-    {
-     "path": "src/MeterForge.Application/Usage/UsageIngestionService.cs",
-     "lineStart": 24,
-     "lineEnd": 30,
-     "quote": "return new UsageIngestionResult(stored, stored.Id != candidate.Id);"
     },
     {
      "path": "astraupskill/02-CONCEPTS.md",
