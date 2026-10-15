@@ -166,7 +166,7 @@ Each gate is a real command that must exit 0. Run them in the foreground.
 
 | Command | What it proves |
 |---|---|
-| `npm test` | Unit and API suites of every workspace (shared, server, client, cli, tools/seed), incl. engine honesty rules, append-only triggers and planted-bad validator tests |
+| `npm test` | Unit and API suites of every workspace (shared, server, client, cli, tools/seed), incl. engine honesty rules, append-only triggers, planted-bad validator tests, and the answer-tell guards (`quiz-balance` per draft; `blind-pass`: no blind strategy clears any quest pack's 80% gate with probability > 2%) |
 | `npm run typecheck` | Root TypeScript project, strict |
 | `npm run build:client` | The client compiles (tsc) and bundles (vite) |
 | `npm run smoke:api` | Boots the REAL server entrypoint on a temp DB and free port, then walks the honesty flows over HTTP with real runners: drills, quiz, predict, csbootcamp C#, http check, reveal, reviews, campaign, the ladder flow (real explain-back and kata), stamp refusal, busy-port refusal and the reset guard. It also proves no zombie process or port is left. See the `npm run smoke:api` output for the step list |

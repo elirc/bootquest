@@ -703,3 +703,29 @@ what ships until the owner picks an option.
     honest outcome).
   - *Option B:* version kata keys whenever a learner-visible diff changes (new key, old one
     retired), so old answers keep their key and the new item is answerable.
+
+## 2026-10-15 — Release wave finished after the orchestrator crash
+
+- **Crash recovery.** The previous session died while the release-wave workflow ran. FACTORY-3
+  (b998349) and CODE-POLISH (bb84ef8) had committed; six content agents had left uncommitted
+  rewrites; CONTENT-7 never started. The uncommitted work was committed as `wip(content)` in each
+  clone first, then integrated on `release` in `bq-honesty`. Lesson: a crashed agent's tree can
+  be half-way through a re-seed. organized-experiment-support-hub had lost its `validation.json`
+  (the rewrite made q06's choices near-duplicates, so the validator quarantined it and refused to
+  stamp), and the server refused to start. `npm test -w @bootquest/cli` (its e2e boots the real
+  server) caught it; the guard tests did not, because they read drafts, not stamps.
+- **Why blind-pass instead of more share caps.** Every review round found a new surface tell
+  (length, then rank, then colon/because frames, then commas, "and", clause marks, digits).
+  Per-draft share caps cannot keep up: at ~12 quizzes a draft, 17 strategies at 0.35 fail ~70 of
+  100 drafts even with random keys. The honesty rule is "a blind learner cannot clear the 80%
+  gate", so the guard computes exactly that probability per stamped pack (cap 0.02; random keys
+  essentially never exceed 0.01). It is cheap, has no false positives in practice, and covers
+  generated and authored packs, not only drafts.
+- **F3 bypasses.** tsc accepts any whitespace (\v, \f, NBSP, BOM) between `//` and
+  `@ts-ignore` and treats CR / U+2028 / U+2029 as line breaks, so the original guard (space/tab,
+  split on LF) could be bypassed. Both are fixed and tested against the real tsc API.
+- **Tooling gotcha.** Text sent through the agent's Edit/Bash tools had `\uXXXX` escapes turned
+  into literal characters, and a backslash in a regex was lost once (`/^(\d+|-)$/` became
+  `/^(d+|-)$/`, and the broken test file silently did not compile because the vitest filter
+  matched only the other file). When writing backslashes or escapes, build them with
+  `String.fromCharCode(92)` in a node script and confirm the test count went UP.
