@@ -55,7 +55,7 @@
    "answer": "404: the lookup filters by id and tenantId, so a foreign id looks like a missing one",
    "distractors": [
     "403: the service detects that the ticket belongs to another tenant and refuses explicitly",
-    "200: the AGENT role may edit any ticket by id, so the update goes through normally",
+    "200: the AGENT role may edit any ticket by its id, so the update goes through normally",
     "500: PostgreSQL row-level security raises an error that the middleware does not map"
    ],
    "explanation": "`where: { id, tenantId: auth.tenantId }` - the schema has no row-level security; the service predicate is the only thing selecting the right tenant."
@@ -138,7 +138,7 @@
    "answer": "A 500 and no audit row, since all three writes commit together or not at all",
    "distractors": [
     "A 200, because the ticket update succeeded and the outbox insert is best-effort",
-    "A 500, but the audit row remains because it was inserted before any outbox row",
+    "A 500, but the audit row is not rolled back, since it was inserted before the outbox",
     "A 409 mapped from the Prisma error, with the ticket update always kept in place"
    ],
    "explanation": "All three writes are in one prisma.$transaction callback; the Prisma error is not an HttpError, so errorMiddleware answers 500. A rolled-back change can never have announced itself."
@@ -163,9 +163,9 @@
    "prompt": "withSerializableRetry re-runs the callback on Prisma P2034 only. Why NOT also retry an HttpError or a P2002?",
    "answer": "An HttpError is a decision and a P2002 will recur, but a P2034 can pass on retry",
    "distractors": [
-    "Retrying those errors would exhaust Prisma's connection pool under load, so they are passed through",
-    "They are retried as well, just later, by Express's error middleware rather than inside the wrapper",
-    "P2002 and HttpError are thrown outside the transaction callback, so the wrapper can never catch them"
+    "Retrying a P2002 or an HttpError would exhaust Prisma's pool under load, so both pass through",
+    "They are retried as well, later and outside the wrapper, by Express's error middleware",
+    "A P2002 or an HttpError is thrown outside the transaction callback, so the wrapper never sees it"
    ],
    "explanation": "Serializable means retry or it means nothing: SQLSTATE 40001 (Prisma P2034) is PostgreSQL asking the app to retry; everything else passes through untouched."
   },
@@ -277,9 +277,9 @@
    "prompt": "A HIGH ticket due at 17:00 sits in PENDING until 18:00 and is then reopened. What SLA state does it show right after reopening?",
    "answer": "BREACHED: PAUSED was just a label, and the stored slaDueAt did not move",
    "distractors": [
-    "MET: the hour spent in PENDING is credited back to the stored deadline",
+    "MET: the hour in PENDING is credited back, and the stored slaDueAt moves out",
     "AT_RISK: reopening a ticket restarts the final-hour warning window",
-    "PAUSED, until an agent posts the first reply after the ticket reopens"
+    "PAUSED, as the clock does not restart before the agent's first reply"
    ],
    "explanation": "SLA state is derived, not stored; truly pausing needs a stored pause start or accumulated paused time that pushes slaDueAt forward on leaving PENDING."
   },
@@ -304,7 +304,7 @@
    "answer": "It gets a fresh two hours, because every priority change recomputes slaDueAt from now",
    "distractors": [
     "Nothing changes: slaDueAt is computed from createdAt, so priority churn cannot move it",
-    "It breaches immediately, because the LOW step always counts as an SLA downgrade",
+    "It breaches immediately, because stepping down to LOW always counts as an SLA downgrade",
     "The second change is refused, because priority changes are rate-limited per ticket"
    ],
    "explanation": "`slaDueAt: priority changed ? calculateSlaDueAt(new Date(), priority) : undefined` - finding F5 calls this an SLA clock reset."
@@ -334,9 +334,9 @@
    "prompt": "A read-only VIEWER posts a PUBLIC reply on a ticket nobody has answered yet. What side effects follow?",
    "answer": "It sets firstResponseAt and then notifies the customer",
    "distractors": [
-    "None: viewers cannot comment, so the post is refused",
-    "The comment is saved but hidden until an agent approves it",
-    "It is stored as INTERNAL automatically, so nobody is notified"
+    "None: viewers cannot comment, so it is refused",
+    "The comment is saved and hidden until an agent approves it",
+    "It is stored as INTERNAL, so no ticket.public_reply_added audit is written"
    ],
    "explanation": "addTicketComment only blocks INTERNAL notes for viewers; a PUBLIC reply from anyone sets firstResponseAt when it is still null (finding F6)."
   },

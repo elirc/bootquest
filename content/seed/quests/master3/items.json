@@ -219,11 +219,15 @@
    "prompt": "withSerializableRetry re-runs the callback on Prisma P2034 only. Why NOT also retry an HttpError or a P2002?",
    "choices": [
     {
-     "text": "They are retried as well, just later, by Express's error middleware rather than inside the wrapper",
+     "text": "Retrying a P2002 or an HttpError would exhaust Prisma's pool under load, so both pass through",
      "evidence": []
     },
     {
-     "text": "Retrying those errors would exhaust Prisma's connection pool under load, so they are passed through",
+     "text": "They are retried as well, later and outside the wrapper, by Express's error middleware",
+     "evidence": []
+    },
+    {
+     "text": "A P2002 or an HttpError is thrown outside the transaction callback, so the wrapper never sees it",
      "evidence": []
     },
     {
@@ -231,22 +235,18 @@
      "evidence": [
       "apps/api/src/modules/tickets/ticketService.ts"
      ]
-    },
-    {
-     "text": "P2002 and HttpError are thrown outside the transaction callback, so the wrapper can never catch them",
-     "evidence": []
     }
    ],
    "check": {
     "type": "quiz",
     "itemKey": "seed:quests:master3/quiz/2663e1d607eea7f9",
     "grading": "choice",
-    "answerKey": 2,
+    "answerKey": 3,
     "choices": [
-     "They are retried as well, just later, by Express's error middleware rather than inside the wrapper",
-     "Retrying those errors would exhaust Prisma's connection pool under load, so they are passed through",
-     "An HttpError is a decision and a P2002 will recur, but a P2034 can pass on retry",
-     "P2002 and HttpError are thrown outside the transaction callback, so the wrapper can never catch them"
+     "Retrying a P2002 or an HttpError would exhaust Prisma's pool under load, so both pass through",
+     "They are retried as well, later and outside the wrapper, by Express's error middleware",
+     "A P2002 or an HttpError is thrown outside the transaction callback, so the wrapper never sees it",
+     "An HttpError is a decision and a P2002 will recur, but a P2034 can pass on retry"
     ]
    },
    "explanation": "Serializable means retry or it means nothing: SQLSTATE 40001 (Prisma P2034) is PostgreSQL asking the app to retry; everything else passes through untouched."
@@ -337,6 +337,10 @@
      "evidence": []
     },
     {
+     "text": "200: the AGENT role may edit any ticket by its id, so the update goes through normally",
+     "evidence": []
+    },
+    {
      "text": "404: the lookup filters by id and tenantId, so a foreign id looks like a missing one",
      "evidence": [
       "apps/api/src/modules/tickets/ticketService.ts"
@@ -345,22 +349,18 @@
     {
      "text": "403: the service detects that the ticket belongs to another tenant and refuses explicitly",
      "evidence": []
-    },
-    {
-     "text": "200: the AGENT role may edit any ticket by id, so the update goes through normally",
-     "evidence": []
     }
    ],
    "check": {
     "type": "quiz",
     "itemKey": "seed:quests:master3/quiz/2fb6ddefdead181e",
     "grading": "choice",
-    "answerKey": 1,
+    "answerKey": 2,
     "choices": [
      "500: PostgreSQL row-level security raises an error that the middleware does not map",
+     "200: the AGENT role may edit any ticket by its id, so the update goes through normally",
      "404: the lookup filters by id and tenantId, so a foreign id looks like a missing one",
-     "403: the service detects that the ticket belongs to another tenant and refuses explicitly",
-     "200: the AGENT role may edit any ticket by id, so the update goes through normally"
+     "403: the service detects that the ticket belongs to another tenant and refuses explicitly"
     ]
    },
    "explanation": "`where: { id, tenantId: auth.tenantId }` - the schema has no row-level security; the service predicate is the only thing selecting the right tenant."
@@ -515,11 +515,7 @@
    "prompt": "A read-only VIEWER posts a PUBLIC reply on a ticket nobody has answered yet. What side effects follow?",
    "choices": [
     {
-     "text": "It is stored as INTERNAL automatically, so nobody is notified",
-     "evidence": []
-    },
-    {
-     "text": "The comment is saved but hidden until an agent approves it",
+     "text": "It is stored as INTERNAL, so no ticket.public_reply_added audit is written",
      "evidence": []
     },
     {
@@ -529,7 +525,11 @@
      ]
     },
     {
-     "text": "None: viewers cannot comment, so the post is refused",
+     "text": "The comment is saved and hidden until an agent approves it",
+     "evidence": []
+    },
+    {
+     "text": "None: viewers cannot comment, so it is refused",
      "evidence": []
     }
    ],
@@ -537,12 +537,12 @@
     "type": "quiz",
     "itemKey": "seed:quests:master3/quiz/4a191703db4bc163",
     "grading": "choice",
-    "answerKey": 2,
+    "answerKey": 1,
     "choices": [
-     "It is stored as INTERNAL automatically, so nobody is notified",
-     "The comment is saved but hidden until an agent approves it",
+     "It is stored as INTERNAL, so no ticket.public_reply_added audit is written",
      "It sets firstResponseAt and then notifies the customer",
-     "None: viewers cannot comment, so the post is refused"
+     "The comment is saved and hidden until an agent approves it",
+     "None: viewers cannot comment, so it is refused"
     ]
    },
    "explanation": "addTicketComment only blocks INTERNAL notes for viewers; a PUBLIC reply from anyone sets firstResponseAt when it is still null (finding F6)."
@@ -698,7 +698,7 @@
    "prompt": "A HIGH ticket due at 17:00 sits in PENDING until 18:00 and is then reopened. What SLA state does it show right after reopening?",
    "choices": [
     {
-     "text": "PAUSED, until an agent posts the first reply after the ticket reopens",
+     "text": "PAUSED, as the clock does not restart before the agent's first reply",
      "evidence": []
     },
     {
@@ -712,7 +712,7 @@
      "evidence": []
     },
     {
-     "text": "MET: the hour spent in PENDING is credited back to the stored deadline",
+     "text": "MET: the hour in PENDING is credited back, and the stored slaDueAt moves out",
      "evidence": []
     }
    ],
@@ -722,10 +722,10 @@
     "grading": "choice",
     "answerKey": 1,
     "choices": [
-     "PAUSED, until an agent posts the first reply after the ticket reopens",
+     "PAUSED, as the clock does not restart before the agent's first reply",
      "BREACHED: PAUSED was just a label, and the stored slaDueAt did not move",
      "AT_RISK: reopening a ticket restarts the final-hour warning window",
-     "MET: the hour spent in PENDING is credited back to the stored deadline"
+     "MET: the hour in PENDING is credited back, and the stored slaDueAt moves out"
     ]
    },
    "explanation": "SLA state is derived, not stored; truly pausing needs a stored pause start or accumulated paused time that pushes slaDueAt forward on leaving PENDING."
@@ -829,10 +829,6 @@
      "evidence": []
     },
     {
-     "text": "A 500, but the audit row remains because it was inserted before any outbox row",
-     "evidence": []
-    },
-    {
      "text": "A 409 mapped from the Prisma error, with the ticket update always kept in place",
      "evidence": []
     },
@@ -841,18 +837,22 @@
      "evidence": [
       "apps/api/src/middleware/errors.ts"
      ]
+    },
+    {
+     "text": "A 500, but the audit row is not rolled back, since it was inserted before the outbox",
+     "evidence": []
     }
    ],
    "check": {
     "type": "quiz",
     "itemKey": "seed:quests:master3/quiz/944d81f42782f8bd",
     "grading": "choice",
-    "answerKey": 3,
+    "answerKey": 2,
     "choices": [
      "A 200, because the ticket update succeeded and the outbox insert is best-effort",
-     "A 500, but the audit row remains because it was inserted before any outbox row",
      "A 409 mapped from the Prisma error, with the ticket update always kept in place",
-     "A 500 and no audit row, since all three writes commit together or not at all"
+     "A 500 and no audit row, since all three writes commit together or not at all",
+     "A 500, but the audit row is not rolled back, since it was inserted before the outbox"
     ]
    },
    "explanation": "All three writes are in one prisma.$transaction callback; the Prisma error is not an HttpError, so errorMiddleware answers 500. A rolled-back change can never have announced itself."
@@ -1139,10 +1139,6 @@
      "evidence": []
     },
     {
-     "text": "It breaches immediately, because the LOW step always counts as an SLA downgrade",
-     "evidence": []
-    },
-    {
      "text": "Nothing changes: slaDueAt is computed from createdAt, so priority churn cannot move it",
      "evidence": []
     },
@@ -1151,18 +1147,22 @@
      "evidence": [
       "apps/api/src/modules/tickets/ticketService.ts"
      ]
+    },
+    {
+     "text": "It breaches immediately, because stepping down to LOW always counts as an SLA downgrade",
+     "evidence": []
     }
    ],
    "check": {
     "type": "quiz",
     "itemKey": "seed:quests:master3/quiz/dcff31728998cbb7",
     "grading": "choice",
-    "answerKey": 3,
+    "answerKey": 2,
     "choices": [
      "The second change is refused, because priority changes are rate-limited per ticket",
-     "It breaches immediately, because the LOW step always counts as an SLA downgrade",
      "Nothing changes: slaDueAt is computed from createdAt, so priority churn cannot move it",
-     "It gets a fresh two hours, because every priority change recomputes slaDueAt from now"
+     "It gets a fresh two hours, because every priority change recomputes slaDueAt from now",
+     "It breaches immediately, because stepping down to LOW always counts as an SLA downgrade"
     ]
    },
    "explanation": "`slaDueAt: priority changed ? calculateSlaDueAt(new Date(), priority) : undefined` - finding F5 calls this an SLA clock reset."
