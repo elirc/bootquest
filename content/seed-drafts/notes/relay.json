@@ -1,0 +1,353 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "relay",
+ "repo": "relay",
+ "sha": "d5d8a5ea7dd9648979b6b1edbd7b541c430564eb",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: an automation engine taught through its ADRs",
+   "body": "Relay is a Zapier-style automation platform: a trigger notices something in one service, and a chain of steps calls other services. Each sprint is an annotated pull request, and the lasting reasoning lives in `docs/adr/`.\n\nThis quest uses five ADRs, best read in this order: 0006 (the template language that maps data between steps), 0007 (what happens when a step fails), 0008 (how a trigger avoids firing twice), 0013 (sharing vendor rate limits and worker time fairly) and 0016 (what to do with a step that never returns).\n\nEach ADR names its code in a Links section. The engine logic is written as small pure functions and classes, so you can trace them on paper. Do that for each quiz-style question you can think of before checking the answers.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0006-expression-language.md",
+     "lineStart": 9,
+     "lineEnd": 12,
+     "quote": "Field mapping needs a way to write `{{steps.1.output.email}}` into an action's inputs. This string language is, by usage, **the product's most-attacked API**: users constantly paste untrusted data (webhook payloads, vendor responses) through templates. Whatever we build here, an attacker will feed it hostile input a million times a day."
+    },
+    {
+     "path": "docs/adr/0016-stuck-run-policy.md",
+     "lineStart": 9,
+     "lineEnd": 12,
+     "quote": "The classic automation-engine outage: a vendor hangs (not an error — a socket that never responds), so steps wait *forever*, workers fill with stuck runs, and one bad vendor takes down everyone's automations. A wall-clock timeout is necessary but not sufficient — the interesting question is what the timeout leads *to*."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/LEARNER-GUIDE.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "How the course expects you to read each sprint."
+    },
+    {
+     "path": "docs/connector-authoring-guide.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "How connectors plug into the engine."
+    }
+   ]
+  },
+  {
+   "id": "r02-untrusted-templates",
+   "target": "pack",
+   "phase": "before",
+   "title": "Templates carry untrusted data, so the language stays tiny",
+   "body": "Users write templates such as `{{steps.1.output.email}}` to copy a value from one step into the next. Everything flowing through them comes from outside: webhook bodies, vendor responses, spreadsheet cells. ADR-0006 therefore calls the template language the most-attacked API in the product.\n\nThe response is to keep the grammar closed. A template is plain text plus dotted path references and nothing else, resolved over a fixed scope. There is no code to run, so there is nothing to inject into. Read `render.ts` with three questions in mind: what comes back when the template is a single reference, what comes back when there is text around it, and what happens when a path does not exist.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0006-expression-language.md",
+     "lineStart": 15,
+     "lineEnd": 17,
+     "quote": "A **hand-rolled, closed grammar**: a template is literal text interleaved with `{{ dotted.path }}` references, and nothing else. No operators, no function calls, no arithmetic, no filters. The v1 implementation is a tokenizer + a path resolver over a fixed scope (`trigger`, `steps`). Two rules:"
+    },
+    {
+     "path": "docs/adr/0006-expression-language.md",
+     "lineStart": 36,
+     "lineEnd": 37,
+     "quote": "- The entire injection surface is a **path resolver over a fixed scope**. There is no code path that executes user-authored logic. That's the point."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "packages/expr/src/render.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The whole renderer, about fifty lines."
+    }
+   ]
+  },
+  {
+   "id": "r03-failure-is-a-policy",
+   "target": "pack",
+   "phase": "before",
+   "title": "Failures, duplicates and overload are handled by explicit policy",
+   "body": "Three ADRs turn messy failure into small, reviewable rules.\n\nRetries depend on the kind of error, from a closed list of error classes, so one table covers every vendor instead of each connector inventing its own. Duplicate trigger events are filtered with a time-bounded memory of keys that each connector defines. Overload is handled by a shared budget per vendor account and a scheduler that weighs tenants against each other and keeps a minimum share for background work.\n\nADR-0016 adds the last piece: a timeout alone is not a policy, so decide what the timeout leads to. While reading, write down for each mechanism what state it keeps, when that state resets, and which number (a cap, a window, a threshold) controls it.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0007-retry-by-error-class.md",
+     "lineStart": 27,
+     "lineEnd": 29,
+     "quote": "- **Per-connector retry logic.** Each connector decides its own retries. Flexible, but you get N inconsistent implementations, and the engine can't reason about or bound total work. The closed taxonomy (S3) exists precisely so this policy can live in one place."
+    },
+    {
+     "path": "docs/adr/0016-stuck-run-policy.md",
+     "lineStart": 11,
+     "lineEnd": 12,
+     "quote": "A wall-clock timeout is necessary but not sufficient — the interesting question is what the timeout leads *to*."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "apps/engine/src/fairness/scheduler.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Weighted fair queuing and priority lanes."
+    },
+    {
+     "path": "apps/engine/src/observability/breaker.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The circuit breaker and stuck-run check."
+    }
+   ]
+  },
+  {
+   "id": "x-q01-single-ref-type",
+   "target": "seed:quests:relay/quiz/da6cb1e3f098d74c",
+   "phase": "after",
+   "title": "Why a lone reference keeps its type",
+   "body": "`render` tokenizes the template first. When there is exactly one token and it is a reference, it returns `resolvePath(...)` directly, so `trigger.count` comes back as the number 5. ADR-0006 makes this a rule: a lone reference preserves the value's type, while any surrounding text coerces the result to a string.\n\n- The string \"5\" is what you get only with surrounding text, such as \"Count: {{trigger.count}}\".\n- The raw template text is wrong: the path exists, so it is resolved.\n- An array is wrong: nothing wraps the value; it is returned as it is stored.",
+   "excerpts": [
+    {
+     "path": "packages/expr/src/render.ts",
+     "lineStart": 42,
+     "lineEnd": 47,
+     "quote": "export function render(template: string, scope: Scope): unknown { const tokens = tokenize(template); // validates the grammar; ExprParseError on anything non-path if (tokens.length === 1 && tokens[0].kind === \"ref\") { return resolvePath(tokens[0].path, scope); }"
+    },
+    {
+     "path": "docs/adr/0006-expression-language.md",
+     "lineStart": 18,
+     "lineEnd": 19,
+     "quote": "- **`{{x}}` alone preserves the value's type** (a number stays a number, an array stays an array); any surrounding text coerces to a string."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02-array-in-text",
+   "target": "seed:quests:relay/quiz/24bc08fdaf9d022e",
+   "phase": "after",
+   "title": "How an array is written into surrounding text",
+   "body": "This template has text before the reference, so `render` maps every token and joins them into one string. Text tokens stay as they are; each reference is resolved and passed to `stringify`. `stringify` returns \"\" for null or undefined, uses `JSON.stringify` for objects (arrays included), and `String` for everything else. The array becomes `[\"a\",\"b\"]`.\n\n- `a,b` is what `String([\"a\",\"b\"])` would give, but arrays take the JSON branch.\n- \"[object Object]\" is the flattening bug the ADR says other platforms have.\n- The array itself is only returned when the whole template is one reference.",
+   "excerpts": [
+    {
+     "path": "packages/expr/src/render.ts",
+     "lineStart": 27,
+     "lineEnd": 31,
+     "quote": "function stringify(v: unknown): string { if (v === null || v === undefined) return \"\"; if (typeof v === \"object\") return JSON.stringify(v); return String(v); }"
+    },
+    {
+     "path": "packages/expr/src/render.ts",
+     "lineStart": 53,
+     "lineEnd": 55,
+     "quote": "return tokens .map((t) => (t.kind === \"text\" ? t.value : stringify(resolvePath(t.path, scope)))) .join(\"\");"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q03-missing-path",
+   "target": "seed:quests:relay/quiz/c9fa4b6dc94ebc4d",
+   "phase": "after",
+   "title": "Why a missing path throws instead of rendering blank",
+   "body": "`resolvePath` walks the path one segment at a time. `trigger` exists, but `trigger.email` is `undefined`, so it throws `ExprRenderError` with a message naming the missing segment. ADR-0006 chose this deliberately: a mapping that points at nothing is a bug the author should see, not a blank that quietly corrupts the run.\n\n- An empty string is the silent behaviour the ADR rejects; `stringify` only produces \"\" for values that exist but are null.\n- Returning undefined is wrong: the check `cur === undefined` throws first.\n- The raw text is wrong: references are never passed through unresolved.",
+   "excerpts": [
+    {
+     "path": "packages/expr/src/render.ts",
+     "lineStart": 15,
+     "lineEnd": 25,
+     "quote": "export function resolvePath(path: string[], scope: Scope): unknown { let cur: unknown = scope; for (const seg of path) { if (cur === null || cur === undefined || typeof cur !== \"object\") { throw new ExprRenderError(`cannot resolve \"${path.join(\".\")}\": \"${seg}\" is not on an object`); } cur = (cur as Record<string, unknown>)[seg]; if (cur === undefined) throw new ExprRenderError(`cannot resolve \"${path.join(\".\")}\": missing \"${seg}\"`); } return cur; }"
+    },
+    {
+     "path": "docs/adr/0006-expression-language.md",
+     "lineStart": 20,
+     "lineEnd": 20,
+     "quote": "- **A missing path is a render-time error**, not a silent empty string."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q04-single-pass",
+   "target": "seed:quests:relay/quiz/ef4e56b87f69c572",
+   "phase": "after",
+   "title": "Why braces inside a value stay as plain text",
+   "body": "Since the S13 fix, rendering is a single pass. The template is tokenized once, each reference is resolved, and the results are joined. A resolved value is never tokenized again, so a cell containing `{{connection.token}}` ends up in the output as those exact characters. The code comment explains the old bug: the renderer used to loop and re-expand references found inside values, which let a spreadsheet row pull a live secret into an action input.\n\n- Expanding nested references is the exfiltration bug that was fixed.\n- Stripping braces is wrong: the value is copied unchanged.\n- An error is wrong: values may contain any text; only the template itself is parsed.",
+   "excerpts": [
+    {
+     "path": "packages/expr/src/render.ts",
+     "lineStart": 49,
+     "lineEnd": 52,
+     "quote": "// SINGLE PASS (S13, flaw #1 fix). Resolved values are INERT DATA — we never re-scan them for more // templates. The old code looped, re-expanding any `{{…}}` that appeared inside a resolved value; a // SheetLite row containing `{{connection.token}}` would then get re-evaluated into an action input, // exfiltrating a live secret. The invariant now: user *data* flowing through the renderer stays data."
+    },
+    {
+     "path": "docs/adr/0006-expression-language.md",
+     "lineStart": 42,
+     "lineEnd": 43,
+     "quote": "- ⚠️ A rendering subtlety around resolved values that themselves contain `{{…}}` is exactly the kind of edge the S13 fuzzer exists to find. Smallness limits the blast radius even of our own mistakes."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q05-vendor-down-backoff",
+   "target": "seed:quests:relay/quiz/623282c78ff46ffd",
+   "phase": "after",
+   "title": "Computing the VendorDown backoff for attempt 3",
+   "body": "`retryPolicy` first checks the attempt cap: 3 is below `MAX_ATTEMPTS` (4), so it continues. VendorDown is a transient class, so it retries with `backoff(attempt)`. The formula is `min(30_000, 1000 * 2 ** (attempt - 1))`; for attempt 3 that is 1000 x 4 = 4000 ms.\n\n- 8000 ms forgets the `- 1` in the exponent.\n- 3000 ms is linear backoff, which this code does not use.\n- No retry is wrong: VendorDown is one of the two retryable classes in ADR-0007; AuthFailed and BadInput are the ones that never retry.",
+   "excerpts": [
+    {
+     "path": "apps/engine/src/executor.ts",
+     "lineStart": 18,
+     "lineEnd": 22,
+     "quote": "export const MAX_ATTEMPTS = 4; function backoff(attempt: number): number { return Math.min(30_000, 1000 * 2 ** (attempt - 1)); }"
+    },
+    {
+     "path": "apps/engine/src/executor.ts",
+     "lineStart": 30,
+     "lineEnd": 31,
+     "quote": "case \"VendorDown\": return { retry: true, delayMs: backoff(attempt) };"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q06-rate-limited-cap",
+   "target": "seed:quests:relay/quiz/3731cfbad73678e3",
+   "phase": "after",
+   "title": "Why the attempt cap beats Retry-After",
+   "body": "Order matters in `retryPolicy`. Before looking at the error kind, it checks `attempt >= MAX_ATTEMPTS` and returns `{ retry: false }`. MAX_ATTEMPTS is 4, so on attempt 4 even a RateLimited error stops, and with fail-fast semantics the run fails. Below the cap, RateLimited would wait `error.retryAfterMs`, falling back to backoff only when there is no Retry-After.\n\n- \"Rate limits always retry\" ignores the cap, which ADR-0007 says bounds all retries.\n- 8000 ms of backoff would be the delay for an earlier attempt without Retry-After, never past the cap.\n- 30000 ms is the backoff ceiling, not a final retry.",
+   "excerpts": [
+    {
+     "path": "apps/engine/src/executor.ts",
+     "lineStart": 24,
+     "lineEnd": 29,
+     "quote": "export function retryPolicy(error: unknown, attempt: number): RetryDecision { if (!(error instanceof ConnectorError)) return { retry: false, delayMs: 0 }; if (attempt >= MAX_ATTEMPTS) return { retry: false, delayMs: 0 }; switch (error.kind) { case \"RateLimited\": return { retry: true, delayMs: error.retryAfterMs ?? backoff(attempt) };"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07-dedupe-window",
+   "target": "seed:quests:relay/quiz/ad32e040a2500406",
+   "phase": "after",
+   "title": "Why the dedupe window is three polling intervals",
+   "body": "`dedupeTtlForInterval` returns `intervalMs * 3`, so a 60000 ms poll gets a 180000 ms window. ADR-0008 explains the reasoning: a late poll can surface the same item roughly one cycle later, so the window must cover that with a safety margin. The `Deduper` evicts keys after their expiry, which keeps memory bounded.\n\n- One interval is too short: a straggler from a late poll would slip through.\n- Two intervals is not what the code computes; the factor is 3.\n- Keeping keys forever is the unbounded seen-set the ADR rejects as a memory leak.",
+   "excerpts": [
+    {
+     "path": "apps/engine/src/triggers/dedupe.ts",
+     "lineStart": 42,
+     "lineEnd": 45,
+     "quote": "/** Window = interval × safety factor: a late poll can re-surface an item roughly one cycle later. */ export function dedupeTtlForInterval(intervalMs: number): number { return intervalMs * 3; }"
+    },
+    {
+     "path": "docs/adr/0008-trigger-dedupe-ownership.md",
+     "lineStart": 20,
+     "lineEnd": 22,
+     "quote": "- **The engine enforces dedupe.** A `Deduper` with a TTL window records seen keys; a repeat within the window doesn't fire. The window is `interval × safety factor`, because a late poll can re-surface an item roughly one cycle later. Dedupe state is bounded (TTL eviction) — it must never grow forever."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08-who-owns-identity",
+   "target": "seed:quests:relay/quiz/96822f6d4646fd93",
+   "phase": "after",
+   "title": "Why the connector defines what \"the same item\" means",
+   "body": "Every `TriggerDef` must provide `dedupeKey: (item) => string`, and the registry throws at boot when a trigger lacks one. Only the connector knows the vendor's notion of identity: a row id, an email message-id, a chat `ts`, or a content-hash fallback. The engine's `Deduper` then enforces it with a TTL window.\n\n- Hashing the whole payload is the rejected engine-owned option: different events can collide and the same item can hash differently when the vendor changes a field.\n- Leaving it to the user is the \"no dedupe\" option the ADR calls unacceptable.\n- Vendors give no reliable repeat header, which is why the key is per connector.",
+   "excerpts": [
+    {
+     "path": "packages/connector-sdk/src/registry.ts",
+     "lineStart": 22,
+     "lineEnd": 23,
+     "quote": "if (typeof trigger.dedupeKey !== \"function\") { throw new Error(`connector \"${def.key}\" trigger \"${trigger.key}\" is missing its dedupeKey`);"
+    },
+    {
+     "path": "docs/adr/0008-trigger-dedupe-ownership.md",
+     "lineStart": 29,
+     "lineEnd": 32,
+     "quote": "- **Engine-owned identity (a generic dedupe key, e.g. hash the whole payload).** Simple, but wrong: two genuinely different events can hash-collide on irrelevant fields, and the same logical item can hash differently across polls (a field the vendor mutates). Identity is domain knowledge; only the connector has it."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09-weighted-fair",
+   "target": "seed:quests:relay/quiz/e2fcb7dcf5f0c416",
+   "phase": "after",
+   "title": "Working out pickOrg by hand",
+   "body": "`pickOrg` first keeps only eligible orgs: some pending work and `inFlight < cap`. C has no pending runs, so it is out. Among A and B it picks the lowest `inFlight / weight`. A: 2 / 1 = 2. B: 4 / 4 = 1. B wins, even though it has more runs in flight, because its higher weight (plan tier) entitles it to a bigger share.\n\n- C is wrong: an org with nothing waiting is never served.\n- A is wrong: pending count does not decide; the ratio does. This is what stops one big fan-out from dominating.\n- null only happens when no org is eligible.",
+   "excerpts": [
+    {
+     "path": "apps/engine/src/fairness/scheduler.ts",
+     "lineStart": 19,
+     "lineEnd": 25,
+     "quote": "export function pickOrg(claims: readonly OrgClaim[]): string | null { const eligible = claims.filter((c) => c.pending > 0 && c.inFlight < c.cap); if (eligible.length === 0) return null; return eligible.reduce((best, c) => c.inFlight / c.weight < best.inFlight / best.weight ? c : best, ).orgId; }"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10-bulk-reserved",
+   "target": "seed:quests:relay/quiz/70bec6f65dc39ee9",
+   "phase": "after",
+   "title": "Why bulk work gets a turn after five high picks",
+   "body": "`pickLane` checks the reserved minimum before the priority order. Bulk has 2 runs waiting and `consecutiveHighPicks` is 5, which meets the default `starvationLimit` of 5, so it returns \"bulk\". Otherwise it would walk interactive, scheduled, bulk and return the first lane with work. ADR-0013 says no lane may fully starve.\n\n- Interactive would be right with fewer than 5 consecutive high picks.\n- Scheduled is wrong twice: it has no work, and the reserved branch returns first.\n- None is wrong: an empty lane is skipped, not a reason to stop.",
+   "excerpts": [
+    {
+     "path": "apps/engine/src/fairness/scheduler.ts",
+     "lineStart": 35,
+     "lineEnd": 46,
+     "quote": "export function pickLane( depth: Record<Lane, number>, consecutiveHighPicks: number, starvationLimit = 5, ): Lane | null { const bulkWaiting = depth.bulk > 0; if (bulkWaiting && consecutiveHighPicks >= starvationLimit) return \"bulk\"; // reserved minimum for (const lane of LANE_ORDER) { if (depth[lane] > 0) return lane; } return null; }"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q11-half-open-failure",
+   "target": "seed:quests:relay/quiz/03b414a791651134",
+   "phase": "after",
+   "title": "What a failed half-open probe does to the breaker",
+   "body": "After the cooldown, `canRequest` moves an open breaker to \"half-open\" and lets one request through. If that probe fails, `onFailure` sees `state === \"half-open\"` and re-opens immediately, whatever the failure count, and sets `openedAt` to now. The next probe therefore waits a whole new cooldown. ADR-0016: success closes the breaker, a failed probe re-opens it.\n\n- Staying half-open is wrong: half-open allows exactly one probe.\n- Closing is wrong: only `onSuccess` closes it.\n- Open for good is wrong: the cooldown always allows another probe later; no human reset exists in this code.",
+   "excerpts": [
+    {
+     "path": "apps/engine/src/observability/breaker.ts",
+     "lineStart": 41,
+     "lineEnd": 48,
+     "quote": "onFailure(): void { this.failures += 1; // A failed probe re-opens immediately; otherwise open once we cross the threshold. if (this.state === \"half-open\" || this.failures >= this.threshold) { this.state = \"open\"; this.openedAt = this.now(); } }"
+    },
+    {
+     "path": "docs/adr/0016-stuck-run-policy.md",
+     "lineStart": 19,
+     "lineEnd": 22,
+     "quote": "- **Per-connector circuit breaker.** A degraded connector trips a breaker after N failures; while open it **holds** that connector's runs briefly (instead of pounding a vendor that's already down), then allows one **half-open probe** to test recovery — success closes it, a failed probe re-opens. So one hung vendor's runs back off on *their* connector without starving healthy ones."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q12-shared-cursor",
+   "target": "seed:quests:relay/quiz/3ec3710e8a2d44db",
+   "phase": "after",
+   "title": "Why two relays on one sheet share one cursor",
+   "body": "`subscriptionKey` builds `sub:connectionId:connector:triggerKey` from the binding, and the cursor key is built from it. Nothing about the relay is in the key, so every relay bound to the same resource maps to the same subscription: one poll, one cursor, fanned out to each relay. ADR-0013 calls this getting the identity right, and it closes planted flaw #3.\n\n- One cursor per relay is the S06 design that double-polled and could fire twice on a shared row.\n- Worker processes do not own cursors; the key has no worker in it.\n- Nothing switched the sheet to webhooks; it is still polled.",
+   "excerpts": [
+    {
+     "path": "apps/engine/src/triggers/cursor.ts",
+     "lineStart": 19,
+     "lineEnd": 25,
+     "quote": "export function subscriptionKey(binding: PollingBinding): string { return `sub:${binding.connectionId}:${binding.connector}:${binding.triggerKey}`; } /** The cursor is stored per subscription (per resource), so relays sharing a resource share one cursor. */ export function cursorKey(binding: PollingBinding): string { return `cursor:${subscriptionKey(binding)}`;"
+    },
+    {
+     "path": "docs/adr/0013-rate-limiting-fairness.md",
+     "lineStart": 27,
+     "lineEnd": 30,
+     "quote": "- **Shared trigger subscriptions (flaw #3 harvest).** A subscription's identity is the **resource** — `(connection, connector, trigger)` — never the relay. Re-keying the cursor to the resource means one poll, one cursor, fanned out to every relay bound to it. Getting the identity right dissolves the duplication."
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}
