@@ -1,0 +1,297 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "masternext",
+ "repo": "masternext",
+ "sha": "ae124777f5cbf2eb4db66e40379526f4d5f3a985",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: the architectural-cartographer guides",
+   "body": "NextCRM is an open-source CRM built with Next.js, Prisma and PostgreSQL. This quest uses the `nextcrm-app/docs2/architectural-cartographer/` track, three guides written for three levels:\n\n1. `01-junior-engineer.md`: folder orientation, a frontend and a backend entry point, three React component anatomies, three backend anatomies.\n2. `02-mid-level-engineer.md`: the API contract map, a full-stack trace of creating a contact, and non-obvious patterns.\n3. `03-senior-engineer.md`: findings with evidence, such as process-local state.\n\n`00-reading-map.md` is a good first page: it orders the files and says what to explain after each one.\n\nThe guides quote code with comments added. The quiz is about what the real file does with particular inputs, so open each quoted file (paths are relative to `nextcrm-app/`) and read the full function, especially the order of its checks. Some quoted snippets are shortened; where the guide and the file differ, the file is the truth.",
+   "excerpts": [
+    {
+     "path": "nextcrm-app/docs2/architectural-cartographer/00-reading-map.md",
+     "lineStart": 22,
+     "lineEnd": 22,
+     "quote": "how pending, inactive, and unauthenticated users are handled"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "nextcrm-app/docs2/architectural-cartographer/00-reading-map.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The reading order for the codebase that the three guides assume."
+    }
+   ]
+  },
+  {
+   "id": "r02-route-handlers",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: reading a route handler as a checklist",
+   "body": "Most API routes in this repo follow the same shape: authenticate, read input, check permission, validate, act, respond. The order varies from route to route, and the order decides the response when a request is wrong in more than one way.\n\nFor each route below, write the checks as a numbered list with the status each one returns, before you answer anything:\n\n- `app/api/reports/export/route.ts`: note the default values for the query parameters and where the role is consulted.\n- `app/api/crm/targets/[id]/contacts/route.ts`: note when the body is read relative to the permission check, and how each field is defaulted. Look up the difference between `??` and `||` if it is not familiar.\n- `app/api/crm/contacts/enrich/route.ts` (POST and DELETE): note every early return and its status code, and where the session map lives.\n\nAlso read `actions/reports/export-csv.ts`, a 16-line file. Work out by hand what `escapeCSV` does with a few sample values, and what `generateCSV` returns for an empty list.",
+   "excerpts": [
+    {
+     "path": "nextcrm-app/docs2/architectural-cartographer/02-mid-level-engineer.md",
+     "lineStart": 123,
+     "lineEnd": 123,
+     "quote": "authenticates, validates category, applies role/report scope"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "nextcrm-app/docs2/architectural-cartographer/02-mid-level-engineer.md",
+     "lineStart": 120,
+     "lineEnd": 126,
+     "why": "The API contract map: one line per route this quest asks about."
+    }
+   ]
+  },
+  {
+   "id": "r03-server-actions",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: server actions, the app shell and process state",
+   "body": "**Server actions.** `actions/crm/contacts/create-contact.ts` is called directly from a form. Read it in the order the mid-level guide's \"create a contact\" trace gives: session check, the transform of birthday and assignment fields, the notification email, then the audit log, the Inngest event and the cache revalidation. For each side effect, write down the condition (if any) that guards it. `actions/crm/get-contacts.ts` shows how a read action treats a missing session.\n\n**The app shell.** `app/[locale]/(routes)/layout.tsx` wraps every authenticated page. List the redirects it can issue and the condition for each.\n\n**Process state.** The senior guide's Finding 2 is about state kept in a module-level variable. Read the finding and the code comment it cites, then note where that variable is declared, which handlers read or write it, and what each handler does with the value it finds there.",
+   "excerpts": [
+    {
+     "path": "nextcrm-app/docs2/architectural-cartographer/03-senior-engineer.md",
+     "lineStart": 105,
+     "lineEnd": 105,
+     "quote": "Finding 2: In-memory cancellation is not multi-replica safe."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "nextcrm-app/docs2/architectural-cartographer/03-senior-engineer.md",
+     "lineStart": 100,
+     "lineEnd": 120,
+     "why": "The senior finding on process-local session state, with its proposed fix."
+    }
+   ]
+  },
+  {
+   "id": "x-q01",
+   "target": "seed:quests:masternext/quiz/b9e748acaa674130",
+   "phase": "after",
+   "title": "Why the role check answers before the format check",
+   "body": "The route authenticates, reads `category` and `format`, and checks the category against `REPORT_CATEGORIES`; users is valid, so it passes. The next check is `category === \"users\" && user.role === \"user\"`, which returns `forbiddenResponse()` (403). The format is examined only after the data is about to be built, so xlsx is never considered.\n\n- *400 Unknown format*: that check is the last line of the route.\n- *400 Invalid category*: users is one of the allowed categories.\n- *200 with an empty CSV*: the role check stops the request first, and xlsx is not CSV anyway.",
+   "excerpts": [
+    {
+     "path": "nextcrm-app/app/api/reports/export/route.ts",
+     "lineStart": 90,
+     "lineEnd": 92,
+     "quote": "if (category === \"users\" && user.role === \"user\") {"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02",
+   "target": "seed:quests:masternext/quiz/1972ffbd0e692525",
+   "phase": "after",
+   "title": "What the export route does with no parameters",
+   "body": "`category` is `searchParams.get(\"category\") ?? \"sales\"` and `format` is `searchParams.get(\"format\") ?? \"csv\"`. With no query string both defaults apply, sales is a valid category, the manager is not blocked, and the CSV branch returns the file with `Content-Disposition: attachment; filename=\"sales-report.csv\"`.\n\n- *PDF*: PDF is produced only for format=pdf.\n- *400 Invalid category*: the default makes the category valid.\n- *JSON list of categories*: the route never lists categories.",
+   "excerpts": [
+    {
+     "path": "nextcrm-app/app/api/reports/export/route.ts",
+     "lineStart": 83,
+     "lineEnd": 84,
+     "quote": "const format = searchParams.get(\"format\") ?? \"csv\";"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q03",
+   "target": "seed:quests:masternext/quiz/7a907ccaf223db1e",
+   "phase": "after",
+   "title": "How a comma in a value is escaped",
+   "body": "`escapeCSV` turns the value into a string and checks for a comma, a double quote or a newline. If any is present it wraps the value in double quotes and doubles inner quotes. \"Smith, Jane\" contains a comma, so it is quoted; 3 contains none, so it is written bare. The row is the two escaped values joined by a comma.\n\n- *No quoting*: that would split the name into two CSV columns.\n- *Comma stripped*: escapeCSV never removes characters.\n- *Both fields quoted*: only values that need it are quoted.",
+   "excerpts": [
+    {
+     "path": "nextcrm-app/actions/reports/export-csv.ts",
+     "lineStart": 5,
+     "lineEnd": 6,
+     "quote": "if (str.includes(\",\") || str.includes('\"') || str.includes(\"\\n\")) {"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q04",
+   "target": "seed:quests:masternext/quiz/97a4b08cde134645",
+   "phase": "after",
+   "title": "What an empty report looks like",
+   "body": "`generateCSV` builds `headerRow` from the headers and returns it directly when `data.length === 0`. The download is a one-line CSV with only the column names. No error is raised and no placeholder row is invented.\n\n- *0-byte file*: the header row is always included.\n- *No data placeholder*: nothing adds such a row.\n- *Throws and 500*: an empty array is a normal input here.",
+   "excerpts": [
+    {
+     "path": "nextcrm-app/actions/reports/export-csv.ts",
+     "lineStart": 12,
+     "lineEnd": 13,
+     "quote": "if (data.length === 0) return headerRow;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q05",
+   "target": "seed:quests:masternext/quiz/2361a2d9476524f3",
+   "phase": "after",
+   "title": "Why the permission check answers before the body check",
+   "body": "The POST handler authenticates, then calls `assertCanWriteTarget(user, targetId)` and maps an `AuthorizationError` to `notFoundOrForbiddenResponse()`, a 404. Only after that does it read the JSON body and check that a name or an email is present. A caller who may not write the target never learns anything about body validation.\n\n- *400 name or email required*: that check runs only for callers who passed the permission check.\n- *403 Forbidden*: the helper used here answers 404, which hides whether the target exists.\n- *201 Created*: nothing is created; the route also answers 200 rather than 201 on success.",
+   "excerpts": [
+    {
+     "path": "nextcrm-app/app/api/crm/targets/[id]/contacts/route.ts",
+     "lineStart": 25,
+     "lineEnd": 30,
+     "quote": "if (e instanceof AuthorizationError) return notFoundOrForbiddenResponse();"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q06",
+   "target": "seed:quests:masternext/quiz/6dd6bc1b43ca9018",
+   "phase": "after",
+   "title": "Why ?? keeps the empty name but || drops the phone",
+   "body": "The create call uses `name: name ?? null` and `phone: phone || null`. The nullish operator `??` replaces only `null` and `undefined`, so an empty-string name is stored as \"\". The logical OR `||` replaces every falsy value, including \"\", so the empty phone becomes null. The email is present, so the name-or-email check passes.\n\n- *Both null*: ?? does not treat \"\" as missing.\n- *Both empty strings*: || turns the empty phone into null.\n- *name null, phone empty*: that is the two operators swapped.",
+   "excerpts": [
+    {
+     "path": "nextcrm-app/app/api/crm/targets/[id]/contacts/route.ts",
+     "lineStart": 43,
+     "lineEnd": 44,
+     "quote": "name: name ?? null, email: email ?? null,"
+    },
+    {
+     "path": "nextcrm-app/app/api/crm/targets/[id]/contacts/route.ts",
+     "lineStart": 45,
+     "lineEnd": 45,
+     "quote": "phone: phone || null,"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07",
+   "target": "seed:quests:masternext/quiz/9d03e2758894fa0a",
+   "phase": "after",
+   "title": "Why a birthday without a year is null",
+   "body": "`createContact` sets `birthday` with `birthday_day && birthday_month && birthday_year ? day + \"/\" + month + \"/\" + year : null`. A missing year makes the condition false, so the stored value is null. No partial date string is built and no year is guessed.\n\n- *\"4/7/\"*: concatenation runs only when all three parts are present.\n- *\"4/7\"*: there is no two-part format.\n- *Current year*: nothing fills in a default.",
+   "excerpts": [
+    {
+     "path": "nextcrm-app/actions/crm/contacts/create-contact.ts",
+     "lineStart": 56,
+     "lineEnd": 59,
+     "quote": "birthday_day && birthday_month && birthday_year"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08",
+   "target": "seed:quests:masternext/quiz/82ec451c5af77191",
+   "phase": "after",
+   "title": "Which side effects run for a self-assigned contact",
+   "body": "The email block runs only when `assigned_to && assigned_to !== userId`. Assigning the contact to yourself fails the second test, so no email is sent. The audit log, the `crm/contact.saved` Inngest event and `revalidatePath` are outside that block and run for every contact that is created.\n\n- *Email sent, then audit*: self-assignment skips the email.\n- *Event skipped*: the Inngest send is unconditional after a successful create.\n- *Returns right away*: the function continues to all the unguarded side effects.",
+   "excerpts": [
+    {
+     "path": "nextcrm-app/actions/crm/contacts/create-contact.ts",
+     "lineStart": 64,
+     "lineEnd": 64,
+     "quote": "if (assigned_to && assigned_to !== userId) {"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09",
+   "target": "seed:quests:masternext/quiz/21db4d19b993ec2f",
+   "phase": "after",
+   "title": "Where a pending user is sent",
+   "body": "`AppLayout` calls `getSession()`. A missing session redirects to /sign-in. With a session, it checks `user.userStatus`: PENDING redirects to /pending and INACTIVE to /inactive. The pending user has a session, so the first redirect does not apply and they land on /pending.\n\n- */sign-in*: only for visitors without a session.\n- *Pending banner*: the layout never renders children for a pending user.\n- */inactive*: that is for INACTIVE users.",
+   "excerpts": [
+    {
+     "path": "nextcrm-app/app/[locale]/(routes)/layout.tsx",
+     "lineStart": 60,
+     "lineEnd": 62,
+     "quote": "if (user?.userStatus === \"PENDING\") {"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10",
+   "target": "seed:quests:masternext/quiz/abce04e4203702c6",
+   "phase": "after",
+   "title": "Why missing API keys return 402",
+   "body": "POST /api/crm/contacts/enrich validates the body, checks write access, and then resolves the Firecrawl and OpenAI keys for the user. If either is missing, it returns `{ error: \"NO_API_KEY\" }` with status 402 (Payment Required), before any enrichment row or stream exists.\n\n- *400 validation error*: the body passed validation earlier.\n- *503*: the route does not use 503.\n- *SSE error event*: no stream has been opened yet; the error is an ordinary JSON response.",
+   "excerpts": [
+    {
+     "path": "nextcrm-app/app/api/crm/contacts/enrich/route.ts",
+     "lineStart": 49,
+     "lineEnd": 51,
+     "quote": "return NextResponse.json({ error: \"NO_API_KEY\" }, { status: 402 });"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q11",
+   "target": "seed:quests:masternext/quiz/ba5bf10f26bc9a79",
+   "phase": "after",
+   "title": "Why a cancel on the wrong replica is a 404",
+   "body": "`activeSessions` is a `Map` declared at module level, so each server process has its own. The replica that did not start s1 has no entry, `activeSessions.get(sessionId)` is undefined, and the route returns `notFoundOrForbiddenResponse()` (404). Nothing is aborted, and the running enrichment continues on the other replica. The code comment says Redis would be needed for multi-replica deployments.\n\n- *200 after aborting elsewhere*: replicas do not talk to each other here.\n- *400 sessionId required*: the parameter is present.\n- *409 Conflict*: the route has no such response.",
+   "excerpts": [
+    {
+     "path": "nextcrm-app/app/api/crm/contacts/enrich/route.ts",
+     "lineStart": 20,
+     "lineEnd": 22,
+     "quote": "Works correctly in single-process deployments. For multi-replica, use Redis."
+    },
+    {
+     "path": "nextcrm-app/app/api/crm/contacts/enrich/route.ts",
+     "lineStart": 158,
+     "lineEnd": 161,
+     "quote": "const entry = activeSessions.get(sessionId);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q12",
+   "target": "seed:quests:masternext/quiz/6ab506787ce7e099",
+   "phase": "after",
+   "title": "What status a cancelled enrichment gets",
+   "body": "After the ownership check, the DELETE handler aborts the controller, removes the session from the map, and updates the enrichment row with `status: \"FAILED\", error: \"Cancelled by user\"`. The update's errors are swallowed with `.catch(() => {})`. The status set used here has no CANCELLED value.\n\n- *CANCELLED*: the route writes FAILED.\n- *SKIPPED, Stopped early*: SKIPPED is used by the background worker for other reasons, not by cancel.\n- *PENDING for resume*: there is no resume path.",
+   "excerpts": [
+    {
+     "path": "nextcrm-app/app/api/crm/contacts/enrich/route.ts",
+     "lineStart": 173,
+     "lineEnd": 176,
+     "quote": "data: { status: \"FAILED\", error: \"Cancelled by user\" },"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q13",
+   "target": "seed:quests:masternext/quiz/896642df3a8744bb",
+   "phase": "after",
+   "title": "Why getContacts returns an empty list when signed out",
+   "body": "`getContacts` calls `requireAuthenticated()` inside a try block. If it throws `AuthenticationError`, the catch returns `[]`; any other error is rethrown. The list query with `contactReadScopeWhere(user)` runs only for an authenticated user.\n\n- *Rethrows AuthenticationError*: that specific error is caught and turned into [].\n- *Every live contact*: the unscoped query never runs without a user.\n- *A 401 response*: server actions return data, not HTTP responses.",
+   "excerpts": [
+    {
+     "path": "nextcrm-app/actions/crm/get-contacts.ts",
+     "lineStart": 10,
+     "lineEnd": 15,
+     "quote": "if (e instanceof AuthenticationError) return [];"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}
