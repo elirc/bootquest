@@ -46,18 +46,15 @@
       "id": "q03-two-identities",
       "kind": "quiz",
       "source": { "path": "astraupskill/02-CONCEPTS.md", "lines": { "start": 15, "end": 19 } },
-      "cites": [
-        { "path": "astraupskill/02-CONCEPTS.md", "lineStart": 17, "lineEnd": 19 },
-        { "path": "src/model.js", "lineStart": 506, "lineEnd": 513 }
-      ],
-      "prompt": "A subscriber's May box was cancelled. The operator starts a fresh reservation for the same subscriber and May with a brand-new request key. What happens and which rule decides it?",
-      "answer": "It is refused: the subscriber-month cycle rule still holds after cancellation, whatever the key",
+      "cites": [{"path":"src/model.js","lineStart":381,"lineEnd":388}],
+      "prompt": "A subscriber whose status is Paused needs a box. The operator asks quoteBox for one with the right number of eligible items. What happens?",
+      "answer": "It is refused with \"Only an active subscriber can reserve a box.\"",
       "distractors": [
-        "It succeeds: a new request key is a new attempt and the earlier May shipment was cancelled anyway",
-        "It returns the cancelled shipment: replay matches on subscriber and month rather than the key",
-        "It succeeds if fingerprints match: the cancelled shipment's quote for May is reused"
+        "It is quoted, and only the later reserve command rejects it",
+        "It is quoted normally, since a pause only skips the next billing cycle",
+        "It is quoted with an empty line list until the pause ends"
       ],
-      "explanation": "Idempotency handles transport uncertainty; the cycle constraint enforces business policy. reduce throws 'already has a reservation, including cancelled history'."
+      "explanation": "quoteBox finds the subscriber and ensures u.status === \"Active\" before it looks at the plan or the items, so a Paused (or Cancelled) subscriber gets that error and no quote exists for reserve to see."
     },
     {
       "id": "q04-sql-needs-constraints",
@@ -95,35 +92,29 @@
       "id": "q06-exclusion-is-hard-rule",
       "kind": "quiz",
       "source": { "path": "astraupskill/02-CONCEPTS.md", "lines": { "start": 27, "end": 29 } },
-      "cites": [
-        { "path": "astraupskill/02-CONCEPTS.md", "lineStart": 29, "lineEnd": 29 },
-        { "path": "src/model.js", "lineStart": 350, "lineEnd": 358 }
-      ],
-      "prompt": "An item matches three of a subscriber's preferred tags but also carries one of their blocked tags. Where does it appear in recommendations?",
-      "answer": "Nowhere: excluded tags are a hard eligibility filter applied before scoring",
+      "cites": [{"path":"src/model.js","lineStart":381,"lineEnd":383},{"path":"src/model.js","lineStart":45,"lineEnd":47}],
+      "prompt": "An operator calls quoteBox for a 2-item plan with itemIds [\"itm_101\", \"itm_101\"]. What happens?",
+      "answer": "unique() rejects it with \"Duplicate identifier, email or tag.\"",
       "distractors": [
-        "Near the top: three preferred-tag matches outweigh the single blocked-tag penalty",
-        "At the bottom: each blocked tag subtracts points from the item's score",
-        "In the middle: a blocked tag only halves the rating part of the score"
+        "It is quoted as two units of itm_101, using two units of its stock",
+        "It is deduplicated, and the quote then fails the item count of 2",
+        "It is quoted once, and the second id is silently dropped"
       ],
-      "explanation": "eligible() requires active, in stock and no blocked tag; recommendations filters on eligible before computing scores."
+      "explanation": "quoteBox calls array(itemIds, 20) and then unique(itemIds) first; a repeated id makes the Set smaller than the array, so ensure throws \"Duplicate identifier, email or tag.\" before any item or plan check."
     },
     {
       "id": "q07-loser-never-reaches-stock",
       "kind": "quiz",
       "source": { "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md", "lines": { "start": 29, "end": 31 } },
-      "cites": [
-        { "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md", "lineStart": 31, "lineEnd": 31 },
-        { "path": "src/repository.js", "lineStart": 11, "lineEnd": 24 }
-      ],
-      "prompt": "Two tabs race to reserve the last unit of an item from the same base. Which check rejects the loser, and what is the consequence for unrelated edits?",
-      "answer": "The raw-baseline check in the lock rejects it before reduce sees stock, so unrelated writes conflict too",
+      "cites": [{"path":"src/repository.js","lineStart":25,"lineEnd":44}],
+      "prompt": "repository.restore is given a backup whose revision is 3, and the stored workspace (unchanged since review) is at revision 10. What revision is saved?",
+      "answer": "11, one more than the larger of the two revisions",
       "distractors": [
-        "reduce's stock check rejects it with an out-of-stock error, so unrelated records never get any conflict",
-        "replay rejects it, as both tabs were frozen with the same request key for that reservation",
-        "Web Locks reject the second tab outright, so it never reads storage and unrelated edits stay safe"
+        "3, because a restore writes the backup exactly as it is",
+        "4, because a restore bumps the backup by one revision",
+        "10, because the stored revision is never moved backwards"
       ],
-      "explanation": "Inside the lock the winner has already replaced the stored bytes, so current.raw !== base.raw throws first. Safe, but coarse."
+      "explanation": "restore reads the current revision (10), builds the state from the imported backup and sets revision: Math.max(revision, imported.revision) + 1, which is 11, so the restored workspace still moves forward."
     },
     {
       "id": "q08-lost-ack-transition",
@@ -178,33 +169,29 @@
       "id": "q11-ledger-opening-balance",
       "kind": "quiz",
       "source": { "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md", "lines": { "start": 69, "end": 73 } },
-      "cites": [
-        { "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md", "lineStart": 71, "lineEnd": 73 }
-      ],
-      "prompt": "You add a stock-movement ledger. Why can't the sum of movements alone explain the current stock of the seed items?",
-      "answer": "Seed stock existed before any movement was recorded, so it needs an opening balance",
+      "cites": [{"path":"src/model.js","lineStart":476,"lineEnd":489}],
+      "prompt": "An item was never shipped, but one subscriber has rated it. The operator deletes it with the correct expected version. What happens?",
+      "answer": "It is refused, and the error asks them to archive the item instead",
       "distractors": [
-        "Cancellations are not recorded as movements, so returned units never appear in the sum",
-        "Movements are stored as floating-point numbers, and the running sum drifts over time",
-        "It can, as the seed data is generated by replaying movements at startup, so sums agree"
+        "It is deleted, and that rating is removed from the subscriber record",
+        "It is deleted, and the rating keeps pointing at the now-missing item id",
+        "It is refused only while the item still has stock left over"
       ],
-      "explanation": "Movement totals alone cannot explain existing sample stock unless there is an opening balance."
+      "explanation": "For kind item, the delete branch ensures no shipment line and no subscriber rating references the id; a rating alone fails it with \"Item has shipment or rating history. Archive it instead.\" Stock is not part of the check."
     },
     {
       "id": "q12-skip-race",
       "kind": "quiz",
       "source": { "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md", "lines": { "start": 75, "end": 79 } },
-      "cites": [
-        { "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md", "lineStart": 79, "lineEnd": 79 }
-      ],
-      "prompt": "Adding a 'skip this month' option: what is the critical race, and what prevents both sides from succeeding?",
-      "answer": "Skip racing a reserve for the same month; both must go through one subscriber-month slot",
+      "cites": [{"path":"src/model.js","lineStart":226,"lineEnd":232},{"path":"src/model.js","lineStart":540,"lineEnd":546}],
+      "prompt": "A shipment is already Shipped. The operator sends a shipment.transition to Cancelled with the correct expected version. What happens?",
+      "answer": "It is refused with \"This shipment transition is not allowed.\"",
       "distractors": [
-        "Two skips for the same month; disabling the skip button after the first click stops the second one",
-        "A skip racing a catalog edit; per-item versions make the losing write fail and retry cleanly",
-        "There is no race, as a skip never touches stock, so both sides can safely succeed"
+        "It is cancelled, and the stock for its items is returned to the shelf",
+        "It is cancelled, but the stock stays deducted as shipped",
+        "It moves to Delivered first, and is then cancelled right after that"
       ],
-      "explanation": "If each checks a separate table without an appropriate transaction or uniqueness design, both could succeed."
+      "explanation": "The transitions table allows Shipped only to Delivered. The transition branch checks transitions[sh.status].includes(c.status) right after the version check, so Shipped to Cancelled throws before any stock or history change."
     },
     {
       "id": "f01-whole-workspace-cc",
