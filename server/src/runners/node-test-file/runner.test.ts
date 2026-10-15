@@ -1,12 +1,15 @@
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  activeRunCount,
   CheckIntegrityError,
   gitBlobSha,
   parseTap,
+  removeWorkParent,
   run,
   sha256Hex,
   type NodeTestFileExercise,
@@ -314,6 +317,44 @@ describe("TAP parser", () => {
     const p = parseTap(tap);
     expect(p.failures).toEqual([{ name: "suite # one > inner", message: "it's broken" }]);
     expect(p.summary).toMatchObject({ tests: 1, fail: 1, pass: 0 });
+  });
+});
+
+describe("F12: removeWorkParent never pulls the parent out from under a run in flight", () => {
+  it("an EMPTY parent is kept while a run counts against it (the mkdir..mkdtemp window), removed after", async () => {
+    const parent = path.join(scratch, "f12-parent");
+    await mkdir(parent, { recursive: true }); // empty, exactly as between a run's mkdir(parent) and mkdtemp
+    let spawnedRefused: boolean | null = null;
+    const pending = run(
+      exerciseFor("U01"),
+      { code: await read("solutions/u01.mjs") },
+      { workRoot: parent, onSpawn: () => void removeWorkParent(parent).then((r) => (spawnedRefused = !r)) },
+    );
+    // counted synchronously, before the run's first await: the parent is still empty right now
+    expect(activeRunCount(parent)).toBe(1);
+    expect(await readdir(parent)).toEqual([]);
+    expect(await removeWorkParent(parent)).toBe(false); // without the guard this rmdir would succeed
+    expect(existsSync(parent)).toBe(true);
+    const r = await pending;
+    expect(r.failures).toEqual([]);
+    expect(r.pass).toBe(true);
+    expect(spawnedRefused).toBe(true);
+    expect(activeRunCount(parent)).toBe(0);
+    expect(await readdir(parent)).toEqual([]); // the run removed its own workspace
+    expect(await removeWorkParent(parent)).toBe(true);
+    expect(existsSync(parent)).toBe(false);
+  });
+  it("concurrent runs are each counted, and a refused (throwing) run still releases its count", async () => {
+    const parent = path.join(scratch, "f12-parent-2");
+    const a = run(exerciseFor("U01"), { code: await read("solutions/u01.mjs") }, { workRoot: parent });
+    const b = run({ ...exerciseFor("U01"), checkFile: path.join(scratch, "nope.mjs") }, { code: "" }, { workRoot: parent });
+    expect(activeRunCount(parent)).toBe(2);
+    await expect(b).rejects.toBeInstanceOf(CheckIntegrityError);
+    expect(activeRunCount(parent)).toBe(1);
+    expect(await removeWorkParent(parent)).toBe(false);
+    expect((await a).pass).toBe(true);
+    expect(activeRunCount(parent)).toBe(0);
+    expect(await removeWorkParent(parent)).toBe(true);
   });
 });
 

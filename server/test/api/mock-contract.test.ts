@@ -4,7 +4,9 @@
  * BOTH the mock and the real server (built from the mock's own fixture units, reached through the
  * client's real fetch binding, client/src/api/http.ts), so the two cannot drift silently:
  *   1. guided passes: a pass after a reveal is mode 'guided' and pays 0 XP ('revealed'); pass
- *      rates never count it as a pass;
+ *      rates never count it as a pass. Both sides DERIVE the rates from the submits they recorded
+ *      (the mock is built with passRateHistory 'empty', like the fresh server DB), and the exact
+ *      response is asserted identical; the default (fixture-history) mock must move by the same delta;
  *   2. written units: rubric null and model answer 403 until the learner's own answer exists; the
  *      untouched starter template is refused (422); afterwards both are served.
  * Cheap: one temp DB, a stand-in drill runner that applies the mock fixture's own pass rule, no
@@ -33,6 +35,10 @@ interface RateLike {
   attempts: number;
   passes: number;
   guidedPasses: number;
+  passRate: number | null;
+  units: number;
+  firstTryPasses: number;
+  firstTryRate: number | null;
 }
 /** The slice of the client's BootQuestApi this contract drives. */
 interface ContractApi {
@@ -41,7 +47,7 @@ interface ContractApi {
   getModelAnswer(id: number): Promise<{ answer: string; modelAnswer: string; rubric: { id: string; label: string }[] }>;
   revealUnit(id: number): Promise<{ solution: unknown }>;
   submitUnit(id: number, body: { code: string; selfAssisted: boolean }): Promise<SubmitLike>;
-  getPassRates(): Promise<{ overall: RateLike; byTrack: RateLike[]; byCheckType: RateLike[] }>;
+  getPassRates(): Promise<{ overall: RateLike; byTrack: (RateLike & { trackId: string })[]; byCheckType: (RateLike & { checkType: string })[] }>;
 }
 interface DrillFixture {
   starter?: string;
@@ -57,6 +63,9 @@ interface WrittenFixture {
   rubric: { id: string; label: string }[];
 }
 
+const EMPTY_RATE: RateLike = { attempts: 0, passes: 0, guidedPasses: 0, passRate: null, units: 0, firstTryPasses: 0, firstTryRate: null };
+/** the scenario's exact rates (solo pass, reveal, guided pass), the same on both sides */
+const AFTER: RateLike = { attempts: 2, passes: 1, guidedPasses: 1, passRate: 0.5, units: 1, firstTryPasses: 1, firstTryRate: 1 };
 const DRILL = 102; // mock fixture: js/reduce-groupby (drill-js, revealable, pass rule `reduce(`)
 const WRITTEN = 113; // mock fixture: a written review unit with a starter template
 
@@ -70,18 +79,18 @@ async function errorOf(p: Promise<unknown>): Promise<{ status: number; code: str
   throw new Error('expected the call to be refused');
 }
 
-let createMockApi: () => ContractApi;
+let createMockApi: (opts?: { passRateHistory?: 'fixture' | 'empty' }) => ContractApi;
 let drill: DrillFixture;
 let written: WrittenFixture;
 let drillUnit: { key: string; title: string; difficulty: number };
 let server: Server;
 let tmp: TempDb;
 const ids = { mock: { drill: DRILL, written: WRITTEN }, server: { drill: 0, written: 0 } };
-const apis: Record<'mock' | 'server', () => ContractApi> = { mock: () => createMockApi(), server: () => httpApi };
+const apis: Record<'mock' | 'server', () => ContractApi> = { mock: () => createMockApi({ passRateHistory: 'empty' }), server: () => httpApi };
 let httpApi: ContractApi;
 
 beforeAll(async () => {
-  ({ createMockApi } = (await import(CLIENT_API + 'mock.ts')) as { createMockApi: () => ContractApi });
+  ({ createMockApi } = (await import(CLIENT_API + 'mock.ts')) as { createMockApi: typeof createMockApi });
   const { createHttpApi } = (await import(CLIENT_API + 'http.ts')) as { createHttpApi: (base: string) => ContractApi };
   const details = ((await import(CLIENT_API + 'fixtures/unit-details.json')) as { default: Record<string, DrillFixture> }).default;
   const units = ((await import(CLIENT_API + 'fixtures/units.json')) as { default: Record<string, { id: number; key: string; title: string; difficulty: number }[]> }).default;
@@ -140,17 +149,38 @@ describe.each(['mock', 'server'] as const)('F17 contract (%s): the same honesty 
     const api = apis[side]();
     const id = ids[side].drill;
     const code = drill.private.solution!.code!;
+    expect(await api.getPassRates()).toEqual({ overall: { ...EMPTY_RATE }, byTrack: [], byCheckType: [] }); // both start empty
     const solo = await api.submitUnit(id, { code, selfAssisted: false });
     expect(solo).toMatchObject({ verdict: 'pass', attempt: { mode: 'solo' }, xp: { reason: null } });
     expect(solo.xp!.amount).toBeGreaterThan(0);
     await api.revealUnit(id);
     const guided = await api.submitUnit(id, { code, selfAssisted: false });
     expect(guided).toMatchObject({ verdict: 'pass', attempt: { mode: 'guided' }, xp: { amount: 0, reason: 'revealed' } });
-    // pass rates: a guided pass is reported apart, never inside `passes` (the mock serves fixture numbers; the rule must hold there too)
+    // pass rates, derived on BOTH sides from the two recorded submits: the guided pass stays in the
+    // denominator, is reported apart and is never inside `passes`; first try = the solo pass
     const rates = await api.getPassRates();
-    for (const r of [rates.overall, ...rates.byTrack, ...rates.byCheckType]) expect(r.passes + r.guidedPasses).toBeLessThanOrEqual(r.attempts);
-    if (side === 'server') expect(rates.overall).toMatchObject({ attempts: 2, passes: 1, guidedPasses: 1 });
+    expect(rates).toEqual({ overall: AFTER, byTrack: [{ trackId: 'js', ...AFTER }], byCheckType: [{ checkType: 'drill-js', ...AFTER }] });
   });
+
+  if (side === 'mock') {
+    it('the default dev:mock instance (fixture history) applies the same rule: the scenario moves it by exactly the same delta', async () => {
+      const api = createMockApi();
+      const before = (await api.getPassRates()).overall;
+      for (const r of [before, ...(await api.getPassRates()).byTrack]) expect(r.passes + r.guidedPasses).toBeLessThanOrEqual(r.attempts);
+      const code = drill.private.solution!.code!;
+      await api.submitUnit(DRILL, { code, selfAssisted: false });
+      await api.revealUnit(DRILL);
+      await api.submitUnit(DRILL, { code, selfAssisted: false });
+      const after = (await api.getPassRates()).overall;
+      expect({
+        attempts: after.attempts - before.attempts,
+        passes: after.passes - before.passes,
+        guidedPasses: after.guidedPasses - before.guidedPasses,
+        units: after.units - before.units,
+        firstTryPasses: after.firstTryPasses - before.firstTryPasses,
+      }).toEqual({ attempts: AFTER.attempts, passes: AFTER.passes, guidedPasses: AFTER.guidedPasses, units: AFTER.units, firstTryPasses: AFTER.firstTryPasses });
+    });
+  }
 
   it('written: rubric withheld and model answer 403 until the own answer exists; the untouched template is refused', async () => {
     const api = apis[side]();
