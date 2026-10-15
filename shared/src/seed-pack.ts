@@ -27,11 +27,11 @@ import { PACK_FORMAT, PackQuarantine } from './pack.ts';
 
 export const SEED_PACK_FORMAT = 'bootquest-seed-pack@1' as const;
 
-export const SEED_GENERATORS = ['quests', 'explainback', 'variants', 'patches'] as const;
+export const SEED_GENERATORS = ['quests', 'explainback', 'variants', 'patches', 'notes'] as const;
 export const SeedGenerator = z.enum(SEED_GENERATORS);
 export type SeedGenerator = z.infer<typeof SeedGenerator>;
 
-export const SEED_ITEM_KINDS = ['quiz', 'flashcard', 'reading-step', 'explain-back', 'variant', 'patch-kata'] as const;
+export const SEED_ITEM_KINDS = ['quiz', 'flashcard', 'reading-step', 'explain-back', 'variant', 'patch-kata', 'note'] as const;
 export const SeedItemKind = z.enum(SEED_ITEM_KINDS);
 export type SeedItemKind = z.infer<typeof SeedItemKind>;
 
@@ -237,6 +237,95 @@ export const SeedPatchKataItem = z
   })
   .strict();
 
+// ---------------------------------------------------------------- "Learn more" notes (seed:notes)
+
+/**
+ * Notes (owner ask 2026-10-15, the "Learn more" button): authored at seed time, validated by
+ * seed:notes, served read-only by the server. Two phases:
+ *   before = a READING, shown before the learner answers; seed:notes rejects one that contains
+ *            (or heavily overlaps) any keyed quiz answer of its quest pack;
+ *   after  = an EXPLANATION of one quiz, released only once the learner has a recorded answer
+ *            for the study quest that contains it (answer-first, like explain-back keys).
+ * Every excerpt quotes its source lines verbatim (whitespace-normalized) at the pinned sha.
+ */
+export const NOTES_DRAFT_FORMAT = 'bootquest-notes-draft@1' as const;
+export const NOTE_PHASES = ['before', 'after'] as const;
+export const NotePhase = z.enum(NOTE_PHASES);
+export type NotePhase = z.infer<typeof NotePhase>;
+/** target of a note: the whole quest pack, or the exact key of one quest item (quiz / flashcard / reading-step) */
+export const NOTE_PACK_TARGET = 'pack' as const;
+
+export const NoteExcerpt = z
+  .object({
+    path: repoRel,
+    lineStart: z.number().int().positive(),
+    lineEnd: z.number().int().positive(),
+    /** verbatim text of lines lineStart..lineEnd (whitespace runs collapsed before matching) */
+    quote: z.string().min(1),
+  })
+  .strict();
+export type NoteExcerpt = z.infer<typeof NoteExcerpt>;
+
+export const NoteReadMore = z
+  .object({
+    path: repoRel,
+    lineStart: z.number().int().positive().nullable(),
+    lineEnd: z.number().int().positive().nullable(),
+    why: z.string().min(1),
+  })
+  .strict();
+export type NoteReadMore = z.infer<typeof NoteReadMore>;
+
+/** One note as authored in content/seed-drafts/notes/<pack>.json. */
+export const NotesDraftNote = z
+  .object({
+    id: z.string().min(1),
+    target: z.string().min(1),
+    phase: NotePhase,
+    title: z.string(),
+    body: z.string(),
+    excerpts: z.array(NoteExcerpt),
+    readMore: z.array(NoteReadMore).default([]),
+  })
+  .strict();
+export type NotesDraftNote = z.infer<typeof NotesDraftNote>;
+
+/** content/seed-drafts/notes/<pack>.json (the shared draft contract, format bootquest-notes-draft@1). */
+export const NotesDraft = z
+  .object({
+    format: z.literal(NOTES_DRAFT_FORMAT),
+    /** quest pack name: the dir under content/seed/quests/ */
+    pack: z.string().min(1),
+    /** === that pack's manifest source.repo */
+    repo: z.string().min(1),
+    /** === that pack's manifest source.sha */
+    sha,
+    notes: z.array(NotesDraftNote),
+  })
+  .strict();
+export type NotesDraft = z.infer<typeof NotesDraft>;
+
+/** A stamped note (content/seed/notes/<pack>/items.json). provenance = its first excerpt. */
+export const SeedNoteItem = z
+  .object({
+    ...base,
+    kind: z.literal('note'),
+    /** the draft's id (unique per pack) */
+    noteId: z.string().regex(/^[a-z0-9][a-z0-9-]{2,63}$/),
+    /** the quest pack the note belongs to (content/seed/quests/<pack>/) */
+    pack: z.string().min(1),
+    /** 'pack' or the exact key of a quest item of that pack ('after' notes: a quiz key) */
+    target: z.string().min(1),
+    phase: NotePhase,
+    title: z.string().min(1),
+    /** markdown (no HTML, no images) */
+    body: z.string().min(1),
+    excerpts: z.array(NoteExcerpt).min(1),
+    readMore: z.array(NoteReadMore),
+  })
+  .strict();
+export type SeedNoteItem = z.infer<typeof SeedNoteItem>;
+
 export const SeedItem = z.discriminatedUnion('kind', [
   SeedQuizItem,
   SeedFlashcardItem,
@@ -244,6 +333,7 @@ export const SeedItem = z.discriminatedUnion('kind', [
   SeedExplainBackItem,
   SeedVariantItem,
   SeedPatchKataItem,
+  SeedNoteItem,
 ]);
 export type SeedItem = z.infer<typeof SeedItem>;
 export type SeedItemInput = z.input<typeof SeedItem>;
@@ -261,6 +351,7 @@ export const GENERATOR_KINDS: Readonly<Record<SeedGenerator, readonly SeedItemKi
   explainback: ['explain-back'],
   variants: ['variant'],
   patches: ['patch-kata'],
+  notes: ['note'],
 };
 
 export const SeedItemsFile = z
@@ -357,7 +448,7 @@ export const SeedValidationStamp = z
     format: z.literal(SEED_PACK_FORMAT),
     /** pack source id: "<generator>/<name>" (the quarantine.json `source`) */
     source: z.string().min(1),
-    fingerprintKind: z.string().regex(/^seed:(quests|explainback|variants|patches)$/),
+    fingerprintKind: z.string().regex(/^seed:(quests|explainback|variants|patches|notes)$/),
     fingerprint: z.string().regex(/^[0-9a-f]{64}$/),
     toolchain: z
       .object({ node: z.string().min(1), esbuild: z.string().min(1).optional(), dotnetSdk: z.string().min(1).optional(), dotnetRef: z.string().min(1).optional() })
