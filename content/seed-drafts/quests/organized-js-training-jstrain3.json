@@ -15,13 +15,13 @@
         { "path": "deskpilot-clean/src/lib/state-machine.ts", "lineStart": 4, "lineEnd": 11 }
       ],
       "prompt": "A DeskPilot ticket is closed. Which statuses may it transition to?",
-      "answer": "Only in_progress - closed tickets can be reopened, but not resolved, blocked or sent back to open",
+      "answer": "Only in_progress: a closed ticket can be reopened, nothing else",
       "distractors": [
-        "None - closed is terminal",
-        "open or in_progress",
-        "Any status except closed itself"
+        "None: closed is a terminal status, so every transition is refused",
+        "open or in_progress, so a reopened ticket can go back to the queue",
+        "Any status except closed itself, as long as the ticket is not merged"
       ],
-      "explanation": "rules.closed is [\"in_progress\"]. Note that nothing anywhere transitions back to open; open only appears as a starting status."
+      "explanation": "rules.closed is [\"in_progress\"]: not resolved, blocked or open. Note that nothing anywhere transitions back to open; open only appears as a starting status."
     },
     {
       "id": "q02-same-status-noop",
@@ -31,11 +31,11 @@
         { "path": "deskpilot-clean/src/lib/state-machine.ts", "lineStart": 33, "lineEnd": 35 }
       ],
       "prompt": "transitionTicket is asked to move a blocked ticket to blocked. What happens?",
-      "answer": "The ticket is returned unchanged - no error, no write, and no status_changed event",
+      "answer": "The ticket is returned unchanged, with no write and no status_changed event",
       "distractors": [
-        "TransitionError, because blocked is not in blocked's allowed list",
-        "The ticket is rewritten and a status_changed event from blocked to blocked is logged",
-        "The ticket's updatedAt is bumped but no event is logged"
+        "A TransitionError, because blocked is not in blocked's own allowed list",
+        "The ticket is rewritten and a blocked -> blocked status_changed event is logged",
+        "The ticket's updatedAt is bumped and saved, but no status event is logged"
       ],
       "explanation": "The same-status check returns early, before the rules lookup, so idempotent requests are harmless."
     },
@@ -48,13 +48,13 @@
         { "path": "deskpilot-clean/src/lib/store.ts", "lineStart": 58, "lineEnd": 60 }
       ],
       "prompt": "What happens to a ticket that has been merged into another one?",
-      "answer": "It can no longer transition (TransitionError 'Merged tickets cannot transition.') and it is hidden from listTickets",
+      "answer": "It can no longer transition, and listTickets hides it from the list",
       "distractors": [
-        "It transitions together with the ticket it was merged into",
-        "It is deleted from the JSON store at merge time",
-        "It can still transition, but only to closed"
+        "It transitions together with the ticket it was merged into from then on",
+        "It is deleted from the JSON store at merge time, leaving only the target",
+        "It can still transition, but only to closed, and stays in the ticket list"
       ],
-      "explanation": "transitionTicket rejects isMerged tickets, and listTickets filters out ticket.isMerged. The record stays in the store, pointing at mergedIntoId."
+      "explanation": "transitionTicket rejects isMerged tickets with TransitionError 'Merged tickets cannot transition.', and listTickets filters out ticket.isMerged. The record stays in the store, pointing at mergedIntoId."
     },
     {
       "id": "q04-lost-update",
@@ -66,13 +66,13 @@
         { "path": "deskpilot-clean/src/lib/store.ts", "lineStart": 185, "lineEnd": 185 }
       ],
       "prompt": "Two createTicket calls for the same org run concurrently. Both readDb before either writes. What can the stored file end up with?",
-      "answer": "Only one of the two tickets - each writes its own full copy of the database, so the later write erases the earlier ticket (and both computed the same ticketNumber)",
+      "answer": "Only one ticket: each writes its own full copy, so the later write erases the other",
       "distractors": [
-        "Both tickets, because writeQueue serializes the writes",
-        "Both tickets with the same ticketNumber, but nothing is lost",
-        "Neither ticket, because the second write detects the conflict and aborts"
+        "Both tickets, because writeQueue serializes the two read-modify-write cycles",
+        "Both tickets, sharing one ticketNumber, but nothing is lost from the file itself",
+        "Neither ticket, because the second write detects the conflict and both abort"
       ],
-      "explanation": "writeQueue only orders the writeFile calls; the read-modify-write cycle around them is not serialized. Each caller serializes the whole db object it read, so the second write replaces the first."
+      "explanation": "writeQueue only orders the writeFile calls; the read-modify-write cycle around them is not serialized. Each caller serializes the whole db object it read, so the second write replaces the first (and both computed the same ticketNumber)."
     },
     {
       "id": "q05-three-reads",
@@ -83,13 +83,13 @@
         { "path": "deskpilot-clean/src/lib/state-machine.ts", "lineStart": 41, "lineEnd": 57 }
       ],
       "prompt": "A successful transitionTicket call: how many readDb and writeDb calls does it make in total?",
-      "answer": "3 readDb and 2 writeDb - getTicketById, setTicketStatus and addTransitionEvent each read the whole database; the last two each write it back",
+      "answer": "3 readDb and 2 writeDb, one read-modify-write per store function",
       "distractors": [
-        "1 readDb and 1 writeDb, in a single transaction",
-        "2 readDb and 1 writeDb",
-        "3 readDb and 3 writeDb"
+        "1 readDb and 1 writeDb, wrapped together in a single transaction",
+        "2 readDb and 1 writeDb, since the status and event share one write",
+        "3 readDb and 3 writeDb, since every store function writes the file"
       ],
-      "explanation": "Each store function opens its own read-modify-write cycle. The status change and its event are separate writes, so a failure between them leaves a status change with no audit event."
+      "explanation": "getTicketById, setTicketStatus and addTransitionEvent each read the whole database; the last two each write it back. The status change and its event are separate writes, so a failure between them leaves a status change with no audit event."
     },
     {
       "id": "q06-resolved-at-sticky",
@@ -99,11 +99,11 @@
         { "path": "deskpilot-clean/src/lib/store.ts", "lineStart": 342, "lineEnd": 346 }
       ],
       "prompt": "A resolved ticket is reopened (resolved -> in_progress). What happens to its resolvedAt?",
-      "answer": "It keeps the old timestamp - resolvedAt is set on resolved/closed but never cleared on reopen",
+      "answer": "It keeps the old timestamp, since reopening never clears resolvedAt",
       "distractors": [
-        "It is cleared to null",
-        "It is set to the reopen time",
-        "It is moved into a reopenedAt field"
+        "It is cleared to null, since the ticket is no longer resolved",
+        "It is set to the reopen time, like updatedAt on every status change",
+        "It is moved into a reopenedAt field and resolvedAt is left empty"
       ],
       "explanation": "setTicketStatus only assigns resolvedAt when the new status is resolved or closed; there is no branch that resets it, so reports can show an in-progress ticket as resolved."
     },
@@ -115,13 +115,13 @@
         { "path": "deskpilot-clean/src/lib/store.ts", "lineStart": 286, "lineEnd": 288 }
       ],
       "prompt": "On a new ticket, an agent first adds an internal note, then a customer comments, then the agent replies publicly. Which comment sets firstResponseAt?",
-      "answer": "The agent's public reply - internal notes and customer comments never count as a first response",
+      "answer": "The agent's public reply, the first comment that is both agent and public",
       "distractors": [
-        "The internal note, since it is the first agent comment",
-        "The customer's comment, since it is the first public comment",
-        "None - firstResponseAt is only set by a status transition"
+        "The internal note, since it is the first comment written by an agent",
+        "The customer's comment, since it is the first public comment on the ticket",
+        "None: firstResponseAt is set only by a transition out of the open status"
       ],
-      "explanation": "The condition is !ticket.firstResponseAt && authorType === \"agent\" && !isInternal; it is set once and never moved."
+      "explanation": "The condition is !ticket.firstResponseAt && authorType === \"agent\" && !isInternal: internal notes and customer comments never count. It is set once and never moved."
     },
     {
       "id": "q08-escape-gaps",
@@ -131,11 +131,11 @@
         { "path": "deskpilot-clean/src/lib/store.ts", "lineStart": 279, "lineEnd": 279 }
       ],
       "prompt": "A comment body is  Tom & Jerry <b>  . What bodyHtml is stored?",
-      "answer": "<p>Tom & Jerry &lt;b&gt;</p> - the body is trimmed and only < and > are escaped; & is left as-is",
+      "answer": "<p>Tom & Jerry &lt;b&gt;</p>: trimmed, and only the < and > are escaped",
       "distractors": [
-        "<p>Tom &amp; Jerry &lt;b&gt;</p> - every HTML special character is escaped",
-        "<p>Tom & Jerry <b></p> - the body is stored unescaped",
-        "<p>Tom &amp; Jerry <b></p> - only ampersands are escaped"
+        "<p>Tom &amp; Jerry &lt;b&gt;</p>: trimmed, with every HTML special escaped",
+        "<p> Tom & Jerry <b> </p>: stored exactly as sent, with nothing escaped",
+        "<p>Tom &amp; Jerry <b></p>: trimmed, with only the ampersand escaped"
       ],
       "explanation": "bodyHtml is built with replaceAll(\"<\", \"&lt;\").replaceAll(\">\", \"&gt;\") on the trimmed body. Ampersands and quotes pass through untouched."
     },
@@ -147,11 +147,11 @@
         { "path": "deskpilot-clean/src/lib/store.ts", "lineStart": 231, "lineEnd": 247 }
       ],
       "prompt": "updateTicketFields is called with exactly the ticket's current subject and priority. What changes?",
-      "answer": "updatedAt is bumped and the file is rewritten, but no ticket.updated event is logged",
+      "answer": "updatedAt is bumped and the file rewritten, but no ticket.updated event is logged",
       "distractors": [
-        "Nothing at all - the function returns before writing",
-        "updatedAt is bumped and an empty ticket.updated event is logged",
-        "An error is thrown because no field changed"
+        "Nothing at all: the function compares the fields and returns before writing",
+        "updatedAt is bumped and a ticket.updated event with no changed fields is logged",
+        "A validation error is thrown, because an update must change at least one field"
       ],
       "explanation": "updatedAt = nowIso() runs unconditionally; the event push is guarded by Object.keys(newValue).length > 0. The ticket jumps to the top of the updatedAt-sorted list anyway."
     },
@@ -163,13 +163,13 @@
         { "path": "deskpilot-clean/src/lib/store.ts", "lineStart": 223, "lineEnd": 223 }
       ],
       "prompt": "updateTicketFields receives tags [\" vip\", \"vip\", \"\", \"billing\"]. What does the ticket store?",
-      "answer": "[\"vip\", \"billing\"] - tags are trimmed, empty ones dropped, duplicates removed in first-seen order",
+      "answer": "[\"vip\", \"billing\"]: trimmed, empties dropped, deduplicated in order",
       "distractors": [
-        "[\" vip\", \"vip\", \"billing\"] - only empty tags are dropped",
-        "[\"billing\", \"vip\"] - tags are deduplicated and sorted",
-        "[\" vip\", \"vip\", \"\", \"billing\"] - tags are stored as sent"
+        "[\" vip\", \"vip\", \"billing\"]: only the empty tag is dropped before saving",
+        "[\"billing\", \"vip\"]: trimmed, empties dropped, then deduplicated and sorted",
+        "[\" vip\", \"vip\", \"\", \"billing\"]: tags are stored exactly as they were sent"
       ],
-      "explanation": "Array.from(new Set(tags.map(trim).filter(Boolean))) - a Set keeps insertion order. The event is only logged if the JSON of the new list differs from the old one."
+      "explanation": "Array.from(new Set(tags.map(trim).filter(Boolean))) - a Set keeps first-seen insertion order. The event is only logged if the JSON of the new list differs from the old one."
     },
     {
       "id": "q11-ticket-number",
@@ -179,13 +179,13 @@
         { "path": "deskpilot-clean/src/lib/store.ts", "lineStart": 104, "lineEnd": 109 }
       ],
       "prompt": "Org A has tickets numbered 1-7 and org B has 1-30. What ticketNumber does org A's next ticket get?",
-      "answer": "8 - numbering is the per-org maximum plus one",
+      "answer": "8: the next number is org A's own maximum plus one",
       "distractors": [
-        "31 - numbers are global across orgs",
-        "38 - the total ticket count plus one",
-        "A random UUID-derived number"
+        "31: numbers are shared across orgs, so it follows 30",
+        "38: the total ticket count across both orgs plus one",
+        "A UUID-derived number, so numbers never collide"
       ],
-      "explanation": "nextTicketNumber filters to the org and reduces with Math.max starting at 0."
+      "explanation": "nextTicketNumber filters to the org and reduces with Math.max starting at 0, so it is the per-org maximum plus one."
     },
     {
       "id": "f01-write-queue-limit",

@@ -15,11 +15,11 @@
         { "path": "src/lib/sqlite.js", "lineStart": 195, "lineEnd": 205 }
       ],
       "prompt": "Two browser tabs loaded the same workspace. Tab A renames page X and saves; a moment later Tab B, which never saw A's rename, edits page Y and saves. What does the server keep?",
-      "answer": "Tab B's entire state - PUT replaces the whole workspace JSON, so A's rename of X is silently lost",
+      "answer": "Tab B's whole state: PUT replaces the entire workspace JSON, losing A's rename",
       "distractors": [
-        "Both edits, because the server merges page-level changes",
-        "Tab A's state, because B's save is rejected as stale",
-        "Both edits, but X's rename is flagged as a conflict for review"
+        "Both edits, because the server merges the two saves page by page before writing",
+        "Tab A's state, because B's save is rejected as stale by a version check on PUT",
+        "Both edits, but the rename of page X is flagged as a conflict for the user to review"
       ],
       "explanation": "The route upserts the full state document; the SQL is INSERT ... ON CONFLICT(workspace_id) DO UPDATE SET state_json = excluded.state_json. There is no version check or merge on the server."
     },
@@ -31,13 +31,13 @@
         { "path": "src/app/api/workspace/route.js", "lineStart": 35, "lineEnd": 38 }
       ],
       "prompt": "A client PUTs a workspace whose meta.updatedAt is a date in the year 2099. What updatedAt is stored?",
-      "answer": "The server's current time - the route overwrites meta.updatedAt (and workspaceId) after spreading the client's meta",
+      "answer": "The server's current time, which overwrites the client's meta.updatedAt",
       "distractors": [
-        "2099, because the client's meta is stored as sent",
-        "The later of the two timestamps",
-        "None - the request is rejected for a future timestamp"
+        "2099, because the client's meta object is stored exactly as it was sent",
+        "The later of the client's timestamp and the server's own current time",
+        "None: the request is rejected with a 400 for carrying a future timestamp"
       ],
-      "explanation": "nextState.meta is { ...(state.meta || {}), workspaceId, updatedAt: new Date().toISOString() }, so later keys win over the client's values."
+      "explanation": "nextState.meta is { ...(state.meta || {}), workspaceId, updatedAt: new Date().toISOString() }, so the route's later keys (updatedAt and workspaceId) win over the client's values."
     },
     {
       "id": "q03-remote-older-ignored",
@@ -47,11 +47,11 @@
         { "path": "src/lib/workspaceStore.js", "lineStart": 368, "lineEnd": 372 }
       ],
       "prompt": "applyRemoteState receives a remote state whose meta.updatedAt equals the local meta.updatedAt. What changes locally?",
-      "answer": "Nothing - remote state is applied only when its timestamp is strictly newer than local",
+      "answer": "Nothing: remote state is applied only when strictly newer than local",
       "distractors": [
-        "Everything - remote state always replaces local state",
-        "Only pages and blocks are replaced; comments are kept",
-        "The remote state is merged key by key with local state"
+        "Everything: remote state always replaces local state when it arrives",
+        "Only pages and blocks are replaced, while local comments are kept",
+        "The remote state is merged key by key into the local workspace state"
       ],
       "explanation": "The guard returns {} when remoteUpdatedAt <= localUpdatedAt (or is NaN). When it is newer, collections are replaced wholesale, not merged."
     },
@@ -63,13 +63,13 @@
         { "path": "src/app/api/workspace/route.js", "lineStart": 40, "lineEnd": 49 }
       ],
       "prompt": "A PUT /api/workspace arrives whose state.activities already holds 200 entries. How many activities are stored afterwards, and which one is dropped?",
-      "answer": "200 - the new activity is appended and slice(-200) drops the oldest entry",
+      "answer": "200: the new activity is appended and slice(-200) drops the oldest",
       "distractors": [
-        "201 - the log grows without bound",
-        "200 - the new activity is discarded because the log is full",
-        "1 - the log is reset once it reaches 200"
+        "201: the log is appended to and grows without any upper bound at all",
+        "200: the new activity is discarded, because the log is already full",
+        "1: the log is reset to just the new entry once it reaches 200 items"
       ],
-      "explanation": "activities is [...existing, newEntry].slice(-200): keep the last 200, i.e. the newest."
+      "explanation": "activities is [...existing, newEntry].slice(-200): keep the last 200, i.e. the newest, so the oldest entry is the one dropped."
     },
     {
       "id": "q05-move-into-descendant",
@@ -80,13 +80,13 @@
         { "path": "src/lib/workspaceUtils.js", "lineStart": 22, "lineEnd": 35 }
       ],
       "prompt": "Page A contains B, and B contains C. A user drags A onto C (movePage(A, C)). What happens?",
-      "answer": "Nothing - walking up from C reaches A, so isDescendant reports a cycle and movePage returns no changes",
+      "answer": "Nothing: walking up from C reaches A, so the move is refused as a cycle",
       "distractors": [
-        "A moves under C, and C becomes the root of the tree",
+        "A moves under C, and C is promoted to become the new root of the tree",
         "A moves under C, and B is re-parented to the root to break the cycle",
-        "It throws, and the sidebar shows an error"
+        "It throws a cycle error, and the sidebar shows an error toast to the user"
       ],
-      "explanation": "isDescendant(pages, C, A) follows parentId links from C: C -> B -> A, finds A, returns true. movePage also ignores moving a page onto itself."
+      "explanation": "isDescendant(pages, C, A) follows parentId links from C: C -> B -> A, finds A, returns true, so movePage returns no changes. movePage also ignores moving a page onto itself."
     },
     {
       "id": "q06-deleted-parent-hides",
@@ -96,13 +96,13 @@
         { "path": "src/lib/workspaceUtils.js", "lineStart": 1, "lineEnd": 8 }
       ],
       "prompt": "Parent page P is soft-deleted but its child page Q is not. Does Q appear in the sidebar tree built by buildPageTree?",
-      "answer": "No - the recursion only descends through non-deleted pages, so Q is unreachable while P is in the trash",
+      "answer": "No: the recursion only descends through pages that are not deleted",
       "distractors": [
-        "Yes, promoted to the root level",
-        "Yes, still nested under a greyed-out P",
-        "Yes, because Q's own isDeleted flag is false"
+        "Yes, promoted to the root level until its parent page is restored",
+        "Yes, still nested under P, which is shown greyed out in the tree",
+        "Yes, because Q's own isDeleted flag is false, so the filter keeps it"
       ],
-      "explanation": "Each level filters parentId === parentId && !isDeleted and recurses into the survivors only. Q stays in pages but is orphaned from the visible tree."
+      "explanation": "Each level filters parentId === parentId && !isDeleted and recurses into the survivors only. Q stays in pages but is unreachable from the visible tree while P is in the trash."
     },
     {
       "id": "q07-recent-list",
@@ -112,13 +112,13 @@
         { "path": "src/lib/workspaceStore.js", "lineStart": 83, "lineEnd": 83 }
       ],
       "prompt": "recent is [B, A, C] and the user opens page A. What is recent afterwards?",
-      "answer": "[A, B, C] - A moves to the front, its old entry is removed, and the list is capped at 40",
+      "answer": "[A, B, C]: A moves to the front and its old entry is removed",
       "distractors": [
-        "[A, B, A, C] - every visit is recorded",
-        "[B, A, C] - pages already in the list keep their position",
-        "[B, C, A] - the newest visit goes to the end"
+        "[A, B, A, C]: every visit is recorded, including repeat visits",
+        "[B, A, C]: pages already in the list keep their current position",
+        "[B, C, A]: the old entry is removed and the visit goes to the end"
       ],
-      "explanation": "[pageId, ...state.recent.filter((id) => id !== pageId)].slice(0, 40): a move-to-front, deduplicated, bounded list."
+      "explanation": "[pageId, ...state.recent.filter((id) => id !== pageId)].slice(0, 40): a move-to-front, deduplicated list capped at 40."
     },
     {
       "id": "q08-add-block-fallback",
@@ -128,11 +128,11 @@
         { "path": "src/lib/workspaceStore.js", "lineStart": 206, "lineEnd": 212 }
       ],
       "prompt": "addBlock is called with an afterBlockId that no longer exists on the page. Where is the new block inserted?",
-      "answer": "At the end of the page - findIndex returns -1, and index < 0 falls into the push branch",
+      "answer": "At the end of the page, since findIndex returns -1 and index < 0 pushes",
       "distractors": [
-        "At the start of the page, since -1 + 1 is 0",
-        "Nowhere - the call is ignored",
-        "Right after the first block of the page"
+        "At the start of the page, since the -1 index plus 1 splices at position 0",
+        "Nowhere: the call is ignored because the anchor block cannot be found",
+        "Right after the first block of the page, as the fallback anchor block"
       ],
       "explanation": "Both an unknown afterBlockId and the last block's id lead to list.push; only a found, non-last index uses splice(index + 1, 0, nextBlock)."
     },
@@ -144,13 +144,13 @@
         { "path": "src/app/api/workspace/version/route.js", "lineStart": 46, "lineEnd": 54 }
       ],
       "prompt": "PATCH /api/workspace/version restores a version of page X. What does it change in the stored workspace?",
-      "answer": "Page X's fields are overlaid with the snapshot page, X's blocks are replaced by the snapshot blocks, and meta.updatedAt is bumped",
+      "answer": "It overlays X with the snapshot page and blocks, and bumps meta.updatedAt",
       "distractors": [
-        "The whole workspace is rolled back to the moment the version was saved",
-        "Only X's title is restored; blocks are left as they are",
-        "A new page is created from the snapshot next to X"
+        "It rolls the whole workspace back to the moment the version was saved",
+        "It restores only X's title from the snapshot and leaves its blocks as is",
+        "It creates a new page from the snapshot and places it next to page X"
       ],
-      "explanation": "It rewrites state.pages[pageIndex] (spread with version.snapshot.page) and state.blocksByPage[pageId], then upserts the workspace. Other pages are untouched."
+      "explanation": "It rewrites state.pages[pageIndex] (spread with version.snapshot.page) and replaces state.blocksByPage[pageId] with the snapshot blocks, then upserts the workspace with a new updatedAt. Other pages are untouched."
     },
     {
       "id": "q10-presence-ttl",
@@ -161,11 +161,11 @@
         { "path": "src/lib/workspaceStore.js", "lineStart": 348, "lineEnd": 355 }
       ],
       "prompt": "With default arguments, how stale may a presence entry and a typing indicator become before the prune functions drop them?",
-      "answer": "Presence survives up to 13000 ms, typing indicators up to 3000 ms",
+      "answer": "Presence up to 13000 ms, typing indicators up to 3000 ms",
       "distractors": [
-        "Both survive up to 13000 ms",
-        "Presence up to 3000 ms, typing up to 13000 ms",
-        "Both survive until the page is reloaded"
+        "Both presence and typing indicators up to 13000 ms",
+        "Typing indicators outlive presence: 13000 ms against 3000 ms",
+        "Both survive until the page is reloaded or the tab closes"
       ],
       "explanation": "prunePresence(maxAgeMs = 13000) and pruneTyping(maxAgeMs = 3000) keep entries whose now - updatedAt <= maxAgeMs."
     },

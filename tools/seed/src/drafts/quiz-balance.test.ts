@@ -8,7 +8,8 @@ import { describe, expect, it } from 'vitest';
  * Hash-seeded choice order fixes WHERE the key sits, but not a length tell:
  * if the keyed answer is usually the longest choice, "pick the longest" clears
  * the 80% study-quest gate without reading the guides. The same goes for an
- * answer that is usually the shortest. This guard covers the drafts that were
+ * answer that is usually the shortest, and for a key that is typically much
+ * longer or shorter than its rivals (median answer/longest-distractor ratio). This guard covers the drafts that were
  * rebalanced; the older hand packs still carry the pattern (see transplant
  * notes), so the guarded list grows as packs are rebalanced. Do NOT raise the
  * thresholds to admit a pack; rewrite its choices.
@@ -59,12 +60,33 @@ const GUARDED = [
   'organized-build-subbox',
   'organized-dotnet-pastebin',
   'organized-dotnet-trello',
+  // campaign 2 final wave, rebalance-3: these hand drafts keyed the longest choice in 83-100% of quizzes
+  'organized-js-training-jsdrill_sync_20260223_125137',
+  'organized-js-training-jstrain2',
+  'organized-js-training-jstrain2.2',
+  'organized-js-training-jstrain2.3',
+  'organized-js-training-jstrain3',
+  'organized-js-training-react',
+  'organized-js-training-trainjs',
+  'react',
+  'recipegen-app',
+  'recipeweb',
+  'relay-app',
+  'ship-it',
+  'trainjs',
+  'unionboot',
 ];
 const MAX_LONGEST_SHARE = 0.35;
 const MAX_SHORTEST_SHARE = 0.4;
 /** Median of answer length / longest-distractor length must sit in this band. */
 const MEDIAN_RATIO_MIN = 0.8;
 const MEDIAN_RATIO_MAX = 1.2;
+/**
+ * No single length rank may dominate: if the key is (say) the second-longest choice in most quizzes,
+ * "pick the second-longest" becomes the tell (rebalance-3 review: 58% in react and jsdrill_sync).
+ * Rank = 1 + number of distractors strictly longer than the key, so ties never count against the guard's author.
+ */
+const MAX_RANK_SHARE = 0.5;
 
 /**
  * Format tells (REBALANCE-1 fix pass). A key written as "Verdict: reason" next
@@ -162,6 +184,18 @@ describe('hand-authored quiz drafts do not leak the key by length or position', 
         }
       });
     }
+
+    it(`${repo}: no single key-length rank holds most quizzes`, () => {
+      const qs = quizzes(repo);
+      const byRank = new Map<number, string[]>();
+      for (const q of qs) {
+        const rank = 1 + q.distractors.filter((d) => d.length > q.answer.length).length;
+        byRank.set(rank, [...(byRank.get(rank) ?? []), q.id]);
+      }
+      for (const [rank, ids] of byRank) {
+        expect(ids.length / qs.length, `key is length rank ${rank} in: ${ids.join(', ')}`).toBeLessThanOrEqual(MAX_RANK_SHARE);
+      }
+    });
 
     it(`${repo}: the stamped pack uses every answer slot`, () => {
       const pack = JSON.parse(readFileSync(join(ROOT, 'content', 'seed', 'quests', repo, 'items.json'), 'utf8')) as { items: PackQuiz[] };
