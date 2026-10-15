@@ -1,8 +1,9 @@
 /**
  * Content regression guard for generated goal-check quizzes in the SHIPPED quest packs.
  *
- * The goal-check extractor (factory/quests/parse.ts) treats a bare `**Goal**` in prose as a
- * Goal marker, so a guide intro such as
+ * The goal-check extractor (factory/quests/parse.ts) treated a bare `**Goal**` in prose as a
+ * Goal marker (fixed in campaign 2 factory-2; this guard stays as the content-level backstop),
+ * so a guide intro such as
  *   "Each has a **Goal** and a **Check** you can observe."
  * becomes a junk exercise: prompt "Goal: and a", keyed answer "you can observe." — and that
  * fragment then leaks into sibling goal-checks as a distractor. seed:check stays green on

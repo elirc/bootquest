@@ -80,4 +80,14 @@ describe('the real estate', () => {
     const r = answerPositionReport({ seedDir: join(REPO, 'content', 'seed') });
     expect(r.offenders.map((o) => o.pack).sort()).toEqual(expected);
   });
+
+  // the GATE (campaign 2 factory-2): `npm run seed:lint:answers` must print RESULT OK, so a re-seed
+  // that piles keys at one index again fails the tools/seed suite instead of only being reported.
+  it('GATE: no committed quest or code pack is degenerate (seed:lint:answers RESULT OK)', () => {
+    const REPO = resolve(import.meta.dirname, '..', '..', '..', '..');
+    const r = answerPositionReport({ seedDir: join(REPO, 'content', 'seed'), packsDir: join(REPO, 'content', 'packs') });
+    expect(r.rows.length).toBeGreaterThan(0);
+    expect(r.offenders.map((o) => `${o.pack} top ${o.dominantIndex} @ ${Math.round(o.dominantShare * 100)}%`)).toEqual([]);
+    expect(formatAnswerPositionReport(r).at(-1)).toBe('RESULT OK');
+  });
 });

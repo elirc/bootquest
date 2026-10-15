@@ -1,5 +1,6 @@
 // Seed-session authoring path for seed:quests (NOT part of the fingerprinted factory).
-//   node --import tsx tools/seed/authoring/quests-authored.ts <draft.json> [--out <dir>]
+//   node --import tsx tools/seed/authoring/quests-authored.ts <draft.json> [--out <dir>] [--checkouts <dir>]
+//   (--checkouts / BOOTQUEST_CHECKOUTS: read the checkout at <dir>/<repo>@<sha> instead of draft.checkout)
 //
 // W5a's seed:quests reads guide shapes only (Goal/**Check**, F-tables, numbered/R
 // findings); it has no input for hand-authored items. Repos whose refined guides use
@@ -12,6 +13,12 @@
 // parser's citations inside that range (never typed by hand). Extra authoring rule
 // beyond the validator: a finding-location key/distractor written as path:line must
 // itself resolve at the pinned sha.
+//
+// Choice ORDER: the stored order is hash-seeded from the item key exactly like the
+// generator's and the drafts path's (`hashOrder(..., `${key}:order`, text)`), so the keyed
+// choice lands at a deterministic, well-spread index. The draft's `answer` index only names
+// WHICH authored choice is keyed; it never decides where it is stored (three drafts keyed
+// every quiz at choice 0, which seed:lint:answers flags as degenerate).
 //
 // draft: { repo, sha, checkout, guides: string[], excludeDirs?: string[],
 //          authored: [{ id, guide, lines: {start,end} | find: string, span?: number,
@@ -29,7 +36,7 @@ import { generateQuestCandidates } from '../src/factory/quests/generate.ts';
 import { headings, scanLines } from '../src/factory/quests/parse.ts';
 import { validateQuestItem } from '../src/factory/quests/validate.ts';
 import { bucket, DEFAULT_SEED_DIR, finish, parseArgs, summarize } from '../src/factory/report.ts';
-import { stableKey } from '../src/factory/util.ts';
+import { hashOrder, stableKey } from '../src/factory/util.ts';
 
 interface AuthoredQuiz {
   id: string;
@@ -60,7 +67,9 @@ finish('seed:quests(authored)', () => {
   if (!draftPath) throw new Error('usage: quests-authored.ts <draft.json> [--out <dir>]');
   const d = JSON.parse(readFileSync(draftPath, 'utf8')) as Draft;
   const ex = Exclusions.load();
-  const co = openCheckout({ root: resolve(d.checkout), sha: d.sha, repo: d.repo, ...(d.excludeDirs ? { excludeDirs: d.excludeDirs } : {}) });
+  const checkouts = opts.get('checkouts') ?? process.env.BOOTQUEST_CHECKOUTS;
+  const root = checkouts ? join(resolve(checkouts), `${d.repo}@${d.sha}`) : resolve(d.checkout);
+  const co = openCheckout({ root, sha: d.sha, repo: d.repo, ...(d.excludeDirs ? { excludeDirs: d.excludeDirs } : {}) });
   const head = [`[seed:quests(authored)] repo ${co.repo} @ ${co.sha} (pin ${co.pin}); generator guides ${d.guides.length}; authored ${d.authored.length}`];
   const repoHit = ex.repo(co.repo);
   if (repoHit) throw new Error(`repo ${co.repo} is ${repoHit.reason}`);
@@ -103,6 +112,13 @@ finish('seed:quests(authored)', () => {
       }
     }
     const key = stableKey('quests', co.repo, 'quiz', ['authored', a.id]);
+    if (!Number.isInteger(a.answer) || a.answer < 0 || a.answer >= a.choices.length) {
+      authoredProblems.push(`${a.id}: answer index ${a.answer} is outside its ${a.choices.length} choices`);
+      continue;
+    }
+    const authoredChoices = a.choices.map((c) => ({ text: c.text, evidence: c.evidence ?? [] }));
+    const keyed = authoredChoices[a.answer]!;
+    const choices = hashOrder(authoredChoices, `${key}:order`, (c) => c.text);
     const item: SeedQuizItem = {
       kind: 'quiz',
       key,
@@ -110,8 +126,8 @@ finish('seed:quests(authored)', () => {
       citations: cites,
       variety: a.variety,
       prompt: a.prompt,
-      choices: a.choices.map((c) => ({ text: c.text, evidence: c.evidence ?? [] })),
-      check: { type: 'quiz', itemKey: key, grading: 'choice', answerKey: a.answer, choices: a.choices.map((c) => c.text) },
+      choices,
+      check: { type: 'quiz', itemKey: key, grading: 'choice', answerKey: choices.indexOf(keyed), choices: choices.map((c) => c.text) },
       explanation: a.explanation ?? '',
     };
     bucket(outcome, key, validateQuestItem(co, ex, item));

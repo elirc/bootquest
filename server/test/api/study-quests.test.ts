@@ -92,11 +92,10 @@ const storedTexts = (q: QuizItem) => q.check.choices ?? q.choices.map((c) => c.t
  * STORED (keyed) frame is translated the way a learner would: find each stored choice's TEXT in
  * the served list of GET /units/:id. Throws (never guesses) when a text is not served.
  */
-async function served(ctx: Ctx, unitId: number, repo: string, stored: readonly number[]): Promise<number[]> {
+async function served(ctx: Ctx, unitId: number, repo: string, stored: readonly number[], byKey: Map<string, QuizItem> = quizByKey(repo)): Promise<number[]> {
   const d = UnitDetailResponse.parse((await request(ctx.app).get(`/api/units/${unitId}`)).body);
   const qs = d.studyQuest!.questions;
   expect(qs).toHaveLength(stored.length);
-  const byKey = quizByKey(repo);
   return qs.map((q, i) => {
     const text = storedTexts(byKey.get(q.itemKey)!)[stored[i]!]!;
     const at = q.choices.indexOf(text);
@@ -438,10 +437,31 @@ describe('study-quest API flow (real packs)', { timeout: 60_000 }, () => {
 // ---------------------------------------------------------------- ui-audit #24: served choice order
 
 describe('ui-audit #24 (HONESTY): choices are served in a stable secret permutation, so an all-key-0 pack cannot be passed by position', { timeout: 120_000 }, () => {
+  // These three packs used to ship every key at stored choice 0. Campaign 2 factory-2 re-seeded them
+  // with hash-spread key positions (seed:lint:answers now gates), so the all-key-0 bias is PLANTED
+  // here: each real, stamp-verified pack is read (readSeedPackItems) and every quiz's keyed choice is
+  // moved to stored index 0 (the other choices keep their order; prompt, key, evidence unchanged).
+  // The server-side property under test is exactly the one it was: stored order is never served.
   const ZERO_PACKS = ['csharp-tut', 'csharp-interview', 'dotnet-snapshot'];
+  const keyAtZero = (q: QuizItem): QuizItem => {
+    const k = q.check.answerKey as number;
+    const order = [k, ...q.choices.map((_, i) => i).filter((i) => i !== k)];
+    const choices = order.map((i) => q.choices[i]!);
+    return { ...q, choices, check: { ...q.check, answerKey: 0, choices: choices.map((c) => c.text) } };
+  };
+  const zeroItems = new Map<string, unknown[]>();
+  const zeroQuizzes = (repo: string) => zeroItems.get(repo)!.filter((i) => (i as { kind: string }).kind === 'quiz') as QuizItem[];
+  const zeroKeys = (repo: string) => zeroQuizzes(repo).map((q) => q.check.answerKey as number);
+  const zeroByKey = (repo: string) => new Map(zeroQuizzes(repo).map((q) => [q.key, q]));
   let zeroStore: SeedItemStore;
   beforeAll(() => {
-    zeroStore = loadSeedItemStore(ZERO_PACKS.map((p) => join(QUESTS, p)));
+    for (const repo of ZERO_PACKS) {
+      zeroItems.set(
+        repo,
+        readSeedPackItems(join(QUESTS, repo)).map((i) => ((i as { kind: string }).kind === 'quiz' ? keyAtZero(SeedQuizItem.parse(i)) : i)),
+      );
+    }
+    zeroStore = mapSeedItemStore(ZERO_PACKS.flatMap((r) => zeroItems.get(r)!));
   }, 120_000);
 
   const ctx = {} as Ctx & { units: Map<string, number> };
@@ -450,7 +470,7 @@ describe('ui-audit #24 (HONESTY): choices are served in a stable secret permutat
     ctx.clock = fixedClock(localNoon(2026, 10, 1));
     ctx.units = new Map();
     for (const repo of ZERO_PACKS) {
-      const spec = { type: 'study-quiz' as const, itemKeys: packQuizzes(repo).map((q) => q.key), passPct: 0.8 };
+      const spec = { type: 'study-quiz' as const, itemKeys: zeroQuizzes(repo).map((q) => q.key), passPct: 0.8 };
       ctx.units.set(repo, insertUnit(ctx.tmp.db, { key: `hand/zero/${repo}`, track: 'csharp', kind: 'study', title: repo, competencies: ['code-reading'], checks: [{ spec }] }, ctx.clock));
     }
     ctx.app = createApp({ db: ctx.tmp.db, clock: ctx.clock, runners: defaultRunners(), seedItems: zeroStore });
@@ -459,23 +479,30 @@ describe('ui-audit #24 (HONESTY): choices are served in a stable secret permutat
 
   const detail = async (app: Express, id: number) => UnitDetailResponse.parse((await request(app).get(`/api/units/${id}`)).body).studyQuest!.questions;
 
-  it('precondition: these real packs key EVERY question at stored choice 0 (the bias the server must not serve)', () => {
+  it('precondition: the planted packs key EVERY question at stored choice 0 (the bias the server must not serve), built from the real packs\' quizzes', () => {
     for (const repo of ZERO_PACKS) {
-      const keys = keysOf(repo);
+      const keys = zeroKeys(repo);
       expect(keys.length, repo).toBeGreaterThanOrEqual(6);
       expect(new Set(keys), repo).toEqual(new Set([0]));
+      // same quizzes as the shipped pack: same keys, same keyed TEXT, same choice set — only the order moved
+      const real = quizByKey(repo);
+      for (const q of zeroQuizzes(repo)) {
+        const r = real.get(q.key)!;
+        expect(storedTexts(q)[0], q.key).toBe(storedTexts(r)[r.check.answerKey as number]);
+        expect([...storedTexts(q)].sort()).toEqual([...storedTexts(r)].sort());
+      }
     }
   });
 
   it('an all-zeros submit FAILS on every all-key-0 pack (recorded, no XP); the right answers in SERVED order PASS', async () => {
     for (const repo of ZERO_PACKS) {
       const id = ctx.units.get(repo)!;
-      const zeros = keysOf(repo).map(() => 0);
+      const zeros = zeroKeys(repo).map(() => 0);
       const fail = SubmitResponse.parse((await submit(ctx, id, { answers: zeros })).body);
       expect(fail.verdict, `${repo} all-zeros`).toBe('fail');
       expect(fail.xp, repo).toBeNull();
       expect(fail.studyQuiz!.correct, repo).toBeLessThan(Math.ceil(zeros.length * 0.8));
-      const pass = SubmitResponse.parse((await submit(ctx, id, { answers: await served(ctx, id, repo, keysOf(repo)) })).body);
+      const pass = SubmitResponse.parse((await submit(ctx, id, { answers: await served(ctx, id, repo, zeroKeys(repo), zeroByKey(repo)) })).body);
       expect(pass.verdict, `${repo} served keys`).toBe('pass');
       expect(pass.studyQuiz!.correct).toBe(zeros.length);
     }
@@ -490,7 +517,7 @@ describe('ui-audit #24 (HONESTY): choices are served in a stable secret permutat
       expect(byKey.studyQuest!.questions).toEqual(a);
       const fresh = createApp({ db: ctx.tmp.db, clock: ctx.clock, runners: defaultRunners(), seedItems: zeroStore });
       expect(await detail(fresh, id)).toEqual(a);
-      const byKeyItems = quizByKey(repo);
+      const byKeyItems = zeroByKey(repo);
       for (const q of a) expect([...q.choices].sort()).toEqual([...storedTexts(byKeyItems.get(q.itemKey)!)].sort());
       // 13+ questions of 3-4 choices all landing on the identity permutation: ~(1/6)^13 or less
       expect(a.map((q) => q.choices)).not.toEqual(a.map((q) => storedTexts(byKeyItems.get(q.itemKey)!)));
@@ -504,7 +531,7 @@ describe('ui-audit #24 (HONESTY): choices are served in a stable secret permutat
       const id = ctx.units.get(repo)!;
       const qs = await detail(ctx.app, id);
       orders.push(qs.map((q) => q.choices.join('|')));
-      const byKeyItems = quizByKey(repo);
+      const byKeyItems = zeroByKey(repo);
       for (const q of qs) positions.push(q.choices.indexOf(storedTexts(byKeyItems.get(q.itemKey)!)[0]!));
     }
     expect(positions.every((p) => p >= 0)).toBe(true);
@@ -517,7 +544,7 @@ describe('ui-audit #24 (HONESTY): choices are served in a stable secret permutat
     const other = makeTempDb();
     try {
       const repo = ZERO_PACKS[0]!;
-      const spec = { type: 'study-quiz' as const, itemKeys: packQuizzes(repo).map((q) => q.key), passPct: 0.8 };
+      const spec = { type: 'study-quiz' as const, itemKeys: zeroQuizzes(repo).map((q) => q.key), passPct: 0.8 };
       // same unit id on the fresh DB (the first insert), so only the secret differs
       const otherId = insertUnit(other.db, { key: `hand/zero/${repo}`, track: 'csharp', kind: 'study', title: repo, competencies: ['code-reading'], checks: [{ spec }] }, ctx.clock);
       expect(otherId).toBe(ctx.units.get(repo));
@@ -532,9 +559,9 @@ describe('ui-audit #24 (HONESTY): choices are served in a stable secret permutat
     const repo = 'csharp-tut';
     const id = ctx.units.get(repo)!;
     const qs = await detail(ctx.app, id);
-    const byKeyItems = quizByKey(repo);
+    const byKeyItems = zeroByKey(repo);
     // miss question 1 deliberately: answer a served index whose text is NOT the key
-    const right = await served(ctx, id, repo, keysOf(repo));
+    const right = await served(ctx, id, repo, zeroKeys(repo), zeroByKey(repo));
     const answers = right.map((r, i) => (i === 0 ? (r + 1) % qs[0]!.choices.length : r));
     const sub = SubmitResponse.parse((await submit(ctx, id, { answers })).body);
     expect(sub.studyQuiz!.items[0]!.correct).toBe(false);

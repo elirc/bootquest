@@ -86,7 +86,14 @@ export function headingPathAt(hs: readonly Heading[], line: number): string[] {
 // Factory fix 3a: real guides also write `**Goal.**` / `**Check.**` (buildsubbox
 // astraupskill/05-PRACTICE.md:11,17) and the single-asterisk `*Goal:*` emphasis form —
 // the bold form stays the FIRST alternative (shipped-pack counts pin on it).
-const GOAL = /\*\*Goal[.:]?\*\*:?|\*Goal:\*|^\s*[-*+]\s+Goal:/;
+// Campaign-2 factory fix: a BARE `**Goal**` (no colon/period inside the bold, no colon right
+// after it) is a marker only at the start of a line or of a list item (`**Goal** ...`,
+// `3. **Goal** ...`). Mid-sentence it is prose: guide intros such as "Each has a **Goal** and a
+// **Check** you can observe." (organized-study-atlas-fulfillment
+// docs/architecture/final-system-design.md:105, master3 astraupskill/05-PRACTICE.md:3) used to
+// become junk goal-check quizzes. The lookbehind keeps the match starting AT the marker, so the
+// inline list-item test in extractGoalChecks (list marker before the match) is unchanged.
+const GOAL = /\*\*Goal[.:]\*\*:?|\*\*Goal\*\*:|(?<=^\s*(?:(?:\d+[.)]|[-*+])\s+)?)\*\*Goal\*\*|\*Goal:\*|^\s*[-*+]\s+Goal:/;
 const CHECK = /\*\*Check[.:]?\*\*:?|\*Check:\*|^\s*[-*+]\s+Check:/;
 const LIST_ITEM = /^(\s*)(?:\d+[.)]|[-*+])\s+/;
 const BOLD_ONLY = /^\s*\*\*([^*].*?)\*\*\s*$/;

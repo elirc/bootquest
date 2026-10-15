@@ -117,6 +117,75 @@ describe('guide shapes (real excerpts)', () => {
     expect(items[2]).toMatchObject({ goal: 'read the queue module.', checks: ['you can name its retry rule.'] });
   });
 
+  it('a bare mid-sentence **Goal** is prose, not a marker (master3 05-PRACTICE.md:3 intro)', () => {
+    // verbatim master3@913823e astraupskill/05-PRACTICE.md:1-9 — act-3 slice C shipped this intro as
+    // a junk goal-check ("Goal: (what to work out by reading code) and a") before the parser fix
+    const md = [
+      '# Practice exercises',
+      '',
+      'Each exercise has a **Goal** (what to work out by reading code) and a **Check** (a `node:test` file you run to confirm your answer). Checks need no `npm install`: save each one anywhere outside the repo and run it from the repo root with',
+      '',
+      '```bash',
+      'node --experimental-strip-types --test path/to/check.test.mjs',
+      '```',
+      '',
+      '(Node 22.6 or newer.) Domain checks import the real `packages/domain/src/index.ts`; service checks read source text because the service needs Prisma.',
+    ].join('\n');
+    const lines = scanLines(md);
+    const { items, skips } = extractGoalChecks(lines, headings(lines));
+    expect(items).toEqual([]);
+    // the orphaned **Check** in the intro is counted, never silently dropped
+    expect(skips).toEqual([expect.objectContaining({ line: 3, reason: 'check-without-goal' })]);
+  });
+
+  it('an intro sentence before real exercises yields only the real exercises (atlas final-system-design.md:103-115)', () => {
+    // verbatim organized-study-atlas-fulfillment@d82cc29 docs/architecture/final-system-design.md:103-111
+    const md = [
+      '## Exercises',
+      '',
+      'Each has a **Goal** and a **Check** you can observe.',
+      '',
+      '1. **Reserve an order end to end.**',
+      '   *Goal:* after `db:push` and `db:seed`, run the API and `curl -X POST -H "x-user-id: user-warehouse-lead" http://127.0.0.1:4000/api/orders/so-10035/reserve`.',
+      '   *Check:* the response is `{ "ok": true, "status": "allocated", ... }`; `GET /api/inventory` now shows the west green pack (`PACK-22-GRN`) with `reserved` 38 and `available` 4; a second identical POST returns `ok: true` without changing the numbers.',
+      '2. **See the role ranking.**',
+      '   *Goal:* as `user-buyer`, call the reserve endpoint and the CSV export.',
+      '   *Check:* reserve returns 403 with `requiredRoles: ["warehouse_manager", "admin"]`; the export returns 200.',
+    ].join('\n');
+    const lines = scanLines(md);
+    const { items, skips } = extractGoalChecks(lines, headings(lines));
+    expect(items.map((i) => i.goal)).toEqual([
+      'after `db:push` and `db:seed`, run the API and `curl -X POST -H "x-user-id: user-warehouse-lead" http://127.0.0.1:4000/api/orders/so-10035/reserve`.',
+      'as `user-buyer`, call the reserve endpoint and the CSV export.',
+    ]);
+    expect(items.flatMap((i) => i.checks).some((c) => /you can observe/.test(c))).toBe(false);
+    expect(skips).toEqual([expect.objectContaining({ line: 3, reason: 'check-without-goal' })]);
+  });
+
+  it('a bare **Goal** still counts at the start of a line or list item, and with a colon anywhere', () => {
+    const md = [
+      '## A',
+      '',
+      '**Goal** read the router. **Check** you can name its fallback.',
+      '',
+      '## B',
+      '',
+      '1. **Goal** trace one request. **Check:** the log shows two spans.',
+      '',
+      '## C',
+      '',
+      'Exercise 3 — **Goal**: find the retry rule. **Check:** you can quote it.',
+    ].join('\n');
+    const lines = scanLines(md);
+    const { items, skips } = extractGoalChecks(lines, headings(lines));
+    expect(skips).toEqual([]);
+    expect(items.map((i) => [i.shape, i.goal, i.checks])).toEqual([
+      ['sectioned', 'read the router.', ['you can name its fallback.']],
+      ['inline', 'trace one request.', ['the log shows two spans.']],
+      ['sectioned', 'find the retry rule.', ['you can quote it.']],
+    ]);
+  });
+
   it('F-table findings with severity + section honesty (ww6 06: "none reproduced" => read-derived)', () => {
     const { lines, hs } = parse(join(FX, 'ww6', 'astraupskill', '06-SOLUTIONS-AND-REVIEW.md'));
     const f = extractFindings(lines, hs);
