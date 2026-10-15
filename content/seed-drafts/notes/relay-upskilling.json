@@ -1,0 +1,477 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "relay-upskilling",
+ "repo": "relay-upskilling",
+ "sha": "2f6bd82e16ea35f21dd94c0f8a5d39f3f480d089",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: Relay, a CSV importer that keeps one promise",
+   "body": "Relay imports contact lists (CSV or Excel) into a destination. A Next.js API handles uploads, review and control; a .NET worker does the parsing and the actual importing; PostgreSQL holds the job state and a ledger of every row.\n\nThe `upskilling/README.md` says to start small (the first session needs only Node), and to treat the twelve labs as later resources. For this pack, read in this order:\n\n1. `upskilling/ARCHITECTURE.md`: one page on the parts, the job states, and where atomicity and uncertainty live.\n2. `upskilling/course/CODE-TOUR.md`: the core of the pack. It follows a single promise through every layer, in numbered steps, and asks you to predict at each one.\n3. `upskilling/labs/02-tenancy.md` and `labs/05-approval.md`: the code anchors and the Checks for tenancy and approval.\n\nThe tour's line numbers were checked when it was written; if one has drifted, search for the quoted code instead.",
+   "excerpts": [
+    {
+     "path": "upskilling/ARCHITECTURE.md",
+     "lineStart": 2,
+     "lineEnd": 2,
+     "quote": "The request API handles identity, uploads, review, control and downloads. The .NET worker owns parsing, normalization, validation and batch effects. PostgreSQL stores the job state and row ledger."
+    },
+    {
+     "path": "upskilling/course/CODE-TOUR.md",
+     "lineStart": 10,
+     "lineEnd": 11,
+     "quote": "Line numbers were verified against the repository at the commit this tour was written; if they drift, search for the quoted code."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "upskilling/README.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Where to start and how the course is paced."
+    },
+    {
+     "path": "upskilling/course/CODE-TOUR.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The single-promise tour; most questions come from it."
+    }
+   ]
+  },
+  {
+   "id": "r02-one-promise-two-mechanisms",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: the promise, and why two destinations need two mechanisms",
+   "body": "The code tour is built around one promise: only the version a reviewer approved is imported, and a worker crash at any moment never creates a duplicate contact when the import resumes.\n\nThe interesting part is that Relay has two kinds of destination, and they keep the promise differently.\n\n- **local**: contacts are written into the same PostgreSQL database that holds the job ledger. One database transaction can contain both \"insert these contacts\" and \"move the checkpoint forward\", so either both happen or neither does.\n- **test-api**: contacts go to a separate service with its own database. Nothing can wrap both systems in one transaction. That gap is why the external path has extra machinery, and why the word *uncertain* appears.\n\nKeep asking, at each step of the tour: is this protected by one shared transaction, or does it have to cope without one? The tour itself says steps 5 and 6 are the payoff.",
+   "excerpts": [
+    {
+     "path": "upskilling/course/CODE-TOUR.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "**Only the exact version a reviewer approved reaches the destination, and a"
+    },
+    {
+     "path": "upskilling/course/CODE-TOUR.md",
+     "lineStart": 8,
+     "lineEnd": 8,
+     "quote": "creates a duplicate contact when the import resumes.**"
+    },
+    {
+     "path": "upskilling/course/CODE-TOUR.md",
+     "lineStart": 20,
+     "lineEnd": 21,
+     "quote": "`local` — contacts land in the **same PostgreSQL database** as the job ledger. One transaction can hold the inserts and the checkpoint."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "upskilling/ARCHITECTURE.md",
+     "lineStart": 24,
+     "lineEnd": 34,
+     "why": "Local atomicity and external uncertainty in two short sections."
+    }
+   ]
+  },
+  {
+   "id": "r03-an-id-is-not-permission",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: an ID is not permission",
+   "body": "Relay serves several organisations from one database. Knowing a job's id must not let you touch it. Lab 02 lists the layers that enforce this:\n\n- **Authentication** turns the session cookie into a user.\n- **Authorization** requires the `x-relay-org` header to look like a UUID and requires a membership row for that user and organisation. Some actions also need the reviewer role.\n- **Every job query** filters by both the job id and the organisation id, so a job from another organisation is simply not found.\n- **The schema** uses composite foreign keys that include the organisation, so child rows cannot point at another organisation's job even if application code forgot a filter.\n\nNotice that each layer answers with a different HTTP status. Lab 02's first Check asks you to produce each one on purpose, which is a good way to learn what each layer is responsible for.",
+   "excerpts": [
+    {
+     "path": "upskilling/labs/02-tenancy.md",
+     "lineStart": 21,
+     "lineEnd": 21,
+     "quote": "every job route re-reads the job with `WHERE id=$1 AND org_id=$2`; a foreign job is **404**, not 403, so existence is not leaked."
+    },
+    {
+     "path": "upskilling/labs/02-tenancy.md",
+     "lineStart": 23,
+     "lineEnd": 23,
+     "quote": "composite `(org_id, job_id)` foreign keys, so a child row cannot point at another organisation's job even if application code forgot the filter."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "upskilling/labs/02-tenancy.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The tenancy anchors and Checks."
+    },
+    {
+     "path": "upskilling/ARCHITECTURE.md",
+     "lineStart": 43,
+     "lineEnd": 48,
+     "why": "Trust boundaries."
+    }
+   ]
+  },
+  {
+   "id": "x-24bc4304decf837d",
+   "target": "seed:quests:relay-upskilling/quiz/24bc4304decf837d",
+   "phase": "after",
+   "title": "Lab 02: producing 401, 400, 403 and 404 on purpose",
+   "body": "This is a goal-check question: each lab's Checks section pairs a Goal with the Check that proves it, and the wrong choice is the Check of the other exercise in the same lab.\n\nThe Goal is to tell four error codes apart. Each comes from a different layer, so the Check makes you trigger each one against a single Acme job: no cookie fails **authentication** (401); a cookie with a non-UUID org header fails the **shape check** (400); a cookie with Acme's org id fails the **membership check** (403), because Jules is not an Acme member; Jules's own org id with Acme's job id passes authorization, but the job query filters by org and finds nothing (404). Returning 404 there hides whether the job exists at all.\n\nWhy the other Check belongs elsewhere:\n- \"list every parts[2] branch ... and mark which ones the e2e scripts call as a foreign user\" is the second goal, finding an endpoint without an isolation test.",
+   "excerpts": [
+    {
+     "path": "upskilling/labs/02-tenancy.md",
+     "lineStart": 20,
+     "lineEnd": 20,
+     "quote": "`x-relay-org` must look like a UUID (else 400); a `memberships` row for (user, org) must exist (else 403)"
+    },
+    {
+     "path": "upskilling/labs/02-tenancy.md",
+     "lineStart": 21,
+     "lineEnd": 21,
+     "quote": "a foreign job is **404**, not 403, so existence is not leaked."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-28bf62917ed15651",
+   "target": "seed:quests:relay-upskilling/quiz/28bf62917ed15651",
+   "phase": "after",
+   "title": "Why CSV resume counts records, not bytes",
+   "body": "A CSV value in quotes may contain a line break. So \"line 1,200\" in the file is not the same as \"record 1,200\", and a byte offset saved from one reader does not reliably mark where a record starts. Relay stores the durable position as a **logical record count**. When a worker reopens the file, the cursor reads and throws away that many records, then continues. A test pins this with a quoted value containing a line break.\n\nWhy the others are wrong:\n- **gzip-compressed**: the tour never says the CSV is compressed; the reason is quoted newlines.\n- **Windows vs Linux byte offsets**: not the reason given.\n- **skipping the SHA-256 rehash**: the rehash happens every time the file is opened, regardless of how the position is found.",
+   "excerpts": [
+    {
+     "path": "worker/SourceCursor.cs",
+     "lineStart": 45,
+     "lineEnd": 45,
+     "quote": "for(var i=0;i<skip;i++) if(Read()==null) throw new InvalidDataException(\"Source ended before its durable checkpoint.\");"
+    },
+    {
+     "path": "upskilling/course/CODE-TOUR.md",
+     "lineStart": 57,
+     "lineEnd": 59,
+     "quote": "a reopened cursor *reads and discards* `skip` records. A byte offset would break on quoted newlines; the durable position is a logical record count."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-32cefcb4c3d83271",
+   "target": "seed:quests:relay-upskilling/quiz/32cefcb4c3d83271",
+   "phase": "after",
+   "title": "Lab 02: hunting for an endpoint nobody tested as a stranger",
+   "body": "This is a goal-check question: each lab's Checks section pairs a Goal with the Check that proves it, and the wrong choice is the Check of the other exercise in the same lab.\n\nThe Goal is to find an API endpoint that has no isolation test (no test where a user from another organisation tries it). The Check gives a method rather than an answer: list every action branch in the catch-all route file (`suggest`, `rows`, `report`, and so on), then go through the two end-to-end scripts and mark which branches they call as a foreign user. Any branch left unmarked has no proof that it refuses strangers, and is a candidate for a new test.\n\nWhy the other Check belongs elsewhere:\n- \"for one Acme job, record: no cookie gives 401 ...\" is the first goal, separating 400, 401, 403 and 404.",
+   "excerpts": [
+    {
+     "path": "upskilling/labs/02-tenancy.md",
+     "lineStart": 29,
+     "lineEnd": 29,
+     "quote": "list every `parts[2]` branch in `src/app/api/[...path]/route.ts` (`suggest`, `rows`, `report`, `mapping`, `correct`, `approve`, `retry`, `reconcile`, `pause`, `resume`, `cancel`) and mark which ones `scripts/e2e.mjs` and `scripts/advanced-e2e.mjs` call as a foreign user; each unmarked branch is a candidate for your test."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-3b216153cc57aa5e",
+   "target": "seed:quests:relay-upskilling/quiz/3b216153cc57aa5e",
+   "phase": "after",
+   "title": "Re-checking the approval inside every batch",
+   "body": "Checking the approval once, when the job is queued, leaves a gap: someone could edit the mapping after the check but before a batch is written, and the worker would import a version nobody approved. So for every batch the worker opens a transaction, locks the job row with `SELECT ... FOR UPDATE`, and recomputes and compares the approval hash right there. Because the row is locked, an edit cannot slip in between that check and the write. This closes the gap between check and effect.\n\nWhy the others are wrong:\n- **cache the hash once**: caching is exactly what would reopen the gap.\n- **keep the approval across pooled connections**: the approval is stored in the jobs table; connections do not hold it.\n- **refresh the reviewer's session**: the worker does not use reviewer sessions; the reviewer was involved only at approval time.",
+   "excerpts": [
+    {
+     "path": "upskilling/course/CODE-TOUR.md",
+     "lineStart": 90,
+     "lineEnd": 94,
+     "quote": "the worker re-verifies the approval *inside every batch transaction*, after `SELECT ... FOR UPDATE` (`ImportWorker.cs:128`). A mapping edit racing the import cannot slip between check and effect."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-3c2812a125119fe1",
+   "target": "seed:quests:relay-upskilling/quiz/3c2812a125119fe1",
+   "phase": "after",
+   "title": "PostgreSQL owns progress, not worker memory",
+   "body": "Workers keep open file cursors in memory to save time. But another worker may have processed this job in the meantime. If the cached cursor's position (900) disagrees with the job's checkpoint in the database (1,000), the worker trusts the database: it drops the cached cursor and opens a fresh one at the checkpoint. The tour's one-line rule: PostgreSQL, not worker memory, owns progress.\n\nWhy the others are wrong:\n- **continue from 900 and let ON CONFLICT skip duplicates**: the code drops the cursor instead of relying on duplicates being absorbed.\n- **roll the checkpoint back to 900**: the database is the source of truth; memory never overrides it.\n- **fail the job**: a mismatch is expected when workers share jobs, so it is handled quietly, not treated as an error.",
+   "excerpts": [
+    {
+     "path": "worker/ImportWorker.cs",
+     "lineStart": 138,
+     "lineEnd": 138,
+     "quote": "if(cursors.TryGetValue(job.Id,out var cached) && cached.Position!=job.Parsed) DropCursor(job.Id);"
+    },
+    {
+     "path": "upskilling/course/CODE-TOUR.md",
+     "lineStart": 63,
+     "lineEnd": 65,
+     "quote": "a cached cursor whose position disagrees with the database checkpoint is dropped: another worker may have advanced the job. PostgreSQL, not worker memory, owns progress."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-3f649ea6de6e4de3",
+   "target": "seed:quests:relay-upskilling/quiz/3f649ea6de6e4de3",
+   "phase": "after",
+   "title": "Every edit un-approves, in the same UPDATE",
+   "body": "Saving a mapping or correcting a row runs one UPDATE that bumps `mapping_version`, resets validation, and sets `approved_hash=NULL` (with the approver and time). Because it is a single statement, there is no moment where the data has changed but the old approval is still attached. Even a one-row email correction changes what will be imported, so the approval goes. The tour says there is no path around this.\n\nWhy the others are wrong:\n- **small corrections are below a threshold**: there is no threshold; any change clears it.\n- **cleared later by the worker**: it is cleared immediately, in the API's UPDATE.\n- **the corrected row is skipped**: nothing is skipped; the job goes back to validation and needs a fresh approval.",
+   "excerpts": [
+    {
+     "path": "src/app/api/[...path]/route.ts",
+     "lineStart": 149,
+     "lineEnd": 149,
+     "quote": "mapping_version=mapping_version+1,validation_checkpoint=0,approved_hash=NULL"
+    },
+    {
+     "path": "upskilling/course/CODE-TOUR.md",
+     "lineStart": 71,
+     "lineEnd": 72,
+     "quote": "There is no path that changes what will be imported while an approval stays attached."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-598183a7c2640c9d",
+   "target": "seed:quests:relay-upskilling/quiz/598183a7c2640c9d",
+   "phase": "after",
+   "title": "A reused key with a different payload is a 409",
+   "body": "The test destination stores a receipt per idempotency key, with a hash of the payload. When a key arrives that it already has a receipt for, it compares hashes. Same payload: it returns the original outcome, so a retry is harmless. **Different payload: it rolls back and answers 409**, \"Idempotency key payload changed\". A key means \"this exact item\"; it cannot be quietly reused for other data.\n\nWhy the others are wrong:\n- **201 under a suffixed key**: the destination never invents keys.\n- **200 with the original outcome**: that is what happens for the same payload, not a changed one.\n- **201, applied over the contact**: existing contacts are never overwritten; the insert is `ON CONFLICT DO NOTHING`.",
+   "excerpts": [
+    {
+     "path": "scripts/test-destination.mjs",
+     "lineStart": 38,
+     "lineEnd": 38,
+     "quote": "if(old){if(old.payload_hash!==payloadHash){await c.query('ROLLBACK');return reply(409,{error:'Idempotency key payload changed'});}"
+    },
+    {
+     "path": "upskilling/course/CODE-TOUR.md",
+     "lineStart": 161,
+     "lineEnd": 162,
+     "quote": "a replayed key with a **changed payload** is a 409 (`test-destination.mjs:38`), so the key cannot be silently reused"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-83b051b023767355",
+   "target": "seed:quests:relay-upskilling/quiz/83b051b023767355",
+   "phase": "after",
+   "title": "An approval must name the version the reviewer saw",
+   "body": "The approve request carries the `version` the reviewer was looking at. The route rejects it unless the job is in `review` **and** that version equals the current `mapping_version`. Here the reviewer saw version 3, but a correction made it 4, so the request gets **409** \"The preview has changed. Refresh it before approving.\" This stops an approval meant for one version from landing on a different one.\n\nWhy the others are wrong:\n- **403, permission expired**: permission is checked separately and has not changed; this is a version mismatch.\n- **200, binds to version 4**: binding to a version the reviewer never saw is exactly what the check prevents.\n- **200, imports version 3**: version 3 no longer exists as the current mapping; nothing imports it.",
+   "excerpts": [
+    {
+     "path": "src/app/api/[...path]/route.ts",
+     "lineStart": 153,
+     "lineEnd": 153,
+     "quote": "if(job.status!=='review' || job.mapping_version!==body.version) throw new HttpError(409,'The preview has changed. Refresh it before approving.');"
+    },
+    {
+     "path": "upskilling/course/CODE-TOUR.md",
+     "lineStart": 78,
+     "lineEnd": 79,
+     "quote": "approving requires `status='review'` **and** the version the reviewer looked at; a stale approval gets 409."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-8de77e0df208b540",
+   "target": "seed:quests:relay-upskilling/quiz/8de77e0df208b540",
+   "phase": "after",
+   "title": "Why only the external destination needs an outbox",
+   "body": "For the local destination, contacts and the job ledger live in the **same** PostgreSQL database, so one transaction holds the inserts and the checkpoint; nothing can half-happen. The external test API is a separate service with its own transactions. No single transaction can cover both databases. So there is a new failure window: the destination may commit and the response may be lost. The delivery outbox, with a stable key per row and states `pending`, `uncertain`, `delivered`, `abandoned`, is how Relay keeps track of what it may or may not have sent.\n\nWhy the others are wrong:\n- **slower, so batches queue**: speed is not the reason; the missing shared transaction is.\n- **encrypts payloads**: the outbox stores payloads and states; it is not about encryption.\n- **local inserts are not retried**: local batches can rerun; they are safe because they share a transaction.",
+   "excerpts": [
+    {
+     "path": "upskilling/course/CODE-TOUR.md",
+     "lineStart": 22,
+     "lineEnd": 25,
+     "quote": "`test-api` — contacts land in a **separate service with its own transactions** (`scripts/test-destination.mjs`). No shared transaction exists, so a new artifact appears: the delivery outbox, and with it the word *uncertain*."
+    },
+    {
+     "path": "db/002_platform.sql",
+     "lineStart": 14,
+     "lineEnd": 14,
+     "quote": "state text NOT NULL DEFAULT 'pending' CHECK(state IN('pending','uncertain','delivered','abandoned')),"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-9d16469b50f9c310",
+   "target": "seed:quests:relay-upskilling/quiz/9d16469b50f9c310",
+   "phase": "after",
+   "title": "Why a replayed parse batch is harmless",
+   "body": "Each parse batch writes its staged rows **and** the `parse_checkpoint` in one transaction. If the worker crashes before the commit, neither happened. If it crashes after, both happened, and the next worker starts after the checkpoint. And if a batch is replayed anyway, the staged-row insert uses `ON CONFLICT DO NOTHING`, so rows already there are silently skipped. Atomic progress plus idempotent inserts: a replay changes nothing.\n\nWhy the others are wrong:\n- **the API clears staged rows first**: no such clearing step exists; duplicates are absorbed by the insert.\n- **replays cannot happen because the lock stays held**: the tour says PostgreSQL releases advisory locks when a crashed worker disconnects.\n- **an in-memory set of row numbers**: memory is lost in a crash; the protection lives in the database.",
+   "excerpts": [
+    {
+     "path": "worker/ImportWorker.cs",
+     "lineStart": 165,
+     "lineEnd": 165,
+     "quote": "INSERT INTO import_rows(org_id,job_id,row_no,raw) VALUES($1,$2,$3,$4::jsonb) ON CONFLICT DO NOTHING"
+    },
+    {
+     "path": "worker/ImportWorker.cs",
+     "lineStart": 170,
+     "lineEnd": 170,
+     "quote": "await Exec(c,tx,\"UPDATE jobs SET parse_checkpoint=$2,total_rows=$2,updated_at=now() WHERE id=$1\",job.Id,rows[^1].Row);"
+    },
+    {
+     "path": "upskilling/course/CODE-TOUR.md",
+     "lineStart": 53,
+     "lineEnd": 56,
+     "quote": "each parse batch commits the staged rows *and* `parse_checkpoint` in one transaction"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-abee03ccf0f4f8be",
+   "target": "seed:quests:relay-upskilling/quiz/abee03ccf0f4f8be",
+   "phase": "after",
+   "title": "The approval hash binds a version; it does not prove who",
+   "body": "The approval hash is a SHA-256 over the file hash, mapping version, schema version, schema hash and destination. It answers \"is this still exactly what was approved?\" If any part changes, the hash changes and the approval no longer matches. But it contains no secret and nothing about the reviewer: anyone who can read those values can compute it. So it is a **version binding, not a signature**, and the API checks the reviewer role on its own.\n\nWhy the others are wrong:\n- **covers the file bytes alone**: the formula includes the mapping version, schema and destination too.\n- **salted per reviewer**: there is no salt and no reviewer in the formula.\n- **permission checks are too slow**: speed is not the reason; the hash simply cannot express permission.",
+   "excerpts": [
+    {
+     "path": "src/app/api/[...path]/route.ts",
+     "lineStart": 17,
+     "lineEnd": 17,
+     "quote": "createHash('sha256').update(job.file_hash+':'+job.mapping_version+':'+job.schema_version+(job.approval_format===2?':'+job.schema_hash+':'+job.destination:'')).digest('hex');"
+    },
+    {
+     "path": "upskilling/ARCHITECTURE.md",
+     "lineStart": 22,
+     "lineEnd": 22,
+     "quote": "This hash is a version binding, not an authentication signature: reviewer permission is checked separately."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-c1b413577c1ce4d7",
+   "target": "seed:quests:relay-upskilling/quiz/c1b413577c1ce4d7",
+   "phase": "after",
+   "title": "The two local crash windows are symmetric",
+   "body": "In the local `Commit`, the contact inserts, the row outcomes and the new `commit_checkpoint` are all in one transaction.\n\n- **Killed just before the commit** (the rehearsal exits with code 74): the transaction never committed, so everything rolls back. The next worker runs the same batch again and gets the same result.\n- **Killed just after the commit** (exit 73): the batch and its checkpoint are permanent. The next worker starts after the checkpoint.\n\nEither way, the operator sees no duplicates and no lost rows. That is what \"the two windows are symmetric\" means.\n\nWhy the others are wrong:\n- **manual cleanup, then cannot resume**: a rollback leaves nothing to clean, and the committed checkpoint is exactly what resume uses.\n- **rows already committed before commit**: nothing is visible until the commit.\n- **half the batch visible**: a transaction is all or nothing.",
+   "excerpts": [
+    {
+     "path": "worker/ImportWorker.cs",
+     "lineStart": 265,
+     "lineEnd": 268,
+     "quote": "if(injectBefore)Environment.Exit(74); await tx.CommitAsync(ct);"
+    },
+    {
+     "path": "upskilling/course/CODE-TOUR.md",
+     "lineStart": 125,
+     "lineEnd": 129,
+     "quote": "**Before commit** (exit 74, `ImportWorker.cs:265`): everything rolls back; the batch reruns identically."
+    },
+    {
+     "path": "upskilling/course/CODE-TOUR.md",
+     "lineStart": 128,
+     "lineEnd": 129,
+     "quote": "**After commit** (exit 73, `ImportWorker.cs:268`): the committed prefix is permanent; the next worker starts at the checkpoint."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-c1b9480f25a189df",
+   "target": "seed:quests:relay-upskilling/quiz/c1b9480f25a189df",
+   "phase": "after",
+   "title": "Writing down uncertainty before sending",
+   "body": "Once a request leaves for the external API, a crash could happen at any point: before it arrives, after the destination commits, or while the response is coming back. If the database still said `pending`, a new worker would have no idea anything might have been sent. So, in a short committed transaction **before** the POST, the worker flips the keys it is about to send to `uncertain`. If it dies mid-flight, the record already says \"I may have sent this\", and the next worker knows to look up receipts. The same transaction also re-checks that the job is still active, so a pause or cancel and the decision to send cannot interleave.\n\nWhy the others are wrong:\n- **keep the outbox row locked during the request**: the transaction is committed before the network call; no lock is held over it.\n- **let the destination reject pending keys**: the destination never sees outbox states.\n- **let the destination skip validation**: the state is Relay's own bookkeeping.",
+   "excerpts": [
+    {
+     "path": "worker/ExternalDelivery.cs",
+     "lineStart": 60,
+     "lineEnd": 60,
+     "quote": "// Serialize the permission-to-send decision with pause/cancel. Mark uncertainty before network I/O."
+    },
+    {
+     "path": "worker/ExternalDelivery.cs",
+     "lineStart": 65,
+     "lineEnd": 66,
+     "quote": "UPDATE delivery_outbox SET state='uncertain',attempts=attempts+1,updated_at=now() WHERE job_id=$1 AND idempotency_key=ANY($2)"
+    },
+    {
+     "path": "upskilling/course/CODE-TOUR.md",
+     "lineStart": 156,
+     "lineEnd": 157,
+     "quote": "If it dies mid-flight, the database already says \"I may have sent this.\""
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-e70f3bf5ed5e3cac",
+   "target": "seed:quests:relay-upskilling/quiz/e70f3bf5ed5e3cac",
+   "phase": "after",
+   "title": "Recovering a lost response by asking for receipts",
+   "body": "In the rehearsal, the destination commits seven contacts and their receipts, then destroys the socket, so the worker never hears back and exits with seven `uncertain` outbox rows. A fresh worker does not resend blindly. Before sending anything, it asks the destination for receipts for all keys in the batch. It finds all seven, records them as delivered, and finishes with exactly seven receipts: **by lookup, not by resend**.\n\nWhy the others are wrong:\n- **delete the seven and start over**: Relay never deletes destination data; it reconciles.\n- **abandon them for an operator**: they are recoverable, because the receipts exist.\n- **resend and let the email constraint absorb duplicates**: a resend with the same key and payload would just return the original outcome, but the worker does not need to; it looks up receipts first.",
+   "excerpts": [
+    {
+     "path": "worker/ExternalDelivery.cs",
+     "lineStart": 56,
+     "lineEnd": 57,
+     "quote": "// Receipt lookup also recovers the commit/response-loss window after a real process restart. using var known=await DestinationRequest(\"/v1/receipts\",new{tenantId=job.Org,keys=items.Select(i=>i.Key)},ct);"
+    },
+    {
+     "path": "upskilling/course/CODE-TOUR.md",
+     "lineStart": 179,
+     "lineEnd": 181,
+     "quote": "A fresh worker then completes the job to `delivered=7, imported=7` with exactly seven receipts — by lookup, not by resend."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-e8164eadeb2d7217",
+   "target": "seed:quests:relay-upskilling/quiz/e8164eadeb2d7217",
+   "phase": "after",
+   "title": "Lab 05: reproducing the stale-approval race",
+   "body": "This is a goal-check question: each lab's Checks section pairs a Goal with the Check that proves it, and the wrong choice is the Check of the other exercise in the same lab.\n\nThe Goal is to reproduce the race where a reviewer approves an out-of-date preview. The Check spells out the sequence: the reviewer reads version N; an operator corrects a row, which bumps the job to N+1 and clears any approval; the reviewer then submits an approval naming version N. The route sees the mismatch and returns **409**, and `approved_hash` stays `NULL`, which proves nothing was approved.\n\nWhy the other Check belongs elsewhere:\n- \"name both definitions of the fingerprint ... and predict what happens if only one changes\" is the second goal, finding the cross-language coupling between the TypeScript and C# hash code.",
+   "excerpts": [
+    {
+     "path": "upskilling/labs/05-approval.md",
+     "lineStart": 27,
+     "lineEnd": 27,
+     "quote": "**Check:** reviewer reads version N, operator corrects a row (version N+1), reviewer submits `{\"version\": N}` → **409** and `approved_hash` stays `NULL`."
+    },
+    {
+     "path": "upskilling/labs/05-approval.md",
+     "lineStart": 20,
+     "lineEnd": 20,
+     "quote": "rejects unless status is `review` **and** the submitted `version` equals `mapping_version` (409 \"The preview has changed\"), then stores `approved_hash`."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-f3975add08e4c88d",
+   "target": "seed:quests:relay-upskilling/quiz/f3975add08e4c88d",
+   "phase": "after",
+   "title": "Destination uniqueness is the final arbiter",
+   "body": "A preview is a prediction made earlier; another job can import the same email after it. So the local commit does not trust the preview. It inserts contacts with `ON CONFLICT(org_id,email) DO NOTHING ... RETURNING`, and only rows that come back from `RETURNING` are marked imported. A row whose email was taken in the meantime does not come back; it is then classified as `existing` (same data) or `conflict` (different data). Existing data is never overwritten, and the batch carries on.\n\nWhy the others are wrong:\n- **both inserted**: the `UNIQUE (org_id,email)` constraint makes a second contact with that email impossible.\n- **the batch fails for a reviewer**: a taken email is a normal outcome, not an error.\n- **the newer job overwrites**: the tour states existing data is never overwritten.",
+   "excerpts": [
+    {
+     "path": "worker/ImportWorker.cs",
+     "lineStart": 231,
+     "lineEnd": 231,
+     "quote": "// Destination uniqueness is the final arbiter, even if another job committed after preview."
+    },
+    {
+     "path": "db/001_init.sql",
+     "lineStart": 42,
+     "lineEnd": 42,
+     "quote": "UNIQUE (org_id,email)"
+    },
+    {
+     "path": "upskilling/course/CODE-TOUR.md",
+     "lineStart": 115,
+     "lineEnd": 117,
+     "quote": "rows that lost the insert are re-classified `existing` or `conflict` under `FOR SHARE` locks, so a concurrent edit cannot change the answer mid-read. Existing data is never overwritten."
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}
