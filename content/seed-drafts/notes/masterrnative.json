@@ -1,0 +1,371 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "masterrnative",
+ "repo": "masterrnative",
+ "sha": "d14bebbd427deb362076bfe274c58b537261b604",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: one small helper that guards every update",
+   "body": "Masterrnative is a React Native app for a pig farm. It keeps batches, feed, expenses, sales and mortality records on the phone in AsyncStorage. The course follows one narrow change. Before it, each `update*` function in the data context rebuilt its list with `map` and saved it, even when the id did not exist. A form could say \"saved\" while nothing changed. The fix adds one helper, `replaceRecordById`, and uses it in all six update paths.\n\nReading order (from the course README):\n\n1. `01-CODEBASE-MAP.md`: context, then storage, then the helper.\n2. `02-CONCEPTS.md`: the difference between an id that exists, is unique, and is current.\n3. `03-WORKED-CHANGE.md`: before and after code.\n4. `04-TESTING-AND-DEBUGGING.md` and `05-PRACTICE.md`: predict before you peek.\n5. `06-SOLUTIONS-AND-REVIEW.md`: answers plus four review findings.\n\nThe helper is eight lines in `src/utils/collection.ts`. Read it first, then everything else is about what it does and does not promise.",
+   "excerpts": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "each `update*` callback in the data context previously used `map`, so an id that did not exist produced an unchanged array and still called the storage writer — a form could report success while saving nothing."
+    },
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 23,
+     "lineEnd": 23,
+     "quote": "It does not solve transactions, conflict merging, or stale closures — those are named as findings in 06 rather than claimed as fixed."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The reading order and the one-command quick check."
+    },
+    {
+     "path": "src/utils/collection.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The whole helper, eight lines."
+    }
+   ]
+  },
+  {
+   "id": "r02-map-versus-existence",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: a map cannot tell you whether the record existed",
+   "body": "`array.map(item => item.id === x.id ? x : item)` always returns an array of the same length. If no item matches, you get a copy that looks exactly like the original, and nothing complains. So \"map, then save\" quietly turns a bad id into a successful-looking save.\n\nThe helper adds the missing question. It first uses `findIndex` to look for the id. A result below zero means \"not here\", and the helper throws a clear error. Only when the id is found does it build the new array with `map`. Because the throw happens before the storage writer is called, a missing record can no longer reach storage.\n\nKeep in mind what the helper does not do: it only looks at the array it is handed. It does not read storage, does not know who the user is, and does not coordinate two writers. The concepts chapter is careful to list those limits, and several practice questions test whether you kept them apart.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "A `map` expression answers \"what would the array look like if this id were present?\" It does not answer \"did the requested resource exist?\""
+    },
+    {
+     "path": "src/utils/collection.ts",
+     "lineStart": 2,
+     "lineEnd": 5,
+     "quote": "const index = records.findIndex((record) => record.id === replacement.id); if (index < 0) { throw new Error(`Record '${replacement.id}' was not found.`); }"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Before and after code, and the trace of each path."
+    }
+   ]
+  },
+  {
+   "id": "r03-whole-array-storage",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: how the app stores lists, and why that matters",
+   "body": "Every collection lives under one AsyncStorage key as a JSON array. Saving is not \"update one row\": `saveList` turns the entire array into a string and writes it with a single `setItem`, replacing whatever was stored there.\n\nTwo consequences follow, and the review findings build on both:\n\n- **Each save is the whole list.** Whatever array a function holds is what ends up on disk. If that array is out of date, the out-of-date version is what gets written.\n- **Different collections are different keys.** Sales and pig batches are stored separately, so a screen that saves a sale and then updates its batch is doing two separate writes. Nothing ties them together; the first can succeed while the second fails.\n\nWhen you read the context callbacks, notice they use the array captured by the React component (`pigBatches`, `sales`), not a fresh read from storage.",
+   "excerpts": [
+    {
+     "path": "src/services/storageService.ts",
+     "lineStart": 33,
+     "lineEnd": 35,
+     "quote": "async function saveList<T>(key: string, items: T[]): Promise<void> { await AsyncStorage.setItem(key, JSON.stringify(items)); }"
+    },
+    {
+     "path": "src/context/AppDataContext.tsx",
+     "lineStart": 201,
+     "lineEnd": 205,
+     "quote": "updateSale: async (sale) => { const next = replaceRecordById(sales, sale); await saveSales(next); setSales(next); },"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 17,
+     "lineEnd": 25,
+     "why": "The four verified review findings that build on this storage model."
+    }
+   ]
+  },
+  {
+   "id": "x-02dd79aeebe6bdb8",
+   "target": "seed:quests:masterrnative/quiz/02dd79aeebe6bdb8",
+   "phase": "after",
+   "title": "Why a retry after the batch write fails duplicates the sale",
+   "body": "The save handler does two awaited writes inside one `try`. First `addSale` stores the sale under the sales key. Then, if the batch is now empty, it awaits `updatePigBatch` with status `sold_out`. If that second write rejects, the sale is already on disk, but the single `catch` shows \"The sale could not be saved.\" The user believes it and taps save again. An add creates a new id each time, so the retry stores a **second, duplicate sale**. This is review finding F1.\n\nWhy the others are wrong:\n- **automatic rollback**: AsyncStorage has no transaction spanning keys. `saveList` is one `setItem` per key, and nothing undoes the first.\n- **addSale is idempotent**: `addSale` prepends the record; the retry has a new id from `createId()`, so there is nothing to skip.\n- **not-found error**: the retry is an add, not an update, so the helper's missing-id check never runs.",
+   "excerpts": [
+    {
+     "path": "src/screens/transactions/SaleFormScreen.tsx",
+     "lineStart": 90,
+     "lineEnd": 95,
+     "quote": "try { if (existingSale) { await updateSale(nextSale); } else { await addSale(nextSale); }"
+    },
+    {
+     "path": "src/screens/transactions/SaleFormScreen.tsx",
+     "lineStart": 101,
+     "lineEnd": 106,
+     "quote": "await updatePigBatch({ ...batch, status: \"sold_out\", updatedAt: now });"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 19,
+     "lineEnd": 19,
+     "quote": "A user who retries an *add* creates a duplicate sale (new id from `createId()`)."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-216554dc8af116a9",
+   "target": "seed:quests:masterrnative/quiz/216554dc8af116a9",
+   "phase": "after",
+   "title": "Why delete may stay silent while update must throw",
+   "body": "Delete is a `filter`: it keeps every record whose id is not the one being removed. If the id is already gone, the result is the same list, and that is exactly what the user asked for: the record is not there. A double tap or a retry after an error ends in the same state, so it is safe to accept. Update is different. Silently accepting a missing id means nothing was changed while the screen reports success. The course keeps this difference on purpose.\n\nWhy the others are wrong:\n- **filter cannot detect a removal**: it could (compare lengths); the course chooses not to, because the end state is correct.\n- **an oversight the rubric forbids**: the rubric requires add/delete behaviour to stay unchanged.\n- **AsyncStorage rolls back unchanged deletes**: AsyncStorage just stores the string it is given; there is no rollback.",
+   "excerpts": [
+    {
+     "path": "src/context/AppDataContext.tsx",
+     "lineStart": 146,
+     "lineEnd": 150,
+     "quote": "deletePigBatch: async (id) => { const next = pigBatches.filter((item) => item.id !== id);"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 7,
+     "lineEnd": 7,
+     "quote": "Delete filters and stays idempotent, because deleting an already absent id is usually safe for a UI retry."
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 29,
+     "lineEnd": 29,
+     "quote": "add/delete behavior is unchanged"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-44a161dba7ac2b6f",
+   "target": "seed:quests:masterrnative/quiz/44a161dba7ac2b6f",
+   "phase": "after",
+   "title": "Why replaceRecordById is not access control",
+   "body": "Access control answers \"is this user allowed to change this record?\" That needs a notion of users and owners. This app has neither: it is a single-user app that keeps everything on one device, with no tenant boundary. The helper only answers \"is there a record with this id in this array?\" That is an **identity** check. The concepts chapter says so directly, and it also places data validation in a different file, `validation.ts`.\n\nWhy the others are wrong:\n- **checks ownership for sales and batches**: the helper compares ids and nothing else; there is no owner field in its logic.\n- **checks every field against validation.ts**: the helper never calls validation code. Field rules live in `validation.ts`.\n- **rejects records from another user account**: there are no user accounts to compare against.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "The context provides no authorization or tenant boundary (it is a single-user, on-device app); this helper is an identity check, not access control."
+    },
+    {
+     "path": "src/utils/collection.ts",
+     "lineStart": 1,
+     "lineEnd": 2,
+     "quote": "const index = records.findIndex((record) => record.id === replacement.id);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-5fda4f9af9bd2f99",
+   "target": "seed:quests:masterrnative/quiz/5fda4f9af9bd2f99",
+   "phase": "after",
+   "title": "What a throw inside an async callback becomes",
+   "body": "`updateSale` is an `async` function. In JavaScript, if an async function throws, the caller does not get a crash; it gets a **rejected promise**. Here the throw comes from `replaceRecordById` on the very first line, before `await saveSales(next)`. So the function stops before the storage write, and the caller's `await` rejects. That is the point of the design: a missing resource and a storage failure can never share a success path.\n\nWhy the others are wrong:\n- **resolved promise, throws swallowed**: async functions turn a throw into a rejection, they do not hide it.\n- **uncaught crash**: the screens await the call inside `try/catch`, and the rejection lands in that `catch`.\n- **rejection after saveSales finished**: the throw happens on the line before `saveSales`, so the write never starts.",
+   "excerpts": [
+    {
+     "path": "src/context/AppDataContext.tsx",
+     "lineStart": 201,
+     "lineEnd": 203,
+     "quote": "const next = replaceRecordById(sales, sale); await saveSales(next);"
+    },
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": 38,
+     "lineEnd": 38,
+     "quote": "inside an `async` context callback that throw becomes a rejected promise *before* the first `await`, so a storage failure and a missing resource never share one success path."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-74444b026c73f0fb",
+   "target": "seed:quests:masterrnative/quiz/74444b026c73f0fb",
+   "phase": "after",
+   "title": "The missing-id path: throw, no save, no state change",
+   "body": "`updatePigBatch` now does three things in order: compute `next` with the helper, await `savePigBatches(next)`, then `setPigBatches(next)`. For an unknown id, `findIndex` returns -1, the `index < 0` branch throws, and the function stops on its first line. Neither the save nor the state update runs. The worked change spells out this trace.\n\nWhy the others are wrong:\n- **inserts it as a new record**: the helper never adds; turning an update into an add is explicitly a rejected patch in the rubric.\n- **save first, then throw in setPigBatches**: the helper runs before the save, not after it.\n- **returns the original array and skips the save**: that \"unchanged array\" behaviour was the old `map` bug, and it did not even skip the save.",
+   "excerpts": [
+    {
+     "path": "src/context/AppDataContext.tsx",
+     "lineStart": 141,
+     "lineEnd": 145,
+     "quote": "updatePigBatch: async (batch) => { const next = replaceRecordById(pigBatches, batch); await savePigBatches(next); setPigBatches(next); },"
+    },
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": 34,
+     "lineEnd": 34,
+     "quote": "missing id → index -1 → throw → no write, no state change."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-77fb4004277a2051",
+   "target": "seed:quests:masterrnative/quiz/77fb4004277a2051",
+   "phase": "after",
+   "title": "Why a stale closure can resurrect a deleted record",
+   "body": "Each context callback works on the array its React closure captured, such as `sales`. If that array is old and still contains a record that was deleted since, the helper looks there, finds the id, and passes. The callback then saves the whole old array, so the deleted record is written back. The helper checked existence **in the array it was given**, which is not the same as existence in current storage. Review finding F4 says preventing this needs a version check or a re-read before writing.\n\nWhy the others are wrong:\n- **React refreshes closures first**: a closure keeps the values from the render that created it; nothing refreshes it mid-call.\n- **the helper re-reads storage**: it only takes `records` as a parameter and never touches storage.\n- **AsyncStorage rejects deleted ids**: AsyncStorage stores whatever string `setItem` is given.",
+   "excerpts": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 25,
+     "lineEnd": 25,
+     "quote": "A stale closure that still contains a deleted id passes the guard and resurrects the record."
+    },
+    {
+     "path": "src/context/AppDataContext.tsx",
+     "lineStart": 201,
+     "lineEnd": 204,
+     "quote": "const next = replaceRecordById(sales, sale); await saveSales(next); setSales(next);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-92d063f4473d9f9f",
+   "target": "seed:quests:masterrnative/quiz/92d063f4473d9f9f",
+   "phase": "after",
+   "title": "What a successful helper call proves, and no more",
+   "body": "The concepts chapter calls this the resource existence invariant. If `replaceRecordById` returns, `findIndex` found at least one record with that id in the array passed in. That is all. The chapter deliberately separates three claims: the id **exists**, the id is **unique**, and the array is **current**. Only the first is guaranteed. Keeping them apart helps a reviewer tell an identity bug from a concurrency or persistence bug.\n\nWhy the others are wrong:\n- **the caller is authorized**: there is no authorization in this app; the helper only compares ids.\n- **exactly one record matched**: `findIndex` stops at the first match and `map` then replaces every match, so duplicates are possible and allowed.\n- **the array matches AsyncStorage**: the array is the one captured by the React closure, which may be stale.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 11,
+     "lineEnd": 11,
+     "quote": "a successful helper call implies at least one matching id existed in the supplied array. It does not establish that ids are unique, and it does not establish that the supplied array is the latest persisted one"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-94b83a7b8f6aa249",
+   "target": "seed:quests:masterrnative/quiz/94b83a7b8f6aa249",
+   "phase": "after",
+   "title": "Two writers, one key: last writer wins",
+   "body": "`saveList` writes a collection by calling `AsyncStorage.setItem(key, JSON.stringify(items))`. That replaces the whole stored value. If two callbacks hold different copies of the sales array and each saves, the second `setItem` simply overwrites the first, and the first edit is lost. The helper does not help here: it is a rule about the local array, not a database transaction, and there is no concurrency control on whole-array writes.\n\nWhy the others are wrong:\n- **the helper detects conflicting copies**: it only checks that an id exists in the one array it is given.\n- **the key is locked**: AsyncStorage has no locks; writes are not queued against each other by this code.\n- **AsyncStorage merges by id**: `setItem` stores a string. It knows nothing about records or ids.",
+   "excerpts": [
+    {
+     "path": "src/services/storageService.ts",
+     "lineStart": 33,
+     "lineEnd": 35,
+     "quote": "await AsyncStorage.setItem(key, JSON.stringify(items));"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "This is a local state rule, not a database transaction: `saveList` in [storageService.ts](../src/services/storageService.ts) (line 33) replaces a whole collection with one `setItem`, so two writers holding different arrays still produce last-writer-wins."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-cef9311309515b4a",
+   "target": "seed:quests:masterrnative/quiz/cef9311309515b4a",
+   "phase": "after",
+   "title": "The old bug: a map that saved an unchanged copy",
+   "body": "In the baseline snapshot, `updatePigBatch` built `next` with `map`, then saved it, then set state. With a stale id, no item matched, so `map` returned an array equal to the original. That array was written to storage and set into state. Nothing threw, the form reported success, and nothing had actually changed. This is exactly the silent failure the course fixes.\n\nWhy the others are wrong:\n- **map threw a TypeError**: `map` never throws for \"no match\"; it just returns each item unchanged.\n- **AsyncStorage refused an identical write**: AsyncStorage does not compare old and new contents; it writes what it is given.\n- **the stale batch was appended**: `map` keeps the length the same; it cannot add an element.",
+   "excerpts": [
+    {
+     "path": "astraupskill/snapshots/src/context/AppDataContext.tsx",
+     "lineStart": 141,
+     "lineEnd": 143,
+     "quote": "const next = pigBatches.map((item) => (item.id === batch.id ? batch : item)); await savePigBatches(next); setPigBatches(next);"
+    },
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "A stale id yielded an array equal to the original, then the storage writer ran and the state setter accepted it."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-d47fbfa66ca7e8de",
+   "target": "seed:quests:masterrnative/quiz/d47fbfa66ca7e8de",
+   "phase": "after",
+   "title": "Why the user sees a generic save-failed alert",
+   "body": "The sale screen wraps its save in `try { ... } catch { Alert.alert(...) }`. Note the bare `catch {`: it does not bind the error, so the helper's message \"Record '...' was not found.\" is thrown away. Whatever went wrong, the user sees the same text: \"The sale could not be saved. Please try again.\" For a deleted record that advice is misleading, because retrying cannot succeed. Review finding F3 flags this across all six form screens.\n\nWhy the others are wrong:\n- **no message, navigates back**: `navigation.goBack()` sits inside the `try` after the awaits, so a rejection skips it and runs the `catch`.\n- **the helper's own text, verbatim**: the error object is never read, so its message cannot be shown.\n- **an offer to re-create the sale**: no such prompt exists; the rubric would reject converting an update into an add.",
+   "excerpts": [
+    {
+     "path": "src/screens/transactions/SaleFormScreen.tsx",
+     "lineStart": 104,
+     "lineEnd": 106,
+     "quote": "navigation.goBack(); } catch { Alert.alert(\"Save failed\", \"The sale could not be saved. Please try again.\");"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 23,
+     "lineEnd": 23,
+     "quote": "All six form screens use `catch {` without binding the error"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-eea195b6158ecd47",
+   "target": "seed:quests:masterrnative/quiz/eea195b6158ecd47",
+   "phase": "after",
+   "title": "Why findIndex then map, not a single index assignment",
+   "body": "The change was meant to add a guard without changing anything else. The old `map` code replaced **every** record with the matching id, duplicates included. Copying the array and doing `copy[index] = replacement` would only replace the first duplicate, silently changing that behaviour. So the helper uses `findIndex` only to decide whether to throw, then keeps the original `map` for the actual replacement. Practice exercise 3 shows test 3 (duplicate ids) fails if you try the shortcut.\n\nWhy the others are wrong:\n- **map is faster**: the guide gives no speed argument; the reason is preserving the old contract.\n- **findIndex cannot detect a missing id**: it can and does; it returns -1, which is the guard.\n- **index assignment mutates the original**: assigning into a spread copy changes only the copy.",
+   "excerpts": [
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": 36,
+     "lineEnd": 36,
+     "quote": "Because the baseline replaced **every** matching id, and the change was meant to add a guard without changing that contract. The shortcut would only replace the first duplicate"
+    },
+    {
+     "path": "src/utils/collection.ts",
+     "lineStart": 7,
+     "lineEnd": 7,
+     "quote": "return records.map((record) => (record.id === replacement.id ? replacement : record));"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-f695baf66831080e",
+   "target": "seed:quests:masterrnative/quiz/f695baf66831080e",
+   "phase": "after",
+   "title": "A new array, but the same objects inside",
+   "body": "The helper returns the result of `records.map(...)`, and `map` always builds a **new** array, so `result !== records`. Order is kept: `a` stays first and `b` is replaced in its slot by `b2`, giving `[a, b2]`. For records that did not match, `map` returns the very same object, so `result[0]` is the same object as `records[0]`. The guide calls this shallow structural preservation, not deep immutability.\n\nWhy the others are wrong:\n- **result === records, replaced in place**: `map` never returns its input array.\n- **result[0] is a deep clone**: unmatched items are returned as-is, not copied.\n- **[b2, a], replaced records move to the front**: `map` keeps every element at its index.",
+   "excerpts": [
+    {
+     "path": "src/utils/collection.ts",
+     "lineStart": 7,
+     "lineEnd": 7,
+     "quote": "return records.map((record) => (record.id === replacement.id ? replacement : record));"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 7,
+     "lineEnd": 7,
+     "quote": "`[a, b']`, order preserved; `result !== records`, and `result[0]` is the *same object* as `records[0]` (shallow preservation)."
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}
