@@ -1,0 +1,311 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "organized-experiment-ww43",
+ "repo": "organized-experiment-ww43",
+ "sha": "fb89c9c7da40e2c366b98eb640865bde768a7a2a",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: Collab Notes and its docs",
+   "body": "Collab Notes is a collaborative notes app in Next.js, Prisma and PostgreSQL. Users sign in with a cookie-backed session, share notes per person as OWNER, EDITOR or VIEWER, save with a version number so concurrent edits are detected, archive and restore notes, and admins can read an audit log.\n\nRead in this order:\n\n1. `README.md` for what the app is and what local setup really needs.\n2. `docs/learning/guided-reading-path.md` for a route through the code.\n3. `docs/architecture/auth-and-permissions.md`: the session flow, the route gate table, the capability matrix and the numbered findings.\n4. `docs/architecture/request-lifecycle.md` and `domain-model.md` for every request path and the schema.\n\nThe architecture docs mark each finding as run or read-only. Keep `src/lib/auth/permissions.ts` and `src/services/note-service.ts` open as you read: almost every quiz question is decided by one of the checks in those two files.",
+   "excerpts": [
+    {
+     "path": "README.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "a collaborative notes app with cookie-backed sessions, per-note sharing"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Route gates, the capability matrix and the findings."
+    },
+    {
+     "path": "docs/learning/guided-reading-path.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "A guided route through the code."
+    }
+   ]
+  },
+  {
+   "id": "r02-permissions",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: capabilities computed per note",
+   "body": "Two layers decide what a caller may do.\n\n**System role.** A user is `MEMBER` or `APP_ADMIN`. Only the audit-log route checks the system role, through `withRole` nested inside `withAuth`.\n\n**Note capability.** `getNoteAccessLevel` in `src/lib/auth/permissions.ts` turns the caller, the note's status and its collaborator rows into `permission`, `canEdit`, `canManageSharing` and `canArchive`. Build the matrix yourself from the code: one row per caller type (admin, the `Note.ownerId` user, another OWNER row, EDITOR, VIEWER, no row), one column per capability, and one table for ACTIVE notes and one for ARCHIVED ones. Note exactly what `isOwner` is made of.\n\nThen read the three assert helpers below it, and for each one note which conditions it tests and **in what order**, and the status and code each throws. Finally, in `note-service.ts`, list for each write method every check that runs before the write, in order, with the status each one throws.",
+   "excerpts": [
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 30,
+     "lineEnd": 30,
+     "quote": "`getNoteAccessLevel()` turns the note owner id, note status, and collaborator rows into a single access object"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/lib/auth/permissions.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Access levels and the three assert helpers."
+    },
+    {
+     "path": "src/services/note-service.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Every note write and its checks."
+    }
+   ]
+  },
+  {
+   "id": "r03-requests-and-saves",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: from request to response, and safe saves",
+   "body": "Every API route follows the same shape, so learn it once.\n\n- `withAuth` in `src/lib/middleware/with-auth.ts` resolves the session from the cookie. Note what it returns when there is none and whether the handler still runs.\n- Inside the handler, the body is read with `request.json()` and then checked with `parseSchema`. Read `parseSchema` and `apiError` (`src/lib/http/api-response.ts`) and write down which errors keep their own status and what happens to every other error, including ones thrown before `parseSchema` sees the body.\n\nNext, the save path in `updateNote`. It has a pre-check on `baseVersionNumber` and, inside a transaction, a conditional update. For each of the two ways a stale save can be caught, note the status, the code and every row that gets written. Do the same for `updateStatus` when the requested status equals the current one. The findings list in the auth doc is a good place to compare your notes after you finish.",
+   "excerpts": [
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 49,
+     "lineEnd": 49,
+     "quote": "`updateNoteSchema` requires `baseVersionNumber`"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/lib/middleware/with-auth.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The authentication wrapper every API route uses."
+    },
+    {
+     "path": "src/lib/validation/parse-schema.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "How a failed zod parse becomes an API error."
+    }
+   ]
+  },
+  {
+   "id": "x-q01",
+   "target": "seed:quests:organized-experiment-ww43/quiz/6ff5113a9b1b73d6",
+   "phase": "after",
+   "title": "Why an archived note answers 409 even to a viewer",
+   "body": "`updateNote` loads the note, builds the access level and calls `assertCanEditNote`. That helper tests the note status **first**: if the note is ARCHIVED it throws **409 NOTE_ARCHIVED** \"Archived notes must be restored before editing.\" Only for an ACTIVE note does it go on to check `canEdit` and throw 403. The auth doc points out the odd effect: a viewer, who could never edit, is told to restore the note.\n\n- *403 FORBIDDEN* is what the same viewer gets on an ACTIVE note.\n- *404* is wrong: the viewer is a collaborator, so the scoped load finds the note.\n- *422* is wrong: the access check happens after a valid body was parsed, and nothing here is about shape.",
+   "excerpts": [
+    {
+     "path": "src/lib/auth/permissions.ts",
+     "lineStart": 73,
+     "lineEnd": 74,
+     "quote": "if (access.noteStatus === \"ARCHIVED\") { throw appError(\"Archived notes must be restored before editing.\", 409, \"NOTE_ARCHIVED\");"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02",
+   "target": "seed:quests:organized-experiment-ww43/quiz/f8738b836061001c",
+   "phase": "after",
+   "title": "Why a non-collaborator sees 404",
+   "body": "For a MEMBER, every note query is scoped by `buildAccessibleNoteWhere`, which requires a collaborator row for the caller. A member without one gets no result from `findAccessibleById`, and `getNoteDetail` throws **404 NOTE_NOT_FOUND**. The route gate table explains why: a member cannot tell \"exists but not shared with me\" from \"does not exist\".\n\n- *403* would confirm that the note exists.\n- *200 read-only* is wrong: there is no access at all without a collaborator row.\n- *401* is wrong: the user is signed in; `withAuth` passes.",
+   "excerpts": [
+    {
+     "path": "src/services/note-service.ts",
+     "lineStart": 187,
+     "lineEnd": 188,
+     "quote": "if (!note) { throw appError(\"This note was not found for your account.\", 404, \"NOTE_NOT_FOUND\");"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q03",
+   "target": "seed:quests:organized-experiment-ww43/quiz/ca699e934df77d76",
+   "phase": "after",
+   "title": "Why an editor cannot share",
+   "body": "Sharing requires `canManageSharing`, which `getNoteAccessLevel` sets to `isOwner`: true only for an OWNER row or the `Note.ownerId` user. An EDITOR row has neither, so `assertCanManageSharing` throws **403 FORBIDDEN** \"Only the owner or an application admin can change collaborators.\" This happens before the target email is looked up.\n\n- *Editors may add viewers* is wrong: there is no partial sharing right.\n- *404 USER_NOT_FOUND first* is wrong: the email lookup comes after the capability check.\n- *422 for a non-VIEWER grant* is wrong: the schema accepts every permission; the refusal is about the caller.",
+   "excerpts": [
+    {
+     "path": "src/lib/auth/permissions.ts",
+     "lineStart": 59,
+     "lineEnd": 59,
+     "quote": "const canManageSharing = isOwner;"
+    },
+    {
+     "path": "src/lib/auth/permissions.ts",
+     "lineStart": 85,
+     "lineEnd": 85,
+     "quote": "\"Only the owner or an application admin can change collaborators.\","
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q04",
+   "target": "seed:quests:organized-experiment-ww43/quiz/922db679030def82",
+   "phase": "after",
+   "title": "Why sharing with an unknown email is 404",
+   "body": "Once the owner passes the sharing check, `upsertCollaborator` looks the email up with `findByEmail`. No user means **404 USER_NOT_FOUND** \"No user with that email exists yet.\" The app has no sign-up route and no invitation model, so a collaborator must already exist as a user (the seed creates the demo accounts).\n\n- *A pending invitation* is wrong: nothing stores one.\n- *422* is wrong: the email passed the schema; the problem is that no account has it.\n- *A new user created* is wrong: users exist only through the seed or a manual insert.",
+   "excerpts": [
+    {
+     "path": "src/services/note-service.ts",
+     "lineStart": 343,
+     "lineEnd": 344,
+     "quote": "if (!collaborator) { throw appError(\"No user with that email exists yet.\", 404, \"USER_NOT_FOUND\");"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q05",
+   "target": "seed:quests:organized-experiment-ww43/quiz/2a69d8e84a4bacd3",
+   "phase": "after",
+   "title": "Why nobody can demote the note's original owner",
+   "body": "A co-owner passes `assertCanManageSharing`, because any OWNER row counts as an owner. `upsertCollaborator` then has one extra rule: if the target is the user in `Note.ownerId` and the new permission is not OWNER, it throws **422 INVALID_PERMISSION_CHANGE**. That is the only protection the original owner has (finding F6).\n\n- *Accepted* is true for other collaborators, not for the `ownerId` user.\n- *403, only Note.ownerId may manage sharing* is wrong: co-owners may manage sharing.\n- *409, more than one OWNER* is wrong: no rule counts OWNER rows.",
+   "excerpts": [
+    {
+     "path": "src/services/note-service.ts",
+     "lineStart": 347,
+     "lineEnd": 348,
+     "quote": "if (collaborator.id === note.ownerId && input.permission !== \"OWNER\") { throw appError(\"The note owner must keep OWNER permission.\", 422, \"INVALID_PERMISSION_CHANGE\");"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q06",
+   "target": "seed:quests:organized-experiment-ww43/quiz/5906b5375a9986ec",
+   "phase": "after",
+   "title": "Why a co-owner can create more co-owners",
+   "body": "`isOwner` is true for any collaborator whose row is OWNER, not only for the `Note.ownerId` user. So a co-owner passes the sharing check, and `shareNoteSchema` accepts every `NotePermission`, OWNER included. The upsert and its `NOTE_COLLABORATOR_UPSERTED` audit row are written in one transaction. The editor now has an OWNER row and, with it, `canManageSharing` and `canArchive`. The auth doc lists this as finding F6.\n\n- *Only Note.ownerId may grant OWNER* is the fix the doc sketches, not the code.\n- *422, OWNER not accepted* is wrong: the enum includes it.\n- *Cannot change status* is wrong: `canArchive` is also `isOwner`.",
+   "excerpts": [
+    {
+     "path": "src/lib/auth/permissions.ts",
+     "lineStart": 57,
+     "lineEnd": 57,
+     "quote": "const isOwner = collaborator.permission === \"OWNER\" || note.ownerId === session.user.id;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07",
+   "target": "seed:quests:organized-experiment-ww43/quiz/2d585efe9be1896c",
+   "phase": "after",
+   "title": "Why a lost save race leaves no conflict in the audit log",
+   "body": "There are two conflict paths. The pre-check compares the stored version with `baseVersionNumber`, writes `NOTE_CONFLICT_REJECTED` and throws 409. In the race path the pre-check passed, but the conditional update inside the transaction matched nothing, so the callback returns `null`. The service then throws the same **409 VERSION_CONFLICT**, without any audit call. An admin reading the log under-counts exactly the races (finding F3).\n\n- *409 with an audit row* describes the pre-check path.\n- *500* is wrong: matching zero rows is a normal result, not an error.\n- *200* is wrong: the null result is turned into a conflict.",
+   "excerpts": [
+    {
+     "path": "src/services/note-service.ts",
+     "lineStart": 276,
+     "lineEnd": 278,
+     "quote": "if (!updatedSuccessfully) { return null; }"
+    },
+    {
+     "path": "src/services/note-service.ts",
+     "lineStart": 248,
+     "lineEnd": 248,
+     "quote": "action: \"NOTE_CONFLICT_REJECTED\","
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08",
+   "target": "seed:quests:organized-experiment-ww43/quiz/36b496a2d478a82f",
+   "phase": "after",
+   "title": "Why a broken JSON body is a 500",
+   "body": "The route calls `await request.json()` inside its `try`, before `parseSchema` ever sees anything. A body that is not valid JSON makes `request.json()` throw a `SyntaxError`. In the `catch`, `apiError` maps only `AppError` instances to their own status; anything else becomes **500 INTERNAL_SERVER_ERROR**. The auth doc ran this case (finding F1) and sketches a `readJson` helper that would return 400.\n\n- *400* is the right answer for the fix, not for this code.\n- *422* is wrong: `parseSchema` is never reached.\n- *401* is wrong: authentication already passed in `withAuth`.",
+   "excerpts": [
+    {
+     "path": "src/app/api/notes/route.ts",
+     "lineStart": 28,
+     "lineEnd": 28,
+     "quote": "const input = parseSchema(createNoteSchema, await request.json());"
+    },
+    {
+     "path": "src/lib/http/api-response.ts",
+     "lineStart": 29,
+     "lineEnd": 29,
+     "quote": "error: \"INTERNAL_SERVER_ERROR\","
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09",
+   "target": "seed:quests:organized-experiment-ww43/quiz/dbf32910a238b487",
+   "phase": "after",
+   "title": "Why a too-short title is a 422",
+   "body": "`createNoteSchema` requires a trimmed title of at least three characters. `parseSchema` runs `safeParse`, and on failure throws an `AppError` with status **422**, code `VALIDATION_ERROR`, and the flattened zod issues as details. `apiError` passes that status through.\n\n- *400 with the raw error* is wrong twice: the status is 422, and the details are flattened, not the raw zod object.\n- *500* is what happens to a malformed JSON body, not to a well-formed body with a bad field.\n- *Titles never measured* is wrong: the schema has `min(3)` after `trim()`.",
+   "excerpts": [
+    {
+     "path": "src/lib/validation/parse-schema.ts",
+     "lineStart": 14,
+     "lineEnd": 17,
+     "quote": "throw appError( \"The request payload did not match the expected shape.\", 422, \"VALIDATION_ERROR\","
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10",
+   "target": "seed:quests:organized-experiment-ww43/quiz/cdbec0f1c47c9f43",
+   "phase": "after",
+   "title": "Why archiving an archived note is a 409",
+   "body": "`updateStatus` first checks `canArchive`, which the owner has. It then compares the current status with the requested one; when they are equal it throws **409 INVALID_STATUS_TRANSITION** with \"This note is already archived.\" Nothing is written. The same guard has a gap the findings call out: two concurrent archive requests that both read ACTIVE both pass it and both write (F5).\n\n- *200 with a second audit row* is what the race can produce, not a sequential repeat.\n- *403* is wrong: owners keep `canArchive` on archived notes.\n- *422* is wrong: ARCHIVED is a valid `NoteStatus`.",
+   "excerpts": [
+    {
+     "path": "src/services/note-service.ts",
+     "lineStart": 413,
+     "lineEnd": 417,
+     "quote": "if (note.status === nextStatus) { throw appError( `This note is already ${nextStatus.toLowerCase()}.`, 409, \"INVALID_STATUS_TRANSITION\","
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q11",
+   "target": "seed:quests:organized-experiment-ww43/quiz/53c115c9d6d8cca4",
+   "phase": "after",
+   "title": "Why an archived note can still be shared",
+   "body": "Archiving changes one capability: `canEdit` becomes false. `canManageSharing` is still `isOwner`, and `assertCanManageSharing` looks only at that flag, not at the note status. So the owner's share goes through, the collaborator row is upserted and the change is audited. The auth doc records this as a partial transition guard (check S6).\n\n- *409 NOTE_ARCHIVED* is the edit path's check; sharing has no status check.\n- *403* is wrong: the owner keeps the sharing capability.\n- *422 for a non-OWNER grant* is wrong: no rule ties the granted permission to the note status.",
+   "excerpts": [
+    {
+     "path": "src/lib/auth/permissions.ts",
+     "lineStart": 65,
+     "lineEnd": 66,
+     "quote": "canEdit: canEdit && note.status === \"ACTIVE\", canManageSharing,"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q12",
+   "target": "seed:quests:organized-experiment-ww43/quiz/2be9aed17e5b58e9",
+   "phase": "after",
+   "title": "Why logging out with an expired session keeps the cookie",
+   "body": "The logout route is wrapped in `withAuth`. With an expired or missing session row, `withAuth` resolves `null` and immediately returns **401 UNAUTHENTICATED**; the handler, which would delete the row and call `clearSessionCookie`, never runs. The stale cookie stays in the browser until its own expiry, and expired rows are never cleaned up anywhere (finding F9).\n\n- *Cleared for stale sessions* is the fix the doc suggests, not today's code.\n- *Row deleted* is wrong in both remaining options: the handler that deletes the row is never reached.",
+   "excerpts": [
+    {
+     "path": "src/lib/middleware/with-auth.ts",
+     "lineStart": 32,
+     "lineEnd": 38,
+     "quote": "if (!session) { return ok( { error: \"UNAUTHENTICATED\","
+    },
+    {
+     "path": "src/app/api/auth/logout/route.ts",
+     "lineStart": 29,
+     "lineEnd": 29,
+     "quote": "clearSessionCookie(response);"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}
