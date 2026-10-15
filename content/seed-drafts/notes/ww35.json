@@ -1,0 +1,549 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "ww35",
+ "repo": "ww35",
+ "sha": "e5be96fa24ecb7d5381ebcc695970b52bf938bee",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: booking appointments across local days",
+   "body": "This pack uses an appointment-booking app (Next.js, Prisma, PostgreSQL). Clients book time with staff members, who have weekly working hours in their own timezone. The course looks at two boundaries: deciding whether a time range fits inside one local working day, and cancelling so that only one request can win.\n\nSuggested reading order:\n\n1. `astraupskill/README.md`: what changed and where it lives.\n2. `astraupskill/01-CODEBASE-MAP.md`.\n3. `astraupskill/02-CONCEPTS.md`: instants, local days and half-open intervals, and a line-by-line walk through the working-hours check. Most concept quizzes come from here.\n4. `src/lib/availability/schedule.ts` lines 29-143, with the concepts guide open.\n5. `src/services/appointmentService.ts` (`cancelAppointment`, lines 81-108) and `src/repositories/appointmentRepository.ts` (lines 150-160).\n6. `astraupskill/05-PRACTICE.md`: five exercises and eight numbered Goal/Check pairs.\n7. `astraupskill/06-SOLUTIONS-AND-REVIEW.md`, after you try them.",
+   "excerpts": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "The improvement focuses on two boundaries: deciding whether an interval belongs inside a local working day, and canceling an appointment without leaking another caller's state or overwriting an earlier cancellation."
+    },
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 15,
+     "lineEnd": 19,
+     "quote": "- Local-day check: `src/lib/availability/schedule.ts:71-97`"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 11,
+     "lineEnd": 11,
+     "why": "What the tests cover, and what they do not claim (no live PostgreSQL run)."
+    },
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Where each layer of the app lives."
+    }
+   ]
+  },
+  {
+   "id": "r02-instants-and-local-days",
+   "target": "pack",
+   "phase": "before",
+   "title": "Instants versus local clock times",
+   "body": "An appointment is stored as two *instants*: exact moments, the same everywhere in the world (stored in UTC). Working hours are *local* rules: \"Monday, 09:00 to 17:00, in America/New_York\". To compare them, the code converts each instant into the staff member's local date and clock time with `Intl.DateTimeFormat` (`getZonedParts`).\n\nTwo traps to keep in mind:\n\n- A clock time alone (\"00:30\") forgets which day it belongs to. That is why `getZonedParts` also returns a `dateKey` (year-month-day).\n- A local day is not always 24 hours long. On daylight-saving change days the offset from UTC changes, so a day can have 23 or 25 hours.\n\nMinutes are counted from local midnight, so 09:00 is minute 540 and the end of the day is minute 1440. Read the five-step walkthrough of `isWithinWorkingHours` in the concepts guide before the quizzes.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "Translating an instant to a local clock loses information unless the local date is retained too."
+    },
+    {
+     "path": "src/lib/availability/schedule.ts",
+     "lineStart": 44,
+     "lineEnd": 49,
+     "quote": "dateKey: `${get(\"year\")}-${get(\"month\")}-${get(\"day\")}`,"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 13,
+     "lineEnd": 20,
+     "why": "The algorithm, line by line, with the line numbers in schedule.ts."
+    }
+   ]
+  },
+  {
+   "id": "r03-one-winner-cancel",
+   "target": "pack",
+   "phase": "before",
+   "title": "Scoped reads and conditional writes",
+   "body": "Cancelling has two dangers: one client touching another client's appointment, and two requests racing to cancel the same one.\n\nThe service handles the first by reading with the actor's scope: `findScopedAppointmentById(actor, id)` only finds appointments this caller is allowed to see. The repository handles the second with a *conditional write*: `updateMany` whose `where` includes the id, the actor scope and `status: \"BOOKED\"`. The database checks those conditions at the moment of the write and reports how many rows changed.\n\nBelow both sits PostgreSQL. The first migration adds an *exclusion constraint* so that two booked appointments for the same staff member can never overlap, even if two inserts race.\n\nBefore the quizzes, read `cancelAppointment` in the service top to bottom and list, in order, every place it can throw and which error it throws.",
+   "excerpts": [
+    {
+     "path": "src/repositories/appointmentRepository.ts",
+     "lineStart": 154,
+     "lineEnd": 155,
+     "quote": "where: { id: input.appointmentId, ...buildAppointmentListWhere(actor), status: \"BOOKED\" },"
+    },
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "That database guard is the final protection against concurrent overlapping inserts. Service checks improve feedback, but a read followed by an insert alone cannot establish that guarantee."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The worked change to the local-day check and the scoped cancellation."
+    }
+   ]
+  },
+  {
+   "id": "x-q01-rule-ends-1440",
+   "target": "seed:quests:ww35/quiz/0f6af4ff708ddf9d",
+   "phase": "after",
+   "title": "Only an end exactly at local midnight can use minute 1440",
+   "body": "**Key: 23:00 ending exactly at the following local midnight, minute 1440.**\n\nWhen start and end fall on different local dates, `isWithinWorkingHours` accepts the end only if its local minutes are exactly 0 (midnight) *and* the instant 1 ms earlier is still on the start date. Then it treats the end as minute 1440. 23:00 to midnight passes both tests, and a rule ending at 1440 contains it.\n\nWhy the others are wrong:\n- *One millisecond after midnight*: milliseconds count in `localEnd`, so it is not exactly 0 and the check returns `false`.\n- *23:30 to 00:30*: the end is on the next date and not midnight, so it is rejected; \"most of it fits\" is not a rule.\n- *None*: the exact-midnight case is the one allowed exception.",
+   "excerpts": [
+    {
+     "path": "src/lib/availability/schedule.ts",
+     "lineStart": 81,
+     "lineEnd": 86,
+     "quote": "if (start.dateKey !== end.dateKey) { // A midnight endpoint belongs to the preceding day only when it ends that day exactly. const preceding = getZonedParts(new Date(slot.endsAt.getTime() - 1), timeZone); if (localEnd !== 0 || preceding.dateKey !== start.dateKey) return false; localEnd = 1440;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02-gc-stale-loser",
+   "target": "seed:quests:ww35/quiz/1966d929e2af0903",
+   "phase": "after",
+   "title": "Goal 4's check: one updateMany, no re-read, a conflict",
+   "body": "**Key: \"one `updateMany` call, no `findFirst` afterwards, `ConflictAppError` raised.\"**\n\nThis is a goal-check question: `05-PRACTICE.md` pairs each short **Goal** with one **Check**, and the wrong choices are the Checks of the other numbered goals.\n\n\"Stale loser\" means a request that read the appointment as BOOKED but lost the race: by the time its conditional write ran, someone else had cancelled it, so `updateMany` changed 0 rows. The check proves the right behaviour: exactly one write attempt, no follow-up read pretending it worked, and a conflict error.\n\nWhy the others do not fit:\n- *Cancel a finished appointment, name the line*: Goal 8, past cancellations.\n- *List the writes in createStaffMember*: Goal 7, the orphan path.\n- *Two clients at 09:00 and 09:20 see different slots*: Goal 6, the grid anchor.",
+   "excerpts": [
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 20,
+     "lineEnd": 20,
+     "quote": "4. **Goal:** stale-loser behaviour. **Check:** one `updateMany` call, no `findFirst` afterwards, `ConflictAppError` raised."
+    },
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "simulate a BOOKED scoped read followed by an updateMany result with count zero. Assert the service returns a conflict and does not retry an unrestricted write."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q03-gc-orphan",
+   "target": "seed:quests:ww35/quiz/272a51e005145b8b",
+   "phase": "after",
+   "title": "Goal 7's check: list the writes and what a failure leaves",
+   "body": "**Key: \"list the writes in `createStaffMember` (`availabilityService.ts:24-66`) and say what remains if the second one fails.\"**\n\nThis is a goal-check question: `05-PRACTICE.md` pairs each short **Goal** with one **Check**, and the wrong choices are the Checks of the other numbered goals.\n\nAn *orphan* is a record left behind without the partner it was meant to have. To find the orphan path in staff creation, you list its writes in order (create the user, then create the staff profile) and ask what is left if the second one fails. That is exactly what the check asks for.\n\nWhy the others do not fit:\n- *Only the typed P2004 maps to \"slot taken\"*: Goal 5, narrow error mapping.\n- *One updateMany, no findFirst, conflict*: Goal 4, the stale loser.\n- *Adjacent open, one-minute overlap closed*: Goal 3, half-open overlap.",
+   "excerpts": [
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 27,
+     "lineEnd": 28,
+     "quote": "7. **Goal:** find the orphan path. **Check:** list the writes in `createStaffMember` (`availabilityService.ts:24-66`) and say what remains if the second one fails."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 19,
+     "lineEnd": 20,
+     "why": "The answer to Goal 7, once you have tried it."
+    }
+   ]
+  },
+  {
+   "id": "x-q04-seconds-in-minutes",
+   "target": "seed:quests:ww35/quiz/2748bc7dd80a3c61",
+   "phase": "after",
+   "title": "Seconds and milliseconds stop truncation at the boundary",
+   "body": "**Key: so an end just past a boundary cannot slip through by truncation.**\n\nThe formatter only gives whole hours and minutes. If the code used only those, an end at 17:00:30 would look like minute 1020 (17:00) and fit a rule ending at 1020, even though it is 30 seconds too late. So `localStart` and `localEnd` add `getUTCSeconds() / 60` and `getUTCMilliseconds() / 60_000`, turning 17:00:30 into 1020.5, which is past the rule's end.\n\nWhy the others are wrong:\n- *To sort appointments in the same minute*: this code compares against rules; it does not sort.\n- *Intl cannot report minutes*: it does report minutes (`minute: \"2-digit\"`); it is seconds that are left out.\n- *To round DST transitions*: nothing here rounds to hours.",
+   "excerpts": [
+    {
+     "path": "src/lib/availability/schedule.ts",
+     "lineStart": 79,
+     "lineEnd": 80,
+     "quote": "const localStart = start.hour * 60 + start.minute + slot.startsAt.getUTCSeconds() / 60 + slot.startsAt.getUTCMilliseconds() / 60_000;"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "Seconds and milliseconds are included in minute comparisons, so a meeting ending just beyond the boundary cannot slip through a truncation."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q05-foreign-cancelled",
+   "target": "seed:quests:ww35/quiz/2e899236b092296f",
+   "phase": "after",
+   "title": "Another client's appointment: not found, before any status check",
+   "body": "**Key: not found, as the scoped lookup fails before the status check.**\n\n`cancelAppointment` first runs `findScopedAppointmentById(actor, id)`, which only returns appointments this actor may see. For another client's appointment it returns nothing, so the service throws `NotFoundAppError` straight away. The \"already cancelled\" check comes after, so it never runs. This order matters: if the stranger got \"Cancelled appointments cannot be cancelled again\", they would learn the state of someone else's booking.\n\nWhy the others are wrong:\n- *Conflict*: the conflict comes from a zero-row `updateMany`, which is never reached.\n- *Invalid transition*: that check runs only after the scoped read found the appointment.\n- *Forbidden, naming the owner*: that would disclose exactly what scoping is there to hide.",
+   "excerpts": [
+    {
+     "path": "src/services/appointmentService.ts",
+     "lineStart": 92,
+     "lineEnd": 100,
+     "quote": "const appointment = await findScopedAppointmentById(actor, appointmentId); if (!appointment) { throw new NotFoundAppError(\"Appointment not found\"); } if (appointment.status === \"CANCELLED\") {"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "A missing actor-scoped row instead produces not found before status inspection, avoiding a cross-user lifecycle disclosure."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q06-staff-orphan",
+   "target": "seed:quests:ww35/quiz/41bc3d7328c497bc",
+   "phase": "after",
+   "title": "Staff creation can leave a STAFF user with no profile",
+   "body": "**Key: a STAFF user with no profile, as the two writes share no transaction.**\n\n`createStaffMember` calls `createUser` (role \"STAFF\") and then, as a separate step, `createStaffProfile`. They are two independent database writes with no transaction around them. If the first succeeds and the second throws, the user row is already saved and nothing removes it. The review lists this as finding 3, \"Staff creation is not atomic\". The fix is to run both writes in one transaction.\n\nWhy the others are wrong:\n- *A profile with no user*: the user is written first; the profile needs `user.id`.\n- *Nothing, Prisma rolls back*: Prisma only rolls back writes inside a transaction you open; these are separate calls.\n- *A duplicate user from a retry*: nothing in the function retries.",
+   "excerpts": [
+    {
+     "path": "src/services/availabilityService.ts",
+     "lineStart": 43,
+     "lineEnd": 46,
+     "quote": "user = await createUser({ email: input.email, name: input.name, role: \"STAFF\","
+    },
+    {
+     "path": "src/services/availabilityService.ts",
+     "lineStart": 58,
+     "lineEnd": 59,
+     "quote": "const staffProfile = await createStaffProfile({ userId: user.id,"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 19,
+     "lineEnd": 20,
+     "quote": "If the second fails, a `STAFF` user with no profile remains; there is no transaction."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07-overnight-wrap",
+   "target": "seed:quests:ww35/quiz/4295861a576f8fe2",
+   "phase": "after",
+   "title": "Clock minutes forget the date; the code compares dates",
+   "body": "**Key: minutes drop the date, so dateKeys are compared and only an exact midnight end may cross.**\n\n23:30 is minute 1410 and 00:30 is minute 30. Clock minutes alone lose the fact that 00:30 is on the next day, which is how the original check went wrong: the end minute wrapped back to a small number. The fixed code gets a `dateKey` for both ends. If they differ, the interval is rejected unless the end is exactly local midnight closing the start day (then it counts as 1440).\n\nWhy the others are wrong:\n- *Adds 1440 to a smaller end time*: the code never does that; it only sets 1440 for an exact midnight.\n- *Converts to UTC minutes*: UTC times also wrap at UTC midnight, and working hours are local, so this would not help.\n- *The client splits the booking*: nothing requires that; the code simply rejects the interval.",
+   "excerpts": [
+    {
+     "path": "src/lib/availability/schedule.ts",
+     "lineStart": 81,
+     "lineEnd": 84,
+     "quote": "if (start.dateKey !== end.dateKey) {"
+    },
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "A meeting beginning late at night and ending after midnight could appear to fit a daytime rule because the end minute wrapped back to a small number."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08-gc-grid-anchor",
+   "target": "seed:quests:ww35/quiz/5d34231e1be374c1",
+   "phase": "after",
+   "title": "Goal 6's check: explain why two clients see different grids",
+   "body": "**Key: \"explain why two clients asking for availability from 09:00 and 09:20 see different slot lists for the same staff member (`schedule.ts:119-140`).\"**\n\nThis is a goal-check question: `05-PRACTICE.md` pairs each short **Goal** with one **Check**, and the wrong choices are the Checks of the other numbered goals.\n\nThe \"grid\" is the list of slots the availability preview shows. Finding its *anchor* means finding where the first slot starts. In `buildAvailabilitySlots` the cursor starts at the caller's own `from` and steps by the appointment length, so the check asks you to explain why a 09:00 request and a 09:20 request produce different lists.\n\nWhy the others do not fit:\n- *Cancel a finished appointment, name the line*: Goal 8.\n- *Adjacent open, overlap closed*: Goal 3, half-open overlap.\n- *isSlotOpen on 23:30-00:30 and 23:00-24:00*: Goal 1, overnight wraps.",
+   "excerpts": [
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 25,
+     "lineEnd": 26,
+     "quote": "6. **Goal:** find the grid anchor. **Check:** explain why two clients asking for availability from 09:00 and 09:20 see different slot lists for the same staff member (`schedule.ts:119-140`)."
+    },
+    {
+     "path": "src/lib/availability/schedule.ts",
+     "lineStart": 119,
+     "lineEnd": 119,
+     "quote": "let cursor = new Date(window.startsAt);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09-gc-half-open",
+   "target": "seed:quests:ww35/quiz/7ba2c408d9c9d399",
+   "phase": "after",
+   "title": "Goal 3's check: touching is fine, overlapping is not",
+   "body": "**Key: \"adjacent intervals are open; overlap by one minute is closed (`schedule.ts:67-69`).\"**\n\nThis is a goal-check question: `05-PRACTICE.md` pairs each short **Goal** with one **Check**, and the wrong choices are the Checks of the other numbered goals.\n\nA *half-open* interval includes its start but not its end, written `[start, end)`. So one meeting can end at 10:00 and the next start at 10:00 without overlapping. The check tests exactly the two cases that define it: adjacent intervals must be allowed, and a one-minute overlap must be blocked, using the `overlaps` function at lines 67-69.\n\nWhy the others do not fit:\n- *Next local midnight from the formatter, 30-minute extension false*: Goal 2, DST.\n- *Cancel a finished appointment*: Goal 8.\n- *List the writes in createStaffMember*: Goal 7.",
+   "excerpts": [
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 19,
+     "lineEnd": 19,
+     "quote": "3. **Goal:** half-open overlap. **Check:** adjacent intervals are open; overlap by one minute is closed (`schedule.ts:67-69`)."
+    },
+    {
+     "path": "src/lib/availability/schedule.ts",
+     "lineStart": 67,
+     "lineEnd": 69,
+     "quote": "return left.startsAt < right.endsAt && left.endsAt > right.startsAt;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10-gc-dst",
+   "target": "seed:quests:ww35/quiz/80a548b0a7ab04b7",
+   "phase": "after",
+   "title": "Goal 2's check: find local midnight with the formatter",
+   "body": "**Key: \"you name the UTC instant of the next local midnight from the formatter, not from `+24h`, and the 30-minute extension returns `false`.\"**\n\nThis is a goal-check question: `05-PRACTICE.md` pairs each short **Goal** with one **Check**, and the wrong choices are the Checks of the other numbered goals.\n\nExercise two uses the spring daylight-saving day in New York, when the local day is only 23 hours long. Reasoning about DST means not assuming a day is 24 hours: you find the next local midnight by formatting instants in the timezone. The check asks for exactly that, and for the second half of the exercise: extending the appointment 30 minutes past that midnight must be rejected.\n\nWhy the others do not fit:\n- *Only the typed P2004 maps to \"slot taken\"*: Goal 5.\n- *Cancel a finished appointment*: Goal 8.\n- *isSlotOpen on 23:30-00:30, 23:00-24:00, +1 ms*: Goal 1, overnight wraps, which uses UTC examples with no DST change.",
+   "excerpts": [
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 17,
+     "lineEnd": 18,
+     "quote": "2. **Goal:** reason about DST. **Check:** you name the UTC instant of the next local midnight from the formatter, not from `+24h`, and the 30-minute extension returns `false`."
+    },
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "Explain why adding a fixed twenty-four hours is not a general way to find a local midnight."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q11-narrow-error-mapping",
+   "target": "seed:quests:ww35/quiz/97dca56d2a274aba",
+   "phase": "after",
+   "title": "Only the named exclusion error means 'slot taken'",
+   "body": "**Key: no, as only a typed P2004 naming the exclusion constraint means slot taken.**\n\n`isAppointmentExclusionViolation` returns true only if all of these hold: the error is a `Prisma.PrismaClientKnownRequestError`, its code is `P2004`, and its database detail names the constraint `Appointment_staffProfileId_time_window_excl` (and mentions 23P01 or \"exclusion constraint\"). A network error is not that type, so the function returns false at the first line, whatever its message says. The code comment says why: never match \"arbitrary prose containing the word conflict\".\n\nWhy the others are wrong:\n- *Retried silently*: nothing retries; unknown errors go to the generic error response.\n- *Any message with 'conflict'*: the message text is never read for that word.\n- *Any 409*: the check looks at the Prisma error type and code, not an HTTP status.",
+   "excerpts": [
+    {
+     "path": "src/lib/data/appointmentErrors.ts",
+     "lineStart": 4,
+     "lineEnd": 10,
+     "quote": "if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== \"P2004\") return false;"
+    },
+    {
+     "path": "src/lib/data/appointmentErrors.ts",
+     "lineStart": 7,
+     "lineEnd": 8,
+     "quote": "// Prisma wraps PostgreSQL exclusion errors in P2004. Match the named constraint, // never arbitrary prose containing the word conflict or another integrity failure."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q12-touching-meetings",
+   "target": "seed:quests:ww35/quiz/a4653c335b4b80cd",
+   "phase": "after",
+   "title": "Meetings that touch at 10:00 do not overlap",
+   "body": "**Key: no, as half-open intervals may touch without overlapping.**\n\n`overlaps` is `left.startsAt < right.endsAt && left.endsAt > right.startsAt`. Take left = the meeting ending at 10:00 and right = the one starting at 10:00. Is `left.endsAt > right.startsAt`? 10:00 > 10:00 is false, so the whole test is false: no overlap. The comparisons are strict (`<`, `>`), so equal edges never count. The SQL constraint uses `tsrange(..., '[)')`, the same convention, so the database agrees.\n\nWhy the others are wrong:\n- *SQL blocks it, TypeScript allows it*: both use half-open ranges, so both allow it.\n- *Both contain the 10:00 instant*: under `[start, end)`, a meeting does not contain its end instant.\n- *Unless a buffer is configured*: no buffer setting exists in this code.",
+   "excerpts": [
+    {
+     "path": "src/lib/availability/schedule.ts",
+     "lineStart": 67,
+     "lineEnd": 69,
+     "quote": "function overlaps(left: TimeWindow, right: TimeWindow) { return left.startsAt < right.endsAt && left.endsAt > right.startsAt; }"
+    },
+    {
+     "path": "prisma/migrations/0001_initial/migration.sql",
+     "lineStart": 102,
+     "lineEnd": 102,
+     "quote": "tsrange(\"startsAt\", \"endsAt\", '[)') WITH &&"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q13-gc-overnight",
+   "target": "seed:quests:ww35/quiz/bb4b97e08522bdcf",
+   "phase": "after",
+   "title": "Goal 1's check: three isSlotOpen results at midnight",
+   "body": "**Key: \"`isSlotOpen` returns `false` for 23:30-00:30 against 09:00-17:00, `true` for 23:00-24:00 against a rule ending at 1440, and `false` for an end one millisecond past midnight.\"**\n\nThis is a goal-check question: `05-PRACTICE.md` pairs each short **Goal** with one **Check**, and the wrong choices are the Checks of the other numbered goals.\n\nRejecting overnight wraps means an appointment that crosses local midnight must not fit a single-day rule, with one exception: ending exactly at midnight when the rule runs to 1440. The check covers all three edges of that rule: the wrap (rejected), the exact midnight (accepted), and one millisecond more (rejected).\n\nWhy the others do not fit:\n- *Two clients at 09:00 and 09:20*: Goal 6, the grid anchor.\n- *One updateMany, no findFirst*: Goal 4, the stale loser.\n- *List the writes in createStaffMember*: Goal 7, the orphan path.",
+   "excerpts": [
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 15,
+     "lineEnd": 16,
+     "quote": "1. **Goal:** reject overnight wraps. **Check:** `isSlotOpen` returns `false` for 23:30-00:30 against 09:00-17:00, `true` for 23:00-24:00 against a rule ending at 1440, and `false` for an end one millisecond past midnight."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q14-dst-23-hours",
+   "target": "seed:quests:ww35/quiz/c4493c093e6c6713",
+   "phase": "after",
+   "title": "On spring-forward day, +24 hours overshoots midnight",
+   "body": "**Key: that day has 23 hours, so adding 24 hours lands at 01:00 the next day.**\n\nOn the spring daylight-saving date in New York, clocks jump from 02:00 to 03:00, so that local day is only 23 hours long. Start at local midnight and add 24 real hours: you pass the next midnight by one hour and land at 01:00. That is why the code never adds fixed hours; it formats instants in the timezone (`getZonedParts`) and compares local dates.\n\nWhy the others are wrong:\n- *It is fine*: DST, not leap seconds, is the problem here.\n- *JavaScript Dates are local time*: a `Date` holds a UTC instant; adding milliseconds adds real elapsed time, which is exactly why it overshoots.\n- *Midnight is 24:00 under h23*: h23 writes midnight as 00; it is h24 that would use 24.",
+   "excerpts": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "On a spring transition day in New York, the UTC offset changes during the local date. Convert the actual endpoint through the timezone formatter rather than assuming the day has exactly twenty-four elapsed hours."
+    },
+    {
+     "path": "src/lib/availability/schedule.ts",
+     "lineStart": 76,
+     "lineEnd": 77,
+     "quote": "const start = getZonedParts(slot.startsAt, timeZone); const end = getZonedParts(slot.endsAt, timeZone);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q15-cancelled-frees-slot",
+   "target": "seed:quests:ww35/quiz/cefd85146031530d",
+   "phase": "after",
+   "title": "A cancelled appointment no longer blocks its time",
+   "body": "**Key: yes, as the exclusion constraint applies WHERE status = 'BOOKED'.**\n\nThe exclusion constraint says: for the same `staffProfileId`, no two rows may have overlapping `tsrange(startsAt, endsAt, '[)')`. But it ends with `WHERE (\"status\" = 'BOOKED')`, so only booked rows take part. Cancelling changes the status to CANCELLED. The row and its times stay in the table for history, but it drops out of the constraint, and a new booking can take that time.\n\nWhy the others are wrong:\n- *Only for a different client*: the constraint is about the staff member; the client is not part of it.\n- *No, it covers every row*: the `WHERE` clause limits it to BOOKED rows.\n- *Only after deleting the row*: no deletion is needed; the status change is enough.",
+   "excerpts": [
+    {
+     "path": "prisma/migrations/0001_initial/migration.sql",
+     "lineStart": 98,
+     "lineEnd": 104,
+     "quote": "EXCLUDE USING GIST ( \"staffProfileId\" WITH =, tsrange(\"startsAt\", \"endsAt\", '[)') WITH && ) WHERE (\"status\" = 'BOOKED');"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 7,
+     "lineEnd": 7,
+     "quote": "A cancellation changes the row out of BOOKED, which removes it from the exclusion constraint's predicate without deleting its historical timestamps or reason."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q16-grid-from-caller",
+   "target": "seed:quests:ww35/quiz/daf2375fb994441e",
+   "phase": "after",
+   "title": "The preview grid starts at the caller's from; bookings need no grid",
+   "body": "**Key: the preview starts at 09:30-10:30, and 09:15 is accepted if free.**\n\n`buildAvailabilitySlots` sets `cursor` to the requested start (`window.startsAt`, the caller's `from`) and steps by the appointment length. A request from 09:30 with 60-minute appointments gives 09:30-10:30, 10:30-11:30, and so on. Booking is separate: `bookAppointment` checks that the interval fits working hours and is free, but not that it lines up with any grid, so 09:15-10:15 is accepted if nothing else is booked. The review lists this as finding 1.\n\nWhy the others are wrong:\n- *Preview is empty off the hour*: there is no on-the-hour rule; 09:30-10:30 fits 09:00-17:00.\n- *Snaps to 09:00; 09:15 rejected as off-grid*: nothing snaps, and nothing checks grid alignment.\n- *09:30 refused, 09:15 snapped back*: neither refusal nor snapping exists.",
+   "excerpts": [
+    {
+     "path": "src/lib/availability/schedule.ts",
+     "lineStart": 119,
+     "lineEnd": 125,
+     "quote": "let cursor = new Date(window.startsAt); while (cursor < window.endsAt) { const slot = { startsAt: new Date(cursor), endsAt: new Date(cursor.getTime() + window.slotMinutes * 60 * 1000), };"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 26,
+     "lineEnd": 27,
+     "quote": "`bookAppointment` does not require the requested start to be on that grid: any future start whose whole interval fits working hours and is free can be booked."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q17-gc-error-mapping",
+   "target": "seed:quests:ww35/quiz/e9c617f51486c3c4",
+   "phase": "after",
+   "title": "Goal 5's check: only one exact error becomes 'slot taken'",
+   "body": "**Key: \"only the typed P2004 naming the exclusion constraint maps to 'slot taken'.\"**\n\nThis is a goal-check question: `05-PRACTICE.md` pairs each short **Goal** with one **Check**, and the wrong choices are the Checks of the other numbered goals.\n\n\"Narrow error mapping\" means turning a low-level database error into a friendly domain message only when you are sure what it is. Exercise five builds two traps (a P2004 for a *different* constraint, and a plain network error containing the word \"conflict\") and neither may become \"slot taken\". The check states the one case that should.\n\nWhy the others do not fit:\n- *List the writes in createStaffMember*: Goal 7, the orphan path.\n- *Cancel a finished appointment*: Goal 8, past cancellations.\n- *isSlotOpen on 23:30-00:30 and friends*: Goal 1, overnight wraps.\n\nNone of those involves translating an error.",
+   "excerpts": [
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 21,
+     "lineEnd": 21,
+     "quote": "5. **Goal:** narrow error mapping. **Check:** only the typed P2004 naming the exclusion constraint maps to \"slot taken\"."
+    },
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 11,
+     "lineEnd": 11,
+     "quote": "create a typed Prisma P2004 error for a different constraint and a plain network error containing the word conflict. Neither should become a slot-taken response."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q18-count-zero-conflict",
+   "target": "seed:quests:ww35/quiz/eaf590a1f0728a21",
+   "phase": "after",
+   "title": "updateMany changed zero rows: report a conflict",
+   "body": "**Key: raise a conflict, as count zero means the BOOKED precondition no longer held.**\n\nThe conditional `updateMany` only changes a row that is still BOOKED and in the caller's scope. A count of 0 means that condition was false at the moment of the write: someone else changed it first. The repository returns `null` when the count is not 1, and the service turns that into `ConflictAppError`. The guide says count zero is decisive: there is no successful change to report.\n\nWhy the others are wrong:\n- *Return it as cancelled*: this request did not cancel anything, and its reason was not saved; pretending otherwise misreports.\n- *Not found*: the scoped read already found it; the row still exists.\n- *Retry by id alone*: dropping the BOOKED condition would overwrite the earlier cancellation, which \"would undo the protection and recreate the original race\".",
+   "excerpts": [
+    {
+     "path": "src/repositories/appointmentRepository.ts",
+     "lineStart": 158,
+     "lineEnd": 158,
+     "quote": "if (result.count !== 1) return null;"
+    },
+    {
+     "path": "src/services/appointmentService.ts",
+     "lineStart": 106,
+     "lineEnd": 106,
+     "quote": "if (!updated) throw new ConflictAppError(\"The appointment was already changed or is no longer accessible.\");"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "For a stale cancellation, count zero is decisive. There is no successful mutation to return, so the service raises a conflict. Repeating the write by ID alone would undo the protection and recreate the original race."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q19-hourcycle-h23",
+   "target": "seed:quests:ww35/quiz/f1e62d22b5618bcf",
+   "phase": "after",
+   "title": "hourCycle h23 makes midnight hour 00",
+   "body": "**Key: so midnight reads as hour 00 rather than 24 in arithmetic.**\n\n`hourCycle: \"h23\"` tells `Intl.DateTimeFormat` to number hours 0 to 23. With other settings some locales show midnight as 24, and then `hour * 60 + minute` would give 1440 for a time that is really the start of a day. The code relies on midnight being 0: the cross-date check requires `localEnd !== 0` to fail before it sets 1440 itself. The guide adds that `hour12` is left out because it conflicts with `hourCycle`.\n\nWhy the others are wrong:\n- *Hours above 23 for the next day*: h23 never produces hours above 23.\n- *12-hour times with AM/PM*: that would be h12/h11; h23 is a 24-hour clock.\n- *hour12 is required outside the US*: the guide says the opposite, that it is a conflicting option left out on purpose.",
+   "excerpts": [
+    {
+     "path": "src/lib/availability/schedule.ts",
+     "lineStart": 37,
+     "lineEnd": 38,
+     "quote": "day: \"2-digit\", hourCycle: \"h23\","
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 7,
+     "lineEnd": 7,
+     "quote": "The formatter uses hourCycle h23 without the conflicting hour12 option. Midnight is therefore represented as 00 rather than 24 in labels and arithmetic."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q20-gc-past-cancel",
+   "target": "seed:quests:ww35/quiz/fb130fdcdc147e06",
+   "phase": "after",
+   "title": "Goal 8's check: decide a policy and name where to enforce it",
+   "body": "**Key: \"decide whether a client should be able to cancel a finished appointment and name the line where you would enforce it.\"**\n\nThis is a goal-check question: `05-PRACTICE.md` pairs each short **Goal** with one **Check**, and the wrong choices are the Checks of the other numbered goals.\n\nToday nothing stops a client from cancelling an appointment that is already over (review finding 2). The goal \"past cancellations\" is a policy question, so the check asks for a decision plus a location in the code, not a test result.\n\nWhy the others do not fit:\n- *Adjacent open, overlap closed*: Goal 3, half-open overlap.\n- *Two clients at 09:00 and 09:20*: Goal 6, the grid anchor.\n- *isSlotOpen on 23:30-00:30 and friends*: Goal 1, overnight wraps.\n\nAll three are about time ranges and slots, not about who may cancel what.",
+   "excerpts": [
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 29,
+     "lineEnd": 30,
+     "quote": "8. **Goal:** past cancellations. **Check:** decide whether a client should be able to cancel a finished appointment and name the line where you would enforce it."
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 28,
+     "lineEnd": 28,
+     "quote": "**Past appointments can be cancelled** — no time check in `cancelAppointment` or the `updateMany` predicate."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 21,
+     "lineEnd": 22,
+     "why": "A reasonable rule and two places to enforce it, one of them race-safe."
+    }
+   ]
+  }
+ ]
+}
