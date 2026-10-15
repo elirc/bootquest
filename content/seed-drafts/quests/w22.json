@@ -34,10 +34,10 @@
     }
    ],
    "prompt": "assertRefundAllowed's third parameter is named capturedAmountMinor. What value does the refund service actually pass in that slot?",
-   "answer": "The remaining refundable amount (amountMinor minus SUCCEEDED refunds)",
+   "answer": "The remaining refundable amount, amountMinor minus the SUCCEEDED refunds",
    "distractors": [
-    "The original captured amount, Payment.amountMinor, unchanged by any earlier partial refunds",
-    "The sum of all refund rows, PENDING included",
+    "The original captured amount, Payment.amountMinor, unchanged by earlier refunds",
+    "The sum of every refund row on the payment, with PENDING rows included",
     "The amount the operator typed into the refund form, re-validated by Zod"
    ],
    "explanation": "Line 33 computes remainingRefundableAmount = payment.amountMinor - refundedAmount and passes it on line 34; the guide calls the parameter name misleading for exactly this reason."
@@ -60,11 +60,11 @@
     }
    ],
    "prompt": "A FAILED payment of 100 receives a refund request for 500. Which error code comes back?",
-   "answer": "PAYMENT_NOT_REFUNDABLE: status is checked first",
+   "answer": "PAYMENT_NOT_REFUNDABLE, because the status check runs before the amount check",
    "distractors": [
-    "REFUND_AMOUNT_EXCEEDS_CAPTURE, because the amount is the larger of the two violations",
-    "INVALID_PAYMENT_TRANSITION",
-    "Both codes together, collected into error.details"
+    "REFUND_AMOUNT_EXCEEDS_CAPTURE, because 500 is the larger of the two violations",
+    "INVALID_PAYMENT_TRANSITION, because the refund is checked as a transition first",
+    "Both codes together, collected into error.details as a list of violations"
    ],
    "explanation": "assertRefundAllowed throws on the first failing check; status (lines 55-57) is tested before amount (lines 60-62), so the amount is never examined."
   },
@@ -86,11 +86,11 @@
     }
    ],
    "prompt": "Two OPS users each refund 40 on a 100 payment that already has 60 refunded, at the same moment, with today's prisma.$transaction code under READ COMMITTED. What is the final SUCCEEDED refund total?",
-   "answer": "140: both read 60, both pass, both commit",
+   "answer": "140: both transactions read 60, both pass the check, and both commit",
    "distractors": [
-    "100: the transaction makes the second request wait until the first one commits",
-    "100: the second commit fails because the aggregate it read has changed underneath it",
-    "60: both deadlock and roll back"
+    "100: the transaction makes the second request wait until the first commits",
+    "100: the second commit fails since the aggregate it read changed underneath it",
+    "60: both requests deadlock on the payment row, and both roll back"
    ],
    "explanation": "Passing tx gives atomicity (one BEGIN...COMMIT per request) but does not serialize concurrent transactions; both aggregates see 60 before either commits."
   },
@@ -112,11 +112,11 @@
     }
    ],
    "prompt": "You add SELECT ... FOR UPDATE on the payment row at the start of the transaction. Two concurrent 40-unit refunds hit a 100 payment with 60 refunded. What does the second request receive?",
-   "answer": "409 PAYMENT_NOT_REFUNDABLE, because after waiting it reads the payment that the first request already flipped to REFUNDED",
+   "answer": "409 PAYMENT_NOT_REFUNDABLE: after waiting it sees the payment A flipped to REFUNDED",
    "distractors": [
     "409 REFUND_AMOUNT_EXCEEDS_CAPTURE: after waiting it sees a refunded total of 100 against 100",
-    "200: the lock only orders the two requests, it does not change what the check sees",
-    "A deadlock error, because both transactions try to lock the same payment row"
+    "200: the lock only orders the two requests and never changes what the check sees",
+    "A deadlock error: both transactions try to lock the same payment row at once"
    ],
    "explanation": "The first request fully refunds the payment and sets status REFUNDED; B's read waits, then sees REFUNDED, and status is checked before amount."
   },
@@ -138,11 +138,11 @@
     }
    ],
    "prompt": "Same row lock in place, but now two concurrent 20-unit refunds arrive against a 100 payment with 70 already refunded. Why does the second one fail with REFUND_AMOUNT_EXCEEDS_CAPTURE rather than PAYMENT_NOT_REFUNDABLE?",
-   "answer": "A's refund was partial, so the payment is still SUCCEEDED and B fails on amount (20 > 10)",
+   "answer": "A's refund was partial, so the payment stays SUCCEEDED and B fails on amount (20 > 10)",
    "distractors": [
-    "The lock is released before the status check runs, so B never sees A's committed write at all",
-    "Partial refunds set the status to PARTIALLY_REFUNDED, which skips the status check entirely",
-    "When two requests are queued on a lock, the amount check always runs before the status check"
+    "The lock is released before the status check runs, so B does not see A's committed write",
+    "Partial refunds set status PARTIALLY_REFUNDED, and that status skips the status check",
+    "Two requests queued on a lock run the amount check before the status check"
    ],
    "explanation": "Only a full refund flips the payment to REFUNDED (refundService.ts:64-75); after A the total is 90 with status SUCCEEDED, so B reaches the amount check."
   },
@@ -164,11 +164,11 @@
     }
    ],
    "prompt": "In a real integration where the provider confirms refunds asynchronously, why would the current aggregate let two operators each refund the full balance?",
-   "answer": "The sum counts only SUCCEEDED refunds, so PENDING ones reserve nothing",
+   "answer": "The sum counts only SUCCEEDED refunds, so a PENDING refund reserves no money",
    "distractors": [
-    "The sum is cached per session, so it is stale",
-    "PENDING refunds are deleted when the provider is slow to respond, freeing the balance",
-    "The aggregate runs outside the transaction, so it can never see newly inserted rows"
+    "The refunded sum is cached per operator session, so it goes stale",
+    "PENDING refunds are deleted when the provider is slow, which frees the balance",
+    "The aggregate runs outside the transaction, so it cannot see newly inserted rows"
    ],
    "explanation": "sumSuccessfulRefundsForPayment filters status: SUCCEEDED; today the window is tiny only because the refund is flipped to SUCCEEDED in the same transaction."
   },
@@ -190,11 +190,11 @@
     }
    ],
    "prompt": "An operator double-clicks the refund form's submit button and the balance allows both. What happens, and what would prevent it?",
-   "answer": "Two refunds; only an idempotency key on the endpoint would stop it",
+   "answer": "Two refunds; only an idempotency key on the refund endpoint would stop it",
    "distractors": [
-    "One refund: the transaction rejects the repeat",
+    "One refund; the transaction rejects any repeat as a duplicate write",
     "One refund, because the refund endpoint reuses the payment's idempotency record",
-    "Both requests fail, because the second sees the first's PENDING refund and aborts"
+    "Both fail, because the second request sees the first's PENDING refund and aborts"
    ],
    "explanation": "A transaction makes one request atomic; idempotency makes a repeated request harmless. Only payment creation has an idempotency key."
   },
@@ -216,11 +216,11 @@
     }
    ],
    "prompt": "User B sends POST /api/payments with the same Idempotency-Key and identical body that user A used earlier. What does B get?",
-   "answer": "A replay of A's response, including A's payment id",
+   "answer": "A replay of A's response, including A's payment id, since the key is not user-scoped",
    "distractors": [
-    "409 IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD, because the requesting user differs",
-    "A brand new payment",
-    "400 MISSING_IDEMPOTENCY_KEY, because the key was already consumed by user A"
+    "409 IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD, because the user differs",
+    "A brand-new payment of its own, since each user has a separate key namespace",
+    "400 MISSING_IDEMPOTENCY_KEY, because user A's request already consumed the key"
    ],
    "explanation": "findIdempotencyRecord(route, key) ignores the user, and the fingerprint covers only the body, so identical bodies match and B receives A's completed response."
   },
@@ -242,11 +242,11 @@
     }
    ],
    "prompt": "The payment endpoint requires an Idempotency-Key, yet a double-submitted create-payment form still creates two payments. Why?",
-   "answer": "The hook generates a fresh key on every call",
+   "answer": "The create hook generates a fresh Idempotency-Key on every single mutation call",
    "distractors": [
-    "The server ignores the key whenever the request body is byte-for-byte identical",
-    "The key is stored only after the payment commits, so both requests miss the lookup",
-    "The browser strips custom headers such as Idempotency-Key on retried POSTs"
+    "The server always ignores the key when the request body is byte-for-byte identical",
+    "The key is stored after the payment commits, so both requests miss the lookup",
+    "The browser strips custom headers like Idempotency-Key from retried POSTs"
    ],
    "explanation": "usePaymentActions sends crypto.randomUUID() as the Idempotency-Key per mutation, so each submission looks new. A retry must carry the same key for idempotency to work."
   },
@@ -268,11 +268,11 @@
     }
    ],
    "prompt": "A SUPPORT user (no refund permission) calls the refund route. Does the 403 reach the handler's jsonError?",
-   "answer": "No: requirePermission throws inside withRouteAuth before the handler's try/catch has even started, so Next.js sees an uncaught error",
+   "answer": "No: requirePermission throws in withRouteAuth before the handler's try/catch starts",
    "distractors": [
     "Yes: withRouteAuth wraps the handler call in the same try/catch that calls jsonError",
-    "Yes: RouteError instances are converted by jsonError globally through Next.js middleware",
-    "No: the guard returns an empty 204 instead of throwing for missing permissions"
+    "Yes: Next.js middleware converts every RouteError through jsonError globally",
+    "No: the guard returns an empty 204 instead of throwing for a missing permission"
    ],
    "explanation": "guards.ts:32 runs requirePermission before invoking the handler; the documented { error: { code: 'FORBIDDEN' } } body is not what callers receive."
   },
@@ -294,11 +294,11 @@
     }
    ],
    "prompt": "After fully refunding a SUCCEED-mode payment, reconciliation records an issue for it on every run. Which issue, and what did the refund path forget?",
-   "answer": "STATUS_MISMATCH: ProviderPayment.status is never updated",
+   "answer": "STATUS_MISMATCH: the refund path never updates ProviderPayment.status",
    "distractors": [
-    "AMOUNT_MISMATCH: the refunded total is never written back to Payment.amountMinor",
-    "MISSING_WEBHOOK: refunds never create a webhook delivery row for the payment",
-    "None: REFUNDED payments are skipped"
+    "AMOUNT_MISMATCH: the refunded total is not written back to Payment.amountMinor",
+    "MISSING_WEBHOOK: refunds create no webhook delivery row for the payment",
+    "None: reconciliation skips REFUNDED payments, so no issue is recorded"
    ],
    "explanation": "Reconciliation maps the provider's SUCCEEDED to SUCCEEDED and compares it with the local REFUNDED, flagging a mismatch each time."
   },
@@ -320,11 +320,11 @@
     }
    ],
    "prompt": "The webhook service marks a bad event REJECTED using tx and then rethrows. What evidence of the failed webhook survives in WebhookEvent?",
-   "answer": "None: the rethrow rolls back the row and its REJECTED mark",
+   "answer": "Nothing survives: the rethrow rolls back the event row and its REJECTED mark",
    "distractors": [
-    "The REJECTED row, because status updates commit independently of the rethrown error",
-    "The RECEIVED row only",
-    "Both rows, because Prisma commits each statement before the callback finishes"
+    "The REJECTED row: status updates commit independently of the rethrown error",
+    "The RECEIVED row: the insert commits before the REJECTED update is attempted",
+    "Both rows: Prisma commits each statement before the callback finishes"
    ],
    "explanation": "Writes made with tx share the transaction's fate; only the outbound WebhookDelivery records the failure."
   },
