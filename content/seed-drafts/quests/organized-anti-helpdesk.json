@@ -34,7 +34,7 @@
       "prompt": "An agent in org-A requests GET /api/tickets/ticket-B-999, a real ticket owned by org-B. What response do they get, and why that code?",
       "answer": "404: findById filters by id AND the caller's organizationId, so the row is invisible",
       "distractors": [
-        "403 Forbidden: the tenant middleware compares the ticket's organization with the caller's",
+        "403 Forbidden: enforceTenantIsolation compares the ticket's organizationId, so it refuses",
         "200 with the ticket, because agents may read every ticket in the database regardless of organization",
         "401 Unauthorized: the JWT was minted for another organization and is rejected"
       ],
@@ -62,7 +62,7 @@
       "distractors": [
         "That every resource id in the URL belongs to the caller's organization, by looking each one up in the database",
         "That the JWT's organization claim matches the subdomain in the Host header of the request",
-        "That the caller's role is allowed to act on the organization named in the query string"
+        "That the caller's role may act on the organization named in the query string, not just its own"
       ],
       "explanation": "The middleware compares req.params.organizationId and req.body.organizationId with the user's org and 403s on mismatch; ticket ids are protected by the repository's organizationId filter, not here."
     },
@@ -86,7 +86,7 @@
       "prompt": "A user is deactivated (isActive false) while holding a still-valid access token. What does authenticate do on their next request?",
       "answer": "Rejects it with 401, as the user is reloaded on each request and isActive is checked",
       "distractors": [
-        "Lets it through until the 15-minute token expires, because the JWT payload is trusted",
+        "Lets it through until the 15-minute token expires, as isActive lives only in the JWT payload",
         "Returns 403 Forbidden with a 'deactivated' message so the client can show a specific error",
         "Refreshes the token automatically and logs the user out on the client side"
       ],
@@ -170,7 +170,7 @@
       "answer": "Yes: the update, the ASSIGNED activity and the audit event are all separate writes",
       "distractors": [
         "No: assignTicket validates the assignee first, so nothing can fail after the update",
-        "No: the repository update runs in a transaction that includes the audit service",
+        "No: the repository update and the audit service share one transaction",
         "Only if the assignee is a REQUESTER: that case writes logs before the update"
       ],
       "explanation": "Validation happens before the writes, but the three writes themselves are unconnected awaits; validation does not make them atomic."
@@ -200,7 +200,7 @@
       "prompt": "The comments endpoint hides internal notes from requesters. A requester instead calls GET /api/tickets/:id on their own ticket. Are internal notes hidden there too?",
       "answer": "No: findById includes every comment with no isInternal filter, so internal notes reach the requester",
       "distractors": [
-        "Yes: getTicket strips isInternal comments for requesters before returning, mirroring the comments service",
+        "Yes: getTicket strips isInternal comments for requesters, so none reach them, as in the comments service",
         "Yes: Prisma applies the comments service's where clause to every include of the comments relation",
         "The request fails with 403, because requesters may only read comments through the comments endpoint"
       ],
@@ -232,7 +232,7 @@
       "answer": "Only the earlier getTicket(id, organizationId, user), as the update's where is { id }",
       "distractors": [
         "The update's where clause includes organizationId, so Prisma refuses any mismatched row",
-        "A compound unique index on (id, organizationId) declared in the Prisma schema",
+        "A compound unique index on (id, organizationId), declared in the Prisma schema, guards it",
         "enforceTenantIsolation, which looks up the ticket's org before every PATCH"
       ],
       "explanation": "The repository's where is { id } alone (the comments in it debate the fix), which is exactly the 'querying by ID alone' pitfall; safety depends on every caller remembering the prior scoped read."
@@ -283,7 +283,7 @@
       "prompt": "After a successful status change on the detail page, which cached queries are invalidated?",
       "answer": "Only ['ticket', id], so the list entries keyed ['tickets', ...] stay stale after it",
       "distractors": [
-        "Every query starting with 'ticket', which also prefix-matches the ['tickets', ...] list entries",
+        "Every query starting with 'ticket', which also prefix-matches the ['tickets', ...] list entries too",
         "['ticket', id] and ['comments', id], the same pair as the comment mutation",
         "None: the page patches the cached ticket object in place without a refetch"
       ],
@@ -335,9 +335,9 @@
       "prompt": "Which systems-level gap does the critique report about ticket path parameters?",
       "answer": "Ticket UUIDs in the path reach Postgres without Zod checks, so bad strings hit the DB",
       "distractors": [
-        "Path parameters are validated twice, by Zod and by Prisma, which slows every request",
-        "Path parameters are trusted for the organization id instead of the JWT claim",
-        "Path parameters are URL-decoded twice, enabling double-encoding attacks"
+        "Zod and Prisma both validate the path params, so every single request pays for two checks",
+        "The organization id is taken from the path, not from the JWT claim",
+        "Each path parameter gets URL-decoded twice, which enables double-encoding attacks"
       ],
       "explanation": "The controller passes req.params.id straight into ticketsService.getTicket; the critique names 'no path param validation' as gap 3."
     },
