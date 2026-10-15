@@ -1,0 +1,311 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "organized-build-scedulingpyjs",
+ "repo": "organized-build-scedulingpyjs",
+ "sha": "ab052930f5623267564ba990153f8c68c48b0517",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: a scheduling API documented as written",
+   "body": "This repo is a small appointment-scheduling app: an Express, Prisma and Postgres backend with a React frontend, plus BullMQ for notifications. Its guides describe the code **as written**, including where it departs from the intended design, with file:line references throughout.\n\nRead in this order:\n\n1. `ARCHITECTURE.md`: the core rules, the backend layers, the scheduling design, the appointment lifecycle and the notification flow.\n2. `FEATURE_WALKTHROUGHS.md`: one request at a time, from route to database (slots, book, cancel, reschedule, complete, recurring series).\n3. `CODE_REVIEW_GUIDE.md`: a review checklist and eleven numbered, verified findings.\n4. `DEBUGGING_GUIDE.md` and `SENIOR_ENGINEERING_DECISIONS.md` as lookups.\n\nAlmost all the business logic is in `backend/src/modules/appointments/appointments.service.ts` and `recurrence.service.ts`. Keep them open while reading the walkthroughs and check each cited line yourself.",
+   "excerpts": [
+    {
+     "path": "ARCHITECTURE.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "This page describes the rules the code follows **as written**"
+    },
+    {
+     "path": "CODE_REVIEW_GUIDE.md",
+     "lineStart": 16,
+     "lineEnd": 16,
+     "quote": "Each item was confirmed by reading the cited lines."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "FEATURE_WALKTHROUGHS.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Each request traced from route to database."
+    },
+    {
+     "path": "CODE_REVIEW_GUIDE.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The checklist and the numbered findings."
+    }
+   ]
+  },
+  {
+   "id": "r02-time-and-overlap",
+   "target": "pack",
+   "phase": "before",
+   "title": "Time, slots and the overlap rule",
+   "body": "Three ideas carry the scheduling logic:\n\n- **Instants in UTC, intent in a zone.** Appointments store UTC start and end plus the caller's timezone. `convertLocalToUtc` in `backend/src/shared/utils/timezones.ts` is the boundary. A recurring rule (\"09:00 every Tuesday\") is a local rule, so ask how `generateOccurrences` advances its cursor.\n- **One overlap predicate.** `overlaps()` in `conflictDetection.service.ts` and the booking query both use a half-open interval test. Write it out and try touching intervals against it.\n- **Slots are a view, booking is the write.** `generateAvailableSlots` walks each available window in fixed steps. Note what length must fit in the window, where a candidate slot starts inside that length, and which interval is compared with existing appointments.\n\nThen read `book` and `createSeries` and list exactly what each one checks before inserting, and what happens to the whole transaction when a check throws. `DEBUGGING_GUIDE.md` has a row for most of the surprising outcomes.",
+   "excerpts": [
+    {
+     "path": "backend/src/modules/appointments/conflictDetection.service.ts",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "export function overlaps("
+    },
+    {
+     "path": "SENIOR_ENGINEERING_DECISIONS.md",
+     "lineStart": 8,
+     "lineEnd": 8,
+     "quote": "\"09:00 every Tuesday in Chicago\" is a local rule"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "backend/src/modules/availability/slotGeneration.service.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Slot generation, window by window."
+    },
+    {
+     "path": "backend/src/modules/appointments/recurrence.service.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Series creation and occurrence generation."
+    }
+   ]
+  },
+  {
+   "id": "r03-lifecycle-and-side-effects",
+   "target": "pack",
+   "phase": "before",
+   "title": "Lifecycle, auth and the notification outbox",
+   "body": "The rest of the pack is about what happens around a state change.\n\n- **Lifecycle.** `appointment.stateMachine.ts` lists the legal transitions. For each service method (`cancel`, `reschedule`, `complete`, `markNoShow`), compare the transition it checks with the status it writes, and look at the `where` clause of its update.\n- **Auth.** `auth.middleware.ts` decodes the token; `requirePermission.middleware.ts` compares role levels. Read each route file to see which routes call `requireRole` and which do not, and read `auth.schemas.ts` for what the public register body accepts.\n- **Errors.** `error.middleware.ts` decides every status code a client sees. Check which error classes it recognises.\n- **Notifications.** Booking writes notification rows in its transaction. Trace `enqueuePendingNotifications` and `cancelFutureNotificationsForAppointment` in `notifications.service.ts`: note each query's filter, and when each runs relative to the transaction that created the rows.",
+   "excerpts": [
+    {
+     "path": "ARCHITECTURE.md",
+     "lineStart": 57,
+     "lineEnd": 57,
+     "quote": "## Async Notification Flow"
+    },
+    {
+     "path": "CODE_REVIEW_GUIDE.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "**Local intent.** Does the code keep the user's wall-clock time and timezone"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "backend/src/middleware/error.middleware.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The only place status codes are chosen."
+    },
+    {
+     "path": "backend/src/modules/notifications/notifications.service.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The notification sweep and the bulk cancel."
+    }
+   ]
+  },
+  {
+   "id": "x-expired-token",
+   "target": "seed:quests:organized-build-scedulingpyjs/quiz/53206d8dca38cce6",
+   "phase": "after",
+   "title": "A bad token is not rejected until a route asks",
+   "body": "`authMiddleware` returns early with no header, and on a failed verify it sets `req.user = undefined` and calls `next()`. It never sends an error. `GET /api/availability/slots` has no `requireRole`, so it runs normally. `POST /api/appointments` uses `requireRole(CUSTOMER)`, which sends 401 UNAUTHORIZED when `req.user` is missing.\n\n- *Both 401 at once*: the middleware does not reject; only `requireRole` does.\n- *Both 403*: 403 is for a known user with too low a role; a missing user is 401.\n- *Guest booking*: there is no guest path; the booking route requires a user.",
+   "excerpts": [
+    {
+     "path": "backend/src/middleware/auth.middleware.ts",
+     "lineStart": 27,
+     "lineEnd": 28,
+     "quote": "req.user = undefined;"
+    },
+    {
+     "path": "backend/src/middleware/requirePermission.middleware.ts",
+     "lineStart": 17,
+     "lineEnd": 18,
+     "quote": "return next(new AppError(\"UNAUTHORIZED\", 401));"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-zod-500",
+   "target": "seed:quests:organized-build-scedulingpyjs/quiz/d3c160a6024290cf",
+   "phase": "after",
+   "title": "Only AppError gets its own status",
+   "body": "`errorMiddleware` has one branch: `error instanceof AppError` serialises the code and status. Everything else is logged and answered as 500 with code INTERNAL_SERVER_ERROR and \"Something went wrong\". `validate` forwards the raw `ZodError`, so a bad body becomes a 500 (review finding 3).\n\n- *400 with the Zod issues* is the suggested fix, not current behaviour.\n- *422 VALIDATION_ERROR* is not a code anywhere in this middleware.\n- *400 BAD_REQUEST* would need the ZodError to be wrapped in an AppError first; it is not.",
+   "excerpts": [
+    {
+     "path": "backend/src/middleware/error.middleware.ts",
+     "lineStart": 15,
+     "lineEnd": 19,
+     "quote": "code: \"INTERNAL_SERVER_ERROR\","
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-register-admin",
+   "target": "seed:quests:organized-build-scedulingpyjs/quiz/0ff649354fe347df",
+   "phase": "after",
+   "title": "The public register body chooses its own role",
+   "body": "`authRouter.post(\"/register\", validate(registerSchema), ...)` has no `requireRole`. `registerSchema` allows `role` to be any of the six roles and only defaults to CUSTOMER when the field is missing. `authService.register` writes `role: input.role`. So the visitor becomes a SYSTEM_ADMIN (review finding 1).\n\n- *CUSTOMER, role ignored*: the default applies only when no role is sent.\n- *403 for that role*: there is no role check on this route.\n- *READ_ONLY pending approval*: there is no approval step.",
+   "excerpts": [
+    {
+     "path": "backend/src/modules/auth/auth.schemas.ts",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "role: z.enum([\"SYSTEM_ADMIN\", \"MANAGER\", \"SCHEDULER\", \"STAFF\", \"CUSTOMER\", \"READ_ONLY\"]).default(\"CUSTOMER\")"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-cancel-notice",
+   "target": "seed:quests:organized-build-scedulingpyjs/quiz/6088d91325994f53",
+   "phase": "after",
+   "title": "The bulk cancel catches the brand-new notice",
+   "body": "Inside its transaction, `cancel` creates an APPOINTMENT_CANCELLED notification, whose status defaults to PENDING. After the commit it calls `cancelFutureNotificationsForAppointment`, an `updateMany` over every PENDING notification of that appointment. That includes the two reminders and the notice just created, so all three end CANCELLED and the customer is never told (review finding 2).\n\n- *Notice PENDING, reminders cancelled*: the bulk update does not filter by type.\n- *SENT*: nothing sends inside the transaction; sending is a worker's job.\n- *Everything still PENDING*: the bulk cancel runs right after the commit.",
+   "excerpts": [
+    {
+     "path": "backend/src/modules/notifications/notifications.service.ts",
+     "lineStart": 38,
+     "lineEnd": 42,
+     "quote": "status: NotificationStatus.PENDING"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-buffered-slots",
+   "target": "seed:quests:organized-build-scedulingpyjs/quiz/435dd5083f4f75ea",
+   "phase": "after",
+   "title": "Buffers fit the window, not the neighbour",
+   "body": "The block that must fit is 10 + 30 + 5 = 45 minutes, so cursors run 09:00, 09:15 ... 10:15. Each slot starts 10 minutes after its cursor and lasts 30: 09:10, 09:25, 09:40, 09:55, 10:10, 10:25. Overlap with the 09:40-10:10 booking uses the un-buffered slot and the half-open rule `aStart < bEnd && aEnd > bStart`. 09:10-09:40 and 10:10-10:40 only touch it; 09:25, 09:40 and 09:55 overlap.\n\n- *Only 10:25* would be right if the buffered block were compared; it is not.\n- *Four slots including 09:25*: 09:25-09:55 overlaps the booking.\n- *Dropping 09:10 for touching*: touching is allowed under the half-open rule.",
+   "excerpts": [
+    {
+     "path": "backend/src/modules/availability/slotGeneration.service.ts",
+     "lineStart": 121,
+     "lineEnd": 126,
+     "quote": "const slotStart = cursor.plus({ minutes: service.bufferBeforeMinutes });"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-book-outside-hours",
+   "target": "seed:quests:organized-build-scedulingpyjs/quiz/74d7385456e8fdf4",
+   "phase": "after",
+   "title": "Booking never reads availability",
+   "body": "`book` checks that the service and staff exist and are active, that the staff member offers the service, that the start is not in the past, and that no REQUESTED or CONFIRMED appointment overlaps. It never queries `AvailabilityWindow`, and it creates the row directly as CONFIRMED. A free Sunday 22:00 slot therefore books (review finding 7).\n\n- *409 conflict*: there is no other appointment to overlap.\n- *REQUESTED*: nothing in the backend writes REQUESTED.\n- *OUTSIDE_AVAILABILITY*: no such error exists; availability is only consulted by the slot list.",
+   "excerpts": [
+    {
+     "path": "backend/src/modules/appointments/appointments.service.ts",
+     "lineStart": 103,
+     "lineEnd": 103,
+     "quote": "status: AppointmentStatus.CONFIRMED,"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-reschedule-twice",
+   "target": "seed:quests:organized-build-scedulingpyjs/quiz/770d0e91bd068718",
+   "phase": "after",
+   "title": "Checked as RESCHEDULED, stored as CONFIRMED",
+   "body": "`reschedule` asserts the transition from the current status to RESCHEDULED, which is legal from CONFIRMED. Its update then writes `status: AppointmentStatus.CONFIRMED` with the new times. After the first reschedule the row is CONFIRMED again, so the second one passes the same check.\n\n- *RESCHEDULED may only go back to CONFIRMED*: true of the table, but no row ever holds RESCHEDULED.\n- *Only once*: nothing counts reschedules.\n- *Manager confirmation*: there is no approval step anywhere in reschedule.",
+   "excerpts": [
+    {
+     "path": "backend/src/modules/appointments/appointments.service.ts",
+     "lineStart": 242,
+     "lineEnd": 242,
+     "quote": "status: AppointmentStatus.CONFIRMED,"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-series-rollback",
+   "target": "seed:quests:organized-build-scedulingpyjs/quiz/7a3f5dabd05b65a7",
+   "phase": "after",
+   "title": "One conflict rolls back the whole series",
+   "body": "`createSeries` wraps everything in one `prisma.$transaction`: it inserts the `RecurrenceSeries` row, then checks and inserts each occurrence in turn. The conflict on occurrence 7 throws `AppError(\"RECURRENCE_CONFLICT\", 409)` inside the transaction, so the series row and the six appointments already inserted are all rolled back.\n\n- *Six saved, then 409*: a throw inside the transaction undoes earlier writes.\n- *Skip the bad week*: there is no skip logic; the decision record calls this all-or-nothing.\n- *All twelve with a flag*: the loop throws before inserting occurrence 7.",
+   "excerpts": [
+    {
+     "path": "backend/src/modules/appointments/recurrence.service.ts",
+     "lineStart": 110,
+     "lineEnd": 112,
+     "quote": "throw new AppError(\"RECURRENCE_CONFLICT\", 409"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-series-cap",
+   "target": "seed:quests:organized-build-scedulingpyjs/quiz/d70247971806c44d",
+   "phase": "after",
+   "title": "Every series stops at 52",
+   "body": "`generateOccurrences` sets `limit = Math.min(count ?? maxOccurrences, maxOccurrences)`, and `createSeries` always passes `maxOccurrences: 52`. A count of 100 is quietly reduced to 52, for any frequency.\n\n- *100*: the minimum with the cap applies first.\n- *Rejected*: no validation in this path refuses a large count; the cap silently trims it.\n- *53*: the first occurrence is one of the 52, not an extra.",
+   "excerpts": [
+    {
+     "path": "backend/src/modules/appointments/recurrence.service.ts",
+     "lineStart": 25,
+     "lineEnd": 25,
+     "quote": "const limit = Math.min(input.count ?? input.maxOccurrences, input.maxOccurrences);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-dst-series",
+   "target": "seed:quests:organized-build-scedulingpyjs/quiz/a32bdc9091de294c",
+   "phase": "after",
+   "title": "A zoned cursor keeps local time",
+   "body": "The cursor is `DateTime.fromISO(firstStartTimeLocal, { zone: timezone })` and moves with `plus({ weeks: interval })`. Luxon adds weeks in local time, so every occurrence is 09:00 in Chicago. On 3 November Chicago is on CST, UTC-6, so `convertLocalToUtc` gives 15:00 UTC.\n\n- *14:00 UTC, 08:00 local* is what stepping in UTC would produce.\n- *14:00 UTC, still 09:00 local* mixes the two: after the change, 09:00 local is not 14:00 UTC.\n- *13:00 UTC* moves the offset the wrong way.",
+   "excerpts": [
+    {
+     "path": "backend/src/modules/appointments/recurrence.service.ts",
+     "lineStart": 23,
+     "lineEnd": 23,
+     "quote": "let cursor = DateTime.fromISO(input.firstStartTimeLocal, { zone: input.timezone });"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-sweep-early",
+   "target": "seed:quests:organized-build-scedulingpyjs/quiz/e8dcbfdff1cd4daf",
+   "phase": "after",
+   "title": "The sweep ignores scheduledForUtc",
+   "body": "`enqueuePendingNotifications` runs `findMany({ where: { status: PENDING } })` and adds one BullMQ job per row, with no time filter and no `jobId`. Booking created three PENDING rows (confirmation now, reminders at T-24h and T-1h), so all three are queued immediately, and a worker would send both reminders days early (review finding 8).\n\n- *Only the confirmation*: there is no time filter to hold the reminders back.\n- *Confirmation plus T-24h*: nothing picks \"the next one due\".\n- *None*: the query does not compare with scheduledForUtc at all.",
+   "excerpts": [
+    {
+     "path": "backend/src/modules/notifications/notifications.service.ts",
+     "lineStart": 22,
+     "lineEnd": 26,
+     "quote": "status: NotificationStatus.PENDING"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-complete-race",
+   "target": "seed:quests:organized-build-scedulingpyjs/quiz/75d684f5b81fecd6",
+   "phase": "after",
+   "title": "A status check that the write does not repeat",
+   "body": "`complete` loads the appointment, asserts CONFIRMED -> COMPLETED on what it read, then runs `tx.appointment.update({ where: { id }, ... })`. The update's predicate has no status, so a cancel committed in between does not stop it: the row ends COMPLETED (review finding 10).\n\n- *Re-reads before writing*: there is no second read.\n- *P2025*: Prisma raises it only when no row matches the `where`; `{ id }` still matches.\n- *A 409 to the customer*: nothing detects the conflict, so no error is raised.",
+   "excerpts": [
+    {
+     "path": "backend/src/modules/appointments/appointments.service.ts",
+     "lineStart": 308,
+     "lineEnd": 309,
+     "quote": "const item = await tx.appointment.update({ where: { id },"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}
