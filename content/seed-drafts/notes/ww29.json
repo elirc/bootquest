@@ -1,0 +1,323 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "ww29",
+ "repo": "ww29",
+ "sha": "2d77047ae39fd4208058db5d3253d6c7e8996cca",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: one write path, \"mark as opened\"",
+   "body": "ww29 is a notification delivery platform: Next.js route handlers, Prisma over PostgreSQL, and a separate polling worker that sends deliveries. The `astraupskill/` course follows a single function, `markNotificationOpenedForSession` in `src/services/notificationService.ts`, because it touches every layer: session, roles, ownership, a lifecycle rule, several writes, status roll-ups and an audit row.\n\nRead the README for the map, then `02-CONCEPTS.md`, which splits the function into four separate questions answered by different lines. `07-TRACE-LAB.md` gives trace tables you can fill in by hand. `06-SOLUTIONS-AND-REVIEW.md` closes with senior-review findings across the whole codebase, including the worker and the rate limiter.\n\nKeep the service, `notificationRepository.ts` and `deliveryRepository.ts` open while you read.",
+   "excerpts": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 8,
+     "lineEnd": 10,
+     "quote": "That one function touches every layer worth learning here: the signed-cookie session, the central role matrix, ownership scoping, a lifecycle precondition (`SENT`), a multi-row mutation, two levels of derived aggregate status, and an audit write."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The four concerns of the open path, with line numbers."
+    },
+    {
+     "path": "astraupskill/07-TRACE-LAB.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Trace tables for opening and for status derivation."
+    }
+   ]
+  },
+  {
+   "id": "r02-four-questions",
+   "target": "pack",
+   "phase": "before",
+   "title": "Ownership, lifecycle, aggregation, atomicity",
+   "body": "The concepts chapter asks you to keep four questions apart when you review this code.\n\nOwnership: may this user touch this record at all? Lifecycle: is the requested state change legal from the current state? Aggregation: once a child row changes, what should the parent rows say now? Atomicity: if one write fails halfway, what is left behind?\n\nEach question is answered by a different block of lines, and each has its own failure mode if removed. For every quiz in this quest, first decide which of the four questions it is really about, then find the block that answers it. Watch especially for places where the order of checks decides which error a caller sees.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 3,
+     "lineEnd": 4,
+     "quote": "Opening a notification is a constrained update. Four separate questions are answered, in this order, by different lines of code. Keep them separate when you review changes."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/services/notificationService.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The service with the open path and the refresh helper."
+    }
+   ]
+  },
+  {
+   "id": "r03-derived-status",
+   "target": "pack",
+   "phase": "before",
+   "title": "Parent statuses are derived from children, not counted",
+   "body": "A batch contains notifications, and a notification has one delivery per channel. Only deliveries change directly; the notification's status and the batch's status are recomputed from the children every time something changes. The rules live in two pure functions in `notificationRepository.ts`.\n\nRecomputing from scratch is robust, but the result is only as good as the rules. The functions check conditions in a fixed order and fall back to a default when nothing matches, so the interesting inputs are the edge cases: a status that belongs to two groups, a mix that no branch names, or an empty list. Before taking the quiz, write out a few status lists and run both functions on paper, branch by branch.",
+   "excerpts": [
+    {
+     "path": "src/services/notificationService.ts",
+     "lineStart": 57,
+     "lineEnd": 63,
+     "quote": "async function refreshNotificationAndBatchState(notificationId: string, batchId: string) { const deliveryStates = await getDeliveryStatusesForNotification(notificationId); const nextNotificationStatus = deriveNotificationStatus( deliveryStates.map((delivery) => delivery.status) ); await updateNotificationStatus(notificationId, nextNotificationStatus);"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/repositories/notificationRepository.ts",
+     "lineStart": 217,
+     "lineEnd": 287,
+     "why": "deriveNotificationStatus and deriveBatchStatus."
+    }
+   ]
+  },
+  {
+   "id": "x-q01-viewer-other-sent",
+   "target": "seed:quests:ww29/quiz/18321d0435471c3f",
+   "phase": "after",
+   "title": "Why a viewer gets a 404, not a 403",
+   "body": "A VIEWER does not have `notifications:view:any`, so the service compares the recipient with the caller. They differ, and it throws `ApiError(404, \"Notification not found.\")`, exactly the error a missing id produces. Using the same answer means a guessed id tells an attacker nothing about whether it exists.\n\n- 403 would confirm the record exists, which is what the shared 404 avoids.\n- 409 is the lifecycle error; the ownership check runs first and has already failed.\n- 200 is wrong: a SENT delivery only matters after ownership passes.",
+   "excerpts": [
+    {
+     "path": "src/services/notificationService.ts",
+     "lineStart": 292,
+     "lineEnd": 296,
+     "quote": "const canViewAny = can(session.role, \"notifications:view:any\"); if (!canViewAny && notification.recipientUserId !== session.userId) { throw new ApiError(404, \"Notification not found.\"); }"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 8,
+     "lineEnd": 9,
+     "quote": "`notificationService.ts:292-296`. A `VIEWER` who is not the recipient gets the same 404 and message as a missing record, so a guessed id reveals nothing. Roles with `notifications:view:any`"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02-second-open",
+   "target": "seed:quests:ww29/quiz/5c974629009038c4",
+   "phase": "after",
+   "title": "Why opening twice is a 409",
+   "body": "The lifecycle rule keeps only deliveries whose status is `SENT`. After the first open, the only delivery is `OPENED`, so the list of eligible ids is empty and the service throws 409 \"Only sent notifications can transition to opened.\" The concepts chapter says it plainly: repeated opens are not idempotent successes.\n\n- An idempotent 200 would need a branch that treats \"already opened\" as success; there is none.\n- 404 is wrong: the owner passes the ownership check, and opened notifications are not hidden.\n- Moving openedAt is wrong: the service throws before any write.",
+   "excerpts": [
+    {
+     "path": "src/services/notificationService.ts",
+     "lineStart": 298,
+     "lineEnd": 304,
+     "quote": "const sentDeliveryIds = notification.deliveries .filter((delivery) => delivery.status === DeliveryStatus.SENT) .map((delivery) => delivery.id); if (sentDeliveryIds.length === 0) { throw new ApiError(409, \"Only sent notifications can transition to opened.\"); }"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 25,
+     "lineEnd": 26,
+     "quote": "A second open of the same notification after all deliveries became `OPENED` therefore returns 409 \"Only sent notifications can transition to opened.\" Repeated opens are not idempotent successes."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q03-operator-other",
+   "target": "seed:quests:ww29/quiz/c724f2de7ee04f63",
+   "phase": "after",
+   "title": "Why an operator can open a customer's notification",
+   "body": "The OPERATOR role holds `notifications:view:any`, so `canViewAny` is true and the recipient comparison is skipped. The notification has a SENT delivery, so the lifecycle check passes, and the delivery is marked opened like any other open. The guide points out the naming mismatch: the action is called `notifications:open:own`, yet staff can open other people's notifications and inflate open metrics.\n\n- 404 is wrong: the ownership check is bypassed for view-any roles.\n- 403 is wrong: OPERATOR does have `notifications:open:own` in the role matrix.\n- 409 is wrong: the lifecycle check only looks at delivery status, not at who is asking.",
+   "excerpts": [
+    {
+     "path": "src/lib/auth/permissions.ts",
+     "lineStart": 28,
+     "lineEnd": 34,
+     "quote": "OPERATOR: [ \"notifications:create\", \"notifications:view:any\", \"notifications:view:own\", \"notifications:open:own\", \"preferences:manage:own\" ],"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 12,
+     "lineEnd": 16,
+     "quote": "Notice the naming mismatch: the route and the service require `notifications:open:own`, but the code lets any-viewers open **other people's** notifications. The lab's case 4 pins this behaviour (`tests/runtime-notification-open-lab.test.mjs:72-76`). Whether an operator should be able to generate an \"opened\" event for a customer is a product question; as written, open metrics can be inflated by staff."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q04-all-skipped",
+   "target": "seed:quests:ww29/quiz/d54c45c3750f2e08",
+   "phase": "after",
+   "title": "Why an all-skipped notification counts as completed",
+   "body": "SKIPPED appears in two lists inside `deriveNotificationStatus`: `completedStatuses` (SENT, OPENED, SKIPPED) and `failedStatuses` (FAILED, SKIPPED). The function checks \"every status is completed\" before \"every status is failed\", so a list of only SKIPPED returns COMPLETED. That fits opt-outs: nothing went wrong.\n\n- FAILED would need the failed check to run first.\n- QUEUED is only returned for an empty list or as the final fallback.\n- PARTIAL_FAILURE needs at least one delivered and one FAILED status.",
+   "excerpts": [
+    {
+     "path": "src/repositories/notificationRepository.ts",
+     "lineStart": 222,
+     "lineEnd": 240,
+     "quote": "const completedStatuses: DeliveryStatus[] = [ DeliveryStatus.SENT, DeliveryStatus.OPENED, DeliveryStatus.SKIPPED ]; const failedStatuses: DeliveryStatus[] = [ DeliveryStatus.FAILED, DeliveryStatus.SKIPPED ]; const deliveredStatuses: DeliveryStatus[] = [ DeliveryStatus.SENT, DeliveryStatus.OPENED ]; const allCompleted = statuses.every((status) => completedStatuses.includes(status)); if (allCompleted) { return NotificationStatus.COMPLETED; }"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q05-partial-regresses",
+   "target": "seed:quests:ww29/quiz/f3de7b54c253a17b",
+   "phase": "after",
+   "title": "Why SENT plus QUEUED derives QUEUED",
+   "body": "Walk the branches. Not every status is in the completed set (QUEUED is not). Not every status is in the failed set. There is a delivered status (SENT) but no FAILED, so PARTIAL_FAILURE does not apply. The final fallback returns PROCESSING only when some delivery is PROCESSING; here none is, so the result is QUEUED. The review calls this a regression: a notification that is half delivered looks as if nothing happened.\n\n- PROCESSING needs a PROCESSING delivery; QUEUED is a different status.\n- PARTIAL_FAILURE needs a FAILED delivery.\n- COMPLETED needs every delivery in the completed set.",
+   "excerpts": [
+    {
+     "path": "src/repositories/notificationRepository.ts",
+     "lineStart": 248,
+     "lineEnd": 257,
+     "quote": "const hasCompleted = statuses.some((status) => deliveredStatuses.includes(status)); const hasFailed = statuses.includes(DeliveryStatus.FAILED); if (hasCompleted && hasFailed) { return NotificationStatus.PARTIAL_FAILURE; } return statuses.includes(DeliveryStatus.PROCESSING) ? NotificationStatus.PROCESSING : NotificationStatus.QUEUED;"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 69,
+     "lineEnd": 70,
+     "quote": "3. **Batch roll-up mislabels all-partial batches** — `notificationRepository.ts:273-286`, see Level 5c. Partial delivery also regresses a notification to `QUEUED` (Level 5b)."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q06-all-partial-batch",
+   "target": "seed:quests:ww29/quiz/4764b02e2df5bd78",
+   "phase": "after",
+   "title": "Why a batch of partial failures shows QUEUED",
+   "body": "`deriveBatchStatus` returns COMPLETED only if every notification is COMPLETED and FAILED only if every one is FAILED. Its PARTIAL_FAILURE branch requires some COMPLETED notification AND some FAILED or PARTIAL_FAILURE one. A batch where every notification is PARTIAL_FAILURE has no COMPLETED member, so none of these match, and with nothing PROCESSING the fallback is QUEUED. The concepts chapter calls it a real mislabel.\n\n- PARTIAL_FAILURE is the intuitive answer, but the branch needs a COMPLETED member too.\n- FAILED needs every notification to be FAILED.\n- PROCESSING needs a notification in PROCESSING.",
+   "excerpts": [
+    {
+     "path": "src/repositories/notificationRepository.ts",
+     "lineStart": 265,
+     "lineEnd": 286,
+     "quote": "if (statuses.every((status) => status === NotificationStatus.COMPLETED)) { return BatchStatus.COMPLETED; } if (statuses.every((status) => status === NotificationStatus.FAILED)) { return BatchStatus.FAILED; } if ( statuses.some((status) => status === NotificationStatus.COMPLETED) && statuses.some( (status) => status === NotificationStatus.FAILED || status === NotificationStatus.PARTIAL_FAILURE ) ) { return BatchStatus.PARTIAL_FAILURE; } return statuses.includes(NotificationStatus.PROCESSING) ? BatchStatus.PROCESSING : BatchStatus.QUEUED;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07-midway-failure",
+   "target": "seed:quests:ww29/quiz/6b67dc5b80c508d2",
+   "phase": "after",
+   "title": "What a mid-way failure leaves written",
+   "body": "The open path performs its writes one after another with no transaction around them: mark deliveries opened, set the notification's openedAt, refresh statuses, then write the audit log. Refresh begins by writing the notification status. If that write throws, the first two writes are already in the database, while the batch update (later in refresh) and the audit log never run. Lab case 6 pins this order.\n\n- A single transaction is exactly what is missing.\n- \"All but the audit\" is wrong: the batch update comes after the failing write too.\n- Audit first is wrong: the audit row is the last step.",
+   "excerpts": [
+    {
+     "path": "src/services/notificationService.ts",
+     "lineStart": 306,
+     "lineEnd": 318,
+     "quote": "await markDeliveryOpened(sentDeliveryIds); await updateNotificationOpenedAt(notification.id); await refreshNotificationAndBatchState(notification.id, notification.batchId); await createAuditLog({ actorUserId: session.userId, action: \"notifications.opened\", entityType: \"Notification\", entityId: notification.id, payload: { openedDeliveryIds: sentDeliveryIds } });"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 51,
+     "lineEnd": 53,
+     "quote": "There is no transaction around lines 306-318. Lab case 6 (lines 86-90) injects a failure into `updateNotificationStatus` and shows the delivery-open and opened-at writes have already happened, while batch status and audit never run. In production that leaves an `OPENED` delivery with a"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08-limiter-never-denies",
+   "target": "seed:quests:ww29/quiz/dad449ca5e34fe08",
+   "phase": "after",
+   "title": "Why the rate limiter always says allowed",
+   "body": "The upsert's `CASE` only increments `sentCount` while it is below the limit; when the window is full it leaves `sentCount` equal to `limit`. The function then computes `allowed: sentCount <= input.limit`, and limit <= limit is true. So a full window still reports allowed, `nextAvailableAt` stays null, and the worker's RATE_LIMITED branch can never run. The review lists this as the first finding.\n\n- Denying with a next window is the intended behaviour, but the comparison never fails.\n- Going past the limit is wrong: the CASE caps the value.\n- An error is wrong: the CASE just keeps the old count.",
+   "excerpts": [
+    {
+     "path": "src/repositories/rateLimitRepository.ts",
+     "lineStart": 49,
+     "lineEnd": 52,
+     "quote": "SET \"sentCount\" = CASE WHEN \"RateLimitWindow\".\"sentCount\" < ${input.limit} THEN \"RateLimitWindow\".\"sentCount\" + 1 ELSE \"RateLimitWindow\".\"sentCount\" END,"
+    },
+    {
+     "path": "src/repositories/rateLimitRepository.ts",
+     "lineStart": 58,
+     "lineEnd": 62,
+     "quote": "const sentCount = rows[0]?.sentCount ?? input.limit; return { allowed: sentCount <= input.limit, nextAvailableAt: sentCount <= input.limit ? null : nextWindow(now)"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09-sql-predicate",
+   "target": "seed:quests:ww29/quiz/87aaa37c67fa2062",
+   "phase": "after",
+   "title": "Why the update repeats the SENT check in SQL",
+   "body": "The service decides which deliveries are SENT from a read it did earlier, then writes later. In between, the worker could change a delivery's state. `markDeliveryOpened` therefore puts `status: DeliveryStatus.SENT` in the `updateMany` where clause, so the database only changes rows that are still SENT at the moment of the write.\n\n- Prisma has no rule requiring a status in `updateMany`.\n- Opening QUEUED deliveries is the opposite of what the predicate does.\n- The service filter runs for every caller; the role only affects the ownership check.",
+   "excerpts": [
+    {
+     "path": "src/repositories/deliveryRepository.ts",
+     "lineStart": 155,
+     "lineEnd": 162,
+     "quote": "export async function markDeliveryOpened(deliveryIds: string[]) { return prisma.notificationDelivery.updateMany({ where: { id: { in: deliveryIds }, status: DeliveryStatus.SENT },"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 22,
+     "lineEnd": 23,
+     "quote": "repository update repeats the predicate in SQL (`deliveryRepository.ts:161`), which protects against a delivery changing state between the read at line 286 and the write at line 306."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10-stuck-processing",
+   "target": "seed:quests:ww29/quiz/e8e53d013f13163b",
+   "phase": "after",
+   "title": "Why a crashed worker's delivery is never reclaimed",
+   "body": "The claim query has two conditions: status must be QUEUED, RETRYING or RATE_LIMITED, AND the row must be unlocked or have a stale `lockedAt`. A claimed delivery becomes PROCESSING, so after a crash it fails the status condition and the stale-lock test never gets a chance to help. The review's fix is to also select PROCESSING rows whose lock is stale.\n\n- Reclaiming after the timeout is what the stale test was meant for, but it is inside the status filter.\n- There is no startup cleanup job in this code.\n- SKIP LOCKED only skips rows locked by another open transaction; a crashed worker's transaction is gone.",
+   "excerpts": [
+    {
+     "path": "src/repositories/deliveryRepository.ts",
+     "lineStart": 22,
+     "lineEnd": 28,
+     "quote": "WHERE \"status\" IN ( 'QUEUED'::\"DeliveryStatus\", 'RETRYING'::\"DeliveryStatus\", 'RATE_LIMITED'::\"DeliveryStatus\" ) AND \"availableAt\" <= NOW() AND (\"lockedAt\" IS NULL OR \"lockedAt\" < ${staleBefore})"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 61,
+     "lineEnd": 62,
+     "quote": "2. **Crashed workers strand deliveries in `PROCESSING`** — `deliveryRepository.ts:22-28`. The stale lease condition is inside a `WHERE` that excludes `PROCESSING`, so a lease is never reclaimed."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q11-recompute-not-increment",
+   "target": "seed:quests:ww29/quiz/05c6da7ad0e46295",
+   "phase": "after",
+   "title": "How the batch status is refreshed",
+   "body": "`refreshNotificationAndBatchState` reads every delivery status of the notification and derives the notification status, writes it, then reads every notification status in the batch and derives the batch status from that list. It recomputes from scratch each time instead of keeping counters, so it cannot drift from the rows it reads.\n\n- An opened counter does not exist on the batch.\n- Copying the notification status ignores the other notifications in the batch.\n- Waiting for the worker is wrong: the open path calls refresh directly at line 308.",
+   "excerpts": [
+    {
+     "path": "src/services/notificationService.ts",
+     "lineStart": 57,
+     "lineEnd": 71,
+     "quote": "async function refreshNotificationAndBatchState(notificationId: string, batchId: string) { const deliveryStates = await getDeliveryStatusesForNotification(notificationId); const nextNotificationStatus = deriveNotificationStatus( deliveryStates.map((delivery) => delivery.status) ); await updateNotificationStatus(notificationId, nextNotificationStatus); const notificationStates = await getNotificationStatusesForBatch(batchId); const nextBatchStatus = deriveBatchStatus( notificationStates.map((notification) => notification.status) ); await updateBatchStatus(batchId, nextBatchStatus); }"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q12-missing-id",
+   "target": "seed:quests:ww29/quiz/342a21e7e147b8c5",
+   "phase": "after",
+   "title": "Which check rejects a missing notification id",
+   "body": "The checks run top to bottom. `requireAction(session.role, \"notifications:open:own\")` passes, because VIEWER holds that action. `findNotificationDetail` returns null for an unknown id, and the `if (!notification)` branch at line 288 throws 404 \"Notification not found.\" Nothing after it runs.\n\n- requireAction would only fail for a role without `notifications:open:own`; every role here has it.\n- The recipient check at 294 needs a record to compare against.\n- The 409 at 302 needs a record with deliveries.\n\nThis is case (d) of the concepts exercise.",
+   "excerpts": [
+    {
+     "path": "src/services/notificationService.ts",
+     "lineStart": 284,
+     "lineEnd": 290,
+     "quote": "requireAction(session.role, \"notifications:open:own\"); const notification = await findNotificationDetail(notificationId); if (!notification) { throw new ApiError(404, \"Notification not found.\"); }"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}
