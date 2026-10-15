@@ -1,0 +1,557 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "atlas-swe-bootcamp",
+ "sha": "bc90eb9c53a538444153ae514a3807d86845048a",
+ "guides": [
+  "docs/adr/0002-api-key-authentication.md",
+  "docs/adr/0003-cross-client-404-policy.md",
+  "docs/adr/0004-datetimeoffset-as-utc-ticks.md",
+  "docs/adr/0005-decimal-money-rounding-policy.md",
+  "docs/adr/0006-append-only-salary-history.md",
+  "docs/adr/0007-optimistic-concurrency-version-token.md",
+  "docs/adr/0008-payroll-run-snapshot.md",
+  "docs/adr/0009-problemdetails-and-header-pagination.md"
+ ],
+ "items": [
+  {
+   "id": "q01-stale-approval",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0007-optimistic-concurrency-version-token.md",
+    "lines": {
+     "start": 14,
+     "end": 22
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0007-optimistic-concurrency-version-token.md",
+     "lineStart": 16,
+     "lineEnd": 22
+    },
+    {
+     "path": "src/Atlas.Api/ConcurrencyExceptionHandler.cs",
+     "lineStart": 16,
+     "lineEnd": 24
+    }
+   ],
+   "prompt": "Two callers load the same pending leave request and both approve it. The second SaveChanges finds the Version changed. What does that caller get?",
+   "answer": "A 409 ProblemDetails telling it to reload the resource and retry",
+   "distractors": [
+    "A 200, and its decision quietly overwrites the first approval",
+    "A 412 Precondition Failed, since it sent no If-Match header",
+    "A 500 error, because nothing maps DbUpdateConcurrencyException"
+   ],
+   "explanation": "ConcurrencyExceptionHandler recognises the write conflict and writes a 409 problem body (\"Reload it and retry\"). Lost updates are what the token prevents, Atlas uses no ETag preconditions, and the global handler is exactly what keeps this from being a 500."
+  },
+  {
+   "id": "q02-who-bumps-version",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0007-optimistic-concurrency-version-token.md",
+    "lines": {
+     "start": 16,
+     "end": 26
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0007-optimistic-concurrency-version-token.md",
+     "lineStart": 16,
+     "lineEnd": 26
+    },
+    {
+     "path": "src/Atlas.Infrastructure/AtlasDbContext.cs",
+     "lineStart": 327,
+     "lineEnd": 349
+    }
+   ],
+   "prompt": "An endpoint modifies a versioned EmploymentContract and calls SaveChangesAsync. Where does its Version number get incremented?",
+   "answer": "In AtlasDbContext, which bumps it for each Modified versioned entry",
+   "distractors": [
+    "In SQLite itself, through a rowversion column it updates on every write",
+    "In each endpoint, which must add one before it calls the save",
+    "In a database trigger that EnsureCreated adds for versioned tables"
+   ],
+   "explanation": "Both SaveChanges overrides call BumpVersions, which walks ChangeTracker.Entries<IVersioned>() and increments Version when the state is Modified. SQLite has no rowversion type (the ADR says so), the point of centralising is that no endpoint can forget, and there are no triggers."
+  },
+  {
+   "id": "q03-offset-round-trip",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0004-datetimeoffset-as-utc-ticks.md",
+    "lines": {
+     "start": 26,
+     "end": 33
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0004-datetimeoffset-as-utc-ticks.md",
+     "lineStart": 30,
+     "lineEnd": 33
+    },
+    {
+     "path": "src/Atlas.Infrastructure/AtlasDbContext.cs",
+     "lineStart": 352,
+     "lineEnd": 360
+    }
+   ],
+   "prompt": "Atlas saves a DateTimeOffset of 10:00 at +08:00 and reads it back from SQLite. What does it get?",
+   "answer": "The same instant, 02:00 with a zero offset; the +08:00 is gone",
+   "distractors": [
+    "10:00 at +08:00, because the offset is stored next to the ticks",
+    "10:00 at a zero offset, so the instant moves by eight hours",
+    "The same instant, but cut to whole seconds by string parsing"
+   ],
+   "explanation": "The converter stores value.UtcTicks and reads new DateTimeOffset(ticks, TimeSpan.Zero): same instant, offset discarded. No offset column exists, the UTC ticks keep the instant, and ticks preserve 100 ns precision with no string parsing."
+  },
+  {
+   "id": "q04-why-ticks",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0004-datetimeoffset-as-utc-ticks.md",
+    "lines": {
+     "start": 5,
+     "end": 15
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0004-datetimeoffset-as-utc-ticks.md",
+     "lineStart": 7,
+     "lineEnd": 15
+    }
+   ],
+   "prompt": "Why does AtlasDbContext convert every DateTimeOffset to a long instead of keeping EF Core's default SQLite mapping?",
+   "answer": "The default is TEXT, which SQLite cannot compare as instants",
+   "distractors": [
+    "SQLite rejects DateTimeOffset columns, so EnsureCreated would fail",
+    "Integers take less disk space, which is the main concern of the ADR",
+    "The default stores local time, so two servers would disagree on it"
+   ],
+   "explanation": "ADR 0004: SQLite has no date-time type, EF stores DateTimeOffset as TEXT, and ORDER BY or range filters on those strings get wrong semantics or client evaluation. Table creation works fine with TEXT, size is never mentioned, and the issue is comparison, not local time."
+  },
+  {
+   "id": "q05-benefit-remainder",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0005-decimal-money-rounding-policy.md",
+    "lines": {
+     "start": 19,
+     "end": 25
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0005-decimal-money-rounding-policy.md",
+     "lineStart": 23,
+     "lineEnd": 25
+    },
+    {
+     "path": "src/Atlas.Domain/Entities/BenefitPlan.cs",
+     "lineStart": 39,
+     "lineEnd": 42
+    }
+   ],
+   "prompt": "BenefitPlan computes EmployerShare as RoundMoney(MonthlyCost * EmployerContributionRate). How is EmployeeShare computed?",
+   "answer": "MonthlyCost - EmployerShare, so both shares re-add to the cent",
+   "distractors": [
+    "RoundMoney(MonthlyCost * (1 - rate)), rounded on its own",
+    "RoundMoney with banker's rounding, to offset the employer's bias",
+    "MonthlyCost times the rate, truncated toward zero at two places"
+   ],
+   "explanation": "BenefitPlan.cs line 42: EmployeeShare => MonthlyCost - EmployerShare. The remainder is never rounded independently, which is why the split always re-adds to the premium. Rounding both sides separately is the drift the ADR forbids, and Atlas uses one AwayFromZero rounding, never banker's rounding or truncation."
+  },
+  {
+   "id": "q06-midpoint",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0005-decimal-money-rounding-policy.md",
+    "lines": {
+     "start": 14,
+     "end": 18
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0005-decimal-money-rounding-policy.md",
+     "lineStart": 16,
+     "lineEnd": 18
+    },
+    {
+     "path": "src/Atlas.Domain/Services/PayrollCalculator.cs",
+     "lineStart": 24,
+     "lineEnd": 25
+    }
+   ],
+   "prompt": "What does PayrollCalculator.RoundMoney(2.345m) return?",
+   "answer": "2.35, because a midpoint is rounded away from zero",
+   "distractors": [
+    "2.34, because a midpoint is rounded to the even digit",
+    "2.345, since RoundMoney keeps three places for FX",
+    "2.34, since decimal amounts are truncated, not rounded"
+   ],
+   "explanation": "RoundMoney is Math.Round(amount, 2, MidpointRounding.AwayFromZero), so 2.345 goes to 2.35. Round-to-even (banker's rounding, the .NET default) would give 2.34; the ADR rejects it. RoundMoney always rounds to 2 places, and it rounds rather than truncates."
+  },
+  {
+   "id": "q07-fx-once",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0005-decimal-money-rounding-policy.md",
+    "lines": {
+     "start": 19,
+     "end": 28
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0005-decimal-money-rounding-policy.md",
+     "lineStart": 26,
+     "lineEnd": 27
+    },
+    {
+     "path": "src/Atlas.Domain/Services/PayrollAssessment.cs",
+     "lineStart": 63,
+     "lineEnd": 66
+    }
+   ],
+   "prompt": "A client's invoice has several payslip lines in EUR and the client is billed in USD. How does Atlas apply the FX rate?",
+   "answer": "Once, to the summed invoice total, rounding that single product",
+   "distractors": [
+    "Per line, rounding each converted line, then summing the results",
+    "At payment time, using the rate on the day the invoice gets paid",
+    "Never; invoices are issued only in the payroll country's currency"
+   ],
+   "explanation": "PayrollAssessment line 66: RoundMoney(total * fxRate). Converting per line and summing rounded lines is the drift the ADR avoids. ADR 0008 uses the period's effective rate at completion, not a payment-day rate, and invoices do carry a TotalInBillingCurrency."
+  },
+  {
+   "id": "q08-mid-month-raise",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0006-append-only-salary-history.md",
+    "lines": {
+     "start": 14,
+     "end": 32
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0006-append-only-salary-history.md",
+     "lineStart": 17,
+     "lineEnd": 19
+    },
+    {
+     "path": "docs/adr/0006-append-only-salary-history.md",
+     "lineStart": 30,
+     "lineEnd": 32
+    },
+    {
+     "path": "src/Atlas.Domain/Entities/SalaryRecord.cs",
+     "lineStart": 45,
+     "lineEnd": 53
+    }
+   ],
+   "prompt": "An amendment raising a salary is approved with an EffectiveDate of 15 May. What salary does May's payroll use?",
+   "answer": "The new salary for the whole of May, with no proration by day",
+   "distractors": [
+    "The old salary to 14 May and the new one after, prorated by days",
+    "The old salary; a raise starts in the first full month after it",
+    "Both, averaged, since two records qualify for the same month"
+   ],
+   "explanation": "EffectiveForMonth takes the latest record with EffectiveDate on or before the month end, so the 15 May record wins for May. The ADR documents the simplification: a mid-month change owns that whole month. There is no proration, no full-month delay, and no averaging; LastOrDefault picks one record."
+  },
+  {
+   "id": "q09-amend-after-run",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0008-payroll-run-snapshot.md",
+    "lines": {
+     "start": 14,
+     "end": 36
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0008-payroll-run-snapshot.md",
+     "lineStart": 16,
+     "lineEnd": 20
+    },
+    {
+     "path": "docs/adr/0008-payroll-run-snapshot.md",
+     "lineStart": 34,
+     "lineEnd": 36
+    }
+   ],
+   "prompt": "A draft May payroll run already exists. An amendment for May is approved afterwards. What do the May payslips show?",
+   "answer": "The snapshot from run creation; the amendment hits the next run",
+   "distractors": [
+    "The new terms, because a draft run recalculates when it completes",
+    "The new terms for gross pay and the old ones for the deductions",
+    "Nothing yet: the run is locked until an admin recalculates it"
+   ],
+   "explanation": "ADR 0008: creating the run computes and stores every Payslip, and from that point it is a snapshot; an amendment approved after creation affects the next run. There is no recalculate-draft operation, payslips are not split between old and new terms, and the run is not blocked."
+  },
+  {
+   "id": "q10-foreign-contract-read",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0003-cross-client-404-policy.md",
+    "lines": {
+     "start": 12,
+     "end": 22
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0003-cross-client-404-policy.md",
+     "lineStart": 16,
+     "lineEnd": 18
+    },
+    {
+     "path": "src/Atlas.Api/Auth/AuthorizationExtensions.cs",
+     "lineStart": 32,
+     "lineEnd": 33
+    }
+   ],
+   "prompt": "A ClientViewer key asks GET /api/contracts/{id} for a contract owned by a different client. What is the status?",
+   "answer": "404, exactly as if that contract id did not exist at all",
+   "distractors": [
+    "403, because the role is too weak to read that other client's data",
+    "401, because the key is only valid for its own client",
+    "200, with the other client's salary fields masked out"
+   ],
+   "explanation": "ADR 0003: cross-client access is 404 for reads and writes, and the not-found and not-yours branches are indistinguishable (CanViewClient guards the load). 403 is reserved for a caller who can see the resource but lacks the role; the key is authenticated, so not 401; nothing is returned."
+  },
+  {
+   "id": "q11-viewer-own-write",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0003-cross-client-404-policy.md",
+    "lines": {
+     "start": 12,
+     "end": 22
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0003-cross-client-404-policy.md",
+     "lineStart": 19,
+     "lineEnd": 22
+    }
+   ],
+   "prompt": "A ClientViewer key tries to approve a leave request that belongs to its own client. What status does it get?",
+   "answer": "403, since it can see the request but lacks the role to act",
+   "distractors": [
+    "404, so that a viewer learns nothing at all about that request",
+    "409, because the request is not in an approvable state",
+    "401, since a viewer key carries no write credentials"
+   ],
+   "explanation": "ADR 0003: 403 means the caller can see the resource but lacks the role, and viewers attempting any write is the first example. 404 is for other clients' data; 409 is a domain-state conflict, not a role check; the key authenticated fine, so it is not 401."
+  },
+  {
+   "id": "q12-list-filter",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0003-cross-client-404-policy.md",
+    "lines": {
+     "start": 24,
+     "end": 25
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0003-cross-client-404-policy.md",
+     "lineStart": 24,
+     "lineEnd": 25
+    },
+    {
+     "path": "src/Atlas.Api/Endpoints/ContractEndpoints.cs",
+     "lineStart": 27,
+     "lineEnd": 36
+    }
+   ],
+   "prompt": "A ClientAdmin key calls GET /api/contracts?clientId=<another client's id>. What does the code return?",
+   "answer": "200 and an empty array: both client filters are applied together",
+   "distractors": [
+    "200 with its own contracts, and the clientId query value ignored",
+    "404, as for any other cross-client resource it asks for",
+    "403, because the filter names a client it may not see"
+   ],
+   "explanation": "Lines 27-36 add Where(ClientId == own) and then, when clientId is given, Where(ClientId == clientId); the two ANDed conditions match nothing, so the page is empty. The ADR wording and the comment (\"whatever filter they pass\") read as if the filter were ignored, but the code does not ignore it. Lists never 403 or 404 by ownership."
+  },
+  {
+   "id": "q13-page-size-cap",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0009-problemdetails-and-header-pagination.md",
+    "lines": {
+     "start": 27,
+     "end": 31
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0009-problemdetails-and-header-pagination.md",
+     "lineStart": 27,
+     "lineEnd": 28
+    },
+    {
+     "path": "src/Atlas.Api/Pagination.cs",
+     "lineStart": 29,
+     "lineEnd": 35
+    }
+   ],
+   "prompt": "A caller asks a paged list endpoint for ?pageSize=500. What happens?",
+   "answer": "A 400 ValidationProblem with an error under the pageSize key",
+   "distractors": [
+    "200 with 200 rows, the size quietly clamped to the maximum",
+    "200 with all 500 rows, since the maximum is only advisory",
+    "200 with 50 rows, the default page size used in its place"
+   ],
+   "explanation": "Pagination.Validate adds errors[\"pageSize\"] when the value is < 1 or > 200 (MaxPageSize) and returns Results.ValidationProblem. The ADR says out-of-range means 400; nothing clamps, nothing ignores the cap, and the default of 50 applies only when pageSize is absent."
+  },
+  {
+   "id": "q14-page-metadata",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0009-problemdetails-and-header-pagination.md",
+    "lines": {
+     "start": 27,
+     "end": 31
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0009-problemdetails-and-header-pagination.md",
+     "lineStart": 28,
+     "lineEnd": 30
+    },
+    {
+     "path": "src/Atlas.Api/Pagination.cs",
+     "lineStart": 42,
+     "lineEnd": 48
+    }
+   ],
+   "prompt": "Where does a paged Atlas list response put the total count and the page number?",
+   "answer": "In the X-Total-Count, X-Page and X-Page-Size response headers",
+   "distractors": [
+    "In an { items, total } envelope object that wraps the JSON array",
+    "In a Link header with rel=\"next\" and rel=\"last\" entries",
+    "In a metadata object appended as the last array element"
+   ],
+   "explanation": "ToPageAsync sets three response headers and returns a plain list, so bodies stay JSON arrays. The ADR rejected the envelope to avoid a breaking change; there is no Link header, and the array holds only items."
+  },
+  {
+   "id": "q15-revocation",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0002-api-key-authentication.md",
+    "lines": {
+     "start": 21,
+     "end": 26
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0002-api-key-authentication.md",
+     "lineStart": 23,
+     "lineEnd": 26
+    },
+    {
+     "path": "src/Atlas.Api/Auth/ApiKeyAuthenticationHandler.cs",
+     "lineStart": 37,
+     "lineEnd": 42
+    }
+   ],
+   "prompt": "An admin deactivates a client's API key. When does that key stop working?",
+   "answer": "On its next request, as every request looks up ApiUsers",
+   "distractors": [
+    "When its issued JWT expires, after the five-minute skew",
+    "After an in-memory key cache refreshes, about hourly",
+    "Only once the ApiUser row is deleted from the table"
+   ],
+   "explanation": "HandleAuthenticateAsync queries ApiUsers on every request and fails when !user.IsActive, so revocation is immediate. Atlas issues no JWTs (the ADR lists that as avoided infrastructure), there is no key cache, and keys are revoked by deactivation precisely so rows are never deleted."
+  },
+  {
+   "id": "f01-round-once",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0005-decimal-money-rounding-policy.md",
+    "lines": {
+     "start": 19,
+     "end": 28
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0005-decimal-money-rounding-policy.md",
+     "lineStart": 19,
+     "lineEnd": 28
+    }
+   ],
+   "front": "ADR 0005: which quantity is rounded, and what is derived, in payroll, benefit split, FX and final pay?",
+   "back": "Payroll: employer cost and deductions rounded; net = gross - deductions, total = gross + employer cost. Benefits: employer share rounded; employee share = remainder. FX: round the summed total once. Final pay: daily rate rounded once, then times days."
+  },
+  {
+   "id": "f02-status-matrix",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0003-cross-client-404-policy.md",
+    "lines": {
+     "start": 14,
+     "end": 25
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0003-cross-client-404-policy.md",
+     "lineStart": 14,
+     "lineEnd": 25
+    }
+   ],
+   "front": "ADR 0003 status matrix for client-scoped keys.",
+   "back": "404 for another client's resource (or a missing one), reads and writes alike; 403 when the caller can see it but lacks the role (viewer writes, platform-only endpoints, foreign client id in a body); list endpoints never 403/404 by ownership, they scope the query."
+  },
+  {
+   "id": "f03-version-token",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0007-optimistic-concurrency-version-token.md",
+    "lines": {
+     "start": 16,
+     "end": 26
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0007-optimistic-concurrency-version-token.md",
+     "lineStart": 16,
+     "lineEnd": 26
+    }
+   ],
+   "front": "How Atlas prevents lost updates (ADR 0007), end to end.",
+   "back": "IVersioned entities have int Version registered as an EF concurrency token; SaveChanges bumps it for each modified entity; a stale write throws DbUpdateConcurrencyException; ConcurrencyExceptionHandler returns 409 \"reload and retry\"."
+  },
+  {
+   "id": "f04-payroll-snapshot",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0008-payroll-run-snapshot.md",
+    "lines": {
+     "start": 14,
+     "end": 25
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0008-payroll-run-snapshot.md",
+     "lineStart": 14,
+     "lineEnd": 25
+    }
+   ],
+   "front": "ADR 0008: what creating vs completing a PayrollRun does.",
+   "back": "Create (per country + month, platform admin): computes and stores every Payslip and marks expenses Reimbursed in the same unit of work. Complete (one-way Draft -> Completed): one invoice per client, fee on gross only, FX at the period rate; a missing FX rate fails with 409 and leaves it draft."
+  }
+ ]
+}
