@@ -1,0 +1,293 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "masteropen",
+ "repo": "masteropen",
+ "sha": "7fb603aa0838cab1ab711b40577937cfd0f27cf2",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: OpenStatus alerting, the capstone and the SQL labs",
+   "body": "OpenStatus is an open-source uptime monitor and status-page product. This checkout keeps the monorepo under `openstatus/`; the parts this quest uses are `apps/workflows` (the cron and alerting pipeline), `packages/db` (Drizzle schemas over libSQL/SQLite) and `packages/services` (the service layer). Four generations of study docs sit beside the code; this quest uses the newest, plus two ADRs.\n\nRead in this order:\n\n1. `fabledocs3/adr-009-idempotency-over-outbox.md`: how the pipeline stays consistent without transactions.\n2. `fabledocs4/02-capstone-at-least-once-alerting.md`: the project that changes that design.\n3. `fabledocs3/adr-005-libsql-and-schema-style.md`: the database and its schema conventions.\n4. `fabledocs4/03-labs-sql-and-drizzle.md`: eight hands-on labs against the real schema.\n\nThe labs say 'verify' and 'trace with real numbers' for a reason: some claims in the docs are suspicions, and at least one is contradicted by the code. When the docs and the code disagree, the quiz follows the code.",
+   "excerpts": [
+    {
+     "path": "openstatus/fabledocs4/02-capstone-at-least-once-alerting.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "The single most valuable thing you can build in this repo."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "openstatus/fabledocs4/README.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "How the drills, capstone, labs and flashcards in fabledocs4 fit together."
+    },
+    {
+     "path": "openstatus/fabledocs3/README.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The ADR index."
+    }
+   ]
+  },
+  {
+   "id": "r02-alerting-path",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: idempotency keys and the order of write and send",
+   "body": "An **idempotency key** is an identity for a unit of work, so that doing it twice has the effect of doing it once. A retry-heavy pipeline needs one at every step, and *where* the key is recorded relative to the side effect decides what a crash does.\n\nOpen `apps/workflows/src/checker/alerting.ts` and read the loop over notifications from top to bottom. Write down, in order:\n\n- the SMS quota check: what it counts, over which period, and the exact comparison with the plan limit (plan limits live in `packages/db/src/schema/plan/config.ts`);\n- the call to `insertNotificationTrigger`, and what the code does when that insert throws;\n- the provider call, how it is retried (look up `Effect.retry` and `Schedule.exponential` in the Effect docs), and what happens when every attempt fails.\n\nThen open `packages/db/src/schema/notifications/notification.ts` and find which columns make up the trigger table's unique identity.\n\nNow build the crash table yourself: for a crash at each point in that sequence, followed by a redelivery of the same request, how many alerts does the customer get? Compare your table with ADR-009 and with the capstone's milestone 1.",
+   "excerpts": [
+    {
+     "path": "openstatus/fabledocs3/adr-009-idempotency-over-outbox.md",
+     "lineStart": 7,
+     "lineEnd": 7,
+     "quote": "retries without idempotency multiply effects"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "openstatus/apps/workflows/src/checker/alerting.ts",
+     "lineStart": 70,
+     "lineEnd": 176,
+     "why": "The notification loop: quota check, trigger insert, send and retry."
+    },
+    {
+     "path": "openstatus/packages/db/src/schema/notifications/notification.ts",
+     "lineStart": 33,
+     "lineEnd": 53,
+     "why": "The notification_trigger table."
+    }
+   ]
+  },
+  {
+   "id": "r03-schema-labs",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: reading the schema the way the labs ask",
+   "body": "The SQL labs work from `packages/db/src/schema/monitors/monitor.ts`. Read the whole `monitor` table definition before you start, and for each column note its type, its default, and whether it is `.notNull()`. Pay attention to how `regions`, the timestamps and `workspaceId` are declared, and read the index defined at the end of the table, including its `where`.\n\nThree general ideas help:\n\n- A **partial index** covers only rows that match its condition. Look up when SQLite is allowed to use one for a query, then test your own queries with `EXPLAIN QUERY PLAN`.\n- **Serialized columns** (lists or JSON stored as text) are quick to ship but hard to query. Ask which questions about a monitor become awkward.\n- **Unix time** can be counted in seconds or milliseconds. JavaScript's `Date` works in milliseconds. For every date expression you meet, write down the unit of each value.\n\nFor tenancy, read `getMonitorInWorkspace` in `packages/services/src/monitor/internal.ts` and list its filters and its failure path. For time, trace `getScheduledTime` in `apps/workflows/src/cron/monitor.ts` with real numbers, as Lab 7 asks, before trusting any doc's summary of it.",
+   "excerpts": [
+    {
+     "path": "openstatus/fabledocs4/03-labs-sql-and-drizzle.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "The earlier docs *describe* the data model; these make you operate it."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "openstatus/packages/db/src/schema/monitors/monitor.ts",
+     "lineStart": 13,
+     "lineEnd": 73,
+     "why": "The monitor table, its columns and its index."
+    },
+    {
+     "path": "openstatus/apps/workflows/src/cron/monitor.ts",
+     "lineStart": 357,
+     "lineEnd": 407,
+     "why": "The lifecycle-email task scheduling and its date math."
+    }
+   ]
+  },
+  {
+   "id": "x-crash-after-insert",
+   "target": "seed:quests:masteropen/quiz/7097b6a4224762f3",
+   "phase": "after",
+   "title": "Why a crash after the trigger insert loses the alert",
+   "body": "The loop records the trigger first and sends second. If the insert throws, the code logs 'notification trigger already exists dont send again' and continues. So when the process dies between the insert and `sendAlert`, the redelivered request finds its own row, the insert fails, and the send is skipped every time after that. ADR-009 calls this at-most-once alerting.\n\n- *One alert from the retry*: the retry never reaches the send; the insert fails first.\n- *Two alerts*: nothing was sent the first time.\n- *A sweep sends it later*: no sweep exists today; building one is the capstone.",
+   "excerpts": [
+    {
+     "path": "openstatus/apps/workflows/src/checker/alerting.ts",
+     "lineStart": 136,
+     "lineEnd": 138,
+     "quote": "logger.error(\"notification trigger already exists dont send again\"); continue;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-clean-redelivery",
+   "target": "seed:quests:masteropen/quiz/1a664f8e90817a09",
+   "phase": "after",
+   "title": "Why a redelivered transition is not paged twice",
+   "body": "`notification_trigger` declares `uniqueIndex(\"notification_id_monitor_id_crontimestampe\")` on `notificationId`, `monitorId` and `cronTimestamp`. A second delivery of the same transition tries to insert the same triple, the insert throws, the catch continues, and no provider call is made. This is ADR-009's second identity layer.\n\n- *A Redis TTL key*: ADR-009 uses those for lifecycle emails, not for alerts.\n- *A provider idempotency key*: none is passed today; the capstone suggests adding one.\n- *A status column*: the table has none yet; adding it is the capstone's design A.",
+   "excerpts": [
+    {
+     "path": "openstatus/packages/db/src/schema/notifications/notification.ts",
+     "lineStart": 47,
+     "lineEnd": 50,
+     "quote": "uniqueIndex(\"notification_id_monitor_id_crontimestampe\").on( table.notificationId, table.monitorId, table.cronTimestamp,"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-send-retries",
+   "target": "seed:quests:masteropen/quiz/52bad73284a788f9",
+   "phase": "after",
+   "title": "Why a failing provider is retried, then logged and dropped",
+   "body": "The send is built with `Effect.tryPromise(...)` and piped through `Effect.retry({ times: 3, schedule: Schedule.exponential(\"1000 millis\") })`: up to three retries after the first attempt, with growing delays from one second. `Effect.runPromise(alertResult).catch(...)` then logs 'Failed to send alert notification' and the loop moves on. The trigger row is already written, so this alert will not be tried again.\n\n- *Trigger row deleted*: nothing deletes it on failure.\n- *Cloud Tasks retries the request*: the error is caught, so the request does not fail and no redelivery is triggered by it.\n- *No retry*: the Effect pipeline retries before giving up.",
+   "excerpts": [
+    {
+     "path": "openstatus/apps/workflows/src/checker/alerting.ts",
+     "lineStart": 164,
+     "lineEnd": 167,
+     "quote": "Effect.retry({ times: 3, schedule: Schedule.exponential(\"1000 millis\"), }),"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-sms-quota-boundary",
+   "target": "seed:quests:masteropen/quiz/74848a102e5081d0",
+   "phase": "after",
+   "title": "Why the SMS quota lets one extra message through",
+   "body": "For an SMS notification the loop counts the workspace's SMS trigger rows since one month ago, and skips the send only when `count > data.limits[\"sms-limit\"]`. With 50 rows and a limit of 50, `50 > 50` is false, so the 51st SMS goes out; the check stops sending only from the 52nd. A `>=` comparison would hold the limit exactly. The count also includes recovery messages, since it counts every trigger row.\n\n- *Skipped at 50*: that needs `>=`.\n- *Email fallback*: the code just logs a warning and continues.\n- *Recovery only*: the check runs for every SMS notification, before the switch on alert or recovery.",
+   "excerpts": [
+    {
+     "path": "openstatus/apps/workflows/src/checker/alerting.ts",
+     "lineStart": 116,
+     "lineEnd": 121,
+     "quote": "if ((smsSent[0]?.count ?? 0) > data.limits[\"sms-limit\"]) {"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-capstone-target",
+   "target": "seed:quests:masteropen/quiz/11354b3218c52e84",
+   "phase": "after",
+   "title": "Why the capstone targets at-least-once with dedupe",
+   "body": "The capstone states its target in one line: at-least-once delivery with dedupe, where a down customer may rarely get two pages but never zero. ADR-009 gives the reasoning: for a paging product, a duplicate page is an annoyance, while a suppressed page is a missed outage.\n\n- *Exactly-once*: a database write and a call to an outside provider cannot be made atomic, so this is not on offer.\n- *At-most-once*: that is today's behaviour, the flaw the capstone fixes.\n- *Best-effort with logging*: logging a failure does not deliver the page.",
+   "excerpts": [
+    {
+     "path": "openstatus/fabledocs4/02-capstone-at-least-once-alerting.md",
+     "lineStart": 7,
+     "lineEnd": 7,
+     "quote": "at-least-once delivery with dedupe"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-design-b-extra",
+   "target": "seed:quests:masteropen/quiz/5eac2030cbe9a8fe",
+   "phase": "after",
+   "title": "Why only the outbox covers the incident-insert gap",
+   "body": "Design A adds status, attempts and lastAttemptAt to the trigger row and sweeps stale rows. It can only repair work that already has a trigger row. If the process dies after the incident row is written but before the trigger row exists, A has nothing to sweep. Design B writes an outbox row in the same transaction as the incident insert, so that gap is covered too; the capstone asks you to quantify whether it matters.\n\n- *Crash between trigger insert and send*: both designs fix it; it is the main bug.\n- *Duplicate sends on retry*: both designs accept this and move dedupe to the provider.\n- *Two sweeps claiming one row*: both need a claim mechanism.",
+   "excerpts": [
+    {
+     "path": "openstatus/fabledocs4/02-capstone-at-least-once-alerting.md",
+     "lineStart": 19,
+     "lineEnd": 19,
+     "quote": "B is the only option that also fixes the incident-insert-then-crash-before-trigger-insert gap"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-backfill-sent",
+   "target": "seed:quests:masteropen/quiz/0f59d584d68f02c2",
+   "phase": "after",
+   "title": "Why history is backfilled as sent",
+   "body": "Once the column exists, the sweep claims stale `pending` or `failed` rows and resends them. Existing rows are past alerts that the old code already handled, so marking them `sent` keeps the sweep away from history. The guide writes 'sent, presumably' and asks you to argue it.\n\n- *pending*: the first sweep would resend every historical alert.\n- *failed*: same problem, and it would also mislabel alerts that went out.\n- *NULL*: leaves the state undefined; the milestone asks for an explicit backfill statement.",
+   "excerpts": [
+    {
+     "path": "openstatus/fabledocs4/02-capstone-at-least-once-alerting.md",
+     "lineStart": 27,
+     "lineEnd": 27,
+     "quote": "Write the backfill statement for existing trigger rows (`sent`, presumably"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-partial-index-query",
+   "target": "seed:quests:masteropen/quiz/1a818f2ae47eef25",
+   "phase": "after",
+   "title": "Why only the exact condition can use the partial index",
+   "body": "The index is declared with `.on(t.workspaceId)` and a `where` of `deleted_at IS NULL`, so it holds only live monitors. SQLite may use a partial index only when the query's WHERE clause implies the index's condition. `workspace_id = ? AND deleted_at IS NULL` does. The OR form also wants deleted rows the index never stored, so the planner must fall back.\n\n- *The OR form*: it can match rows outside the index.\n- *workspace_id alone*: same problem; deleted monitors are not in the index.\n- *deleted_at alone*: no workspace value to look up in an index keyed on workspace_id.",
+   "excerpts": [
+    {
+     "path": "openstatus/packages/db/src/schema/monitors/monitor.ts",
+     "lineStart": 69,
+     "lineEnd": 71,
+     "quote": "index(\"monitor_workspace_id_active_idx\") .on(t.workspaceId)"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-monitor-other-workspace",
+   "target": "seed:quests:masteropen/quiz/01e4120e43de08b3",
+   "phase": "after",
+   "title": "Why a foreign monitor id is simply not found",
+   "body": "`getMonitorInWorkspace` selects with three conditions joined by `and`: the id, the workspace id, and `deletedAt IS NULL`. A monitor from another workspace fails the second one, so `.get()` returns nothing and the helper throws `NotFoundError(\"monitor\", id)`. The caller cannot tell a foreign id from a missing one, which is what you want for tenant isolation.\n\n- *ForbiddenError*: it is imported in the file, but this helper does not throw it.\n- *The router checks the workspace*: the service owns this check, which is the point of Lab 2.\n- *Returns undefined*: the helper throws instead of returning an empty value.",
+   "excerpts": [
+    {
+     "path": "openstatus/packages/services/src/monitor/internal.ts",
+     "lineStart": 45,
+     "lineEnd": 45,
+     "quote": "if (!row) throw new NotFoundError(\"monitor\", id);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-regions-column",
+   "target": "seed:quests:masteropen/quiz/fbe9ac46df565fd0",
+   "phase": "after",
+   "title": "Why a region search cannot use an index",
+   "body": "`regions` is declared as `text(\"regions\").default(\"\").notNull()`, holding region codes joined by commas. To find monitors that probe from `ams`, a query has to look inside the string with `LIKE` or `instr`, and an ordinary index on the column cannot serve a match in the middle of a value. ADR-005 chose this cheap serialization for speed and judges it right for these columns.\n\n- *A JSON array*: the column is plain text, not JSON.\n- *A join table*: that is Lab 6's counterfactual, not the current schema.\n- *A bitmask*: nothing encodes regions as bits.",
+   "excerpts": [
+    {
+     "path": "openstatus/packages/db/src/schema/monitors/monitor.ts",
+     "lineStart": 26,
+     "lineEnd": 26,
+     "quote": "regions: text(\"regions\").default(\"\").notNull(),"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-scheduled-time-unit",
+   "target": "seed:quests:masteropen/quiz/5cf2e6867c45505d",
+   "phase": "after",
+   "title": "Why getScheduledTime returns seconds in every branch",
+   "body": "Trace it with numbers. `new Date().getTime()` is milliseconds, and the 14days branch divides it by 1000. `Date.prototype.setDate` changes the date and returns the new time value, also in milliseconds, and the 3days and paused branches divide that by 1000 too. So all three return unix seconds (with a fractional part), which matches `scheduleTime.seconds`. Several docs say the function mixes conventions; this trace does not support that, so the code is keyed.\n\n- *Milliseconds for the setDate branches*: they are divided by 1000 as well.\n- *Milliseconds everywhere*: every branch divides.\n- *Milliseconds for 14days*: that branch divides as well.",
+   "excerpts": [
+    {
+     "path": "openstatus/apps/workflows/src/cron/monitor.ts",
+     "lineStart": 400,
+     "lineEnd": 400,
+     "quote": "return new Date().setDate(new Date().getDate() + 11) / 1000;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-nullable-tenancy",
+   "target": "seed:quests:masteropen/quiz/412c5c1249e54881",
+   "phase": "after",
+   "title": "Why nullable workspaceId is the ADR-005 wart",
+   "body": "`workspaceId: integer(\"workspace_id\").references(() => workspace.id)` has no `.notNull()`, so the database accepts a monitor with no workspace. ADR-005's hindsight verdict calls the serialized columns right and the nullable tenancy column wrong: isolation then depends on every query remembering its workspace filter, which is discipline where structure was available. The NOT NULL migration is still unwritten; Lab 4 asks you to write it.\n\n- *NOT NULL with a foreign key*: the foreign key is there, the NOT NULL is not.\n- *Called right because zod checks it*: the ADR calls it wrong.\n- *Already added*: the ADR still lists it as a standing candidate.",
+   "excerpts": [
+    {
+     "path": "openstatus/packages/db/src/schema/monitors/monitor.ts",
+     "lineStart": 37,
+     "lineEnd": 37,
+     "quote": "workspaceId: integer(\"workspace_id\").references(() => workspace.id),"
+    },
+    {
+     "path": "openstatus/fabledocs3/adr-005-libsql-and-schema-style.md",
+     "lineStart": 23,
+     "lineEnd": 23,
+     "quote": "**wrong for nullable `workspaceId`**"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}
