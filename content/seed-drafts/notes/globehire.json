@@ -1,0 +1,353 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "globehire",
+ "repo": "globehire",
+ "sha": "d38fb1477266c5591bc8340ebda3d699fc7008a6",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: one hire case, one tenant boundary, one version number",
+   "body": "GlobeHire is an employer-of-record API in .NET: client companies hire workers in other countries. The `astraupskill/` course follows a single \"hire case\" (an onboarding checklist) from the HTTP route down to the domain object.\n\nRead in this order:\n\n1. `01-CODEBASE-MAP.md`: the route, the handler, the repository, the aggregate.\n2. `02-CONCEPTS.md`: tenant keys, versions and audit time as three separate ideas.\n3. `03-WORKED-CHANGE.md`: the four-case test matrix.\n4. `04-TESTING-AND-DEBUGGING.md`: how to read a failing test.\n5. `07-TRACE-LAB.md`: predict the state at each checkpoint before running anything.\n\nThen read `docs/concepts/effective-dated-policies.md` for how country rules are chosen. Keep `HireCase.cs` open; it is short and most questions point into it.",
+   "excerpts": [
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "This is the transport boundary: HTTP shapes and status codes belong here, while tenant lookup and lifecycle rules remain below it."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/GlobeHire.Domain/HireCases/HireCase.cs",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The aggregate: checklist, Version and Status."
+    },
+    {
+     "path": "src/GlobeHire.Infrastructure/HireCases/InMemoryHireCaseRepository.cs",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The in-memory repository and its key."
+    }
+   ]
+  },
+  {
+   "id": "r02-scope-vs-version",
+   "target": "pack",
+   "phase": "before",
+   "title": "Core idea: two different questions about every write",
+   "body": "A request that changes a hire case has to pass two independent checks. The first is about who: may this client see this case at all? The second is about when: is the client changing the state it actually looked at, or an older copy?\n\nThe course keeps these apart on purpose, because when a test fails you need to know which of the two broke. While reading `02-CONCEPTS.md`, find where each check lives: one is in the repository lookup, the other is inside the aggregate. Then look at what the guide says the in-memory lock does and does not guarantee.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "Treating these as separate questions makes failure diagnosis clearer."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/GlobeHire.Application/HireCases/HireCaseUseCases.cs",
+     "lineStart": 51,
+     "lineEnd": 61,
+     "why": "The handler that connects lookup and aggregate."
+    }
+   ]
+  },
+  {
+   "id": "r03-time-and-policies",
+   "target": "pack",
+   "phase": "before",
+   "title": "Core idea: time and rules are inputs you can name",
+   "body": "Two places in GlobeHire depend on dates. Audit timestamps on completed tasks come from a clock that is handed in, so a test can fix the exact time. Country employment rules change over the years, so each version of a rule has an effective range and a quote must pick the right one.\n\nIn both cases the code avoids \"whatever the machine says right now\" and \"whatever row loaded first\". Read the audit-time paragraph in `02-CONCEPTS.md`, then `effective-dated-policies.md`, then open `CountryPolicySelector.cs` and count the possible outcomes of a selection.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 7,
+     "lineEnd": 7,
+     "quote": "Audit time is an input, not a reason to consult the machine clock throughout domain code."
+    },
+    {
+     "path": "docs/concepts/effective-dated-policies.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "Global employment rules change over time."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/GlobeHire.Domain/WorkforcePlans/CountryPolicySelector.cs",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The selector: zero, one or many matching policies."
+    }
+   ]
+  },
+  {
+   "id": "x-q01-key",
+   "target": "seed:quests:globehire/quiz/3f8be441fd60ef0a",
+   "phase": "after",
+   "title": "The tenant is part of the key",
+   "body": "The key is right. The repository field is `Dictionary<(ClientId ClientId, Guid Id), HireCase> _cases`. `FindAsync` looks up `(clientId, id)`, so a correct Guid with the wrong client simply does not match any entry. There is no \"load by id, then check\" path to forget.\n\n- No separate client check exists in the handler; the key does the work.\n- Cases are stored one per key, not as per-client lists.\n- The candidate email plays no part in lookup.",
+   "excerpts": [
+    {
+     "path": "src/GlobeHire.Infrastructure/HireCases/InMemoryHireCaseRepository.cs",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "private readonly Dictionary<(ClientId ClientId, Guid Id), HireCase> _cases = [];"
+    },
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "The pair matters: a globally valid Guid is insufficient."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02-null",
+   "target": "seed:quests:globehire/quiz/3216156ce1cb0d4e",
+   "phase": "after",
+   "title": "A foreign case looks like no case",
+   "body": "The key is right. `CompleteTaskAsync` calls `FindAsync(ClientId.Parse(clientId), id, ...)`; for client-other that returns null. The next line is `hireCase?.CompleteTask(...)`, and the `?.` skips the call on null. The owner case keeps Version 1, no completed task and no timestamp. The endpoint maps null to 404.\n\n- No 403 is produced, and nothing names the real owner.\n- The Guid alone never selects a case here.\n- The version check is never reached, so no version error appears.",
+   "excerpts": [
+    {
+     "path": "src/GlobeHire.Application/HireCases/HireCaseUseCases.cs",
+     "lineStart": 59,
+     "lineEnd": 59,
+     "quote": "hireCase?.CompleteTask(taskCode, expectedVersion, clock.UtcNow);"
+    },
+    {
+     "path": "astraupskill/07-TRACE-LAB.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "The response cannot distinguish an existing foreign case from a nonexistent case."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q03-twice",
+   "target": "seed:quests:globehire/quiz/82e0aa6fd8f4cbfb",
+   "phase": "after",
+   "title": "Completing a finished task is a no-op",
+   "body": "The key is right. After `EnsureVersion` and the status and lookup checks, `CompleteTask` tests `if (_tasks[index].IsComplete) { return; }`. The replacement record and `Version++` come after that return, so neither the timestamp nor the version moves.\n\n- Version only increases when a task actually changes.\n- The task is found (it exists), so task_not_found does not apply.\n- Naming a completed task is allowed; it simply does nothing.",
+   "excerpts": [
+    {
+     "path": "src/GlobeHire.Domain/HireCases/HireCase.cs",
+     "lineStart": 99,
+     "lineEnd": 102,
+     "quote": "if (_tasks[index].IsComplete)"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "Completing a previously incomplete task changes its record and advances the version."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q04-order",
+   "target": "seed:quests:globehire/quiz/757a7f0f4c9a6f2f",
+   "phase": "after",
+   "title": "The version check runs before anything else",
+   "body": "The key is right. The first statement of `CompleteTask` is `EnsureVersion(expectedVersion)`. The case is at Version 2, the request says 1, so it throws `concurrency.version_mismatch` before the status check, the task lookup or any change.\n\n- work-eligibility exists; the lookup would succeed if it were reached.\n- Completing identity did not change Status; the case is still Draft.\n- A stale request is never applied.",
+   "excerpts": [
+    {
+     "path": "src/GlobeHire.Domain/HireCases/HireCase.cs",
+     "lineStart": 85,
+     "lineEnd": 87,
+     "quote": "EnsureVersion(expectedVersion);"
+    },
+    {
+     "path": "astraupskill/07-TRACE-LAB.md",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "Lookup succeeds, but EnsureVersion observes 2 and throws `concurrency.version_mismatch`."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q05-incomplete",
+   "target": "seed:quests:globehire/quiz/0b1bc77fe5243152",
+   "phase": "after",
+   "title": "Review needs a finished checklist",
+   "body": "The key is right. `SubmitForReview` runs `EnsureVersion`, then `if (_tasks.Any(task => !task.IsComplete))` throws `hire_case.tasks_incomplete` with \"Every onboarding task must be completed before review.\" Status is set only after that check, so it stays Draft.\n\n- Status cannot become ReadyForReview while a task is open.\n- The method never completes tasks on your behalf.\n- The version was right, so no version error is raised.",
+   "excerpts": [
+    {
+     "path": "src/GlobeHire.Domain/HireCases/HireCase.cs",
+     "lineStart": 111,
+     "lineEnd": 116,
+     "quote": "\"Every onboarding task must be completed before review.\""
+    },
+    {
+     "path": "src/GlobeHire.Domain/HireCases/HireCase.cs",
+     "lineStart": 118,
+     "lineEnd": 118,
+     "quote": "Status = HireCaseStatus.ReadyForReview;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q06-clock",
+   "target": "seed:quests:globehire/quiz/34b4647e9c0cdfab",
+   "phase": "after",
+   "title": "The handler hands the time to the domain",
+   "body": "The key is right. `CompleteTaskAsync` passes `clock.UtcNow` as the `now` argument of `CompleteTask`, and the aggregate stores `now.ToUniversalTime()`. The domain never reads a clock itself, which is why the tests can use a `FixedClock` and assert an exact instant.\n\n- `HireCase` has no `DateTimeOffset.UtcNow` call.\n- If-Match carries only the expected version number.\n- The repository stores references; it adds no timestamps.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 7,
+     "lineEnd": 7,
+     "quote": "ChangeHireCaseHandler receives IClock and passes UtcNow into CompleteTask."
+    },
+    {
+     "path": "src/GlobeHire.Application/HireCases/HireCaseUseCases.cs",
+     "lineStart": 59,
+     "lineEnd": 59,
+     "quote": "hireCase?.CompleteTask(taskCode, expectedVersion, clock.UtcNow);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07-if-match",
+   "target": "seed:quests:globehire/quiz/f84354a5331929ae",
+   "phase": "after",
+   "title": "The expected version must be sent",
+   "body": "The key is right. The endpoint calls `ParseVersion(ifMatch)`, which trims quotes and runs `int.TryParse`. If the header is missing or not a number, it throws `BusinessRuleViolationException(\"concurrency.if_match_required\", \"A numeric If-Match ETag is required.\")`.\n\n- The server never fills in the current version; that would defeat the check.\n- There is no default of 1.\n- The endpoint does not retry; the client must read the ETag and send it.",
+   "excerpts": [
+    {
+     "path": "src/GlobeHire.Api/HireCases/HireCaseEndpoints.cs",
+     "lineStart": 95,
+     "lineEnd": 97,
+     "quote": "if (!int.TryParse(ifMatch?.Trim('\"'), out var version))"
+    },
+    {
+     "path": "src/GlobeHire.Api/HireCases/HireCaseEndpoints.cs",
+     "lineStart": 97,
+     "lineEnd": 97,
+     "quote": "\"concurrency.if_match_required\", \"A numeric If-Match ETag is required.\""
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08-lock",
+   "target": "seed:quests:globehire/quiz/cbd775d9ad480467",
+   "phase": "after",
+   "title": "The lock guards the dictionary, not the business rule",
+   "body": "The key is right. `FindAsync` takes `lock (_gate)`, reads the dictionary, and returns, releasing the lock. `CompleteTask` and `SubmitForReview` then run on the shared object with no lock held, so two requests could both pass `EnsureVersion`. The guide calls this check-then-act.\n\n- It is not a compare-and-swap; offers use `MutateAsync` for that, hire cases do not.\n- There is no `SaveChangesAsync` in this in-memory repository.\n- An in-process lock does nothing across processes.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "The version check is therefore a check-then-act, not a compare-and-swap."
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "`FindAsync` releases it before returning"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09-state",
+   "target": "seed:quests:globehire/quiz/d45125f8f67f570e",
+   "phase": "after",
+   "title": "Check what did not change",
+   "body": "The key is right. If code mutated the aggregate and only then decided to return not-found, the HTTP answer would still be 404. Only an assertion on the owner's Version, task flags and timestamps proves nothing changed, which is why the worked change checks absence of mutation.\n\n- Null results are deterministic here; parallelism is not the concern.\n- Application tests do see return values; the point is about what they assert.\n- The tests use the in-memory repository and need no database.",
+   "excerpts": [
+    {
+     "path": "astraupskill/04-TESTING-AND-DEBUGGING.md",
+     "lineStart": 7,
+     "lineEnd": 7,
+     "quote": "A 404 can coexist with an earlier mutation if code is ordered badly."
+    },
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "This checks absence of mutation rather than merely checking the outward response."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10-start-date",
+   "target": "seed:quests:globehire/quiz/5d02ef6a33059479",
+   "phase": "after",
+   "title": "The start date picks the policy",
+   "body": "The key is right. Employment rules are effective-dated, and the guide says the proposed employment start date selects the policy; the request date does not. `CountryPolicySelector.Select` filters by country and `AppliesOn(effectiveDate)`, and the quote records which policy it used.\n\n- Using the request date could apply today's rules to a hire that starts next year.\n- Rows are versioned by effective range, not by last update.\n- Contract signing dates are not part of the selection.",
+   "excerpts": [
+    {
+     "path": "docs/concepts/effective-dated-policies.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "The proposed employment start date selects the policy; the request date does not."
+    },
+    {
+     "path": "src/GlobeHire.Domain/WorkforcePlans/CountryPolicySelector.cs",
+     "lineStart": 14,
+     "lineEnd": 14,
+     "quote": "policy.Country == country && policy.AppliesOn(effectiveDate)"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q11-overlap",
+   "target": "seed:quests:globehire/quiz/5907881046fbf46d",
+   "phase": "after",
+   "title": "Two matches is a configuration error",
+   "body": "The key is right. The selector sorts the matches by `EffectiveFrom`, but then switches on the count: 0 throws `country_policy.not_found`, 1 returns it, and anything more throws `country_policy.overlap`. The sort does not pick a winner.\n\n- Sorting is there for a stable order; the many-match arm still throws.\n- Load order is exactly what the guide refuses to rely on.\n- Nothing is averaged; estimates come from one policy.",
+   "excerpts": [
+    {
+     "path": "src/GlobeHire.Domain/WorkforcePlans/CountryPolicySelector.cs",
+     "lineStart": 24,
+     "lineEnd": 25,
+     "quote": "\"country_policy.overlap\","
+    },
+    {
+     "path": "docs/concepts/effective-dated-policies.md",
+     "lineStart": 14,
+     "lineEnd": 14,
+     "quote": "More than one match is a configuration error, not an invitation to pick whichever row happened to load first."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q12-submit",
+   "target": "seed:quests:globehire/quiz/e0343097d292f6f9",
+   "phase": "after",
+   "title": "A successful submit moves Status and Version",
+   "body": "The key is right. The owner passes the lookup, `EnsureVersion(4)` succeeds, no task is incomplete, so `Status = HireCaseStatus.ReadyForReview;` and `Version++` take it from 4 to 5.\n\n- There is no Submitted status here and versions never reset.\n- `not_editable` guards `CompleteTask` on a non-Draft case, not this submit.\n- Every successful mutation increments Version, so it cannot stay at 4.",
+   "excerpts": [
+    {
+     "path": "src/GlobeHire.Domain/HireCases/HireCase.cs",
+     "lineStart": 118,
+     "lineEnd": 119,
+     "quote": "Status = HireCaseStatus.ReadyForReview; Version++;"
+    },
+    {
+     "path": "astraupskill/07-TRACE-LAB.md",
+     "lineStart": 11,
+     "lineEnd": 11,
+     "quote": "changes Status to ReadyForReview, and increments Version to 5."
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}

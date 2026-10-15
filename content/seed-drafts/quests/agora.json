@@ -1,0 +1,492 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "agora",
+ "sha": "2030d638fde80a7f90a595a964d69e74b5f28b96",
+ "guides": [
+  "docs/concepts/lost-update.md",
+  "docs/concepts/identity-vs-resource.md",
+  "docs/concepts/value-objects.md",
+  "docs/concepts/the-clock.md",
+  "docs/concepts/authn-vs-authz.md"
+ ],
+ "items": [
+  {
+   "id": "q01-stale-save-409",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/concepts/lost-update.md",
+    "lines": {
+     "start": 32,
+     "end": 46
+    }
+   },
+   "cites": [
+    {
+     "path": "src/Agora.Application/Catalog/UpdateProduct.cs",
+     "lineStart": 42,
+     "lineEnd": 42
+    },
+    {
+     "path": "docs/concepts/lost-update.md",
+     "lineStart": 43,
+     "lineEnd": 46
+    }
+   ],
+   "prompt": "Alia and Ben both opened product v3. Alia saves first (now v4). Ben then saves, presenting expectedVersion 3. What does Ben get?",
+   "answer": "A 409 Conflict that hands the current v4 row back to him",
+   "distractors": [
+    "A 200, and his price silently overwrites Alia's description",
+    "A 200, with both edits merged into a brand-new version 5",
+    "A 412 Precondition Failed, with no body at all returned"
+   ],
+   "explanation": "The write is accepted only if the row is still at the version the client read; v4 is not 3, so UpdateProduct throws ConcurrencyConflictException and the problem+json carries the current row for the conflict banner."
+  },
+  {
+   "id": "q02-int-not-rowversion",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/concepts/lost-update.md",
+    "lines": {
+     "start": 60,
+     "end": 63
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/concepts/lost-update.md",
+     "lineStart": 60,
+     "lineEnd": 63
+    }
+   ],
+   "prompt": "Why does Agora keep an explicit int Version and not rely on SQL Server rowversion or Postgres xmin?",
+   "answer": "The tests run on SQLite, which offers neither of those tokens",
+   "distractors": [
+    "A rowversion would leak the database's internal clock to clients",
+    "EF Core has no way to read the Postgres xmin column at all",
+    "An int lets each client choose its own next version number"
+   ],
+   "explanation": "ADR 0005: the test suite runs on SQLite, so a database-maintained token would leave the concurrency story untested on the provider the tests use; an int behaves the same everywhere, including in-memory fakes."
+  },
+  {
+   "id": "q03-second-gate",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/concepts/lost-update.md",
+    "lines": {
+     "start": 50,
+     "end": 56
+    }
+   },
+   "cites": [
+    {
+     "path": "src/Agora.Application/Catalog/UpdateProduct.cs",
+     "lineStart": 59,
+     "lineEnd": 60
+    },
+    {
+     "path": "src/Agora.Infrastructure/Persistence/Configurations/ProductConfiguration.cs",
+     "lineStart": 74,
+     "lineEnd": 74
+    },
+    {
+     "path": "docs/concepts/lost-update.md",
+     "lineStart": 53,
+     "lineEnd": 54
+    }
+   ],
+   "prompt": "UpdateProduct already compares product.Version with expectedVersion. Why is Version also an EF concurrency token?",
+   "answer": "A race between the load and the commit can still slip past it",
+   "distractors": [
+    "The comparison in UpdateProduct runs only in Development builds",
+    "EF needs the token in order to generate the next Version number",
+    "The token is what puts the current row into the 409 response"
+   ],
+   "explanation": "The in-code check catches the common stale case; IsConcurrencyToken adds Version to the UPDATE's WHERE, so a write that lands between load and commit raises DbUpdateConcurrencyException, translated to the same 409."
+  },
+  {
+   "id": "q04-identity-wins",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/concepts/identity-vs-resource.md",
+    "lines": {
+     "start": 37,
+     "end": 47
+    }
+   },
+   "cites": [
+    {
+     "path": "src/Agora.Application/Carts/CartLookup.cs",
+     "lineStart": 43,
+     "lineEnd": 47
+    },
+    {
+     "path": "docs/concepts/identity-vs-resource.md",
+     "lineStart": 37,
+     "lineEnd": 38
+    }
+   ],
+   "prompt": "A signed-in request also carries an old agora_cart cookie. Which cart does CartLookup return?",
+   "answer": "The user's own active cart while the token is ignored",
+   "distractors": [
+    "The cart behind the token, since it is the more specific one",
+    "Both carts, merged again on every request until logout",
+    "Neither: it fails with a 409 until the cookie is cleared"
+   ],
+   "explanation": "If currentUser.IsAuthenticated, CartLookup returns FindActiveByUserAsync and never consults the token: the identity you proved beats the claim check you were handed."
+  },
+  {
+   "id": "q05-no-find-by-id-b",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/concepts/identity-vs-resource.md",
+    "lines": {
+     "start": 66,
+     "end": 68
+    }
+   },
+   "cites": [
+    {
+     "path": "src/Agora.Application/Abstractions/ICartRepository.cs",
+     "lineStart": 19,
+     "lineEnd": 30
+    },
+    {
+     "path": "docs/concepts/identity-vs-resource.md",
+     "lineStart": 66,
+     "lineEnd": 68
+    }
+   ],
+   "prompt": "Why does ICartRepository deliberately have no FindByIdAsync method?",
+   "answer": "Callers can never name a cart id, so no door is left open",
+   "distractors": [
+    "EF Core cannot look up a cart by its Guid primary key directly",
+    "Carts are cached in memory, so no lookup by id is ever needed",
+    "Admins use a separate repository that does offer that method"
+   ],
+   "explanation": "No route takes a cart id and no DTO carries one; the cart is found BY the caller's identity or token, so every reachable line is theirs by construction."
+  },
+  {
+   "id": "q06-stranger-line-404",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/concepts/identity-vs-resource.md",
+    "lines": {
+     "start": 70,
+     "end": 77
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/concepts/identity-vs-resource.md",
+     "lineStart": 60,
+     "lineEnd": 64
+    },
+    {
+     "path": "docs/concepts/identity-vs-resource.md",
+     "lineStart": 72,
+     "lineEnd": 77
+    }
+   ],
+   "prompt": "A shopper sends a change for a cart line id that belongs to someone else's cart. What status comes back?",
+   "answer": "404 just as for a line id that does not exist",
+   "distractors": [
+    "403, as the line is real but not theirs to change",
+    "401, as only the owner's session may name that line",
+    "200, as cart endpoints never call RequireUser"
+   ],
+   "explanation": "The line is looked up inside the caller's own cart, so a stranger's id simply is not there. One answer for \"no such line\", \"not your line\" and \"no cart\" means the endpoint is not an existence oracle."
+  },
+  {
+   "id": "q07-anonymous-admin-401-c",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/concepts/authn-vs-authz.md",
+    "lines": {
+     "start": 10,
+     "end": 12
+    }
+   },
+   "cites": [
+    {
+     "path": "src/Agora.Api/Auth/RequestCurrentUser.cs",
+     "lineStart": 32,
+     "lineEnd": 39
+    },
+    {
+     "path": "docs/concepts/authn-vs-authz.md",
+     "lineStart": 10,
+     "lineEnd": 12
+    }
+   ],
+   "prompt": "An anonymous caller hits a StoreAdmin-only action. Which status do they get?",
+   "answer": "401, because RequireRole calls RequireUser first",
+   "distractors": [
+    "403, because the caller lacks the StoreAdmin role",
+    "404, so the admin route's existence stays hidden",
+    "302, a redirect that sends them to the login page"
+   ],
+   "explanation": "Authentication comes before authorization: you cannot be forbidden from something you have not been identified for. \"Would logging in fix it? Yes: 401.\""
+  },
+  {
+   "id": "q08-bankers-rounding",
+   "kind": "quiz",
+   "source": {
+    "path": "src/Agora.Domain/Values/Money.cs",
+    "lines": {
+     "start": 44,
+     "end": 62
+    }
+   },
+   "cites": [
+    {
+     "path": "src/Agora.Domain/Values/Money.cs",
+     "lineStart": 44,
+     "lineEnd": 44
+    },
+    {
+     "path": "src/Agora.Domain/Values/Money.cs",
+     "lineStart": 61,
+     "lineEnd": 62
+    }
+   ],
+   "prompt": "What amount does Money.Of(0.125m, \"USD\") hold?",
+   "answer": "0.12, as Money rounds a half to the even cent",
+   "distractors": [
+    "0.13, because Money rounds a half away from zero",
+    "0.125, because Money keeps three decimal places",
+    "None: it throws, as 0.125 is not a whole cent"
+   ],
+   "explanation": "Money.Of rounds to the currency's minor units with MidpointRounding.ToEven (banker's rounding): 0.125 sits halfway, and the even neighbour is 0.12."
+  },
+  {
+   "id": "q09-mixed-currency",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/concepts/value-objects.md",
+    "lines": {
+     "start": 37,
+     "end": 42
+    }
+   },
+   "cites": [
+    {
+     "path": "src/Agora.Domain/Values/Money.cs",
+     "lineStart": 205,
+     "lineEnd": 212
+    },
+    {
+     "path": "docs/concepts/value-objects.md",
+     "lineStart": 38,
+     "lineEnd": 38
+    }
+   ],
+   "prompt": "What happens when code calls usd.Add(eur) on two Money values?",
+   "answer": "It throws, refusing to mix them without an exchange rate",
+   "distractors": [
+    "It converts the EUR into USD at that day's exchange rate",
+    "It returns USD, keeping the currency of the left-hand value",
+    "It returns a Money tagged with a mixed \"USD+EUR\" currency"
+   ],
+   "explanation": "Every binary operation goes through SameCurrencyAs, which throws DomainRuleException \"Cannot combine USD and EUR without an exchange rate.\" There is no implicit conversion."
+  },
+  {
+   "id": "q10-ratio-unwraps",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/concepts/value-objects.md",
+    "lines": {
+     "start": 62,
+     "end": 64
+    }
+   },
+   "cites": [
+    {
+     "path": "src/Agora.Domain/Pricing/EffectivePrice.cs",
+     "lineStart": 33,
+     "lineEnd": 38
+    },
+    {
+     "path": "docs/concepts/value-objects.md",
+     "lineStart": 62,
+     "lineEnd": 64
+    }
+   ],
+   "prompt": "Why does EffectivePrice.SavedPercent return a plain number and not a Money?",
+   "answer": "Money over money is a ratio in which the currency cancels",
+   "distractors": [
+    "Money cannot be negative, and a saving can go below zero",
+    "A plain number serialises to JSON, while Money cannot",
+    "A percentage needs more decimals than Money will keep"
+   ],
+   "explanation": "Savings over list price in the same currency is a pure ratio; \"25% USD\" is a category error. Unwrap exactly where the type stops being true. (Money itself permits negative amounts.)"
+  },
+  {
+   "id": "q11-rule-where-true",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/concepts/value-objects.md",
+    "lines": {
+     "start": 55,
+     "end": 60
+    }
+   },
+   "cites": [
+    {
+     "path": "src/Agora.Domain/Catalog/Product.cs",
+     "lineStart": 203,
+     "lineEnd": 208
+    },
+    {
+     "path": "docs/concepts/value-objects.md",
+     "lineStart": 55,
+     "lineEnd": 57
+    }
+   ],
+   "prompt": "Where does Agora enforce \"a shelf price is not negative\"?",
+   "answer": "In Product.ValidPrice, since it is a fact about products",
+   "distractors": [
+    "In Money.Of, since an amount of money is never negative",
+    "Only in the HTTP validator in front of UpdateProduct",
+    "In a database CHECK constraint on the PriceAmount column"
+   ],
+   "explanation": "Money permits a negative amount because a refund is negative money; the shelf-price rule is about products, so Product.ValidPrice throws \"Product price cannot be negative.\""
+  },
+  {
+   "id": "q12-sale-without-badge",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/concepts/the-clock.md",
+    "lines": {
+     "start": 7,
+     "end": 12
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/concepts/the-clock.md",
+     "lineStart": 7,
+     "lineEnd": 12
+    },
+    {
+     "path": "docs/concepts/the-clock.md",
+     "lineStart": 68,
+     "lineEnd": 71
+    }
+   ],
+   "prompt": "A customer saw the sale price but no sale badge on the same page at the same instant. What caused it?",
+   "answer": "One function took the instant as input, the other read the clock",
+   "distractors": [
+    "The browser drew the badge in the shopper's own local timezone instead",
+    "A cache served the badge from a request made before the sale",
+    "The two functions rounded the sale price with different modes"
+   ],
+   "explanation": "Two functions were consulted: IsActiveAt(instant) and the ambient IsActive(). They disagreed, and the ambient one, untestable at a boundary, was wrong."
+  },
+  {
+   "id": "q13-datetime-drops-offset-b",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/concepts/the-clock.md",
+    "lines": {
+     "start": 16,
+     "end": 27
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/concepts/the-clock.md",
+     "lineStart": 20,
+     "lineEnd": 25
+    }
+   ],
+   "prompt": "For window.Starts = 2026-08-04T09:00+09:00, what does window.Starts.DateTime give you?",
+   "answer": "The local number 09:00 with the +09:00 offset thrown away",
+   "distractors": [
+    "00:00 UTC, the same instant converted for you into UTC",
+    "09:00 in the server's timezone, with the offset still kept",
+    "An exception, because the offset is not +00:00"
+   ],
+   "explanation": ".DateTime discards the offset and leaves \"nine o'clock somewhere unstated\"; comparing it to the server wall clock compares two local numbers about nothing."
+  },
+  {
+   "id": "f01-four-moves",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/concepts/value-objects.md",
+    "lines": {
+     "start": 44,
+     "end": 64
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/concepts/value-objects.md",
+     "lineStart": 46,
+     "lineEnd": 64
+    }
+   ],
+   "front": "Value objects: the four moves in Agora?",
+   "back": "1 One door (private constructor, Money.Of validates and normalises). 2 Make illegal states unrepresentable and illegal operations uncallable (no Multiply(Money)). 3 Put the rule where the rule is true (Product.ValidPrice, not Money). 4 Unwrap only where the type stops being true (SavedPercent)."
+  },
+  {
+   "id": "f02-four-questions",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/concepts/identity-vs-resource.md",
+    "lines": {
+     "start": 85,
+     "end": 94
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/concepts/identity-vs-resource.md",
+     "lineStart": 88,
+     "lineEnd": 94
+    }
+   ],
+   "front": "Four questions to ask of anything a client can name?",
+   "back": "Is the token an identity or a claim check? Can the caller name a resource that is not theirs (scope the query by the caller)? Does the deny case leak existence (then 404)? When both identities are present, which wins (the one you proved)?"
+  },
+  {
+   "id": "f03-two-cookies",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/concepts/identity-vs-resource.md",
+    "lines": {
+     "start": 6,
+     "end": 18
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/concepts/identity-vs-resource.md",
+     "lineStart": 6,
+     "lineEnd": 18
+    }
+   ],
+   "front": "agora_session vs agora_cart?",
+   "back": "Same crypto (256-bit CSPRNG, stored as a SHA-256 hash), opposite kinds: the session is an identity earned by a password, short-lived; the cart is a claim check handed to anyone, long-lived. The privilege is in the code path that reads the token."
+  },
+  {
+   "id": "f04-ban-capability",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/concepts/the-clock.md",
+    "lines": {
+     "start": 76,
+     "end": 91
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/concepts/the-clock.md",
+     "lineStart": 76,
+     "lineEnd": 91
+    }
+   ],
+   "front": "How does Agora keep ambient clock reads out of the domain?",
+   "back": "Ban the capability, not the symptom: a fitness function scans Agora.Domain source for wall-clock reads (UtcNow too) and names the file and line. Take the instant as a parameter; read it once at the edge from TimeProvider."
+  }
+ ]
+}
