@@ -44,19 +44,13 @@
    "target": "pack",
    "phase": "before",
    "title": "Templates carry untrusted data, so the language stays tiny",
-   "body": "Users write templates such as `{{steps.1.output.email}}` to copy a value from one step into the next. Everything flowing through them comes from outside: webhook bodies, vendor responses, spreadsheet cells. ADR-0006 therefore calls the template language the most-attacked API in the product.\n\nThe response is to keep the grammar closed. A template is plain text plus dotted path references and nothing else, resolved over a fixed scope. There is no code to run, so there is nothing to inject into. Read `render.ts` with three questions in mind: what comes back when the template is a single reference, what comes back when there is text around it, and what happens when a path does not exist.",
+   "body": "Users write templates such as `{{steps.1.output.email}}` to copy a value from one step into the next. Everything flowing through them comes from outside: webhook bodies, vendor responses, spreadsheet cells. ADR-0006 therefore calls the template language the most-attacked API in the product.\n\nThe response is to keep the grammar closed: a template is plain text plus dotted path references, resolved over a fixed scope. Read `render.ts` with four questions in mind: what comes back when the template is a single reference, what comes back when there is text around it (and how non-string values are turned into text), what happens when a path does not exist, and what happens to a resolved value that itself looks like a template.",
    "excerpts": [
     {
      "path": "docs/adr/0006-expression-language.md",
      "lineStart": 15,
      "lineEnd": 17,
      "quote": "A **hand-rolled, closed grammar**: a template is literal text interleaved with `{{ dotted.path }}` references, and nothing else. No operators, no function calls, no arithmetic, no filters. The v1 implementation is a tokenizer + a path resolver over a fixed scope (`trigger`, `steps`). Two rules:"
-    },
-    {
-     "path": "docs/adr/0006-expression-language.md",
-     "lineStart": 36,
-     "lineEnd": 37,
-     "quote": "- The entire injection surface is a **path resolver over a fixed scope**. There is no code path that executes user-authored logic. That's the point."
     }
    ],
    "readMore": [
@@ -73,7 +67,7 @@
    "target": "pack",
    "phase": "before",
    "title": "Failures, duplicates and overload are handled by explicit policy",
-   "body": "Three ADRs turn messy failure into small, reviewable rules.\n\nRetries depend on the kind of error, from a closed list of error classes, so one table covers every vendor instead of each connector inventing its own. Duplicate trigger events are filtered with a time-bounded memory of keys that each connector defines. Overload is handled by a shared budget per vendor account and a scheduler that weighs tenants against each other and keeps a minimum share for background work.\n\nADR-0016 adds the last piece: a timeout alone is not a policy, so decide what the timeout leads to. While reading, write down for each mechanism what state it keeps, when that state resets, and which number (a cap, a window, a threshold) controls it.",
+   "body": "Three ADRs turn messy failure into small, reviewable rules.\n\nRetries depend on the kind of error, from a closed list of error classes, so one table covers every vendor instead of each connector inventing its own. ADR-0008 is about duplicate trigger events: read it and `dedupe.ts` and note who supplies the identity of an event and how long the engine remembers it. ADR-0013 is about overload: read the scheduler functions and note what each one compares when it chooses the next tenant or lane.\n\nADR-0016 adds the last piece: a timeout alone is not a policy, so decide what the timeout leads to. While reading, write down for each mechanism what state it keeps, when that state resets, and which number (a cap, a window, a threshold) controls it.",
    "excerpts": [
     {
      "path": "docs/adr/0007-retry-by-error-class.md",
@@ -218,7 +212,7 @@
    "target": "seed:quests:relay/quiz/3731cfbad73678e3",
    "phase": "after",
    "title": "Why the attempt cap beats Retry-After",
-   "body": "Order matters in `retryPolicy`. Before looking at the error kind, it checks `attempt >= MAX_ATTEMPTS` and returns `{ retry: false }`. MAX_ATTEMPTS is 4, so on attempt 4 even a RateLimited error stops, and with fail-fast semantics the run fails. Below the cap, RateLimited would wait `error.retryAfterMs`, falling back to backoff only when there is no Retry-After.\n\n- \"Rate limits always retry\" ignores the cap, which ADR-0007 says bounds all retries.\n- 8000 ms of backoff would be the delay for an earlier attempt without Retry-After, never past the cap.\n- 30000 ms is the backoff ceiling, not a final retry.",
+   "body": "Order matters in `retryPolicy`. Before looking at the error kind, it checks `attempt >= MAX_ATTEMPTS` and returns `{ retry: false }`. MAX_ATTEMPTS is 4, so on attempt 4 even a RateLimited error stops, and with fail-fast semantics the run fails. Below the cap, RateLimited would wait `error.retryAfterMs`, falling back to backoff only when there is no Retry-After.\n\n- \"Rate limits always retry\" ignores the cap, which ADR-0007 says bounds all retries.\n- 8000 ms is backoff(4) = 1000 x 2^3, but the cap check (executor.ts:26) returns retry: false before any delay is computed.\n- 30000 ms is the backoff ceiling, not a final retry.",
    "excerpts": [
     {
      "path": "apps/engine/src/executor.ts",
@@ -256,7 +250,7 @@
    "target": "seed:quests:relay/quiz/96822f6d4646fd93",
    "phase": "after",
    "title": "Why the connector defines what \"the same item\" means",
-   "body": "Every `TriggerDef` must provide `dedupeKey: (item) => string`, and the registry throws at boot when a trigger lacks one. Only the connector knows the vendor's notion of identity: a row id, an email message-id, a chat `ts`, or a content-hash fallback. The engine's `Deduper` then enforces it with a TTL window.\n\n- Hashing the whole payload is the rejected engine-owned option: different events can collide and the same item can hash differently when the vendor changes a field.\n- Leaving it to the user is the \"no dedupe\" option the ADR calls unacceptable.\n- Vendors give no reliable repeat header, which is why the key is per connector.",
+   "body": "Every `TriggerDef` must provide `dedupeKey: (item) => string`, and the registry throws at boot when a trigger lacks one. Only the connector knows the vendor's notion of identity: a row id, an email message-id, a chat `ts`, or a content-hash fallback. The engine's `Deduper` then enforces it with a TTL window.\n\n- Hashing the whole payload is the rejected engine-owned option: different events can collide and the same item can hash differently when the vendor changes a field.\n- Leaving it to the user is the \"no dedupe\" option the ADR calls unacceptable.\n- A vendor repeat header is not the mechanism: ADR-0008 notes identity is vendor-specific and some vendors offer nothing, so each connector supplies the key.",
    "excerpts": [
     {
      "path": "packages/connector-sdk/src/registry.ts",

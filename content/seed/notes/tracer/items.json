@@ -344,7 +344,7 @@
    "target": "seed:quests:tracer/quiz/8e3986e38c45c742",
    "phase": "after",
    "title": "Why presence uses its own short-lived path",
-   "body": "ADR-0008 sorts collaborative state by one question: does it need to be correct across devices and survive a reload? Comments do, so they go through `recordMutation` like any other entity. Presence does not. It is a heartbeat every few seconds per viewer and is useless moments later. Logging it would add huge numbers of rows, slow every bootstrap, and store data nobody queries, so it travels on an in-memory `presenceBus` and simply expires.\n\n- Needing a team id is wrong: `teamId` is optional (`string | null`) in the log input.\n- Encryption is not mentioned anywhere in the decision.\n- Other workspaces is wrong: presence is about viewers of one team, not cross-workspace delivery.",
+   "body": "ADR-0008 sorts collaborative state by one question: does it need to be correct across devices and survive a reload? Comments do, so they go through `recordMutation` like any other entity. Presence does not. It is a heartbeat every few seconds per viewer and is useless moments later. Logging it would add huge numbers of rows, slow every bootstrap, and store data nobody queries, so it travels on an in-memory `presenceBus` and simply expires.\n\n- Needing a team id is wrong: the log input declares `teamId: string | null` (mutations.ts:7), so a write with no team is accepted.\n- Encryption is not mentioned anywhere in the decision.\n- Other workspaces is wrong: presence is about viewers of one team, not cross-workspace delivery.",
    "excerpts": [
     {
      "path": "docs/adr/0008-durable-vs-ephemeral.md",
@@ -508,8 +508,8 @@
     "sha": "a554af85dfa7e82e80e8a9ddec8f3ade19d040e9",
     "path": "docs/adr/0006-mutation-log-sync.md",
     "lines": {
-     "start": 15,
-     "end": 17
+     "start": 9,
+     "end": 12
     }
    },
    "citations": [],
@@ -519,19 +519,19 @@
    "target": "pack",
    "phase": "before",
    "title": "Two ideas behind the sync engine: a log and an overlay",
-   "body": "The server side keeps a mutation log. Every write to an issue goes through one function, gets the next sequence number for its workspace, is stored as a permanent row, and is then announced to connected clients. The announcement can be lost; the stored row cannot.\n\nThe client side keeps two layers. One layer is what the server has confirmed. The other is a list of local edits the server has not confirmed yet. What you see on screen is the first layer with the second applied on top.\n\nKeep both pictures in mind while reading ADR-0006 and ADR-0007, and look at the pure functions in `packages/shared/src/store.ts`. They are small, have no network code, and are tested with property tests.",
+   "body": "The server side keeps a mutation log. Every write to an issue goes through one function, `recordMutation`, which numbers it within its workspace, stores it as a row and tells connected clients about it. While you read it, note the order of those steps and what a client can rely on when a message to it goes missing.\n\nThe client side keeps two layers: what the server has confirmed, and local edits the server has not confirmed yet. What you see on screen combines the two.\n\nKeep both pictures in mind while reading ADR-0006 and ADR-0007, and open the pure functions in `packages/shared/src/store.ts`. They are small, have no network code, and are tested with property tests. For each function there, write down which layer it reads and which layer it changes: the ack path, the rejection path and the rebase path.",
    "excerpts": [
     {
      "path": "docs/adr/0006-mutation-log-sync.md",
-     "lineStart": 15,
-     "lineEnd": 17,
-     "quote": "We use a **server-ordered mutation log with per-field LWW**. Every issue-domain write goes through one write path (`recordMutation`) that assigns a monotonic per-workspace `seq`, records the mutation as a durable fact, and fans the delta out. Clients bootstrap from their `lastSeq` and then receive"
+     "lineStart": 9,
+     "lineEnd": 12,
+     "quote": "Two clients edit the same workspace; changes must appear on every screen live, survive reconnects, and stay consistent."
     },
     {
-     "path": "packages/shared/src/store.ts",
-     "lineStart": 1,
-     "lineEnd": 4,
-     "quote": "// The offline-first store model (S07), as pure functions so convergence is unit-testable with no // IndexedDB and no network. The key idea: NEVER mutate committed truth optimistically. Keep // server-confirmed state in `committed` and layer un-acked local mutations on top as an overlay. // Rollback = drop a pending mutation; rebase = recompute the overlay against new committed truth."
+     "path": "docs/adr/0007-overlay-store.md",
+     "lineStart": 9,
+     "lineEnd": 11,
+     "quote": "Sprint 07 makes the client offline-first: it must boot without the network, apply local edits instantly (optimistically), send them when connected"
     }
    ],
    "readMore": [

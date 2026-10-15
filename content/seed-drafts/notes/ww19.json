@@ -37,14 +37,14 @@
    "id": "r02-identity-not-content",
    "target": "pack",
    "phase": "before",
-   "title": "An idempotency key names a command, it does not describe it",
-   "body": "Clients retry. A network blip, a double click or a timeout can send the same \"start this run\" request twice. An idempotency key lets the server recognise the retry: the client sends a key, the server remembers which run that key produced, and a repeat with the same key gets the earlier result instead of a new run.\n\nTwo design choices matter here. First, whose key is it? This service combines the key with the caller's user id, so keys from different users never collide. Second, what counts as \"the same request\"? The concepts chapter is explicit that the key alone decides, and it explains what you would have to store if you wanted a mismatched body to be rejected.\n\nAlso notice that the lookup and the insert are two separate database statements, and think about what happens between them.",
+   "title": "Idempotency keys: what the server remembers about a retry",
+   "body": "Clients retry. A network blip, a double click or a timeout can send the same \"start this run\" request twice. An idempotency key lets the server recognise the retry: the client sends a key, the server remembers which run that key produced, and a repeat is answered from that memory instead of creating new work.\n\nTwo design questions decide how such a scheme behaves. First, whose key is it? Look at line 51 of `workflow-run-service.ts` and write down exactly what string is stored as the key. Second, what counts as \"the same request\"? Read the replay branch and note which fields of the new request it compares, if any, before it returns.\n\nAlso look at how the lookup and the insert relate: are they one statement or two, and what does the catch block do?",
    "excerpts": [
     {
      "path": "astraupskill/02-CONCEPTS.md",
-     "lineStart": 10,
-     "lineEnd": 10,
-     "quote": "That is deliberate request identity, not payload equality. If the product needs \"same key, different payload → 409\", the run has to store a request fingerprint (for example a hash of the canonical body), and the replay branch has to compare it."
+     "lineStart": 1,
+     "lineEnd": 1,
+     "quote": "# Concepts: identity, idempotency, and transaction scope"
     }
    ],
    "readMore": [
@@ -60,20 +60,14 @@
    "id": "r03-two-transactions",
    "target": "pack",
    "phase": "before",
-   "title": "Creating a run and seeding it are separate commits",
-   "body": "Starting a run writes in two phases. Phase one creates the run row inside a transaction. Phase two, called seeding, writes the first event and the first executable step, in a different transaction that starts only after the first has committed.\n\nThat split is a trade-off. Each transaction stays short, but there is a window in which the run exists and phase two has not happened yet. The course asks you to reason about what a failure in that window leaves behind and how later requests treat it. The service even carries a comment about repair, and the permission model has a matching permission: check whether anything actually uses it.\n\nWhile reading, list every database write in order and mark which transaction it belongs to.",
+   "title": "Creating and seeding a run: count the transactions",
+   "body": "Starting a run writes several rows: the run itself, its first event and its first executable step. `startWorkflowRun` creates the run, and a separate function, `seedRunExecution` in `workflow-engine-service.ts`, writes the first event and step.\n\nThe course asks you to reason about how those writes are grouped into transactions, what a failure part-way through would leave behind, and how later requests (a replay of the same key, the worker) would treat that state. The service carries a comment about this, and the permission model has a related permission: check whether any route or service actually uses it.\n\nWhile reading, list every database write in order, mark which `$transaction` call it belongs to, and note where each transaction ends.",
    "excerpts": [
     {
-     "path": "src/services/workflow-run-service.ts",
-     "lineStart": 79,
-     "lineEnd": 79,
-     "quote": "// ⚠️ SENIOR NOTE: The run is created before execution starts so a crash between creation and first-step scheduling still leaves a durable record to repair."
-    },
-    {
      "path": "astraupskill/02-CONCEPTS.md",
-     "lineStart": 24,
-     "lineEnd": 24,
-     "quote": "The trade-off is a shorter creation transaction, paid for with a window in which a run exists but cannot progress."
+     "lineStart": 16,
+     "lineEnd": 16,
+     "quote": "## 3. Two transactions, not one"
     }
    ],
    "readMore": [
