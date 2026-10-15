@@ -68,17 +68,6 @@ const EXEMPT: Record<string, Guard[]> = {
   'w22': ['median-ratio', 'rank', 'format'],
 
   // CONTENT-2
-  '3buildagentteachgem': ['format'],
-  'customer-feedback-board': ['longest', 'format'],
-  'formforge': ['format'],
-  'grokjs-javascript-learning-lab': ['rank'],
-  'lucasrouter': ['format'],
-  'meterforge-upskilling': ['longest', 'format'],
-  'newcodexjs': ['format'],
-  'organized-build-jira': ['longest', 'format'],
-  'organized-js-training-jstrain2.3': ['format'],
-  'recipeweb': ['format'],
-  'ww18': ['median-ratio', 'rank'],
 
   // CONTENT-3
   '3buildanalytics': ['format'],
