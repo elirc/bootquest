@@ -85,19 +85,19 @@
    "target": "pack",
    "phase": "before",
    "title": "Concept: replay-safe writes with mutate and award",
-   "body": "Networks fail, and clients retry. The API protects every private write with two helpers in `db.ts`.\n\n**mutate** wraps a write in one database transaction. It first locks the owner's `User` row with `FOR UPDATE`, so two writes for the same owner run one after the other. Then it looks for a **mutation receipt**: a stored record of an earlier request with the same `clientEventId`. The request body is hashed, and the receipt keeps that hash and the response that was sent. If no receipt exists, the handler runs and a new receipt is saved in the same transaction.\n\n**award** grants XP with an upsert keyed on `(userId, awardKey)`. Its update branch is `{}`, so if the key already exists nothing changes. That makes \"give XP once per achievement\" a database rule rather than something each route must remember.\n\nThese are two different safety nets. When a quiz asks why something happens only once, ask yourself which net caught it.",
+   "body": "Networks fail, and clients retry. The API protects every private write with two helpers in `db.ts`.\n\n**mutate** wraps a write in one database transaction. It first locks the owner's `User` row with `FOR UPDATE`, so two writes for the same owner run one after the other. Then it looks for a **mutation receipt**: a stored record of an earlier request with the same `clientEventId`. The request body is hashed, and the receipt keeps that hash and the response that was sent. Read what `mutate` does in each case: no receipt, a receipt with the same hash, and a receipt with a different hash.\n\n**award** grants XP with a database upsert. Read its `where` key and its `update` branch, then find how each route builds the `awardKey` it passes in (which parts of the item go into it).\n\nThese are two different safety nets. When a quiz asks why something happens only once, ask yourself which net caught it.",
    "excerpts": [
     {
      "path": "apps/api/src/db.ts",
      "lineStart": 9,
      "lineEnd": 10,
-     "quote": "// All owner mutations serialize; this is small private-app traffic. Database constraints remain the final safeguard."
+     "quote": "// All owner mutations serialize; this is small private-app traffic. Database constraints remain the final safeguard. await tx.$queryRaw`SELECT id FROM \"User\" WHERE id = ${userId}::uuid FOR UPDATE`;"
     },
     {
-     "path": "apps/api/src/db.ts",
-     "lineStart": 17,
-     "lineEnd": 17,
-     "quote": "await tx.xpAward.upsert({where:{userId_awardKey:{userId,awardKey}},create:{userId,awardKey,amount,reason},update:{}});"
+     "path": "docs/codebase-tour.md",
+     "lineStart": 11,
+     "lineEnd": 11,
+     "quote": "- `apps/api/src/db.ts`: the two helpers everything else leans on — `mutate` (idempotency receipts) and `award` (unique XP). Nineteen lines; read them before either trace."
     }
    ],
    "readMore": [
@@ -127,7 +127,7 @@
    "target": "pack",
    "phase": "before",
    "title": "Concept: the learning rules are pure functions",
-   "body": "All the \"learning brain\" lives in one file, `packages/learning-core/src/index.ts`. Its functions take plain values and return plain values. They never read the database or the clock themselves; even the current time is passed in as `now`. That makes every rule deterministic and easy to test, and it lets the server's time stay authoritative.\n\nThree functions matter most:\n\n- `schedule(step, rating, correctness, now)` picks the next review step and due time. Steps index into a fixed list of day intervals.\n- `conceptStatus(evidence, reviews, overdue)` decides whether a concept is unseen, practicing, demonstrated, retained or review_due. It filters the evidence first, so not every pass counts.\n- `placementOutcome(...)` decides whether a placement test lets a learner skip ahead.\n\nRead each one slowly with the doc open beside it. The doc's prose and the one-line code should say the same thing; checking that they do is good practice in itself.",
+   "body": "All the \"learning brain\" lives in one file, `packages/learning-core/src/index.ts`. Its functions take plain values and return plain values. They never read the database or the clock themselves; even the current time is passed in as `now`. That makes every rule deterministic and easy to test, and it lets the server's time stay authoritative.\n\nThree functions matter most:\n\n- `schedule(step, rating, correctness, now)` picks the next review step and due time. Steps index into a fixed list of day intervals.\n- `conceptStatus(evidence, reviews, overdue)` decides whether a concept is unseen, practicing, demonstrated, retained or review_due. It filters the evidence first; note exactly which passes it keeps, and why.\n- `placementOutcome(...)` decides whether a placement test lets a learner skip ahead.\n\nRead each one slowly with the doc open beside it. The doc's prose and the one-line code should say the same thing; checking that they do is good practice in itself.",
    "excerpts": [
     {
      "path": "docs/learning-algorithms.md",

@@ -10,8 +10,8 @@
     "sha": "2402d8907c72b15922a8a21619d6a7fcf794d128",
     "path": "astraupskill/02-CONCEPTS.md",
     "lines": {
-     "start": 5,
-     "end": 5
+     "start": 8,
+     "end": 8
     }
    },
    "citations": [],
@@ -21,19 +21,19 @@
    "target": "pack",
    "phase": "before",
    "title": "Concept: where authority comes from, and checking before writing",
-   "body": "Two rules keep the data safe.\n\n**Authority.** A request body is just data the caller typed. If it says `ownerId: \"someone-else\"`, that proves nothing. Identity comes from the session context, and the service decides whether that actor may touch the profile. The service repeats the checks itself so that code calling it directly (jobs, tests) gets the same protection as the HTTP route.\n\n**Validate before each side effect.** A side effect is anything that changes the world: a repository write, an audit row, a metrics call. If a request is going to be rejected, it must be rejected before any of those happen, so a failed request leaves no trace.\n\nThe guides are also honest about limits: this demo builds its session from plain request headers and uses fake repositories, so it teaches the shape of the rules, not production security or database atomicity. The senior review in `06-SOLUTIONS-AND-REVIEW.md` lists where that matters.",
+   "body": "Two rules keep the data safe, and the concepts chapter states both. Read them, then check how the code applies each.\n\n**Authority.** A request body is data the caller typed. For each create and update, find where the code gets the actor and the owner from, and which layer decides whether that actor may touch the profile. Then look at how the request context itself is built in this demo, and ask how much an attacker controls.\n\n**Order of side effects.** A side effect is anything that changes the world: a repository write, an audit row, a metrics call. In `updateProfile` and `createProfile`, list every guard and every side effect in the exact order they run. For each step, ask what the client sees, and what has already been written, if that step throws.\n\nThe guides are honest about limits: the demo uses fake repositories, so it teaches the shape of the rules, not production security or database atomicity. The senior review in `06-SOLUTIONS-AND-REVIEW.md` lists where that matters.",
    "excerpts": [
     {
      "path": "astraupskill/02-CONCEPTS.md",
-     "lineStart": 5,
-     "lineEnd": 5,
-     "quote": "The session identifies the actor, and the service checks whether that actor may create or mutate the owner’s profile. A caller supplied `ownerId` is data, not authority."
+     "lineStart": 8,
+     "lineEnd": 8,
+     "quote": "The canonical model is the stable seam: version-specific names and statuses should not leak into repository or service policy. This keeps later versions additive."
     },
     {
-     "path": "astraupskill/01-CODEBASE-MAP.md",
-     "lineStart": 12,
-     "lineEnd": 12,
-     "quote": "A rejected version must stop before service calls, and a rejected profile mutation must leave repository and audit records untouched."
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 10,
+     "lineEnd": 10,
+     "quote": "Compatibility also includes error behavior."
     }
    ],
    "readMore": [
@@ -209,13 +209,13 @@
    "target": "pack",
    "phase": "before",
    "title": "Start here: one PATCH, traced through every layer",
-   "body": "This course follows one request: a client updates a customer profile with a PATCH, and the guides trace it through each layer until it is saved and audited. Two ideas carry the whole course. First, **omitting a field is not the same as sending `false`**. Second, **who you are comes from the session, not from the JSON you send**.\n\nSuggested reading order:\n\n1. `astraupskill/README.md` for the glossary (canonical object, version adapter, rollout, audit row).\n2. `01-CODEBASE-MAP.md`, which tells you which file to open first and in what order.\n3. `02-CONCEPTS.md`, the short theory chapter. Read it twice; most quizzes come from it.\n4. `03-WORKED-CHANGE.md`, the repair shown in code.\n5. `06-SOLUTIONS-AND-REVIEW.md`, including the senior review table of extra findings.\n\nKeep `src/lib/versioning/customer-profile-contracts.ts` open in a second window while you read. Almost every rule in the guides is a few lines in that file, and reading the real code is faster than memorising the prose.",
+   "body": "This course follows one request: a client updates a customer profile with a PATCH, and the guides trace it through each layer until it is saved and audited. Two ideas carry the whole course: what it means for a field to be **present** in a request, and where the server gets the **authority** to act on a profile. The concepts chapter treats each one; read them before the code.\n\nSuggested reading order:\n\n1. `astraupskill/README.md` for the glossary (canonical object, version adapter, rollout, audit row).\n2. `01-CODEBASE-MAP.md`, which tells you which file to open first and in what order.\n3. `02-CONCEPTS.md`, the short theory chapter. Read it twice; most quizzes come from it.\n4. `03-WORKED-CHANGE.md`, the repair shown in code.\n5. `06-SOLUTIONS-AND-REVIEW.md`, including the senior review table of extra findings.\n\nKeep `src/lib/versioning/customer-profile-contracts.ts` open in a second window while you read. Almost every rule in the guides is a few lines in that file, and reading the real code is faster than memorising the prose.",
    "excerpts": [
     {
      "path": "astraupskill/README.md",
      "lineStart": 3,
      "lineEnd": 3,
-     "quote": "API compatibility depends on preserving omission and false values, while authorization depends on trusted session context rather than caller supplied ownership."
+     "quote": "This course traces a versioned customer profile PATCH through request context, version adapter, runtime schema, service, repository, audit"
     },
     {
      "path": "astraupskill/01-CODEBASE-MAP.md",
@@ -514,25 +514,19 @@
    "target": "pack",
    "phase": "before",
    "title": "Concept: the canonical model and why presence matters",
-   "body": "The app supports two public API versions, v1 and v2. They name things differently: v1 has one `fullName` and an `active`/`inactive` status, v2 has a nested name and a richer lifecycle. Instead of teaching every layer about both, a **version adapter** turns each request into one internal shape, the **canonical** object. The service and repository only ever see that shape.\n\nFor updates, the adapter has one more job: keep track of what the caller actually sent. A PATCH means \"change these fields and leave the rest alone\". So a missing key and a key set to `false` mean different things, and the adapter must not blur them. That is why the update adapters start from an empty object and copy in only keys whose value is not `undefined`.\n\nWhen you read `toCanonicalUpdateInput`, look for the pattern `if (x !== undefined) canonical.x = ...`. That one line, repeated per field, is the whole rule.",
+   "body": "The app supports two public API versions, v1 and v2. They name things differently: v1 has one `fullName` and an `active`/`inactive` status, v2 has a nested name and a richer lifecycle. Instead of teaching every layer about both, a **version adapter** turns each request into one internal shape, the **canonical** object. The service and repository only ever see that shape.\n\nFor updates, the adapter has one more job: a PATCH means \"change these fields and leave the rest alone\", so the adapter has to keep track of what the caller actually sent. The concepts chapter calls this **presence**.\n\nRead `toCanonicalUpdateInput` field by field. For each field, write down which canonical keys it produces when the caller sends it with a real value, with `false` or an empty value, and when the caller leaves it out. Do the same for the v1 fields that map to two canonical keys, and for v1's status, both on the way in and on the way out.",
    "excerpts": [
     {
      "path": "astraupskill/02-CONCEPTS.md",
      "lineStart": 8,
      "lineEnd": 8,
-     "quote": "The canonical model is the stable seam: version-specific names and statuses should not leak into repository or service policy."
+     "quote": "The canonical model is the stable seam: version-specific names and statuses should not leak into repository or service policy. This keeps later versions additive."
     },
     {
      "path": "astraupskill/02-CONCEPTS.md",
-     "lineStart": 14,
-     "lineEnd": 14,
-     "quote": "An omitted property means “leave the stored value alone.” It is different from an explicit false, empty string, or null."
-    },
-    {
-     "path": "src/lib/versioning/customer-profile-contracts.ts",
-     "lineStart": 163,
-     "lineEnd": 163,
-     "quote": "if (modernPayload.email !== undefined) canonical.email = modernPayload.email;"
+     "lineStart": 6,
+     "lineEnd": 6,
+     "quote": "## Presence, compatibility, and authority"
     }
    ],
    "readMore": [
