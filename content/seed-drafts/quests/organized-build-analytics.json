@@ -1,0 +1,476 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "organized-build-analytics",
+ "sha": "3196d0683e0a4cbe5115aba911b5f1336f74adea",
+ "guides": [
+  "docs/upskill/01-codebase-cartography/05-key-flows.md",
+  "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+  "docs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+  "docs/DATA_MODEL_GUIDE.md"
+ ],
+ "items": [
+  {
+   "id": "q01-refresh-bypass",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/01-codebase-cartography/05-key-flows.md",
+    "lines": {
+     "start": 66,
+     "end": 66
+    }
+   },
+   "cites": [
+    {
+     "path": "backend/src/middleware/metricVisibility.middleware.ts",
+     "lineStart": 3,
+     "lineEnd": 9
+    },
+    {
+     "path": "backend/src/modules/dashboard/kpi.service.ts",
+     "lineStart": 22,
+     "lineEnd": 27
+    }
+   ],
+   "prompt": "An OPS_MANAGER calls /api/dashboard/kpi-summary with refresh=true while a cached summary exists for that range. What comes back?",
+   "answer": "The cached summary: the middleware strips refresh for anyone not SYSTEM_ADMIN",
+   "distractors": [
+    "A freshly computed summary, as any caller holding dashboard:view may bypass the cache",
+    "403 Insufficient permissions, because only admins may send the refresh flag",
+    "400 from validation, since refresh is not a field of dashboardRangeSchema"
+   ],
+   "explanation": "metricVisibilityMiddleware sets request.query.refresh to undefined unless the role is SYSTEM_ADMIN, so kpiService sees refresh false and returns the cached entry. The flag is silently dropped, not refused; the schema does accept an optional refresh string."
+  },
+  {
+   "id": "q02-cache-key-role",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/01-codebase-cartography/05-key-flows.md",
+    "lines": {
+     "start": 70,
+     "end": 70
+    }
+   },
+   "cites": [
+    {
+     "path": "backend/src/cache/cacheKeys.ts",
+     "lineStart": 10,
+     "lineEnd": 12
+    },
+    {
+     "path": "backend/src/modules/dashboard/kpi.service.ts",
+     "lineStart": 16,
+     "lineEnd": 20
+    }
+   ],
+   "prompt": "An OPS_MANAGER and then a READ_ONLY user request the same KPI date range. Does the second request reuse the first one's cache entry?",
+   "answer": "No; the cache key includes the role, so each role has its own entry",
+   "distractors": [
+    "Yes, the key holds only the two dates, so one cached object is shared",
+    "Yes, and applyMetricVisibility re-filters that cached copy for the role",
+    "Only once the 300-second TTL has passed and the entry was rebuilt"
+   ],
+   "explanation": "cacheKeys.kpiSummary builds dashboard:kpi-summary:${role}:${startDate}:${endDate}. Visibility is applied BEFORE the result is cached, so a shared key would leak hidden metrics; the role in the key prevents that."
+  },
+  {
+   "id": "q03-read-only-hidden",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 28,
+     "end": 28
+    }
+   },
+   "cites": [
+    {
+     "path": "backend/src/shared/permissions.ts",
+     "lineStart": 54,
+     "lineEnd": 67
+    },
+    {
+     "path": "backend/src/modules/dashboard/kpi.service.ts",
+     "lineStart": 54,
+     "lineEnd": 63
+    }
+   ],
+   "prompt": "Which fields are missing from the kpi-summary response a READ_ONLY user receives?",
+   "answer": "averageApiLatencyMs, backgroundJobFailures and adminActions",
+   "distractors": [
+    "recentFailures and adminActions, the same set an executive loses",
+    "None of them; KpiCardGrid hides the cards in the browser instead",
+    "Only backgroundJobFailures, exactly as for a PRODUCT_MANAGER"
+   ],
+   "explanation": "applyMetricVisibility drops the keys listed for the role in hiddenKeysByRole; READ_ONLY lists averageApiLatencyMs, backgroundJobFailures and adminActions. The filter runs on the backend, so the fields never reach the client."
+  },
+  {
+   "id": "q04-ttls",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/01-codebase-cartography/05-key-flows.md",
+    "lines": {
+     "start": 158,
+     "end": 158
+    }
+   },
+   "cites": [
+    {
+     "path": "backend/src/modules/dashboard/kpi.service.ts",
+     "lineStart": 65,
+     "lineEnd": 65
+    },
+    {
+     "path": "backend/src/modules/monitoring/monitoring.service.ts",
+     "lineStart": 74,
+     "lineEnd": 74
+    }
+   ],
+   "prompt": "How long are the KPI summary and the monitoring summary kept in the cache?",
+   "answer": "300 seconds for the KPI summary, 60 seconds for monitoring",
+   "distractors": [
+    "60 seconds for both, set by one shared default in cacheService",
+    "300 seconds for both; the TTL is fixed inside the Redis client",
+    "Neither is cached, because Redis is only used for the job queue"
+   ],
+   "explanation": "kpi.service.ts:65 calls cacheService.set(key, result, 300) and monitoring.service.ts:74 calls it with 60. Each caller passes its own TTL, which is why a monitoring summary can be fresher than a KPI summary."
+  },
+  {
+   "id": "q05-inactive-login",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/01-codebase-cartography/05-key-flows.md",
+    "lines": {
+     "start": 18,
+     "end": 18
+    }
+   },
+   "cites": [
+    {
+     "path": "backend/src/modules/auth/auth.service.ts",
+     "lineStart": 73,
+     "lineEnd": 106
+    }
+   ],
+   "prompt": "A deactivated user (isActive false) logs in with the correct password. What does authService.login do?",
+   "answer": "It throws 403 \"User account is inactive\" and writes no login event",
+   "distractors": [
+    "It records USER_LOGIN_FAILED and then throws 401 for bad credentials",
+    "It issues tokens; isActive is only enforced later by route middleware",
+    "It records USER_LOGGED_IN first, then answers 403 to the client"
+   ],
+   "explanation": "The password check passes, so the USER_LOGIN_FAILED branch (lines 78-90) is skipped. Line 92 then throws a 403 AppError before the USER_LOGGED_IN event at line 96 and before createSession."
+  },
+  {
+   "id": "q06-refresh-replay",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/01-codebase-cartography/05-key-flows.md",
+    "lines": {
+     "start": 30,
+     "end": 30
+    }
+   },
+   "cites": [
+    {
+     "path": "backend/src/modules/auth/auth.service.ts",
+     "lineStart": 121,
+     "lineEnd": 147
+    }
+   ],
+   "prompt": "A client calls POST /api/auth/refresh twice with the same refresh token. What does the second call get?",
+   "answer": "401 \"Refresh token is invalid or expired\", since the first call revoked it",
+   "distractors": [
+    "A second new session, because the token's JWT signature is still valid",
+    "The same pair of tokens again: refresh is idempotent by token hash",
+    "403, as replaying a refresh token deactivates the user's account"
+   ],
+   "explanation": "refresh looks up a stored row with revokedAt: null and a future expiresAt. The first call sets revokedAt on that row (lines 141-144) before creating a new session, so the second lookup finds nothing and throws 401."
+  },
+  {
+   "id": "q07-token-storage",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/01-codebase-cartography/05-key-flows.md",
+    "lines": {
+     "start": 23,
+     "end": 23
+    }
+   },
+   "cites": [
+    {
+     "path": "backend/src/modules/auth/auth.service.ts",
+     "lineStart": 184,
+     "lineEnd": 190
+    },
+    {
+     "path": "backend/src/modules/auth/auth.service.ts",
+     "lineStart": 149,
+     "lineEnd": 160
+    }
+   ],
+   "prompt": "What does the database keep for each session that createSession establishes?",
+   "answer": "A SHA-256 hash of the refresh token; the access token is only returned",
+   "distractors": [
+    "The raw refresh token, so that logout can match it by its value later on",
+    "Both tokens in plaintext, in one row keyed by the user id",
+    "A bcrypt hash of the access token, together with its expiry"
+   ],
+   "explanation": "createSession writes refreshToken rows with tokenHash: sha256(refreshToken) and expiresAt. The access token is only returned to the client. logout also hashes the presented token to find the row."
+  },
+  {
+   "id": "q08-sync-export",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+    "lines": {
+     "start": 24,
+     "end": 24
+    }
+   },
+   "cites": [
+    {
+     "path": "backend/src/modules/exports/exports.service.ts",
+     "lineStart": 18,
+     "lineEnd": 18
+    },
+    {
+     "path": "backend/src/modules/exports/exports.service.ts",
+     "lineStart": 45,
+     "lineEnd": 52
+    }
+   ],
+   "prompt": "A CSV export is estimated at 8,000 rows. How does exportsService.create process it?",
+   "answer": "Inline, within the request, since 8,000 is under the 10,000-row sync limit",
+   "distractors": [
+    "On the BullMQ queue; inline processing happens only when Redis is not reachable",
+    "Inline, but only after the queue add has first thrown an error for that job",
+    "It is rejected with 400, as exports over 5,000 rows need an approval"
+   ],
+   "explanation": "MAX_SYNC_EXPORT_ROWS is 10_000. When estimateExportRows returns at most that, create returns this.processJob(...) directly and never touches the queue."
+  },
+  {
+   "id": "q09-queue-down",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/01-codebase-cartography/05-key-flows.md",
+    "lines": {
+     "start": 195,
+     "end": 195
+    }
+   },
+   "cites": [
+    {
+     "path": "backend/src/modules/exports/exports.service.ts",
+     "lineStart": 54,
+     "lineEnd": 69
+    }
+   ],
+   "prompt": "A large export is requested while Redis is unreachable, so adding to the queue throws. What happens?",
+   "answer": "A warning is logged and the job is processed inline instead",
+   "distractors": [
+    "The job stays PENDING until a worker reconnects to Redis",
+    "The request fails with 500 and the job is marked FAILED",
+    "The add is retried 3 times, after which the job is dropped without notice"
+   ],
+   "explanation": "The catch block around getExportQueue().add logs export.queue.unavailable.falling_back with logWarn and then awaits this.processJob for the same job. There is no retry loop around the add."
+  },
+  {
+   "id": "q10-duplicate-events",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+    "lines": {
+     "start": 15,
+     "end": 15
+    }
+   },
+   "cites": [
+    {
+     "path": "backend/src/modules/exports/exports.service.ts",
+     "lineStart": 124,
+     "lineEnd": 180
+    }
+   ],
+   "prompt": "processJob runs to completion twice for the same export job (for example a queue redelivery). What happens to its side effects?",
+   "answer": "Both runs write a CSV_EXPORTED event and an EXPORT_COMPLETED audit row each",
+   "distractors": [
+    "The second run is skipped, as processJob does not reprocess COMPLETED jobs",
+    "Only the file is rewritten; events are written once per job id",
+    "The second run throws, because the stored fileName already exists"
+   ],
+   "explanation": "processJob only checks that the job exists (line 130); it never looks at its status. Each successful run writes a new timestamped file, a CSV_EXPORTED tracked event and an EXPORT_COMPLETED audit record, which is the idempotency gap the guide names."
+  },
+  {
+   "id": "q11-csv-injection",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/01-codebase-cartography/05-key-flows.md",
+    "lines": {
+     "start": 196,
+     "end": 196
+    }
+   },
+   "cites": [
+    {
+     "path": "backend/src/shared/utils/csv.ts",
+     "lineStart": 1,
+     "lineEnd": 33
+    }
+   ],
+   "prompt": "An exported cell value is =HYPERLINK(\"http://x\"). What does toCsv write for that cell?",
+   "answer": "The value with a single quote in front, wrapped in double quotes",
+   "distractors": [
+    "The value unchanged, because export rows come from trusted tables",
+    "An empty cell, since values that look like formulas are dropped entirely",
+    "The value with its leading = character removed, then quoted"
+   ],
+   "explanation": "sanitizeCsvCell prefixes a single quote to any text starting with =, +, - or @, so a spreadsheet treats it as text. toCsv then doubles inner double quotes and wraps every cell in double quotes."
+  },
+  {
+   "id": "q12-download-other-user",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 40,
+     "end": 40
+    }
+   },
+   "cites": [
+    {
+     "path": "backend/src/modules/exports/exports.service.ts",
+     "lineStart": 78,
+     "lineEnd": 99
+    }
+   ],
+   "prompt": "User B, who holds exports:view, requests the download of an export job that user A created. What is the response?",
+   "answer": "404 \"Export job not found\", the same answer as for a missing id",
+   "distractors": [
+    "403 Insufficient permissions, as the job belongs to another user",
+    "The CSV streams to B, since exports:view covers every export job",
+    "400 \"Export is not ready for download\" for anyone but the owner"
+   ],
+   "explanation": "downloadForUser calls getById, which throws a 404 when job.requestedById !== userId. Answering 404 instead of 403 also hides whether the id exists."
+  },
+  {
+   "id": "q13-retry-orphan",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+    "lines": {
+     "start": 20,
+     "end": 20
+    }
+   },
+   "cites": [
+    {
+     "path": "backend/src/modules/exports/exports.service.ts",
+     "lineStart": 101,
+     "lineEnd": 122
+    },
+    {
+     "path": "backend/src/modules/monitoring/monitoring.repository.ts",
+     "lineStart": 34,
+     "lineEnd": 47
+    }
+   ],
+   "prompt": "POST /api/exports/:id/retry is called on a FAILED export job. What becomes of the original job row?",
+   "answer": "It is reset to PENDING and left there; a new job row does the actual work",
+   "distractors": [
+    "It is processed again in place, keeping its id and its audit history",
+    "It is deleted, and the newly created job takes over its original id",
+    "It stays FAILED, and only the new job row moves through the statuses"
+   ],
+   "explanation": "retry updates the old row to PENDING with cleared fields, then calls this.create, which inserts a NEW ExportJob and processes or queues that one. Nothing touches the old row again, so it sits in PENDING and inflates the queue depth that monitoring counts from ExportJob statuses."
+  },
+  {
+   "id": "f01-three-streams",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/DATA_MODEL_GUIDE.md",
+    "lines": {
+     "start": 3,
+     "end": 39
+    }
+   },
+   "cites": [
+    {
+     "path": "backend/prisma/schema.prisma",
+     "lineStart": 26,
+     "lineEnd": 74
+    }
+   ],
+   "front": "TrackedEvent vs AuditEvent vs MonitoringMetric: what each is for",
+   "back": "TrackedEvent: product and operations analytics (logins, API errors, exports). AuditEvent: compliance and admin accountability (role changes, export requested). MonitoringMetric: technical health time series (latency, error rate, cache hit rate). They stay separate because they have different readers, retention rules and permissions."
+  },
+  {
+   "id": "f02-401-vs-403",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 14,
+     "end": 20
+    }
+   },
+   "cites": [
+    {
+     "path": "backend/src/middleware/auth.middleware.ts",
+     "lineStart": 5,
+     "lineEnd": 25
+    },
+    {
+     "path": "backend/src/middleware/requirePermission.middleware.ts",
+     "lineStart": 7,
+     "lineEnd": 18
+    }
+   ],
+   "front": "Where does a request get 401 and where 403?",
+   "back": "authMiddleware never rejects: a missing or invalid Bearer token just leaves request.user undefined. requirePermission then answers 401 \"Authentication required\" when there is no user and 403 \"Insufficient permissions\" when the role lacks the permission."
+  },
+  {
+   "id": "f03-pagination",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/upskill/01-codebase-cartography/05-key-flows.md",
+    "lines": {
+     "start": 96,
+     "end": 96
+    }
+   },
+   "cites": [
+    {
+     "path": "backend/src/shared/utils/pagination.ts",
+     "lineStart": 1,
+     "lineEnd": 6
+    }
+   ],
+   "front": "Pagination defaults from getPagination",
+   "back": "page defaults to 1 and is at least 1; pageSize defaults to 25 and is clamped to 1..100; skip = (page - 1) * pageSize and take = pageSize."
+  },
+  {
+   "id": "f04-date-range",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 9,
+     "end": 9
+    }
+   },
+   "cites": [
+    {
+     "path": "backend/src/shared/utils/dates.ts",
+     "lineStart": 11,
+     "lineEnd": 40
+    },
+    {
+     "path": "backend/src/modules/dashboard/kpi.service.ts",
+     "lineStart": 15,
+     "lineEnd": 15
+    }
+   ],
+   "front": "What parseDateRange enforces",
+   "back": "Both dates must parse (else 400 \"Invalid date range provided\"), startDate must not be after endDate (400), and the span may not exceed maxRangeDays: 180 by default, but the KPI summary passes 365."
+  }
+ ]
+}

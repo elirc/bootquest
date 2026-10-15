@@ -1,0 +1,357 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "organized-build-analytics",
+ "repo": "organized-build-analytics",
+ "sha": "3196d0683e0a4cbe5115aba911b5f1336f74adea",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: follow three flows through the backend",
+   "body": "This repo is an analytics dashboard: an Express + Prisma backend, a React frontend, Redis for caching and a BullMQ queue for exports. The quest focuses on the backend.\n\nRead `docs/upskill/01-codebase-cartography/05-key-flows.md` first. Each flow there lists the files to open and a step table with file:line references. Concentrate on three flows: login and session establishment, the KPI summary dashboard, and the CSV export lifecycle. Keep the cited source file open next to each step.\n\nThen read the two short architecture chapters. `03-validation-auth-and-permissions.md` lists every validation and authorization layer. `04-side-effects-async-and-reliability.md` maps where the code writes events, cache entries, queue jobs and files, and asks what happens when one of those writes fails. Finish with `docs/DATA_MODEL_GUIDE.md` for the three event tables.\n\nMost questions ask what one specific branch does, so answer from the code, not from what a well-built system would do.",
+   "excerpts": [
+    {
+     "path": "docs/upskill/01-codebase-cartography/05-key-flows.md",
+     "lineStart": 169,
+     "lineEnd": 169,
+     "quote": "This is the best example of orchestration, side effects, async fallback, and user-visible job tracking."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/BACKEND_TOUR.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The folder map and the routes/controller/service/repository/schemas module shape."
+    },
+    {
+     "path": "docs/DATA_MODEL_GUIDE.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Why tracked, audit and monitoring data live in separate tables."
+    }
+   ]
+  },
+  {
+   "id": "r02-authz-layers",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: authentication, permission and visibility are three layers",
+   "body": "A dashboard request passes three separate gates, and it helps to keep them apart.\n\n1. `authMiddleware` reads the `Authorization: Bearer` header. It decides WHO you are, but it never rejects a request by itself.\n2. `requirePermission(...)` on each router decides WHETHER your role may call the route, using the `permissionMatrix` in `shared/permissions.ts`.\n3. `applyMetricVisibility` decides WHICH fields of the result your role may see. Several roles share `dashboard:view`, yet they receive different payloads.\n\nThe third layer runs on the server. Hiding a card in the browser would not protect anything, because the API response would still carry the number. While reading, also notice which inputs reach the cache layer and in what order filtering and caching happen in `kpi.service.ts`.",
+   "excerpts": [
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 27,
+     "lineEnd": 28,
+     "quote": "UI hiding is not authorization."
+    },
+    {
+     "path": "backend/src/shared/permissions.ts",
+     "lineStart": 50,
+     "lineEnd": 52,
+     "quote": "return permissionMatrix[role].includes(permission);"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "backend/src/middleware/requirePermission.middleware.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The 18-line middleware that turns the matrix into HTTP errors."
+    }
+   ]
+  },
+  {
+   "id": "r03-export-side-effects",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: an export is a job row plus several side effects",
+   "body": "Creating an export does not just produce a file. `exportsService.create` writes an `ExportJob` row in PENDING state, records an audit event, estimates how many rows the export will have, and then chooses between doing the work right away and handing it to a BullMQ queue. `processJob` moves the row through PROCESSING to COMPLETED or FAILED, writes the CSV file to disk, and emits a tracked event and an audit record.\n\nThe guide points out that these steps are separate operations, not one transaction. When you read the code, ask for each write: what if it runs twice, and what if the step before it failed? Look at which conditions `processJob` checks before it starts, and at what `retry` does to the old row compared with the new one.\n\nThe job row, not the file, is the source of truth for the user-visible state.",
+   "excerpts": [
+    {
+     "path": "backend/src/modules/exports/exports.service.ts",
+     "lineStart": 18,
+     "lineEnd": 18,
+     "quote": "const MAX_SYNC_EXPORT_ROWS = 10_000;"
+    },
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+     "lineStart": 30,
+     "lineEnd": 30,
+     "quote": "Export completion updates DB state and writes file in a multi-step flow."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "backend/prisma/schema.prisma",
+     "lineStart": 186,
+     "lineEnd": 192,
+     "why": "The ExportStatus enum: the only states an export job can be in."
+    }
+   ]
+  },
+  {
+   "id": "x-q01-refresh-bypass",
+   "target": "seed:quests:organized-build-analytics/quiz/898abd3dbeb03b58",
+   "phase": "after",
+   "title": "refresh=true is silently dropped for non-admins",
+   "body": "The dashboard router runs `metricVisibilityMiddleware` on every route. It rewrites `request.query.refresh` to `undefined` unless `request.user?.role === \"SYSTEM_ADMIN\"`. The controller then computes `refresh: request.query.refresh === \"true\"`, which is false, so `kpiService.getSummary` checks the cache and returns the cached entry.\n\n- \"Any caller with dashboard:view may bypass\" is what the middleware exists to prevent.\n- \"403\" is wrong: the flag is removed, not refused, so the request still succeeds.\n- \"400 from validation\" is wrong: `dashboardRangeSchema` declares `refresh: z.string().optional()`, so the field is allowed.",
+   "excerpts": [
+    {
+     "path": "backend/src/middleware/metricVisibility.middleware.ts",
+     "lineStart": 8,
+     "lineEnd": 8,
+     "quote": "request.query.refresh = request.user?.role === \"SYSTEM_ADMIN\" ? request.query.refresh : undefined;"
+    },
+    {
+     "path": "backend/src/modules/dashboard/kpi.service.ts",
+     "lineStart": 22,
+     "lineEnd": 26,
+     "quote": "if (!input.refresh) {"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02-cache-key-role",
+   "target": "seed:quests:organized-build-analytics/quiz/f274bf174a7511c2",
+   "phase": "after",
+   "title": "Why the role is part of the KPI cache key",
+   "body": "`cacheKeys.kpiSummary` returns `dashboard:kpi-summary:${role}:${startDate}:${endDate}`. Two different roles therefore produce two different keys, and the READ_ONLY request misses the OPS_MANAGER entry.\n\nThis matters because `kpiService` applies `applyMetricVisibility` BEFORE it calls `cacheService.set`. The cached object is already filtered for one role. If the key had no role, a READ_ONLY user could receive a summary filtered for a more privileged role.\n\n- \"Only the two dates\" is wrong: the template includes the role.\n- \"Re-filters the cached copy\" is wrong: a cache hit is returned as is, with no second filter.\n- \"After the 300-second TTL\" confuses expiry with key identity; the keys never match.",
+   "excerpts": [
+    {
+     "path": "backend/src/cache/cacheKeys.ts",
+     "lineStart": 11,
+     "lineEnd": 12,
+     "quote": "`dashboard:kpi-summary:${role}:${startDate}:${endDate}`"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q03-read-only-hidden",
+   "target": "seed:quests:organized-build-analytics/quiz/b389ad8467be75f1",
+   "phase": "after",
+   "title": "Reading the hiddenKeysByRole table",
+   "body": "`applyMetricVisibility` looks up `hiddenKeysByRole[role]` and removes those keys from the metrics object. The entry for READ_ONLY is `[\"averageApiLatencyMs\", \"backgroundJobFailures\", \"adminActions\"]`, so those three fields are missing from the response.\n\n- \"recentFailures and adminActions\" is the EXECUTIVE_VIEWER entry.\n- \"KpiCardGrid hides the cards\" is wrong: the filtering happens on the backend in `kpi.service.ts` before the response is sent; the frontend only renders the fields that exist.\n- \"Only backgroundJobFailures\" is the PRODUCT_MANAGER entry.\n\nRoles without an entry, such as SYSTEM_ADMIN, get the full object because `hiddenKeysByRole[role] ?? []` is empty.",
+   "excerpts": [
+    {
+     "path": "backend/src/shared/permissions.ts",
+     "lineStart": 57,
+     "lineEnd": 57,
+     "quote": "READ_ONLY: [\"averageApiLatencyMs\", \"backgroundJobFailures\", \"adminActions\"],"
+    },
+    {
+     "path": "backend/src/shared/permissions.ts",
+     "lineStart": 56,
+     "lineEnd": 56,
+     "quote": "EXECUTIVE_VIEWER: [\"recentFailures\", \"adminActions\"],"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q04-ttls",
+   "target": "seed:quests:organized-build-analytics/quiz/088edcb961d67a4b",
+   "phase": "after",
+   "title": "Each caller chooses its own cache TTL",
+   "body": "`cacheService.set(key, value, ttlSeconds)` takes the TTL as an argument and passes it to Redis with `\"EX\"`. The KPI service calls it with 300, the monitoring service with 60. That is why the guide says a monitoring summary can be fresher than a KPI summary.\n\n- \"60 seconds for both\" and \"300 seconds for both\" are wrong because there is no shared default: each call site passes its own number.\n- \"Neither is cached\" is wrong: both services read from and write to Redis through `cacheService`. Redis is used for the cache AND for the BullMQ queue.\n\nAlso notice that `cacheService` swallows Redis errors and returns null, so a Redis outage turns into cache misses rather than failed requests.",
+   "excerpts": [
+    {
+     "path": "backend/src/modules/dashboard/kpi.service.ts",
+     "lineStart": 65,
+     "lineEnd": 65,
+     "quote": "await cacheService.set(key, result, 300);"
+    },
+    {
+     "path": "backend/src/modules/monitoring/monitoring.service.ts",
+     "lineStart": 74,
+     "lineEnd": 74,
+     "quote": "await cacheService.set(key, result, 60);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q05-inactive-login",
+   "target": "seed:quests:organized-build-analytics/quiz/721690ecf1c90562",
+   "phase": "after",
+   "title": "The order of checks in login",
+   "body": "`login` first loads the user by lower-cased email. The failure branch at line 78 runs only when the user is missing or the password does not verify; it writes `USER_LOGIN_FAILED` and throws 401. A deactivated user with the right password skips that branch. Line 92 then checks `!user.isActive` and throws a 403 \"User account is inactive\". The `USER_LOGGED_IN` event at line 96 and `createSession` come after, so neither runs.\n\n- \"USER_LOGIN_FAILED then 401\" applies to wrong credentials only.\n- \"Issues tokens anyway\" is wrong: the isActive check sits inside login itself.\n- \"USER_LOGGED_IN first\" reverses the order in the code.",
+   "excerpts": [
+    {
+     "path": "backend/src/modules/auth/auth.service.ts",
+     "lineStart": 92,
+     "lineEnd": 94,
+     "quote": "throw new AppError(ERROR_CODES.FORBIDDEN, \"User account is inactive\", 403);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q06-refresh-replay",
+   "target": "seed:quests:organized-build-analytics/quiz/ca65fe8d5515abff",
+   "phase": "after",
+   "title": "Refresh rotation makes a token single-use",
+   "body": "`refresh` verifies the JWT, hashes the token and looks for a stored row with that hash, `revokedAt: null` and an unexpired `expiresAt`. On success it sets `revokedAt: new Date()` on that row and only then creates a new session. The second call with the same token passes the signature check but finds no unrevoked row, so it throws 401 \"Refresh token is invalid or expired\".\n\n- \"A second new session\" ignores the database lookup: a valid signature is not enough.\n- \"The same tokens again\" is wrong: every call that succeeds signs a new refresh token.\n- \"403 and account deactivation\" does not exist anywhere in the auth service.\n\nThe guide calls this an approximation of replay protection: it stops reuse, but it does not revoke the new session the first caller received.",
+   "excerpts": [
+    {
+     "path": "backend/src/modules/auth/auth.service.ts",
+     "lineStart": 141,
+     "lineEnd": 144,
+     "quote": "data: { revokedAt: new Date() }"
+    },
+    {
+     "path": "backend/src/modules/auth/auth.service.ts",
+     "lineStart": 128,
+     "lineEnd": 130,
+     "quote": "revokedAt: null, expiresAt: { gt: new Date() }"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07-token-storage",
+   "target": "seed:quests:organized-build-analytics/quiz/be4c914022d2d1c0",
+   "phase": "after",
+   "title": "Refresh tokens are stored hashed; access tokens are not stored",
+   "body": "`createSession` signs both tokens, but it only writes one row: `prisma.refreshToken.create` with `tokenHash: sha256(refreshToken)` and an expiry from `JWT_REFRESH_EXPIRES_IN` (7 days by default). The access token goes back to the client in the response and is verified later by its signature alone.\n\nStoring a hash means a database leak does not hand out usable refresh tokens. Logout and refresh both hash the presented token and compare hashes.\n\n- \"The raw refresh token\" is wrong: only the hash is written.\n- \"Both tokens in plaintext\" is wrong on both counts.\n- \"A bcrypt hash of the access token\" is wrong: the access token is never persisted, and the hash used is SHA-256.",
+   "excerpts": [
+    {
+     "path": "backend/src/modules/auth/auth.service.ts",
+     "lineStart": 184,
+     "lineEnd": 190,
+     "quote": "tokenHash: sha256(refreshToken),"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08-sync-export",
+   "target": "seed:quests:organized-build-analytics/quiz/e3c39c38ab2b526c",
+   "phase": "after",
+   "title": "Small exports run inside the request",
+   "body": "`create` calls `estimateExportRows` and compares the result with `MAX_SYNC_EXPORT_ROWS`, which is `10_000`. When the estimate is at most that, it `return`s `this.processJob(...)` right away: the CSV is built during the HTTP request and the queue is never used.\n\n- \"On the BullMQ queue\" is the path for estimates ABOVE 10,000.\n- \"Inline only after the queue add throws\" describes the fallback for large exports, which an 8,000-row export never reaches.\n- \"Rejected above 5,000 rows\" is invented: there is no approval rule or 5,000 limit in the service.",
+   "excerpts": [
+    {
+     "path": "backend/src/modules/exports/exports.service.ts",
+     "lineStart": 47,
+     "lineEnd": 48,
+     "quote": "if (estimatedRowCount <= MAX_SYNC_EXPORT_ROWS) {"
+    },
+    {
+     "path": "backend/src/modules/exports/exports.service.ts",
+     "lineStart": 18,
+     "lineEnd": 18,
+     "quote": "const MAX_SYNC_EXPORT_ROWS = 10_000;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09-queue-down",
+   "target": "seed:quests:organized-build-analytics/quiz/b54a955f34321dc7",
+   "phase": "after",
+   "title": "The inline fallback when the queue is unavailable",
+   "body": "For a large export, `create` wraps `getExportQueue().add(\"PROCESS_EXPORT\", ...)` in a try/catch. If the add throws (for example because Redis is down), the catch calls `logWarn(\"export.queue.unavailable.falling_back\", ...)` and then awaits `this.processJob(job.id, ...)`, doing the work inline.\n\n- \"Stays PENDING until a worker reconnects\" is wrong: the job never reached the queue, so no worker would ever pick it up; the fallback exists for exactly that reason.\n- \"500 and FAILED\" is wrong: the error is caught, not rethrown.\n- \"Retried 3 times\" is wrong: there is a single attempt at the add, with no loop.\n\nThe trade-off: a large export may now make one HTTP request very slow.",
+   "excerpts": [
+    {
+     "path": "backend/src/modules/exports/exports.service.ts",
+     "lineStart": 61,
+     "lineEnd": 61,
+     "quote": "logWarn(\"export.queue.unavailable.falling_back\", {"
+    },
+    {
+     "path": "docs/upskill/01-codebase-cartography/05-key-flows.md",
+     "lineStart": 195,
+     "lineEnd": 195,
+     "quote": "Queue unavailability falls back to inline processing"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10-duplicate-events",
+   "target": "seed:quests:organized-build-analytics/quiz/89430d2f2c55e58f",
+   "phase": "after",
+   "title": "processJob has no idempotency guard",
+   "body": "`processJob` loads the job and throws 404 only when it is missing. It never checks whether the status is already COMPLETED. Each run sets PROCESSING, builds the rows, writes a file named with the current timestamp, sets COMPLETED, creates a `CSV_EXPORTED` tracked event and records an `EXPORT_COMPLETED` audit event. Run it twice and every one of those writes happens twice.\n\n- \"Skips COMPLETED jobs\" is the guard that is missing.\n- \"Events written once per job id\" is wrong: nothing deduplicates the event inserts.\n- \"Throws because fileName exists\" is wrong: `buildFileName` adds a new ISO timestamp, and `fs.writeFile` would overwrite anyway.\n\nThe guide names this as a senior-level investigation target: a redelivered queue job inflates the CSV_EXPORTED count on the dashboard.",
+   "excerpts": [
+    {
+     "path": "backend/src/modules/exports/exports.service.ts",
+     "lineStart": 157,
+     "lineEnd": 159,
+     "quote": "eventType: \"CSV_EXPORTED\","
+    },
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+     "lineStart": 15,
+     "lineEnd": 15,
+     "quote": "the current code would re-emit tracked and audit events on repeated successful processing"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q11-csv-injection",
+   "target": "seed:quests:organized-build-analytics/quiz/1d14cb6fdfa2ef15",
+   "phase": "after",
+   "title": "How cells are protected against spreadsheet formulas",
+   "body": "Spreadsheet programs execute a cell that starts with `=`, `+`, `-` or `@` as a formula, which is how CSV injection works. `sanitizeCsvCell` tests `/^[=+\\-@]/` and, on a match, returns the text with a single quote in front, which makes the spreadsheet show it as text. `toCsv` then doubles every inner `\"` and wraps the cell in double quotes.\n\n- \"Unchanged, trusted data\" is wrong: exported values include user-controlled fields such as emails and metadata, which is why the sanitizer exists.\n- \"An empty cell\" is wrong: only null and undefined become empty strings.\n- \"Leading = removed\" is wrong: nothing is stripped; a quote is added.",
+   "excerpts": [
+    {
+     "path": "backend/src/shared/utils/csv.ts",
+     "lineStart": 7,
+     "lineEnd": 9,
+     "quote": ".test(text)) { return `'${text}`; }"
+    },
+    {
+     "path": "backend/src/shared/utils/csv.ts",
+     "lineStart": 26,
+     "lineEnd": 26,
+     "quote": "return `\"${value.replaceAll('\"', '\"\"')}\"`;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q12-download-other-user",
+   "target": "seed:quests:organized-build-analytics/quiz/5f692e568a300995",
+   "phase": "after",
+   "title": "Exports are scoped to the user who requested them",
+   "body": "The download route requires `exports:view`, which B has. The controller then calls `downloadForUser(userId, id)`, which calls `getById`. `getById` throws `AppError(NOT_FOUND, \"Export job not found\", 404)` when the job is missing OR when `job.requestedById !== userId`. So B receives the same 404 as for an id that does not exist, and learns nothing about A's job.\n\n- \"403\" is wrong: the permission check passed; the ownership check answers 404 on purpose.\n- \"The CSV streams\" is wrong: `exports:view` lets B call the route, not read other users' jobs.\n- \"400 not ready\" is only reached for B's own jobs that are not COMPLETED.",
+   "excerpts": [
+    {
+     "path": "backend/src/modules/exports/exports.service.ts",
+     "lineStart": 81,
+     "lineEnd": 82,
+     "quote": "if (!job || job.requestedById !== userId) {"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q13-retry-orphan",
+   "target": "seed:quests:organized-build-analytics/quiz/b6a989ca10b5b4c4",
+   "phase": "after",
+   "title": "Retry creates a new job and strands the old one",
+   "body": "`retry` checks that the job is FAILED, then updates THAT row to `status: PENDING` with its error, file and completion fields cleared. Next it calls `this.create(...)` with the same type and filters. `create` inserts a brand-new `ExportJob` and processes or queues the new id. No code ever touches the old row again, so it stays PENDING for good.\n\nThat has a visible effect: `monitoringRepository.getQueueDepth` counts PENDING export jobs, so every retry inflates the queue depth on the engineering dashboard.\n\n- \"Processed again in place\" would need `processJob(job.id)`; retry never calls it with the old id.\n- \"Deleted, new job takes its id\" is wrong: there is no delete, and ids are generated per row.\n- \"Stays FAILED\" is wrong: the update at line 108 changes it to PENDING.",
+   "excerpts": [
+    {
+     "path": "backend/src/modules/exports/exports.service.ts",
+     "lineStart": 108,
+     "lineEnd": 109,
+     "quote": "status: ExportStatus.PENDING,"
+    },
+    {
+     "path": "backend/src/modules/monitoring/monitoring.repository.ts",
+     "lineStart": 36,
+     "lineEnd": 36,
+     "quote": "prisma.exportJob.count({ where: { status: \"PENDING\" } }),"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}
