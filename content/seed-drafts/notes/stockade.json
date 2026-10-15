@@ -1,0 +1,365 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "stockade",
+ "repo": "stockade",
+ "sha": "1cfc5dd7f8926ca02d296a80ff25ebf2ec024e3c",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: from signed-in account to a health card",
+   "body": "Stockade is a store back office. A Next.js app (`src/`) serves the storefront and admin screens, and a C# service called Fulfil (`services/Fulfil/`) owns orders, payments, refunds and stock in PostgreSQL. This quest follows one small feature across that boundary: the operational health panel and its refund counts.\n\nRead the `astraupskill/` course in order. `README.md` says what changed, `01-CODEBASE-MAP.md` traces the request from the signed-in account to the counting queries, `02-CONCEPTS.md` explains the boundary, `03-WORKED-CHANGE.md` separates the query from the label, and `04` and `06` explain the test fixture. `07-TRACE-LAB.md` walks one refund through the whole path.\n\nKeep three files open while you read: `ReadApi.cs` (the queries), `Worker.cs` (the retry loop) and `src/lib/health.ts` (the cards).",
+   "excerpts": [
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "ReadApi.List resolves the authenticated account through Session.Account before handling the requested resource. The health branch uses that account's MerchantId in every operational count and in the reconciliation history query. Client-supplied display data does not choose the merchant whose refunds are counted."
+    },
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": 7,
+     "lineEnd": 7,
+     "quote": "On the frontend, src/lib/health.ts exports HealthStat and healthStats. The Panels component calls this mapping and renders label, value, and optional help. Keeping the mapping in a small pure function makes the semantics testable without starting a browser or importing the full panel tree."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/ARCHITECTURE.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Who owns which data, and how the Next app and Fulfil talk to each other."
+    },
+    {
+     "path": "astraupskill/07-TRACE-LAB.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "A step-by-step trace of one refund from database row to visible label."
+    }
+   ]
+  },
+  {
+   "id": "r02-partition-at-a-boundary",
+   "target": "pack",
+   "phase": "before",
+   "title": "Splitting a set at a boundary without gaps or overlap",
+   "body": "The core idea is a partition. Take every refund that is still pending for one merchant and split it into two groups by attempt count. Every pending row must land in exactly one group, so the two group sizes add up to the total.\n\nThree separate conditions decide where a row is counted: its state, its attempt count, and its merchant. Each one can be wrong on its own. A wrong comparison operator makes the groups overlap or leave a gap. A missing state check lets finished refunds in. A missing merchant check leaks another store's numbers.\n\nWhen you read the queries, check each condition separately, and check the boundary value itself, not just values far away from it. That is exactly how the test fixture is built.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 7,
+     "lineEnd": 7,
+     "quote": "Merchant scoping is another independent predicate. Correct arithmetic over the entire table would still leak another merchant's operational information. The regression gives the two merchants different expected counts so a missing scope predicate cannot accidentally pass with symmetric fixtures."
+    },
+    {
+     "path": "astraupskill/04-TESTING-AND-DEBUGGING.md",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "If the test is skipped, inspect the helper invocation and ownership marker before claiming database coverage. If seeding fails, inspect required relationships and constraints. If counts fail, compare state, attempt threshold, and merchant predicates independently. The frontend test can diagnose mapping mistakes without a database, but cannot establish query isolation on its own."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The partition rule and what the counts do not promise."
+    }
+   ]
+  },
+  {
+   "id": "r03-worker-loop",
+   "target": "pack",
+   "phase": "before",
+   "title": "The background worker decides what counts as stuck",
+   "body": "The health counts only make sense next to the worker that produces them. `Worker.cs` runs a loop: each tick it selects a batch of orders and refunds that still need work, processes them, then waits before the next tick. When a provider call for a refund fails, the worker adds one to that refund's attempt counter. Rows past the limit are no longer selected.\n\nAn administrator can push a row back into the loop with an authorized command in `Team.cs`. The dashboard only describes the state; it does not change it.\n\nRead the selection queries at the top of `ExecuteAsync`, the delay at the end of the loop, and the failure branch of `ProcessRefund`. The review findings in `06-SOLUTIONS-AND-REVIEW.md` point at these exact lines.",
+   "excerpts": [
+    {
+     "path": "services/Fulfil/Services/Worker.cs",
+     "lineStart": 26,
+     "lineEnd": 26,
+     "quote": "var refunds = await db.Refunds.Where(x => x.State == \"pending\" && x.Attempts < 12).Select(x => x.Id).Take(20).ToListAsync(stoppingToken);"
+    },
+    {
+     "path": "services/Fulfil/Services/Worker.cs",
+     "lineStart": 34,
+     "lineEnd": 34,
+     "quote": "await Task.Delay(1500, stoppingToken);"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 60,
+     "lineEnd": 69,
+     "why": "Senior-review findings about the duplicated limit, missing backoff and unordered batch."
+    },
+    {
+     "path": "services/Fulfil/Services/Team.cs",
+     "lineStart": 25,
+     "lineEnd": 37,
+     "why": "The authorized retry commands for payments and refunds."
+    }
+   ]
+  },
+  {
+   "id": "x-q01-twelve-attempts",
+   "target": "seed:quests:stockade/quiz/2171af64af243b31",
+   "phase": "after",
+   "title": "Why a pending refund at 12 attempts counts as stuck",
+   "body": "Read the three refund lines in the health branch. `pendingRefunds` needs only `State == \"pending\"`, so the row counts there. `retryableRefunds` adds `Attempts < 12`, and 12 is not less than 12, so it does not count. `stuckRefunds` adds `Attempts >= 12`, which is true.\n\n- Retryable is wrong: the worker stops selecting rows at 12 (`Attempts < 12` in `Worker.cs:26`), and the health query uses the same comparison.\n- Only stuck is wrong: the pending total keeps every pending row, exhausted or not.\n- None is wrong: the counts read the database, not the worker's batch.",
+   "excerpts": [
+    {
+     "path": "services/Fulfil/Services/ReadApi.cs",
+     "lineStart": 71,
+     "lineEnd": 73,
+     "quote": "pendingRefunds = await db.Refunds.CountAsync(x => x.MerchantId == a.MerchantId && x.State == \"pending\"), retryableRefunds = await db.Refunds.CountAsync(x => x.MerchantId == a.MerchantId && x.State == \"pending\" && x.Attempts < 12), stuckRefunds = await db.Refunds.CountAsync(x => x.MerchantId == a.MerchantId && x.State == \"pending\" && x.Attempts >= 12),"
+    },
+    {
+     "path": "services/Fulfil/Services/Worker.cs",
+     "lineStart": 26,
+     "lineEnd": 26,
+     "quote": "var refunds = await db.Refunds.Where(x => x.State == \"pending\" && x.Attempts < 12).Select(x => x.Id).Take(20).ToListAsync(stoppingToken);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02-succeeded-twenty",
+   "target": "seed:quests:stockade/quiz/98ae5d508f3a853d",
+   "phase": "after",
+   "title": "Why a succeeded refund adds to no count",
+   "body": "All three refund queries contain `x.State == \"pending\"`. A succeeded refund fails that condition, so it is not counted anywhere, however many attempts it took. The guide calls it historical success, not recovery work.\n\n- Stuck alone is wrong: the attempt check is combined with the state check, and the state check fails first.\n- Pending and stuck is wrong for the same reason: neither query admits a succeeded row.\n- Retryable is wrong: nothing resets the attempt counter on success, and even if it did, the state check would still exclude the row.\n\nThe fixture includes succeeded rows above 12 on purpose, to catch a query that tests only attempts.",
+   "excerpts": [
+    {
+     "path": "services/Fulfil/Services/ReadApi.cs",
+     "lineStart": 71,
+     "lineEnd": 73,
+     "quote": "pendingRefunds = await db.Refunds.CountAsync(x => x.MerchantId == a.MerchantId && x.State == \"pending\"), retryableRefunds = await db.Refunds.CountAsync(x => x.MerchantId == a.MerchantId && x.State == \"pending\" && x.Attempts < 12), stuckRefunds = await db.Refunds.CountAsync(x => x.MerchantId == a.MerchantId && x.State == \"pending\" && x.Attempts >= 12),"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "State and attempt count both matter. A succeeded refund with twenty attempts is historical success, not pending recovery work. Testing only the attempt comparison would allow an implementation that accidentally includes successful rows. The fixture therefore includes successful examples above the threshold as well as pending examples at eleven and twelve."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q03-merchant-a-counts",
+   "target": "seed:quests:stockade/quiz/492e8765c97320d4",
+   "phase": "after",
+   "title": "Working out merchant A's three refund counts",
+   "body": "Merchant A has five refunds: pending at 0, 11, 12 and 13, and one succeeded at 20. Drop the succeeded row first, since every query requires pending. That leaves four pending rows. Rows at 0 and 11 are below 12, so two are retryable. Rows at 12 and 13 are at or above 12, so two are stuck. The test asserts 4, 2 and 2.\n\n- 5 pending is wrong: it counts the succeeded row.\n- 3 retryable is wrong: it puts the boundary row at 12 on the retryable side.\n- 3 pending is wrong: the row with 0 attempts is still pending and still counts.",
+   "excerpts": [
+    {
+     "path": "tests/Fulfil.Tests/RefundHealthTests.cs",
+     "lineStart": 44,
+     "lineEnd": 53,
+     "quote": "db.Refunds.AddRange( RefundFor(orderA, 0), RefundFor(orderA, 11), RefundFor(orderA, 12), RefundFor(orderA, 13), RefundFor(orderA, 20, \"succeeded\"), RefundFor(orderB, 11), RefundFor(orderB, 12), RefundFor(orderB, 12, \"succeeded\")); await db.SaveChangesAsync(); var a = await ReadHealth(ownerA, factory); Assert.Equal(4, a.GetProperty(\"pendingRefunds\").GetInt32()); Assert.Equal(2, a.GetProperty(\"retryableRefunds\").GetInt32()); Assert.Equal(2, a.GetProperty(\"stuckRefunds\").GetInt32());"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q04-missing-scope",
+   "target": "seed:quests:stockade/quiz/280297cbbc9d0539",
+   "phase": "after",
+   "title": "Why a missing merchant filter gives merchant A three",
+   "body": "Without `x.MerchantId == a.MerchantId`, the stuck query counts every pending refund in the whole table with 12 or more attempts. Merchant A contributes its rows at 12 and 13. Merchant B has a pending row at 11 (too low), a pending row at 12 (counted), and a succeeded row at 12 (excluded by the state check). The total is 3.\n\n- 2 is wrong: only one of B's rows at 12 is succeeded; the other is pending.\n- 4 is wrong: the state predicate is still there, so B's succeeded row is not added.\n- 5 is wrong: B's row at 11 fails the attempt check.\n\nBecause A and B expect different numbers, the assertion `Assert.Equal(2, ...)` for A fails loudly.",
+   "excerpts": [
+    {
+     "path": "tests/Fulfil.Tests/RefundHealthTests.cs",
+     "lineStart": 44,
+     "lineEnd": 47,
+     "quote": "db.Refunds.AddRange( RefundFor(orderA, 0), RefundFor(orderA, 11), RefundFor(orderA, 12), RefundFor(orderA, 13), RefundFor(orderA, 20, \"succeeded\"), RefundFor(orderB, 11), RefundFor(orderB, 12), RefundFor(orderB, 12, \"succeeded\"));"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "Removing merchant scope from the recovery query would include merchant B's pending refund at twelve, yielding three for A. The asymmetric fixture detects this directly. Symmetric one-row fixtures could conceal some query mistakes, so distinct expected totals are deliberate test data rather than decoration."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q05-less-or-equal",
+   "target": "seed:quests:stockade/quiz/0587acf5199fa2bf",
+   "phase": "after",
+   "title": "Why <= 12 makes the two groups overlap",
+   "body": "The stuck group is `Attempts >= 12`. If the retryable group becomes `Attempts <= 12`, a row at exactly 12 satisfies both conditions. It is counted twice, so retryable plus stuck is larger than the pending total. That is the overlap the guide warns about.\n\n- Dropping out of both is wrong: a gap would need conditions like `< 12` and `> 12`, which is a different mistake.\n- Only the retryable count changing is wrong: the stuck query was left as it was, so it still counts the row.\n- Nothing visible changing is wrong: the health query does not ask the worker anything; it just compares numbers.",
+   "excerpts": [
+    {
+     "path": "services/Fulfil/Services/ReadApi.cs",
+     "lineStart": 72,
+     "lineEnd": 73,
+     "quote": "retryableRefunds = await db.Refunds.CountAsync(x => x.MerchantId == a.MerchantId && x.State == \"pending\" && x.Attempts < 12), stuckRefunds = await db.Refunds.CountAsync(x => x.MerchantId == a.MerchantId && x.State == \"pending\" && x.Attempts >= 12),"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 7,
+     "lineEnd": 7,
+     "quote": "Using less than or equal to twelve for eligibility overlaps the greater-than-or-equal recovery group. A single pending refund with exactly twelve attempts exposes the error, but the full fixture also protects lower and higher values and state exclusion. The correct boundary divides the set without overlap when observed at one stable instant."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q06-mismatched-claims",
+   "target": "seed:quests:stockade/quiz/26ffdb2c443c602b",
+   "phase": "after",
+   "title": "Why mismatched claims fail before any count runs",
+   "body": "`Session.Account` reads two claims: the account id and the merchant id. It then looks for one account that matches BOTH (`x.Id == id && x.MerchantId == merchant`). Owner A's account belongs to merchant A, so no row matches merchant B's id, and the method throws `DomainError(\"unauthorized\", ..., 401)`. The health branch never runs. The test checks this with `Assert.ThrowsAsync` expecting a `DomainError`.\n\n- B's counts is wrong: the merchant claim is never trusted on its own.\n- A's counts is wrong: the merchant claim is part of the lookup, not ignored.\n- Zero counts is wrong: an exception is thrown, so no 200 response is built.",
+   "excerpts": [
+    {
+     "path": "services/Fulfil/Program.cs",
+     "lineStart": 141,
+     "lineEnd": 145,
+     "quote": "public static async Task<Account> Account(HttpContext c, StockadeDb db) { if (!Guid.TryParse(c.User.FindFirstValue(ClaimTypes.NameIdentifier), out var id) || !Guid.TryParse(c.User.FindFirstValue(\"merchant\"), out var merchant)) throw new DomainError(\"unauthorized\", \"Sign in to continue.\", 401); return await db.Accounts.SingleOrDefaultAsync(x => x.Id == id && x.MerchantId == merchant) ?? throw new DomainError(\"unauthorized\", \"This account is unavailable.\", 401); }"
+    },
+    {
+     "path": "tests/Fulfil.Tests/RefundHealthTests.cs",
+     "lineStart": 59,
+     "lineEnd": 62,
+     "quote": "var mismatchedIdentity = ContextFor(ownerA); mismatchedIdentity.User = new ClaimsPrincipal(new ClaimsIdentity( [new Claim(ClaimTypes.NameIdentifier, ownerA.Id.ToString()), new Claim(\"merchant\", merchantB.Id.ToString())], \"test\")); await Assert.ThrowsAsync<DomainError>(() => ReadApi.List(\"health\", mismatchedIdentity, factory));"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07-no-reconciliation",
+   "target": "seed:quests:stockade/quiz/c7cdc96f574a6c9c",
+   "phase": "after",
+   "title": "Why missing history shows \"?\" and not 0",
+   "body": "The last card in `healthStats` checks `list(data, \"items\")[0]` first. With an empty list that is `undefined`, so the value is the string \"?\". Only when a reconciliation run exists does it read `differences` with `num`. This keeps two cases apart: a recorded zero (a check ran and found nothing) and no history at all.\n\n- 0 is wrong: `num` is only called when a run exists; showing 0 here would claim a check happened.\n- An empty string is wrong: the fallback is the literal \"?\".\n- Leaving the card out is wrong: the array always has five entries; only the value changes.",
+   "excerpts": [
+    {
+     "path": "src/lib/health.ts",
+     "lineStart": 19,
+     "lineEnd": 22,
+     "quote": "{ label: \"Latest inventory differences\", value: list(data, \"items\")[0] ? num(list(data, \"items\")[0]!, \"differences\") : \"?\", },"
+    },
+    {
+     "path": "src/lib/client.ts",
+     "lineStart": 8,
+     "lineEnd": 8,
+     "quote": "export const list=(row:Row,key:string):Row[]=>Array.isArray(row[key])?row[key] as Row[]:[];"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08-eighteen-seconds",
+   "target": "seed:quests:stockade/quiz/7c63408e04f53fc7",
+   "phase": "after",
+   "title": "Why a failing refund is stuck after about 18 seconds",
+   "body": "Three lines in `Worker.cs` decide this. The refund selection is `State == \"pending\" && Attempts < 12` with no time condition, so a failed refund is picked again on the very next tick. The loop waits `Task.Delay(1500)` between ticks. Each failure runs `r.Attempts++`. Twelve failures at 1.5 seconds each is about 18 seconds.\n\n- About 6 minutes is wrong: refunds have no backoff at all; the guide flags that as a finding.\n- About 12 minutes is wrong: the tick is 1.5 s, not one minute.\n- Never is wrong: the row is selected at 11 attempts, fails once more, and reaches 12.\n\nThe `min(120, attempts*5)` delay exists only for payment sagas.",
+   "excerpts": [
+    {
+     "path": "services/Fulfil/Services/Worker.cs",
+     "lineStart": 26,
+     "lineEnd": 26,
+     "quote": "var refunds = await db.Refunds.Where(x => x.State == \"pending\" && x.Attempts < 12).Select(x => x.Id).Take(20).ToListAsync(stoppingToken);"
+    },
+    {
+     "path": "services/Fulfil/Services/Worker.cs",
+     "lineStart": 34,
+     "lineEnd": 34,
+     "quote": "await Task.Delay(1500, stoppingToken);"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 64,
+     "lineEnd": 67,
+     "quote": "2. **Refunds reach \"needing retry\" in seconds, not hours.** `ProcessRefund` increments `Attempts` on failure (`Worker.cs:150`) and the selection has no backoff filter (`Worker.cs:26`); with a 1.5 s tick (`Worker.cs:34`) a failing refund is stuck after about 18 seconds. Payment sagas, by contrast, delay by `min(120, attempts*5)` s (`Worker.cs:125`). The health card is accurate, but the policy behind it deserves a backoff."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09-retry-refund-command",
+   "target": "seed:quests:stockade/quiz/6103229df134c2a7",
+   "phase": "after",
+   "title": "What the refund.retry command actually changes",
+   "body": "`RetryRefund` in `Team.cs` first requires an admin (`Admin(a)`) and a reason. If the refund is not pending it throws `refund_state` with status 409. Otherwise it sets `refund.Attempts = 0` and returns. That puts the row back under the worker's `Attempts < 12` selection, so the next tick tries the provider again.\n\n- Calling the provider at once is wrong: the command only resets a counter; the worker makes the provider call later.\n- Marking it failed is wrong: the state is not touched.\n- Raising the limit is wrong: the limit is a literal 12 in the worker, and the command does not change it.",
+   "excerpts": [
+    {
+     "path": "services/Fulfil/Services/Team.cs",
+     "lineStart": 32,
+     "lineEnd": 36,
+     "quote": "async Task<object> RetryRefund(StockadeDb db, Actor a, JsonObject p) { Admin(a); var refund = await Get<Refund>(db, a, p.Id(\"id\")); p.Required(\"reason\"); if (refund.State != \"pending\") throw new DomainError(\"refund_state\", \"Only pending refunds can be retried.\", 409); refund.Attempts = 0; return new { refund.Id, refund.State };"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10-card-is-guidance",
+   "target": "seed:quests:stockade/quiz/0afcb2b9cf088c17",
+   "phase": "after",
+   "title": "Why the stuck-refund card only gives guidance",
+   "body": "In `health.ts` the \"Refunds needing retry\" entry has a label, the `stuckRefunds` value, and a `help` string telling the operator to open the order and use the authorized Retry refund action. `Panels.tsx` renders that help as the card's `title` tooltip. No code on the card calls a command.\n\n- Calling `refund.retry` itself is wrong: a summary card would then bypass the per-order authorization the guide insists on.\n- A bulk-retry endpoint is wrong: the worked change says it adds no new mutation endpoint.\n- Hiding the number is wrong: the value is always shown; the count is not proof of worker health, but it is still displayed.",
+   "excerpts": [
+    {
+     "path": "src/lib/health.ts",
+     "lineStart": 13,
+     "lineEnd": 17,
+     "quote": "{ label: \"Refunds needing retry\", value: num(data, \"stuckRefunds\"), help: \"Open the order and use the authorized Retry refund action.\", },"
+    },
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "The frontend no longer presents all pending refunds as though they require the same response. healthStats emits Retryable refunds from retryableRefunds and Refunds needing retry from stuckRefunds. The latter includes help directing the user to the order's authorized Retry refund action. This is guidance, not a new mutation endpoint or an authorization bypass."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q11-key-after-503",
+   "target": "seed:quests:stockade/quiz/3b5169d4e55bdd0d",
+   "phase": "after",
+   "title": "Why a 503 keeps the same idempotency key",
+   "body": "`command()` derives a storage key from a SHA-256 of the operation and the canonical payload, then reuses a saved Idempotency-Key for it or makes a new one. In the `catch`, it clears the saved key only for an `ApiError` with status below 500 that is not 429. A 503 is not below 500, so the key stays in both the in-memory map and `sessionStorage`. The comment says why: a 5xx may already have committed, and resending the same key lets the server return the stored result instead of acting twice.\n\n- Cleared with a new key is the behaviour for a 4xx like 400 or 409.\n- Memory only is wrong: the key is also written to sessionStorage.\n- Auto-retry is wrong: `command()` rethrows; the caller decides.",
+   "excerpts": [
+    {
+     "path": "src/lib/client.ts",
+     "lineStart": 34,
+     "lineEnd": 38,
+     "quote": "}catch(error){ // A network/5xx outcome may already have committed. Retain its key across form retries/reloads. if(error instanceof ApiError&&error.status<500&&error.status!==429)clear(); throw error; }"
+    },
+    {
+     "path": "docs/ARCHITECTURE.md",
+     "lineStart": 12,
+     "lineEnd": 12,
+     "quote": "Serializable transactions retry conflicts with bounded jitter. Idempotency receipts atomically bind merchant, actor, operation and payload digest to the result. Replaying the same key/payload returns the result; changed payload conflicts. A disabled browser button is not a concurrency control."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q12-available-stock",
+   "target": "seed:quests:stockade/quiz/7ab8be62a0fe350a",
+   "phase": "after",
+   "title": "Why available stock subtracts reserved and held",
+   "body": "The architecture defines available stock in one line and names the moves: checkout increases `reserved`, capture moves reserved into `held`, and shipment reduces held and `onHand`. Both reserved and held are promised to orders, so both come off the physical count.\n\n- Adding inbound is wrong: expected supplier goods are explicitly not sellable.\n- Adding transit is wrong for the same reason: goods in transit between warehouses are not sellable yet.\n- Subtracting held and transit is wrong: it ignores reserved stock from checkouts that have not been captured, and transit is not part of onHand to begin with.",
+   "excerpts": [
+    {
+     "path": "docs/ARCHITECTURE.md",
+     "lineStart": 8,
+     "lineEnd": 8,
+     "quote": "available = onHand - reserved - held. Database constraints prohibit negative terms and negative availability. Checkout increases reserved; capture moves reserved into held; shipment reduces held and physical onHand and appends a negative adjustment. Cancellation releases commitments."
+    },
+    {
+     "path": "docs/ARCHITECTURE.md",
+     "lineStart": 10,
+     "lineEnd": 10,
+     "quote": "Transfer approval adds a typed transfer allocation to held. Dispatch removes the held commitment and physical source stock. Outstanding transit = dispatched - received - explicit loss. Neither transit nor expected supplier goods are sellable. Accepted receipts append stock once in the same transaction as their workflow update."
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}

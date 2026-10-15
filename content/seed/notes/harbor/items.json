@@ -1,0 +1,529 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "notes",
+ "name": "harbor",
+ "items": [
+  {
+   "key": "seed:notes:harbor/note/0687f660fbb67c12",
+   "provenance": {
+    "repo": "harbor",
+    "sha": "383b296196d5912fa9ed57893bea1de8ba5f394b",
+    "path": "docs/adr/0006-routing-engine.md",
+    "lines": {
+     "start": 51,
+     "end": 52
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r01-start-here",
+   "pack": "harbor",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: a help desk built sprint by sprint",
+   "body": "Harbor is a customer-support product (shared inbox, live chat widget, routing, SLAs) that grows an AI answer-bot in its later sprints. Like the other courses in this curriculum, it is taught through annotated pull requests plus architecture decision records in `docs/adr/`.\n\nThis quest uses four ADRs. Read ADR-0006 (routing) and ADR-0007 (SLA clock and escalation) first: they are classic backend design. Then read ADR-0012 (how the answer-bot decides to answer or refuse) and ADR-0014 (when the bot may act without a human).\n\nAlmost every rule in these ADRs is implemented as a small pure function in `packages/shared/src/`. Open the matching file next to each ADR and read the function; the quizzes ask what that code returns for concrete inputs.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0006-routing-engine.md",
+     "lineStart": 51,
+     "lineEnd": 52,
+     "quote": "- `packages/shared/src/routing.ts` is pure: AST + evaluator + strategies + hours, fully unit-tested (rule ordering, round-robin fairness over N, the load race, timezone boundaries)."
+    },
+    {
+     "path": "docs/adr/0007-sla-clock-and-escalation.md",
+     "lineStart": 50,
+     "lineEnd": 51,
+     "quote": "- `packages/shared/src/sla.ts` (clock, status, thresholds, `EscalationLog`) and `reporting.ts` (percentiles) are pure and property-tested; `apps/worker/src/sla-monitor.ts` decides escalations from them."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/LEARNER-GUIDE.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "How the course expects you to study each sprint."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:harbor/note/06dbb22cc35724ac",
+   "provenance": {
+    "repo": "harbor",
+    "sha": "383b296196d5912fa9ed57893bea1de8ba5f394b",
+    "path": "docs/adr/0007-sla-clock-and-escalation.md",
+    "lines": {
+     "start": 7,
+     "end": 10
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r03-clocks-and-trust",
+   "pack": "harbor",
+   "target": "pack",
+   "phase": "before",
+   "title": "SLA clocks and AI autonomy both default to the safe side",
+   "body": "Two ideas repeat through these ADRs: measure fairly, and act carefully.\n\nThe SLA clock measures only the time an agent could actually work. It follows a business calendar, so nights and weekends do not count, and it has a pause rule for time that is not the agent's fault. Escalation adds attention in steps before anything as drastic as moving a ticket, and the monitor remembers what it has already sent.\n\nThe answer-bot follows the same caution. A wrong confident answer is treated as worse than an honest refusal, so the code checks that every citation points at a real source, and the bot only sends a reply on its own after several independent checks pass. Read `autonomy.ts` from top to bottom and note the order of the checks.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0007-sla-clock-and-escalation.md",
+     "lineStart": 7,
+     "lineEnd": 10,
+     "quote": "Support promises are time-based: \"first response within 4 hours,\" \"resolved within a business day.\" Measuring that naively (wall-clock `now - createdAt`) is wrong in ways that matter to the humans being measured: it counts nights, weekends, and the hours a ticket sits *waiting on the customer* against the agent. We need a clock that reflects the promise actually made, plus a way to act before a breach without crying wolf."
+    },
+    {
+     "path": "docs/adr/0012-answer-bot-grounding-refusal-cost.md",
+     "lineStart": 7,
+     "lineEnd": 9,
+     "quote": "The answer-bot is Harbor's user-facing AI: it drafts replies to customers from the help center. For a support bot, a confident *wrong* answer is worse than no answer — it destroys trust and, on billing or security topics, can do real harm. So this sprint treats **grounding and knowing-when-to-stop as correctness**, gated by"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/adr/0014-bot-autonomy-gating.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Why auto-reply is earned by an eval and shipped as a ladder."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:harbor/note/16132f68178fa937",
+   "provenance": {
+    "repo": "harbor",
+    "sha": "383b296196d5912fa9ed57893bea1de8ba5f394b",
+    "path": "packages/shared/src/sla.ts",
+    "lines": {
+     "start": 57,
+     "end": 67
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q04-sla-pause",
+   "pack": "harbor",
+   "target": "seed:quests:harbor/quiz/a6fd9c83be6e50d1",
+   "phase": "after",
+   "title": "Why waiting on the customer does not use up the SLA",
+   "body": "`slaConsumedMs` first measures gross business time from the window start to now. Then, for every pause, it clamps the pause to the window and to now and measures the business time inside it. The result is gross minus paused, never below zero. ADR-0007 calls this a fairness decision: an agent should not be charged for time spent waiting on the customer.\n\n- Wall-clock time is exactly what the ADR rejects; even the gross figure is business time.\n- Counting the in-hours part of the pause is wrong: that in-hours part is precisely what gets subtracted.\n- Restarting from zero is wrong: the window keeps the time already consumed.",
+   "excerpts": [
+    {
+     "path": "packages/shared/src/sla.ts",
+     "lineStart": 57,
+     "lineEnd": 67,
+     "quote": "export function slaConsumedMs(w: SlaWindow, now: Date, hours: BusinessHours): number { const gross = businessMillisBetween(w.startedAt, now, hours); let paused = 0; for (const p of w.pauses) { const from = p.from < w.startedAt ? w.startedAt : p.from; const toRaw = p.to ?? now; const to = toRaw > now ? now : toRaw; paused += businessMillisBetween(from, to, hours); } return Math.max(0, gross - paused); }"
+    },
+    {
+     "path": "docs/adr/0007-sla-clock-and-escalation.md",
+     "lineStart": 17,
+     "lineEnd": 19,
+     "quote": "**pauses while awaiting the customer**. This is a *fairness* decision, stated openly: an SLA that ticks during customer latency punishes agents for something they don't control. Consumed = gross business-time − paused business-time. 🔗 Meridian S6's working-days math, restated."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:harbor/note/3653387bec3cdb49",
+   "provenance": {
+    "repo": "harbor",
+    "sha": "383b296196d5912fa9ed57893bea1de8ba5f394b",
+    "path": "packages/shared/src/reporting.ts",
+    "lines": {
+     "start": 11,
+     "end": 19
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q08-nearest-rank",
+   "pack": "harbor",
+   "target": "seed:quests:harbor/quiz/63eb5c8846fdbdcc",
+   "phase": "after",
+   "title": "Computing a nearest-rank p90 by hand",
+   "body": "The nearest-rank method picks an actual value from the sorted list: rank = ceil(p / 100 x N), counted from 1. For ten values and p = 90, rank = ceil(9.0) = 9, so the function returns `sorted[8]`, the ninth value, which is 9.\n\n- 10 is what p95 gives here: ceil(9.5) = 10.\n- 9.1 comes from linear interpolation between values, which this function does not do; nearest-rank always returns a member of the list.\n- 8 is an off-by-one: it uses the rank as a zero-based index.\n\nADR-0007 prefers these percentiles to averages because an average can describe no real customer.",
+   "excerpts": [
+    {
+     "path": "packages/shared/src/reporting.ts",
+     "lineStart": 11,
+     "lineEnd": 19,
+     "quote": "* Nearest-rank method: p-th percentile is the value at ⌈(p/100)·N⌉ in the sorted list (1-indexed). */ export function percentile(values: readonly number[], p: number): number { if (values.length === 0) return 0; const sorted = [...values].sort((a, b) => a - b); const rank = Math.ceil((p / 100) * sorted.length); const idx = Math.min(Math.max(rank - 1, 0), sorted.length - 1); return sorted[idx]; }"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:harbor/note/3807b0010c648b67",
+   "provenance": {
+    "repo": "harbor",
+    "sha": "383b296196d5912fa9ed57893bea1de8ba5f394b",
+    "path": "docs/adr/0007-sla-clock-and-escalation.md",
+    "lines": {
+     "start": 28,
+     "end": 30
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q07-breach-tier",
+   "pack": "harbor",
+   "target": "seed:quests:harbor/quiz/206fe139ccee19b5",
+   "phase": "after",
+   "title": "What a breach does when the owner is online",
+   "body": "ADR-0007 settles the debate between auto-reassigning and alert-and-hold with a tiered policy. The 75% and 90% thresholds warn the owner. At 100% the team lead is notified. Ownership changes automatically only if the owner is offline. The rule it states is that escalation should add attention before it changes ownership, because reassigning loses context and can dump work on an equally busy agent. The worker's comment repeats the same policy.\n\n- Reassigning to the least-loaded agent is the auto-reassign option the ADR rejected for an online owner.\n- There is no 110% tier; the defaults stop at 1.0.\n- Closing the window is not part of escalation at all.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0007-sla-clock-and-escalation.md",
+     "lineStart": 28,
+     "lineEnd": 30,
+     "quote": "**Resolution: tiered.** Pre-breach thresholds (75%, 90%) warn the *owner*; a breach (100%) escalates to the *team lead* (notify — not auto-reassign); ownership only changes automatically when the owner is **offline**. The rule: *escalation should add attention before it changes ownership.*"
+    },
+    {
+     "path": "apps/worker/src/sla-monitor.ts",
+     "lineStart": 53,
+     "lineEnd": 54,
+     "quote": "// what's tested. Tiered policy (ADR-0007): warn → notify owner; breach → notify team lead; reassign only when // the owner is offline."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:harbor/note/469158847ced10ea",
+   "provenance": {
+    "repo": "harbor",
+    "sha": "383b296196d5912fa9ed57893bea1de8ba5f394b",
+    "path": "packages/shared/src/answerbot.ts",
+    "lines": {
+     "start": 75,
+     "end": 80
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q09-fabricated-citation",
+   "pack": "harbor",
+   "target": "seed:quests:harbor/quiz/e9a5ae9b2c56343c",
+   "phase": "after",
+   "title": "Why citing [3] with two chunks is not grounded",
+   "body": "`extractCitations` collects the numbers inside `[n]` markers, here 1 and 3. `verifyCitations` marks as invalid every number below 1 or above the chunk count, so 3 is invalid. An answer is grounded only when it has at least one citation AND no invalid ones. ADR-0012 calls an out-of-range citation a fabricated source and says checking only that citations exist is \"citation theater\".\n\n- One valid citation is not enough: the rule requires zero invalid ones.\n- Nothing clamps an index to the last chunk; out of range is simply invalid.\n- Citing several chunks is allowed; the prompt even asks for [1], [2], etc.",
+   "excerpts": [
+    {
+     "path": "packages/shared/src/answerbot.ts",
+     "lineStart": 75,
+     "lineEnd": 80,
+     "quote": "export function verifyCitations(answer: string, chunkCount: number): CitationCheck { const cited = extractCitations(answer); const invalid = cited.filter((n) => n < 1 || n > chunkCount); const grounded = cited.length > 0 && invalid.length === 0; return { cited, invalid, grounded }; }"
+    },
+    {
+     "path": "docs/adr/0012-answer-bot-grounding-refusal-cost.md",
+     "lineStart": 24,
+     "lineEnd": 25,
+     "quote": "generation: every `[n]` must map to a provided chunk (an out-of-range citation is a *fabricated source*), and an answer with claims but no valid citation is **ungrounded and suppressed to a refusal**. ⚠️ Models cite plausibly"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:harbor/note/4ef23d7420ff3d5c",
+   "provenance": {
+    "repo": "harbor",
+    "sha": "383b296196d5912fa9ed57893bea1de8ba5f394b",
+    "path": "packages/shared/src/routing.ts",
+    "lines": {
+     "start": 131,
+     "end": 135
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q02-round-robin",
+   "pack": "harbor",
+   "target": "seed:quests:harbor/quiz/5299357b4c81e6ba",
+   "phase": "after",
+   "title": "Working out roundRobin with a cursor of 7",
+   "body": "`roundRobin` turns the cursor into an index with `((cursor % n) + n) % n`; the extra `+ n` only matters for negative cursors. With three agents, 7 % 3 = 1, so the index is 1 and the agent is \"b\". The returned `nextCursor` is simply `cursor + 1`, which is 8; the cursor keeps counting up and only the index wraps.\n\n- \"a\" would need index 0 (a cursor of 6 or 9).\n- \"c\" with cursor 0 assumes the cursor wraps, but it never resets.\n- A nextCursor of 1 confuses the index with the cursor.\n\nBecause the cursor is persisted, fairness over N picks is exact and testable.",
+   "excerpts": [
+    {
+     "path": "packages/shared/src/routing.ts",
+     "lineStart": 131,
+     "lineEnd": 135,
+     "quote": "export function roundRobin(agentIds: readonly string[], cursor: number): { agentId: string; nextCursor: number } { if (agentIds.length === 0) throw new Error(\"roundRobin: no agents\"); const idx = ((cursor % agentIds.length) + agentIds.length) % agentIds.length; // safe for negative cursors return { agentId: agentIds[idx], nextCursor: cursor + 1 }; }"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:harbor/note/5665cc26b4fc8c6f",
+   "provenance": {
+    "repo": "harbor",
+    "sha": "383b296196d5912fa9ed57893bea1de8ba5f394b",
+    "path": "packages/shared/src/sla.ts",
+    "lines": {
+     "start": 96,
+     "end": 103
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q06-fire-once",
+   "pack": "harbor",
+   "target": "seed:quests:harbor/quiz/6bbe1677b8dc21f4",
+   "phase": "after",
+   "title": "Why ten monitor runs send one warning",
+   "body": "`planEscalations` loops over the crossed thresholds of each window and asks `log.shouldFire(windowId, threshold)`. `EscalationLog` builds the key `windowId|threshold`; the first call adds it to a set and returns true, every later call finds it and returns false. So ten runs at 80% produce one 0.75 warning. ADR-0007 explains why: a channel that re-alerts every tick cries wolf and gets muted.\n\n- Ten alerts is exactly the bug the sent-marker prevents.\n- None is wrong: 0.75 is a warn threshold and fires before the breach.\n- A reminder is wrong: there is no repeat logic; 0.9 would be a different key, and 80% has not reached it.",
+   "excerpts": [
+    {
+     "path": "packages/shared/src/sla.ts",
+     "lineStart": 96,
+     "lineEnd": 103,
+     "quote": "export class EscalationLog { private readonly fired = new Set<string>(); shouldFire(windowId: string, threshold: number): boolean { const key = `${windowId}|${threshold}`; if (this.fired.has(key)) return false; this.fired.add(key); return true; }"
+    },
+    {
+     "path": "apps/worker/src/sla-monitor.ts",
+     "lineStart": 38,
+     "lineEnd": 39,
+     "quote": "for (const threshold of crossedThresholds(mw.window, now, hours, thresholds)) { if (!log.shouldFire(mw.windowId, threshold)) continue; // already alerted — don't cry wolf"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:harbor/note/8d47ff8cec9bc06f",
+   "provenance": {
+    "repo": "harbor",
+    "sha": "383b296196d5912fa9ed57893bea1de8ba5f394b",
+    "path": "apps/api/src/routes/routing.ts",
+    "lines": {
+     "start": 124,
+     "end": 133
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q03-advisory-lock",
+   "pack": "harbor",
+   "target": "seed:quests:harbor/quiz/de614e6e2883b7d7",
+   "phase": "after",
+   "title": "Why picking an agent takes a per-team lock",
+   "body": "Load-aware assignment means \"find the agent with the fewest open conversations, then assign\". Done naively, two conversations routed at the same moment both read the same counts, both pick the same agent, and that agent gets both. This is a check-then-act race. `pickAgentForTeam` opens a transaction and calls `pg_advisory_xact_lock` on a key built from workspace and team, so only one pick per team counts and commits at a time.\n\n- The cursor survives restarts because it is stored in `TeamCursor`, not because of the lock.\n- Postgres does allow concurrent updates; the danger is the stale read, not a refusal.\n- Business hours are evaluated as a rule condition, unrelated to this lock.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/routes/routing.ts",
+     "lineStart": 124,
+     "lineEnd": 133,
+     "quote": "/** * Pick an agent within a team fairly. ⚠️ \"fewest open\" is a check-then-act race, and round-robin's cursor is a * counter race — both pile conversations on one agent under concurrency. We serialize picks per team with a * Postgres advisory lock (🔗 the S02 pattern) so the whole choose-and-commit is atomic. Load-aware first, * round-robin as the tiebreaker/fallback via an atomically-incremented cursor. */ async function pickAgentForTeam(workspaceId: string, teamId: string): Promise<string | null> { const lockKey = `route|${workspaceId}|${teamId}`; return prisma.$transaction(async (tx) => { await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;"
+    },
+    {
+     "path": "docs/adr/0006-routing-engine.md",
+     "lineStart": 36,
+     "lineEnd": 39,
+     "quote": "- **Load-aware** assigns to the agent with the fewest open conversations. ⚠️ \"read the minimum, then assign\" is a check-then-act race — two conversations routed at once both read the same minimum and land on the same agent (the **counter race**, seen in S02 identity and S04 claim). The fix: serialize picks per team with a Postgres **advisory lock** so choose-and-commit is one atomic step; the round-robin cursor is incremented"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:harbor/note/908349c6b3bb35ae",
+   "provenance": {
+    "repo": "harbor",
+    "sha": "383b296196d5912fa9ed57893bea1de8ba5f394b",
+    "path": "docs/adr/0006-routing-engine.md",
+    "lines": {
+     "start": 14,
+     "end": 17
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r02-fair-and-explainable",
+   "pack": "harbor",
+   "target": "pack",
+   "phase": "before",
+   "title": "Routing: explainable rules and fair, race-free assignment",
+   "body": "Routing has two halves. The first half decides which rule applies to a new conversation. Rules are stored as JSON conditions built from a small fixed set of node types, checked by a schema when saved and evaluated by one pure function, so a rule can never run arbitrary code. The ADR also argues for a design where an admin can always answer \"why did this conversation go here?\" by reading a trace.\n\nThe second half picks a person inside the chosen team. Watch for the race the ADR warns about: if two requests look at agent workloads at the same moment, they can both make the same choice. Read how the API route prevents that inside one database transaction.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0006-routing-engine.md",
+     "lineStart": 14,
+     "lineEnd": 17,
+     "quote": "### 1. Conditions are a closed predicate AST — evaluated, never eval'd A rule condition is a discriminated union (`channelIs`, `subjectContains`, `attrEquals`, `all`/`any`/`not`), stored as JSON, validated by a Zod schema on write, and evaluated by one pure total function. Fields come from an **allowlist** (`CONTACT_ATTR_KEYS`); a rule cannot reach arbitrary internals or execute code. 🔗 This is the"
+    },
+    {
+     "path": "docs/adr/0006-routing-engine.md",
+     "lineStart": 21,
+     "lineEnd": 22,
+     "quote": "### 2. First-match-wins with explicit ordering (the debate)"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "apps/api/src/routes/routing.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Where the pure routing model meets the database."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:harbor/note/9eb28f254c0278f2",
+   "provenance": {
+    "repo": "harbor",
+    "sha": "383b296196d5912fa9ed57893bea1de8ba5f394b",
+    "path": "packages/shared/src/autonomy.ts",
+    "lines": {
+     "start": 54,
+     "end": 65
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q11-outside-hours",
+   "pack": "harbor",
+   "target": "seed:quests:harbor/quiz/bbb13dc2031d8a47",
+   "phase": "after",
+   "title": "Why the bot drafts at 2 a.m. even with every main gate open",
+   "body": "Walk `autonomyDecision` in order. The bot did not refuse, so no handoff. Mode is auto, so it continues. The topic is allowlisted, 0.9 is at least the 0.85 confidence floor, and 0.5 is at least the 0.3 retrieval floor. The last check is `s.businessHoursOnly && !input.businessHoursOk`, which is true at 2 a.m., so it returns `draft` with the reason \"outside business hours\". Anything short of every gate drafts for a human.\n\n- auto_send ignores the business-hours gate that this workspace switched on.\n- handoff is only for a refusal.\n- auto_send_cc needs mode `auto_cc`, and it would still be blocked by the hours check.",
+   "excerpts": [
+    {
+     "path": "packages/shared/src/autonomy.ts",
+     "lineStart": 54,
+     "lineEnd": 65,
+     "quote": "export function autonomyDecision(input: AutonomyInput): AutonomyDecision { const s = input.settings; if (input.refused) return { action: \"handoff\", reason: \"bot refused — no confident grounded answer\" }; if (s.mode === \"off\" || s.mode === \"draft\") return { action: \"draft\", reason: `mode=${s.mode}: draft for human` }; if (!s.topicAllowlist.includes(input.topic)) return { action: \"draft\", reason: `topic \"${input.topic}\" not allowlisted for auto-reply` }; if (input.confidence < s.minConfidence) return { action: \"draft\", reason: `confidence ${input.confidence.toFixed(2)} < ${s.minConfidence}` }; if (input.retrievalScore < s.minRetrievalScore) return { action: \"draft\", reason: `retrieval ${input.retrievalScore.toFixed(2)} < ${s.minRetrievalScore}` }; if (s.businessHoursOnly && !input.businessHoursOk) return { action: \"draft\", reason: \"outside business hours\" }; return { action: s.mode === \"auto_cc\" ? \"auto_send_cc\" : \"auto_send\", reason: \"all autonomy gates passed\" }; }"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:harbor/note/b52991efc44568b2",
+   "provenance": {
+    "repo": "harbor",
+    "sha": "383b296196d5912fa9ed57893bea1de8ba5f394b",
+    "path": "packages/shared/src/routing.ts",
+    "lines": {
+     "start": 115,
+     "end": 124
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q01-first-match",
+   "pack": "harbor",
+   "target": "seed:quests:harbor/quiz/e8b5c87bb8ebde16",
+   "phase": "after",
+   "title": "Why only the first matching rule applies",
+   "body": "`route()` keeps only enabled rules, sorts them by `order`, and walks them in that order. For each rule it records whether the condition matched, and on the first match it returns that rule's actions immediately. Later rules are never evaluated. ADR-0006 picked this \"first-match-wins\" model because it is predictable and easy to explain.\n\n- Merging both rules' actions is the cumulative all-match model, which the code comment names as a rejected alternative.\n- A total score is weighted scoring, the losing side of the S06 debate.\n- Recency plays no part: only the `order` field decides.",
+   "excerpts": [
+    {
+     "path": "packages/shared/src/routing.ts",
+     "lineStart": 115,
+     "lineEnd": 124,
+     "quote": "export function route(rules: readonly RoutingRule[], ctx: RoutingContext): RoutingDecision { const ordered = [...rules].filter((r) => r.enabled).sort((a, b) => a.order - b.order); const trace: RoutingDecision[\"trace\"] = []; for (const rule of ordered) { const matched = evaluate(rule.condition, ctx); trace.push({ ruleId: rule.id, order: rule.order, matched }); if (matched) return { matchedRuleId: rule.id, actions: rule.actions, trace }; } return { matchedRuleId: null, actions: [], trace }; }"
+    },
+    {
+     "path": "docs/adr/0006-routing-engine.md",
+     "lineStart": 28,
+     "lineEnd": 29,
+     "quote": "**Resolution: first-match-wins** + a **preview/dry-run** that returns the full trace (every enabled rule in order and whether it matched). Scoring is deferred until a real need appears (it rarely does). *Prefer"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:harbor/note/e0e4ca14a328d264",
+   "provenance": {
+    "repo": "harbor",
+    "sha": "383b296196d5912fa9ed57893bea1de8ba5f394b",
+    "path": "packages/mailin/src/thread.ts",
+    "lines": {
+     "start": 109,
+     "end": 115
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q12-scoped-subject",
+   "pack": "harbor",
+   "target": "seed:quests:harbor/quiz/8c8f8736e9dd03e1",
+   "phase": "after",
+   "title": "Why two customers' \"Re: Invoice\" emails stay apart",
+   "body": "`threadEmail` first follows the reply chain: In-Reply-To, then References. With no header match it falls back to the subject, but only among open conversations whose `contactId` equals the sender's. Customer B's email cannot match customer A's conversation, so `threadEmail` returns no conversation and the inbound route creates a new one. This scoping is the fix for planted flaw #1, where subject-only threading merged different customers.\n\n- Merging by subject is the S03 bug, now pinned by a regression test.\n- Timing is irrelevant; there is no business-day rule in threading.\n- Nothing is dropped: the route creates a new conversation when no thread matches.",
+   "excerpts": [
+    {
+     "path": "packages/mailin/src/thread.ts",
+     "lineStart": 109,
+     "lineEnd": 115,
+     "quote": "// 2. Subject fallback — ONLY within the sender's own open conversations (the misthread fix). const norm = normalizeSubject(input.subject); if (norm && input.fromContactId) { const match = openConversations.find( (c) => c.contactId === input.fromContactId && normalizeSubject(c.subject) === norm, ); if (match) return { conversationId: match.id, via: \"subject\" };"
+    },
+    {
+     "path": "apps/api/src/routes/inbound.ts",
+     "lineStart": 48,
+     "lineEnd": 50,
+     "quote": "const conversationId = result.conversationId ?? (await prisma.conversation.create({ data: { workspaceId, contactId, subject: email.subject || \"(no subject)\" } })).id;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:harbor/note/ea49e12e6f7fd1e3",
+   "provenance": {
+    "repo": "harbor",
+    "sha": "383b296196d5912fa9ed57893bea1de8ba5f394b",
+    "path": "packages/shared/src/sla.ts",
+    "lines": {
+     "start": 82,
+     "end": 89
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q05-crossed-thresholds",
+   "pack": "harbor",
+   "target": "seed:quests:harbor/quiz/b346b83a2c3c7e4e",
+   "phase": "after",
+   "title": "Which thresholds 92% has crossed",
+   "body": "`crossedThresholds` divides consumed time by the target and keeps every threshold that fraction has reached (`frac >= t`). The defaults are 75%, 90% and 100%. A fraction of 0.92 is at or above 0.75 and 0.9 but below 1.0, so both warning thresholds are returned and the breach is not.\n\n- Only 0.9 is wrong: the filter returns every crossed threshold, not just the highest. Fire-once logic elsewhere stops 0.75 from re-alerting.\n- Including 1.0 is wrong: 0.92 has not breached.\n- Only 0.75 is wrong: 0.92 is past 0.9 as well.",
+   "excerpts": [
+    {
+     "path": "packages/shared/src/sla.ts",
+     "lineStart": 82,
+     "lineEnd": 89,
+     "quote": "export const DEFAULT_THRESHOLDS = [0.75, 0.9, 1.0] as const; /** Which thresholds a window has crossed at `now` (consumed / target). */ export function crossedThresholds(w: SlaWindow, now: Date, hours: BusinessHours, thresholds: readonly number[] = DEFAULT_THRESHOLDS): number[] { if (w.targetMs <= 0) return []; const frac = slaConsumedMs(w, now, hours) / w.targetMs; return thresholds.filter((t) => frac >= t); }"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:harbor/note/f14b364c92a0da63",
+   "provenance": {
+    "repo": "harbor",
+    "sha": "383b296196d5912fa9ed57893bea1de8ba5f394b",
+    "path": "packages/shared/src/answerbot.ts",
+    "lines": {
+     "start": 20,
+     "end": 21
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q10-sensitive-first",
+   "pack": "harbor",
+   "target": "seed:quests:harbor/quiz/2410329236be71b3",
+   "phase": "after",
+   "title": "Why a sensitive question is refused even with good sources",
+   "body": "`refusalReason` checks the topic before anything else: if `isSensitive(question)` matches one of the patterns (wire transfers, SSNs, a full card number, legal advice and so on), it returns \"sensitive_topic\" at once. Only after that does it look at whether retrieval was sufficient. The comment above the list says these topics go to a human regardless of what retrieval found.\n\n- null is wrong: good retrieval never overrides the sensitive check.\n- \"no_relevant_sources\" is the second check and is never reached here.\n- Requiring weak retrieval as well is wrong: the sensitive branch returns before retrieval is considered.",
+   "excerpts": [
+    {
+     "path": "packages/shared/src/answerbot.ts",
+     "lineStart": 20,
+     "lineEnd": 21,
+     "quote": "// Topics an automated bot must never answer from a help article: security/account-takeover, payment details, // legal/medical. These go to a human regardless of what retrieval found."
+    },
+    {
+     "path": "packages/shared/src/answerbot.ts",
+     "lineStart": 33,
+     "lineEnd": 37,
+     "quote": "export function refusalReason(question: string, retrievalSufficient: boolean): RefusalReason | null { if (isSensitive(question)) return \"sensitive_topic\"; if (!retrievalSufficient) return \"no_relevant_sources\"; return null; }"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}

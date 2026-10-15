@@ -1,0 +1,415 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "zz8",
+ "sha": "ae8c8234428271147fda7d136e3936acf3c4c692",
+ "guides": [
+  "astraupskill/README.md",
+  "astraupskill/01-CODEBASE-MAP.md",
+  "astraupskill/02-CONCEPTS.md",
+  "astraupskill/03-WORKED-CHANGE.md",
+  "astraupskill/04-TESTING-AND-DEBUGGING.md",
+  "astraupskill/07-TRACE-LAB.md"
+ ],
+ "excludeDirs": [
+  "astraupskill/snapshots"
+ ],
+ "items": [
+  {
+   "id": "q01-race-loser",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 9,
+     "end": 9
+    }
+   },
+   "cites": [
+    {
+     "path": "src/repositories/review-repository.ts",
+     "lineStart": 105,
+     "lineEnd": 123
+    },
+    {
+     "path": "src/services/review-service.ts",
+     "lineStart": 72,
+     "lineEnd": 86
+    }
+   ],
+   "prompt": "Two tabs submit the same self-review; both read IN_PROGRESS before either writes. What does the second caller get at this commit?",
+   "answer": "A 404 AppError, since the repository returns null for it",
+   "distractors": [
+    "A 409 from the service's already-submitted context check",
+    "A 201 Created, with a second reviewResponse row written",
+    "A 200, and an upsert replaces the first caller's answers"
+   ],
+   "explanation": "The loser's updateMany matches zero rows (status is now SUBMITTED), so the repository returns null and the service throws AppError(404, \"Review assignment was not found for submission.\"). The context check passed because it read IN_PROGRESS earlier. (02-CONCEPTS.md says \"maps null to a conflict\", but the code throws 404.)"
+  },
+  {
+   "id": "q02-audit-throws",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/03-WORKED-CHANGE.md",
+    "lines": {
+     "start": 23,
+     "end": 23
+    }
+   },
+   "cites": [
+    {
+     "path": "src/repositories/review-repository.ts",
+     "lineStart": 105,
+     "lineEnd": 155
+    }
+   ],
+   "prompt": "The auditLog.create at the end of submitSelfReview throws. What happens to the assignment?",
+   "answer": "It keeps its old status, as the transaction rolls back",
+   "distractors": [
+    "It stays SUBMITTED, and only the audit row ends up missing",
+    "It stays SUBMITTED, with the response row kept as well",
+    "It is set back to NOT_STARTED by an explicit catch block"
+   ],
+   "explanation": "The status update, response create and audit create all use the same tx inside db.$transaction; a throw discards all three. No catch resets anything; there is nothing to reset."
+  },
+  {
+   "id": "q03-subject-predicate",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/03-WORKED-CHANGE.md",
+    "lines": {
+     "start": 125,
+     "end": 125
+    }
+   },
+   "cites": [
+    {
+     "path": "src/repositories/review-repository.ts",
+     "lineStart": 106,
+     "lineEnd": 116
+    }
+   ],
+   "prompt": "Why does the submit updateMany also match subjectEmployeeId and reviewerUserId?",
+   "answer": "So a tenant member cannot claim another person's assignment",
+   "distractors": [
+    "So Prisma can use the composite index on those two columns",
+    "So the response row can be upserted on the subject later on",
+    "So a manager may submit on behalf of an employee directly"
+   ],
+   "explanation": "tenantId alone is not enough: a guessed assignment id inside the same tenant would be claimed. Removing subjectEmployeeId makes the \"subject employee predicate does not match\" test fail, which is the hole the change closed."
+  },
+  {
+   "id": "q04-stale-token",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 30,
+     "end": 30
+    }
+   },
+   "cites": [
+    {
+     "path": "src/repositories/integration-repository.ts",
+     "lineStart": 213,
+     "lineEnd": 232
+    }
+   ],
+   "prompt": "Worker 1 claimed job-1, it failed, was retried and worker 2 claimed it. Worker 1 now calls completeJob with its old token. What is returned?",
+   "answer": "null, as the RUNNING row now holds worker 2's token",
+   "distractors": [
+    "The job, marked FAILED with worker 1's error message",
+    "The job, marked SUCCEEDED as long as worker 1 succeeded",
+    "An error thrown, since stale tokens are rejected loudly"
+   ],
+   "explanation": "completeJob matches tenant, id, status RUNNING and the exact claimToken. Worker 2's claim wrote a new token, so the update count is 0 and the method returns null; no log follows."
+  },
+  {
+   "id": "q05-claim-race",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 38,
+     "end": 38
+    }
+   },
+   "cites": [
+    {
+     "path": "src/repositories/integration-repository.ts",
+     "lineStart": 181,
+     "lineEnd": 208
+    }
+   ],
+   "prompt": "Two workers read the same three QUEUED rows at 10:00 and both run claimQueuedJobs. How is each row handled?",
+   "answer": "One worker's update wins it, and the other skips that row",
+   "distractors": [
+    "Both workers claim it, and the later claimToken overwrites",
+    "Both process it, and completeJob later removes the duplicate",
+    "Neither claims it, since the two updates deadlock each other"
+   ],
+   "explanation": "Each updateMany requires status QUEUED. The first winner flips it to RUNNING with its token; the second gets count 0 and continues. The read is an ordering aid, not ownership."
+  },
+  {
+   "id": "q06-retry-from-running",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 32,
+     "end": 32
+    }
+   },
+   "cites": [
+    {
+     "path": "src/repositories/integration-repository.ts",
+     "lineStart": 111,
+     "lineEnd": 156
+    }
+   ],
+   "prompt": "An operator calls queueRetry on a job that is still RUNNING. What does it return?",
+   "answer": "null, because only FAILED or RETRY_REQUIRED can be retried",
+   "distractors": [
+    "The job, moved back to QUEUED with a cleared claimToken",
+    "The job, unchanged, with an INFO log saying it was queued",
+    "An error, since the audit insert rejects RUNNING jobs"
+   ],
+   "explanation": "The where clause requires status in [FAILED, RETRY_REQUIRED]; for RUNNING the count is 0, the transaction returns false and queueRetry returns null with no log or audit."
+  },
+  {
+   "id": "q07-attempt-count",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 30,
+     "end": 30
+    }
+   },
+   "cites": [
+    {
+     "path": "src/repositories/integration-repository.ts",
+     "lineStart": 184,
+     "lineEnd": 196
+    },
+    {
+     "path": "src/repositories/integration-repository.ts",
+     "lineStart": 116,
+     "lineEnd": 130
+    }
+   ],
+   "prompt": "A job is claimed, fails, is manually retried and is claimed again. What is its attemptCount?",
+   "answer": "2, one for each claim that actually won",
+   "distractors": [
+    "3, as the manual retry also counts as one",
+    "1, as queueRetry resets the count to zero",
+    "4, as select and claim each add one"
+   ],
+   "explanation": "attemptCount: { increment: 1 } is only in the winning claim update. queueRetry resets status, timestamps, error and claimToken, but leaves attemptCount alone."
+  },
+  {
+   "id": "q08-create-not-upsert",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 11,
+     "end": 11
+    }
+   },
+   "cites": [
+    {
+     "path": "src/repositories/review-repository.ts",
+     "lineStart": 125,
+     "lineEnd": 135
+    }
+   ],
+   "prompt": "Why is the review response written with create instead of upsert?",
+   "answer": "An upsert would let a late request overwrite the text",
+   "distractors": [
+    "create is faster, as it skips the lookup that upsert performs",
+    "upsert cannot run inside a Prisma interactive transaction",
+    "create lets one assignment collect several draft responses"
+   ],
+   "explanation": "If a status predicate were ever weakened, an upsert would silently replace the submitted answers; create plus the unique assignment relation fails instead. Upsert works in transactions; speed is not the reason."
+  },
+  {
+   "id": "q09-closed-cycle",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 7,
+     "end": 7
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/review-service.ts",
+     "lineStart": 56,
+     "lineEnd": 65
+    }
+   ],
+   "prompt": "An employee submits a self-review for a cycle whose status is CLOSED. What does the service do?",
+   "answer": "Throws a 409 saying submissions need an ACTIVE cycle",
+   "distractors": [
+    "Throws a 404, the same as for a missing assignment",
+    "Saves it as a late draft that HR can approve later",
+    "Submits it, as the repository ignores cycle status"
+   ],
+   "explanation": "After loading the context, the service throws AppError(409, \"Self-review submissions are only allowed while the cycle is ACTIVE. Current status: CLOSED.\"). The repository also requires reviewCycle.status ACTIVE."
+  },
+  {
+   "id": "q10-identity-from-session",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 21,
+     "end": 21
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/review-service.ts",
+     "lineStart": 46,
+     "lineEnd": 54
+    }
+   ],
+   "prompt": "Where does submitSelfReview get the subject employee id it writes?",
+   "answer": "From session.employeeId, not from the request body",
+   "distractors": [
+    "From the request body, after Zod checks its format",
+    "From the cycle row, which names the subject employee",
+    "From a URL parameter, checked against the session"
+   ],
+   "explanation": "The service sets subjectEmployeeId = session.employeeId and reviewerUserId = session.userId. Narrative fields are client-owned; identity fields are server-owned."
+  },
+  {
+   "id": "q11-no-lease-expiry",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/03-WORKED-CHANGE.md",
+    "lines": {
+     "start": 47,
+     "end": 47
+    }
+   },
+   "cites": [
+    {
+     "path": "src/repositories/integration-repository.ts",
+     "lineStart": 158,
+     "lineEnd": 211
+    }
+   ],
+   "prompt": "A worker claims a job and then crashes before completeJob. What does the current code do with that job?",
+   "answer": "It stays RUNNING, as nothing ever expires a claim",
+   "distractors": [
+    "A later claim takes it back once its token is stale",
+    "queueRetry picks it up, as RUNNING jobs can be retried",
+    "The worker's finally block resets it back to QUEUED"
+   ],
+   "explanation": "claimQueuedJobs only selects QUEUED rows and queueRetry only accepts FAILED or RETRY_REQUIRED. The guide says the example does not invent a timeout or heartbeat; lease recovery needs a new field and tests."
+  },
+  {
+   "id": "q12-stale-no-log",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 34,
+     "end": 34
+    }
+   },
+   "cites": [
+    {
+     "path": "src/repositories/integration-repository.ts",
+     "lineStart": 231,
+     "lineEnd": 231
+    },
+    {
+     "path": "src/jobs/process-queued-integration-jobs.ts",
+     "lineStart": 31,
+     "lineEnd": 48
+    }
+   ],
+   "prompt": "Why does the worker write its completion log only after completeJob returns a row?",
+   "answer": "A stale worker would otherwise report a newer attempt's outcome",
+   "distractors": [
+    "The log table has a foreign key that needs a finished job row first",
+    "Logging first would keep the transaction open far too long",
+    "completeJob deletes earlier log rows for the attempt it ends"
+   ],
+   "explanation": "A stale process can finish its in-memory work after another attempt took ownership; completeJob returns null for it, so logging only on a returned row stops it from describing a job it no longer owns."
+  },
+  {
+   "id": "f01-zero-rows",
+   "kind": "flashcard",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 55,
+     "end": 56
+    }
+   },
+   "cites": [
+    {
+     "path": "src/repositories/review-repository.ts",
+     "lineStart": 123,
+     "lineEnd": 123
+    },
+    {
+     "path": "src/repositories/integration-repository.ts",
+     "lineStart": 231,
+     "lineEnd": 231
+    }
+   ],
+   "front": "Conditional update and zero-rows-as-conflict",
+   "back": "updateMany({ where: { every predicate }, data }) lets the database decide whether the row still qualifies. `if (result.count !== 1) return null;` then means someone else won (or the row was never ours): answer 404/409, never retry blindly."
+  },
+  {
+   "id": "f02-claim-complete",
+   "kind": "flashcard",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 28,
+     "end": 30
+    }
+   },
+   "cites": [
+    {
+     "path": "src/repositories/integration-repository.ts",
+     "lineStart": 184,
+     "lineEnd": 224
+    }
+   ],
+   "front": "Claim vs complete in the integration queue",
+   "back": "Claim: update with tenant, id and status QUEUED -> RUNNING, a new claimToken, attemptCount + 1; process only rows whose count was 1. Complete: tenant, id, status RUNNING and the same claimToken -> SUCCEEDED or FAILED."
+  },
+  {
+   "id": "f03-audit-in-tx",
+   "kind": "flashcard",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 58,
+     "end": 58
+    }
+   },
+   "cites": [
+    {
+     "path": "src/repositories/review-repository.ts",
+     "lineStart": 137,
+     "lineEnd": 149
+    },
+    {
+     "path": "src/repositories/integration-repository.ts",
+     "lineStart": 141,
+     "lineEnd": 150
+    }
+   ],
+   "front": "Why the audit row is written inside the transaction",
+   "back": "An audit entry can then never exist for a change that did not commit, and a committed change always has its audit row: if the audit insert throws, the status change and response are discarded too."
+  }
+ ]
+}

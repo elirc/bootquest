@@ -1,0 +1,417 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "relay",
+ "sha": "d5d8a5ea7dd9648979b6b1edbd7b541c430564eb",
+ "guides": [
+  "docs/LEARNER-GUIDE.md",
+  "docs/adr/0006-expression-language.md",
+  "docs/adr/0007-retry-by-error-class.md",
+  "docs/adr/0008-trigger-dedupe-ownership.md",
+  "docs/adr/0013-rate-limiting-fairness.md",
+  "docs/adr/0016-stuck-run-policy.md"
+ ],
+ "items": [
+  {
+   "id": "q01-single-ref-type",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0006-expression-language.md",
+    "lines": {
+     "start": 18,
+     "end": 19
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/expr/src/render.ts",
+     "lineStart": 42,
+     "lineEnd": 47
+    }
+   ],
+   "prompt": "With scope { trigger: { count: 5 } }, what does render(\"{{trigger.count}}\", scope) return?",
+   "answer": "The number 5, with its type kept",
+   "distractors": [
+    "The string \"5\", like all rendered text",
+    "The text \"{{trigger.count}}\" as written",
+    "An array holding the single value 5"
+   ],
+   "explanation": "A template that is exactly one reference returns resolvePath(...) directly, so the value keeps its type. Only templates with surrounding text are joined into a string."
+  },
+  {
+   "id": "q02-array-in-text",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0006-expression-language.md",
+    "lines": {
+     "start": 38,
+     "end": 39
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/expr/src/render.ts",
+     "lineStart": 27,
+     "lineEnd": 31
+    },
+    {
+     "path": "packages/expr/src/render.ts",
+     "lineStart": 53,
+     "lineEnd": 55
+    }
+   ],
+   "prompt": "With trigger.tags = [\"a\", \"b\"], what does render(\"Tags: {{trigger.tags}}\", scope) return?",
+   "answer": "The string Tags: [\"a\",\"b\"], since objects are JSON-encoded",
+   "distractors": [
+    "The string Tags: a,b, from String() applied to the array",
+    "The string Tags: [object Object], as other platforms produce",
+    "The array [\"a\", \"b\"] itself, since one reference keeps its type"
+   ],
+   "explanation": "With surrounding text the tokens are joined, and stringify() JSON.stringifies objects and arrays. Type preservation only applies when the whole template is one reference."
+  },
+  {
+   "id": "q03-missing-path",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0006-expression-language.md",
+    "lines": {
+     "start": 20,
+     "end": 20
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/expr/src/render.ts",
+     "lineStart": 15,
+     "lineEnd": 25
+    }
+   ],
+   "prompt": "render(\"{{trigger.email}}\", { trigger: {} }) runs. What happens?",
+   "answer": "It throws an ExprRenderError that names the missing segment",
+   "distractors": [
+    "It returns an empty string, and the step goes on running",
+    "It returns undefined, which the action then drops from its input",
+    "It returns the raw {{trigger.email}} text with nothing changed"
+   ],
+   "explanation": "resolvePath throws ExprRenderError(`cannot resolve \"trigger.email\": missing \"email\"`) when a segment is undefined. A missing path is a render-time error by design, not a silent blank."
+  },
+  {
+   "id": "q04-single-pass",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0006-expression-language.md",
+    "lines": {
+     "start": 42,
+     "end": 43
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/expr/src/render.ts",
+     "lineStart": 49,
+     "lineEnd": 55
+    }
+   ],
+   "prompt": "A SheetLite cell contains the text {{connection.token}} and a template inserts that cell. What does the output hold?",
+   "answer": "That literal text; values are never scanned again",
+   "distractors": [
+    "The live token, as nested references are expanded too",
+    "Nothing, because braces are stripped from resolved values",
+    "An error, as resolved values may not contain any braces"
+   ],
+   "explanation": "Since the S13 fix render() is single-pass: resolved values are inert data. The old loop re-expanded {{...}} inside values, which could exfiltrate a secret."
+  },
+  {
+   "id": "q05-vendor-down-backoff",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0007-retry-by-error-class.md",
+    "lines": {
+     "start": 15,
+     "end": 17
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/engine/src/executor.ts",
+     "lineStart": 18,
+     "lineEnd": 37
+    }
+   ],
+   "prompt": "retryPolicy gets a VendorDown error on attempt 3. What does it decide?",
+   "answer": "Retry after 4000 ms (1000 x 2^2)",
+   "distractors": [
+    "Retry after 8000 ms (1000 x 2^3)",
+    "Retry after 3000 ms (1000 x 3)",
+    "No retry, as VendorDown is final"
+   ],
+   "explanation": "backoff(attempt) = min(30000, 1000 * 2 ** (attempt - 1)), so attempt 3 gives 4000 ms. Attempt 3 is below MAX_ATTEMPTS (4), and VendorDown is a retryable class."
+  },
+  {
+   "id": "q06-rate-limited-cap",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0007-retry-by-error-class.md",
+    "lines": {
+     "start": 16,
+     "end": 21
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/engine/src/executor.ts",
+     "lineStart": 24,
+     "lineEnd": 29
+    }
+   ],
+   "prompt": "A RateLimited error with a Retry-After arrives on attempt 4. What does retryPolicy decide?",
+   "answer": "No retry, since attempt 4 has reached MAX_ATTEMPTS",
+   "distractors": [
+    "Retry after the Retry-After delay, as rate limits always retry",
+    "Retry after 8000 ms of plain exponential backoff instead",
+    "Retry after 30000 ms, the cap on every backoff delay"
+   ],
+   "explanation": "The attempt >= MAX_ATTEMPTS check runs before the switch on error kind, so even a RateLimited error stops at attempt 4. Below the cap it would wait retryAfterMs."
+  },
+  {
+   "id": "q07-dedupe-window",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0008-trigger-dedupe-ownership.md",
+    "lines": {
+     "start": 20,
+     "end": 22
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/engine/src/triggers/dedupe.ts",
+     "lineStart": 42,
+     "lineEnd": 45
+    }
+   ],
+   "prompt": "A trigger polls every 60000 ms. What dedupe TTL does dedupeTtlForInterval give it?",
+   "answer": "180000 ms, three polling intervals",
+   "distractors": [
+    "60000 ms, exactly one interval",
+    "120000 ms, two polling intervals",
+    "None; seen keys are kept forever"
+   ],
+   "explanation": "dedupeTtlForInterval returns intervalMs * 3: a late poll can re-surface an item about one cycle later, and the window must stay bounded (TTL eviction), never an unbounded seen-set."
+  },
+  {
+   "id": "q08-who-owns-identity",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0008-trigger-dedupe-ownership.md",
+    "lines": {
+     "start": 16,
+     "end": 19
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/connector-sdk/src/connector.ts",
+     "lineStart": 55,
+     "lineEnd": 55
+    },
+    {
+     "path": "packages/connector-sdk/src/registry.ts",
+     "lineStart": 22,
+     "lineEnd": 23
+    }
+   ],
+   "prompt": "Who decides when two trigger events are the same item?",
+   "answer": "The connector, through its trigger's dedupeKey function",
+   "distractors": [
+    "The engine, by hashing the whole payload of each event",
+    "The user, by writing a dedupe rule for every relay",
+    "The vendor, by marking repeat deliveries with a header"
+   ],
+   "explanation": "Each TriggerDef carries dedupeKey(item) => string, and the registry throws at boot if a trigger lacks one; the engine's Deduper only enforces it. Hashing the payload was the rejected engine-owned alternative."
+  },
+  {
+   "id": "q09-weighted-fair",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0013-rate-limiting-fairness.md",
+    "lines": {
+     "start": 21,
+     "end": 23
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/engine/src/fairness/scheduler.ts",
+     "lineStart": 19,
+     "lineEnd": 25
+    }
+   ],
+   "prompt": "pickOrg sees A (weight 1, inFlight 2, pending 5), B (weight 4, inFlight 4, pending 1) and C (weight 2, inFlight 0, pending 0), all under cap. Which org is served?",
+   "answer": "B, with the lowest inFlight / weight ratio of the two",
+   "distractors": [
+    "C, because it is the only org with nothing in flight",
+    "A, because it has the largest number of pending runs",
+    "None of them; pickOrg returns null for this input"
+   ],
+   "explanation": "Eligible orgs need pending > 0 and inFlight < cap, so C is out. A has ratio 2 / 1 = 2 and B has 4 / 4 = 1; the lowest ratio wins."
+  },
+  {
+   "id": "q10-bulk-reserved",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0013-rate-limiting-fairness.md",
+    "lines": {
+     "start": 24,
+     "end": 26
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/engine/src/fairness/scheduler.ts",
+     "lineStart": 35,
+     "lineEnd": 46
+    }
+   ],
+   "prompt": "pickLane gets depth { interactive: 3, scheduled: 0, bulk: 2 } after 5 consecutive high-lane picks. Which lane does it choose?",
+   "answer": "bulk, as 5 high picks reach the default starvation limit",
+   "distractors": [
+    "interactive, as the higher lane wins whenever it has work",
+    "scheduled, the lane that comes right after interactive",
+    "none, because the scheduled lane has no runs waiting"
+   ],
+   "explanation": "Bulk is waiting and consecutiveHighPicks (5) >= starvationLimit (default 5), so the reserved minimum returns \"bulk\" before the priority loop runs."
+  },
+  {
+   "id": "q11-half-open-failure",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0016-stuck-run-policy.md",
+    "lines": {
+     "start": 19,
+     "end": 22
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/engine/src/observability/breaker.ts",
+     "lineStart": 26,
+     "lineEnd": 48
+    }
+   ],
+   "prompt": "A circuit breaker (threshold 3) is half-open and its single probe fails. What state is it in afterwards?",
+   "answer": "Open again right away, with its cooldown restarted",
+   "distractors": [
+    "Still half-open, until three more failures add up",
+    "Closed, as one failure is below the threshold of 3",
+    "Open for good, until a human operator resets it"
+   ],
+   "explanation": "onFailure re-opens when state is \"half-open\" OR failures reach the threshold, and sets openedAt = now, so the next probe waits a full cooldown."
+  },
+  {
+   "id": "q12-shared-cursor",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0013-rate-limiting-fairness.md",
+    "lines": {
+     "start": 27,
+     "end": 30
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/engine/src/triggers/cursor.ts",
+     "lineStart": 19,
+     "lineEnd": 25
+    }
+   ],
+   "prompt": "After S11, two relays watch the same sheet over one connection. How many polling cursors exist?",
+   "answer": "One, keyed on connection, connector, trigger",
+   "distractors": [
+    "Two, one per relay, as the S06 code had them",
+    "One per worker process that polls the sheet",
+    "None; the sheet sends webhooks after S11"
+   ],
+   "explanation": "subscriptionKey is sub:connectionId:connector:triggerKey and the cursor key wraps it, so relays bound to the same resource share one poll and one cursor. Per-relay cursors were planted flaw #3."
+  },
+  {
+   "id": "f01-retry-table",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0007-retry-by-error-class.md",
+    "lines": {
+     "start": 15,
+     "end": 21
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/engine/src/executor.ts",
+     "lineStart": 18,
+     "lineEnd": 37
+    }
+   ],
+   "front": "Relay retry policy by error class",
+   "back": "RateLimited: retry after Retry-After (else backoff). VendorDown: retry with min(30 s, 1 s x 2^(attempt-1)). AuthFailed, BadInput, anything else: no retry. Nothing retries at attempt >= MAX_ATTEMPTS (4). A step out of retries fails the whole run (fail-fast)."
+  },
+  {
+   "id": "f02-breaker-states",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0016-stuck-run-policy.md",
+    "lines": {
+     "start": 19,
+     "end": 22
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/engine/src/observability/breaker.ts",
+     "lineStart": 13,
+     "lineEnd": 48
+    }
+   ],
+   "front": "CircuitBreaker states and transitions",
+   "back": "closed -> open after threshold failures. open holds requests until cooldownMs passes, then half-open lets one probe through. Probe success -> closed (failures reset); probe failure -> open again with a fresh cooldown."
+  },
+  {
+   "id": "f03-why-retriable-failed",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0016-stuck-run-policy.md",
+    "lines": {
+     "start": 17,
+     "end": 18
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/engine/src/observability/breaker.ts",
+     "lineStart": 60,
+     "lineEnd": 62
+    }
+   ],
+   "front": "Why a stuck run times out to retriable-failed",
+   "back": "A hard fail loses legitimately slow runs, and a blind retry re-hits the hung vendor. isStuck flags a step past expectedMs x graceFactor (default 3); retriable-failed runs go to the DLQ for safe, idempotent bulk replay."
+  },
+  {
+   "id": "f04-shared-bucket",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0013-rate-limiting-fairness.md",
+    "lines": {
+     "start": 16,
+     "end": 20
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0013-rate-limiting-fairness.md",
+     "lineStart": 33,
+     "lineEnd": 37
+    }
+   ],
+   "front": "Why the vendor token bucket is shared and atomic",
+   "back": "The vendor limit is per account, so per-worker or per-org buckets multiply it by N and get the account banned. One bucket per connection in Redis, taken atomically (Lua), or two workers both see \"1 left\" and both take it."
+  }
+ ]
+}

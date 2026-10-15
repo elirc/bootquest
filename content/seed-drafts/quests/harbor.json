@@ -1,0 +1,411 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "harbor",
+ "sha": "383b296196d5912fa9ed57893bea1de8ba5f394b",
+ "guides": [
+  "docs/LEARNER-GUIDE.md",
+  "docs/adr/0006-routing-engine.md",
+  "docs/adr/0007-sla-clock-and-escalation.md",
+  "docs/adr/0012-answer-bot-grounding-refusal-cost.md",
+  "docs/adr/0014-bot-autonomy-gating.md"
+ ],
+ "items": [
+  {
+   "id": "q01-first-match",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0006-routing-engine.md",
+    "lines": {
+     "start": 23,
+     "end": 24
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/shared/src/routing.ts",
+     "lineStart": 115,
+     "lineEnd": 124
+    }
+   ],
+   "prompt": "Two enabled routing rules both match a new conversation. Whose actions are applied?",
+   "answer": "Only the lower-order rule's, as route() stops at the first match",
+   "distractors": [
+    "Both rules' actions, merged together in order of the rules",
+    "The rule with the higher total score across all its conditions",
+    "The rule that an admin created or edited most recently"
+   ],
+   "explanation": "route() filters enabled rules, sorts by order, and returns on the first rule whose condition matches. Scoring was the losing side of the S06 debate; the trace records every rule it checked."
+  },
+  {
+   "id": "q02-round-robin",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0006-routing-engine.md",
+    "lines": {
+     "start": 34,
+     "end": 35
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/shared/src/routing.ts",
+     "lineStart": 131,
+     "lineEnd": 135
+    }
+   ],
+   "prompt": "What does roundRobin([\"a\", \"b\", \"c\"], 7) return?",
+   "answer": "agentId \"b\", with nextCursor 8",
+   "distractors": [
+    "agentId \"a\", with nextCursor 8",
+    "agentId \"c\", with nextCursor 0",
+    "agentId \"b\", with nextCursor 1"
+   ],
+   "explanation": "idx = ((7 % 3) + 3) % 3 = 1, so agentIds[1] is \"b\", and nextCursor is cursor + 1 = 8. The cursor never wraps; only the index does."
+  },
+  {
+   "id": "q03-advisory-lock",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0006-routing-engine.md",
+    "lines": {
+     "start": 36,
+     "end": 41
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/routes/routing.ts",
+     "lineStart": 124,
+     "lineEnd": 135
+    }
+   ],
+   "prompt": "Why does pickAgentForTeam take a per-team advisory lock before counting open conversations?",
+   "answer": "Two picks reading one minimum at once would both land on that agent",
+   "distractors": [
+    "The lock is what keeps the round-robin cursor across server restarts",
+    "Postgres refuses two concurrent updates to a single team row",
+    "It stops off-hours routing rules from firing during the pick"
+   ],
+   "explanation": "\"Read the minimum, then assign\" is a check-then-act race: concurrent picks see the same least-loaded agent. pg_advisory_xact_lock serializes choose-and-commit per team. The cursor persists because it is stored, not because of the lock."
+  },
+  {
+   "id": "q04-sla-pause",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0007-sla-clock-and-escalation.md",
+    "lines": {
+     "start": 15,
+     "end": 19
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/shared/src/sla.ts",
+     "lineStart": 55,
+     "lineEnd": 67
+    }
+   ],
+   "prompt": "An SLA window spends two business hours awaiting the customer. How does slaConsumedMs treat them?",
+   "answer": "It subtracts them: consumed is gross business time minus paused",
+   "distractors": [
+    "It counts them, since the clock follows wall-clock time from the start",
+    "It counts them, but only when they fall inside business hours",
+    "It freezes the whole window and restarts it from zero afterwards"
+   ],
+   "explanation": "slaConsumedMs computes gross = businessMillisBetween(start, now) and subtracts the business time inside each pause, clamped to the window. The ADR calls the pause a fairness decision."
+  },
+  {
+   "id": "q05-crossed-thresholds",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0007-sla-clock-and-escalation.md",
+    "lines": {
+     "start": 28,
+     "end": 29
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/shared/src/sla.ts",
+     "lineStart": 82,
+     "lineEnd": 89
+    }
+   ],
+   "prompt": "A window has used 92% of its target. What does crossedThresholds return with the default thresholds?",
+   "answer": "[0.75, 0.9]",
+   "distractors": [
+    "[0.9]",
+    "[0.9, 1.0]",
+    "[0.75]"
+   ],
+   "explanation": "DEFAULT_THRESHOLDS is [0.75, 0.9, 1.0] and the function keeps every t with consumed / target >= t. 0.92 passes 0.75 and 0.9 but not 1.0."
+  },
+  {
+   "id": "q06-fire-once",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0007-sla-clock-and-escalation.md",
+    "lines": {
+     "start": 32,
+     "end": 34
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/shared/src/sla.ts",
+     "lineStart": 96,
+     "lineEnd": 103
+    },
+    {
+     "path": "apps/worker/src/sla-monitor.ts",
+     "lineStart": 37,
+     "lineEnd": 46
+    }
+   ],
+   "prompt": "The monitor runs ten times while a window sits at 80%. How many 0.75 warnings does planEscalations emit?",
+   "answer": "One, since shouldFire is true only the first time",
+   "distractors": [
+    "Ten, one for each monitor run that finds it past 75%",
+    "None; nothing fires until the window breaches at 100%",
+    "Two; the first warning, then a reminder at the tenth run"
+   ],
+   "explanation": "EscalationLog.shouldFire records the \"windowId|threshold\" key and returns false afterwards, and planEscalations skips the threshold when it is false. That is the fire-once marker that stops the channel crying wolf."
+  },
+  {
+   "id": "q07-breach-tier",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0007-sla-clock-and-escalation.md",
+    "lines": {
+     "start": 28,
+     "end": 30
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/worker/src/sla-monitor.ts",
+     "lineStart": 51,
+     "lineEnd": 54
+    }
+   ],
+   "prompt": "Under the tiered policy, what happens at 100% (breach) while the owner is online?",
+   "answer": "The team lead is notified, and the owner keeps the conversation",
+   "distractors": [
+    "It is reassigned to the least-loaded agent on the same team",
+    "The owner is warned again, and the lead hears only at 110%",
+    "The window is closed, and a new SLA window opens for the lead"
+   ],
+   "explanation": "Pre-breach thresholds warn the owner, a breach escalates to the team lead by notification, and ownership changes automatically only when the owner is offline: attention before ownership."
+  },
+  {
+   "id": "q08-nearest-rank",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0007-sla-clock-and-escalation.md",
+    "lines": {
+     "start": 37,
+     "end": 39
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/shared/src/reporting.ts",
+     "lineStart": 11,
+     "lineEnd": 19
+    }
+   ],
+   "prompt": "What is percentile([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 90) with the nearest-rank method?",
+   "answer": "9",
+   "distractors": [
+    "10",
+    "9.1",
+    "8"
+   ],
+   "explanation": "rank = ceil(0.9 * 10) = 9, index 8 in the sorted list, which holds 9. 9.1 would be linear interpolation, which this function does not do; 10 is the p95 here."
+  },
+  {
+   "id": "q09-fabricated-citation",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0012-answer-bot-grounding-refusal-cost.md",
+    "lines": {
+     "start": 23,
+     "end": 25
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/shared/src/answerbot.ts",
+     "lineStart": 57,
+     "lineEnd": 80
+    }
+   ],
+   "prompt": "Two chunks were provided and the answer cites [1] and [3]. What does verifyCitations report?",
+   "answer": "Not grounded: [3] has no chunk, so it is a fabricated source",
+   "distractors": [
+    "Grounded: one valid citation is enough to count as grounded",
+    "Grounded, because an index past the end maps to the last chunk",
+    "Not grounded: an answer may only ever cite a single chunk"
+   ],
+   "explanation": "invalid = cited.filter(n => n < 1 || n > chunkCount) gives [3], and grounded requires cited.length > 0 AND invalid.length === 0. Nothing clamps indices or limits how many chunks are cited."
+  },
+  {
+   "id": "q10-sensitive-first",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0012-answer-bot-grounding-refusal-cost.md",
+    "lines": {
+     "start": 35,
+     "end": 35
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/shared/src/answerbot.ts",
+     "lineStart": 20,
+     "lineEnd": 37
+    }
+   ],
+   "prompt": "A question asks for a full card number and retrieval found strong sources. What does refusalReason return?",
+   "answer": "\"sensitive_topic\", checked before retrieval",
+   "distractors": [
+    "null, since retrieval found sources that are good enough",
+    "\"no_relevant_sources\", as help articles skip sensitive topics",
+    "\"sensitive_topic\", but only when retrieval was weak as well"
+   ],
+   "explanation": "refusalReason checks isSensitive(question) first and returns \"sensitive_topic\" regardless of retrieval; \"no_relevant_sources\" is only the second check."
+  },
+  {
+   "id": "q11-outside-hours",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0014-bot-autonomy-gating.md",
+    "lines": {
+     "start": 20,
+     "end": 23
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/shared/src/autonomy.ts",
+     "lineStart": 54,
+     "lineEnd": 65
+    }
+   ],
+   "prompt": "Mode is auto, the topic is allowlisted, confidence 0.9, retrieval 0.5, businessHoursOnly is true and it is 2 a.m. local. What is the decision?",
+   "answer": "draft, with the reason \"outside business hours\"",
+   "distractors": [
+    "auto_send, as all three main gates pass",
+    "handoff, since the bot cannot act right now",
+    "auto_send_cc, so an agent reviews it later"
+   ],
+   "explanation": "The topic, confidence (>= 0.85) and retrieval (>= 0.3) gates pass, but businessHoursOnly && !businessHoursOk returns draft. Handoff is only for a refusal; auto_send_cc needs mode auto_cc."
+  },
+  {
+   "id": "q12-scoped-subject",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0007-sla-clock-and-escalation.md",
+    "lines": {
+     "start": 42,
+     "end": 45
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/mailin/src/thread.ts",
+     "lineStart": 109,
+     "lineEnd": 115
+    }
+   ],
+   "prompt": "Two different customers each send \"Re: Invoice\" with no matching headers. Do they end up in one conversation?",
+   "answer": "No; the subject fallback only searches the sender's own threads",
+   "distractors": [
+    "Yes; subject similarity still merges them, just as it did in S03",
+    "Yes, provided both emails arrive during the same business day",
+    "No, because an email that matches no header is always dropped"
+   ],
+   "explanation": "threadEmail tries the In-Reply-To/References chain first; the subject fallback then matches only open conversations whose contactId equals the sender's. With no match it starts a new conversation, nothing is dropped."
+  },
+  {
+   "id": "f01-three-gates",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0014-bot-autonomy-gating.md",
+    "lines": {
+     "start": 20,
+     "end": 23
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/shared/src/autonomy.ts",
+     "lineStart": 54,
+     "lineEnd": 65
+    }
+   ],
+   "front": "autonomyDecision: order of checks",
+   "back": "refused -> handoff; mode off or draft -> draft; then topic allowlisted, confidence >= minConfidence (0.85), retrieval >= minRetrievalScore (0.3), and business hours if required, else draft. All pass -> auto_send (or auto_send_cc in auto_cc mode)."
+  },
+  {
+   "id": "f02-trust-ladder",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0014-bot-autonomy-gating.md",
+    "lines": {
+     "start": 32,
+     "end": 35
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/shared/src/autonomy.ts",
+     "lineStart": 25,
+     "lineEnd": 32
+    }
+   ],
+   "front": "The autonomy trust ladder and its default",
+   "back": "off -> draft -> auto+CC -> auto. DEFAULT_AUTONOMY is mode \"off\" with an empty topic allowlist; admins opt in per topic after reviewing the safety eval."
+  },
+  {
+   "id": "f03-grounding-check",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0012-answer-bot-grounding-refusal-cost.md",
+    "lines": {
+     "start": 21,
+     "end": 27
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/shared/src/answerbot.ts",
+     "lineStart": 83,
+     "lineEnd": 94
+    }
+   ],
+   "front": "isAcceptableAnswer(answer, chunkCount)",
+   "back": "A refusal (the refusal message or \"I don't know\") is always acceptable. Otherwise the answer must cite at least one [n] and every cited n must be in 1..chunkCount; an uncited confident answer is suppressed to a refusal."
+  },
+  {
+   "id": "f04-why-percentiles",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0007-sla-clock-and-escalation.md",
+    "lines": {
+     "start": 37,
+     "end": 39
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/shared/src/reporting.ts",
+     "lineStart": 28,
+     "lineEnd": 30
+    }
+   ],
+   "front": "Why Harbor reports p50/p90/p95 instead of averages",
+   "back": "Nine one-minute replies and one three-hour reply average about 18 minutes, which describes no real customer. The p95 shows the customer about to churn. percentiles() uses the nearest-rank method."
+  }
+ ]
+}

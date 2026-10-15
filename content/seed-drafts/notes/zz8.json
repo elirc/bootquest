@@ -1,0 +1,359 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "zz8",
+ "repo": "zz8",
+ "sha": "ae8c8234428271147fda7d136e3936acf3c4c692",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: two risky writes in an HR app",
+   "body": "zz8 is a Next.js and Prisma HR application. The `astraupskill/` course follows two write paths that used to be blind updates: an employee submitting a self-review, and a background worker claiming an integration job. Both were rewritten as guarded, transactional claims.\n\nRead the README for the chapter order and time estimates, then `01-CODEBASE-MAP.md` to see who calls whom. `02-CONCEPTS.md` is the key chapter: it explains both workflows and ends with a glossary that every later chapter relies on. `03-WORKED-CHANGE.md` shows the exact predicates and the new `claimToken` column, and `07-TRACE-LAB.md` follows one request across six boundaries.\n\nThe tests in this course use in-memory doubles, so read the \"Honest limits\" section to know what they do not prove.",
+   "excerpts": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "This course follows two high-risk write paths in an existing Next.js + Prisma HR application: an employee submitting a self-review, and a background worker claiming an integration job. Both were blind updates; both are now guarded, transactional claims. Every example names the real file and function, so you can open the implementation beside the lesson."
+    },
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 45,
+     "lineEnd": 45,
+     "quote": "The tests use deterministic repository doubles and an in-memory Prisma double. They demonstrate conditional-update contracts and transaction grouping; they do **not** prove PostgreSQL locking, isolation levels or cross-process behaviour. [VERIFICATION.md](VERIFICATION.md) says exactly what is and is not established, and sketches the integration test that would close the gap."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Both workflows plus the glossary."
+    },
+    {
+     "path": "astraupskill/07-TRACE-LAB.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "One request traced through six boundaries."
+    }
+   ]
+  },
+  {
+   "id": "r02-compare-and-set",
+   "target": "pack",
+   "phase": "before",
+   "title": "Let the database decide: compare-and-set updates",
+   "body": "Both workflows rely on one idea. Instead of reading a row, checking it in application code, and then writing, the code puts every condition into the write itself. A Prisma `updateMany` with all the predicates in its `where` clause changes the row only if it still qualifies at that instant, and the returned count tells you whether you won.\n\nThe read that happens earlier is still useful, for example to give a friendly error, but it is not a guarantee: two requests can both read the same state before either writes. The gap between the read and the write is called the race window, and only a predicate inside the write closes it.\n\nAs you read, list each predicate in the two `updateMany` calls and say which attack or race it blocks.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 61,
+     "lineEnd": 61,
+     "quote": "| **Race window** | The gap between reading a row and writing it. Here: both requests run `findSelfReviewContext` and see `IN_PROGRESS` before either runs `updateMany`. Only a predicate inside the write closes it. |"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/repositories/review-repository.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The guarded self-review submission."
+    },
+    {
+     "path": "src/repositories/integration-repository.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The queue claim, completion and retry."
+    }
+   ]
+  },
+  {
+   "id": "r03-claim-tokens",
+   "target": "pack",
+   "phase": "before",
+   "title": "Queues need ownership, not just a status",
+   "body": "A queue worker does two things at different times: it claims a job, then later it completes it. Between those moments a lot can happen. The job can fail, an operator can retry it, and a second worker can claim it while the first is still running old code.\n\nThe course solves this with a random token written onto the row at claim time. Later writes must present the same token, so only the current owner can finish the job. Think of it like a numbered ticket at a counter: an old ticket no longer matches.\n\nWhile reading `integration-repository.ts`, note which method writes the token, which method checks it, which method clears it, and which fields each method leaves alone. The chapter also explains what this project deliberately does not have yet.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 57,
+     "lineEnd": 57,
+     "quote": "| **Claim token / lease** | A random value (`crypto.randomUUID()`) written onto a row when a worker takes ownership of it. Later writes must present the same token, so a worker that fell behind cannot finish a job that has since been retried. A \"lease\" is the same idea with an expiry; this project has no expiry — see chapter 3. |"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": 95,
+     "lineEnd": 120,
+     "why": "The claimToken schema change and how it reaches a database."
+    }
+   ]
+  },
+  {
+   "id": "x-q01-race-loser",
+   "target": "seed:quests:zz8/quiz/7c0d2daf4bed7003",
+   "phase": "after",
+   "title": "What the losing tab actually receives",
+   "body": "Both requests run `findSelfReviewContext` first and both see IN_PROGRESS, so the service's \"already submitted\" check passes for both. The first request's `updateMany` flips the assignment to SUBMITTED. The second one's `updateMany` now matches zero rows, the repository returns null, and the service throws `AppError(404, \"Review assignment was not found for submission.\")`.\n\nNote the mismatch: `02-CONCEPTS.md` says the service maps null to a conflict, but the code at this commit throws 404.\n\n- The 409 \"already submitted\" check ran before the first write, so it could not see it.\n- A second response row is impossible: the loser returns before `reviewResponse.create`.\n- There is no upsert; the code uses create.",
+   "excerpts": [
+    {
+     "path": "src/services/review-service.ts",
+     "lineStart": 68,
+     "lineEnd": 70,
+     "quote": "if (reviewContext.assignmentStatus === \"SUBMITTED\") { throw new AppError(409, \"This self-review has already been submitted.\"); }"
+    },
+    {
+     "path": "src/services/review-service.ts",
+     "lineStart": 84,
+     "lineEnd": 86,
+     "quote": "if (!response) { throw new AppError(404, \"Review assignment was not found for submission.\"); }"
+    },
+    {
+     "path": "src/repositories/review-repository.ts",
+     "lineStart": 123,
+     "lineEnd": 123,
+     "quote": "if (claimed.count !== 1) return null;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02-audit-throws",
+   "target": "seed:quests:zz8/quiz/1d676a3a1028b125",
+   "phase": "after",
+   "title": "Why a failing audit insert undoes the submission",
+   "body": "The status change, the response create and the audit create all go through the same `tx` client inside one `db.$transaction`. A throw inside the callback discards everything written through `tx`, so the assignment keeps the status it had and no response row survives. The glossary states the invariant: an audit entry can never exist for a change that did not commit, and the reverse holds too.\n\n- SUBMITTED without audit is what you would get if the audit write moved outside the transaction; variation 2 in chapter 3 shows a test failing exactly that way.\n- Keeping the response is wrong for the same reason: it was written through `tx`.\n- There is no catch block that resets the status; rollback does the work.",
+   "excerpts": [
+    {
+     "path": "src/repositories/review-repository.ts",
+     "lineStart": 105,
+     "lineEnd": 106,
+     "quote": "return db.$transaction(async (tx) => { const claimed = await tx.reviewAssignment.updateMany({"
+    },
+    {
+     "path": "src/repositories/review-repository.ts",
+     "lineStart": 137,
+     "lineEnd": 141,
+     "quote": "await tx.auditLog.create({ data: { tenantId: ctx.tenantId, actorUserId: ctx.actorUserId, action: \"REVIEW_SUBMITTED\","
+    },
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": 23,
+     "lineEnd": 23,
+     "quote": "Place the equivalent predicate only in the repository transaction, after the service has derived IDs from the session. Follow it with `reviewResponse.create` and `tx.auditLog.create`. If either write throws, the transaction rolls back. The response returned to the route contains assignment and cycle information, never password or unrelated employee data."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q03-subject-predicate",
+   "target": "seed:quests:zz8/quiz/7fbe22e94f090aa3",
+   "phase": "after",
+   "title": "Why the update also matches reviewer and subject",
+   "body": "The tenant check alone is not enough. Every employee in the tenant could guess another assignment id. Putting `reviewerUserId` and `subjectEmployeeId` in the `where` clause means the update only matches an assignment that really belongs to the caller. Chapter 3's first variation removes the subject predicate and a test fails, because the repository then claims someone else's assignment.\n\n- An index is a performance concern; these predicates are about authorization.\n- There is no upsert of the response, so nothing is keyed on the subject later.\n- Delegated submission is the opposite: the concepts chapter says it would need a separate permission.",
+   "excerpts": [
+    {
+     "path": "src/repositories/review-repository.ts",
+     "lineStart": 107,
+     "lineEnd": 116,
+     "quote": "where: { tenantId: ctx.tenantId, id: input.assignmentId, reviewCycleId: input.cycleId, reviewerUserId: input.reviewerUserId, subjectEmployeeId: input.subjectEmployeeId, type: \"SELF\", status: { in: [\"NOT_STARTED\", \"IN_PROGRESS\"] }, reviewCycle: { status: \"ACTIVE\" }, },"
+    },
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": 125,
+     "lineEnd": 125,
+     "quote": "1. **Delete `subjectEmployeeId` from the `updateMany` where clause** in `review-repository.ts:107`. Run `npm test -- run src/tests/workflow-atomicity.test.ts`. Expected: \"writes nothing when the subject employee predicate does not match\" fails, because the repository now claims an assignment that belongs to someone else. This is the exact authorisation hole the change closed."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q04-stale-token",
+   "target": "seed:quests:zz8/quiz/26e5bdc1586f760f",
+   "phase": "after",
+   "title": "Why an old worker cannot finish a newer attempt",
+   "body": "`completeJob` only updates a row that matches the tenant, the job id, status RUNNING and the exact `claimToken` the worker passes. When worker 2 claimed the retried job, it wrote a new token. Worker 1's old token no longer matches, the update count is 0, and `completeJob` returns null. The worker loop then skips its log.\n\n- Marking it FAILED is what would happen if the token were dropped from the `where` clause (chapter 3, variation 3).\n- Marking it SUCCEEDED is wrong for the same reason.\n- No error is thrown; zero rows simply means \"not yours\", returned as null.",
+   "excerpts": [
+    {
+     "path": "src/repositories/integration-repository.ts",
+     "lineStart": 217,
+     "lineEnd": 231,
+     "quote": "const updated = await db.integrationJob.updateMany({ where: { tenantId: ctx.tenantId, id: input.jobId, status: \"RUNNING\", claimToken: input.claimToken, }, data: { status: input.success ? \"SUCCEEDED\" : \"FAILED\", errorMessage: input.success ? null : (input.errorMessage ?? \"Integration failed.\"), finishedAt: new Date(), }, }); if (updated.count !== 1) return null;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q05-claim-race",
+   "target": "seed:quests:zz8/quiz/bd6d8fd3c35c4273",
+   "phase": "after",
+   "title": "How two workers share three queued rows",
+   "body": "`claimQueuedJobs` reads up to `batchSize` QUEUED rows, then tries a separate `updateMany` per row that requires `status: \"QUEUED\"`. Whichever worker updates a row first changes it to RUNNING with its own token; the other worker's update for that row returns count 0, and the loop `continue`s. Each row ends up owned by exactly one worker.\n\n- An overwritten token is impossible: the second update no longer matches QUEUED.\n- Processing both is prevented because the worker only processes the returned, claimed list.\n- There is no deadlock: each update touches one row and simply matches or does not.",
+   "excerpts": [
+    {
+     "path": "src/repositories/integration-repository.ts",
+     "lineStart": 182,
+     "lineEnd": 198,
+     "quote": "for (const job of jobs) { const claimToken = crypto.randomUUID(); const result = await db.integrationJob.updateMany({ where: { tenantId: ctx.tenantId, id: job.id, status: \"QUEUED\", }, data: { status: \"RUNNING\", startedAt: new Date(), finishedAt: null, claimToken, attemptCount: { increment: 1 }, }, }); if (result.count !== 1) continue;"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 38,
+     "lineEnd": 38,
+     "quote": "At 10:00, two workers read the same three queued rows. Both may see the same candidates, but each conditional update can return one positive count per row. The first winner writes token A and returns the row. The second receives zero for that ID and skips it. If the second worker processes an object retained from its initial read anyway, its completion predicate fails because the row is already RUNNING with token A. This is why the processor must consume only the claimed return list."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q06-retry-from-running",
+   "target": "seed:quests:zz8/quiz/3280b128288399d0",
+   "phase": "after",
+   "title": "Why a running job cannot be retried",
+   "body": "`queueRetry` opens a transaction and runs `updateMany` with `status: { in: [\"FAILED\", \"RETRY_REQUIRED\"] }`. A RUNNING job does not match, so the count is 0, the callback returns false before writing the log or the audit row, and the method returns null.\n\n- Moving it back to QUEUED would let two workers run the same job; the status predicate is what stops it.\n- The INFO log is written only after a successful update.\n- The audit insert never runs, so it cannot be the thing that rejects the call.",
+   "excerpts": [
+    {
+     "path": "src/repositories/integration-repository.ts",
+     "lineStart": 115,
+     "lineEnd": 131,
+     "quote": "const updated = await db.$transaction(async (tx) => { const result = await tx.integrationJob.updateMany({ where: { tenantId: ctx.tenantId, id: input.jobId, status: { in: [\"FAILED\", \"RETRY_REQUIRED\"] }, }, data: { status: \"QUEUED\", retryReason: input.reason, errorMessage: null, startedAt: null, finishedAt: null, claimToken: null, }, }); if (result.count !== 1) return false;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07-attempt-count",
+   "target": "seed:quests:zz8/quiz/876b702a068dcc79",
+   "phase": "after",
+   "title": "Counting attempts across a retry",
+   "body": "Only one line changes `attemptCount`: the winning claim update in `claimQueuedJobs`, with `attemptCount: { increment: 1 }`. The first claim makes it 1. The failure and the manual `queueRetry` do not touch it: retry resets status, the retry reason, error, timestamps and `claimToken`, but not the count. The second claim makes it 2. The concepts chapter says attempts increase when a claim actually wins.\n\n- 3 would require the retry to count, which it does not.\n- 1 would require the retry to reset the count, which it does not.\n- 4 assumes the candidate read also increments, but reading changes nothing.",
+   "excerpts": [
+    {
+     "path": "src/repositories/integration-repository.ts",
+     "lineStart": 190,
+     "lineEnd": 196,
+     "quote": "data: { status: \"RUNNING\", startedAt: new Date(), finishedAt: null, claimToken, attemptCount: { increment: 1 }, },"
+    },
+    {
+     "path": "src/repositories/integration-repository.ts",
+     "lineStart": 122,
+     "lineEnd": 129,
+     "quote": "data: { status: \"QUEUED\", retryReason: input.reason, errorMessage: null, startedAt: null, finishedAt: null, claimToken: null, },"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08-create-not-upsert",
+   "target": "seed:quests:zz8/quiz/760b9850ed916473",
+   "phase": "after",
+   "title": "Why the response row uses create",
+   "body": "The old code upserted the response, so two requests could both overwrite it. With `create`, a second response for the same assignment fails on the unique assignment relation instead of silently replacing the first one. The concepts chapter puts it this way: if a status predicate were ever weakened by mistake, an upsert would let a late request overwrite the original text, while create keeps a second safety net.\n\n- Speed is not the reason given anywhere; correctness is.\n- Upsert works fine inside interactive transactions.\n- Several drafts per assignment is wrong: the relation is unique, one response per assignment.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 11,
+     "lineEnd": 11,
+     "quote": "The response uses create rather than upsert. Upsert would make a late request overwrite the original text if a status predicate were accidentally weakened. The unique assignment relation remains a second safety net. Audit metadata carries cycle and response IDs while the transaction still has the same actor and tenant context."
+    },
+    {
+     "path": "src/repositories/review-repository.ts",
+     "lineStart": 125,
+     "lineEnd": 128,
+     "quote": "const response = await tx.reviewResponse.create({ data: { tenantId: ctx.tenantId, reviewAssignmentId: input.assignmentId,"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09-closed-cycle",
+   "target": "seed:quests:zz8/quiz/2b15c1a538ad9a92",
+   "phase": "after",
+   "title": "Why a closed cycle is a 409",
+   "body": "The service loads the self-review context, finds the assignment, and checks `reviewContext.cycleStatus !== \"ACTIVE\"`. For CLOSED it throws `AppError(409, ...)` with a message naming the current status. The record exists, so this is a conflict with its state, not a missing record. The repository repeats the rule with `reviewCycle: { status: \"ACTIVE\" }` in its update.\n\n- 404 is reserved for a missing assignment.\n- There is no draft or approval path in this code.\n- Submitting anyway is wrong twice: the service throws first, and the repository also filters on cycle status.",
+   "excerpts": [
+    {
+     "path": "src/services/review-service.ts",
+     "lineStart": 60,
+     "lineEnd": 65,
+     "quote": "if (reviewContext.cycleStatus !== \"ACTIVE\") { throw new AppError( 409, `Self-review submissions are only allowed while the cycle is ACTIVE. Current status: ${reviewContext.cycleStatus}.`, ); }"
+    },
+    {
+     "path": "src/repositories/review-repository.ts",
+     "lineStart": 115,
+     "lineEnd": 115,
+     "quote": "reviewCycle: { status: \"ACTIVE\" },"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10-identity-from-session",
+   "target": "seed:quests:zz8/quiz/e1c0add0ed66cbb4",
+   "phase": "after",
+   "title": "Where the subject employee id comes from",
+   "body": "The service calls `assertEmployeeContext(session)` and then sets `subjectEmployeeId = session.employeeId`. The reviewer id is `session.userId`. Both come from the trusted session, so a request cannot name a different employee. The concepts chapter calls this the desired shape: narrative fields come from the client, identity fields come from the server.\n\n- The body is untrusted; Zod only validates the narrative fields and ratings.\n- The cycle row is looked up for status and name, not for the subject.\n- The URL carries the cycle id, which the repository confirms; it does not carry the employee.",
+   "excerpts": [
+    {
+     "path": "src/services/review-service.ts",
+     "lineStart": 46,
+     "lineEnd": 54,
+     "quote": "assertEmployeeContext(session); const ctx = toRepositoryContext(session); const subjectEmployeeId = session.employeeId as string; const reviewContext = await this.deps.reviewRepository.findSelfReviewContext(ctx, { cycleId, reviewerUserId: session.userId, subjectEmployeeId, });"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 21,
+     "lineEnd": 21,
+     "quote": "Suppose the browser sends strengths, areasToImprove, accomplishments, rating, and answers but omits any user identifier. The service builds the repository input from the session’s userId and employeeId. This is the desired shape: narrative fields are client-owned, identity fields are server-owned. If a future API needs a delegated reviewer workflow, it should introduce a separate permission and assignment lookup rather than accepting an employeeId silently."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q11-no-lease-expiry",
+   "target": "seed:quests:zz8/quiz/59ac89587a5ca3d4",
+   "phase": "after",
+   "title": "What happens to a job whose worker crashed",
+   "body": "Nothing moves it. `claimQueuedJobs` only selects QUEUED rows, and `queueRetry` only accepts FAILED or RETRY_REQUIRED, so a RUNNING row left by a crashed worker is never picked up again. The guide is explicit that the example does not invent a timeout or a heartbeat; a lease field and a recovery query would need their own migration and tests (exercise E sketches one).\n\n- A stale token does not trigger a reclaim: no query looks at RUNNING rows.\n- queueRetry refuses RUNNING jobs by its status predicate.\n- There is no finally block in the worker that resets jobs.",
+   "excerpts": [
+    {
+     "path": "src/repositories/integration-repository.ts",
+     "lineStart": 158,
+     "lineEnd": 163,
+     "quote": "async claimQueuedJobs(ctx: RepositoryContext, batchSize: number): Promise<ClaimedIntegrationJob[]> { const jobs = await db.integrationJob.findMany({ where: { tenantId: ctx.tenantId, status: \"QUEUED\", },"
+    },
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": 47,
+     "lineEnd": 47,
+     "quote": "A processor can throw before completion, so a production worker needs a policy for leaving RUNNING jobs and recovering leases. The current bounded example uses explicit statuses and claim tokens; it does not invent a timeout or heartbeat. A future lease field could allow a recovery query to move abandoned RUNNING rows to RETRY_REQUIRED, but that change would need its own migration and tests."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q12-stale-no-log",
+   "target": "seed:quests:zz8/quiz/7fbd1774f27bfdad",
+   "phase": "after",
+   "title": "Why the completion log waits for completeJob",
+   "body": "The worker calls `completeJob` and only `if (completed)` does it write the log and push the job to `processed`. A worker that fell behind can still finish its in-memory work after another attempt took the job. For that worker `completeJob` returns null, so it writes no log. Otherwise it would publish an outcome for an attempt it no longer owns, and the log would lie.\n\n- No foreign key forces this ordering; the log is written by `addLog` with just a job id.\n- The log is written outside any transaction, so transaction length is not the reason.\n- `completeJob` does not delete logs; it only updates the job row.",
+   "excerpts": [
+    {
+     "path": "src/jobs/process-queued-integration-jobs.ts",
+     "lineStart": 31,
+     "lineEnd": 48,
+     "quote": "const completed = await deps.integrationRepository.completeJob(input.ctx, { jobId: job.id, claimToken: job.claimToken, success: !simulateFailure, errorMessage: simulateFailure ? \"Simulated vendor-side failure while processing queued job.\" : null, }); if (completed) { await deps.integrationRepository.addLog(input.ctx, { jobId: job.id, level: simulateFailure ? \"ERROR\" : \"INFO\", message: simulateFailure ? \"Job failed during worker processing.\" : \"Job completed during worker processing.\", }); processed.push(completed);"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 34,
+     "lineEnd": 34,
+     "quote": "The worker logs completion only after matching completion succeeds. This matters because a stale worker can still finish its in-memory processor after another attempt has taken ownership. A log from that stale process would falsely report a current attempt’s outcome."
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}
