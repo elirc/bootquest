@@ -1,0 +1,424 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "master4",
+ "repo": "master4",
+ "sha": "236a7d547df8c28f2c92178576a6856d1d1a2033",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: reserving stock without promising it twice",
+   "body": "Atlas Fulfillment is a TypeScript app (Express, Prisma over SQLite, React). This pack studies one change: how an order **reserves** warehouse stock safely. The guides live in `astraupskill/` and the README gives the reading order:\n\n1. `01-CODEBASE-MAP.md`: the layers (browser, API, service, shared rule, Prisma).\n2. `02-CONCEPTS.md`: the vocabulary (`onHand`, `reserved`, available-to-promise) and why repeated lines for one SKU share one stock pool.\n3. `03-WORKED-CHANGE.md`: the old and new code side by side.\n4. `04-TESTING-AND-DEBUGGING.md`: the three test files and a debugging table.\n5. `05-PRACTICE.md`, *then* `06-SOLUTIONS-AND-REVIEW.md`, which also holds the senior review findings F1 to F7.\n\nTwo code files carry almost everything: `src/shared/inventoryRules.ts` (pure rules with no database) and `src/server/modules/orders/orders.service.ts` (the transaction that reads, plans and writes). For the review findings you will also need `src/server/modules/platform/auth.ts` and `src/server/app.ts`. Many questions give you numbers; work them out on paper against the code.",
+   "excerpts": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "Read `01-CODEBASE-MAP.md` to identify the browser, API, service, shared rule, and Prisma layers."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Which file implements each layer."
+    },
+    {
+     "path": "astraupskill/07-TRACE-LAB.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "A reservation followed from HTTP request to database writes."
+    }
+   ]
+  },
+  {
+   "id": "r02-stock-vocabulary",
+   "target": "pack",
+   "phase": "before",
+   "title": "On hand, reserved and available-to-promise",
+   "body": "Three numbers describe one SKU in one warehouse:\n\n- **onHand**: units physically there.\n- **reserved**: units already promised to orders but not shipped yet.\n- **available-to-promise (ATP)**: what a *new* order may still claim, computed as `onHand - reserved` and never allowed below zero.\n\nWith 42 on hand and 20 reserved, ATP is 22. Reserving raises `reserved`; shipping later lowers both `onHand` and `reserved`.\n\nAn order is made of lines, and nothing stops two lines naming the same SKU. Those lines do not each get their own 22: they compete for the same stock. Keep that idea of a shared **demand pool** in mind when you read `planReservation`: look for where it adds up quantities per SKU before comparing with ATP, and what it does with a line whose quantity is not a sensible whole number.",
+   "excerpts": [
+    {
+     "path": "src/shared/inventoryRules.ts",
+     "lineStart": 25,
+     "lineEnd": 27,
+     "quote": "export function availableToPromise(balance: Pick<InventoryBalance, 'onHand' | 'reserved'>) { return Math.max(0, balance.onHand - balance.reserved) }"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "If a balance has 42 on hand and 20 reserved, the API can promise 22."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The full concepts guide, including the duplicate-line example."
+    }
+   ]
+  },
+  {
+   "id": "r03-plan-apply-transaction",
+   "target": "pack",
+   "phase": "before",
+   "title": "Plan, apply, transaction: three different jobs",
+   "body": "The reservation code has three layers of protection, and each does a different job:\n\n1. **Planning** (`planReservation`) is a pure function. It looks at the order lines and the balances and returns a *decision*: ok or not, plus a list of failures to report back.\n2. **Applying** (`applyReservation`) is a guarded state change on one balance. The service calls it again inside the write loop, as a second check.\n3. **The transaction** (`db.$transaction` in the service) makes the many writes (stock, reservation rows, order status, event, outbox, audit) succeed or fail together.\n\nThe concepts guide is careful about what these do *not* give you. Both checks compare against the balances read at the start, and the stock update itself has no condition. Read that paragraph, then read the service from line 36 to the end of the transaction and label each write with which layer protects it.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 13,
+     "lineEnd": 13,
+     "quote": "The shared helper makes the decision deterministic and reusable; the transaction makes the multi-record workflow atomic."
+    },
+    {
+     "path": "src/server/modules/orders/orders.service.ts",
+     "lineStart": 91,
+     "lineEnd": 93,
+     "quote": "// The pure rule is the guard at the write, not only at the plan: it throws (and the // transaction rolls back) if the aggregate would exceed available-to-promise. applyReservation(balance, quantity)"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/server/modules/orders/orders.service.ts",
+     "lineStart": 36,
+     "lineEnd": 148,
+     "why": "reserveSalesOrder: the whole transaction."
+    }
+   ]
+  },
+  {
+   "id": "x-q01-debug-table",
+   "target": "seed:quests:master4/quiz/0b65c35d5b6db54b",
+   "phase": "after",
+   "title": "What the debugging table is built to separate",
+   "body": "**Key: a planner bug from a transaction bug.** The table walks one input through every stage: the lines, the per-SKU total, the balance, ATP, the decision, and finally the writes. If the *decision* column is wrong (say 14 + 9 against 22 says \"ok\"), the bug is in the pure planner. If the decision is right but the *writes* column is wrong (say a refused order still incremented stock), the bug is in the transaction code. The guide says exactly this, and also warns that no test makes two reservations race.\n\n- *Flaky vs deterministic*: the table has no reruns; the planner is a pure function, so reruns would tell you nothing.\n- *SQLite vs PostgreSQL*: the table uses one database; there is no comparison column.\n- *Authentication vs authorization*: the table has no actor column at all.",
+   "excerpts": [
+    {
+     "path": "astraupskill/04-TESTING-AND-DEBUGGING.md",
+     "lineStart": 48,
+     "lineEnd": 48,
+     "quote": "A useful debugging table is: input lines, grouped demand, matching balance, available stock, decision, writes."
+    },
+    {
+     "path": "astraupskill/04-TESTING-AND-DEBUGGING.md",
+     "lineStart": 55,
+     "lineEnd": 55,
+     "quote": "This table separates a planner bug (wrong decision) from a transaction bug (right decision, wrong writes). None of the three files exercises two reservations racing for the same balance."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02-unsafe-integer",
+   "target": "seed:quests:master4/quiz/1ce421deda75ef55",
+   "phase": "after",
+   "title": "What planReservation does with 2 ** 53 units",
+   "body": "**Key: one failure for that line, with available 0 as a placeholder.** `Number.isSafeInteger` is false for `2 ** 53` (safe integers stop at `2 ** 53 - 1`), so that line is invalid. Look at the `filter`: an invalid line returns `true` (kept in `invalidLines`) *before* reaching the line that adds to `requestedBySku`. So it never enters the per-SKU total. It becomes a failure with `available: 0`, a fixed placeholder, not a stock reading. The valid 5 is judged on its own and fits.\n\n- *Two failures, the total is poisoned*: the invalid line is never added to the total.\n- *available shows the real ATP*: the invalid-line failure hard-codes `available: 0`.\n- *No failure*: `2 ** 53` is positive but not a *safe* integer, so the check rejects it.",
+   "excerpts": [
+    {
+     "path": "src/shared/inventoryRules.ts",
+     "lineStart": 34,
+     "lineEnd": 41,
+     "quote": "const invalidLines = lines.filter((line) => { const valid = Number.isSafeInteger(line.quantity) && line.quantity > 0 if (!valid) { return true } requestedBySku.set(line.skuId, (requestedBySku.get(line.skuId) ?? 0) + line.quantity) return false })"
+    },
+    {
+     "path": "src/shared/inventoryRules.ts",
+     "lineStart": 44,
+     "lineEnd": 48,
+     "quote": "...invalidLines.map((line) => ({ skuId: line.skuId, requested: line.quantity, available: 0, reason: 'Reservation quantity must be a positive whole number.',"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 36,
+     "lineEnd": 38,
+     "why": "Exercise 2 answer, which explains the placeholder."
+    }
+   ]
+  },
+  {
+   "id": "x-q03-negative-shipment",
+   "target": "seed:quests:master4/quiz/23512e94c1348f43",
+   "phase": "after",
+   "title": "What applyShipment does with a negative quantity",
+   "body": "**Key: onHand 47 and reserved 25.** `applyShipment` has one guard: `quantity > balance.reserved`. With `-5`, that is `-5 > 20`, false, so nothing throws. Then it subtracts: `42 - (-5) = 47` and `20 - (-5) = 25`. A \"shipment\" of minus five silently adds stock. Senior finding F5 records this observed result and calls it latent because no server code calls the function yet.\n\n- *37 and 15, sign ignored*: there is no `Math.abs`; the subtraction uses the raw value.\n- *Throws the positive-whole-number error*: that message belongs to `applyReservation`; `applyShipment` has no such check (Exercise 5 adds one).\n- *Throws \"more than reserved\"*: `-5` is not greater than 20, so that guard does not fire.",
+   "excerpts": [
+    {
+     "path": "src/shared/inventoryRules.ts",
+     "lineStart": 98,
+     "lineEnd": 107,
+     "quote": "export function applyShipment(balance: InventoryBalance, quantity: number): InventoryBalance { if (quantity > balance.reserved) { throw new Error('Cannot ship more units than are currently reserved.') } return { ...balance, onHand: balance.onHand - quantity, reserved: balance.reserved - quantity, }"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 140,
+     "lineEnd": 140,
+     "why": "Finding F5 with the observed values."
+    }
+   ]
+  },
+  {
+   "id": "x-q04-minimum-rank",
+   "target": "seed:quests:master4/quiz/363d6cc6ba6f0687",
+   "phase": "after",
+   "title": "Why a warehouse associate can download the CSV",
+   "body": "**Key: yes, requireRole takes the minimum rank of the listed roles.** `requireRole` does not check membership. It maps each listed role to a rank and keeps `Math.min`. For `['buyer', 'warehouse_manager', 'admin']` the ranks are 1, 2, 3, so the minimum is 1. A request passes when `actorRank < minimumRank` is false. `warehouse_associate` has rank 1, so 1 < 1 is false and it passes, though it is not in the list. Finding F2 calls this latent (no seeded user has that role) and suggests `includes()` or renaming to `requireMinimumRole`.\n\n- *No, it checks includes()*: that is the suggested *fix*; the current code uses `Math.min`.\n- *Needs an x-role header*: no such header is read anywhere in `auth.ts`.\n- *Rank 0 like viewer*: the table gives `warehouse_associate: 1`.",
+   "excerpts": [
+    {
+     "path": "src/server/modules/platform/auth.ts",
+     "lineStart": 7,
+     "lineEnd": 8,
+     "quote": "buyer: 1, warehouse_associate: 1,"
+    },
+    {
+     "path": "src/server/modules/platform/auth.ts",
+     "lineStart": 33,
+     "lineEnd": 33,
+     "quote": "const minimumRank = Math.min(...allowedRoles.map((role) => roleRank[role] ?? 99))"
+    },
+    {
+     "path": "src/server/modules/platform/auth.ts",
+     "lineStart": 36,
+     "lineEnd": 38,
+     "quote": "const actorRank = roleRank[request.actor?.role ?? 'viewer'] ?? 0 if (actorRank < minimumRank) {"
+    },
+    {
+     "path": "src/server/app.ts",
+     "lineStart": 93,
+     "lineEnd": 93,
+     "quote": "app.get('/api/exports/inventory.csv', requireRole(['buyer', 'warehouse_manager', 'admin']), async (_request, response, next) => {"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q05-duplicate-sku-lines",
+   "target": "seed:quests:master4/quiz/38da5ec9aca0f58e",
+   "phase": "after",
+   "title": "Why 14 + 9 against 22 used to pass",
+   "body": "**Key: each line was compared to the same 22 separately; the fix sums first.** ATP is 42 - 20 = 22. The old planner checked line by line: 14 fits in 22, and 9 fits in 22, so it said yes, even though together they ask for 23. The concepts guide calls this treating one shared pool as two. The corrected `planReservation` adds each valid line into `requestedBySku` and compares the 23 total with 22, so the order is refused.\n\n- *Old compared to on-hand, fix compares each line to 22*: per-line against 22 is exactly the old bug, and would still approve both.\n- *Rounding fractions / rejecting multi-line orders*: there are no fractions here, and the fix sums lines rather than banning them.\n- *Old ignored reserved*: ATP already subtracts reserved; 14 and 9 each still fit in 22 on their own.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 7,
+     "lineEnd": 7,
+     "quote": "Each line is less than 22, but the order asks for 23 total. Checking lines independently treats one shared stock pool as two separate pools."
+    },
+    {
+     "path": "src/shared/inventoryRules.ts",
+     "lineStart": 39,
+     "lineEnd": 39,
+     "quote": "requestedBySku.set(line.skuId, (requestedBySku.get(line.skuId) ?? 0) + line.quantity)"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/04-TESTING-AND-DEBUGGING.md",
+     "lineStart": 13,
+     "lineEnd": 33,
+     "why": "The aggregation regression test with 14 and 9."
+    }
+   ]
+  },
+  {
+   "id": "x-q06-report-vs-throw",
+   "target": "seed:quests:master4/quiz/4b609e017eb0b3dd",
+   "phase": "after",
+   "title": "Why the planner reports but applyReservation throws",
+   "body": "**Key: planning returns a decision; applying changes state and so throws.** `planReservation`'s job is to answer \"can this order be reserved, and if not, why?\", so invalid lines go into the normal `failures` list that the API reports. `applyReservation`'s job is to return the *new balance*; for an invalid quantity there is no meaningful balance to return, so it throws. Inside the service's write loop that throw rolls the whole transaction back, as the comment at line 91 says.\n\n- *Both throw, the planner catches*: `planReservation` contains no `throw` or `try`; it builds failure objects directly.\n- *Throws only in tests*: the service calls the same function at line 93, and the comment says it throws there.\n- *The planner runs outside the transaction*: the service calls `planReservation` inside `db.$transaction` (line 57).",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "`planReservation` reports invalid lines in its normal `ReservationDecision` shape. `applyReservation` throws because it is a state transformation and cannot return a meaningful balance after an invalid mutation."
+    },
+    {
+     "path": "src/shared/inventoryRules.ts",
+     "lineStart": 84,
+     "lineEnd": 86,
+     "quote": "if (!Number.isSafeInteger(quantity) || quantity <= 0) { throw new Error('Reservation quantity must be a positive whole number.') }"
+    },
+    {
+     "path": "src/server/modules/orders/orders.service.ts",
+     "lineStart": 91,
+     "lineEnd": 93,
+     "quote": "// The pure rule is the guard at the write, not only at the plan: it throws (and the // transaction rolls back) if the aggregate would exceed available-to-promise. applyReservation(balance, quantity)"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07-one-row-per-sku",
+   "target": "seed:quests:master4/quiz/57b828ad0298611f",
+   "phase": "after",
+   "title": "What the write loop does with two lines for one SKU",
+   "body": "**Key: one increment of 2 and one StockReservation row of 2.** After a successful plan, the service builds its own `requestedBySku` map by adding each line's quantity per SKU (lines 77-80). The write loop then runs once per *map entry*, not once per line: one `inventoryItem.update` with `increment: quantity` and one `stockReservation.create` with that summed quantity. Two one-unit lines therefore give a single row of quantity 2, which is exactly what the regression test asserts.\n\n- *Deduplicated to quantity 1*: lines are summed (`+ line.quantity`), not deduplicated.\n- *No rows until the outbox worker runs*: the rows are written inside the transaction; the outbox message is a separate notification.\n- *Two increments and two rows, like before*: that per-line behaviour is what the Part 2 fix removed.",
+   "excerpts": [
+    {
+     "path": "src/server/modules/orders/orders.service.ts",
+     "lineStart": 77,
+     "lineEnd": 82,
+     "quote": "const requestedBySku = new Map<string, number>() for (const line of order.lines) { requestedBySku.set(line.skuId, (requestedBySku.get(line.skuId) ?? 0) + line.quantity) } for (const [skuId, quantity] of requestedBySku) {"
+    },
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": 64,
+     "lineEnd": 64,
+     "quote": "`tests/reservation-api.test.ts` is the regression test for Part 2: its second case asserts exactly one `StockReservation` row with `quantity: 2` for an order of two one-unit lines."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08-check-then-act",
+   "target": "seed:quests:master4/quiz/629b879ab667e18d",
+   "phase": "after",
+   "title": "Why two concurrent reservations can both pass",
+   "body": "**Key: both read the old balance, and the increment is unconditional.** Both checks (`planReservation` and `applyReservation`) compare against `balances`, read once at line 51. The write at lines 95-98 says \"add this many to reserved\" with no condition on the current numbers. On PostgreSQL at READ COMMITTED, two transactions can both read the same old balance, both decide \"fits\", and both increments land. Finding F3 calls this check-then-act; the fix is a conditional write (`WHERE \"onHand\" - reserved >= quantity`) and checking the affected-row count.\n\n- *applyReservation is skipped after planning*: it runs in the loop at line 93 every time.\n- *Prisma retries failed transactions*: nothing failed; both succeed, which is the problem.\n- *They cannot*: the guide says the outcome depends on the database's isolation, not on this code.",
+   "excerpts": [
+    {
+     "path": "src/server/modules/orders/orders.service.ts",
+     "lineStart": 51,
+     "lineEnd": 57,
+     "quote": "const balances = await tx.inventoryItem.findMany({ where: { warehouseId: order.warehouseId, skuId: { in: order.lines.map((line) => line.skuId) }, }, }) const decision = planReservation(order.lines, balances)"
+    },
+    {
+     "path": "src/server/modules/orders/orders.service.ts",
+     "lineStart": 95,
+     "lineEnd": 98,
+     "quote": "await tx.inventoryItem.update({ where: { id: balance.id }, data: { reserved: { increment: quantity } }, })"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 136,
+     "lineEnd": 136,
+     "quote": "Port this code to PostgreSQL at its default READ COMMITTED isolation and both transactions can pass the check and both increments land."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09-missing-header-admin",
+   "target": "seed:quests:master4/quiz/8ec5d3fab708049d",
+   "phase": "after",
+   "title": "What happens with no x-user-id header",
+   "body": "**Key: it falls back to systemUserId, a seeded admin.** Line 18 reads `request.header('x-user-id') ?? systemUserId`. With no header, `??` picks `systemUserId`, which `db.ts` defines as `'user-ops-admin'`, seeded with the admin role. That user is found, set as `request.actor`, and admin has the highest rank, so every `requireRole` check passes. Finding F1 rates this high and notes the browser client never sends the header, so the UI only works thanks to this fallback.\n\n- *Treated as a viewer*: `requireRole` defaults to viewer only when there is *no actor*; here an actor is found.\n- *401 Missing x-user-id*: no such response exists in `authenticateRequest`.\n- *next(new Error) and a 500*: that happens for an *unknown* id that is not found (finding F6), not a missing header.",
+   "excerpts": [
+    {
+     "path": "src/server/modules/platform/auth.ts",
+     "lineStart": 18,
+     "lineEnd": 18,
+     "quote": "const requestedUserId = request.header('x-user-id') ?? systemUserId"
+    },
+    {
+     "path": "src/server/db.ts",
+     "lineStart": 6,
+     "lineEnd": 6,
+     "quote": "export const systemUserId = 'user-ops-admin'"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 132,
+     "lineEnd": 132,
+     "quote": "Any request without the header passes every `requireRole` check."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10-refusal-writes-audit",
+   "target": "seed:quests:master4/quiz/a0686a3e5ce56dce",
+   "phase": "after",
+   "title": "Why a refused reservation still writes a row",
+   "body": "**Key: the refusal path writes an audit row and returns normally, so it commits.** When `decision.ok` is false, the service creates one `AuditLog` with action `order.reservation_failed` and the failures, then *returns* a value. Returning from a `$transaction` callback commits it; only a throw rolls back. So a refused order changes no stock, but the audit table gains a row. The solutions guide calls \"rejection changes no tables\" a wrong review claim; only the not-found and already-processed paths write nothing.\n\n- *Status moves to 'failed'*: the refusal path returns `status: order.status` and never updates the order.\n- *A pending outbox message*: the outbox write is on the success path only (line 126).\n- *Nothing wrong, it throws*: the refusal path uses `return`, not `throw`.",
+   "excerpts": [
+    {
+     "path": "src/server/modules/orders/orders.service.ts",
+     "lineStart": 59,
+     "lineEnd": 65,
+     "quote": "if (!decision.ok) { await tx.auditLog.create({ data: { id: `audit-reservation-failed-${randomUUID()}`, tenantId: defaultTenantId, actorId: systemUserId, action: 'order.reservation_failed',"
+    },
+    {
+     "path": "src/server/modules/orders/orders.service.ts",
+     "lineStart": 72,
+     "lineEnd": 72,
+     "quote": "return { ok: false, orderId, status: order.status, failures: decision.failures }"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 124,
+     "lineEnd": 124,
+     "quote": "\"Rejection changes no tables\" would be a wrong review claim."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q11-clamp-hides-overpromise",
+   "target": "seed:quests:master4/quiz/b90306cc05528286",
+   "phase": "after",
+   "title": "Why 5 on hand and 20 reserved looks like a stockout",
+   "body": "**Key: ATP clamps to 0 and stockHealth says 'stockout', hiding the over-promise.** `availableToPromise` returns `Math.max(0, onHand - reserved)`. Here `5 - 20 = -15`, clamped to 0. `stockHealth` sees `available <= 0` and returns `'stockout'`, the same label as an honestly empty shelf. The 15 units promised but not there are invisible unless someone shows raw `onHand` and `reserved`. The concepts guide calls the clamp deliberate but with a cost.\n\n- *stockHealth throws*: it has no throw; it just compares numbers.\n- *Shows -15 in red*: the clamp makes that impossible.\n- *Reports 'low'*: the `available <= 0` check comes first and returns `'stockout'` before the low-stock check runs.",
+   "excerpts": [
+    {
+     "path": "src/shared/inventoryRules.ts",
+     "lineStart": 25,
+     "lineEnd": 27,
+     "quote": "export function availableToPromise(balance: Pick<InventoryBalance, 'onHand' | 'reserved'>) { return Math.max(0, balance.onHand - balance.reserved) }"
+    },
+    {
+     "path": "src/shared/inventoryRules.ts",
+     "lineStart": 114,
+     "lineEnd": 119,
+     "quote": "export function stockHealth(balance: InventoryBalance) { const available = availableToPromise(balance) if (available <= 0) { return 'stockout' }"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "why": "The paragraph on the clamp's cost."
+    }
+   ]
+  },
+  {
+   "id": "x-q12-wrong-audit-actor",
+   "target": "seed:quests:master4/quiz/d7c683226a104770",
+   "phase": "after",
+   "title": "Whose id is on the order.reserved audit row",
+   "body": "**Key: the system admin's.** The reserve route calls `reserveSalesOrder(prisma, params.orderId)`; it passes no actor, even though `authenticateRequest` set `request.actor`. Inside the service, the audit write uses `actorId: systemUserId`, a hard-coded constant. So every reservation, whoever made it, is recorded as the ops admin. Finding F4's fix: pass the actor id into the service and write it.\n\n- *The buyer from the SalesOrder*: the audit data does not read anything from the order for the actor.\n- *actorId null*: it is set, to `systemUserId`.\n- *The manager's id from the header*: the service never sees the request or its headers; it only receives `prisma` and the order id.",
+   "excerpts": [
+    {
+     "path": "src/server/app.ts",
+     "lineStart": 52,
+     "lineEnd": 55,
+     "quote": "app.post('/api/orders/:orderId/reserve', requireRole(['warehouse_manager', 'admin']), async (request, response, next) => { try { const params = orderIdParams.parse(request.params) response.json(await reserveSalesOrder(prisma, params.orderId))"
+    },
+    {
+     "path": "src/server/modules/orders/orders.service.ts",
+     "lineStart": 135,
+     "lineEnd": 140,
+     "quote": "await tx.auditLog.create({ data: { id: `audit-order-reserved-${randomUUID()}`, tenantId: defaultTenantId, actorId: systemUserId, action: 'order.reserved',"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 138,
+     "lineEnd": 138,
+     "why": "Finding F4."
+    }
+   ]
+  }
+ ]
+}

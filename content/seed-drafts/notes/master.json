@@ -1,0 +1,452 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "master",
+ "repo": "master",
+ "sha": "3fa45f3577721f54dfec2bbec6eea09ea7b22ee6",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: who may attach a task to a project",
+   "body": "The app is a personal day planner (Next.js route handlers, Prisma on SQLite). A task belongs to a user and to a project. The lesson in `astraupskill/` studies one repair: making sure a user can only attach their task to a project *they* own.\n\nRead in this order:\n\n1. `astraupskill/README.md`, for the one-paragraph story and where the two guards live.\n2. `02-CONCEPTS.md`: existence versus ownership, omitted versus supplied fields, and what the gap between a lookup and a write really means in this codebase.\n3. `03-WORKED-CHANGE.md`: the exact blocks that were inserted, and why the order of effects matters.\n4. `06-SOLUTIONS-AND-REVIEW.md`: answers to the practice exercises, plus four *open* findings in sibling routes that were not repaired.\n\nKeep two files open while reading: `src/app/api/tasks/route.ts` (POST) and `src/app/api/tasks/[id]/route.ts` (PATCH). The questions in this pack ask you to predict what those handlers do for a given request body, so trace the code line by line instead of guessing.",
+   "excerpts": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 5,
+     "lineEnd": 8,
+     "quote": "project. The schema's foreign key proves the project *exists*; it does not prove the current user may attach their task to it. This lesson studies the repair of that gap in task creation and reassignment, then sends you looking for the same gap in the routes that were *not* repaired."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The request path (auth, parse, lookup, write) with line numbers."
+    },
+    {
+     "path": "astraupskill/07-TRACE-LAB.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "A request-by-request trace table to check your predictions."
+    }
+   ]
+  },
+  {
+   "id": "r02-source-and-destination",
+   "target": "pack",
+   "phase": "before",
+   "title": "Protecting a row is not protecting its relationships",
+   "body": "A database **foreign key** only promises that the referenced row exists. It says nothing about *who* owns it. So \"project B exists\" and \"Alice may put her task in project B\" are two different questions.\n\nThe concepts guide uses Alice, task A and Bob's project B. Filtering a write by the task id and Alice's user id makes sure Alice can only touch her own task: that protects the *source* row. But if the same write sets the task's project to B, the user filter on the task says nothing about B. Every resource whose relationship changes needs its own check, scoped to the current user.\n\nThe guide then shows the matching idea for errors: a lookup that combines the submitted id with the user id cannot tell \"absent\" from \"someone else's\", and the route answers both the same way on purpose. Keep the two ideas apart when you read the code: one predicate per resource, and the same answer for every \"not yours\".",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 3,
+     "lineEnd": 8,
+     "quote": "Consider user Alice, task A and project B. Task A belongs to Alice; project B belongs to Bob. A PATCH constrained by task A's identifier and Alice's user ID correctly protects the task row. It still permits a bad relationship if it writes project B without checking who owns B. Authorization is therefore not a single check at the beginning of the request. It must cover every resource whose relationship the operation changes."
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 10,
+     "lineEnd": 14,
+     "quote": "The destination lookup combines two predicates: the submitted project ID and the authenticated user's ID. A result proves the requested relationship is allowed at that moment. No result means either the project is absent or it is outside the user's scope. Returning the same not-found shape avoids revealing which explanation applies (an *id oracle*). The task write must still keep its"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 37,
+     "lineEnd": 43,
+     "why": "The review counterexample: why one user filter cannot stand in for the other."
+    }
+   ]
+  },
+  {
+   "id": "r03-the-guard-code",
+   "target": "pack",
+   "phase": "before",
+   "title": "Reading the destination guard in the POST handler",
+   "body": "Here is the guard that was inserted into the POST handler. Read it slowly:\n\n- `prisma.project.findFirst` looks for **one** project.\n- The `where` has **two** conditions: the id the client sent, and the id of the logged-in user (`auth.user.id`). Both must match.\n- `select: { id: true }` asks only for the id column, because the handler only needs to know whether such a row exists.\n- If nothing comes back, the handler returns early with a 404 and the write below it never runs.\n\nThe PATCH handler in `src/app/api/tasks/[id]/route.ts` uses the same lookup, wrapped in a condition about whether the body supplied a project id at all. Before you answer any question about PATCH, open that file and read the condition exactly as written; small differences such as \"is it present?\" versus \"is it truthy?\" matter. Then look at `handleError` in `src/lib/api.ts` to see what the client receives when something throws.",
+   "excerpts": [
+    {
+     "path": "src/app/api/tasks/route.ts",
+     "lineStart": 38,
+     "lineEnd": 44,
+     "quote": "const project = await prisma.project.findFirst({ where: { id: body.projectId, userId: auth.user.id }, select: { id: true }, }); if (!project) { return Response.json({ error: \"Project not found\" }, { status: 404 }); }"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/app/api/tasks/[id]/route.ts",
+     "lineStart": 23,
+     "lineEnd": 36,
+     "why": "The PATCH guard and the scoped updateMany."
+    },
+    {
+     "path": "src/lib/api.ts",
+     "lineStart": 13,
+     "lineEnd": 29,
+     "why": "handleError: what each kind of thrown error becomes."
+    }
+   ]
+  },
+  {
+   "id": "x-q01-same-404",
+   "target": "seed:quests:master/quiz/1220d36052961754",
+   "phase": "after",
+   "title": "Why missing and foreign projects both get 404",
+   "body": "**Key: a distinct answer would be an oracle.** The lookup asks for a project with this id *and* this user's id. If it finds nothing, there are two possible reasons: the project does not exist, or it belongs to someone else. If the route answered 403 only in the second case, any caller could test ids and learn which ones exist in other accounts. The concepts guide names this an *id oracle* and says returning the same not-found shape avoids revealing which explanation applies.\n\n- *Route handlers cannot return 403*: they can return any status; the guard itself builds its response with `Response.json(..., { status: 404 })`.\n- *A 403 makes the client retry*: nothing in the guide or code describes retry behaviour.\n- *Browsers cache 403s*: not the reason given; the concern is information leakage.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 10,
+     "lineEnd": 14,
+     "quote": "The destination lookup combines two predicates: the submitted project ID and the authenticated user's ID. A result proves the requested relationship is allowed at that moment. No result means either the project is absent or it is outside the user's scope. Returning the same not-found shape avoids revealing which explanation applies (an *id oracle*). The task write must still keep its"
+    },
+    {
+     "path": "src/app/api/tasks/route.ts",
+     "lineStart": 42,
+     "lineEnd": 44,
+     "quote": "if (!project) { return Response.json({ error: \"Project not found\" }, { status: 404 }); }"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02-mass-assignment",
+   "target": "seed:quests:master/quiz/18e155c3a5250441",
+   "phase": "after",
+   "title": "What a caller still controls in settings import",
+   "body": "**Key: every column but userId.** Each imported row is built as `{ ...item, userId }`. Because `userId` is written last, it overrides any `userId` the caller put in the row, so ownership cannot be forged. But everything else in `item` is copied as-is and there is no schema, so the caller chooses `id`, `projectId`, `areaId`, `taskId`, `goalId` and every other column. That is **mass assignment**. The guide adds that reusing another user's `id` makes `createMany` fail, which is itself an existence oracle.\n\n- *Prisma regenerates the ids*: no; the guide's fix is to *start* regenerating ids, which means the route does not today.\n- *Spreading userId last discards other fields*: spreading copies all fields; only a later key with the same name is overridden.\n- *Just userId*: the reverse; userId is the one field the caller cannot choose.",
+   "excerpts": [
+    {
+     "path": "src/app/api/settings/import/route.ts",
+     "lineStart": 29,
+     "lineEnd": 32,
+     "quote": "const projects = (body.projects as Record<string, unknown>[]) ?? []; if (projects.length) { await tx.project.createMany({ data: projects.map((item) => ({ ...item, userId })) as never[] }); }"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 73,
+     "lineEnd": 77,
+     "quote": "4. **Mass assignment in settings import.** Every row is created as `{ ...item, userId }` (`settings/import/route.ts` lines 26-71) with no schema. Because `userId` is spread last, the caller cannot forge it, but they choose `id`, `projectId`, `areaId`, `taskId`, `goalId` and every other column. An `id` that already belongs to another user's row makes"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q03-post-missing-projectid",
+   "target": "seed:quests:master/quiz/27ae63ceea4df25f",
+   "phase": "after",
+   "title": "What POST does when projectId is missing",
+   "body": "**Key: parsing fails, so the route returns 400.** The first thing POST does inside its `try` is `taskSchema.parse(...)`. In `taskSchema`, `projectId` is `z.string()` with no `.optional()`, so a body without it is invalid. Zod throws a `ZodError`, the `catch` calls `handleError`, and `handleError` turns a `ZodError` into a 400 \"Validation failed\". The ownership lookup is on the lines after the parse, so it never runs. The guide's Exercise 3 table lists exactly this: ZodError, 400, no lookup. (PATCH differs: there `projectId` is optional.)\n\n- *create runs without a project*: the parse throws before the lookup or the create.\n- *The lookup runs with undefined and returns 404*: the lookup is never reached.\n- *A default project is assigned, 201*: nothing in the handler assigns a default project.",
+   "excerpts": [
+    {
+     "path": "src/lib/schemas.ts",
+     "lineStart": 23,
+     "lineEnd": 24,
+     "quote": "export const taskSchema = z.object({ projectId: z.string(),"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 28,
+     "lineEnd": 28,
+     "quote": "| Omitted | `taskSchema.projectId` is required (`src/lib/schemas.ts` line 24): ZodError, 400, no lookup | no lookup, `updateMany`, 200 |"
+    },
+    {
+     "path": "src/lib/api.ts",
+     "lineStart": 14,
+     "lineEnd": 21,
+     "quote": "if (error instanceof ZodError) { return json( { error: \"Validation failed\", issues: error.issues, }, { status: 400 }, );"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q04-positive-and-negative",
+   "target": "seed:quests:master/quiz/3d558f15595e9d37",
+   "phase": "after",
+   "title": "Why a passing positive test missed the deleted guard",
+   "body": "**Key: a positive case alone misses a deleted guard, so a negative case is needed too.** The \"creates with the owned project\" test sends a project Alice owns. With or without the guard, that request should create a task and return 201, so the test passes either way. Only the negative test, \"rejects a foreign project before create\", fails when the guard is gone. The guide draws the general rule: a positive case cannot detect a missing guard, and a negative case alone cannot detect a guard that rejects everything. You need both.\n\n- *The owned-project test is redundant*: no, it is the one that catches a guard rejecting everything.\n- *Status-only positive tests are enough*: this exercise shows the opposite.\n- *The guard was dead code*: without it the foreign-project test fails (201 instead of 404), so it does real work.",
+   "excerpts": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 5,
+     "lineEnd": 11,
+     "quote": "Deleting the POST guard (lines 38-44 of `tasks/route.ts`) fails exactly one case: *POST rejects a foreign project before create* (status becomes 201 and `projectReads[0]` is `undefined`). *POST creates with the owned project...* still passes, because it checks only the 201 and the create payload. That is a useful lesson in itself: the positive case alone cannot detect a missing guard, and the negative case alone cannot detect a guard that rejects everything. You need both."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q05-presence-not-truthiness",
+   "target": "seed:quests:master/quiz/438f0867e963b93d",
+   "phase": "after",
+   "title": "Why PATCH checks projectId !== undefined",
+   "body": "**Key: an empty string is falsy but still reaches updateMany.** The PATCH schema is `projectId: z.string().optional()`, so `\"\"` is a valid string. A truthiness test, `if (body.projectId)`, treats `\"\"` as false and skips the lookup, yet `data: body` would still hand `projectId: \"\"` to `updateMany`. The route checks *presence* instead: only an omitted field (`undefined`) skips the lookup. As the guide puts it, authorization should never depend on favorable coercion.\n\n- *undefined means \"remove from project\"*: omission means \"this request does not change the relationship\", not removal.\n- *TypeScript rejects truthiness checks*: it does not; the guide simply shows such a check would be wrong.\n- *The schema turns omission into null*: `.optional()` leaves it `undefined`, and the guide notes `null` is rejected with a 400.",
+   "excerpts": [
+    {
+     "path": "src/app/api/tasks/[id]/route.ts",
+     "lineStart": 7,
+     "lineEnd": 7,
+     "quote": "projectId: z.string().optional(),"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 18,
+     "lineEnd": 24,
+     "quote": "PATCH introduces a second distinction: omitted versus supplied. Omitting `projectId` means this request does not change that relationship. The PATCH schema is `projectId: z.string().optional()`, so `\"\"` parses successfully and is *not* omission. A truthiness guard (`if (body.projectId)`) would skip the lookup for `\"\"` even though `data: body` still passes it to `updateMany`. The route checks presence explicitly — `body.projectId !== undefined` — so title-only edits skip the lookup while a falsy string cannot bypass it."
+    },
+    {
+     "path": "src/app/api/tasks/[id]/route.ts",
+     "lineStart": 23,
+     "lineEnd": 23,
+     "quote": "if (body.projectId !== undefined) {"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q06-day-read-leak",
+   "target": "seed:quests:master/quiz/4805ac76fe834579",
+   "phase": "after",
+   "title": "Where the write turns into a read leak",
+   "body": "**Key: `src/app/api/day/route.ts:27-37`.** Finding 2 says that once an unchecked write lets Alice's DayTask point at Bob's task, `GET /api/day` *includes* `task.project.area` in what it returns. Lines 27-37 are that `include` block, so Alice's day view would show Bob's task title, project name and area name. The bad write becomes a data leak on read. (Precondition: Alice must already know Bob's id.)\n\nThe other choices are where the guide places other findings:\n\n- `src/lib/api.ts:24-25`: finding 3, `handleError` echoing `error.message` (the existence oracle).\n- `src/app/api/daytask/route.ts:37`: finding 1, the unchecked `taskId` *write* itself; it is the cause, not the read that leaks.\n- `src/app/api/settings/import/route.ts:26-71`: finding 4, mass assignment in settings import.",
+   "excerpts": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 59,
+     "lineEnd": 63,
+     "quote": "2. **The write becomes a read leak.** `GET /api/day` includes `dayTask.task.project.area` (`day/route.ts` lines 27-37) and `GET /api/widgets` includes `goal` (line 13). Once Alice's DayTask points at Bob's task, Alice's day view returns Bob's task title, project name and area name. Precondition: Alice must already know Bob's id. Ids are `cuid()`"
+    },
+    {
+     "path": "src/app/api/day/route.ts",
+     "lineStart": 27,
+     "lineEnd": 33,
+     "quote": "include: { task: { include: { project: { include: { area: true, },"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07-error-oracle",
+   "target": "seed:quests:master/quiz/499fe6fbced1106b",
+   "phase": "after",
+   "title": "Why different errors for missing ids are a problem",
+   "body": "**Key: handleError echoes error.message, so the responses reveal whether an id exists.** `handleError` returns any `Error`'s message with a 400. A nonexistent `areaId` makes the insert fail on a foreign key, so the caller sees Prisma's message. Bob's real `areaId` passes the foreign key (nobody checks ownership), so the caller gets 201. Comparing the two answers tells the caller whether an id exists, and the raw message exposes internals. The guide's fix: an ownership lookup returning the same 404 for both cases, plus a generic message for non-validation errors.\n\n- *Localized messages break clients*: not what the guide is about.\n- *A 400 violates HTTP semantics*: the issue is information leaking, not the status number.\n- *cuid ids cannot be guessed*: unguessable ids make it hard to exploit, but the guide still calls the difference an oracle and recommends fixing it.",
+   "excerpts": [
+    {
+     "path": "src/lib/api.ts",
+     "lineStart": 24,
+     "lineEnd": 26,
+     "quote": "if (error instanceof Error) { return json({ error: error.message }, { status: 400 }); }"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 67,
+     "lineEnd": 70,
+     "quote": "`POST /api/projects` with a nonexistent `areaId` fails the `Project_areaId_fkey` constraint and returns the Prisma message; with Bob's real `areaId` it returns 201. The difference tells a caller whether an id exists, and the raw message exposes internals. The fix is an ownership"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08-project-deleted-mid-post",
+   "target": "seed:quests:master/quiz/655ff90105c0b102",
+   "phase": "after",
+   "title": "What happens if the project is deleted mid-request",
+   "body": "**Key: the foreign key rejects the insert and handleError returns 400 with Prisma's message.** The lookup and the create are two separate statements. If `DELETE /api/projects/[id]` lands between them, the lookup has already said yes, but by the time `task.create` runs the project is gone. The database's `Task_projectId_fkey` constraint refuses the insert, Prisma throws, and `handleError` turns that `Error` into a 400 carrying the raw message. Ugly, but integrity holds and no cross-user relationship is made.\n\n- *An orphaned task is created*: the foreign key prevents exactly that.\n- *withUser re-checks after the create*: `withUser` only runs at the start to find the logged-in user.\n- *A deadlock*: the guide describes a rejected insert, not a deadlock.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 36,
+     "lineEnd": 40,
+     "quote": "- **Can the project disappear?** Yes: `DELETE /api/projects/[id]` (line 41) or `POST /api/settings/reset`. If that lands between Alice's lookup and her `task.create`, the `Task_projectId_fkey` constraint rejects the insert; Prisma throws, and `handleError` turns it into a 400 carrying the raw Prisma message instead of a clean 404."
+    },
+    {
+     "path": "src/app/api/projects/[id]/route.ts",
+     "lineStart": 41,
+     "lineEnd": 41,
+     "quote": "const deleted = await prisma.project.deleteMany({ where: { id, userId: auth.user.id } });"
+    },
+    {
+     "path": "src/lib/api.ts",
+     "lineStart": 24,
+     "lineEnd": 26,
+     "quote": "if (error instanceof Error) { return json({ error: error.message }, { status: 400 }); }"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09-api-oracle-location",
+   "target": "seed:quests:master/quiz/7918b73c82b06b70",
+   "phase": "after",
+   "title": "Where the error-message existence oracle lives",
+   "body": "**Key: `src/lib/api.ts:24-25`.** Finding 3 says `handleError` returns `error.message` with a 400 for any `Error`. Those two lines are exactly that branch: `if (error instanceof Error)` and the `json({ error: error.message }, { status: 400 })` below it. Because the raw message is passed through, a foreign-key failure on a nonexistent id looks different from a success on a real one, which tells a caller whether an id exists.\n\nThe other choices are other findings in the same section:\n\n- `src/app/api/settings/import/route.ts:26-71`: finding 4, mass assignment in settings import.\n- `src/app/api/daytask/route.ts:37`: finding 1, an unchecked `taskId` written without an ownership lookup.\n- `src/app/api/day/route.ts:27-37`: finding 2, the read leak through the `include` in `GET /api/day`.",
+   "excerpts": [
+    {
+     "path": "src/lib/api.ts",
+     "lineStart": 24,
+     "lineEnd": 25,
+     "quote": "if (error instanceof Error) { return json({ error: error.message }, { status: 400 });"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 65,
+     "lineEnd": 66,
+     "quote": "3. **Existence oracle through error messages.** `handleError` returns `error.message` with 400 for any `Error` (`src/lib/api.ts` lines 24-25)."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10-record-the-writes",
+   "target": "seed:quests:master/quiz/8624485f55da2760",
+   "phase": "after",
+   "title": "Why the regression records every write call",
+   "body": "**Key: a handler that wrote first and then returned 404 would still pass a status test.** The rule is \"a forbidden relationship produces no task write\". A status code only describes the response. If a buggy handler created the task and *then* returned 404, a test that only checks for 404 would be happy while the forbidden row sits in the database. Recording each `create` and `updateMany` call, with its arguments, lets the test assert that no write happened.\n\n- *404 body text changes between Prisma versions*: the 404 body is written by the route itself, not by Prisma.\n- *To measure performance overhead*: the guide gives no performance purpose.\n- *Status codes are unreliable in tests*: the suite does check status; the point is that status alone is not enough.",
+   "excerpts": [
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": 41,
+     "lineEnd": 45,
+     "quote": "The negative assertion that matters is \"the forbidden relationship produces no task write\". A handler that wrote first and then returned 404 would show the same status and still violate the rule. That is why the regression records every `create`/`updateMany` call and its arguments instead of checking status alone."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/app/api/tasks/route.ts",
+     "lineStart": 38,
+     "lineEnd": 58,
+     "why": "The POST handler: lookup, then create, then 201."
+    }
+   ]
+  },
+  {
+   "id": "x-q11-title-only-patch",
+   "target": "seed:quests:master/quiz/9902c26d8a248ed6",
+   "phase": "after",
+   "title": "What a title-only PATCH does",
+   "body": "**Key: skips the project lookup, runs the scoped updateMany, returns 200.** The body has no `projectId`, so `body.projectId !== undefined` is false and the lookup block is skipped: the request does not change the task's project, so there is no destination to authorize. `updateMany` then runs with `where: { id, userId }`, so Alice can only touch her own task. A non-zero count means success; the route re-reads the task and returns it.\n\n- *400 because projectId is required*: in the PATCH schema it is `.optional()`.\n- *Looks up the task's current project*: the guard only checks a *supplied* destination; it never looks up the current one.\n- *404 because no project id was supplied*: a 404 here only happens if the lookup fails (when an id was supplied) or the task is not Alice's.",
+   "excerpts": [
+    {
+     "path": "src/app/api/tasks/[id]/route.ts",
+     "lineStart": 23,
+     "lineEnd": 23,
+     "quote": "if (body.projectId !== undefined) {"
+    },
+    {
+     "path": "src/app/api/tasks/[id]/route.ts",
+     "lineStart": 33,
+     "lineEnd": 43,
+     "quote": "const updated = await prisma.task.updateMany({ where: { id, userId: auth.user.id }, data: body, }); if (!updated.count) { return Response.json({ error: \"Task not found\" }, { status: 404 }); } const task = await prisma.task.findUnique({ where: { id } }); return Response.json({ task });"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": 31,
+     "lineEnd": 37,
+     "why": "PATCH section of the worked change."
+    }
+   ]
+  },
+  {
+   "id": "x-q12-owner-cannot-change",
+   "target": "seed:quests:master/quiz/ae8a456b78c5c2ae",
+   "phase": "after",
+   "title": "Why the lookup-then-write gap cannot change owners",
+   "body": "**Key: no API path writes `Project.userId`.** A race only matters if something can happen in the gap. The concepts guide checks the repository: the project PATCH schema allows only `areaId`, `name` and `order`, and settings import forces `userId` to the caller on each row it creates. So nothing can move Bob's project into Alice's account, or Alice's into Bob's, between her lookup and her write. (A project *can* disappear in the gap, which gives an ugly 400, not a cross-user link.)\n\n- *They share one $transaction*: the guide says lookup and write are two statements, and warns that a transaction does not solve every race by itself.\n- *cuids cannot be guessed*: that limits other attacks, not ownership changes.\n- *SQLite serializes writes*: the lookup is a read, and the reason given is the missing write path.",
+   "excerpts": [
+    {
+     "path": "src/app/api/projects/[id]/route.ts",
+     "lineStart": 6,
+     "lineEnd": 10,
+     "quote": "const patchSchema = z.object({ areaId: z.string().optional(), name: z.string().trim().min(1).max(120).optional(), order: z.number().int().min(0).optional(), });"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 28,
+     "lineEnd": 30,
+     "quote": "There is also a time boundary: lookup and write are two statements, not one atomic proof. Whether that matters depends on which concurrent writes exist, so check the repository instead of guessing:"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q13-source-not-destination",
+   "target": "seed:quests:master/quiz/b216d12c6fa86ef3",
+   "phase": "after",
+   "title": "How Alice moved her task into Bob's project",
+   "body": "**Key: the where clause scoped the source task, and nothing checked the destination.** `updateMany({ where: { id, userId } })` only matches Alice's own task, which is good: she cannot edit Bob's tasks. But `data: body` then writes whatever `projectId` she sent. Before the fix nothing asked who owns that project, so writing Bob's project id simply worked. The guide's rule: authorization must cover every resource whose relationship the operation changes, not just the row being updated.\n\n- *updateMany bypasses foreign keys*: the foreign key was satisfied, since Bob's project exists. Existence is all a foreign key checks.\n- *The userId filter ran after the write*: it is part of the `where`, applied to the same statement.\n- *updateMany ignores where when data has a foreign key*: no such behaviour; the where clause worked and matched only Alice's task.",
+   "excerpts": [
+    {
+     "path": "src/app/api/tasks/[id]/route.ts",
+     "lineStart": 33,
+     "lineEnd": 36,
+     "quote": "const updated = await prisma.task.updateMany({ where: { id, userId: auth.user.id }, data: body, });"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 3,
+     "lineEnd": 8,
+     "quote": "Consider user Alice, task A and project B. Task A belongs to Alice; project B belongs to Bob. A PATCH constrained by task A's identifier and Alice's user ID correctly protects the task row. It still permits a bad relationship if it writes project B without checking who owns B. Authorization is therefore not a single check at the beginning of the request. It must cover every resource whose relationship the operation changes."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 37,
+     "lineEnd": 43,
+     "why": "Review counterexample with Alice, task A and project B."
+    }
+   ]
+  },
+  {
+   "id": "x-q14-guard-placement",
+   "target": "seed:quests:master/quiz/c3a548528d5c449e",
+   "phase": "after",
+   "title": "Where the POST guard sits and why it selects only id",
+   "body": "**Key: between taskSchema.parse and task.create, because it only needs existence.** Look at the order in the handler: line 36 parses the body, lines 38-44 look up the project, line 46 creates the task. The lookup must come after the parse (it needs a valid `body.projectId`) and before the create (so a forbidden request writes nothing). It selects only `id` because the decision is a yes/no on \"does this user own a project with this id\"; the project's other columns are never used.\n\n- *In one transaction, selecting every column*: there is no transaction, and the guide stresses the narrow select.\n- *Before parsing*: the lookup uses the parsed body; malformed bodies are rejected by Zod.\n- *After task.create*: then the forbidden task would already be written, which is the bug the order prevents.",
+   "excerpts": [
+    {
+     "path": "src/app/api/tasks/route.ts",
+     "lineStart": 36,
+     "lineEnd": 41,
+     "quote": "const body = taskSchema.parse(await request.json()); const project = await prisma.project.findFirst({ where: { id: body.projectId, userId: auth.user.id }, select: { id: true }, });"
+    },
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": 26,
+     "lineEnd": 28,
+     "quote": "It runs after `taskSchema.parse` and before `task.create`. It selects only `id` because the decision needs existence-within-scope, not the project object. The create payload, defaults (`notes ?? null`, `tags ?? []`,"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q15-import-location",
+   "target": "seed:quests:master/quiz/e3e97e88ddec84b7",
+   "phase": "after",
+   "title": "Where the mass-assignment finding lives",
+   "body": "**Key: `src/app/api/settings/import/route.ts:26-71`.** Finding 4 says every imported row is created as `{ ...item, userId }` with no schema, at lines 26-71 of that file. That range covers the `createMany` calls for each collection (areas, projects, tasks and the rest). The caller cannot forge `userId`, because it is spread last, but chooses every other column, including ids and foreign keys: mass assignment.\n\nThe other choices belong to other findings in the same guide section:\n\n- `src/lib/api.ts:24-25`: finding 3, `handleError` echoing raw error messages.\n- `src/app/api/day/route.ts:27-37`: finding 2, the read leak through the day view's `include`.\n- `src/app/api/daytask/route.ts:37`: finding 1, an unchecked `taskId` in `POST /api/daytask`.",
+   "excerpts": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 73,
+     "lineEnd": 75,
+     "quote": "4. **Mass assignment in settings import.** Every row is created as `{ ...item, userId }` (`settings/import/route.ts` lines 26-71) with no schema. Because `userId` is spread last, the caller cannot forge it, but they"
+    },
+    {
+     "path": "src/app/api/settings/import/route.ts",
+     "lineStart": 26,
+     "lineEnd": 26,
+     "quote": "await tx.area.createMany({ data: areas.map((item) => ({ ...item, userId })) as never[] });"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}

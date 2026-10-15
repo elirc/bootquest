@@ -1,0 +1,421 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "campusops",
+ "repo": "campusops",
+ "sha": "fc19ad4de32d4746db5de565867c13eceff1bed3",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: the CampusOps route from map to trace",
+   "body": "CampusOps is a facilities app written in C#: a maintenance request becomes a work order, and parts are reserved for that work. This pack follows one feature, reserving inventory, from its old bugs to its repair. Read in the course's own order:\n\n1. `astraupskill/README.md` - the route table and the glossary. Learn the glossary words first; the quizzes use them.\n2. `01-CODEBASE-MAP.md` - which files a reservation request passes through.\n3. `02-CONCEPTS.md` - invariants, commit boundaries, snapshots, cancellation and access control. Most quizzes come from here.\n4. `03-WORKED-CHANGE.md` - the repair, step by step.\n5. `04-TESTING-AND-DEBUGGING.md` - how to prove each promise with a test.\n6. `06-SOLUTIONS-AND-REVIEW.md` - read only after trying the exercises in 05; it explains idempotency and the database version.\n7. `07-TRACE-LAB.md` - follow one real request and check the stored stock and history.\n\nKeep `Part.cs` and `InMemoryPartsStores.cs` open beside the guides.",
+   "excerpts": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "The concrete feature is reserving inventory for an existing work order."
+    },
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 11,
+     "lineEnd": 12,
+     "quote": "[Understand the concepts](02-CONCEPTS.md)"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The request path and storage lifetimes, with real file names."
+    },
+    {
+     "path": "astraupskill/07-TRACE-LAB.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "A hands-on trace of one reservation through the API."
+    }
+   ]
+  },
+  {
+   "id": "r02-invariants",
+   "target": "pack",
+   "phase": "before",
+   "title": "An invariant is a promise every operation must keep",
+   "body": "An **invariant** is a rule that must be true after *every* operation, not only after the one you are writing. For a part the rule is a chain of inequalities, plus one formula for what is free to use.\n\nRead it slowly:\n\n- `Reserved` can never go below zero or above `OnHand`.\n- `OnHand` can never go above the largest `int`.\n- `Available` is not stored; it is always `OnHand - Reserved`.\n\nEach method on `Part` (Receive, Reserve, Release, Consume) checks its input **before** changing any field, and throws a `DomainException` with a business code if the rule would break. Practice: pick a starting stock, do a reserve and then a release on paper, and write all three numbers after each step. If any step breaks the chain, that call must be refused.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 7,
+     "lineEnd": 10,
+     "quote": "```text 0 <= Reserved <= OnHand <= int.MaxValue Available = OnHand - Reserved ```"
+    },
+    {
+     "path": "src/CampusOps.Core/Inventory/Part.cs",
+     "lineStart": 34,
+     "lineEnd": 39,
+     "quote": "public void Reserve(int quantity) { Positive(quantity); if (quantity > Available) throw new DomainException(\"part.stock_insufficient\", \"Not enough available stock.\"); Reserved += quantity; }"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/CampusOps.Core/Inventory/Part.cs",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The four stock operations and how each guards the invariant."
+    }
+   ]
+  },
+  {
+   "id": "r03-commit-boundary",
+   "target": "pack",
+   "phase": "before",
+   "title": "Commit boundaries and detached copies, in plain words",
+   "body": "Two glossary ideas carry most of this course.\n\nA **commit boundary** is the span in which a group of writes either all happen or none do. In this in-memory store it is one `lock (_gate)` block in `InMemoryPartStore`; in a database it is one transaction. Ask of any change: which writes belong together, and is there one boundary around all of them?\n\nA **detached read** (a snapshot) hands the caller a *copy* of stored state, so changing that copy cannot change storage. The opposite is a **live reference**, where the object you got back *is* the stored object. Look at `GetAsync`: it returns `part.Snapshot()`, never the stored part itself.\n\nNotice too that the store's reserve method does all its checks and builds the new values first, and only then publishes them.",
+   "excerpts": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 31,
+     "lineEnd": 31,
+     "quote": "- **Commit boundary** — the span inside which a group of writes either all happen or none do. Here it is one `lock (_gate)` in `InMemoryPartStore`; in a database it is one transaction."
+    },
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 33,
+     "lineEnd": 34,
+     "quote": "- **Detached read / snapshot** — returning a *copy* of stored state so the caller cannot change storage by mutating what it was handed. `Part.Snapshot()` does this; EF Core's `AsNoTracking()` is the database equivalent. - **Live reference** — the opposite: the object you got back *is* the stored object. The old store returned these, which is why a caller could quietly change stock."
+    },
+    {
+     "path": "src/CampusOps.Infrastructure/Inventory/InMemoryPartsStores.cs",
+     "lineStart": 26,
+     "lineEnd": 30,
+     "quote": "lock (_gate) { token.ThrowIfCancellationRequested(); return Task.FromResult(_parts.TryGetValue(id, out var part) ? part.Snapshot() : null); }"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "How the repair moved the whole operation into one adapter contract."
+    }
+   ]
+  },
+  {
+   "id": "x-q01-retry-not-safe",
+   "target": "seed:quests:campusops/quiz/0861d1f9ef40c82a",
+   "phase": "after",
+   "title": "Atomic is not the same as safe to retry",
+   "body": "The lock makes one reservation all-or-nothing. It does not help when the same command arrives twice. The first request committed; the client never heard back and sends an identical request. To the store this is just a new, valid reservation: it checks stock again and, if enough is free, reserves more and makes a new receipt with a fresh `Guid.NewGuid()`. The guide says it plainly: there is no idempotency key yet, and atomicity and retry safety are different promises.\n\n- \"409 because the lock is still held\": the lock is released when the first call returns; the second call just waits its turn.\n- \"The lock turns the duplicate into a no-op\": the lock only makes calls take turns; it does not know two calls mean the same thing.\n- \"The store matches part and quantity\": no such check exists; every call builds a new reservation.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 39,
+     "lineEnd": 39,
+     "quote": "The current reservation API has no idempotency key: repeating the same request can reserve more stock. Atomicity and retry safety are different promises."
+    },
+    {
+     "path": "src/CampusOps.Infrastructure/Inventory/InMemoryPartsStores.cs",
+     "lineStart": 56,
+     "lineEnd": 56,
+     "quote": "var reservation = new PartReservation(Guid.NewGuid(), workOrderId, partId, quantity, at.ToUniversalTime());"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02-consume-math",
+   "target": "seed:quests:campusops/quiz/3c35370e7a83ea99",
+   "phase": "after",
+   "title": "Consuming lowers both OnHand and Reserved",
+   "body": "Start with OnHand=10, Reserved=0. Reserving 4 gives Reserved=4, so Available = 10-4 = 6. `Consume(3)` then subtracts 3 from **both** fields: Reserved becomes 1 and OnHand becomes 7. Available = 7-1 = 6, the same as before, because the consumed filters were already set aside. The guide walks through the identical example.\n\n- \"OnHand=7, Reserved=4\": consume also lowers Reserved, or reserved stock would be counted twice.\n- \"OnHand=10, Reserved=1\": consuming removes physical stock, so OnHand must drop.\n- \"OnHand=6, Reserved=1, Available=5\": OnHand drops by the 3 consumed, not by 4.",
+   "excerpts": [
+    {
+     "path": "src/CampusOps.Core/Inventory/Part.cs",
+     "lineStart": 48,
+     "lineEnd": 54,
+     "quote": "public void Consume(int quantity) { Positive(quantity); if (quantity > Reserved) throw new DomainException(\"part.consume_invalid\", \"Parts must be reserved before consumption.\"); Reserved -= quantity; OnHand -= quantity; }"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 12,
+     "lineEnd": 12,
+     "quote": "Consuming three gives `OnHand=7`, `Reserved=1`, `Available=6`: consumption decreases both physical stock and its reserved portion."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q03-cancel-before-commit",
+   "target": "seed:quests:campusops/quiz/4255c5c1978976ea",
+   "phase": "after",
+   "title": "Cancellation is checked before the commit, never after",
+   "body": "A cancellation token means \"the caller no longer wants to wait\". Inside the reserve method the store calls `token.ThrowIfCancellationRequested()` first, before any write, so a cancelled call changes nothing. Once the writes are published the reservation **has happened**. If the method then reported \"cancelled\", the client would think nothing happened and might retry, reserving the stock a second time. So the honest result after commit is the receipt.\n\n- \"A check inside the lock would deadlock\": the first check is already inside the lock; the guide's reason is about honesty to the client, not deadlocks.\n- \"The commit rolls back automatically\": nothing undoes it; the course's table says cancellation is not rollback.\n- \"A token can be observed only once\": the store calls `ThrowIfCancellationRequested()` in every method; the guide gives no such limit.",
+   "excerpts": [
+    {
+     "path": "src/CampusOps.Infrastructure/Inventory/InMemoryPartsStores.cs",
+     "lineStart": 46,
+     "lineEnd": 47,
+     "quote": "// Cancellation is honored before commit, never reported after mutation. token.ThrowIfCancellationRequested();"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 37,
+     "lineEnd": 37,
+     "quote": "Reporting cancellation after committing could encourage the client to retry an operation that already happened."
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 57,
+     "lineEnd": 57,
+     "quote": "cancellation is not rollback"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q04-rollback-objects",
+   "target": "seed:quests:campusops/quiz/5509798100e98a32",
+   "phase": "after",
+   "title": "A rollback restores the database, not your objects",
+   "body": "EF Core tracks entities you loaded and changed in memory. A transaction rollback undoes the **database** writes, but your C# object is just an object: its fields still hold the changed values. The guide says that scope must be thrown away. It also warns that a tracked, mutated entity will be written by the next `SaveChangesAsync` in the same scope, even if you meant to reject the request.\n\n- \"Detached and safe to reuse\": reusing it is exactly the danger; the guide says to discard the scope.\n- \"Reset to original values\": that is the misunderstanding the guide is warning about.\n- \"Reloaded lazily\": nothing in the guide says EF re-reads the row for you.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 61,
+     "lineEnd": 61,
+     "quote": "a rolled-back transaction restores the database, not your C# objects. If a request mutated a tracked entity and the save failed, that entity is still mutated in memory, and the scope it lives in must be thrown away."
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 55,
+     "lineEnd": 55,
+     "quote": "An entity you loaded *with* tracking and then mutated will be written by the next `SaveChangesAsync` anywhere in the same scope"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q05-overflow-guard",
+   "target": "seed:quests:campusops/quiz/70dcd1517bec7360",
+   "phase": "after",
+   "title": "Why the overflow guard subtracts instead of adds",
+   "body": "In ordinary unchecked C# arithmetic, `int.MaxValue + 1` wraps around to a large negative number. So `OnHand + quantity > int.MaxValue` can never be true: the sum either fits or wraps negative. The repaired guard moves the work to the other side: `int.MaxValue - OnHand` cannot overflow, because OnHand is never negative. If `quantity` is bigger than that room, `Receive` throws `part.quantity_overflow` **before** `OnHand += quantity` runs.\n\n- \"The two forms are equivalent\": they differ exactly when the sum wraps.\n- \"C# throws OverflowException on every addition\": the guide calls this ordinary **unchecked** arithmetic, where the value wraps silently.\n- \"Clamp to the remaining room\": the code throws; it never accepts part of a delivery.",
+   "excerpts": [
+    {
+     "path": "src/CampusOps.Core/Inventory/Part.cs",
+     "lineStart": 26,
+     "lineEnd": 31,
+     "quote": "public void Receive(int quantity) { Positive(quantity); if (quantity > int.MaxValue - OnHand) throw new DomainException(\"part.quantity_overflow\", \"Received quantity exceeds supported stock capacity.\"); OnHand += quantity;"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 14,
+     "lineEnd": 14,
+     "quote": "With `OnHand=int.MaxValue`, adding one in ordinary unchecked arithmetic wraps to a negative value. The repaired guard compares `quantity` with `int.MaxValue - OnHand`, which is safe because existing stock is nonnegative."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q06-single-process-lock",
+   "target": "seed:quests:campusops/quiz/7a297e184cb4af6e",
+   "phase": "after",
+   "title": "A lock only protects one process",
+   "body": "`_gate` is a plain private field on one store object, and the stock lives in an ordinary in-memory `Dictionary`. Both exist only inside one running process. The guide calls this a single-process memory guarantee: a second API process has its own lock and its own dictionary, so the two never coordinate.\n\n- \"ConcurrentDictionary without the lock is as strong\": the guide says that alone would not give the guarantee, because the promise covers stock **and** history together.\n- \"It survives a restart\": nothing is written to disk; the guide says process termination can erase the whole store.\n- \"DI shares the lock across instances\": dependency injection lives inside one process; another instance behind a load balancer has its own container.",
+   "excerpts": [
+    {
+     "path": "src/CampusOps.Infrastructure/Inventory/InMemoryPartsStores.cs",
+     "lineStart": 9,
+     "lineEnd": 11,
+     "quote": "private readonly object _gate = new(); private readonly Dictionary<Guid, Part> _parts = new(); private readonly Dictionary<Guid, PartReservation> _reservations = new();"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 27,
+     "lineEnd": 27,
+     "quote": "This is a single-process memory guarantee. A second API process has another lock and another dictionary. A database implementation needs one real transaction over both tables, plus a conditional update or concurrency control that prevents overselling. Replacing `Dictionary` with `ConcurrentDictionary` alone would not establish that guarantee. Process termination can still erase the entire teaching store."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07-replay-same-receipt",
+   "target": "seed:quests:campusops/quiz/8c914aec0af8878b",
+   "phase": "after",
+   "title": "A replay returns the original receipt",
+   "body": "Idempotency means a retry of the same logical request gets the **same result** as the first try. The guide is specific: on a replay, return the stored receipt with its original timestamp and ID. The client may have already saved that ID, so a new one would break the promise even if stock is not charged twice.\n\n- \"A fresh receipt with a new ID\": the guide names this exact mistake as defeating the client-visible identity promise.\n- \"The part's current stock\": that is a different resource; the client asked for its reservation result.\n- \"409 Conflict\": a matching replay is not an error. It is the normal case the key exists for.",
+   "excerpts": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 19,
+     "lineEnd": 19,
+     "quote": "On a replay, return the stored receipt, including its original timestamp and ID. Generating a new ID for every retry defeats the client-visible identity promise even if the quantity is not charged twice."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08-401-vs-403",
+   "target": "seed:quests:campusops/quiz/a6fef2cb30af8cf5",
+   "phase": "after",
+   "title": "401 is who you are; 403 is what you may do",
+   "body": "Authentication asks **who** sent the request. Authorization asks what that caller **may** do. A request with no demo identity fails the first question, so it gets 401 Unauthorized. A Technician is known, but the Operations policy allows only Dispatchers and Managers, so the Technician fails the second question and gets 403 Forbidden. The guide states both results directly.\n\n- \"404 for the missing identity\": 404 means the resource does not exist; the route exists here.\n- \"403 for both\": the caller with no identity was never identified, so it cannot be \"forbidden\" yet.\n- \"401 for both\": the Technician *is* identified; the problem is permission.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 43,
+     "lineEnd": 43,
+     "quote": "Authentication asks who supplied a request. Authorization asks what that principal may do."
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 43,
+     "lineEnd": 43,
+     "quote": "Inventory endpoints now require the existing Operations policy, allowing demo Dispatchers and Managers. Missing demo identity receives 401; a Technician receives 403."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09-assert-state",
+   "target": "seed:quests:campusops/quiz/a8e3f9a17d1393da",
+   "phase": "after",
+   "title": "Assert the state, not only the exception",
+   "body": "The review guide asks one pointed question about the capacity test: could it pass if `Receive` **assigned** the bad quantity first and only then threw? If the test checks only the exception, yes, because the exception still arrives. So the guide adds a second assertion: stock and reservations are unchanged after the throw. That is the gap this quiz is about.\n\n- \"A race on two different parts\": two different parts share no stock, so there is nothing for this test to race on; races are tested separately with competing tasks.\n- \"A wrong human-readable message\": the guide's concern here is stored state; the business code is what the UI keys on.\n- \"A silent success for int.MaxValue-2 units\": the guide covers the success boundary with its own fresh-part case, `Receive(2)`.",
+   "excerpts": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 7,
+     "lineEnd": 7,
+     "quote": "With the same starting stock, `Receive(3)` should throw `part.quantity_overflow` and leave both stock and reservations unchanged."
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "A useful review question is whether your test could pass if the method assigned an invalid quantity and then threw. If you assert only the exception, yes. Add the state assertion."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10-split-writes",
+   "target": "seed:quests:campusops/quiz/b6498a65ae2126e5",
+   "phase": "after",
+   "title": "Two safe collections are not one safe operation",
+   "body": "Before the repair, one store changed stock and another appended the reservation. Each collection was safe for its own calls, but the business operation needs **both** writes. If the second write failed or was cancelled, stock stayed reserved and no history record said why. The repair puts both writes inside one private lock, with all checks done before either write.\n\n- \"Thread-safe collections copy and lose the stock change\": the guide's example shows the stock change **did** happen; the history did not.\n- \"The two collections could deadlock\": the guide does not describe a deadlock; it describes a half-done operation.\n- \"FIFO replay applies to the wrong part\": nothing in the guide involves replaying a queue.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 18,
+     "lineEnd": 18,
+     "quote": "A dictionary and queue can each be safe for concurrent calls while the combined business operation remains unsafe:"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 21,
+     "lineEnd": 22,
+     "quote": "reserve 2 filters -> stock becomes reserved history write fails or is cancelled -> no record explains those filters"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 25,
+     "lineEnd": 25,
+     "quote": "One private lock protects both inventory and reservation history."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q11-one-scope-one-store",
+   "target": "seed:quests:campusops/quiz/d5a646a81517a859",
+   "phase": "after",
+   "title": "Forward both interfaces to one scoped store",
+   "body": "The durable adapter is registered once as a scoped `SqlitePartStore`, and both interfaces ask the container for that same object. Within one HTTP request you therefore get one store, one `DbContext`, one transaction and one change tracker. If the class were registered twice as scoped, once per interface, the request would get **two** store objects, each with its own `DbContext`. Stock writes and history writes would land in two separate transactions: the same split-write bug the course is about, one layer down.\n\n- \"Nothing changes\": scoped means one instance per registration per request, so two registrations give two instances.\n- \"The container throws at startup\": the guide describes a silent bug, not a startup error.\n- \"One DbContext for the whole process\": that is singleton behavior; scoped lives for one request.",
+   "excerpts": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 99,
+     "lineEnd": 101,
+     "quote": "builder.Services.AddScoped<SqlitePartStore>(); builder.Services.AddScoped<IPartStore>(p => p.GetRequiredService<SqlitePartStore>()); builder.Services.AddScoped<IPartReservationStore>(p => p.GetRequiredService<SqlitePartStore>());"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 104,
+     "lineEnd": 104,
+     "quote": "registering `SqlitePartStore` twice as scoped, once per interface — gives you two `DbContext`-backed stores in the same request whose writes are in two different transactions."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q12-shallow-clone",
+   "target": "seed:quests:campusops/quiz/e9743add98b57f20",
+   "phase": "after",
+   "title": "MemberwiseClone copies references, not lists",
+   "body": "`MemberwiseClone` makes a **shallow** copy: each field's value is copied as is. For an `int`, a GUID or an immutable string that is a real copy. For a `List`, the field holds a *reference*, so the clone gets the same reference: snapshot and stored part would point at one shared list, and changing one changes the other. The code comment shows why it is safe today, and the guide warns you must revisit this when the model changes.\n\n- \"The list is copied but items become read-only\": nothing makes items read-only; the list itself is shared.\n- \"It deep-copies collections\": shallow is the whole point of the warning.\n- \"The compiler rejects it\": it compiles fine; the danger is silent sharing.",
+   "excerpts": [
+    {
+     "path": "src/CampusOps.Core/Inventory/Part.cs",
+     "lineStart": 56,
+     "lineEnd": 57,
+     "quote": "// All fields are values or immutable strings; callers receive detached state. public Part Snapshot() => (Part)MemberwiseClone();"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 33,
+     "lineEnd": 33,
+     "quote": "If you later add a mutable `List<Reservation>` field, a shallow clone would share that list."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q13-predicate-in-update",
+   "target": "seed:quests:campusops/quiz/ebd6b5a6ec240ded",
+   "phase": "after",
+   "title": "Put the stock check inside the UPDATE",
+   "body": "With a database, two connections can each read the part, each see enough stock, and each write: an oversell. A transaction does not stop this, because the decision was made on data read earlier. The fix is a conditional update: the `WHERE` clause itself requires `p.OnHand - p.Reserved >= quantity`, and the code branches on the affected-row count. If the count is 0, the predicate did not match, and nothing was reserved.\n\n- \"Load, check in C#, save, all in a transaction\": this is the read-then-check pattern the guide calls the oversell bug.\n- \"AsNoTracking\": that keeps reads detached; it does not stop two connections passing the same check.\n- \"Keep the in-memory lock\": the guide says a process-local lock does not coordinate other processes.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 54,
+     "lineEnd": 54,
+     "quote": "Read-then-check-then-update across two statements is the oversell bug. Two connections both pass the check. The predicate must be *in* the `UPDATE`"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 78,
+     "lineEnd": 80,
+     "quote": ".Where(p => p.Id == partId && p.OnHand - p.Reserved >= quantity)"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 27,
+     "lineEnd": 27,
+     "quote": "Do not copy the in-memory lock into a SQL adapter and claim it coordinates other processes."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q14-key-mismatch",
+   "target": "seed:quests:campusops/quiz/ee98653654961f4d",
+   "phase": "after",
+   "title": "A reused key with a different request is refused",
+   "body": "An idempotency key promises \"this is the same request as before\". So the store must check that it really is. The guide says to compare every request field that affects the business result: work order, part and quantity. Two filters versus five bulbs differ, so this is not a replay. It is a mismatch, and it must not quietly return the filter receipt.\n\n- \"Return the stored filter receipt\": the guide says a reused key should not return a receipt for a different request.\n- \"Process the bulbs under the same key\": then one key would name two different operations.\n- \"Overwrite with the latest request\": that would erase the first receipt the client may already hold.",
+   "excerpts": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 21,
+     "lineEnd": 21,
+     "quote": "Compare all request fields that affect the business operation. A key reused for another part or quantity should not silently return a receipt for a different request."
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}
