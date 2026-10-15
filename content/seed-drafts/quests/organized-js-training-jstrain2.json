@@ -16,13 +16,13 @@
         { "path": "src/lib/engine/executor.ts", "lineStart": 189, "lineEnd": 191 }
       ],
       "prompt": "A tenant has maxConcurrency 5. Run A started one second ago and is still executing. Run B for the same tenant reaches WorkflowExecutor.run. What happens to B?",
-      "answer": "It fails with ConcurrencyLimitError 'Tenant lock already held' - the per-tenant NX lock is held for A's whole run, so maxConcurrency is never consulted",
+      "answer": "It fails with ConcurrencyLimitError: A still holds the NX tenant lock, so the limit is never checked",
       "distractors": [
-        "It starts, because only 1 of the tenant's 5 concurrent slots is in use",
-        "It waits in the queue until A releases its slot, then starts",
-        "It starts, and A is cancelled because the newest run takes the lock"
+        "It starts, because only 1 of the tenant's 5 concurrent slots is in use when B reaches the check",
+        "It waits in the queue until A releases its concurrency slot, and then starts normally",
+        "It starts, and A is cancelled because the newest run always takes over the tenant lock"
       ],
-      "explanation": "claimConcurrency first does SET flowpilot:tenant-lock:<id> NX PX 5000 and throws if that fails. The lock is only deleted in run()'s finally, so within its 5 s TTL the tenant is effectively limited to one run."
+      "explanation": "claimConcurrency first does SET flowpilot:tenant-lock:<id> NX PX 5000 and throws 'Tenant lock already held' if that fails, before maxConcurrency is read. The lock is only deleted in run()'s finally, so within its 5 s TTL the tenant is effectively limited to one run."
     },
     {
       "id": "q02-foreign-lock-release",
@@ -34,13 +34,13 @@
         { "path": "src/lib/queue/connection.ts", "lineStart": 36, "lineEnd": 40 }
       ],
       "prompt": "Run A takes 8 seconds. At 6 s, Run B for the same tenant acquires the lock (A's 5000 ms TTL has expired). What does A's finally block do when A finishes at 8 s?",
-      "answer": "It deletes the tenant lock unconditionally - which is now B's lock - so a third run can start while B is still executing",
+      "answer": "It deletes the tenant lock unconditionally, freeing B's lock while B is still running",
       "distractors": [
-        "Nothing, because A notices the lock value no longer belongs to it",
-        "It renews the lock for B, since B is still running",
-        "It throws, because DEL on a key A did not set is rejected"
+        "Nothing, because A first checks the lock's stored value and sees that it no longer belongs to A",
+        "It renews the lock's TTL on B's behalf, since B is still running for that tenant",
+        "It throws, because Redis rejects a DEL on a key that a different client had set"
       ],
-      "explanation": "releaseConcurrency calls redis.del on the key with no ownership token, and every holder writes the same value \"1\". A lock with a TTL shorter than the work, released without an owner check, can free someone else's lock."
+      "explanation": "releaseConcurrency calls redis.del on the key with no ownership token, and every holder writes the same value \"1\". A lock with a TTL shorter than the work, released without an owner check, frees someone else's lock, so a third run can start while B is still executing."
     },
     {
       "id": "q03-condition-first-branch",
@@ -50,13 +50,13 @@
         { "path": "src/lib/engine/executor.ts", "lineStart": 86, "lineEnd": 92 }
       ],
       "prompt": "A condition step has conditionBranches [{ expression: \"amount > 100\", nextStepId: S5 }, { expression: \"amount <= 100\", nextStepId: S3 }] and its runner returns passed: true. Where does execution go next?",
-      "answer": "To S5 - the executor picks the first branch that has any non-empty expression whenever passed is true; branch expressions are never evaluated",
+      "answer": "To S5: with passed true it takes the first branch that has any expression string",
       "distractors": [
-        "To whichever branch's expression evaluates true against the step output",
-        "To S3, because the last matching branch wins",
+        "To whichever branch's expression evaluates to true against the step's output data",
+        "To S3, because when several branches match, the last matching branch wins",
         "To the next step by position, because branches only apply when passed is false"
       ],
-      "explanation": "branches.find((branch) => Boolean(branch.expression) && output.data.passed) only checks that an expression string exists. With passed false no branch matches and the explicit nextStepId or the next position is used."
+      "explanation": "branches.find((branch) => Boolean(branch.expression) && output.data.passed) only checks that an expression string exists; branch expressions are never evaluated. With passed false no branch matches and the explicit nextStepId or the next position is used."
     },
     {
       "id": "q04-default-retries",
@@ -68,11 +68,11 @@
         { "path": "src/lib/utils/retry.ts", "lineStart": 11, "lineEnd": 13 }
       ],
       "prompt": "A step with an empty retryConfig fails every time. How many attempts are made, and how long are the waits between them?",
-      "answer": "4 attempts (maxRetries defaults to 3), waiting 1000, 2000 and 4000 ms between them",
+      "answer": "4 attempts (maxRetries defaults to 3), with waits of 1000, 2000 and 4000 ms",
       "distractors": [
-        "3 attempts, waiting 1000 ms between each",
-        "4 attempts, waiting 2000, 4000 and 8000 ms between them",
-        "1 attempt, because an empty retryConfig disables retries"
+        "3 attempts (maxRetries defaults to 3), with a fixed 1000 ms wait between each",
+        "Four tries, with the backoff doubling from a 2 s base: 2 s, then 4 s, then 8 s",
+        "1 attempt, because an empty retryConfig is read as retries being disabled"
       ],
       "explanation": "The loop runs attempt = 1 .. maxRetries + 1. computeBackoff is backoffMs * multiplier ** (attempt - 1) with defaults 1000 and 2, so after attempts 1, 2, 3 it sleeps 1000, 2000, 4000."
     },
@@ -85,13 +85,13 @@
         { "path": "src/lib/engine/executor.ts", "lineStart": 96, "lineEnd": 104 }
       ],
       "prompt": "A step's onFailure is \"goto:cleanup\" and it exhausts its retries. What does the run do next?",
-      "answer": "It continues with the step's normal successor - executeStep returns metadata.goto, but run() never reads output.metadata",
+      "answer": "It continues to the step's normal successor, because run() never reads the goto",
       "distractors": [
-        "It jumps to the step named cleanup",
-        "It fails the run and writes a dead-letter item",
-        "It restarts the failing step from attempt 1"
+        "It jumps to the step named cleanup, as the onFailure setting tells it to",
+        "It fails the whole run and writes a dead-letter item recording the failed step's error",
+        "It restarts the failing step from attempt 1 with a fresh retry budget"
       ],
-      "explanation": "The goto target only lands in output.metadata. The run loop looks at conditionBranches, nextStepId and cursor + 1 - never metadata - so goto behaves like continue."
+      "explanation": "executeStep puts the goto target in output.metadata, but the run loop looks at conditionBranches, nextStepId and cursor + 1 - never metadata - so goto behaves like continue."
     },
     {
       "id": "q06-idempotency-after-success",
@@ -102,11 +102,11 @@
         { "path": "src/lib/engine/executor.ts", "lineStart": 119, "lineEnd": 125 }
       ],
       "prompt": "Two jobs carrying the same idempotencyKey start a few milliseconds apart, and the first has not finished yet. Does the second one run?",
-      "answer": "Yes - the key is only written after a run completes successfully, so the lookup at the start finds nothing yet",
+      "answer": "Yes: the key is written only after a run succeeds, so the early lookup finds nothing",
       "distractors": [
-        "No - the first job reserves the key before executing any step",
-        "No - the second job waits for the first and then returns its runId",
-        "Yes, but its steps write no step_logs because the key is pending"
+        "No: the first job reserves the key before it executes any of its steps",
+        "No: the second job waits for the first to finish and then returns the first job's runId",
+        "Yes, but its steps write no step_logs while the shared key is still pending"
       ],
       "explanation": "lookupIdempotencyRunId runs at the top of run(); reserveIdempotencyKey runs only after the completed update. In-flight duplicates (and retries after a failure) are not deduplicated."
     },
@@ -118,11 +118,11 @@
         { "path": "src/lib/engine/context.ts", "lineStart": 40, "lineEnd": 43 }
       ],
       "prompt": "A step config contains \"Hello {{triggerData.user.name}}\" but the trigger payload has no user. What string does resolveTemplates produce?",
-      "answer": "\"Hello \" - an unresolved path is replaced with the empty string",
+      "answer": "\"Hello \", because an unresolved path becomes an empty string",
       "distractors": [
-        "\"Hello undefined\"",
-        "\"Hello {{triggerData.user.name}}\", left untouched",
-        "It throws, failing the step with a template error"
+        "\"Hello undefined\", because the missing value is passed through String()",
+        "\"Hello {{triggerData.user.name}}\", with the placeholder left untouched",
+        "It throws, failing the step with a template resolution error"
       ],
       "explanation": "The replace callback returns resolved === undefined ? \"\" : String(resolved). Missing data silently becomes blank text rather than an error."
     },
@@ -135,11 +135,11 @@
         { "path": "src/lib/engine/context.ts", "lineStart": 59, "lineEnd": 61 }
       ],
       "prompt": "A step named \"Fetch User!\" finishes. Under which key does its output appear in the run context's steps map?",
-      "answer": "fetch_user_ - the name is trimmed, lowercased, and every run of non [a-z0-9] characters becomes one underscore",
+      "answer": "fetch_user_ (lowercased; each run of non-alphanumerics becomes one underscore)",
       "distractors": [
-        "Fetch User!, exactly as typed",
-        "fetch-user, with punctuation removed and spaces hyphenated",
-        "fetchUser, converted to camelCase"
+        "Fetch User!, exactly as typed, since step names are used as context keys verbatim",
+        "fetch-user, with punctuation removed and spaces converted to hyphens",
+        "fetchUser, converted to camelCase so it can be used in a template path"
       ],
       "explanation": "normalizeStepName applies /[^a-z0-9]+/g -> \"_\" after lowercasing, so both the space and the trailing ! become underscores. Templates must use {{steps.fetch_user_.output...}}."
     },
@@ -152,13 +152,13 @@
         { "path": "src/lib/engine/executor.ts", "lineStart": 146, "lineEnd": 158 }
       ],
       "prompt": "claimConcurrency throws ConcurrencyLimitError for a job. What happens to that job's workflow_runs row?",
-      "answer": "Nothing - the claim runs before the try block, so the failure handler that marks runs failed and writes a dead-letter item never executes",
+      "answer": "Nothing: the claim runs before the try, so the failure handler never executes",
       "distractors": [
-        "It is marked failed with the concurrency error message",
-        "It is marked failed and a dead-letter item is written for later retry",
-        "It is deleted so the job can be re-enqueued cleanly"
+        "It is marked failed, with the concurrency error message stored on the row",
+        "It is marked failed, and a dead-letter item is written so the job can be retried later",
+        "It is deleted, so that the job can be cleanly re-enqueued by the worker"
       ],
-      "explanation": "await this.claimConcurrency(...) precedes try { ... } catch { ... } finally { ... }. The error propagates to the caller and the row keeps whatever status it had (pending)."
+      "explanation": "await this.claimConcurrency(...) precedes try { ... } catch { ... } finally { ... }, so the handler that marks runs failed and writes a dead-letter item never runs. The error propagates to the caller and the row keeps whatever status it had (pending)."
     },
     {
       "id": "q10-time-bucket-key",
@@ -168,11 +168,11 @@
         { "path": "src/lib/engine/idempotency.ts", "lineStart": 13, "lineEnd": 18 }
       ],
       "prompt": "With the default bucketMinutes, the same workflow is triggered twice with identical triggerData at 10:04:10 and 10:04:50. Do the two triggers get the same idempotency key?",
-      "answer": "Yes - seconds are zeroed and minutes floored to the bucket, so both hash 10:04:00 with the same workflow id and payload",
+      "answer": "Yes: the time is floored to the minute bucket, so both hash the same 10:04:00",
       "distractors": [
-        "No - the key includes the exact millisecond timestamp",
-        "No - each trigger gets a random UUID key",
-        "Yes, but only if both triggers come from the same IP address"
+        "No: the key includes the exact millisecond timestamp of each trigger",
+        "No: each trigger is given a random UUID as its idempotency key",
+        "Yes, but only when both triggers arrive from the same client IP address"
       ],
       "explanation": "generateWorkflowIdempotencyKey hashes workflowId, JSON.stringify(triggerData) and the bucketed ISO time. A trigger at 10:05:01 would land in a new bucket and get a different key."
     },
