@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom';
 import { useApi } from '../api/context';
 import { errorText } from '../api/errors';
 import { isApiError, type ReviewGrade, type ReviewQueueItem } from '../api/types';
+import { useDueReport } from '../components/AppShell';
 import { Icon } from '../components/Icon';
 import { Chip, Kbd, LoadState, PageHeader, ProgressBar } from '../components/ui';
 import { hasModifier, isEditableTarget, useKeydown } from '../lib/keys';
@@ -35,6 +36,7 @@ function Session({ cards }: { cards: ReviewQueueItem[] }) {
   const [tally, setTally] = useState<Record<ReviewGrade, number>>({ again: 0, hard: 0, good: 0, easy: 0 });
   const [error, setError] = useState<string | null>(null);
   const busy = useRef(false);
+  const reportDue = useDueReport();
   const card = cards[index];
 
   const grade = async (g: ReviewGrade) => {
@@ -42,6 +44,7 @@ function Session({ cards }: { cards: ReviewQueueItem[] }) {
     busy.current = true;
     try {
       const r = await api.gradeReview(card.id, g);
+      reportDue(r.remainingDue); // W11: the nav badge counts down live
       setXp((x) => x + r.xp.amount);
       setTally((t) => ({ ...t, [g]: t[g] + 1 }));
       setRevealed(false);

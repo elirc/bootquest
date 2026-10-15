@@ -249,7 +249,7 @@ describe('#8 reading unit with nothing to read: honest empty state', () => {
     renderApp('/play/104', api);
     const box = await screen.findByTestId('reading-empty');
     expect(box).toHaveTextContent('No reading material is served for this unit yet');
-    expect(within(box).getByRole('link', { name: /campaign map/ })).toHaveAttribute('href', '/campaign/js');
+    expect(within(box).getByRole('link', { name: /campaign map/ })).toHaveAttribute('href', '/campaign/js?unit=104'); // W11: targets this quest
     expect(within(box).getByText('JS-Exercise-Closures-Callbacks-ArrayMethods').tagName).toBe('CODE');
     expect(within(box).queryByRole('link', { name: /github/i })).not.toBeInTheDocument();
     expect(box.querySelectorAll('a[href^="http"]')).toHaveLength(0);

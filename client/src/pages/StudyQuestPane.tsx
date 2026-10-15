@@ -83,7 +83,7 @@ function StudyQuest({ detail, sq }: { detail: UnitDetail; sq: StudyQuestPublic }
         {sq.readingSteps.map((r) => (
           <li key={r.key}>
             <a href={r.url} target="_blank" rel="noopener noreferrer">
-              {readingTitle(r.title, r.path)}
+              <InlineProse text={readingTitle(r.title, r.path)} />
             </a>{' '}
             <span className="muted small">
               {r.path}:{r.lines.start}-{r.lines.end}

@@ -95,19 +95,36 @@ function useWidth(ref: RefObject<HTMLElement>): number {
   return width;
 }
 
-export function SkillTree({ acts, trackLocked, level }: { acts: readonly CampaignActDto[]; trackLocked: boolean; level: number }) {
+export function SkillTree({
+  acts,
+  trackLocked,
+  level,
+  targetQuestId,
+}: {
+  acts: readonly CampaignActDto[];
+  trackLocked: boolean;
+  level: number;
+  /** W11: a quest to reveal (its act is expanded), focus and mark — the Campaign page's `?unit=` target */
+  targetQuestId?: number;
+}) {
   const boxRef = useRef<HTMLDivElement>(null);
   const width = useWidth(boxRef);
-  const [expanded, setExpanded] = useState<Set<number>>(() => defaultExpanded(acts));
+  const targetAct = targetQuestId === undefined ? undefined : acts.find((a) => a.quests.some((q) => q.id === targetQuestId));
+  const [expanded, setExpanded] = useState<Set<number>>(() => {
+    const open = defaultExpanded(acts);
+    if (targetAct) open.add(targetAct.id);
+    return open;
+  });
   const layout = useMemo(() => layoutTree(acts, { width, expanded }), [acts, width, expanded]);
   const actById = useMemo(() => new Map(acts.map((a) => [a.id, a])), [acts]);
   const questById = useMemo(() => new Map(acts.flatMap((a) => a.quests.map((q) => [q.id, q] as const))), [acts]);
   const nodes = useRef(new Map<string, HTMLElement>());
   const [active, setActive] = useState<string>(() => {
+    if (targetAct) return `q:${targetQuestId}`;
     const first = layout.quests.find((q) => q.state === 'in-progress' || q.state === 'available');
     return first?.key ?? layout.rows[0]?.[0] ?? '';
   });
-  const pendingFocus = useRef<string | null>(null);
+  const pendingFocus = useRef<string | null>(targetAct ? `q:${targetQuestId}` : null);
 
   // a collapsed act drops its cards: the roving stop falls back to that act's gate
   const allKeys = useMemo(() => new Set(layout.rows.flat()), [layout]);
@@ -119,7 +136,9 @@ export function SkillTree({ acts, trackLocked, level }: { acts: readonly Campaig
 
   useEffect(() => {
     if (pendingFocus.current === null) return;
-    nodes.current.get(pendingFocus.current)?.focus();
+    const el = nodes.current.get(pendingFocus.current);
+    el?.focus({ preventScroll: true });
+    el?.scrollIntoView?.({ block: 'center' });
     pendingFocus.current = null;
   });
 
@@ -216,6 +235,7 @@ export function SkillTree({ acts, trackLocked, level }: { acts: readonly Campaig
               box={box}
               quest={quest}
               actUnlocked={act.unlocked}
+              target={box.id === targetQuestId}
               tabIndex={box.key === activeKey ? 0 : -1}
               nodeRef={register(box.key)}
               onFocus={() => setActive(box.key)}
@@ -233,7 +253,7 @@ function unlockLine(act: CampaignActDto, level: number): string | null {
   if (r.staticLock) return 'locked: content arrives after V1';
   const parts: string[] = [];
   if (r.previousCorePct > 0) parts.push(`${r.previousCorePct}% of act ${act.ordinal - 1} core`);
-  if (r.level > 1) parts.push(`level ${r.level} (you: ${level})`);
+  if (r.level > 1) parts.push(level >= r.level ? `level ${r.level} (reached)` : `level ${r.level} (you: ${level})`); // W11: met = reached
   return parts.length ? `unlocks at ${parts.join(' + ')}` : null;
 }
 
@@ -303,6 +323,7 @@ function QuestNode({
   box,
   quest,
   actUnlocked,
+  target = false,
   tabIndex,
   nodeRef,
   onFocus,
@@ -310,12 +331,13 @@ function QuestNode({
   box: QuestBox;
   quest: CampaignQuestDto;
   actUnlocked: boolean;
+  target?: boolean;
   tabIndex: number;
   nodeRef: (el: HTMLElement | null) => void;
   onFocus: () => void;
 }) {
   const style = { left: box.x, top: box.y, width: box.w, height: box.h };
-  const cls = `tree-quest tree-q-${box.state}`;
+  const cls = `tree-quest tree-q-${box.state}${target ? ' tree-q-target' : ''}`;
   const meta = quest.kind === 'reading' ? 'reading' : quest.core ? 'core' : 'optional';
   const body = (
     <>
@@ -343,6 +365,7 @@ function QuestNode({
     'data-step': '',
     'data-state': quest.state,
     'data-quest': quest.id,
+    'aria-current': target ? ('location' as const) : undefined,
     tabIndex,
     onFocus,
   };

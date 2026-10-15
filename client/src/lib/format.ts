@@ -28,3 +28,13 @@ export function toRoman(n: number): string {
 }
 
 export const pct = (n: number, d: number): number => (d <= 0 ? 0 : Math.max(0, Math.min(100, (n / d) * 100)));
+
+/** W11: a stored timestamp in LOCAL time, like every other date in the app (the server's day keys are local days). */
+export const fmtWhen = (ms: number) => new Date(ms).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+/** W11: "2026-10-14 21:05" in LOCAL time (the evidence list's sortable stamp; was UTC, a day off the local day keys at night). */
+export function fmtStamp(ms: number): string {
+  const d = new Date(ms);
+  const p2 = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`;
+}

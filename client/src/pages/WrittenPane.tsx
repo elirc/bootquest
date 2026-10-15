@@ -4,17 +4,17 @@
 // self-check the learner reads against the model answer: display-only, NOT scored, NOT evidence,
 // no XP. Its ticks are a per-browser convenience (localStorage), never sent anywhere.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useApi } from '../api/context';
 import { errorText } from '../api/errors';
 import { isApiError, type ModelAnswerResponse, type UnitDetail } from '../api/types';
 import { Icon } from '../components/Icon';
 import { Chip } from '../components/ui';
+import { fmtWhen } from '../lib/format';
 import { InlineProse, Prose } from '../lib/prose';
 
-const fmtWhen = (ms: number) =>
-  new Date(ms).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'UTC' }) + ' UTC';
+
 
 // ---------------------------------------------------------------- per-browser storage (best effort)
 
@@ -66,6 +66,8 @@ export function WrittenPane({ detail }: { detail: UnitDetail }) {
   const [error, setError] = useState<string | null>(null);
   /** the answer row exists but the model answer could not be loaded (e.g. 404 NO_SOLUTION) */
   const [storedId, setStoredId] = useState<number | null>(null);
+  /** the model answer view was opened by this session's store (move focus to it) */
+  const [justStored, setJustStored] = useState(false);
 
   useEffect(() => {
     if (answeredFlag === false) return;
@@ -98,6 +100,7 @@ export function WrittenPane({ detail }: { detail: UnitDetail }) {
       setStoredId(rec.attemptId);
       writeStore(draftKey(id), null); // the server holds the answer now
       setConfirming(false);
+      setJustStored(true);
       setModel(await api.getModelAnswer(id));
     } catch (e) {
       setError(errorText(e));
@@ -106,8 +109,10 @@ export function WrittenPane({ detail }: { detail: UnitDetail }) {
     }
   };
 
-  if (model) return <ModelAnswerView unitId={id} trackId={detail.unit.trackId} question={question} model={model} />;
-  const ready = text.trim() !== '' && storedId === null;
+  if (model) return <ModelAnswerView unitId={id} trackId={detail.unit.trackId} question={question} model={model} focusOnMount={justStored} />;
+  // W11: the answer is stored immutably, so the untouched starter template is not an answer
+  const untouched = text.trim() === (detail.starter ?? '').trim();
+  const ready = text.trim() !== '' && !untouched && storedId === null;
 
   return (
     <section className="panel player-work written" aria-labelledby="written-q">
@@ -133,6 +138,7 @@ export function WrittenPane({ detail }: { detail: UnitDetail }) {
       </label>
       <p className="muted small" data-testid="draft-note">
         Unsent drafts are kept in this browser only.
+        {untouched && text.trim() !== '' && storedId === null && <> Fill in the template before submitting: an untouched template cannot be stored.</>}
       </p>
       <div className="toolbar">
         <label className="check">
@@ -179,8 +185,25 @@ export function WrittenPane({ detail }: { detail: UnitDetail }) {
   );
 }
 
-function ModelAnswerView({ unitId, trackId, question, model }: { unitId: number; trackId: string; question: string; model: ModelAnswerResponse }) {
+function ModelAnswerView({
+  unitId,
+  trackId,
+  question,
+  model,
+  focusOnMount = false,
+}: {
+  unitId: number;
+  trackId: string;
+  question: string;
+  model: ModelAnswerResponse;
+  focusOnMount?: boolean;
+}) {
   const key = marksKey(unitId, model.attemptId);
+  // W11: the Store button unmounts with the answer form; keep keyboard focus on the new view
+  const titleRef = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (focusOnMount) titleRef.current?.focus();
+  }, [focusOnMount]);
   const [marks, setMarks] = useState<Record<string, boolean>>(() => readMarks(key));
   const toggle = (rid: string, on: boolean) => {
     setMarks((prev) => {
@@ -194,7 +217,7 @@ function ModelAnswerView({ unitId, trackId, question, model }: { unitId: number;
 
   return (
     <section className="panel player-work written" aria-labelledby="written-key-title">
-      <h2 className="panel-title" id="written-key-title">
+      <h2 className="panel-title" id="written-key-title" tabIndex={-1} ref={titleRef}>
         Compare with the model answer
       </h2>
       <p className="muted small" data-testid="stored-meta">

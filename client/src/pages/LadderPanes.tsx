@@ -18,12 +18,12 @@ import {
 } from '../api/types';
 import { Icon } from '../components/Icon';
 import { Chip } from '../components/ui';
+import { fmtWhen } from '../lib/format';
 import { InlineProse } from '../lib/prose';
 import { useTracksRefresh } from '../lib/tracks';
 
 const fmtPct = (x: number) => `${Math.round(x * 1000) / 10}%`;
-const fmtWhen = (ms: number) =>
-  new Date(ms).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'UTC' }) + ' UTC';
+
 
 function HelpBox({ checked, onChange, disabled }: { checked: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
   return (
