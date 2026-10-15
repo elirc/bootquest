@@ -1,0 +1,483 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "dotnet-intercom",
+ "sha": "74e0a28945f68e3d04c75ea5d86a2ed6d531050b",
+ "guides": [
+  "docs/architecture-review.md"
+ ],
+ "items": [
+  {
+   "id": "q01-external-id-takeover",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture-review.md",
+    "lines": {
+     "start": 17,
+     "end": 26
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture-review.md",
+     "lineStart": 19,
+     "lineEnd": 24
+    },
+    {
+     "path": "src/NetIntercom.Application/Widget/StartConversation.cs",
+     "lineStart": 51,
+     "lineEnd": 52
+    }
+   ],
+   "prompt": "An anonymous caller POSTs /api/v1/widget/session with externalId \"user-123\", which belongs to another person's visitor row. What happens?",
+   "answer": "The caller is issued that visitor's token, with their history",
+   "distractors": [
+    "A 403, because externalId must match the caller's anonymousId",
+    "A brand-new visitor row is created and given the same externalId",
+    "A 401, because an HMAC userHash is required to use an externalId"
+   ],
+   "explanation": "The handler looks up a visitor with ExternalId == request.ExternalId OR AnonymousId == request.AnonymousId and issues a visitor JWT for whatever it finds; nothing proves the caller owns that externalId. The HMAC userHash is the review's recommendation, not existing code, and the OR match means no new row is created."
+  },
+  {
+   "id": "q02-null-name-kept",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture-review.md",
+    "lines": {
+     "start": 17,
+     "end": 26
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture-review.md",
+     "lineStart": 24,
+     "lineEnd": 24
+    },
+    {
+     "path": "src/NetIntercom.Application/Widget/StartConversation.cs",
+     "lineStart": 60,
+     "lineEnd": 63
+    }
+   ],
+   "prompt": "An existing visitor's widget calls /session again and sends name: null. What happens to the stored Name?",
+   "answer": "It keeps its old value, because the update uses the ?? operator",
+   "distractors": [
+    "It is set to null, since every field is copied from the request",
+    "It becomes an empty string, filled in by the session validator",
+    "It is reset to \"Visitor\", the widget's default display name"
+   ],
+   "explanation": "Lines 60-63 assign visitor.Name = request.Name ?? visitor.Name (and the same for Email, ExternalId, AttributesJson), so a null leaves the stored value. The review's \"overwrite\" applies when a value IS sent. \"Visitor\" is only a display fallback used elsewhere, never written back."
+  },
+  {
+   "id": "q03-visitor-token-life",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture-review.md",
+    "lines": {
+     "start": 28,
+     "end": 30
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture-review.md",
+     "lineStart": 30,
+     "lineEnd": 30
+    },
+    {
+     "path": "src/NetIntercom.Infrastructure/Auth/TokenService.cs",
+     "lineStart": 18,
+     "lineEnd": 20
+    },
+    {
+     "path": "src/NetIntercom.Infrastructure/Auth/TokenService.cs",
+     "lineStart": 74,
+     "lineEnd": 74
+    }
+   ],
+   "prompt": "How long does a visitor JWT from CreateVisitorToken stay valid, and what can revoke it before then?",
+   "answer": "30 days, and nothing in the code can revoke it any earlier",
+   "distractors": [
+    "15 minutes, and the widget silently refreshes it on every load",
+    "14 days, and it is revoked when the refresh token is rotated",
+    "30 days, but it is revoked as soon as the visitor row changes"
+   ],
+   "explanation": "CreateVisitorToken writes the token with UtcNow.AddDays(VisitorTokenDays), and VisitorTokenDays is 30. The review notes there is no revocation mechanism and suggests a token-version claim. 15 minutes and 14 days are the agent access and refresh lifetimes; visitors have no refresh token."
+  },
+  {
+   "id": "q04-refresh-reuse",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture-review.md",
+    "lines": {
+     "start": 32,
+     "end": 34
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture-review.md",
+     "lineStart": 34,
+     "lineEnd": 34
+    },
+    {
+     "path": "src/NetIntercom.Application/Auth/Refresh.cs",
+     "lineStart": 38,
+     "lineEnd": 43
+    }
+   ],
+   "prompt": "Someone presents an agent refresh token that was already rotated (revoked). What does the Refresh handler do?",
+   "answer": "It answers 401 for that call; the newer tokens stay valid",
+   "distractors": [
+    "It revokes every token the agent holds and logs them all out",
+    "It issues a fresh pair, as the hash still matches a stored row",
+    "It answers 409, treating the reuse as a concurrency conflict"
+   ],
+   "explanation": "The stored row is found, but IsActive is false for a revoked token, so the handler throws UnauthorizedException, mapped to 401. The review's point is that it does nothing else: no family revocation, so whoever holds the newest token keeps a valid session."
+  },
+  {
+   "id": "q05-typing-unchecked",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture-review.md",
+    "lines": {
+     "start": 40,
+     "end": 42
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture-review.md",
+     "lineStart": 42,
+     "lineEnd": 42
+    },
+    {
+     "path": "src/NetIntercom.Api/Realtime/VisitorHub.cs",
+     "lineStart": 48,
+     "lineEnd": 58
+    }
+   ],
+   "prompt": "An authenticated visitor invokes VisitorHub.Typing with the id of a conversation that is not theirs. What happens?",
+   "answer": "The typing event reaches that conversation's agent group",
+   "distractors": [
+    "A HubException, exactly as JoinConversation would throw for it",
+    "Nothing, since the visitor never joined that hub group",
+    "The hub closes that visitor's connection immediately"
+   ],
+   "explanation": "Typing looks up the visitor's name and sends \"typing\" to the agent hub group conv:{conversationId} with no ownership check, unlike JoinConversation's AnyAsync guard. Sending to a group does not require the sender to be in it, and nothing disconnects the caller."
+  },
+  {
+   "id": "q06-xmin-conflict",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture-review.md",
+    "lines": {
+     "start": 68,
+     "end": 70
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture-review.md",
+     "lineStart": 70,
+     "lineEnd": 70
+    },
+    {
+     "path": "src/NetIntercom.Infrastructure/Persistence/AppDbContext.cs",
+     "lineStart": 78,
+     "lineEnd": 79
+    },
+    {
+     "path": "src/NetIntercom.Api/Infrastructure/ApiExceptionHandler.cs",
+     "lineStart": 18,
+     "lineEnd": 39
+    }
+   ],
+   "prompt": "Two agents close the same conversation at the same moment; the second save finds that xmin has changed. What does that agent receive?",
+   "answer": "A 500, because ApiExceptionHandler falls to its default branch",
+   "distractors": [
+    "A 409 Conflict that is mapped from DbUpdateConcurrencyException",
+    "A 422, because a closed conversation breaks a domain rule",
+    "A 200, because the last of the two writes wins silently"
+   ],
+   "explanation": "RowVersion is configured with IsRowVersion(), mapped to Postgres xmin, so the stale update throws DbUpdateConcurrencyException. The handler's switch covers Validation, NotFound, Forbidden, Unauthorized and Domain exceptions; anything else falls to the 500 branch. The review lists the 409 mapping as a fix to make."
+  },
+  {
+   "id": "q07-domain-422",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture-review.md",
+    "lines": {
+     "start": 68,
+     "end": 70
+    }
+   },
+   "cites": [
+    {
+     "path": "src/NetIntercom.Api/Infrastructure/ApiExceptionHandler.cs",
+     "lineStart": 31,
+     "lineEnd": 31
+    }
+   ],
+   "prompt": "A command handler throws DomainException because a state change breaks a rule. Which status does ApiExceptionHandler produce?",
+   "answer": "422, titled \"Domain rule violated\", with the message as detail",
+   "distractors": [
+    "409, titled \"Conflict\", with the exception message as detail",
+    "400, titled \"Validation failed\", with per-field error lists",
+    "500, titled \"An unexpected error occurred\", since it is unhandled"
+   ],
+   "explanation": "The switch maps DomainException to Problem(422, \"Domain rule violated\", exception.Message). 400 with grouped errors is the FluentValidation ValidationException arm, and 500 is only for exceptions no arm matches. No arm produces 409."
+  },
+  {
+   "id": "q08-sla-overlap",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture-review.md",
+    "lines": {
+     "start": 72,
+     "end": 74
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture-review.md",
+     "lineStart": 5,
+     "lineEnd": 5
+    },
+    {
+     "path": "src/NetIntercom.Application/Sla/CheckSlaBreaches.cs",
+     "lineStart": 34,
+     "lineEnd": 53
+    },
+    {
+     "path": "src/NetIntercom.Infrastructure/Persistence/AppDbContext.cs",
+     "lineStart": 95,
+     "lineEnd": 99
+    }
+   ],
+   "prompt": "Two overlapping SLA sweeps both load the same Running timer that is overdue. What actually happens?",
+   "answer": "Both mark it breached, save and notify: the escalation is sent twice",
+   "distractors": [
+    "The later sweep throws DomainException and its whole batch fails",
+    "xmin makes the second save fail with a DbUpdateConcurrencyException",
+    "A unique index on Status and BreachAtUtc rejects the second save"
+   ],
+   "explanation": "Each sweep loads the timer into its own DbContext while it is still Running, so MarkBreached's guard passes in both, and SlaTimer has no concurrency token. Both saves succeed and both notify. The review's section 2.3 claims a DomainException, but its own status note corrects that; the (Status, BreachAtUtc) index is not unique."
+  },
+  {
+   "id": "q09-after-tie",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture-review.md",
+    "lines": {
+     "start": 92,
+     "end": 94
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture-review.md",
+     "lineStart": 94,
+     "lineEnd": 94
+    },
+    {
+     "path": "src/NetIntercom.Application/Widget/WidgetQueries.cs",
+     "lineStart": 36,
+     "lineEnd": 36
+    }
+   ],
+   "prompt": "A widget's last-seen message has the same CreatedAtUtc as a message it missed. It calls the catch-up query with ?after= that timestamp. What happens to the missed message?",
+   "answer": "It is skipped, because the query filters on CreatedAtUtc > after",
+   "distractors": [
+    "It is returned, since the filter always includes the after time",
+    "It is returned, and the server removes the duplicate by its Id",
+    "The query fails, since CreatedAtUtc values must all be unique"
+   ],
+   "explanation": "Both catch-up queries filter m.CreatedAtUtc > request.AfterUtc, a strict comparison, so a message sharing the boundary timestamp is excluded. Messages from one SaveChanges batch share IClock.UtcNow, so ties are real. The widget dedupes on the client, not the server, and timestamps have no unique constraint."
+  },
+  {
+   "id": "q10-presence-node",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture-review.md",
+    "lines": {
+     "start": 104,
+     "end": 112
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture-review.md",
+     "lineStart": 108,
+     "lineEnd": 109
+    },
+    {
+     "path": "src/NetIntercom.Api/Program.cs",
+     "lineStart": 38,
+     "lineEnd": 39
+    }
+   ],
+   "prompt": "NetIntercom runs on two API nodes. An agent's SignalR connection is on node A. What does ConversationRouter on node B see?",
+   "answer": "The agent as offline, because presence is held in node memory",
+   "distractors": [
+    "The agent as online, through the SignalR Redis backplane",
+    "The agent as online, since presence is stored in Postgres rows",
+    "An error, because routing must run on a single node"
+   ],
+   "explanation": "PresenceTracker is a singleton holding ConcurrentDictionary state in process, registered as IPresenceService. Node B has its own empty tracker, so routing treats the agent as offline. The review notes there is no backplane and that the abstraction makes a Redis swap clean later."
+  },
+  {
+   "id": "q11-hangfire-dashboard",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture-review.md",
+    "lines": {
+     "start": 56,
+     "end": 58
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture-review.md",
+     "lineStart": 58,
+     "lineEnd": 58
+    },
+    {
+     "path": "src/NetIntercom.Api/Program.cs",
+     "lineStart": 189,
+     "lineEnd": 189
+    }
+   ],
+   "prompt": "An Admin opens /hangfire directly in a browser tab. What do they get?",
+   "answer": "A 401, since the browser request lacks an Authorization header",
+   "distractors": [
+    "The dashboard, through Hangfire's own built-in login page",
+    "A 403, because Hangfire demands a role of its own as well",
+    "A redirect to the inbox app's login page, then the dashboard"
+   ],
+   "explanation": "MapHangfireDashboard(\"/hangfire\").RequireAuthorization(\"Admin\") protects it with the JWT policy, and a plain browser navigation carries no bearer token, so authentication fails with 401. Hangfire has no login page, no extra role is configured, and nothing redirects."
+  },
+  {
+   "id": "q12-rate-limit-partition",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture-review.md",
+    "lines": {
+     "start": 48,
+     "end": 50
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture-review.md",
+     "lineStart": 50,
+     "lineEnd": 50
+    },
+    {
+     "path": "src/NetIntercom.Api/Program.cs",
+     "lineStart": 117,
+     "lineEnd": 122
+    }
+   ],
+   "prompt": "NetIntercom is deployed behind a reverse proxy with no forwarded-headers middleware. How does its rate limiter partition requests?",
+   "answer": "Clients share a single partition, keyed by the proxy's IP",
+   "distractors": [
+    "Per real client IP, read from the X-Forwarded-For request header",
+    "Per visitor, keyed by the sub claim in each widget token",
+    "Per agent, keyed by the user id in the bearer token"
+   ],
+   "explanation": "The limiter keys on context.Connection.RemoteIpAddress. Without UseForwardedHeaders, that is the proxy's address for every request, so all clients share one partition and the limiter becomes a global throttle. Nothing reads X-Forwarded-For or token claims for partitioning."
+  },
+  {
+   "id": "q13-office-hours-zone",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture-review.md",
+    "lines": {
+     "start": 134,
+     "end": 142
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture-review.md",
+     "lineStart": 141,
+     "lineEnd": 141
+    },
+    {
+     "path": "src/NetIntercom.Domain/Entities/OfficeHours.cs",
+     "lineStart": 22,
+     "lineEnd": 29
+    }
+   ],
+   "prompt": "A team's OfficeHours.TimeZoneId contains a typo. What does IsOpenAt do?",
+   "answer": "It quietly treats the team as being in UTC",
+   "distractors": [
+    "It lets TimeZoneNotFoundException reach the router",
+    "It treats the team as closed until the zone is fixed",
+    "It falls back to the server's local time zone instead"
+   ],
+   "explanation": "IsOpenAt wraps FindSystemTimeZoneById in a try/catch for TimeZoneNotFoundException and sets zone = TimeZoneInfo.Utc, with no logging. The exception never escapes, the team is not forced closed, and the fallback is UTC, not TimeZoneInfo.Local."
+  },
+  {
+   "id": "f01-priority-top4",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/architecture-review.md",
+    "lines": {
+     "start": 155,
+     "end": 162
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture-review.md",
+     "lineStart": 159,
+     "lineEnd": 162
+    }
+   ],
+   "front": "Architecture review: the top four fixes, in order.",
+   "back": "1) Widget identity verification (HMAC userHash) for externalId; 2) snooze auto-reopen job; 3) map DbUpdateConcurrencyException to 409; 4) DisableConcurrentExecution or an idempotent set-based breach update for the SLA job."
+  },
+  {
+   "id": "f02-single-node",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/architecture-review.md",
+    "lines": {
+     "start": 104,
+     "end": 112
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture-review.md",
+     "lineStart": 106,
+     "lineEnd": 110
+    }
+   ],
+   "front": "Three things that assume exactly one NetIntercom API node.",
+   "back": "In-process PresenceTracker (so routing breaks, not just badges); SignalR groups with no backplane; PresenceSweeper's per-node _lastBroadcast state. Migration path: Redis backplane plus presence in Redis with TTL keys."
+  },
+  {
+   "id": "f03-done-well",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/architecture-review.md",
+    "lines": {
+     "start": 146,
+     "end": 153
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture-review.md",
+     "lineStart": 148,
+     "lineEnd": 153
+    }
+   ],
+   "front": "What the review says to keep in NetIntercom.",
+   "back": "Domain invariants in the domain; delivery-only hubs (REST writes, DB catch-up); visitor scoping on every widget path; internal-note isolation at every boundary; an honest test pyramid with Testcontainers; RFC 7807 with correlation ids, rate limiting, health checks, Serilog + OTel."
+  }
+ ]
+}
