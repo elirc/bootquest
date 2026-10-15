@@ -1,0 +1,425 @@
+{
+  "format": "bootquest-quest-drafts@1",
+  "repo": "organized-anti-helpdesk",
+  "sha": "b09b34a042e809978d9c133a5fb87cdfdc489f10",
+  "guides": [
+    "docsclaude/03-server-mastery/05-auth-and-multi-tenancy.md",
+    "docsclaude/02-frontend-deep-dive/06-data-fetching-and-cache.md",
+    "docsclaude/04-architecture-and-patterns/03-transactions-and-audit.md",
+    "docsclaude/CRITIQUE.md"
+  ],
+  "items": [
+    {
+      "id": "q01-cross-tenant-404",
+      "kind": "quiz",
+      "source": {
+        "path": "docsclaude/03-server-mastery/05-auth-and-multi-tenancy.md",
+        "lines": {
+          "start": 60,
+          "end": 65
+        }
+      },
+      "cites": [
+        {
+          "path": "backend/src/modules/tickets/tickets.repository.ts",
+          "lineStart": 25,
+          "lineEnd": 30
+        },
+        {
+          "path": "backend/src/modules/tickets/tickets.service.ts",
+          "lineStart": 49,
+          "lineEnd": 53
+        }
+      ],
+      "prompt": "An agent in org-A requests GET /api/tickets/ticket-B-999, a real ticket owned by org-B. What response do they get, and why that code?",
+      "answer": "404: findById filters by id AND the caller's organizationId, so the row is invisible",
+      "distractors": [
+        "403 Forbidden: the tenant middleware compares the ticket's organization with the caller's and rejects the mismatch",
+        "200 with the ticket, because agents may read every ticket in the database regardless of organization",
+        "401 Unauthorized: the JWT is rejected because it was minted for another organization"
+      ],
+      "explanation": "Tenant isolation lives in the query: where { id, organizationId }. A null result becomes AppError('Ticket not found', 404), which leaks nothing about other tenants."
+    },
+    {
+      "id": "q02-tenant-middleware-scope",
+      "kind": "quiz",
+      "source": {
+        "path": "docsclaude/03-server-mastery/05-auth-and-multi-tenancy.md",
+        "lines": {
+          "start": 84,
+          "end": 86
+        }
+      },
+      "cites": [
+        {
+          "path": "backend/src/middleware/tenant.middleware.ts",
+          "lineStart": 9,
+          "lineEnd": 26
+        }
+      ],
+      "prompt": "What does enforceTenantIsolation actually check?",
+      "answer": "Only that an organizationId in the params or body matches the user's; requests without one pass through",
+      "distractors": [
+        "That every resource id in the URL belongs to the caller's organization, by looking each one up in the database",
+        "That the JWT's organization claim matches the subdomain in the Host header of the request",
+        "That the caller's role is allowed to act on the organization named in the query string"
+      ],
+      "explanation": "The middleware compares req.params.organizationId and req.body.organizationId with the user's org and 403s on mismatch; ticket ids are protected by the repository's organizationId filter, not here."
+    },
+    {
+      "id": "q03-auth-collapses-errors",
+      "kind": "quiz",
+      "source": {
+        "path": "docsclaude/03-server-mastery/05-auth-and-multi-tenancy.md",
+        "lines": {
+          "start": 11,
+          "end": 39
+        }
+      },
+      "cites": [
+        {
+          "path": "backend/src/middleware/auth.middleware.ts",
+          "lineStart": 14,
+          "lineEnd": 38
+        }
+      ],
+      "prompt": "A user is deactivated (isActive false) while holding a still-valid access token. What does authenticate do on their next request?",
+      "answer": "Rejects it with 401: the user is reloaded on every request and isActive is checked",
+      "distractors": [
+        "Lets it through until the 15-minute token expires, because the JWT payload is trusted without a database read",
+        "Returns 403 Forbidden with a 'deactivated' message so the client can show a specific error",
+        "Refreshes the token automatically and logs the user out on the client"
+      ],
+      "explanation": "authenticate verifies the token, then prisma.user.findUnique(...) and throws if !user || !user.isActive; the catch converts every failure into AppError('Unauthorized', 401)."
+    },
+    {
+      "id": "q04-requester-status-transition",
+      "kind": "quiz",
+      "source": {
+        "path": "docsclaude/CRITIQUE.md",
+        "lines": {
+          "start": 30,
+          "end": 30
+        }
+      },
+      "cites": [
+        {
+          "path": "backend/src/modules/tickets/tickets.service.ts",
+          "lineStart": 165,
+          "lineEnd": 174
+        },
+        {
+          "path": "backend/src/modules/tickets/ticket-status-machine.ts",
+          "lineStart": 3,
+          "lineEnd": 10
+        }
+      ],
+      "prompt": "A requester tries to move their own OPEN ticket straight to RESOLVED. What happens?",
+      "answer": "400 Invalid transition: RESOLVED passes the requester target check, but the state machine only allows OPEN to go to IN_PROGRESS",
+      "distractors": [
+        "403, because requesters can never change status",
+        "200: requesters may resolve their own tickets from any state",
+        "200, but the ticket is moved to IN_PROGRESS instead of RESOLVED"
+      ],
+      "explanation": "changeStatus first restricts requesters to RESOLVED or CLOSED targets, then calls canTransition(ticket.status, status); ALLOWED_TRANSITIONS[OPEN] is [IN_PROGRESS]."
+    },
+    {
+      "id": "q05-non-atomic-status-change",
+      "kind": "quiz",
+      "source": {
+        "path": "docsclaude/04-architecture-and-patterns/03-transactions-and-audit.md",
+        "lines": {
+          "start": 72,
+          "end": 78
+        }
+      },
+      "cites": [
+        {
+          "path": "backend/src/modules/tickets/tickets.service.ts",
+          "lineStart": 186,
+          "lineEnd": 207
+        }
+      ],
+      "prompt": "During changeStatus the database connection drops right after the ticket row is updated. What is the resulting state?",
+      "answer": "The ticket has the new status, but no STATUS_CHANGED activity row and no audit event",
+      "distractors": [
+        "Nothing changed: Prisma rolls back the ticket update automatically because the later writes in the same request failed",
+        "The activity row exists but the ticket status is unchanged, because the activity is written first",
+        "The audit event is written first, so the change is at least audited"
+      ],
+      "explanation": "The update, the activity create and auditService.logEvent are three separate awaits on the base client; the guide's fix is to run all three through tx inside prisma.$transaction."
+    },
+    {
+      "id": "q06-assignment-out-of-sync",
+      "kind": "quiz",
+      "source": {
+        "path": "docsclaude/04-architecture-and-patterns/03-transactions-and-audit.md",
+        "lines": {
+          "start": 112,
+          "end": 112
+        }
+      },
+      "cites": [
+        {
+          "path": "backend/src/modules/tickets/tickets.service.ts",
+          "lineStart": 239,
+          "lineEnd": 262
+        }
+      ],
+      "prompt": "The drill asks whether assignTicket's logs can end up out of sync. What is the correct answer?",
+      "answer": "Yes: the assignee update, the ASSIGNED activity and the audit event are separate writes, so a failure after the update leaves an assignment with no matching logs",
+      "distractors": [
+        "No: assignTicket validates the assignee first, so nothing can fail after the update",
+        "No: the repository update runs in a transaction that includes the audit service",
+        "Only if the assignee is a REQUESTER, which is the one case that writes logs before the update"
+      ],
+      "explanation": "Validation happens before the writes, but the three writes themselves are unconnected awaits; validation does not make them atomic."
+    },
+    {
+      "id": "q07-internal-notes-on-detail",
+      "kind": "quiz",
+      "source": {
+        "path": "docsclaude/03-server-mastery/05-auth-and-multi-tenancy.md",
+        "lines": {
+          "start": 116,
+          "end": 116
+        }
+      },
+      "cites": [
+        {
+          "path": "backend/src/modules/tickets/tickets.repository.ts",
+          "lineStart": 38,
+          "lineEnd": 45
+        },
+        {
+          "path": "backend/src/modules/comments/comments.service.ts",
+          "lineStart": 17,
+          "lineEnd": 20
+        }
+      ],
+      "prompt": "The comments endpoint hides internal notes from requesters. A requester instead calls GET /api/tickets/:id on their own ticket. Are internal notes hidden there too?",
+      "answer": "No: findById includes every comment with no isInternal filter, so internal notes reach the requester",
+      "distractors": [
+        "Yes: getTicket strips isInternal comments for requesters before returning, mirroring the comments service",
+        "Yes: Prisma applies the comments service's where clause to every include of the comments relation",
+        "The request fails with 403, because requesters may only read comments through the comments endpoint"
+      ],
+      "explanation": "Only CommentsService.getComments adds where.isInternal = false for requesters; the ticket repository's include: { comments } has no such filter, the pitfall the guide lists as 'allowing requesters to read internal notes'."
+    },
+    {
+      "id": "q08-repo-update-ignores-org",
+      "kind": "quiz",
+      "source": {
+        "path": "docsclaude/03-server-mastery/05-auth-and-multi-tenancy.md",
+        "lines": {
+          "start": 104,
+          "end": 110
+        }
+      },
+      "cites": [
+        {
+          "path": "backend/src/modules/tickets/tickets.repository.ts",
+          "lineStart": 110,
+          "lineEnd": 136
+        },
+        {
+          "path": "backend/src/modules/tickets/tickets.service.ts",
+          "lineStart": 163,
+          "lineEnd": 163
+        }
+      ],
+      "prompt": "ticketsRepository.update takes an organizationId parameter. What keeps a cross-tenant update from succeeding today?",
+      "answer": "Only the service calling getTicket(id, organizationId, user) first; the update itself uses where: { id } and ignores organizationId",
+      "distractors": [
+        "The update's where clause includes organizationId, so Prisma refuses a mismatched row",
+        "A compound unique index on (id, organizationId) in the schema",
+        "enforceTenantIsolation, which looks up the ticket's org before every PATCH"
+      ],
+      "explanation": "The repository's where is { id } alone (the comments in it debate the fix), which is exactly the 'querying by ID alone' pitfall; safety depends on every caller remembering the prior scoped read."
+    },
+    {
+      "id": "q09-query-key-refetch",
+      "kind": "quiz",
+      "source": {
+        "path": "docsclaude/02-frontend-deep-dive/06-data-fetching-and-cache.md",
+        "lines": {
+          "start": 9,
+          "end": 24
+        }
+      },
+      "cites": [
+        {
+          "path": "frontend/src/features/tickets/pages/TicketListPage.tsx",
+          "lineStart": 41,
+          "lineEnd": 42
+        }
+      ],
+      "prompt": "The ticket list's queryKey is ['tickets', page, status, priority, search, sortBy, sortDirection]. If a developer dropped status from the key, what would break?",
+      "answer": "Changing the status filter would keep showing the cached page for the old filter",
+      "distractors": [
+        "Nothing: queryFn reads status from the URL string, so TanStack Query refetches whenever the URL changes",
+        "The list would refetch on every render, because keys without filters are never cached",
+        "TypeScript would refuse to compile because queryFn uses a variable that is missing from the key"
+      ],
+      "explanation": "The query key works like a dependency array: TanStack Query only fetches a new entry when the key changes. Leaving a parameter out is the first pitfall in the guide."
+    },
+    {
+      "id": "q10-status-change-invalidation",
+      "kind": "quiz",
+      "source": {
+        "path": "docsclaude/02-frontend-deep-dive/06-data-fetching-and-cache.md",
+        "lines": {
+          "start": 77,
+          "end": 77
+        }
+      },
+      "cites": [
+        {
+          "path": "frontend/src/features/tickets/pages/TicketDetailPage.tsx",
+          "lineStart": 84,
+          "lineEnd": 97
+        }
+      ],
+      "prompt": "After a successful status change on the detail page, which cached queries are invalidated?",
+      "answer": "Only ['ticket', id]; list entries keyed ['tickets', ...] are not invalidated by the status change",
+      "distractors": [
+        "Every query starting with 'ticket', which also prefix-matches the ['tickets', ...] list entries",
+        "['ticket', id] and ['comments', id], like the comment mutation",
+        "None: the page patches the cached ticket object in place"
+      ],
+      "explanation": "handleStatusChange calls invalidateQueries({ queryKey: ['ticket', id] }) only. Prefix matching is per array element, so 'ticket' does not match 'tickets'."
+    },
+    {
+      "id": "q11-invalidate-not-patch",
+      "kind": "quiz",
+      "source": {
+        "path": "docsclaude/02-frontend-deep-dive/06-data-fetching-and-cache.md",
+        "lines": {
+          "start": 51,
+          "end": 58
+        }
+      },
+      "cites": [
+        {
+          "path": "frontend/src/features/tickets/pages/TicketDetailPage.tsx",
+          "lineStart": 64,
+          "lineEnd": 76
+        }
+      ],
+      "prompt": "Why does the comment mutation invalidate ['comments', id] and ['ticket', id] instead of pushing the new comment into the cached array?",
+      "answer": "A refetch returns server truth, including generated columns and other actors' changes",
+      "distractors": [
+        "Because TanStack Query caches are read-only and cannot be modified with setQueryData after the first fetch",
+        "Because invalidation is synchronous, while patching the array would require an extra network round trip",
+        "Because the POST response is empty, so there is nothing to insert"
+      ],
+      "explanation": "The guide's senior aside: real systems have multiple concurrent actors, so fetching from the server gets the exact truth including auto-generated database columns."
+    },
+    {
+      "id": "q12-path-params-unvalidated",
+      "kind": "quiz",
+      "source": {
+        "path": "docsclaude/CRITIQUE.md",
+        "lines": {
+          "start": 47,
+          "end": 47
+        }
+      },
+      "cites": [
+        {
+          "path": "backend/src/modules/tickets/tickets.controller.ts",
+          "lineStart": 14,
+          "lineEnd": 21
+        }
+      ],
+      "prompt": "Which systems-level gap does the critique report about ticket path parameters?",
+      "answer": "Ids such as the ticket UUID in the path reach Postgres without Zod verification, so invalid strings hit the database",
+      "distractors": [
+        "Path parameters are validated twice, by Zod and by Prisma, which slows every request",
+        "Path parameters are trusted for the organization id instead of the JWT",
+        "Path parameters are URL-decoded twice, enabling double-encoding attacks"
+      ],
+      "explanation": "The controller passes req.params.id straight into ticketsService.getTicket; the critique names 'no path param validation' as gap 3."
+    },
+    {
+      "id": "f01-tenant-filter-in-query",
+      "kind": "flashcard",
+      "source": {
+        "path": "docsclaude/03-server-mastery/05-auth-and-multi-tenancy.md",
+        "lines": {
+          "start": 104,
+          "end": 104
+        }
+      },
+      "cites": [
+        {
+          "path": "backend/src/modules/tickets/tickets.repository.ts",
+          "lineStart": 25,
+          "lineEnd": 30
+        }
+      ],
+      "front": "Rule for tenant isolation in repository queries?",
+      "back": "Never look a record up by id alone. Pass the tenant id from the verified user (never the request body) down to the query, e.g. where { id, organizationId }, so a foreign row returns null and becomes a 404."
+    },
+    {
+      "id": "f02-detail-leaks-internal-notes",
+      "kind": "flashcard",
+      "source": {
+        "path": "docsclaude/03-server-mastery/05-auth-and-multi-tenancy.md",
+        "lines": {
+          "start": 116,
+          "end": 116
+        }
+      },
+      "cites": [
+        {
+          "path": "backend/src/modules/tickets/tickets.repository.ts",
+          "lineStart": 38,
+          "lineEnd": 45
+        }
+      ],
+      "front": "Ticket findById includes all comments, and getTicket returns it to requesters unfiltered. Risk and fix?",
+      "back": "Requesters see internal notes on GET /tickets/:id even though the comments endpoint hides them. Filter the include by isInternal for requesters (or drop comments from the detail payload) and add a role-based test."
+    },
+    {
+      "id": "f03-three-writes-one-tx",
+      "kind": "flashcard",
+      "source": {
+        "path": "docsclaude/04-architecture-and-patterns/03-transactions-and-audit.md",
+        "lines": {
+          "start": 80,
+          "end": 91
+        }
+      },
+      "cites": [
+        {
+          "path": "backend/src/modules/tickets/tickets.service.ts",
+          "lineStart": 186,
+          "lineEnd": 207
+        }
+      ],
+      "front": "Ticket update, activity row and audit event are three separate awaits. Risk and fix?",
+      "back": "A failure between writes leaves a status change with no activity or audit record. Wrap all three in prisma.$transaction(async (tx) => ...) using tx for every write, so any throw rolls back the batch."
+    },
+    {
+      "id": "f04-query-key-is-dependency-array",
+      "kind": "flashcard",
+      "source": {
+        "path": "docsclaude/02-frontend-deep-dive/06-data-fetching-and-cache.md",
+        "lines": {
+          "start": 9,
+          "end": 9
+        }
+      },
+      "cites": [
+        {
+          "path": "frontend/src/features/tickets/pages/TicketListPage.tsx",
+          "lineStart": 42,
+          "lineEnd": 42
+        }
+      ],
+      "front": "What must go into a TanStack Query queryKey?",
+      "back": "Every variable the queryFn depends on (page, filters, search, sort). The key is the cache identity: a changed key triggers a fetch, and a missing variable shows stale data for the old parameters."
+    }
+  ]
+}

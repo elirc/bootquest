@@ -1,0 +1,447 @@
+{
+  "format": "bootquest-quest-drafts@1",
+  "repo": "master4",
+  "sha": "236a7d547df8c28f2c92178576a6856d1d1a2033",
+  "guides": [
+    "astraupskill/02-CONCEPTS.md",
+    "astraupskill/04-TESTING-AND-DEBUGGING.md",
+    "astraupskill/06-SOLUTIONS-AND-REVIEW.md"
+  ],
+  "items": [
+    {
+      "id": "q01-duplicate-sku-lines",
+      "kind": "quiz",
+      "source": {
+        "path": "astraupskill/02-CONCEPTS.md",
+        "lines": {
+          "start": 7,
+          "end": 7
+        }
+      },
+      "cites": [
+        {
+          "path": "src/shared/inventoryRules.ts",
+          "lineStart": 33,
+          "lineEnd": 41
+        }
+      ],
+      "prompt": "A balance has 42 on hand and 20 reserved. An order has two lines for the same SKU, quantities 14 and 9. Why did the pre-change planner wrongly approve it, and what does the corrected planner do?",
+      "answer": "Each line was compared to the same 22 separately; the fix sums the SKU's lines (23) first, so the order is refused",
+      "distractors": [
+        "The old planner rounded fractional quantities down before comparing; the fix rejects any order that has more than one line for a SKU",
+        "The old planner ignored reserved units entirely; the fix subtracts reserved from on-hand before checking each line, so 14 and 9 now fail",
+        "The old planner compared against on-hand (42); the fix compares each line against available (22), which still approves both lines"
+      ],
+      "explanation": "Checking lines independently treats one shared stock pool as two. planReservation now accumulates valid quantities into requestedBySku and compares the 23 total with 22 available."
+    },
+    {
+      "id": "q02-atp-clamp-hides-overpromise",
+      "kind": "quiz",
+      "source": {
+        "path": "astraupskill/02-CONCEPTS.md",
+        "lines": {
+          "start": 5,
+          "end": 5
+        }
+      },
+      "cites": [
+        {
+          "path": "src/shared/inventoryRules.ts",
+          "lineStart": 25,
+          "lineEnd": 27
+        },
+        {
+          "path": "src/shared/inventoryRules.ts",
+          "lineStart": 114,
+          "lineEnd": 119
+        }
+      ],
+      "prompt": "Bad data leaves a balance at 5 on hand and 20 reserved. What does the dashboard show, and why is that a problem?",
+      "answer": "ATP clamps to 0 and stockHealth says 'stockout', hiding the 15-unit over-promise as an ordinary empty shelf",
+      "distractors": [
+        "available-to-promise is -15, and the dashboard renders a red negative number that operators notice immediately on the next refresh",
+        "stockHealth throws because reserved exceeds on-hand, so the whole dashboard request fails with a 500 until the data is repaired",
+        "stockHealth reports 'low' because on-hand is below the safety stock, which hides the stockout"
+      ],
+      "explanation": "availableToPromise returns Math.max(0, onHand - reserved); the clamp is deliberate but means over-reservation is invisible unless raw onHand and reserved are shown next to available."
+    },
+    {
+      "id": "q03-plan-vs-apply-roles",
+      "kind": "quiz",
+      "source": {
+        "path": "astraupskill/02-CONCEPTS.md",
+        "lines": {
+          "start": 9,
+          "end": 11
+        }
+      },
+      "cites": [
+        {
+          "path": "src/shared/inventoryRules.ts",
+          "lineStart": 83,
+          "lineEnd": 96
+        },
+        {
+          "path": "src/server/modules/orders/orders.service.ts",
+          "lineStart": 91,
+          "lineEnd": 93
+        }
+      ],
+      "prompt": "Why does planReservation report invalid quantities as failures in its result, while applyReservation throws on the same input?",
+      "answer": "Planning returns a decision the API reports back, but applying is a state transformation that cannot return a meaningful balance after an invalid mutation, so it throws (rolling back the transaction)",
+      "distractors": [
+        "applyReservation throws only because it is called from tests; in the service it returns a failure object like the planner",
+        "planReservation cannot throw because it runs outside the database transaction, while applyReservation runs inside it",
+        "Both throw on invalid input; the planner catches its own exception and converts it into a failure"
+      ],
+      "explanation": "The concepts guide contrasts the two: planReservation keeps the normal ReservationDecision shape, applyReservation throws and, inside the write loop, that throw rolls the whole transaction back."
+    },
+    {
+      "id": "q04-safe-integer-quantity",
+      "kind": "quiz",
+      "source": {
+        "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+        "lines": {
+          "start": 38,
+          "end": 38
+        }
+      },
+      "cites": [
+        {
+          "path": "src/shared/inventoryRules.ts",
+          "lineStart": 34,
+          "lineEnd": 48
+        }
+      ],
+      "prompt": "A line asks to reserve 2 ** 53 units alongside a valid line of 5. What does planReservation report?",
+      "answer": "One failure for the 2 ** 53 line with available 0 as a placeholder; the valid 5 is unaffected because the invalid line never enters the grouped map",
+      "distractors": [
+        "Two failures, because the invalid line poisons the per-SKU total so the 5 also exceeds availability",
+        "No failure: 2 ** 53 is a positive integer, so it is accepted and later rejected only by the database",
+        "One failure whose available field reports the real available-to-promise of 22"
+      ],
+      "explanation": "Number.isSafeInteger stops at 2 ** 53 - 1, so the line is invalid; invalid lines are filtered out before aggregation and their failure carries available: 0 as a placeholder, not an inventory reading."
+    },
+    {
+      "id": "q05-write-loop-per-sku",
+      "kind": "quiz",
+      "source": {
+        "path": "astraupskill/03-WORKED-CHANGE.md",
+        "lines": {
+          "start": 62,
+          "end": 64
+        }
+      },
+      "cites": [
+        {
+          "path": "src/server/modules/orders/orders.service.ts",
+          "lineStart": 75,
+          "lineEnd": 110
+        }
+      ],
+      "prompt": "An order that fits has two one-unit lines for the same SKU. After the Part 2 fix, what does the reserve write loop produce?",
+      "answer": "One inventory increment of 2 and one StockReservation row with quantity 2",
+      "distractors": [
+        "Two inventory increments of 1 and two StockReservation rows, one per order line, exactly as the pre-change loop wrote them",
+        "One StockReservation row of quantity 1, because duplicate lines for the same SKU are deduplicated rather than summed",
+        "No rows until the outbox worker processes the order.reserved event"
+      ],
+      "explanation": "The loop aggregates order lines by skuId into requestedBySku before writing, so the regression test asserts exactly one StockReservation with quantity 2."
+    },
+    {
+      "id": "q06-refusal-still-commits",
+      "kind": "quiz",
+      "source": {
+        "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+        "lines": {
+          "start": 124,
+          "end": 124
+        }
+      },
+      "cites": [
+        {
+          "path": "src/server/modules/orders/orders.service.ts",
+          "lineStart": 59,
+          "lineEnd": 73
+        }
+      ],
+      "prompt": "A reviewer writes: 'A refused reservation changes no tables.' What is wrong with that claim?",
+      "answer": "The refusal path writes an order.reservation_failed audit row and returns normally, so the transaction commits it",
+      "distractors": [
+        "Nothing is wrong with it: the refusal path throws an error, so the surrounding transaction rolls back every write it made",
+        "The refusal also moves the order status to 'failed', which is a second write besides the audit row",
+        "The refusal creates a pending outbox message so the customer is notified"
+      ],
+      "explanation": "When decision.ok is false the service creates one audit log and returns a value instead of throwing, so the transaction commits; only the not-found and already-processed paths write nothing."
+    },
+    {
+      "id": "q07-check-then-act",
+      "kind": "quiz",
+      "source": {
+        "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+        "lines": {
+          "start": 136,
+          "end": 136
+        }
+      },
+      "cites": [
+        {
+          "path": "src/server/modules/orders/orders.service.ts",
+          "lineStart": 51,
+          "lineEnd": 57
+        },
+        {
+          "path": "src/server/modules/orders/orders.service.ts",
+          "lineStart": 95,
+          "lineEnd": 98
+        }
+      ],
+      "prompt": "Two reservations for the same SKU run concurrently on PostgreSQL at READ COMMITTED. Why can both pass even though the code checks availability twice?",
+      "answer": "Both checks compare against balances read at the start of the transaction and the reserved increment is unconditional, so both transactions can see the old balance and both increments land",
+      "distractors": [
+        "Because applyReservation is skipped when the planner already approved the order",
+        "Because Prisma retries failed transactions automatically, replaying the second one after the first commits",
+        "They cannot: the transaction makes the read and the increment atomic at every isolation level"
+      ],
+      "explanation": "F3: the guard is check-then-act. The fix is a conditional write (WHERE onHand - reserved >= quantity) and checking the affected-row count, rolling back on zero."
+    },
+    {
+      "id": "q08-missing-header-admin",
+      "kind": "quiz",
+      "source": {
+        "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+        "lines": {
+          "start": 132,
+          "end": 132
+        }
+      },
+      "cites": [
+        {
+          "path": "src/server/modules/platform/auth.ts",
+          "lineStart": 17,
+          "lineEnd": 21
+        },
+        {
+          "path": "src/server/db.ts",
+          "lineStart": 6,
+          "lineEnd": 6
+        }
+      ],
+      "prompt": "A request arrives with no x-user-id header. What happens in authenticateRequest?",
+      "answer": "It falls back to systemUserId, a seeded admin, so the request passes every requireRole check",
+      "distractors": [
+        "It responds 401 'Missing x-user-id' before any route handler or role check runs",
+        "It treats the caller as a 'viewer' with rank 0, so only the read-only routes such as the dashboard succeed",
+        "It calls next(new Error(...)), which the generic error handler turns into a 500 response"
+      ],
+      "explanation": "F1 (high): request.header('x-user-id') ?? systemUserId. The UI and the reserve tests only work because of this fallback."
+    },
+    {
+      "id": "q09-require-role-minimum-rank",
+      "kind": "quiz",
+      "source": {
+        "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+        "lines": {
+          "start": 134,
+          "end": 134
+        }
+      },
+      "cites": [
+        {
+          "path": "src/server/modules/platform/auth.ts",
+          "lineStart": 5,
+          "lineEnd": 11
+        },
+        {
+          "path": "src/server/modules/platform/auth.ts",
+          "lineStart": 32,
+          "lineEnd": 41
+        },
+        {
+          "path": "src/server/app.ts",
+          "lineStart": 93,
+          "lineEnd": 93
+        }
+      ],
+      "prompt": "The CSV export route uses requireRole(['buyer', 'warehouse_manager', 'admin']). Can a warehouse_associate download it?",
+      "answer": "Yes: requireRole takes the minimum rank of the listed roles (1), and warehouse_associate also has rank 1, so it passes although it is not listed",
+      "distractors": [
+        "No: requireRole checks allowedRoles.includes(actor.role), and warehouse_associate is not in the list",
+        "No: warehouse_associate has rank 0 like viewer, below the buyer minimum",
+        "Only if the request also sends an x-role header naming one of the listed roles"
+      ],
+      "explanation": "F2: Math.min over the listed roles' ranks turns a role list into a minimum-rank rule. Fix by checking includes() or renaming to requireMinimumRole."
+    },
+    {
+      "id": "q10-audit-wrong-actor",
+      "kind": "quiz",
+      "source": {
+        "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+        "lines": {
+          "start": 138,
+          "end": 138
+        }
+      },
+      "cites": [
+        {
+          "path": "src/server/app.ts",
+          "lineStart": 52,
+          "lineEnd": 55
+        },
+        {
+          "path": "src/server/modules/orders/orders.service.ts",
+          "lineStart": 135,
+          "lineEnd": 140
+        }
+      ],
+      "prompt": "A warehouse manager reserves an order. Whose id appears as actorId on the order.reserved audit row, and why?",
+      "answer": "The system admin's: the route never passes request.actor, and the service hard-codes systemUserId",
+      "distractors": [
+        "The manager's id, which the reserve service reads from the x-user-id header before writing the audit row",
+        "No actor at all: audit rows for reservations leave actorId null because the route runs as the system",
+        "The buyer who placed the order, taken from the SalesOrder row"
+      ],
+      "explanation": "F4: request.actor is set by authenticateRequest but never passed into the service, so every reservation is recorded as the ops admin."
+    },
+    {
+      "id": "q11-apply-shipment-negative",
+      "kind": "quiz",
+      "source": {
+        "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+        "lines": {
+          "start": 140,
+          "end": 140
+        }
+      },
+      "cites": [
+        {
+          "path": "src/shared/inventoryRules.ts",
+          "lineStart": 98,
+          "lineEnd": 108
+        }
+      ],
+      "prompt": "Balance is 42 on hand, 20 reserved. What does the current applyShipment(balance, -5) return?",
+      "answer": "onHand 47 and reserved 25: the only guard is quantity > reserved, so a negative shipment silently adds stock",
+      "distractors": [
+        "It throws 'Shipment quantity must be a positive whole number.' because applyShipment shares applyReservation's guard",
+        "onHand 37 and reserved 15, because the sign of the quantity is ignored and 5 units are shipped",
+        "It throws 'Cannot ship more units than are currently reserved.'"
+      ],
+      "explanation": "F5: applyShipment only checks quantity > balance.reserved. Exercise 5 adds the safe-integer, on-hand and reserved guards."
+    },
+    {
+      "id": "q12-planner-vs-transaction-bug",
+      "kind": "quiz",
+      "source": {
+        "path": "astraupskill/04-TESTING-AND-DEBUGGING.md",
+        "lines": {
+          "start": 48,
+          "end": 55
+        }
+      },
+      "cites": [
+        {
+          "path": "src/server/modules/orders/orders.service.ts",
+          "lineStart": 57,
+          "lineEnd": 73
+        }
+      ],
+      "prompt": "The debugging table lists input lines, grouped demand, balance, available, decision and writes. What is it designed to distinguish?",
+      "answer": "A planner bug (the wrong decision) from a transaction bug (the right decision but the wrong writes)",
+      "distractors": [
+        "A SQLite bug from a PostgreSQL bug, by comparing the writes each database produces for the same input lines",
+        "A flaky test from a deterministic one, by rerunning each row of the table several times and comparing decisions",
+        "An authentication bug from an authorization bug, by tracking the actor column"
+      ],
+      "explanation": "The guide says the table separates a planner bug from a transaction bug; it also notes none of the test files exercise two reservations racing."
+    },
+    {
+      "id": "f01-check-then-act-reserve",
+      "kind": "flashcard",
+      "source": {
+        "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+        "lines": {
+          "start": 136,
+          "end": 136
+        }
+      },
+      "cites": [
+        {
+          "path": "src/server/modules/orders/orders.service.ts",
+          "lineStart": 95,
+          "lineEnd": 98
+        }
+      ],
+      "severity": "medium",
+      "front": "Reserve guards compare against balances read at transaction start, then do an unconditional reserved increment (orders.service.ts:95-98). Risk and fix?",
+      "back": "Check-then-act: under READ COMMITTED two reservations can both pass and both increment. Make the write conditional (UPDATE ... WHERE onHand - reserved >= qty, updateMany on status 'pending_reservation') and roll back when the affected-row count is 0."
+    },
+    {
+      "id": "f02-header-fallback-admin",
+      "kind": "flashcard",
+      "source": {
+        "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+        "lines": {
+          "start": 132,
+          "end": 132
+        }
+      },
+      "cites": [
+        {
+          "path": "src/server/modules/platform/auth.ts",
+          "lineStart": 18,
+          "lineEnd": 18
+        }
+      ],
+      "severity": "high",
+      "front": "authenticateRequest uses request.header('x-user-id') ?? systemUserId (auth.ts:18). Risk and fix?",
+      "back": "No header means the seeded admin, so every requireRole passes, and the header itself is the whole identity (no credential). Fix: return 401 for a missing or unknown id, send the header from tests and the client, and add real authentication with a login story."
+    },
+    {
+      "id": "f03-aggregate-before-check",
+      "kind": "flashcard",
+      "source": {
+        "path": "astraupskill/03-WORKED-CHANGE.md",
+        "lines": {
+          "start": 7,
+          "end": 7
+        }
+      },
+      "cites": [
+        {
+          "path": "src/shared/inventoryRules.ts",
+          "lineStart": 50,
+          "lineEnd": 77
+        }
+      ],
+      "front": "Rule for checking an order with repeated SKU lines against one warehouse balance?",
+      "back": "Group demand by skuId first (requestedBySku), then compare each SKU total with available-to-promise. Lines 14 + 9 against 22 available is one request for 23 and must fail, though each line alone fits."
+    },
+    {
+      "id": "f04-unknown-user-500",
+      "kind": "flashcard",
+      "source": {
+        "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+        "lines": {
+          "start": 142,
+          "end": 142
+        }
+      },
+      "cites": [
+        {
+          "path": "src/server/modules/platform/auth.ts",
+          "lineStart": 23,
+          "lineEnd": 26
+        },
+        {
+          "path": "src/server/app.ts",
+          "lineStart": 111,
+          "lineEnd": 118
+        }
+      ],
+      "severity": "low",
+      "front": "An unknown x-user-id calls next(new Error(...)) (auth.ts:24). What does the client get, and why is that bad?",
+      "back": "The generic error handler returns 500 Internal server error, so a client cannot tell 'you are not a user' from 'the server broke', and logs fill with stack traces for bad input. Return 401 instead."
+    }
+  ]
+}
