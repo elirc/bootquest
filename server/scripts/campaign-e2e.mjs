@@ -2,12 +2,12 @@
 //   npm run demo:campaign      (= node --import tsx server/scripts/campaign-e2e.mjs)
 //
 // Temp DBs + an injected, settable clock; the owner's DB (BOOTQUEST_DB) is never opened.
-// Content is REAL: the 48 stamped seed:quests packs (content/seed/quests, full stamp verified by
+// Content is REAL: the 59 stamped seed:quests packs (content/seed/quests, full stamp verified by
 // the server's seed loader) and the committed campaign map (content/campaign). The script reads
 // the pack files directly ONLY as the seed-time oracle for the right answers.
 //
 // Part A (the committed campaign, unmodified): the loader wires every campaign study quest whose
-//   repo has a pack (JS 37, C# 10) and leaves the rest content-pending; all 15 JS act-1 core quests
+//   repo has a pack (JS 48, C# 10) and leaves the rest content-pending; all 15 JS act-1 core quests
 //   have packs (W5c-act1) and are passed through the API: 15/15 = 100% >= 80%, but 750 XP =
 //   level 3 < the committed unlockLevel 4, so act 2 is still locked (level leg). Passing the 5 C#
 //   act-1 quests (+250 XP on the one global ledger) reaches level 4, and JS act 2 (and C# act 2)
@@ -105,11 +105,11 @@ async function main() {
   const open = [];
   try {
     // ------------------------------------------------------------ content
-    section('content: the 48 stamped seed:quests packs through the stamp-checking seed loader');
+    section('content: the 59 stamped seed:quests packs through the stamp-checking seed loader');
     const packDirs = readdirSync(QUESTS).filter((n) => existsSync(join(QUESTS, n, 'items.json'))).map((n) => join(QUESTS, n)).sort();
     const { store, packs } = loadSeedItemStoreWithStats(packDirs);
     const quizTotal = packs.reduce((n, p) => n + (p.byKind.quiz ?? 0), 0);
-    step('48 quest packs loaded, full stamp verified (quiz + flashcard + reading-step items)', packs.length === 48 && store.questPacks().size === 48, `${quizTotal} quiz items across ${packs.length} packs`);
+    step('59 quest packs loaded, full stamp verified (quiz + flashcard + reading-step items)', packs.length === 59 && store.questPacks().size === 59, `${quizTotal} quiz items across ${packs.length} packs`);
 
     // ============================================================ PART A: the committed campaign
     section('PART A — the committed campaign map (content/campaign), unmodified');
@@ -118,7 +118,7 @@ async function main() {
     open.push(A);
     const js = A.stats.tracks.find((t) => t.track === 'js');
     const cs = A.stats.tracks.find((t) => t.track === 'csharp');
-    step('loader: JS 37 + C# 10 study-quest gates, loaded === built; quests without a pack stay content-pending; ww6 matches no quest', js.built === 37 && js.loaded === 37 && cs.built === 10 && cs.loaded === 10 && A.stats.unmatchedPacks.join() === 'ww6', `js ${js.loaded}/${js.built} (${js.pending} pending), csharp ${cs.loaded}/${cs.built} (${cs.pending} pending), unmatched ${A.stats.unmatchedPacks.join(',')}`);
+    step('loader: JS 48 + C# 10 study-quest gates, loaded === built; quests without a pack stay content-pending; ww6 matches no quest', js.built === 48 && js.loaded === 48 && cs.built === 10 && cs.loaded === 10 && A.stats.unmatchedPacks.join() === 'ww6', `js ${js.loaded}/${js.built} (${js.pending} pending), csharp ${cs.loaded}/${cs.built} (${cs.pending} pending), unmatched ${A.stats.unmatchedPacks.join(',')}`);
     let camp = (await A.api('GET', '/tracks/js/campaign')).json;
     const act1 = camp.acts[0];
     const playable = act1.quests.filter((q) => q.kind === 'study-quest' && q.state === 'available');
@@ -176,7 +176,7 @@ async function main() {
     const jsAct1 = packedAct1.slice(0, 7);
     const jsAct2 = realJs.acts[1].quests.filter((q) => q.kind === 'study-quest' && hasPack(q));
     const csAct1 = realCs.acts[0].quests.filter((q) => q.kind === 'study-quest' && hasPack(q)).slice(0, 3);
-    step(`Part B store withholds ${noPack.repo}'s pack (47 of 48 loaded)`, storeB.questPacks().size === 47 && !hasPack(noPack) && jsAct1.every(hasPack));
+    step(`Part B store withholds ${noPack.repo}'s pack (58 of 59 loaded)`, storeB.questPacks().size === 58 && !hasPack(noPack) && jsAct1.every(hasPack));
     const ACT2_LEVEL = 3;
     const tracks = defaultFixtureTracks();
     tracks.js = {
