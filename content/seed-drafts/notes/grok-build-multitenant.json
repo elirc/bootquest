@@ -1,0 +1,365 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "grok-build-multitenant",
+ "repo": "grok-build-multitenant",
+ "sha": "e899e2056faf5fa912bf980a51d4732e7da20497",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: one token, several workspaces, one request path",
+   "body": "This repo is a small multi-tenant workspace: users belong to organizations (the demo has Cedar Studio and Maple Works), organizations own projects, and projects own tasks. The course in `astraupskill/` teaches how a request earns the right to touch a row.\n\nRead in this order:\n\n1. `astraupskill/01-CODEBASE-MAP.md`: the files and the trust boundary each one owns.\n2. `astraupskill/02-CONCEPTS.md`: selection versus authorization, versions, transactions and literal search.\n3. `astraupskill/07-TRACE-LAB.md`: follow one real request through the middleware, service and repository.\n4. Part A of `astraupskill/05-PRACTICE.md`: three drills you can run with plain `node --test`.\n\nKeep these files open beside the docs: `backend/src/app.ts`, `backend/src/middleware/auth.ts`, `backend/src/middleware/tenantContext.ts`, `backend/src/routes/projectRoutes.ts`, `backend/src/services/projectService.ts`, `backend/src/repositories/projectRepository.ts`, `backend/src/lib/validation.ts` and `backend/src/lib/errors.ts`.\n\nMost quiz questions ask what a request gets back. For each one, find the line that throws, then look up in `errors.ts` which status that kind of error becomes.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "Selecting an organization is different from being authorized to use it."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The map of files and trust boundaries; read it first."
+    },
+    {
+     "path": "backend/src/lib/errors.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Where every thrown error is turned into an HTTP status."
+    }
+   ]
+  },
+  {
+   "id": "r02-tenant-and-versions",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: who may act here, and on which version",
+   "body": "Two ideas carry most of this codebase.\n\n**Selection is not permission.** The browser says which organization it means with the `x-org-id` header, because one person can belong to several. The server then decides what that person may do there. Read `attachTenantContext` and answer from the code: where does `userId` come from, what is looked up with the header value, and where does the `role` that later checks use come from? Then read `requireManager` and check each service function in `projectService.ts` for a call to it.\n\n**Optimistic concurrency.** Every project and task has a `version`. A client sends the version its draft was loaded at, and the repository writes only if the row still has that version. Read `update`, `remove`, `updateTask` and `removeTask` in `projectRepository.ts`. For each, note the full `where` clause, what the code does when the write matched zero rows, which follow-up lookup it makes, and which errors it can throw, in what order. Also note what each `audit(...)` call records as the version.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 16,
+     "lineEnd": 16,
+     "quote": "The repository uses a conditional update matching identity, organization, and version, then checks the affected-row count."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "backend/src/middleware/tenantContext.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Membership lookup and the manager role check."
+    },
+    {
+     "path": "backend/src/repositories/projectRepository.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Every scoped read and conditional write, with its audit insert."
+    }
+   ]
+  },
+  {
+   "id": "r03-outer-guards",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: the guards a request meets before the business logic",
+   "body": "Before a project service runs, a request passes several layers, and each can end it early. `backend/src/app.ts` mounts them in a fixed order; write that order down, because the first layer that fails decides the response.\n\nWhat to look for in each layer:\n\n- **CORS** in `app.ts`: what the origin callback compares, and what it does for each case.\n- **The JSON body parser**: its options, and which status `errors.ts` gives the error it raises.\n- **The login limiter** in `auth.ts`: treat it as a state machine (Exercise 1 of the practice file). Note where `count` is incremented relative to body validation and the password comparison, when an entry expires, and what the size check on the map does.\n- **The project router guard** at the top of `projectRoutes.ts`: which requests it inspects and for what.\n- **The zod schemas** in `validation.ts`: which ones are `.strict()`, which limits they set, and how `errors.ts` reports a `ZodError`.",
+   "excerpts": [
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 11,
+     "lineEnd": 11,
+     "quote": "**Goal:** predict exactly when sign-in returns 429."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "backend/src/app.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The middleware order: headers, CORS, parser, auth, tenant, routes."
+    },
+    {
+     "path": "backend/src/middleware/auth.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Token checks and the in-memory login limiter."
+    }
+   ]
+  },
+  {
+   "id": "x-q01",
+   "target": "seed:quests:grok-build-multitenant/quiz/2474785dd6820a2c",
+   "phase": "after",
+   "title": "Why a 21st successful sign-in is still refused",
+   "body": "The limiter counts attempts, not failures. On each POST to `/login` the handler loads or creates the entry for the caller's IP, refuses if the count has already reached 20, and then increments the count and stores it. All of that happens before the body is validated and before bcrypt compares the password, and no line resets the count after a success. So twenty good sign-ins use up the window, and the 21st gets **429** with `Retry-After: 900`.\n\n- *Only failed checks add to the count* is wrong: the increment comes before the comparison.\n- *The counter starts again from zero* is wrong: a success never touches the entry.\n- *Refused with 401* is wrong: 401 is the bad-password response; the limiter throws 429.",
+   "excerpts": [
+    {
+     "path": "backend/src/middleware/auth.ts",
+     "lineStart": 90,
+     "lineEnd": 90,
+     "quote": "if (entry.count >= 20 || (!attempts.has(key) && attempts.size >= 1000)) {"
+    },
+    {
+     "path": "backend/src/middleware/auth.ts",
+     "lineStart": 97,
+     "lineEnd": 99,
+     "quote": "entry.count++; attempts.set(key, entry); const data = loginInput.parse(req.body);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02",
+   "target": "seed:quests:grok-build-multitenant/quiz/187d359ec6886703",
+   "phase": "after",
+   "title": "What the 1000-entry cap does to a newcomer",
+   "body": "Every request first deletes the entries whose window has ended. Then the guard refuses in two cases: the caller's own count has reached 20, or the caller is not tracked yet and the map already holds 1000 entries. A first attempt from a new address meets the second case, so it gets **429** with no password check at all. That is the trade-off Exercise 1 asks you to name: an attacker who controls many addresses can fill the table and lock out new legitimate users for up to fifteen minutes.\n\n- *The oldest IP is evicted* is wrong: only expired entries are removed.\n- *Checked but not recorded* is wrong: the guard throws before anything is checked.\n- *503* is wrong: the limiter throws an AppError with status 429.",
+   "excerpts": [
+    {
+     "path": "backend/src/middleware/auth.ts",
+     "lineStart": 84,
+     "lineEnd": 85,
+     "quote": "for (const [ip, entry] of attempts) if (entry.until <= now) attempts.delete(ip);"
+    },
+    {
+     "path": "backend/src/middleware/auth.ts",
+     "lineStart": 90,
+     "lineEnd": 90,
+     "quote": "(!attempts.has(key) && attempts.size >= 1000)"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q03",
+   "target": "seed:quests:grok-build-multitenant/quiz/26ec10f21f981c27",
+   "phase": "after",
+   "title": "Why an over-long password costs an attempt and then gets 400",
+   "body": "The handler increments the attempt count and saves the entry first, and only then runs `loginInput.parse(req.body)`. `loginInput` refuses any password longer than 72 UTF-8 bytes, which is the most bcrypt would ever read. The parse throws a `ZodError`, and `errorHandler` turns every `ZodError` into **400**. So the request is counted, then rejected as invalid input.\n\n- *Truncated to 72 bytes* is wrong: the schema refuses the value rather than cutting it.\n- *Rejected before the counter* is wrong: the increment runs on the line before the parse.\n- *401 like a wrong password* is wrong: the password is never compared; validation fails first.",
+   "excerpts": [
+    {
+     "path": "backend/src/middleware/auth.ts",
+     "lineStart": 97,
+     "lineEnd": 99,
+     "quote": "entry.count++; attempts.set(key, entry); const data = loginInput.parse(req.body);"
+    },
+    {
+     "path": "backend/src/lib/validation.ts",
+     "lineStart": 58,
+     "lineEnd": 58,
+     "quote": "(value) => Buffer.byteLength(value, \"utf8\") <= 72,"
+    },
+    {
+     "path": "backend/src/lib/errors.ts",
+     "lineStart": 31,
+     "lineEnd": 32,
+     "quote": "} else if (error instanceof ZodError) { status = 400;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q04",
+   "target": "seed:quests:grok-build-multitenant/quiz/99524ff404ba2cd8",
+   "phase": "after",
+   "title": "Why a demotion takes effect on the very next request",
+   "body": "The token issued at login carries only the user id as its subject, plus issuer, audience and expiry; there is no role in it. On every project request `attachTenantContext` looks up the membership row for that user and the selected organization and copies the row's current `role` into `req.tenant`. After the demotion that row says MEMBER, so `createProject` calls `requireManager`, which throws **403**.\n\n- *The token still carries OWNER* is wrong: `issueToken` signs an empty payload with only a subject.\n- *401, sign in again* is wrong: the token is still valid and authentication passes.\n- *201 until the token expires* is wrong for the same reason as the first: the role is never cached in the token.",
+   "excerpts": [
+    {
+     "path": "backend/src/middleware/tenantContext.ts",
+     "lineStart": 25,
+     "lineEnd": 25,
+     "quote": "const membership = await prisma.organizationMember.findUnique({"
+    },
+    {
+     "path": "backend/src/middleware/tenantContext.ts",
+     "lineStart": 51,
+     "lineEnd": 51,
+     "quote": "if (![\"OWNER\", \"ADMIN\"].includes(context.role))"
+    },
+    {
+     "path": "backend/src/middleware/auth.ts",
+     "lineStart": 20,
+     "lineEnd": 22,
+     "quote": "return jwt.sign({}, secret, { algorithm: \"HS256\", subject: userId,"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q05",
+   "target": "seed:quests:grok-build-multitenant/quiz/37f91e000fae217c",
+   "phase": "after",
+   "title": "Why a member can delete a task, and the audit still records it",
+   "body": "Project changes and task changes have different rules. `createProject`, `updateProject` and `deleteProject` call `requireManager` first; `createTask`, `updateTask` and `deleteTask` do not, which matches the error text \"Members can manage tasks.\" With the current version in the body, `removeTask` deletes the row and writes its DELETE audit event inside the same transaction, and nothing in that path looks at the role.\n\n- *403, deleting needs an owner or administrator* describes projects, not tasks.\n- *Left out of the audit* is wrong: `audit(...)` runs for every accepted delete, whoever the actor is.\n- *Only the creator may delete* is wrong: tasks have no creator check; the audit records the actor but nothing checks it.",
+   "excerpts": [
+    {
+     "path": "backend/src/services/projectService.ts",
+     "lineStart": 86,
+     "lineEnd": 92,
+     "quote": "export const deleteTask = ( context: TenantContext, projectId: unknown, id: unknown, value: unknown, ) => repo.removeTask("
+    },
+    {
+     "path": "backend/src/repositories/projectRepository.ts",
+     "lineStart": 248,
+     "lineEnd": 248,
+     "quote": "await audit(tx, context, \"TASK\", id, \"DELETE\", expected + 1);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q06",
+   "target": "seed:quests:grok-build-multitenant/quiz/dbd9d42d14afd4e6",
+   "phase": "after",
+   "title": "Which of two problems a project delete reports first",
+   "body": "`remove` tries one conditional `deleteMany` that requires the organization, the expected version and no tasks. When it matches nothing, the code works out why: it loads the project (a 404 if it is not in this organization), then compares the stored version with the expected one and throws the stale-record **409** if they differ. Only when the version matches does it throw the other 409 that asks for the tasks to be deleted. A stale version with tasks present therefore reports the stale record.\n\n- *409 asking to delete the tasks* is the second check, which this request never reaches.\n- *400 from the schema* is wrong: `deleteInput` only requires a positive integer, and an old version is one.\n- *Tasks removed with the project* is wrong: the delete requires `tasks: { none: {} }`, and the relation is Restrict.",
+   "excerpts": [
+    {
+     "path": "backend/src/repositories/projectRepository.ts",
+     "lineStart": 137,
+     "lineEnd": 142,
+     "quote": "const row = await projectIn(tx, context.organizationId, id); if (row.version !== expected) throw conflict();"
+    },
+    {
+     "path": "backend/src/repositories/projectRepository.ts",
+     "lineStart": 133,
+     "lineEnd": 133,
+     "quote": "tasks: { none: {} },"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07",
+   "target": "seed:quests:grok-build-multitenant/quiz/a9c856bcfbffbafa",
+   "phase": "after",
+   "title": "Why another organization's project id gives 404, not 409",
+   "body": "The update matches on id, the caller's organization and the expected version, so a Maple project can never match while Cedar is selected; zero rows change. Before calling that a conflict, `update` runs `projectIn` with the Cedar organization id. That lookup finds nothing and throws **404** \"Project not found in this organization.\" From Cedar's point of view the project does not exist, which also avoids confirming that the id is real elsewhere.\n\n- *409* would need the project to exist in Cedar with another version.\n- *200 and renamed* is wrong: the organization predicate is part of the write.\n- *403* is wrong: membership in Cedar is fine; the row simply is not in scope.",
+   "excerpts": [
+    {
+     "path": "backend/src/repositories/projectRepository.ts",
+     "lineStart": 114,
+     "lineEnd": 116,
+     "quote": "if (changed.count !== 1) { await projectIn(tx, context.organizationId, id); throw conflict();"
+    },
+    {
+     "path": "backend/src/repositories/projectRepository.ts",
+     "lineStart": 42,
+     "lineEnd": 42,
+     "quote": "if (!row) throw new AppError(404, \"Project not found in this organization.\");"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08",
+   "target": "seed:quests:grok-build-multitenant/quiz/9b86302175688f86",
+   "phase": "after",
+   "title": "Why the search text arrives with backslashes in it",
+   "body": "Prisma turns `contains` into a SQL `LIKE`, where `%` matches any run of characters and `_` matches any single character. The repository runs the query text through `literal()` first, which puts a backslash in front of every backslash, percent sign and underscore. `50%_off` becomes `50\\%\\_off`, so the search matches those characters literally.\n\n- *Unchanged, since the query is parameterized* mixes up two problems: parameters stop injection, but `LIKE` still reads `%` and `_` as wildcards.\n- *Stripped out* would search for a different string, `50off`.\n- *Doubled* is the convention of some other escape schemes; this code uses a backslash prefix.",
+   "excerpts": [
+    {
+     "path": "backend/src/repositories/projectRepository.ts",
+     "lineStart": 16,
+     "lineEnd": 16,
+     "quote": "Prisma sends contains to LIKE: escape wildcard characters for literal search."
+    },
+    {
+     "path": "backend/src/repositories/projectRepository.ts",
+     "lineStart": 64,
+     "lineEnd": 64,
+     "quote": "{ name: { contains: literal(query.q), mode: \"insensitive\" } },"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09",
+   "target": "seed:quests:grok-build-multitenant/quiz/468aaa6decc238c4",
+   "phase": "after",
+   "title": "Why an extra list parameter is a 400",
+   "body": "The controller passes the whole `req.query` object to the service, which parses it with `listInput`. That schema declares only `q` and `page`, and it ends with `.strict()`, so any other key makes `parse` throw a `ZodError`. `errorHandler` maps a `ZodError` to **400** and lists the issue in the message.\n\n- *sort ignored* would be zod's default (strip) behaviour; `.strict()` changes it to an error.\n- *Sorted by name* is wrong: the repository always orders by `createdAt` descending, then `id`.\n- *500 from Prisma* is wrong: validation fails before the repository is called.",
+   "excerpts": [
+    {
+     "path": "backend/src/lib/validation.ts",
+     "lineStart": 36,
+     "lineEnd": 38,
+     "quote": ".default(\"1\"), }) .strict();"
+    },
+    {
+     "path": "backend/src/lib/errors.ts",
+     "lineStart": 31,
+     "lineEnd": 32,
+     "quote": "} else if (error instanceof ZodError) { status = 400;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10",
+   "target": "seed:quests:grok-build-multitenant/quiz/6508e36f081c4855",
+   "phase": "after",
+   "title": "Why a query string on a PUT is refused outright",
+   "body": "The project router installs a guard ahead of every route. For any method other than GET it checks whether `req.query` has keys, and if so it ends the request with **400** \"Mutation routes do not accept query parameters.\" This runs before the body, the version or the role are looked at, so the value of `force` never matters.\n\n- *force is ignored* is wrong: the guard rejects the request; it does not drop the key.\n- *force skips the version check* is wrong: no code reads `force`, and the request never reaches the repository.\n- *Stored in the audit* is wrong: audit events record only the actor, resource, action and version.",
+   "excerpts": [
+    {
+     "path": "backend/src/routes/projectRoutes.ts",
+     "lineStart": 9,
+     "lineEnd": 12,
+     "quote": "if (req.method !== \"GET\" && Object.keys(req.query).length)"
+    },
+    {
+     "path": "backend/src/routes/projectRoutes.ts",
+     "lineStart": 11,
+     "lineEnd": 11,
+     "quote": "Mutation routes do not accept query parameters."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q11",
+   "target": "seed:quests:grok-build-multitenant/quiz/d676becbbdcfe139",
+   "phase": "after",
+   "title": "Why a request with no Origin header passes CORS",
+   "body": "The `origin` callback in `app.ts` raises a 403 AppError only when two things are both true: an `Origin` header is present, and it differs from the configured frontend origin. curl sends no `Origin`, so the callback reports no error and the request moves on to the JSON parser and authentication like any other. CORS is a browser protection; a non-browser client still has to get past the token and the membership checks.\n\n- *Refused like any unrecognized origin* is wrong: a missing origin is not compared.\n- *Only for GET and health* is wrong: the callback ignores the method and path.\n- *Only for /api/auth* is wrong for the same reason.",
+   "excerpts": [
+    {
+     "path": "backend/src/app.ts",
+     "lineStart": 36,
+     "lineEnd": 37,
+     "quote": "origin && origin !== frontendOrigin ? new AppError(403, \"This browser origin is not allowed.\")"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q12",
+   "target": "seed:quests:grok-build-multitenant/quiz/d3472380f60659d6",
+   "phase": "after",
+   "title": "Why a 40 KB body is a 413",
+   "body": "`app.ts` mounts `express.json` with a 32 KB limit before any route. A larger body never reaches the project service; the parser raises an error whose `type` is `entity.too.large`, and `errorHandler` maps that to **413** \"Request body must not exceed 32 KiB.\" The 2000-character limit on `description` is real, but it lives in the zod schema, which only runs on a body that was parsed.\n\n- *400 for the description cap* is wrong: the schema never sees this body.\n- *201* is wrong twice over: the parser rejects it, and the description does have a cap.\n- *500 unmapped* is wrong: `errorHandler` has an explicit branch for this error type.",
+   "excerpts": [
+    {
+     "path": "backend/src/app.ts",
+     "lineStart": 44,
+     "lineEnd": 44,
+     "quote": "app.use(express.json({ limit: \"32kb\", strict: true }));"
+    },
+    {
+     "path": "backend/src/lib/errors.ts",
+     "lineStart": 53,
+     "lineEnd": 55,
+     "quote": "status = 413; message = \"Request body must not exceed 32 KiB.\";"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}
