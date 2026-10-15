@@ -1,0 +1,387 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "organized-build-jira",
+ "repo": "organized-build-jira",
+ "sha": "c1c64065faade4919c2cf0babdcc9e27df5966d4",
+ "notes": [
+  {
+   "id": "r01-start-here-buildjira",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: BuildJira was migrated, so read the .NET doc first",
+   "body": "BuildJira is a small Jira-style project board: projects, a board of columns, issues you can edit, and an audit log of changes. It was first written in TypeScript (Express, Prisma, React with Vite) and later **migrated to C# and ASP.NET Core**. This matters for how you read the docs.\n\nSuggested order:\n\n1. **docs/dotnet-architecture.md**: describes the system that actually runs today (`apps/dotnet/BuildJira.Api`). Most quizzes come from here. Read it end to end, including the tradeoffs table and the next-steps list.\n2. **apps/dotnet/BuildJira.Api/Program.cs** and **Services/BuildJiraStore.cs**: the two files that hold almost all of the behavior.\n3. **docs/upskill/03-architecture-and-patterns/**: the curriculum's architecture module. It still cites the old TypeScript files, but its lessons about validation, auth and permissions carry over.\n4. **docs/architecture-journal.md**: the \"why\" behind the original TypeScript design, for background.\n\nWhen an older doc and the .NET doc disagree about where code lives, trust the .NET doc: it says the old curriculum docs still need updating.",
+   "excerpts": [
+    {
+     "path": "docs/dotnet-architecture.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "The historical TypeScript files are still present as commented reference material"
+    },
+    {
+     "path": "docs/dotnet-architecture.md",
+     "lineStart": 215,
+     "lineEnd": 215,
+     "quote": "6. Update the old curriculum docs so they teach the C# implementation rather than the archived TypeScript one."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/dotnet-architecture.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The authoritative description of the running app, its tradeoffs and next steps."
+    },
+    {
+     "path": "docs/architecture-journal.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Background on the original TypeScript design and its patterns."
+    }
+   ]
+  },
+  {
+   "id": "r02-one-process-one-store",
+   "target": "pack",
+   "phase": "before",
+   "title": "Core idea: one process, one in-memory store, one JSON file",
+   "body": "The running app is deliberately compact. A browser talks to an ASP.NET Core \"minimal API\" (routes mapped directly in `Program.cs`, no controller classes). Every route handler gets the same `BuildJiraStore` object, registered once for the whole app (a **singleton**). The store keeps all data in memory and saves it to a JSON file on disk.\n\nThree words to understand before the quizzes:\n\n- **Singleton**: one shared instance for every request, instead of a fresh object per request (\"scoped\").\n- **Lock**: a C# `lock` block lets only one thread run the code inside at a time, so two requests cannot change the in-memory data at once.\n- **Serialize**: turn objects into text (JSON) to write to a file, and back again when loading.\n\nAs you read, keep asking: what does this design make easy today, and what would have to change if the app grew or ran on several servers? The doc's tradeoffs table answers that question row by row.",
+   "excerpts": [
+    {
+     "path": "docs/dotnet-architecture.md",
+     "lineStart": 16,
+     "lineEnd": 30,
+     "quote": "ASP.NET Core minimal API | | singleton application store v BuildJiraStore"
+    },
+    {
+     "path": "apps/dotnet/BuildJira.Api/Services/BuildJiraStore.cs",
+     "lineStart": 20,
+     "lineEnd": 20,
+     "quote": "private readonly object sync = new();"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "apps/dotnet/BuildJira.Api/Program.cs",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "App composition: JSON options, the singleton, CORS, static files and the routes."
+    }
+   ]
+  },
+  {
+   "id": "r03-identity-is-a-demo",
+   "target": "pack",
+   "phase": "before",
+   "title": "Core idea: validation, authentication and authorization are different",
+   "body": "Three checks often get mixed up:\n\n- **Validation** asks: is this request well formed? (Is the priority a known value? Is the title present?)\n- **Authentication** asks: who is calling, and can we trust that?\n- **Authorization** asks: is *this* caller allowed to do *this* action on *this* record?\n\nBuildJira has no real login. The caller says who they are with an `x-user-id` header, and the store applies simple role rules. The docs are honest that this is a local practice mechanism, not security.\n\nWhen you read the auth sections, separate two kinds of authorization: a **role check** (is this user an engineer, a manager, an admin?) and a **resource check** (does this user belong to the project that owns this record?). Note which of the two the code performs, and which one the docs list as future work.",
+   "excerpts": [
+    {
+     "path": "docs/dotnet-architecture.md",
+     "lineStart": 160,
+     "lineEnd": 160,
+     "quote": "This is not real authentication. It is a local practice mechanism for preserving the original app behavior."
+    },
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 15,
+     "lineEnd": 15,
+     "quote": "This is a demo identity mechanism, not production auth."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Validation layers, auth, authorization and a senior review checklist."
+    }
+   ]
+  },
+  {
+   "id": "x-q01-enums-as-strings",
+   "target": "seed:quests:organized-build-jira/quiz/09f396deeefa1787",
+   "phase": "after",
+   "title": "Why enums go over the wire as strings",
+   "body": "**Key: to keep the API contract familiar to the old frontend shape.**\n\nThe TypeScript version of BuildJira sent statuses as text like `IN_PROGRESS`. After the move to C#, the domain uses C# enums, which by default would be written as numbers (0, 1, 2...). `Program.cs` adds `JsonStringEnumConverter` so the JSON still contains the same strings. The doc says why: \"so the API contract remains familiar to the old frontend shape\".\n\nWhy the others are wrong:\n- *System.Text.Json cannot write enums as numbers*: numbers are its default; the converter is added to change that.\n- *The data file must be easy to edit by hand*: the doc gives the API contract as the reason, not hand-editing.\n- *Accept unknown values without validation*: the converter maps known names; the doc says nothing about accepting unknown values.",
+   "excerpts": [
+    {
+     "path": "apps/dotnet/BuildJira.Api/Program.cs",
+     "lineStart": 13,
+     "lineEnd": 13,
+     "quote": "options.SerializerOptions.Converters.Add(new JsonStringEnumConverter());"
+    },
+    {
+     "path": "docs/dotnet-architecture.md",
+     "lineStart": 110,
+     "lineEnd": 110,
+     "quote": "The JSON serializer emits these enum values as strings so the API contract remains familiar to the old frontend shape, for example `IN_PROGRESS`, `PROJECT_MANAGER`, and `AT_RISK`."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02-two-instances-race",
+   "target": "seed:quests:organized-build-jira/quiz/0cde8bbdfcde2ef2",
+   "phase": "after",
+   "title": "Why two instances on one JSON file would race",
+   "body": "**Key: they would race, as each private lock only covers its own process.**\n\nThe store's `lock (sync)` uses a private object inside one running program. A second instance of the app is a separate process with its own memory and its own lock object; neither knows the other exists. Each loads the file into memory, changes its own copy, and rewrites the whole file. The last writer silently replaces the other's changes. The doc lists exactly this: \"Multiple app instances pointed at the same JSON file would race.\"\n\nWhy the others are wrong:\n- *The second instance refuses to start*: nothing in the startup steps checks whether another process has the file.\n- *Safe because the lock is shared through the file*: the lock is an in-memory object, not a file lock.\n- *Writes merge*: each save writes the full state, so there is no merging.",
+   "excerpts": [
+    {
+     "path": "docs/dotnet-architecture.md",
+     "lineStart": 137,
+     "lineEnd": 142,
+     "quote": "- Multiple app instances pointed at the same JSON file would race."
+    },
+    {
+     "path": "docs/dotnet-architecture.md",
+     "lineStart": 137,
+     "lineEnd": 137,
+     "quote": "`BuildJiraStore` is registered as a singleton and protects state with a private lock."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q03-who-reads-audit",
+   "target": "seed:quests:organized-build-jira/quiz/1eca3b4175eb2151",
+   "phase": "after",
+   "title": "Which roles may list audit events",
+   "body": "**Key: ADMIN and PROJECT_MANAGER actors, and no other role.**\n\nThe doc lists the role rules enforced in `BuildJiraStore`. Issue create and update allow three roles: ADMIN, PROJECT_MANAGER and ENGINEER. Audit listing is narrower: only ADMIN and PROJECT_MANAGER. The route table says the same: `GET /api/audit` returns events \"for manager/admin actors\".\n\nWhy the others are wrong:\n- *Every seeded user, as read routes are public*: the public read routes are the project and board reads; the audit route has its own role check.\n- *Any role that can write issues, including engineers*: ENGINEER may write issues but is not in the audit list.\n- *ADMIN alone*: PROJECT_MANAGER is also allowed.",
+   "excerpts": [
+    {
+     "path": "docs/dotnet-architecture.md",
+     "lineStart": 156,
+     "lineEnd": 158,
+     "quote": "- Audit listing allows `ADMIN` and `PROJECT_MANAGER`."
+    },
+    {
+     "path": "docs/dotnet-architecture.md",
+     "lineStart": 67,
+     "lineEnd": 67,
+     "quote": "| `GET /api/audit` | Returns recent audit events for manager/admin actors. |"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q04-minimal-apis-singleton",
+   "target": "seed:quests:organized-build-jira/quiz/3e2d3f269f6a39fd",
+   "phase": "after",
+   "title": "Why minimal APIs and a singleton store",
+   "body": "**Key: they fit a small route surface and simple local state, with route modules planned later.**\n\nThe doc calls minimal APIs \"a deliberate fit for the current app size\". There are only six routes, so mapping them directly in `Program.cs` is easy to review. The singleton store is \"Simple local state management\". The tradeoffs table also names the future direction: controllers or route modules if endpoints grow, and a scoped repository with a database context.\n\nWhy the others are wrong:\n- *MVC cannot serve static files in the same process*: static files come from `UseStaticFiles`, which is separate from the choice of minimal APIs or controllers; nothing in the doc says MVC rules it out.\n- *Minimal APIs are required by JSON persistence*: the doc ties the choice to app size, not to the storage format.\n- *Scoped services need Entity Framework*: the doc lists scoped services as a future step paired with a database, not as something impossible without EF.",
+   "excerpts": [
+    {
+     "path": "docs/dotnet-architecture.md",
+     "lineStart": 50,
+     "lineEnd": 52,
+     "quote": "`Program.cs` uses ASP.NET Core minimal APIs rather than MVC controllers. That is a deliberate fit for the current app size:"
+    },
+    {
+     "path": "docs/dotnet-architecture.md",
+     "lineStart": 200,
+     "lineEnd": 202,
+     "quote": "| API framework | Minimal APIs | Small route surface and easy review. | Controllers or route modules if endpoints grow. |"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q05-where-the-app-lives",
+   "target": "seed:quests:organized-build-jira/quiz/456597aea9925e88",
+   "phase": "after",
+   "title": "Where the running BuildJira lives after the migration",
+   "body": "**Key: apps/dotnet/BuildJira.Api, with the old TS files kept as commented reference.**\n\nThe first paragraph of the .NET doc answers this directly: the TypeScript files are still in the repo \"as commented reference material\", but \"the running system now lives under `apps/dotnet/BuildJira.Api`\". That is also why older curriculum pages that teach the TypeScript code are out of date.\n\nWhy the others are wrong:\n- *apps/api behind a .NET reverse proxy*: the .NET app is the API itself; the old Express API is reference only.\n- *apps/web hosting the API through Vite*: the doc says the Node/Vite toolchain was removed from runtime.\n- *Both stacks side by side on one JSON file*: there is one active process; the TypeScript stack used Prisma and SQLite, not this JSON file.",
+   "excerpts": [
+    {
+     "path": "docs/dotnet-architecture.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "but the running system now lives under `apps/dotnet/BuildJira.Api`."
+    },
+    {
+     "path": "docs/dotnet-architecture.md",
+     "lineStart": 170,
+     "lineEnd": 170,
+     "quote": "removes the old Node/Vite toolchain from runtime."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q06-default-actor",
+   "target": "seed:quests:organized-build-jira/quiz/4e9edf99c99a8e70",
+   "phase": "after",
+   "title": "Missing x-user-id versus an unknown x-user-id",
+   "body": "**Key: the first acts as the first seeded user, and the second gets UNAUTHENTICATED.**\n\n`GetActor` in the store has two branches. If the header is empty or missing, it picks the earliest-created user (`OrderBy(user => user.CreatedAt).FirstOrDefault()`). If a header is given, it looks for a user with that exact id; no match gives `null`, and the mutating route returns 401 with code UNAUTHENTICATED. The doc lists both rules.\n\nWhy the others are wrong:\n- *Both act as the first seeded user*: only a *missing* header falls back; a wrong id is not replaced.\n- *First UNAUTHENTICATED, second a guest viewer*: reversed, and there is no guest fallback.\n- *Both rejected*: the missing-header case gets the default actor.\n\nThe upskill drill notes this default actor makes \"no-auth\" tests harder to write.",
+   "excerpts": [
+    {
+     "path": "apps/dotnet/BuildJira.Api/Services/BuildJiraStore.cs",
+     "lineStart": 89,
+     "lineEnd": 91,
+     "quote": "? state.Users.OrderBy(user => user.CreatedAt).FirstOrDefault() : state.Users.FirstOrDefault(user => user.Id == requestedUserId);"
+    },
+    {
+     "path": "docs/dotnet-architecture.md",
+     "lineStart": 151,
+     "lineEnd": 152,
+     "quote": "- If the header points to an unknown user, mutating and audit routes return `UNAUTHENTICATED`."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07-full-state-rewrite",
+   "target": "seed:quests:organized-build-jira/quiz/8257be77981001ec",
+   "phase": "after",
+   "title": "What a successful write does on disk",
+   "body": "**Key: the full in-memory state is serialised back to the JSON file.**\n\nThe write steps in the doc are: mutate in-memory state under a lock, append audit events, then \"serializes the full state back to disk\". The code matches: `Save()` calls `File.WriteAllText(dataFile, JsonSerializer.Serialize(state, JsonOptions))`, writing the whole `state` object every time. The doc calls this fine for a learning app but \"not a production persistence strategy\".\n\nWhy the others are wrong:\n- *SQLite journal, flushed later*: the migrated app uses JSON files \"instead of SQLite or Entity Framework\".\n- *Nothing until clean shutdown*: `Save()` runs as part of each write.\n- *Only the changed issue is appended*: `WriteAllText` replaces the file with the entire state.",
+   "excerpts": [
+    {
+     "path": "docs/dotnet-architecture.md",
+     "lineStart": 129,
+     "lineEnd": 131,
+     "quote": "3. It serializes the full state back to disk."
+    },
+    {
+     "path": "apps/dotnet/BuildJira.Api/Services/BuildJiraStore.cs",
+     "lineStart": 453,
+     "lineEnd": 456,
+     "quote": "File.WriteAllText(dataFile, JsonSerializer.Serialize(state, JsonOptions));"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08-no-node-dev-server",
+   "target": "seed:quests:organized-build-jira/quiz/a424bfad53529d58",
+   "phase": "after",
+   "title": "What the single ASP.NET Core process does not do",
+   "body": "**Key: run a separate Node/Vite dev server for the browser UI.**\n\nThe doc lists what the one process serves: static assets from `wwwroot`, API endpoints under `/api`, a health endpoint at `/health`, and local JSON-file persistence. The frontend is now plain HTML, CSS and JavaScript, and the doc says the migration \"removes the old Node/Vite toolchain from runtime\". So no Node or Vite server is involved.\n\nWhy the other three are wrong answers (they are things the process *does* do):\n- *Serve static assets from wwwroot*: first item in the list.\n- *Expose /api and /health*: second and third items.\n- *Persist data to a local JSON file*: fourth item.",
+   "excerpts": [
+    {
+     "path": "docs/dotnet-architecture.md",
+     "lineStart": 7,
+     "lineEnd": 12,
+     "quote": "- Static browser assets from `wwwroot`. - HTTP API endpoints under `/api`. - A health endpoint at `/health`. - Local JSON-file persistence for seeded demo data and runtime mutations."
+    },
+    {
+     "path": "docs/dotnet-architecture.md",
+     "lineStart": 170,
+     "lineEnd": 170,
+     "quote": "React is no longer required for the active app."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09-audit-future-outbox",
+   "target": "seed:quests:organized-build-jira/quiz/a4754531fd7cdb05",
+   "phase": "after",
+   "title": "Where audit events should go in the future",
+   "body": "**Key: a transactional audit or outbox table in a real database.**\n\nToday audit events are appended to the same JSON state file, which \"keeps behavior visible\". The tradeoffs table gives the future direction as \"Transactional audit/outbox table\". The point of *transactional* is that the change and its audit record are saved together or not at all. An \"outbox\" table is a common pattern where events are written in the same transaction as the data and sent elsewhere later.\n\nWhy the others are wrong:\n- *A separate audit microservice over HTTP*: the doc never suggests one; its direction keeps audit next to the data, in the same transaction.\n- *Console log only*: that would lose the stored record; the doc keeps audit in storage.\n- *Dropping audit events*: the doc's first next step asks for tests of \"audit creation\", so audit stays.",
+   "excerpts": [
+    {
+     "path": "docs/dotnet-architecture.md",
+     "lineStart": 205,
+     "lineEnd": 205,
+     "quote": "| Audit | Appended to same state file | Keeps behavior visible. | Transactional audit/outbox table. |"
+    },
+    {
+     "path": "docs/dotnet-architecture.md",
+     "lineStart": 210,
+     "lineEnd": 210,
+     "quote": "issue update, and audit creation."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10-role-check-first",
+   "target": "seed:quests:organized-build-jira/quiz/ad973c6313d94718",
+   "phase": "after",
+   "title": "The first thing UpdateIssue does",
+   "body": "**Key: check the actor's role, before the lock and lookup.**\n\nOpen `UpdateIssue`. Its first real statement is `if (!CanWriteIssues(actor))`, which returns a Forbidden error for roles that may not write. Only after that does it enter `lock (sync)`, look up the issue and return ISSUE_NOT_FOUND if it is missing. Validation, mutation, the audit event and the save come later. The doc's request-flow list has the same order: role authorization (step 4) before validate and mutate (step 5).\n\nWhy the others are wrong:\n- *Append the audit event*: that is step 6, after the change is made.\n- *Look up the issue and 404*: the lookup is inside the lock, after the role check.\n- *Validate the fields*: `ApplyPatch` validates and applies the body only after the issue has been found inside the lock.",
+   "excerpts": [
+    {
+     "path": "apps/dotnet/BuildJira.Api/Services/BuildJiraStore.cs",
+     "lineStart": 181,
+     "lineEnd": 187,
+     "quote": "if (!CanWriteIssues(actor)) { error = Forbidden(); return null; } lock (sync)"
+    },
+    {
+     "path": "docs/dotnet-architecture.md",
+     "lineStart": 85,
+     "lineEnd": 86,
+     "quote": "4. `BuildJiraStore.UpdateIssue` checks role authorization. 5. The store validates the supplied fields and mutates the issue."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q11-interface-before-database",
+   "target": "seed:quests:organized-build-jira/quiz/b353e07be613925e",
+   "phase": "after",
+   "title": "The step before adding a database implementation",
+   "body": "**Key: introduce an interface such as IBuildJiraStore.**\n\nThe next-steps list says to \"Introduce an interface such as `IBuildJiraStore` before adding a database implementation.\" An interface lists the methods the routes need (get board, update issue...) without saying how they are stored. The routes then depend on the interface, and you can swap the JSON store for a database store behind it without rewriting every route.\n\nWhy the others are wrong:\n- *Rewrite the frontend as React*: the doc says React can return \"if the frontend grows\"; it is unrelated to persistence.\n- *Delete the JSON file and reseed*: no step suggests this.\n- *Move every endpoint into MVC controllers*: the doc suggests extracting endpoint groups \"once route count grows\", not controllers as a precondition for a database.",
+   "excerpts": [
+    {
+     "path": "docs/dotnet-architecture.md",
+     "lineStart": 212,
+     "lineEnd": 212,
+     "quote": "3. Introduce an interface such as `IBuildJiraStore` before adding a database implementation."
+    },
+    {
+     "path": "docs/dotnet-architecture.md",
+     "lineStart": 211,
+     "lineEnd": 211,
+     "quote": "2. Extract endpoint groups from `Program.cs` once route count grows."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q12-junior-blind-spots",
+   "target": "seed:quests:organized-build-jira/quiz/e08309ab944ea827",
+   "phase": "after",
+   "title": "The three things a junior might miss",
+   "body": "**Key: shared request schemas protect API shapes but not database constraints.**\n\nThe guide's list has three short items: validation is not authorization; `x-user-id` is not secure identity; shared schemas protect API shapes but not DB constraints. A schema only checks the shape of a request. Rules like \"this id must exist\" or \"this value must be unique\" live in the database and still need checking there.\n\nWhy the others are wrong:\n- *x-user-id is secure once CORS is set*: the list says the opposite; CORS controls which browser pages may call the API, not who the caller is.\n- *Validation failures double as authorization failures*: the list's first item is \"Validation is not authorization\".\n- *The audit trail proves who made each change*: the senior checklist asks \"Are audit events trustworthy?\", because the actor comes from an unverified header.",
+   "excerpts": [
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 30,
+     "lineEnd": 32,
+     "quote": "- Validation is not authorization. - `x-user-id` is not secure identity. - Shared schemas protect API shapes but not DB constraints."
+    },
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 39,
+     "lineEnd": 39,
+     "quote": "- Are audit events trustworthy?"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q13-no-membership-check",
+   "target": "seed:quests:organized-build-jira/quiz/eaf1440369c0ecdb",
+   "phase": "after",
+   "title": "Can an engineer edit an issue outside their project?",
+   "body": "**Key: yes, as there is no project-membership check beyond the role guards.**\n\nThe only authorization in `UpdateIssue` is the role check `CanWriteIssues`, which allows ADMIN, PROJECT_MANAGER and ENGINEER. It never asks which project the issue belongs to or whether the actor is a member. The guide says it plainly: \"No resource-level authorization exists. A user with allowed role can update any issue id if they know it\", and labels this an IDOR risk. The .NET doc lists \"resource-level authorization for project membership\" as future work.\n\nWhy the others are wrong:\n- *Ids cannot be guessed*: the question says the engineer already knows the id; unguessable ids are not authorization.\n- *The role guard checks membership*: `CanWriteIssues` looks only at `actor.Role`.\n- *A project key header is needed*: no such header exists; identity comes only from `x-user-id`.",
+   "excerpts": [
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 26,
+     "lineEnd": 26,
+     "quote": "No resource-level authorization exists. A user with allowed role can update any issue id if they know it"
+    },
+    {
+     "path": "apps/dotnet/BuildJira.Api/Services/BuildJiraStore.cs",
+     "lineStart": 399,
+     "lineEnd": 399,
+     "quote": "private bool CanWriteIssues(User actor) => actor.Role is UserRole.ADMIN or UserRole.PROJECT_MANAGER or UserRole.ENGINEER;"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}
