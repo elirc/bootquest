@@ -1,0 +1,452 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "gitjira",
+ "sha": "42abd2c55baf9e944e7e8505cd2ddb59a48c6b31",
+ "guides": [
+  "astraupskill/01-CODEBASE-MAP.md",
+  "astraupskill/02-CONCEPTS.md",
+  "astraupskill/03-WORKED-CHANGE.md",
+  "astraupskill/04-TESTING-AND-DEBUGGING.md",
+  "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+  "astraupskill/07-TRACE-LAB.md"
+ ],
+ "excludeDirs": [
+  "astraupskill/snapshots",
+  "astraupskill/evidence",
+  "astraupskill/extended-course"
+ ],
+ "items": [
+  {
+   "id": "q01-retry-bound",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "lines": {
+     "start": 11,
+     "end": 11
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/services/sprint.service.js",
+     "lineStart": 14,
+     "lineEnd": 28
+    }
+   ],
+   "prompt": "Every attempt inside serializable() fails with Prisma P2034. How often does the work run, and what reaches the caller?",
+   "answer": "Three runs, then the domain 409 \"Sprint changed during this request\"",
+   "distractors": [
+    "Two runs; the second P2034 is rethrown to the caller as a raw Prisma error",
+    "It reruns until one commits, so a P2034 never reaches the caller at all",
+    "Three runs, and then the error middleware answers with a generic 500"
+   ],
+   "explanation": "The loop bound is attempt < 3, a retry happens only while attempt < 2, and on the third P2034 the helper throws conflict(...), a 409. Any other error is rethrown unchanged."
+  },
+  {
+   "id": "q02-other-error",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "lines": {
+     "start": 11,
+     "end": 11
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/services/sprint.service.js",
+     "lineStart": 20,
+     "lineEnd": 25
+    }
+   ],
+   "prompt": "The work passed to serializable() throws a Prisma P2002 that it does not catch itself. What does the helper do?",
+   "answer": "It rethrows the error unchanged on the first attempt, with no retry",
+   "distractors": [
+    "It retries it like P2034, for up to three attempts in all",
+    "It converts it into the domain 409 \"Sprint changed during this request\"",
+    "It swallows the error, and the transaction resolves to undefined"
+   ],
+   "explanation": "retryable requires PrismaClientKnownRequestError AND code === \"P2034\" (sprint.service.js:21-22). A P2002 is not retryable, so line 25 rethrows it at once. startSprint catches its own P2002 inside the work and maps it to 409."
+  },
+  {
+   "id": "q03-future-clock",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 7,
+     "end": 7
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/services/sprint.service.js",
+     "lineStart": 152,
+     "lineEnd": 152
+    },
+    {
+     "path": "apps/api/test/sprint.test.js",
+     "lineStart": 96,
+     "lineEnd": 112
+    }
+   ],
+   "prompt": "An issue's stored updatedAt is 60 seconds in the future. A valid assignment sends that exact token. What is the new updatedAt?",
+   "answer": "Exactly the stored value plus 1 ms, as Math.max picks previous + 1",
+   "distractors": [
+    "The current wall time, roughly 60,000 ms earlier than the stored value",
+    "The stored value unchanged, because the clock has not caught up yet",
+    "None: a token from the future fails the version check with 409"
+   ],
+   "explanation": "nextUpdatedAt = new Date(Math.max(Date.now(), issue.updatedAt.getTime() + 1)) (line 152). With the clock a minute behind, the second argument wins; the test asserts toBe(captured.getTime() + 1)."
+  },
+  {
+   "id": "q04-missing-token",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/01-CODEBASE-MAP.md",
+    "lines": {
+     "start": 71,
+     "end": 71
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/services/sprint.service.js",
+     "lineStart": 153,
+     "lineEnd": 159
+    },
+    {
+     "path": "packages/shared/src/issue-schemas.js",
+     "lineStart": 77,
+     "lineEnd": 80
+    }
+   ],
+   "prompt": "Suppose the issue-list projection did not select updatedAt. What would a backlog sprint assignment do?",
+   "answer": "Skip the stale check silently, as the undefined token is dropped from the JSON body",
+   "distractors": [
+    "Fail with 400, because assignSprintSchema requires expectedUpdatedAt to be set",
+    "Return 409 every time, as an undefined token never matches the stored version",
+    "Crash in the controller when it reads req.body.expectedUpdatedAt and finds none"
+   ],
+   "explanation": "expectedUpdatedAt is z.string().datetime().optional(), JSON.stringify drops undefined fields, and the service spreads the updatedAt term only when a token is present (line 156). No error would reveal the gap; that is why the list now selects updatedAt."
+  },
+  {
+   "id": "q05-shared-token-race",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "lines": {
+     "start": 3,
+     "end": 3
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/test/sprint.test.js",
+     "lineStart": 114,
+     "lineEnd": 136
+    },
+    {
+     "path": "apps/api/src/services/sprint.service.js",
+     "lineStart": 153,
+     "lineEnd": 162
+    }
+   ],
+   "prompt": "Two assignments of the same issue race, each carrying the same captured updatedAt token. What does the regression require?",
+   "answer": "One 200 and one 409, and the winner's returned updatedAt has advanced",
+   "distractors": [
+    "Two 200s, with the later write deciding which sprint finally keeps the issue",
+    "Two 409s, as serializable isolation aborts both of the writers",
+    "One 200, while the other is retried by the helper until it also wins"
+   ],
+   "explanation": "The token is in the updateMany predicate, so once the winner advances updatedAt the loser matches zero rows and gets conflict (lines 160-162). The test sorts the statuses to [200, 409] and checks the winner's timestamp changed."
+  },
+  {
+   "id": "q06-nonmember",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/01-CODEBASE-MAP.md",
+    "lines": {
+     "start": 5,
+     "end": 5
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/services/project.service.js",
+     "lineStart": 79,
+     "lineEnd": 80
+    },
+    {
+     "path": "apps/api/test/sprint.test.js",
+     "lineStart": 138,
+     "lineEnd": 153
+    }
+   ],
+   "prompt": "A user who is not a member of project GJ sends a sprint assignment for one of its issues. What comes back?",
+   "answer": "A 404 for the project, and the issue keeps both its sprintId and its updatedAt",
+   "distractors": [
+    "A 403 that names the sprint:manage action that the outsider's role does not hold",
+    "A 401, because the outsider's token is not valid for this project at all",
+    "A 409, because the outsider's expectedUpdatedAt is treated as a stale token"
+   ],
+   "explanation": "requireMembership throws notFound(\"Project\") when the user has no role in the member map, concealing the project. The test then reads the row through __realClient: sprintId is still null and updatedAt unchanged."
+  },
+  {
+   "id": "q07-completed-target",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 9,
+     "end": 9
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/services/sprint.service.js",
+     "lineStart": 143,
+     "lineEnd": 150
+    }
+   ],
+   "prompt": "An issue is assigned to a sprint of the same project whose state is COMPLETED. What does assignIssueToSprint answer?",
+   "answer": "A 409 conflict that says the sprint is already completed",
+   "distractors": [
+    "404 Sprint; completed sprints are hidden from the project lookup",
+    "200, and the issue is attached to the completed sprint as asked",
+    "400 from assignSprintSchema, which refuses completed sprint ids"
+   ],
+   "explanation": "The project-scoped findFirst finds the sprint (it is not hidden), then sprint.state === \"COMPLETED\" throws conflict (lines 148-149). The schema only checks shapes, not sprint states."
+  },
+  {
+   "id": "q08-foreign-destination",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/03-WORKED-CHANGE.md",
+    "lines": {
+     "start": 3,
+     "end": 3
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/services/sprint.service.js",
+     "lineStart": 87,
+     "lineEnd": 99
+    },
+    {
+     "path": "apps/api/test/sprint.test.js",
+     "lineStart": 181,
+     "lineEnd": 217
+    }
+   ],
+   "prompt": "completeSprint is called with moveUnfinishedTo set to a PLANNED sprint of another project. What is the outcome?",
+   "answer": "A 404 for the destination; the source sprint stays ACTIVE and keeps its issues",
+   "distractors": [
+    "409 \"Unfinished issues can only move to a planned sprint\", and nothing changes",
+    "200, and the unfinished issues are moved into the other project's sprint",
+    "The sprint completes, yet movedCount is 0 because no destination was found"
+   ],
+   "explanation": "The destination lookup is scoped by projectId: project.id (lines 91-94), so a foreign sprint is simply not found and notFound(\"Destination sprint\") is thrown before the first write. The regression checks the source is still ACTIVE and the issue still assigned."
+  },
+  {
+   "id": "q09-double-complete",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/03-WORKED-CHANGE.md",
+    "lines": {
+     "start": 5,
+     "end": 5
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/services/sprint.service.js",
+     "lineStart": 114,
+     "lineEnd": 118
+    }
+   ],
+   "prompt": "Two completion requests for the same ACTIVE sprint race. How does the service let only one of them win?",
+   "answer": "The loser's updateMany on state ACTIVE matches 0 rows, so it gets 409",
+   "distractors": [
+    "Both return 200, and the second request then reports a movedCount of zero",
+    "Both move the unfinished issues, so every issue is moved twice",
+    "It does not: the second waits on a row lock, then also succeeds"
+   ],
+   "explanation": "The claim is tx.sprint.updateMany({ where: { id, projectId, state: \"ACTIVE\" } }); once one request completes the sprint, the other changes zero rows and throws conflict(\"Sprint was already completed\") (line 118)."
+  },
+  {
+   "id": "q10-concurrent-starts",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/07-TRACE-LAB.md",
+    "lines": {
+     "start": 84,
+     "end": 84
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/services/sprint.service.js",
+     "lineStart": 63,
+     "lineEnd": 73
+    },
+    {
+     "path": "apps/api/prisma/migrations/20260709220000_sprints/migration.sql",
+     "lineStart": 31,
+     "lineEnd": 32
+    }
+   ],
+   "prompt": "Two different PLANNED sprints of one project are started at the same moment. What decides that one of them gets 409?",
+   "answer": "The partial unique index, whose P2002 startSprint maps to 409",
+   "distractors": [
+    "The state machine's start guard sees the other ACTIVE sprint and refuses",
+    "Nothing does; both start, as each update touches a different sprint row",
+    "serializable() retries both until one gives up, which ends in a 500"
+   ],
+   "explanation": "The two updates hit different rows, so the per-sprint guard passes for both. The index Sprint_one_active_per_project allows one ACTIVE sprint per project; its violation is P2002, caught at lines 68-71 and turned into conflict."
+  },
+  {
+   "id": "q11-update-issue-weaker",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 61,
+     "end": 61
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/services/issue.service.js",
+     "lineStart": 173,
+     "lineEnd": 187
+    },
+    {
+     "path": "apps/api/src/services/issue.service.js",
+     "lineStart": 210,
+     "lineEnd": 214
+    }
+   ],
+   "prompt": "Why is updateIssue's expectedUpdatedAt check weaker than the one in sprint assignment?",
+   "answer": "It compares in JavaScript, then runs an update whose where is only { id }",
+   "distractors": [
+    "It compares timestamps only to the whole second, so close edits always collide",
+    "It skips the comparison whenever the patch leaves out the title field",
+    "It writes outside any transaction, so its history entry can be lost"
+   ],
+   "explanation": "updateIssue reads the issue, compares ISO strings, and only later updates by id alone. Two requests can both pass the compare. Assignment puts the token in the updateMany predicate, so the database decides."
+  },
+  {
+   "id": "q12-old-moved-count",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/03-WORKED-CHANGE.md",
+    "lines": {
+     "start": 77,
+     "end": 77
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/services/sprint.service.js",
+     "lineStart": 120,
+     "lineEnd": 126
+    }
+   ],
+   "prompt": "In the pre-change completeSprint, where did the reported movedCount come from?",
+   "answer": "A count() taken before the move, not the move's own result",
+   "distractors": [
+    "From the updateMany result of the bulk move, as in the current service",
+    "From the number of DONE workflow columns found in the project",
+    "From the sprint's _count of issues, read again after completion"
+   ],
+   "explanation": "Chapter 03 lists four gaps in the old version; (d) is that movedCount came from a count() before the move. The current code returns moved.count from the bulk updateMany (lines 120-126)."
+  },
+  {
+   "id": "f01-three-mechanisms",
+   "kind": "flashcard",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 57,
+     "end": 57
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/services/sprint.service.js",
+     "lineStart": 137,
+     "lineEnd": 162
+    }
+   ],
+   "front": "The three separate protections inside assignIssueToSprint",
+   "back": "Isolation: the serializable( call (line 137). Ownership/lifecycle guards: the project-scoped sprint lookup and the COMPLETED rejection (lines 143-150). Optimistic version check: the updatedAt term in the updateMany predicate (line 156) plus changed.count === 0 -> 409 (lines 160-162). Each has its own failing test."
+  },
+  {
+   "id": "f02-old-complete-gaps",
+   "kind": "flashcard",
+   "source": {
+    "path": "astraupskill/03-WORKED-CHANGE.md",
+    "lines": {
+     "start": 77,
+     "end": 77
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/services/sprint.service.js",
+     "lineStart": 77,
+     "lineEnd": 128
+    }
+   ],
+   "front": "Four gaps in the pre-change completeSprint",
+   "back": "(a) sprint state and unfinished count were read outside the transaction; (b) sprint.update had no state: ACTIVE guard, so two completions could both succeed; (c) moveUnfinishedTo was never checked, so a foreign or completed sprint id was accepted; (d) movedCount came from a count() before the move."
+  },
+  {
+   "id": "f03-no-rollback",
+   "kind": "flashcard",
+   "source": {
+    "path": "astraupskill/01-CODEBASE-MAP.md",
+    "lines": {
+     "start": 9,
+     "end": 9
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/test/sprint.test.js",
+     "lineStart": 8,
+     "lineEnd": 8
+    },
+    {
+     "path": "apps/api/test/setup.js",
+     "lineStart": 34,
+     "lineEnd": 39
+    }
+   ],
+   "front": "Why does the sprint suite opt out of the rollback proxy?",
+   "back": "Competing operations need separate, real PostgreSQL transactions to exercise isolation and constraints; a rollback wrapper would put them in one. sprint.test.js:8 sets globalThis.__NO_ROLLBACK__ = true and setup.js:39 honors it."
+  },
+  {
+   "id": "f04-real-client-read",
+   "kind": "flashcard",
+   "source": {
+    "path": "astraupskill/04-TESTING-AND-DEBUGGING.md",
+    "lines": {
+     "start": 77,
+     "end": 77
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/test/sprint.test.js",
+     "lineStart": 150,
+     "lineEnd": 152
+    }
+   ],
+   "front": "Why does the nonmember test read the issue through __realClient instead of the API?",
+   "back": "The outsider's API reads would also return 404. Reading the row directly is the only way to show that neither sprintId nor updatedAt changed after the denied write."
+  }
+ ]
+}
