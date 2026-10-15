@@ -1,0 +1,436 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "masteroutline-outline",
+ "sha": "6511cbb6da848428cf552bfa7eb106dacd4e0c57",
+ "guides": [
+  "fabledocs3/adr-004-policy-authorization.md",
+  "fabledocs3/adr-005-sequelize-explicit-transactions.md",
+  "fabledocs3/adr-006-event-spine.md",
+  "fabledocs3/adr-007-crdt-triple-representation.md",
+  "fabledocs4/02-capstone-outbox-relay.md"
+ ],
+ "items": [
+  {
+   "id": "q01-authorize-throws",
+   "kind": "quiz",
+   "source": {
+    "path": "fabledocs3/adr-004-policy-authorization.md",
+    "lines": {
+     "start": 20,
+     "end": 22
+    }
+   },
+   "cites": [
+    {
+     "path": "server/policies/cancan.ts",
+     "lineStart": 182,
+     "lineEnd": 191
+    }
+   ],
+   "prompt": "In Outline's policy layer, a handler calls authorize(user, \"update\", document) for a user who lacks that ability. What happens?",
+   "answer": "It throws an AuthorizationError, so the handler stops there",
+   "distractors": [
+    "It returns false, and the handler must branch on the result",
+    "It returns a denial-reason string for the handler to log",
+    "It records the denial and lets the request continue read-only"
+   ],
+   "explanation": "authorize calls cannot() and throws AuthorizationError(\"Authorization error\") when it is true; ADR-004 calls this \"an assertion, not a query\". It returns nothing on success, and nothing is logged or downgraded on failure."
+  },
+  {
+   "id": "q02-can-membership-string",
+   "kind": "quiz",
+   "source": {
+    "path": "fabledocs3/adr-004-policy-authorization.md",
+    "lines": {
+     "start": 53,
+     "end": 55
+    }
+   },
+   "cites": [
+    {
+     "path": "server/policies/cancan.ts",
+     "lineStart": 94,
+     "lineEnd": 119
+    }
+   ],
+   "prompt": "In server/policies/cancan.ts, the one matching ability's condition returns the string \"m1\" (a membership id) instead of true. What does can() return?",
+   "answer": "An array holding the membership id, here [\"m1\"]",
+   "distractors": [
+    "false, as that string is read as a denial reason",
+    "true, as any truthy condition result is a grant",
+    "The string \"m1\" itself, the last condition result"
+   ],
+   "explanation": "can() collects string results into membershipIds and returns that array when it is non-empty; only boolean results feed hasNonMembershipMatch. ADR-004 line 54 calls a string a \"denial reason\", but the code treats it as a truthy grant carrying membership ids, so the code is keyed here."
+  },
+  {
+   "id": "q03-serialize-throwing-action",
+   "kind": "quiz",
+   "source": {
+    "path": "fabledocs3/adr-004-policy-authorization.md",
+    "lines": {
+     "start": 24,
+     "end": 27
+    }
+   },
+   "cites": [
+    {
+     "path": "server/policies/cancan.ts",
+     "lineStart": 127,
+     "lineEnd": 155
+    }
+   ],
+   "prompt": "serialize() builds the policies object that ships in API responses. One action's condition throws while it is evaluated. What does the serialized policy hold?",
+   "answer": "That action as false, with the other actions still evaluated",
+   "distractors": [
+    "Nothing: the error propagates up and the whole API response fails",
+    "No entry for that action, so the client sees it as unknown",
+    "That action set to true, so the UI does not hide the control"
+   ],
+   "explanation": "serialize() wraps each this.can() call in try/catch and writes output[action] = false in the catch, then moves on to the next action. The error is swallowed, the key is present, and a failure never grants."
+  },
+  {
+   "id": "q04-transaction-middleware-rollback",
+   "kind": "quiz",
+   "source": {
+    "path": "fabledocs3/adr-005-sequelize-explicit-transactions.md",
+    "lines": {
+     "start": 24,
+     "end": 29
+    }
+   },
+   "cites": [
+    {
+     "path": "server/middlewares/transaction.ts",
+     "lineStart": 13,
+     "lineEnd": 19
+    }
+   ],
+   "prompt": "A route uses the transaction() middleware. Its command makes two writes with ctx.state.transaction, then throws. What happens to the two writes?",
+   "answer": "Both roll back, because next() runs inside the managed transaction",
+   "distractors": [
+    "Both stay, because each query autocommits on its own as soon as it runs",
+    "The second write rolls back; the first had already committed",
+    "Both commit, and the error is reported after the response"
+   ],
+   "explanation": "The middleware calls sequelize.transaction(async (t) => { ctx.state.transaction = t; return next(); }). A managed Sequelize transaction commits when the callback resolves and rolls back when it rejects, so the whole route is one unit. Writes only autocommit when the transaction is NOT passed."
+  },
+  {
+   "id": "q05-cls-rejected",
+   "kind": "quiz",
+   "source": {
+    "path": "fabledocs3/adr-005-sequelize-explicit-transactions.md",
+    "lines": {
+     "start": 40,
+     "end": 44
+    }
+   },
+   "cites": [
+    {
+     "path": "fabledocs3/adr-005-sequelize-explicit-transactions.md",
+     "lineStart": 40,
+     "lineEnd": 44
+    }
+   ],
+   "prompt": "Sequelize can propagate a transaction implicitly with AsyncLocalStorage/CLS. Why did ADR-005 reject that option?",
+   "answer": "If async context is lost, queries fall back to autocommit silently",
+   "distractors": [
+    "CLS conflicts with Koa's middleware chain, so the routes would not compile",
+    "It doubled query latency in the team's Postgres load tests",
+    "Sequelize dropped CLS support in the version this repo pins"
+   ],
+   "explanation": "ADR-005 says a stray timer or callback boundary loses the async context and CLS \"fails silently into autocommit\", the worst failure mode for a correctness mechanism; explicit passing fails visibly in review. The ADR mentions no compile conflict, latency measurement or removed support."
+  },
+  {
+   "id": "q06-eroding-status",
+   "kind": "quiz",
+   "source": {
+    "path": "fabledocs3/adr-005-sequelize-explicit-transactions.md",
+    "lines": {
+     "start": 55,
+     "end": 60
+    }
+   },
+   "cites": [
+    {
+     "path": "fabledocs3/adr-005-sequelize-explicit-transactions.md",
+     "lineStart": 3,
+     "lineEnd": 3
+    },
+    {
+     "path": "fabledocs3/adr-005-sequelize-explicit-transactions.md",
+     "lineStart": 55,
+     "lineEnd": 60
+    }
+   ],
+   "prompt": "ADR-005 (explicit transaction-per-mutation) has the status Active-Eroding. What reason does it give?",
+   "answer": "Forgetting the transaction still compiles and passes most tests",
+   "distractors": [
+    "Most commands have gone back to opening ad hoc transactions",
+    "The middleware does not wrap routes added after the v1 API",
+    "Contributors dropped the model decorators over Sequelize typing ceremony"
+   ],
+   "explanation": "The Negative consequences say forgetting the transaction parameter \"compiles and passes low-concurrency tests\"; enforcement is convention and review, so nothing structural stops a new autocommit query. Ad hoc transactions were the rejected starting point, not today's trend."
+  },
+  {
+   "id": "q07-event-enqueue-after-commit",
+   "kind": "quiz",
+   "source": {
+    "path": "fabledocs3/adr-006-event-spine.md",
+    "lines": {
+     "start": 19,
+     "end": 23
+    }
+   },
+   "cites": [
+    {
+     "path": "server/models/Event.ts",
+     "lineStart": 82,
+     "lineEnd": 97
+    }
+   ],
+   "prompt": "An Event row is saved with a transaction option. When does the Event model's AfterSave hook add it to globalEventQueue?",
+   "answer": "After the commit, via afterCommit on the parent transaction if any",
+   "distractors": [
+    "Right away inside AfterSave, before the transaction commits",
+    "In an afterRollback hook, so a failed mutation is retried",
+    "On the next cron tick that sweeps unpublished event rows"
+   ],
+   "explanation": "Event.enqueue registers (options.transaction.parent || options.transaction).afterCommit(() => globalEventQueue().add(model)); the comment explains that findOrCreate opens a child transaction whose afterCommit would never fire. Without a transaction it enqueues at once. There is no relay or cron sweep today."
+  },
+  {
+   "id": "q08-at-most-once-into-queue",
+   "kind": "quiz",
+   "source": {
+    "path": "fabledocs3/adr-006-event-spine.md",
+    "lines": {
+     "start": 58,
+     "end": 62
+    }
+   },
+   "cites": [
+    {
+     "path": "fabledocs3/adr-006-event-spine.md",
+     "lineStart": 31,
+     "lineEnd": 32
+    },
+    {
+     "path": "fabledocs3/adr-006-event-spine.md",
+     "lineStart": 58,
+     "lineEnd": 62
+    }
+   ],
+   "prompt": "Per ADR-006, what delivery guarantee holds for getting a committed Event INTO the Bull queue?",
+   "answer": "At-most-once, since a crash after commit can lose the publish",
+   "distractors": [
+    "Exactly-once, as the event row and the job share one commit",
+    "At-least-once, with Bull retrying any publish that fails",
+    "At-least-once, because a relay re-sends unpublished rows"
+   ],
+   "explanation": "The event row commits, then the process publishes to Redis in-process; a crash in between yields an event no processor sees, and no relay reconciles it. Bull's retries give at-least-once only from the queue onward, after the job exists."
+  },
+  {
+   "id": "q09-backfill-published-at",
+   "kind": "quiz",
+   "source": {
+    "path": "fabledocs4/02-capstone-outbox-relay.md",
+    "lines": {
+     "start": 23,
+     "end": 28
+    }
+   },
+   "cites": [
+    {
+     "path": "fabledocs4/02-capstone-outbox-relay.md",
+     "lineStart": 23,
+     "lineEnd": 28
+    },
+    {
+     "path": "fabledocs4/02-capstone-outbox-relay.md",
+     "lineStart": 54,
+     "lineEnd": 57
+    }
+   ],
+   "prompt": "The outbox capstone adds a nullable publishedAt column to events. Why must existing rows get publishedAt = createdAt instead of staying NULL?",
+   "answer": "NULL rows look unpublished, so the new relay would replay history",
+   "distractors": [
+    "A partial index cannot be built over a column that holds NULLs",
+    "Postgres refuses a nullable column on a table that already has rows",
+    "CleanupOldEventsTask removes any event row whose publishedAt is NULL"
+   ],
+   "explanation": "The relay claims rows WHERE publishedAt IS NULL, so millions of old rows left NULL would all be enqueued again on first deploy, a replay storm. The guide itself recommends a partial index where NULL; CleanupOldEventsTask selects by createdAt (365-day retention), not by publishedAt."
+  },
+  {
+   "id": "q10-publish-then-mark",
+   "kind": "quiz",
+   "source": {
+    "path": "fabledocs4/02-capstone-outbox-relay.md",
+    "lines": {
+     "start": 33,
+     "end": 37
+    }
+   },
+   "cites": [
+    {
+     "path": "fabledocs4/02-capstone-outbox-relay.md",
+     "lineStart": 33,
+     "lineEnd": 37
+    }
+   ],
+   "prompt": "Why does the capstone have the relay enqueue the event first and set publishedAt second, not the reverse?",
+   "answer": "A crash between the steps then gives a duplicate rather than a loss",
+   "distractors": [
+    "Marking first would hold the event row lock across the whole call to Redis",
+    "Bull needs the publishedAt value inside the job payload",
+    "Enqueueing first lets the in-process fast path skip the row"
+   ],
+   "explanation": "Publish-then-mark means a crash after publish but before mark republishes the event: at-least-once, duplicates chosen over loss. Mark-then-publish would record the event as published and then lose it if the publish failed, silently reintroducing the gap."
+  },
+  {
+   "id": "q11-skip-locked-claim",
+   "kind": "quiz",
+   "source": {
+    "path": "fabledocs4/02-capstone-outbox-relay.md",
+    "lines": {
+     "start": 38,
+     "end": 40
+    }
+   },
+   "cites": [
+    {
+     "path": "fabledocs4/02-capstone-outbox-relay.md",
+     "lineStart": 71,
+     "lineEnd": 73
+    }
+   ],
+   "prompt": "Two cron pods run the outbox relay at the same moment. Which clause on the batch SELECT stops them from claiming the same event rows?",
+   "answer": "FOR UPDATE SKIP LOCKED",
+   "distractors": [
+    "ORDER BY \"createdAt\" LIMIT 100",
+    "FOR SHARE, with no wait option",
+    "SET LOCAL lock_timeout = '15s'"
+   ],
+   "explanation": "FOR UPDATE locks the claimed rows and SKIP LOCKED makes the other pod pass over them and take different rows. ORDER BY/LIMIT takes no lock, FOR SHARE lets both pods hold the same rows, and lock_timeout only bounds how long a lock wait may last."
+  },
+  {
+   "id": "q12-load-document-fast-path",
+   "kind": "quiz",
+   "source": {
+    "path": "fabledocs3/adr-007-crdt-triple-representation.md",
+    "lines": {
+     "start": 28,
+     "end": 31
+    }
+   },
+   "cites": [
+    {
+     "path": "server/collaboration/PersistenceExtension.ts",
+     "lineStart": 33,
+     "lineEnd": 69
+    }
+   ],
+   "prompt": "A user opens a document for collaborative editing, and its row already has a state blob. What does PersistenceExtension.onLoadDocument do?",
+   "answer": "Reads state with no lock and returns a Y.Doc built from it",
+   "distractors": [
+    "Locks the row FOR UPDATE, then rebuilds state from content",
+    "Rebuilds the Y.Doc from the markdown text and saves state",
+    "Opens a transaction with a 15s lock_timeout to read state"
+   ],
+   "explanation": "It first reads only the state attribute without a transaction; if state exists it applies it to a new Y.Doc and returns. The FOR UPDATE transaction (with a double-check of state) runs only for a legacy document that has no state yet, which is then built from content or text. lock_timeout belongs to documentCollaborativeUpdater, the write path."
+  },
+  {
+   "id": "f01-three-representations",
+   "kind": "flashcard",
+   "source": {
+    "path": "fabledocs3/adr-007-crdt-triple-representation.md",
+    "lines": {
+     "start": 22,
+     "end": 26
+    }
+   },
+   "cites": [
+    {
+     "path": "fabledocs3/adr-007-crdt-triple-representation.md",
+     "lineStart": 22,
+     "lineEnd": 26
+    },
+    {
+     "path": "server/models/Document.ts",
+     "lineStart": 343,
+     "lineEnd": 367
+    }
+   ],
+   "front": "ADR-007: which three representations of a document live on one Document row, and which one is authoritative?",
+   "back": "state: the binary Y.Doc (authoritative). content: the Prosemirror JSON projection. text: the markdown projection. The projections are refreshed asynchronously (DocumentUpdateTextTask) and may be briefly stale; the withoutState scope avoids loading the large state blob by accident."
+  },
+  {
+   "id": "f02-rls-rejected",
+   "kind": "flashcard",
+   "source": {
+    "path": "fabledocs3/adr-004-policy-authorization.md",
+    "lines": {
+     "start": 33,
+     "end": 35
+    }
+   },
+   "cites": [
+    {
+     "path": "fabledocs3/adr-004-policy-authorization.md",
+     "lineStart": 33,
+     "lineEnd": 35
+    },
+    {
+     "path": "fabledocs3/adr-004-policy-authorization.md",
+     "lineStart": 56,
+     "lineEnd": 59
+    }
+   ],
+   "front": "ADR-004 rejected Postgres row-level security for authorization. Why, and what residual risk did that choice leave?",
+   "back": "Debugging RLS through ORM-generated SQL is brutal, and self-hosters would blame their own database setup for permission bugs. The cost: policies run on hydrated models, so list endpoints must keep their WHERE clauses aligned with what policies permit, by hand, in two places."
+  },
+  {
+   "id": "f03-relay-loop",
+   "kind": "flashcard",
+   "source": {
+    "path": "fabledocs4/02-capstone-outbox-relay.md",
+    "lines": {
+     "start": 71,
+     "end": 73
+    }
+   },
+   "cites": [
+    {
+     "path": "fabledocs4/02-capstone-outbox-relay.md",
+     "lineStart": 71,
+     "lineEnd": 73
+    }
+   ],
+   "front": "Outbox capstone: what is the relay task's core loop, step by step?",
+   "back": "In one transaction: SELECT a batch (LIMIT 100) of events WHERE publishedAt IS NULL AND createdAt is older than the 30-second grace window, ORDER BY createdAt, FOR UPDATE SKIP LOCKED; enqueue each; then UPDATE those rows SET publishedAt = now(). Count relayed events: nonzero means the fast path failed."
+  },
+  {
+   "id": "f04-crdt-not-ot",
+   "kind": "flashcard",
+   "source": {
+    "path": "fabledocs3/adr-007-crdt-triple-representation.md",
+    "lines": {
+     "start": 39,
+     "end": 42
+    }
+   },
+   "cites": [
+    {
+     "path": "fabledocs3/adr-007-crdt-triple-representation.md",
+     "lineStart": 39,
+     "lineEnd": 42
+    },
+    {
+     "path": "fabledocs3/adr-007-crdt-triple-representation.md",
+     "lineStart": 46,
+     "lineEnd": 49
+    }
+   ],
+   "front": "ADR-007: why Yjs CRDTs instead of operational transformation, and why lazy rather than big-bang conversion?",
+   "back": "OT needs an always-authoritative server ordering every op; CRDTs tolerate offline edits and multi-server merge, and Yjs had Prosemirror bindings. Lazy conversion (on first open, under a row lock) means a conversion bug shows up to an active user at once instead of months later as silent corruption."
+  }
+ ]
+}
