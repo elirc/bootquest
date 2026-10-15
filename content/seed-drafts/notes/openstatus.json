@@ -1,0 +1,299 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "openstatus",
+ "repo": "openstatus",
+ "sha": "33c62021e71a4be4581423ff0ec828a0eea156fc",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: learning OpenStatus by reading its tests",
+   "body": "OpenStatus is an open-source uptime monitor with public status pages. This checkout is the monorepo itself, with a study library in `docs/`. This quest uses the **test-first learning lab**: `docs/test-first-learning-lab/`. Its idea is that a test is the most precise description of what code does, so you learn a module by reading its tests and then writing the next one.\n\nRead in order:\n\n1. `01-test-map.md`: which kinds of tests exist and where.\n2. `02-service-test-workouts.md`: status reports in `packages/services`.\n3. `03-router-test-workouts.md`: the same feature through the tRPC routers in `packages/api`.\n4. `04-public-page-and-utils-tests.md`: the public status page helpers and the SSRF guard in `packages/utils`.\n\nThe workouts mix real test excerpts with code marked *illustrative fake*. Always open the real file a workout cites and check the behaviour yourself.",
+   "excerpts": [
+    {
+     "path": "docs/test-first-learning-lab/04-public-page-and-utils-tests.md",
+     "lineStart": 48,
+     "lineEnd": 48,
+     "quote": "Test-first note: there is no exported `sortStatusReports` helper today in the inspected code."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/test-first-learning-lab/README.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "How the lab is organised."
+    },
+    {
+     "path": "docs/test-first-learning-lab/01-test-map.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The test map: where each kind of test lives."
+    }
+   ]
+  },
+  {
+   "id": "r02-status-report-service",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: status reports, from service verb to router",
+   "body": "A **status report** is a public incident write-up on a status page, with a series of updates. The service verbs live in `packages/services/src/status-report/`; the tRPC routers in `packages/api/src/router/` wrap them and translate their errors.\n\nRead `create.ts` and list every step in order: the scope check, input parsing, the page lookup (note its `where`), the page-component validation, and the check that compares the components' page with the requested page. For each failure, note which error class is thrown. Then read `notify.ts` and list its early returns and their conditions.\n\nNext, open `packages/api/src/router/statusReport.ts`:\n\n- For `create`, note what the procedure returns and how it handles errors (follow `toTRPCError` into `service-adapter.ts`).\n- For `list`, compare the zod input object with the object passed to `listStatusReports`. Then read `list.ts` to see how each field is used.\n\nFinally, re-read workout 1 of the service file and the real test it cites to see which rows one create writes.",
+   "excerpts": [
+    {
+     "path": "docs/test-first-learning-lab/02-service-test-workouts.md",
+     "lineStart": 45,
+     "lineEnd": 45,
+     "quote": "the service owns the workspace page lookup"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "packages/services/src/status-report/create.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The createStatusReport verb."
+    },
+    {
+     "path": "packages/api/src/router/statusReport.ts",
+     "lineStart": 40,
+     "lineEnd": 215,
+     "why": "The router procedures that wrap the service."
+    }
+   ]
+  },
+  {
+   "id": "r03-public-page-and-ssrf",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: building the public timeline, and guarding URLs",
+   "body": "The public status page shows a timeline of **events**: maintenances, incidents and status reports. `getEvents` in `packages/api/src/router/statusPage.utils.ts` builds that list. Read it slowly and make a table with one row per source (maintenances, incidents, reports) and these columns: how it is filtered by component or monitor, whether the 45-day threshold applies, and what `type`, `status` and `to` the event gets. Fill it in from the code, not from the workout's bullet list.\n\nIn `packages/api/src/router/statusPage.ts`, find where `statusReports` is sorted. A JavaScript comparator must return a negative number when `a` comes first, a positive number when `b` comes first, and zero for a tie, and it must be consistent. Check each branch of this comparator against that contract.\n\nThe SSRF guard in `packages/utils/src/ssrf.ts` stops the server from fetching internal addresses. Read `isBlockedIPv4`, `isBlockedIPv6`, `isBlockedHost`, and both `assertSafeUrl` functions. For each, list exactly what it inspects and what it ignores.",
+   "excerpts": [
+    {
+     "path": "docs/test-first-learning-lab/04-public-page-and-utils-tests.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "`getEvents` collects maintenances, incidents, and reports into a common event shape"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "packages/api/src/router/statusPage.utils.ts",
+     "lineStart": 128,
+     "lineEnd": 260,
+     "why": "getEvents."
+    },
+    {
+     "path": "packages/utils/src/ssrf.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The SSRF guard."
+    },
+    {
+     "path": "packages/utils/src/ssrf.test.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The SSRF test table."
+    }
+   ]
+  },
+  {
+   "id": "x-component-other-page",
+   "target": "seed:quests:openstatus/quiz/db28dc4d8396a055",
+   "phase": "after",
+   "title": "Why components from another page cause a conflict",
+   "body": "`createStatusReport` first loads the page by id and workspace, then calls `validatePageComponentIds`, which checks the ids against the workspace and reports which page they belong to. If that page is not null and differs from `input.pageId`, the service throws `ConflictError` naming both pages. The components are legitimately the workspace's own, so this is a conflict between two inputs, not an ownership failure.\n\n- *NotFoundError*: the page itself was found; the components are validated by workspace.\n- *ForbiddenError*: the components belong to the same workspace.\n- *Linked anyway*: the throw happens before the insert.",
+   "excerpts": [
+    {
+     "path": "packages/services/src/status-report/create.ts",
+     "lineStart": 48,
+     "lineEnd": 49,
+     "quote": "if (validated.pageId !== null && validated.pageId !== input.pageId) { throw new ConflictError("
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-foreign-page-trpc",
+   "target": "seed:quests:openstatus/quiz/b5be3ddf750d0953",
+   "phase": "after",
+   "title": "Why a foreign page id surfaces as NOT_FOUND",
+   "body": "The page lookup filters on both `page.id` and `page.workspaceId`, so a page from another workspace is not found, and the service throws `NotFoundError(\"page\", input.pageId)`. The router catches it and calls `toTRPCError`, which maps a ServiceError with code `NOT_FOUND` to a `TRPCError` with code `NOT_FOUND`. The router test asserts exactly this code.\n\n- *FORBIDDEN*: the service never reveals that the page exists elsewhere.\n- *BAD_REQUEST*: the page id is a valid number, so input parsing passes.\n- *INTERNAL_SERVER_ERROR*: the service throws before any insert.",
+   "excerpts": [
+    {
+     "path": "packages/services/src/status-report/create.ts",
+     "lineStart": 40,
+     "lineEnd": 40,
+     "quote": "if (!page_) throw new NotFoundError(\"page\", input.pageId);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-notify-plan-gate",
+   "target": "seed:quests:openstatus/quiz/090caea92cd13c62",
+   "phase": "after",
+   "title": "Why notifying on a plan without subscribers does nothing",
+   "body": "After loading the update and checking that it belongs to the caller's workspace, `notifyStatusReport` tests `ctx.workspace.limits[\"status-subscribers\"]`. When it is false, the function simply returns: no dispatch, no error. The comment says this silent skip matches the existing email router. The workout asks whether that should be user-visible instead.\n\n- *ForbiddenError*: that is thrown only when the update belongs to another workspace.\n- *Dispatches anyway*: the plan check runs before `dispatchStatusReportUpdate`.\n- *Queued for later*: there is no queue; the call just ends.",
+   "excerpts": [
+    {
+     "path": "packages/services/src/status-report/notify.ts",
+     "lineStart": 51,
+     "lineEnd": 54,
+     "quote": "Plan does not enable subscribers"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-list-statuses-dropped",
+   "target": "seed:quests:openstatus/quiz/b577d35553a94b7b",
+   "phase": "after",
+   "title": "Why a statuses filter on the tRPC list has no effect",
+   "body": "The router's input is `z.object({ period, order, pageId })`. A zod object schema strips keys it does not declare unless told otherwise, so `statuses` disappears during parsing. The router then always calls the service with `statuses: []`, `limit: 10_000` and `offset: 0`. In `listStatusReports` a status condition is added only when `input.statuses.length > 0`, so every status comes back. The workout predicts this test would fail today.\n\n- *Only resolved*: the service supports the filter, but the router never passes it.\n- *Zod throws*: an object schema strips unknown keys by default.\n- *Capped at 100*: that limit belongs to the separate Connect handler; tRPC passes 10,000.",
+   "excerpts": [
+    {
+     "path": "packages/api/src/router/statusReport.ts",
+     "lineStart": 208,
+     "lineEnd": 210,
+     "quote": "limit: 10_000, offset: 0, statuses: [],"
+    },
+    {
+     "path": "packages/services/src/status-report/list.ts",
+     "lineStart": 173,
+     "lineEnd": 174,
+     "quote": "if (input.statuses.length > 0) {"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-maintenance-both-ids",
+   "target": "seed:quests:openstatus/quiz/923dffb6a0baa668",
+   "phase": "after",
+   "title": "Why pageComponentId wins over monitorId",
+   "body": "The maintenance filter checks `if (pageComponentId)` first and returns its match. Only when `pageComponentId` is falsy does it try `monitorId`, and when neither is given it keeps every maintenance. The comment calls monitorId the backward-compatibility fallback. The reports filter uses the same order.\n\n- *monitorId alone*: it is the fallback, not the first choice.\n- *Either one*: the branches return before the next is tried, so there is no OR.\n- *Both at once*: there is no AND either.",
+   "excerpts": [
+    {
+     "path": "packages/api/src/router/statusPage.utils.ts",
+     "lineStart": 158,
+     "lineEnd": 158,
+     "quote": "prioritize pageComponentId, fallback to monitorId for backward compatibility"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-static-component-incidents",
+   "target": "seed:quests:openstatus/quiz/e011ccce1cb903b8",
+   "phase": "after",
+   "title": "Why static components show no incidents",
+   "body": "All incident handling sits inside `if (componentType !== \"static\") { ... }`. A static component is a manual entry on the page with no monitor behind it, so the code skips incidents entirely, whatever monitor id is passed. The monitor filter and the 45-day threshold apply only inside that block.\n\n- *All incidents from 45 days*: that is the behaviour for monitor-type components.\n- *Only unresolved ones*: the block is skipped as a whole.\n- *Only matching monitorId*: the filter never runs for a static component.",
+   "excerpts": [
+    {
+     "path": "packages/api/src/router/statusPage.utils.ts",
+     "lineStart": 185,
+     "lineEnd": 187,
+     "quote": "Static components don't have incidents"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-monitoring-update",
+   "target": "seed:quests:openstatus/quiz/f400030805492c5a",
+   "phase": "after",
+   "title": "Why a monitoring update closes the range but stays degraded",
+   "body": "`getEvents` sorts a report's updates by date. If `report.status` is `\"resolved\"` it emits a `success` event. Otherwise it emits a `degraded` event whose `to` is the last update's date when that update's status is `resolved` or `monitoring`, and `null` otherwise. Here the report is investigating and the last update is monitoring, so the event is degraded and ends at that update.\n\n- *Success*: only the report's own status `resolved` gives success.\n- *Open with to null*: monitoring is one of the two statuses that set `to`.\n- *No event*: unresolved reports are always included when they have updates.",
+   "excerpts": [
+    {
+     "path": "packages/api/src/router/statusPage.utils.ts",
+     "lineStart": 251,
+     "lineEnd": 254,
+     "quote": "lastUpdate?.status === \"monitoring\" ? lastUpdate?.date : null,"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-old-unresolved-report",
+   "target": "seed:quests:openstatus/quiz/4451e3b76822ba99",
+   "phase": "after",
+   "title": "Why the old report stays but the old maintenance goes",
+   "body": "`pastThreshod` is today minus `pastDays`. The maintenance loop returns early when `maintenance.from < pastThreshod`, and incidents check `createdAt` the same way. The reports branch has no such check; its comment says all unresolved reports are displayed. So a 60-day-old maintenance is dropped while a 60-day-old unresolved report stays on the timeline.\n\n- *Both*: the maintenance threshold drops the old maintenance.\n- *Neither*: reports are deliberately exempt from the threshold.\n- *Only the maintenance*: it is the other way round.",
+   "excerpts": [
+    {
+     "path": "packages/api/src/router/statusPage.utils.ts",
+     "lineStart": 229,
+     "lineEnd": 229,
+     "quote": "we don't check threshold here because we display all unresolved reports"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-sort-comparator",
+   "target": "seed:quests:openstatus/quiz/d75927351da6e970",
+   "phase": "after",
+   "title": "Why the report comparator is inconsistent",
+   "body": "A comparator returns a negative number to put `a` first and a positive number to put `b` first. This one returns `-1` when `a` has no updates (correct: a goes first) and also `-1` when `b` has no updates, which again puts `a` first, the opposite of the comment's intent. The second branch should return `1`. Because the result depends on argument order, the comparator is inconsistent, and the final order depends on the engine's sort algorithm.\n\n- *Returns 0*: 0 is returned only when both have no updates.\n- *Throws*: the empty-array checks return before the last-update read.\n- *Puts the empty report first*: -1 orders `a`, not `b`, first.",
+   "excerpts": [
+    {
+     "path": "packages/api/src/router/statusPage.ts",
+     "lineStart": 371,
+     "lineEnd": 372,
+     "quote": "if (a.statusReportUpdates.length === 0) return -1; if (b.statusReportUpdates.length === 0) return -1;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-mapped-ipv6",
+   "target": "seed:quests:openstatus/quiz/e47dc7c02cb80c45",
+   "phase": "after",
+   "title": "Why the hex IPv4-mapped loopback is blocked",
+   "body": "`isBlockedHost` sees a bracketed host and calls `isBlockedIPv6` with `::ffff:7f00:1`. That function handles the `::ffff:` prefix: it first tries the rest as a dotted IPv4, then splits the two hex groups `7f00` and `1`, rebuilds `127.0.0.1` from their bytes, and asks `isBlockedIPv4`, which blocks the 127 range. The comment explains why: Node's URL parser rewrites the dotted form into this hex form.\n\n- *Only the dotted form*: the hex branch exists for exactly this input.\n- *Every IPv6 literal*: public IPv6 addresses are allowed.\n- *IPv6 skips the checks*: bracketed hosts go through `isBlockedIPv6`.",
+   "excerpts": [
+    {
+     "path": "packages/utils/src/ssrf.ts",
+     "lineStart": 49,
+     "lineEnd": 50,
+     "quote": "Node's URL parser converts ::ffff:127.0.0.1 to ::ffff:7f00:1 (hex form)"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-dns-not-resolved",
+   "target": "seed:quests:openstatus/quiz/981cfc667b771b89",
+   "phase": "after",
+   "title": "Why a hostname pointing at a private IP passes",
+   "body": "Read the body of `assertSafeUrl`: it parses the URL, rejects non-HTTP protocols, and calls `isBlockedHost(parsed.hostname)`. `isBlockedHost` compares the name with a blocklist and checks it only if it is a raw IP literal. Nothing calls a DNS resolver, so a public-looking name whose record points to `10.0.0.5` passes. The docblock and the test section header both claim DNS resolution; the code does not do it, and the tests only use literal hosts.\n\n- *Blocked after a lookup*: no lookup happens.\n- *An allowlist*: the guard uses blocklists, not an allowlist.\n- *Invalid URL*: the URL parses fine; only parsing failures throw that.",
+   "excerpts": [
+    {
+     "path": "packages/utils/src/ssrf.ts",
+     "lineStart": 104,
+     "lineEnd": 105,
+     "quote": "if (isBlockedHost(parsed.hostname)) {"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-create-rows",
+   "target": "seed:quests:openstatus/quiz/2ba2fa4b92930063",
+   "phase": "after",
+   "title": "Which rows one status-report create writes",
+   "body": "Workout 1 lists the happy-path effects of `createStatusReport`: a `status_report` row, a `status_report_update` row (the initial update), a `status_report_to_page_component` row linking the affected component, and audit rows for both the report and the update. The audit rows are written with `emitAudit` inside the same transaction.\n\n- *Update row only, audit later*: the link row is also written, and audit is not deferred.\n- *Link row and one audit row*: both the report and the update are audited.\n- *Subscriber notification rows*: notifying subscribers is the separate `notifyStatusReport` verb.",
+   "excerpts": [
+    {
+     "path": "docs/test-first-learning-lab/02-service-test-workouts.md",
+     "lineStart": 12,
+     "lineEnd": 16,
+     "quote": "status_report_to_page_component row audit rows for report and update"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}
