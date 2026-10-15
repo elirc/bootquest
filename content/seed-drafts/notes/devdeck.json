@@ -239,20 +239,14 @@
    "id": "x-q07-unknown-deck-id",
    "target": "seed:quests:devdeck/quiz/855f798f98746d0e",
    "phase": "after",
-   "title": "Unknown deck ids are kept, and nothing breaks",
-   "body": "**Key: it is kept: deck ids just need to be strings, and its counter just stays empty.**\n\nFor `enabledDeckIds`, the validator only checks `s.enabledDeckIds.every(text)`: each entry must be a non-empty string of at most 200 characters. It never checks the id against the real decks. `importData` filters unknown *card* ids but writes settings as given, so `\"no-such-deck\"` is stored. Nothing crashes: the per-deck counter code creates an empty counter for each enabled id, and no card matches it.\n\nWhy the others are wrong:\n- *Fails with 'Malformed backup: settings'*: a string passes `text`, so the settings block accepts it.\n- *Dropped by the known-ids filter*: that filter (`knownIds`) is built from cards and applied only to states and logs.\n- *Crashes the stats screen*: the guide says an empty counter is created and \"Nothing breaks\".",
+   "title": "Theme is one of exactly two values",
+   "body": "**Key: it is rejected with the settings error, and nothing changes.**\n\nThe settings block of `validateImport` requires an object with integer limits, `[\"light\", \"dark\"].includes(s.theme)`, and arrays of valid card types and non-empty deck ids. \"blue\" is not in the theme list, so `fail(\"settings\")` throws. Validation runs before `db.transaction` in `importData`, so the stored progress and settings are untouched.\n\n- *Falls back to light*: nothing repairs values; invalid input is refused.\n- *Stored as blue*: validation fails first.\n- *Progress metadata*: that message belongs to the `meta` block, which is checked after settings.",
    "excerpts": [
     {
      "path": "src/importValidation.ts",
-     "lineStart": 70,
-     "lineEnd": 71,
-     "quote": "!Array.isArray(s.enabledDeckIds) || !s.enabledDeckIds.every(text)"
-    },
-    {
-     "path": "astraupskill/02-CONCEPTS.md",
-     "lineStart": 60,
-     "lineEnd": 60,
-     "quote": "Nothing breaks: `getPerDeckCounts` creates an empty counter for each enabled id (`src/queue.ts:174-176`), and no card matches it."
+     "lineStart": 67,
+     "lineEnd": 67,
+     "quote": "![\"light\", \"dark\"].includes(s.theme) ||"
     }
    ],
    "readMore": [
@@ -312,20 +306,14 @@
    "id": "x-q10-filter-dont-fail",
    "target": "seed:quests:devdeck/quiz/b29befd5818f79fe",
    "phase": "after",
-   "title": "Unknown cards are filtered and missing ones recreated",
-   "body": "**Key: states and logs of unknown cards are filtered, and missing bundled cards get fresh states.**\n\nCards ship inside the app, so a backup from an older build can mention cards this build no longer has. `importData` builds `knownIds` from the bundled cards and keeps only states (line 172) and logs (line 188) whose `cardId` is known. Inside the transaction it then finds every bundled card that got no state from the file and adds a fresh state for it with `createNewReviewState`. The regression test pins all three behaviours.\n\nWhy the others are wrong:\n- *The file is rejected*: the policy is \"filter, don't fail\".\n- *New cards stay stateless until reviewed*: lines 181-184 create their states during the import.\n- *Imported as orphans, cleaned up later*: unknown states never reach the database.",
+   "title": "Spread order decides which id wins",
+   "body": "**Key: the id \"other\", because the payload spread comes after the literal.**\n\nIn an object literal, later properties overwrite earlier ones. `db.settings.put({ id: \"settings\", ...payload.settings })` writes `id` first and then spreads the payload, so a payload `id` replaces it, and the row is stored under \"other\". The validator does not stop this: it checks the known settings fields but does not reject extra keys. Compare the very next line, `db.meta.put({ ...payload.meta, id: \"meta\" })`, which spreads first and then fixes the id.\n\n- *\"settings\" wins*: that would need the spread first, as for meta.\n- *Rejected for an unknown field*: the check is not strict about extra keys.\n- *Both keys*: `put` writes one row with one primary key.",
    "excerpts": [
     {
      "path": "src/db.ts",
-     "lineStart": 171,
-     "lineEnd": 172,
-     "quote": "const knownIds = new Set(allCards.map((c) => c.id)); const states = payload.reviewStates.filter((s) => knownIds.has(s.cardId));"
-    },
-    {
-     "path": "src/db.ts",
-     "lineStart": 181,
-     "lineEnd": 184,
-     "quote": "const missing = allCards .filter((c) => !restored.has(c.id)) .map((c) => createNewReviewState(c.id, now));"
+     "lineStart": 196,
+     "lineEnd": 197,
+     "quote": "await db.settings.put({ id: \"settings\", ...payload.settings });"
     }
    ],
    "readMore": []
@@ -334,20 +322,14 @@
    "id": "x-q11-clear-inside-transaction",
    "target": "seed:quests:devdeck/quiz/b97f7a85dee991bc",
    "phase": "after",
-   "title": "clear() then bulkAdd() is safe only inside the transaction",
-   "body": "**Key: both run in one readwrite transaction, so any failure after clear aborts and restores the tables.**\n\n`clear()` deletes every review state. If the next step failed and nothing undid the delete, the user would be left with no progress. Here both calls are inside the `db.transaction(\"rw\", ...)` callback. If `bulkAdd` (or anything later in the callback) fails, Dexie aborts the transaction, and IndexedDB restores all four tables to how they were before it began. The worked-change chapter lists this as point 3.\n\nWhy the others are wrong:\n- *The validator guarantees bulkAdd cannot fail*: validation catches bad data, not a full disk or a closed tab.\n- *clear() returns a snapshot*: it returns nothing used for rollback; the database does the rollback.\n- *Dexie defers the deletes*: the rows are cleared; it is the transaction abort that brings them back.",
+   "title": "importData reports the restored states only",
+   "body": "**Key: how many states from the file matched cards this build bundles.**\n\nBefore the transaction, `importData` builds `states = payload.reviewStates.filter((s) => knownIds.has(s.cardId))`. Inside the transaction it writes those, adds fresh states for bundled cards that had none, rewrites logs, settings and meta. The last line is `return states.length`: only the restored states are counted.\n\n- *All states in the table*: the recreated `missing` states are written but not counted.\n- *Logs written*: the log count is never returned.\n- *undefined*: the signature is `Promise<number>` and the function returns `states.length`.",
    "excerpts": [
     {
      "path": "src/db.ts",
-     "lineStart": 178,
-     "lineEnd": 179,
-     "quote": "await db.reviewStates.clear(); await db.reviewStates.bulkAdd(states);"
-    },
-    {
-     "path": "astraupskill/03-WORKED-CHANGE.md",
-     "lineStart": 52,
-     "lineEnd": 52,
-     "quote": "**`clear()` then `bulkAdd()` is safe only because of the transaction.** Outside one, a failure after `clear()` would leave the user with no progress at all."
+     "lineStart": 200,
+     "lineEnd": 200,
+     "quote": "return states.length;"
     }
    ],
    "readMore": []
@@ -356,20 +338,14 @@
    "id": "x-q12-day-rollover",
    "target": "seed:quests:devdeck/quiz/c0a08194a97d023c",
    "phase": "after",
-   "title": "The day helper's round-trip catches February 30",
-   "body": "**Key: rollover dates like 2025-02-30, which parse into March, so the re-formatted string differs.**\n\n`2025-02-30` passes the `YYYY-MM-DD` regex, and `Date.parse('2025-02-30')` gives a real timestamp in V8, because the engine rolls the extra days over into March. So the first two checks pass. The third check formats the parsed date back (`toISOString().slice(0, 10)`) and gets `2025-03-02`, which is not equal to the input, so the value is rejected. Only that comparison exposes a calendar date that does not exist.\n\nWhy the others are wrong:\n- *Dates before 1970*: negative timestamps format back correctly; the helper is about impossible dates.\n- *Two-digit years*: the regex already requires four digits, so they never reach the third check.\n- *Timezone offsets*: a bare `YYYY-MM-DD` is parsed as UTC and formatted as UTC, so it round-trips unchanged.",
+   "title": "The day helper treats null as a valid \"no date\"",
+   "body": "**Key: it accepts it, since the day helper allows null as well as a date.**\n\n`day` is written as `v === null || (typeof v === \"string\" && regex && Date.parse && round-trip)`. For null the left side of the `||` is already true, so none of the string checks runs. `lastReviewDay` and `newIntroDay` are both checked with `day`, which lets a fresh profile, with no review yet, be exported and imported.\n\n- *Fails the regex*: the regex is never reached for null.\n- *Date.parse(null) not finite*: that call is inside the right-hand side, which is skipped.\n- *Replaced with today*: validation only checks values; it never edits the payload.",
    "excerpts": [
     {
      "path": "src/importValidation.ts",
      "lineStart": 14,
-     "lineEnd": 19,
-     "quote": "/^\\d{4}-\\d{2}-\\d{2}$/.test(v) && Number.isFinite(Date.parse(v)) && new Date(v).toISOString().slice(0, 10) === v);"
-    },
-    {
-     "path": "astraupskill/02-CONCEPTS.md",
-     "lineStart": 30,
-     "lineEnd": 30,
-     "quote": "`Date.parse('2025-02-30')` is a valid timestamp in V8 (it rolls over into March), so the helper formats the parsed date back and requires it to equal the input (line 19)."
+     "lineEnd": 15,
+     "quote": "const day = (v: unknown) =>"
     }
    ],
    "readMore": []
@@ -444,20 +420,14 @@
    "id": "x-q16-duplicate-state",
    "target": "seed:quests:devdeck/quiz/df61682d1fbe3e14",
    "phase": "after",
-   "title": "Two states for one card: rejected by the seen-ids set",
-   "body": "**Key: it is rejected as 'Malformed backup: review state': a Set of seen ids trips on the repeat.**\n\nThe review-state loop keeps a `Set` called `ids`. For each state it checks `ids.has(s.cardId)` among its conditions, then adds the id. The first copy passes and is added; the second copy finds its id already in the set, so the condition fails and `fail(\"review state\")` throws. This happens in validation, before the transaction, so nothing is written.\n\nWhy the others are wrong:\n- *The later state wins via put()*: states are written with `bulkAdd`, and the file never gets that far.\n- *Both written, then ConstraintError*: that is what would happen *without* the set: `bulkAdd` would throw mid-transaction, which is safe but gives a confusing error.\n- *Silently filtered like unknown cards*: the unknown-card filter is about ids not in the bundle; a duplicate of a known card is rejected.",
+   "title": "Review logs are range-checked too",
+   "body": "**Key: it is rejected with the review log error, before any write.**\n\nAfter the review states, `validateImport` loops over every log and requires an object with a non-empty `cardId`, a finite `reviewedAt`, `integer(l.grade, 0, 3)`, a finite `msTaken` and a known `statusBefore`. Grade 4 fails the integer range, so `fail(\"review log\")` throws. `importData` calls `validateImport` before `db.transaction`, so the stored progress is unchanged.\n\n- *Logs are not range-checked*: they are, field by field.\n- *Clamped to 3*: the validator never edits values.\n- *Skipped*: one bad log rejects the whole file; filtering applies only to unknown card ids.",
    "excerpts": [
     {
      "path": "src/importValidation.ts",
-     "lineStart": 35,
-     "lineEnd": 40,
-     "quote": "const ids = new Set<string>(); for (const s of p.reviewStates) { if ( !object(s) || !text(s.cardId) || ids.has(s.cardId) ||"
-    },
-    {
-     "path": "astraupskill/03-WORKED-CHANGE.md",
-     "lineStart": 66,
-     "lineEnd": 66,
-     "quote": "| duplicate the first state | | `Malformed backup: review state` |"
+     "lineStart": 57,
+     "lineEnd": 57,
+     "quote": "!integer(l.grade, 0, 3) ||"
     }
    ],
    "readMore": []
