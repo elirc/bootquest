@@ -9,6 +9,7 @@ import { hasModifier, isEditableTarget, useKeydown } from '../lib/keys';
 import { useAsync } from '../lib/useAsync';
 import { useTracks } from '../lib/tracks';
 import { TRACK_PLACEHOLDER, isTrackId, progressLabel, progressTitle } from '../lib/view';
+import { SkillTree, ViewToggle, useCampaignView } from './CampaignTree';
 
 const STATE_LABEL: Record<QuestState, string> = {
   done: 'Done',
@@ -38,10 +39,16 @@ function CampaignView({ trackId }: { trackId: TrackId }) {
   useEffect(() => {
     refreshTracks({ join: true });
   }, [refreshTracks]);
+  const [view, setView] = useCampaignView(); // B3: list or skill tree, remembered
 
   // j / k walk the quests (including locked ones, which are focusable but not actionable).
   useKeydown((e) => {
     if (hasModifier(e) || isEditableTarget(e.target)) return;
+    if (e.key === 'v') {
+      e.preventDefault();
+      setView(view === 'tree' ? 'list' : 'tree');
+      return;
+    }
     if (e.key !== 'j' && e.key !== 'k') return;
     const nodes = Array.from(mapRef.current?.querySelectorAll<HTMLElement>('[data-step]') ?? []);
     if (nodes.length === 0) return;
@@ -59,7 +66,7 @@ function CampaignView({ trackId }: { trackId: TrackId }) {
 
   return (
     <>
-      <PageHeader eyebrow="Campaign" title={track ? track.name : ' '} />
+      <PageHeader eyebrow="Campaign" title={track ? track.name : ' '} actions={<ViewToggle view={view} onChange={setView} />} />
       <TrackTabs tracks={tracks.data?.tracks ?? []} current={trackId} />
       <TrackProgressLine progress={tracks.data?.tracks.find((t) => t.id === trackId)?.progress} locked={locked} />
       <div className={`campaign${locked ? ' campaign-locked' : ''}`} ref={mapRef}>
@@ -73,6 +80,10 @@ function CampaignView({ trackId }: { trackId: TrackId }) {
             <div className="act-empty" data-testid="campaign-empty">
               <p>No campaign acts are seeded for this track yet.</p>
               <p className="muted small">Practice units on this track are still playable from the dashboard's next-up list.</p>
+            </div>
+          ) : view === 'tree' ? (
+            <div role="tabpanel" aria-label="Campaign skill tree">
+              <SkillTree key={trackId} acts={campaign.data.acts} trackLocked={locked} level={campaign.data.level} />
             </div>
           ) : (
             <ol className="acts" role="tabpanel" aria-label="Campaign acts">

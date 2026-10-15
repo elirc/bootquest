@@ -132,7 +132,7 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
     const c = campaignFixtures[trackId];
     if (!c) return [];
     return c.acts.map((a) => {
-      const quests = a.quests.map((q) => (q.unitId !== undefined && studyPassed.has(q.unitId) ? { ...q, state: 'done' as const } : q));
+      const quests = a.quests.map((q) => (q.unitId !== undefined && studyPassed.has(q.unitId) ? { ...q, state: 'done' as const, inProgress: false } : q));
       const bump = quests.filter((q, i) => q.core && q.state === 'done' && a.quests[i]!.state !== 'done').length;
       return { ...a, quests, progress: { ...a.progress, coreDone: a.progress.coreDone + bump } };
     });

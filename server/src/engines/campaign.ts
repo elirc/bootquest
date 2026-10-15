@@ -74,6 +74,10 @@ export interface QuestState {
   /** a learner can complete it now-or-once-unlocked: live reading unit, or a live unit with a check */
   actionable: boolean;
   done: boolean;
+  /** B3: the quest's unit has at least one ledger row (an attempt or a free run) — the skill tree's "in progress" */
+  started: boolean;
+  /** B3: unit_prerequisite rows of the quest's unit (prerequisite unit ids, ascending) */
+  prereqUnitIds: number[];
   state: QuestStateName;
 }
 
@@ -136,6 +140,34 @@ function doneUnitIds(db: Db): Set<number> {
   );
 }
 
+/** B3: quest units with any ledger activity (an attempt row, or a free run) — read-only. */
+function startedUnitIds(db: Db): Set<number> {
+  return new Set(
+    db
+      .all<{ u: number }>(
+        `SELECT unit_id AS u FROM attempt WHERE unit_id IN (SELECT unit_id FROM quest WHERE unit_id IS NOT NULL)
+         UNION
+         SELECT unit_id AS u FROM run WHERE unit_id IN (SELECT unit_id FROM quest WHERE unit_id IS NOT NULL)`,
+      )
+      .map((r) => r.u),
+  );
+}
+
+/** B3: unit_prerequisite rows of every quest unit, keyed by the quest's unit id. */
+function questUnitPrereqs(db: Db): Map<number, number[]> {
+  const out = new Map<number, number[]>();
+  for (const r of db.all<{ u: number; p: number }>(
+    `SELECT unit_id AS u, prereq_unit_id AS p FROM unit_prerequisite
+      WHERE unit_id IN (SELECT unit_id FROM quest WHERE unit_id IS NOT NULL)
+      ORDER BY unit_id, prereq_unit_id`,
+  )) {
+    const list = out.get(r.u) ?? [];
+    list.push(r.p);
+    out.set(r.u, list);
+  }
+  return out;
+}
+
 export function currentLevel(db: Db): number {
   return levelForXp(totalXp(db));
 }
@@ -160,6 +192,8 @@ export function campaignState(db: Db, trackId?: string, level: number = currentL
       ORDER BY q.act_id, COALESCE(q.ordinal, q.index_rank), q.index_rank, q.id`,
   );
   const done = doneUnitIds(db);
+  const started = startedUnitIds(db);
+  const prereqs = questUnitPrereqs(db);
   const byAct = new Map<number, QuestRow[]>();
   for (const q of quests) {
     const list = byAct.get(q.actId) ?? [];
@@ -187,6 +221,8 @@ export function campaignState(db: Db, trackId?: string, level: number = currentL
           twinRepo: q.twinRepo,
           actionable,
           done: q.unitId !== null && Boolean(q.unitLive) && done.has(q.unitId),
+          started: q.unitId !== null && Boolean(q.unitLive) && started.has(q.unitId),
+          prereqUnitIds: q.unitId === null ? [] : [...(prereqs.get(q.unitId) ?? [])],
           state: 'locked' as QuestStateName,
         };
       });

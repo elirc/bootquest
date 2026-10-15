@@ -392,10 +392,17 @@ export function getCampaign(deps: ServiceDeps, trackId: string): CampaignRespons
   const track = getTrack(db, trackId);
   if (!track) throw new HttpError(404, 'NOT_FOUND', `track ${trackId} not found`);
   const level = currentLevel(db);
+  const acts = campaignState(db, track.id, level);
+  // B3: unit_prerequisite edges are reported as quest ids of THIS track (a prereq unit that is
+  // no quest of the track has no node on the tree and is left out)
+  const questOfUnit = new Map<number, number>();
+  for (const a of acts) for (const q of a.quests) if (q.unitId !== null && !questOfUnit.has(q.unitId)) questOfUnit.set(q.unitId, q.id);
+  const prereqQuests = (unitIds: readonly number[], self: number): number[] =>
+    [...new Set(unitIds.map((u) => questOfUnit.get(u)).filter((id): id is number => id !== undefined && id !== self))].sort((x, y) => x - y);
   return {
     track: { id: track.id, name: track.name, locked: track.locked },
     level,
-    acts: campaignState(db, track.id, level).map((a) => ({
+    acts: acts.map((a) => ({
       id: a.id,
       title: a.title,
       theme: a.theme,
@@ -414,6 +421,8 @@ export function getCampaign(deps: ServiceDeps, trackId: string): CampaignRespons
         core: q.core,
         contentPending: q.contentPending,
         twinRepo: q.twinRepo,
+        inProgress: q.state === 'available' && q.started && !q.done,
+        prerequisites: prereqQuests(q.prereqUnitIds, q.id),
       })),
     })),
   };

@@ -52,6 +52,8 @@ export const SHORTCUTS: ShortcutDoc[] = [
   ...Object.entries(GO_CHORDS).map(([k, v]) => ({ keys: ['g', k], label: `Go to ${v.label}`, scope: 'Global' })),
   { keys: ['?'], label: 'Toggle this help', scope: 'Global' },
   { keys: ['j', 'k'], label: 'Next / previous step', scope: 'Campaign' },
+  { keys: ['v'], label: 'Toggle list / skill-tree view', scope: 'Campaign' },
+  { keys: ['↑', '↓', '←', '→'], label: 'Move between skill-tree nodes', scope: 'Campaign' },
   { keys: ['←', '→'], label: 'Switch track tab', scope: 'Campaign' },
   { keys: ['Ctrl', 'Enter'], label: 'Run checks', scope: 'Exercise' },
   { keys: ['Ctrl', 'Shift', 'Enter'], label: 'Submit attempt', scope: 'Exercise' },

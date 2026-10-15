@@ -4,6 +4,11 @@ import { Assessor, Assistance, CheckType, CompetencyId, EvidenceKind, ReviewGrad
 import { MUTATION_TOOLS } from './mutation.ts';
 import { RunnerFailure } from './schemas.ts';
 import { RefLink } from './sync.ts';
+import {
+  CampaignActDto as CampaignActBase,
+  CampaignQuestDto as CampaignQuestBase,
+  CampaignResponse as CampaignResponseBase,
+} from './campaign.ts';
 
 /**
  * HTTP API contract (W1b). Every request body / params / query is validated
@@ -1037,8 +1042,25 @@ export const AttemptDetailResponse = z
   .strict();
 export type AttemptDetailResponse = z.infer<typeof AttemptDetailResponse>;
 
-// GET /api/tracks/:id/campaign (W5b) — schemas live with the campaign pack format
-export { CampaignActDto, CampaignQuestDto, CampaignResponse, QuestState } from './campaign.ts';
+// GET /api/tracks/:id/campaign (W5b) — the base schemas live with the campaign pack format.
+// B3 (skill tree) extends the API shape HERE, additively, rather than in campaign.ts: that
+// file is part of the campaign seeder fingerprint (server/src/store/campaign-fingerprint.ts),
+// so editing it would invalidate the committed content/campaign stamp.
+export { QuestState } from './campaign.ts';
+
+export const CampaignQuestDto = CampaignQuestBase.extend({
+  /** the quest's unit has ledger activity (an attempt or a free run) but is not done, in an open act */
+  inProgress: z.boolean(),
+  /** quest ids (same track) whose units are unit_prerequisite rows of this quest's unit, ascending */
+  prerequisites: z.array(z.number()),
+}).strict();
+export type CampaignQuestDto = z.infer<typeof CampaignQuestDto>;
+
+export const CampaignActDto = CampaignActBase.extend({ quests: z.array(CampaignQuestDto) }).strict();
+export type CampaignActDto = z.infer<typeof CampaignActDto>;
+
+export const CampaignResponse = CampaignResponseBase.extend({ acts: z.array(CampaignActDto) }).strict();
+export type CampaignResponse = z.infer<typeof CampaignResponse>;
 
 // ---------------------------------------------------------------- campaign 2 B2: stats (read-only)
 //
