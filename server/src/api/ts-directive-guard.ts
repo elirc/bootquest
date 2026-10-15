@@ -21,8 +21,14 @@ import { normalizeSource, TESTS_DIVIDER } from '../runners/self-run/compose.ts';
  *
  * This lives in the API layer on purpose: the self-run runner and runners.ts are part of
  * the grader fingerprints, and the guard decides what may be graded, not how.
+ *
+ * Whitespace is matched with \s (tsc also accepts \v, \f, NBSP and BOM there), and lines are
+ * split on every terminator the TypeScript scanner honours (CR, LF, U+2028, U+2029), so a lone
+ * CR inside a block comment cannot hide a directive on its "last line" (release review of F3).
  */
-export const SUPPRESSION_DIRECTIVE = /(?:\/\/|\/\*|^[ \t]*\*|^)[ \t/*]*@ts-(nocheck|ignore|expect-error)\b/i;
+export const SUPPRESSION_DIRECTIVE = /(?:\/\/|\/\*|^\s*\*|^)[\s/*]*@ts-(nocheck|ignore|expect-error)\b/iu;
+/** Every line terminator the TypeScript scanner recognises. */
+const LINE_BREAK = /\r\n|[\n\r\u2028\u2029]/;
 
 /** The learner-editable text of a submission for a type-checked spec, or null when the spec has no tsc leg. */
 export function typeCheckedLearnerText(spec: CheckSpec, code: string): string | null {
@@ -39,7 +45,7 @@ export function typeCheckedLearnerText(spec: CheckSpec, code: string): string | 
 export function findTypeCheckSuppression(spec: CheckSpec, code: string): { directive: string; line: number } | null {
   const text = typeCheckedLearnerText(spec, code);
   if (text === null) return null;
-  const lines = text.split('\n');
+  const lines = text.split(LINE_BREAK);
   for (let i = 0; i < lines.length; i++) {
     const m = SUPPRESSION_DIRECTIVE.exec(lines[i]!);
     if (m) return { directive: `@ts-${m[1]!.toLowerCase()}`, line: i + 1 };

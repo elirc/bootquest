@@ -68,6 +68,16 @@ describe('findTypeCheckSuppression', () => {
       ['/**\n * @ts-nocheck\n */\n', '@ts-nocheck'],
       ['/*\n   @ts-expect-error\n*/\n', '@ts-expect-error'],
       ['// @TS-IGNORE\n', '@ts-ignore'],
+      // release review: whitespace and line breaks tsc honours but [ \t] / split('\n') missed
+      ['//\v@ts-ignore\nconst b: string = 1;\n', '@ts-ignore'],
+      ['//\f@ts-ignore\nconst b: string = 1;\n', '@ts-ignore'],
+      ['//\u00A0@ts-ignore\nconst b: string = 1;\n', '@ts-ignore'],
+      ['//\uFEFF@ts-ignore\nconst b: string = 1;\n', '@ts-ignore'],
+      ['//\u00A0@ts-nocheck\n', '@ts-nocheck'],
+      ['const y = 1; /* a\r@ts-ignore */\nconst b: string = 1;\n', '@ts-ignore'],
+      ['const y = 1; /* a\u2028@ts-ignore */\nconst b: string = 1;\n', '@ts-ignore'],
+      ['/* a\u2029 @ts-nocheck */\n', '@ts-nocheck'],
+      ['/* a \u2028 @ts-expect-error */\nconst b: string = 1;\n', '@ts-expect-error'],
     ] as const) {
       expect(findTypeCheckSuppression(spec, code), code).toMatchObject({ directive });
     }
