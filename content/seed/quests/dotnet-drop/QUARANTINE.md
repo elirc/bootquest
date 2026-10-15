@@ -1,0 +1,10 @@
+# Quarantine — quests/dotnet-drop
+
+Written by the seed factory. These candidates FAILED their deterministic validator and are
+never shipped. Never fix them by weakening the validator; fix the source and re-seed.
+
+| item | reason |
+|---|---|
+| `seed:quests:dotnet-drop/reading-step/3b0c2f19a96eb8d7` | citation `src/NetDropbox.Infrastructure/Storage/FileSystemChunkStorage.cs` at astraupskill/03-WORKED-CHANGE.md:39 -> missing-file: "src/NetDropbox.Infrastructure/Storage/FileSystemChunkStorage.cs" not found (root-relative, guide-relative, or as a path suffix) |
+| `seed:quests:dotnet-drop/reading-step/676681f249d80f34` | citation `UploadChunk.cs:31-38` at astraupskill/01-CODEBASE-MAP.md:17 -> ambiguous-suffix: "UploadChunk.cs" matches 2 files; cite a longer path [src/NetDropbox.Application/Uploads/UploadChunk.cs, src/NetDropbox.Domain/UploadChunk.cs] ; citation `UploadChunk.cs:40-47` at astraupskill/01-CODEBASE-MAP.md:18 -> ambiguous-suffix: "UploadChunk.cs" matches 2 files; cite a longer path [src/NetDropbox.Application/Uploads/UploadChunk.cs, src/NetDropbox.Domain/UploadChunk.cs] ; citation `UploadChunk.cs:49-70` at astraupskill/01-CODEBASE-MAP.md:19 -> ambiguous-suffix: "UploadChunk.cs" matches 2 files; cite a longer path [src/NetDropbox.Application/Uploads/UploadChunk.cs, src/NetDropbox.Domain/UploadChunk.cs] ; citation `UploadChunk.cs:72-76` at astraupskill/01-CODEBASE-MAP.md:20 -> ambiguous-suffix: "UploadChunk.cs" matches 2 files; cite a longer path [src/NetDropbox.Application/Uploads/UploadChunk.cs, src/NetDropbox.Domain/UploadChunk.cs] |
+| `seed:quests:dotnet-drop/reading-step/ebbddb0af9315c95` | citation `UploadChunk.cs` at astraupskill/03-WORKED-CHANGE.md:20 -> ambiguous-suffix: "UploadChunk.cs" matches 2 files; cite a longer path [src/NetDropbox.Application/Uploads/UploadChunk.cs, src/NetDropbox.Domain/UploadChunk.cs] ; citation `Storage/FileSystemChunkStorage.cs` at astraupskill/03-WORKED-CHANGE.md:25 -> missing-file: "Storage/FileSystemChunkStorage.cs" not found (root-relative, guide-relative, or as a path suffix) |
