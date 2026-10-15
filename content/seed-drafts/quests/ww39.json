@@ -29,10 +29,10 @@
     }
    ],
    "prompt": "Now 12:00. First response was due 11:30 but was answered at 11:45; resolution is due 13:00; a 30-minute rule exists. Does the sweep escalate?",
-   "answer": "No: once answered, only the future resolution clock counts",
+   "answer": "No: once answered, only the future resolution clock counts toward a breach",
    "distractors": [
     "Yes: the first-response deadline was breached by 30 minutes before the answer",
-    "Yes: the earliest deadline is always active",
+    "Yes: the earliest deadline is always the active one, answered or not",
     "No: the 30-minute rule needs strictly more than 30 breached minutes to fire"
    ],
    "explanation": "dueAt is resolutionDueAt when firstResponseAt is set; otherwise it is the earliest of both deadlines."
@@ -63,7 +63,7 @@
    "answer": "It escalates: 30 breached minutes meets afterMins <= breachedMinutes",
    "distractors": [
     "Nothing yet: the rule needs breachedMinutes strictly greater than 30",
-    "Nothing: overdueMinutes rounds 30 down to 29",
+    "Nothing: overdueMinutes rounds the 30 breached minutes down to 29",
     "It escalates twice, once for each breached clock on the ticket"
    ],
    "explanation": "Eligibility is inclusive; a test exactly at the threshold pins that boundary."
@@ -89,7 +89,7 @@
    "answer": "1 and 0: it floors complete minutes and clamps future deadlines to zero",
    "distractors": [
     "2 and -10: it rounds to the nearest minute and keeps the sign of the difference",
-    "1.48 and 0",
+    "1.48 and 0: it returns fractional minutes and clamps the future one",
     "1 and -10: negative values mark tickets that are not yet due"
    ],
    "explanation": "Math.max(0, Math.floor(diffMs / 60000))."
@@ -112,10 +112,10 @@
     }
    ],
    "prompt": "Why does rule selection break ties on id after sorting by afterMins descending?",
-   "answer": "So equal thresholds route the same way on every run",
+   "answer": "So rules with equal thresholds route a ticket the same way on each sweep run",
    "distractors": [
     "Because ids encode creation time and older rules take priority by business policy",
-    "localeCompare is faster",
+    "localeCompare on ids is faster than comparing the thresholds again",
     "To pick the smallest eligible threshold first when several rules apply to one ticket"
    ],
    "explanation": "Without the id tie-break, rules with equal afterMins would be ordered however the database returned them, so identical data could route to different groups on different runs. A deterministic order makes the sweep and its tests reproducible."
@@ -138,9 +138,9 @@
     }
    ],
    "prompt": "Two sweep workers try to escalate the same ticket at once. What guarantees only one succeeds?",
-   "answer": "The conditional update WHERE escalatedAt IS NULL",
+   "answer": "The conditional update's WHERE escalatedAt IS NULL, which one write can match",
    "distractors": [
-    "A unique index on the escalatedAt column",
+    "A unique index on the escalatedAt column that rejects the second write",
     "An in-process mutex per ticket held by the sweep while it decides and writes",
     "Prisma's updateMany serializes concurrent calls that target the same id"
    ],
@@ -164,11 +164,11 @@
     }
    ],
    "prompt": "Two staff members post public replies at nearly the same instant. Whose timestamp becomes firstResponseAt?",
-   "answer": "The first to commit; the second matches zero rows",
+   "answer": "The first to commit, as the second update matches zero rows",
    "distractors": [
     "The later one, since the last write always wins on an update",
     "The earlier client timestamp, compared inside the update statement itself",
-    "Both"
+    "Both, as each update stamps its own reply time in turn"
    ],
    "explanation": "markFirstResponse uses where { id, firstResponseAt: null }, so the first writer wins."
   },
@@ -190,10 +190,10 @@
     }
    ],
    "prompt": "An assignment request body is { reason: \"keep\" } with no assigneeId. What happens to the ticket's assignee column?",
-   "answer": "Untouched: undefined leaves the column alone",
+   "answer": "Untouched, because undefined leaves the column alone in the update",
    "distractors": [
     "It is cleared, because a missing assigneeId is coerced to null before the update",
-    "Set to the requester",
+    "Set to the requester, as the reason field asks to keep the owner",
     "The request is rejected because assigneeId is a required field on every assignment"
    ],
    "explanation": "{ assigneeId: null, reason: 'clear' } clears it; omission preserves it."
@@ -216,11 +216,11 @@
     }
    ],
    "prompt": "An admin moves a ticket to group g2 with { supportGroupId: \"g2\" }; its assignee belongs to g1. What does the service send to the repository?",
-   "answer": "The group move plus assigneeId: null",
+   "answer": "The group move together with an explicit null assigneeId",
    "distractors": [
     "Only the group move; the g1 assignee stays attached to the ticket",
     "A 409, because group moves require an explicit new assignee in the same request",
-    "The move, with the assignee transferred to g2"
+    "The group move, with the g1 assignee transferred over to group g2"
    ],
    "explanation": "Otherwise no group-scoped list query would return the ticket for its assignee: an invisible routing state."
   },
@@ -242,11 +242,11 @@
     }
    ],
    "prompt": "An assignment's conditional write matches zero rows because the ticket changed after it was read. What does the caller get, and is an audit row written?",
-   "answer": "A ValidationDomainError asking to retry, and no assignment audit",
+   "answer": "A ValidationDomainError asking to retry, without an assignment audit",
    "distractors": [
     "Success with the stale data, plus an audit row noting the conflict",
-    "A database exception surfaced as a 500, plus an audit row",
-    "A silent no-op 200"
+    "A database exception surfaced as a 500, plus an audit row of the attempt",
+    "A silent no-op 200 with the stale ticket returned"
    ],
    "explanation": "assign returns null when count is 0; the service turns that into a domain error before the audit write. The loser learns it lost from the row count, not from an exception."
   },
@@ -277,7 +277,7 @@
    "distractors": [
     "It returns true, granting every capability to the 'constructor' role",
     "Nothing: optional chaining treats inherited properties as undefined",
-    "TypeScript rejects 'constructor' as a role at runtime"
+    "TypeScript rejects 'constructor' as a role value at runtime, before the lookup"
    ],
    "explanation": "hasOwnProperty.call plus Array.isArray makes the helper fail closed (false) for inherited keys like constructor, toString and __proto__."
   },
@@ -299,11 +299,11 @@
     }
    ],
    "prompt": "An escalation target group is invalid in one case; in another, a concurrent worker already escalated the ticket. How do the two negative paths differ?",
-   "answer": "The invalid target never reaches markEscalated; the race loser does and gets null",
+   "answer": "The invalid target stops before markEscalated, and the race loser gets null",
    "distractors": [
-    "Both call markEscalated, which throws for each of them",
+    "Both call markEscalated, which throws for each of them alike",
     "The invalid target is audited as rejected; the race loser throws a 500",
-    "They are indistinguishable"
+    "They are indistinguishable: both surface as the same error"
    ],
    "explanation": "Test both: refactors often start auditing rejected targets or turn normal races into noisy errors."
   },
@@ -325,11 +325,11 @@
     }
    ],
    "prompt": "A test sets claimed = true in a fake and calls it twice, observing one escalation. What does that prove?",
-   "answer": "Only the service's control flow against a fake",
+   "answer": "Only the service's control flow against a fake, not a database race",
    "distractors": [
-    "That the conditional update is race-safe against a real PostgreSQL instance",
+    "That the conditional update is race-safe against any real PostgreSQL instance",
     "That the ticket and its audit row are written in one database transaction",
-    "Nothing; delete the test"
+    "Nothing at all; the test should be deleted"
    ],
    "explanation": "A stronger fake models conditional update counts and rollback snapshots; state the remaining limitation whenever quoting the test."
   },

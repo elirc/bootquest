@@ -25,7 +25,7 @@
         }
       ],
       "prompt": "Two customers order the last Notebook at once and both pass the JavaScript check product.stock < quantity. What actually prevents selling it twice?",
-      "answer": "The conditional updateMany evaluated inside the write",
+      "answer": "The conditional updateMany, whose stock filter is evaluated inside the write itself",
       "distractors": [
         "The JavaScript check, because the second request sees the updated stock",
         "The interactive transaction, which runs the two requests one after another from the start",
@@ -51,11 +51,11 @@
         }
       ],
       "prompt": "A cart has two products. The first reservation succeeds and the second has insufficient stock. What happens to the first product's stock?",
-      "answer": "It is restored: the 409 rolls back the whole transaction",
+      "answer": "It is restored: the 409 rolls back the entire transaction",
       "distractors": [
-        "It stays decremented, and an admin must restock it",
+        "It stays decremented: an admin has to restock it by hand",
         "It stays decremented until the order is cancelled",
-        "The first product is ordered alone and the second is back-ordered"
+        "Partial order: the first product ships alone, the second is back-ordered"
       ],
       "explanation": "Atomicity is about all related writes; the suite even injects a failure at the final order insert to prove reservations alone do not commit."
     },
@@ -77,11 +77,11 @@
         }
       ],
       "prompt": "A product has 100 in stock and two customers each buy one unit concurrently. Why can the second get 409 'Inventory changed during checkout'?",
-      "answer": "Both read version 3 unlocked; T2's version clause then matches nothing",
+      "answer": "Both read version 3 without a lock, so T2's version clause then matches nothing",
       "distractors": [
-        "Because the stock clause gte 1 fails once the first unit is sold to the other customer",
-        "Because PostgreSQL detects a deadlock between the two transactions and aborts the second one",
-        "It cannot: with 100 in stock both orders always succeed"
+        "The stock clause gte 1 fails once the first unit is sold to the other customer",
+        "PostgreSQL detects a deadlock between the two transactions and aborts the second",
+        "It cannot: with 100 in stock both orders succeed every time"
       ],
       "explanation": "stock gte alone already prevents overselling, and the version increment in data protects stale editors, so the version in the where buys little and costs real orders."
     },
@@ -103,11 +103,11 @@
         }
       ],
       "prompt": "You remove only version: product.version from the reservation's where clause. Which tests fail?",
-      "answer": "None: the stock clause alone still stops the loser",
+      "answer": "Nothing fails, because the stock clause by itself still stops the loser",
       "distractors": [
-        "The last-unit race test, which now sells the unit twice",
+        "The last-unit race test, because the unit is now sold twice",
         "'Prevents stale inventory forms', because the editor guard is gone",
-        "Every checkout test, because Prisma requires the version field"
+        "The checkout tests, because Prisma requires the version field in the where"
       ],
       "explanation": "Overlapping guards hide each other from tests; only removing both clauses lets the decrement reach the Product_stock_nonnegative constraint. The follow-up is one test per guard."
     },
@@ -129,11 +129,11 @@
         }
       ],
       "prompt": "An editor has a product form open at version 4 with stock 10. An order reserves 2 units and bumps the version to 5. The editor saves. What happens, and what must the UI not do?",
-      "answer": "409; the UI keeps the draft but must not resend it with version 5",
+      "answer": "A 409, and the UI keeps the draft but must not resend it with version 5",
       "distractors": [
-        "The save succeeds and stock returns to 10, which is acceptable because admins own the catalog",
-        "The save succeeds with stock 8, because the server merges the editor's change with the reservation",
-        "The UI should retry automatically with the latest version"
+        "The save succeeds and stock returns to 10, which is fine as admins own the whole catalog",
+        "The save succeeds with stock 8, as the server merges the edit with the reservation",
+        "A 409, and the UI must resend the draft automatically with version 5"
       ],
       "explanation": "PATCH includes the expected version; on conflict the stale write stays disabled until the user explicitly reloads current data."
     },
@@ -157,9 +157,9 @@
       "prompt": "Two cancellation requests for the same PENDING order race. Why can stock not be restored twice?",
       "answer": "The status update is conditional on PENDING, so only one matches",
       "distractors": [
-        "The order's version column rejects the second request because both carry the same version",
-        "Stock restoration sets an absolute value, so doing it twice is harmless",
-        "The second request restores stock but a trigger reverses it"
+        "The order's version column rejects the second request, as both carry one version",
+        "Stock restoration sets an absolute value, so doing it twice never matters",
+        "The second request restores stock but a trigger always reverses it"
       ],
       "explanation": "Transitions are guarded by status, not version: Order has no version column, so a stale client acting on a still-PENDING order gets no conflict."
     },
@@ -186,13 +186,13 @@
         }
       ],
       "prompt": "Cancellation restores stock with an unconditional increment. What can go wrong given that validation caps editable stock at 2,000,000,000?",
-      "answer": "A restore can push stock past the cap, after which saving the unchanged edit form fails validation with 400: every writer of a column must respect the same bounds",
+      "answer": "Stock can pass the cap, and then saving the unchanged edit form fails validation with 400",
       "distractors": [
-        "Nothing: the increment is clamped to the validation cap",
-        "The cancellation fails with 409, like in the ecommerce project",
-        "Stock wraps around to a negative number"
+        "Nothing goes wrong: the increment is clamped to the validation cap inside the update",
+        "The cancellation fails with 409, like in the ecommerce project, and stock stays put",
+        "Stock silently wraps around to a negative number in the database"
       ],
-      "explanation": "The ecommerce sibling refuses such a cancellation with an explicit 409; here the restore has no upper bound."
+      "explanation": "A restore can push stock past the 2,000,000,000 cap, after which saving the unchanged edit form fails validation with 400: every writer of a column must respect the same bounds. The ecommerce sibling refuses such a cancellation with an explicit 409; here the restore has no upper bound."
     },
     {
       "id": "q08-two-sort-rules",
@@ -217,13 +217,13 @@
         }
       ],
       "prompt": "Checkout sorts cart lines with localeCompare; cancellation walks items ordered by the database. Why is that a review point?",
-      "answer": "With ids whose collation differs from localeCompare (mixed case, punctuation), the two paths could take row locks in opposite orders; one plain comparison everywhere removes the question",
+      "answer": "Mixed-case or punctuated ids could make the two paths lock rows in opposite orders",
       "distractors": [
-        "localeCompare is too slow for large carts",
-        "The database ignores orderBy inside transactions",
-        "Cancellation should not lock products at all"
+        "localeCompare is too slow for large carts and stalls checkout under load",
+        "The database ignores orderBy inside a transaction, so the order is random",
+        "Cancellation should not lock product rows, since it only adds stock back"
       ],
-      "explanation": "With Prisma cuid() ids both orders agree today, but consistent lock order should not depend on two different sort rules."
+      "explanation": "With ids whose collation differs from localeCompare (mixed case, punctuation), checkout and cancellation could take row locks in opposite orders; one plain comparison everywhere removes the question. With Prisma cuid() ids both orders agree today, but consistent lock order should not depend on two different sort rules."
     },
     {
       "id": "q09-anyone-any-order",
@@ -243,13 +243,13 @@
         }
       ],
       "prompt": "Transactions keep the data consistent. What do they NOT establish in this project?",
-      "answer": "Authorization: userId is caller-supplied and CORS accepts every origin, so any local client can cancel or fulfill any order id",
+      "answer": "Authorization: callers supply userId and CORS accepts every origin",
       "distractors": [
-        "Atomicity of the reservation loop",
-        "Non-negative stock",
-        "Immutable historical item prices"
+        "Atomicity: every reservation loop either applies whole or not at all",
+        "Non-negative stock: the conditional decrement never lets it drop below 0",
+        "Price history: order items keep the price that was paid at checkout"
       ],
-      "explanation": "Data consistency, identity and delivery uncertainty are different concerns; a retried POST can also create a second order because idempotency is not implemented."
+      "explanation": "Authorization: userId is caller-supplied and CORS accepts every origin, so any local client can cancel or fulfill any order id. Data consistency, identity and delivery uncertainty are different concerns; a retried POST can also create a second order because idempotency is not implemented."
     },
     {
       "id": "q10-price-snapshot",
@@ -295,11 +295,11 @@
         }
       ],
       "prompt": "In the movement-ledger exercise, why must the ledger rows be written with tx rather than db?",
-      "answer": "A db write commits independently and would survive a rollback",
+      "answer": "A db write commits on its own and would survive a rollback of the order",
       "distractors": [
-        "Because db is not connected inside a transaction callback",
-        "Because tx writes are faster",
-        "Because db writes are rejected by the unique index"
+        "db is not connected inside a transaction callback, so the write throws",
+        "tx writes are faster, and ledger rows are written in bulk",
+        "db writes are rejected by the unique index while tx is open"
       ],
       "explanation": "The stock delta and its explanation must commit together; a ledger that writes outside the transaction can fail or succeed independently."
     },
@@ -321,13 +321,13 @@
         }
       ],
       "prompt": "In the idempotent-create sketch, two requests with the same key both miss the key lookup. Why does the loser usually report 'Inventory changed' instead of returning the existing order, and what is the fix?",
-      "answer": "It waits on the winner's product row lock, then fails the version clause before reaching the key insert; serialize on the key (an advisory lock) before the lookup",
+      "answer": "It blocks on the winner's row lock and fails the version check before any key insert; lock the key first",
       "distractors": [
-        "Because the unique key insert fails first; catching every exception as a duplicate fixes it",
-        "Because the fingerprint differs between concurrent requests",
-        "Because PostgreSQL deadlocks; retrying the transaction fixes it"
+        "The unique key insert fails first; catching every exception as a duplicate fixes it",
+        "The fingerprint differs between concurrent requests; hashing the body fixes it",
+        "PostgreSQL deadlocks on the two rows; retrying the whole transaction fixes it"
       ],
-      "explanation": "Keep a P2002 handler only as a backstop and catch only that code; catching every exception turns a connection failure into a wrong 200."
+      "explanation": "The loser waits on the winner's product row lock, then fails the version clause before it reaches the key insert; the fix is to serialize on the key (an advisory lock) before the lookup. Keep a P2002 handler only as a backstop and catch only that code; catching every exception turns a connection failure into a wrong 200."
     },
     {
       "id": "f01-invariants-first",

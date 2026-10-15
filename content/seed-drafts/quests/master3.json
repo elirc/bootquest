@@ -26,11 +26,11 @@
     }
    ],
    "prompt": "Why does updateTicket run canEditTicket BEFORE the tenant-scoped findFirst rather than after it?",
-   "answer": "After the lookup, a viewer could tell 404 from 403 and cost a query; first, it is a 403 with no DB work",
+   "answer": "Gating first returns 403 with no query, so a viewer cannot tell a 404 from a 403",
    "distractors": [
-    "Because findFirst needs the caller's role to choose which include shape it should load for the ticket",
-    "Because Prisma refuses to run queries for requests whose role carries no write permission at all",
-    "Order does not matter for safety; the gate was moved first only to make the unit test simpler to write"
+    "findFirst needs the caller's role to choose which include shape to load for the ticket",
+    "Prisma refuses to run queries for a role that carries no write permission at all",
+    "Order does not matter for safety, and the gate was moved first only for the unit test"
    ],
    "explanation": "The role gate is the first line of the service (ticketService.ts:172-174), so a viewer PATCH stops before the lookup at :176 and before the 404 at :181 could disclose anything."
   },
@@ -52,7 +52,7 @@
     }
    ],
    "prompt": "An AGENT of tenant A sends a valid ticket id that belongs to tenant B. What status comes back, and why that one?",
-   "answer": "404: the lookup filters by id and tenantId, so a foreign id looks exactly like a missing one",
+   "answer": "404: the lookup filters by id and tenantId, so a foreign id looks like a missing one",
    "distractors": [
     "403: the service detects that the ticket belongs to another tenant and refuses explicitly",
     "200: the AGENT role may edit any ticket by id, so the update goes through normally",
@@ -81,8 +81,8 @@
    "answer": "403 from the role gate, before any tenant lookup runs",
    "distractors": [
     "404, the same as the agent, because tenant scope is checked before the role",
-    "200 with public comments only",
-    "401 for the foreign tenant"
+    "200 with the ticket, but with its public comments only",
+    "401 for the foreign tenant, as no session covers it"
    ],
    "explanation": "Trace D: canEditTicket(\"VIEWER\") is false, so the request never reaches the tenant-scoped findFirst."
   },
@@ -109,7 +109,7 @@
     }
    ],
    "prompt": "Before the repair, GET hid an internal note from a viewer but PATCH returned it. What general rule does the fix encode?",
-   "answer": "Every endpoint that returns a ticket is a read path, so both share one role-aware include",
+   "answer": "Every endpoint returning a ticket is a read path, so both share one role-aware include",
    "distractors": [
     "Write endpoints should never return the updated resource, only a status code and an id",
     "Comment filtering belongs in the client, which already knows the signed-in viewer's role",
@@ -135,11 +135,11 @@
     }
    ],
    "prompt": "The outbox insert fails after the ticket update inside updateTicket's transaction. What does the client see, and does the audit row exist?",
-   "answer": "A 500, and no audit row: all three writes commit together or not at all",
+   "answer": "A 500 and no audit row, since all three writes commit together or not at all",
    "distractors": [
     "A 200, because the ticket update succeeded and the outbox insert is best-effort",
-    "A 500, but the audit row remains because it was inserted before the outbox row",
-    "A 409 mapped from the Prisma error, with the ticket update itself kept in place"
+    "A 500, but the audit row remains because it was inserted before any outbox row",
+    "A 409 mapped from the Prisma error, with the ticket update always kept in place"
    ],
    "explanation": "All three writes are in one prisma.$transaction callback; the Prisma error is not an HttpError, so errorMiddleware answers 500. A rolled-back change can never have announced itself."
   },
@@ -161,7 +161,7 @@
     }
    ],
    "prompt": "withSerializableRetry re-runs the callback on Prisma P2034 only. Why NOT also retry an HttpError or a P2002?",
-   "answer": "An HttpError is a decision and a unique violation will recur; only a serialization failure may succeed on retry",
+   "answer": "An HttpError is a decision and a P2002 will recur, but a P2034 can pass on retry",
    "distractors": [
     "Retrying those errors would exhaust Prisma's connection pool under load, so they are passed through",
     "They are retried as well, just later, by Express's error middleware rather than inside the wrapper",
@@ -192,7 +192,7 @@
     }
    ],
    "prompt": "Agents A and B both read a NEW ticket; A sets RESOLVED and B sets PENDING. A commits first. Why does Serializable isolation not stop B from writing PENDING over RESOLVED?",
-   "answer": "The read and the transition check run before the transaction opens, so there is nothing for it to protect",
+   "answer": "The read and transition check run before the transaction opens, so it has nothing to guard",
    "distractors": [
     "It does stop it: PostgreSQL raises 40001 and the retry re-validates the transition from the fresh state",
     "RESOLVED to PENDING is a legal transition in the table, so there is nothing that needs to be stopped",
@@ -227,7 +227,7 @@
    "distractors": [
     "403, because the domain rule refuses agents and is mapped to an HttpError by the service",
     "200: agents can close from any state; only viewers are refused by the transition table",
-    "409, the conventional status the middleware assigns to every invalid state transition"
+    "409: the conventional status the middleware assigns to every invalid transition"
    ],
    "explanation": "A client mistake reported as a server error. The suggested fix keeps HTTP out of the domain: export a TicketTransitionError and map it to 409 in errorMiddleware."
   },
@@ -275,7 +275,7 @@
     }
    ],
    "prompt": "A HIGH ticket due at 17:00 sits in PENDING until 18:00 and is then reopened. What SLA state does it show right after reopening?",
-   "answer": "BREACHED: PAUSED was only a label, and the stored slaDueAt never moved",
+   "answer": "BREACHED: PAUSED was just a label, and the stored slaDueAt did not move",
    "distractors": [
     "MET: the hour spent in PENDING is credited back to the stored deadline",
     "AT_RISK: reopening a ticket restarts the final-hour warning window",
@@ -304,7 +304,7 @@
    "answer": "It gets a fresh two hours, because every priority change recomputes slaDueAt from now",
    "distractors": [
     "Nothing changes: slaDueAt is computed from createdAt, so priority churn cannot move it",
-    "It breaches immediately, because the LOW step is recorded as an SLA downgrade",
+    "It breaches immediately, because the LOW step always counts as an SLA downgrade",
     "The second change is refused, because priority changes are rate-limited per ticket"
    ],
    "explanation": "`slaDueAt: priority changed ? calculateSlaDueAt(new Date(), priority) : undefined` - finding F5 calls this an SLA clock reset."
@@ -332,9 +332,9 @@
     }
    ],
    "prompt": "A read-only VIEWER posts a PUBLIC reply on a ticket nobody has answered yet. What side effects follow?",
-   "answer": "It sets firstResponseAt and notifies the customer",
+   "answer": "It sets firstResponseAt and then notifies the customer",
    "distractors": [
-    "None: viewers cannot comment",
+    "None: viewers cannot comment, so the post is refused",
     "The comment is saved but hidden until an agent approves it",
     "It is stored as INTERNAL automatically, so nobody is notified"
    ],

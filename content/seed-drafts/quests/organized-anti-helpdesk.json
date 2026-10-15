@@ -34,9 +34,9 @@
       "prompt": "An agent in org-A requests GET /api/tickets/ticket-B-999, a real ticket owned by org-B. What response do they get, and why that code?",
       "answer": "404: findById filters by id AND the caller's organizationId, so the row is invisible",
       "distractors": [
-        "403 Forbidden: the tenant middleware compares the ticket's organization with the caller's and rejects the mismatch",
+        "403 Forbidden: the tenant middleware compares the ticket's organization with the caller's",
         "200 with the ticket, because agents may read every ticket in the database regardless of organization",
-        "401 Unauthorized: the JWT is rejected because it was minted for another organization"
+        "401 Unauthorized: the JWT was minted for another organization and is rejected"
       ],
       "explanation": "Tenant isolation lives in the query: where { id, organizationId }. A null result becomes AppError('Ticket not found', 404), which leaks nothing about other tenants."
     },
@@ -58,7 +58,7 @@
         }
       ],
       "prompt": "What does enforceTenantIsolation actually check?",
-      "answer": "Only that an organizationId in the params or body matches the user's; requests without one pass through",
+      "answer": "That an organizationId in the params or body matches the user's, letting requests without one pass",
       "distractors": [
         "That every resource id in the URL belongs to the caller's organization, by looking each one up in the database",
         "That the JWT's organization claim matches the subdomain in the Host header of the request",
@@ -84,11 +84,11 @@
         }
       ],
       "prompt": "A user is deactivated (isActive false) while holding a still-valid access token. What does authenticate do on their next request?",
-      "answer": "Rejects it with 401: the user is reloaded on every request and isActive is checked",
+      "answer": "Rejects it with 401, as the user is reloaded on each request and isActive is checked",
       "distractors": [
-        "Lets it through until the 15-minute token expires, because the JWT payload is trusted without a database read",
+        "Lets it through until the 15-minute token expires, because the JWT payload is trusted",
         "Returns 403 Forbidden with a 'deactivated' message so the client can show a specific error",
-        "Refreshes the token automatically and logs the user out on the client"
+        "Refreshes the token automatically and logs the user out on the client side"
       ],
       "explanation": "authenticate verifies the token, then prisma.user.findUnique(...) and throws if !user || !user.isActive; the catch converts every failure into AppError('Unauthorized', 401)."
     },
@@ -115,11 +115,11 @@
         }
       ],
       "prompt": "A requester tries to move their own OPEN ticket straight to RESOLVED. What happens?",
-      "answer": "400 Invalid transition: RESOLVED passes the requester target check, but the state machine only allows OPEN to go to IN_PROGRESS",
+      "answer": "400 Invalid transition: the state machine only lets OPEN move to IN_PROGRESS",
       "distractors": [
-        "403, because requesters can never change status",
-        "200: requesters may resolve their own tickets from any state",
-        "200, but the ticket is moved to IN_PROGRESS instead of RESOLVED"
+        "403 Forbidden: requesters can never change the status of a ticket",
+        "200 OK: requesters may resolve their own tickets from any state",
+        "200 OK, but the ticket is moved to IN_PROGRESS instead of RESOLVED"
       ],
       "explanation": "changeStatus first restricts requesters to RESOLVED or CLOSED targets, then calls canTransition(ticket.status, status); ALLOWED_TRANSITIONS[OPEN] is [IN_PROGRESS]."
     },
@@ -141,11 +141,11 @@
         }
       ],
       "prompt": "During changeStatus the database connection drops right after the ticket row is updated. What is the resulting state?",
-      "answer": "The ticket has the new status, but no STATUS_CHANGED activity row and no audit event",
+      "answer": "The ticket shows the new status, but there is no STATUS_CHANGED activity or audit event",
       "distractors": [
-        "Nothing changed: Prisma rolls back the ticket update automatically because the later writes in the same request failed",
-        "The activity row exists but the ticket status is unchanged, because the activity is written first",
-        "The audit event is written first, so the change is at least audited"
+        "Nothing changed: Prisma rolls back the ticket update once any later write fails",
+        "The activity row exists but the status is unchanged, as the activity is written first",
+        "The audit event is written first, so the change is at least audited in every case"
       ],
       "explanation": "The update, the activity create and auditService.logEvent are three separate awaits on the base client; the guide's fix is to run all three through tx inside prisma.$transaction."
     },
@@ -167,11 +167,11 @@
         }
       ],
       "prompt": "The drill asks whether assignTicket's logs can end up out of sync. What is the correct answer?",
-      "answer": "Yes: the assignee update, the ASSIGNED activity and the audit event are separate writes, so a failure after the update leaves an assignment with no matching logs",
+      "answer": "Yes: the update, the ASSIGNED activity and the audit event are all separate writes",
       "distractors": [
         "No: assignTicket validates the assignee first, so nothing can fail after the update",
         "No: the repository update runs in a transaction that includes the audit service",
-        "Only if the assignee is a REQUESTER, which is the one case that writes logs before the update"
+        "Only if the assignee is a REQUESTER: that case writes logs before the update"
       ],
       "explanation": "Validation happens before the writes, but the three writes themselves are unconnected awaits; validation does not make them atomic."
     },
@@ -229,10 +229,10 @@
         }
       ],
       "prompt": "ticketsRepository.update takes an organizationId parameter. What keeps a cross-tenant update from succeeding today?",
-      "answer": "Only the service calling getTicket(id, organizationId, user) first; the update itself uses where: { id } and ignores organizationId",
+      "answer": "Only the earlier getTicket(id, organizationId, user), as the update's where is { id }",
       "distractors": [
-        "The update's where clause includes organizationId, so Prisma refuses a mismatched row",
-        "A compound unique index on (id, organizationId) in the schema",
+        "The update's where clause includes organizationId, so Prisma refuses any mismatched row",
+        "A compound unique index on (id, organizationId) declared in the Prisma schema",
         "enforceTenantIsolation, which looks up the ticket's org before every PATCH"
       ],
       "explanation": "The repository's where is { id } alone (the comments in it debate the fix), which is exactly the 'querying by ID alone' pitfall; safety depends on every caller remembering the prior scoped read."
@@ -255,11 +255,11 @@
         }
       ],
       "prompt": "The ticket list's queryKey is ['tickets', page, status, priority, search, sortBy, sortDirection]. If a developer dropped status from the key, what would break?",
-      "answer": "Changing the status filter would keep showing the cached page for the old filter",
+      "answer": "Changing the status filter would keep showing the cached page for the previous filter",
       "distractors": [
-        "Nothing: queryFn reads status from the URL string, so TanStack Query refetches whenever the URL changes",
+        "Nothing: queryFn reads status from the URL, so the query refetches when it changes",
         "The list would refetch on every render, because keys without filters are never cached",
-        "TypeScript would refuse to compile because queryFn uses a variable that is missing from the key"
+        "TypeScript would refuse to compile, as queryFn uses a variable missing from the key"
       ],
       "explanation": "The query key works like a dependency array: TanStack Query only fetches a new entry when the key changes. Leaving a parameter out is the first pitfall in the guide."
     },
@@ -281,11 +281,11 @@
         }
       ],
       "prompt": "After a successful status change on the detail page, which cached queries are invalidated?",
-      "answer": "Only ['ticket', id]; list entries keyed ['tickets', ...] are not invalidated by the status change",
+      "answer": "Only ['ticket', id], so the list entries keyed ['tickets', ...] stay stale after it",
       "distractors": [
         "Every query starting with 'ticket', which also prefix-matches the ['tickets', ...] list entries",
-        "['ticket', id] and ['comments', id], like the comment mutation",
-        "None: the page patches the cached ticket object in place"
+        "['ticket', id] and ['comments', id], the same pair as the comment mutation",
+        "None: the page patches the cached ticket object in place without a refetch"
       ],
       "explanation": "handleStatusChange calls invalidateQueries({ queryKey: ['ticket', id] }) only. Prefix matching is per array element, so 'ticket' does not match 'tickets'."
     },
@@ -309,9 +309,9 @@
       "prompt": "Why does the comment mutation invalidate ['comments', id] and ['ticket', id] instead of pushing the new comment into the cached array?",
       "answer": "A refetch returns server truth, including generated columns and other actors' changes",
       "distractors": [
-        "Because TanStack Query caches are read-only and cannot be modified with setQueryData after the first fetch",
-        "Because invalidation is synchronous, while patching the array would require an extra network round trip",
-        "Because the POST response is empty, so there is nothing to insert"
+        "TanStack Query caches are read-only and cannot be changed with setQueryData after a fetch",
+        "Invalidation is synchronous, while patching the array would need an extra network round trip",
+        "The POST response is empty, so there is nothing to insert into the cached array"
       ],
       "explanation": "The guide's senior aside: real systems have multiple concurrent actors, so fetching from the server gets the exact truth including auto-generated database columns."
     },
@@ -333,10 +333,10 @@
         }
       ],
       "prompt": "Which systems-level gap does the critique report about ticket path parameters?",
-      "answer": "Ids such as the ticket UUID in the path reach Postgres without Zod verification, so invalid strings hit the database",
+      "answer": "Ticket UUIDs in the path reach Postgres without Zod checks, so bad strings hit the DB",
       "distractors": [
         "Path parameters are validated twice, by Zod and by Prisma, which slows every request",
-        "Path parameters are trusted for the organization id instead of the JWT",
+        "Path parameters are trusted for the organization id instead of the JWT claim",
         "Path parameters are URL-decoded twice, enabling double-encoding attacks"
       ],
       "explanation": "The controller passes req.params.id straight into ticketsService.getTicket; the critique names 'no path param validation' as gap 3."
