@@ -1,0 +1,482 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "masterstore",
+ "repo": "masterstore",
+ "sha": "2488b3491e68ef64a39064d08b513e8b11c224f4",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: one URL, followed from the address bar to Spree",
+   "body": "MasterStore is a Next.js storefront that sells products from a Spree commerce backend. All the app code lives under `storefront/`. The course in `astraupskill/` follows one small path: a product-listing URL such as `?price_min=12` is read by a parser, turned into a filter object, turned into Spree request parameters, and sent through a cached call.\n\nA good reading order:\n\n1. `astraupskill/README.md` for the one-paragraph story.\n2. `01-CODEBASE-MAP.md`: the path file by file, with line numbers. Keep it open while reading code.\n3. `02-CONCEPTS.md`: parsing versus trusting, query identity, and why dropping bad input is a policy.\n4. `03-WORKED-CHANGE.md`: the before and after of `parsePositiveInt`, and why each guard exists.\n5. `05-PRACTICE.md`: write your predictions down first, then compare with `06-SOLUTIONS-AND-REVIEW.md`, which also lists four review findings.\n6. `07-TRACE-LAB.md`: one URL traced through both tables.\n7. `storefront/docs/architectural-cartographer/02-mid-level-engineer.md`: the wider app (cart state, caching, webhooks).\n\nWhile you read, keep the \"boundary ledger\" the map suggests: for each step, ask who owns the data at that point.",
+   "excerpts": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "This course hardens one small query boundary: product-listing state is read from URL parameters in `storefront/src/lib/utils/listing-search-params.ts`."
+    },
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": 30,
+     "lineEnd": 30,
+     "quote": "Keep a boundary ledger while reading: raw URL input, normalized filter object, Spree params, cached response, rendered cards. Each has a different owner and should not inherit assumptions from the next."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The step-by-step table from URL to cached Spree call, with file:line references."
+    },
+    {
+     "path": "storefront/docs/architectural-cartographer/00-reading-map.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "A mental model of the whole storefront and the top files to read in order."
+    }
+   ]
+  },
+  {
+   "id": "r02-parsing-is-not-trusting",
+   "target": "pack",
+   "phase": "before",
+   "title": "Core idea: a URL filter is caller data, so parse it strictly",
+   "body": "Anyone can type anything into a URL. So a value like `price_min` is *input from a stranger*, and the code has to decide which text it will accept as a price bound.\n\nThe guide's key point is that there are two different questions you can ask of a string:\n\n- a loose one: \"what number does this text start with?\"\n- a strict one: \"is this whole text a plain non-negative whole number that JavaScript can store exactly?\"\n\nThe current `parsePositiveInt` asks the strict question. Read it line by line: first it gives up on a missing value, then on an empty string or any character that is not a digit (`/\\D/` means \"a non-digit\"), then it converts with `Number` and gives up unless the result is a safe integer. If any step fails it returns `undefined`, which means \"no bound\".\n\nAlso note that the parser reads only one value per parameter, through the helper `readFirst`. When you meet repeated parameters in the practice, read that helper before guessing.",
+   "excerpts": [
+    {
+     "path": "storefront/src/lib/utils/listing-search-params.ts",
+     "lineStart": 58,
+     "lineEnd": 64,
+     "quote": "function parsePositiveInt(value: string | undefined): number | undefined { if (value === undefined) return undefined; if (value.length === 0 || /\\D/.test(value)) return undefined; const parsed = Number(value); if (!Number.isSafeInteger(parsed)) return undefined; return parsed; }"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "A URL filter is data supplied by a caller. Parsing it is different from trusting it."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The old and new parser side by side, with what each guard protects against."
+    },
+    {
+     "path": "astraupskill/snapshots/src/lib/utils/listing-search-params.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The exact pre-change file, to compare with the live parser."
+    }
+   ]
+  },
+  {
+   "id": "r03-what-the-parser-cannot-promise",
+   "target": "pack",
+   "phase": "before",
+   "title": "Core idea: each boundary owns a different promise",
+   "body": "The parser only decides which text becomes a filter. It does not log anyone in, it does not check that the numbers make sense together, and it does not make cached data fresh. The concepts chapter says those jobs belong to the route, the query builder and Spree.\n\nTwo ideas help here:\n\n- **Query identity.** `listingKey` turns the parsed state into one JSON string. The same accepted filters always give the same key, which is used to remount the product list when filters change.\n- **Omission as a policy.** The module already treats an unknown `availability` value as if it were not there. Dropping a bad price bound follows the same rule. A visible error would be a *new* contract that needs its own tests.\n\nWhen you read `buildProductQueryParams`, notice how directly it copies filters into Spree parameter names. Ask yourself, for each line, \"did anything check this value before it got here?\" That question is the heart of the review findings in chapter 06.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "**Silent omission is a policy, not an accident.**"
+    },
+    {
+     "path": "storefront/src/lib/utils/listing-search-params.ts",
+     "lineStart": 73,
+     "lineEnd": 77,
+     "quote": "const availabilityRaw = readFirst(params, LISTING_PARAM_KEYS.availability); const availability: AvailabilityStatus | undefined = availabilityRaw && isAvailabilityStatus(availabilityRaw) ? availabilityRaw : undefined;"
+    },
+    {
+     "path": "storefront/src/lib/utils/product-query.ts",
+     "lineStart": 19,
+     "lineEnd": 25,
+     "quote": "if (filters.priceMin !== undefined) { params.price_gte = filters.priceMin; } if (filters.priceMax !== undefined) { params.price_lte = filters.priceMax; }"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The four verified review findings (F1-F4) about sort, price ranges, webhooks and option order."
+    },
+    {
+     "path": "storefront/docs/architectural-cartographer/02-mid-level-engineer.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The mid-level tour: cart state, cache segmentation, webhook handling and the Socratic checkpoint."
+    }
+   ]
+  },
+  {
+   "id": "x-q01-repeated-price-min",
+   "target": "seed:quests:masterstore/quiz/0a62911cd6152054",
+   "phase": "after",
+   "title": "Why price_min=12px&price_min=5 gives no bound at all",
+   "body": "The parser never looks past the first value. `priceMin` is `parsePositiveInt(readFirst(...))`, and `readFirst` returns `raw[0]` when a key repeats (or `params.get(key)`, which is also the first value). So the parser only sees `\"12px\"`. That text contains a non-digit, so `parsePositiveInt` returns `undefined` and there is no `priceMin`. Solution 6 confirms it: there is \"no fallback to later values\".\n\n- **5, last-wins:** `readFirst` takes the first value, not the last.\n- **5, skip to the next valid value:** there is no retry loop; one value is read and either accepted or dropped.\n- **12 from the prefix:** that was the *old* `Number.parseInt` behavior. The current parser rejects the whole string because of `px`.",
+   "excerpts": [
+    {
+     "path": "storefront/src/lib/utils/listing-search-params.ts",
+     "lineStart": 40,
+     "lineEnd": 47,
+     "quote": "if (Array.isArray(raw)) return raw[0];"
+    },
+    {
+     "path": "storefront/src/lib/utils/listing-search-params.ts",
+     "lineStart": 79,
+     "lineEnd": 81,
+     "quote": "const priceMin = parsePositiveInt( readFirst(params, LISTING_PARAM_KEYS.priceMin), );"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 12,
+     "lineEnd": 12,
+     "quote": "The second `price_min=5` is ignored because `readFirst` takes the first value (`12px`), which is rejected — there is no fallback to later values."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02-verify-before-parse",
+   "target": "seed:quests:masterstore/quiz/15ab16336fa0bbb2",
+   "phase": "after",
+   "title": "Why the webhook verifies the raw text before JSON.parse",
+   "body": "The handler reads the body once as plain text, `request.text()`, and passes exactly that text to `verifyWebhookSignature` along with the signature and timestamp headers. The signature is checked against those raw bytes. Only if the check passes does the code call `JSON.parse(body)`. Until then the input is untrusted, so there is no reason to parse it: missing headers or a bad signature answer 401 before any parsing happens.\n\n- **Event name inside the JSON:** verification uses the body text and the headers; the event name is read from a header (`x-spree-webhook-event`) or, after parsing, from `event.name`.\n- **request.json() unavailable:** the code does not say that; it chooses `text()` because the signature needs the exact text.\n- **Pure performance:** the order is about not trusting or processing unverified input, not about JSON speed.",
+   "excerpts": [
+    {
+     "path": "storefront/src/lib/spree/webhooks.ts",
+     "lineStart": 55,
+     "lineEnd": 58,
+     "quote": "const body = await request.text(); const signature = request.headers.get(\"x-spree-webhook-signature\"); const timestamp = request.headers.get(\"x-spree-webhook-timestamp\"); const eventName = request.headers.get(\"x-spree-webhook-event\");"
+    },
+    {
+     "path": "storefront/src/lib/spree/webhooks.ts",
+     "lineStart": 67,
+     "lineEnd": 84,
+     "quote": "event = JSON.parse(body);"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "storefront/docs/architectural-cartographer/02-mid-level-engineer.md",
+     "lineStart": 182,
+     "lineEnd": 196,
+     "why": "Socratic checkpoint question 6 asks exactly this, with the files a strong answer cites."
+    }
+   ]
+  },
+  {
+   "id": "x-q03-safe-integer",
+   "target": "seed:quests:masterstore/quiz/38ebe020bf1ea8fa",
+   "phase": "after",
+   "title": "Why Number.isSafeInteger, not Number.isFinite, for 2^53",
+   "body": "`9007199254740992` is all digits, so it passes the `/\\D/` check. `Number(\"9007199254740992\")` gives a perfectly finite number, so `Number.isFinite` would say yes. But it is 2^53, one above `Number.MAX_SAFE_INTEGER`. Above that limit, neighbouring whole numbers start to share the same stored value (2^53 + 1 rounds to it), so integers there are no longer \"safe\". `Number.isSafeInteger` returns false and the bound is dropped. Solution 3 records that swapping in `isFinite` makes test 2 fail.\n\n(The guide's wording that `Number` \"cannot represent it exactly\" is loose: 2^53 itself is exact. The real point is that it is outside the safe range.)\n\n- **isSafeInteger rejects 0:** it does not; 0 is a safe integer and stays valid.\n- **isFinite does not exist:** `Number.isFinite` is a standard static method.\n- **isFinite would see Infinity:** the value is finite, which is exactly why `isFinite` is the wrong check.",
+   "excerpts": [
+    {
+     "path": "storefront/src/lib/utils/listing-search-params.ts",
+     "lineStart": 61,
+     "lineEnd": 62,
+     "quote": "const parsed = Number(value); if (!Number.isSafeInteger(parsed)) return undefined;"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "3. Only **test 2** fails, on `'9007199254740992'` (finite, but not safe)."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 23,
+     "lineEnd": 26,
+     "why": "Exercise 3 has you make the swap and watch the test fail."
+    }
+   ]
+  },
+  {
+   "id": "x-q04-dollar-anchor",
+   "target": "seed:quests:masterstore/quiz/4462233dbd443049",
+   "phase": "after",
+   "title": "Why /^\\d+$/ rejects \"12\\n\" in JavaScript",
+   "body": "In JavaScript, without the `m` (multiline) flag, `$` matches only at the very end of the input. So `/^\\d+$/.test(\"12\\n\")` is `false`: the newline is a non-digit sitting before the end. That means `!/^\\d+$/.test(value)` and `/\\D/.test(value)` reject the same strings here, and the guide reports all five tests still pass after the swap. The guide corrects its own earlier claim: \"dollar before a final newline\" is real in Python, Perl and PCRE, not in JS. The LF and CRLF tests stay to catch anyone adding the `m` flag.\n\n- **It throws:** `\\d` is valid in a plain regex; no `u` flag is needed.\n- **true, so unsafe:** that is the Python/Perl behavior the guide retracts.\n- **true only on Windows with CRLF:** the guide checked `\"12\\r\\n\"` too, and it is also `false`.",
+   "excerpts": [
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": 35,
+     "lineEnd": 35,
+     "quote": "That is true in Python, Perl, and PCRE, but **not in JavaScript**: without the `m` flag, `$` matches only at the end of input."
+    },
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": 35,
+     "lineEnd": 35,
+     "quote": "`/^\\d+$/.test(\"12\\n\")` → `false`, `/^\\d+$/.test(\"12\\r\\n\")` → `false`, `/^\\d+$/m.test(\"12\\n\")` → `true`"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 33,
+     "lineEnd": 36,
+     "why": "Exercise 5 asks you to make this swap and predict the result."
+    }
+   ]
+  },
+  {
+   "id": "x-q05-parseint-prefix",
+   "target": "seed:quests:masterstore/quiz/47dbd60d87b821f2",
+   "phase": "after",
+   "title": "What the old parseInt did with ?price_min=12px",
+   "body": "`Number.parseInt` reads digits from the start of the string and stops at the first character it cannot use. For `\"12px\"` it reads `12` and ignores `px`. The old code then only checked that the result was finite and not negative, so `12` became a real `priceMin`. The guide shows the same happened with `\"12.9\"` and `\" 12\"`. That is wrong for this contract, because the contract wants the *whole* string to be one non-negative whole number.\n\n- **undefined / NaN for any letters:** `parseInt` only returns NaN when the string does not *start* with a number; `\"12px\"` does.\n- **A thrown RangeError and a 400:** neither the old nor the new parser throws; they return a number or `undefined`.\n- **0 for unparseable input:** `parseInt` gives NaN, not 0, for unparseable text, and the old code turned NaN into `undefined`.",
+   "excerpts": [
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": 8,
+     "lineEnd": 11,
+     "quote": "const parsed = Number.parseInt(value, 10); if (!Number.isFinite(parsed) || parsed < 0) return undefined; return parsed; }"
+    },
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": 14,
+     "lineEnd": 14,
+     "quote": "The problem is observable: `parsePositiveInt(\"12px\")` returns `12`, and so do `\"12.9\"` (→ 12) and `\" 12\"`."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/snapshots/src/lib/utils/listing-search-params.ts",
+     "lineStart": 58,
+     "lineEnd": 63,
+     "why": "The original parser, preserved as a snapshot."
+    }
+   ]
+  },
+  {
+   "id": "x-q06-user-token-cache-key",
+   "target": "seed:quests:masterstore/quiz/5150a7b450660f87",
+   "phase": "after",
+   "title": "Why cachedListProducts takes an unused _userToken",
+   "body": "`cachedListProducts` is a `\"use cache\"` function. The comment above it says Next.js builds the cache key from *all* of the function's arguments. The SDK call only uses `params` and `options`, but because `_userToken` is an argument, two calls with different tokens get different cache entries. Guests pass `undefined`, so all guests share entries, while a signed-in user (who may see different prices, such as B2B or loyalty) gets their own.\n\n- **Authorizes the request:** the comment says the token is \"NOT passed to SDK\", so it cannot authorize anything.\n- **Dead code:** it has a job, it just does that job through the cache key rather than the request.\n- **The SDK reads it from the closure:** `getClient().products.list(params, options)` receives no token, and nothing in the function hands it over.",
+   "excerpts": [
+    {
+     "path": "storefront/src/lib/data/products.ts",
+     "lineStart": 7,
+     "lineEnd": 16,
+     "quote": "/** * Cached product list fetch. Cache key is derived from all function * arguments by Next.js \"use cache\": * * - locale/country: determines language and market-specific pricing * - userToken: per-user cache segmentation (separate arg, NOT passed to * SDK). Authenticated users may see different prices (B2B, loyalty). * Each user's JWT is unique so the cache is segmented per user. * Guest users pass undefined. */"
+    },
+    {
+     "path": "storefront/src/lib/data/products.ts",
+     "lineStart": 17,
+     "lineEnd": 26,
+     "quote": "return getClient().products.list(params, options);"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "storefront/docs/architectural-cartographer/02-mid-level-engineer.md",
+     "lineStart": 151,
+     "lineEnd": 156,
+     "why": "The \"cache segmentation by user token\" pattern in the non-obvious patterns list."
+    }
+   ]
+  },
+  {
+   "id": "x-q07-junk-sort",
+   "target": "seed:quests:masterstore/quiz/7c3eb607bb459d84",
+   "phase": "after",
+   "title": "Why ?sort=anything-goes reaches Spree and the cache",
+   "body": "`sortBy` is just the first `sort` value, trimmed; if it is non-empty it is kept. There is no allowlist like the one `availability` has. Then `buildProductQueryParams` copies any `sortBy` other than `\"manual\"` straight into `params.sort`. So `anything-goes` is forwarded to Spree untouched, as exercise 6 observed. Since `listingKey` includes `sortBy`, each junk value is also its own key and its own cache entry. This is finding F1: the UI only offers Spree's options, so it matters for hand-edited or crawled URLs.\n\n- **Dropped by an allowlist:** only `availability` is allowlisted (`isAvailabilityStatus`); `sort` is not.\n- **A 400 from Spree before caching:** nothing in the course observed Spree's reaction; the code forwards the value.\n- **Replaced with manual:** `manual` is the one value that is *removed*; nothing substitutes it.",
+   "excerpts": [
+    {
+     "path": "storefront/src/lib/utils/listing-search-params.ts",
+     "lineStart": 90,
+     "lineEnd": 91,
+     "quote": "const sortBy = readFirst(params, LISTING_PARAM_KEYS.sort)?.trim() || undefined;"
+    },
+    {
+     "path": "storefront/src/lib/utils/product-query.ts",
+     "lineStart": 37,
+     "lineEnd": 39,
+     "quote": "if (filters.sortBy && filters.sortBy !== \"manual\") { params.sort = filters.sortBy; }"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 18,
+     "lineEnd": 18,
+     "quote": "each distinct junk value is a distinct `listingKey` and a distinct cache entry."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08-duplicate-webhook",
+   "target": "seed:quests:masterstore/quiz/b9a76aacc7c2dbff",
+   "phase": "after",
+   "title": "Why two concurrent deliveries can send two emails",
+   "body": "`handleOrderCompleted` checks `isAlreadyProcessed(event.id)` at line 47, then *awaits* `sendEmail`, and only calls `markProcessed` at line 90. While the first delivery is waiting for the email to send, the second delivery can run its own check, and the id is not in the `Set` yet. Both pass, both send. This is a check-then-act gap (finding F3). Marking after sending is deliberate, so a failed send can be retried, but the result is \"at least once\", not \"exactly once\". A restart or a second server instance also forgets the in-memory `Set`.\n\n- **The Set makes it exactly-once:** only if the mark happened before the slow step; it happens after.\n- **Single-threaded Node waits:** `await` hands control back to the event loop, so another request can run in the gap.\n- **The signature check rejects duplicates:** both copies are genuinely signed by Spree; the signature says nothing about repeats.",
+   "excerpts": [
+    {
+     "path": "storefront/src/lib/webhooks/handlers.ts",
+     "lineStart": 46,
+     "lineEnd": 47,
+     "quote": "export async function handleOrderCompleted(event: WebhookEvent<Order>) { if (isAlreadyProcessed(event.id)) return;"
+    },
+    {
+     "path": "storefront/src/lib/webhooks/handlers.ts",
+     "lineStart": 64,
+     "lineEnd": 65,
+     "quote": "await sendEmail({ to: order.email,"
+    },
+    {
+     "path": "storefront/src/lib/webhooks/handlers.ts",
+     "lineStart": 90,
+     "lineEnd": 90,
+     "quote": "markProcessed(event.id);"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 22,
+     "lineEnd": 22,
+     "quote": "Two concurrent deliveries of the same event can both pass the check and both send; a restart or a second instance forgets everything."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "storefront/src/lib/webhooks/handlers.ts",
+     "lineStart": 20,
+     "lineEnd": 41,
+     "why": "The comment at lines 20-27 explains why marking happens only after a successful send."
+    }
+   ]
+  },
+  {
+   "id": "x-q09-empty-guard",
+   "target": "seed:quests:masterstore/quiz/bf3c53f532331717",
+   "phase": "after",
+   "title": "Why ?price_min= (empty) needs the length guard",
+   "body": "Follow the empty string through the parser with the guard removed. `/\\D/.test(\"\")` asks \"is there a non-digit?\" An empty string has no characters at all, so the answer is `false` and the string is *not* rejected. Next, `Number(\"\")` is `0`, and 0 is a safe integer. So an empty bound would quietly become a real zero bound. The `value.length === 0` check stops that, and solution 2 confirms removing it makes test 2 fail.\n\n- **A crash in the regex:** testing a regex on an empty string is fine; it just returns `false`.\n- **undefined:** that is what you get *with* the guard, which is the whole reason it exists.\n- **priceMin 1:** nothing turns an empty string into 1; `Number(\"\")` is 0.",
+   "excerpts": [
+    {
+     "path": "storefront/src/lib/utils/listing-search-params.ts",
+     "lineStart": 60,
+     "lineEnd": 61,
+     "quote": "if (value.length === 0 || /\\D/.test(value)) return undefined; const parsed = Number(value);"
+    },
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": 28,
+     "lineEnd": 28,
+     "quote": "- **`value.length === 0`**: `/\\D/.test(\"\")` is `false` and `Number(\"\")` is `0`, so without it an empty `?price_min=` would become a real `priceMin: 0`. Remove it and test 2 fails (executed, see [06](06-SOLUTIONS-AND-REVIEW.md))."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 18,
+     "lineEnd": 21,
+     "why": "Exercise 2 has you delete the guard and see which test fails."
+    }
+   ]
+  },
+  {
+   "id": "x-q10-order-placed-skip",
+   "target": "seed:quests:masterstore/quiz/c6754452a1c7d0e6",
+   "phase": "after",
+   "title": "Why the cart does not refresh on the order-placed page",
+   "body": "`CartContext` normally calls `refreshCart()` on every navigation. On a path containing `/order-placed/` it instead sets the cart to `null` and returns. The comment explains why: `getCart()` clears the cart token cookie when it fails, and after checkout the completed order is no longer a cart, so it would fail. For a guest, that cookie is the only auth token they have, and the order page still needs it to load the order. The mid-level guide calls this a coupling between navigation and token lifetime; `getCompletedOrder` avoids `getCart()` for the same reason.\n\n- **Statically rendered page can't call server actions:** the comment talks about the cookie, not rendering.\n- **Saving one request:** the stated reason is a race that loses the token, not performance.\n- **Re-adding purchased items:** nothing in the code suggests a refresh re-creates a cart with the old items.",
+   "excerpts": [
+    {
+     "path": "storefront/src/contexts/CartContext.tsx",
+     "lineStart": 124,
+     "lineEnd": 127,
+     "quote": "// On the order-placed page, skip refreshCart to avoid a race condition: // getCart() auto-clears the cart token cookie on error (completed order // is no longer a cart), which removes the only auth token guest users // have before getCheckoutOrder() can use it."
+    },
+    {
+     "path": "storefront/src/contexts/CartContext.tsx",
+     "lineStart": 128,
+     "lineEnd": 133,
+     "quote": "if (pathname.includes(\"/order-placed/\")) {"
+    },
+    {
+     "path": "storefront/docs/architectural-cartographer/02-mid-level-engineer.md",
+     "lineStart": 79,
+     "lineEnd": 79,
+     "quote": "The order-placed exception at `src/contexts/CartContext.tsx:122-135` is a mid-level clue: automatic refresh would clear the guest token before the completed-order page can use it, so navigation behavior and token lifetime are coupled."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "storefront/docs/architectural-cartographer/02-mid-level-engineer.md",
+     "lineStart": 151,
+     "lineEnd": 156,
+     "why": "The defensive order retrieval pattern in getCompletedOrder."
+    }
+   ]
+  },
+  {
+   "id": "x-q11-option-order",
+   "target": "seed:quests:masterstore/quiz/d944572c1d980985",
+   "phase": "after",
+   "title": "Why option order changes the URL but not the listing key",
+   "body": "Two different functions treat the options differently. `listingKey` builds its key with `o: [...state.filters.optionValues].sort()`, so `red, large` and `large, red` produce the same key: the same listing state. `buildListingSearchParams` appends each option in the order it is given, so the two URLs keep their different order. This is finding F4: harmless today, but worth knowing before anyone uses the raw URL as a cache key.\n\n- **Same URL, different state:** it is the reverse; the key sorts, the URL does not.\n- **URLSearchParams sorts repeated keys:** `append` keeps insertion order, and the code never calls a sort on it.\n- **Option order changes Spree's results:** the course treats both orders as the same state, and the key deliberately ignores order.",
+   "excerpts": [
+    {
+     "path": "storefront/src/lib/utils/listing-search-params.ts",
+     "lineStart": 163,
+     "lineEnd": 163,
+     "quote": "o: [...state.filters.optionValues].sort(),"
+    },
+    {
+     "path": "storefront/src/lib/utils/listing-search-params.ts",
+     "lineStart": 137,
+     "lineEnd": 139,
+     "quote": "for (const optionValue of filters.optionValues) { out.append(LISTING_PARAM_KEYS.option, optionValue); }"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 24,
+     "lineEnd": 24,
+     "quote": "Two URLs differing only in option order are the same listing state but different URLs"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q12-inverted-range",
+   "target": "seed:quests:masterstore/quiz/f9e41d856d8cf0e4",
+   "phase": "after",
+   "title": "Why price_min=500&price_max=10 reaches Spree unchanged",
+   "body": "Each bound is parsed on its own. `500` and `10` are both valid digit strings and safe integers, so both survive. `buildProductQueryParams` then copies each one into its own Spree field, `price_gte` and `price_lte`, with no comparison between them. Nothing on the path from URL to Spree checks the order, so Spree receives `{\"price_gte\":500,\"price_lte\":10}` (exercise 7). This is finding F2: not a security issue, but a guaranteed-empty result that looks like \"no products\".\n\n- **Swapped bounds:** no code swaps them; a swap is one possible *fix* the guide mentions.\n- **A 400 error:** the parser drops bad values silently and has no range rule, so nothing rejects the request.\n- **Neither bound:** both strings are valid on their own, so both are kept.",
+   "excerpts": [
+    {
+     "path": "storefront/src/lib/utils/product-query.ts",
+     "lineStart": 19,
+     "lineEnd": 25,
+     "quote": "if (filters.priceMin !== undefined) { params.price_gte = filters.priceMin; } if (filters.priceMax !== undefined) { params.price_lte = filters.priceMax; }"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 13,
+     "lineEnd": 13,
+     "quote": "Nothing between the URL and Spree checks ordering."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 53,
+     "lineEnd": 56,
+     "why": "Exercise 7 asks where an ordering rule should live."
+    }
+   ]
+  }
+ ]
+}

@@ -1,0 +1,418 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "dotnet-ramp",
+ "repo": "dotnet-ramp",
+ "sha": "709feb8ff366b901e061b7b208f5128dce4039bf",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: the expense app's architecture pages",
+   "body": "This pack covers dotnet-ramp, an ASP.NET Core expense app: employees file expenses, managers approve them, Finance reimburses them, and a background worker does slow jobs. The quizzes come from the \"Architecture & Patterns\" section of the upskill docs.\n\nSuggested reading order:\n\n1. `docs/upskill/03-architecture-and-patterns/README.md` - the table of the six pages.\n2. `02-data-model-and-persistence.md` - the entities, the in-memory `DataStore`, and what would change with a real database.\n3. `03-validation-auth-and-permissions.md` - which layer answers which \"is this allowed?\" question.\n4. `04-side-effects-async-and-reliability.md` - the background queue and what it does not guarantee.\n5. `06-architecture-critique.md` - strengths, risks and the improvement plan.\n6. `training/incidents/001-fast-track-reimbursement.md` - a practice incident; investigate it yourself.\n\nOpen the code each page links (`backend/Services/ExpenseService.cs`, `backend/Background/`) next to the page. Each claim in these pages points to exact lines.",
+   "excerpts": [
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/README.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "How the system is structured, why, and what it costs."
+    },
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 13,
+     "lineEnd": 13,
+     "quote": "Understanding which layer answers which question is the core of this page."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/01-boundaries-and-layers.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "What each layer owns, useful context before the four pages above."
+    },
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/05-pattern-catalog.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Reusable pattern cards anchored to the same code."
+    }
+   ]
+  },
+  {
+   "id": "r02-layers-of-allowed",
+   "target": "pack",
+   "phase": "before",
+   "title": "Five questions, five layers of 'is this allowed?'",
+   "body": "The validation page splits \"is this allowed?\" into five different questions, each answered by a different piece of code:\n\n- **Well-formed input?** DataAnnotations on the DTOs, checked by `[ApiController]`. Failure: 400.\n- **Business rules?** `PolicyEngine.Evaluate`. Failure: 422.\n- **Logged in?** The bearer-token handler. Failure: 401.\n- **Right role?** `[Authorize(Roles=...)]` on the controller action. Failure: 403.\n- **This exact resource?** Checks inside `ExpenseService`. Failure: 403.\n\nA role check only says \"you are some manager\". The service must still check that you are allowed to touch **this** expense; skipping that is called IDOR (insecure direct object reference).\n\nAlso notice the *default-deny* style: each `switch` on the role ends with an arm such as `_ => false`, so anything not listed gets nothing.",
+   "excerpts": [
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 5,
+     "lineEnd": 11,
+     "quote": "| Question | Mechanism | Where | HTTP on failure | | --- | --- | --- | --- | | Is the input well-formed? | DataAnnotations + `[ApiController]` | [`Dtos.cs`](../../../backend/Dtos/Dtos.cs) | 400 | | Does it satisfy business rules? | `PolicyEngine` | [`PolicyEngine.Evaluate`](../../../backend/Services/PolicyEngine.cs#L34-L66) | 422 | | Are you logged in? | `[Authorize]` + auth handler | [`TokenAuthenticationHandler`](../../../backend/Security/TokenAuthenticationHandler.cs) | 401 | | Do you have the role? | `[Authorize(Roles=…)]` | controller actions | 403 | | May you touch *this* resource? | service checks | `ExpenseService` | 403 |"
+    },
+    {
+     "path": "backend/Services/ExpenseService.cs",
+     "lineStart": 190,
+     "lineEnd": 196,
+     "quote": "private bool CanView(User actor, Expense expense) => actor.Role switch { UserRole.Employee => expense.EmployeeId == actor.Id, UserRole.Manager => expense.EmployeeId == actor.Id || IsDirectReport(expense.EmployeeId, actor.Id), UserRole.Finance => true, _ => false };"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The full security model, with line links for each layer."
+    }
+   ]
+  },
+  {
+   "id": "r03-in-memory-queue",
+   "target": "pack",
+   "phase": "before",
+   "title": "An in-memory store and an in-process queue",
+   "body": "Two design facts explain most of this pack.\n\n**The store is in memory.** `DataStore` is a handful of `ConcurrentDictionary` objects registered as a singleton. Changing an object *is* saving it: there is no commit and no transaction.\n\n**Background work runs inside the same process.** A request puts a delegate into a bounded `Channel`; a `BackgroundService` takes jobs out one by one, opens a new DI scope for each, and runs it. If a job throws, the error is logged and the loop goes on.\n\nBecause the queue lives in memory, the reliability page lists what it does **not** give you: durability, retries and full idempotency. Keep this table in mind when you read about the reimbursement flow and the outbox pattern.\n\nNew words: *idempotent* means running something twice has the same effect as running it once. *At-most-once* means a job runs once or not at all.",
+   "excerpts": [
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/02-data-model-and-persistence.md",
+     "lineStart": 34,
+     "lineEnd": 38,
+     "quote": "**\"Transactions\" here are just object mutation.** When `Submit` changes status and appends history ([`ExpenseService` L176-178](../../../backend/Services/ExpenseService.cs#L176-L178)), there's no commit — the object is already in the dictionary, so the change is \"persisted\" the instant it's made. This is convenient and also the source of the concurrency caveats (no isolation, no atomic multi-entity update)."
+    },
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+     "lineStart": 30,
+     "lineEnd": 38,
+     "quote": "This is an **in-process, in-memory, at-most-once** queue. Be explicit about what that means: | Property | Status | Consequence | | --- | --- | --- | | Durability | ❌ none | Process crash loses all queued + in-flight jobs | | Retries | ❌ none | A transient failure (or a thrown OCR) leaves the entity stuck | | Idempotency | ⚠️ partial | `ProcessReimbursement` re-checks `CanSystemTransition` ([L51](../../../backend/Background/BackgroundJobs.cs#L51)) so a double-run is safe; `ProcessReceipt` has no such guard | | Delivery | at-most-once | Enqueue isn't transactional with the state change | | Visibility | ⚠️ logs only | No metric/alert for \"stuck in Reimbursing\" |"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "backend/Background/QueuedHostedService.cs",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The worker loop: dequeue, create a scope, run, catch and log."
+    },
+    {
+     "path": "backend/Background/BackgroundTaskQueue.cs",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The bounded channel and how it is configured."
+    }
+   ]
+  },
+  {
+   "id": "x-q01-outbox-at-least-once",
+   "target": "seed:quests:dotnet-ramp/quiz/08c987af5d70761f",
+   "phase": "after",
+   "title": "Why the outbox still needs an idempotent payment",
+   "body": "The outbox saves the status change and an `OutboxEntry` together, so the job can no longer be lost. A separate dispatcher reads the entry and performs the payment, retrying on failure. But think about a crash *after* the payment is sent and *before* the entry is marked done: on restart the dispatcher sees the entry again and retries. So the outbox delivers **at least once**, and the payment must be safe to repeat. The guide sums it up: it \"converts at-most-once into at-least-once + idempotent\". The critique's test kills the dispatcher mid-flight and asserts exactly one payment.\n\nWhy the others are wrong:\n- **Exactly-once on its own:** retries are the whole point, and retries can repeat work.\n- **Idempotency replaces the transaction:** the outbox entry must be in the same `SaveChanges` as the status change; that is the pattern.\n- **Dispatcher on the request thread:** the dispatcher is separate and polls the outbox.",
+   "excerpts": [
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+     "lineStart": 44,
+     "lineEnd": 46,
+     "quote": "no recovery. This is the canonical motivation for the **outbox pattern**: write the state change and an \"outbox\" record in one transaction; a separate dispatcher reads the outbox and performs the side effect with retries. It converts at-most-once into at-least-once + idempotent."
+    },
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/06-architecture-critique.md",
+     "lineStart": 72,
+     "lineEnd": 74,
+     "quote": "- **Outbox:** add an `OutboxEntry` written in the same `SaveChanges` as the status change; a dispatcher polls it. Test: kill the dispatcher mid-flight, restart, assert exactly-once payment. Rollback: feature-flag the dispatcher; fall back to direct enqueue."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02-guarded-rerun",
+   "target": "seed:quests:dotnet-ramp/quiz/0fb1576490ec6724",
+   "phase": "after",
+   "title": "Why a second reimbursement run does nothing",
+   "body": "`ProcessReimbursement` looks up the expense and then asks `ExpenseStateMachine.CanSystemTransition(expense.Status, ExpenseStatus.Reimbursed)`. After the first run, the status is already `Reimbursed`, and that move is not legal from there. So the second run logs a warning and returns before it creates a new payment reference. The guide calls this \"idempotent by guard\".\n\nWhy the others are wrong:\n- **The channel deduplicates delegates:** a `Channel` is just a queue; nothing in it compares jobs.\n- **QueuedHostedService catches a DomainException:** the job does not throw here; it returns early after the check.\n- **Reuses the existing PaymentReference:** the code never reads an old reference; it would write a new one if the guard let it through.",
+   "excerpts": [
+    {
+     "path": "backend/Background/BackgroundJobs.cs",
+     "lineStart": 51,
+     "lineEnd": 56,
+     "quote": "if (!ExpenseStateMachine.CanSystemTransition(expense.Status, ExpenseStatus.Reimbursed)) { logger.LogWarning(\"Expense {ExpenseId} not in a reimbursable state ({Status}).\", expenseId, expense.Status); return; }"
+    },
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+     "lineStart": 50,
+     "lineEnd": 52,
+     "quote": "`ProcessReimbursement` is **idempotent by guard**: if it runs twice, the second run sees the status is already `Reimbursed`, fails the `CanSystemTransition` check, logs a warning, and returns without double-paying"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q03-crash-window",
+   "target": "seed:quests:dotnet-ramp/quiz/36fa17e6ee2e5755",
+   "phase": "after",
+   "title": "The crash window in StartReimbursement",
+   "body": "`StartReimbursement` does two things in order: line 153 changes the status to `Reimbursing`, line 154 puts the payment job in the queue. The change is \"saved\" the moment the object changes, because the store is in memory. The queue also lives only in memory. If the process dies after line 153 and before the worker runs the job, the job is gone, and nothing in the app looks for stuck `Reimbursing` expenses. The guide: \"no payment, no retry, no recovery\".\n\nWhy the others are wrong:\n- **Paid twice on restart:** nothing re-runs `StartReimbursement`; there is no recovery scan at all.\n- **The channel replays on startup:** the queue is in-memory with no durability; a crash loses queued jobs.\n- **Back in Approved:** the status change happened first and is not tied to the enqueue.",
+   "excerpts": [
+    {
+     "path": "backend/Services/ExpenseService.cs",
+     "lineStart": 153,
+     "lineEnd": 154,
+     "quote": "Transition(expense, ExpenseStatus.Reimbursing, actor, note: \"Reimbursement queued.\"); _queue.EnqueueAsync(BackgroundJobs.ProcessReimbursement(expense.Id));"
+    },
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+     "lineStart": 42,
+     "lineEnd": 44,
+     "quote": "status flips to `Reimbursing` and *then* the job is enqueued (not awaited, not transactional). If the process dies in between, the expense is `Reimbursing` forever — no payment, no retry, no recovery."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q04-scope-per-job",
+   "target": "seed:quests:dotnet-ramp/quiz/3c22e3766ed048b9",
+   "phase": "after",
+   "title": "The worker already makes a scope per job",
+   "body": "An EF Core `DbContext` is not thread-safe and is meant to be **scoped**: one per request (or per unit of work). Today the `DataStore` is a singleton, so code that holds it forever works. The guide's good news is that the background worker already does `using var scope = _services.CreateScope();` for every job and runs the job with that scope's service provider. So each job could resolve its own scoped `DbContext`, just like a web request does.\n\nWhy the others are wrong:\n- **One job at a time makes a singleton safe:** the guide says `DbContext` must be scoped, not singleton; requests run in parallel with the worker.\n- **Jobs run on the request thread:** they run in a `BackgroundService`, not in the request.\n- **Everything is transient:** jobs resolve services from a scope; lifetimes matter, which is the gotcha the guide calls out.",
+   "excerpts": [
+    {
+     "path": "backend/Background/QueuedHostedService.cs",
+     "lineStart": 42,
+     "lineEnd": 43,
+     "quote": "using var scope = _services.CreateScope(); await work(scope.ServiceProvider, stoppingToken);"
+    },
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/02-data-model-and-persistence.md",
+     "lineStart": 53,
+     "lineEnd": 57,
+     "quote": "**The gotcha you must call out:** `DbContext` is **not thread-safe** and must be **scoped**, whereas today's `DataStore` is a singleton. Code that captures the store in a long-lived field (or a singleton service) would break. The good news: the worker already uses `CreateScope()` ([`QueuedHostedService` L42](../../../backend/Background/QueuedHostedService.cs#L42)), so it's structurally prepared."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q05-backpressure",
+   "target": "seed:quests:dotnet-ramp/quiz/47e551645484ac06",
+   "phase": "after",
+   "title": "A full bounded channel makes producers wait",
+   "body": "The queue is created with `new BoundedChannelOptions(capacity)` and `FullMode = BoundedChannelFullMode.Wait`, with a default capacity of 100. \"Wait\" means: when the channel is full, a writer waits until the worker takes a job out and frees a slot. That is *backpressure*. The code comment says producers wait \"rather than blowing memory\".\n\nWhy the others are wrong:\n- **Throws and returns 503:** with `Wait` mode nothing is thrown; the call just waits.\n- **Drops the oldest job:** that would be a different mode; this code chose `Wait`.\n- **Grows past capacity:** a bounded channel never grows past its capacity; that is what \"bounded\" means.",
+   "excerpts": [
+    {
+     "path": "backend/Background/BackgroundTaskQueue.cs",
+     "lineStart": 19,
+     "lineEnd": 25,
+     "quote": "public BackgroundTaskQueue(int capacity = 100) { // Backpressure: if the queue fills up, producers wait rather than blowing memory. var options = new BoundedChannelOptions(capacity) { FullMode = BoundedChannelFullMode.Wait };"
+    },
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+     "lineStart": 20,
+     "lineEnd": 22,
+     "quote": "1. **Backpressure** — `BoundedChannelFullMode.Wait` ([L22-25](../../../backend/Background/BackgroundTaskQueue.cs#L22-L25)) makes producers wait if the queue is full, instead of unbounded memory growth."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q06-policy-reevaluation",
+   "target": "seed:quests:dotnet-ramp/quiz/5878d3d28a43660d",
+   "phase": "after",
+   "title": "Policy is recomputed on every change",
+   "body": "`RefreshPolicy` calls `_policy.Evaluate(...)` and replaces `expense.PolicyFlags` with a fresh list. The guide says this runs at create, update **and** submit. `Submit` calls it on line 117, before checking for blocking flags. Some rules depend on the current data and the current day (for example the date checks use `today`), so a flag can appear at submit that was absent at create.\n\nWhy the others are wrong:\n- **The approver adds flags by hand:** flags come only from `PolicyEngine.Evaluate`.\n- **Only computed at submit:** the guide says create and update also recompute.\n- **A nightly job:** the two background jobs are receipt processing and reimbursement; there is no nightly policy job.",
+   "excerpts": [
+    {
+     "path": "backend/Services/ExpenseService.cs",
+     "lineStart": 159,
+     "lineEnd": 164,
+     "quote": "public void RefreshPolicy(Expense expense) { bool hasProcessedReceipt = expense.ReceiptId is { } rid && _store.Receipts.GetValueOrDefault(rid)?.Status == ReceiptStatus.Processed; expense.PolicyFlags = _policy.Evaluate(expense, hasProcessedReceipt).ToList(); }"
+    },
+    {
+     "path": "backend/Services/ExpenseService.cs",
+     "lineStart": 117,
+     "lineEnd": 119,
+     "quote": "RefreshPolicy(expense); if (PolicyEngine.HasBlocking(expense.PolicyFlags))"
+    },
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 63,
+     "lineEnd": 65,
+     "quote": "policy is recomputed at create, update, *and* submit"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07-partial-timing",
+   "target": "seed:quests:dotnet-ramp/quiz/668a8210bb8a591d",
+   "phase": "after",
+   "title": "Why the timing protection is only partial",
+   "body": "Look at line 29 of `AuthService.Login`: `if (user is null || !PasswordHasher.Verify(...))`. The `||` stops as soon as the left side is true. So when the email does not exist, the slow PBKDF2 check never runs and the method returns at once. When the email exists, the hash is computed, which takes noticeably longer. An attacker could time responses to learn which emails exist. The comment even admits \"We still short-circuit\". The comparison itself is constant-time, so the guide calls the equalisation partial.\n\nWhy the others are wrong:\n- **Only for admin accounts:** the same code path runs for every user.\n- **PBKDF2 varies with the password:** the guide praises the hashing as \"done right\"; the gap is the early return.\n- **The salt leaks existence:** a per-user salt is standard and is listed as a strength.",
+   "excerpts": [
+    {
+     "path": "backend/Security/AuthService.cs",
+     "lineStart": 27,
+     "lineEnd": 30,
+     "quote": "// Verify even when the user is missing? We still short-circuit, but the // password check itself is constant-time to avoid trivial timing leaks. if (user is null || !PasswordHasher.Verify(password, user.PasswordHash, user.PasswordSalt)) return null;"
+    },
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 31,
+     "lineEnd": 32,
+     "quote": "it *does* return early when the user is null, so the timing equalization is partial"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08-default-deny",
+   "target": "seed:quests:dotnet-ramp/quiz/6ae160aa34679a4a",
+   "phase": "after",
+   "title": "A new role gets nothing by default",
+   "body": "Every `switch` on `actor.Role` lists the known roles and ends with a catch-all arm. In `CanView` it is `_ => false`; in `List` it is an empty-sequence arm (`Enumerable.Empty`). A brand-new `Auditor` value matches none of the named arms, so it falls to the catch-all: no expense is visible. The guide calls this the default-deny habit: \"Fail closed.\"\n\nWhy the others are wrong:\n- **Same as Employee:** there is no \"lowest role\" fallback; the `Employee` arm matches only `UserRole.Employee`.\n- **Treated as administrator:** nothing grants unknown roles more access; the catch-all denies.\n- **Own expenses via GetOwned:** `GetOwned` guards *writes*; reading goes through `List`/`CanView`, which deny.",
+   "excerpts": [
+    {
+     "path": "backend/Services/ExpenseService.cs",
+     "lineStart": 34,
+     "lineEnd": 44,
+     "quote": "query = actor.Role switch { // Employees see only their own expenses. UserRole.Employee => query.Where(e => e.EmployeeId == actor.Id), // Managers see their own plus their direct reports'. UserRole.Manager => query.Where(e => e.EmployeeId == actor.Id || IsDirectReport(e.EmployeeId, actor.Id)), // Finance sees everything. UserRole.Finance => query, _ => Enumerable.Empty<Expense>() };"
+    },
+    {
+     "path": "backend/Services/ExpenseService.cs",
+     "lineStart": 190,
+     "lineEnd": 196,
+     "quote": "private bool CanView(User actor, Expense expense) => actor.Role switch { UserRole.Employee => expense.EmployeeId == actor.Id, UserRole.Manager => expense.EmployeeId == actor.Id || IsDirectReport(expense.EmployeeId, actor.Id), UserRole.Finance => true, _ => false };"
+    },
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 51,
+     "lineEnd": 53,
+     "quote": "**The default-deny habit:** every role `switch` has a `_ => false` / `Enumerable.Empty` arm. A new role added to the enum gets *no* access until someone deliberately grants it. Fail closed."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09-422-business-rule",
+   "target": "seed:quests:dotnet-ramp/quiz/8477ba1c1b8b39eb",
+   "phase": "after",
+   "title": "A future date is a business rule: 422",
+   "body": "The body is well-formed, so the shape checks pass. A date in the future is not a shape problem; it breaks a business rule. `PolicyEngine.Evaluate` adds a **Blocking** `DATE_FUTURE` flag (\"Expense date cannot be in the future.\"). The guide's table maps business-rule failures from `PolicyEngine` to HTTP 422.\n\nWhy the others are wrong:\n- **401 from the token handler:** that answers \"are you logged in?\", not whether the data is valid.\n- **403 from `[Authorize(Roles=...)]`:** that answers \"do you have the role?\".\n- **400 from DataAnnotations:** that is for malformed input; the senior checklist says 400 (shape) and 422 (rules) are different layers.",
+   "excerpts": [
+    {
+     "path": "backend/Services/PolicyEngine.cs",
+     "lineStart": 45,
+     "lineEnd": 46,
+     "quote": "if (expense.ExpenseDate > today) flags.Add(new PolicyFlag(\"DATE_FUTURE\", \"Expense date cannot be in the future.\", PolicySeverity.Blocking));"
+    },
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 7,
+     "lineEnd": 8,
+     "quote": "| Is the input well-formed? | DataAnnotations + `[ApiController]` | [`Dtos.cs`](../../../backend/Dtos/Dtos.cs) | 400 | | Does it satisfy business rules? | `PolicyEngine` | [`PolicyEngine.Evaluate`](../../../backend/Services/PolicyEngine.cs#L34-L66) | 422 |"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10-blocking-vs-warning",
+   "target": "seed:quests:dotnet-ramp/quiz/86dd5ff661651e21",
+   "phase": "after",
+   "title": "Blocking flags stop submit; warnings travel on",
+   "body": "Each flag from `PolicyEngine.Evaluate` has a severity, `Blocking` or `Warning`. `Submit` checks `PolicyEngine.HasBlocking(...)`; if any blocking flag exists it throws a `DomainException` and the expense is not submitted. Warnings do not stop anything: the expense is submitted with them, and the guide says they \"ride along to the approver\". Examples: a missing receipt over the threshold is Blocking; a stale date, a category limit or a high-value amount is a Warning.\n\nWhy the others are wrong:\n- **Both stop submission:** only `HasBlocking` is checked; warnings never stop submit.\n- **Notify Finance / server log:** the code has no notification path; flags are stored on the expense.\n- **Reversed:** that swaps the two severities.",
+   "excerpts": [
+    {
+     "path": "backend/Services/ExpenseService.cs",
+     "lineStart": 119,
+     "lineEnd": 125,
+     "quote": "if (PolicyEngine.HasBlocking(expense.PolicyFlags)) { var reasons = expense.PolicyFlags .Where(f => f.Severity == PolicySeverity.Blocking) .Select(f => f.Message) .ToList(); throw new DomainException(\"Expense violates policy and cannot be submitted.\", reasons);"
+    },
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 57,
+     "lineEnd": 60,
+     "quote": "Blocking flags stop submission"
+    },
+    {
+     "path": "backend/Services/PolicyEngine.cs",
+     "lineStart": 47,
+     "lineEnd": 48,
+     "quote": "else if (expense.ExpenseDate < today.AddDays(-StaleDays)) flags.Add(new PolicyFlag(\"DATE_STALE\", $\"Expense is older than {StaleDays} days.\", PolicySeverity.Warning));"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q11-concurrency-token",
+   "target": "seed:quests:dotnet-ramp/quiz/8c878a14fbf9f6f0",
+   "phase": "after",
+   "title": "Start with a documented assumption and a token",
+   "body": "Risk R4 is a check-then-act gap: `Submit` evaluates policy and then transitions, with nothing making the two steps one atomic unit. The critique's concurrency plan starts small: **document** the single-writer assumption, add an optimistic-concurrency token to `Expense`, and reject stale writes. The test is two concurrent submits giving one 409. Rollback is simply to ignore the token.\n\nWhy the others are wrong:\n- **Move policy into the background worker:** submit is a user request; the critique never proposes this.\n- **Make the store scoped:** each request would get an empty store, not a copy; the data lives in the singleton.\n- **One global lock around the DataStore:** the plan's first step is to document the assumption and add a token, not a global lock.",
+   "excerpts": [
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/06-architecture-critique.md",
+     "lineStart": 31,
+     "lineEnd": 31,
+     "quote": "| R4 | TOCTOU on submit (policy check then transition, not atomic) | [`Submit` L117-128](../../../backend/Services/ExpenseService.cs#L117-L128) | Rare double-submit | confirmed |"
+    },
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/06-architecture-critique.md",
+     "lineStart": 75,
+     "lineEnd": 77,
+     "quote": "- **Concurrency:** start by *documenting* the single-writer assumption and adding an optimistic-concurrency token to `Expense`; reject stale writes. Test: two concurrent submits → one 409. Rollback: ignore the token."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/06-architecture-critique.md",
+     "lineStart": 39,
+     "lineEnd": 48,
+     "why": "The full prioritised improvement list, including where concurrency sits."
+    }
+   ]
+  },
+  {
+   "id": "x-q12-n-plus-one",
+   "target": "seed:quests:dotnet-ramp/quiz/d8da7b4b437be201",
+   "phase": "after",
+   "title": "A free lookup today, an N+1 tomorrow",
+   "body": "`ToResponse` maps one expense, and for each expense it calls `store.Users.GetValueOrDefault(e.EmployeeId)`. Today that is a dictionary lookup in memory, which costs almost nothing. If the store becomes a real database through EF Core, each lookup becomes a query: mapping 100 expenses fires 1 list query plus 100 user queries. That pattern is called **N+1**. The fix is a join, `Include` or a batch load.\n\nWhy the others are wrong:\n- **Torn read:** the guide's concern here is query count under a database, not `ConcurrentDictionary` safety.\n- **Throws when an employee is deleted:** `GetValueOrDefault` returns a default instead of throwing.\n- **Leaks the password hash:** the employee is looked up for the response, but the guide raises no leak here; DTO mapping is the defence against leaks.",
+   "excerpts": [
+    {
+     "path": "backend/Services/Mappings.cs",
+     "lineStart": 17,
+     "lineEnd": 19,
+     "quote": "public static ExpenseResponse ToResponse(this Expense e, DataStore store, User actor) { var employee = store.Users.GetValueOrDefault(e.EmployeeId);"
+    },
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/02-data-model-and-persistence.md",
+     "lineStart": 59,
+     "lineEnd": 62,
+     "quote": "In memory that's a dictionary hit (free). Against a DB, mapping a list of 100 expenses would fire 100 user lookups — the classic **N+1**."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q13-ensure-manages-owner",
+   "target": "seed:quests:dotnet-ramp/quiz/f0059decde7294ac",
+   "phase": "after",
+   "title": "Role attribute plus resource check",
+   "body": "`[Authorize(Roles=\"Manager\")]` only proves the caller is *some* manager. Without more, any manager could approve any team's expense just by sending its id. That is IDOR. `Approve` therefore also calls `EnsureManagesOwner`, which throws `ForbiddenException` unless the actor is a Manager **and** the expense's owner is the actor's direct report. The guide: coarse authorization is \"Necessary but **not sufficient**\".\n\nWhy the others are wrong:\n- **The attribute is skipped for API clients:** the SPA and other clients go through the same pipeline; the service check is about *which* expense, not about repeating the role check.\n- **Only for the audit history:** history is written in `Transition`, not in `EnsureManagesOwner`.\n- **Refreshes an expired role claim:** it only reads `actor.Role` and the reporting line; it never touches tokens.",
+   "excerpts": [
+    {
+     "path": "backend/Services/ExpenseService.cs",
+     "lineStart": 198,
+     "lineEnd": 202,
+     "quote": "private void EnsureManagesOwner(User actor, Expense expense) { if (actor.Role != UserRole.Manager || !IsDirectReport(expense.EmployeeId, actor.Id)) throw new ForbiddenException(\"You can only approve expenses for your direct reports.\"); }"
+    },
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 38,
+     "lineEnd": 44,
+     "quote": "- **Coarse (attribute):** `[Authorize(Roles=\"Manager\")]` on [`Approve` L80](../../../backend/Controllers/ExpensesController.cs#L80) means \"some manager.\" Necessary but **not sufficient**. - **Fine (resource):** `EnsureManagesOwner` ([`ExpenseService` L198-202](../../../backend/Services/ExpenseService.cs#L198-L202)) means \"*this* manager manages *this* expense's owner.\" This is the **IDOR** defense — without it, any manager could approve any team's expense by guessing an id."
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}
