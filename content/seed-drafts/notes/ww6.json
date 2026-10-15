@@ -1,0 +1,557 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "ww6",
+ "repo": "ww6",
+ "sha": "09751ceaee909a30e5c4b5ff5cdde99880b9a3e5",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: a FinOps API and one run state machine",
+   "body": "ww6 is a multi-tenant FinOps API (Next.js plus Prisma/PostgreSQL). Companies (tenants) load their cloud cost line items; tag rules split each cost across teams and projects; an **allocation run** computes the split in the background; a chargeback report reads the latest completed run for a month.\n\nThe course centres on the run's life: PENDING, RUNNING, COMPLETED, FAILED, and the policy that says which moves are legal. Read in this order:\n\n1. `astraupskill/README.md`: the app in one paragraph and the request shape (route, role check, session, Zod, service, repository).\n2. `01-CODEBASE-MAP.md`: the run pipeline with line numbers.\n3. `02-CONCEPTS.md`: six short sections; this is the theory.\n4. `03-WORKED-CHANGE.md` and `04-TESTING-AND-DEBUGGING.md`.\n5. `05-PRACTICE.md`: ten levels, each with a Goal and a Check. Predict before you read on.\n6. `06-SOLUTIONS-AND-REVIEW.md`: answers, plus a senior review table of thirteen findings with file:line evidence.\n\nKeep `src/services/allocationRunService.ts` open; it is short and almost every chapter points into it.",
+   "excerpts": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 7,
+     "lineEnd": 7,
+     "quote": "Cost line items are ingested per tenant; tag-matching allocation rules split each item across teams and projects; an asynchronous allocation run materialises `AllocationResult` rows; a chargeback report aggregates the latest COMPLETED run for a month."
+    },
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "Attempt each level before reading [06](06-SOLUTIONS-AND-REVIEW.md)."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The app, the request shape and the chapter list."
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The six concepts the practice and review build on."
+    }
+   ]
+  },
+  {
+   "id": "r02-policy-is-not-a-lock",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: a transition table is a policy, not a lock",
+   "body": "`VALID_RUN_TRANSITIONS` is a small table: for each status, the list of statuses it may move to. `assertValidRunTransition` looks up the current status and throws a `ValidationError` if the requested next status is not in the list. That is a **policy**: it answers \"is this move allowed?\".\n\nWhat it cannot do is stop two workers acting at once. `transitionRunStatus` reads the run, checks the policy, and then writes. Between the read and the write, another worker could change the row, and the write does not re-check the status. The concepts chapter calls the fix a **conditional claim**: put the expected current status into the update's `where`, and treat \"zero rows updated\" as \"someone else got there first\". The guide is explicit that this is not implemented.\n\nA useful habit: for every write in the worker, ask \"does this write go through the policy, or around it?\" The concepts chapter's section 2 is about one write that goes around it.",
+   "excerpts": [
+    {
+     "path": "src/services/allocationRunService.ts",
+     "lineStart": 27,
+     "lineEnd": 32,
+     "quote": "export function assertValidRunTransition(input: RunTransitionInput) { const allowedNext = VALID_RUN_TRANSITIONS[input.from];"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "It is a policy function; it cannot make an update atomic."
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 7,
+     "lineEnd": 7,
+     "quote": "Between the read and the write another worker can change the row."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 3,
+     "lineEnd": 11,
+     "why": "Sections 1 and 2: policy versus atomic claim, and the catch path."
+    }
+   ]
+  },
+  {
+   "id": "r03-tenants-months-identity",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: tenant scope, month windows, and who the caller is",
+   "body": "Three more ideas run through the review findings.\n\n**Tenant scope.** Every repository query includes `tenantId` in its `where`, so tenant A cannot read tenant B's rows by guessing an id. The concepts chapter then points out what that does not cover: ids that arrive inside a request body and are stored as foreign keys.\n\n**Month windows.** The canonical month is a half-open range from the first instant of the month (UTC) up to, but not including, the first instant of the next. Range queries use this consistently. Problems appear where code looks a month up by **equality** instead of by range, because then the stored key must be normalised exactly.\n\n**Identity.** The API decides who the caller is from a request header and then loads that user from the database. Tenant and role come from the database row, which is good; but the header itself is the only proof of identity. The review ranks identity first, because every other control depends on it.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 15,
+     "lineEnd": 15,
+     "quote": "Every repository `where` includes `tenantId`. A run id alone is insufficient when APIs serve multiple tenants"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 19,
+     "lineEnd": 19,
+     "quote": "`toUtcMonthWindow` (`src/lib/time/month.ts:10-22`) is the canonical month: `[Date.UTC(y, m, 1), Date.UTC(y, m+1, 1))`. Range queries use it consistently."
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 44,
+     "lineEnd": 44,
+     "quote": "a senior review also finds F1–F3 and ranks F1 first because every other control depends on knowing who the caller is."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 13,
+     "lineEnd": 27,
+     "why": "Sections 3 to 6: tenant scope, month keys, async semantics and header identity."
+    }
+   ]
+  },
+  {
+   "id": "x-0775358f76587905",
+   "target": "seed:quests:ww6/quiz/0775358f76587905",
+   "phase": "after",
+   "title": "F7: money as floating-point numbers",
+   "body": "This is a finding-location question: the review table pairs each finding with the file and lines where the defect lives, and the other choices are locations of different findings in the same table.\n\nF7 is about money arithmetic. The database stores amounts as `Decimal`, which is exact. The engine converts them with `Number(...)` and does the maths in JavaScript floating point, then writes per-row amounts back into a `Decimal(12,2)` column without rounding first. Small errors add up, so team or project totals can drift from the input total by cents. Line 56 is where each cost is turned into a `Number` and summed into `totalInputAmount`; the review also cites lines 79 and 91.\n\nWhy the other locations do not fit:\n- `allocationRunService.ts:35-61` is F4: a read-then-update transition with no status check.\n- `budgets/route.ts:23-28` is F13: team managers may create budgets for any team.\n- `session.ts:13-22` is F1: identity from a bare header.",
+   "excerpts": [
+    {
+     "path": "src/services/allocationEngineService.ts",
+     "lineStart": 56,
+     "lineEnd": 56,
+     "quote": "totalInputAmount += Number(costItem.amount);"
+    },
+    {
+     "path": "src/services/allocationEngineService.ts",
+     "lineStart": 79,
+     "lineEnd": 79,
+     "quote": "const allocatedAmount = (Number(costItem.amount) * percent) / 100;"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 28,
+     "lineEnd": 28,
+     "quote": "per-row amounts are not rounded before writing `Decimal(12,2)`, so team/project totals can drift from the input total by cents."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-0a29670e0aa24658",
+   "target": "seed:quests:ww6/quiz/0a29670e0aa24658",
+   "phase": "after",
+   "title": "F3: body-supplied team and project ids",
+   "body": "This is a finding-location question: the review table pairs each finding with the file and lines where the defect lives, and the other choices are locations of different findings in the same table.\n\nF3: when a rule is created, `createRule` passes `targetTeamId` and `targetProjectId` from the request body straight into the repository. Nobody checks that the team or project belongs to the caller's tenant, and the Prisma relations point at `Team.id` / `Project.id` with no tenant part. So if someone knows another tenant's team id, a rule can point at it. Repository reads are tenant-scoped, but these stored references are not.\n\nWhy the other locations do not fit:\n- `budgets/route.ts:23-28` is F13: a within-tenant permission gap for team managers, not a cross-tenant one.\n- `anomalyService.ts:53-55` is F6: anomaly refresh inserts duplicates.\n- `session.ts:13-22` is F1: who the caller is, not which ids they may reference.",
+   "excerpts": [
+    {
+     "path": "src/services/allocationRuleService.ts",
+     "lineStart": 20,
+     "lineEnd": 28,
+     "quote": "weightPercent: input.weightPercent, targetTeamId: input.targetTeamId, targetProjectId: input.targetProjectId"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 15,
+     "lineEnd": 15,
+     "quote": "so a rule can point at another tenant's team if its id is known."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-4274dd95ae18cb33",
+   "target": "seed:quests:ww6/quiz/4274dd95ae18cb33",
+   "phase": "after",
+   "title": "F5: a queue that lives in memory",
+   "body": "This is a finding-location question: the review table pairs each finding with the file and lines where the defect lives, and the other choices are locations of different findings in the same table.\n\nF5: `enqueueAllocationRun` does not use a real queue. It calls `setTimeout` in the same Node process and runs the worker 5 ms later. If the process restarts or a serverless host freezes it after the response, the job is simply gone; the run row stays PENDING and nothing ever resumes it. The review adds a second problem: if the FAILED write inside the worker's `catch` itself throws, that rejection escapes the `setTimeout` callback unhandled. The code comment even says a durable queue is needed in production.\n\nWhy the other locations do not fit:\n- `budgets/route.ts:23-28` is F13, a budget permission note.\n- `allocationRunService.ts:35-61` is F4: how status is written, not how jobs are scheduled.\n- `cost-line-items/route.ts:27-28` is F10: unvalidated paging numbers.",
+   "excerpts": [
+    {
+     "path": "src/lib/queue/allocationQueue.ts",
+     "lineStart": 19,
+     "lineEnd": 21,
+     "quote": "export function enqueueAllocationRun(job: AllocationRunJob) { // In production, replace with durable queue (SQS/BullMQ). In-process queue is intentional learning placeholder. setTimeout(async () => {"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 26,
+     "lineEnd": 26,
+     "quote": "Jobs are lost on restart; PENDING runs are never recovered."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-470028669ff770c8",
+   "target": "seed:quests:ww6/quiz/470028669ff770c8",
+   "phase": "after",
+   "title": "Level 10: deciding how a failed run is retried",
+   "body": "This is a goal-check question: in the practice guide every exercise has a Goal and a Check, and the wrong choices are the Checks of other exercises.\n\nLevel 10 asks you to design a retry for FAILED runs. The transition table makes FAILED terminal: it has no allowed next status. So a retry is a product decision: create a **new run**, or **reopen** the old one. The Check asks you to make that decision explicitly, and if you reopen, to add a FAILED to PENDING edge to the policy rather than letting a FAILED run jump straight to RUNNING without the table knowing. The solutions prefer a new run row so finished runs stay immutable.\n\nWhy the other Checks belong elsewhere:\n- \"one row of 60 to team A\" is Level 6, allocation arithmetic.\n- \"nothing in allocationSchemas.ts ...\" is Level 9, the tenant boundary.\n- \"your where includes status PENDING\" is Level 3, the atomic claim.",
+   "excerpts": [
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 41,
+     "lineEnd": 43,
+     "quote": "**Check:** you decide \"new run\" vs \"reopen\", and if reopening you add a FAILED→PENDING edge rather than letting FAILED→RUNNING happen silently."
+    },
+    {
+     "path": "src/services/allocationRunService.ts",
+     "lineStart": 20,
+     "lineEnd": 25,
+     "quote": "COMPLETED: [], FAILED: []"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 14,
+     "lineEnd": 14,
+     "quote": "Explicit product decision; prefer a new run row so COMPLETED/FAILED stay immutable."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-4c30a8df22b60a45",
+   "target": "seed:quests:ww6/quiz/4c30a8df22b60a45",
+   "phase": "after",
+   "title": "F8: nothing stops two runs for the same month",
+   "body": "This is a finding-location question: the review table pairs each finding with the file and lines where the defect lives, and the other choices are locations of different findings in the same table.\n\nF8 lives in the Prisma schema. The `AllocationRun` model has only an `@@index([tenantId, monthStart, status])`. An index speeds up lookups but does not forbid duplicates; there is no `@@unique` on `(tenantId, monthStart)`. `createRunAndQueue` also does not check for a run already in flight. So two runs for the same month can be started and race, and the report silently uses whichever completed last.\n\nWhy the other locations do not fit:\n- `allocationRunService.ts:35-61` is F4: one run's status writes are not atomic. F8 is about two separate runs.\n- `allocationQueue.ts:19-29` is F5: lost in-memory jobs.\n- `allocationEngineService.ts:56` is F7: floating-point money.",
+   "excerpts": [
+    {
+     "path": "prisma/schema.prisma",
+     "lineStart": 156,
+     "lineEnd": 160,
+     "quote": "model AllocationRun { id String @id @default(cuid()) tenantId String monthStart DateTime"
+    },
+    {
+     "path": "prisma/schema.prisma",
+     "lineStart": 172,
+     "lineEnd": 172,
+     "quote": "@@index([tenantId, monthStart, status])"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 29,
+     "lineEnd": 29,
+     "quote": "No uniqueness on `(tenantId, monthStart)` for runs and no in-flight check in `createRunAndQueue`"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-65f657a6ca1f164a",
+   "target": "seed:quests:ww6/quiz/65f657a6ca1f164a",
+   "phase": "after",
+   "title": "F12: a forecast that is just this month times 1.08",
+   "body": "This is a finding-location question: the review table pairs each finding with the file and lines where the defect lives, and the other choices are locations of different findings in the same table.\n\nF12: `generateForecastForMonth` loads the month's own cost line items, sums them, and multiplies by 1.08. So the \"forecast\" for a month is that month's actual spend plus 8%. While the month is still in progress and data keeps arriving, refreshing changes the prediction. The code comment admits the model is intentionally naive. The review also notes that the delete-then-create save in the forecast repository is not transactional.\n\nWhy the other locations do not fit:\n- `budgets/route.ts:23-28` is F13: budget permissions.\n- `allocationRunService.ts:35-61` is F4: run status transitions.\n- `allocationQueue.ts:19-29` is F5: the in-memory job queue.",
+   "excerpts": [
+    {
+     "path": "src/services/forecastService.ts",
+     "lineStart": 13,
+     "lineEnd": 17,
+     "quote": "const costs = await listAllCostLineItemsByMonth(tenantId, window);"
+    },
+    {
+     "path": "src/services/forecastService.ts",
+     "lineStart": 16,
+     "lineEnd": 17,
+     "quote": "const predictedTotal = total * 1.08;"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 33,
+     "lineEnd": 33,
+     "quote": "The \"forecast\" for month M is 1.08 × M's own actuals; refreshing the current month changes the prediction as data arrives."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-9026689c0b7ac892",
+   "target": "seed:quests:ww6/quiz/9026689c0b7ac892",
+   "phase": "after",
+   "title": "F11: re-ingesting an export duplicates every line",
+   "body": "This is a finding-location question: the review table pairs each finding with the file and lines where the defect lives, and the other choices are locations of different findings in the same table.\n\nF11: `ingestCostLineItems` maps every incoming item to a row and calls `createManyCostLineItems`. There is no natural key (such as provider plus resource id plus usage date) and no upsert, so sending the same export twice inserts every line twice and doubles that tenant's costs. The comment at line 13 talks about making \"idempotency/refeeds easier\", but the code does not actually make refeeds idempotent.\n\nWhy the other locations do not fit:\n- `budgets/route.ts:23-28` is F13: budget permissions.\n- `allocationRunService.ts:35-61` is F4: run status transitions.\n- `allocationEngineService.ts:99` is F9: a misnamed summary field.",
+   "excerpts": [
+    {
+     "path": "src/services/ingestionService.ts",
+     "lineStart": 13,
+     "lineEnd": 13,
+     "quote": "normalization here keeps ingestion idempotency/refeeds easier than spreading transforms in repositories."
+    },
+    {
+     "path": "src/services/ingestionService.ts",
+     "lineStart": 28,
+     "lineEnd": 28,
+     "quote": "const result = await createManyCostLineItems(rows);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-a454a0c8508ad646",
+   "target": "seed:quests:ww6/quiz/a454a0c8508ad646",
+   "phase": "after",
+   "title": "F1: identity from a bare x-user-id header",
+   "body": "This is a finding-location question: the review table pairs each finding with the file and lines where the defect lives, and the other choices are locations of different findings in the same table.\n\nF1, the critical finding: `requireSession` reads `x-user-id` from the request and loads that user. That is the whole proof of identity. Tenant and role are correctly taken from the database row, but anyone who knows a user id can send it and be that user. Worse, the browser client sends `NEXT_PUBLIC_DEMO_USER_ID`, and `NEXT_PUBLIC_` values are compiled into the public JavaScript bundle. The review ranks F1 first because every other control depends on it.\n\nWhy the other locations do not fit:\n- `ingestionService.ts:12-34` is F11: duplicate line items on refeed.\n- `allocationRunService.ts:35-61` is F4: run status transitions.\n- `cost-line-items/route.ts:27-28` is F10: unvalidated paging numbers.",
+   "excerpts": [
+    {
+     "path": "src/lib/auth/session.ts",
+     "lineStart": 12,
+     "lineEnd": 16,
+     "quote": "const userId = request.headers.get(\"x-user-id\"); if (!userId) { throw new UnauthorizedError(\"Missing x-user-id header\");"
+    },
+    {
+     "path": "src/lib/http/client.ts",
+     "lineStart": 7,
+     "lineEnd": 7,
+     "quote": "const DEMO_USER_ID = process.env.NEXT_PUBLIC_DEMO_USER_ID ?? \"replace_with_seed_user_id\";"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 22,
+     "lineEnd": 22,
+     "quote": "Any caller with a user id is that user; the id the UI uses is shipped in the public bundle via `NEXT_PUBLIC_`."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-a866f0c0e89da039",
+   "target": "seed:quests:ww6/quiz/a866f0c0e89da039",
+   "phase": "after",
+   "title": "Level 1: reading the transition table",
+   "body": "This is a goal-check question: in the practice guide every exercise has a Goal and a Check, and the wrong choices are the Checks of other exercises.\n\nLevel 1 asks for the legal targets from PENDING and RUNNING and which statuses are terminal. The answer is written down in one place, the `VALID_RUN_TRANSITIONS` table, so the Check is simply that your answer matches those lines exactly: PENDING may go to RUNNING or FAILED, RUNNING may go to COMPLETED or FAILED, and COMPLETED and FAILED have empty lists, which makes them terminal.\n\nWhy the other Checks belong elsewhere:\n- \"one row of 60 to team A\" is Level 6, allocation arithmetic.\n- \"FAILED, completedAt set, ... replaceAllocationResults never ran\" is Level 4, a failure after RUNNING.\n- \"ValidationError, status 422 ... PENDING -> COMPLETED\" is Level 2, the skipped phase. It uses the table, but it checks one refused move, not the whole table.",
+   "excerpts": [
+    {
+     "path": "src/services/allocationRunService.ts",
+     "lineStart": 20,
+     "lineEnd": 25,
+     "quote": "PENDING: [\"RUNNING\", \"FAILED\"], RUNNING: [\"COMPLETED\", \"FAILED\"], COMPLETED: [], FAILED: []"
+    },
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 5,
+     "lineEnd": 7,
+     "quote": "**Check:** your answer matches `src/services/allocationRunService.ts:20-25` exactly."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-ad96be56d0310878",
+   "target": "seed:quests:ww6/quiz/ad96be56d0310878",
+   "phase": "after",
+   "title": "Level 3: designing an atomic claim",
+   "body": "This is a goal-check question: in the practice guide every exercise has a Goal and a Check, and the wrong choices are the Checks of other exercises.\n\nLevel 3 is about the race between reading a run and writing its new status. Today `updateAllocationRunStatus` updates by `id` and `tenantId` only. A **conditional claim** adds the expected current status to the `where`, so the database only changes the row if it is still PENDING. If another worker already claimed it, the update affects zero rows, and the worker treats count zero as \"not mine\" and stops. The Check asks for exactly that: `status: \"PENDING\"` in the `where`, and naming the repository lines that change.\n\nWhy the other Checks belong elsewhere:\n- \"your answer matches allocationRunService.ts:20-25\" is Level 1, the policy table.\n- \"FAILED, completedAt set ...\" is Level 4, failure after RUNNING.\n- \"one row of 60 to team A\" is Level 6, allocation arithmetic.",
+   "excerpts": [
+    {
+     "path": "src/repositories/allocationRunRepository.ts",
+     "lineStart": 66,
+     "lineEnd": 72,
+     "quote": "return db.allocationRun.updateMany({ where: {"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 7,
+     "lineEnd": 7,
+     "quote": "A conditional claim — `updateMany({ where: { id, tenantId, status: \"PENDING\" } })` and treating `count === 0` as \"someone else owns it\" — closes that gap. It is not implemented."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-b69d025f6ee848d8",
+   "target": "seed:quests:ww6/quiz/b69d025f6ee848d8",
+   "phase": "after",
+   "title": "Level 7: what matchedRules really counts",
+   "body": "This is a goal-check question: in the practice guide every exercise has a Goal and a Check, and the wrong choices are the Checks of other exercises.\n\nLevel 7 is a naming trap. The summary field is called `matchedRules`, which sounds like \"how many rules matched\". But the code sets it to `rules.length`, the number of active rules loaded for the tenant, whether or not any of them matched. With 5 active rules and no matches, the field still says 5. The Check is that number plus the reason. The review lists the same thing as finding F9.\n\nWhy the other Checks belong elsewhere:\n- \"you decide new run vs reopen\" is Level 10, retry policy.\n- \"FAILED, completedAt set ...\" is Level 4, failure after RUNNING.\n- \"your where includes status PENDING\" is Level 3, the atomic claim.",
+   "excerpts": [
+    {
+     "path": "src/services/allocationEngineService.ts",
+     "lineStart": 97,
+     "lineEnd": 99,
+     "quote": "summary: { evaluatedLineItems: costItems.length, matchedRules: rules.length,"
+    },
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 29,
+     "lineEnd": 31,
+     "quote": "**Check:** 5 — the field is `rules.length` (`allocationEngineService.ts:99`), not a match count."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-b868ba21eda289e5",
+   "target": "seed:quests:ww6/quiz/b868ba21eda289e5",
+   "phase": "after",
+   "title": "Level 9: nothing stops a cross-tenant team id",
+   "body": "This is a goal-check question: in the practice guide every exercise has a Goal and a Check, and the wrong choices are the Checks of other exercises.\n\nLevel 9 asks what stops an analyst in tenant A from creating a rule that targets tenant B's team. The honest answer is **nothing**: the Zod schema only checks the shape of the input, `createRule` only checks that some target is present, and the Prisma relation references `Team.id` without a tenant. So the Check names those three places and finds no guard in any of them. This is review finding F3.\n\nWhy the other Checks belong elsewhere:\n- \"ValidationError, status 422 ... PENDING -> COMPLETED\" is Level 2, the skipped phase.\n- \"FAILED, completedAt set ...\" is Level 4, failure after RUNNING.\n- \"your where includes status PENDING\" is Level 3, the atomic claim.",
+   "excerpts": [
+    {
+     "path": "src/services/allocationRuleService.ts",
+     "lineStart": 16,
+     "lineEnd": 18,
+     "quote": "if (!input.targetProjectId && !input.targetTeamId) { throw new ValidationError(\"Rule must target a team or project\");"
+    },
+    {
+     "path": "prisma/schema.prisma",
+     "lineStart": 148,
+     "lineEnd": 148,
+     "quote": "team           Team?     @relation(fields: [targetTeamId], references: [id])"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 13,
+     "lineEnd": 13,
+     "quote": "Nothing; cross-tenant foreign keys are accepted."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-baf3484ce805ef30",
+   "target": "seed:quests:ww6/quiz/baf3484ce805ef30",
+   "phase": "after",
+   "title": "F13: team managers can budget for any team",
+   "body": "This is a finding-location question: the review table pairs each finding with the file and lines where the defect lives, and the other choices are locations of different findings in the same table.\n\nF13 is an informational finding. The budgets POST route is guarded by the `manageBudgets` permission, which team managers have. After that it parses the body and creates the budget for whatever team the body names, as long as it is in the caller's tenant. There is no check that the manager owns that team. The code comment on line 24 already says this should be enforced eventually, which is why the review rates it Info rather than a hidden bug.\n\nWhy the other locations do not fit:\n- `ingestionService.ts:12-34` is F11: duplicates on refeed.\n- `allocationRuleService.ts:20-28` is F3: ids from another tenant entirely, not another team in the same tenant.\n- `allocationRunService.ts:66` is F2: the run's month stored un-normalised.",
+   "excerpts": [
+    {
+     "path": "src/app/api/budgets/route.ts",
+     "lineStart": 23,
+     "lineEnd": 24,
+     "quote": "export const POST = withRole(\"manageBudgets\", async (request, auth) => { // ⚠️ SENIOR NOTE: TEAM_MANAGER can write budgets, but this should eventually enforce team ownership checks too."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-c22363003d3ddc91",
+   "target": "seed:quests:ww6/quiz/c22363003d3ddc91",
+   "phase": "after",
+   "title": "F10: paging numbers that nobody validates",
+   "body": "This is a finding-location question: the review table pairs each finding with the file and lines where the defect lives, and the other choices are locations of different findings in the same table.\n\nF10: the cost line items GET route reads `limit` and `offset` from the query string and passes them through `Number(...)`. Nothing checks the result. `Number(\"abc\")` is `NaN`, which the review says ends in a 500; negative or huge values pass straight through to the query. A validation schema for month queries already exists elsewhere, but no route uses it.\n\nWhy the other locations do not fit:\n- `allocationRuleService.ts:20-28` is F3: cross-tenant ids in rule bodies.\n- `allocationEngineService.ts:99` is F9: the misnamed `matchedRules` field.\n- `allocationRunService.ts:35-61` is F4: run status transitions.",
+   "excerpts": [
+    {
+     "path": "src/app/api/cost-line-items/route.ts",
+     "lineStart": 27,
+     "lineEnd": 28,
+     "quote": "const limit = Number(request.nextUrl.searchParams.get(\"limit\") ?? \"100\"); const offset = Number(request.nextUrl.searchParams.get(\"offset\") ?? \"0\");"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 31,
+     "lineEnd": 31,
+     "quote": "`limit`/`offset` are unvalidated `Number(...)`: NaN → 500, negative or huge values pass through."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-c6a7224a750a4855",
+   "target": "seed:quests:ww6/quiz/c6a7224a750a4855",
+   "phase": "after",
+   "title": "Level 5: a duplicate job turns COMPLETED into FAILED",
+   "body": "This is a goal-check question: in the practice guide every exercise has a Goal and a Check, and the wrong choices are the Checks of other exercises.\n\nLevel 5: the same job runs a second time after the first already completed. The second run tries to move COMPLETED to RUNNING. The policy refuses that and throws a `ValidationError` with the message \"Invalid run transition: COMPLETED -> RUNNING\". The worker's `catch` then writes FAILED **directly** with `updateAllocationRunStatus`, without consulting the policy. So the finished run is overwritten with FAILED, and the failure reason is that message. The Check states exactly this.\n\nWhy the other Checks belong elsewhere:\n- \"your where includes status PENDING\" is Level 3, the atomic claim.\n- \"FAILED, completedAt set, ... startedAt kept\" is Level 4, where computation throws after RUNNING, not a duplicate job.\n- the two monthStart timestamps check is Level 8, month keys.",
+   "excerpts": [
+    {
+     "path": "src/services/allocationRunService.ts",
+     "lineStart": 102,
+     "lineEnd": 109,
+     "quote": "} catch (error) { const message = error instanceof Error ? error.message : \"Unknown run failure\";"
+    },
+    {
+     "path": "src/services/allocationRunService.ts",
+     "lineStart": 106,
+     "lineEnd": 109,
+     "quote": "await updateAllocationRunStatus({ tenantId: job.tenantId, runId: job.runId, status: \"FAILED\","
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 11,
+     "lineEnd": 11,
+     "quote": "if the run was already COMPLETED, the RUNNING transition throws `ValidationError` and the catch overwrites COMPLETED with FAILED."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-d1724d09b11ea0e2",
+   "target": "seed:quests:ww6/quiz/d1724d09b11ea0e2",
+   "phase": "after",
+   "title": "Level 6: a 60% rule leaves 40% unaccounted",
+   "body": "This is a goal-check question: in the practice guide every exercise has a Goal and a Check, and the wrong choices are the Checks of other exercises.\n\nLevel 6: a $100.00 item matches one rule at 60% for team A. The engine adds 100 to `totalInputAmount`, then for each matching rule computes `amount * percent / 100`, which is 60, pushes one result row, and adds 60 to `totalAllocatedAmount`. There is no second rule, and nothing creates a row for the remaining 40 or flags it. The Check names all of that: one row of 60, totals 100 and 60, and a silent 40.\n\nWhy the other Checks belong elsewhere:\n- \"FAILED, completedAt set ...\" is Level 4, failure after RUNNING.\n- \"you decide new run vs reopen\" is Level 10, retry policy.\n- \"nothing in allocationSchemas.ts ...\" is Level 9, the tenant boundary.",
+   "excerpts": [
+    {
+     "path": "src/services/allocationEngineService.ts",
+     "lineStart": 77,
+     "lineEnd": 79,
+     "quote": "for (const rule of matchingRules) { const percent = Number(rule.weightPercent); const allocatedAmount = (Number(costItem.amount) * percent) / 100;"
+    },
+    {
+     "path": "src/services/allocationEngineService.ts",
+     "lineStart": 91,
+     "lineEnd": 91,
+     "quote": "totalAllocatedAmount += allocatedAmount;"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 10,
+     "lineEnd": 10,
+     "quote": "One row of 60; the 40 remainder is silent."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-d1b0873d003a88bf",
+   "target": "seed:quests:ww6/quiz/d1b0873d003a88bf",
+   "phase": "after",
+   "title": "F9: matchedRules counts every active rule",
+   "body": "This is a finding-location question: the review table pairs each finding with the file and lines where the defect lives, and the other choices are locations of different findings in the same table.\n\nF9: the engine's summary sets `matchedRules: rules.length`. `rules` is the list of all active rules for the tenant, not the rules that actually matched a line item. So the name promises one thing and the number measures another. Anyone reading a summary would overestimate how many rules applied. It is rated Low because it misleads rather than corrupts data.\n\nWhy the other locations do not fit:\n- `anomalyService.ts:53-55` is F6: anomaly refresh inserts duplicates.\n- `ingestionService.ts:12-34` is F11: duplicate line items on refeed.\n- `session.ts:13-22` is F1: identity from a header.",
+   "excerpts": [
+    {
+     "path": "src/services/allocationEngineService.ts",
+     "lineStart": 99,
+     "lineEnd": 99,
+     "quote": "matchedRules: rules.length,"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 30,
+     "lineEnd": 30,
+     "quote": "`summary.matchedRules` reports `rules.length` (all active rules), not matched rules."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-e68638301470e23d",
+   "target": "seed:quests:ww6/quiz/e68638301470e23d",
+   "phase": "after",
+   "title": "F6: anomaly refresh adds copies and misses past months",
+   "body": "This is a finding-location question: the review table pairs each finding with the file and lines where the defect lives, and the other choices are locations of different findings in the same table.\n\nF6 has two parts. First, with `refresh=true` the anomaly service computes anomalies and calls `createAnomalies` every time, with no dedupe, so each refresh stores another copy of every anomaly. Second, it then reads them back with `listAnomaliesByMonth`, and the repository filters by `detectedAt` falling inside the month window. New anomalies are detected now, so for a past month their `detectedAt` is outside that window and the read returns nothing new.\n\nWhy the other locations do not fit:\n- `budgets/route.ts:23-28` is F13: budget permissions.\n- `allocationQueue.ts:19-29` is F5: the in-memory job queue.\n- `allocationRunService.ts:35-61` is F4: run status transitions.",
+   "excerpts": [
+    {
+     "path": "src/services/anomalyService.ts",
+     "lineStart": 53,
+     "lineEnd": 55,
+     "quote": "await createAnomalies(anomalies); return listAnomaliesByMonth(tenantId, window);"
+    },
+    {
+     "path": "src/repositories/anomalyRepository.ts",
+     "lineStart": 36,
+     "lineEnd": 38,
+     "quote": "detectedAt: { gte: window.monthStart, lt: window.monthEnd"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 27,
+     "lineEnd": 27,
+     "quote": "`refresh=true` inserts a fresh copy of every anomaly each call (no dedupe), and the read filters by `detectedAt`, so refreshing a past month returns nothing new."
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}
