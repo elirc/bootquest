@@ -1,0 +1,405 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "opusorganize",
+ "sha": "6a6e84522bd58c88ccec72421a15b8dbef797602",
+ "guides": [
+  "apprenticeship/curriculum/01-transactional-outbox.md",
+  "apprenticeship/curriculum/02-idempotency.md",
+  "apprenticeship/curriculum/03-concurrency-races.md",
+  "apprenticeship/curriculum/07-zero-downtime-migrations.md"
+ ],
+ "items": [
+  {
+   "id": "p01-outbox-guarantee",
+   "kind": "quiz",
+   "source": {
+    "path": "apprenticeship/curriculum/01-transactional-outbox.md",
+    "lines": {
+     "start": 5,
+     "end": 11
+    }
+   },
+   "cites": [
+    {
+     "path": "apprenticeship/curriculum/01-transactional-outbox.md",
+     "lineStart": 7,
+     "lineEnd": 9
+    }
+   ],
+   "prompt": "A service writes its business change and an OutboxMessage row in one database transaction. What does that guarantee?",
+   "answer": "An event cannot be lost once the business write commits",
+   "distractors": [
+    "Each event is delivered exactly once to each of its consumers",
+    "Events reach consumers in the order their rows commit",
+    "A failed publish is retried with backoff automatically"
+   ],
+   "explanation": "Both rows commit or roll back together, so a committed change always has a durable outbox row. Delivery is still at-least-once, ordering depends on the dispatcher query, and stranded rows need a sweeper policy."
+  },
+  {
+   "id": "p02-crash-after-publish",
+   "kind": "quiz",
+   "source": {
+    "path": "apprenticeship/curriculum/01-transactional-outbox.md",
+    "lines": {
+     "start": 9,
+     "end": 9
+    }
+   },
+   "cites": [
+    {
+     "path": "apprenticeship/curriculum/01-transactional-outbox.md",
+     "lineStart": 13,
+     "lineEnd": 15
+    }
+   ],
+   "prompt": "An outbox dispatcher publishes a message, then crashes before it marks the row as sent. What happens when it restarts?",
+   "answer": "It republishes that message, so consumers must be idempotent",
+   "distractors": [
+    "The broker drops the copy, since it already saw that outbox row",
+    "The row is marked failed and left for an operator to replay",
+    "The business change rolls back, since its event was not marked"
+   ],
+   "explanation": "The row still looks unsent, so the dispatcher republishes it. That is why outbox delivery is at-least-once and consumers need idempotency (curriculum 02)."
+  },
+  {
+   "id": "p03-replica-dispatchers",
+   "kind": "quiz",
+   "source": {
+    "path": "apprenticeship/curriculum/01-transactional-outbox.md",
+    "lines": {
+     "start": 13,
+     "end": 17
+    }
+   },
+   "cites": [
+    {
+     "path": "apprenticeship/curriculum/01-transactional-outbox.md",
+     "lineStart": 17,
+     "lineEnd": 17
+    }
+   ],
+   "prompt": "Three dispatcher replicas poll the same outbox table. What keeps two of them from publishing the same row?",
+   "answer": "Claiming rows with FOR UPDATE SKIP LOCKED or a lease",
+   "distractors": [
+    "Ordering the poll query by the creation time of each outbox row",
+    "Wrapping every publish call in a separate retry loop",
+    "Giving each replica a private copy of the outbox table"
+   ],
+   "explanation": "Checklist item 4: with several replicas, each must claim rows (SKIP LOCKED or a lease) or the same message is published twice. ORDER BY only orders; retries add duplicates."
+  },
+  {
+   "id": "p04-unstable-message-id",
+   "kind": "quiz",
+   "source": {
+    "path": "apprenticeship/curriculum/01-transactional-outbox.md",
+    "lines": {
+     "start": 57,
+     "end": 65
+    }
+   },
+   "cites": [
+    {
+     "path": "apprenticeship/curriculum/01-transactional-outbox.md",
+     "lineStart": 61,
+     "lineEnd": 65
+    }
+   ],
+   "prompt": "An inbox table dedups messages by id, but each republish builds the event with Guid.NewGuid(). What happens to a republished message?",
+   "answer": "The inbox accepts it as new, so its effect runs a second time",
+   "distractors": [
+    "The inbox rejects it, since its payload matches the first",
+    "The broker replaces the older message with the newer copy",
+    "The consumer hits a unique violation, then retries it later"
+   ],
+   "explanation": "The inbox key is only the message id. A fresh Guid looks like a new message, so the dedup never fires; the id must be derived from something stable, such as the outbox row id."
+  },
+  {
+   "id": "p05-insert-then-catch",
+   "kind": "quiz",
+   "source": {
+    "path": "apprenticeship/curriculum/02-idempotency.md",
+    "lines": {
+     "start": 5,
+     "end": 6
+    }
+   },
+   "cites": [
+    {
+     "path": "apprenticeship/curriculum/03-concurrency-races.md",
+     "lineStart": 3,
+     "lineEnd": 7
+    }
+   ],
+   "prompt": "For a uniqueness rule, why does the guide say to insert and catch the unique violation instead of checking first, then inserting?",
+   "answer": "Two requests can both pass the check before either inserts",
+   "distractors": [
+    "A SELECT cannot see the rows that the same request has just inserted",
+    "Postgres refuses a SELECT before an INSERT on that key",
+    "A unique index applies only when no SELECT came first"
+   ],
+   "explanation": "Check-then-insert is a race: both requests see \"not there\" and both insert. A unique constraint makes the database the single referee; catch its violation (23505 in Postgres)."
+  },
+  {
+   "id": "p06-cache-final-only",
+   "kind": "quiz",
+   "source": {
+    "path": "apprenticeship/curriculum/02-idempotency.md",
+    "lines": {
+     "start": 7,
+     "end": 7
+    }
+   },
+   "cites": [
+    {
+     "path": "apprenticeship/curriculum/02-idempotency.md",
+     "lineStart": 5,
+     "lineEnd": 9
+    }
+   ],
+   "prompt": "An API idempotency-key store maps each key to a stored response. Which responses should it keep?",
+   "answer": "Terminal successes, and errors that are explicitly final",
+   "distractors": [
+    "Every response, so that a retry always gets the same reply",
+    "Errors only, so that successful requests run once more",
+    "5xx errors only, so clients back off from a sick server"
+   ],
+   "explanation": "Caching a transient failure would replay that failure to every legitimate retry. The guide's worked example is a middleware that cached a 400, so retries kept replaying it."
+  },
+  {
+   "id": "p07-consumer-inbox",
+   "kind": "quiz",
+   "source": {
+    "path": "apprenticeship/curriculum/02-idempotency.md",
+    "lines": {
+     "start": 8,
+     "end": 8
+    }
+   },
+   "cites": [
+    {
+     "path": "apprenticeship/curriculum/02-idempotency.md",
+     "lineStart": 5,
+     "lineEnd": 9
+    }
+   ],
+   "prompt": "A queue consumer can receive the same message twice. Which tool does the idempotency guide name for consumers?",
+   "answer": "An inbox table keyed by a stable message id",
+   "distractors": [
+    "A key store, mapping each key to an HTTP response",
+    "A distributed lock held while each message runs",
+    "A client-supplied key checked in a cache first"
+   ],
+   "explanation": "Tool 3 is the inbox or processed-message table for consumers, keyed by an id that survives republishing. The key-to-response store is the API tool, and the guide does not list a lock for this."
+  },
+  {
+   "id": "p08-conditional-update",
+   "kind": "quiz",
+   "source": {
+    "path": "apprenticeship/curriculum/03-concurrency-races.md",
+    "lines": {
+     "start": 8,
+     "end": 10
+    }
+   },
+   "cites": [
+    {
+     "path": "apprenticeship/curriculum/03-concurrency-races.md",
+     "lineStart": 6,
+     "lineEnd": 13
+    }
+   ],
+   "prompt": "Two requests try to move the same ticket from Open to Closed at once. Which fix does the guide give for a conditional state change like this?",
+   "answer": "UPDATE with WHERE id and status = expected, then check rows affected",
+   "distractors": [
+    "Load the status into memory, then guard it with an if before saving",
+    "Add a unique index on the status column of the tickets table",
+    "Retry the update in a loop, until exactly one of the requests succeeds"
+   ],
+   "explanation": "Option 1 makes the database apply the check and the write atomically; zero rows affected means another request got there first. An in-memory guard does not help across two contexts or pods."
+  },
+  {
+   "id": "p09-prove-a-race-fix",
+   "kind": "quiz",
+   "source": {
+    "path": "apprenticeship/curriculum/03-concurrency-races.md",
+    "lines": {
+     "start": 15,
+     "end": 15
+    }
+   },
+   "cites": [
+    {
+     "path": "apprenticeship/curriculum/03-concurrency-races.md",
+     "lineStart": 3,
+     "lineEnd": 4
+    }
+   ],
+   "prompt": "How does the guide say to prove, in a test, that a race condition is fixed?",
+   "answer": "Fire N concurrent calls, then assert on the final state",
+   "distractors": [
+    "Fire the calls one by one, and assert on each status code returned",
+    "Mock the database and count how often save is called",
+    "Run the test many times and require zero exceptions"
+   ],
+   "explanation": "Concurrent calls (Task.WhenAll) reproduce the race, and asserting the final state (exactly one invoice, the exact balance) proves the outcome; status codes alone can look fine while the data is wrong."
+  },
+  {
+   "id": "p10-step-after-expand",
+   "kind": "quiz",
+   "source": {
+    "path": "apprenticeship/curriculum/07-zero-downtime-migrations.md",
+    "lines": {
+     "start": 6,
+     "end": 12
+    }
+   },
+   "cites": [
+    {
+     "path": "apprenticeship/curriculum/07-zero-downtime-migrations.md",
+     "lineStart": 3,
+     "lineEnd": 4
+    }
+   ],
+   "prompt": "An expand/contract change has just added the new column as nullable. What is the next step in the guide's sequence?",
+   "answer": "Dual-write, where new code writes both columns but reads stay old",
+   "distractors": [
+    "Backfill the new column inside the migration transaction itself",
+    "Switch every single read to the new column at once, for all requests",
+    "Drop the old column, since the new one now exists in the schema"
+   ],
+   "explanation": "After expand comes dual-write, then a throttled backfill from a job (not in the migration transaction), then switching reads, stopping old writes, and only then contract."
+  },
+  {
+   "id": "p11-wait-before-contract",
+   "kind": "quiz",
+   "source": {
+    "path": "apprenticeship/curriculum/07-zero-downtime-migrations.md",
+    "lines": {
+     "start": 11,
+     "end": 12
+    }
+   },
+   "cites": [
+    {
+     "path": "apprenticeship/curriculum/07-zero-downtime-migrations.md",
+     "lineStart": 3,
+     "lineEnd": 4
+    }
+   ],
+   "prompt": "Why does the sequence wait one full release after the code stops writing the old column before dropping it?",
+   "answer": "So rolling back to the prior version still finds its column",
+   "distractors": [
+    "So the backfill job has time to copy the last few rows across",
+    "So the database can rebuild every index that uses the column",
+    "So ORMs can regenerate their models from the schema"
+   ],
+   "explanation": "During and after a deploy the previous version may run again (rollback). It still reads the old column, so the drop waits until N-1 compatibility is no longer needed. The backfill happened earlier, at step 3."
+  },
+  {
+   "id": "p12-index-concurrently",
+   "kind": "quiz",
+   "source": {
+    "path": "apprenticeship/curriculum/07-zero-downtime-migrations.md",
+    "lines": {
+     "start": 14,
+     "end": 16
+    }
+   },
+   "cites": [
+    {
+     "path": "apprenticeship/curriculum/07-zero-downtime-migrations.md",
+     "lineStart": 16,
+     "lineEnd": 16
+    }
+   ],
+   "prompt": "A migration must add an index to a large, busy Postgres table without blocking writes. What does the guide say to use?",
+   "answer": "CREATE INDEX CONCURRENTLY, run outside a transaction block",
+   "distractors": [
+    "A plain CREATE INDEX inside the migration transaction",
+    "CREATE INDEX CONCURRENTLY in a transaction, to be safe",
+    "A plain CREATE INDEX, since Postgres never blocks writes"
+   ],
+   "explanation": "A plain CREATE INDEX locks out writes while it builds. CONCURRENTLY avoids that, but Postgres refuses to run it inside a transaction block, so the migration runner must issue it on its own."
+  },
+  {
+   "id": "f01-failure-window-checklist",
+   "kind": "flashcard",
+   "source": {
+    "path": "apprenticeship/curriculum/01-transactional-outbox.md",
+    "lines": {
+     "start": 13,
+     "end": 17
+    }
+   },
+   "cites": [
+    {
+     "path": "apprenticeship/curriculum/01-transactional-outbox.md",
+     "lineStart": 13,
+     "lineEnd": 17
+    }
+   ],
+   "front": "Recite the outbox failure-window checklist.",
+   "back": "1) Is the outbox row written in the same transaction as the state change? 2) If the process dies after publish but before mark-sent, is the message id stable across republishes? 3) What retries stranded rows, and what alerts on a growing backlog? 4) With several dispatchers, is there FOR UPDATE SKIP LOCKED or a lease?"
+  },
+  {
+   "id": "f02-idempotency-review",
+   "kind": "flashcard",
+   "source": {
+    "path": "apprenticeship/curriculum/02-idempotency.md",
+    "lines": {
+     "start": 11,
+     "end": 15
+    }
+   },
+   "cites": [
+    {
+     "path": "apprenticeship/curriculum/02-idempotency.md",
+     "lineStart": 11,
+     "lineEnd": 15
+    }
+   ],
+   "front": "What four review questions does the guide ask of any idempotency key?",
+   "back": "What is the key and who generates it? Is it stable across retries? What is its scope (tenant, user, endpoint) and how long is it kept? What does a duplicate return: the same response, a 409, or a 200 no-op?"
+  },
+  {
+   "id": "f03-expand-contract",
+   "kind": "flashcard",
+   "source": {
+    "path": "apprenticeship/curriculum/07-zero-downtime-migrations.md",
+    "lines": {
+     "start": 6,
+     "end": 12
+    }
+   },
+   "cites": [
+    {
+     "path": "apprenticeship/curriculum/07-zero-downtime-migrations.md",
+     "lineStart": 6,
+     "lineEnd": 12
+    }
+   ],
+   "front": "List the six expand/contract steps, each its own deploy.",
+   "back": "Expand (add nullable/defaulted), dual-write (write both, read old), backfill in batches from a job, switch reads (behind a flag), stop writing the old column and wait one release, contract (drop the old column)."
+  },
+  {
+   "id": "f04-race-fixes",
+   "kind": "flashcard",
+   "source": {
+    "path": "apprenticeship/curriculum/03-concurrency-races.md",
+    "lines": {
+     "start": 6,
+     "end": 13
+    }
+   },
+   "cites": [
+    {
+     "path": "apprenticeship/curriculum/03-concurrency-races.md",
+     "lineStart": 6,
+     "lineEnd": 13
+    }
+   ],
+   "front": "Match each race situation to the guide's fix.",
+   "back": "Uniqueness: a DB unique constraint. Conditional state change: UPDATE ... WHERE status=@expected with a rows-affected check, or a concurrency token. Counters: an atomic UPDATE n = n - 1 WHERE n > 0, or SELECT ... FOR UPDATE. Singleton jobs: a lock or lease. Shared in-process objects: copy or lock."
+  }
+ ]
+}
