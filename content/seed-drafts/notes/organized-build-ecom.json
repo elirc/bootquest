@@ -1,0 +1,334 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "organized-build-ecom",
+ "repo": "organized-build-ecom",
+ "sha": "24cf00e6b6ca42243e50979245cd5b39a1798dc0",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: a marketplace read flow by flow",
+   "body": "MarketForge is a Next.js marketplace with buyers, sellers and admins. ADR 0001 sets the shape: route handlers in `app/api/v1` stay thin, business rules live in `src/domain` (pure functions such as pricing and the order state machine), and infrastructure such as Prisma, Redis and Stripe sits in `src/server`.\n\nRead `docs/upskill/01-codebase-cartography/05-key-flows.md` first. Each flow lists the files to open and a trace table with one row per step. Follow the checkout, Stripe webhook, refresh-token and seller-moderation flows with the code open beside the guide. Then read the validation/auth chapter for the ownership checks, the side-effects chapter for what happens outside a database transaction, and the architecture critique for the risks the authors confirmed.\n\nOne more file matters for almost every question: `src/server/api/errors.ts`, which turns thrown errors into HTTP status codes.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0001-architecture.md",
+     "lineStart": 13,
+     "lineEnd": 13,
+     "quote": "Route handlers must stay thin: validate input, enforce auth/rate limits, call services, and format responses."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/upskill/01-codebase-cartography/05-key-flows.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "One trace table per flow: catalog, cart, checkout, auth, moderation, Stripe webhook."
+    },
+    {
+     "path": "src/server/api/errors.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "How error messages become status codes; read it before predicting any response."
+    }
+   ]
+  },
+  {
+   "id": "r02-errors-to-status",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: how a thrown Error becomes a status code",
+   "body": "Most services here signal failure by throwing a plain `Error` whose message starts with a code, for example `CHECKOUT_EMPTY_CART` or `ORDER_INVALID_TRANSITION:PLACED->SHIPPED`. Some throw an `ApiError`, which already carries a code and status. Every route catches errors and calls `fail()`, which calls `toApiError`.\n\n`toApiError` keeps an `ApiError` as it is, turns a `ZodError` into a 400, and checks a plain Error's message against one regular expression. When the prefix is one of the four listed, the code is the text before the first colon and the status is fixed. Anything else falls through to the last branch.\n\nSo before you predict a response, find where the error is thrown, check whether it is an `ApiError`, and if not, compare its prefix with that list.",
+   "excerpts": [
+    {
+     "path": "src/server/api/errors.ts",
+     "lineStart": 22,
+     "lineEnd": 24,
+     "quote": "if (/^(CHECKOUT|ORDER|SELLER|CART)_/.test(error.message)) {"
+    },
+    {
+     "path": "src/server/api/responses.ts",
+     "lineStart": 12,
+     "lineEnd": 13,
+     "quote": "const apiError = toApiError(error);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "r03-inside-and-outside",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: what a database transaction does and does not cover",
+   "body": "A Prisma `$transaction` makes its database writes all-or-nothing. It cannot undo a call to Stripe, Redis or a notification service, and code placed after the transaction runs only once the commit has already happened.\n\nIn checkout, the transaction decrements stock with a conditional `updateMany`, creates the order with its items, seller splits and first event, and clears the cart. Read what comes after it in `createCheckoutSession`: the PaymentIntent, the order update, notifications and the idempotency completion. For each step, ask what state is left if that step throws.\n\nThe same question applies to the Stripe webhook, where database updates and provider transfers are interleaved. The side-effects chapter introduces the outbox pattern as the standard answer.",
+   "excerpts": [
+    {
+     "path": "src/server/checkout/service.ts",
+     "lineStart": 64,
+     "lineEnd": 69,
+     "quote": "const order = await prisma.$transaction(async (tx) => {"
+    },
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+     "lineStart": 32,
+     "lineEnd": 32,
+     "quote": "Concept: write \"what should happen\" to the database in the same transaction as business state, then a worker performs external side effects with retries."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/06-architecture-critique.md",
+     "lineStart": 13,
+     "lineEnd": 20,
+     "why": "The confirmed-risks table: checkout before Stripe, and partial webhook transfers."
+    }
+   ]
+  },
+  {
+   "id": "x-q01-seller-split",
+   "target": "seed:quests:organized-build-ecom/quiz/5e2abcb3d1ecd486",
+   "phase": "after",
+   "title": "Per-seller subtotals, then a basis-point fee",
+   "body": "`calculateCheckoutPricing` first sums lines per seller: 3 x 2,500 + 1 x 2,500 = 10,000 cents in one entry of `subtotalBySeller`. Then, per seller, `platformFeeCents = Math.round((subtotalCents * commission.commissionBasisPoints) / 10_000)`. 1200 basis points is 12%, so the fee is 1,200 cents and `sellerReceivesCents` is 10,000 - 1,200 = 8,800.\n\n- A fee of 120 treats 1200 basis points as 1.2%; one basis point is 1/100 of a percent, so 1200 is 12%.\n- Two splits per line is wrong: splits are keyed by seller, not by line.\n- \"Stripe works out the rest\" is wrong: the domain function returns `sellerReceivesCents` itself, and checkout stores it on each order split.",
+   "excerpts": [
+    {
+     "path": "src/domain/checkout/pricing.ts",
+     "lineStart": 65,
+     "lineEnd": 65,
+     "quote": "const platformFeeCents = Math.round((subtotalCents * commission.commissionBasisPoints) / 10_000);"
+    },
+    {
+     "path": "src/domain/checkout/pricing.ts",
+     "lineStart": 71,
+     "lineEnd": 71,
+     "quote": "sellerReceivesCents: subtotalCents - platformFeeCents"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02-last-unit-race",
+   "target": "seed:quests:organized-build-ecom/quiz/5591c0efc7bb9b4d",
+   "phase": "after",
+   "title": "A conditional decrement is the real stock check",
+   "body": "The pricing stock check reads `item.product.stock` from the cart query, so two buyers who load at the same time both see stock 1 and both pass. The protection is inside the transaction: `updateMany({ where: { id, stock: { gte: item.quantity } }, data: { stock: { decrement } } })`. Once the first buyer commits, the second update matches no row, `stockUpdate.count !== 1`, and it throws `CHECKOUT_STOCK_CHANGED:` followed by the product id. The transaction rolls back and `toApiError` maps the `CHECKOUT_` prefix to a 409.\n\n- Stock going negative is exactly what the `gte` condition prevents.\n- \"Placed anyway\" ignores that the re-checked condition fails.\n- \"500\" ignores the prefix mapping in `errors.ts`.",
+   "excerpts": [
+    {
+     "path": "src/server/checkout/service.ts",
+     "lineStart": 66,
+     "lineEnd": 70,
+     "quote": "stock: { gte: item.quantity }"
+    },
+    {
+     "path": "src/server/checkout/service.ts",
+     "lineStart": 76,
+     "lineEnd": 77,
+     "quote": "throw new Error(`CHECKOUT_STOCK_CHANGED:${item.productId}`);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q03-stripe-fails-after-commit",
+   "target": "seed:quests:organized-build-ecom/quiz/8064d9e1171550ff",
+   "phase": "after",
+   "title": "The orphaned placed order",
+   "body": "`prisma.$transaction` returns at line 133 with the order committed: stock decremented, order, items, splits and the PLACED event created, cart items deleted. Only then does line 135 call `createMarketplacePaymentIntent`. There is no try/catch around it, so when it throws, the function exits before `prisma.order.update` stores `stripePaymentIntentId`. The committed rows stay as they are.\n\n- \"Rolled back\" would need the Stripe call inside the transaction callback; it is outside.\n- \"PAYMENT_FAILED plus compensation\" describes a recovery the guide proposes; no such status or step exists in the code.\n- \"Deleted in a catch block\" is wrong because there is no catch.\n\nThe critique lists this as a confirmed risk and recommends an outbox or a recovery state.",
+   "excerpts": [
+    {
+     "path": "src/server/checkout/service.ts",
+     "lineStart": 135,
+     "lineEnd": 135,
+     "quote": "const payment = await createMarketplacePaymentIntent({"
+    },
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/06-architecture-critique.md",
+     "lineStart": 15,
+     "lineEnd": 15,
+     "quote": "Orphaned placed order if Stripe call fails"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q04-retry-after-failure",
+   "target": "seed:quests:organized-build-ecom/quiz/1d8bdc9288ddc643",
+   "phase": "after",
+   "title": "A reservation that outlives its failure",
+   "body": "`reserveIdempotencyKey` runs `redis.set(key, \"reserved\", \"EX\", 60 * 30, \"NX\")`. NX only succeeds when the key does not exist yet; otherwise it throws `ApiError(\"IDEMPOTENCY_REPLAY\", 409, ...)`. The first attempt reserved the key and then failed at Stripe, before line 171 where `completeIdempotencyKey` would run. Nothing deletes the key, so for up to 30 minutes every retry with the same key gets 409.\n\n- \"Replayed client secret\" is wrong: nothing reads a stored response, and this attempt never stored one.\n- \"Released in a finally block\" is wrong: the service has no finally.\n- \"400 for a reused key\" is wrong: the schema only checks that the key is a UUID, not that it is new.",
+   "excerpts": [
+    {
+     "path": "src/server/security/idempotency.ts",
+     "lineStart": 7,
+     "lineEnd": 10,
+     "quote": "const reserved = await redis.set(redisKey, \"reserved\", \"EX\", ttlSeconds, \"NX\");"
+    },
+    {
+     "path": "src/server/checkout/service.ts",
+     "lineStart": 171,
+     "lineEnd": 171,
+     "quote": "await completeIdempotencyKey(reservationKey, responsePayload);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q05-completed-key-replay",
+   "target": "seed:quests:organized-build-ecom/quiz/9407fea7eb59c959",
+   "phase": "after",
+   "title": "Stored but never replayed",
+   "body": "After a successful checkout, `completeIdempotencyKey` overwrites the key with `JSON.stringify(payload)` for 24 hours. A retry calls `reserveIdempotencyKey` again, whose `SET ... NX` fails because the key exists, so it throws 409 `IDEMPOTENCY_REPLAY`. No code path ever reads the stored payload back to the caller. The side-effects chapter and the critique both flag this as an item to investigate.\n\n- \"The stored response\" is what a complete idempotency layer would return; this one does not.\n- \"Completion cleared the reservation\" is wrong: completion writes a value, it does not delete the key.\n- \"A new PaymentIntent\" is wrong: the request is refused before any cart lookup.\n\nSo a client whose response was lost cannot recover its order through a retry.",
+   "excerpts": [
+    {
+     "path": "src/server/security/idempotency.ts",
+     "lineStart": 16,
+     "lineEnd": 17,
+     "quote": "await redis.set(redisKey, JSON.stringify(payload), \"EX\", ttlSeconds);"
+    },
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/06-architecture-critique.md",
+     "lineStart": 25,
+     "lineEnd": 25,
+     "quote": "Redis idempotency completion is stored but not replayed to callers"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q06-webhook-retry",
+   "target": "seed:quests:organized-build-ecom/quiz/d3a9cdd4fcf588a5",
+   "phase": "after",
+   "title": "A retried webhook skips the unpaid sellers",
+   "body": "First delivery: the event row is upserted, `markOrderPaidAndTransferFunds` sets the order to PAID, then `createSellerTransfers` (a `Promise.all`) rejects. `processedAt` is never set and no `stripeTransferId` is stored, because the split updates run after the transfers resolve.\n\nRedelivery: `existing?.processedAt` is null, so it is not a duplicate. The handler runs again, but `if (order.status !== \"PLACED\") return;` exits because the order is PAID. The event is then marked processed. No transfer is attempted again.\n\n- \"Paid twice\" would need the transfers to run again; the early return prevents it.\n- \"duplicate: true\" requires `processedAt`, not just an existing row.\n- \"Only the failed transfer\" assumes stored transfer ids, which were never written.",
+   "excerpts": [
+    {
+     "path": "app/api/webhooks/stripe/route.ts",
+     "lineStart": 24,
+     "lineEnd": 26,
+     "quote": "if (existing?.processedAt) {"
+    },
+    {
+     "path": "app/api/webhooks/stripe/route.ts",
+     "lineStart": 72,
+     "lineEnd": 74,
+     "quote": "if (order.status !== \"PLACED\") {"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07-missing-signature",
+   "target": "seed:quests:organized-build-ecom/quiz/7780dd899656b712",
+   "phase": "after",
+   "title": "An unmapped prefix becomes a 500",
+   "body": "The route throws `new Error(\"STRIPE_SIGNATURE_MISSING\")` when the header is absent. The catch calls `fail(error, requestId)`, and `toApiError` checks the message against `/^(CHECKOUT|ORDER|SELLER|CART)_/`. `STRIPE_` is not in the list and the error is neither an `ApiError` nor a `ZodError`, so the last branch returns `ApiError(\"INTERNAL_SERVER_ERROR\", 500, error.message)`.\n\n- \"400 BAD_REQUEST\" only comes from a `ZodError` or `badRequest()`; no schema checks this header.\n- \"401\" would need the route to throw `unauthorized()`, which it does not.\n- \"409 STRIPE_SIGNATURE_MISSING\" would need STRIPE in the regex.\n\nA rejection is still the right outcome; the status code is the part a reviewer would fix.",
+   "excerpts": [
+    {
+     "path": "app/api/webhooks/stripe/route.ts",
+     "lineStart": 13,
+     "lineEnd": 14,
+     "quote": "throw new Error(\"STRIPE_SIGNATURE_MISSING\");"
+    },
+    {
+     "path": "src/server/api/errors.ts",
+     "lineStart": 26,
+     "lineEnd": 26,
+     "quote": "return new ApiError(\"INTERNAL_SERVER_ERROR\", 500, error.message);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08-seller-sets-paid",
+   "target": "seed:quests:organized-build-ecom/quiz/5a95016a4b07b65a",
+   "phase": "after",
+   "title": "Sellers own fulfillment, not payment",
+   "body": "The route lets SELLER and ADMIN through `requireRole`. In `updateOrderStatus`, the very first check after loading the order is the seller's target status: if the actor is a SELLER and the status is neither SHIPPED nor DELIVERED, it throws `ApiError(\"ORDER_SELLER_STATUS_FORBIDDEN\", 403, ...)`. PAID fails that check, so the ownership check and the state machine are never reached.\n\n- \"200 OK\" is wrong: PLACED -> PAID is legal in `order-state.ts`, but the seller rule runs first.\n- \"409 ORDER_INVALID_TRANSITION\" is wrong: the transition is valid, and nothing restricts PAID to the webhook in the state machine.\n- \"SCOPE_FORBIDDEN first\" reverses the order of the two checks at lines 20 and 24.",
+   "excerpts": [
+    {
+     "path": "src/server/orders/service.ts",
+     "lineStart": 20,
+     "lineEnd": 21,
+     "quote": "if (input.actor.role === \"SELLER\" && input.status !== \"SHIPPED\" && input.status !== \"DELIVERED\") {"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09-refresh-reuse",
+   "target": "seed:quests:organized-build-ecom/quiz/0eacc6e1ad4040a9",
+   "phase": "after",
+   "title": "Reuse detection revokes the whole family",
+   "body": "`verifyRefreshToken` checks the JWT signature and returns its hash and `familyId`. The route then loads the stored row by hash. If the row is missing, revoked or expired, it runs `updateMany({ where: { familyId }, data: { revokedAt: new Date() } })` and throws 401 `AUTH_REFRESH_REUSE_DETECTED`. A rotated token always has `revokedAt` set (rotation revokes the old row in the same `$transaction` that creates the new one), so presenting it again means someone kept an old copy.\n\n- \"A fresh pair\" is wrong: a valid signature is not enough, the database row decides.\n- \"Only that one token\" is wrong: `updateMany` targets the family, which includes the newer token.\n- \"Un-revoked\" is wrong: the code only ever sets `revokedAt`.",
+   "excerpts": [
+    {
+     "path": "app/api/v1/auth/refresh/route.ts",
+     "lineStart": 28,
+     "lineEnd": 33,
+     "quote": "await prisma.refreshToken.updateMany({ where: { familyId: verified.familyId },"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10-approve-rejected",
+   "target": "seed:quests:organized-build-ecom/quiz/92f4e1f54ee8d682",
+   "phase": "after",
+   "title": "Approval has an allow-list of source states",
+   "body": "`moderateSeller` loads the seller, then for an APPROVED target calls `canApproveSeller(seller.status)`, which returns true only for PENDING or SUSPENDED. REJECTED is neither, so the service throws `ApiError(\"SELLER_INVALID_STATUS_CHANGE\", 409, ...)` before the transaction starts.\n\n- \"200 OK\" would need the policy to allow REJECTED -> APPROVED.\n- \"403 for a super-admin\" is wrong: the codebase has three roles (BUYER, SELLER, ADMIN) and the route only requires ADMIN.\n- \"400 BAD_REQUEST\" is wrong: the admin schema validates the TARGET status against `sellerStatuses`, and APPROVED is in that list (REJECTED is too).",
+   "excerpts": [
+    {
+     "path": "src/domain/sellers/seller-policy.ts",
+     "lineStart": 9,
+     "lineEnd": 11,
+     "quote": "return status === \"PENDING\" || status === \"SUSPENDED\";"
+    },
+    {
+     "path": "src/server/sellers/service.ts",
+     "lineStart": 68,
+     "lineEnd": 69,
+     "quote": "if (input.status === \"APPROVED\" && !canApproveSeller(seller.status)) {"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q11-suspended-to-pending",
+   "target": "seed:quests:organized-build-ecom/quiz/ce52ee9f493db911",
+   "phase": "after",
+   "title": "The targets nobody guards",
+   "body": "`moderateSeller` has exactly two policy checks: one for an APPROVED target and one for a SUSPENDED target. A PENDING target matches neither `if`, so control goes straight to the transaction, which updates the seller's status and writes a `seller.status.update` audit log row with `from: \"SUSPENDED\", to: \"PENDING\"`. The same is true for REJECTED.\n\n- \"409 from canApproveSeller\" is wrong: that function only runs for an APPROVED target.\n- \"400 BAD_REQUEST\" is wrong: PENDING is one of `sellerStatuses`, which the admin schema accepts.\n- \"Nothing changes\" is wrong: the update and the audit row commit together.\n\nWhether moving a suspended seller back to pending should be allowed is a policy gap worth raising in review.",
+   "excerpts": [
+    {
+     "path": "src/server/sellers/service.ts",
+     "lineStart": 72,
+     "lineEnd": 72,
+     "quote": "if (input.status === \"SUSPENDED\" && !canSuspendSeller(seller.status)) {"
+    },
+    {
+     "path": "src/server/sellers/service.ts",
+     "lineStart": 76,
+     "lineEnd": 80,
+     "quote": "data: { status: input.status }"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q12-foreign-cart-cookie",
+   "target": "seed:quests:organized-build-ecom/quiz/2c347baaeb53f714",
+   "phase": "after",
+   "title": "Scoped lookup, then a fresh cart",
+   "body": "The route reads `mf_cart_id` from the cookie but never trusts it alone: `prisma.cart.findFirst({ where: { id: existingCartId, buyerId: session.id } })`. For another buyer's cart id that returns null, so `existingCart` is null and the route takes the `prisma.cart.create` branch with `buyerId: session.id`. The response then sets the cookie to the new cart id.\n\n- \"Adds to the other cart\" is the IDOR the `buyerId` filter prevents.\n- \"403\" is wrong: the route does not distinguish a foreign cart from a missing one, it just ignores it.\n- \"404 from findFirstOrThrow\" is wrong: the cart lookup uses `findFirst`, which returns null instead of throwing.",
+   "excerpts": [
+    {
+     "path": "app/api/v1/cart/items/route.ts",
+     "lineStart": 31,
+     "lineEnd": 33,
+     "quote": "? await prisma.cart.findFirst({ where: { id: existingCartId, buyerId: session.id } })"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}

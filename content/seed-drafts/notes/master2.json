@@ -1,0 +1,347 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "master2",
+ "repo": "master2",
+ "sha": "01f83c0c9e706213216bdf8f9b8d3f8dff01e5a9",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: one webhook, read in the order the request runs",
+   "body": "This quest studies one function: `processMockPaymentWebhook` in `apps/api/src/modules/payments.service.ts`. Webhook calls arrive from a simulated payment provider. For each one the function decides between new work, a harmless repeat and a refusal, and new work touches four tables inside one database transaction.\n\nRead in this order. `01-CODEBASE-MAP.md` gives a file:line table for every step. `02-CONCEPTS.md` separates five ideas that are easy to blur: tenant safety, authorization, idempotency, atomicity and typed errors. `03-WORKED-CHANGE.md` walks one success, one failure and one replay through the code. `04-TESTING-AND-DEBUGGING.md` and `07-TRACE-LAB.md` show how the tests prove each branch. Finish with `06-SOLUTIONS-AND-REVIEW.md`, whose findings F1-F8 are real defects that the course leaves unfixed.\n\nKeep the service file open the whole time. Most questions ask what a specific branch does, so read the line before you answer.",
+   "excerpts": [
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": 22,
+     "lineEnd": 22,
+     "quote": "Trace a success by following `body -> payloadHash -> tx.webhookEvent.findUnique -> tx.payment.findFirst -> tx.invoice.findFirst"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": 5,
+     "lineEnd": 20,
+     "why": "The file:line table for every step of the webhook, from tenant resolution to error mapping."
+    },
+    {
+     "path": "apps/api/src/modules/payments.service.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The whole service in 131 lines: read it top to bottom once before the quiz."
+    }
+   ]
+  },
+  {
+   "id": "r02-event-identity",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: what makes two webhook deliveries \"the same event\"",
+   "body": "Payment providers retry. The same event can arrive twice, so the service needs a rule for \"this is a repeat, acknowledge it\" versus \"this is new work\".\n\nHere the rule has two parts. The provider event id is globally unique in the database (`providerEventId String @unique`). On top of that, the service hashes the normalized request body with SHA-256 over a key-sorted JSON string, so reordering keys does not change the hash. An existing row is only a harmless repeat when it belongs to the same tenant AND its stored payload hashes to the same value. Anything else is a conflict, because one id would then carry two meanings.\n\nWatch where the hash is computed: after Zod has parsed the body, not on the raw bytes. That detail decides several edge cases. Also notice that `processedAt` matters: only a processed event short-circuits.",
+   "excerpts": [
+    {
+     "path": "packages/domain/src/idempotency.ts",
+     "lineStart": 3,
+     "lineEnd": 5,
+     "quote": "return createHash(\"sha256\").update(stableStringify(payload)).digest(\"hex\");"
+    },
+    {
+     "path": "apps/api/src/modules/payments.service.ts",
+     "lineStart": 36,
+     "lineEnd": 37,
+     "quote": "const payloadHash = hashRequestPayload(body);"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "packages/db/prisma/schema.prisma",
+     "lineStart": 276,
+     "lineEnd": 276,
+     "why": "Line 276 declares the provider event id unique across all tenants."
+    }
+   ]
+  },
+  {
+   "id": "r03-tenant-from-headers",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: tenant scope is only as strong as where the tenant comes from",
+   "body": "Every payment and invoice read in the service carries `organizationId: tenant.organizationId`. That is good practice: a global id alone never reaches another tenant's row. But the scope is chosen by `tenant`, and `tenant` is built in `apps/api/src/shared/auth.ts` from two request headers, `x-org-slug` and `x-user-email`.\n\nAsk two questions while you read `auth.ts`. What happens when a header is missing? And who can set these headers? A real payment provider cannot send your tenant headers, and anyone who can reach the endpoint can send any value. The concepts chapter explains why a production webhook must take its tenant from something the caller cannot forge, such as a verified provider signature.\n\nThe route also checks a permission, and so does the service. Notice that they read it from two different places (`hasPermission(role)` versus `tenant.permissions`).",
+   "excerpts": [
+    {
+     "path": "apps/api/src/shared/auth.ts",
+     "lineStart": 15,
+     "lineEnd": 16,
+     "quote": "const organizationSlug = String(request.header(\"x-org-slug\") ?? \"acme\");"
+    },
+    {
+     "path": "apps/api/src/modules/payments.service.ts",
+     "lineStart": 53,
+     "lineEnd": 56,
+     "quote": "where: { id: body.paymentId, organizationId: tenant.organizationId },"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 15,
+     "lineEnd": 17,
+     "why": "The section \"The tenant header is an input the attacker controls\"."
+    }
+   ]
+  },
+  {
+   "id": "x-q01-first-write",
+   "target": "seed:quests:master2/quiz/732e79ca9758b0b6",
+   "phase": "after",
+   "title": "Why the event row is created only after every guard",
+   "body": "Read `payments.service.ts` from line 42 to line 81. Every call before line 73 is a read or a refusal: the event lookup, the identity and replay checks, the scoped payment read, the scoped invoice read and the transition guard. The first write is `tx.webhookEvent.create` at line 73, and `existing ??` means it is skipped when an unprocessed event already exists.\n\nThis order is the point of the repair. If the event were written first, a request for an unknown payment would leave an orphan event row behind and make the next retry ambiguous.\n\n- `tx.webhookEvent.upsert` before the lookup describes the code BEFORE the repair (the snapshot in chapter 03), not today's service.\n- `tx.payment.update` runs at line 86, after the event create, not before it.\n- `writeAuditLog` runs at line 103, near the end, after the state updates.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/modules/payments.service.ts",
+     "lineStart": 73,
+     "lineEnd": 74,
+     "quote": "const event = existing ?? await tx.webhookEvent.create({"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 161,
+     "lineEnd": 161,
+     "quote": "transition guard (409) → first write, `tx.webhookEvent.create`"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02-changed-payment-id",
+   "target": "seed:quests:master2/quiz/e7e2f6ba7b5d53c7",
+   "phase": "after",
+   "title": "A reused provider id with a new meaning is a conflict",
+   "body": "Line 44 compares an existing event on two things: the tenant and the payload hash. The new body names a different `paymentId`, so its normalized JSON differs and so does its SHA-256 hash. The service throws `HttpError(409, \"webhook.identity_conflict\", ...)` at line 45, inside the `if (existing)` block, which runs before the payment lookup at line 53.\n\n- \"Replays as a duplicate\" would only happen if the hashes matched; the provider id alone is not the identity.\n- \"Processes the new payment\" would let one event id silently acquire a second meaning, which is exactly what hashing the body prevents.\n- \"404 payment.not_found\" cannot happen: the conflict is thrown before any payment is read, and the prompt says the new payment exists anyway.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/modules/payments.service.ts",
+     "lineStart": 44,
+     "lineEnd": 45,
+     "quote": "if (existing.organizationId !== tenant.organizationId || hashRequestPayload(existing.payload) !== payloadHash) {"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q03-trimmed-event-id",
+   "target": "seed:quests:master2/quiz/fbb516b790f30f0f",
+   "phase": "after",
+   "title": "Zod trims the event id before the hash is taken",
+   "body": "The schema declares `providerEventId: z.string().trim().min(4)` (line 10). `parseMockWebhook` returns the parsed, trimmed object, and line 37 hashes THAT object, not the raw request. So \" evt-1234 \" becomes \"evt-1234\", the lookup finds the stored processed event, the hashes match and the service returns `{ duplicate: true, eventId }`.\n\n- \"Raw body hashes differently\" is wrong because the raw body is never hashed.\n- \"400 for outer spaces\" is wrong: `.trim()` normalizes instead of rejecting, and `.strict()` only rejects unknown keys.\n- \"A brand-new event\" is wrong because the trimmed id is the same unique key.\n\nNote the asymmetry the review calls F7: only `providerEventId` is trimmed, so a padded `paymentId` misses the scoped lookup and returns 404.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/modules/payments.service.ts",
+     "lineStart": 10,
+     "lineEnd": 10,
+     "quote": "providerEventId: z.string().trim().min(4),"
+    },
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": 45,
+     "lineEnd": 45,
+     "quote": "Zod trims it at `payments.service.ts:10` before hashing"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q04-late-failure",
+   "target": "seed:quests:master2/quiz/28779329e0f9fc67",
+   "phase": "after",
+   "title": "A late failure cannot undo a success",
+   "body": "For a payment already `succeeded`, `alreadySucceeded` is true and `succeeded` is false. Line 85 skips the payment and invoice updates. Line 102 still sets `processedAt` on the event, line 105 picks the audit action `payment.failed.ignored`, and the guard at line 110 (`!(alreadySucceeded && !succeeded)`) skips the outbox write.\n\nThe audit row exists so an operator can see the notification arrived and was deliberately refused.\n\n- \"Set to failed and reopen the invoice\" is the regression the guard prevents.\n- \"409 invoice.transition_invalid\" only applies to a SUCCESS event for a draft or void invoice (line 69).\n- \"duplicate: true\" is the replay path for an already-processed event with the same id; this event id is new.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/modules/payments.service.ts",
+     "lineStart": 105,
+     "lineEnd": 105,
+     "quote": "action: alreadySucceeded && !succeeded ? \"payment.failed.ignored\" : body.eventType,"
+    },
+    {
+     "path": "apps/api/src/modules/payments.service.ts",
+     "lineStart": 110,
+     "lineEnd": 110,
+     "quote": "if (!(alreadySucceeded && !succeeded)) {"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q05-second-success",
+   "target": "seed:quests:master2/quiz/d8e2ff1aada6ad30",
+   "phase": "after",
+   "title": "Finding F2: the second success double-notifies",
+   "body": "With a new provider event id the identity check passes and a new event row is created. Because the payment is already succeeded, line 85 skips both updates. But the audit action is just `body.eventType`, and the outbox guard at line 110 only blocks the case \"already succeeded AND this is a failure\". A second success is not that case, so another `payment.succeeded` outbox row is written.\n\nThis matters because the worker creates payments already succeeded, so in the running app most provider successes take this path. No test covers it.\n\n- \"Nothing beyond the event row\" is what the fix in F2 would do, not what the code does.\n- \"409 identity_conflict\" depends on the event row, not on `providerRef`.\n- \"Only the invoice\" is wrong: the invoice update sits inside the skipped `if (!alreadySucceeded)` block.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/modules/payments.service.ts",
+     "lineStart": 85,
+     "lineEnd": 85,
+     "quote": "if (!alreadySucceeded) {"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 179,
+     "lineEnd": 179,
+     "quote": "because the guard at `:110` only suppresses `alreadySucceeded && !succeeded`, another outbox event (`:111-115`)"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q06-no-headers",
+   "target": "seed:quests:master2/quiz/b31dc7410a270ca4",
+   "phase": "after",
+   "title": "Finding F1: missing headers fall back to the owner",
+   "body": "`attachTenantContext` reads `request.header(\"x-org-slug\") ?? \"acme\"` and `request.header(\"x-user-email\") ?? config.defaultUserEmail`. `config.ts` defaults `DEFAULT_USER_EMAIL` to `owner@acme.test`, and the seed upserts that user with the `owner` role in the Acme organization. The membership lookup therefore succeeds and the request gets every owner permission, including `payments:manage`.\n\n- \"403 membership.denied\" only happens when no membership matches; the defaults make one match.\n- \"401\" does not exist in this file: there is no authentication step at all, which is the finding.\n- \"A viewer\" is wrong: the role comes from the seeded membership, which is `owner`.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/shared/auth.ts",
+     "lineStart": 15,
+     "lineEnd": 16,
+     "quote": "const userEmail = String(request.header(\"x-user-email\") ?? config.defaultUserEmail);"
+    },
+    {
+     "path": "apps/api/src/config.ts",
+     "lineStart": 6,
+     "lineEnd": 6,
+     "quote": "DEFAULT_USER_EMAIL: z.string().email().default(\"owner@acme.test\")"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07-contention-twice",
+   "target": "seed:quests:master2/quiz/8ba5314923e9e043",
+   "phase": "after",
+   "title": "Two contentions end in a typed 409",
+   "body": "The catch block at lines 120-127 rethrows `HttpError` unchanged, treats Prisma codes P2002 and P2034 as contention, and rethrows anything else. On the first contention (`attempt === 0`) it falls through and the loop runs a second attempt. On the second it throws `HttpError(409, \"webhook.claim_conflict\", ...)`.\n\n- \"500 server.internal\" would be the result for an unrecognized error, not for P2034.\n- \"Retries until it commits\" is wrong: the loop is `for (let attempt = 0; attempt < 2; ...)`, two attempts at most.\n- \"identity_conflict\" is the code for a payload or tenant mismatch on an existing event, a different branch.\n\nRemember the limit the course names: a mocked transaction proves this control flow, not real PostgreSQL serialization.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/modules/payments.service.ts",
+     "lineStart": 122,
+     "lineEnd": 125,
+     "quote": "const contention = error instanceof Prisma.PrismaClientKnownRequestError && [\"P2002\", \"P2034\"].includes(error.code);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08-redundant-branch",
+   "target": "seed:quests:master2/quiz/35730d55169169a4",
+   "phase": "after",
+   "title": "A branch no test can see",
+   "body": "After the second contention, the catch block does nothing (once the `attempt === 1` throw is deleted), the loop condition `attempt < 2` fails and control reaches line 130, which throws the very same `HttpError(409, \"webhook.claim_conflict\", ...)`. Callers and tests observe exactly the same error, so every test passes. The chapter 04 break-it table records this as a redundant branch.\n\n- \"Escapes as a 500\" would need the raw Prisma error to be rethrown; it is swallowed by the catch.\n- \"The suite hangs\" ignores the loop bound, which does not depend on the deleted block.\n- \"Returns undefined\" is wrong because the final throw runs before the function could return.\n\nThe lesson: when a mutation survives, ask whether the code is redundant before writing a test for it.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/modules/payments.service.ts",
+     "lineStart": 130,
+     "lineEnd": 130,
+     "quote": "throw new HttpError(409, \"webhook.claim_conflict\", \"The provider event is being processed concurrently.\");"
+    },
+    {
+     "path": "astraupskill/04-TESTING-AND-DEBUGGING.md",
+     "lineStart": 37,
+     "lineEnd": 37,
+     "quote": "**all tests still pass**"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09-worker-decides",
+   "target": "seed:quests:master2/quiz/5bdea098811fe2e0",
+   "phase": "after",
+   "title": "The worker settles payments on its own",
+   "body": "Payments are not created by the webhook. `attemptPayment` in `apps/worker/src/jobs.ts` loads the invoice, returns early if it is already paid, then computes `const succeeds = invoice.total % 7 !== 0;` (line 120). It creates the payment with `status: succeeds ? \"succeeded\" : \"failed\"`, never `processing`, and marks the invoice paid on success.\n\n- \"Creates a processing payment\" describes the webhook test fixture, not the worker.\n- \"Calls canTransitionInvoice\" is wrong: the worker never calls it, which is finding F6.\n- \"A random draw, retried five times\" is wrong: the rule is deterministic, and the five-attempt limit belongs to the outbox processor.\n\nThis is why F2 is the common case: by the time a provider success arrives, the worker has usually settled the payment already.",
+   "excerpts": [
+    {
+     "path": "apps/worker/src/jobs.ts",
+     "lineStart": 120,
+     "lineEnd": 120,
+     "quote": "const succeeds = invoice.total % 7 !== 0;"
+    },
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": 28,
+     "lineEnd": 28,
+     "quote": "creates the payment already `succeeded` or `failed`, never `processing`"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10-void-invoice-paid",
+   "target": "seed:quests:master2/quiz/61252f0862e556b2",
+   "phase": "after",
+   "title": "Finding F6: two writers, two rule sets",
+   "body": "The pay route finds the invoice by id and tenant with `findFirstOrThrow` and queues the job; it does not look at the status. In the worker, the only status check is `if (invoice.status === \"paid\")`. A void invoice passes it. 120 % 7 is 1, so `succeeds` is true: a succeeded payment is created and the invoice is updated to `status: \"paid\"`.\n\n- \"invoice.transition_invalid\" is the webhook's refusal (payments.service.ts:69-71); the worker never calls `canTransitionInvoice`.\n- \"The route only queues open invoices\" is wrong: the route has no status filter.\n- \"P2025\" would need the invoice to be missing; `findFirstOrThrow` filters by id and tenant only, and a void invoice is found.",
+   "excerpts": [
+    {
+     "path": "apps/worker/src/jobs.ts",
+     "lineStart": 116,
+     "lineEnd": 116,
+     "quote": "if (invoice.status === \"paid\") {"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 187,
+     "lineEnd": 187,
+     "quote": "so a `void` or `draft` invoice can be paid, which the webhook path refuses"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q11-run-idempotent-race",
+   "target": "seed:quests:master2/quiz/4515a17f23ae6bd6",
+   "phase": "after",
+   "title": "Finding F4: check-then-act is not idempotency",
+   "body": "`runIdempotent` does three separate steps with the global client: `findUnique` the key (line 16), `await input.run()` (line 35), then `upsert` the key with the response (line 36). There is no transaction around them and no \"pending\" row written first. Two concurrent requests can both see no key, both run the work (two subscriptions, two queued jobs) and both upsert; the second upsert hits the `update: { response }` branch and overwrites the first response.\n\n- \"Blocks on the key row's lock\" assumes a row exists to lock; neither request has written one yet.\n- \"409 payload_conflict\" needs an existing key with a different hash; here the payload is the same.\n- \"One transaction\" is wrong: no `$transaction` appears in the helper.\n\nThe fix: insert the key first in a pending state and let the unique constraint act as the lock.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/shared/idempotent.ts",
+     "lineStart": 35,
+     "lineEnd": 36,
+     "quote": "const response = await input.run();"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 183,
+     "lineEnd": 183,
+     "quote": "Two concurrent requests with the same `idempotency-key` both miss, both run"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q12-outbox-no-claim",
+   "target": "seed:quests:master2/quiz/e27a2eddbbfbbe29",
+   "phase": "after",
+   "title": "Finding F8: an outbox without a claim",
+   "body": "`processOutboxBatch` selects up to 10 `pending` rows, then for each one runs `update({ where: { id: event.id }, data: { status: \"processing\", ... } })`. The `where` names only the id, so the update succeeds even if another process already moved the row to processing. Two workers that select at the same moment will both \"claim\" and both deliver the same event.\n\n- \"The update re-checks pending\" is the fix, not the current code: the predicate is missing.\n- \"Prisma locks the selected rows\" is wrong: a plain `findMany` takes no row locks.\n- \"Disjoint batches by ordering\" is wrong: ordering by `createdAt` makes both workers pick the SAME oldest rows.\n\nSo delivery is at-least-once, and consumers must be idempotent on the outbox id.",
+   "excerpts": [
+    {
+     "path": "apps/worker/src/outbox-processor.ts",
+     "lineStart": 14,
+     "lineEnd": 15,
+     "quote": "await prisma.outboxEvent.update({ where: { id: event.id },"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 191,
+     "lineEnd": 191,
+     "quote": "updates each to `processing` by id without a `status: \"pending\"` predicate"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}

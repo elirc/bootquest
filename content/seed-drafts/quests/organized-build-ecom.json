@@ -1,0 +1,452 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "organized-build-ecom",
+ "sha": "24cf00e6b6ca42243e50979245cd5b39a1798dc0",
+ "guides": [
+  "docs/adr/0001-architecture.md",
+  "docs/api-contracts.md",
+  "docs/upskill/01-codebase-cartography/05-key-flows.md",
+  "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+  "docs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+  "docs/upskill/03-architecture-and-patterns/06-architecture-critique.md"
+ ],
+ "items": [
+  {
+   "id": "q01-seller-split",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/01-codebase-cartography/05-key-flows.md",
+    "lines": {
+     "start": 144,
+     "end": 144
+    }
+   },
+   "cites": [
+    {
+     "path": "src/domain/checkout/pricing.ts",
+     "lineStart": 51,
+     "lineEnd": 73
+    }
+   ],
+   "prompt": "One seller's cart lines are 3 x 2,500 cents and 1 x 2,500 cents, and the seller's commissionBasisPoints is 1200. What split does calculateCheckoutPricing return for that seller?",
+   "answer": "Subtotal 10,000 cents, platform fee 1,200, seller receives 8,800",
+   "distractors": [
+    "Subtotal 10,000 cents, platform fee 120, and seller receives 9,880",
+    "Two splits, 7,500 and 2,500 cents, each one charged its own fee",
+    "Subtotal 10,000 cents and fee 1,200; Stripe always works out the rest"
+   ],
+   "explanation": "Lines are summed per seller first (pricing.ts:51-56), then the fee is Math.round(subtotal * basisPoints / 10_000) = 1,200 and the seller gets subtotal minus fee, all computed in the domain function."
+  },
+  {
+   "id": "q02-last-unit-race",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/01-codebase-cartography/05-key-flows.md",
+    "lines": {
+     "start": 145,
+     "end": 145
+    }
+   },
+   "cites": [
+    {
+     "path": "src/server/checkout/service.ts",
+     "lineStart": 64,
+     "lineEnd": 79
+    },
+    {
+     "path": "src/server/api/errors.ts",
+     "lineStart": 22,
+     "lineEnd": 24
+    }
+   ],
+   "prompt": "Two buyers each have the last unit (stock 1) in their carts and check out at the same moment. Both pass the pricing stock check. What happens to the slower one?",
+   "answer": "Its updateMany matches 0 rows, so the transaction throws and it gets 409 CHECKOUT_STOCK_CHANGED",
+   "distractors": [
+    "Both orders are created and stock goes to -1, because the earlier stock check passed for every buyer",
+    "It waits on the row lock, then its order is placed anyway and the product shows stock of 0",
+    "A 500 INTERNAL_SERVER_ERROR, as the raw Error thrown in the transaction is never translated"
+   ],
+   "explanation": "The decrement is conditional (stock: { gte: item.quantity }); a count other than 1 throws CHECKOUT_STOCK_CHANGED:<id>, which rolls the transaction back, and toApiError maps the CHECKOUT_ prefix to a 409."
+  },
+  {
+   "id": "q03-stripe-fails-after-commit",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+    "lines": {
+     "start": 24,
+     "end": 24
+    }
+   },
+   "cites": [
+    {
+     "path": "src/server/checkout/service.ts",
+     "lineStart": 64,
+     "lineEnd": 150
+    }
+   ],
+   "prompt": "In createCheckoutSession the order transaction commits, then createMarketplacePaymentIntent throws. What state is left behind?",
+   "answer": "A PLACED order with its stock taken and the cart emptied, yet lacking a PaymentIntent id",
+   "distractors": [
+    "Nothing at all: the Stripe call runs inside the transaction, so the order is rolled back",
+    "The order is set to PAYMENT_FAILED and a compensation step puts the reserved stock back",
+    "The order is deleted in a catch block, and the cart items are restored for a retry"
+   ],
+   "explanation": "The Stripe call (service.ts:135) runs after prisma.$transaction returns, and there is no catch or compensation, so the committed order, decremented stock and cleared cart remain without stripePaymentIntentId. This is the orphaned-order risk in the critique."
+  },
+  {
+   "id": "q04-retry-after-failure",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+    "lines": {
+     "start": 20,
+     "end": 20
+    }
+   },
+   "cites": [
+    {
+     "path": "src/server/security/idempotency.ts",
+     "lineStart": 5,
+     "lineEnd": 13
+    },
+    {
+     "path": "src/server/checkout/service.ts",
+     "lineStart": 16,
+     "lineEnd": 17
+    },
+    {
+     "path": "src/server/checkout/service.ts",
+     "lineStart": 171,
+     "lineEnd": 171
+    }
+   ],
+   "prompt": "After that Stripe failure, the buyer retries five minutes later with the same idempotency key. What does the retry get?",
+   "answer": "409 IDEMPOTENCY_REPLAY, since the key is still reserved for up to 30 minutes",
+   "distractors": [
+    "The first order's client secret, always replayed from the stored response payload",
+    "A second new order, as the failed attempt released its key in a finally block",
+    "400 BAD_REQUEST, because an idempotency key must be a fresh UUID on every call"
+   ],
+   "explanation": "reserveIdempotencyKey uses SET ... EX 1800 NX. completeIdempotencyKey only runs at the very end (service.ts:171), so after a mid-flow failure the key stays \"reserved\" and NX fails until it expires."
+  },
+  {
+   "id": "q05-completed-key-replay",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/06-architecture-critique.md",
+    "lines": {
+     "start": 25,
+     "end": 25
+    }
+   },
+   "cites": [
+    {
+     "path": "src/server/security/idempotency.ts",
+     "lineStart": 5,
+     "lineEnd": 17
+    }
+   ],
+   "prompt": "A checkout succeeds, its response is lost, and the client retries with the same key an hour later. What comes back?",
+   "answer": "409 IDEMPOTENCY_REPLAY; the stored response is written but is not read back",
+   "distractors": [
+    "The stored response, with the same orderId and the same clientSecret every time",
+    "A second order, because completion cleared the reservation for reuse",
+    "200 with a new PaymentIntent created for the existing placed order"
+   ],
+   "explanation": "completeIdempotencyKey overwrites the key with the JSON payload for 24 hours, but reserveIdempotencyKey only does SET NX and throws when the key exists; nothing ever reads the stored payload back (the guide lists this as an item to investigate)."
+  },
+  {
+   "id": "q06-webhook-retry-after-transfer-failure",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/01-codebase-cartography/05-key-flows.md",
+    "lines": {
+     "start": 271,
+     "end": 271
+    }
+   },
+   "cites": [
+    {
+     "path": "app/api/webhooks/stripe/route.ts",
+     "lineStart": 41,
+     "lineEnd": 56
+    },
+    {
+     "path": "app/api/webhooks/stripe/route.ts",
+     "lineStart": 62,
+     "lineEnd": 116
+    }
+   ],
+   "prompt": "On the first payment_intent.succeeded delivery the order is marked PAID, then createSellerTransfers throws. Stripe redelivers the event. What happens?",
+   "answer": "The order is already PAID, so the handler returns early before reaching the transfers",
+   "distractors": [
+    "Every transfer runs again, so the seller whose transfer succeeded is paid twice",
+    "It returns duplicate: true at once, because the webhook event row already exists",
+    "Only the failed transfer is retried, using the stripeTransferId values already saved"
+   ],
+   "explanation": "processedAt was never set, so the redelivery is not treated as a duplicate; but markOrderPaidAndTransferFunds returns when order.status !== \"PLACED\" (route.ts:72-74), and the event is then marked processed. No transfer ids were stored either, since the update runs after Promise.all."
+  },
+  {
+   "id": "q07-missing-signature",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/01-codebase-cartography/05-key-flows.md",
+    "lines": {
+     "start": 274,
+     "end": 274
+    }
+   },
+   "cites": [
+    {
+     "path": "app/api/webhooks/stripe/route.ts",
+     "lineStart": 11,
+     "lineEnd": 15
+    },
+    {
+     "path": "src/server/api/errors.ts",
+     "lineStart": 14,
+     "lineEnd": 28
+    }
+   ],
+   "prompt": "A POST reaches /api/webhooks/stripe with no stripe-signature header. What status does the route return?",
+   "answer": "500 INTERNAL_SERVER_ERROR, since toApiError maps the STRIPE_ prefix to nothing",
+   "distractors": [
+    "400 BAD_REQUEST, as a missing header is reported the way a bad request body is",
+    "401 AUTH_UNAUTHORIZED, which is what unauthorized() gives a missing credential",
+    "409 STRIPE_SIGNATURE_MISSING, the mapping that checkout and order errors receive"
+   ],
+   "explanation": "The route throws new Error(\"STRIPE_SIGNATURE_MISSING\"). toApiError maps only messages matching /^(CHECKOUT|ORDER|SELLER|CART)_/ to 409; any other Error becomes a 500 INTERNAL_SERVER_ERROR carrying its message."
+  },
+  {
+   "id": "q08-seller-sets-paid",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 40,
+     "end": 40
+    }
+   },
+   "cites": [
+    {
+     "path": "src/server/orders/service.ts",
+     "lineStart": 20,
+     "lineEnd": 30
+    },
+    {
+     "path": "app/api/v1/orders/[orderId]/status/route.ts",
+     "lineStart": 13,
+     "lineEnd": 13
+    }
+   ],
+   "prompt": "A seller who owns a split on a PLACED order sends PATCH /api/v1/orders/:orderId/status with status PAID. What happens?",
+   "answer": "403 ORDER_SELLER_STATUS_FORBIDDEN, because sellers may set only SHIPPED or DELIVERED",
+   "distractors": [
+    "200 OK: PLACED to PAID is an allowed transition, and the seller owns a split of it",
+    "409 ORDER_INVALID_TRANSITION, as only the Stripe webhook may mark an order as paid",
+    "403 ORDER_SELLER_SCOPE_FORBIDDEN, since the ownership check is the one that runs first"
+   ],
+   "explanation": "updateOrderStatus checks the seller's target status first (orders/service.ts:20-22), before the ownership check (24-30) and before assertOrderTransition. PLACED -> PAID is legal in the state machine, but not for a seller."
+  },
+  {
+   "id": "q09-refresh-reuse",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/01-codebase-cartography/05-key-flows.md",
+    "lines": {
+     "start": 189,
+     "end": 189
+    }
+   },
+   "cites": [
+    {
+     "path": "app/api/v1/auth/refresh/route.ts",
+     "lineStart": 28,
+     "lineEnd": 34
+    }
+   ],
+   "prompt": "A refresh token that was already rotated (its row has revokedAt set) is presented to POST /api/v1/auth/refresh. What happens?",
+   "answer": "Its token family is revoked as a group, then the call fails with 401 AUTH_REFRESH_REUSE_DETECTED",
+   "distractors": [
+    "A fresh token pair is issued, because the JWT signature on that old token still verifies correctly",
+    "Only that one old token is refused with a 401; the newer token from its family keeps working",
+    "The old token is un-revoked and rotated again, staying inside the same token family"
+   ],
+   "explanation": "A missing, revoked or expired stored row triggers updateMany({ where: { familyId } }) setting revokedAt on the whole family, then a 401. JWT verification alone is not enough; the database row decides."
+  },
+  {
+   "id": "q10-approve-rejected",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/01-codebase-cartography/05-key-flows.md",
+    "lines": {
+     "start": 229,
+     "end": 229
+    }
+   },
+   "cites": [
+    {
+     "path": "src/server/sellers/service.ts",
+     "lineStart": 68,
+     "lineEnd": 74
+    },
+    {
+     "path": "src/domain/sellers/seller-policy.ts",
+     "lineStart": 9,
+     "lineEnd": 11
+    }
+   ],
+   "prompt": "An admin PATCHes a REJECTED seller to APPROVED. What does moderateSeller do?",
+   "answer": "409 SELLER_INVALID_STATUS_CHANGE; only PENDING or SUSPENDED sellers can be approved",
+   "distractors": [
+    "200 OK, with the status update and its audit row committed in one transaction",
+    "403 AUTH_FORBIDDEN, as only a super-admin role may ever reinstate a rejected seller",
+    "400 BAD_REQUEST, since REJECTED is not a status the admin update schema accepts"
+   ],
+   "explanation": "canApproveSeller returns true only for PENDING or SUSPENDED (seller-policy.ts:9-11), so the check at sellers/service.ts:68-70 throws before the transaction."
+  },
+  {
+   "id": "q11-suspended-to-pending",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/01-codebase-cartography/05-key-flows.md",
+    "lines": {
+     "start": 229,
+     "end": 229
+    }
+   },
+   "cites": [
+    {
+     "path": "src/server/sellers/service.ts",
+     "lineStart": 68,
+     "lineEnd": 100
+    }
+   ],
+   "prompt": "An admin PATCHes a SUSPENDED seller to PENDING. What happens?",
+   "answer": "It is applied and audited, as the policy checks cover APPROVED and SUSPENDED alone",
+   "distractors": [
+    "409 SELLER_INVALID_STATUS_CHANGE, because canApproveSeller rejects it",
+    "400 BAD_REQUEST, since PENDING is not a status an admin may set",
+    "Nothing changes: the seller stays SUSPENDED and no audit row is written"
+   ],
+   "explanation": "moderateSeller only guards APPROVED and SUSPENDED targets (service.ts:68-74). Any other enum value, PENDING or REJECTED, goes straight to the update plus audit transaction."
+  },
+  {
+   "id": "q12-foreign-cart-cookie",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 39,
+     "end": 39
+    }
+   },
+   "cites": [
+    {
+     "path": "app/api/v1/cart/items/route.ts",
+     "lineStart": 31,
+     "lineEnd": 70
+    }
+   ],
+   "prompt": "A buyer's mf_cart_id cookie holds another buyer's cart id. What does POST /api/v1/cart/items do with it?",
+   "answer": "It ignores that cart and creates a new cart owned by the caller",
+   "distractors": [
+    "It adds the item to the other buyer's cart, as the id came from a cookie",
+    "403 AUTH_FORBIDDEN, raised because the cart belongs to someone else",
+    "404 from findFirstOrThrow, so the request fails without any write"
+   ],
+   "explanation": "The existing cart is looked up with findFirst({ where: { id, buyerId: session.id } }); for a foreign id that returns null, so the route falls through to prisma.cart.create with the caller as buyer and resets the cookie."
+  },
+  {
+   "id": "f01-thin-routes",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0001-architecture.md",
+    "lines": {
+     "start": 13,
+     "end": 13
+    }
+   },
+   "cites": [
+    {
+     "path": "app/api/v1/checkout/sessions/route.ts",
+     "lineStart": 10,
+     "lineEnd": 22
+    }
+   ],
+   "front": "What may a MarketForge route handler do, per ADR 0001?",
+   "back": "Stay thin: validate input, enforce auth and rate limits, call a service, format the response. Business rules live in src/domain, infrastructure adapters in src/server."
+  },
+  {
+   "id": "f02-outside-the-transaction",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+    "lines": {
+     "start": 24,
+     "end": 24
+    }
+   },
+   "cites": [
+    {
+     "path": "src/server/checkout/service.ts",
+     "lineStart": 135,
+     "lineEnd": 171
+    }
+   ],
+   "front": "Which checkout steps run AFTER the order transaction commits?",
+   "back": "Creating the Stripe PaymentIntent, storing its id and transfer group on the order, low-stock notifications, and completing the idempotency key. A failure in any of them leaves the committed order behind."
+  },
+  {
+   "id": "f03-outbox",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+    "lines": {
+     "start": 32,
+     "end": 39
+    }
+   },
+   "cites": [
+    {
+     "path": "src/server/checkout/service.ts",
+     "lineStart": 135,
+     "lineEnd": 162
+    },
+    {
+     "path": "app/api/webhooks/stripe/route.ts",
+     "lineStart": 102,
+     "lineEnd": 116
+    }
+   ],
+   "front": "Outbox pattern, and the three candidate points in this codebase",
+   "back": "Write \"what should happen\" to the database in the same transaction as the business state; a worker performs the external side effect with retries. Candidates: PaymentIntent creation after order create, the low-stock notification after checkout, seller transfers after webhook payment success."
+  },
+  {
+   "id": "f04-idor-checks",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 37,
+     "end": 41
+    }
+   },
+   "cites": [
+    {
+     "path": "src/server/checkout/service.ts",
+     "lineStart": 19,
+     "lineEnd": 41
+    },
+    {
+     "path": "src/server/orders/service.ts",
+     "lineStart": 24,
+     "lineEnd": 30
+    }
+   ],
+   "front": "The resource-isolation (IDOR) checks the guide lists",
+   "back": "Cart lookup includes buyerId; address lookup includes userId; cart mutation checks the existing cart belongs to the buyer; a seller status update requires a split owned by that seller; the seller dashboard redirects without a matching seller id."
+  }
+ ]
+}

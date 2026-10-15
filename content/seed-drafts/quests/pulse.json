@@ -1,0 +1,412 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "pulse",
+ "sha": "924aae022779b65f8fe38895a73e11bd1fbf2ee4",
+ "guides": [
+  "docs/funnel-semantics.md",
+  "docs/experiments/peeking.md",
+  "docs/adr/0003-api-key-model.md",
+  "docs/adr/0009-sse-drop-policy-tails.md",
+  "docs/adr/0010-sampling-and-confidence-policy.md",
+  "docs/adr/0011-bucketing-and-experiment-methodology.md"
+ ],
+ "items": [
+  {
+   "id": "q01-window-from-step-one",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/funnel-semantics.md",
+    "lines": {
+     "start": 12,
+     "end": 14
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/insights/src/funnel.ts",
+     "lineStart": 54,
+     "lineEnd": 66
+    }
+   ],
+   "prompt": "Funnel view -> signup -> purchase with a 7-day window. One person views on day 0, signs up on day 5 and purchases on day 9. How far do they get?",
+   "answer": "Step 2: the purchase is 9 days after the view that anchors the window",
+   "distractors": [
+    "Step 3, as the purchase lands within 7 days of the day-5 signup",
+    "Step 3, because the window only bounds the gap between neighbouring steps",
+    "Step 1 only; the signup resets the anchor, so the chain breaks"
+   ],
+   "explanation": "computeFunnel compares every later step with anchor + windowMs, and the anchor is the step-1 timestamp (funnel.ts:58, 62). The window is measured from step 1, not from the previous step."
+  },
+  {
+   "id": "q02-inclusive-edge",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/funnel-semantics.md",
+    "lines": {
+     "start": 18,
+     "end": 19
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/insights/src/funnel.ts",
+     "lineStart": 62,
+     "lineEnd": 62
+    }
+   ],
+   "prompt": "With a 7-day window, the last step happens at exactly anchor + 7 days, to the millisecond. Does it count?",
+   "answer": "Yes; the comparison is t <= anchor + windowMs, so the edge is inside",
+   "distractors": [
+    "No, the window is half-open and ends just before anchor + 7 days",
+    "Only when the step shares a timestamp with an earlier recorded event",
+    "It depends on rounding, since timestamps are bucketed to whole days"
+   ],
+   "explanation": "funnel.ts:62 uses t <= anchor + windowMs. The guide states the edge is inclusive: exactly anchor + window counts, one millisecond later does not."
+  },
+  {
+   "id": "q03-wrong-order",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/funnel-semantics.md",
+    "lines": {
+     "start": 15,
+     "end": 17
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/insights/src/funnel.ts",
+     "lineStart": 56,
+     "lineEnd": 62
+    }
+   ],
+   "prompt": "A person signs up (step 2) on day 0 and views the page (step 1) on day 1, then does nothing else. What does the funnel count?",
+   "answer": "They count at step 1 only; the earlier signup is ignored",
+   "distractors": [
+    "They complete both steps, because order is ignored inside the window",
+    "They are not counted at all: an out-of-order chain discards the person",
+    "They count at step 2, as the signup still falls within 7 days of the view"
+   ],
+   "explanation": "At level 0 only a step-1 event can match (funnel.ts:56-61); the day-0 signup is skipped. After the view anchors at day 1 there is no later signup, so the person stays at step 1. Ordered-with-gaps means B ... A leaves you stuck at step 1."
+  },
+  {
+   "id": "q04-no-reanchor",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/funnel-semantics.md",
+    "lines": {
+     "start": 10,
+     "end": 11
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/insights/src/funnel.ts",
+     "lineStart": 51,
+     "lineEnd": 66
+    }
+   ],
+   "prompt": "Window 7 days. A person views on day 0, views again on day 6 and signs up on day 8. Does the signup count?",
+   "answer": "No, because the anchor stays at the earliest view, so the window closed",
+   "distractors": [
+    "Yes, the day-6 view re-anchors the window to start on day 6",
+    "Yes: any step-1 event within 7 days of the signup will do",
+    "No; a repeated step-1 event disqualifies the person entirely"
+   ],
+   "explanation": "The anchor is set only while level === 0 (funnel.ts:56-59), so the second view changes nothing; day 8 > 0 + 7 days fails the check at line 62. The person is counted at step 1, not dropped."
+  },
+  {
+   "id": "q05-breakdown-label",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/funnel-semantics.md",
+    "lines": {
+     "start": 28,
+     "end": 28
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/insights/src/funnel.ts",
+     "lineStart": 100,
+     "lineEnd": 116
+    }
+   ],
+   "prompt": "A funnel is broken down by $browser. A person's first step-1 event was on Firefox and every later event on Chrome. Where are they counted?",
+   "answer": "In the Firefox group, with all their events, as their first view was Firefox",
+   "distractors": [
+    "In both groups, split by the browser property that each separate event carries",
+    "In the Chrome group, since most of their events carry that browser",
+    "In \"(none)\", as the browser property differs across their events"
+   ],
+   "explanation": "computeFunnelBreakdown labels each person once, from the property on their FIRST step-1 event (funnel.ts:100-108), then puts all of that person's events into that group. \"(none)\" is only used when the property is missing."
+  },
+  {
+   "id": "q06-flagkey-in-hash",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0011-bucketing-and-experiment-methodology.md",
+    "lines": {
+     "start": 20,
+     "end": 21
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/shared/src/bucketing.ts",
+     "lineStart": 41,
+     "lineEnd": 43
+    }
+   ],
+   "prompt": "Why does bucket() put the flagKey inside the hashed string, next to the distinctId?",
+   "answer": "So that two flags give uncorrelated splits instead of reusing one",
+   "distractors": [
+    "So that a user can be moved between variants by editing the key",
+    "It is only a cache key; the hash itself reads the distinctId only",
+    "To make the hash slower, as a defence against bucket guessing"
+   ],
+   "explanation": "bucket hashes `${flagKey}:${salt}:${distinctId}` (bucketing.ts:42). Leaving the flagKey out would give every experiment the same split; the chi-square and Pearson property tests exist to catch that."
+  },
+  {
+   "id": "q07-ramp-up",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0011-bucketing-and-experiment-methodology.md",
+    "lines": {
+     "start": 53,
+     "end": 54
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/flags/src/evaluate.ts",
+     "lineStart": 40,
+     "lineEnd": 43
+    }
+   ],
+   "prompt": "A flag ramps from 10% to 20% rollout. What happens to the users who were already inside the 10%?",
+   "answer": "They stay in, since their rollout draw is unchanged and still under 0.2",
+   "distractors": [
+    "They are reshuffled, and about half of them drop back out of the rollout",
+    "They are removed until the next deploy writes a fresh assignment table",
+    "They keep the flag but get a new variant from the next variant draw"
+   ],
+   "explanation": "The rollout gate is bucket(key, id, \"rollout\") >= rolloutPercentage / 100 (evaluate.ts:40-41). The draw depends only on the key, the salt and the user, so anyone below 0.1 is also below 0.2. The variant draw uses its own salt and does not change either."
+  },
+  {
+   "id": "q08-reason-order",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0011-bucketing-and-experiment-methodology.md",
+    "lines": {
+     "start": 14,
+     "end": 15
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/flags/src/evaluate.ts",
+     "lineStart": 32,
+     "lineEnd": 46
+    }
+   ],
+   "prompt": "An enabled flag has targeting that this user fails, and the user's rollout draw is also outside the percentage. Which reason does evaluateFlag return?",
+   "answer": "\"not_targeted\": targeting runs before the rollout draw",
+   "distractors": [
+    "\"out_of_rollout\", since the rollout gate always has the final word",
+    "\"disabled\": a failed predicate turns the flag off for them",
+    "\"rollout\", with the control variant picked by weight"
+   ],
+   "explanation": "evaluateFlag returns in order: disabled, then not_targeted (evaluate.ts:36-38), then out_of_rollout (line 41-43). A user who fails targeting never reaches the rollout draw."
+  },
+  {
+   "id": "q09-peeking-rate",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/experiments/peeking.md",
+    "lines": {
+     "start": 12,
+     "end": 18
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/experiments/peeking.md",
+     "lineStart": 15,
+     "lineEnd": 18
+    }
+   ],
+   "prompt": "In the 1000 A/A experiments of the peeking simulation, what false-positive rate does \"check after every 100 samples, stop at p < 0.05\" produce?",
+   "answer": "About 26%: one null experiment in four called a winner",
+   "distractors": [
+    "About 5%, the same alpha a single fixed-horizon look gives",
+    "About 50%, as half of the null experiments drift past p < 0.05 at some look",
+    "Zero; the A/A design cannot produce a significant difference"
+   ],
+   "explanation": "The table in peeking.md gives ~26% for peeking against ~4.7% for a fixed horizon. Every \"win\" in an A/A test is a false positive by construction, so the true lift is zero but noise still crosses the line."
+  },
+  {
+   "id": "q10-unpooled-ci",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0011-bucketing-and-experiment-methodology.md",
+    "lines": {
+     "start": 26,
+     "end": 27
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/flags/src/results.ts",
+     "lineStart": 58,
+     "lineEnd": 76
+    }
+   ],
+   "prompt": "computeExperimentResult runs a z-test and a confidence interval on the lift. Which standard error does each one use?",
+   "answer": "A pooled SE for the z-test; per-arm own variance for the lift CI",
+   "distractors": [
+    "Pooled for both, because the null hypothesis assumes equal rates in each arm",
+    "Unpooled for both: each of the 2 arms keeps its own variance",
+    "Separate variances in the test statistic, a shared rate for the interval"
+   ],
+   "explanation": "twoProportionZTest pools the two rates under the null (results.ts:50-51). The lift CI uses each proportion's own variance (seUnpooled, lines 70-73) because it describes the estimated difference."
+  },
+  {
+   "id": "q11-undead-key",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0003-api-key-model.md",
+    "lines": {
+     "start": 29,
+     "end": 33
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/auth/src/resolver.ts",
+     "lineStart": 38,
+     "lineEnd": 39
+    },
+    {
+     "path": "packages/auth/src/resolver.ts",
+     "lineStart": 63,
+     "lineEnd": 63
+    }
+   ],
+   "prompt": "A WRITE key is revoked. How long can it keep authenticating POST /e on an API instance that resolved it a moment ago?",
+   "answer": "Up to 60 seconds, the TTL of the hash-to-key cache",
+   "distractors": [
+    "Not at all; revocation busts the hot-path cache straight away",
+    "Until the next deploy, since keys are cached for the process lifetime",
+    "Up to 24 hours, the interval of the sampled lastUsedAt write"
+   ],
+   "explanation": "The resolver caches each hash -> key mapping with ttlMs defaulting to 60_000 (resolver.ts:38-39, 63). ADR-0003 names this the \"undead key\" window; an instant cache-bust on revoke is deferred."
+  },
+  {
+   "id": "q12-sample-estimate",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0010-sampling-and-confidence-policy.md",
+    "lines": {
+     "start": 25,
+     "end": 28
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/insights/src/sampling.ts",
+     "lineStart": 24,
+     "lineEnd": 40
+    }
+   ],
+   "prompt": "A sampled query reads 400 matching events in a 10% sample. What does formatEstimate show?",
+   "answer": "~4,000 ±9%, from observed / 0.1 and a 95% interval of about 372",
+   "distractors": [
+    "~400 ±5%, the raw observed count shown with a 5% error band",
+    "~4,000 exactly, because 400 clears the 30-event reliability floor",
+    "~40,000 ±1%: the estimate scales by the square of the sample rate"
+   ],
+   "explanation": "estimate = round(400 / 0.1) = 4000; se = sqrt(400 * 0.9) / 0.1 ≈ 189.7; ci95 = 1.96 * se ≈ 372, about 9.3% of 4000 (sampling.ts:24-39). The floor only decides reliable; it never drops the ± sign."
+  },
+  {
+   "id": "f01-funnel-contract",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/funnel-semantics.md",
+    "lines": {
+     "start": 10,
+     "end": 21
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/insights/src/funnel.ts",
+     "lineStart": 49,
+     "lineEnd": 69
+    }
+   ],
+   "front": "The five rules of Pulse's funnel contract",
+   "back": "1) Step 1 anchors at the person's earliest step-1 event. 2) The window is measured from step 1, not the previous step. 3) Ordered with gaps: other events may fall between steps, but B before A does not count. 4) The window edge is inclusive. 5) Same-timestamp steps advance in recorded order."
+  },
+  {
+   "id": "f02-key-audiences",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0003-api-key-model.md",
+    "lines": {
+     "start": 16,
+     "end": 25
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/auth/src/capability.ts",
+     "lineStart": 17,
+     "lineEnd": 20
+    }
+   ],
+   "front": "Pulse's two API key types and what each may do",
+   "back": "WRITE (pw_live_...): public, shipped in page source, append only. SECRET (ps_live_...): server-side only, append + read. Stored as sha256 hash + identifiable prefix; the plaintext is shown once. Resolving proves a key is valid; keyCan proves it is allowed."
+  },
+  {
+   "id": "f03-tail-vs-ingest",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0009-sse-drop-policy-tails.md",
+    "lines": {
+     "start": 16,
+     "end": 18
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/tail.ts",
+     "lineStart": 54,
+     "lineEnd": 62
+    }
+   ],
+   "front": "How does the live SSE tail treat a slow client, and why is that the opposite of ingest?",
+   "back": "Each client has a bounded ring buffer (default 100); on overflow it drops the OLDEST frame and counts the drop (\"N skipped\"). Ingest promises never drop (at-least-once, durable); a live tail promises fresh. Two surfaces, opposite correctness contracts."
+  },
+  {
+   "id": "f04-three-states",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0011-bucketing-and-experiment-methodology.md",
+    "lines": {
+     "start": 30,
+     "end": 31
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/flags/src/results.ts",
+     "lineStart": 19,
+     "lineEnd": 19
+    }
+   ],
+   "front": "The three experiment result states, and why one is worded carefully",
+   "back": "collecting / significant / \"no effect detected\". Never \"no effect\": reaching the horizon without significance only means no effect large enough to detect was found, not that the variants are equivalent (that needs an equivalence/TOST design)."
+  }
+ ]
+}
