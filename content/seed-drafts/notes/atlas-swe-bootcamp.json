@@ -1,0 +1,382 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "atlas-swe-bootcamp",
+ "repo": "atlas-swe-bootcamp",
+ "sha": "bc90eb9c53a538444153ae514a3807d86845048a",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: Atlas explained through its decision records",
+   "body": "Atlas is an employer-of-record backend: an ASP.NET Core minimal API over EF Core and SQLite that runs contracts, leave, expenses, payroll and invoicing for client companies. This pack is built from **docs/adr/**, the architecture decision records. Each ADR is short and has the same three parts: **Context** (the problem), **Decision** (what was chosen) and **Consequences** (what that costs and how it is tested).\n\nA good reading order:\n\n1. ADR 0002 and 0003: who the callers are and what each kind of key may see or do.\n2. ADR 0004 and 0007: two persistence decisions forced by SQLite.\n3. ADR 0005, 0006 and 0008: money, salary history and payroll runs.\n4. ADR 0009: the shape of errors and of list responses.\n\nEvery ADR names the class that implements it. Open that class next to the ADR and check the claim against the code; in at least one place in this pack the wording and the code are worth comparing line by line.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0001-sqlite-with-ensurecreated.md",
+     "lineStart": 13,
+     "lineEnd": 13,
+     "quote": "Use **EF Core + SQLite** as the only persistence"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The wider architecture tour: projects, request pipeline and the main domain areas."
+    },
+    {
+     "path": "docs/adr/README.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The index of all eleven ADRs with one line on each."
+    }
+   ]
+  },
+  {
+   "id": "r02-persistence-on-sqlite",
+   "target": "pack",
+   "phase": "before",
+   "title": "Core idea: two persistence decisions that SQLite forced",
+   "body": "SQLite is a small embedded database with very few column types. Two Atlas decisions exist because of that.\n\n**Storing timestamps.** EF Core picks a column type for each .NET type. Read the Context of ADR 0004 to see what the default would have been for DateTimeOffset and why that is a problem for sorting and range filters. Then find the value converter in AtlasDbContext: a value converter is a pair of functions, one used when writing a property and one when reading it. Work out for yourself what information survives the round trip and what does not.\n\n**Concurrent edits.** Two HTTP requests can load the same row, change it and save. Optimistic concurrency means no lock is taken; instead a column is compared at save time and a mismatch fails the save. In ADR 0007 and AtlasDbContext, look for three things: which entities take part, where the number is changed, and which class turns the failure into an HTTP response.",
+   "excerpts": [
+    {
+     "path": "src/Atlas.Infrastructure/AtlasDbContext.cs",
+     "lineStart": 302,
+     "lineEnd": 302,
+     "quote": "Entities whose updates can race use Version as an optimistic-concurrency"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/Atlas.Infrastructure/AtlasDbContext.cs",
+     "lineStart": 300,
+     "lineEnd": 360,
+     "why": "The concurrency-token loop, the SaveChanges overrides and the converter class."
+    }
+   ]
+  },
+  {
+   "id": "r03-money-and-periods",
+   "target": "pack",
+   "phase": "before",
+   "title": "Core idea: money, rounding and which period a value belongs to",
+   "body": "Payroll adds and splits money many times, so a cent can appear or vanish if every step rounds on its own. ADR 0005 states one policy for this. As you read it, list each calculation it names (payroll amounts, benefit split, FX, final pay) and, for each one, which number is rounded and which numbers are derived from it by plain arithmetic. Then open PayrollCalculator.RoundMoney and note the midpoint rule it passes to Math.Round; look up the MidpointRounding enum if the options are new.\n\nADR 0006 and ADR 0008 are about time. Salary history is append-only: new terms are added as records with an effective date, never edited in place. ADR 0008 describes what creating a payroll run stores and what completing it does. Read SalaryRecord.EffectiveForMonth slowly and trace it by hand for a raise that starts in the middle of a month, and for an amendment that arrives after a run already exists.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0005-decimal-money-rounding-policy.md",
+     "lineStart": 7,
+     "lineEnd": 7,
+     "quote": "Payroll is the heart of the product"
+    },
+    {
+     "path": "docs/adr/0006-append-only-salary-history.md",
+     "lineStart": 1,
+     "lineEnd": 1,
+     "quote": "Append-only salary history with effective-for-month selection"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/Atlas.Domain/Services/PayrollCalculator.cs",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The single rounding function and the per-country payroll calculation."
+    },
+    {
+     "path": "src/Atlas.Domain/Entities/SalaryRecord.cs",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "How the record for a month is selected."
+    }
+   ]
+  },
+  {
+   "id": "r04-access-and-lists",
+   "target": "pack",
+   "phase": "before",
+   "title": "Core idea: keys, roles and how lists are bounded",
+   "body": "Atlas has no login page. Callers send a static key in a header, and ApiKeyAuthenticationHandler turns it into a principal with a role and, for client roles, one client id. Read ADR 0002 for the trade-offs of that choice compared with signed tokens, and read the handler to see what it checks on each request.\n\nADR 0003 then defines two different refusal status codes and when each applies. Build a small table with rows for read, write and list, and columns for own client and other client, and fill each cell from the ADR. Then check the cells against AuthorizationExtensions and two endpoint files, ContractEndpoints and LeaveEndpoints.\n\nADR 0009 covers the error body format and pagination. Find Pagination.Validate and ToPageAsync and note what each does with the page and pageSize values.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0003-cross-client-404-policy.md",
+     "lineStart": 14,
+     "lineEnd": 14,
+     "quote": "Two distinct signals, applied uniformly by every endpoint:"
+    },
+    {
+     "path": "docs/adr/0002-api-key-authentication.md",
+     "lineStart": 7,
+     "lineEnd": 8,
+     "quote": "Atlas is a machine-to-machine API: callers are the platform's own operators"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/Atlas.Api/Auth/AuthorizationExtensions.cs",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "CanViewClient, CanManageClient and the other claim helpers."
+    },
+    {
+     "path": "src/Atlas.Api/Pagination.cs",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Header-based pagination in about fifty lines."
+    }
+   ]
+  },
+  {
+   "id": "x-q01-stale-approval",
+   "target": "seed:quests:atlas-swe-bootcamp/quiz/1090c2d74aa3d55d",
+   "phase": "after",
+   "title": "A stale Version becomes a 409, not a lost update",
+   "body": "**Key: a 409 ProblemDetails telling it to reload the resource and retry.**\n\nBoth callers loaded the same Version. The first save bumps it, so the second save's concurrency check matches no row and EF throws DbUpdateConcurrencyException. DecideAsync does not catch it, so it reaches the global ConcurrencyExceptionHandler, which asks DatabaseConflicts.IsWriteConflict and writes a 409 with the detail \"Reload it and retry\".\n\nWhy the others are wrong:\n- **A 200 that overwrites the first approval**: that lost update is exactly what the token prevents; the ADR says the winner's decision stands.\n- **412 because no If-Match was sent**: Atlas does not use ETag preconditions; the ADR only mentions them as a possible later use.\n- **A 500 because nothing maps the exception**: the registered IExceptionHandler maps it.",
+   "excerpts": [
+    {
+     "path": "src/Atlas.Api/ConcurrencyExceptionHandler.cs",
+     "lineStart": 24,
+     "lineEnd": 24,
+     "quote": "detail: \"The resource was modified by another request. Reload it and retry.\""
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02-who-bumps-version",
+   "target": "seed:quests:atlas-swe-bootcamp/quiz/b0be03db2c7fb197",
+   "phase": "after",
+   "title": "The DbContext bumps Version, so no endpoint can forget",
+   "body": "**Key: in AtlasDbContext, which bumps it for each Modified versioned entry.**\n\nBoth SaveChanges overrides call BumpVersions before the base save. BumpVersions walks `ChangeTracker.Entries<IVersioned>()` and runs `entry.Entity.Version++` for every entry whose state is Modified. OnModelCreating registers the same property as a concurrency token, so EF puts the old value in the UPDATE's WHERE clause.\n\nWhy the others are wrong:\n- **A SQLite rowversion column**: ADR 0007 says SQLite has no rowversion type; that is why the token is application-managed.\n- **Each endpoint adds one**: the ADR's reason for centralising the bump is that no endpoint can forget it.\n- **A trigger from EnsureCreated**: no trigger is defined anywhere; the increment is plain C#.",
+   "excerpts": [
+    {
+     "path": "src/Atlas.Infrastructure/AtlasDbContext.cs",
+     "lineStart": 340,
+     "lineEnd": 349,
+     "quote": "if (entry.State == EntityState.Modified)"
+    },
+    {
+     "path": "docs/adr/0007-optimistic-concurrency-version-token.md",
+     "lineStart": 24,
+     "lineEnd": 26,
+     "quote": "centralizing the bump in `SaveChanges` means no endpoint can forget it."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q03-offset-round-trip",
+   "target": "seed:quests:atlas-swe-bootcamp/quiz/d617614fb26f657b",
+   "phase": "after",
+   "title": "UTC ticks keep the instant and drop the offset",
+   "body": "**Key: the same instant, 02:00 with a zero offset; the +08:00 is gone.**\n\nThe converter writes value.UtcTicks and reads new DateTimeOffset(ticks, TimeSpan.Zero). 10:00 at +08:00 is 02:00 UTC, so the ticks describe 02:00 UTC and the value comes back as 02:00+00:00. ADR 0004 calls this out: the offset is discarded but the instant is the same, and a round-trip test documents it.\n\nWhy the others are wrong:\n- **10:00 at +08:00**: there is no offset column; only one long is stored.\n- **10:00 at a zero offset**: that would move the instant by eight hours; using UtcTicks prevents it.\n- **Cut to whole seconds**: ticks keep 100 ns precision, and no string parsing is involved.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0004-datetimeoffset-as-utc-ticks.md",
+     "lineStart": 30,
+     "lineEnd": 31,
+     "quote": "The original offset is discarded: a value written at `+08:00` reads back at offset zero."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q04-why-ticks",
+   "target": "seed:quests:atlas-swe-bootcamp/quiz/f9a53e90fb30f126",
+   "phase": "after",
+   "title": "Text timestamps cannot be compared as instants",
+   "body": "**Key: the default is TEXT, which SQLite cannot compare as instants.**\n\nADR 0004's Context: SQLite has no native date-time type, EF Core's default stores DateTimeOffset as TEXT, and ORDER BY or range filters on those strings get the wrong SQL semantics or fall back to client-side evaluation. Integer ticks sort and compare correctly in SQL, which DateTimeOffsetConverterTests check.\n\nWhy the others are wrong:\n- **EnsureCreated would fail**: a TEXT column is created without complaint; the problem only shows up in queries.\n- **Disk space**: the ADR never mentions size; its concern is ordering and comparison.\n- **Two servers disagree on local time**: the problem is how instants compare, not which zone a server uses.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0004-datetimeoffset-as-utc-ticks.md",
+     "lineStart": 7,
+     "lineEnd": 10,
+     "quote": "SQLite cannot order or compare those strings as instants"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q05-benefit-remainder",
+   "target": "seed:quests:atlas-swe-bootcamp/quiz/5380a4b2c4b4fd47",
+   "phase": "after",
+   "title": "The employee share is the remainder, never rounded on its own",
+   "body": "**Key: MonthlyCost - EmployerShare, so both shares re-add to the cent.**\n\nBenefitPlan line 39 rounds the employer share once; line 42 defines EmployeeShare as MonthlyCost - EmployerShare. Because one side is the remainder of the other, employer plus employee always equals the premium exactly. ADR 0005 names this case explicitly.\n\nWhy the others are wrong:\n- **Rounding (1 - rate) on its own**: rounding both sides independently can make the split one cent off the premium, which is the drift the ADR forbids.\n- **Banker's rounding to offset bias**: Atlas has one rounding function and it uses AwayFromZero.\n- **Truncating toward zero**: nothing in the money code truncates; RoundMoney rounds.",
+   "excerpts": [
+    {
+     "path": "src/Atlas.Domain/Entities/BenefitPlan.cs",
+     "lineStart": 42,
+     "lineEnd": 42,
+     "quote": "public decimal EmployeeShare => MonthlyCost - EmployerShare;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q06-midpoint",
+   "target": "seed:quests:atlas-swe-bootcamp/quiz/2040c732ee3b0cd7",
+   "phase": "after",
+   "title": "RoundMoney uses AwayFromZero at two places",
+   "body": "**Key: 2.35, because a midpoint is rounded away from zero.**\n\nRoundMoney is Math.Round(amount, 2, MidpointRounding.AwayFromZero). 2.345 sits exactly halfway between 2.34 and 2.35, and AwayFromZero picks 2.35. ADR 0005 chose this because it is predictable for people checking payslips by hand and matches statutory tables.\n\nWhy the others are wrong:\n- **2.34, to the even digit**: that is MidpointRounding.ToEven, the default for Math.Round with no mode argument; Atlas passes AwayFromZero explicitly.\n- **2.345, three places for FX**: RoundMoney always rounds to 2 places; FX results go through the same function.\n- **2.34, truncated**: Math.Round rounds; it does not truncate.",
+   "excerpts": [
+    {
+     "path": "src/Atlas.Domain/Services/PayrollCalculator.cs",
+     "lineStart": 24,
+     "lineEnd": 25,
+     "quote": "Math.Round(amount, 2, MidpointRounding.AwayFromZero);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07-fx-once",
+   "target": "seed:quests:atlas-swe-bootcamp/quiz/b8ebb05695c2a26e",
+   "phase": "after",
+   "title": "Convert the invoice total once, not each line",
+   "body": "**Key: once, to the summed invoice total, rounding that single product.**\n\nPayrollAssessment sums the lines, adds the management fee, and only then converts: RoundMoney(total * fxRate.Value). ADR 0005 lists this rule: convert the already-summed total once, never per line. Converting and rounding each line could leave the converted total a cent away from the converted sum.\n\nWhy the others are wrong:\n- **Per line, then sum**: this is the drift the ADR is written to avoid.\n- **At payment time**: ADR 0008 applies the period's effective FX rate when the run is completed and the invoice issued; nothing re-converts at payment.\n- **Never converted**: the assessment returns a TotalInBillingCurrency, and a missing FX rate makes completion fail with 409.",
+   "excerpts": [
+    {
+     "path": "src/Atlas.Domain/Services/PayrollAssessment.cs",
+     "lineStart": 66,
+     "lineEnd": 66,
+     "quote": "fxRate is null ? null : PayrollCalculator.RoundMoney(total * fxRate.Value));"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08-mid-month-raise",
+   "target": "seed:quests:atlas-swe-bootcamp/quiz/0b4a44d6cbc04e6d",
+   "phase": "after",
+   "title": "A change effective mid-month owns the whole month",
+   "body": "**Key: the new salary for the whole of May, with no proration by day.**\n\nEffectiveForMonth computes the month end (31 May), keeps records with EffectiveDate on or before it, orders by EffectiveDate then CreatedAtUtc, and takes the last one. The 15 May record qualifies and is the latest, so it is used for all of May. ADR 0006 records this as an accepted simplification.\n\nWhy the others are wrong:\n- **Prorated by days**: the ADR says there is no intra-month proration for amendments.\n- **Starts in the first full month**: the filter compares against the month's end, not its start.\n- **Averaged**: LastOrDefault returns one record; nothing averages two.",
+   "excerpts": [
+    {
+     "path": "src/Atlas.Domain/Entities/SalaryRecord.cs",
+     "lineStart": 47,
+     "lineEnd": 47,
+     "quote": "var monthEnd = new DateOnly(year, month, 1).AddMonths(1).AddDays(-1);"
+    },
+    {
+     "path": "docs/adr/0006-append-only-salary-history.md",
+     "lineStart": 30,
+     "lineEnd": 31,
+     "quote": "a change effective mid-month owns that **whole** month (no intra-month proration)."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09-amend-after-run",
+   "target": "seed:quests:atlas-swe-bootcamp/quiz/3f40fb0548905ca5",
+   "phase": "after",
+   "title": "A created payroll run is a snapshot",
+   "body": "**Key: the snapshot from run creation; the amendment hits the next run.**\n\nADR 0008: creating a run computes and stores every Payslip immediately, and from then on the run is a snapshot that later amendments do not rewrite. Its Consequences section states the ordering case directly: an amendment approved after run creation affects the next run, and tests pin it.\n\nWhy the others are wrong:\n- **Draft runs recalculate on completion**: completing a run issues invoices; the ADR says there is no recalculate-draft operation.\n- **New gross, old deductions**: payslips are computed together at creation; nothing mixes two sets of terms.\n- **Locked until recalculated**: nothing blocks the run, and corrections would be a new feature, not a mutation.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0008-payroll-run-snapshot.md",
+     "lineStart": 34,
+     "lineEnd": 36,
+     "quote": "an amendment approved after run creation affects the *next* run (pinned by tests)"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10-foreign-contract-read",
+   "target": "seed:quests:atlas-swe-bootcamp/quiz/89d98ef73f79f64c",
+   "phase": "after",
+   "title": "Another client's resource looks exactly like a missing one",
+   "body": "**Key: 404, exactly as if that contract id did not exist at all.**\n\nThe contract GET loads by id and returns Results.NotFound() when the row is null OR when !user.CanViewClient(contract.ClientId). Both branches produce the same response, so a client key cannot learn that another client's id exists. ADR 0003 applies this to reads and writes.\n\nWhy the others are wrong:\n- **403, role too weak**: 403 is for a caller who can see the resource but lacks the role; using it here would reveal that the contract exists.\n- **401**: the key authenticated successfully; 401 is for a missing or unknown key.\n- **200 with fields masked**: no data from another client is returned at all.",
+   "excerpts": [
+    {
+     "path": "src/Atlas.Api/Endpoints/ContractEndpoints.cs",
+     "lineStart": 57,
+     "lineEnd": 58,
+     "quote": "return contract is null || !user.CanViewClient(contract.ClientId)"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q11-viewer-own-write",
+   "target": "seed:quests:atlas-swe-bootcamp/quiz/cc6e5e99337a2e1a",
+   "phase": "after",
+   "title": "Visible but not permitted is a 403",
+   "body": "**Key: 403, since it can see the request but lacks the role to act.**\n\nLeaveEndpoints.DecideAsync first returns 404 if the request is missing or belongs to another client (CanViewClient). A viewer of its own client passes that check. Next, CanManageClient fails for a viewer, and the endpoint returns a 403 problem saying only platform admins or the client's own admins can decide leave requests.\n\nWhy the others are wrong:\n- **404**: hiding existence is for other clients' data; this request belongs to the viewer's own client, which it may read.\n- **409**: that is a domain-state conflict, raised only after the role check passes.\n- **401**: the key is valid, so authentication succeeded.",
+   "excerpts": [
+    {
+     "path": "src/Atlas.Api/Endpoints/LeaveEndpoints.cs",
+     "lineStart": 235,
+     "lineEnd": 239,
+     "quote": "if (!user.CanManageClient(request.Contract!.ClientId))"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q12-list-filter",
+   "target": "seed:quests:atlas-swe-bootcamp/quiz/fe35d0890d85b2ec",
+   "phase": "after",
+   "title": "Two ANDed client filters match nothing",
+   "body": "**Key: 200 and an empty array: both client filters are applied together.**\n\nFor a non-admin, line 31 adds Where(c => c.ClientId == ownClientId). Line 33 then adds Where(c => c.ClientId == clientId) whenever the query string has one. EF combines the two Where calls with AND, and no contract has two client ids, so the page is empty (X-Total-Count is 0). Note the gap: ADR 0003 and the comment on line 29 say lists are scoped \"whatever filter they pass\", which reads as if the filter were ignored. The code applies it.\n\nWhy the others are wrong:\n- **Own contracts, filter ignored**: that is the comment's reading, not what lines 33-36 do.\n- **404 / 403**: list endpoints never refuse by ownership; they scope the query.",
+   "excerpts": [
+    {
+     "path": "src/Atlas.Api/Endpoints/ContractEndpoints.cs",
+     "lineStart": 33,
+     "lineEnd": 35,
+     "quote": "query = query.Where(c => c.ClientId == clientId);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q13-page-size-cap",
+   "target": "seed:quests:atlas-swe-bootcamp/quiz/a3e0d7e902c305ae",
+   "phase": "after",
+   "title": "An out-of-range page size is a validation error",
+   "body": "**Key: a 400 ValidationProblem with an error under the pageSize key.**\n\nPagination.Validate checks pageSize is < 1 or > MaxPageSize (200), adds errors[\"pageSize\"], and returns Results.ValidationProblem(errors). The list endpoint returns that result before it touches the database. ADR 0009 states the same rule: default 50, max 200, out of range is 400.\n\nWhy the others are wrong:\n- **Clamped to 200**: nothing clamps; the value is rejected.\n- **All 500 rows**: the maximum is enforced, not advisory.\n- **The default of 50**: the default is used only when pageSize is absent (pageSize ?? DefaultPageSize), not when it is invalid.",
+   "excerpts": [
+    {
+     "path": "src/Atlas.Api/Pagination.cs",
+     "lineStart": 29,
+     "lineEnd": 31,
+     "quote": "if (pageSize is < 1 or > MaxPageSize)"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q14-page-metadata",
+   "target": "seed:quests:atlas-swe-bootcamp/quiz/3dc2d78c67ba5b04",
+   "phase": "after",
+   "title": "Page metadata travels in headers",
+   "body": "**Key: in the X-Total-Count, X-Page and X-Page-Size response headers.**\n\nToPageAsync counts the query, writes those three headers on the response, and returns a plain `List<T>`. ADR 0009 chose this so that clients already parsing a JSON array kept working when pagination arrived.\n\nWhy the others are wrong:\n- **An { items, total } envelope**: the ADR names this option and rejects it to avoid a breaking change.\n- **A Link header with rel=next**: no Link header is written anywhere in Pagination.cs.\n- **A metadata object appended to the array**: the body holds only the page's items.",
+   "excerpts": [
+    {
+     "path": "src/Atlas.Api/Pagination.cs",
+     "lineStart": 45,
+     "lineEnd": 47,
+     "quote": "http.Response.Headers[\"X-Total-Count\"] = total.ToString();"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q15-revocation",
+   "target": "seed:quests:atlas-swe-bootcamp/quiz/386f14efb964e31d",
+   "phase": "after",
+   "title": "Every request re-reads the key, so revocation is immediate",
+   "body": "**Key: on its next request, as every request looks up ApiUsers.**\n\nHandleAuthenticateAsync runs SingleOrDefaultAsync on ApiUsers for the header value on every request and fails when the user is missing, inactive or expired. ADR 0002 counts this as a benefit: the one indexed lookup per request doubles as the revocation check.\n\nWhy the others are wrong:\n- **When its JWT expires**: Atlas issues no JWTs; the ADR lists signing, refresh and clock skew as infrastructure it avoids.\n- **After a key cache refreshes**: nothing caches keys; the handler queries the database each time.\n- **Only once the row is deleted**: keys are revoked by deactivation, and rows are kept for the audit trail.",
+   "excerpts": [
+    {
+     "path": "src/Atlas.Api/Auth/ApiKeyAuthenticationHandler.cs",
+     "lineStart": 39,
+     "lineEnd": 39,
+     "quote": "if (user is null || !user.IsActive || user.ExpiresAtUtc <= now)"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}
