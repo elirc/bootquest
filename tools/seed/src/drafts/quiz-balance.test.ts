@@ -66,13 +66,6 @@ const EXEMPT: Record<string, Guard[]> = {
   // CONTENT-6
 
   // CONTENT-7
-  'buildgum': ['rank'],
-  'finance-dashboard': ['rank'],
-  'grokjs-dotnet-learning-lab': ['rank'],
-  'jsprojectlearn': ['format'],
-  'masterrnative': ['rank', 'format'],
-  'netslack': ['rank'],
-  'organized-build-crmpyjs': ['format'],
   'organized-experiment-ww45': ['format'],
   'recipegen-app': ['format'],
   'trainjs': ['format'],
