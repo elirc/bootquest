@@ -30,9 +30,9 @@
       "prompt": "A project_member of the Checkout project holds a token with the write scope and tries to edit a flag in a different project. What happens?",
       "answer": "403: the write scope is not enough without a membership row for that project",
       "distractors": [
-        "200: a write-scoped token can edit any project's flags, because scope is the only check on writes",
-        "401: the token is rejected because it was issued while the user was working in Checkout",
-        "404: flags in other projects are invisible to every non-admin"
+        "200: a write-scoped token may edit the flags of a project it is not a member of",
+        "401: the token is refused as it was issued while working in the Checkout project",
+        "404: flags in another project are hidden from users who are not an admin"
       ],
       "explanation": "Effective permission is the intersection of token scope, instance role and per-project membership; only instance_admin skips the membership check."
     },
@@ -56,9 +56,9 @@
       "prompt": "A token is revoked while a client still holds the actor object built from it earlier. What does its next service call return, and why?",
       "answer": "401: the wrapper re-reads the token on every call and requires it unrevoked",
       "distractors": [
-        "Success, because the actor object was already authenticated when the session started",
-        "Success until the actor object's cached expiry passes, after which the next call returns 401",
-        "403, because revoked tokens keep read access only"
+        "200: the actor object was authenticated at session start and is still trusted",
+        "200: the cached actor stays valid until its expiry, and later calls get 401",
+        "403: a revoked token keeps read access, so only the write call is refused"
       ],
       "explanation": "The per-request re-read costs one scan but makes revocation effective mid-session; the review lists it as deliberate, not a finding."
     },
@@ -82,9 +82,9 @@
       "prompt": "A flag is { description: 'Old text', stale: true }. A PATCH sends { description: '' }. What is stored afterwards?",
       "answer": "description '' and stale still true",
       "distractors": [
-        "description 'Old text', because an empty string is falsy and ignored",
-        "description '' and stale false, because omitted booleans default to false",
-        "The PATCH is rejected with 422 because description cannot be empty"
+        "description 'Old text', stale true",
+        "description '' and stale reset to false",
+        "a 422 for the empty description string"
       ],
       "explanation": "updateFlag uses !== undefined for description and the booleans, so '' and false are applied while omitted fields are untouched; only name and type use truthiness, which is safe because the contract refuses an empty name."
     },
@@ -106,11 +106,11 @@
         }
       ],
       "prompt": "Two sibling variants each have weight 60. Why can no single-field validator reject that, and what inconsistency does the codebase have here?",
-      "answer": "Each 60 is valid on its own; only the sum breaks the 'variants sum to 100' rule, and that rule answers 422 in the contract but 400 (bad sum) or 409 (duplicate name) in the service",
+      "answer": "Each 60 is valid alone; only the sum breaks the rule, and it answers 422 in the contract but 400 or 409 in the service",
       "distractors": [
-        "Weights are validated only in the browser, so the server accepts any sum",
-        "A weight of 60 is out of range, and both layers consistently return 422",
-        "The rule is enforced only at evaluation time, which silently normalizes the weights"
+        "Weights are checked only in the browser; the server accepts any sum and answers 200 to both layers",
+        "A weight of 60 is out of the allowed range; the contract and the service both reject it with 422",
+        "The sum is enforced at evaluation time; the weights are silently normalized to 50 each and saved"
       ],
       "explanation": "Cross-field invariants need a set-level check; the review (R3) recommends standardizing semantic failures on 422 so clients can tell a conflict from a malformed request."
     },
@@ -134,9 +134,9 @@
       "prompt": "An editor loaded revision 8 and saves with If-Match: \"8\", but another user committed revision 9 in between. Why are the service's permission checks still safe even though they are check-then-act?",
       "answer": "Checks use the request's frozen snapshot, and the commit is refused (409) if version or digest changed",
       "distractors": [
-        "Because the service re-runs every permission and confirmation check after the write succeeds and reverts on failure",
-        "Because the writer lease blocks all other reads while any editor has a form open in the browser",
-        "They are not safe; the second write silently overwrites revision 9"
+        "Checks re-run after the write succeeds, and the write is reverted if any of them fails on the new state",
+        "The writer lease blocks other reads while an editor has a form open, so the second commit cannot start",
+        "They are not safe, and the second write silently overwrites revision 9 without raising a conflict"
       ],
       "explanation": "Under #withLease the store compares meta.version and the digest with what the request expected; any mismatch throws 'State changed; reload and review before saving'."
     },
@@ -160,9 +160,9 @@
       "prompt": "Someone hand-edits data/state.json without changing meta.version. Which part of the commit condition catches it?",
       "answer": "The digest comparison, so the next mutation gets 409",
       "distractors": [
-        "The version comparison, because any write to the file bumps meta.version",
-        "Nothing; the next mutation overwrites the hand edit",
-        "The writer lease, because the editor holds the lock file"
+        "The version comparison, as every write bumps meta.version",
+        "Nothing, so the next mutation overwrites the hand edit",
+        "The writer lease, as the hand editor holds the lock file"
       ],
       "explanation": "If the version were the only check, a stale draft would be accepted and silently overwrite the edit; test/storage.test.js:124 covers this."
     },
@@ -184,11 +184,11 @@
         }
       ],
       "prompt": "Why does #commit publish the new state in memory only after renameSync succeeds?",
-      "answer": "If memory were published first, readers could see a change that a later disk failure rolled back: durability must come before visibility",
+      "answer": "Otherwise readers could see a change that a later disk failure rolled back",
       "distractors": [
-        "Because renameSync is asynchronous and must be awaited first",
-        "To keep the in-memory cache smaller during the write",
-        "Because the lease file is deleted by renameSync"
+        "renameSync is asynchronous, so the new state has to wait for it to resolve first",
+        "renameSync deletes the lease file, so publishing earlier would release the lock",
+        "The in-memory cache is cleared during the write, so there is nothing to publish"
       ],
       "explanation": "The file is written, fsynced and renamed into place, then #accept publishes the exact bytes; the guide calls durability and visibility separate events."
     },
@@ -212,9 +212,9 @@
       "prompt": "Why would answering evaluate requests with 304 Not Modified keyed on the snapshot ETag be a bug?",
       "answer": "The ETag names the configuration, not the caller; one snapshot gives different users different answers",
       "distractors": [
-        "Because ETags change on every request, so a 304 would never actually be returned to any client",
-        "Because the snapshot cache evicts entries too quickly to serve 304s reliably under load",
-        "It is not a bug; flag decisions are the same for every user of a snapshot"
+        "ETags change on every request; a 304 keyed on them would never be returned to any client",
+        "The snapshot cache evicts entries quickly; 304 answers would be unreliable under heavy load",
+        "It is not a bug; flag decisions are identical for all users who evaluate against one snapshot"
       ],
       "explanation": "With checkout_redesign at 25% rollout, one ETag maps to four different results across contexts; the cache key says nothing about who asked."
     },
@@ -236,11 +236,11 @@
         }
       ],
       "prompt": "A constraint is rewritten as plan not_in [free]. A context arrives with no plan field. What does the constraint evaluate to, and why?",
-      "answer": "false: a missing or non-scalar context value never matches, even through not_in or inversion, so missing data cannot switch a flag on",
+      "answer": "false: a missing context value never matches, even through not_in or inversion",
       "distractors": [
-        "true, because an absent plan is not 'free'",
-        "true only when inversion is enabled",
-        "It throws, and the whole evaluation fails closed with a 500"
+        "true: an absent plan is not 'free', so the not_in [free] constraint is satisfied",
+        "true: but only when the constraint also has inversion turned on",
+        "error: the evaluation throws and the whole request fails with a 500"
       ],
       "explanation": "evaluation.js returns false when the raw value is not scalar, before any operator logic; removing that line would let every plan-less context through to the rollout check."
     },
@@ -264,9 +264,9 @@
       "prompt": "bucketValue maps users to 1..100 and a rollout matches when bucket <= rollout. Why is the range 1..100 rather than 0..99?",
       "answer": "So rollout 0 enables nobody and rollout 100 everybody",
       "distractors": [
-        "Because SHA-256 digests never produce a zero prefix",
         "So that a missing userId can be assigned bucket 0",
-        "Because JavaScript's % operator cannot return 0"
+        "So the hash prefix never has to be reduced modulo 100",
+        "So rollout 1 enables nobody and rollout 99 everybody"
       ],
       "explanation": "(numeric % range) + 1 shifts the range; a boundary test built on bucketValue itself catches the off-by-one that 200 random users rarely hit."
     },
@@ -288,11 +288,11 @@
         }
       ],
       "prompt": "A non-member sends a malformed updateStrategy body for another project's strategy. What leaks today, and what is the fix?",
-      "answer": "A 422 message derived from the stored strategy (e.g. that it is not a gradual rollout) is returned before the 403; move validateStrategySettings after requireProjectWrite",
+      "answer": "A 422 describing the stored strategy is sent before the 403; authorize first, then validate",
       "distractors": [
-        "Nothing leaks; requireProjectWrite already runs first",
-        "The strategy's full JSON is echoed in the error; strip the body from errors",
-        "The project's member list leaks; hide it behind instance_admin"
+        "Nothing leaks, as the project-write check already runs first; no change is needed here",
+        "The strategy's full JSON is echoed back in the 422 body; strip the request body from errors",
+        "The project's member list leaks in the 403 body; hide that list behind instance_admin"
       ],
       "explanation": "R1: validation against stored data runs at services.js:1158, before the write check at 1160. The remaining 404-before-403 leak is accepted because ids are 12 random hex characters."
     },
@@ -316,9 +316,9 @@
       "prompt": "Why does variant selection hash 'variant:<flagKey>:<userId>' instead of reusing the rollout bucket input?",
       "answer": "So variant choice is independent of rollout position",
       "distractors": [
-        "Because the rollout bucket is stored per user and variants are not",
-        "So that a user's variant changes on every request for fairness",
-        "Because the rollout hash uses MD5, which is too short for variants"
+        "So a user's variant changes on every request, for fairness",
+        "So variants can be stored per user, like rollout buckets",
+        "So the variant hash can use MD5 while the rollout uses SHA-256"
       ],
       "explanation": "Rollout bucketing hashes '<groupId>:<userId>'; reusing it would correlate low buckets with particular variants. Both are deterministic, so nothing is stored."
     },

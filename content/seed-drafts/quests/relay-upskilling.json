@@ -29,9 +29,9 @@
    "prompt": "The worker dies after staging 1,200 of 5,000 CSV rows. Why does the next worker re-read and discard 1,200 records instead of seeking to a saved byte offset?",
    "answer": "Quoted values may contain newlines, so position is a record count",
    "distractors": [
-    "Byte offsets are not portable between Windows and Linux workers reading the same file",
-    "The file is compressed",
-    "Seeking would skip the SHA-256 rehash that guards the original against mutation"
+    "Byte offsets differ between Windows and Linux readers of a file",
+    "The CSV is gzip-compressed, so it cannot seek to an offset",
+    "Seeking would skip the SHA-256 rehash guarding the source file"
    ],
    "explanation": "A reopened cursor reads and discards `skip` records; LogicalCsvResumeHandlesQuotedNewlines pins a \\r\\n inside quotes."
   },
@@ -55,9 +55,9 @@
    "prompt": "A parse batch is replayed after a crash. Why does that not duplicate staged rows?",
    "answer": "Checkpoint and rows commit together, with ON CONFLICT DO NOTHING",
    "distractors": [
-    "The worker keeps an in-memory set of the row numbers it has already staged",
-    "The API deletes staged rows",
-    "Replays are impossible, because the advisory lock is never released after a crash"
+    "The worker keeps an in-memory set of row numbers it already staged",
+    "The API clears the job's staged rows before the replayed batch",
+    "Replays cannot happen, as the advisory lock stays held after a crash"
    ],
    "explanation": "Atomic progress plus idempotent inserts make a replayed batch harmless."
   },
@@ -81,9 +81,9 @@
    "prompt": "A worker's cached source cursor says it is at record 900, but the job's checkpoint in PostgreSQL says 1,000. What does the worker do?",
    "answer": "Drops the cursor and reopens from the database checkpoint",
    "distractors": [
-    "Rolls the database checkpoint back to 900 so it matches the cached cursor",
-    "Continues from 900 and relies on ON CONFLICT to skip the duplicate records",
-    "Fails the job"
+    "Rolls the database checkpoint back to 900 to match the cursor",
+    "Continues from 900 and lets ON CONFLICT skip the duplicates",
+    "Fails the job with a checkpoint mismatch error for an operator"
    ],
    "explanation": "PostgreSQL, not worker memory, owns progress."
   },
@@ -107,9 +107,9 @@
    "prompt": "A reviewer approved an import; then someone corrects one row's email. What happens to the approval?",
    "answer": "It is cleared in the same UPDATE that bumps mapping_version",
    "distractors": [
-    "It stays attached, because a single-row correction is below the change threshold",
-    "It stays; the row is skipped",
-    "It is cleared only when the worker next re-validates the job in the background"
+    "It stays attached, as one-row corrections are below a threshold",
+    "It stays, and the corrected row is skipped during the import",
+    "It is cleared later, when the worker next re-validates the job"
    ],
    "explanation": "There is no path that changes what will be imported while an approval stays attached."
   },
@@ -131,11 +131,11 @@
     }
    ],
    "prompt": "A reviewer looked at mapping version 3, but a correction made it version 4 before they clicked Approve. What happens?",
-   "answer": "409: the approval must name the version the reviewer saw",
+   "answer": "409: the approval has to name the version the reviewer saw",
    "distractors": [
-    "The approval binds to version 4 automatically",
-    "The approval is accepted, and version 3 is the one that gets imported",
-    "403, because the reviewer's permission expired along with the old version"
+    "200: the approval binds to version 4 automatically",
+    "200: the approval is accepted, and version 3 is imported",
+    "403: the reviewer's permission expired with the old version"
    ],
    "explanation": "The approve request carries the version; a mismatch rejects stale reviews."
   },
@@ -159,9 +159,9 @@
    "prompt": "The approval hash is sha256(file_hash:mapping_version:schema_version:schema_hash:destination), yet the API still checks reviewer permission separately. Why?",
    "answer": "The hash is a version binding anyone can compute, not a signature",
    "distractors": [
-    "The hash is salted per reviewer, so it has to be recomputed for each new approver",
-    "Permission checks are too slow to run inside the hash",
-    "The hash covers only the file bytes, so it cannot tell which mapping version was approved"
+    "The hash is salted per reviewer and recomputed for each approver",
+    "Permission checks are too slow to run inside the hash function",
+    "The hash covers the file bytes alone, not the mapping version"
    ],
    "explanation": "The hash binds an approval to exactly what will be imported (bytes, mapping generation, schema, destination); a change un-approves. It proves nothing about who approved, so reviewer permission is checked on its own."
   },
@@ -185,9 +185,9 @@
    "prompt": "Why does the worker re-verify the approval hash inside every batch transaction, after SELECT ... FOR UPDATE on the job?",
    "answer": "So a racing mapping edit cannot slip between check and effect",
    "distractors": [
-    "The C# hash differs from the TypeScript one",
-    "To refresh the reviewer's session before each batch is committed",
-    "Because PostgreSQL forgets approvals between transactions on a pooled connection"
+    "So the C# worker can cache the hash once and reuse it for each batch",
+    "So the reviewer's session is refreshed before each batch commits",
+    "So PostgreSQL keeps the approval across pooled connections"
    ],
    "explanation": "Checking once at queue time leaves a window; locking the job and re-checking per batch closes it."
   },
@@ -216,9 +216,9 @@
    "prompt": "After a preview showed an email as new, another job imports the same email first. What happens when this job's batch commits?",
    "answer": "ON CONFLICT skips it; the row is classified existing or conflict",
    "distractors": [
-    "The newer job overwrites the contact with its own values",
-    "The batch fails and the job stops for a reviewer to resolve the duplicate manually",
-    "Both contacts are inserted, because the preview had already approved the row as new"
+    "The newer job overwrites the contact; its values replace the old ones",
+    "The batch fails; the job stops for a reviewer to resolve the duplicate",
+    "Both contacts are inserted; the preview had already approved the row"
    ],
    "explanation": "Destination uniqueness is the final arbiter, even if another job committed after preview; INSERT RETURNING identifies only the truly new rows."
   },
@@ -240,13 +240,13 @@
     }
    ],
    "prompt": "Local destination: the worker is killed once just before a batch commits, and once just after. What does the operator see in each case?",
-   "answer": "Before: nothing from the batch happened and it reruns identically. After: progress to the checkpoint is permanent and resume continues after it",
+   "answer": "Before: the batch reruns identically. After: resume continues past the checkpoint",
    "distractors": [
-    "Before: half the batch is visible; after: the batch is retried and deduplicated",
-    "Both leave uncertain rows",
-    "Both require manual cleanup of duplicate contacts before the job can resume"
+    "Before: half the batch is already visible. After: the batch is retried and deduplicated",
+    "Before: rows are left uncertain. After: rows are left uncertain as well",
+    "Before: duplicates need manual cleanup. After: the job cannot resume"
    ],
-   "explanation": "Effects and checkpoint commit together in one transaction, so the two windows are symmetric (exits 74 and 73)."
+   "explanation": "Before the commit (exit 74) everything rolls back and the batch reruns identically; after it (exit 73) the committed prefix is permanent and the next worker starts at the checkpoint. Effects and checkpoint commit together in one transaction, so the two windows are symmetric."
   },
   {
    "id": "q10-why-outbox-external",
@@ -269,8 +269,8 @@
    "answer": "No single transaction can span its database and Relay's",
    "distractors": [
     "The external API is slower, so batches must be queued",
-    "The outbox encrypts payloads before they leave the private network",
-    "Local inserts are never retried, so they need no durable record of what was sent"
+    "The outbox encrypts payloads before they leave the network",
+    "Local inserts are not retried, so they need no record"
    ],
    "explanation": "Locally, contacts and the job ledger share one PostgreSQL database; externally, a commit/response-loss window appears that only stable keys and receipts can cover."
   },
@@ -294,9 +294,9 @@
    "prompt": "Why does the worker mark missing keys 'uncertain' in a committed transaction before POSTing the batch?",
    "answer": "So a crash mid-flight still leaves 'I may have sent this' on record",
    "distractors": [
-    "To hold a row lock on the outbox for as long as the HTTP request is in flight",
-    "The destination rejects pending keys",
-    "To make the POST faster by letting the destination skip payload validation"
+    "So the outbox row stays locked while the HTTP request is in flight",
+    "So the destination can reject keys that are still pending",
+    "So the destination can skip payload validation and answer faster"
    ],
    "explanation": "The same short transaction re-checks that the job is still active, serializing permission-to-send with pause/cancel."
   },
@@ -323,10 +323,10 @@
     }
    ],
    "prompt": "The destination commits seven contacts, then the response is lost and the worker crashes. How does a fresh worker finish without duplicates?",
-   "answer": "It asks the destination for receipts for the batch's keys before resending, finds all seven, and marks them delivered without sending again",
+   "answer": "It looks up receipts for the batch's keys first, finds all seven, and marks them delivered",
    "distractors": [
-    "It resends all seven; the destination's ON CONFLICT on email absorbs the duplicates",
-    "It abandons the seven rows",
+    "It resends all seven, and the destination's unique email constraint absorbs every duplicate",
+    "It abandons the seven rows and marks them failed for an operator to review",
     "It deletes the seven contacts at the destination and starts the batch over"
    ],
    "explanation": "Receipt lookup before resending recovers the commit/response-loss window; delivered=7, imported=7 with exactly seven receipts, by lookup, not resend."
@@ -349,11 +349,11 @@
     }
    ],
    "prompt": "The destination receives a key it has a receipt for, but with a different payload. What does it return?",
-   "answer": "409: the key cannot be reused for different data",
+   "answer": "409: the key may not be reused for different data",
    "distractors": [
-    "The original outcome, ignoring the new payload",
-    "201, with the new payload applied over the existing contact",
-    "A new receipt under an automatically suffixed key"
+    "200: the original outcome, ignoring the new payload",
+    "201: the new payload is applied over the existing contact",
+    "201: a new receipt under an automatically suffixed key"
    ],
    "explanation": "Same key + same payload returns the original outcome; same key + changed payload is rejected."
   },
