@@ -15,11 +15,11 @@
    "source": { "path": "astraupskill/02-CONCEPTS.md", "lines": { "start": 5, "end": 7 } },
    "cites": [{ "path": "src/store.ts", "lineStart": 294, "lineEnd": 294 }],
    "prompt": "importBackup runs JSON.parse(text) as ExportData. When a malformed backup file is loaded, what does the 'as ExportData' part actually do?",
-   "answer": "Nothing at runtime: the cast erases to plain JSON.parse, and the compiler now lets code read fields the file never had",
+   "answer": "Nothing at runtime: the cast erases, so code may read fields the file never actually had",
    "distractors": [
-    "It throws a TypeError as soon as a required property is missing",
-    "It strips unknown properties so only ExportData fields survive",
-    "It coerces field types, turning numeric strings into numbers"
+    "It throws a TypeError at parse time as soon as a required ExportData property is missing",
+    "It strips unknown properties during parsing, so only the declared ExportData fields survive",
+    "It coerces field types to match the interface, turning numeric strings into real numbers"
    ],
    "explanation": "TypeScript types are erased at compile time - the cast produces exactly the same JavaScript, which is why a separate runtime validator has to exist at all."
   },
@@ -29,11 +29,11 @@
    "source": { "path": "astraupskill/02-CONCEPTS.md", "lines": { "start": 9, "end": 15 } },
    "cites": [{ "path": "src/importValidation.ts", "lineStart": 3, "lineEnd": 5 }],
    "prompt": "validateImport is declared with 'asserts payload is ExportData' rather than returning a boolean. What does that signature buy?",
-   "answer": "The result cannot be ignored: the function throws or returns, and after a normal return the compiler narrows the payload's type",
+   "answer": "The result can't be ignored: it throws or returns, and after a return the payload's type is narrowed",
    "distractors": [
-    "The check moves to compile time, so no runtime cost remains",
-    "The function may repair the payload in place before returning it",
-    "It allows the validator to be tree-shaken out of production builds"
+    "The whole check moves to compile time, so no runtime validation cost remains in the shipped bundle",
+    "The function may repair the payload in place, filling in defaults, before the caller continues using it",
+    "It lets the bundler tree-shake the validator out of production builds once types are checked"
    ],
    "explanation": "A boolean validator can be called and its result dropped; an assertion function makes that impossible - a bad payload never gets past the call site."
   },
@@ -43,11 +43,11 @@
    "source": { "path": "astraupskill/02-CONCEPTS.md", "lines": { "start": 27, "end": 30 } },
    "cites": [{ "path": "src/importValidation.ts", "lineStart": 14, "lineEnd": 19 }],
    "prompt": "The day helper checks a YYYY-MM-DD regex, that Date.parse is finite, AND that re-formatting the parsed date equals the input. What does that third check catch?",
-   "answer": "Rollover dates like 2025-02-30, which V8 happily parses into early March; the round-trip produces a different string, so the value is rejected",
+   "answer": "Rollover dates like 2025-02-30, which parse into March, so the re-formatted string differs",
    "distractors": [
-    "Timezone offsets that would shift an exported date by one day",
-    "Two-digit years that slip through the regular expression",
-    "Dates before the Unix epoch, whose timestamps are negative"
+    "Timezone offsets that would shift an exported date by one day when it is formatted back to ISO",
+    "Two-digit years such as 25-02-28 that slip past the four-digit regular expression check",
+    "Dates before the Unix epoch, whose negative timestamps make toISOString return a different day"
    ],
    "explanation": "Date.parse('2025-02-30') is a valid timestamp in V8. Only formatting back to 2025-03-02 and comparing against the input exposes the impossible calendar date."
   },
@@ -57,11 +57,11 @@
    "source": { "path": "astraupskill/02-CONCEPTS.md", "lines": { "start": 32, "end": 43 } },
    "cites": [{ "path": "src/importValidation.ts", "lineStart": 35, "lineEnd": 50 }],
    "prompt": "A backup contains two review states for the same cardId, each individually well-formed. What happens on import?",
-   "answer": "The file is rejected with 'Malformed backup: review state' - a Set of seen ids trips on the second occurrence before anything is written",
+   "answer": "It is rejected as 'Malformed backup: review state': a Set of seen ids trips on the second one",
    "distractors": [
-    "The later state wins because put() overwrites by primary key",
-    "Both are written and Dexie's ConstraintError aborts the transaction",
-    "The duplicate is silently filtered like an unknown-card state"
+    "The later state wins, because put() overwrites by primary key and the file is processed in order",
+    "Both are written, and Dexie's ConstraintError then aborts the transaction after the clear",
+    "The duplicate is silently filtered out, the same way a state for an unknown card is dropped"
    ],
    "explanation": "Catching duplicates in validation matters downstream: bulkAdd would otherwise throw a ConstraintError mid-transaction - safe, but it would reject the file with a far more confusing error."
   },
@@ -74,11 +74,11 @@
     { "path": "src/db.ts", "lineStart": 174, "lineEnd": 199 }
    ],
    "prompt": "importData validates the payload before the transaction AND replaces all four tables inside one transaction. Why are both layers necessary?",
-   "answer": "Validation rejects bad data before storage is touched; the transaction covers failures unrelated to the data, like quota errors or a crash mid-write",
+   "answer": "Validation stops bad data before storage is touched; the transaction covers quota errors or crashes",
    "distractors": [
-    "The transaction exists purely for speed - batched writes commit faster",
-    "Validating inside the transaction would deadlock Dexie's readwrite lock",
-    "Either alone would suffice; the pairing is redundant defense in depth"
+    "The transaction exists purely for speed, because Dexie commits batched writes faster than single ones",
+    "Validating inside the transaction would deadlock Dexie's readwrite lock on the four tables",
+    "Either alone would suffice; pairing them is redundant defense in depth kept for reviewers"
    ],
    "explanation": "Validation alone leaves you exposed to non-data failures; the transaction alone would let well-formed garbage in. Each guards a failure class the other cannot see."
   },
@@ -88,11 +88,11 @@
    "source": { "path": "astraupskill/03-WORKED-CHANGE.md", "lines": { "start": 48, "end": 54 } },
    "cites": [{ "path": "src/db.ts", "lineStart": 178, "lineEnd": 179 }],
    "prompt": "Inside importData the callback calls reviewStates.clear() and then bulkAdd(states). What makes that destructive sequence acceptable?",
-   "answer": "Both run in one Dexie readwrite transaction: any failure after the clear aborts it, and IndexedDB restores all four tables to their prior state",
+   "answer": "Both run in one readwrite transaction, so any failure after clear aborts and restores the tables",
    "distractors": [
-    "clear() returns a snapshot that bulkAdd uses to roll back on error",
-    "The validator guarantees bulkAdd cannot fail once clear succeeded",
-    "Dexie defers the deletes until the callback returns successfully"
+    "clear() returns a snapshot of the deleted rows that bulkAdd uses to roll back on an error",
+    "The validator guarantees bulkAdd cannot fail once clear has succeeded, so no rollback is ever needed",
+    "Dexie defers the deletes in clear() until the callback returns, so nothing is lost on failure"
    ],
    "explanation": "Outside a transaction, a failure after clear() would leave the user with no progress at all - the guide calls this out as the reason the transaction is load-bearing, not decorative."
   },
@@ -105,11 +105,11 @@
     { "path": "src/db.ts", "lineStart": 181, "lineEnd": 184 }
    ],
    "prompt": "A backup from an older build references card ids this build no longer bundles, and says nothing about newly added cards. How does import handle both?",
-   "answer": "States and logs for unknown cards are filtered out rather than failing, and bundled cards missing from the backup get fresh new states",
+   "answer": "States and logs of unknown cards are filtered, and missing bundled cards get fresh states",
    "distractors": [
-    "The file is rejected: card ids must match the current bundle exactly",
-    "Unknown states import as orphans and are garbage-collected next session",
-    "New cards stay stateless until the first time they are reviewed"
+    "The file is rejected, because every card id in a backup must match the current bundle exactly",
+    "Unknown states import as orphans and are garbage-collected at the start of the next session",
+    "Unknown states are filtered, and newly added cards stay stateless until they are first reviewed"
    ],
    "explanation": "Cards ship with the app, so id drift across builds is expected - filter, don't fail. The regression test pins all three behaviours: kept progress, omitted unknown logs, recreated states."
   },
@@ -122,11 +122,11 @@
     { "path": "src/queue.ts", "lineStart": 174, "lineEnd": 176 }
    ],
    "prompt": "Unknown CARD ids in a backup are dropped on import. What happens to an unknown DECK id in settings.enabledDeckIds, and why does nothing break?",
-   "answer": "It is kept - validation only requires deck ids to be strings - and the per-deck counter simply initializes an empty count that no card ever matches",
+   "answer": "It is kept, since deck ids only need to be strings, and its counter just stays empty",
    "distractors": [
-    "It is dropped by the same known-ids filter that handles card states",
-    "It fails validation with the 'Malformed backup: settings' message",
-    "It crashes the stats screen, which looks every enabled deck up by id"
+    "It is dropped by the same known-ids filter that removes review states for unknown cards",
+    "It fails validation with the 'Malformed backup: settings' message and nothing is imported",
+    "It crashes the stats screen later, because that screen looks every enabled deck up by id"
    ],
    "explanation": "A deliberate asymmetry worth noticing: card ids are domain-checked, deck ids only type-checked. Whether to drop stale deck ids too is left as exercise 3."
   },
@@ -140,11 +140,11 @@
     { "path": "src/scheduler.ts", "lineStart": 167, "lineEnd": 167 }
    ],
    "prompt": "The validator accepts ease 1-10, yet the scheduler never drops ease below 1.3 and 'Easy' adds 0.15 with no upper clamp. What lesson do the guides draw from this mismatch?",
-   "answer": "Validator rules that nobody derived from the producer: they accept values the app cannot emit and could, in principle, reject ones it can",
+   "answer": "Rules not derived from the producer accept values the app cannot emit, and may reject ones it can",
    "distractors": [
-    "The validator must be loosened to accept any positive ease value",
-    "The scheduler is buggy and should clamp ease to exactly 10",
-    "The mismatch is exploitable: imported cards can skip their reviews"
+    "The validator must be loosened to accept any positive ease value, so older backups keep importing",
+    "The scheduler is buggy and should clamp ease to exactly 10 so it can never exceed the validator",
+    "The mismatch is exploitable, because imported cards with a high ease can skip their reviews"
    ],
    "explanation": "ease 1.0 is accepted though unreachable; ease 10.15 is theoretically reachable (after decades) and would be rejected. Neither crashes - the point is the gap between 'a validator exists' and 'the validator matches the domain'."
   },
@@ -154,11 +154,11 @@
    "source": { "path": "astraupskill/03-WORKED-CHANGE.md", "lines": { "start": 48, "end": 56 } },
    "cites": [{ "path": "src/db.ts", "lineStart": 187, "lineEnd": 193 }],
    "prompt": "Before bulkAdd, importData strips the id field off every imported review log. Why?",
-   "answer": "Logs use auto-increment keys; re-importing ids from the file could collide with keys Dexie assigns to future reviews",
+   "answer": "Logs use auto-increment keys, so file ids could collide with keys Dexie assigns to later reviews",
    "distractors": [
-    "The validator has already rejected any log that carries an id",
-    "Dropping ids shrinks the stored rows and speeds up the import",
-    "Dexie refuses bulkAdd whenever any key is supplied explicitly"
+    "The validator has already rejected any log that carries an id, so stripping it is only defensive",
+    "Dropping the ids shrinks the stored rows, which noticeably speeds up a large backup import",
+    "Dexie refuses bulkAdd whenever any primary key is supplied explicitly in the added rows"
    ],
    "explanation": "Fresh keys for appended history, stable keys for keyed rows (settings, meta) - the destructuring { id: _id, ...rest } is the one-line version of that policy."
   },
@@ -171,11 +171,11 @@
     { "path": "src/importValidation.ts", "lineStart": 24, "lineEnd": 25 }
    ],
    "prompt": "A backup arrives with schemaVersion 2 while the app is at 1, and the validator rejects it - newer and older alike. Why is that the honest choice today, and what replaces it when the format evolves?",
-   "answer": "With no migration code, any other version has an unknown shape; later, a migrate step upgrades one version at a time and then runs the current validator",
+   "answer": "With no migration code, other versions have an unknown shape; later, migrate step by step, then validate",
    "distractors": [
-    "Newer versions should import unchanged because fields are only added",
-    "Dexie's version().stores() chain already migrates backup files",
-    "The validator should warn and accept, since schemaVersion is advisory"
+    "Newer versions should import unchanged because fields are only ever added; older ones need the migrator",
+    "Dexie's version().stores() chain already migrates backup files, so the check is only a safety net",
+    "The validator should warn and accept instead, since schemaVersion is advisory metadata in a backup"
    ],
    "explanation": "The backup file's version and IndexedDB's schema version are two separate systems - rejecting unknown file versions is the only claim the code can currently back up."
   },
@@ -185,11 +185,11 @@
    "source": { "path": "astraupskill/03-WORKED-CHANGE.md", "lines": { "start": 75, "end": 79 } },
    "cites": [{ "path": "src/importValidation.test.ts", "lineStart": 9, "lineEnd": 35 }],
    "prompt": "After each rejected import, the regression test re-exports the database and deep-compares states, settings and meta against the original. What failure mode does that second half guard against?",
-   "answer": "An implementation that writes first and validates afterwards - a rejection-only assertion would still pass while progress was already corrupted",
+   "answer": "Code that writes first and validates afterwards, where a rejection-only assertion would still pass",
    "distractors": [
-    "Flaky ordering between Dexie's async rejection and the test runner",
-    "Mutations leaking between test cases through the shared fixture",
-    "A validator that throws the wrong error message for the right reason"
+    "Flaky ordering between Dexie's async rejection and the test runner's await on the import promise",
+    "Mutations leaking between test cases through the shared original fixture that each case clones",
+    "A validator that throws the wrong error message even though it rejects for the right reason"
    ],
    "explanation": "Checking the rejection proves the error path exists; comparing the stored bytes proves 'a bad file changes nothing' - which is the actual invariant the change promises."
   },

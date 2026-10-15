@@ -16,9 +16,9 @@
         { "path": "astraupskill/02-CONCEPTS.md", "lineStart": 7, "lineEnd": 7 }
       ],
       "prompt": "A box reservation selects five items and the fifth is out of stock. What must the accepted state look like afterwards, and why not just clamp the fifth item's stock at zero?",
-      "answer": "Completely unchanged, because the reducer works on a clone; clamping would hide overselling instead of proving the reservation was possible",
+      "answer": "Completely unchanged, since the reducer works on a clone; clamping would hide overselling",
       "distractors": [
-        "The first four items are decremented and the shipment is saved as partial, which is honest about what was available",
+        "The first four items are decremented and the shipment is saved as partial, which is honest about stock",
         "The fifth item is set to zero and the shipment is saved, since clamping keeps stock non-negative",
         "The first four decrements are kept but the shipment is dropped, to be reconciled by a later stocktake"
       ],
@@ -34,11 +34,11 @@
         { "path": "src/model.js", "lineStart": 560, "lineEnd": 565 }
       ],
       "prompt": "An item starts with stock 4. A box containing it is reserved, packed, then cancelled. What is its stock now, and could a second cancellation change it?",
-      "answer": "4: reserve subtracts one, packing changes nothing, cancel returns one, and Cancelled is terminal so no second return is possible",
+      "answer": "4: reserve subtracts one, packing nothing, cancel returns one; Cancelled is terminal, so no second return",
       "distractors": [
-        "2: reserve and pack each subtract one, and cancel returns only the reserved unit",
-        "3: cancellation after packing does not return stock because the unit is assumed boxed",
-        "4 now, but a second cancel would raise it to 5 because cancel always increments"
+        "2: reserve and pack each subtract one, and cancelling returns only the unit that reserve took",
+        "3: cancelling after packing returns no stock, because the unit is assumed to be sealed in the box already",
+        "4 now, but a second cancel would raise it to 5, because every cancel increments the item's stock"
       ],
       "explanation": "stock means units available for new reservations; packing does not subtract again; cancellation from Reserved or Packed returns one per item and is terminal (transitions.Cancelled is empty)."
     },
@@ -51,11 +51,11 @@
         { "path": "src/model.js", "lineStart": 506, "lineEnd": 513 }
       ],
       "prompt": "A subscriber's May box was cancelled. The operator starts a fresh reservation for the same subscriber and May with a brand-new request key. What happens and which rule decides it?",
-      "answer": "It is refused by the subscriber-month cycle constraint, a business rule that holds even after cancellation and is separate from request-key idempotency",
+      "answer": "It is refused: the subscriber-month cycle rule still holds after cancellation, independent of request keys",
       "distractors": [
-        "It succeeds, because a new request key is a new attempt and the old shipment is cancelled",
-        "It returns the cancelled shipment, because replay matches on subscriber and month",
-        "It succeeds only if the fingerprint matches the cancelled shipment's quote"
+        "It succeeds, because a new request key is a new attempt and the earlier May shipment was cancelled anyway",
+        "It returns the cancelled shipment, because replay matches on subscriber and month rather than the key",
+        "It succeeds only if its fingerprint matches the cancelled shipment's quote for that same month"
       ],
       "explanation": "Idempotency handles transport uncertainty; the cycle constraint enforces business policy. reduce throws 'already has a reservation, including cancelled history'."
     },
@@ -67,11 +67,11 @@
         { "path": "astraupskill/02-CONCEPTS.md", "lineStart": 19, "lineEnd": 19 }
       ],
       "prompt": "Porting to SQL, a teammate proposes: SELECT for an existing shipment for (subscriber, month); if none, INSERT. Why is that insufficient?",
-      "answer": "Two concurrent requests can both see no row and both insert; only unique constraints with transaction handling can arbitrate concurrent inserts",
+      "answer": "Two concurrent requests can both see no row and both insert; unique constraints must arbitrate",
       "distractors": [
-        "It is sufficient as long as the SELECT and INSERT run in the same HTTP request handler",
-        "SELECT is too slow; an index on subscriber alone would fix the problem",
-        "SQL cannot store request keys, so idempotency must stay in the browser"
+        "It is sufficient as long as the SELECT and the INSERT run inside the same HTTP request handler",
+        "The SELECT is too slow under load; adding an index on the subscriber column alone would fix it",
+        "SQL cannot store request keys reliably, so idempotency would have to stay in the browser"
       ],
       "explanation": "A preliminary lookup by itself cannot arbitrate concurrent inserts."
     },
@@ -83,11 +83,11 @@
         { "path": "astraupskill/02-CONCEPTS.md", "lineStart": 25, "lineEnd": 25 }
       ],
       "prompt": "A plan used by last month's shipments is archived. Why must historical validation NOT check whether the plan is currently available?",
-      "answer": "Historical validation checks internal receipt consistency and references; checking today's availability would make old records unreadable just because the plan was archived",
+      "answer": "It checks internal receipt consistency; today's availability would make old records unreadable",
       "distractors": [
-        "Because archived plans are deleted, so there is nothing to check against",
-        "Because historical shipments are never validated at all after acceptance",
-        "It must check it; an archived plan means the old shipment should be flagged invalid"
+        "Because archived plans are deleted from storage, so there is nothing left to check the shipment against",
+        "Because historical shipments are never validated again at all once the reservation has been accepted",
+        "It must check it: an archived plan means last month's shipments should now be flagged as invalid"
       ],
       "explanation": "New reservations evaluate current eligibility; historical records are judged on their own accepted facts."
     },
@@ -102,9 +102,9 @@
       "prompt": "An item matches three of a subscriber's preferred tags but also carries one of their blocked tags. Where does it appear in recommendations?",
       "answer": "Nowhere: excluded tags are a hard eligibility filter applied before any scoring",
       "distractors": [
-        "Near the top, because three preferred matches outweigh one blocked-tag penalty",
-        "At the bottom, because each blocked tag subtracts points from the score",
-        "In the middle, because blocked tags only halve the rating component"
+        "Near the top, because three preferred-tag matches outweigh one blocked-tag penalty",
+        "At the bottom, because each blocked tag subtracts points from the item's score",
+        "In the middle, because a blocked tag only halves the rating part of the score"
       ],
       "explanation": "eligible() requires active, in stock and no blocked tag; recommendations filters on eligible before computing scores."
     },
@@ -117,11 +117,11 @@
         { "path": "src/repository.js", "lineStart": 11, "lineEnd": 24 }
       ],
       "prompt": "Two tabs race to reserve the last unit of an item from the same base. Which check rejects the loser, and what is the consequence for unrelated edits?",
-      "answer": "The raw-baseline comparison inside the lock rejects it before reduce looks at stock, so any two concurrent writes conflict even on unrelated records",
+      "answer": "The raw-baseline check in the lock rejects it before reduce sees stock, so unrelated writes conflict too",
       "distractors": [
-        "reduce's stock check rejects it with an out-of-stock error; unrelated records never conflict",
-        "replay rejects it because both tabs used the same request key",
-        "Web Locks reject the second tab outright; it never reads storage"
+        "reduce's stock check rejects it with an out-of-stock error, so unrelated records never conflict",
+        "replay rejects it, because both tabs were frozen with the same request key for that reservation",
+        "Web Locks reject the second tab outright, so it never reads storage and unrelated edits are safe"
       ],
       "explanation": "Inside the lock the winner has already replaced the stored bytes, so current.raw !== base.raw throws first. Safe, but coarse."
     },
@@ -134,11 +134,11 @@
         { "path": "src/model.js", "lineStart": 429, "lineEnd": 438 }
       ],
       "prompt": "A Packed transition is written to storage but its acknowledgement is lost; the operator retries from the same snapshot. What do they see, and why?",
-      "answer": "A misleading 'Workspace changed in another tab' error, because replay only short-circuits reserve commands, so the retry falls through to the stale-baseline check",
+      "answer": "A misleading 'Workspace changed in another tab' error: replay only covers reserve commands",
       "distractors": [
-        "Success, because every command type is replayed by request key",
-        "The shipment moves to Packed twice and its history gets a duplicate entry",
-        "A 'transition is not allowed' error, because Packed to Packed is not in the table"
+        "Success, because every command type is replayed by its request key before the baseline check runs",
+        "The shipment moves to Packed twice, and its history gets a duplicate Packed entry with the same time",
+        "A 'transition is not allowed' error, because Packed to Packed is missing from the transition table"
       ],
       "explanation": "replay returns early unless c.type === 'reserve'; the write landed, so the stored bytes differ from the old base."
     },
@@ -150,11 +150,11 @@
         { "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md", "lineStart": 37, "lineEnd": 40 }
       ],
       "prompt": "Of the two fixes proposed for non-replayable transitions, why does the guide prefer making transitions replayable in the model over a UI reload-and-check?",
-      "answer": "It keeps the guarantee in the tested domain layer, using version expected+1 and the last history entry as the transition's natural fingerprint",
+      "answer": "It keeps the guarantee in the tested domain layer, using version expected+1 and the last history entry",
       "distractors": [
-        "The UI fix cannot be implemented because React cannot reload storage",
-        "The model fix needs a new requestKey field on every transition command, which makes it more explicit",
-        "The UI fix is preferred; the model fix would break reservation replay"
+        "The UI fix cannot be built, because React cannot reload localStorage while a dialog is open",
+        "The model fix adds a requestKey field to every transition command, which makes each retry more explicit",
+        "The UI fix is preferred, because the model fix would break reservation replay for retried reserves"
       ],
       "explanation": "No new field is needed: matching version and last history entry identify the already-applied transition. The codebase puts every other guarantee in the domain layer."
     },
@@ -166,11 +166,11 @@
         { "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md", "lineStart": 15, "lineEnd": 15 }
       ],
       "prompt": "You add 'retail cannot be below cost' to validateItem. Besides one existing test fixture, what else does this rule change that belongs in the PR description?",
-      "answer": "Backup imports: validateState calls validateItem, so an old backup containing a below-cost item will now be rejected",
+      "answer": "Backup imports: validateState calls validateItem, so old below-cost backups are now rejected",
       "distractors": [
-        "Nothing else: validateItem only runs when the item editor form is submitted",
-        "Existing shipments are re-priced to retail when the rule is added",
-        "Recommendations start excluding below-cost items from scoring"
+        "Nothing else: validateItem only runs when the item editor form is submitted in the browser",
+        "Existing shipments are re-priced to the retail price when the stricter rule is first loaded",
+        "Recommendations start excluding below-cost items from scoring, changing what subscribers see"
       ],
       "explanation": "The rule applies to every backup on import because validateState calls validateItem."
     },
@@ -182,11 +182,11 @@
         { "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md", "lineStart": 71, "lineEnd": 73 }
       ],
       "prompt": "You add a stock-movement ledger. Why can't the sum of movements alone explain the current stock of the seed items?",
-      "answer": "Seed stock existed before any movement was recorded, so you need an opening balance (or accepted stocktake events) as the reconciliation baseline",
+      "answer": "Seed stock existed before any movement was recorded, so it needs an opening balance",
       "distractors": [
-        "Because cancellations are not recorded as movements",
-        "Because movements are stored as floats and drift over time",
-        "It can: the seed data is generated from movements at startup"
+        "Because cancellations are not recorded as movements, so returned units never appear in the sum",
+        "Because movements are stored as floating-point numbers, and the running sum drifts over time",
+        "It can: the seed data is generated by replaying movements at startup, so the sums always agree"
       ],
       "explanation": "Movement totals alone cannot explain existing sample stock unless there is an opening balance."
     },
@@ -198,11 +198,11 @@
         { "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md", "lineStart": 79, "lineEnd": 79 }
       ],
       "prompt": "Adding a 'skip this month' option: what is the critical race, and what prevents both sides from succeeding?",
-      "answer": "One client skipping while another reserves the same month; both must go through one authoritative subscriber-month slot with a transaction or uniqueness design",
+      "answer": "Skip racing a reserve for the same month; both must go through one subscriber-month slot",
       "distractors": [
-        "Two skips of the same month; a disabled skip button after the first click prevents it",
-        "A skip racing a catalog edit; per-item versions prevent it",
-        "There is no race, because skips do not touch stock"
+        "Two skips for the same month; disabling the skip button after the first click stops the second one",
+        "A skip racing a catalog edit; per-item versions make the losing write fail and retry cleanly",
+        "There is no race, because a skip never touches stock, so both sides can safely succeed"
       ],
       "explanation": "If each checks a separate table without an appropriate transaction or uniqueness design, both could succeed."
     },

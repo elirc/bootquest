@@ -159,18 +159,18 @@
    "prompt": "The same customer reuses a checkout key but adds an item to the cart. What happens?",
    "choices": [
     {
-     "text": "A new order is created under a regenerated key",
+     "text": "A new order is created under a regenerated checkout key",
      "evidence": []
     },
     {
-     "text": "409: the stored cart fingerprint no longer matches",
+     "text": "The original order is returned, since the checkout key matches",
+     "evidence": []
+    },
+    {
+     "text": "409: the stored cart fingerprint no longer matches the new cart",
      "evidence": [
       "backend/src/repositories/orderRepository.ts"
      ]
-    },
-    {
-     "text": "The old order is returned, since the key matches",
-     "evidence": []
     },
     {
      "text": "The new item is appended to the existing order",
@@ -181,11 +181,11 @@
     "type": "quiz",
     "itemKey": "seed:quests:grok-build-ecommerce/quiz/29b99e66458035de",
     "grading": "choice",
-    "answerKey": 1,
+    "answerKey": 2,
     "choices": [
-     "A new order is created under a regenerated key",
-     "409: the stored cart fingerprint no longer matches",
-     "The old order is returned, since the key matches",
+     "A new order is created under a regenerated checkout key",
+     "The original order is returned, since the checkout key matches",
+     "409: the stored cart fingerprint no longer matches the new cart",
      "The new item is appended to the existing order"
     ]
    },
@@ -227,35 +227,35 @@
    "prompt": "Why is the checkout requestId lower-cased during parsing?",
    "choices": [
     {
-     "text": "It feeds both the advisory-lock key and the receipt lookup; if either used the raw spelling, two casings of one UUID could pass the lock separately",
+     "text": "To make the checkout key look consistent wherever the admin UI displays it",
+     "evidence": []
+    },
+    {
+     "text": "PostgreSQL rejects upper-case UUID strings when they are inserted into a uuid column type",
+     "evidence": []
+    },
+    {
+     "text": "Because hashtextextended is case-insensitive, so the lock key would match anyway",
+     "evidence": []
+    },
+    {
+     "text": "It keys the advisory lock and the receipt lookup, so two casings cannot pass separately",
      "evidence": [
       "backend/src/lib/validation.ts",
       "backend/src/repositories/orderRepository.ts"
      ]
-    },
-    {
-     "text": "PostgreSQL rejects upper-case UUIDs",
-     "evidence": []
-    },
-    {
-     "text": "Because hashtextextended is case-insensitive anyway",
-     "evidence": []
-    },
-    {
-     "text": "To make the key look consistent in the admin UI",
-     "evidence": []
     }
    ],
    "check": {
     "type": "quiz",
     "itemKey": "seed:quests:grok-build-ecommerce/quiz/4930f113a6323c6e",
     "grading": "choice",
-    "answerKey": 0,
+    "answerKey": 3,
     "choices": [
-     "It feeds both the advisory-lock key and the receipt lookup; if either used the raw spelling, two casings of one UUID could pass the lock separately",
-     "PostgreSQL rejects upper-case UUIDs",
-     "Because hashtextextended is case-insensitive anyway",
-     "To make the key look consistent in the admin UI"
+     "To make the checkout key look consistent wherever the admin UI displays it",
+     "PostgreSQL rejects upper-case UUID strings when they are inserted into a uuid column type",
+     "Because hashtextextended is case-insensitive, so the lock key would match anyway",
+     "It keys the advisory lock and the receipt lookup, so two casings cannot pass separately"
     ]
    },
    "explanation": "Retry identity must be canonical in every place that uses it; an integration test pins differently cased spellings as the same receipt key."
@@ -291,11 +291,11 @@
      "evidence": []
     },
     {
-     "text": "Prisma requires a read before any raw query in a transaction",
+     "text": "Prisma requires an ordinary read before any raw query inside a transaction",
      "evidence": []
     },
     {
-     "text": "Read 1 stops locking others' orders; read 2 sees the state after the lock",
+     "text": "Read 1 stops callers locking orders they can't see; read 2 sees the state after the lock",
      "evidence": [
       "backend/src/repositories/orderRepository.ts"
      ]
@@ -312,8 +312,8 @@
     "answerKey": 2,
     "choices": [
      "The first read loads the order items and the second loads the customer for the response",
-     "Prisma requires a read before any raw query in a transaction",
-     "Read 1 stops locking others' orders; read 2 sees the state after the lock",
+     "Prisma requires an ordinary read before any raw query inside a transaction",
+     "Read 1 stops callers locking orders they can't see; read 2 sees the state after the lock",
      "The second read is redundant and exists only so the audit row can record the order's status"
     ]
    },
@@ -355,21 +355,21 @@
    "prompt": "Two customers check out the last unit of a product at the same moment. What happens?",
    "choices": [
     {
-     "text": "Both succeed and stock goes to -1, and an administrator corrects the count later from the audit trail",
+     "text": "Both fail with a serialization error, and each client must start a new checkout to retry",
      "evidence": []
     },
     {
-     "text": "The first succeeds and the second is waitlisted",
+     "text": "Both succeed and stock drops to -1, to be corrected later by an admin from the audit trail",
      "evidence": []
     },
     {
-     "text": "One reserves it under the row lock; the other then reads stock 0 and gets 409",
+     "text": "One reserves it under the row lock; the other then reads stock 0 and gets a 409",
      "evidence": [
       "backend/src/repositories/orderRepository.ts"
      ]
     },
     {
-     "text": "Both fail with a serialization error, and each client must start a new checkout to try again",
+     "text": "The first succeeds and the second is waitlisted until the product is restocked by an admin",
      "evidence": []
     }
    ],
@@ -379,10 +379,10 @@
     "grading": "choice",
     "answerKey": 2,
     "choices": [
-     "Both succeed and stock goes to -1, and an administrator corrects the count later from the audit trail",
-     "The first succeeds and the second is waitlisted",
-     "One reserves it under the row lock; the other then reads stock 0 and gets 409",
-     "Both fail with a serialization error, and each client must start a new checkout to try again"
+     "Both fail with a serialization error, and each client must start a new checkout to retry",
+     "Both succeed and stock drops to -1, to be corrected later by an admin from the audit trail",
+     "One reserves it under the row lock; the other then reads stock 0 and gets a 409",
+     "The first succeeds and the second is waitlisted until the product is restocked by an admin"
     ]
    },
    "explanation": "lockProduct takes SELECT ... FOR UPDATE then reads the row, so the second transaction sees the committed decrement."
@@ -414,21 +414,21 @@
    "prompt": "An admin creates a product with a SKU that already exists. What message do they see, and why is it a review finding?",
    "choices": [
     {
-     "text": "'The record changed or is still referenced', because unique (P2002), foreign-key (P2003) and serialization (P2034) errors share one 409 message that never says the SKU is taken",
+     "text": "A 500 Internal Server Error, because the P2002 unique violation is not handled by the mapper",
+     "evidence": []
+    },
+    {
+     "text": "The generic 'record changed or is still referenced' 409, which never says the SKU is taken",
      "evidence": [
       "backend/src/lib/errors.ts"
      ]
     },
     {
-     "text": "A 400 validation error from zod before the insert",
+     "text": "'SKU already exists', a specific 409 message mapped from the P2002 unique violation",
      "evidence": []
     },
     {
-     "text": "A 500 Internal Server Error, because P2002 is unhandled",
-     "evidence": []
-    },
-    {
-     "text": "'SKU already exists', mapped from P2002",
+     "text": "A 400 validation error from zod, which checks SKU uniqueness before the insert runs",
      "evidence": []
     }
    ],
@@ -436,12 +436,12 @@
     "type": "quiz",
     "itemKey": "seed:quests:grok-build-ecommerce/quiz/86104a259542b00f",
     "grading": "choice",
-    "answerKey": 0,
+    "answerKey": 1,
     "choices": [
-     "'The record changed or is still referenced', because unique (P2002), foreign-key (P2003) and serialization (P2034) errors share one 409 message that never says the SKU is taken",
-     "A 400 validation error from zod before the insert",
-     "A 500 Internal Server Error, because P2002 is unhandled",
-     "'SKU already exists', mapped from P2002"
+     "A 500 Internal Server Error, because the P2002 unique violation is not handled by the mapper",
+     "The generic 'record changed or is still referenced' 409, which never says the SKU is taken",
+     "'SKU already exists', a specific 409 message mapped from the P2002 unique violation",
+     "A 400 validation error from zod, which checks SKU uniqueness before the insert runs"
     ]
    },
    "explanation": "A targeted check for P2002 on the sku target would be a small, testable improvement."
@@ -532,21 +532,21 @@
    "prompt": "Why does a popular product's admin edit history disappear after a few dozen orders?",
    "choices": [
     {
-     "text": "Audit events older than 30 days are deleted by a nightly retention job",
+     "text": "Each checkout overwrites the product's previous audit row instead of adding one",
      "evidence": []
     },
     {
-     "text": "Each checkout overwrites the previous audit row for that product instead of inserting a new one",
+     "text": "Admin edits are not audited at all; only order reservations write audit events",
      "evidence": []
     },
     {
-     "text": "Only the newest 30 events are returned, and each order adds RESERVE/RESTORE events",
+     "text": "Only the newest 30 events are returned, and every order adds RESERVE/RESTORE events",
      "evidence": [
       "backend/src/repositories/productRepository.ts"
      ]
     },
     {
-     "text": "Edits are not audited at all; only orders are",
+     "text": "Audit events older than 30 days are removed by a nightly retention job",
      "evidence": []
     }
    ],
@@ -556,10 +556,10 @@
     "grading": "choice",
     "answerKey": 2,
     "choices": [
-     "Audit events older than 30 days are deleted by a nightly retention job",
-     "Each checkout overwrites the previous audit row for that product instead of inserting a new one",
-     "Only the newest 30 events are returned, and each order adds RESERVE/RESTORE events",
-     "Edits are not audited at all; only orders are"
+     "Each checkout overwrites the product's previous audit row instead of adding one",
+     "Admin edits are not audited at all; only order reservations write audit events",
+     "Only the newest 30 events are returned, and every order adds RESERVE/RESTORE events",
+     "Audit events older than 30 days are removed by a nightly retention job"
     ]
    },
    "explanation": "Order history has the same limit but an order has at most four events, so only product history is a practical problem."
@@ -600,22 +600,22 @@
    "prompt": "Why does reserving stock at checkout also increment the product's version?",
    "choices": [
     {
-     "text": "Because Prisma increments the version column automatically on any update to a model that has one",
-     "evidence": []
-    },
-    {
-     "text": "So a stale admin form (which writes absolute stock) conflicts instead of overwriting the reservation",
+     "text": "So a stale admin form that writes absolute stock conflicts rather than overwriting the reservation",
      "evidence": [
       "backend/src/repositories/orderRepository.ts",
       "backend/src/repositories/productRepository.ts"
      ]
     },
     {
-     "text": "To record how many times the product has been sold, which the admin dashboard reports as popularity",
+     "text": "Because Prisma increments the version column automatically on any update to a model that has one",
      "evidence": []
     },
     {
-     "text": "To invalidate the product's cached image URL",
+     "text": "To invalidate the cached product page so the storefront shows the new stock level right away",
+     "evidence": []
+    },
+    {
+     "text": "To record how many times the product has been sold, which the admin dashboard reports as popularity",
      "evidence": []
     }
    ],
@@ -623,12 +623,12 @@
     "type": "quiz",
     "itemKey": "seed:quests:grok-build-ecommerce/quiz/ac2d048743e79b21",
     "grading": "choice",
-    "answerKey": 1,
+    "answerKey": 0,
     "choices": [
+     "So a stale admin form that writes absolute stock conflicts rather than overwriting the reservation",
      "Because Prisma increments the version column automatically on any update to a model that has one",
-     "So a stale admin form (which writes absolute stock) conflicts instead of overwriting the reservation",
-     "To record how many times the product has been sold, which the admin dashboard reports as popularity",
-     "To invalidate the product's cached image URL"
+     "To invalidate the cached product page so the storefront shows the new stock level right away",
+     "To record how many times the product has been sold, which the admin dashboard reports as popularity"
     ]
    },
    "explanation": "If adjustments should stop invalidating open forms, remove stock from the metadata update rather than skipping the version bump."
@@ -669,34 +669,34 @@
    "prompt": "Why does checkout lock product rows in sorted product-id order?",
    "choices": [
     {
-     "text": "To make the cheapest product reserve first",
+     "text": "So the order receipt lists the purchased items alphabetically by product id",
      "evidence": []
     },
     {
-     "text": "Because PostgreSQL requires FOR UPDATE locks in primary-key order",
+     "text": "So the cheapest product is reserved first and the expensive ones fail fast if stock runs out",
      "evidence": []
     },
     {
-     "text": "Two multi-product checkouts then acquire product locks in a common order, removing the circular wait that unsorted locking would reintroduce as a deadlock risk",
+     "text": "Because PostgreSQL only grants FOR UPDATE locks in primary-key order within a transaction",
+     "evidence": []
+    },
+    {
+     "text": "All checkouts then lock products in one common order, so no circular wait can deadlock them",
      "evidence": [
       "backend/src/repositories/orderRepository.ts"
      ]
-    },
-    {
-     "text": "So the receipt shows items alphabetically",
-     "evidence": []
     }
    ],
    "check": {
     "type": "quiz",
     "itemKey": "seed:quests:grok-build-ecommerce/quiz/bf9cd06370fcb7fc",
     "grading": "choice",
-    "answerKey": 2,
+    "answerKey": 3,
     "choices": [
-     "To make the cheapest product reserve first",
-     "Because PostgreSQL requires FOR UPDATE locks in primary-key order",
-     "Two multi-product checkouts then acquire product locks in a common order, removing the circular wait that unsorted locking would reintroduce as a deadlock risk",
-     "So the receipt shows items alphabetically"
+     "So the order receipt lists the purchased items alphabetically by product id",
+     "So the cheapest product is reserved first and the expensive ones fail fast if stock runs out",
+     "Because PostgreSQL only grants FOR UPDATE locks in primary-key order within a transaction",
+     "All checkouts then lock products in one common order, so no circular wait can deadlock them"
     ]
    },
    "explanation": "sortedItems sets both the fingerprint canonicalization and the lock order. It removes checkout-to-checkout lock cycles; it is not a proof that the whole application is deadlock-free."
@@ -728,21 +728,21 @@
    "prompt": "Which identity decides who owns a new order?",
    "choices": [
     {
-     "text": "The record version of the cart",
+     "text": "The checkout key, which is scoped to a customer",
      "evidence": []
     },
     {
-     "text": "The token's authenticated subject",
+     "text": "The authenticated subject carried by the token",
      "evidence": [
       "backend/src/repositories/orderRepository.ts"
      ]
     },
     {
-     "text": "The checkout key, which is scoped to a customer",
+     "text": "The userId field in the request body, validated against the token",
      "evidence": []
     },
     {
-     "text": "The userId field in the request body, validated against the token",
+     "text": "The record version of the customer's cart",
      "evidence": []
     }
    ],
@@ -752,10 +752,10 @@
     "grading": "choice",
     "answerKey": 1,
     "choices": [
-     "The record version of the cart",
-     "The token's authenticated subject",
      "The checkout key, which is scoped to a customer",
-     "The userId field in the request body, validated against the token"
+     "The authenticated subject carried by the token",
+     "The userId field in the request body, validated against the token",
+     "The record version of the customer's cart"
     ]
    },
    "explanation": "Three identities solve three problems: token for who, version for which accepted state, checkout key for duplicate creation. A key cannot replace authorization."
@@ -787,11 +787,7 @@
    "prompt": "A customer's checkout committed but the response was lost. The tab retries with the same checkout key and the same cart. What does the API return?",
    "choices": [
     {
-     "text": "409, because the key has already been used",
-     "evidence": []
-    },
-    {
-     "text": "A second order, because each POST is a new create",
+     "text": "A second order, because each POST to checkout is treated as a new create",
      "evidence": []
     },
     {
@@ -803,18 +799,22 @@
      "evidence": [
       "backend/src/repositories/orderRepository.ts"
      ]
+    },
+    {
+     "text": "409, because that checkout key has already been used once",
+     "evidence": []
     }
    ],
    "check": {
     "type": "quiz",
     "itemKey": "seed:quests:grok-build-ecommerce/quiz/f06a78ba57ca60af",
     "grading": "choice",
-    "answerKey": 3,
+    "answerKey": 2,
     "choices": [
-     "409, because the key has already been used",
-     "A second order, because each POST is a new create",
+     "A second order, because each POST to checkout is treated as a new create",
      "A new order that replaces the first and releases its stock",
-     "The existing order, marked replayed; nothing new is reserved"
+     "The existing order, marked replayed; nothing new is reserved",
+     "409, because that checkout key has already been used once"
     ]
    },
    "explanation": "The checkout key identifies one logical create attempt; a matching requestHash returns { order, replayed: true }. Changing the cart under a used key is what conflicts."
@@ -855,21 +855,21 @@
    "prompt": "A customer double-clicks Cancel, sending two cancellations with the same version. Why can stock not be restored twice?",
    "choices": [
     {
-     "text": "Both lock the order; the second sees a changed version (or status CANCELLED, which has no transitions) and conflicts before restoring anything",
+     "text": "The frontend disables the Cancel button after one click, and that is the only guard",
+     "evidence": []
+    },
+    {
+     "text": "Stock restoration is idempotent, because it writes stock as an absolute value, not a delta",
+     "evidence": []
+    },
+    {
+     "text": "The second waits on the lock, then sees a new version or CANCELLED status and conflicts",
      "evidence": [
       "backend/src/repositories/orderRepository.ts"
      ]
     },
     {
-     "text": "The second cancellation restores stock but a nightly job corrects it",
-     "evidence": []
-    },
-    {
-     "text": "Stock restoration is idempotent because it sets stock to an absolute value",
-     "evidence": []
-    },
-    {
-     "text": "The frontend disables the button, which is the only guard",
+     "text": "The second cancellation restores stock, but a nightly job corrects the count",
      "evidence": []
     }
    ],
@@ -877,12 +877,12 @@
     "type": "quiz",
     "itemKey": "seed:quests:grok-build-ecommerce/quiz/f1250769b4325ebe",
     "grading": "choice",
-    "answerKey": 0,
+    "answerKey": 2,
     "choices": [
-     "Both lock the order; the second sees a changed version (or status CANCELLED, which has no transitions) and conflicts before restoring anything",
-     "The second cancellation restores stock but a nightly job corrects it",
-     "Stock restoration is idempotent because it sets stock to an absolute value",
-     "The frontend disables the button, which is the only guard"
+     "The frontend disables the Cancel button after one click, and that is the only guard",
+     "Stock restoration is idempotent, because it writes stock as an absolute value, not a delta",
+     "The second waits on the lock, then sees a new version or CANCELLED status and conflicts",
+     "The second cancellation restores stock, but a nightly job corrects the count"
     ]
    },
    "explanation": "Cancellation checks the captured version and PENDING status under the order lock, restores stock and audits in one transaction, and the final updateMany is conditional on version and status."

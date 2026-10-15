@@ -26,9 +26,35 @@ const GUARDED = [
   '3buildanalytics',
   'elihyper2',
   'fableopusrecallv2',
+  // campaign 2 final wave, REBALANCE-1: hand drafts whose key was the longest
+  // choice in 83-100% of quizzes before the rewrite.
+  '1jstrain2.2v2',
+  'andie',
+  'buildgum',
+  'buildsubbox',
+  'devdeck',
+  'dotnet-snapshot1',
+  'eliapplybot-extension',
+  'finance-dashboard',
+  'grok-build-ecommerce',
+  'grok-js',
+  'grokjs-csharp-learning-lab',
+  'grokjs-dotnet-learning-lab',
+  'grokjs-grokbuildjs',
+  'grokjs-javascript-learning-lab',
+  'groktuts-web-dev-upskilling-lab',
 ];
 const MAX_LONGEST_SHARE = 0.35;
 const MAX_SHORTEST_SHARE = 0.4;
+/** Median of answer length / longest-distractor length must sit in this band. */
+const MEDIAN_RATIO_MIN = 0.8;
+const MEDIAN_RATIO_MAX = 1.2;
+
+const median = (xs: number[]): number => {
+  const s = [...xs].sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+};
 
 interface DraftQuiz { id: string; kind: 'quiz'; answer: string; distractors: string[] }
 interface PackQuiz { kind: string; label?: string; check: { answerKey: number }; choices: unknown[] }
@@ -47,6 +73,13 @@ describe('hand-authored quiz drafts do not leak the key by length or position', 
       const shortest = qs.filter((q) => q.answer.length < Math.min(...q.distractors.map((d) => d.length)));
       expect(longest.length / qs.length, `longest: ${longest.map((q) => q.id).join(', ')}`).toBeLessThanOrEqual(MAX_LONGEST_SHARE);
       expect(shortest.length / qs.length, `shortest: ${shortest.map((q) => q.id).join(', ')}`).toBeLessThanOrEqual(MAX_SHORTEST_SHARE);
+    });
+
+    it(`${repo}: the key is about as long as its longest distractor (median ratio)`, () => {
+      const ratios = quizzes(repo).map((q) => q.answer.length / Math.max(...q.distractors.map((d) => d.length)));
+      const m = median(ratios);
+      expect(m).toBeGreaterThanOrEqual(MEDIAN_RATIO_MIN);
+      expect(m).toBeLessThanOrEqual(MEDIAN_RATIO_MAX);
     });
 
     it(`${repo}: the stamped pack uses every answer slot`, () => {

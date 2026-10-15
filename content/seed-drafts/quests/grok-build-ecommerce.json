@@ -27,8 +27,8 @@
       "prompt": "A customer's checkout committed but the response was lost. The tab retries with the same checkout key and the same cart. What does the API return?",
       "answer": "The existing order, marked replayed; nothing new is reserved",
       "distractors": [
-        "A second order, because each POST is a new create",
-        "409, because the key has already been used",
+        "A second order, because each POST to checkout is treated as a new create",
+        "409, because that checkout key has already been used once",
         "A new order that replaces the first and releases its stock"
       ],
       "explanation": "The checkout key identifies one logical create attempt; a matching requestHash returns { order, replayed: true }. Changing the cart under a used key is what conflicts."
@@ -56,11 +56,11 @@
         }
       ],
       "prompt": "The same customer reuses a checkout key but adds an item to the cart. What happens?",
-      "answer": "409: the stored cart fingerprint no longer matches",
+      "answer": "409: the stored cart fingerprint no longer matches the new cart",
       "distractors": [
-        "The old order is returned, since the key matches",
+        "The original order is returned, since the checkout key matches",
         "The new item is appended to the existing order",
-        "A new order is created under a regenerated key"
+        "A new order is created under a regenerated checkout key"
       ],
       "explanation": "Returning the old receipt for a different request would be a silent wrong answer; the fingerprint is computed over sortedItems so line order does not matter."
     },
@@ -82,11 +82,11 @@
         }
       ],
       "prompt": "Which identity decides who owns a new order?",
-      "answer": "The token's authenticated subject",
+      "answer": "The authenticated subject carried by the token",
       "distractors": [
         "The userId field in the request body, validated against the token",
         "The checkout key, which is scoped to a customer",
-        "The record version of the cart"
+        "The record version of the customer's cart"
       ],
       "explanation": "Three identities solve three problems: token for who, version for which accepted state, checkout key for duplicate creation. A key cannot replace authorization."
     },
@@ -113,11 +113,11 @@
         }
       ],
       "prompt": "Why does checkout lock product rows in sorted product-id order?",
-      "answer": "Two multi-product checkouts then acquire product locks in a common order, removing the circular wait that unsorted locking would reintroduce as a deadlock risk",
+      "answer": "All checkouts then lock products in one common order, so no circular wait can deadlock them",
       "distractors": [
-        "So the receipt shows items alphabetically",
-        "Because PostgreSQL requires FOR UPDATE locks in primary-key order",
-        "To make the cheapest product reserve first"
+        "So the order receipt lists the purchased items alphabetically by product id",
+        "Because PostgreSQL only grants FOR UPDATE locks in primary-key order within a transaction",
+        "So the cheapest product is reserved first and the expensive ones fail fast if stock runs out"
       ],
       "explanation": "sortedItems sets both the fingerprint canonicalization and the lock order. It removes checkout-to-checkout lock cycles; it is not a proof that the whole application is deadlock-free."
     },
@@ -144,11 +144,11 @@
         }
       ],
       "prompt": "Two customers check out the last unit of a product at the same moment. What happens?",
-      "answer": "One reserves it under the row lock; the other then reads stock 0 and gets 409",
+      "answer": "One reserves it under the row lock; the other then reads stock 0 and gets a 409",
       "distractors": [
-        "Both succeed and stock goes to -1, and an administrator corrects the count later from the audit trail",
-        "Both fail with a serialization error, and each client must start a new checkout to try again",
-        "The first succeeds and the second is waitlisted"
+        "Both succeed and stock drops to -1, to be corrected later by an admin from the audit trail",
+        "Both fail with a serialization error, and each client must start a new checkout to retry",
+        "The first succeeds and the second is waitlisted until the product is restocked by an admin"
       ],
       "explanation": "lockProduct takes SELECT ... FOR UPDATE then reads the row, so the second transaction sees the committed decrement."
     },
@@ -196,11 +196,11 @@
         }
       ],
       "prompt": "transition reads the order through the caller's scope, then takes SELECT ... FOR UPDATE, then reads it again. Why both reads?",
-      "answer": "Read 1 stops locking others' orders; read 2 sees the state after the lock",
+      "answer": "Read 1 stops callers locking orders they can't see; read 2 sees the state after the lock",
       "distractors": [
         "The second read is redundant and exists only so the audit row can record the order's status",
         "The first read loads the order items and the second loads the customer for the response",
-        "Prisma requires a read before any raw query in a transaction"
+        "Prisma requires an ordinary read before any raw query inside a transaction"
       ],
       "explanation": "Copy this order whenever a lock is acquired on a client-supplied id: authorize, lock, then re-read under the lock and check the version."
     },
@@ -227,11 +227,11 @@
         }
       ],
       "prompt": "A customer double-clicks Cancel, sending two cancellations with the same version. Why can stock not be restored twice?",
-      "answer": "Both lock the order; the second sees a changed version (or status CANCELLED, which has no transitions) and conflicts before restoring anything",
+      "answer": "The second waits on the lock, then sees a new version or CANCELLED status and conflicts",
       "distractors": [
-        "The frontend disables the button, which is the only guard",
-        "Stock restoration is idempotent because it sets stock to an absolute value",
-        "The second cancellation restores stock but a nightly job corrects it"
+        "The frontend disables the Cancel button after one click, and that is the only guard",
+        "Stock restoration is idempotent, because it writes stock as an absolute value, not a delta",
+        "The second cancellation restores stock, but a nightly job corrects the count"
       ],
       "explanation": "Cancellation checks the captured version and PENDING status under the order lock, restores stock and audits in one transaction, and the final updateMany is conditional on version and status."
     },
@@ -258,11 +258,11 @@
         }
       ],
       "prompt": "Why does reserving stock at checkout also increment the product's version?",
-      "answer": "So a stale admin form (which writes absolute stock) conflicts instead of overwriting the reservation",
+      "answer": "So a stale admin form that writes absolute stock conflicts rather than overwriting the reservation",
       "distractors": [
         "To record how many times the product has been sold, which the admin dashboard reports as popularity",
         "Because Prisma increments the version column automatically on any update to a model that has one",
-        "To invalidate the product's cached image URL"
+        "To invalidate the cached product page so the storefront shows the new stock level right away"
       ],
       "explanation": "If adjustments should stop invalidating open forms, remove stock from the metadata update rather than skipping the version bump."
     },
@@ -284,11 +284,11 @@
         }
       ],
       "prompt": "An admin creates a product with a SKU that already exists. What message do they see, and why is it a review finding?",
-      "answer": "'The record changed or is still referenced', because unique (P2002), foreign-key (P2003) and serialization (P2034) errors share one 409 message that never says the SKU is taken",
+      "answer": "The generic 'record changed or is still referenced' 409, which never says the SKU is taken",
       "distractors": [
-        "'SKU already exists', mapped from P2002",
-        "A 500 Internal Server Error, because P2002 is unhandled",
-        "A 400 validation error from zod before the insert"
+        "'SKU already exists', a specific 409 message mapped from the P2002 unique violation",
+        "A 500 Internal Server Error, because the P2002 unique violation is not handled by the mapper",
+        "A 400 validation error from zod, which checks SKU uniqueness before the insert runs"
       ],
       "explanation": "A targeted check for P2002 on the sku target would be a small, testable improvement."
     },
@@ -315,11 +315,11 @@
         }
       ],
       "prompt": "Why is the checkout requestId lower-cased during parsing?",
-      "answer": "It feeds both the advisory-lock key and the receipt lookup; if either used the raw spelling, two casings of one UUID could pass the lock separately",
+      "answer": "It keys the advisory lock and the receipt lookup, so two casings cannot pass separately",
       "distractors": [
-        "PostgreSQL rejects upper-case UUIDs",
-        "To make the key look consistent in the admin UI",
-        "Because hashtextextended is case-insensitive anyway"
+        "PostgreSQL rejects upper-case UUID strings when they are inserted into a uuid column type",
+        "To make the checkout key look consistent wherever the admin UI displays it",
+        "Because hashtextextended is case-insensitive, so the lock key would match anyway"
       ],
       "explanation": "Retry identity must be canonical in every place that uses it; an integration test pins differently cased spellings as the same receipt key."
     },
@@ -341,11 +341,11 @@
         }
       ],
       "prompt": "Why does a popular product's admin edit history disappear after a few dozen orders?",
-      "answer": "Only the newest 30 events are returned, and each order adds RESERVE/RESTORE events",
+      "answer": "Only the newest 30 events are returned, and every order adds RESERVE/RESTORE events",
       "distractors": [
-        "Audit events older than 30 days are deleted by a nightly retention job",
-        "Each checkout overwrites the previous audit row for that product instead of inserting a new one",
-        "Edits are not audited at all; only orders are"
+        "Audit events older than 30 days are removed by a nightly retention job",
+        "Each checkout overwrites the product's previous audit row instead of adding one",
+        "Admin edits are not audited at all; only order reservations write audit events"
       ],
       "explanation": "Order history has the same limit but an order has at most four events, so only product history is a practical problem."
     },
