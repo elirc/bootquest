@@ -13,8 +13,8 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-/** The F5 shape (`^\d+ \(.*item\)$`) plus its two sibling label leaks. */
-export const ARTIFACT_EXPLANATION_PATTERNS: readonly RegExp[] = [/^\d+ \(.*item\)$/, /^- \(.*item\)$/, /^goal \d+$/i];
+/** The F5 shape (`^\d+ \(.*item\)$`), its two sibling label leaks, and a bare finding number ("3"; release review). */
+export const ARTIFACT_EXPLANATION_PATTERNS: readonly RegExp[] = [/^\d+ \(.*item\)$/, /^- \(.*item\)$/, /^goal \d+$/i, /^\d+$/];
 
 /** quest pack name -> why it is exempt for now. Empty: no hand draft carries an artifact explanation. */
 export const EXPLANATION_LINT_EXEMPT: Readonly<Record<string, string>> = {};

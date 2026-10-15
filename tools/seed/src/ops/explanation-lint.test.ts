@@ -8,7 +8,7 @@ const quiz = (key: string, explanation: string) => ({ kind: 'quiz', key, explana
 
 describe('isArtifactExplanation (campaign 2 review F5)', () => {
   it('matches the parser-label leaks and nothing that reads like an explanation', () => {
-    for (const s of ['1 (inline list item)', '12 (inline list item)', '- (inline list item)', 'goal 2', ' 3 (inline list item) ']) expect(isArtifactExplanation(s), s).toBe(true);
+    for (const s of ['1 (inline list item)', '12 (inline list item)', '- (inline list item)', 'goal 2', ' 3 (inline list item) ', '3', ' 12 ']) expect(isArtifactExplanation(s), s).toBe(true);
     for (const s of ['', 'In docs/a.md:4, the guide pairs this Goal with this Check; ...', 'F3 (Medium)', 'Step 1 (inline list item) is wrong because', 'goal 2 fails when the cache is cold']) expect(isArtifactExplanation(s), s).toBe(false);
     expect(isArtifactExplanation(undefined)).toBe(false);
   });
