@@ -54,18 +54,6 @@ type Guard = 'longest' | 'shortest' | 'median-ratio' | 'rank' | 'format' | 'slot
  */
 const EXEMPT: Record<string, Guard[]> = {
   // CONTENT-1
-  '1jstrain2.2v2': ['rank'],
-  'campusops': ['format', 'slots'],
-  'folio-app': ['longest'],
-  'grokjs-grokbuildjs': ['rank'],
-  'jstrain2.2': ['format'],
-  'masterstore': ['format', 'slots'],
-  'nettodo': ['format'],
-  'organized-build-gum': ['format'],
-  'organized-js-training-jstrain2.2': ['format'],
-  'recipeview': ['format'],
-  'relay-app': ['format'],
-  'w22': ['median-ratio', 'rank', 'format'],
 
   // CONTENT-2
   '3buildagentteachgem': ['format'],
