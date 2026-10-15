@@ -42,9 +42,12 @@ const today = (clock: Clock) => dayKey(nowMs(clock));
 export function xpStats({ db, clock }: StatsDeps): XpStatsResponse {
   const t = today(clock);
   const rows = db.all<XpDayRow>(
-    `SELECT day, track_id AS trackId, SUM(amount) AS xp FROM xp_event GROUP BY day, track_id ORDER BY day`,
+    // zero-amount ledger rows (revealed / daily cap / already awarded) earn nothing: a day+track whose
+    // rows sum to 0 is not "XP", so it neither appears as a bucket row nor starts the all-time weeks
+    `SELECT day, track_id AS trackId, SUM(amount) AS xp FROM xp_event GROUP BY day, track_id HAVING SUM(amount) <> 0 ORDER BY day`,
   );
-  const events = db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM xp_event`)?.n ?? 0;
+  // events = ledger rows that EARNED XP (amount > 0); zero-amount rows are not counted
+  const events = db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM xp_event WHERE amount > 0`)?.n ?? 0;
   const days = dailyBuckets(rows, t, XP_STATS_DAYS);
   return {
     today: t,

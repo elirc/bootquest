@@ -139,7 +139,7 @@ function XpChart({ data, range }: { data: XpStatsResponse; range: XpRange }) {
   const total = weekly ? data.totals.allTime : data.totals.lastDays;
   const keys = rows.map((r) => r.key);
   const summary = weekly
-    ? `Weekly XP since the week of ${shortDate(keys[0]!)}: ${fmtInt(total)} XP across ${rows.length} week${rows.length === 1 ? '' : 's'}.`
+    ? `Weekly XP since the week of ${longDate(keys[0]!)}: ${fmtInt(total)} XP across ${rows.length} week${rows.length === 1 ? '' : 's'}.`
     : `Daily XP, last ${rows.length} days: ${fmtInt(total)} XP on ${rows.filter((r) => Object.values(r.values).some((v) => v > 0)).length} active days.`;
   return (
     <div data-testid={`xp-chart-${range}`}>
@@ -168,7 +168,7 @@ function XpChart({ data, range }: { data: XpStatsResponse; range: XpRange }) {
         head={[weekly ? 'Week of' : 'Day', 'Total', ...used.map((s) => s.label)]}
         rows={rows
           .filter((r) => weekly || Object.values(r.values).some((v) => v > 0))
-          .map((r) => [weekly ? shortDate(r.key) : r.label, fmtInt(Object.values(r.values).reduce((a, b) => a + b, 0)), ...used.map((s) => fmtInt(r.values[s.id] ?? 0))])}
+          .map((r) => [weekly ? longDate(r.key) : r.label, fmtInt(Object.values(r.values).reduce((a, b) => a + b, 0)), ...used.map((s) => fmtInt(r.values[s.id] ?? 0))])}
       />
     </div>
   );
@@ -217,13 +217,19 @@ function PassRates({ data }: { data: PassRatesResponse }) {
       <p className="chart-sub small">
         <span className="num">{fmtRate(o.passRate)}</span> of <span className="num">{fmtInt(o.attempts)}</span> graded submits passed ·{' '}
         <span className="num">{fmtRate(o.firstTryRate)}</span> of <span className="num">{fmtInt(o.units)}</span> units passed on the first try, solo
+        {o.guidedPasses > 0 && (
+          <span data-testid="pass-guided">
+            {' '}
+            · <span className="num">{fmtInt(o.guidedPasses)}</span> pass{o.guidedPasses === 1 ? '' : 'es'} after a reveal not counted
+          </span>
+        )}
       </p>
       <ul className="chart-legend" aria-label="Legend">
         <li>
           <svg width="10" height="10" aria-hidden="true">
             <rect className="series-pass" width="10" height="10" rx="2" />
           </svg>
-          Pass rate (passes / graded submits)
+          Pass rate (passes without a reveal / graded submits)
         </li>
         <li>
           <svg width="10" height="10" aria-hidden="true">
@@ -244,11 +250,19 @@ function PassRates({ data }: { data: PassRatesResponse }) {
       </div>
       <DataTable
         caption="Pass rates by track and check type"
-        head={['Group', 'Pass rate', 'Passes / submits', 'First try', 'First-try units']}
-        rows={[...trackRows, ...typeRows].map((r) => [r.label, fmtRate(r.passRate), `${r.passes}/${r.attempts}`, fmtRate(r.firstTryRate), `${r.firstTryPasses}/${r.units}`])}
+        head={['Group', 'Pass rate', 'Passes / submits', 'Passed after reveal (not counted)', 'First try', 'First-try units']}
+        rows={[...trackRows, ...typeRows].map((r) => [
+          r.label,
+          fmtRate(r.passRate),
+          `${r.passes}/${r.attempts}`,
+          fmtInt(r.guidedPasses),
+          fmtRate(r.firstTryRate),
+          `${r.firstTryPasses}/${r.units}`,
+        ])}
       />
       <p className="muted small">
-        A graded submit is a machine-checked submit; reading self-attests, written answers and self-scored explain-backs or katas are not counted. First try =
+        A graded submit is a machine-checked submit; reading self-attests, written answers and self-scored explain-backs or katas are not counted. A submit made after you revealed the solution is a graded submit but never a pass, so copying the
+        revealed answer cannot raise the rate. First try =
         the unit&apos;s earliest graded submit passed with no self-assist and no reveal.
       </p>
     </div>

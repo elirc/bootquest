@@ -44,7 +44,7 @@ function useStatsApi(): Ctx {
     ctx.db = ctx.tmp.db;
     ctx.clock = fixedClock(localNoon(2026, 10, 1));
     loadCampaignIntoDb(ctx.db, readCampaign(writeCampaignFixture(join(ctx.tmp.dir, 'campaign'))), ctx.clock);
-    ctx.app = createApp({ db: ctx.db, clock: ctx.clock, runners: { 'drill-js': fakeDrillJs, 'study-quiz': fakeStudyQuiz }, content: mapContentStore({}) });
+    ctx.app = createApp({ db: ctx.db, clock: ctx.clock, runners: { 'drill-js': fakeDrillJs, 'study-quiz': fakeStudyQuiz }, content: mapContentStore({ 'stats:g': { solution: 'return a + b' } }) });
   });
   afterEach(() => ctx.tmp.cleanup());
   return ctx;
@@ -83,7 +83,7 @@ describe('GET /api/stats/*: honest empty states on a fresh ledger', () => {
 
   it('pass rates: null rates, no groups', async () => {
     const p = await get(ctx.app, '/api/stats/pass-rates', PassRatesResponse);
-    expect(p).toEqual({ overall: { attempts: 0, passes: 0, passRate: null, units: 0, firstTryPasses: 0, firstTryRate: null }, byTrack: [], byCheckType: [] });
+    expect(p).toEqual({ overall: { attempts: 0, passes: 0, guidedPasses: 0, passRate: null, units: 0, firstTryPasses: 0, firstTryRate: null }, byTrack: [], byCheckType: [] });
   });
 
   it('reviews: 14 zero days, null retention', async () => {
@@ -157,12 +157,47 @@ describe('GET /api/stats/* over real ledger writes', () => {
     expect((await request(ctx.app).post(`/api/units/${unitOf(ctx.db, 'campaign/js/read-r1')}/self-attest`).send({})).status).toBe(200);
 
     const p = await get(ctx.app, '/api/stats/pass-rates', PassRatesResponse);
-    expect(p.overall).toEqual({ attempts: 5, passes: 4, passRate: 0.8, units: 4, firstTryPasses: 2, firstTryRate: 0.5 });
-    expect(p.byTrack).toEqual([{ trackId: 'js', attempts: 5, passes: 4, passRate: 0.8, units: 4, firstTryPasses: 2, firstTryRate: 0.5 }]);
+    expect(p.overall).toEqual({ attempts: 5, passes: 4, guidedPasses: 0, passRate: 0.8, units: 4, firstTryPasses: 2, firstTryRate: 0.5 });
+    expect(p.byTrack).toEqual([{ trackId: 'js', attempts: 5, passes: 4, guidedPasses: 0, passRate: 0.8, units: 4, firstTryPasses: 2, firstTryRate: 0.5 }]);
     expect(p.byCheckType.map((g) => [g.checkType, g.attempts, g.passes, g.firstTryPasses])).toEqual([
       ['drill-js', 4, 3, 1],
       ['study-quiz', 1, 1, 1],
     ]);
+  });
+
+  it('pass rates: a reveal then a passing (guided) submit is NOT a pass; the reveal row itself is not graded', async () => {
+    const a = drill(ctx, 'stats:a');
+    const g = drill(ctx, 'stats:g');
+    await submit(ctx.app, a, { code: 'return a + b' }); // honest first-try pass
+    await submit(ctx.app, g, { code: 'return 0' }); // honest fail
+    ctx.clock.advance(1000);
+    expect((await request(ctx.app).post(`/api/units/${g}/reveal`).send()).status).toBe(200);
+    ctx.clock.advance(1000);
+    const sub = await submit(ctx.app, g, { code: 'return a + b' }); // copies the revealed answer
+    expect(sub.status).toBe(200);
+    expect(sub.body.verdict).toBe('pass');
+    expect(sub.body.attempt.mode).toBe('guided');
+
+    const p = await get(ctx.app, '/api/stats/pass-rates', PassRatesResponse);
+    expect(p.overall).toEqual({ attempts: 3, passes: 1, guidedPasses: 1, passRate: 1 / 3, units: 2, firstTryPasses: 1, firstTryRate: 0.5 });
+    expect(p.byCheckType).toEqual([{ checkType: 'drill-js', attempts: 3, passes: 1, guidedPasses: 1, passRate: 1 / 3, units: 2, firstTryPasses: 1, firstTryRate: 0.5 }]);
+
+    // the guided submit wrote a 0-XP ledger row ('revealed'); totals.events counts only rows that earned XP
+    const rows = ctx.db.all<{ amount: number; reason: string }>('SELECT amount, reason FROM xp_event ORDER BY id');
+    expect(rows.some((r) => r.amount === 0 && r.reason === 'revealed')).toBe(true);
+    const xp = await get(ctx.app, '/api/stats/xp', XpStatsResponse);
+    expect(xp.totals.events).toBe(rows.filter((r) => r.amount > 0).length);
+    expect(xp.totals.events).toBeLessThan(rows.length);
+  });
+
+  it('xp: a day whose only ledger rows earned 0 XP does not start the all-time weeks', async () => {
+    const g = drill(ctx, 'stats:g');
+    expect((await request(ctx.app).post(`/api/units/${g}/reveal`).send()).status).toBe(200);
+    expect((await submit(ctx.app, g, { code: 'return a + b' })).status).toBe(200); // 0 XP, 'revealed'
+    expect(ctx.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM xp_event WHERE amount = 0')!.n).toBeGreaterThan(0);
+    const xp = await get(ctx.app, '/api/stats/xp', XpStatsResponse);
+    expect(xp.weeks).toEqual([]);
+    expect(xp.totals).toEqual({ allTime: 0, lastDays: 0, events: 0 });
   });
 
   it('reviews: forecast by local due day (overdue folds into today), retention from review_log, retests excluded', async () => {

@@ -136,7 +136,9 @@ describe('#10 no expected-403 key probe on unanswered explain-back / kata', () =
     await base.submitKataFindings(KATA, { findings: [{ scenario: 's', evidence: 'e:1', consequence: 'c' }], selfAssisted: false });
     const again = spyApi(base);
     renderApp(`/play/${KATA}`, again.api);
-    expect(await screen.findByTestId('kata-key')).toBeInTheDocument();
+    // two full app trees are mounted in this test; under a parallel suite the second one's key load measured
+    // 600-1100 ms, past findBy's 1 s default. A longer WAIT only; no assertion is timing-based.
+    expect(await screen.findByTestId('kata-key', {}, { timeout: 15_000 })).toBeInTheDocument();
     expect(again.calls).toContain('getKataKey');
   });
 });

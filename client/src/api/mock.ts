@@ -728,24 +728,26 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
 
     getPassRates: () =>
       wrap((): PassRatesResponse => {
-        const row = (attempts: number, passes: number, unitsN: number, first: number) => ({
+        // same rule as the server: a pass after a reveal (guided) is reported, never counted as a pass
+        const row = (attempts: number, passes: number, unitsN: number, first: number, guided = 0) => ({
           attempts,
           passes,
+          guidedPasses: guided,
           passRate: attempts ? passes / attempts : null,
           units: unitsN,
           firstTryPasses: first,
           firstTryRate: unitsN ? first / unitsN : null,
         });
         return {
-          overall: row(62, 47, 41, 29),
+          overall: row(62, 47, 41, 29, 4),
           byTrack: [
-            { trackId: 'js', ...row(44, 35, 30, 23) },
-            { trackId: 'csharp', ...row(18, 12, 11, 6) },
+            { trackId: 'js', ...row(44, 35, 30, 23, 3) },
+            { trackId: 'csharp', ...row(18, 12, 11, 6, 1) },
           ],
           byCheckType: [
-            { checkType: 'drill-js', ...row(26, 21, 17, 13) },
-            { checkType: 'drill-cs', ...row(12, 8, 7, 4) },
-            { checkType: 'quiz', ...row(14, 11, 11, 9) },
+            { checkType: 'drill-js', ...row(26, 21, 17, 13, 2) },
+            { checkType: 'drill-cs', ...row(12, 8, 7, 4, 1) },
+            { checkType: 'quiz', ...row(14, 11, 11, 9, 1) },
             { checkType: 'predict-output', ...row(6, 4, 4, 2) },
             { checkType: 'study-quiz', ...row(4, 3, 2, 1) },
           ],

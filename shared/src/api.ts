@@ -1061,6 +1061,8 @@ export const XP_STATS_DAYS = 90;
  *   days:  exactly XP_STATS_DAYS contiguous local days ending `today` (zero days included);
  *   weeks: all-time, Monday-start local weeks, contiguous from the week of the FIRST XP event to the
  *          current week (zero weeks included); empty when the ledger has no XP event at all.
+ *   totals.events: xp_event rows that EARNED XP (amount > 0); zero-amount rows (revealed, daily cap,
+ *          already awarded) are ledger rows but not counted, and never start the weekly series.
  */
 export const XpStatsResponse = z
   .object({
@@ -1075,7 +1077,11 @@ export type XpStatsResponse = z.infer<typeof XpStatsResponse>;
 /**
  * One pass-rate row. A GRADED attempt is an attempt with a machine submit run (reading self-attests,
  * written answers, explain-back / kata self-scores and the reveal row itself are not graded attempts).
- *   passes:         graded attempts that are a VERIFIED pass (outcome pass + a passing submit run);
+ *   passes:         graded attempts that are a VERIFIED pass (outcome pass + a passing submit run) made
+ *                   WITHOUT a reveal (solo or self-assisted). A submit after the solution was revealed
+ *                   (mode 'guided') stays in `attempts` but is never a pass;
+ *   guidedPasses:   verified passes made after a reveal (mode 'guided'), reported so they are visible,
+ *                   never counted in `passes` or `passRate`;
  *   units:          distinct units with at least one graded attempt;
  *   firstTryPasses: units whose FIRST graded attempt was a verified pass made SOLO (no self-assist,
  *                   no reveal) — the honest "first-try" number;
@@ -1085,6 +1091,7 @@ export const PassRateRow = z
   .object({
     attempts: z.number().int().min(0),
     passes: z.number().int().min(0),
+    guidedPasses: z.number().int().min(0),
     passRate: z.number().min(0).max(1).nullable(),
     units: z.number().int().min(0),
     firstTryPasses: z.number().int().min(0),

@@ -142,23 +142,32 @@ export interface GradedAttemptRow {
 
 export interface PassRate {
   attempts: number;
+  /** verified passes made WITHOUT a reveal (solo or self-assisted); guided passes are not passes */
   passes: number;
+  /** verified passes made after the solution was revealed (mode 'guided'): reported, never counted */
+  guidedPasses: number;
   passRate: number | null;
   units: number;
   firstTryPasses: number;
   firstTryRate: number | null;
 }
 
-/** Aggregate graded attempts (any order in; first-try is judged by createdAt, then id). */
+/**
+ * Aggregate graded attempts (any order in; first-try is judged by createdAt, then id).
+ * A submit made after a reveal (mode 'guided') stays in the denominator but is never a pass:
+ * copying the revealed answer is not passing the check. It is surfaced as `guidedPasses`.
+ */
 export function passRate(rows: readonly GradedAttemptRow[]): PassRate {
   const sorted = [...rows].sort((a, b) => a.createdAt - b.createdAt || a.id - b.id);
   const first = new Map<number, GradedAttemptRow>();
   for (const r of sorted) if (!first.has(r.unitId)) first.set(r.unitId, r);
-  const passes = rows.filter((r) => r.verified).length;
+  const passes = rows.filter((r) => r.verified && r.mode !== 'guided').length;
+  const guidedPasses = rows.filter((r) => r.verified && r.mode === 'guided').length;
   const firstTryPasses = [...first.values()].filter((r) => r.verified && r.mode === 'solo').length;
   return {
     attempts: rows.length,
     passes,
+    guidedPasses,
     passRate: rows.length === 0 ? null : passes / rows.length,
     units: first.size,
     firstTryPasses,

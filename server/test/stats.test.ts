@@ -196,13 +196,28 @@ describe('passRate (graded attempts)', () => {
     ];
     // input order must not matter: the earliest attempt decides
     const r = passRate([...rows].reverse());
-    expect(r).toEqual({ attempts: 5, passes: 4, passRate: 0.8, units: 4, firstTryPasses: 1, firstTryRate: 0.25 });
+    // the guided (post-reveal) pass is a graded submit but NOT a pass
+    expect(r).toEqual({ attempts: 5, passes: 3, guidedPasses: 1, passRate: 0.6, units: 4, firstTryPasses: 1, firstTryRate: 0.25 });
+  });
+
+  it('a reveal followed by a passing submit is never a pass: guided passes stay in the denominator only', () => {
+    const rows = [
+      row({ unitId: 7, verified: false, createdAt: 1 }), // honest fail
+      row({ unitId: 7, verified: true, mode: 'guided', createdAt: 3 }), // copied the revealed answer
+      row({ unitId: 8, verified: true, mode: 'guided', createdAt: 4 }), // revealed before ever trying
+    ];
+    const r = passRate(rows);
+    expect(r).toEqual({ attempts: 3, passes: 0, guidedPasses: 2, passRate: 0, units: 2, firstTryPasses: 0, firstTryRate: 0 });
+    // only guided passes: the rate is an honest 0%, not 100%
+    expect(passRate([row({ unitId: 9, verified: true, mode: 'guided' })]).passRate).toBe(0);
+    // a self-assisted (hint) pass is still a pass; only the reveal disqualifies
+    expect(passRate([row({ unitId: 10, verified: true, mode: 'assisted' })])).toMatchObject({ passes: 1, guidedPasses: 0, passRate: 1 });
   });
 
   it('ties on createdAt break by id; empty input gives null rates', () => {
     const r = passRate([row({ unitId: 9, verified: false, createdAt: 5, id: 100 }), row({ unitId: 9, verified: true, createdAt: 5, id: 101 })]);
     expect(r.firstTryPasses).toBe(0);
-    expect(passRate([])).toEqual({ attempts: 0, passes: 0, passRate: null, units: 0, firstTryPasses: 0, firstTryRate: null });
+    expect(passRate([])).toEqual({ attempts: 0, passes: 0, guidedPasses: 0, passRate: null, units: 0, firstTryPasses: 0, firstTryRate: null });
   });
 
   it('passRatesBy keeps the enum order and drops empty groups', () => {

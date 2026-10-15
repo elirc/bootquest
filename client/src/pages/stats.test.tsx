@@ -15,7 +15,7 @@ function emptyStatsApi(): BootQuestApi {
   const base = createMockApi();
   const days = Array.from({ length: 90 }, (_, i) => ({ day: `2026-07-${String((i % 28) + 1).padStart(2, '0')}`, total: 0, byTrack: zeroTrack }));
   const xp: XpStatsResponse = { today: '2026-10-07', days, weeks: [], totals: { allTime: 0, lastDays: 0, events: 0 } };
-  const rate = { attempts: 0, passes: 0, passRate: null, units: 0, firstTryPasses: 0, firstTryRate: null };
+  const rate = { attempts: 0, passes: 0, guidedPasses: 0, passRate: null, units: 0, firstTryPasses: 0, firstTryRate: null };
   const pass: PassRatesResponse = { overall: rate, byTrack: [], byCheckType: [] };
   const reviews: ReviewStatsResponse = {
     today: '2026-10-07',
@@ -62,6 +62,10 @@ describe('Stats: XP over time', () => {
     const weekly = await screen.findByTestId('xp-chart-weeks', {}, SLOW);
     expect(weekly.querySelectorAll('[data-bar]')).toHaveLength(xp.weeks.length);
     expect(screen.getByRole('button', { name: 'All time (weekly)' })).toHaveAttribute('aria-pressed', 'true');
+    // weekly table rows carry the year (all-time history can span years)
+    const firstWeek = xp.weeks[0]!.weekStart;
+    const rowHeader = within(weekly).getAllByRole('row')[1]!;
+    expect(rowHeader.textContent).toContain(firstWeek.slice(0, 4));
   });
 
   it('every bar segment stays inside the plot (labels and marks within bounds)', async () => {
@@ -94,6 +98,21 @@ describe('Stats: pass rates, reviews, campaign progress', () => {
     const js = panel.querySelector('[data-row="js"]')!;
     expect(js.textContent).toContain('80% · 35/44'); // 35/44 = 79.5% -> 80%
     expect(panel.textContent).toContain('First try, solo');
+    // passes after a reveal are surfaced as NOT counted, and the legend says so
+    expect(screen.getByTestId('pass-guided')).toHaveTextContent('4 passes after a reveal not counted');
+    expect(panel.textContent).toContain('Pass rate (passes without a reveal / graded submits)');
+    expect(within(panel).getByRole('columnheader', { name: 'Passed after reveal (not counted)' })).toBeInTheDocument();
+  });
+
+  it('a group whose only passes came after a reveal shows 0%, never 100%', async () => {
+    const base = createMockApi();
+    const guidedOnly = { attempts: 1, passes: 0, guidedPasses: 1, passRate: 0, units: 1, firstTryPasses: 0, firstTryRate: 0 };
+    const pass: PassRatesResponse = { overall: guidedOnly, byTrack: [{ trackId: 'js', ...guidedOnly }], byCheckType: [{ checkType: 'drill-js', ...guidedOnly }] };
+    renderApp('/stats', { ...base, getPassRates: async () => pass });
+    const panel = await screen.findByTestId('pass-rates', {}, SLOW);
+    expect(panel.querySelector('[data-row="drill-js"]')!.textContent).toContain('0% · 0/1');
+    expect(panel.querySelector('[data-row="drill-js"] rect.series-pass')).toBeNull(); // no bar for 0%
+    expect(screen.getByTestId('pass-guided')).toHaveTextContent('1 pass after a reveal not counted');
   });
 
   it('review forecast: 14 day bars labelled from Today, retention and grades', async () => {
@@ -150,22 +169,68 @@ describe('ui-audit #26: sidebar track % = campaign core progress, explained in a
     expect(within(line).getByText(expected).getAttribute('title')).toBe(link.getAttribute('title'));
   });
 
-  it('the sidebar refreshes silently after navigation (a cleared quest moves the %), never flashing placeholders', async () => {
+  it('a plain navigation never re-reads the slow /tracks endpoint (progress cannot have changed)', async () => {
+    const base = createMockApi();
+    let calls = 0;
+    const api: BootQuestApi = { ...base, getTracks: async () => (calls++, base.getTracks()) };
+    const { user, path } = renderApp('/campaign/js', api);
+    expect(await screen.findByTestId('track-pct-js', {}, SLOW)).toBeInTheDocument();
+    expect(calls).toBe(1);
+    const nav = within(screen.getByRole('complementary', { name: 'Primary' }));
+    await user.click(nav.getByRole('link', { name: /^Stats/ }));
+    await screen.findByTestId('pass-rates', {}, SLOW);
+    await user.click(nav.getByRole('link', { name: /^Dashboard/ }));
+    await user.click(nav.getByRole('link', { name: /^Review/ }));
+    await user.click(nav.getByRole('link', { name: /^Campaign/ }));
+    await waitFor(() => expect(path()).toBe('/campaign/js'), SLOW);
+    expect(await screen.findByTestId('track-progress', {}, SLOW)).toBeInTheDocument();
+    expect(calls).toBe(1);
+  });
+
+  it('after Mark as read succeeds, the next navigation moves the sidebar %, never flashing placeholders', async () => {
     const base = createMockApi();
     let pct = 0;
+    let calls = 0;
     const api: BootQuestApi = {
       ...base,
       getTracks: async (): Promise<TracksResponse> => {
+        calls++;
         const t = await base.getTracks();
         return { tracks: t.tracks.map((x) => (x.id === 'js' ? { ...x, progress: { ...x.progress, basis: 'campaign-core', pct, coreDone: pct ? 1 : 0 } } : x)) };
       },
+      selfAttest: async (id) => {
+        const r = await base.selfAttest(id);
+        pct = 25; // the server-side progress moved
+        return r;
+      },
     };
-    const { user } = renderApp('/campaign/js', api);
+    const { user } = renderApp('/play/104', api);
     expect(await screen.findByTestId('track-pct-js', {}, SLOW)).toHaveTextContent('0%');
-    pct = 25; // the learner clears a quest somewhere
+    await user.click(await screen.findByRole('button', { name: /Mark as read/ }, SLOW));
+    expect(await screen.findByText('+5 XP', {}, SLOW)).toBeInTheDocument();
+    expect(calls).toBe(1); // no re-read while staying on the page
     await user.click(screen.getByRole('link', { name: /Stats/ }));
     await waitFor(() => expect(screen.getByTestId('track-pct-js')).toHaveTextContent('25%'), SLOW);
+    expect(calls).toBe(2);
     expect(document.querySelectorAll('.track-skel')).toHaveLength(0);
+    // the stale mark is consumed: the next plain navigation costs nothing
+    await user.click(screen.getByRole('link', { name: /Dashboard/ }));
+    expect(calls).toBe(2);
+  });
+
+  it('a rejected progress mutation does not mark the list stale', async () => {
+    const base = createMockApi();
+    let calls = 0;
+    const api: BootQuestApi = {
+      ...base,
+      getTracks: async () => (calls++, base.getTracks()),
+      selfAttest: () => Promise.reject(new Error('boom')),
+    };
+    const { user } = renderApp('/play/104', api);
+    await user.click(await screen.findByRole('button', { name: /Mark as read/ }, SLOW));
+    await user.click(screen.getByRole('link', { name: /Stats/ }));
+    await screen.findByTestId('pass-rates', {}, SLOW);
+    expect(calls).toBe(1);
   });
 
   it('a track without campaign core quests uses practice units; locked java shows the lock, not a %', async () => {
