@@ -66,15 +66,8 @@ const EXEMPT: Record<string, Guard[]> = {
   // CONTENT-6
 
   // CONTENT-7
-  'organized-experiment-ww45': ['format'],
-  'recipegen-app': ['format'],
-  'trainjs': ['format'],
-  'zz1': ['median-ratio', 'rank', 'format'],
 
   // UNASSIGNED
-  'dotnet-ramp': ['format'],
-  'master4': ['format'],
-  'organized-app-job-track': ['format'],
 };
 
 /** "Verdict: reason": a colon + space early in the choice, outside code braces/brackets. */
