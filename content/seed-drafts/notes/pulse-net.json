@@ -1,0 +1,341 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "pulse-net",
+ "repo": "pulse-net",
+ "sha": "0a3451c6c7c16162bfe5b3547e94a87bd19d0aca",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: an analytics backend in eight ADRs",
+   "body": "pulse-net is a product-analytics backend in the style of PostHog: events come in through `POST /capture`, get attached to persons, and are answered by a query engine, feature flags and exports. It has three projects: `Pulse.Domain` (pure logic, no packages), `Pulse.Infrastructure` (EF Core on SQLite and the services) and `Pulse.Api` (endpoints, auth and the two background workers).\n\nRead `docs/architecture.md` first, then the ADRs in `docs/adr/` in order. Every ADR ends with two useful sections:\n\n- **In the code** gives file and line pointers. Open each one; the quiz is about what those lines do.\n- **Review notes** are a reviewer's claims about weak spots. Treat each one as a hypothesis and check it against the code yourself.\n\nEach ADR also has a **Check:** exercise. Doing them is the best preparation for this quest.",
+   "excerpts": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 3,
+     "lineEnd": 4,
+     "quote": "pulse-net is a PostHog/Mixpanel-style product-analytics backend: events flow in through a durable ingestion pipeline,"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The layer map and a section per subsystem."
+    },
+    {
+     "path": "docs/adr/README.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Index of the eight decisions."
+    }
+   ]
+  },
+  {
+   "id": "r02-durable-queue",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: a durable queue with a doorbell",
+   "body": "Capture does not write events directly. It appends rows to a `QueuedEvents` table and answers at once; a background worker processes the table later. Three general ideas help when reading this code.\n\n- **Doorbell.** A `System.Threading.Channels` channel can carry a wake-up signal instead of data. Its capacity and `FullMode` decide what happens when someone rings while the reader is busy. Read both settings in `IngestionSignal`.\n- **Delivery guarantees.** At-most-once means work can be lost but never repeated; at-least-once means it is never lost but can repeat; exactly-once needs a transaction or deduplication that covers both the work and the bookkeeping.\n- **Dead letters.** A row that keeps failing is moved aside so it cannot block the rest.\n\nWhat to look for in `IngestionProcessor.ProcessPendingAsync`: the order of the database calls in each `case`, which of them are separate statements, and how the `Attempts` counter is read, compared with `MaxAttempts` and copied into a `DeadLetterEvent`. Then read `IngestionWorker.DrainAsync` and note when it stops.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0001-async-ingestion-durable-queue.md",
+     "lineStart": 25,
+     "lineEnd": 27,
+     "quote": "The wake-up is a bounded `Channel<bool>` of capacity 1 (`DropWrite`) used purely as a doorbell"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/Pulse.Infrastructure/Services/IngestionPipeline.cs",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Signal, counters and the processor in one file."
+    },
+    {
+     "path": "src/Pulse.Api/Ingestion/IngestionWorker.cs",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The worker loop and its drain condition."
+    }
+   ]
+  },
+  {
+   "id": "r03-access-flags-exports",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: who may read, which bucket, which page",
+   "body": "Three smaller subsystems round out the quest.\n\n**Access.** HTTP has three different refusals: 401 (we do not know who you are), 403 (we know you, and you may not) and 404 (there is nothing here for you). Read `ProjectAccessService` and write down, for each method, which credential it looks at first and under what condition it looks at the other one. Then read the `ForwardDefaultSelector` in `Program.cs` and note the exact string comparison it uses.\n\n**Flags.** `FeatureFlagHasher` turns a flag key and a user id into a number in [0, 1]. Look closely at every comparison operator in `IsInRollout` and `PickVariant`; boundary values are where they matter.\n\n**Exports and time.** Exports page with a cursor instead of an offset. Read `EncodeCursor` and `TryDecodeCursor`, then follow the call up into `ExportEndpoints` and list each `try`/`catch` on the way. In `PulseDbContext`, read both lambdas of the ticks converter and ask what each one keeps.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0002-404-not-403-membership.md",
+     "lineStart": 7,
+     "lineEnd": 8,
+     "quote": "Every management endpoint is scoped to a project by a GUID in the route."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/adr/0003-sha256-deterministic-rollout.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The rollout hash recipe and its properties."
+    },
+    {
+     "path": "docs/adr/0004-three-api-key-types.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The three key types and how the header is routed."
+    },
+    {
+     "path": "docs/adr/0007-cursor-pagination-for-exports.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Cursor pagination and its review note."
+    }
+   ]
+  },
+  {
+   "id": "x01-read-after-202",
+   "target": "seed:quests:pulse-net/quiz/f8bb3f33ce0f42c0",
+   "phase": "after",
+   "title": "Why a query right after a 202 can miss the event",
+   "body": "The capture handler adds one `QueuedEvent` per event, saves, rings the signal and returns 202. The `Events` row is written later by `IngestionWorker` through `CaptureService`. A query that runs before the worker has drained the queue does not see the event; reads are eventually consistent, and the ADR tells tests to poll the metrics endpoint until `pending` is 0.\n\n- The 202 follows the save of the queue row, not of the event row.\n- Capture no longer calls the ingest pipeline inside the request.\n- There is no nightly batch; the worker runs continuously, woken by the signal or a 1-second sweep.",
+   "excerpts": [
+    {
+     "path": "src/Pulse.Api/Endpoints/CaptureEndpoints.cs",
+     "lineStart": 59,
+     "lineEnd": 62,
+     "quote": "await db.SaveChangesAsync(ct); signal.Ring();"
+    },
+    {
+     "path": "docs/adr/0001-async-ingestion-durable-queue.md",
+     "lineStart": 44,
+     "lineEnd": 45,
+     "quote": "Reads are eventually consistent: a query issued immediately after a 202 may not see the event."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x02-doorbell-capacity",
+   "target": "seed:quests:pulse-net/quiz/001b46653b6bd015",
+   "phase": "after",
+   "title": "Why fifty rings leave one signal",
+   "body": "`IngestionSignal` builds `Channel.CreateBounded<bool>(new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropWrite })`. The channel holds one item. `Ring` calls `TryWrite`; when the channel is full, DropWrite discards the item being written. So after fifty rings during a busy drain, exactly one signal is waiting. That is enough, because the worker reads the table, not the signal.\n\n- A capacity-1 channel cannot hold fifty items.\n- Rows never wait for a restart: the worker also sweeps every second.\n- `TryWrite` never blocks; it returns at once whether or not the item was kept.",
+   "excerpts": [
+    {
+     "path": "src/Pulse.Infrastructure/Services/IngestionPipeline.cs",
+     "lineStart": 16,
+     "lineEnd": 17,
+     "quote": "new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropWrite });"
+    },
+    {
+     "path": "src/Pulse.Infrastructure/Services/IngestionPipeline.cs",
+     "lineStart": 19,
+     "lineEnd": 19,
+     "quote": "public void Ring() => _channel.Writer.TryWrite(true);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x03-dead-letter-attempts",
+   "target": "seed:quests:pulse-net/quiz/b8542a2349f285d5",
+   "phase": "after",
+   "title": "Three tries, but the dead letter says Attempts = 2",
+   "body": "`Attempts` starts at 0. A transient failure returns Retry while `row.Attempts + 1 >= MaxAttempts` is false, and the Retry case writes `row.Attempts + 1`. So the first failure stores 1, the second stores 2, and the third sees 2 + 1 >= 3 and dead-letters. The `DeadLetterEvent` copies `Attempts = row.Attempts`, which is still 2, even though its error text says it failed after 3 attempts. The stored count is one lower than the real number of tries.\n\n- Retries stop at the cap; there is no backoff at all.\n- A fourth try never happens.\n- Only missing projects and invalid payloads dead-letter at once; exceptions from ingest are transient.",
+   "excerpts": [
+    {
+     "path": "src/Pulse.Infrastructure/Services/IngestionPipeline.cs",
+     "lineStart": 176,
+     "lineEnd": 178,
+     "quote": "return row.Attempts + 1 >= MaxAttempts ? (RowOutcome.DeadLettered, $\"Failed after {MaxAttempts} attempts: {ex.Message}\") : (RowOutcome.Retry, null);"
+    },
+    {
+     "path": "src/Pulse.Infrastructure/Services/IngestionPipeline.cs",
+     "lineStart": 109,
+     "lineEnd": 109,
+     "quote": "Attempts = row.Attempts,"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x04-crash-before-delete",
+   "target": "seed:quests:pulse-net/quiz/e24830d303b23caa",
+   "phase": "after",
+   "title": "Why a crash can duplicate an event",
+   "body": "In the Processed case, `CaptureService.IngestAsync` has already saved the event; only then does `DeleteRowAsync` run its own `ExecuteDeleteAsync`. These are two separate statements with no transaction around both. If the process dies between them, the queue row is still there on restart and is ingested again, producing a second copy of the event. The ADR names this at-least-once behavior and suggests a shared transaction or dedup by event id.\n\n- Ingest and delete do not share a transaction.\n- Nothing detects duplicates, so the row is not dead-lettered.\n- The event was committed before the crash; nothing rolls it back.",
+   "excerpts": [
+    {
+     "path": "src/Pulse.Infrastructure/Services/IngestionPipeline.cs",
+     "lineStart": 97,
+     "lineEnd": 99,
+     "quote": "await DeleteRowAsync(row.Seq, ct);"
+    },
+    {
+     "path": "docs/adr/0001-async-ingestion-durable-queue.md",
+     "lineStart": 76,
+     "lineEnd": 77,
+     "quote": "A processed row is deleted in a separate statement after `CaptureService` has saved"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x05-non-member-404",
+   "target": "seed:quests:pulse-net/quiz/10de0ae8524b3579",
+   "phase": "after",
+   "title": "Why a non-member gets 404, not 403",
+   "body": "`RequireMemberAsync` first reads the user id. Only a caller with no user id gets 401. For a signed-in caller it runs one `AnyAsync` over `ProjectMemberships` and returns `Results.NotFound()` when there is no row. That is the same response a project id that does not exist produces, so a non-member cannot tell real projects from fake ones.\n\n- 403 would confirm the project exists; the API has no 403 in project routes.\n- 401 is reserved for callers with no identity at all.\n- The guard returns before any data is read, so there is no empty 200.",
+   "excerpts": [
+    {
+     "path": "src/Pulse.Api/Auth/ProjectAccessService.cs",
+     "lineStart": 47,
+     "lineEnd": 50,
+     "quote": "return isMember ? null : Results.NotFound();"
+    },
+    {
+     "path": "docs/adr/0002-404-not-403-membership.md",
+     "lineStart": 21,
+     "lineEnd": 21,
+     "quote": "There is no 403 anywhere in the project-scoped API."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x06-read-key-with-jwt",
+   "target": "seed:quests:pulse-net/quiz/0b0daf0092244e9c",
+   "phase": "after",
+   "title": "Why a valid read key does not help a signed-in non-member",
+   "body": "`RequireReadAsync` checks the `X-Api-Key` header only when the key is present **and** `GetUserId(http.User)` is null. A request that also carries a valid JWT has a user id, so the key branch is skipped and the method falls through to `RequireMemberAsync`. The user is not a member, so the answer is 404.\n\n- The read key is never compared here, so it cannot grant access.\n- The 401 Invalid read key result belongs to the key branch, which did not run.\n- Nothing in this path returns 403.",
+   "excerpts": [
+    {
+     "path": "src/Pulse.Api/Auth/ProjectAccessService.cs",
+     "lineStart": 61,
+     "lineEnd": 61,
+     "quote": "if (!string.IsNullOrWhiteSpace(apiKey) && GetUserId(http.User) is null)"
+    },
+    {
+     "path": "src/Pulse.Api/Auth/ProjectAccessService.cs",
+     "lineStart": 74,
+     "lineEnd": 74,
+     "quote": "return await RequireMemberAsync(http, projectId, ct);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x07-personal-key-routing",
+   "target": "seed:quests:pulse-net/quiz/62185d116b1ae306",
+   "phase": "after",
+   "title": "How one Bearer header reaches two handlers",
+   "body": "The default scheme is a policy scheme whose `ForwardDefaultSelector` reads the Authorization header and calls `StartsWith` with `\"Bearer \"` plus `ApiKeyGenerator.PersonalPrefix`, using `StringComparison.Ordinal`. A match forwards to `PersonalApiKeyAuthenticationHandler`; everything else goes to JwtBearer. The prefix routes the request before any token is parsed or looked up.\n\n- The selector never counts dots or parses a JWT.\n- The hash lookup happens later, inside the personal-key handler.\n- The comparison is ordinal (case-sensitive) and needs the full user prefix, not just `pk_`.",
+   "excerpts": [
+    {
+     "path": "src/Pulse.Api/Program.cs",
+     "lineStart": 54,
+     "lineEnd": 54,
+     "quote": "return header?.StartsWith($\"Bearer {ApiKeyGenerator.PersonalPrefix}\", StringComparison.Ordinal) == true"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x08-offset-not-kept",
+   "target": "seed:quests:pulse-net/quiz/68854a30f2df4d41",
+   "phase": "after",
+   "title": "What the ticks converter keeps and drops",
+   "body": "On write the converter stores `v.UtcTicks`, a count of ticks for the instant in UTC. 10:00 at +02:00 is 08:00 UTC. On read it builds `new DateTimeOffset(v, TimeSpan.Zero)`, so the value comes back as 08:00 with offset +00:00: the same instant, without the original offset. ADR 0006 accepts this because all analytics math is in UTC.\n\n- The +02:00 offset is not stored anywhere, so it cannot come back.\n- The clock time is converted, not relabelled: 10:00 becomes 08:00.\n- The column is an integer, so SQLite compares numbers, not text.",
+   "excerpts": [
+    {
+     "path": "src/Pulse.Infrastructure/PulseDbContext.cs",
+     "lineStart": 207,
+     "lineEnd": 207,
+     "quote": ": base(v => v.UtcTicks, v => new DateTimeOffset(v, TimeSpan.Zero))"
+    },
+    {
+     "path": "docs/adr/0006-utc-ticks-datetimeoffset-converter.md",
+     "lineStart": 32,
+     "lineEnd": 33,
+     "quote": "The original client offset is **not round-tripped**: everything reads back as `+00:00`."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x09-cursor-out-of-range",
+   "target": "seed:quests:pulse-net/quiz/ac581316c94c3e72",
+   "phase": "after",
+   "title": "Why the out-of-range cursor still gets a 400",
+   "body": "`TryDecodeCursor` parses -1 as a valid `long` and then calls `new DateTimeOffset(ticks, TimeSpan.Zero)`, which throws `ArgumentOutOfRangeException`. Its own `catch (FormatException)` does not match, so the exception leaves `EventsPageAsync`. But the endpoint awaits that call inside `catch (ArgumentException)`, and in C# a catch clause also matches derived types: `ArgumentOutOfRangeException` derives from `ArgumentException`. The endpoint returns `CursorProblem()`, a 400. ADR 0007's review note predicts the global handler; the code says otherwise.\n\n- No 500 here: the exception is caught one level up.\n- A bad cursor never restarts the scan.\n- The membership guard ran earlier; the cursor error is a 400.",
+   "excerpts": [
+    {
+     "path": "src/Pulse.Infrastructure/Services/ExportService.cs",
+     "lineStart": 70,
+     "lineEnd": 73,
+     "quote": "timestamp = new DateTimeOffset(ticks, TimeSpan.Zero);"
+    },
+    {
+     "path": "src/Pulse.Api/Endpoints/ExportEndpoints.cs",
+     "lineStart": 62,
+     "lineEnd": 64,
+     "quote": "catch (ArgumentException) { return CursorProblem();"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x10-empty-filtered-page",
+   "target": "seed:quests:pulse-net/quiz/71eeb12ab35fb68b",
+   "phase": "after",
+   "title": "Why an empty page can still have a next cursor",
+   "body": "Property filters are opaque JSON to SQLite, so the export scans a page of rows by `(Timestamp, Id)` in SQL and filters them afterwards in memory. A page can lose some or all of its rows to the filter while the cursor still points at the last row scanned. Only a null cursor means the scan reached the end. The client should keep requesting pages.\n\n- An empty page is not an end signal; null is.\n- Nothing timed out; the filter simply matched no rows in this slice.\n- Matching nothing is a valid result, not a 400.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0007-cursor-pagination-for-exports.md",
+     "lineStart": 32,
+     "lineEnd": 35,
+     "quote": "so a filtered page may contain fewer than `limit` rows while the cursor still advances — the cursor tracks scan position, not result count."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x11-variant-tie",
+   "target": "seed:quests:pulse-net/quiz/ccc838a7685598dd",
+   "phase": "after",
+   "title": "Why a position of exactly 50.0 picks test",
+   "body": "`PickVariant` computes `position = Rank(..., VariantSalt) * 100` and walks the variants, adding each rollout to `cumulative` and returning the first variant where `position < cumulative`. For control, 50.0 < 50 is false. For test, cumulative is 100 and 50.0 < 100 is true, so the user gets test.\n\n- The comparison is strict, so 50.0 is not inside control's range.\n- There is no re-ranking on ties; the salt is fixed.\n- Ties go to the later variant here, because of the strict comparison.",
+   "excerpts": [
+    {
+     "path": "src/Pulse.Domain/FeatureFlagHasher.cs",
+     "lineStart": 45,
+     "lineEnd": 45,
+     "quote": "if (position < cumulative)"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x12-zero-rollout",
+   "target": "seed:quests:pulse-net/quiz/6d690e8b94bf7289",
+   "phase": "after",
+   "title": "Why 0% excludes even a rank of 0.0",
+   "body": "`IsInRollout` short-circuits to true only when `rolloutPercentage >= 100`. Otherwise it returns `Rank(flagKey, distinctId) * 100 < rolloutPercentage`. With 0% and a rank of 0.0, that is 0 < 0, which is false, so the user is not in the rollout. Because the test is strict, a 0% flag excludes everyone.\n\n- A rank of 0.0 is not special; it still has to be strictly below the percentage.\n- 0% does not short-circuit; only 100% or more does.\n- Variant selection runs only for users who pass the gate.",
+   "excerpts": [
+    {
+     "path": "src/Pulse.Domain/FeatureFlagHasher.cs",
+     "lineStart": 26,
+     "lineEnd": 28,
+     "quote": "rolloutPercentage >= 100 || Rank(flagKey, distinctId) * 100 < rolloutPercentage;"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}
