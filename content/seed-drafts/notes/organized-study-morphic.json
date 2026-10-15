@@ -1,0 +1,309 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "organized-study-morphic",
+ "repo": "organized-study-morphic",
+ "sha": "d5498e6803b3ed92c8c45ca8313ad3941ee3790b",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: the key flows of an AI answer engine",
+   "body": "Morphic is an open-source AI answer engine: a Next.js app where a model searches the web with tools and streams an answer with citations. The study track for this quest is `morphic/fabledocs/`.\n\nRead in this order:\n\n1. `01-codebase-cartography/05-key-flows.md`, Flows 1, 2, 3, 4, 5 and 6. Each flow names the files to open first, then a trace table (step, owner, file, what happens, risk).\n2. `03-architecture-and-patterns/03-validation-auth-and-permissions.md` for where checks live.\n3. `03-architecture-and-patterns/02-data-model-and-persistence.md` for the tables behind a chat.\n\nThe tables summarise; the quiz asks about specific inputs (a cookie value, a header that is missing, an environment variable set to an odd value). For each step, open the linked file in `morphic/` and read the branch itself. Note every early `return new Response(...)` in `app/api/chat/route.ts` in the order it appears, with its status. When two checks could both reject a request, the order in the file decides which one answers.",
+   "excerpts": [
+    {
+     "path": "morphic/fabledocs/01-codebase-cartography/05-key-flows.md",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "it's the product. Everything else decorates it."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "morphic/fabledocs/01-codebase-cartography/05-key-flows.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The seven traced flows this quest is built on."
+    }
+   ]
+  },
+  {
+   "id": "r02-rate-limits",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: fixed-window daily limits in Redis",
+   "body": "Morphic has three rate limiters in `lib/rate-limit/`: one for guests, one overall daily limit for signed-in users, and one for adaptive mode. All three use the same fixed-window pattern: build a key from an identity and today's UTC date, `INCR` it, and on the first hit set an expiry that ends at midnight UTC. The count resets because the key itself disappears.\n\nThings to read for in each limiter:\n\n- the guard clauses at the top: under which deployment settings is the limiter active at all?\n- how the Redis call is protected against hanging, and what the `catch` block returns;\n- how the limit number is computed, and what happens with an unusual environment value;\n- what status code and body the caller receives when the limit is reached. Compare the three files; they were written separately and differ in small ways.\n\nAlso look at how `app/api/chat/route.ts` computes the guest's IP from request headers before it calls the guest limiter, and what it passes when no header is present.",
+   "excerpts": [
+    {
+     "path": "morphic/lib/rate-limit/guest-limit.ts",
+     "lineStart": 51,
+     "lineEnd": 52,
+     "quote": "const key = `rl:guest:chat:${ip}:${dateKey}`"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "morphic/lib/rate-limit/__tests__/guest-limit.test.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The tests that pin the guest limiter behaviour."
+    }
+   ]
+  },
+  {
+   "id": "r03-persistence",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: messages, parts and destructive regeneration",
+   "body": "A Morphic chat is stored as three tables: `chats`, `messages` and a wide `parts` table with one sparse column group per part type. `lib/db/actions.ts` writes them and `lib/utils/message-mapping.ts` converts between UI messages and rows.\n\nWhen you read `upsertMessage`, look at the conflict clause on the messages insert and list exactly which columns it touches; then follow what happens to the parts rows. Everything runs inside one transaction, which is why the pattern is safe for readers.\n\nRegeneration and edits are handled in `lib/streaming/helpers/prepare-messages.ts`. Trace the regenerate branch: how it finds the target message, what it does when the id is not found, and at which point in the request rows are deleted relative to the model call. The guide's Flow 5 drill (a failure matrix) is the right exercise here.\n\nFinally, `lib/utils/citation.ts` turns the model's `[n](#toolCallId)` markers into links; read every early `return` in `processCitations`.",
+   "excerpts": [
+    {
+     "path": "morphic/fabledocs/01-codebase-cartography/05-key-flows.md",
+     "lineStart": 79,
+     "lineEnd": 79,
+     "quote": "the \"upsert\" for parts is *delete-then-insert*"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "morphic/fabledocs/03-architecture-and-patterns/02-data-model-and-persistence.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The data model and persistence chapter of the same track."
+    }
+   ]
+  },
+  {
+   "id": "x-q01",
+   "target": "seed:quests:organized-study-morphic/quiz/ecdcf9bc27f397b2",
+   "phase": "after",
+   "title": "Why the share-page check answers before the guest gate",
+   "body": "The route reads the referer, looks up the user, and then checks `isSharePage` before anything about guests. A request from a `/share/` page therefore gets 403 \"Chat API is not available on share pages\" even when the visitor is signed out and guest chat is disabled.\n\n- *401 Authentication required*: that gate comes after the share-page check.\n- *400 message is required*: the body has a valid message, so the trigger check passes.\n- *429 guest limit*: the guest limiter returns 401, not 429, and it is never reached here.",
+   "excerpts": [
+    {
+     "path": "morphic/app/api/chat/route.ts",
+     "lineStart": 61,
+     "lineEnd": 66,
+     "quote": "return new Response('Chat API is not available on share pages', {"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02",
+   "target": "seed:quests:organized-study-morphic/quiz/597de7533d7dc0d9",
+   "phase": "after",
+   "title": "Why an unknown searchMode cookie becomes quick",
+   "body": "The route accepts the cookie value only if it is in `['quick', 'adaptive']`; any other value, or no cookie at all, gives `'quick'`. A cookie is user-controlled, so it is whitelisted rather than trusted.\n\n- *deep, read as given*: values outside the list are never used.\n- *adaptive for signed-in users*: the default does not depend on who the user is.\n- *400 for a bad cookie*: the route does not reject the request; it falls back silently.",
+   "excerpts": [
+    {
+     "path": "morphic/app/api/chat/route.ts",
+     "lineStart": 91,
+     "lineEnd": 94,
+     "quote": "searchModeCookie && ['quick', 'adaptive'].includes(searchModeCookie)"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q03",
+   "target": "seed:quests:organized-study-morphic/quiz/eada246a3d8369ab",
+   "phase": "after",
+   "title": "Why a guest with no IP header is not limited",
+   "body": "The route takes the first `x-forwarded-for` hop, then `x-real-ip`, and otherwise `null`. `checkAndEnforceGuestLimit` begins with `if (!ip) return null`, so a null IP means no limit check at all and the request continues. That is worth noticing in a review: the limiter relies on a proxy always setting the header.\n\n- *Counted under \"unknown\"*: no placeholder key is built; the check is skipped.\n- *401 until an IP is sent*: nothing rejects a missing IP.\n- *Counted per chatId*: the guest key uses only the IP and the date.",
+   "excerpts": [
+    {
+     "path": "morphic/lib/rate-limit/guest-limit.ts",
+     "lineStart": 81,
+     "lineEnd": 84,
+     "quote": "if (!ip) return null"
+    },
+    {
+     "path": "morphic/app/api/chat/route.ts",
+     "lineStart": 79,
+     "lineEnd": 82,
+     "quote": "req.headers.get('x-real-ip') ||"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q04",
+   "target": "seed:quests:organized-study-morphic/quiz/278e2d6c14895bc0",
+   "phase": "after",
+   "title": "Why GUEST_CHAT_DAILY_LIMIT=0 means the default",
+   "body": "`getGuestDailyLimit` converts the variable with `Number`. If the result is not finite or is `<= 0`, it returns `DEFAULT_GUEST_DAILY_LIMIT`, which is 10. So \"0\" does not turn guests off, and it does not remove the limit either.\n\n- *0, every chat refused*: zero fails the positive check and is replaced.\n- *Unlimited*: the limiter lets everything through off the cloud deployment, without Upstash or on a Redis error, but not because of this variable.\n- *Clamped to 1*: there is no clamp; invalid values fall back to the default.",
+   "excerpts": [
+    {
+     "path": "morphic/lib/rate-limit/guest-limit.ts",
+     "lineStart": 8,
+     "lineEnd": 10,
+     "quote": "if (!Number.isFinite(parsed) || parsed <= 0) {"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q05",
+   "target": "seed:quests:organized-study-morphic/quiz/e7319102ffbeaa43",
+   "phase": "after",
+   "title": "Why an over-limit guest gets 401, not 429",
+   "body": "When `allowed` is false, `checkAndEnforceGuestLimit` builds a JSON body with \"Please sign in to continue.\" and status 401 Unauthorized, plus `X-RateLimit-*` headers. The intent is a nudge: sign in and the guest limit no longer applies. The signed-in limiters in `chat-limits.ts` and `adaptive-limit.ts` use 429 instead, which is the drift the guide points out.\n\n- *429 Daily chat limit reached*: that is the signed-in overall limiter.\n- *403 Forbidden*: no limiter returns 403.\n- *503 Service Unavailable*: that status is for having no enabled model.",
+   "excerpts": [
+    {
+     "path": "morphic/lib/rate-limit/guest-limit.ts",
+     "lineStart": 95,
+     "lineEnd": 97,
+     "quote": "statusText: 'Unauthorized',"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q06",
+   "target": "seed:quests:organized-study-morphic/quiz/653801e025443cec",
+   "phase": "after",
+   "title": "Why a slow Redis lets the chat through",
+   "body": "`checkOverallChatLimit` races `redis.incr(key)` against a 3-second timer that rejects with \"Redis timeout\". The rejection lands in the `catch`, which logs and returns `allowed: true`. The limiter fails open, so a Redis outage does not block chats at this step.\n\n- *429 because the count is treated as over*: there is no count in the catch path; it allows.\n- *Waits for Redis indefinitely*: the race caps the wait at 3 seconds.\n- *503 because Redis is required*: Redis is optional; without Upstash the limiter allows everything.",
+   "excerpts": [
+    {
+     "path": "morphic/lib/rate-limit/chat-limits.ts",
+     "lineStart": 54,
+     "lineEnd": 59,
+     "quote": "setTimeout(() => reject(new Error('Redis timeout')), 3000)"
+    },
+    {
+     "path": "morphic/lib/rate-limit/chat-limits.ts",
+     "lineStart": 74,
+     "lineEnd": 76,
+     "quote": "return { allowed: true, remaining: Infinity, resetAt: 0 }"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07",
+   "target": "seed:quests:organized-study-morphic/quiz/a662e2160e0aa8d4",
+   "phase": "after",
+   "title": "Why isNewChat skips the ownership check",
+   "body": "`createChatStreamResponse` loads the chat and compares `initialChat.userId` with the caller only inside `if (!isNewChat)`. When the client says the chat is new, that whole block is skipped and the log says \"loadChat skipped for new chat\". The flag is client-asserted; protection for a forged flag comes later, from RLS on the insert.\n\n- *Loads and returns 403*: that happens only when isNewChat is false.\n- *Creates first, checks after*: no ownership check follows in this function.\n- *Asks the client to resend*: there is no such response.",
+   "excerpts": [
+    {
+     "path": "morphic/lib/streaming/create-chat-stream-response.ts",
+     "lineStart": 56,
+     "lineEnd": 58,
+     "quote": "Skip loading chat for new chats optimization"
+    },
+    {
+     "path": "morphic/lib/streaming/create-chat-stream-response.ts",
+     "lineStart": 71,
+     "lineEnd": 73,
+     "quote": "perfLog('loadChat skipped for new chat')"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08",
+   "target": "seed:quests:organized-study-morphic/quiz/e22351d8d541434c",
+   "phase": "after",
+   "title": "What changes when a message id already exists",
+   "body": "The message insert uses `onConflictDoUpdate` with `set: { role: messageData.role }`: on a conflict only the role is rewritten, so other columns keep their old values. Then every part with that message id is deleted and the newly mapped parts are inserted, inside the same transaction.\n\n- *Every column overwritten, parts merged*: only role is in the set clause, and parts are replaced, not merged.\n- *onConflictDoNothing*: the code uses DoUpdate.\n- *Metadata updated, parts left alone*: metadata is the kind of change that is lost, and the parts are always deleted first.",
+   "excerpts": [
+    {
+     "path": "morphic/lib/db/actions.ts",
+     "lineStart": 104,
+     "lineEnd": 107,
+     "quote": "set: { role: messageData.role }"
+    },
+    {
+     "path": "morphic/lib/db/actions.ts",
+     "lineStart": 110,
+     "lineEnd": 111,
+     "quote": "await tx.delete(parts).where(eq(parts.messageId, message.id))"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09",
+   "target": "seed:quests:organized-study-morphic/quiz/e6a8abe4fd5dee92",
+   "phase": "after",
+   "title": "Why citation 150 disappears from the text",
+   "body": "`processCitations` parses the number and first checks the bounds: `citationNum < 1 || citationNum > 100` returns the empty string. 150 fails that check before the map is consulted, so the marker is removed from the text without a trace. Missing maps and invalid URLs are also replaced by \"\".\n\n- *Link to the first result*: there is no fallback to another citation.\n- *Markup left as it was*: the regex matched, so the replacement callback's \"\" is used.\n- *[missing] placeholder*: no placeholder exists in the code.",
+   "excerpts": [
+    {
+     "path": "morphic/lib/utils/citation.ts",
+     "lineStart": 87,
+     "lineEnd": 90,
+     "quote": "if (isNaN(citationNum) || citationNum < 1 || citationNum > 100) {"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10",
+   "target": "seed:quests:organized-study-morphic/quiz/d815a8d8f286ee6f",
+   "phase": "after",
+   "title": "Why the 6 MB GIF fails on size first",
+   "body": "After auth, the storage check, the content-type check and the file presence check, the route compares `file.size > MAX_FILE_SIZE` (5 MB). That check comes before the `ALLOWED_TYPES` check, so the oversized GIF gets 400 \"File too large (max 5MB)\" and the type is never examined.\n\n- *400 Unsupported file type*: correct for a small GIF, but the size check runs first.\n- *413 Payload Too Large*: the route uses 400 for both checks.\n- *415 Unsupported Media Type*: also not used; type failures are 400 too.",
+   "excerpts": [
+    {
+     "path": "morphic/app/api/upload/route.ts",
+     "lineStart": 48,
+     "lineEnd": 53,
+     "quote": "{ error: 'File too large (max 5MB)' },"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q11",
+   "target": "seed:quests:organized-study-morphic/quiz/3b77a55594eb9c20",
+   "phase": "after",
+   "title": "How the upload object key is built",
+   "body": "`uploadFileToR2` builds `filePath` as the user id, then `chats`, then the chat id from the form data, then `Date.now()` joined with a hyphen to the sanitized file name. Ownership is expressed by the user-id prefix. The chat id is not verified, and the bucket objects are readable by anyone who has the URL.\n\n- *chatId first, original name*: the user id comes first, and the name is sanitized and lowercased.\n- *Random UUID, no folders*: no UUID is generated; the key has folder-like segments.\n- *Upload date and a content hash*: the timestamp is Date.now() in milliseconds, and nothing hashes the file.",
+   "excerpts": [
+    {
+     "path": "morphic/app/api/upload/route.ts",
+     "lineStart": 77,
+     "lineEnd": 78,
+     "quote": "const filePath = `${userId}/chats/${chatId}/${Date.now()}-${sanitizedFileName}`"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q12",
+   "target": "seed:quests:organized-study-morphic/quiz/cfc56c20c925d8a2",
+   "phase": "after",
+   "title": "What regenerate does with an unknown message id",
+   "body": "If `findIndex` returns -1, prepareMessages falls back to `Math.max(lastAssistantIndex, lastUserIndex)`, the latest message that has either role. Here that is the final assistant reply. An assistant target is deleted with everything after it, and the earlier messages are returned so a new reply is generated.\n\n- *Throws Message not found*: that error is thrown only when the chat has no user or assistant message to fall back to.\n- *Restarts from the first user message*: the fallback looks for the last messages, not the first.\n- *Appends without deleting*: an assistant target is always deleted before regeneration.",
+   "excerpts": [
+    {
+     "path": "morphic/lib/streaming/helpers/prepare-messages.ts",
+     "lineStart": 39,
+     "lineEnd": 49,
+     "quote": "messageIndex = Math.max(lastAssistantIndex, lastUserIndex)"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q13",
+   "target": "seed:quests:organized-study-morphic/quiz/289fb67a8e94fec9",
+   "phase": "after",
+   "title": "Why regeneration deletes before it answers",
+   "body": "For an assistant target, prepareMessages calls `deleteMessagesFromIndex` and returns the in-memory messages before that index. This happens while the messages are being prepared, before the model is called. If the new stream then fails, the old answer is already gone; there is no soft delete or undo. The guide suggests delete-after-success or tombstones as the fix.\n\n- *After the new answer is saved*: the delete comes first in the request.\n- *Soft-deleted with a flag*: the rows are deleted, and their parts cascade.\n- *After the user confirms*: no confirmation step exists.",
+   "excerpts": [
+    {
+     "path": "morphic/lib/streaming/helpers/prepare-messages.ts",
+     "lineStart": 59,
+     "lineEnd": 64,
+     "quote": "await deleteMessagesFromIndex(chatId, targetMessageId, userId)"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}
