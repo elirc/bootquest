@@ -17,6 +17,7 @@ import reviewQueueJson from './fixtures/review-queue.json';
 import tracksJson from './fixtures/tracks.json';
 import unitDetailsJson from './fixtures/unit-details.json';
 import unitsJson from './fixtures/units.json';
+import { notesFixtures, type NoteFixture } from './fixtures/notes';
 import { campaignFixtures, emptyPromotion, evidenceFixtures, explainBackFixtures, kataFixtures, promotionFixtures, studyQuestFixtures } from './fixtures/ladder';
 import { writtenFixtures } from './fixtures/written';
 import {
@@ -35,6 +36,9 @@ import {
   type CheckType,
   type TracksResponse,
   type UnitDetail,
+  type UnitNotesResponse,
+  type NoteDto,
+  type RefContentResponse,
   type UnitSummary,
   type AttemptDetailResponse,
   type EvidenceRowDto,
@@ -57,6 +61,8 @@ interface PrivateFixture {
   answerKey?: number | string;
   expected?: string;
   solution?: RevealResponse['solution'];
+  /** post-solve explanation (released by GET /notes after a verified pass or a reveal) */
+  explanation?: string;
 }
 
 interface DetailFixture {
@@ -189,6 +195,9 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
   const writtenAnswers = new Map<number, { attemptId: number; answer: string; at: number }>();
   const studyMissCards = new Set<string>();
   const studyPassed = new Set<number>();
+  // "Learn more": units with a graded study-quiz submit, and code units with a verified pass
+  const studyAnswered = new Set<number>();
+  const passedUnits = new Set<number>();
   const graded = new Set<number>();
   const awarded = new Set<number>();
   const revealed = new Map<number, number>(); // unitId -> reveal attemptId
@@ -442,6 +451,7 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
     }
     const mode = body.selfAssisted ? ('assisted' as const) : ('solo' as const);
     const attemptId = nextId++;
+    studyAnswered.add(u.id);
     recordGraded(u, 'study-quiz', attemptId, mode, passed);
     return {
       result: passed
@@ -555,6 +565,7 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
             awarded.add(id);
           }
           u.state = 'done';
+          passedUnits.add(id);
         }
         const attemptId = nextId++;
         recordGraded(u, spec!.type, attemptId, mode, result.pass);
@@ -905,6 +916,96 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
           }),
         })),
       })),
+
+    // "Learn more": mirrors server/src/api/notes-service.ts (the mock/server contract test runs both)
+    getUnitNotes: (id) =>
+      wrap((): UnitNotesResponse => {
+        const { u, d, spec } = guard(id, { needCheck: false });
+        if (spec?.type === 'study-quiz') {
+          const sq = studyQuestFixtures[String(id)];
+          const notes = sq ? (notesFixtures[sq.public.repo] ?? []) : [];
+          const kinds = new Map<string, NoteDto['targetKind']>([
+            ...(sq?.public.questions ?? []).map((q) => [q.itemKey, 'quiz'] as const),
+            ...(sq?.public.readingSteps ?? []).map((r) => [r.key, 'reading-step'] as const),
+          ]);
+          const order = new Map([...(sq?.public.readingSteps ?? []).map((r) => r.key), ...(sq?.public.questions ?? []).map((q) => q.itemKey)].map((k, n) => [k, n]));
+          const rank = (n: NoteFixture) => (n.target === 'pack' ? -1 : (order.get(n.target) ?? 1e9));
+          const sorted = [...notes].sort((a, b) => rank(a) - rank(b) || (a.noteId < b.noteId ? -1 : a.noteId > b.noteId ? 1 : 0));
+          const dto = (n: NoteFixture): NoteDto => noteDto(n, kinds);
+          const after = sorted.filter((n) => n.phase === 'after' && kinds.get(n.target) === 'quiz');
+          const answered = studyAnswered.has(id);
+          const released: NoteDto[] = [];
+          let withheld = 0;
+          let nextAt: number | null = null;
+          for (const n of after) {
+            if (answered && (studyPassed.has(id) || !studyMissCards.has(n.target))) released.push(dto(n));
+            else {
+              withheld++;
+              if (answered) nextAt = NOW + DAY_MS; // a missed question's card is due tomorrow
+            }
+          }
+          const state = after.length === 0 ? 'none' : withheld === 0 ? 'released' : released.length === 0 ? 'locked' : 'partial';
+          return {
+            unitId: id,
+            source: sq ? { repo: sq.public.repo, sha: sq.public.sha } : null,
+            readings: sorted.filter((n) => n.phase === 'before').map(dto),
+            explanations: { state, message: notesMessage(state, !answered), released, withheld, nextAt },
+            refs: [],
+            explanation: null,
+            solution: null,
+          };
+        }
+        const ownKey = spec?.type === 'explain-back' || spec?.type === 'patch-kata';
+        const isRevealed = revealed.has(id);
+        const can = !ownKey && u.kind !== 'written' && (passedUnits.has(id) || isRevealed);
+        const explanation = can ? (d.private.explanation ?? null) : null;
+        const hasAny = Boolean(d.private.explanation) && !ownKey && u.kind !== 'written';
+        return {
+          unitId: id,
+          source: null,
+          readings: [],
+          explanations: !hasAny
+            ? { state: 'none', message: 'This unit has no written explanations yet.', released: [], withheld: 0, nextAt: null }
+            : explanation
+              ? { state: 'released', message: 'Explanation of the solution.', released: [], withheld: 0, nextAt: null }
+              : { state: 'locked', message: 'The explanation unlocks after you pass (or reveal the solution).', released: [], withheld: 1, nextAt: null },
+          refs: [],
+          explanation,
+          solution: !ownKey && isRevealed && spec ? (d.private.solution ?? null) : null,
+        };
+      }),
+
+    getRefContent: (refId) =>
+      wrap((): RefContentResponse => {
+        throw err(404, 'NOT_FOUND', `content ref ${refId} not found`);
+      }),
+  };
+}
+
+/** the server's explanation messages (server/src/api/notes-service.ts), word for word */
+function notesMessage(state: UnitNotesResponse['explanations']['state'], unanswered: boolean): string {
+  if (state === 'none') return 'No written explanations for this quest yet.';
+  if (state === 'released') return 'Explanations for every question.';
+  if (unanswered) return 'Explanations unlock after you answer: submit the quiz first.';
+  return `Explanations for the questions you missed unlock when their review cards are due${state === 'partial' ? '; the ones you answered right are below' : ''}.`;
+}
+
+const ghLink = (repo: string, sha: string, path: string, a: number | null, b: number | null): string =>
+  `https://github.com/elirc/${encodeURIComponent(repo)}/blob/${sha}/${path.split('/').map(encodeURIComponent).join('/')}` +
+  (a !== null && b !== null ? (a === b ? `#L${a}` : `#L${a}-L${b}`) : '');
+
+function noteDto(n: NoteFixture, kinds: ReadonlyMap<string, NoteDto['targetKind']>): NoteDto {
+  const { repo, sha } = n.provenance;
+  return {
+    key: n.key,
+    id: n.noteId,
+    phase: n.phase,
+    target: n.target,
+    targetKind: n.target === 'pack' ? 'pack' : (kinds.get(n.target) ?? 'pack'),
+    title: n.title,
+    body: n.body,
+    excerpts: n.excerpts.map((e) => ({ ...e, url: ghLink(repo, sha, e.path, e.lineStart, e.lineEnd), refId: null })),
+    readMore: n.readMore.map((r) => ({ ...r, url: ghLink(repo, sha, r.path, r.lineStart, r.lineEnd), refId: null })),
   };
 }
 

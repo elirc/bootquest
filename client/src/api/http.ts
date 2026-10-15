@@ -31,6 +31,8 @@ import {
   type TrackUnitsResponse,
   type TracksResponse,
   type UnitDetail,
+  type UnitNotesResponse,
+  type RefContentResponse,
   type WrittenAnswerResponse,
 } from './types';
 
@@ -127,5 +129,7 @@ export function createHttpApi(baseUrl = '/api', fetchImpl: typeof fetch = (...a)
     getPassRates: () => call<PassRatesResponse>('/stats/pass-rates'),
     getReviewStats: () => call<ReviewStatsResponse>('/stats/reviews'),
     getCampaignProgress: () => call<CampaignProgressResponse>('/stats/campaign'),
+    getUnitNotes: (id) => call<UnitNotesResponse>(`${unit(id)}/notes`),
+    getRefContent: (refId) => call<RefContentResponse>(`/refs/${encodeURIComponent(String(refId))}/content`),
   };
 }

@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useApi } from '../api/context';
 import { errorText } from '../api/errors';
-import type { StudyQuestPublic, SubmitResponse, UnitDetail } from '../api/types';
+import type { StudyQuestPublic, SubmitResponse, UnitDetail, UnitNotesResponse } from '../api/types';
+import { LearnMoreButton } from '../components/LearnMore';
 import { Icon } from '../components/Icon';
 import { Chip } from '../components/ui';
 import { InlineProse } from '../lib/prose';
@@ -41,6 +42,14 @@ function StudyQuest({ detail, sq }: { detail: UnitDetail; sq: StudyQuestPublic }
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(detail.unit.state === 'done');
   const refreshTracks = useTracksRefresh();
+  // "Learn more": which items have a reading, and (after an answer) which have a released explanation
+  const [notes, setNotes] = useState<UnitNotesResponse | null>(null);
+  const loadNotes = useCallback(() => {
+    api.getUnitNotes?.(unitId)?.then(setNotes, () => setNotes(null));
+  }, [api, unitId]);
+  useEffect(loadNotes, [loadNotes]);
+  const hasNotes = (itemKey: string) =>
+    notes !== null && (notes.readings.some((n) => n.target === itemKey) || notes.explanations.released.some((n) => n.target === itemKey));
   const complete = answers.every((a) => a !== null);
   const answered = answers.filter((a) => a !== null).length;
 
@@ -52,6 +61,7 @@ function StudyQuest({ detail, sq }: { detail: UnitDetail; sq: StudyQuestPublic }
       const r = await api.submitUnit(unitId, { answers: answers as number[], selfAssisted: assisted });
       setSubmit(r);
       if (r.verdict === 'pass') setDone(true);
+      loadNotes(); // explanations may have been released by this answer
       refreshTracks(); // W10: a pass changes campaign / track progress (and may unlock an act)
     } catch (e) {
       setError(errorText(e));
@@ -74,6 +84,7 @@ function StudyQuest({ detail, sq }: { detail: UnitDetail; sq: StudyQuestPublic }
             <Chip tone="success">quest done</Chip>
           </span>
         )}
+        <LearnMoreButton unitId={unitId} compact label="Readings & explanations" />
       </div>
       <p className="muted small">
         Read these sections in the repo (pinned at <code>{sq.sha.slice(0, 7)}</code>), then take the quiz gate: {sq.questions.length} questions, pass mark{' '}
@@ -88,6 +99,7 @@ function StudyQuest({ detail, sq }: { detail: UnitDetail; sq: StudyQuestPublic }
             <span className="muted small">
               {r.path}:{r.lines.start}-{r.lines.end}
             </span>
+            {hasNotes(r.key) && <LearnMoreButton unitId={unitId} target={r.key} subject={readingTitle(r.title, r.path)} compact />}
           </li>
         ))}
       </ol>
@@ -118,6 +130,12 @@ function StudyQuest({ detail, sq }: { detail: UnitDetail; sq: StudyQuestPublic }
                   {outcome && (
                     <span className={`study-mark ${outcome.correct ? 'study-right' : 'study-wrong'}`} data-testid={`mark-${qi + 1}`}>
                       {outcome.correct ? ' correct' : ' incorrect'}
+                    </span>
+                  )}
+                  {/* inside the legend: a disabled fieldset (after submit) never disables its first legend's controls */}
+                  {hasNotes(q.itemKey) && (
+                    <span className="question-learn-more" data-testid={`learn-more-q${qi + 1}`}>
+                      <LearnMoreButton unitId={unitId} target={q.itemKey} subject={`Q${qi + 1}`} compact />
                     </span>
                   )}
                 </legend>
