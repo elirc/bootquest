@@ -1,0 +1,416 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "ww19",
+ "sha": "34f69ebb4a40d998eafafcad35b96f8fcbffd1c4",
+ "guides": [
+  "astraupskill/README.md",
+  "astraupskill/01-CODEBASE-MAP.md",
+  "astraupskill/02-CONCEPTS.md",
+  "astraupskill/03-WORKED-CHANGE.md",
+  "astraupskill/04-TESTING-AND-DEBUGGING.md",
+  "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+  "docs/learning/concepts-demonstrated.md"
+ ],
+ "excludeDirs": [
+  "astraupskill/snapshots"
+ ],
+ "items": [
+  {
+   "id": "q01-replay-new-payload",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 8,
+     "end": 8
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/workflow-run-service.ts",
+     "lineStart": 51,
+     "lineEnd": 56
+    }
+   ],
+   "prompt": "User u1 replays key \"k\" with a new displayName and a new input. What does startWorkflowRun return?",
+   "answer": "The original run unchanged, as the new payload is ignored",
+   "distractors": [
+    "The original run, now updated with the new displayName",
+    "A 409 conflict, as the payload differs from the first call",
+    "A second run, because the payload hash no longer matches"
+   ],
+   "explanation": "The scoped key u1:k is found by findWorkflowRunByIdempotencyKey and `if (existing) return existing;` runs before anything else. The key is request identity, not payload equality; nothing stores or compares a fingerprint."
+  },
+  {
+   "id": "q02-two-users-same-key",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 7,
+     "end": 7
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/workflow-run-service.ts",
+     "lineStart": 51,
+     "lineEnd": 51
+    }
+   ],
+   "prompt": "Users u1 and u2 each start a run with the idempotency key \"k\". How many runs exist afterwards?",
+   "answer": "Two, stored under the keys u1:k and u2:k",
+   "distractors": [
+    "One, as the second caller gets u1's run back",
+    "One, and the second call fails with a 409",
+    "None, since a shared key is refused outright"
+   ],
+   "explanation": "scopedIdempotencyKey is `${user.id}:${input.idempotencyKey}`, so the keys differ per user and each gets its own run (the lab asserts runs.size becomes 2)."
+  },
+  {
+   "id": "q03-seed-failure",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 18,
+     "end": 22
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/workflow-run-service.ts",
+     "lineStart": 66,
+     "lineEnd": 83
+    },
+    {
+     "path": "src/services/workflow-engine-service.ts",
+     "lineStart": 363,
+     "lineEnd": 382
+    }
+   ],
+   "prompt": "The run-creation transaction commits, then seedRunExecution throws. What is left in the database?",
+   "answer": "A committed PENDING run with no RUN_CREATED event or step",
+   "distractors": [
+    "Nothing, because the seed failure rolls the run back with it",
+    "A FAILED run, with the error stored in its RUN_CREATED event",
+    "A PENDING run whose first step is queued for the next worker"
+   ],
+   "explanation": "Creation and seeding are separate $transaction calls. The run commits first; the seed's own transaction (event + first step) rolls back alone, so the run exists but cannot progress."
+  },
+  {
+   "id": "q04-concurrent-first",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 14,
+     "end": 14
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/workflow-run-service.ts",
+     "lineStart": 52,
+     "lineEnd": 77
+    },
+    {
+     "path": "prisma/schema.prisma",
+     "lineStart": 157,
+     "lineEnd": 157
+    },
+    {
+     "path": "src/lib/api/route-helpers.ts",
+     "lineStart": 47,
+     "lineEnd": 60
+    }
+   ],
+   "prompt": "Two first requests with the same key arrive at once and both miss the lookup. What do the two clients get?",
+   "answer": "One 201 with the run; the other a 500 from the unique index",
+   "distractors": [
+    "Both get 201 with the same run, as the database merges them",
+    "Both get 201 with two separate runs under the same key",
+    "One 201; the other a 409 that tells it to replay the key"
+   ],
+   "explanation": "Check-then-create: both reach createWorkflowRun, the unique idempotencyKey index rejects one insert, and jsonError maps the unrecognized Prisma error to 500. The fix is to catch P2002 and re-read the winner."
+  },
+  {
+   "id": "q05-p2002-fix",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/03-WORKED-CHANGE.md",
+    "lines": {
+     "start": 38,
+     "end": 39
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/workflow-run-service.ts",
+     "lineStart": 66,
+     "lineEnd": 77
+    }
+   ],
+   "prompt": "The worked exercise turns the losing concurrent create into a replay. What does the catch block do?",
+   "answer": "On Prisma code P2002, re-run the lookup and return that run",
+   "distractors": [
+    "On a timeout, retry the transaction once with a fresh key",
+    "On Prisma code P2025, create the run again under a new key",
+    "On a unique error, return a 409 and let the client retry"
+   ],
+   "explanation": "Wrap the $transaction in try/catch, test for the unique-violation code P2002, call findWorkflowRunByIdempotencyKey(scopedIdempotencyKey) and return it, with a lab case asserting no seed runs."
+  },
+  {
+   "id": "q06-no-active-version",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/03-WORKED-CHANGE.md",
+    "lines": {
+     "start": 20,
+     "end": 22
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/workflow-run-service.ts",
+     "lineStart": 58,
+     "lineEnd": 62
+    }
+   ],
+   "prompt": "A first call names a definition with no active version. What happens?",
+   "answer": "A 404 ApiError after only the lookup and version calls",
+   "distractors": [
+    "A 500, since the parse step fails on a missing definition",
+    "A PENDING run is created, then marked FAILED by the seed",
+    "A 400 from Zod, as the definition id fails validation"
+   ],
+   "explanation": "findActiveWorkflowVersionForDefinition returns null and the service throws ApiError(404) before parsing or opening a transaction, so no rows are written."
+  },
+  {
+   "id": "q07-retired-definition",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 28,
+     "end": 28
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/workflow-run-service.ts",
+     "lineStart": 52,
+     "lineEnd": 64
+    }
+   ],
+   "prompt": "A run was started with key k; its definition has since been retired. The same user replays k. What happens?",
+   "answer": "The old run comes back, since a replay skips validation",
+   "distractors": [
+    "A 404, as no active version exists for the definition now",
+    "A 500, since the stored definition fails to parse now",
+    "A new run on the version that replaced the retired one"
+   ],
+   "explanation": "The replay branch returns before the version lookup and the parse, so validation never runs for a replay. Correct for idempotency, but a retired definition does not affect replays."
+  },
+  {
+   "id": "q08-frozen-version",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 32,
+     "end": 32
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/workflow-run-service.ts",
+     "lineStart": 66,
+     "lineEnd": 76
+    }
+   ],
+   "prompt": "Version v2 of a definition is activated while a run started on v1 is in flight. Which version does that run follow?",
+   "answer": "v1, since its workflowVersionId was frozen at start time",
+   "distractors": [
+    "v2, as runs always follow the active version of their workflow",
+    "v2 for any step that has not started yet, v1 for the rest",
+    "Neither; the run is cancelled when a newer version activates"
+   ],
+   "explanation": "createWorkflowRun stores workflowVersionId: activeVersion.id and currentStepKey from that version's parsed definition. Later activations do not touch in-flight runs."
+  },
+  {
+   "id": "q09-replay-status",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "lines": {
+     "start": 34,
+     "end": 34
+    }
+   },
+   "cites": [
+    {
+     "path": "src/app/api/workflow-runs/route.ts",
+     "lineStart": 29,
+     "lineEnd": 35
+    }
+   ],
+   "prompt": "POST /api/workflow-runs is a replay of an existing key. Which status code does the client see?",
+   "answer": "201 Created, the same as for a brand-new run",
+   "distractors": [
+    "200 OK, which marks the response as a replay",
+    "409 Conflict, since the key has been used already",
+    "303 See Other, pointing at the existing run"
+   ],
+   "explanation": "The route always returns jsonOk(run, { status: 201 }); startWorkflowRun does not tell it whether the run was new. The review lists this as a low finding: clients cannot tell a replay from a create."
+  },
+  {
+   "id": "q10-approver-visibility",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "lines": {
+     "start": 37,
+     "end": 37
+    }
+   },
+   "cites": [
+    {
+     "path": "src/repositories/workflow-run-repository.ts",
+     "lineStart": 17,
+     "lineEnd": 24
+    },
+    {
+     "path": "src/lib/auth/permissions.ts",
+     "lineStart": 42,
+     "lineEnd": 44
+    }
+   ],
+   "prompt": "Which runs can a user with the APPROVER role list?",
+   "answer": "Each run in the system, as VIEWER is the one limited role",
+   "distractors": [
+    "Only runs that wait on that approver's decision",
+    "Only runs that the approver started personally",
+    "No runs at all, since APPROVER lacks runs:read"
+   ],
+   "explanation": "canReadAllRuns returns role !== \"VIEWER\", so APPROVER gets an empty where clause. Only VIEWER is filtered by startedById; APPROVER does have runs:read."
+  },
+  {
+   "id": "q11-pending-to-succeeded",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 18,
+     "end": 20
+    }
+   },
+   "cites": [
+    {
+     "path": "src/lib/workflows/run-state-machine.ts",
+     "lineStart": 13,
+     "lineEnd": 36
+    }
+   ],
+   "prompt": "Code calls assertValidRunTransition(\"PENDING\", \"SUCCEEDED\"). What happens?",
+   "answer": "It throws, as PENDING may go to RUNNING or CANCELLED",
+   "distractors": [
+    "It passes, as any status may move straight to SUCCEEDED",
+    "It passes, as long as the run has no steps that remain",
+    "It returns false, and the caller keeps the old status"
+   ],
+   "explanation": "runTransitions.PENDING is [\"RUNNING\", \"CANCELLED\"], so the function throws `Invalid run transition from PENDING to SUCCEEDED.` It never returns a boolean."
+  },
+  {
+   "id": "q12-zod-error-500",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "lines": {
+     "start": 36,
+     "end": 36
+    }
+   },
+   "cites": [
+    {
+     "path": "src/lib/api/route-helpers.ts",
+     "lineStart": 47,
+     "lineEnd": 61
+    },
+    {
+     "path": "src/app/api/workflow-runs/route.ts",
+     "lineStart": 29,
+     "lineEnd": 37
+    }
+   ],
+   "prompt": "A POST body is missing idempotencyKey, so startWorkflowRunSchema.parse throws a ZodError. What does the client get?",
+   "answer": "A 500 Internal server error, as jsonError special-cases ApiError",
+   "distractors": [
+    "A 400 with the Zod issues listed in error.details",
+    "A 422, because the body is valid JSON that fails the schema",
+    "A 201, as the route fills in a generated idempotency key"
+   ],
+   "explanation": "jsonError special-cases only ApiError; every other error is logged and becomes a 500 with details: null. The review flags this as a low finding."
+  },
+  {
+   "id": "f01-happy-path-order",
+   "kind": "flashcard",
+   "source": {
+    "path": "astraupskill/03-WORKED-CHANGE.md",
+    "lines": {
+     "start": 15,
+     "end": 15
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/workflow-run-service.ts",
+     "lineStart": 51,
+     "lineEnd": 91
+    }
+   ],
+   "front": "startWorkflowRun call order on a first start",
+   "back": "lookup -> version -> parse -> tx (create) -> tx-done -> seed -> reload. A replay stops after lookup; a missing version stops after version (404); a parse failure stops after parse."
+  },
+  {
+   "id": "f02-repair-gap",
+   "kind": "flashcard",
+   "source": {
+    "path": "astraupskill/README.md",
+    "lines": {
+     "start": 35,
+     "end": 35
+    }
+   },
+   "cites": [
+    {
+     "path": "src/lib/auth/permissions.ts",
+     "lineStart": 13,
+     "lineEnd": 35
+    }
+   ],
+   "front": "The runs:repair gap",
+   "back": "runs:repair exists (ADMIN and OPERATOR hold it) but no route or service uses it. A run whose seed failed stays PENDING with no steps, and replays return it without seeding again; the repair path still has to be designed."
+  },
+  {
+   "id": "f03-step-transitions",
+   "kind": "flashcard",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 18,
+     "end": 18
+    }
+   },
+   "cites": [
+    {
+     "path": "src/lib/workflows/run-state-machine.ts",
+     "lineStart": 22,
+     "lineEnd": 30
+    }
+   ],
+   "front": "Step status transitions (run-state-machine.ts)",
+   "back": "PENDING -> QUEUED, WAITING_APPROVAL, SUCCEEDED or SKIPPED; QUEUED -> RUNNING or FAILED; RUNNING -> SUCCEEDED or FAILED; WAITING_APPROVAL -> SUCCEEDED or FAILED; FAILED -> QUEUED (retry); SUCCEEDED and SKIPPED are terminal."
+  }
+ ]
+}
