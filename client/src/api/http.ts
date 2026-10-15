@@ -13,6 +13,7 @@ import {
   type KataKeyResponse,
   type KataScoreResponse,
   type KataStatsResponse,
+  type ModelAnswerResponse,
   type BootQuestApi,
   type ClientErrorCode,
   type Dashboard,
@@ -26,6 +27,7 @@ import {
   type TrackUnitsResponse,
   type TracksResponse,
   type UnitDetail,
+  type WrittenAnswerResponse,
 } from './types';
 
 type Init = { method: 'POST'; body: unknown };
@@ -89,6 +91,9 @@ export function createHttpApi(baseUrl = '/api', fetchImpl: typeof fetch = (...a)
     revealUnit: (id) => post<RevealResponse>(`${unit(id)}/reveal`),
     getSolution: (id) => call<RevealResponse>(`${unit(id)}/solution`),
     selfAttest: (id) => post<SelfAttestResponse>(`${unit(id)}/self-attest`),
+    // Whitelisted body: only the learner's own answer text + the boolean selfAssisted.
+    answerWritten: (id, b) => post<WrittenAnswerResponse>(`${unit(id)}/answer`, { answer: b.answer, selfAssisted: b.selfAssisted }),
+    getModelAnswer: (id) => call<ModelAnswerResponse>(`${unit(id)}/model-answer`),
     getReviewQueue: (limit) => call<ReviewQueueResponse>(`/reviews/queue${limit !== undefined ? `?limit=${limit}` : ''}`),
     gradeReview: (itemId, grade) => post<GradeResponse>(`/reviews/${encodeURIComponent(String(itemId))}/grade`, { grade }),
     getCampaign: (trackId) => call<CampaignResponse>(`/tracks/${encodeURIComponent(trackId)}/campaign`),

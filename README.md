@@ -67,6 +67,8 @@ Commands:
 - `bootquest run`: free and unrecorded.
 - `bootquest submit`: recorded. Add `--assisted` to self-flag help.
 - `bootquest status`
+- `bootquest today`: today's slate (slots and done state), reviews due, streak, freeze
+  tokens and next up per track. Read-only; it always exits 0, even when the server is down.
 - `bootquest sync`
 - `bootquest mutate`: the mutation gate on solo-project units.
 - `bootquest reset --yes-really`: see below.

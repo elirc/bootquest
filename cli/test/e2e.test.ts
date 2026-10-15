@@ -243,6 +243,19 @@ describe('bootquest CLI against the real server', () => {
     expect(r.stdout).toMatch(/State: +done/);
   });
 
+  it('B4 today: the real dashboard as a daily summary (slate slots + done state, reviews, streak, tokens, next up), exit 0', async () => {
+    const r = await cli(['today'], tmp); // no .bootquest.json needed
+    expect(r.stderr).toBe('');
+    expect(r.code).toBe(0);
+    expect(r.stdout).toMatch(/^BootQuest today: \d{4}-\d{2}-\d{2} {2}\(http:\/\/127\.0\.0\.1:\d+\)$/m);
+    expect(r.stdout).toMatch(/^Slate: \d+\/\d+ done \(\w+\)$/m);
+    expect(r.stdout).toMatch(/^ {2}\[[x ]\] .*drill set/m);
+    expect(r.stdout).toMatch(/^Reviews due: \d+$/m);
+    expect(r.stdout).toMatch(/^Streak: \d+ days? \(longest \d+\) - today (complete|not complete yet)$/m);
+    expect(r.stdout).toMatch(/^Freeze tokens: \d+$/m);
+    expect(r.stdout).toMatch(/^Next up:$/m);
+  });
+
   it('unitId config works too (resolved without the key lookup)', async () => {
     const units = (await (await fetch(`${base}/api/tracks/js/units`)).json()) as { units: { id: number; key: string }[] };
     const id = units.units.find((u) => u.key === drill.key)!.id;
@@ -384,5 +397,10 @@ describe('bootquest CLI against the real server', () => {
     expect(r.stderr).toMatch(new RegExp(`Cannot reach the BootQuest server at http://127\\.0\\.0\\.1:${port} \\(ECONNREFUSED\\)`));
     expect(r.stderr).toMatch(/npm run serve/);
     expect(r.stderr).not.toMatch(/\n\s+at /); // no stack trace
+    // B4: `today` is informational: the same down server is reported honestly with exit 0
+    const t = await cli(['today']);
+    expect(t.code).toBe(0);
+    expect(t.stdout).toMatch(/Today: unavailable - the server could not be read/);
+    expect(t.stderr).toMatch(new RegExp(`Cannot reach the BootQuest server at http://127\\.0\\.0\\.1:${port} \\(ECONNREFUSED\\)`));
   });
 });

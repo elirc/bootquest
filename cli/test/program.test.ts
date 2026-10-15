@@ -341,3 +341,81 @@ describe('reset (W7): delegates to the server-side guarded reset', () => {
     expect(r.err.join('\n')).toMatch(/BOOTQUEST_DB is not set/);
   });
 });
+
+describe('today (B4): read-only daily summary, always exit 0', () => {
+  const slateDash = () => ({
+    ...dashboard(),
+    streak: { current: 1, longest: 5, tokens: 2, slateDaysBanked: 0, todayComplete: true },
+    slate: {
+      day: '2026-10-07',
+      status: 'partial',
+      items: [
+        { slot: 'drills:js', kind: 'drill-set' as const, track: 'js', size: 5, done: true },
+        { slot: 'campaign', kind: 'campaign-step' as const, done: false },
+        { slot: 'reviews', kind: 'review-clear' as const, done: true },
+      ],
+    },
+  });
+
+  it('prints the slate with done state, reviews due, streak, tokens and next up per track from ONE GET', async () => {
+    const { fetch, calls } = fakeFetch({ 'GET /api/dashboard': { status: 200, body: slateDash() } });
+    const io = captureIo(proj, fetch);
+    expect(await runCli(['today'], io)).toBe(EXIT.OK);
+    expect(io.stderr).toEqual([]);
+    const out = io.stdout.join('\n');
+    expect(out).toContain(`BootQuest today: 2026-10-07  (${DEFAULT_SERVER})`);
+    expect(out).toContain('Slate: 2/3 done (partial)');
+    expect(out).toContain('  [x] js drill set (5 drills)');
+    expect(out).toContain('  [ ] campaign step');
+    expect(out).toContain('  [x] clear the review queue');
+    expect(out).toContain('Reviews due: 4');
+    expect(out).toContain('Streak: 1 day (longest 5) - today complete');
+    expect(out).toContain('Freeze tokens: 2');
+    expect(out).toMatch(/Next up:\n {2}js {7}Swap two values \[drill\] id 12\n {2}csharp {3}\(nothing available\)/);
+    // read-only: exactly one request, a GET, no body
+    expect(calls.map((c) => `${c.method} ${new URL(c.url).pathname}`)).toEqual(['GET /api/dashboard']);
+    expect(calls[0]!.body).toBeUndefined();
+  });
+
+  it('works without a .bootquest.json and with an empty slate / no next-up', async () => {
+    const empty = { ...dashboard(), slate: { day: '2026-10-07', status: 'open', items: [] }, nextUp: [] };
+    const { fetch } = fakeFetch({ 'GET /api/dashboard': { status: 200, body: empty } });
+    const bare = mkdtempSync(join(tmpdir(), 'bq-cli-today-'));
+    try {
+      const io = captureIo(bare, fetch);
+      expect(await runCli(['today'], io)).toBe(EXIT.OK);
+      const out = io.stdout.join('\n');
+      expect(out).toContain('Slate: 0/0 done (open)');
+      expect(out).toContain('  (no slate slots today)');
+      expect(out).toMatch(/Next up:\n {2}\(nothing\)/);
+      expect(out).toContain('Streak: 3 days (longest 5) - today not complete yet');
+    } finally {
+      rmSync(bare, { recursive: true, force: true });
+    }
+  });
+
+  it('server down: honest message, exit 0, no stack trace', async () => {
+    const io = captureIo(proj, (async () => {
+      throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } });
+    }) as never);
+    expect(await runCli(['today'], io)).toBe(EXIT.OK);
+    expect(io.stdout.join('\n')).toMatch(/Today: unavailable - the server could not be read/);
+    expect(io.stdout.join('\n')).not.toMatch(/Slate:|Streak:/);
+    expect(io.stderr.join('\n')).toMatch(/Cannot reach the BootQuest server at http:\/\/127\.0\.0\.1:4178 \(ECONNREFUSED\)/);
+    expect(io.stderr.join('\n')).not.toMatch(/\n\s+at /);
+  });
+
+  it('a refusing / non-BootQuest server or a bad --server URL also exits 0 with the reason', async () => {
+    const refusing = captureIo(proj, fakeFetch({ 'GET /api/dashboard': { status: 500, body: { error: { code: 'INTERNAL', message: 'boom' } } } }).fetch);
+    expect(await runCli(['today'], refusing)).toBe(EXIT.OK);
+    expect(refusing.stderr.join('\n')).toMatch(/Server refused \(INTERNAL, HTTP 500\): boom/);
+    const html = captureIo(proj, fakeFetch({ 'GET /api/dashboard': { status: 200, body: '<html>' } }).fetch);
+    expect(await runCli(['today'], html)).toBe(EXIT.OK);
+    expect(html.stderr.join('\n')).toMatch(/non-JSON/);
+    const { fetch, calls } = fakeFetch({});
+    const badUrl = captureIo(proj, fetch);
+    expect(await runCli(['today', '--server', 'ftp://x'], badUrl)).toBe(EXIT.OK);
+    expect(badUrl.stderr.join('\n')).toMatch(/must be http\(s\)/);
+    expect(calls).toHaveLength(0);
+  });
+});

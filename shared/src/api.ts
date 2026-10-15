@@ -348,7 +348,9 @@ export type PublicCheck = z.infer<typeof PublicCheck>;
  *                         public check spec)
  *           starter       scaffold code
  *           snippet       predict-output: the code the learner reads
- *           rubric        written: self-assessment rubric items
+ *           rubric        written: self-assessment rubric items — served only
+ *                         AFTER the learner's answer is recorded (B4: a rubric
+ *                         line can quote the model answer's key point)
  *   PRIVATE solution      reference solution / model answer (reveal only)
  *           explanation   post-solve explanation (not served yet)
  *           hints         progressive hints (not served yet)
@@ -507,8 +509,17 @@ export const UnitDetailResponse = z
     starter: z.string().nullable(),
     /** predict-output: the code to read and predict */
     snippet: z.string().nullable(),
-    /** written units: self-assessment rubric */
+    /**
+     * written units: self-assessment rubric. B4: null until the learner's own answer is
+     * recorded — a rubric line can quote the model answer's key point (jstrain verbal
+     * items: "Gives the key answer: ..."), so serving it earlier would be an answer oracle.
+     */
     rubric: z.array(z.object({ id: z.string(), label: z.string() }).strict()).nullable(),
+    /**
+     * B4 written units only: whether the learner's own (non-empty) answer is already
+     * recorded, so the player can show the model answer without an expected-403 probe.
+     */
+    written: z.object({ answered: z.boolean() }).strict().optional(),
     /** W4: GitHub content_refs this unit renders from (program milestone, lesson guide); optional for older clients */
     refs: z.array(RefLink).optional(),
     /**
@@ -604,6 +615,9 @@ export type WrittenAnswerResponse = z.infer<typeof WrittenAnswerResponse>;
 export const ModelAnswerResponse = z
   .object({
     attemptId: z.number(),
+    /** B4: the learner's own first recorded answer (the one the model answer is compared against) */
+    answer: z.string(),
+    answeredAt: z.number(),
     modelAnswer: z.string(),
     rubric: z.array(z.object({ id: z.string(), label: z.string() }).strict()),
   })
