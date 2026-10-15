@@ -38,19 +38,19 @@
    "target": "pack",
    "phase": "before",
    "title": "Concept: a funnel is a tiny state machine per person",
-   "body": "`computeFunnel` groups events by person, sorts each person's events by time, and walks them with two variables: `level` (how many steps are done) and `anchor` (the time of the step-1 event that started the chain).\n\nWhile `level` is 0, only an event that matches step 1 does anything. Once a step-1 event sets the anchor, the walker only looks for the NEXT step, and only accepts it if its time passes a window check against the anchor. Events that match nothing are simply skipped, which is what \"ordered with gaps\" means.\n\nTwo questions to keep asking as you read: when exactly is `anchor` assigned, and what is the window compared against? The counts at the end come from `level`: a person who reached level k counts at steps 1 to k.",
+   "body": "`computeFunnel` turns a list of events into step counts. It groups events by person and then walks each person's events with a couple of local variables: `level` (how many steps are done) and `anchor` (a timestamp the window is measured from).\n\nTreat it as a tiny state machine and trace it by hand. Write down, for each event, which branch of the loop it takes. Pin down four things from the code rather than from the contract page: the order the events are walked in, the exact moment `anchor` is assigned (and whether it can ever be reassigned), what the window check compares the event time against and with which operator, and what happens to an event that matches a step out of order.\n\nThen read the last lines of the loop to see how a person's final `level` turns into counts per step. `computeFunnelBreakdown` sits next to it: note how it decides which group a person belongs to, and whether it sorts first.",
    "excerpts": [
+    {
+     "path": "docs/funnel-semantics.md",
+     "lineStart": 7,
+     "lineEnd": 7,
+     "quote": "## What a funnel counts"
+    },
     {
      "path": "packages/insights/src/funnel.ts",
      "lineStart": 51,
      "lineEnd": 53,
      "quote": "let level = 0; // steps completed so far"
-    },
-    {
-     "path": "packages/insights/src/funnel.ts",
-     "lineStart": 67,
-     "lineEnd": 68,
-     "quote": "for (let k = 1; k <= level; k++) counts[k - 1]++;"
     }
    ],
    "readMore": [
@@ -67,7 +67,7 @@
    "target": "pack",
    "phase": "before",
    "title": "Concept: assigning variants with a hash instead of a table",
-   "body": "Pulse never stores which variant a user got. Instead, every evaluator (the server, the SDK and backfill jobs) computes `bucket(flagKey, distinctId, salt)`: a 32-bit FNV-1a hash finished with murmur3's fmix32 mixer, divided by 2^32 to land in [0, 1). Same inputs, same number, on every machine, with no database and no communication.\n\n`evaluateFlag` uses that number twice with different salts: once for the rollout gate (\"rollout\") and once for the weighted variant pick (\"variant\"), so the two draws are independent. Before either draw it checks whether the flag is enabled and whether the user matches the targeting filters.\n\nWhile reading, ask what is inside the hashed string, and what changes (or does not change) when an operator edits a setting such as the rollout percentage.",
+   "body": "Pulse assigns users to flag variants with a hash instead of an assignment table. Every evaluator (the server, the SDK and backfill jobs) calls `bucket(...)` in `packages/shared/src/bucketing.ts`, which hashes a string with FNV-1a, finishes it with murmur3's fmix32 mixer and divides by 2^32 to land in [0, 1). Same inputs give the same number on every machine, with no database and no communication.\n\nWhile reading, work out for yourself exactly what goes into the hashed string and why each part is there. Then read `evaluateFlag` in `packages/flags/src/evaluate.ts` top to bottom and list its checks in the order they run, with the reason string each early return gives. Note how many times it calls `bucket` and with which salts. Finally, take one user and a flag, change only the rollout percentage, and decide from the code whether that user's numbers change.",
    "excerpts": [
     {
      "path": "packages/shared/src/bucketing.ts",
@@ -77,9 +77,9 @@
     },
     {
      "path": "docs/adr/0011-bucketing-and-experiment-methodology.md",
-     "lineStart": 14,
-     "lineEnd": 15,
-     "quote": "No assignment table; no write on evaluation."
+     "lineStart": 7,
+     "lineEnd": 9,
+     "quote": "S14 closes the analytics loop: the product ships feature flags, and measures their effect with A/B experiments. Two design questions decide everything downstream: **how is a user assigned to a variant**, and **how do we decide an experiment worked**."
     }
    ],
    "readMore": [
@@ -118,7 +118,7 @@
    "target": "seed:quests:pulse/quiz/75844d12fc8232eb",
    "phase": "after",
    "title": "Why the window edge is inside the window",
-   "body": "The check at funnel.ts:62 is `t <= anchor + windowMs`, with `<=`, not `<`. A step at exactly anchor + 7 days therefore counts; one millisecond later fails. The contract states it the same way, so analysts and the code agree.\n\n- \"Half-open, ending just before\" would need `<`.\n- \"Only when it shares a timestamp with another event\" mixes up rule 5 (same-timestamp ordering), which is about ties between steps, not the window edge.\n- \"Rounded to whole days\" is wrong: `windowMs` is `spec.windowDays * DAY_MS` and timestamps are compared in milliseconds.",
+   "body": "The check at funnel.ts:62 is `t <= anchor + windowMs`, with `<=`, not `<`, and it is the same check for every step after the first. A step at exactly anchor + 7 days therefore counts; one millisecond later fails. The contract states it the same way, so analysts and the code agree.\n\n- \"Half-open, ending just before\" would need `<`.\n- \"Only for the last step, with a strict < for earlier steps\" is wrong: there is a single comparison, and line 62 applies `<=` to every step after the first.\n- \"Rounded to whole days\" is wrong: `windowMs` is `spec.windowDays * DAY_MS` and timestamps are compared in milliseconds.",
    "excerpts": [
     {
      "path": "packages/insights/src/funnel.ts",
@@ -131,6 +131,12 @@
      "lineStart": 18,
      "lineEnd": 19,
      "quote": "A conversion at *exactly* anchor + window counts; one millisecond later"
+    },
+    {
+     "path": "packages/insights/src/funnel.ts",
+     "lineStart": 62,
+     "lineEnd": 62,
+     "quote": "} else if (level < n && matchesStep(e, spec.steps[level]) && t <= anchor + windowMs) {"
     }
    ],
    "readMore": []
@@ -178,7 +184,7 @@
    "target": "seed:quests:pulse/quiz/8f4184aa5f5295a7",
    "phase": "after",
    "title": "A breakdown labels each person once",
-   "body": "`computeFunnelBreakdown` first scans the events and, for each person, stores a label from the FIRST step-1 event it sees (`if (!labelOf.has(person))`). Then it puts every event of that person into that one group and runs a normal funnel per group. A person whose first view was on Firefox is in the Firefox group, even if all later events say Chrome.\n\n- \"Both groups\" would double-count people; the label map holds one label per person.\n- \"The majority browser\" is not computed anywhere.\n- \"(none)\" is only used when the property is missing or null on that first event.",
+   "body": "`computeFunnelBreakdown` first scans the events and, for each person, stores a label from the FIRST step-1 event it meets (`if (!labelOf.has(person))`). Then it puts every event of that person into that one group and runs a normal funnel per group. A person whose first view was on Firefox is in the Firefox group, even if all later events say Chrome.\n\nOne precision: \"first\" here means first in the order the events arrive in the input array. This loop does not sort; the time sort happens only inside `computeFunnel` (funnel.ts:50). With time-ordered input the two agree.\n\n- \"Both groups\" would double-count people; the label map holds one label per person.\n- \"The majority browser\" is not computed anywhere.\n- \"(none)\" is only used when the property is missing or null on that first event.",
    "excerpts": [
     {
      "path": "packages/insights/src/funnel.ts",
@@ -304,7 +310,7 @@
    "target": "seed:quests:pulse/quiz/1259cf058872d743",
    "phase": "after",
    "title": "The 60-second \"undead key\" window",
-   "body": "Authenticating every `POST /e` with a database lookup would make auth the bottleneck, so the resolver caches the hash-to-key mapping in process. Each cache entry expires `ttlMs` after it was stored, and `ttlMs` defaults to 60_000. A key revoked in the database keeps working on that instance until its cached entry expires: at most 60 seconds. ADR-0003 states this cost on purpose.\n\n- \"Not at all\" describes the instant cache-bust on revoke, which is deferred to a later sprint.\n- \"For the process lifetime\" is wrong: entries have an expiry time.\n- \"24 hours\" mixes in `lastUsedAt`, which is a ~1% sampled write and has nothing to do with expiry.",
+   "body": "Authenticating every `POST /e` with a database lookup would make auth the bottleneck, so the resolver caches the hash-to-key mapping in process. Each cache entry expires `ttlMs` after it was stored, and `ttlMs` defaults to 60_000. A key revoked in the database keeps working on that instance until its cached entry expires: at most 60 seconds. ADR-0003 states this cost on purpose.\n\n- \"Not at all\" describes an instant cache-bust on revoke, which does not exist yet: the ADR only says the management side \"can add an instant cache-bust later\".\n- \"For the process lifetime\" is wrong: entries have an expiry time.\n- \"24 hours\" mixes in `lastUsedAt`, which is a ~1% sampled write and has nothing to do with expiry.",
    "excerpts": [
     {
      "path": "packages/auth/src/resolver.ts",
@@ -317,6 +323,12 @@
      "lineStart": 30,
      "lineEnd": 31,
      "quote": "**a revoked key keeps working for up to 60s** (\"undead key\")"
+    },
+    {
+     "path": "docs/adr/0003-api-key-model.md",
+     "lineStart": 32,
+     "lineEnd": 32,
+     "quote": "management side can add an instant cache-bust later"
     }
    ],
    "readMore": []
@@ -326,7 +338,7 @@
    "target": "seed:quests:pulse/quiz/f480c68e7d22921d",
    "phase": "after",
    "title": "Working out a sampled estimate by hand",
-   "body": "`estimateFromSample(400, 0.1)`: the estimate is round(400 / 0.1) = 4000. The standard error is sqrt(400 * 0.9) / 0.1 = sqrt(360) / 0.1, about 189.7, and the 95% interval is 1.96 times that, about 372. `formatEstimate` shows the relative interval, 372 / 4000, about 9%: \"~4,000 ±9%\".\n\n- \"~400 ±5%\" forgets to scale the observed count up by the sample rate.\n- \"~4,000 exactly\" misreads the reliability floor: 30 observed events only decides `reliable`; a sampled number is never shown without its ±.\n- \"~40,000 ±1%\" divides by the square of the rate, which the code never does.",
+   "body": "`estimateFromSample(400, 0.1)`: the estimate is round(400 / 0.1) = 4000, the observed count scaled up by the sample rate. The standard error is sqrt(400 * 0.9) / 0.1 = sqrt(360) / 0.1, about 189.7, and the 95% interval is 1.96 times that, about 372. `formatEstimate` shows that band relative to the estimate, 372 / 4000, about 9%.\n\n- \"~400 ±5%\" forgets to scale the observed count up by the sample rate.\n- \"~4,000 exactly\" misreads the reliability floor: 30 observed events only decides `reliable`; a sampled number is never shown without its ±.\n- \"~40,000 ±1%\" divides by the square of the rate, which the code never does.",
    "excerpts": [
     {
      "path": "packages/insights/src/sampling.ts",

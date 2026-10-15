@@ -21,7 +21,7 @@
    "target": "pack",
    "phase": "before",
    "title": "Concept: what a database transaction does and does not cover",
-   "body": "A Prisma `$transaction` makes its database writes all-or-nothing. It cannot undo a call to Stripe, Redis or a notification service, and code placed after the transaction runs only once the commit has already happened.\n\nIn checkout, the transaction decrements stock with a conditional `updateMany`, creates the order with its items, seller splits and first event, and clears the cart. Read what comes after it in `createCheckoutSession`: the PaymentIntent, the order update, notifications and the idempotency completion. For each step, ask what state is left if that step throws.\n\nThe same question applies to the Stripe webhook, where database updates and provider transfers are interleaved. The side-effects chapter introduces the outbox pattern as the standard answer.",
+   "body": "A Prisma `$transaction` makes its database writes all-or-nothing. It cannot undo a call to Stripe, Redis or a notification service. So when a flow mixes database writes with outside calls, what is left behind after a failure depends on exactly where each step sits.\n\nRead `createCheckoutSession` in `src/server/checkout/service.ts` and make a numbered list of every step, from the idempotency reservation to the final response. Mark each one as inside the transaction or outside it, and for the stock step write down what the code does when two buyers race for the last unit. Then, for each step, ask what state is left if that step throws, and whether a retry with the same key can repair it.\n\nAsk the same questions of the Stripe webhook handler: list the database updates and the provider transfers in the order they run, and work out what a redelivery of the same event would do. The side-effects chapter introduces the outbox pattern as the standard answer.",
    "excerpts": [
     {
      "path": "src/server/checkout/service.ts",
@@ -52,8 +52,8 @@
     "sha": "24cf00e6b6ca42243e50979245cd5b39a1798dc0",
     "path": "src/server/api/errors.ts",
     "lines": {
-     "start": 22,
-     "end": 24
+     "start": 14,
+     "end": 15
     }
    },
    "citations": [],
@@ -63,13 +63,13 @@
    "target": "pack",
    "phase": "before",
    "title": "Concept: how a thrown Error becomes a status code",
-   "body": "Most services here signal failure by throwing a plain `Error` whose message starts with a code, for example `CHECKOUT_EMPTY_CART` or `ORDER_INVALID_TRANSITION:PLACED->SHIPPED`. Some throw an `ApiError`, which already carries a code and status. Every route catches errors and calls `fail()`, which calls `toApiError`.\n\n`toApiError` keeps an `ApiError` as it is, turns a `ZodError` into a 400, and checks a plain Error's message against one regular expression. When the prefix is one of the four listed, the code is the text before the first colon and the status is fixed. Anything else falls through to the last branch.\n\nSo before you predict a response, find where the error is thrown, check whether it is an `ApiError`, and if not, compare its prefix with that list.",
+   "body": "Most services here signal failure by throwing a plain `Error` whose message starts with an upper-case code, for example `CHECKOUT_EMPTY_CART` or `ORDER_INVALID_TRANSITION:PLACED->SHIPPED`. Some throw an `ApiError`, which already carries a code and status. Every route catches errors and calls `fail()`, which calls `toApiError` in `src/server/api/errors.ts`.\n\nRead `toApiError` branch by branch and write the mapping down as a small table: input kind (ApiError, ZodError, plain Error with some message, anything else) on the left, resulting code and status on the right. For plain errors, note exactly which message prefixes the code recognises and how it derives the code from the message.\n\nThen, before you predict any response in this quest, find where that error is thrown, check whether it is an `ApiError` or a plain `Error`, read its message, and look it up in your table. Also read the helper functions further down the file and note the status each one uses.",
    "excerpts": [
     {
      "path": "src/server/api/errors.ts",
-     "lineStart": 22,
-     "lineEnd": 24,
-     "quote": "if (/^(CHECKOUT|ORDER|SELLER|CART)_/.test(error.message)) {"
+     "lineStart": 14,
+     "lineEnd": 15,
+     "quote": "export function toApiError(error: unknown) {"
     },
     {
      "path": "src/server/api/responses.ts",
@@ -98,7 +98,7 @@
    "target": "seed:quests:organized-build-ecom/quiz/5e2abcb3d1ecd486",
    "phase": "after",
    "title": "Per-seller subtotals, then a basis-point fee",
-   "body": "`calculateCheckoutPricing` first sums lines per seller: 3 x 2,500 + 1 x 2,500 = 10,000 cents in one entry of `subtotalBySeller`. Then, per seller, `platformFeeCents = Math.round((subtotalCents * commission.commissionBasisPoints) / 10_000)`. 1200 basis points is 12%, so the fee is 1,200 cents and `sellerReceivesCents` is 10,000 - 1,200 = 8,800.\n\n- A fee of 120 treats 1200 basis points as 1.2%; one basis point is 1/100 of a percent, so 1200 is 12%.\n- Two splits per line is wrong: splits are keyed by seller, not by line.\n- \"Stripe works out the rest\" is wrong: the domain function returns `sellerReceivesCents` itself, and checkout stores it on each order split.",
+   "body": "`calculateCheckoutPricing` first sums lines per seller: 3 x 2,500 + 1 x 2,500 = 10,000 cents in one entry of `subtotalBySeller`. Then, per seller, `platformFeeCents = Math.round((subtotalCents * commission.commissionBasisPoints) / 10_000)`. 1200 basis points is 12%, so the fee is 1,200 cents and `sellerReceivesCents` is 10,000 - 1,200 = 8,800.\n\n- A fee of 120 treats 1200 basis points as 1.2%; one basis point is 1/100 of a percent, so 1200 is 12%.\n- Two splits per line is wrong: splits are keyed by seller, not by line.\n- \"Seller receives 10,000, fee added on top for the buyer\" is wrong: line 71 computes `sellerReceivesCents: subtotalCents - platformFeeCents`, so the fee comes out of the seller's subtotal, not on top of it.",
    "excerpts": [
     {
      "path": "src/domain/checkout/pricing.ts",

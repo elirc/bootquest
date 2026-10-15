@@ -38,13 +38,13 @@
    "target": "pack",
    "phase": "before",
    "title": "Concept: isolation, state guards and a version token are different tools",
-   "body": "It is tempting to say \"the transaction makes it safe\". This course insists on three separate ideas.\n\nIsolation (`Serializable`) lets PostgreSQL refuse an unsafe interleaving of two transactions. When it does, Prisma reports error P2034 and the helper reruns the WHOLE transaction against a fresh view.\n\nA state guard asks whether a row is still in the state a transition needs, for example \"this sprint is still ACTIVE\". Putting the state into the `where` of an `updateMany` turns a lost race into zero changed rows, which the code reports as a conflict.\n\nA version token (`expectedUpdatedAt`) asks whether the row is still the version the browser saw. Again the strong form puts it inside the write predicate, not in an earlier read.\n\nOwnership checks (is this sprint in this project?) are a fourth, independent rule.",
+   "body": "It is tempting to say \"the transaction makes it safe\". This course insists on separating several ideas, each with its own test.\n\nIsolation: `serializable()` in the service runs the work at the Serializable isolation level, where PostgreSQL may refuse an unsafe interleaving of two transactions. Read the helper and write down exactly which errors it treats as retryable, how many times the work can run, and what reaches the caller when the attempts run out or a different error is thrown.\n\nState guards: a transition such as completion needs the row to still be in a certain state. Find where each write states that requirement, and work out what the losing request of a race sees.\n\nVersion tokens: `expectedUpdatedAt` asks whether the row is still the version the browser saw. Find every function that uses it, note whether the comparison happens in an earlier read or inside the write itself, and compare the two writers.\n\nOwnership checks (is this sprint in this project?) are a further, independent rule.",
    "excerpts": [
     {
      "path": "astraupskill/02-CONCEPTS.md",
-     "lineStart": 3,
-     "lineEnd": 3,
-     "quote": "A bounded retry repeats the entire transaction against a fresh view; it does not merely repeat the last statement."
+     "lineStart": 1,
+     "lineEnd": 1,
+     "quote": "# Separate isolation, state guards, and stale edits"
     },
     {
      "path": "astraupskill/02-CONCEPTS.md",
@@ -66,20 +66,14 @@
    "id": "r03-db-owns-cross-row-rules",
    "target": "pack",
    "phase": "before",
-   "title": "Concept: the database owns the one-active-sprint rule",
-   "body": "Some rules can be checked by looking at one row: a sprint must be PLANNED before it starts, and it needs at least one issue. Those live in a small state machine, `apps/api/src/domain/sprint-state-machine.js`, as a table of transitions.\n\nOther rules span rows: \"at most one ACTIVE sprint per project\". Two requests can each read \"no other sprint is active\" and both proceed, so an application check cannot enforce it. The migration therefore creates a PARTIAL unique index that applies only to ACTIVE rows. The service has to catch the database's refusal and translate it into a clean HTTP response instead of letting a raw error escape.\n\nWhen you read `startSprint`, look for where that translation happens and which Prisma error code it expects.",
+   "title": "Concept: one-row rules versus rules that span rows",
+   "body": "Some rules can be checked by looking at one row: a sprint must be in the right state before a transition, and it may need at least one issue. Those live in a small state machine, `apps/api/src/domain/sprint-state-machine.js`, as a table of transitions.\n\nOther rules span rows, for example \"how many sprints of a project may be ACTIVE at once\". Think about why an application check that reads other rows first is fragile when two requests run at the same moment.\n\nThen go and find how this repo enforces that cross-row rule. Look in the sprint migration under `apps/api/prisma/migrations/` for any index or constraint that mentions sprint state, and read `startSprint` in the service: which error, if any, does it catch, which Prisma error code does it test for, and what does it turn that into? Write your timeline for two simultaneous starts before you read the tests.",
    "excerpts": [
     {
-     "path": "apps/api/prisma/migrations/20260709220000_sprints/migration.sql",
-     "lineStart": 25,
-     "lineEnd": 26,
-     "quote": "holds. Here: at most one ACTIVE sprint per project, but any number of PLANNED"
-    },
-    {
      "path": "apps/api/src/domain/sprint-state-machine.js",
-     "lineStart": 46,
-     "lineEnd": 46,
-     "quote": "per-sprint rules; the DB owns the cross-sprint invariant."
+     "lineStart": 4,
+     "lineEnd": 5,
+     "quote": "// LEARN: a STATE MACHINE modeled as data, not control flow. A sprint is in one // of three states, and only certain transitions are legal. Instead of scattering"
     }
    ],
    "readMore": []
