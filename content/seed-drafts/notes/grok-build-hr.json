@@ -1,0 +1,407 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "grok-build-hr",
+ "repo": "grok-build-hr",
+ "sha": "6e13516255310fa59be284a7425611620ac71ffa",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: who may act, what may change, what survives",
+   "body": "This pack is about an HR workspace: employees, departments and leave requests. The course asks you to answer three questions for every request: **who** may perform it, **what state** may change, and **what survives** a failure.\n\nSuggested reading order:\n\n1. `astraupskill/README.md` - the glossary table. Learn the words *actor*, *scope*, *version*, *advisory lock* and *state machine* before anything else.\n2. `astraupskill/01-CODEBASE-MAP.md` - where each layer lives: auth middleware, validation, services, repositories.\n3. `astraupskill/02-CONCEPTS.md` - the core ideas. The README suggests splitting it over two sessions.\n4. `astraupskill/03-WORKED-CHANGE.md` - how `decide` approves leave safely.\n5. `astraupskill/04-TESTING-AND-DEBUGGING.md` - the \"break it\" experiments.\n6. `astraupskill/07-TRACE-LAB.md` - follow one request through the app.\n7. `astraupskill/06-SOLUTIONS-AND-REVIEW.md` - the senior review findings.\n\nKeep `backend/src/repositories/leaveRepository.ts` open while you read: most quizzes point into it.",
+   "excerpts": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "Your learning target is to explain three things for every request: who may perform it, what state may change, and what survives a failure."
+    },
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 30,
+     "lineEnd": 31,
+     "quote": "- **Session 1 (about 2 h):** `01` and `02` up to the state machine (roles vs scope, owner edits, calendar days). - **Session 2 (about 2 h):** the rest of `02` (overlap intervals, versions, transactions, the reporting-graph lock and its cost) and `03` with the snapshots open."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Maps each layer (auth, validation, services, repositories) to its file."
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The core concepts: roles vs scope, states, inclusive dates, versions, locks."
+    }
+   ]
+  },
+  {
+   "id": "r02-scope-and-state",
+   "target": "pack",
+   "phase": "before",
+   "title": "Role, scope and the leave state machine",
+   "body": "A **role** (EMPLOYEE, MANAGER, HR_ADMIN) is a label on the account. It is not enough to decide what a person may do. The code also uses a **scope**: a database filter that decides which rows a caller can even see.\n\n`employeeScope` in `scope.ts` builds that filter. HR gets an empty filter (every row). A manager gets \"my own profile, or people whose manager is me\". An employee gets only their own profile. Because the filter is applied in each query, it follows the reporting line stored in the database now.\n\nLeave requests also move through fixed **states**. A request starts PENDING. From PENDING it can become APPROVED or REJECTED (by a manager or HR, never the requester), or CANCELLED by its owner. An APPROVED request can still be cancelled by its owner. Nothing else is allowed, so a finished decision cannot be silently replaced with a new status.\n\nWhen you read a repository function, look for these two checks: the scope filter in the query, and the status guard before the update.",
+   "excerpts": [
+    {
+     "path": "backend/src/repositories/scope.ts",
+     "lineStart": 6,
+     "lineEnd": 13,
+     "quote": "export function employeeScope(actor: Actor): Prisma.EmployeeWhereInput { const userId = identity.parse(actor.id); if (actor.role === \"HR_ADMIN\") return {}; if (actor.role === \"MANAGER\") return { OR: [{ userId }, { manager: { userId } }] }; if (actor.role === \"EMPLOYEE\") return { userId }; throw new AppError(403, \"Unsupported account role.\"); }"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 16,
+     "lineEnd": 16,
+     "quote": "Only an owner can edit or delete a pending request. Accepted decisions are not overwritten with arbitrary status strings."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Walks through decide step by step: scoped lookup, row lock, re-read, then the checks."
+    }
+   ]
+  },
+  {
+   "id": "r03-versions-and-locks",
+   "target": "pack",
+   "phase": "before",
+   "title": "Versions, row locks and the chart lock",
+   "body": "Three tools stop concurrent writes from damaging data.\n\n**Versions.** Each row has a `version` counter. An update says \"I expect version N\". If the row has moved on, the update is refused with a 409 and the user's draft is kept, so a stale tab cannot overwrite newer work.\n\n**Row locks.** `lockEmployee` runs `SELECT ... FOR UPDATE` on one Employee row. A second transaction that wants the same row waits until the first one commits.\n\n**The advisory lock.** `chartLock` takes a PostgreSQL advisory lock with one fixed number. Every transaction that calls it waits for every other one that holds it. Employee writes call it while they check the reporting chart.\n\nThe database adds its own guard too: an exclusion constraint on leave dates, so that rule holds even for writes that skip the repository code.\n\nWhen you study a guard, ask two questions: what invariant does it protect, and what does it cost?",
+   "excerpts": [
+    {
+     "path": "backend/src/repositories/scope.ts",
+     "lineStart": 91,
+     "lineEnd": 96,
+     "quote": "export async function lockEmployee(tx: Tx, id: string) { const rows = await tx.$queryRaw< { id: string }[] >`SELECT id FROM \"Employee\" WHERE id=${identity.parse(id)} FOR UPDATE`; if (!rows.length) throw new AppError(404, \"Employee not found.\"); }"
+    },
+    {
+     "path": "backend/src/repositories/employeeRepository.ts",
+     "lineStart": 21,
+     "lineEnd": 25,
+     "quote": "// One constant key: every chart write waits for every other. Correct and simple; the finer // per-chain key (hashtextextended(rootManagerId, 0)) is discussed in astraupskill/02-CONCEPTS.md. async function chartLock(tx: Tx) { await tx.$queryRaw`SELECT 1 AS locked FROM pg_advisory_xact_lock(74219801)`; }"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 22,
+     "lineEnd": 22,
+     "quote": "Versions preserve draft intent."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/04-TESTING-AND-DEBUGGING.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The break-it section shows which test notices each removed guard."
+    }
+   ]
+  },
+  {
+   "id": "x-q01-scoped-decide",
+   "target": "seed:quests:grok-build-hr/quiz/0b7a11f436a01099",
+   "phase": "after",
+   "title": "Why an unrelated manager gets a 404",
+   "body": "`decide` does not start by checking the role. Its first step is `scoped(tx, actor, id)`, which looks up the leave request **with the caller's scope in the query**. For a MANAGER that scope is \"my own profile, or employees whose manager is me\", read from the database now. A request belonging to someone else's report is simply not found, so the function throws 404 \"Leave request not found within your access.\" The later 403 direct-manager check is a second layer.\n\nWhy the others are wrong:\n- **JWT manager id:** the worked change says the server reads the current relationship, not a manager id captured in a token.\n- **Body managerId:** the decision body carries only intent (version, status, note); unknown fields are rejected.\n- **Any MANAGER role:** a role alone is not authority; scope limits which rows a manager can reach.",
+   "excerpts": [
+    {
+     "path": "backend/src/repositories/leaveRepository.ts",
+     "lineStart": 22,
+     "lineEnd": 30,
+     "quote": "async function scoped(tx: Tx, actor: Actor, id: string) { const row = await tx.leaveRequest.findFirst({ where: { id: identity.parse(id), employee: employeeScope(actor) }, include: leaveInclude, }); if (!row) throw new AppError(404, \"Leave request not found within your access.\"); return row; }"
+    },
+    {
+     "path": "backend/src/repositories/scope.ts",
+     "lineStart": 9,
+     "lineEnd": 10,
+     "quote": "if (actor.role === \"MANAGER\") return { OR: [{ userId }, { manager: { userId } }] };"
+    },
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": 15,
+     "lineEnd": 15,
+     "quote": "The server reads the current employee relationship rather than trusting a manager ID captured in a token or form."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02-chart-lock-cost",
+   "target": "seed:quests:grok-build-hr/quiz/12d46d16d9143abe",
+   "phase": "after",
+   "title": "What one constant advisory lock buys and costs",
+   "body": "`chartLock` asks PostgreSQL for advisory lock number 74219801, and every employee write uses the same number. So two employee writes can never run their checks at the same time. That is the guarantee: two edits that each look fine alone (no cycle) cannot commit together and form a cycle in the reporting graph. The price is that **every** employee create, update and delete waits for every other, even in unrelated departments.\n\nWhy the others are wrong:\n- **No deadlocks anywhere / memory:** the guide talks about cycles in the chart and about throughput, not about removing all deadlocks or about memory.\n- **Only the edited employee:** the key is one constant, so it is not per employee. A per-chain key is the *alternative* the guide describes.\n- **Leave overlaps:** leave writes do not call `chartLock`; overlap is guarded by the row lock and the exclusion constraint.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 30,
+     "lineEnd": 30,
+     "quote": "one constant, so *every* employee create, update and delete (lines 138, 165, 209) in the whole system waits for every other."
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 30,
+     "lineEnd": 30,
+     "quote": "The cost is that all employee writes are serialized, across all departments, even ones that cannot possibly interact."
+    },
+    {
+     "path": "backend/src/repositories/employeeRepository.ts",
+     "lineStart": 23,
+     "lineEnd": 25,
+     "quote": "async function chartLock(tx: Tx) { await tx.$queryRaw`SELECT 1 AS locked FROM pg_advisory_xact_lock(74219801)`; }"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q03-pending-guard",
+   "target": "seed:quests:grok-build-hr/quiz/132cfbdbe4fc5634",
+   "phase": "after",
+   "title": "Why a correct version still cannot re-decide",
+   "body": "Once the manager approved, the request is APPROVED at version 2. HR sends version 2, so the version check passes. But the next line in `decide` refuses any request that is not PENDING: \"Only pending requests can receive a decision.\" The same rule is repeated inside the `updateMany` where clause. The version rule and the state rule protect different things: versions catch stale drafts, the PENDING rule stops anyone re-deciding a finished request.\n\nWhy the others are wrong:\n- **\"Version 2 is for approvals\":** a version is just a counter; it says nothing about which decision is allowed.\n- **\"It succeeds because the version matches\":** the version matching is exactly why the PENDING check is needed as a separate guard.\n- **\"Only the original manager\":** HR is allowed to decide; the authority check accepts HR_ADMIN. The refusal comes from the state, not the person.",
+   "excerpts": [
+    {
+     "path": "backend/src/repositories/leaveRepository.ts",
+     "lineStart": 239,
+     "lineEnd": 243,
+     "quote": "if (current.version !== expected) throw stale(); if (current.status !== \"PENDING\") throw new AppError(409, \"Only pending requests can receive a decision.\"); const changed = await tx.leaveRequest.updateMany({ where: { id, version: expected, status: \"PENDING\" },"
+    },
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": 19,
+     "lineEnd": 19,
+     "quote": "A second attempt using version two also cannot decide an already terminal request because the PENDING-state rule is independent from the version rule."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q04-options-leak",
+   "target": "seed:quests:grok-build-hr/quiz/1f4ab16b4d7f735a",
+   "phase": "after",
+   "title": "The options endpoint forgot its guard",
+   "body": "The senior review found this. `GET /api/employees/options` has no `requireHr`, unlike every employee mutation. The repository `options` function queries every active employee whose role is MANAGER or HR_ADMIN and returns their id and name. It never applies `employeeScope`. So any signed-in employee who calls it directly gets that list. Only the frontend skips the call for non-HR users, and the UI is not a security boundary.\n\nWhy the others are wrong:\n- **Own profile only:** `employeeScope` limits the main directory list, but `options` does not use it. That gap is the finding.\n- **403 via requireHr:** the service's `options` just calls the repository; there is no `requireHr` on it.\n- **Filtered by department:** the query filters by active and role only; there is no department filter.",
+   "excerpts": [
+    {
+     "path": "backend/src/repositories/employeeRepository.ts",
+     "lineStart": 248,
+     "lineEnd": 252,
+     "quote": "prisma.employee.findMany({ where: { active: true, user: { role: { in: [\"MANAGER\", \"HR_ADMIN\"] } } }, orderBy: { id: \"asc\" }, take: 501, select: { id: true, user: { select: { name: true } } },"
+    },
+    {
+     "path": "backend/src/services/employeeService.ts",
+     "lineStart": 35,
+     "lineEnd": 35,
+     "quote": "export const options = (actor: Actor) => repo.options(actor);"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 7,
+     "lineEnd": 7,
+     "quote": "Any signed-in employee receives the id and name of every active manager and HR administrator"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q05-self-approval",
+   "target": "seed:quests:grok-build-hr/quiz/20d83f854717cea9",
+   "phase": "after",
+   "title": "HR still cannot approve their own leave",
+   "body": "In `decide`, the first check after the re-read compares the request's owner with the caller: if `current.employee.userId === actor.id` it throws 403 \"You cannot approve or reject your own leave request.\" This runs **before** the check that lets HR decide any request, so being HR does not help.\n\nWhy the others are wrong:\n- **409, reassign first:** there is no reassignment step in the code; the refusal is a 403 from the self-check.\n- **200 with a later audit flag:** the request is refused, not accepted and flagged.\n- **200, HR may approve any request:** the concepts guide says HR can review leave across the organization, \"yet still cannot approve their own request\".",
+   "excerpts": [
+    {
+     "path": "backend/src/repositories/leaveRepository.ts",
+     "lineStart": 223,
+     "lineEnd": 227,
+     "quote": "if (current.employee.userId === actor.id) throw new AppError( 403, \"You cannot approve or reject your own leave request.\", );"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "HR can review leave across the organization, yet still cannot approve their own request."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q06-inclusive-dates",
+   "target": "seed:quests:grok-build-hr/quiz/2c39ff495406420f",
+   "phase": "after",
+   "title": "Inclusive dates: sharing one day is an overlap",
+   "body": "Leave dates are whole calendar days and both ends count. The database constraint builds `daterange(\"startDate\", \"endDate\", '[]')`; the `'[]'` means both the first and last day are included. Two ranges overlap (`&&`) if they share even one day. The approved leave is July 10-12, so it includes July 12. A request for July 12-14 also includes July 12, so it is rejected.\n\nWhy the others are accepted:\n- **July 13-15** starts the day after the approved leave ends; the guide says a request starting July 13 does not overlap.\n- **July 13-14** also starts on July 13, so no shared day.\n- **July 7-9** ends before July 10, so no shared day.",
+   "excerpts": [
+    {
+     "path": "backend/prisma/migrations/202609090001_hr_workspace/migration.sql",
+     "lineStart": 141,
+     "lineEnd": 143,
+     "quote": "ALTER TABLE \"LeaveRequest\" ADD CONSTRAINT \"LeaveRequest_no_overlap\" EXCLUDE USING gist (\"employeeId\" WITH =, daterange(\"startDate\", \"endDate\", '[]') WITH &&) WHERE (\"status\" IN ('PENDING', 'APPROVED'));"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 18,
+     "lineEnd": 18,
+     "quote": "A request from July 10 through July 12 includes July 12; another starting July 12 overlaps. A request starting July 13 does not."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07-last-hr-admin",
+   "target": "seed:quests:grok-build-hr/quiz/4909333ae290626c",
+   "phase": "after",
+   "title": "The chart lock also protects the last HR admin",
+   "body": "The rule \"keep at least one active HR administrator\" is a count-then-update: `update` counts active HR admins and refuses if the count is 1 or less. On its own, a count-then-update is racy: two HR admins deactivating each other at once could both see a count of 2 and both succeed. It is safe today only because `update` calls `chartLock` first, so the two transactions run one after the other. The review warns that the finer per-chain lock from the concepts guide would break this unless the check took its own lock.\n\nWhy the others are wrong:\n- **Unique partial index:** the rule lives in TypeScript (`tx.employee.count`), not in a database index.\n- **Frontend hides the button:** the review credits the server-side lock, not the UI.\n- **It does not hold today:** it does hold, because of `chartLock`.",
+   "excerpts": [
+    {
+     "path": "backend/src/repositories/employeeRepository.ts",
+     "lineStart": 164,
+     "lineEnd": 165,
+     "quote": "return prisma.$transaction(async (tx) => { await chartLock(tx);"
+    },
+    {
+     "path": "backend/src/repositories/employeeRepository.ts",
+     "lineStart": 173,
+     "lineEnd": 181,
+     "quote": "if ( current.active && !value.active && current.user.role === \"HR_ADMIN\" && (await tx.employee.count({ where: { active: true, user: { role: \"HR_ADMIN\" } }, })) <= 1 ) throw new AppError(409, \"Keep at least one active HR administrator.\");"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "It is safe only because `chartLock` (lines 23-25) serializes every employee write first."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08-history-scope",
+   "target": "seed:quests:grok-build-hr/quiz/a1916005532a246c",
+   "phase": "after",
+   "title": "Leave history follows today's reporting line",
+   "body": "`history` loads the audit rows for a request, takes the `employeeId` from the newest row, and then checks whether that employee is inside the caller's **current** `employeeScope`. If not, it returns `[]`. A manager who has lost a report no longer has that person in scope, so they get an empty list. The review calls out this consequence directly.\n\nWhy the others are wrong:\n- **404:** `history` returns `[]` when access is denied, not a 404; that hides whether the request exists.\n- **Public within a department:** there is no department rule in `history`; only `employeeScope` decides.\n- **\"They decided those requests\":** the code never looks at who decided; it checks current scope only.",
+   "excerpts": [
+    {
+     "path": "backend/src/repositories/leaveRepository.ts",
+     "lineStart": 300,
+     "lineEnd": 307,
+     "quote": "if (!rows.length) return []; const employeeId = rows[0].employeeId; if (!employeeId) return []; const allowed = await prisma.employee.findFirst({ where: { AND: [employeeScope(actor), { id: employeeId }] }, select: { id: true }, }); return allowed ? rows : [];"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 15,
+     "lineEnd": 15,
+     "quote": "a manager who loses a report also loses that report's leave history."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09-leave-row-lock",
+   "target": "seed:quests:grok-build-hr/quiz/c14ace4c5d13edc1",
+   "phase": "after",
+   "title": "Leave writes use the row lock, not the chart lock",
+   "body": "Leave writes never call `chartLock`, so they never wait on the advisory lock. They do call `lockEmployee`, which runs `SELECT ... FOR UPDATE` on the one Employee row the request belongs to. Two writes touching the same employee therefore queue behind each other; writes for different employees run in parallel.\n\nWhy the others are wrong:\n- **Also wait on the chart lock:** the guide says leave writes \"never wait on the advisory lock\".\n- **No locks, constraint only:** `decide` calls `lockEmployee` at line 221; the constraint is an extra layer.\n- **Lock the whole Employee table:** `FOR UPDATE` with `WHERE id=...` locks one row, not the table.",
+   "excerpts": [
+    {
+     "path": "backend/src/repositories/scope.ts",
+     "lineStart": 91,
+     "lineEnd": 96,
+     "quote": "export async function lockEmployee(tx: Tx, id: string) { const rows = await tx.$queryRaw< { id: string }[] >`SELECT id FROM \"Employee\" WHERE id=${identity.parse(id)} FOR UPDATE`; if (!rows.length) throw new AppError(404, \"Employee not found.\"); }"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 32,
+     "lineEnd": 32,
+     "quote": "They never wait on the advisory lock. They do take a row lock on the employee, `lockEmployee` in `scope.ts:91-96`"
+    },
+    {
+     "path": "backend/src/repositories/leaveRepository.ts",
+     "lineStart": 221,
+     "lineEnd": 221,
+     "quote": "await lockEmployee(tx, initial.employeeId);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10-overlapping-guards",
+   "target": "seed:quests:grok-build-hr/quiz/ccf1c1006c426005",
+   "phase": "after",
+   "title": "A green suite after removing a guard proves little",
+   "body": "The break-it exercise predicts that removing `status: \"PENDING\"` from the `updateMany` where clause fails no test. Other guards cover the same cases: the row lock plus re-read and the version check stop the concurrent pair, and the status pre-check at lines 240-241 stops the later HR decision. Only when you also delete the pre-check does the test fail. The lesson: when guards overlap, look for the smallest set whose removal a test notices.\n\nWhy the others are wrong:\n- **A PostgreSQL constraint enforces PENDING:** the pre-check that saves you is TypeScript in `decide`, as the guide explains.\n- **The tests are broken:** the tests are fine; the removed guard is simply backed up by another.\n- **Dead code, delete it:** it is a real second layer; the trace lab says the status appears twice on purpose.",
+   "excerpts": [
+    {
+     "path": "astraupskill/04-TESTING-AND-DEBUGGING.md",
+     "lineStart": 23,
+     "lineEnd": 23,
+     "quote": "when guards overlap, removing one proves nothing; find the smallest set whose removal a test notices"
+    },
+    {
+     "path": "backend/src/repositories/leaveRepository.ts",
+     "lineStart": 239,
+     "lineEnd": 243,
+     "quote": "if (current.version !== expected) throw stale(); if (current.status !== \"PENDING\") throw new AppError(409, \"Only pending requests can receive a decision.\"); const changed = await tx.leaveRequest.updateMany({ where: { id, version: expected, status: \"PENDING\" },"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q11-filter-intersects",
+   "target": "seed:quests:grok-build-hr/quiz/d26eabfa0a24384c",
+   "phase": "after",
+   "title": "Why a forged manager filter returns nothing",
+   "body": "In the worked Exercise 6, the new `managerId` filter is appended to the same `AND` list as `employeeScope(actor)`. For a manager, scope is \"my own profile or my direct reports\". Another manager's id therefore intersects to an empty set: the result is empty, not an error. Answering 403 instead would tell the caller that the id they guessed is real, which is a leak. For HR the scope is `{}`, so the same filter just filters.\n\nWhy the others are wrong:\n- **Validation runs after the query:** the guide says a malformed id is a 400 *before* any query.\n- **React Query cannot cache a 403:** caching is not the reason given anywhere.\n- **Managers may see other managers' reports:** the scope says the opposite: only their own direct reports.",
+   "excerpts": [
+    {
+     "path": "backend/src/repositories/scope.ts",
+     "lineStart": 9,
+     "lineEnd": 10,
+     "quote": "if (actor.role === \"MANAGER\") return { OR: [{ userId }, { manager: { userId } }] };"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 29,
+     "lineEnd": 29,
+     "quote": "A 403 for a non-HR caller sending `managerId` would leak that the id exists."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q12-two-overlap-layers",
+   "target": "seed:quests:grok-build-hr/quiz/f1dec2aecc7ab7e0",
+   "phase": "after",
+   "title": "Two overlap layers, two different jobs",
+   "body": "The repository locks the employee row and runs its own overlap query, so it can answer with a readable error message. The PostgreSQL exclusion constraint independently refuses overlapping PENDING or APPROVED intervals, including rows written by code that skips the repository. The break-it exercise proves it: comment out the constraint and the test that inserts directly with Prisma fails, while the concurrent HTTP test still passes because of the row lock.\n\nWhy the others are wrong:\n- **Redundant, only for performance:** each layer catches something the other cannot.\n- **App = approved, constraint = pending:** the constraint covers both PENDING and APPROVED rows.\n- **SQLite fallback:** the project runs on PostgreSQL; the app check exists for the clear error, not for another database.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 20,
+     "lineEnd": 20,
+     "quote": "The application check provides a clear error; the database constraint protects the invariant."
+    },
+    {
+     "path": "backend/prisma/migrations/202609090001_hr_workspace/migration.sql",
+     "lineStart": 141,
+     "lineEnd": 143,
+     "quote": "ALTER TABLE \"LeaveRequest\" ADD CONSTRAINT \"LeaveRequest_no_overlap\" EXCLUDE USING gist (\"employeeId\" WITH =, daterange(\"startDate\", \"endDate\", '[]') WITH &&) WHERE (\"status\" IN ('PENDING', 'APPROVED'));"
+    },
+    {
+     "path": "astraupskill/04-TESTING-AND-DEBUGGING.md",
+     "lineStart": 19,
+     "lineEnd": 19,
+     "quote": "fails, because it inserts an overlapping row directly with Prisma and expects PostgreSQL to refuse."
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}
