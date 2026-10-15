@@ -1,5 +1,5 @@
 // W9: one regression test per fixed docs/recon/ui-audit.md finding that has client behaviour.
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { createMockApi } from '../api/mock';
 import { ApiError, type BootQuestApi, type UnitDetail } from '../api/types';
@@ -10,13 +10,52 @@ import { renderApp } from '../test/render';
 const EB = 105; // explain-back fixture
 const KATA = 109; // patch-kata fixture
 
-/** Records every API method called, in order. */
-function spyApi(base: BootQuestApi = createMockApi()): { api: BootQuestApi; calls: string[] } {
+interface ApiSpy {
+  api: BootQuestApi;
+  calls: string[];
+  /** promises of API calls that have not settled yet */
+  inflight: Set<Promise<unknown>>;
+}
+
+/** Records every API method called, in order, and tracks the calls still in flight. */
+function spyApi(base: BootQuestApi = createMockApi()): ApiSpy {
   const calls: string[] = [];
+  const inflight = new Set<Promise<unknown>>();
   const api = Object.fromEntries(
-    Object.entries(base).map(([k, fn]) => [k, (...a: unknown[]) => (calls.push(k), (fn as (...x: unknown[]) => unknown)(...a))]),
+    Object.entries(base).map(([k, fn]) => [
+      k,
+      (...a: unknown[]) => {
+        calls.push(k);
+        const r = (fn as (...x: unknown[]) => unknown)(...a);
+        if (r instanceof Promise) {
+          inflight.add(r);
+          void r.then(
+            () => inflight.delete(r),
+            () => inflight.delete(r),
+          );
+        }
+        return r;
+      },
+    ]),
   ) as unknown as BootQuestApi;
-  return { api, calls };
+  return { api, calls, inflight };
+}
+
+/**
+ * F13: wait until the page is QUIET instead of sleeping a fixed time: every API call made so far
+ * has settled, React has flushed what those results triggered (act), and a full round made no new
+ * call. Any probe the page would ever fire in reaction to its data is therefore already in
+ * `calls` (a later one could only come from a timer, which the panes do not use).
+ */
+async function settled(spy: ApiSpy): Promise<void> {
+  for (let round = 0; round < 100; round++) {
+    const before = spy.calls.length;
+    await act(async () => {
+      await Promise.allSettled([...spy.inflight]);
+    });
+    if (spy.inflight.size === 0 && spy.calls.length === before) return;
+  }
+  throw new Error(`the page never went quiet: ${spy.calls.length} calls, ${spy.inflight.size} in flight`);
 }
 
 /** The mock with getUnit(id) post-processed (to serve a shape the fixtures do not carry). */
@@ -117,19 +156,30 @@ describe('#13 a permanent 404 offers no Retry', () => {
 });
 
 describe('#10 no expected-403 key probe on unanswered explain-back / kata', () => {
+  it('F13: settled() waits out a probe chained behind a SLOW call (a fixed 50 ms sleep would have missed it)', async () => {
+    const spy = spyApi(createMockApi({ latencyMs: 120 }));
+    // a late probe: only after a 120 ms load resolves does a second call start (itself 120 ms)
+    void spy.api.getUnit(EB).then(() => spy.api.getExplainBackKey(EB).catch(() => undefined));
+    await settled(spy);
+    expect(spy.calls).toEqual(['getUnit', 'getExplainBackKey']);
+    expect(spy.inflight.size).toBe(0);
+  });
+
   it('explain-back with answered=false never requests the key on mount', async () => {
-    const { api, calls } = spyApi();
-    renderApp(`/play/${EB}`, api);
+    const spy = spyApi();
+    renderApp(`/play/${EB}`, spy.api);
     await screen.findByRole('textbox', { name: 'Answer 1' });
-    await new Promise((r) => setTimeout(r, 50));
-    expect(calls).not.toContain('getExplainBackKey');
+    await settled(spy);
+    expect(spy.calls).toContain('getUnit'); // the spy saw the page's own loads
+    expect(spy.calls).not.toContain('getExplainBackKey');
   });
 
   it('kata with answered=false never requests the key on mount; an answered one loads it', async () => {
     const first = spyApi();
     const firstApp = renderApp(`/play/${KATA}`, first.api);
     await screen.findByTestId('diff');
-    await new Promise((r) => setTimeout(r, 50));
+    await settled(first);
+    expect(first.calls).toContain('getUnit');
     expect(first.calls).not.toContain('getKataKey');
     firstApp.unmount(); // W10: one app at a time (two mounted shells doubled the render work under load)
 

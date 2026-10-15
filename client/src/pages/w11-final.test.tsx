@@ -209,6 +209,9 @@ describe('W11 #6/#7 written unit: no immutable store of the untouched template; 
     const h = await screen.findByRole('heading', { name: 'Compare with the model answer' });
     await waitFor(() => expect(h).toHaveFocus());
     expect(screen.getByTestId('stored-meta')).not.toHaveTextContent('UTC');
+    // release (UI-FINAL leftover): a written unit is never a campaign quest, so no "Back to campaign"
+    expect(screen.queryByRole('link', { name: 'Back to campaign' })).toBeNull();
+    expect(screen.getByRole('link', { name: 'Back to dashboard' })).toHaveAttribute('href', '/');
   });
 
   it('the API refuses the untouched template too (422 UNTOUCHED_TEMPLATE), mirrored by the mock', async () => {

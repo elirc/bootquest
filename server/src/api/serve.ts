@@ -14,6 +14,7 @@ import { combineContentStores, fileContentEntries } from './content-store.ts';
 import { createDrillCsRunner, resolveCsScratchDir, type DrillCsRunner } from './runner-csharp.ts';
 import { defaultRunners, type RunnerRegistry } from './runners.ts';
 import { createNodeTestFileRunner } from './runner-node-test-file.ts';
+import { removeWorkParent } from '../runners/node-test-file/index.ts';
 import { createSyncService, resolveSyncPaths, type SyncService } from '../sync/service.ts';
 import { defaultSeedItemDirs, loadSeedItemStoreWithStats, type SeedPackStat } from '../store/seed-items.ts';
 import { DEFAULT_AUTHORED_UNITS, ladderContentEntries, loadLadderIntoDb, readAuthoredUnits, readKataDifficulty, type LadderLoadStats } from '../store/ladder.ts';
@@ -247,8 +248,12 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
       closing ??= new Promise<void>((done) => {
         server.close(() => {
           db.close();
-          // stop the compiler server (named pipe) + any live dotnet child we started
-          void (csharp ? csharp.shutdown() : Promise.resolve()).finally(done);
+          // stop the compiler server (named pipe) + any live dotnet child we started; F12: then drop
+          // this process's (by now empty) node-test-file workspace parent when we own that runner
+          void (csharp ? csharp.shutdown() : Promise.resolve())
+            .then(() => (opts.runners ? false : removeWorkParent()))
+            .catch(() => undefined)
+            .finally(done);
         });
         server.closeAllConnections();
       });

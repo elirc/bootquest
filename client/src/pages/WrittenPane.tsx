@@ -109,7 +109,7 @@ export function WrittenPane({ detail }: { detail: UnitDetail }) {
     }
   };
 
-  if (model) return <ModelAnswerView unitId={id} trackId={detail.unit.trackId} question={question} model={model} focusOnMount={justStored} />;
+  if (model) return <ModelAnswerView unitId={id} question={question} model={model} focusOnMount={justStored} />;
   // W11: the answer is stored immutably, so the untouched starter template is not an answer
   const untouched = text.trim() === (detail.starter ?? '').trim();
   const ready = text.trim() !== '' && !untouched && storedId === null;
@@ -187,13 +187,11 @@ export function WrittenPane({ detail }: { detail: UnitDetail }) {
 
 function ModelAnswerView({
   unitId,
-  trackId,
   question,
   model,
   focusOnMount = false,
 }: {
   unitId: number;
-  trackId: string;
   question: string;
   model: ModelAnswerResponse;
   focusOnMount?: boolean;
@@ -266,8 +264,10 @@ function ModelAnswerView({
           </ul>
         </div>
       )}
-      <Link to={`/campaign/${trackId}`} className="muted small">
-        Back to campaign
+      {/* release (UI-FINAL leftover): a written unit is never a campaign quest (quests are study / reading
+          units), so the way out is the dashboard, not a campaign map that does not list it */}
+      <Link to="/" className="muted small">
+        Back to dashboard
       </Link>
     </section>
   );

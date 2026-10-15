@@ -8,6 +8,7 @@ import type {
   CheckType,
   CompetencyId,
   EvidenceRowDto,
+  KataStatsResponse,
   PassRatesResponse,
   ReviewStatsResponse,
   XpStatsResponse,
@@ -17,7 +18,7 @@ import { Chip, LoadState, PageHeader, Panel, ProgressBar } from '../components/u
 import { fmtRate, longDate, monthStarts, shortDate, weekdayLabel } from '../lib/chart';
 import { fmtInt, fmtStamp } from '../lib/format';
 import { buildHeatGrid } from '../lib/heatmap';
-import { useAsync } from '../lib/useAsync';
+import { useAsync, type AsyncState } from '../lib/useAsync';
 import { progressLabel, progressTitle, TRACK_LABEL } from '../lib/view';
 
 const COMPETENCIES: { id: CompetencyId; label: string }[] = [
@@ -31,10 +32,30 @@ const COMPETENCIES: { id: CompetencyId; label: string }[] = [
 ];
 const isCompetency = (v: string | null): v is CompetencyId => COMPETENCIES.some((c) => c.id === v);
 
-/** Stats: tiles, XP over time, pass rates, review forecast + retention, campaign progress, G1 catch rate, evidence. */
+/** One panel's request state, loaded by the page (release, UI-FINAL CLS leftover). */
+type Loaded<T> = AsyncState<T> & { reload: () => void };
+
+/**
+ * Stats: tiles, XP over time, pass rates, review forecast + retention, campaign progress, G1 catch rate, evidence.
+ *
+ * Release (UI-FINAL leftover, CLS 0.0067 on /stats): every panel used to fetch on its own and grow from its skeleton
+ * when its data landed, pushing the panels below it down one by one. The page now starts every panel request at once
+ * and lays the panels out only when each has SETTLED (data or error), so the grid appears in its final shape; the
+ * evidence list is the last block on the page, so its own load cannot push anything. A panel's Retry still reloads
+ * that panel alone (an input-driven change, not a layout shift).
+ */
 export function StatsPage() {
   const api = useApi();
   const q = useAsync(() => api.getDashboard(), [api]);
+  const xp = useAsync(() => api.getXpStats(), [api]);
+  const rates = useAsync(() => api.getPassRates(), [api]);
+  const reviews = useAsync(() => api.getReviewStats(), [api]);
+  const campaign = useAsync(() => api.getCampaignProgress(), [api]);
+  const katas = useAsync(() => api.getKataStats(), [api]);
+  // settled once = laid out for good (a later Retry puts that one panel back into loading, in place)
+  const [panelsSettled, setPanelsSettled] = useState(false);
+  const allSettled = [xp, rates, reviews, campaign, katas].every((x) => x.status !== 'loading');
+  if (allSettled && !panelsSettled) setPanelsSettled(true);
   const grid = q.data ? buildHeatGrid(q.data.heatmap, q.data.today) : null;
   const days = q.data?.heatmap ?? [];
   const slateDays = days.filter((d) => d.status === 'slate').length;
@@ -42,7 +63,7 @@ export function StatsPage() {
   return (
     <>
       <PageHeader eyebrow="Stats" title="Progress & evidence" />
-      {q.status !== 'ready' || !grid ? (
+      {q.status !== 'ready' || !grid || !panelsSettled ? (
         <LoadState error={q.error} onRetry={q.reload} minHeight={400} />
       ) : (
         <div className="stats">
@@ -68,11 +89,11 @@ export function StatsPage() {
             </div>
           </div>
           <div className="stats-grid">
-            <XpPanel />
-            <PassRatePanel />
-            <ReviewPanel />
-            <CampaignProgressPanel />
-            <CatchRatePanel />
+            <XpPanel q={xp} />
+            <PassRatePanel q={rates} />
+            <ReviewPanel q={reviews} />
+            <CampaignProgressPanel q={campaign} />
+            <CatchRatePanel q={katas} />
             <EvidenceBrowser />
           </div>
         </div>
@@ -94,9 +115,7 @@ const XP_SERIES: readonly (ChartSeries & { id: keyof XpStatsResponse['days'][num
 
 type XpRange = 'days' | 'weeks';
 
-function XpPanel() {
-  const api = useApi();
-  const q = useAsync(() => api.getXpStats(), [api]);
+function XpPanel({ q }: { q: Loaded<XpStatsResponse> }) {
   const [range, setRange] = useState<XpRange>('days');
   return (
     <Panel
@@ -190,9 +209,7 @@ const CHECK_LABEL: Partial<Record<CheckType, string>> = {
   'vitest-project': 'Vitest projects',
 };
 
-function PassRatePanel() {
-  const api = useApi();
-  const q = useAsync(() => api.getPassRates(), [api]);
+function PassRatePanel({ q }: { q: Loaded<PassRatesResponse> }) {
   return (
     <Panel title="Pass rates" className="span-2">
       {q.status !== 'ready' ? <LoadState error={q.error} onRetry={q.reload} minHeight={220} /> : <PassRates data={q.data} />}
@@ -278,9 +295,7 @@ const RATING_PARTS = [
   { id: 'easy', label: 'Easy', className: 'series-easy' },
 ] as const;
 
-function ReviewPanel() {
-  const api = useApi();
-  const q = useAsync(() => api.getReviewStats(), [api]);
+function ReviewPanel({ q }: { q: Loaded<ReviewStatsResponse> }) {
   return <Panel title="Reviews">{q.status !== 'ready' ? <LoadState error={q.error} onRetry={q.reload} minHeight={220} /> : <ReviewStats data={q.data} />}</Panel>;
 }
 
@@ -357,9 +372,7 @@ function ReviewStats({ data }: { data: ReviewStatsResponse }) {
 
 // ---------------------------------------------------------------- campaign progress
 
-function CampaignProgressPanel() {
-  const api = useApi();
-  const q = useAsync(() => api.getCampaignProgress(), [api]);
+function CampaignProgressPanel({ q }: { q: Loaded<CampaignProgressResponse> }) {
   return (
     <Panel title="Campaign progress" className="span-2">
       {q.status !== 'ready' ? <LoadState error={q.error} onRetry={q.reload} minHeight={200} /> : <CampaignProgress data={q.data} />}
@@ -411,9 +424,7 @@ function CampaignProgress({ data }: { data: CampaignProgressResponse }) {
   );
 }
 
-function CatchRatePanel() {
-  const api = useApi();
-  const q = useAsync(() => api.getKataStats(), [api]);
+function CatchRatePanel({ q }: { q: Loaded<KataStatsResponse> }) {
   return (
     <Panel title="Catch rate (G1)">
       {q.status !== 'ready' ? (

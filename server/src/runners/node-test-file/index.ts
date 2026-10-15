@@ -19,7 +19,7 @@
  */
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmod, mkdtemp, readFile, rm, writeFile, mkdir } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, rmdir, writeFile, mkdir } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -120,6 +120,27 @@ export interface RunOptions {
 }
 
 export const DEFAULT_TIMEOUT_MS = 30_000;
+
+/** This process's default parent of the per-run `bq-ntf-*` workspaces: os.tmpdir()/bq-ntf-<pid>. */
+export function defaultWorkParent(): string {
+  return path.join(tmpdir(), `bq-ntf-${process.pid}`);
+}
+
+/**
+ * campaign 2 release (F12): remove this process's workspace parent on a normal shutdown.
+ * Every run removes its own workspace in a finally, so after the last run the parent is
+ * empty; it is removed only then (rmdir, never recursive), so a run still in flight is
+ * never pulled out from under. A parent that is missing or still holds something is left
+ * alone (false) — `npm run sweep:ntf` handles what a hard kill orphans.
+ */
+export async function removeWorkParent(dir: string = defaultWorkParent()): Promise<boolean> {
+  try {
+    await rmdir(dir);
+    return true;
+  } catch {
+    return false;
+  }
+}
 const OUTPUT_LIMIT = 64 * 1024;
 
 // ---------------------------------------------------------------------------
@@ -470,7 +491,7 @@ export async function run(
 
   // Hygiene: per-PROCESS parent dir, so concurrent suites never snapshot each other's
   // workspaces and a sweeper can tell a dead process's leftovers from a live run's.
-  const workParent = options.workRoot ?? path.join(tmpdir(), `bq-ntf-${process.pid}`);
+  const workParent = options.workRoot ?? defaultWorkParent();
   await mkdir(workParent, { recursive: true });
   const root = await mkdtemp(path.join(workParent, "bq-ntf-"));
   try {

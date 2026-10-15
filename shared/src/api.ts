@@ -68,6 +68,8 @@ export const API_ERROR_CODES = [
   'RETEST_NOT_OPEN',
   /** W11: a written answer identical to the unit's starter template (nothing written; it would be stored immutably) */
   'UNTOUCHED_TEMPLATE',
+  /** F3: run/submit on a type-checked unit whose learner code carries @ts-nocheck / @ts-ignore / @ts-expect-error (nothing ran, nothing recorded) */
+  'TYPECHECK_SUPPRESSED',
   'INTERNAL',
 ] as const;
 export const ApiErrorCode = z.enum(API_ERROR_CODES);

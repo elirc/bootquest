@@ -279,6 +279,21 @@ describe('sync job', { timeout: 120_000 }, () => {
     }
   });
 
+  it('F15: a recorded tsconfig pin that does not hold at the recorded sha is a sync ERROR, judged by the shared chain verifier', async () => {
+    const t = makeSyncFixture();
+    try {
+      // practice/tsconfig.json extends ../tsconfig.json: tamper the parent (still valid JSON)
+      appendFileSync(join(t.base, 'tsconfig.json'), '\n');
+      const r = await t.svc.run(db(), clock);
+      expect(r.repos[0]!.error).toMatch(
+        /U03: recorded tsconfig chain does not hold at [0-9a-f]{40} — the table is wrong \(tsconfig tsconfig\.json at [0-9a-f]{7} does not hash to its recorded pin/,
+      );
+      expect(count('SELECT COUNT(*) AS n FROM unit')).toBe(0);
+    } finally {
+      t.cleanup();
+    }
+  });
+
   it('the DB NEVER stores curriculum text: no markdown body line or program prose lands in any column', async () => {
     await fx.svc.run(db(), clock);
     const u01 = readFileSync(join(fx.base, 'docs', 'curriculum', 'U01.md'), 'utf8');
