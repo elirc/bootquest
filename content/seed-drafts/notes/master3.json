@@ -1,0 +1,634 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "master3",
+ "repo": "master3",
+ "sha": "913823efed266ca1105f5ced631201cb3618e006",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: follow one support ticket through master3",
+   "body": "master3 is a small support-desk app: Express routes, a ticket service, Prisma over PostgreSQL, a background worker and a React page. The course in `astraupskill/` follows one ticket from an HTTP request to a database row and back.\n\nRead in this order:\n\n1. `astraupskill/README.md`: what the app is, and a glossary table that points each term at real lines.\n2. `01-CODEBASE-MAP.md`: the files that matter and the ticket PATCH pipeline step by step.\n3. `02-CONCEPTS.md`: the core ideas, each opened with a \"Predict before you read on\" question. Do predict first.\n4. `03-WORKED-CHANGE.md`: a real repair to ticket PATCH, compared with the old code in `snapshots/`.\n5. `05-PRACTICE.md` (seven Goal + Check exercises), then `06-SOLUTIONS-AND-REVIEW.md` and `07-TRACE-LAB.md`.\n\n`docs/walkthrough/important-files.md` is a gentler tour of the same files if the course feels dense. One warning from the README: identity is a demo fixture (two request headers, no password), so read everything as \"what happens given an honest caller\".",
+   "excerpts": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 9,
+     "lineEnd": 11,
+     "quote": "1. [01-CODEBASE-MAP.md](01-CODEBASE-MAP.md): files, sizes, and the request pipeline with line numbers."
+    },
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "Treat everything below as \"authorization given an honest identity\""
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/walkthrough/important-files.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "A plain-language tour of each important file and the senior habit it shows."
+    },
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The file table and the numbered PATCH pipeline to keep open while reading code."
+    }
+   ]
+  },
+  {
+   "id": "r02-layers-of-a-request",
+   "target": "pack",
+   "phase": "before",
+   "title": "Core idea: each layer of a request answers one question",
+   "body": "A request to master3 passes several layers, and each answers a different question. Keep them apart in your head:\n\n- **Authentication** (\"who is this?\"): `authMiddleware` looks up a user from the `x-tenant-slug` and `x-user-email` headers.\n- **Validation** (\"is this input well formed?\"): the route parses the body with a Zod schema; a bad value becomes a 400.\n- **Authorization** (\"may this role do this?\"): the ticket service checks the role using small helpers from the domain package.\n- **Tenant scope** (\"which customer company's data?\"): lookups include the caller's `tenantId`, because several tenants share one database.\n- **Persistence**: the accepted change is written inside a database transaction.\n\nThe errors module decides which HTTP status each kind of thrown error becomes. When a quiz asks \"what status comes back?\", find which layer stops the request first, and what kind of error that layer throws.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 7,
+     "lineEnd": 7,
+     "quote": "`authMiddleware` answers \"who is this?\" by finding an active user in the tenant named by `x-tenant-slug` (`auth.ts:23-26`). It does not decide what that user may do."
+    },
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "`HttpError`, `asyncHandler`, `errorMiddleware` (Zod → 400, HttpError → its status, anything else → 500)"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": 23,
+     "lineEnd": 35,
+     "why": "\"The ticket PATCH pipeline\" walks these layers with line numbers."
+    }
+   ]
+  },
+  {
+   "id": "r03-domain-rules-and-derived-state",
+   "target": "pack",
+   "phase": "before",
+   "title": "Core idea: pure domain rules, and state computed on the way out",
+   "body": "`packages/domain/src/index.ts` holds the business rules as plain functions with no framework or database: which status changes are allowed (a lookup table plus a few role rules), how long each priority gets before its SLA deadline, and which roles may edit.\n\nTwo habits make this file easy to reason about:\n\n1. **Read rules in order.** `canTransitionTicket` has several `if` lines before it ever looks at the table. The first line that returns decides the answer, so the order matters as much as the table.\n2. **Derived, not stored.** Only the deadline (`slaDueAt`) is saved in the database. The SLA *state* is calculated fresh every time a ticket is returned. So ask: \"what is stored, and when does the stored value change?\"\n\nThe same idea of a durable record shows up in the outbox: a row saved with the change, read later by the worker, instead of sending a message directly.",
+   "excerpts": [
+    {
+     "path": "docs/walkthrough/important-files.md",
+     "lineStart": 17,
+     "lineEnd": 17,
+     "quote": "This file holds business rules that should survive framework changes. Ticket transitions, SLA due-date math, SLA state, and basic permission helpers live here."
+    },
+    {
+     "path": "packages/domain/src/index.ts",
+     "lineStart": 32,
+     "lineEnd": 37,
+     "quote": "export function canTransitionTicket({ from, to, actorRole }: TicketTransition): boolean {"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "packages/domain/src/index.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The whole rules file is 85 lines; read it end to end."
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 39,
+     "lineEnd": 41,
+     "why": "\"SLA state is derived, not stored\" explains the deadline math."
+    }
+   ]
+  },
+  {
+   "id": "x-q01-goal-admin-identity",
+   "target": "seed:quests:master3/quiz/03e5b79e7cd96b08",
+   "phase": "after",
+   "title": "Exercise 7: which Check proves the demo-identity hole",
+   "body": "**What the Goal asks.** As a viewer, can you reach the audit log you are not allowed to see, using only the admin routes and how `authMiddleware` works? The solution: `GET /api/admin/users` has no `requireRole`, so it lists every user's email and role. Then send an admin's email in `x-user-email`; the gate on `/audit-logs` passes, because the role belongs to whatever user the header picks.\n\n**Why the keyed Check fits.** It asserts exactly those three facts: the `/users` handler has no `requireRole`, `/audit-logs` has `requireRole([\"ADMIN\", \"MANAGER\"])`, and the email comes from a header with a default.\n\nThe other three choices are real Checks too, but from other exercises in 05-PRACTICE.md:\n- \"transition is validated against a read outside the transaction\" is Exercise 6 (the update race).\n- \"gate before lookup, role-shaped include on both paths\" is Exercise 3 (ticket PATCH).\n- \"transition matrix\" is Exercise 1 (`canTransitionTicket`).",
+   "excerpts": [
+    {
+     "path": "apps/api/src/modules/admin/adminRoutes.ts",
+     "lineStart": 20,
+     "lineEnd": 22,
+     "quote": "\"/audit-logs\", requireRole([\"ADMIN\", \"MANAGER\"]),"
+    },
+    {
+     "path": "apps/api/src/middleware/auth.ts",
+     "lineStart": 21,
+     "lineEnd": 21,
+     "quote": "const userEmail = String(req.header(\"x-user-email\") ?? \"agent@acme.test\");"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 26,
+     "lineEnd": 26,
+     "quote": "The underlying problem is that identity is asserted, not proved."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 32,
+     "lineEnd": 32,
+     "why": "Finding F1 rates this hole and why it is acceptable only for a teaching fixture."
+    }
+   ]
+  },
+  {
+   "id": "x-q02-retry-only-p2034",
+   "target": "seed:quests:master3/quiz/2663e1d607eea7f9",
+   "phase": "after",
+   "title": "Why withSerializableRetry retries P2034 and nothing else",
+   "body": "**Key: an HttpError is a decision and a P2002 will recur, but a P2034 can pass on retry.** Under Serializable isolation PostgreSQL may refuse a commit because a concurrent transaction got in the way (SQLSTATE 40001, Prisma code P2034). That is contention: running the same work again can succeed. An `HttpError` is the code deliberately saying no (403, 404); retrying gives the same answer. A P2002 is a unique-constraint violation, which will not go away on its own. So the wrapper retries only P2034.\n\n- **Exhausts the connection pool**: the guide gives no pool argument; the reason is that retrying cannot change the outcome.\n- **Retried later by Express's error middleware**: `errorMiddleware` only turns errors into responses; it never re-runs anything.\n- **Thrown outside the callback**: the callback can throw both (for example a unique violation on insert), and the wrapper sees them; it just rethrows them.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/modules/tickets/ticketService.ts",
+     "lineStart": 27,
+     "lineEnd": 28,
+     "quote": "const retryable = error instanceof Prisma.PrismaClientKnownRequestError && error.code === SERIALIZATION_FAILURE; if (!retryable || attempt >= attempts) throw error;"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 33,
+     "lineEnd": 33,
+     "quote": "an `HttpError` is a decision, not contention, and a `P2002` unique violation will not disappear on retry."
+    },
+    {
+     "path": "apps/api/src/middleware/errors.ts",
+     "lineStart": 32,
+     "lineEnd": 33,
+     "quote": "const message = error instanceof Error ? error.message : \"Unexpected error\"; res.status(500).json({ error: message });"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q03-goal-number-race",
+   "target": "seed:quests:master3/quiz/29892e38bb0ae8ae",
+   "phase": "after",
+   "title": "Exercise 5: which Check proves only service paths retry",
+   "body": "**What the Goal asks.** Find every place a ticket number is computed as \"highest + 1\", say which run under Serializable with a retry, and predict two simultaneous inbound emails. The solution: `createTicket` is wrapped in `withSerializableRetry`; the inbound-email route computes `(lastTicket?.number ?? 1000) + 1` itself at default isolation with no retry; the schema's `@@unique([tenantId, number])` makes the second insert fail with P2002, so that client gets a 500.\n\n**Why the keyed Check fits.** It asserts the retry is present in `createTicket` and `updateTicket`, absent from `addTicketComment` and the notification route, that the route has its own \"+ 1\", and that the unique constraint exists.\n\nThe other three choices are real Checks too, but from other exercises in 05-PRACTICE.md:\n- \"transition matrix\" is Exercise 1.\n- \"invalid transition surfaces as a 500 with the raw message\" is Exercise 4.\n- \"transition is validated against a read outside the transaction\" is Exercise 6.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/modules/notifications/notificationRoutes.ts",
+     "lineStart": 43,
+     "lineEnd": 43,
+     "quote": "number: (lastTicket?.number ?? 1000) + 1,"
+    },
+    {
+     "path": "prisma/schema.prisma",
+     "lineStart": 125,
+     "lineEnd": 125,
+     "quote": "@@unique([tenantId, number])"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 22,
+     "lineEnd": 22,
+     "quote": "Prisma raises `P2002`, and the client gets a 500 while the first gets 202."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q04-tenant-404",
+   "target": "seed:quests:master3/quiz/2fb6ddefdead181e",
+   "phase": "after",
+   "title": "A foreign-tenant ticket id comes back as 404",
+   "body": "**Key: 404, because the lookup filters by id and tenantId, so a foreign id looks like a missing one.** `updateTicket` loads the ticket with `where: { id, tenantId: auth.tenantId }`. A ticket from tenant B never matches tenant A's id, so `findFirst` returns nothing and the service throws `HttpError(404, \"Ticket not found\")`. A 404 also hides the fact that the id exists somewhere else.\n\n- **500 from row-level security**: the schema has no row-level security; the service's `where` clause is the only tenant check.\n- **200, agents may edit any id**: agents may edit tickets, but only ones the tenant-scoped lookup finds.\n- **403 for another tenant**: the service never asks \"which tenant owns this?\"; it only knows the row was not found. A 403 would also reveal that the id exists.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/modules/tickets/ticketService.ts",
+     "lineStart": 176,
+     "lineEnd": 181,
+     "quote": "const existing = await prisma.ticket.findFirst({ where: { id, tenantId: auth.tenantId },"
+    },
+    {
+     "path": "apps/api/src/modules/tickets/ticketService.ts",
+     "lineStart": 181,
+     "lineEnd": 181,
+     "quote": "if (!existing) throw new HttpError(404, \"Ticket not found\");"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 15,
+     "lineEnd": 15,
+     "quote": "The schema has no row-level security; the service is the only thing selecting the right tenant."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q05-gate-before-lookup",
+   "target": "seed:quests:master3/quiz/35358a0fa1901e7d",
+   "phase": "after",
+   "title": "Why the role gate runs before findFirst",
+   "body": "**Key: gating first returns 403 with no query, so a viewer cannot tell a 404 from a 403.** If the lookup ran first, a viewer would get 404 for ids that do not exist in their tenant and 403 for ids that do: they could probe which tickets exist. It would also cost a database query for a request that is always refused. With `canEditTicket` on the first line, every viewer PATCH is the same 403 and touches no data.\n\n- **findFirst needs the role to pick an include**: this `findFirst` uses a fixed `select`; the role-shaped include is used later, in the update.\n- **Order does not matter, moved for a test**: the worked change explains a real leak and a wasted query when the gate comes after.\n- **Prisma refuses queries for read-only roles**: Prisma knows nothing about app roles; the service code does the refusing.",
+   "excerpts": [
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": 38,
+     "lineEnd": 38,
+     "quote": "Placed after the lookup, a viewer would still learn whether an id exists in their tenant (404 vs 403) and would cost a query. Placed first, every viewer PATCH is a 403 with zero database work."
+    },
+    {
+     "path": "apps/api/src/modules/tickets/ticketService.ts",
+     "lineStart": 172,
+     "lineEnd": 174,
+     "quote": "if (!canEditTicket(auth.role)) { throw new HttpError(403, \"You do not have permission to update tickets\");"
+    },
+    {
+     "path": "apps/api/src/modules/tickets/ticketService.ts",
+     "lineStart": 176,
+     "lineEnd": 179,
+     "quote": "select: { id: true, status: true, priority: true, assignedUserId: true }"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q06-goal-stale-read",
+   "target": "seed:quests:master3/quiz/3985b765b69b7854",
+   "phase": "after",
+   "title": "Exercise 6: which Check proves the read sits outside the transaction",
+   "body": "**What the Goal asks.** Find the read that `assertTicketTransition` checks against, and where the transaction opens, then build a race. The solution: the read is the `findFirst` before the transaction, and the transaction holds only an update keyed on `id` plus two inserts. Two agents both read NEW; one sets RESOLVED, the other PENDING; the second write turns RESOLVED into PENDING, which the table forbids. Serializable cannot help because the transaction re-reads nothing.\n\n**Why the keyed Check fits.** It asserts lookup, then the transition check, then `prisma.$transaction`, in that order, with no `findFirst`/`findUnique` inside and an update `where: { id }`.\n\nThe other three choices are real Checks too, but from other exercises in 05-PRACTICE.md:\n- \"transition matrix\" is Exercise 1.\n- \"user list is ungated; audit log is gated; identity is a header\" is Exercise 7.\n- \"gate before lookup, role-shaped include on both paths\" is Exercise 3.",
+   "excerpts": [
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 139,
+     "lineEnd": 145,
+     "quote": "assert.ok(lookup < assertAt && assertAt < txAt);"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 24,
+     "lineEnd": 24,
+     "quote": "The read is `ticketService.ts:176-179`; the transition is checked at `:183-185`; the transaction opens at `:199` and contains only the update and two inserts."
+    },
+    {
+     "path": "apps/api/src/modules/tickets/ticketService.ts",
+     "lineStart": 199,
+     "lineEnd": 201,
+     "quote": "return withSerializableRetry(() => prisma.$transaction(async (tx) => { const updated = await tx.ticket.update({ where: { id },"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07-viewer-public-reply",
+   "target": "seed:quests:master3/quiz/4a191703db4bc163",
+   "phase": "after",
+   "title": "What a viewer's public reply sets off",
+   "body": "**Key: it sets firstResponseAt and then notifies the customer.** `addTicketComment` refuses a viewer only when the comment is INTERNAL. A PUBLIC reply from a viewer goes through: if the ticket has no `firstResponseAt` yet, the transaction sets it, writes an audit row, and adds a `notification.customer_reply` outbox event. The review calls this finding F6: a read-only user can satisfy the first-response metric and message the customer.\n\n- **Stored as INTERNAL, no audit**: the comment keeps the visibility the request asked for, and both visibilities write an audit row.\n- **Hidden until approved**: there is no approval step anywhere in the code.\n- **Refused, viewers cannot comment**: the only refusal is for INTERNAL notes; viewers may post public comments.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/modules/tickets/ticketService.ts",
+     "lineStart": 240,
+     "lineEnd": 241,
+     "quote": "if (auth.role === \"VIEWER\" && input.visibility === \"INTERNAL\") { throw new HttpError(403, \"Viewers cannot create internal notes\");"
+    },
+    {
+     "path": "apps/api/src/modules/tickets/ticketService.ts",
+     "lineStart": 262,
+     "lineEnd": 263,
+     "quote": "if (input.visibility === \"PUBLIC\" && !ticket.firstResponseAt) {"
+    },
+    {
+     "path": "apps/api/src/modules/tickets/ticketService.ts",
+     "lineStart": 281,
+     "lineEnd": 281,
+     "quote": "topic: \"notification.customer_reply\","
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 42,
+     "lineEnd": 42,
+     "quote": "so a read-only user can satisfy the first-response metric and message the customer."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08-goal-transition-matrix",
+   "target": "seed:quests:master3/quiz/4b9539d3dac3a917",
+   "phase": "after",
+   "title": "Exercise 1: which Check proves the transition matrix",
+   "body": "**What the Goal asks.** Predict `canTransitionTicket` for eight role and status pairs, reading only lines 24-37 of the domain file. The function checks in order: same status returns true; VIEWER returns false; an AGENT closing may do so only from RESOLVED or PENDING; otherwise the `allowedTransitions` table decides. The surprise: VIEWER OPEN to OPEN is true, because the same-status line runs before the viewer line.\n\n**Why the keyed Check fits.** It calls the real `d.canTransitionTicket` for exactly those eight cases and asserts each answer, including `t(\"OPEN\", \"OPEN\", \"VIEWER\")` being true.\n\nThe other three choices are real Checks too, but from other exercises in 05-PRACTICE.md:\n- \"gate before lookup, role-shaped include on both paths\" is Exercise 3.\n- \"invalid transition surfaces as a 500 with the raw message\" is Exercise 4; it tests what the error looks like, not the matrix.\n- \"only the service paths retry\" is Exercise 5.",
+   "excerpts": [
+    {
+     "path": "packages/domain/src/index.ts",
+     "lineStart": 33,
+     "lineEnd": 36,
+     "quote": "if (from === to) return true; if (actorRole === \"VIEWER\") return false; if (to === \"CLOSED\" && actorRole === \"AGENT\") return from === \"RESOLVED\" || from === \"PENDING\";"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "VIEWER OPEN→OPEN is **true** because the same-status shortcut runs before the viewer check (finding F8)."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09-sla-zero-ms",
+   "target": "seed:quests:master3/quiz/6cf24fcd5fa048fd",
+   "phase": "after",
+   "title": "Exactly 0 ms left on an OPEN ticket is AT_RISK",
+   "body": "**Key: AT_RISK.** Walk `getSlaState` line by line. The ticket is OPEN, so the PAUSED line does not apply. It has a due date, so it is not MET by default. `msRemaining` is 0. `0 < 0` is false, so it is not BREACHED. `0 <= 60 * 60_000` is true, so it returns AT_RISK. Both boundaries of the last hour (exactly 60 minutes and exactly zero) count as AT_RISK.\n\n- **MET**: MET needs more than one hour left, or no due date at all.\n- **PAUSED**: only PENDING, RESOLVED and CLOSED tickets are PAUSED; this one is OPEN.\n- **BREACHED**: only a negative remainder, meaning the deadline has already passed, is BREACHED.",
+   "excerpts": [
+    {
+     "path": "packages/domain/src/index.ts",
+     "lineStart": 65,
+     "lineEnd": 66,
+     "quote": "if (msRemaining < 0) return \"BREACHED\"; if (msRemaining <= 60 * 60_000) return \"AT_RISK\";"
+    },
+    {
+     "path": "packages/domain/src/index.ts",
+     "lineStart": 57,
+     "lineEnd": 58,
+     "quote": "if (ticket.status === \"PENDING\" || ticket.status === \"RESOLVED\" || ticket.status === \"CLOSED\") { return \"PAUSED\";"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 7,
+     "lineEnd": 7,
+     "quote": "so exactly 60 minutes and exactly zero are both AT_RISK; only a negative remainder is BREACHED"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10-paused-is-a-label",
+   "target": "seed:quests:master3/quiz/6d8a3c52ba800fb7",
+   "phase": "after",
+   "title": "Why a reopened ticket shows BREACHED after PENDING",
+   "body": "**Key: BREACHED, because PAUSED was just a label and the stored slaDueAt did not move.** `getSlaState` returns PAUSED for any PENDING ticket, but nothing changes the saved deadline while it waits. The HIGH ticket was due at 17:00. Once it is reopened at 18:00 its status is OPEN, so the PAUSED line no longer applies, the remainder is negative, and the state is BREACHED. `slaDueAt` is only recomputed when priority changes.\n\n- **Still PAUSED**: PAUSED is returned only while the status is PENDING, RESOLVED or CLOSED; a reopened ticket is none of those.\n- **AT_RISK, the warning window restarts**: nothing restarts on reopen; the deadline is an hour in the past.\n- **MET, the hour is credited back**: the review says PENDING time is never credited back; that would need a stored pause start.",
+   "excerpts": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 7,
+     "lineEnd": 7,
+     "quote": "The HIGH ticket was due 17:00; at 18:00 it shows PAUSED while PENDING and BREACHED the instant it reopens."
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 7,
+     "lineEnd": 7,
+     "quote": "`slaDueAt` is stored once and recomputed only on a priority change (`ticketService.ts:208-211`)."
+    },
+    {
+     "path": "packages/domain/src/index.ts",
+     "lineStart": 57,
+     "lineEnd": 59,
+     "quote": "if (ticket.status === \"PENDING\" || ticket.status === \"RESOLVED\" || ticket.status === \"CLOSED\") { return \"PAUSED\"; }"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q11-one-role-aware-include",
+   "target": "seed:quests:master3/quiz/8c9c14a1017b05a7",
+   "phase": "after",
+   "title": "The rule behind the internal-note leak fix",
+   "body": "**Key: every endpoint returning a ticket is a read path, so both share one role-aware include.** Before the repair, `getTicket` filtered comments for viewers inline, while `updateTicket` returned the unfiltered `ticketInclude`. So a PATCH response leaked an internal note that GET hid. Now `ticketIncludeForRole(auth.role)` builds the include for both, using `visibleCommentWhere`, which limits a VIEWER to PUBLIC comments. A write that returns data is also a read, and must follow the same visibility rule.\n\n- **A separate table for internal notes**: the fix kept the same table and added a shared filter.\n- **Filter in the client**: the server must not send hidden data at all; a tampered client could just show it.\n- **Writes return only a status and an id**: `updateTicket` still returns the full updated ticket; it is just shaped by role.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/modules/tickets/ticketService.ts",
+     "lineStart": 43,
+     "lineEnd": 44,
+     "quote": "export function visibleCommentWhere(role: AuthContext[\"role\"]) { return role === \"VIEWER\" ? { visibility: \"PUBLIC\" as const } : {};"
+    },
+    {
+     "path": "apps/api/src/modules/tickets/ticketService.ts",
+     "lineStart": 213,
+     "lineEnd": 213,
+     "quote": "include: ticketIncludeForRole(auth.role)"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 23,
+     "lineEnd": 23,
+     "quote": "The general rule: every endpoint that returns a ticket is a read path, including the ones whose verb is a write."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": 40,
+     "lineEnd": 44,
+     "why": "\"The response is shaped by role\" explains the change from ticketInclude."
+    }
+   ]
+  },
+  {
+   "id": "x-q12-one-transaction",
+   "target": "seed:quests:master3/quiz/944d81f42782f8bd",
+   "phase": "after",
+   "title": "A failing outbox insert rolls back the whole update",
+   "body": "**Key: a 500 and no audit row, since all three writes commit together or not at all.** In `updateTicket` the ticket update, the audit insert and the outbox insert all run inside one `prisma.$transaction` callback. If the outbox insert throws, the database undoes the whole transaction, including the update and the audit row. The Prisma error is not an `HttpError` or a `ZodError`, so `errorMiddleware` answers 500.\n\n- **200, outbox is best-effort**: the outbox insert is inside the transaction, so its failure fails everything; the guide calls the outbox row \"a durable promise to notify\".\n- **409 mapped from Prisma, update kept**: `errorMiddleware` maps nothing from Prisma (all such errors end at 500), and the update is rolled back, not kept.\n- **500 but the audit row stays**: order inside a transaction does not matter for rollback; the earlier audit insert is undone too.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 29,
+     "lineEnd": 29,
+     "quote": "the ticket update, the audit insert and the outbox insert are in one `prisma.$transaction` callback (`ticketService.ts:199-236`), so they commit together or not at all."
+    },
+    {
+     "path": "apps/api/src/middleware/errors.ts",
+     "lineStart": 32,
+     "lineEnd": 33,
+     "quote": "const message = error instanceof Error ? error.message : \"Unexpected error\"; res.status(500).json({ error: message });"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q13-goal-gate-and-include",
+   "target": "seed:quests:master3/quiz/a125a3148c9f9a95",
+   "phase": "after",
+   "title": "Exercise 3: which Check proves the gate and the shaped response",
+   "body": "**What the Goal asks.** Prove that in `updateTicket` the role gate comes before the first Prisma call, and that `getTicket` and the update both use `ticketIncludeForRole`; then fill in status, audit rows, outbox rows and comments for four requests. The solution's matrix: both viewer PATCHes are 403 with no writes, the agent PATCH is 200 with one audit and one outbox row and both comments, and the viewer GET is 200 with the public comment only.\n\n**Why the keyed Check fits.** It asserts `canEditTicket(auth.role)` appears before `prisma.ticket.findFirst` in `updateTicket`, and that both the transactional `tx.ticket.update` and `getTicket` use `include: ticketIncludeForRole(auth.role)`.\n\nThe other three choices are real Checks too, but from other exercises in 05-PRACTICE.md:\n- \"transition matrix\" is Exercise 1.\n- \"transition is validated against a read outside the transaction\" is Exercise 6.\n- \"only the service paths retry\" is Exercise 5.",
+   "excerpts": [
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 86,
+     "lineEnd": 89,
+     "quote": "assert.ok(u.indexOf(\"canEditTicket(auth.role)\") < u.indexOf(\"prisma.ticket.findFirst\"));"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "The check passes because `canEditTicket` at `ticketService.ts:172` precedes the `findFirst` at `:176`, and `ticketIncludeForRole(auth.role)` is the include at `:108` and `:213`."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 11,
+     "lineEnd": 16,
+     "why": "The filled-in matrix for the four requests."
+    }
+   ]
+  },
+  {
+   "id": "x-q14-viewer-foreign-403",
+   "target": "seed:quests:master3/quiz/b3027fcb969463d4",
+   "phase": "after",
+   "title": "A viewer with a foreign-tenant id gets 403, not 404",
+   "body": "**Key: 403 from the role gate, before any tenant lookup runs.** `updateTicket` checks `canEditTicket(auth.role)` on its first line. For a VIEWER that is false, so the service throws a 403 at once. The tenant-scoped `findFirst`, which would have produced the agent's 404, never runs. The trace lab warns not to call this a cross-tenant 404.\n\n- **401 for the foreign tenant**: 401 only comes from `authMiddleware` when the header user is not found; the viewer is a real user of their own tenant.\n- **200 with public comments only**: that is what a viewer GET returns; PATCH is an edit, and viewers may not edit.\n- **404 like the agent**: the role check runs before the tenant check, so the viewer never gets that far.",
+   "excerpts": [
+    {
+     "path": "astraupskill/07-TRACE-LAB.md",
+     "lineStart": 11,
+     "lineEnd": 11,
+     "quote": "A *viewer* sending the same id gets 403 from the gate before any lookup; do not describe that as a cross-tenant 404."
+    },
+    {
+     "path": "apps/api/src/modules/tickets/ticketService.ts",
+     "lineStart": 172,
+     "lineEnd": 173,
+     "quote": "if (!canEditTicket(auth.role)) { throw new HttpError(403, \"You do not have permission to update tickets\");"
+    },
+    {
+     "path": "apps/api/src/middleware/auth.ts",
+     "lineStart": 28,
+     "lineEnd": 29,
+     "quote": "if (!user) { res.status(401)"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q15-serializable-stale-read",
+   "target": "seed:quests:master3/quiz/c3ba562089302eb1",
+   "phase": "after",
+   "title": "Why Serializable does not stop PENDING over RESOLVED",
+   "body": "**Key: the read and transition check run before the transaction opens, so it has nothing to guard.** Both agents' `findFirst` reads see NEW, and both transitions (NEW to RESOLVED, NEW to PENDING) are legal, so both pass `assertTicketTransition`. Only then does each open a transaction, which does a blind `update({ where: { id } })`. Serializable protects reads made *inside* the transaction, and this one makes none.\n\n- **It does stop it with 40001 and a re-validating retry**: even if PostgreSQL raised 40001, the retry re-runs only the callback, which repeats the update without checking the transition again.\n- **RESOLVED to PENDING is legal**: the table allows RESOLVED only to OPEN or CLOSED.\n- **Serializable only applies to inserts**: isolation levels apply to all reads and writes in the transaction; the problem is where the read is.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 35,
+     "lineEnd": 35,
+     "quote": "Serializable protects the reads made inside the transaction, and the transaction makes none."
+    },
+    {
+     "path": "packages/domain/src/index.ts",
+     "lineStart": 28,
+     "lineEnd": 28,
+     "quote": "RESOLVED: [\"OPEN\", \"CLOSED\"],"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 24,
+     "lineEnd": 24,
+     "quote": "or PostgreSQL raises `40001` and `withSerializableRetry` re-runs the callback, which repeats the unvalidated update."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 24,
+     "lineEnd": 24,
+     "why": "Exercise 6 solution: the race step by step and two ways to close it."
+    }
+   ]
+  },
+  {
+   "id": "x-q16-agent-close-500",
+   "target": "seed:quests:master3/quiz/d35f176e7b36e7c1",
+   "phase": "after",
+   "title": "An agent closing an OPEN ticket gets a 500",
+   "body": "**Key: 500, because agents may close only from RESOLVED or PENDING, and the plain Error is unmapped.** `canTransitionTicket` has a special rule: when an AGENT moves a ticket to CLOSED, it is allowed only from RESOLVED or PENDING. OPEN fails, so `assertTicketTransition` throws a plain `Error`. `errorMiddleware` only knows `ZodError` (400) and `HttpError` (its status); everything else becomes 500. It is arguably a bug because a client mistake is reported as a server error.\n\n- **200, agents close from any state**: the AGENT rule on line 35 says otherwise; a MANAGER sending the same request gets 200.\n- **409 from the middleware**: 409 is only the *suggested* fix; today no code maps anything to 409.\n- **403 via an HttpError**: the domain package throws a plain `Error`, not an `HttpError`, and the service does not convert it.",
+   "excerpts": [
+    {
+     "path": "packages/domain/src/index.ts",
+     "lineStart": 35,
+     "lineEnd": 35,
+     "quote": "if (to === \"CLOSED\" && actorRole === \"AGENT\") return from === \"RESOLVED\" || from === \"PENDING\";"
+    },
+    {
+     "path": "packages/domain/src/index.ts",
+     "lineStart": 41,
+     "lineEnd": 41,
+     "quote": "throw new Error(`Cannot transition ticket from ${transition.from} to ${transition.to}`);"
+    },
+    {
+     "path": "astraupskill/07-TRACE-LAB.md",
+     "lineStart": 13,
+     "lineEnd": 13,
+     "quote": "Response: `500 {\"error\":\"Cannot transition ticket from OPEN to CLOSED\"}`. Same request as the manager: 200."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 20,
+     "lineEnd": 20,
+     "why": "Exercise 4 solution sketches the TicketTransitionError fix."
+    }
+   ]
+  },
+  {
+   "id": "x-q17-priority-churn-sla",
+   "target": "seed:quests:master3/quiz/dcff31728998cbb7",
+   "phase": "after",
+   "title": "Priority churn gives a breaching ticket a fresh SLA",
+   "body": "**Key: it gets a fresh two hours, because every priority change recomputes slaDueAt from now.** In `updateTicket`, when the new priority differs from the stored one, `slaDueAt` is set to `calculateSlaDueAt(new Date(), priority)`: the deadline is counted from this moment, not from when the ticket was created. URGENT gets 2 hours. So URGENT to LOW, then LOW to URGENT, ends with a deadline two hours from the second change. The review lists this as finding F5, an SLA clock reset.\n\n- **Refused, priority changes are rate-limited**: no rate limit exists in the service.\n- **Nothing changes, slaDueAt uses createdAt**: the update passes `new Date()`, not the creation time.\n- **Breaches at once on LOW**: the LOW change also recomputes from now, giving 72 hours, not a breach.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/modules/tickets/ticketService.ts",
+     "lineStart": 208,
+     "lineEnd": 211,
+     "quote": "slaDueAt: input.priority && input.priority !== existing.priority ? calculateSlaDueAt(new Date(), input.priority) : undefined"
+    },
+    {
+     "path": "packages/domain/src/index.ts",
+     "lineStart": 46,
+     "lineEnd": 49,
+     "quote": "LOW: 72 * 60, NORMAL: 24 * 60, HIGH: 8 * 60, URGENT: 2 * 60"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 40,
+     "lineEnd": 40,
+     "quote": "an URGENT ticket about to breach can be set to LOW and back to URGENT to get a fresh two hours."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q18-goal-find-the-500",
+   "target": "seed:quests:master3/quiz/ea7bbec5715c9c3d",
+   "phase": "after",
+   "title": "Exercise 4: which Check proves the invalid-transition 500",
+   "body": "**What the Goal asks.** Trace an agent's `{ \"status\": \"CLOSED\" }` on a NEW ticket through `assertTicketTransition` and `errorMiddleware`, and give the status and body. The solution: NEW to CLOSED is not in the table, so the domain throws a plain `Error`; the middleware does not recognise it and falls through to `res.status(500).json({ error: message })`, giving `500 {\"error\":\"Cannot transition ticket from NEW to CLOSED\"}`.\n\n**Why the keyed Check fits.** It calls the real `assertTicketTransition` with NEW, CLOSED, AGENT, asserts the error has no `status` (so it is not an `HttpError`), checks the exact message, and checks the 500 line in `errors.ts`.\n\nThe other three choices are real Checks too, but from other exercises in 05-PRACTICE.md:\n- \"transition matrix\" is Exercise 1: it tests the yes/no answers, not the error.\n- \"gate before lookup, role-shaped include on both paths\" is Exercise 3.\n- \"SLA boundaries\" and \"pause is a label, not a clock stop\" are Exercise 2.",
+   "excerpts": [
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 106,
+     "lineEnd": 107,
+     "quote": "assert.equal(err.status, undefined); // not an HttpError"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 20,
+     "lineEnd": 20,
+     "quote": "`500 {\"error\":\"Cannot transition ticket from NEW to CLOSED\"}`"
+    },
+    {
+     "path": "apps/api/src/middleware/errors.ts",
+     "lineStart": 32,
+     "lineEnd": 33,
+     "quote": "res.status(500).json({ error: message });"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}

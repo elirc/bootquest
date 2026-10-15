@@ -1,0 +1,549 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "csbootcamp",
+ "repo": "csbootcamp",
+ "sha": "e05b3505f22acbb95ed4531204e08991d29a7da9",
+ "notes": [
+  {
+   "id": "r01-start-here-reading-order",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: from the C# bootcamp to the versioned CRUD lab",
+   "body": "This pack has two parts. FLIGHTPLAN.md is the ten-hour schedule for the offline C# exercises in `bootcamp/` (language core, delegates, collections and LINQ, strings and time). The quizzes in this pack are about the second part: a small ASP.NET Core task API in `guides/crud-web-lab`, taught by the chapters in `astraupskill/`.\n\nSuggested reading order for the lab:\n\n1. `astraupskill/README.md`: what the lab is and what it deliberately leaves out (no database, no login).\n2. `02-CONCEPTS.md`: why every write carries a version.\n3. `01-CODEBASE-MAP.md`: the three files, Program.cs (routes), TaskStore.cs (data), HttpChecks.cs (tests).\n4. `03-WORKED-CHANGE.md`: two clients editing the same task, step by step.\n5. `04-TESTING-AND-DEBUGGING.md` and `VERIFICATION.md`: how the self-test runs and what it does not prove.\n6. `07-TRACE-LAB.md`, then the exercises in `05-PRACTICE.md`.\n7. `06-SOLUTIONS-AND-REVIEW.md` only after you have written your own answers.\n\nKeep the three source files open while you read; the chapters point at branches in them.",
+   "excerpts": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 17,
+     "lineEnd": 21,
+     "quote": "Start with the concepts chapter and predict the two-editor result. Then read the route map, follow the worked example and run the HTTP checks."
+    },
+    {
+     "path": "FLIGHTPLAN.md",
+     "lineStart": 107,
+     "lineEnd": 108,
+     "quote": "After the flight: the [CRUD web lab](astraupskill/README.md) applies these fundamentals to a small ASP.NET Core API (`guides/crud-web-lab`)."
+    },
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 3,
+     "lineEnd": 5,
+     "quote": "Do these in order. Exercises 1, 2 and 4 run code; 3, 5 and 6 are paper designs you check against [06-SOLUTIONS-AND-REVIEW.md](06-SOLUTIONS-AND-REVIEW.md), which answers them in the same order."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The lab overview and its stated limits: single process, no authentication, no durable storage."
+    },
+    {
+     "path": "astraupskill/VERIFICATION.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The exact self-test command and what a passing run prints."
+    },
+    {
+     "path": "FLIGHTPLAN.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The hour-by-hour plan for the bootcamp exercises that come before the lab."
+    }
+   ]
+  },
+  {
+   "id": "r02-the-lost-update-problem",
+   "target": "pack",
+   "phase": "before",
+   "title": "Core idea: a version travels with every write",
+   "body": "The problem this lab solves is called a lost update. Two people open the same task. Person A saves a change. Person B, still looking at the old copy, saves too, and B's save silently wipes out A's change. Neither person sees an error.\n\nThe fix is to make each write say which version it started from. Every task has a `Version` number. When you read a task, the server sends that number back in an `ETag` response header, wrapped in quotes. When you later PUT or DELETE, you send the same value back in an `If-Match` request header. The server compares the number you sent with the number it has now. If they differ, someone else changed the task after you read it, and your write is refused instead of applied.\n\nSo the version is not decoration: it is part of what a client must send to be allowed to write. `02-CONCEPTS.md` lists the exact status code the lab uses for each kind of header problem; learn that list as this lab's own contract, because the guide warns it is narrower than full HTTP.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 5,
+     "lineEnd": 7,
+     "quote": "An unconditional write would erase A's title change. This lab requires each writer to include the version it read, so the server can distinguish a current edit from an outdated one."
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 9,
+     "lineEnd": 10,
+     "quote": "The API exposes the version as a quoted numeric ETag. A client sends that value in If-Match on PUT or DELETE."
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 13,
+     "lineEnd": 15,
+     "quote": "Learn these as this lab's explicit contract rather than assuming it implements every conditional-request combination defined by HTTP."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The same two-client story traced through the store, including what the final GET shows."
+    }
+   ]
+  },
+  {
+   "id": "r03-compare-and-change-in-one-lock",
+   "target": "pack",
+   "phase": "before",
+   "title": "Core idea: compare and change inside one protected region",
+   "body": "Checking the version is only half the job. The check and the save must happen as one indivisible step. If the code checks the version, lets go, and saves later, two writers holding the same version can both pass the check before either one saves, and you are back to a lost update.\n\nTaskStore keeps tasks in an in-memory dictionary and uses one C# `lock` to protect it. While a thread holds the lock, no other thread can enter the same locked block. The lab puts the lookup, the comparison, building the new record and storing it all inside that one block, so only one of two competing writers can move a task forward.\n\nTaskStore does not know about HTTP. It returns an outcome (Saved, Missing or Conflict) and Program.cs turns that outcome into a response. When you read the code, keep the two jobs apart: the store decides what happens to data, the route decides what the client is told.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 17,
+     "lineEnd": 19,
+     "quote": "The crucial operation is compare-and-change. Reading a version, releasing the lock, and later taking another lock to assign the item still permits two writers to pass the comparison."
+    },
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": 18,
+     "lineEnd": 20,
+     "quote": "Replace returns an outcome plus the new record; Delete returns an outcome. Neither method decides HTTP status codes. The route translates Missing, Conflict and Saved into transport responses."
+    },
+    {
+     "path": "guides/crud-web-lab/TaskStore.cs",
+     "lineStart": 7,
+     "lineEnd": 7,
+     "quote": "// One-process teaching store. The lock covers BOTH comparison and mutation."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "guides/crud-web-lab/TaskStore.cs",
+     "lineStart": 1,
+     "lineEnd": 12,
+     "why": "The top of the store: the one-process comment, the dictionary and the lock object it guards."
+    },
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": 31,
+     "lineEnd": 37,
+     "why": "The map suggests drawing a second client entering the store with an old version."
+    }
+   ]
+  },
+  {
+   "id": "x-q01-412-ui-check",
+   "target": "seed:quests:csbootcamp/quiz/0d48c0403e802d0f",
+   "phase": "after",
+   "title": "Why the 412 design is checked by keeping the draft",
+   "body": "Exercise 6 is a paper design: what should a screen do when a save comes back 412 (someone else changed the task first)? Its own Check line is the keyed one: your design keeps the user's unsaved draft and never automatically re-sends the full replacement. The answer chapter explains why. If the client just grabs the newest tag and re-sends its old full record, it overwrites the other person's change again, which is the lost update the whole lab exists to prevent. Showing the current server record beside the draft lets the user decide.\n\nWhy the other choices do not fit:\n- \"your diagram ends with the second save overwriting the first\" is the Check for exercise 3, the two-lock review.\n- \"start the lab with dotnet run...\" is the Check for exercise 1, the request-sequence prediction.\n- \"add one success check and one stale-write check ... title and description\" is the Check for exercise 2, the description field.",
+   "excerpts": [
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 93,
+     "lineEnd": 94,
+     "quote": "**Check:** your design keeps the user's draft and never auto-retries the full replacement; compare with the last paragraph of 06."
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 38,
+     "lineEnd": 40,
+     "quote": "Automatically replaying a full replacement with a fresh tag simply recreates the lost-update problem under a different sequence of requests."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 37,
+     "lineEnd": 41,
+     "why": "The last paragraph: the recovery design the exercise compares against."
+    }
+   ]
+  },
+  {
+   "id": "x-q02-two-instances",
+   "target": "seed:quests:csbootcamp/quiz/10fe707834d4b598",
+   "phase": "after",
+   "title": "Why a C# lock does not protect two app instances",
+   "body": "The keyed conclusion is no. A C# `lock (gate)` only stops threads inside one running process. If you start two copies of the app, each copy has its own `gate` object and its own dictionary of tasks. They do not even share data, let alone a lock. To keep the one-winner rule across many instances, the shared database must do the version check itself as part of the write, and the code must handle the case where no row matched.\n\nWhy the other choices are wrong:\n- \"lock (gate) serialises every writer on the machine\": a lock object lives in one process's memory; another process cannot see it.\n- \"as long as both instances read the ETag before writing\": reading the tag is what every client already does. Two writers with the same tag can still both succeed if nothing shared compares and changes in one step.\n\nVERIFICATION.md also lists multi-instance safety among the things the self-test does not prove.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 31,
+     "lineEnd": 33,
+     "quote": "Two application instances would have separate locks and separate dictionaries. Durable implementation requires the database operation itself to express the expected version, plus an outcome for no matching row."
+    },
+    {
+     "path": "guides/crud-web-lab/TaskStore.cs",
+     "lineStart": 10,
+     "lineEnd": 11,
+     "quote": "private readonly object gate = new();"
+    },
+    {
+     "path": "astraupskill/VERIFICATION.md",
+     "lineStart": 47,
+     "lineEnd": 49,
+     "quote": "They do not establish database durability, multi-instance safety,"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q03-one-winner-assertion",
+   "target": "seed:quests:csbootcamp/quiz/11eb434e97c2de07",
+   "phase": "after",
+   "title": "Where the concurrent test asserts exactly one winner",
+   "body": "HttpChecks.cs line 112 is the assertion. The test sends two PUTs with the same tag at the same time (`Task.WhenAll`), then counts the responses: exactly one must be 200 OK and exactly one must be 412. It does not care which request won. Line 114 then checks the stored task is at version 2 with title \"A\" or \"B\". That is why the test still passes whichever request the scheduler lets in first, which is what 07-TRACE-LAB.md asks for.\n\nWhy the other locations do not fit:\n- TaskStore.cs:29 is `lock (gate)` at the start of Replace. That lock is what makes one winner happen, but it is production code, not a check that asserts anything.\n- Program.cs:43 is in the DELETE route: it turns a Conflict outcome into a 412 response. It produces a status code; it does not test anything.",
+   "excerpts": [
+    {
+     "path": "guides/crud-web-lab/HttpChecks.cs",
+     "lineStart": 112,
+     "lineEnd": 112,
+     "quote": "Check(responses.Count(x => x.StatusCode == HttpStatusCode.OK) == 1 && responses.Count(x => (int)x.StatusCode == 412) == 1, \"expected one winner and one conflict\");"
+    },
+    {
+     "path": "astraupskill/07-TRACE-LAB.md",
+     "lineStart": 26,
+     "lineEnd": 28,
+     "quote": "The winning title changes, but the one-winner property remains the same. The HTTP test therefore asserts the property without requiring a particular scheduling winner."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "guides/crud-web-lab/HttpChecks.cs",
+     "lineStart": 106,
+     "lineEnd": 117,
+     "why": "The full concurrent-editors test, including the winner-state check."
+    }
+   ]
+  },
+  {
+   "id": "x-q04-428-missing-header",
+   "target": "seed:quests:csbootcamp/quiz/1fd1cef73638dcb8",
+   "phase": "after",
+   "title": "Where a missing If-Match header becomes 428",
+   "body": "Program.cs line 66 is inside `ExpectedVersion`, the helper that both PUT and DELETE call before touching the store. It tries to read the `If-Match` header; if the header is not there at all, it returns `Results.StatusCode(428)` (Precondition Required). The route returns that result immediately, so `store.Replace` or `store.Delete` never runs and nothing changes.\n\nWhy the other locations do not fit:\n- TaskStore.cs:32 is the version comparison inside Replace. It only runs when a well-formed tag was supplied, and it produces a Conflict outcome (later a 412), not a 428.\n- HttpChecks.cs:96 is a test assertion that a stale replace got 412. It checks a different case and does not produce any response.",
+   "excerpts": [
+    {
+     "path": "guides/crud-web-lab/Program.cs",
+     "lineStart": 66,
+     "lineEnd": 66,
+     "quote": "if (!request.Headers.TryGetValue(\"If-Match\", out var values)) return Results.StatusCode(428);"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 10,
+     "lineEnd": 12,
+     "quote": "missing preconditions return 428, unsupported or malformed tag syntax returns 400, and a valid but outdated version returns 412."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "guides/crud-web-lab/Program.cs",
+     "lineStart": 62,
+     "lineEnd": 72,
+     "why": "The whole ExpectedVersion helper, including the 400 path for a malformed tag."
+    }
+   ]
+  },
+  {
+   "id": "x-q05-zero-affected-rows",
+   "target": "seed:quests:csbootcamp/quiz/86395b4316600c27",
+   "phase": "after",
+   "title": "What zero affected rows can and cannot tell you",
+   "body": "With `UPDATE ... WHERE id = @id AND version = @expected`, the database does the compare and the change in one statement, like the lock does in TaskStore. One affected row means it matched and changed. Zero rows is ambiguous: the task may not exist, or it exists at a different version. So the keyed answer says you need an explicit policy for telling missing from conflict, and warns that a follow-up read to find out has its own timing limits (the row can change between the UPDATE and that read).\n\nWhy the others are wrong:\n- \"zero rows always means the version was stale\": a missing id also gives zero rows.\n- \"zero rows always means the task does not exist\": a stale version also gives zero rows.\n- \"retry the UPDATE with the newest version\": that re-sends an old full record over someone else's change, which the answer chapter calls recreating the lost-update problem.",
+   "excerpts": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 31,
+     "lineEnd": 33,
+     "quote": "One affected row means the conditional mutation succeeded. Zero rows requires the chosen missing versus conflict policy; any follow-up read has its own timing limitations."
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 38,
+     "lineEnd": 40,
+     "quote": "Automatically replaying a full replacement with a fresh tag simply recreates the lost-update problem"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 75,
+     "lineEnd": 84,
+     "why": "Exercise 5, the database design task this answer comes from."
+    }
+   ]
+  },
+  {
+   "id": "x-q06-title-rule",
+   "target": "seed:quests:csbootcamp/quiz/927b110a80a29f34",
+   "phase": "after",
+   "title": "Where the title rule is evaluated",
+   "body": "Program.cs line 59 defines `Valid`: it trims the title and accepts it only if the trimmed length is from 1 to 120. Because `Trim()` comes before `.Length`, a title of spaces counts as length 0 and is rejected. The POST and PUT routes call `Valid` first and return 400 before calling the store, so nothing is mutated.\n\nWhy the other locations do not fit:\n- HttpChecks.cs:44 is the test assertion that a blank title got 400 Bad Request. It checks the rule from outside; it does not evaluate it.\n- TaskStore.cs:18 is inside `Create`. It trims again when building the record, but it does not check length: the answer chapter says Create expects input that was already validated, so calling it directly does not show real HTTP behaviour.",
+   "excerpts": [
+    {
+     "path": "guides/crud-web-lab/Program.cs",
+     "lineStart": 59,
+     "lineEnd": 59,
+     "quote": "static bool Valid(TaskInput input) => input.Title?.Trim().Length is >= 1 and <= 120;"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 27,
+     "lineEnd": 28,
+     "quote": "Trimming occurs before the title length contract is evaluated and before storage."
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 27,
+     "lineEnd": 28,
+     "quote": "TaskStore.Create, which expects already validated input in this design."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07-bad-json-check",
+   "target": "seed:quests:csbootcamp/quiz/9615e97cdd848c98",
+   "phase": "after",
+   "title": "Why exercise 4 is checked by the self-test count",
+   "body": "Exercise 4 asks you to add two new tests to HttpChecks.cs (a body that is not JSON, and a null title). Code exercises are checked by running the self-test, so the keyed Check is exercise 4's own: both new test names print as `ok - ...`, the total is 15 (13 existing plus your 2, or 17 if you also kept exercise 2's two tests) and `# fail 0`. VERIFICATION.md shows the base run prints `# tests 13`.\n\nWhy the other choices do not fit:\n- \"start the lab with dotnet run ... second Git Bash window\" is exercise 1's Check: manual curl requests, not new tests.\n- \"both id and version appear in your WHERE clause\" is exercise 5's Check, a paper database design.\n- \"your design keeps the user's draft\" is exercise 6's Check, the 412 screen design.",
+   "excerpts": [
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 72,
+     "lineEnd": 73,
+     "quote": "**Check:** the self-test prints both new names as `ok - ...`, `# tests 15` (or 17 if you kept exercise 2's checks) and `# fail 0`."
+    },
+    {
+     "path": "astraupskill/VERIFICATION.md",
+     "lineStart": 42,
+     "lineEnd": 43,
+     "quote": "When you add a check (see the exercises), the `# tests` count goes up by one and `# fail` must stay at 0."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/04-TESTING-AND-DEBUGGING.md",
+     "lineStart": 24,
+     "lineEnd": 28,
+     "why": "Why a 400 from malformed JSON may come from the framework before your handler runs."
+    }
+   ]
+  },
+  {
+   "id": "x-q08-etag-from-returned-record",
+   "target": "seed:quests:csbootcamp/quiz/993af2a048aa7ad7",
+   "phase": "after",
+   "title": "Why the PUT response tag comes from the returned record",
+   "body": "Program.cs line 33 sets the response header: `context.Response.Headers.ETag = Tag(item!.Version)`. Here `item` is the record that `store.Replace` just built and returned on line 30. It is the exact result of this write. If the route instead read the task again, another writer could have changed it in between, and the client would get a tag that does not match the data it saved.\n\nWhy the other locations do not fit:\n- TaskStore.cs:35 is `return (WriteOutcome.Saved, changed);`. It hands the new record back, but the store never sets HTTP headers; the map says the store does not decide transport responses.\n- HttpChecks.cs:88 is the test that checks the tag equals \"2\" after a replace. It reads the header; it does not set it.",
+   "excerpts": [
+    {
+     "path": "guides/crud-web-lab/Program.cs",
+     "lineStart": 30,
+     "lineEnd": 33,
+     "quote": "context.Response.Headers.ETag = Tag(item!.Version);"
+    },
+    {
+     "path": "astraupskill/07-TRACE-LAB.md",
+     "lineStart": 19,
+     "lineEnd": 21,
+     "quote": "The response's ETag is derived from the returned immutable record, not from a separate reread that could observe a later writer."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09-predict-sequence-check",
+   "target": "seed:quests:csbootcamp/quiz/a89e7613518203df",
+   "phase": "after",
+   "title": "Why exercise 1 is checked by running curl",
+   "body": "Exercise 1 asks you to write down, before running anything, what each request in a create, read, replace, stale delete, read sequence will return. Its Check is to start the lab and run those requests with curl in a second window, then compare. The guide lists the expected statuses right after the commands: 201 with tag \"1\", 200, 200 with tag \"2\", 412 for the delete that uses the old tag, and a final 200 still showing \"Study HTTP\" at version 2. Every difference from your prediction is the thing to study.\n\nWhy the other choices do not fit:\n- \"both id and version appear in your WHERE clause\" belongs to exercise 5, the database design.\n- \"your design keeps the user's draft\" belongs to exercise 6, the 412 screen.\n- \"the self-test prints both new names as ok\" belongs to exercise 4, adding two tests.",
+   "excerpts": [
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 19,
+     "lineEnd": 20,
+     "quote": "**Check:** start the lab with `dotnet run --project guides/crud-web-lab`, then in a second Git Bash window:"
+    },
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 30,
+     "lineEnd": 32,
+     "quote": "You should see `201` with `ETag: \"1\"`, `200`, `200` with `ETag: \"2\"`, `412`, and a final `200` whose body has `\"title\":\"Study HTTP\"` and `\"version\":2`."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/07-TRACE-LAB.md",
+     "lineStart": 8,
+     "lineEnd": 15,
+     "why": "The trace table the exercise hint says has the same shape."
+    }
+   ]
+  },
+  {
+   "id": "x-q10-db-design-check",
+   "target": "seed:quests:csbootcamp/quiz/dab9c2248e8e3d3c",
+   "phase": "after",
+   "title": "Why exercise 5 is checked against the WHERE clause",
+   "body": "Exercise 5 is a paper design: a `tasks` table and a conditional UPDATE. The key point is that the expected version must be inside the UPDATE itself, so the database compares and changes in one step. That is why its Check asks that both `id` and `version` appear in the WHERE clause, that you say what zero affected rows means, and that you cover the fifth paragraph of 06 (the database sketch and the missing-versus-conflict policy).\n\nWhy the other choices do not fit:\n- \"your diagram ends with the second save overwriting the first\" is exercise 3's Check, the two-lock review.\n- \"your design keeps the user's draft\" is exercise 6's Check, the 412 screen.\n- \"add one success check and one stale-write check\" is exercise 2's Check, the description field.",
+   "excerpts": [
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 82,
+     "lineEnd": 84,
+     "quote": "**Check:** both `id` and `version` appear in your `WHERE` clause, you state what zero affected rows means, and your answer covers the points in the fifth paragraph of 06."
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 20,
+     "lineEnd": 22,
+     "quote": "In a database implementation, the expected version belongs in the mutation predicate rather than only in an earlier SELECT."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 30,
+     "lineEnd": 35,
+     "why": "The fifth paragraph, which this Check points to."
+    }
+   ]
+  },
+  {
+   "id": "x-q11-two-lock-review-check",
+   "target": "seed:quests:csbootcamp/quiz/df8ab5ec295e5b84",
+   "phase": "after",
+   "title": "Why the two-lock review is checked by the overwrite diagram",
+   "body": "Exercise 3 asks you to review a broken idea: lock, read the version, unlock, compare, then lock again to save. The point of the drawing is to show the failure: both writers read version 1, both pass their comparison while no lock is held, then each saves in turn, so the second save overwrites the first. The keyed Check asks exactly that your diagram ends that way, and that the region you name matches the third paragraph of 06: lookup, comparison, construction and assignment in one protected region.\n\nWhy the other choices do not fit:\n- \"the self-test prints both new names as ok\" is exercise 4's Check; exercise 3 is paper, nothing runs.\n- \"start the lab with dotnet run\" is exercise 1's Check.\n- \"add one success check and one stale-write check\" is exercise 2's Check.",
+   "excerpts": [
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 56,
+     "lineEnd": 57,
+     "quote": "**Check:** your diagram ends with the second save overwriting the first, and your named region matches the third paragraph of 06."
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 19,
+     "lineEnd": 20,
+     "quote": "In this lab, lookup, comparison, construction and assignment share one protected region."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "guides/crud-web-lab/TaskStore.cs",
+     "lineStart": 27,
+     "lineEnd": 37,
+     "why": "Replace: the lock block that the review is about."
+    }
+   ]
+  },
+  {
+   "id": "x-q12-description-field-check",
+   "target": "seed:quests:csbootcamp/quiz/e24aa62d6c7f7ebe",
+   "phase": "after",
+   "title": "Why the description exercise is checked with two new tests",
+   "body": "Exercise 2 adds a `Description` field, and the risk is a stale write that changes only part of the record, or a PUT that quietly keeps an old description. So its Check asks for one success test and one stale-write test that both inspect title and description, with the self-test then printing `# tests 15` (13 existing plus your 2) and `# fail 0`. The answer chapter adds that the stale request must change neither field nor version.\n\nWhy the other choices do not fit:\n- \"the self-test prints both new names as ok ... (or 17 if you kept exercise 2's checks)\" is exercise 4's Check; it even refers to exercise 2 as a separate exercise.\n- \"your diagram ends with the second save overwriting the first\" is exercise 3's Check.\n- \"your design keeps the user's draft\" is exercise 6's Check.",
+   "excerpts": [
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 46,
+     "lineEnd": 47,
+     "quote": "**Check:** add one success check and one stale-write check that both inspect title *and* description. The self-test prints `# tests 15` and `# fail 0`."
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 14,
+     "lineEnd": 15,
+     "quote": "Whichever contract you choose, the stale request must change neither field nor version."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q13-compare-inside-lock",
+   "target": "seed:quests:csbootcamp/quiz/e3f34a059f6f12bf",
+   "phase": "after",
+   "title": "Where the version comparison runs inside the lock",
+   "body": "TaskStore.cs line 32 is `if (current.Version != expected) return (WriteOutcome.Conflict, null);`. It sits inside the `lock (gate)` block that starts on line 29, after the lookup and before the new record is built and stored on lines 33-34. Because the comparison and the assignment are in the same locked block, the second of two writers with the same tag waits, then sees the advanced version and gets Conflict.\n\nWhy the other locations do not fit:\n- HttpChecks.cs:112 is the test that counts one 200 and one 412. It checks the result from outside the app.\n- Program.cs:32 is `if (outcome == WriteOutcome.Conflict) return Results.StatusCode(412);`. It runs after the store has already decided and released the lock; it only translates Conflict into an HTTP status.",
+   "excerpts": [
+    {
+     "path": "guides/crud-web-lab/TaskStore.cs",
+     "lineStart": 32,
+     "lineEnd": 32,
+     "quote": "if (current.Version != expected) return (WriteOutcome.Conflict, null);"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 19,
+     "lineEnd": 21,
+     "quote": "TaskStore.Replace holds one lock while it finds the current item, compares expected and actual versions, constructs the replacement and stores it."
+    },
+    {
+     "path": "guides/crud-web-lab/Program.cs",
+     "lineStart": 32,
+     "lineEnd": 32,
+     "quote": "if (outcome == WriteOutcome.Conflict) return Results.StatusCode(412);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q14-stale-tag-is-412",
+   "target": "seed:quests:csbootcamp/quiz/e8552dc9fc60af9f",
+   "phase": "after",
+   "title": "Why a stale but well-formed tag gets 412",
+   "body": "The tag is well formed, so `ExpectedVersion` accepts it and the route calls `store.Replace`. Inside the lock the store finds the current version is newer, returns Conflict and assigns nothing. Program.cs turns Conflict into 412 Precondition Failed. The worked change confirms a later GET still shows the winner's title, so the rejected write left no trace.\n\nWhy the other choices are wrong:\n- 400 with the ETag-syntax error: that is for a malformed tag (for example `1` without quotes, or `*`). This tag is a valid quoted number.\n- 428 Precondition Required: that is only when the If-Match header is missing entirely.\n- 409 Conflict: the lab never returns 409; its contract names 412 for an outdated version.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 10,
+     "lineEnd": 12,
+     "quote": "missing preconditions return 428, unsupported or malformed tag syntax returns 400, and a valid but outdated version returns 412."
+    },
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": 13,
+     "lineEnd": 15,
+     "quote": "compares it to B's expected version 1, and returns Conflict without assigning anything. The route translates that outcome into 412."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "guides/crud-web-lab/Program.cs",
+     "lineStart": 62,
+     "lineEnd": 72,
+     "why": "ExpectedVersion: the exact rules for a well-formed tag."
+    }
+   ]
+  },
+  {
+   "id": "x-q15-blank-title-correct-tag",
+   "target": "seed:quests:csbootcamp/quiz/f8a7b5509ec2f57f",
+   "phase": "after",
+   "title": "Why a blank title with a correct tag costs no version",
+   "body": "In the PUT route, line 27 checks the title with `Valid` before anything else and returns 400 if it fails. The header is parsed on line 28 and the store is called on line 30, so neither runs. The version only increases inside `TaskStore.Replace`, which was never entered, so the version is not consumed. HttpChecks has a test for exactly this: \"invalid replacement does not consume version\", which re-reads the task and expects it unchanged.\n\nWhy the other choices are wrong:\n- \"200 and version plus one, keeping the old title\": a blank title is never accepted, so there is no 200.\n- \"400, but the version still increments\": the increment lives in the store, which is not reached.\n- \"412, because the tag is checked after the title\": the order is right (title first), but the title fails first so you get 400; and the tag is correct anyway, so it would not cause 412.",
+   "excerpts": [
+    {
+     "path": "guides/crud-web-lab/Program.cs",
+     "lineStart": 27,
+     "lineEnd": 27,
+     "quote": "if (!Valid(input)) return Results.BadRequest();"
+    },
+    {
+     "path": "astraupskill/07-TRACE-LAB.md",
+     "lineStart": 30,
+     "lineEnd": 31,
+     "quote": "Finally, trace an invalid title carrying the correct tag. It returns before the mutation operation, so it does not consume a version."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "guides/crud-web-lab/HttpChecks.cs",
+     "lineStart": 99,
+     "lineEnd": 105,
+     "why": "The test that pins this behaviour."
+    }
+   ]
+  }
+ ]
+}

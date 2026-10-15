@@ -1,0 +1,362 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "organized-app-job-track",
+ "repo": "organized-app-job-track",
+ "sha": "f11538822d4d810fe8ba235b33c26e310aac9d70",
+ "notes": [
+  {
+   "id": "r01-start-here-job-track",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: a small Express + SQLite job tracker",
+   "body": "This repo is a full-stack tracker for job applications. You sign up, log in, and keep a list of applications that move through a small workflow: applied, interview, offer or rejected. The server is Node + Express with SQLite (`better-sqlite3`), JWT login and Zod validation. The client is React.\n\nThe pack draws on one guide, **ARCHITECTURE_DEEP_DIVE.md**. Read it in this order:\n\n1. Sections 1-3: what the app does, the stack, and the request flow (who is the source of truth for what).\n2. Section 4: the backend files one by one. Most quizzes are about the server.\n3. Sections 7-9: one transition traced end to end, the security notes, the **known gaps** list, and common mistakes.\n4. Section 11: the file map. Open each backend file it lists, especially `server/src/routes/applications.js`, `server/src/validation.js` and `server/src/constants.js`.\n\nThe guide is short; the code is where the details live. Read the routes line by line.",
+   "excerpts": [
+    {
+     "path": "ARCHITECTURE_DEEP_DIVE.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "This document explains how the project is built, why each part exists, and how a junior developer could build the same system from zero."
+    },
+    {
+     "path": "ARCHITECTURE_DEEP_DIVE.md",
+     "lineStart": 12,
+     "lineEnd": 12,
+     "quote": "- workflow transitions (`applied -> interview -> offer/rejected`)"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "ARCHITECTURE_DEEP_DIVE.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The whole deep dive, including the verified known-gaps list in section 8."
+    },
+    {
+     "path": "server/src/routes/applications.js",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The main route file: list, read, create, update, transition, delete."
+    }
+   ]
+  },
+  {
+   "id": "r02-server-is-source-of-truth",
+   "target": "pack",
+   "phase": "before",
+   "title": "Core idea: the server owns auth, workflow and query rules",
+   "body": "The guide splits responsibility cleanly. The **backend** decides who you are (token check), which workflow moves are legal, and how lists are filtered, sorted and paged. The **frontend** only owns UI state such as open modals, current filters and loading spinners.\n\nWhy this matters: anyone can call the API directly with a script and skip the UI. So every rule that protects data must live on the server, and every SQL query must be limited to the logged-in user's rows. The UI may copy a rule to show nice buttons, but the copy is only a convenience.\n\nAs you read each route, ask three questions: Where is the input validated? Where is the user's id added to the SQL? What happens if a client sends something the UI would never send?",
+   "excerpts": [
+    {
+     "path": "ARCHITECTURE_DEEP_DIVE.md",
+     "lineStart": 40,
+     "lineEnd": 43,
+     "quote": "- Backend is source of truth for: - auth validation - workflow transition rules - query filtering/sorting/pagination"
+    },
+    {
+     "path": "ARCHITECTURE_DEEP_DIVE.md",
+     "lineStart": 209,
+     "lineEnd": 210,
+     "quote": "- trusting front-end-only transition validation - forgetting `user_id` in WHERE clauses"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "server/src/middleware/auth.js",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The single gate every protected route shares."
+    }
+   ]
+  },
+  {
+   "id": "r03-zod-at-the-boundary",
+   "target": "pack",
+   "phase": "before",
+   "title": "Core idea: Zod schemas are the request contract",
+   "body": "All request shapes are defined in one file, `server/src/validation.js`: register and login bodies, create and update bodies, and the list's query parameters. Routes call `parseOrRespond(schema, payload, res)` from `server/src/utils.js`. If the payload does not fit, that helper answers **400 Validation failed** with the list of issues and the route stops; otherwise the route gets the parsed, cleaned data.\n\nZod features that recur in this file: `z.enum`, `.optional()`, `.partial()`, `.refine(...)`, `z.coerce` and `.or(...)`. If any is new to you, look it up before the quizzes.\n\nRead each schema slowly and work out what it does with odd inputs, not only with the values the form sends.",
+   "excerpts": [
+    {
+     "path": "ARCHITECTURE_DEEP_DIVE.md",
+     "lineStart": 79,
+     "lineEnd": 82,
+     "quote": "All request contracts are centrally defined: - auth payloads - application create/update payloads - query params"
+    },
+    {
+     "path": "server/src/utils.js",
+     "lineStart": 10,
+     "lineEnd": 13,
+     "quote": "res.status(400).json({ message: 'Validation failed', errors: issues });"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "server/src/validation.js",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Every schema the server uses, in 81 lines."
+    }
+   ]
+  },
+  {
+   "id": "x-q01-order-by-whitelist",
+   "target": "seed:quests:organized-app-job-track/quiz/00f4655de884f1f3",
+   "phase": "after",
+   "title": "Why interpolating sort_by into ORDER BY is safe here",
+   "body": "**Key: querySchema admits only enum values, i.e. six column names and asc/desc.**\n\nSQL placeholders (`?`) can carry values, but not column names or keywords like ASC, so `ORDER BY` has to be built as text. That is only safe if the text can never be attacker-controlled. Here `querySchema` limits `sort_by` to six fixed column names and `sort_order` to `asc` or `desc`. Anything else fails validation with 400 before the SQL is built. The guide warns: keep that enum if you touch the query.\n\nWhy the others are wrong:\n- *Express strips SQL keywords*: Express does no such thing; the protection is the Zod enum.\n- *prepare escapes interpolated identifiers*: `prepare` receives an already-built string; it cannot tell what was interpolated.\n- *Bound as ? parameters*: only the WHERE values, `page_size` and the offset are bound; sort values are put into the string with `${...}`.",
+   "excerpts": [
+    {
+     "path": "server/src/routes/applications.js",
+     "lineStart": 51,
+     "lineEnd": 51,
+     "quote": "ORDER BY ${sort_by} ${sort_order.toUpperCase()}"
+    },
+    {
+     "path": "server/src/validation.js",
+     "lineStart": 68,
+     "lineEnd": 69,
+     "quote": "sort_by: z.enum(['created_at', 'updated_at', 'applied_date', 'company', 'role', 'status']).optional(), sort_order: z.enum(['asc', 'desc']).optional(),"
+    },
+    {
+     "path": "ARCHITECTURE_DEEP_DIVE.md",
+     "lineStart": 194,
+     "lineEnd": 194,
+     "quote": "which is safe only because `querySchema` restricts it to a fixed enum"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02-same-status-two-routes",
+   "target": "seed:quests:organized-app-job-track/quiz/0517a05c238c3a94",
+   "phase": "after",
+   "title": "Same status, two routes: PATCH rejects, PUT allows",
+   "body": "**Key: PATCH returns 400 'already interview'; PUT succeeds, as the status is unchanged.**\n\nThe two routes check status differently. The transition route compares first: if `existing.status === nextStatus` it answers 400 with `Application is already interview`. The PUT route runs its workflow check only when `data.status && data.status !== existing.status`. Sending the current status skips that block, so the update goes through and only `updated_at` really changes.\n\nWhy the others are wrong:\n- *PATCH is a no-op, PUT returns Invalid transition*: reversed; PATCH has the explicit same-status rejection and PUT has none.\n- *Both succeed*: PATCH rejects a same-status request on line 207.\n- *Both return 400*: PUT's check is skipped when the status is unchanged.",
+   "excerpts": [
+    {
+     "path": "server/src/routes/applications.js",
+     "lineStart": 207,
+     "lineEnd": 209,
+     "quote": "if (existing.status === nextStatus) { return res.status(400).json({ message: `Application is already ${nextStatus}` });"
+    },
+    {
+     "path": "server/src/routes/applications.js",
+     "lineStart": 134,
+     "lineEnd": 134,
+     "quote": "if (data.status && data.status !== existing.status) {"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q03-list-defaults-and-cap",
+   "target": "seed:quests:organized-app-job-track/quiz/13328d9226f3a9a3",
+   "phase": "after",
+   "title": "Default sort, default page size, and the page_size cap",
+   "body": "**Key: updated_at desc, 10 rows per page; page_size=500 is rejected with a 400.**\n\nWith no query parameters, every field in `querySchema` is optional, so the parsed object has none of them and the destructuring defaults apply: `sort_by = 'updated_at'`, `sort_order = 'desc'`, `page = 1`, `page_size = 10`. For `page_size=500`, the schema has `.max(100)`, so parsing fails and `parseOrRespond` answers 400 Validation failed. It validates; it does not clamp.\n\nWhy the others are wrong:\n- *Unsorted, 25 per page, 500 accepted*: there is always an ORDER BY, the default is 10, and 500 breaks the max.\n- *applied_date desc, whole table for 500*: the default column is updated_at, and 500 is rejected.\n- *created_at asc, 20 per page, clamped to 100*: wrong defaults, and nothing in the code clamps.",
+   "excerpts": [
+    {
+     "path": "server/src/routes/applications.js",
+     "lineStart": 16,
+     "lineEnd": 23,
+     "quote": "sort_by = 'updated_at', sort_order = 'desc', page = 1, page_size = 10"
+    },
+    {
+     "path": "server/src/validation.js",
+     "lineStart": 72,
+     "lineEnd": 72,
+     "quote": "page_size: z.coerce.number().int().positive().max(100).optional()"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "server/src/utils.js",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "parseOrRespond: the 400 path for any schema failure."
+    }
+   ]
+  },
+  {
+   "id": "x-q04-offer-is-terminal",
+   "target": "seed:quests:organized-app-job-track/quiz/3d6a7101535d1ca5",
+   "phase": "after",
+   "title": "Where an offer can go next: nowhere",
+   "body": "**Key: none - offer, like rejected, has an empty transition list.**\n\n`ALLOWED_TRANSITIONS` in `constants.js` is the whole workflow. applied can go to interview or rejected; interview can go to offer or rejected; offer and rejected both map to `[]`. An empty list means every move out of that state fails the `allowed.includes(...)` check in the routes, so offer is a final state.\n\nWhy the others are wrong:\n- *Any status, since offer is final*: being final means *no* moves are allowed, not all.\n- *interview or rejected, like applied*: those are applied's targets, not offer's.\n- *Just rejected, to withdraw an offer*: offer's list is empty; rejected is not in it.",
+   "excerpts": [
+    {
+     "path": "server/src/constants.js",
+     "lineStart": 10,
+     "lineEnd": 15,
+     "quote": "[STATUS.APPLIED]: [STATUS.INTERVIEW, STATUS.REJECTED], [STATUS.INTERVIEW]: [STATUS.OFFER, STATUS.REJECTED], [STATUS.OFFER]: [], [STATUS.REJECTED]: []"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q05-same-login-failure",
+   "target": "seed:quests:organized-app-job-track/quiz/606ea59d0fa2a1fd",
+   "phase": "after",
+   "title": "Why both bad logins get the same 401",
+   "body": "**Key: 401 with the same message, 'Invalid email or password', for both.**\n\nThe login route looks up the user by email. If there is no row, it returns 401 `Invalid email or password`. If the row exists but `bcrypt.compare` fails, it returns exactly the same status and text. The code comment says why: a different answer would let anyone test which emails have accounts (\"account enumeration\").\n\nWhy the others are wrong:\n- *400 Validation failed for both*: both requests are well-formed (a valid email shape and a non-empty password), so the login schema passes.\n- *403 Wrong password*: the code never uses 403 or a password-specific message.\n- *404 User not found*: that would reveal which emails exist, the very thing the shared message prevents.\n\nThe guide's known-gaps list adds a subtlety: the *timing* still differs, because a missing email returns before `bcrypt.compare` runs.",
+   "excerpts": [
+    {
+     "path": "server/src/routes/auth.js",
+     "lineStart": 55,
+     "lineEnd": 63,
+     "quote": "// Same generic message for missing user and bad password to avoid account enumeration. return res.status(401).json({ message: 'Invalid email or password' });"
+    },
+    {
+     "path": "ARCHITECTURE_DEEP_DIVE.md",
+     "lineStart": 204,
+     "lineEnd": 204,
+     "quote": "The messages match (`server/src/routes/auth.js:57,62`), but a missing email returns before `bcrypt.compare` runs (line 60)."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q06-blank-salary-becomes-zero",
+   "target": "seed:quests:organized-app-job-track/quiz/6f424cc6dfeaff36",
+   "phase": "after",
+   "title": "Why an empty-string salary is stored as 0",
+   "body": "**Key: 0 - z.coerce.number() turns '' into 0, so the '' fallback never runs.**\n\nThe salary schema is `z.coerce.number().int().nonnegative().optional().or(z.literal('').transform(() => undefined))`. Zod tries the left side first. Coercion calls `Number('')`, which is `0` in JavaScript, and 0 is a non-negative integer, so the left side succeeds and the `.or(...)` branch is never tried. The POST route then inserts `data.salary_min` as is (unlike location or notes, it has no `|| null`). The guide lists this as a known gap; the UI only avoids it by never sending blank salaries.\n\nWhy the others are wrong:\n- *An empty string is stored*: the schema has already turned it into the number 0.\n- *Validation fails*: coercion makes '' a valid number.\n- *NULL via the literal branch*: that branch would only run if the coerce branch failed, and it does not.",
+   "excerpts": [
+    {
+     "path": "server/src/validation.js",
+     "lineStart": 40,
+     "lineEnd": 40,
+     "quote": "salary_min: z.coerce.number().int().nonnegative().optional().or(z.literal('').transform(() => undefined)),"
+    },
+    {
+     "path": "server/src/routes/applications.js",
+     "lineStart": 99,
+     "lineEnd": 102,
+     "quote": "data.job_url || null, data.salary_min, data.salary_max,"
+    },
+    {
+     "path": "ARCHITECTURE_DEEP_DIVE.md",
+     "lineStart": 201,
+     "lineEnd": 201,
+     "quote": "`z.coerce.number()` runs before the `z.literal('')` branch (`server/src/validation.js:40-41`), and `Number(\"\")` is `0`."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07-put-checks-workflow",
+   "target": "seed:quests:organized-app-job-track/quiz/7f62bcafb0f7f011",
+   "phase": "after",
+   "title": "Why PUT cannot skip a workflow step either",
+   "body": "**Key: 400 Invalid transition from applied to offer - PUT checks the same table.**\n\nThe PUT handler is a general edit, but it does not trust the client with status. Whenever the body has a status that differs from the stored one, it looks up `ALLOWED_TRANSITIONS[existing.status]`. For applied that is interview or rejected, so offer is refused with 400 and the message `Invalid transition from applied to offer`. The code comment states the goal: clients cannot skip process states.\n\nWhy the others are wrong:\n- *200 but status silently stays applied*: the handler returns 400; it never quietly drops a field.\n- *200, the workflow is only checked on PATCH*: lines 134-141 check it on PUT too.\n- *409 Conflict*: this route has no version check and never sends 409.",
+   "excerpts": [
+    {
+     "path": "server/src/routes/applications.js",
+     "lineStart": 134,
+     "lineEnd": 141,
+     "quote": "// Enforce one-way workflow transitions server-side so clients cannot skip process states. if (!allowed.includes(data.status)) { return res.status(400).json({ message: `Invalid transition from ${existing.status} to ${data.status}`"
+    },
+    {
+     "path": "ARCHITECTURE_DEEP_DIVE.md",
+     "lineStart": 105,
+     "lineEnd": 105,
+     "quote": "- workflow transitions validated server-side (never trust UI only)"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08-foreign-row-404",
+   "target": "seed:quests:organized-app-job-track/quiz/a91d694cbec8d569",
+   "phase": "after",
+   "title": "Why another user's application comes back as 404",
+   "body": "**Key: 404 Application not found, since each query also filters on user_id.**\n\n`GET /:id` runs `SELECT * FROM applications WHERE id = ? AND user_id = ?` with the requested id and the logged-in user's id. Row 42 belongs to user B, so for user A nothing matches and the route answers 404 `Application not found`. A row that belongs to someone else looks exactly like a row that does not exist, which also avoids confirming that id 42 is real.\n\nWhy the others are wrong:\n- *403 Forbidden*: the code never loads the row without the user filter, so it never learns the row exists and has no reason to send 403.\n- *200, ids are global*: ids are unique, but every query adds `user_id`; the guide says all queries are user-scoped.\n- *401 Unauthorized*: user A's token is valid; 401 is only for missing or bad tokens.",
+   "excerpts": [
+    {
+     "path": "server/src/routes/applications.js",
+     "lineStart": 73,
+     "lineEnd": 77,
+     "quote": "const row = db.prepare('SELECT * FROM applications WHERE id = ? AND user_id = ?').get(id, req.user.id);"
+    },
+    {
+     "path": "ARCHITECTURE_DEEP_DIVE.md",
+     "lineStart": 104,
+     "lineEnd": 104,
+     "quote": "- all queries are user-scoped (`user_id = req.user.id`)"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09-salary-check-after-merge",
+   "target": "seed:quests:organized-app-job-track/quiz/b8a91a7d79f03782",
+   "phase": "after",
+   "title": "Why a one-field salary update is still checked against the stored row",
+   "body": "**Key: 400 - the route re-checks min <= max after merging with the stored row.**\n\nThe update schema's `refine` only sees the request body. With only `salary_min: 90000` sent, `salary_max` is undefined there, so the refine passes. The route then merges the body over the stored row (`{ ...existing, ...data }`) and checks again: merged min 90000, merged max 80000, max is smaller, so it answers 400 `salary_max must be greater than or equal to salary_min`. The comment explains: partial updates can change only one salary field.\n\nWhy the others are wrong:\n- *400 from Zod requiring both fields*: the schema is `.partial()`; every field is optional, and its refine passes.\n- *200, compared only when both are in the body*: that describes the Zod refine; the merged check catches it.\n- *200 with salary_max raised*: the code never changes a value to fix the invariant; it refuses.",
+   "excerpts": [
+    {
+     "path": "server/src/routes/applications.js",
+     "lineStart": 153,
+     "lineEnd": 164,
+     "quote": "// Partial updates can change only one salary field, so we validate after merge as well."
+    },
+    {
+     "path": "server/src/validation.js",
+     "lineStart": 57,
+     "lineEnd": 58,
+     "quote": "(value) => value.salary_min === undefined || value.salary_max === undefined || value.salary_max >= value.salary_min,"
+    },
+    {
+     "path": "ARCHITECTURE_DEEP_DIVE.md",
+     "lineStart": 212,
+     "lineEnd": 212,
+     "quote": "- not validating partial updates after merged state"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10-dashboard-kpis",
+   "target": "seed:quests:organized-app-job-track/quiz/c797d0f94eaed5e0",
+   "phase": "after",
+   "title": "Working out active and conversionRate",
+   "body": "**Key: active 6, conversionRate 30 - interviews count along with offers.**\n\nDo the math with the code in `dashboard.js`:\n\n- `active = byStatus.applied + byStatus.interview` = 4 + 2 = **6**.\n- `conversionRate = (offer + interview) / total * 100`, rounded to one decimal = (1 + 2) / 10 * 100 = **30**.\n\nSo in this app \"conversion\" means reaching interview or offer, not only an offer.\n\nWhy the others are wrong:\n- *conversionRate 10*: that would count offers only; the formula adds interviews.\n- *active 3 (interview plus offer)*: active is applied plus interview.\n- *active 7, rate 14.3, rejections left out*: `total` is the count of all the user's rows, rejections included.",
+   "excerpts": [
+    {
+     "path": "server/src/routes/dashboard.js",
+     "lineStart": 31,
+     "lineEnd": 33,
+     "quote": "const active = byStatus.applied + byStatus.interview; const conversionRate = total === 0 ? 0 : Number((((byStatus.offer + byStatus.interview) / total) * 100).toFixed(1));"
+    },
+    {
+     "path": "server/src/routes/dashboard.js",
+     "lineStart": 20,
+     "lineEnd": 20,
+     "quote": "const totalRow = db.prepare('SELECT COUNT(*) as total FROM applications WHERE user_id = ?').get(req.user.id);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q11-jwt-secret-fail-fast",
+   "target": "seed:quests:organized-app-job-track/quiz/da27bf9c10f56008",
+   "phase": "after",
+   "title": "What happens when JWT_SECRET is missing",
+   "body": "**Key: it throws 'Missing JWT_SECRET in server/.env' at boot and never listens.**\n\nRight after `dotenv.config()` loads the environment, `server.js` checks `process.env.JWT_SECRET`. If it is missing, it throws at the top level of the file. That stops the program before the database is loaded, before routes are mounted, and before the server starts listening. This is a \"fail fast\" guard: better to refuse to start than to run with no way to sign tokens safely. The guide lists \"assert `JWT_SECRET`\" as the entry point's second job.\n\nWhy the others are wrong:\n- *Falls back to an empty string*: there is no fallback; the code throws.\n- *Generates a random secret*: nothing in `server.js` creates a secret.\n- *Starts but every route answers 401*: the process never gets as far as starting.",
+   "excerpts": [
+    {
+     "path": "server/src/server.js",
+     "lineStart": 6,
+     "lineEnd": 10,
+     "quote": "dotenv.config(); if (!process.env.JWT_SECRET) { throw new Error('Missing JWT_SECRET in server/.env'); }"
+    },
+    {
+     "path": "ARCHITECTURE_DEEP_DIVE.md",
+     "lineStart": 52,
+     "lineEnd": 54,
+     "quote": "- load env - assert `JWT_SECRET` - initialize DB schema (`require('./db')`)"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}
