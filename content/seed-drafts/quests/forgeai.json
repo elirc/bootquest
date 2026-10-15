@@ -1,0 +1,440 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "forgeai",
+ "sha": "a6c6c51b034ae56a38aa0685a7357f3ce86b55c4",
+ "guides": [
+  "docs/upskilling/databases/transactions-and-concurrency.md",
+  "docs/upskilling/distributed-systems/durable-jobs.md",
+  "docs/upskilling/security/tenant-isolation.md",
+  "docs/upskilling/code-reading/checkout.md"
+ ],
+ "items": [
+  {
+   "id": "q01-viewer-empty-cart",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskilling/security/tenant-isolation.md",
+    "lines": {
+     "start": 58,
+     "end": 58
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/app.ts",
+     "lineStart": 187,
+     "lineEnd": 197
+    },
+    {
+     "path": "apps/api/src/modules/identity/service.ts",
+     "lineStart": 67,
+     "lineEnd": 70
+    }
+   ],
+   "prompt": "A viewer, with a valid session, Origin and x-forge-request header, POSTs a checkout whose lines array is empty. Which error code comes back?",
+   "answer": "FORBIDDEN, as authorize runs before the body is validated",
+   "distractors": [
+    "VALIDATION_FAILED, as an empty lines array is checked first",
+    "NOT_FOUND, as viewers are not members of any workspace",
+    "INVALID_ORIGIN, as viewers cannot pass the same-origin gate"
+   ],
+   "explanation": "The route calls authorize(..., true) before checkoutSchema.parse, and requireWrite throws 403 FORBIDDEN for the viewer role. The empty array would fail .min(1), but parsing is never reached."
+  },
+  {
+   "id": "q02-missing-forge-header",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskilling/security/tenant-isolation.md",
+    "lines": {
+     "start": 22,
+     "end": 22
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/app.ts",
+     "lineStart": 53,
+     "lineEnd": 65
+    }
+   ],
+   "prompt": "A signed-in admin sends a POST from the right Origin but without the x-forge-request header. What happens?",
+   "answer": "403 INVALID_ORIGIN, before the session is even read",
+   "distractors": [
+    "The request proceeds, as the Origin alone is enough",
+    "401 AUTHENTICATION_REQUIRED, as the session is unread",
+    "403 FORBIDDEN, because the admin role is not checked"
+   ],
+   "explanation": "The onRequest hook rejects every non-GET/HEAD/OPTIONS request unless Origin equals WEB_ORIGIN and x-forge-request is \"1\". It throws INVALID_ORIGIN before any route handler or session lookup."
+  },
+  {
+   "id": "q03-foreign-tenant-404",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskilling/security/tenant-isolation.md",
+    "lines": {
+     "start": 21,
+     "end": 21
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/modules/identity/service.ts",
+     "lineStart": 54,
+     "lineEnd": 66
+    }
+   ],
+   "prompt": "owner@harbor.example calls GET /api/tenants/<Northstar tenantId>/products, a tenant where they have no membership. What is the response?",
+   "answer": "404 NOT_FOUND, which hides that the tenant exists",
+   "distractors": [
+    "403 FORBIDDEN, as the user lacks a membership",
+    "200 with an empty list of products for the user",
+    "401, as the session is only valid for Harbor"
+   ],
+   "explanation": "authorize looks for a membership with that tenantId and throws 404 NOT_FOUND \"Workspace not found.\" when there is none; a 403 would confirm the tenant exists."
+  },
+  {
+   "id": "q04-reordered-lines-replay",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskilling/databases/transactions-and-concurrency.md",
+    "lines": {
+     "start": 36,
+     "end": 38
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/modules/commerce/service.ts",
+     "lineStart": 40,
+     "lineEnd": 62
+    },
+    {
+     "path": "apps/api/src/app.ts",
+     "lineStart": 198,
+     "lineEnd": 199
+    }
+   ],
+   "prompt": "A checkout succeeds. The client retries with the same idempotency-key, the same customer, and the same two lines listed in the opposite order. What does it get?",
+   "answer": "A replay of the same order with status 200",
+   "distractors": [
+    "409 IDEMPOTENCY_CONFLICT for a changed cart",
+    "A second order, created under status 201",
+    "400, because the line order does not match"
+   ],
+   "explanation": "checkout sorts lines by productId before hashing, so both requests have the same fingerprint. The existing order is returned with replayed true, and the route answers 200 with idempotency-replayed: true."
+  },
+  {
+   "id": "q05-concurrent-same-key",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskilling/databases/transactions-and-concurrency.md",
+    "lines": {
+     "start": 37,
+     "end": 37
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/modules/commerce/service.ts",
+     "lineStart": 45,
+     "lineEnd": 62
+    }
+   ],
+   "prompt": "Two identical checkout requests with the same idempotency-key arrive at the same moment from the same user. What happens?",
+   "answer": "One creates the order; the other waits on the lock, then replays it",
+   "distractors": [
+    "Both create orders, and the unique index rejects the second insert",
+    "Both create orders; neither had committed when the other checked",
+    "The second fails at once with a lock timeout; the client sees 409"
+   ],
+   "explanation": "pg_advisory_xact_lock on tenant:user:key serializes them. The second transaction blocks until the first commits, then its lookup finds the committed order with the same fingerprint and returns it as a replay."
+  },
+  {
+   "id": "q06-last-item-race",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskilling/databases/transactions-and-concurrency.md",
+    "lines": {
+     "start": 69,
+     "end": 71
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/modules/inventory/service.ts",
+     "lineStart": 13,
+     "lineEnd": 25
+    }
+   ],
+   "prompt": "Exactly one unit of a product is left, and two customers check it out at the same moment. What are the two responses?",
+   "answer": "201 for one and 409 INSUFFICIENT_STOCK for the other",
+   "distractors": [
+    "201 for both, and on_hand goes down to minus one",
+    "201 for one; the other blocks until a 5 s timeout",
+    "409 for both, as the first lock aborts the second"
+   ],
+   "explanation": "reserve is one conditional UPDATE with on_hand - reserved >= quantity. Under READ COMMITTED the second updater waits, rechecks against the updated row, matches nothing, and reserve throws 409 INSUFFICIENT_STOCK."
+  },
+  {
+   "id": "q07-second-line-fails",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskilling/databases/transactions-and-concurrency.md",
+    "lines": {
+     "start": 53,
+     "end": 53
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/modules/commerce/service.ts",
+     "lineStart": 79,
+     "lineEnd": 113
+    },
+    {
+     "path": "packages/database/src/index.ts",
+     "lineStart": 21,
+     "lineEnd": 43
+    }
+   ],
+   "prompt": "A two-product cart reserves the first product, but the second product has no stock left. What remains in the database afterwards?",
+   "answer": "Nothing from this checkout; every write is rolled back",
+   "distractors": [
+    "The order, kept in a failed state; its first reservation stays",
+    "The first reservation alone, released later by a sweeper job",
+    "The order and lines, but neither reservation nor payment job"
+   ],
+   "explanation": "Order, lines, reservations, payment intent, job and audit all run on one client inside transaction(). The 409 thrown by the second reserve makes the helper ROLLBACK everything."
+  },
+  {
+   "id": "q08-timeout-after-capture",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskilling/distributed-systems/durable-jobs.md",
+    "lines": {
+     "start": 27,
+     "end": 27
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/modules/payments/provider.ts",
+     "lineStart": 28,
+     "lineEnd": 53
+    },
+    {
+     "path": "apps/api/src/platform/jobs.ts",
+     "lineStart": 58,
+     "lineEnd": 64
+    }
+   ],
+   "prompt": "Chaos mode payment_timeout is on. Attempt 1 inserts the provider charge and then throws. What happens on attempt 2 of the same job?",
+   "answer": "The provider lookup returns the stored charge, and the order is confirmed",
+   "distractors": [
+    "A second charge is created, because attempt 2 uses a fresh idempotency key",
+    "The job is dead-lettered, as the timeout code is treated as non-retryable",
+    "Attempt 2 throws the same timeout again, until the five attempts run out"
+   ],
+   "explanation": "capture first looks up simulated_provider_payments by idempotency_key = orderId and returns the earlier result. The chaos throw only fires when attempt === 1, so the stored success is applied and the order becomes confirmed."
+  },
+  {
+   "id": "q09-stale-worker-finalize",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskilling/distributed-systems/durable-jobs.md",
+    "lines": {
+     "start": 28,
+     "end": 28
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/modules/payments/service.ts",
+     "lineStart": 18,
+     "lineEnd": 23
+    },
+    {
+     "path": "apps/api/src/platform/jobs.ts",
+     "lineStart": 64,
+     "lineEnd": 64
+    }
+   ],
+   "prompt": "Worker A captured a payment but lost its lease, and worker B has reclaimed the job. A now calls applyPaymentResult. What happens?",
+   "answer": "It writes nothing and returns false, which processOneJob ignores",
+   "distractors": [
+    "It confirms the order, since its capture really did go through",
+    "It throws PAYMENT_RESULT_MISMATCH and the job is set to failed",
+    "It waits for B to finish, then marks the job completed as well"
+   ],
+   "explanation": "The first query requires the job to still have A's lease_token, state running and an unexpired lease. B's claim replaced the token, so zero rows match and the transaction returns false. The checkout review notes that nothing logs this."
+  },
+  {
+   "id": "q10-crashed-worker-reclaim",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskilling/distributed-systems/durable-jobs.md",
+    "lines": {
+     "start": 25,
+     "end": 25
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/platform/jobs.ts",
+     "lineStart": 31,
+     "lineEnd": 38
+    }
+   ],
+   "prompt": "A worker claims a payment job (attempts becomes 2) and then crashes. Thirty-five seconds later another worker polls. What happens to the job?",
+   "answer": "It is claimed again, because its lease has expired",
+   "distractors": [
+    "It stays running until an admin replays it by hand",
+    "It is dead-lettered, because a crash counts as fatal",
+    "It waits until five more minutes of backoff have run"
+   ],
+   "explanation": "The claim selects pending jobs that are due or running jobs whose lease_until < now(). A 30-second lease has expired, attempts is below 5, so the job is leased again with a new token."
+  },
+  {
+   "id": "q11-third-attempt-delay",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskilling/distributed-systems/durable-jobs.md",
+    "lines": {
+     "start": 29,
+     "end": 29
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/platform/jobs.ts",
+     "lineStart": 19,
+     "lineEnd": 23
+    },
+    {
+     "path": "apps/api/src/platform/jobs.ts",
+     "lineStart": 78,
+     "lineEnd": 89
+    }
+   ],
+   "prompt": "A payment job fails on its third attempt with PROVIDER_UNAVAILABLE. How far in the future is its new available_at set?",
+   "answer": "Somewhere from 2 to 4 seconds, as jitter scales 4 s by 0.5 to 1",
+   "distractors": [
+    "Exactly 4 seconds, since the delay doubles from 1 s each time",
+    "Somewhere from 4 to 8 seconds, since the jitter is added on top",
+    "Exactly 60 seconds, the fixed cap applied to any later attempt"
+   ],
+   "explanation": "retryDelayMs(3) is min(60000, 1000 * 2^2) * (0.5 + random * 0.5), so 4000 ms scaled by a factor in [0.5, 1.0): roughly 2 to 4 seconds."
+  },
+  {
+   "id": "q12-declined-payment",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskilling/distributed-systems/durable-jobs.md",
+    "lines": {
+     "start": 28,
+     "end": 28
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/modules/payments/service.ts",
+     "lineStart": 31,
+     "lineEnd": 50
+    },
+    {
+     "path": "apps/api/src/modules/inventory/service.ts",
+     "lineStart": 32,
+     "lineEnd": 58
+    }
+   ],
+   "prompt": "The provider declines a payment while the order is awaiting_payment. What happens to the order's stock reservations?",
+   "answer": "They are released: reserved goes down and on_hand stays the same",
+   "distractors": [
+    "They are consumed: both reserved and on_hand are reduced by the quantity",
+    "They are kept as held until a reconciliation job expires them later on",
+    "They are deleted, and a shipment row is written with zero quantity"
+   ],
+   "explanation": "For a decline applyPaymentResult sets the order to payment_failed and calls settleReservations(..., \"released\"), which marks held reservations released and subtracts their quantity from reserved with 0 from on_hand."
+  },
+  {
+   "id": "f01-reserve-statement",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/upskilling/databases/transactions-and-concurrency.md",
+    "lines": {
+     "start": 21,
+     "end": 30
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/modules/inventory/service.ts",
+     "lineStart": 13,
+     "lineEnd": 25
+    }
+   ],
+   "front": "Which single statement prevents overselling, and why does it work under READ COMMITTED?",
+   "back": "reserve's UPDATE inventory SET reserved = reserved + qty ... AND on_hand - reserved >= qty RETURNING warehouse_id. A concurrent updater of the same row waits, then rechecks the WHERE against the committed row; if no row is returned, stock was insufficient and reserve throws 409 INSUFFICIENT_STOCK."
+  },
+  {
+   "id": "f02-idempotency-scope",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/upskilling/code-reading/checkout.md",
+    "lines": {
+     "start": 28,
+     "end": 28
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/modules/commerce/service.ts",
+     "lineStart": 44,
+     "lineEnd": 62
+    }
+   ],
+   "front": "What scopes a checkout idempotency key, and what does the stored fingerprint add?",
+   "back": "The advisory lock and the lookup both use tenant, acting user and key, so keys never collide across users or tenants. The SHA-256 of the sorted input is stored as request_hash: same hash replays the order (200); a different hash under the same key is 409 IDEMPOTENCY_CONFLICT."
+  },
+  {
+   "id": "f03-fencing",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/upskilling/distributed-systems/durable-jobs.md",
+    "lines": {
+     "start": 28,
+     "end": 28
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/modules/payments/service.ts",
+     "lineStart": 18,
+     "lineEnd": 23
+    }
+   ],
+   "front": "What is a fencing check in Forge's job runner?",
+   "back": "Before finalizing, applyPaymentResult re-reads the job FOR UPDATE and requires lease_token = the worker's token, state = running and lease_until > now(). A worker whose lease expired and was reclaimed gets zero rows and writes nothing, so only the current owner can commit the outcome."
+  },
+  {
+   "id": "f04-transaction-one-client",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/upskilling/databases/transactions-and-concurrency.md",
+    "lines": {
+     "start": 57,
+     "end": 57
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/database/src/index.ts",
+     "lineStart": 21,
+     "lineEnd": 43
+    }
+   ],
+   "front": "Why is pool.query(\"BEGIN\") followed by more pool.query calls not a transaction?",
+   "back": "A pool may hand each query a different connection, and a transaction belongs to one connection. Forge's transaction helper checks out one client, sets lock_timeout 5s, runs everything on that client, commits or rolls back, and discards the client if ROLLBACK itself failed."
+  }
+ ]
+}
