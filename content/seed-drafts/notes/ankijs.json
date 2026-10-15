@@ -44,7 +44,7 @@
    "target": "pack",
    "phase": "before",
    "title": "The outbox: how offline changes reach the server later",
-   "body": "Because the app works offline, it cannot send each change to the server the moment it happens. Instead, every write that should sync also adds a small bookkeeping row to a local table called the **outbox**. The outbox row just says \"table X, row Y needs pushing\". Later, the sync loop reads the outbox, loads the current version of each row, and sends it.\n\nTwo ideas make this safe:\n\n- **Transactions.** A Dexie transaction is a group of writes that either all happen or none do. The data-model guide lists which writes are grouped together, for example a card review. If the change and its outbox row were saved separately, a crash in between could leave a change that never syncs.\n- **Idempotency.** An idempotent operation can be repeated without changing the result. The outbox is keyed by table and row, so it does not grow without limit for a busy row.\n\nWhen you read `src/db/sync/outbox.ts`, look at what `enqueueOutbox` does when an entry already exists, and what `removeOutboxIfUnchanged` compares before deleting.",
+   "body": "Because the app works offline, it cannot send each change to the server the moment it happens. Instead, every write that should sync also adds a small bookkeeping row to a local table called the **outbox**. The outbox row just says \"table X, row Y needs pushing\". Later, the sync loop reads the outbox, loads the current version of each row, and sends it.\n\nTwo ideas make this safe:\n\n- **Transactions.** A Dexie transaction is a group of writes that either all happen or none do. The data-model guide has a section on transaction boundaries. For each multi-step flow (a review, an undo, converting a note), check which writes are inside one transaction and which are not, and ask what a crash between two writes would leave behind.\n- **Idempotency.** An idempotent operation can be repeated without changing the result. Look at how the outbox table is keyed, and what that means when one row is edited many times.\n\nWhen you read `src/db/sync/outbox.ts`, look at what `enqueueOutbox` does when an entry already exists, and what `removeOutboxIfUnchanged` compares before deleting.",
    "excerpts": [
     {
      "path": "docs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
@@ -53,16 +53,10 @@
      "quote": "| IndexedDB write | Repository calls | `src/db/repos/*.ts` | Must be transactional with outbox when synced. |"
     },
     {
-     "path": "docs/upskill/03-architecture-and-patterns/02-data-model-and-persistence.md",
-     "lineStart": 20,
-     "lineEnd": 23,
-     "quote": "- Note capture: note + outbox (`src/db/repos/noteRepo.ts:18-20`)."
-    },
-    {
      "path": "src/db/sync/outbox.ts",
-     "lineStart": 26,
-     "lineEnd": 33,
-     "quote": "if (current?.queued_at === entry.queued_at) { await db.outbox.delete(entry.id); }"
+     "lineStart": 4,
+     "lineEnd": 8,
+     "quote": "export async function enqueueOutbox( table_name: SyncTableName, row_id: string, queued_at = nowISO(), ): Promise<void> {"
     }
    ],
    "readMore": [
@@ -79,25 +73,19 @@
    "target": "pack",
    "phase": "before",
    "title": "The sync loop: push, pull, merge, and who is trusted",
-   "body": "`syncLoop` in `src/db/sync/engine.ts` does two things in order. **Push**: send outbox rows to Supabase. **Pull**: ask Supabase for rows changed since a saved **cursor** (a timestamp remembered per table in `sync_meta`), then merge them into the local database. Pulled rows are written straight to Dexie without touching the outbox, so they do not bounce back to the server.\n\nThree things to watch when you read it:\n\n- Many triggers call `syncNow`: page load, coming online, a new outbox entry, the tab becoming visible, and a timer. Look at the module-level variables at the top of the file.\n- Errors are stored in `sync_meta` as `last_error` so the UI can show them, and a retry is scheduled.\n- Security is not the client's job. The validation guide is direct about this: the server enforces who owns which rows. The client code still filters, but read the guide on why that is not the protection.\n\nThe merge step (`src/db/sync/merge.ts`) decides which side wins for each field when local and remote both changed.",
+   "body": "`syncLoop` in `src/db/sync/engine.ts` does two things in order. **Push**: send outbox rows to Supabase. **Pull**: ask Supabase for rows changed since a saved **cursor** (a timestamp remembered per table in `sync_meta`), then merge them into the local database. Pulled rows are written straight to Dexie without touching the outbox, so they do not bounce back to the server.\n\nThree things to watch when you read it:\n\n- Many triggers call `syncNow`: page load, coming online, a new outbox entry, the tab becoming visible, and a timer. Look at the module-level variables at the top of the file.\n- Errors are stored in `sync_meta` as `last_error` so the UI can show them. Find the code that schedules the next attempt and work out how its delay changes over time.\n- Security: the client code filters by user, and the server has its own rules in `supabase/migrations/`. Read the validation guide and decide which of the two actually protects one user's data from another, and why.\n\nThe merge step (`src/db/sync/merge.ts`) decides how a local and a remote version are combined when both changed. Read it group of fields by group of fields.",
    "excerpts": [
     {
      "path": "src/db/sync/engine.ts",
      "lineStart": 70,
      "lineEnd": 79,
-     "quote": "await pushOutbox(session.user.id); setSyncState('pulling'); await pullRemote(session.user.id);"
-    },
-    {
-     "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
-     "lineStart": 19,
-     "lineEnd": 19,
-     "quote": "Server authorization is row-level: every synced table has RLS and a policy requiring `user_id = auth.uid()` (`supabase/migrations/0001_init.sql:176-188`)."
+     "quote": "try { window.clearTimeout(retryTimer); setSyncState('pushing'); await pushOutbox(session.user.id); setSyncState('pulling'); await pullRemote(session.user.id); await db.sync_meta.put({ key: 'last_sync_ok_at', value: nowISO() }); await db.sync_meta.delete('last_error'); backoffMs = 5_000; setSyncState('idle');"
     },
     {
      "path": "docs/upskill/01-codebase-cartography/05-key-flows.md",
      "lineStart": 127,
      "lineEnd": 127,
-     "quote": "**What juniors usually miss:** pull writes directly to Dexie to avoid re-enqueue"
+     "quote": "**What juniors usually miss:** pull writes directly to Dexie to avoid re-enqueue (`src/db/sync/engine.ts:171-193`)."
     }
    ],
    "readMore": [

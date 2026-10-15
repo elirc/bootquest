@@ -484,25 +484,19 @@
    "target": "pack",
    "phase": "before",
    "title": "Concept: a transition table is a policy, not a lock",
-   "body": "`VALID_RUN_TRANSITIONS` is a small table: for each status, the list of statuses it may move to. `assertValidRunTransition` looks up the current status and throws a `ValidationError` if the requested next status is not in the list. That is a **policy**: it answers \"is this move allowed?\".\n\nWhat it cannot do is stop two workers acting at once. `transitionRunStatus` reads the run, checks the policy, and then writes. Between the read and the write, another worker could change the row, and the write does not re-check the status. The concepts chapter calls the fix a **conditional claim**: put the expected current status into the update's `where`, and treat \"zero rows updated\" as \"someone else got there first\". The guide is explicit that this is not implemented.\n\nA useful habit: for every write in the worker, ask \"does this write go through the policy, or around it?\" The concepts chapter's section 2 is about one write that goes around it.",
+   "body": "`VALID_RUN_TRANSITIONS` is a small table: for each status, the list of statuses it may move to. `assertValidRunTransition` looks up the current status and throws a `ValidationError` if the requested next status is not in the list. That is a **policy**: it answers \"is this move allowed?\".\n\nThe concepts chapter explains what a policy like this can and cannot do when two workers act at once. Read `transitionRunStatus` and the repository method it calls, and write down the order of its steps: what it reads, what it checks, and what its write's `where` contains. Then picture two workers running it at the same moment, or one job processed twice, and trace what each one sees and writes.\n\nA useful habit: list every write the worker makes to a run's status, and for each one note whether it goes through `assertValidRunTransition`, and what happens when that check throws.",
    "excerpts": [
     {
      "path": "src/services/allocationRunService.ts",
      "lineStart": 27,
      "lineEnd": 32,
-     "quote": "export function assertValidRunTransition(input: RunTransitionInput) { const allowedNext = VALID_RUN_TRANSITIONS[input.from];"
+     "quote": "export function assertValidRunTransition(input: RunTransitionInput) { const allowedNext = VALID_RUN_TRANSITIONS[input.from]; if (!allowedNext.includes(input.to)) { throw new ValidationError(`Invalid run transition: ${input.from} -> ${input.to}`); }"
     },
     {
      "path": "astraupskill/02-CONCEPTS.md",
      "lineStart": 5,
      "lineEnd": 5,
-     "quote": "It is a policy function; it cannot make an update atomic."
-    },
-    {
-     "path": "astraupskill/02-CONCEPTS.md",
-     "lineStart": 7,
-     "lineEnd": 7,
-     "quote": "Between the read and the write another worker can change the row."
+     "quote": "It is a policy function"
     }
    ],
    "readMore": [
@@ -556,8 +550,8 @@
     "sha": "09751ceaee909a30e5c4b5ff5cdde99880b9a3e5",
     "path": "astraupskill/02-CONCEPTS.md",
     "lines": {
-     "start": 15,
-     "end": 15
+     "start": 19,
+     "end": 19
     }
    },
    "citations": [],
@@ -567,25 +561,19 @@
    "target": "pack",
    "phase": "before",
    "title": "Concept: tenant scope, month windows, and who the caller is",
-   "body": "Three more ideas run through the review findings.\n\n**Tenant scope.** Every repository query includes `tenantId` in its `where`, so tenant A cannot read tenant B's rows by guessing an id. The concepts chapter then points out what that does not cover: ids that arrive inside a request body and are stored as foreign keys.\n\n**Month windows.** The canonical month is a half-open range from the first instant of the month (UTC) up to, but not including, the first instant of the next. Range queries use this consistently. Problems appear where code looks a month up by **equality** instead of by range, because then the stored key must be normalised exactly.\n\n**Identity.** The API decides who the caller is from a request header and then loads that user from the database. Tenant and role come from the database row, which is good; but the header itself is the only proof of identity. The review ranks identity first, because every other control depends on it.",
+   "body": "Three more ideas run through the review findings.\n\n**Tenant scope.** Read how repository queries use `tenantId`. Then list every id that reaches the services from a request (in the path, the query or the body), and for each one find whether, and where, it is checked against the caller's tenant.\n\n**Month windows.** The canonical month is a half-open range from the first instant of the month (UTC) up to, but not including, the first instant of the next. Range queries use this consistently. Problems appear where code looks a month up by **equality** instead of by range, because then the stored key must be normalised exactly.\n\n**Identity.** Starting from one route, follow the call that resolves the caller, and write down how the API decides who the caller is, where tenant and role come from, and what a caller would have to send to be someone else. The review ranks its identity finding first; read its reason.",
    "excerpts": [
-    {
-     "path": "astraupskill/02-CONCEPTS.md",
-     "lineStart": 15,
-     "lineEnd": 15,
-     "quote": "Every repository `where` includes `tenantId`. A run id alone is insufficient when APIs serve multiple tenants"
-    },
     {
      "path": "astraupskill/02-CONCEPTS.md",
      "lineStart": 19,
      "lineEnd": 19,
-     "quote": "`toUtcMonthWindow` (`src/lib/time/month.ts:10-22`) is the canonical month: `[Date.UTC(y, m, 1), Date.UTC(y, m+1, 1))`. Range queries use it consistently."
+     "quote": "`toUtcMonthWindow` (`src/lib/time/month.ts:10-22`) is the canonical month: `[Date.UTC(y, m, 1), Date.UTC(y, m+1, 1))`. Range queries use it consistently. Equality lookups need a normalised key, and the code is inconsistent: runs and budgets store `new Date(input)` (`allocationRunService.ts:66`, `budgetService.ts:18`), while forecasts store `window.monthStart` (`src/services/forecastService.ts:23`). The report's run lookup is an equality match (`src/repositories/reportRepository.ts:14`)."
     },
     {
-     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
-     "lineStart": 44,
-     "lineEnd": 44,
-     "quote": "a senior review also finds F1–F3 and ranks F1 first because every other control depends on knowing who the caller is."
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 15,
+     "lineEnd": 15,
+     "quote": "Every repository `where` includes `tenantId`."
     }
    ],
    "readMore": [
