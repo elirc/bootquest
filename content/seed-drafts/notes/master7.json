@@ -1,0 +1,419 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "master7",
+ "repo": "master7",
+ "sha": "589c2484c822665870482ecd6a1e9a816844cc9b",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: one dashboard leak, and the habit that finds the rest",
+   "body": "Master7 is an enterprise learning-management system with several **tenants** (organizations, here Acme and Nova) sharing one app. Each tenant must only see its own data. The `astraupskill/` course follows one fix: the dashboard's audit-log list was showing records from other organizations, even though the dedicated audit-log endpoint was already filtered correctly. It then uses the same habit, tracing every reader and writer of a table, to find what is still broken.\n\nSuggested reading order (the README lists the chapters):\n\n1. `astraupskill/README.md`. Note that the API runs on a plain **in-memory** object (`apps/api/src/store.ts`), not the Prisma schema that also exists.\n2. `01-CODEBASE-MAP.md`: the path login → actor → dashboard → JSON.\n3. `02-CONCEPTS.md`: the scope rule per role, filter-before-limit, one predicate for two readers.\n4. `03-WORKED-CHANGE.md`, then `07-TRACE-LAB.md`.\n5. `06-SOLUTIONS-AND-REVIEW.md`: its review findings are the source of several quizzes.\n\nKeep `apps/api/src/services.ts` open throughout.",
+   "excerpts": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 3,
+     "lineEnd": 8,
+     "quote": "Master7's dedicated `GET /audit-logs` endpoint was already organization-scoped, but `GET /me/dashboard` built a second projection from the newest *global* records."
+    },
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 14,
+     "lineEnd": 15,
+     "quote": "**At runtime the API reads and writes a plain in-memory object** (`apps/api/src/store.ts`)."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 21,
+     "lineEnd": 32,
+     "why": "The chapter list with a one-line summary of each."
+    },
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The request path from login to the dashboard JSON, with line numbers."
+    }
+   ]
+  },
+  {
+   "id": "r02-scope-rule",
+   "target": "pack",
+   "phase": "before",
+   "title": "Who may see which audit rows",
+   "body": "Two ideas carry this whole pack.\n\n**Authentication vs authorization.** Authentication answers \"who is calling?\" (here, `requireAuth` checks the JWT and loads the user). Authorization answers \"what may this caller see or do?\". Passing the first says nothing about the second: every place that returns rows must still apply the tenant rule.\n\n**The rule per role.** The concepts chapter has a small table. Learners get no audit rows; instructors and org admins get rows whose `organizationId` matches their own; the platform admin is the one documented cross-tenant exception. Note that the two readers answer a learner differently, and the worked change explains why that difference is kept on purpose.\n\nWhen you read `services.ts`, find every function that reads `store.auditLogs` and check that each applies the rule. Then find every call to `audit(...)` and look at which organization id it **writes**: a row's visibility is decided by the tenant stamped on it when it was written.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 5,
+     "lineEnd": 7,
+     "quote": "`requireAuth` answers \"who is calling?\". It says nothing about which rows that caller may read."
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 47,
+     "lineEnd": 47,
+     "quote": "Visibility is decided by the `organizationId` stamped at write time."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 10,
+     "lineEnd": 31,
+     "why": "The per-role table and the filter-before-limit example."
+    }
+   ]
+  },
+  {
+   "id": "r03-reading-the-trace",
+   "target": "pack",
+   "phase": "before",
+   "title": "Tracing a request hop by hop",
+   "body": "The trace lab follows one request through numbered **hops**: each row of its table names the code that runs, the file and line, and the value that comes out. This is a skill worth copying: instead of guessing what an endpoint returns, you write down each step and its output.\n\nRead the table for the org admin first, then the short traces for the platform admin and the learner. For each actor, answer: where does the actor's role come from? Which line decides which rows are kept? Which line limits the count, and does it run before or after that?\n\nThe lab also has a warning about **what a test can see**. The response JSON and what the web page draws are not always the same thing: a page might take a list from one endpoint while another endpoint quietly returns more. When you check for a data leak, check the API response itself, not just what appears on screen.",
+   "excerpts": [
+    {
+     "path": "astraupskill/07-TRACE-LAB.md",
+     "lineStart": 14,
+     "lineEnd": 16,
+     "quote": "| 9 | `res.json(...)` | `index.ts:47` | the whole dashboard object, `auditLogs` included |"
+    },
+    {
+     "path": "astraupskill/07-TRACE-LAB.md",
+     "lineStart": 40,
+     "lineEnd": 41,
+     "quote": "Scope first, paging last - the same ordering rule as the dashboard."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/07-TRACE-LAB.md",
+     "lineStart": 1,
+     "lineEnd": 50,
+     "why": "The full hop-by-hop trace for each actor."
+    }
+   ]
+  },
+  {
+   "id": "x-q01-every-reader",
+   "target": "seed:quests:master7/quiz/24aebf6c656d1a5d",
+   "phase": "after",
+   "title": "Why a correctly scoped endpoint did not stop the dashboard leak",
+   "body": "The key is right: every reader of the table, the dashboard included, must apply the organization rule itself. `GET /audit-logs` filtered by organization. But the dashboard built its own list from the same `store.auditLogs` array, and originally took the newest 25 rows with no filter. A correct rule in one place does nothing for code that reads the data some other way. The concepts chapter: having one correctly scoped endpoint did not protect a second reader of the same array. Today the dashboard's `auditLogs` comes from `visibleAuditLogs(actor)`.\n\nWhy the others are wrong:\n- \"A forged JWT\": the leak needed no forgery; any real org admin saw it.\n- \"A stale per-role cache\": there is no such cache; the code read the array directly.\n- \"Scope should be inherited through shared middleware\": middleware here authenticates; it cannot filter rows another function builds. The fix applies the rule in the reader.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 7,
+     "lineEnd": 8,
+     "quote": "Having one correctly scoped endpoint (`/audit-logs`) did not protect a second reader of the same array."
+    },
+    {
+     "path": "apps/api/src/services.ts",
+     "lineStart": 70,
+     "lineEnd": 70,
+     "quote": "auditLogs: visibleAuditLogs(actor)"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 5,
+     "lineEnd": 7,
+     "quote": "Every projection must still apply an organization rule, and the dashboard is a projection like any other."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02-learner-early-return",
+   "target": "seed:quests:master7/quiz/4f16f7f69f6d9e2e",
+   "phase": "after",
+   "title": "Why visibleAuditLogs keeps its own learner check",
+   "body": "The key is right: the two readers have different contracts for a learner. The dashboard answers `[]` with status 200; the dedicated endpoint answers 403. `visibleAuditLogs` starts with `if (actor.role === \"LEARNER\") return [];`, while `services.auditLogs` starts with `throw new Error(\"Forbidden\")`. The shared predicate `auditLogScope` only decides which rows match; it cannot express \"empty list here, refuse there\". So each reader keeps its own learner line. The trace lab adds a bonus: the empty list does not depend on the store being empty, so a learner cannot infer whether any events exist.\n\nWhy the others are wrong:\n- \"A performance shortcut with no effect\": without it a learner would get their organization's rows.\n- \"The predicate would throw for learners\": the predicate just compares values; it never throws.\n- \"Learners have no organization, so all rows come back\": learners have an organization; the predicate would return *its* rows, which learners must not see.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/services.ts",
+     "lineStart": 33,
+     "lineEnd": 33,
+     "quote": "if (actor.role === \"LEARNER\") return [];"
+    },
+    {
+     "path": "apps/api/src/services.ts",
+     "lineStart": 135,
+     "lineEnd": 135,
+     "quote": "if (actor.role === \"LEARNER\") throw new Error(\"Forbidden\");"
+    },
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": 39,
+     "lineEnd": 40,
+     "quote": "The learner branch stays an explicit early return because the dashboard contract (`[]`) differs from the endpoint's (403)."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q03-screenshot-misses",
+   "target": "seed:quests:master7/quiz/784117f2dc52ea4a",
+   "phase": "after",
+   "title": "Why a screenshot check would never have seen the leak",
+   "body": "The key is right: the web page's audit panel reads `/audit-logs`, not `dashboard.auditLogs`. In `apps/web/src/main.tsx`, non-learners get their audit panel from `api(\"/audit-logs?pageSize=10\")`, the endpoint that was already filtered correctly. The dashboard response still **contained** the leaked Nova row, but the page never drew that field. So anything that only looks at the screen sees a correct panel. Only checking the response body would catch it. API payloads are an attack surface even when the UI ignores a field: anyone can open devtools and read them.\n\nWhy the others are wrong:\n- \"The response was compressed\": compression does not hide data from the browser or devtools.\n- \"Only in the platform admin's dashboard\": the leak was for org admins; for a platform admin, seeing all tenants is the documented exception.\n- \"The panel filtered foreign rows on the client\": the panel did not read that field at all.",
+   "excerpts": [
+    {
+     "path": "apps/web/src/main.tsx",
+     "lineStart": 68,
+     "lineEnd": 70,
+     "quote": "const audit = await api(\"/audit-logs?pageSize=10\"); setAuditLogs(audit.auditLogs);"
+    },
+    {
+     "path": "astraupskill/07-TRACE-LAB.md",
+     "lineStart": 45,
+     "lineEnd": 48,
+     "quote": "Before the fix the leaked Nova row was in the dashboard JSON yet never on screen. A UI check could not have found this bug; only a response-level assertion could."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q04-role-from-store",
+   "target": "seed:quests:master7/quiz/7c5b6583cb6d8572",
+   "phase": "after",
+   "title": "What a demoted admin's old token can still do",
+   "body": "The key is right: they act as a LEARNER at once, because only `sub` is trusted from the token and the role is re-read from the store. The JWT holds just `{ sub: userId }`. On every request, `requireAuth` verifies the token, then finds the user row by `payload.sub` and builds `req.actor` from that row's `role` and `organizationId`. Once the stored role says LEARNER, the next request uses LEARNER, even though the 8-hour token is still valid.\n\nWhy the others are wrong:\n- \"Rejected because the signature no longer matches the role\": the role is not in the token, so the signature does not change and the token stays valid.\n- \"Admin rights until the token expires because the role is a claim\": the token has no role claim.\n- \"Admin rights until they log in again\": login only issues a new token with the same `sub`; the role is never read from the token.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/auth.ts",
+     "lineStart": 10,
+     "lineEnd": 10,
+     "quote": "return jwt.sign({ sub: userId }, config.JWT_SECRET, { expiresIn: \"8h\" });"
+    },
+    {
+     "path": "apps/api/src/auth.ts",
+     "lineStart": 22,
+     "lineEnd": 24,
+     "quote": "const user = store.users.find((candidate) => candidate.id === payload.sub); if (!user) return res.status(401).json({ error: \"Unknown user\" }); req.actor = { id: user.id, role: user.role, organizationId: user.organizationId };"
+    },
+    {
+     "path": "astraupskill/07-TRACE-LAB.md",
+     "lineStart": 18,
+     "lineEnd": 20,
+     "quote": "so a role change takes effect on the next request even with an old token. Only `sub` is trusted from the JWT."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q05-certificate-not-idempotent",
+   "target": "seed:quests:master7/quiz/95063ad0aa5b2e7e",
+   "phase": "after",
+   "title": "What three clicks on Issue certificate leave behind",
+   "body": "The key is right: three certificates, each publicly verifiable. `issueCertificate` never looks for an existing certificate for the enrollment. Each call builds a new object with a new `id(\"cert\")` and a fresh `verificationId: id(\"verify\")` and pushes it to `store.certificates`. Three clicks, three rows, three different public verification links. The review calls this finding 4: issuance is not **idempotent** (repeating it is not the same as doing it once). Fix: return the existing ISSUED certificate.\n\nWhy the others are wrong:\n- \"One; later calls return it\": that is the proposed fix, not what the code does.\n- \"One, because verificationId is unique\": nothing enforces uniqueness here; this is a plain array, and each id is new anyway.\n- \"One; later calls fail with 409\": no check exists that could throw a conflict.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/services.ts",
+     "lineStart": 238,
+     "lineEnd": 239,
+     "quote": "const certificate = { id: id(\"cert\"), enrollmentId, status, verificationId: id(\"verify\"),"
+    },
+    {
+     "path": "apps/api/src/services.ts",
+     "lineStart": 239,
+     "lineEnd": 239,
+     "quote": "store.certificates.push(certificate);"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 97,
+     "lineEnd": 102,
+     "quote": "always pushes a new certificate, `ISSUED` or `PENDING`, with a fresh `verificationId`. Retries or double clicks create multiple valid public verification links for one enrollment"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q06-id-oracle",
+   "target": "seed:quests:master7/quiz/a6446d6aca4d003d",
+   "phase": "after",
+   "title": "Why 404 versus 403 leaks which ids exist",
+   "body": "The key is right: it lets a user confirm which ids exist in another tenant. `publishCourse` first looks up the course by id. If there is none, it throws \"Course not found\" (404). Only after that does it call `assertCanAuthorCourse`, which throws a 403 for a course in another organization. So an Acme user who tries `course-forklift` learns from the 403 that the id exists in some other tenant, and from a 404 that it does not. The two answers form an **oracle**: a yes/no signal the user should not have. The ids are readable slugs, which makes guessing easy. Fix: look up only within the actor's visible scope and answer the same 404 either way.\n\nWhy the others are wrong:\n- \"404s make safe retries impossible\": retries are not the issue.\n- \"The 403 body leaks the course title\": the 403 message is a generic policy message; the leak is the status code itself.\n- \"Not a problem\": the finding rates it a real issue.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/services.ts",
+     "lineStart": 154,
+     "lineEnd": 156,
+     "quote": "const course = store.courses.find((candidate) => candidate.id === courseId); if (!course) throw new Error(\"Course not found\"); assertCanAuthorCourse(actor, course.organizationId);"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 91,
+     "lineEnd": 93,
+     "quote": "so an Acme user can confirm which ids exist in Nova. Fix: resolve the resource *within* the actor's visible scope and return the same 404 when it is absent or foreign."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07-seeded-rows",
+   "target": "seed:quests:master7/quiz/b274da3b6d00d4bf",
+   "phase": "after",
+   "title": "Why the test fixture needed one audit row per tenant",
+   "body": "The key is right: with an empty fixture, the leak cannot be observed. The fixture's `auditLogs` used to be `[]`. A test that says \"the Acme admin sees no Nova rows\" then passes no matter what the code does, because there are no Nova rows to leak. Assertions like that pass *vacuously* (trivially, without testing anything). The fix seeds `audit-seeded-acme` and `audit-seeded-nova`, one per tenant, so a broken filter would actually return a foreign row and fail.\n\nWhy the others are wrong:\n- \"totalPages needs two rows\": `totalPages` uses `Math.max(1, ...)`, so it works with zero rows.\n- \"The dashboard crashed on an empty array\": an empty array is a normal result.\n- \"It replaces the agreement test\": the test pinning the two readers together is separate and still exists.",
+   "excerpts": [
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": 53,
+     "lineEnd": 56,
+     "quote": "Without a row from each tenant, the leak could not be observed at all - an empty fixture passes every ownership assertion."
+    },
+    {
+     "path": "apps/api/src/store.ts",
+     "lineStart": 155,
+     "lineEnd": 157,
+     "quote": "{ id: \"audit-seeded-acme\", organizationId: \"org-acme\","
+    },
+    {
+     "path": "apps/api/src/services.ts",
+     "lineStart": 141,
+     "lineEnd": 141,
+     "quote": "const totalPages = Math.max(1, Math.ceil(total / query.pageSize));"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08-writer-stamp",
+   "target": "seed:quests:master7/quiz/b950a32bff5fd630",
+   "phase": "after",
+   "title": "Why a platform admin's action is invisible to the tenant",
+   "body": "The key is right: no, because the row is stamped with `actor.organizationId`, which is null for a platform admin. `completeLesson` writes its audit row with `audit(actor.id, actor.organizationId, \"lesson.completed\", ...)`. For a learner that is fine: their organization is the course's. But the access check `assertCanAccessOwnLearnerRecord` lets a PLATFORM_ADMIN act on any learner's record, and a platform admin has no organization. The row is saved with `organizationId: null`, and the Acme admin's filter (`log.organizationId === actor.organizationId`) never matches it. The review calls it the matching **writer** defect: the readers were fixed, but a wrong stamp at write time still hides a row.\n\nWhy the others are wrong:\n- \"Stamped with the course's organization\": that is the proposed fix, not the current code.\n- \"Platform admins are blocked\": the policy explicitly allows PLATFORM_ADMIN.\n- \"Platform admin rows are visible to every tenant\": tenant admins only see rows stamped with their own organization.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/services.ts",
+     "lineStart": 186,
+     "lineEnd": 186,
+     "quote": "audit(actor.id, actor.organizationId, \"lesson.completed\", \"Lesson\", lessonId, { enrollmentId });"
+    },
+    {
+     "path": "apps/api/src/policies.ts",
+     "lineStart": 22,
+     "lineEnd": 24,
+     "quote": "if (actor.role !== \"PLATFORM_ADMIN\" && actor.id !== learnerId) {"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 59,
+     "lineEnd": 62,
+     "quote": "lets a `PLATFORM_ADMIN` complete any learner's lesson, and that row gets `organizationId: null` - invisible to the tenant whose data changed."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09-slice-then-filter",
+   "target": "seed:quests:master7/quiz/c52b782564caa533",
+   "phase": "after",
+   "title": "What slice-then-filter returns for the quiet tenant",
+   "body": "The key is right: zero rows; the Acme admin's own row silently disappears. Work it through. The store holds 26 Nova rows, newest first, then 1 Acme row. `slice(0, 25)` keeps the first 25 rows: all Nova. Filtering those for Acme leaves nothing. The Acme row was row 27 and was cut off **before** the filter ever saw it. Filter first and you get Acme's one row. The concepts chapter's warning: in the wrong order, row order (which a busy tenant controls just by being busy) becomes an access rule.\n\nWhy the others are wrong:\n- \"25 Nova rows\": that is what the **original** code returned, with no filter at all.\n- \"Their one Acme row\": that is the correct filter-then-slice order.\n- \"One Acme row plus 24 Nova\": the filter removes every Nova row.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 25,
+     "lineEnd": 27,
+     "quote": "`slice(0, 25)` then filter: the slice contains only Nova rows, so the Acme admin gets **zero** rows - and, with no filter at all, 25 Nova rows."
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 29,
+     "lineEnd": 30,
+     "quote": "otherwise row order, which another tenant controls just by being busy, becomes an access rule."
+    },
+    {
+     "path": "apps/api/src/services.ts",
+     "lineStart": 34,
+     "lineEnd": 34,
+     "quote": "return store.auditLogs.filter(auditLogScope(actor)).slice(0, 25);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10-one-predicate",
+   "target": "seed:quests:master7/quiz/da41b668b32a9fba",
+   "phase": "after",
+   "title": "Why the scope rule became one exported function",
+   "body": "The key is right: two copies of the rule are how the endpoints came to disagree. The first version of the fix wrote `role === \"PLATFORM_ADMIN\" || log.organizationId === actor.organizationId` twice, once in each reader. Duplicated rules drift: someone edits one copy and forgets the other. So the code now exports `auditLogScope(actor)`, and both `visibleAuditLogs` and `services.auditLogs` call it. A test then asserts both endpoints return the same row ids for the same actor. The general habit: when two endpoints project the same table, the ownership rule is one named function.\n\nWhy the others are wrong:\n- \"Handlers cannot contain inline filter callbacks\": they can; the first version of the fix did exactly that.\n- \"The endpoint needed a different rule\": the whole point is that both use the same rule.\n- \"A named function is faster\": speed is not the reason given.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 35,
+     "lineEnd": 39,
+     "quote": "Two copies of `role === \"PLATFORM_ADMIN\" || log.organizationId === actor.organizationId` is exactly how the two endpoints came to disagree"
+    },
+    {
+     "path": "apps/api/src/services.ts",
+     "lineStart": 28,
+     "lineEnd": 30,
+     "quote": "export function auditLogScope(actor: Actor) {"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 41,
+     "lineEnd": 43,
+     "quote": "when two endpoints project the same table, the ownership rule is one named function, and a test pins the readers together."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q11-prisma-port",
+   "target": "seed:quests:master7/quiz/e57c05d7ff47a6c4",
+   "phase": "after",
+   "title": "Which Prisma query reproduces the original bug",
+   "body": "The key is right: `findMany({ take: 25 })`, then filtering the array in JavaScript. The database returns the newest 25 rows of **all** tenants, and only then does your code throw away foreign ones. That is limit-before-filter, so a quiet tenant's rows fall off the page, exactly the bug the concepts chapter's table lists as \"the original bug\". The correct port puts the scope and the limit in the **same** query: `where` plus `take`, so the database filters first and then counts 25.\n\nWhy the others are wrong:\n- `findMany({ where: scope, take: 25 })`: scope and limit together in one query, which is the correct version.\n- `where: scopeWhere(actor)` then `.slice(0, 25)`: filtered first, then limited; correct order, just less efficient.\n- `where: { organizationId }` with `orderBy` and `take: 25`: also filters before limiting (though it would drop the platform-admin exception, it does not reproduce this bug).",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 59,
+     "lineEnd": 59,
+     "quote": "| the original bug | `findMany({ take: 25 })`, then filter the array in JavaScript | `.Take(25).ToList().Where(...)` |"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 58,
+     "lineEnd": 58,
+     "quote": "| `.slice(0, 25)` after the filter | `take: 25` in the *same* query | `.Take(25)` after `.Where(...)` |"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q12-regex-status",
+   "target": "seed:quests:master7/quiz/fcaf1f14ef55b180",
+   "phase": "after",
+   "title": "What status \"Cannot publish course draft from PUBLISHED\" gets",
+   "body": "The key is right: 403, because the message contains \"cannot\", though it is really a 409 conflict. `toAppError` picks the HTTP status by testing the error **message** with regular expressions. It checks `/not found/i` first, then `/forbidden|does not belong|cannot|only the/i` for 403. \"Cannot publish...\" matches `cannot`, so it becomes 403 FORBIDDEN. But nothing is forbidden; the course is in the wrong state, which is what 409 Conflict means. Review finding 2 lists this and warns that rewording any message silently changes the HTTP contract. Fix: throw typed errors and map by class.\n\nWhy the others are wrong:\n- \"409, because the regex recognises publish\": no pattern mentions publish or maps to 409.\n- \"404\": the message does not contain \"not found\".\n- \"500, matches nothing\": it does match `cannot`; the 500 example in the review is the quiz-score message.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/errors.ts",
+     "lineStart": 32,
+     "lineEnd": 32,
+     "quote": "if (error instanceof Error && /forbidden|does not belong|cannot|only the/i.test(error.message)) return new AppError(403, \"FORBIDDEN\", error.message);"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 71,
+     "lineEnd": 72,
+     "quote": "`publishDraft` throws `Cannot publish course draft from PUBLISHED` (`packages/domain/src/index.ts:29`) -> 403 instead of 409."
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 80,
+     "lineEnd": 80,
+     "quote": "- Rewording any message silently changes the HTTP contract."
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}
