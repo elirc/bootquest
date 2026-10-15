@@ -1,0 +1,291 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "organized-study-nextcrm-app",
+ "repo": "organized-study-nextcrm-app",
+ "sha": "c8090ac678c69620d78d88de3edf34dcb8f1d500",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: seven traced flows through NextCRM",
+   "body": "NextCRM is an open-source CRM on Next.js, Prisma and PostgreSQL, with better-auth for sign-in and Inngest for background jobs. Its study track is `nextcrm-app/fabledocs/upskill/`.\n\nRead in this order:\n\n1. `01-codebase-cartography/05-key-flows.md`: seven flows (account edit, contact PATCH, invoice issue, contact enrichment, campaign webhooks, auth and roles, MCP tokens), each with a trace table that names the file and lines for every step.\n2. `03-architecture-and-patterns/03-validation-auth-and-permissions.md`.\n3. `03-architecture-and-patterns/04-side-effects-async-and-reliability.md`.\n\nThe repo had a published IDOR advisory, and `docs/2026-05-01-bola-idor-security-audit.md` describes the fix. Many questions in this quest are about who may read or write which row, so keep `lib/authz/scopes/crm.ts` open while you read Flows 1 and 2, and compare the scope used on each read with the scope used on each write.\n\nA table cell is a summary. For every step, open the file and read the branch it summarises, including the early returns.",
+   "excerpts": [
+    {
+     "path": "nextcrm-app/fabledocs/upskill/01-codebase-cartography/05-key-flows.md",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "the canonical RSC → server action → revalidate loop, repeated for every CRM entity"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "nextcrm-app/docs/2026-05-01-bola-idor-security-audit.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The repo's own audit of object-level authorization, the background to Flows 1 and 2."
+    }
+   ]
+  },
+  {
+   "id": "r02-scoped-writes",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: ownership scopes in the WHERE clause",
+   "body": "Object-level authorization asks \"may this user touch this particular row?\". NextCRM answers it in two ways, and you should be able to tell them apart in the code.\n\n- **Scope in the query.** A helper returns a Prisma `where` that already includes the ownership rule, and the read or write uses it directly (`findMany`, `updateMany`). If the user may not touch the row, the query simply matches nothing.\n- **Check, then act.** A helper such as `assertCanWriteAccount` looks the row up with a scoped `where` and throws if it is missing; the caller then runs its own unscoped write.\n\nFor each helper in `lib/authz/scopes/crm.ts`, write down what the `where` looks like for each role (admin, manager, user). Then open the callers in the guide's Flows 1 and 2 and note which helper, if any, each one uses. Look at `lib/authz/route.ts` to see which HTTP status each response helper produces, and at `lib/authz/session.ts` to see where the role comes from on every call.",
+   "excerpts": [
+    {
+     "path": "nextcrm-app/lib/authz/scopes/crm.ts",
+     "lineStart": 226,
+     "lineEnd": 228,
+     "quote": "// Build a Prisma where for \"this user can read this account\"."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "nextcrm-app/lib/authz/scopes/crm.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "All the scope helpers for CRM entities in one file."
+    }
+   ]
+  },
+  {
+   "id": "r03-background-and-money",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: retries, webhooks and invoice numbers",
+   "body": "Three places in this quest run without a user waiting for them.\n\n**Inngest workers** may be retried, so every step must tolerate running twice. Read `inngest/functions/enrich-contact.ts` top to bottom and list each status the enrichment row can be set to, in the order the code can set it, and the condition for each. Then read the merge loop and note the rule that decides whether a contact column is written.\n\n**Webhooks and links.** `app/api/campaigns/webhooks/resend/route.ts` verifies an HMAC over the raw body before parsing JSON; read `verifyResendSignature` closely, including what it does when configuration is missing. Then read each `case` of the switch and note which updates are conditional. `app/api/campaigns/unsubscribe/route.ts` is a GET that changes state; note when it writes.\n\n**Invoice numbers** come from `lib/invoices/numbering.ts`. Work through `formatNumber` and `consumeNextNumber` by hand with a few examples, including a counter wider than the template. Finally read `lib/api-tokens.ts` and note which tokens count toward the per-user cap.",
+   "excerpts": [
+    {
+     "path": "nextcrm-app/fabledocs/upskill/01-codebase-cartography/05-key-flows.md",
+     "lineStart": 126,
+     "lineEnd": 126,
+     "quote": "the whole function is retried by Inngest; every step must tolerate re-execution"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "nextcrm-app/fabledocs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The side-effects chapter: events, retries and best-effort writes."
+    }
+   ]
+  },
+  {
+   "id": "x-q01",
+   "target": "seed:quests:organized-study-nextcrm-app/quiz/c78cee21114d0a1f",
+   "phase": "after",
+   "title": "Why an email-only PATCH is rejected with 400",
+   "body": "The handler maps each key of `enrichmentFields` through `FIELD_MAP` and keeps only keys it finds there. FIELD_MAP lists position, website, four social links, description and two phone numbers; `email` is not among them. `updates` stays empty, so the route returns 400 \"No valid fields to update\" before any database call.\n\n- *200 with the email changed*: email cannot be written through this endpoint at all.\n- *enrichmentFields required*: the body does contain an enrichmentFields object.\n- *404 Not found*: the scoped update is never attempted.",
+   "excerpts": [
+    {
+     "path": "nextcrm-app/app/api/crm/contacts/[id]/route.ts",
+     "lineStart": 47,
+     "lineEnd": 49,
+     "quote": "{ error: \"No valid fields to update\" }, { status: 400 }"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02",
+   "target": "seed:quests:organized-study-nextcrm-app/quiz/4638c21688bf7d8e",
+   "phase": "after",
+   "title": "Why a non-owner gets 404, not 403",
+   "body": "For the user role, `contactScopedWhere` returns `{ id, OR: [{ assigned_to: user.id }, { createdBy: user.id }] }`. `updateMany` with that where updates zero rows, so `tryScopedUpdateContact` returns false and the route calls `notFoundOrForbiddenResponse()`, which is a 404. Answering 404 hides whether the contact exists.\n\n- *403 Forbidden*: there is no separate ownership check that could answer 403; the scope is inside the write.\n- *200 success*: the write matched nothing.\n- *401 Unauthorized*: the user is signed in, so requireAuthenticated passed.",
+   "excerpts": [
+    {
+     "path": "nextcrm-app/lib/authz/scopes/crm.ts",
+     "lineStart": 16,
+     "lineEnd": 22,
+     "quote": "{ assigned_to: user.id },"
+    },
+    {
+     "path": "nextcrm-app/lib/authz/route.ts",
+     "lineStart": 11,
+     "lineEnd": 12,
+     "quote": "return NextResponse.json({ error: \"Not found\" }, { status: 404 });"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q03",
+   "target": "seed:quests:organized-study-nextcrm-app/quiz/b958536477d27cc5",
+   "phase": "after",
+   "title": "What a manager may read among accounts",
+   "body": "`accountReadScopeWhere` returns `{ deletedAt: null }` for admins and managers, so they can read every account that has not been soft-deleted, whoever owns it. Only the user role gets the extra OR over assigned, created and watching.\n\n- *Only assigned or created*: that narrower scope is for the user role.\n- *Including soft-deleted*: deletedAt null is part of every role's scope.\n- *Only watched by the team*: there is no team concept in this scope.",
+   "excerpts": [
+    {
+     "path": "nextcrm-app/lib/authz/scopes/crm.ts",
+     "lineStart": 229,
+     "lineEnd": 232,
+     "quote": "if (user.role === \"admin\" || user.role === \"manager\") {"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q04",
+   "target": "seed:quests:organized-study-nextcrm-app/quiz/5e82c2d04f435310",
+   "phase": "after",
+   "title": "Why updateAccount writes any account",
+   "body": "`updateAccount` checks `getSession()`, requires an id, and then calls `prisma.crm_Accounts.update({ where: { id } })`. No scope helper is used: `assertCanWriteAccount` exists in `lib/authz/scopes/crm.ts` but nothing here calls it. Any signed-in user can update any account by id, and the guide calls this the asymmetry between the scoped read and the unscoped write.\n\n- *Unauthorized for the user role*: the action returns Unauthorized only when there is no session.\n- *AuthorizationError from assertCanWriteAccount*: that helper is not called.\n- *Failed to update account*: the update matches the row by id, so it succeeds.",
+   "excerpts": [
+    {
+     "path": "nextcrm-app/actions/crm/accounts/update-account.ts",
+     "lineStart": 42,
+     "lineEnd": 44,
+     "quote": "const account = await prismadb.crm_Accounts.update({"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q05",
+   "target": "seed:quests:organized-study-nextcrm-app/quiz/e11c4414d9195709",
+   "phase": "after",
+   "title": "Why a wide counter is not truncated",
+   "body": "`formatNumber` replaces `{YYYY}` with the year and each `{#...}` group with `String(counter).padStart(hashes.length, \"0\")`. `padStart` adds leading zeros only when the string is shorter than the target length; a longer string is returned unchanged. With three hashes and counter 12345 the result is the full INV-2026-12345.\n\n- *Last three digits*: nothing slices the counter.\n- *First three digits*: nothing truncates it either.\n- *A cap at 999*: there is no maximum; the template width is a minimum.",
+   "excerpts": [
+    {
+     "path": "nextcrm-app/lib/invoices/numbering.ts",
+     "lineStart": 6,
+     "lineEnd": 7,
+     "quote": "String(counter).padStart(hashes.length, \"0\"),"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q06",
+   "target": "seed:quests:organized-study-nextcrm-app/quiz/f34d106c2b87ead1",
+   "phase": "after",
+   "title": "How the yearly reset produces number 1",
+   "body": "`consumeNextNumber` reads the series, takes the UTC year of `now`, and resets `counter` to 0 when the policy is YEARLY and `currentYear` differs. It then adds 1, saves `counter` and `currentYear`, and formats the number. So the first invoice of 2026 uses 1.\n\n- *42*: the reset happens automatically on the first call in a new year.\n- *0*: 0 is the intermediate value; the increment runs right after.\n- *41*: the increment is never skipped.",
+   "excerpts": [
+    {
+     "path": "nextcrm-app/lib/invoices/numbering.ts",
+     "lineStart": 21,
+     "lineEnd": 24,
+     "quote": "if (series.resetPolicy === \"YEARLY\" && series.currentYear !== year) {"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07",
+   "target": "seed:quests:organized-study-nextcrm-app/quiz/0a363c70916e813f",
+   "phase": "after",
+   "title": "Where a contact without an email stops",
+   "body": "The worker first resolves the Firecrawl and OpenAI keys; both resolve, so it does not fail there. It then sets the row to RUNNING and loads the contact. Because `contact.email` is empty, it updates the row to SKIPPED with \"No email on contact\" and returns before the dedup check or any agent call.\n\n- *FAILED with NO_API_KEY*: that happens only when a key is missing.\n- *Left at RUNNING*: the SKIPPED update replaces RUNNING before returning.\n- *COMPLETED with an empty result*: the function returns before the completion update.",
+   "excerpts": [
+    {
+     "path": "nextcrm-app/inngest/functions/enrich-contact.ts",
+     "lineStart": 82,
+     "lineEnd": 87,
+     "quote": "data: { status: \"SKIPPED\", error: \"No email on contact\" },"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08",
+   "target": "seed:quests:organized-study-nextcrm-app/quiz/e18e8d8f7be6fbf8",
+   "phase": "after",
+   "title": "Why only the empty column is filled",
+   "body": "The merge loop maps each returned field to a contact column and writes it only when `isFieldEmpty(currentValue) && enrichment.value`. The contact's website already has a value, so it is left alone; mobile_phone is empty, so it receives the agent's value. One `update` writes the collected fields.\n\n- *Both overwritten*: existing values are never replaced by this loop.\n- *Website only*: the order of results does not matter; emptiness does.\n- *Neither*: each field is judged on its own; one filled field does not block the rest.",
+   "excerpts": [
+    {
+     "path": "nextcrm-app/inngest/functions/enrich-contact.ts",
+     "lineStart": 122,
+     "lineEnd": 130,
+     "quote": "if (isFieldEmpty(currentValue) && enrichment.value) {"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09",
+   "target": "seed:quests:organized-study-nextcrm-app/quiz/d59a1c4da5c6c6ff",
+   "phase": "after",
+   "title": "Why a late delivered event changes nothing",
+   "body": "In the `email.delivered` case the update runs only inside `if (send.status === \"sent\")`. A send that is already `bounced` does not match, so the row is unchanged and the route returns `{ ok: true }`. Conditional writes like this make out-of-order or repeated events harmless.\n\n- *Status delivered, error cleared*: the condition prevents any write.\n- *409 conflict*: the route answers 200 for every verified event.\n- *Status delivered, error kept*: no write happens at all.",
+   "excerpts": [
+    {
+     "path": "nextcrm-app/app/api/campaigns/webhooks/resend/route.ts",
+     "lineStart": 35,
+     "lineEnd": 41,
+     "quote": "if (send.status === \"sent\") {"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10",
+   "target": "seed:quests:organized-study-nextcrm-app/quiz/ca2b43f4bb6ef3c9",
+   "phase": "after",
+   "title": "Why a missing secret rejects everything",
+   "body": "`verifyResendSignature` begins with `if (!signature || !process.env.RESEND_WEBHOOK_SECRET) return false`. Without the secret, every request fails verification and the route answers 401 \"Invalid signature\" before reading the event. That is a safe default: a misconfigured server accepts nothing.\n\n- *200, verification skipped*: there is no bypass when the secret is missing.\n- *500 from createHmac*: createHmac is never reached in this case.\n- *400 parse error*: parsing happens only after verification succeeds.",
+   "excerpts": [
+    {
+     "path": "nextcrm-app/app/api/campaigns/webhooks/resend/route.ts",
+     "lineStart": 5,
+     "lineEnd": 6,
+     "quote": "if (!signature || !process.env.RESEND_WEBHOOK_SECRET) return false;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q11",
+   "target": "seed:quests:organized-study-nextcrm-app/quiz/1e9f1587f0e54b22",
+   "phase": "after",
+   "title": "Why a second unsubscribe click is harmless",
+   "body": "The GET handler finds the send by `unsubscribe_token`. It writes `unsubscribed_at` only when that field is empty, so the first click's date stays. Then it returns the same 200 HTML page. The token is not deleted or marked used.\n\n- *404, token consumed*: tokens stay valid; the row is still found.\n- *Date set to now*: the update is skipped when unsubscribed_at is already set.\n- *400 already used*: 400 is only for a request without a token.",
+   "excerpts": [
+    {
+     "path": "nextcrm-app/app/api/campaigns/unsubscribe/route.ts",
+     "lineStart": 19,
+     "lineEnd": 24,
+     "quote": "if (!send.unsubscribed_at) {"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q12",
+   "target": "seed:quests:organized-study-nextcrm-app/quiz/58af077f894a3857",
+   "phase": "after",
+   "title": "Why expired tokens do not count toward the cap",
+   "body": "`generateApiToken` counts tokens with `revokedAt: null` and either no expiry or `expiresAt` in the future. The 2 expired tokens fail the expiry condition, so the count is 8, which is below `MAX_TOKENS_PER_USER` (10), and a new token is created.\n\n- *Throws Maximum 10*: that needs 10 tokens that are both unrevoked and unexpired.\n- *Oldest expired token reused*: the function never deletes or reuses tokens.\n- *Cap raised to 11*: the cap is a constant.",
+   "excerpts": [
+    {
+     "path": "nextcrm-app/lib/api-tokens.ts",
+     "lineStart": 17,
+     "lineEnd": 23,
+     "quote": "OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q13",
+   "target": "seed:quests:organized-study-nextcrm-app/quiz/6107aa1edbf44a8e",
+   "phase": "after",
+   "title": "Why a demotion applies on the next call",
+   "body": "`requireAuthenticated` takes only the user id from the session and then runs `prismadb.users.findUnique` to read the role, mapping it with `mapLegacyRole`. Every server-side check calls it again, so the next request sees the Users row as it is now. The cost is one database query per call; the gain is immediate revocation.\n\n- *After 7 days*: session expiry does not matter, since the role is not stored in the session.\n- *After the 24-hour refresh*: the refresh renews the session, not the role.\n- *After signing in again*: no new sign-in is needed.",
+   "excerpts": [
+    {
+     "path": "nextcrm-app/lib/authz/session.ts",
+     "lineStart": 16,
+     "lineEnd": 22,
+     "quote": "return { id: dbUser.id, role: mapLegacyRole(dbUser.role) };"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}
