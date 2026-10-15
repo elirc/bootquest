@@ -37,7 +37,10 @@ function heldTracks(base: BootQuestApi = createMockApi()) {
 
 const jsPct = () => {
   const sidebar = screen.getByRole('complementary', { name: 'Primary' });
-  return within(sidebar).getByRole('link', { name: /JS\/TS/ }).querySelector('.track-count')?.textContent;
+  const link = within(sidebar).getByRole('link', { name: /JS\/TS/ });
+  // the % AND its tooltip: since B2 the % counts campaign core quests, and practice units
+  // (the reading attested below) move the tooltip's practice count, not the %
+  return `${link.querySelector('.track-count')?.textContent} | ${link.getAttribute('title')}`;
 };
 
 describe('prose (a): a numbered run is code only with 3+ lines or a code-like character', () => {
@@ -115,7 +118,7 @@ describe('/tracks refresh: counts follow progress without a layout shift', () =>
   it('a reading self-attest refreshes the sidebar percent in place', async () => {
     const t = heldTracks();
     const { user } = renderApp('/play/104', t.api);
-    await waitFor(() => expect(jsPct()).toMatch(/%$/));
+    await waitFor(() => expect(jsPct()).toMatch(/% \| \S/));
     const before = jsPct();
     expect(t.calls()).toBe(1);
     await user.click(await screen.findByRole('button', { name: /Mark as read/ }));
@@ -126,7 +129,7 @@ describe('/tracks refresh: counts follow progress without a layout shift', () =>
   it('while a refresh is in flight the current rows stay (no placeholder rows, not aria-busy)', async () => {
     const t = heldTracks();
     const { user } = renderApp('/play/104', t.api);
-    await waitFor(() => expect(jsPct()).toMatch(/%$/));
+    await waitFor(() => expect(jsPct()).toMatch(/% \| \S/));
     const before = jsPct();
     t.holdNext(true);
     await user.click(await screen.findByRole('button', { name: /Mark as read/ }));
@@ -154,7 +157,7 @@ describe('/tracks refresh: counts follow progress without a layout shift', () =>
   it('opening the campaign re-reads /tracks; a cold load on the campaign still makes ONE request', async () => {
     const t = heldTracks();
     const { user, unmount } = renderApp('/', t.api);
-    await waitFor(() => expect(jsPct()).toMatch(/%$/));
+    await waitFor(() => expect(jsPct()).toMatch(/% \| \S/));
     expect(t.calls()).toBe(1);
     const nav = within(screen.getByRole('complementary', { name: 'Primary' })).getByRole('navigation');
     await user.click(within(nav).getByRole('link', { name: /Campaign/ }));
@@ -163,7 +166,7 @@ describe('/tracks refresh: counts follow progress without a layout shift', () =>
 
     const cold = heldTracks();
     renderApp('/campaign/js', cold.api);
-    await waitFor(() => expect(jsPct()).toMatch(/%$/));
+    await waitFor(() => expect(jsPct()).toMatch(/% \| \S/));
     await new Promise((r) => setTimeout(r, 30));
     expect(cold.calls()).toBe(1);
   });
@@ -205,11 +208,11 @@ describe('/tracks refresh: counts follow progress without a layout shift', () =>
     let n = 0;
     const api: BootQuestApi = { ...base, getTracks: () => (++n === 1 ? base.getTracks() : Promise.reject(new Error('offline'))) };
     const { user } = renderApp('/play/104', api);
-    await waitFor(() => expect(jsPct()).toMatch(/%$/));
+    await waitFor(() => expect(jsPct()).toMatch(/% \| \S/));
     await user.click(await screen.findByRole('button', { name: /Mark as read/ }));
     await waitFor(() => expect(n).toBe(2));
     await new Promise((r) => setTimeout(r, 30));
-    expect(jsPct()).toMatch(/%$/);
+    expect(jsPct()).toMatch(/% \| \S/);
     expect(screen.queryByText(/Tracks failed to load/)).not.toBeInTheDocument();
   });
 });
