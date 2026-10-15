@@ -71,6 +71,8 @@ export interface WriteSeedPackOptions {
   outcome: SeedOutcome;
   /** stamp even though candidates were quarantined (explicit human choice; recorded in the stamp) */
   allowQuarantine?: boolean;
+  /** pack-level validator failures (seed:notes coverage): any entry means NO stamp */
+  blockers?: string[];
 }
 
 export interface WriteSeedPackResult {
@@ -144,6 +146,7 @@ export function writeSeedPack(o: WriteSeedPackOptions): WriteSeedPackResult {
   const unstampedBecause: string[] = [];
   if (rejected.length > 0 && !o.allowQuarantine) unstampedBecause.push(`${rejected.length} candidate(s) quarantined (pass --allow-quarantine to stamp with them withheld)`);
   if (accepted.length === 0) unstampedBecause.push('no accepted items');
+  for (const b of o.blockers ?? []) unstampedBecause.push(b);
   if (unstampedBecause.length === 0) {
     const stamp = SeedValidationStamp.parse({
       format: SEED_PACK_FORMAT,

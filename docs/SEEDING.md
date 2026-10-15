@@ -1,7 +1,7 @@
 # Seeding BootQuest content
 
 BootQuest never calls an LLM at runtime. All authored content (quizzes, flashcards,
-reading steps, explain-back question sets, changed-example retests, patch katas) is
+reading steps, explain-back question sets, changed-example retests, patch katas, learn-more notes) is
 produced at **seed time**, inside a Claude Code build or maintenance session. A
 deterministic validator must accept every generated item before it is written into
 `content/`. The running app only serves what is committed and stamped.
@@ -231,6 +231,46 @@ Validator:
 - the diff applies cleanly (`git apply --check` in a temp dir);
 - where a test exists, it passes on the context and FAILS on the defective version
   (real runner).
+
+### Learn-more notes: `seed:notes`
+
+The "Learn more" button serves **notes**: authored readings and explanations for one quest pack.
+The draft is `content/seed-drafts/notes/<pack>.json` (format `bootquest-notes-draft@1`; `<pack>` is
+the dir under `content/seed/quests/`, and `repo`/`sha` must equal that pack's `manifest.json`
+`source`). Two phases:
+
+- `before`: a READING, shown before the learner answers (orientation, reading order, a concept in
+  plain words, verbatim excerpts). Target `pack`, or one quiz / flashcard / reading-step key.
+- `after`: an EXPLANATION of ONE quiz (why the key is right, why each distractor is wrong). The
+  server releases it only once the learner has a recorded study-quiz answer that covers it.
+
+```sh
+npm run seed:notes -- C:/Users/Owner/Desktop/selfboot/.cache/checkouts/storefront@9d52bffef289c23d3136f868d201ba76b89a314c --draft content/seed-drafts/notes/storefront.json
+# options: --quests <quest-packs-root> (default content/seed/quests)  --out <dir> (default content/seed/notes/<pack>)
+#          --allow-quarantine (stamp with a rejected OPTIONAL note withheld; coverage must still hold)
+```
+
+Validator (every rule, deterministic):
+
+- `id` `^[a-z0-9][a-z0-9-]{2,63}$`, unique; `target` `pack` or an exact item key of the quest pack;
+  an `after` note must target a quiz, and exactly one `after` note per quiz;
+- title 8-90 chars; body 60-300 words (`after`: 60-250), markdown with no HTML and no images;
+- 1-4 excerpts, each a repo-root path at the pinned sha with `lineStart <= lineEnd` inside the file
+  and a quote (>= 20 chars) found verbatim in those lines after collapsing whitespace runs;
+- 0-4 `readMore`: the path exists, the optional line range is in range, `why` is 8-200 chars;
+- nothing cites, points at or names an excluded file; no secret pattern anywhere in the draft;
+- `before` notes may not leak ANY keyed answer of the pack: no normalized token-boundary substring
+  of a keyed answer in the title, body or excerpt quotes; token-Jaccard < 0.5 against every
+  sentence and every answer-sized window; no excerpt / readMore range overlapping the keyed
+  `file:line` of a finding-location quiz;
+- coverage (pack level, blocks the stamp): 2-4 accepted `before` notes targeting `pack`, and one
+  accepted `after` note per quiz.
+
+The notes manifest binds the quest pack's `items.json` bytes (`quests:<pack>@items-sha256:<hex>`
+in `source.inputs`). **Re-seeding a quest pack makes its notes stale**: `seed:check` and the server
+refuse the notes pack until `seed:notes` is re-run on the (updated) draft. So re-seed quests first,
+then notes. `seed:check` re-validates every note (quotes, ranges, leaks, coverage, the binding),
+and `restamp:all` includes notes packs like every other seed pack.
 
 ### Re-verify everything: `seed:check`
 
