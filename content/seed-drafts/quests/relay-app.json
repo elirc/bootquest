@@ -1,0 +1,457 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "relay-app",
+ "sha": "79e71dcbc4acc5d5bbae401cda5c2bc75b0eedaf",
+ "guides": [
+  "docs/architecture.md",
+  "docs/adr/0001-ports-based-executor.md",
+  "docs/adr/0004-write-only-secrets.md",
+  "docs/testing.md"
+ ],
+ "items": [
+  {
+   "id": "q01-one-executor-path",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 57,
+     "end": 82
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 81,
+     "lineEnd": 82
+    }
+   ],
+   "prompt": "Manual triggers, scheduled ticks, webhook deliveries and dead-letter replays all execute flows. How many execution code paths are there?",
+   "answer": "One: all go through FlowExecutor via the IActionDispatcher port",
+   "distractors": [
+    "Four, one per trigger type, sharing a common base class",
+    "Two: synchronous for manual runs, queued for all the rest",
+    "Three, since dead-letter replays reuse the webhook path"
+   ],
+   "explanation": "Because the executor depends only on the port, the same path serves every trigger; tests swap in FakeActionDispatcher."
+  },
+  {
+   "id": "q02-backoff-between-only",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 84,
+     "end": 95
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 91,
+     "lineEnd": 94
+    }
+   ],
+   "prompt": "A step with MaxAttempts 3 and BackoffSeconds 10 fails all three attempts. How many backoff waits occur?",
+   "answer": "Two, between attempts only",
+   "distractors": [
+    "Three, one after every failed attempt",
+    "One, before the final attempt only",
+    "None, since backoff applies only to whole runs"
+   ],
+   "explanation": "Backoff never follows the final attempt or a success; FakeDelayer records requested delays without sleeping."
+  },
+  {
+   "id": "q03-fail-skips-rest",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 97,
+     "end": 100
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 97,
+     "lineEnd": 100
+    }
+   ],
+   "prompt": "Step 2 of a four-step flow exhausts its attempts. What happens to steps 3 and 4, and where does the run show up?",
+   "answer": "They are logged Skipped and the Failed run appears in dead-letter",
+   "distractors": [
+    "They still run, and the run is marked partially succeeded",
+    "They are queued for retry once step 2 succeeds later",
+    "They are deleted, and the run disappears from history"
+   ],
+   "explanation": "The run is marked Failed with its Error set; failed runs surface at GET /api/workspaces/{ws}/dead-letter."
+  },
+  {
+   "id": "q04-replay-from-step",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 102,
+     "end": 105
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 102,
+     "lineEnd": 105
+    }
+   ],
+   "prompt": "Replaying a failed run from step 3 does what?",
+   "answer": "Creates a new Run that skips earlier steps and dispatches from step 3",
+   "distractors": [
+    "Resumes the original Run in place, starting from the failed step",
+    "Re-executes every step so the run's timeline is complete again",
+    "Marks the original run Succeeded as soon as step 3 passes"
+   ],
+   "explanation": "fromStepOrder skips earlier action steps so completed work is not repeated; a replay of a replay is just another run."
+  },
+  {
+   "id": "q05-advance-schedule-first",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 120,
+     "end": 125
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 120,
+     "lineEnd": 125
+    }
+   ],
+   "prompt": "Why does ScheduleDispatcher advance LastRunAtUtc/NextRunAtUtc before running the flow?",
+   "answer": "So a mis-firing flow cannot wedge the schedule",
+   "distractors": [
+    "So the flow sees its own next run time",
+    "Because EF must save before any dispatch",
+    "So missed slots are each replayed in order"
+   ],
+   "explanation": "A schedule that missed many slots fires once per tick and re-arms to the next future slot."
+  },
+  {
+   "id": "q06-vixie-either",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 114,
+     "end": 119
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 116,
+     "lineEnd": 118
+    }
+   ],
+   "prompt": "A cron expression restricts both day-of-month (1) and day-of-week (Monday). Under Relay's Vixie semantics, when does it match?",
+   "answer": "On the 1st of the month or on any Monday",
+   "distractors": [
+    "Only on a 1st that falls on a Monday",
+    "Only on Mondays; day-of-month is ignored",
+    "Never, so the expression is rejected"
+   ],
+   "explanation": "When both fields are restricted, a day matches if either matches; GetNextOccurrence has a bounded horizon so it cannot loop forever."
+  },
+  {
+   "id": "q07-kms-sees-keys-only",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 136,
+     "end": 152
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 150,
+     "lineEnd": 152
+    }
+   ],
+   "prompt": "In Relay's envelope encryption, what does the KMS port ever see?",
+   "answer": "Only data keys, never the secret payloads",
+   "distractors": [
+    "The secret payloads, which it encrypts directly",
+    "Both the payload and the data key, for auditing",
+    "Nothing; the master key encrypts payloads locally"
+   ],
+   "explanation": "EnvelopeSecretProtector encrypts the plaintext with a fresh AES-GCM data key; the KMS only wraps that DEK."
+  },
+  {
+   "id": "q08-rotate-same-value",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 158,
+     "end": 162
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 158,
+     "lineEnd": 160
+    }
+   ],
+   "prompt": "What does rotating a connection's secret do?",
+   "answer": "Re-seals the same plaintext under a new data key",
+   "distractors": [
+    "Generates a new credential at the connector",
+    "Deletes the secret until the user re-enters it",
+    "Re-encrypts with the same key and a new nonce"
+   ],
+   "explanation": "Rotate = Protect(Reveal(envelope)): the ciphertext changes, the value is preserved. Re-issuing a webhook signing secret, by contrast, mints a new one."
+  },
+  {
+   "id": "q09-body-in-signature",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 171,
+     "end": 175
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 171,
+     "lineEnd": 174
+    }
+   ],
+   "prompt": "Webhook signatures are HMAC-SHA256 over '{timestamp}.{body}'. What does including the body buy?",
+   "answer": "A captured request cannot be replayed with a different body",
+   "distractors": [
+    "The receiver can safely skip TLS for every signed request",
+    "Replays become impossible, even ones carrying the same body",
+    "The token in the URL no longer needs to be kept secret"
+   ],
+   "explanation": "Same-body replays are limited by the ±5 minute timestamp window and Idempotency-Key, not by the signature."
+  },
+  {
+   "id": "q10-dedupe-check-then-insert",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 249,
+     "end": 251
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 251,
+     "lineEnd": 251
+    }
+   ],
+   "prompt": "Review finding 1: two identical webhook deliveries with the same Idempotency-Key arrive at the same moment. What happens?",
+   "answer": "Both run the flow; then the second save hits the unique index and returns 500",
+   "distractors": [
+    "The unique index blocks the second run before any step executes",
+    "The second request waits on a row lock and then returns deduplicated",
+    "Both runs are stored, and the duplicate is cleaned up nightly"
+   ],
+   "explanation": "Idempotency is check-then-insert and the run is saved only after execution, so side effects happen twice (High severity)."
+  },
+  {
+   "id": "q11-optional-token-lww",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 202,
+     "end": 209
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 204,
+     "lineEnd": 209
+    }
+   ],
+   "prompt": "A flow PUT carries an expectedConcurrencyToken that no longer matches. What happens to its step replacement?",
+   "answer": "Nothing is applied: it short-circuits to 409 before any work",
+   "distractors": [
+    "The steps are replaced, and only the flow name is rejected",
+    "It is merged with the winning writer's steps by Order",
+    "It retries automatically with the latest token"
+   ],
+   "explanation": "A DbUpdateConcurrencyException between load and save also maps to 409; omitting the token entirely is last-write-wins (finding 5)."
+  },
+  {
+   "id": "q12-executedelete-order-index",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 210,
+     "end": 213
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 210,
+     "lineEnd": 213
+    }
+   ],
+   "prompt": "Why are a flow's steps replaced with ExecuteDeleteAsync followed by inserts inside one transaction?",
+   "answer": "So the unique (FlowId, Order) index never sees two rows share an order",
+   "distractors": [
+    "Because the change tracker cannot delete more than one row at once",
+    "So that deleted steps can later be restored from the change tracker",
+    "Because ExecuteDeleteAsync also renumbers the remaining steps' Order"
+   ],
+   "explanation": "ExecuteDeleteAsync bypasses the change tracker; import uses the same pattern."
+  },
+  {
+   "id": "q13-foreign-workspace-404",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 236,
+     "end": 238
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 236,
+     "lineEnd": 238
+    }
+   ],
+   "prompt": "A user with the right role requests a flow in a workspace they do not belong to. What does WorkspaceAuthorizationFilter return?",
+   "answer": "404, because tenancy is checked before role",
+   "distractors": [
+    "403, because the role check runs first",
+    "401, because their token lacks that workspace",
+    "200, since the role alone grants access"
+   ],
+   "explanation": "Foreign workspace → 404 before role; insufficient workspace role → 403."
+  },
+  {
+   "id": "q14-nullable-value-fields",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 230,
+     "end": 232
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 230,
+     "lineEnd": 232
+    }
+   ],
+   "prompt": "Why are value-type fields in Relay's request records declared nullable?",
+   "answer": "So a missing value is a 400 instead of binding to default",
+   "distractors": [
+    "So EF can store them in nullable SQLite columns later",
+    "So the client may omit them on every request it sends",
+    "Because C# records cannot hold non-nullable struct fields"
+   ],
+   "explanation": "Validation attributes target constructor parameters; a non-nullable int would silently bind 0."
+  },
+  {
+   "id": "f01-webhook-outcomes",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 176,
+     "end": 186
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 184,
+     "lineEnd": 186
+    }
+   ],
+   "front": "Relay inbound webhook: list the checks in order and the delivery-log outcome classes.",
+   "back": "Signature over {timestamp}.{body} (missing/malformed → 401), timestamp within ±5 min of IClock (→ 401), Idempotency-Key dedupe (202 with deduplicated: true). Outcomes: Delivered, MissingSignature, InvalidSignature, TimestampExpired, FlowDisabled, Duplicate."
+  },
+  {
+   "id": "f02-runs-saved-late",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 252,
+     "end": 252
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 252,
+     "lineEnd": 252
+    }
+   ],
+   "front": "Review finding 2: what goes wrong because runs are persisted only after the whole flow executes?",
+   "back": "A crash mid-run leaves no trace to resume or dead-letter: the Run is added to the context early but saved only at the end."
+  },
+  {
+   "id": "f03-scheduler-no-lease",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 260,
+     "end": 260
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 260,
+     "lineEnd": 260
+    }
+   ],
+   "front": "Review finding 10: what breaks with two Relay instances running the scheduler?",
+   "back": "No lease: both instances double-fire due schedules, and a throw before save loses the 'advance first' update."
+  },
+  {
+   "id": "f04-ci-blind-spot",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 262,
+     "end": 262
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 262,
+     "lineEnd": 262
+    }
+   ],
+   "front": "Why are review findings 1, 3 and 10 invisible to Relay's CI?",
+   "back": "No test issues concurrent requests (no Task.WhenAll anywhere in Relay.Tests), so check-then-insert, import concurrency and scheduler double-fire are never exercised."
+  }
+ ]
+}

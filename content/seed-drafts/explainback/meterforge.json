@@ -1,0 +1,40 @@
+{
+ "questions": [
+  {
+   "prompt": "Explain how MeterForge decides whether an incoming usage event is new, a replay or a conflict, and why a retry may get 200 where the first attempt got 201.",
+   "keyPoints": [
+    { "text": "Identity is a compound of tenant and the caller's external event id, not the internal GUID.", "quote": "The storage key is the pair" },
+    { "text": "The same external id under two tenants is two different events.", "quote": "those are separate namespaces and can create separate events" },
+    { "text": "Retry safety depends on the client reusing its key.", "quote": "The client must keep the same key until that logical action is resolved" },
+    { "text": "Idempotency is a shared contract, not a magic header.", "quote": "Idempotency is a client-and-server contract, not a header that makes arbitrary duplicate requests safe" },
+    { "text": "An identical replay is a success with a different status from creation.", "quote": "200 for an identical replay" },
+    { "text": "Reusing a key with different business data is refused.", "quote": "409 for a reused key with changed business data" },
+    { "text": "How keys are generated and kept is a product decision the server cannot infer.", "quote": "Product requirements must define key generation and retention" }
+   ]
+  },
+  {
+   "prompt": "Why was the old find-then-add ingestion sequence wrong even though every dictionary call was thread-safe, and what exactly does the GetOrAdd repair guarantee?",
+   "keyPoints": [
+    { "text": "Per-call thread safety says nothing about a multi-step sequence.", "quote": "Each dictionary call could be thread-safe while the sequence was still wrong" },
+    { "text": "Ignoring TryAdd's result let the losing caller report an event that was never stored.", "quote": "so the caller could receive an identity that was not actually in storage" },
+    { "text": "A row count cannot detect this; returned identities and flags must be checked.", "quote": "Counting stored rows alone would miss this bug" },
+    { "text": "The repair makes one operation the single point where the key binds to an event.", "quote": "The new contract returns the stored winner from one" },
+    { "text": "The guarantee is scoped to one process.", "quote": "it is not a distributed exactly-once guarantee" },
+    { "text": "A separate defect: looking up a raw key but storing a normalised one.", "quote": "uses two different identities within one operation" },
+    { "text": "Immutable records complement the concurrent map.", "quote": "immutability protects the record after publication" }
+   ]
+  },
+  {
+   "prompt": "Translate MeterForge's in-memory idempotency store to PostgreSQL: which construct replaces GetOrAdd, which pitfalls appear, and what still remains an application decision?",
+   "keyPoints": [
+    { "text": "Start from the property GetOrAdd provides, not from a SELECT followed by an INSERT.", "quote": "which SQL construct has the same property" },
+    { "text": "The unique constraint must include the tenant, mirroring the dictionary key.", "quote": "Put the tenant first in the constraint and in every query" },
+    { "text": "The insert-or-return CTE leaves no gap between checking and inserting.", "quote": "Both branches run inside one statement, so there is no window between" },
+    { "text": "The no-op DO UPDATE variant is shorter but serialises hot replays.", "quote": "it costs you a write and a row lock on every replay" },
+    { "text": "A catch-based approach must not treat every unique violation as a replay.", "quote": "a second unique index would otherwise be reported as an idempotent replay" },
+    { "text": "Side effects such as outbox or audit rows must not repeat on replay.", "quote": "A replay must be silent: same response, no new event, no new audit row" },
+    { "text": "The database coordinates writers but does not define what 'the same event' means.", "quote": "neither one makes the payload comparison unnecessary" }
+   ]
+  }
+ ]
+}
