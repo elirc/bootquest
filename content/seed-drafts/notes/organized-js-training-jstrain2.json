@@ -1,0 +1,339 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "organized-js-training-jstrain2",
+ "repo": "organized-js-training-jstrain2",
+ "sha": "d8a8a4f7730b188aaa7be21401a407b367e6ff0b",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: FlowPilot's workflow engine, step by step",
+   "body": "FlowPilot is a Next.js app that runs \"workflows\": ordered lists of steps (HTTP request, condition, delay, transform and so on) triggered by a user, a webhook or a schedule. Every quiz in this pack is about the execution engine, so most of your time goes into three files.\n\nSuggested reading order:\n\n1. `_learning/00-ARCHITECTURE.md` sections 1-4: what the app does, the data flow, and the lifecycle of one manual run (route creates a pending run, queue, worker, executor).\n2. `_learning/01-LEARNING-PATH.md` Chapter 7: the guides for the engine files.\n3. `src/lib/engine/context.ts` (60 lines): how step outputs are stored and how `{{...}}` templates are filled in.\n4. `src/lib/engine/executor.ts`: read `run()` first, then `executeStep`, then `claimConcurrency` and `releaseConcurrency` at the bottom.\n5. `src/lib/engine/idempotency.ts` and `src/lib/utils/retry.ts`.\n\nThese quizzes test what the code really does, which is not always what a name or comment suggests. Trace the code line by line.",
+   "excerpts": [
+    {
+     "path": "_learning/00-ARCHITECTURE.md",
+     "lineStart": 50,
+     "lineEnd": 51,
+     "quote": "5. Worker receives the job and calls `WorkflowExecutor.run(...)`. 6. Executor checks concurrency and idempotency, loads ordered steps, marks run `running`."
+    },
+    {
+     "path": "_learning/01-LEARNING-PATH.md",
+     "lineStart": 110,
+     "lineEnd": 111,
+     "quote": "You should understand orchestration flow, retry behavior, context propagation, and runner dispatch design."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "_learning/guides/src/lib/engine/executor.ts.guide.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The line-by-line guide to the executor that Chapter 7 of the learning path points to."
+    },
+    {
+     "path": "_learning/02-GLOSSARY.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Short definitions of the terms (run, step, idempotency, dead letter) used across the guides."
+    }
+   ]
+  },
+  {
+   "id": "r02-run-loop-and-try",
+   "target": "pack",
+   "phase": "before",
+   "title": "The shape of run(): claim, try, catch, finally",
+   "body": "`WorkflowExecutor.run` has a shape worth drawing on paper before you answer anything:\n\n1. One line before the `try`: `claimConcurrency`.\n2. Inside `try`: the idempotency lookup, loading the workflow and its steps, the step loop, marking the run completed, saving the idempotency key.\n3. `catch`: mark the run failed, write `event_log` and a dead-letter row, then rethrow.\n4. `finally`: `releaseConcurrency`.\n\nRemember the JavaScript rules: `catch` only handles errors thrown inside its `try`; `finally` runs whenever the `try` block was entered, whether it returned, threw or finished.\n\nInside the loop, the next step is chosen by `cursor`, an index into the ordered steps. Look at the three ways `cursor` changes (condition branch, `nextStepId`, `cursor += 1`) and what each one actually reads from the step and its output.",
+   "excerpts": [
+    {
+     "path": "src/lib/engine/executor.ts",
+     "lineStart": 29,
+     "lineEnd": 35,
+     "quote": "async run(job: WorkflowExecutionJob): Promise<{ runId: string; status: string }> { await this.claimConcurrency(job.tenantId);"
+    },
+    {
+     "path": "src/lib/engine/executor.ts",
+     "lineStart": 189,
+     "lineEnd": 191,
+     "quote": "} finally { await this.releaseConcurrency(job.tenantId); }"
+    },
+    {
+     "path": "src/lib/engine/executor.ts",
+     "lineStart": 64,
+     "lineEnd": 67,
+     "quote": "let cursor = 0; while (cursor < steps.length) { const currentStep = steps[cursor];"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "_learning/00-ARCHITECTURE.md",
+     "lineStart": 45,
+     "lineEnd": 62,
+     "why": "The nine-step lifecycle of a manual run, from the Run button to the run detail page."
+    }
+   ]
+  },
+  {
+   "id": "r03-context-and-templates",
+   "target": "pack",
+   "phase": "before",
+   "title": "RunContext: where step outputs live and how templates read them",
+   "body": "Each run has a `RunContext`. Its state has two parts: `triggerData` (the payload that started the run) and `steps`, a map from a step's key to `{ output }`.\n\nA step's config can contain placeholders such as `{{triggerData.order.id}}`. `resolveTemplates` finds each `{{ ... }}` with a regular expression and replaces it with the value at that dotted path, which `resolvePath` looks up one segment at a time.\n\nQuestions to answer for yourself while reading `context.ts`:\n\n- What key is a step stored under? Look at `setStepOutput` and the private helper it calls.\n- What does `resolvePath` return when a segment is missing?\n- In the replace callback, what string is put into the text for that result?\n\nThe idempotency helper is similar in spirit: read exactly which inputs `generateWorkflowIdempotencyKey` feeds into the hash, and what it does to the clock first.",
+   "excerpts": [
+    {
+     "path": "src/lib/engine/context.ts",
+     "lineStart": 24,
+     "lineEnd": 33,
+     "quote": "const segments = path.split(\".\").filter(Boolean); let cursor: unknown = this.state;"
+    },
+    {
+     "path": "src/lib/engine/context.ts",
+     "lineStart": 16,
+     "lineEnd": 18,
+     "quote": "public setStepOutput(stepName: string, output: Record<string, unknown>): void {"
+    },
+    {
+     "path": "src/lib/engine/idempotency.ts",
+     "lineStart": 8,
+     "lineEnd": 12,
+     "quote": "export function generateWorkflowIdempotencyKey(params: { workflowId: string; triggerData: Record<string, unknown>; bucketMinutes?: number; }): string {"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "_learning/guides/src/lib/engine/context.ts.guide.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The file guide for context.ts from Chapter 7."
+    }
+   ]
+  },
+  {
+   "id": "x-q01-inflight-duplicate",
+   "target": "seed:quests:organized-js-training-jstrain2/quiz/006fdf110adc43a5",
+   "phase": "after",
+   "title": "Two in-flight runs with one idempotency key both run",
+   "body": "**Key: yes: the key is written only after a run succeeds, so the early lookup finds nothing.**\n\nLook at where the two idempotency calls sit in `run()`. `lookupIdempotencyRunId` is at the top of the `try` (line 37). `reserveIdempotencyKey` is far below (line 120), after all steps ran and the run was marked completed. While the first job is still working, nothing has been saved under the key, so the second job's lookup returns `null` and it carries on.\n\nWhy the others are wrong:\n- *The first job reserves the key before executing*: the reserve call comes after the step loop, not before.\n- *Its steps write no step_logs*: `executeStep` inserts a step log on every attempt; nothing checks the key there.\n- *Waits and returns the first runId*: there is no waiting; the duplicate shortcut only fires when a saved row already exists.",
+   "excerpts": [
+    {
+     "path": "src/lib/engine/executor.ts",
+     "lineStart": 36,
+     "lineEnd": 41,
+     "quote": "const existingRunId = await lookupIdempotencyRunId(job.idempotencyKey, job.tenantId); if (existingRunId) {"
+    },
+    {
+     "path": "src/lib/engine/executor.ts",
+     "lineStart": 119,
+     "lineEnd": 125,
+     "quote": "if (job.idempotencyKey) { await reserveIdempotencyKey({"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02-missing-template-path",
+   "target": "seed:quests:organized-js-training-jstrain2/quiz/161acea9c58ab7c1",
+   "phase": "after",
+   "title": "A missing template path becomes an empty string",
+   "body": "**Key: \"Hello \", because an unresolved path becomes an empty string.**\n\n`resolvePath(\"triggerData.user.name\")` walks the state: `triggerData` exists, `user` does not, so the cursor becomes `undefined`, and on the next segment the `!cursor` check returns `undefined`. In the replace callback, `resolved === undefined ? \"\" : String(resolved)` turns that into `\"\"`. The text around the placeholder stays, so the result is `\"Hello \"`. No error is raised: missing data silently becomes blank text.\n\nWhy the others are wrong:\n- *Placeholder left untouched*: the regex matches it and the callback always returns a replacement.\n- *It throws*: nothing in `resolveTemplates` or `resolvePath` throws.\n- *\"Hello undefined\"*: `String()` is only used when the value is not `undefined`.",
+   "excerpts": [
+    {
+     "path": "src/lib/engine/context.ts",
+     "lineStart": 40,
+     "lineEnd": 43,
+     "quote": "const resolved = this.resolvePath(token.trim()); return resolved === undefined ? \"\" : String(resolved);"
+    },
+    {
+     "path": "src/lib/engine/context.ts",
+     "lineStart": 29,
+     "lineEnd": 31,
+     "quote": "if (!cursor || typeof cursor !== \"object\") { return undefined; }"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q03-minute-bucket",
+   "target": "seed:quests:organized-js-training-jstrain2/quiz/61a3846c04d25ea3",
+   "phase": "after",
+   "title": "Triggers in the same minute share an idempotency key",
+   "body": "**Key: yes: the time is floored to the minute bucket, so both hash the same 10:04:00.**\n\nWith no `bucketMinutes`, the default is 1. The function takes the current time, sets seconds and milliseconds to 0 (`setSeconds(0, 0)`), and rounds the minutes down to the bucket. Both 10:04:10 and 10:04:50 become 10:04:00. The hash input is `workflowId:JSON(triggerData):time`; all three parts are equal, so the SHA-256 is equal. A trigger at 10:05:01 would fall in the next bucket.\n\nWhy the others are wrong:\n- *Only from the same IP*: the client IP is not part of the hash input.\n- *A random UUID*: the key is a hash of fixed inputs, so it is repeatable by design.\n- *Exact millisecond timestamp*: seconds and milliseconds are zeroed before the time is used.",
+   "excerpts": [
+    {
+     "path": "src/lib/engine/idempotency.ts",
+     "lineStart": 13,
+     "lineEnd": 18,
+     "quote": "const bucketMinutes = params.bucketMinutes ?? 1; const now = new Date(); now.setSeconds(0, 0); now.setMinutes(Math.floor(now.getMinutes() / bucketMinutes) * bucketMinutes); return sha256(`${params.workflowId}:${JSON.stringify(params.triggerData)}:${now.toISOString()}`);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q04-lock-without-owner",
+   "target": "seed:quests:organized-js-training-jstrain2/quiz/7cf359348f217228",
+   "phase": "after",
+   "title": "Releasing a lock you no longer own frees someone else's",
+   "body": "**Key: it deletes the tenant lock unconditionally, freeing B's lock while B is still running.**\n\nTimeline: A sets the tenant lock at 0 s with a 5000 ms TTL. At 5 s the lock expires. At 6 s B sets the same key (`NX` succeeds because the key is gone). At 8 s A finishes and its `finally` calls `releaseConcurrency`, which is just `redis.del(key)`. There is no check of who holds the lock, and every holder writes the same value `\"1\"`, so there is nothing to check against. B's lock is deleted while B still runs, and a third run could now start.\n\nWhy the others are wrong:\n- *A checks the stored value first*: `releaseConcurrency` has one line and no read.\n- *Redis rejects the DEL*: Redis (and the in-memory shim used here) deletes any existing key; `del` only returns 1 or 0.\n- *Renews the TTL for B*: nothing in the code renews a lock.",
+   "excerpts": [
+    {
+     "path": "src/lib/engine/executor.ts",
+     "lineStart": 328,
+     "lineEnd": 328,
+     "quote": "const lock = await redis.set(lockKey, \"1\", \"PX\", 5000, \"NX\");"
+    },
+    {
+     "path": "src/lib/engine/executor.ts",
+     "lineStart": 355,
+     "lineEnd": 357,
+     "quote": "private async releaseConcurrency(tenantId: string): Promise<void> { await redis.del(`flowpilot:tenant-lock:${tenantId}`); }"
+    },
+    {
+     "path": "src/lib/queue/connection.ts",
+     "lineStart": 44,
+     "lineEnd": 47,
+     "quote": "async del(key: string): Promise<number> { cleanupExpired(); return kv.delete(key) ? 1 : 0; }"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q05-claim-before-try",
+   "target": "seed:quests:organized-js-training-jstrain2/quiz/8420bbefdc988bd1",
+   "phase": "after",
+   "title": "A failed concurrency claim never reaches the failure handler",
+   "body": "**Key: nothing: the claim runs before the try, so the failure handler never executes.**\n\n`await this.claimConcurrency(job.tenantId)` is the first line of `run()`, outside the `try`. When it throws `ConcurrencyLimitError`, JavaScript leaves `run()` straight away. The `catch` that marks the run failed, writes the event log and the dead-letter row only handles errors from inside the `try`, so none of that happens (and the `finally` does not run either, since the `try` was never entered). The error goes back to the caller and the run row keeps its earlier status, which the architecture guide says is `pending`.\n\nWhy the others are wrong:\n- *Marked failed with a dead-letter item*: that is the `catch` block, which never runs here.\n- *Deleted and re-enqueued*: no code deletes run rows.\n- *Marked failed with the message*: again the `catch` block.",
+   "excerpts": [
+    {
+     "path": "src/lib/engine/executor.ts",
+     "lineStart": 29,
+     "lineEnd": 35,
+     "quote": "await this.claimConcurrency(job.tenantId); const startedAt = Date.now(); const context = new RunContext(job.triggerData); try {"
+    },
+    {
+     "path": "src/lib/engine/executor.ts",
+     "lineStart": 146,
+     "lineEnd": 153,
+     "quote": "} catch (error: unknown) { const message = error instanceof Error ? error.message : \"Workflow run failed\"; await db .update(workflowRuns) .set({ status: \"failed\","
+    },
+    {
+     "path": "_learning/00-ARCHITECTURE.md",
+     "lineStart": 48,
+     "lineEnd": 48,
+     "quote": "3. Route validates tenant + workflow, creates a `workflow_runs` record with `pending`."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q06-condition-first-branch",
+   "target": "seed:quests:organized-js-training-jstrain2/quiz/8e8575d0b90b9f77",
+   "phase": "after",
+   "title": "Condition branches: the first one with any expression wins",
+   "body": "**Key: to S5: with passed true it takes the first branch that has any expression string.**\n\nThe branch is chosen by `branches.find((branch) => Boolean(branch.expression) && output.data.passed)`. Read it literally: for each branch, \"does it have a non-empty expression string, and did the step pass?\" The expression text (`\"amount > 100\"`) is never evaluated here. With `passed: true`, the first branch already satisfies both parts, and `find` stops at the first match, so the cursor jumps to S5.\n\nWhy the others are wrong:\n- *Whichever expression is true*: no code evaluates the branch expressions against the output.\n- *By position; branches apply only when passed is false*: it is the reverse: with `passed` false no branch matches and the loop falls through to `nextStepId` or `cursor + 1`.\n- *The last match wins*: `Array.find` returns the first match.",
+   "excerpts": [
+    {
+     "path": "src/lib/engine/executor.ts",
+     "lineStart": 86,
+     "lineEnd": 92,
+     "quote": "const matched = branches.find((branch) => Boolean(branch.expression) && output.data.passed); if (matched?.nextStepId) { const branchTarget = stepById.get(matched.nextStepId); if (branchTarget) { cursor = branchTarget.index; continue;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07-goto-ignored",
+   "target": "seed:quests:organized-js-training-jstrain2/quiz/b533c99825134131",
+   "phase": "after",
+   "title": "onFailure goto: the target is returned but never followed",
+   "body": "**Key: it continues to the step's normal successor, because run() never reads the goto.**\n\nWhen retries run out and `onFailure` starts with `\"goto:\"`, `executeStep` returns a normal output: `data: { skipped: true, error }` plus `metadata: { goto: \"cleanup\" }`. Back in the loop, `run()` only looks at `conditionBranches` (for condition steps), `currentStep.nextStepId`, and otherwise `cursor += 1`. Nothing reads `output.metadata`, so the goto target is ignored and the run moves on as if `onFailure` were `\"continue\"`.\n\nWhy the others are wrong:\n- *Jumps to cleanup*: that is what the setting suggests, but the loop never reads `metadata.goto`.\n- *Fails the run with a dead-letter item*: `executeStep` returns instead of throwing, so the `catch` in `run()` is not reached.\n- *Restarts with fresh retries*: the retry loop has ended; nothing restarts it.",
+   "excerpts": [
+    {
+     "path": "src/lib/engine/executor.ts",
+     "lineStart": 295,
+     "lineEnd": 305,
+     "quote": "if (step.onFailure.startsWith(\"goto:\")) { return { data: { skipped: true, error: message, }, metadata: { goto: step.onFailure.slice(5), }, }; }"
+    },
+    {
+     "path": "src/lib/engine/executor.ts",
+     "lineStart": 96,
+     "lineEnd": 104,
+     "quote": "if (currentStep.nextStepId) { const explicitNext = stepById.get(currentStep.nextStepId);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08-retry-count-backoff",
+   "target": "seed:quests:organized-js-training-jstrain2/quiz/dc844e6a0165d25e",
+   "phase": "after",
+   "title": "Default retries: four attempts, waits of 1, 2 and 4 seconds",
+   "body": "**Key: 4 attempts (maxRetries defaults to 3), with waits of 1000, 2000 and 4000 ms.**\n\n`parseRetryConfig({})` finds no numbers, so it uses the defaults: `maxRetries` 3, `backoffMs` 1000, `backoffMultiplier` 2. The loop runs `attempt = 1` up to `maxRetries + 1`, which is 4 attempts: the first try plus 3 retries. After a failed attempt it sleeps only if `attempt <= maxRetries`, so after attempts 1, 2 and 3. `computeBackoff` is `backoffMs * multiplier ** (attempt - 1)`: 1000 × 2⁰ = 1000, × 2¹ = 2000, × 2² = 4000. After attempt 4 there is no sleep.\n\nWhy the others are wrong:\n- *3 attempts, fixed 1000 ms*: \"retries\" are added to the first try, and the wait grows each time.\n- *Doubling from 2 s*: the base is 1000 ms and the first wait uses exponent 0.\n- *1 attempt*: an empty config means \"use defaults\", not \"no retries\".",
+   "excerpts": [
+    {
+     "path": "src/lib/engine/executor.ts",
+     "lineStart": 208,
+     "lineEnd": 208,
+     "quote": "for (let attempt = 1; attempt <= retryConfig.maxRetries + 1; attempt += 1) {"
+    },
+    {
+     "path": "src/lib/engine/executor.ts",
+     "lineStart": 315,
+     "lineEnd": 317,
+     "quote": "const maxRetries = typeof config.maxRetries === \"number\" ? config.maxRetries : 3; const backoffMs = typeof config.backoffMs === \"number\" ? config.backoffMs : 1000;"
+    },
+    {
+     "path": "src/lib/utils/retry.ts",
+     "lineStart": 11,
+     "lineEnd": 13,
+     "quote": "return Math.round(options.backoffMs * options.backoffMultiplier ** Math.max(0, attempt - 1));"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09-tenant-lock-one-run",
+   "target": "seed:quests:organized-js-training-jstrain2/quiz/e707c09e7d4377db",
+   "phase": "after",
+   "title": "The tenant lock lets only one run in, whatever maxConcurrency says",
+   "body": "**Key: it fails with ConcurrencyLimitError: A still holds the NX tenant lock, so the limit is never checked.**\n\n`claimConcurrency` starts with `SET flowpilot:tenant-lock:TENANT \"1\" PX 5000 NX`. `NX` means \"only set if the key does not exist\". A set that key one second ago and only deletes it in its `finally`, so for B the set returns `null` and the method throws \"Tenant lock already held\". The code that reads `maxConcurrency` and counts running runs comes after that line, so it never runs. In effect a tenant can have one run starting at a time, not five.\n\nWhy the others are wrong:\n- *A is cancelled*: nothing cancels running work.\n- *Only 1 of 5 slots in use*: true in the database, but the count is never reached.\n- *B waits*: there is no waiting; the method throws at once.",
+   "excerpts": [
+    {
+     "path": "src/lib/engine/executor.ts",
+     "lineStart": 327,
+     "lineEnd": 332,
+     "quote": "const lock = await redis.set(lockKey, \"1\", \"PX\", 5000, \"NX\"); if (!lock) { throw new ConcurrencyLimitError(\"Tenant lock already held\"); }"
+    },
+    {
+     "path": "src/lib/engine/executor.ts",
+     "lineStart": 349,
+     "lineEnd": 352,
+     "quote": "if (running.count >= tenant.maxConcurrency) {"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10-step-name-key",
+   "target": "seed:quests:organized-js-training-jstrain2/quiz/ff6fefd63a1fdb7d",
+   "phase": "after",
+   "title": "\"Fetch User!\" is stored as fetch_user_",
+   "body": "**Key: fetch_user_ (lowercased; each run of non-alphanumerics becomes one underscore).**\n\n`setStepOutput` stores the output under `normalizeStepName(stepName)`. That helper trims, lowercases (`fetch user!`), then replaces every run of characters outside `a-z0-9` with `_`. The space becomes `_`, and the trailing `!` becomes another `_`, giving `fetch_user_`. A template that reads this step's output must therefore use `{{steps.fetch_user_.output...}}`.\n\nWhy the others are wrong:\n- *\"Fetch User!\" verbatim*: the name always goes through `normalizeStepName`.\n- *fetch-user*: the replacement character is an underscore, and the `!` is replaced, not removed.\n- *fetchUser*: nothing converts to camelCase; the result is lowercase.",
+   "excerpts": [
+    {
+     "path": "src/lib/engine/context.ts",
+     "lineStart": 17,
+     "lineEnd": 17,
+     "quote": "this.state.steps[this.normalizeStepName(stepName)] = { output };"
+    },
+    {
+     "path": "src/lib/engine/context.ts",
+     "lineStart": 59,
+     "lineEnd": 61,
+     "quote": "return name.trim().toLowerCase().replace(/[^a-z0-9]+/g, \"_\");"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}

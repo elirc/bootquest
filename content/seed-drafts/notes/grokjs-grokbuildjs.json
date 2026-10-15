@@ -1,0 +1,356 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "grokjs-grokbuildjs",
+ "repo": "grokjs-grokbuildjs",
+ "sha": "5256ab6515bf3afcfcef5285ab40ae44aa504c70",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: a small task API, read as a sketch",
+   "body": "grokbuildjs is a teaching repo: an Express + Prisma + Postgres backend for \"tasks\" and a small React page that lists, creates, completes and deletes them. The README is honest that the committed code is \"a readable sketch\" that does not start yet, and PHASE2.md section 0 turns each gap into an exercise. So read it the way a reviewer would: what would this code actually do if you ran it?\n\nSuggested reading order:\n\n1. `README.md`: the tech stack, the project tree, and the section \"Before You Try to Run It\".\n2. `backend/src/index.ts`: about 60 lines. Middleware, the `/health` route, and where `/api/tasks` is mounted.\n3. `backend/src/routes/tasks.ts`: the five HTTP handlers and the Zod schemas they parse with.\n4. `backend/src/services/taskService.ts`: the Prisma calls behind each handler.\n5. `frontend/src/api/tasks.ts`: how the page calls the API.\n6. `PHASE2.md` section 0, then skim sections 1-5 (none of them is built yet).\n\nTip: for every request in the quizzes, trace it file by file: route, schema, service, Prisma, and back.",
+   "excerpts": [
+    {
+     "path": "README.md",
+     "lineStart": 53,
+     "lineEnd": 53,
+     "quote": "The code is a readable sketch. As committed, it does not start:"
+    },
+    {
+     "path": "PHASE2.md",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "**Status 2026-10-06:** Nothing in sections 1–5 is implemented. The baseline is one `Task` model, five routes in `backend/src/routes/tasks.ts`, and one page."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "README.md",
+     "lineStart": 24,
+     "lineEnd": 49,
+     "why": "The committed project tree, with a one-line purpose for every file."
+    },
+    {
+     "path": "JOURNAL.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The README suggests reading this senior-engineer journal before the code."
+    }
+   ]
+  },
+  {
+   "id": "r02-routes-and-services",
+   "target": "pack",
+   "phase": "before",
+   "title": "Routes speak HTTP, services speak Prisma",
+   "body": "The backend splits each request across two files.\n\nThe **route** (`routes/tasks.ts`) deals with HTTP: it reads `req.params` and `req.body`, validates the body with a Zod schema, picks a status code, and sends JSON. The **service** (`services/taskService.ts`) deals with data: each function makes one Prisma call such as `findMany`, `create`, `update` or `delete`.\n\nThe route file also promises one response shape: success bodies look like `{ data: ... }` and errors like `{ error: \"message\", details?: ... }`. When you answer a quiz about \"what does the client get back\", check two things: which status code the route sends, and whether the service returned a value, returned `null`/`false`, or threw. A service that hides an error by returning `false` changes what the route can tell the client.",
+   "excerpts": [
+    {
+     "path": "backend/src/routes/tasks.ts",
+     "lineStart": 6,
+     "lineEnd": 9,
+     "quote": "// - Routes handle HTTP concerns (status codes, request/response shape, validation). // - Services handle business logic and data access."
+    },
+    {
+     "path": "backend/src/routes/tasks.ts",
+     "lineStart": 18,
+     "lineEnd": 20,
+     "quote": "// We return consistent shapes: // Success: { data: ... } // Error:   { error: \"message\", details?: ... }"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "backend/src/services/taskService.ts",
+     "lineStart": 1,
+     "lineEnd": 12,
+     "why": "The service file's header explains why a separate data layer keeps routes thin and testable."
+    }
+   ]
+  },
+  {
+   "id": "r03-zod-schemas",
+   "target": "pack",
+   "phase": "before",
+   "title": "How a Zod schema checks a request body",
+   "body": "Zod lets you describe the shape of incoming data and check it at runtime. `schema.parse(body)` does two things: if the body does not fit, it throws a `ZodError`; if it fits, it returns a new object containing the declared fields.\n\nTwo Zod facts matter for this pack:\n\n- `z.object({...})` returns only the keys it declares. Extra keys in the input are left out of the result by default.\n- `.partial()` makes a copy of a schema where every declared field is optional. It does not add new fields.\n\nNow read the route handlers and note, for each one, which schema it parses with and what the `catch` block does when `parse` throws. Then read `createTaskSchema` carefully: which fields does it declare, and which are required?",
+   "excerpts": [
+    {
+     "path": "backend/src/routes/tasks.ts",
+     "lineStart": 37,
+     "lineEnd": 41,
+     "quote": "const createTaskSchema = z.object({ title: z.string().min(1, \"Title is required\"), description: z.string().optional(), dueDate: z.string().datetime().optional(), });"
+    },
+    {
+     "path": "backend/src/routes/tasks.ts",
+     "lineStart": 86,
+     "lineEnd": 90,
+     "quote": "if (error instanceof z.ZodError) { return res.status(400).json({ error: 'Validation failed', details: error.errors });"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "examples/example-express-zod-validation.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "One of the five examples the README says has real, topic-specific code: Express plus Zod."
+    }
+   ]
+  },
+  {
+   "id": "x-q01-list-order",
+   "target": "seed:quests:grokjs-grokbuildjs/quiz/0a12e8de0ed2128c",
+   "phase": "after",
+   "title": "GET /api/tasks returns the newest tasks first",
+   "body": "**Key: newest first, as getAllTasks orders by createdAt descending.**\n\nThe GET route calls `taskService.getAllTasks()`, which runs `prisma.task.findMany` with `orderBy: { createdAt: 'desc' }`. \"desc\" means descending: the largest (latest) `createdAt` comes first. The comment above it says so in plain words.\n\nWhy the others are wrong:\n- *By id ascending*: there is an explicit `orderBy`, so the database's default order is not used.\n- *Incomplete first, then by title*: `completed` and `title` do not appear in the `orderBy`.\n- *By dueDate*: `dueDate` is not in the `orderBy` either. Sorting and filtering options are only proposed in PHASE2 section 2, which is not built.",
+   "excerpts": [
+    {
+     "path": "backend/src/services/taskService.ts",
+     "lineStart": 21,
+     "lineEnd": 26,
+     "quote": "// orderBy makes sure newest tasks appear first. return prisma.task.findMany({ orderBy: { createdAt: 'desc' }, });"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02-update-schema-unused",
+   "target": "seed:quests:grokjs-grokbuildjs/quiz/1d100be72dfe8547",
+   "phase": "after",
+   "title": "updateTaskSchema is defined but nothing uses it",
+   "body": "**Key: nowhere: it is defined, but the PUT handler still parses with createTaskSchema.**\n\nSearch `routes/tasks.ts` for `updateTaskSchema`: it appears once, on the line that defines it. The comment there says \"for PATCH\", but the router has no PATCH route at all. The PUT handler, the one place an update happens, calls `createTaskSchema.parse(req.body)`. The README lists this as a known problem.\n\nWhy the others are wrong:\n- *A separate PATCH handler*: the router only defines GET `/`, GET `/:id`, POST, PUT and DELETE.\n- *In the PUT handler*: PUT parses with `createTaskSchema` (line 102), which is why a body with only `completed` fails.\n- *In the POST handler*: POST also uses `createTaskSchema`, so a title is still required to create a task.",
+   "excerpts": [
+    {
+     "path": "backend/src/routes/tasks.ts",
+     "lineStart": 43,
+     "lineEnd": 43,
+     "quote": "const updateTaskSchema = createTaskSchema.partial(); // All fields optional for PATCH"
+    },
+    {
+     "path": "backend/src/routes/tasks.ts",
+     "lineStart": 102,
+     "lineEnd": 102,
+     "quote": "const validated = createTaskSchema.parse(req.body);"
+    },
+    {
+     "path": "README.md",
+     "lineStart": 58,
+     "lineEnd": 58,
+     "quote": "`updateTaskSchema` is defined but never used."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q03-fetch-400",
+   "target": "seed:quests:grokjs-grokbuildjs/quiz/2c076b83fab1246d",
+   "phase": "after",
+   "title": "A 400 reply makes the frontend's updateTask return undefined",
+   "body": "**Key: undefined: fetch does not reject on a 400, and the error body has no data field.**\n\n`fetch` only rejects when the request cannot be made at all (for example, the network is down). An HTTP error status such as 400 still counts as a received response. The frontend's `updateTask` never looks at `res.ok` or `res.status`: it reads the JSON body and returns `json.data`. The backend's error body is `{ error, details }`, which has no `data` key, so the function returns `undefined`.\n\nWhy the others are wrong:\n- *It rejects with the 400*: `fetch` does not throw for HTTP error codes, and the code adds no check that would throw.\n- *It never resolves*: the body is consumed by `await res.json()`, so the promise completes.\n- *json.data falls back to the whole body*: there is no fallback in the code; a missing property is just `undefined`.",
+   "excerpts": [
+    {
+     "path": "frontend/src/api/tasks.ts",
+     "lineStart": 43,
+     "lineEnd": 51,
+     "quote": "const json = await res.json(); return json.data;"
+    },
+    {
+     "path": "backend/src/routes/tasks.ts",
+     "lineStart": 112,
+     "lineEnd": 114,
+     "quote": "return res.status(400).json({ error: 'Validation failed', details: error.errors });"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q04-complete-400",
+   "target": "seed:quests:grokjs-grokbuildjs/quiz/2da13eb2020a1804",
+   "phase": "after",
+   "title": "Why the Complete button gets 400 Validation failed",
+   "body": "**Key: 400 Validation failed: PUT parses with createTaskSchema, which needs a title.**\n\nThe body `{ \"completed\": true }` has no `title`. The PUT handler runs `createTaskSchema.parse(req.body)`, and that schema says `title: z.string().min(1, ...)`, so the title is required. `parse` throws a `ZodError`, the `catch` block sees `error instanceof z.ZodError` and answers 400 with `'Validation failed'`. The service is never called.\n\nWhy the others are wrong:\n- *500, unknown column*: `completed` is a real column in the Prisma model, and the request never reaches the database anyway.\n- *200 with the task completed*: PUT does not accept partial bodies here, because of the schema it uses.\n- *404*: the validation error is thrown in the route before `updateTask` runs, so the service has nothing to swallow.",
+   "excerpts": [
+    {
+     "path": "backend/src/routes/tasks.ts",
+     "lineStart": 99,
+     "lineEnd": 117,
+     "quote": "const validated = createTaskSchema.parse(req.body);"
+    },
+    {
+     "path": "backend/src/routes/tasks.ts",
+     "lineStart": 38,
+     "lineEnd": 38,
+     "quote": "title: z.string().min(1, \"Title is required\"),"
+    },
+    {
+     "path": "README.md",
+     "lineStart": 58,
+     "lineEnd": 58,
+     "quote": "It sends `PUT` with `{ completed: true }`, but the route validates with `createTaskSchema` (title required, no `completed` field), so the response is 400."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "PHASE2.md",
+     "lineStart": 19,
+     "lineEnd": 21,
+     "why": "Exercise 0.2 fixes this and gives a curl check for the repaired PUT."
+    }
+   ]
+  },
+  {
+   "id": "x-q05-undefined-due-date",
+   "target": "seed:quests:grokjs-grokbuildjs/quiz/30dd12cad993b0a6",
+   "phase": "after",
+   "title": "An undefined field in a Prisma update is left alone",
+   "body": "**Key: it is left unchanged: Prisma treats an undefined update field as 'do not touch'.**\n\nIn a Prisma `update`, each key in `data` says \"set this column\". A key whose value is `undefined` is treated as if it were not there, so that column keeps its stored value. To clear a nullable column you must pass `null` explicitly. `updateTask` passes `undefined` when no `dueDate` was sent, so the due date stays as it was. Compare `createTask`, which deliberately writes `null` for a missing due date.\n\nWhy the others are wrong:\n- *Set to the current time*: the fallback branch is `undefined`; `new Date(...)` is only called when `data.dueDate` exists.\n- *Cleared to NULL*: that would need `null`, not `undefined`.\n- *The update fails*: `dueDate` is optional in the schema and in the model (`DateTime?`).",
+   "excerpts": [
+    {
+     "path": "backend/src/services/taskService.ts",
+     "lineStart": 54,
+     "lineEnd": 57,
+     "quote": "...data, dueDate: data.dueDate ? new Date(data.dueDate) : undefined,"
+    },
+    {
+     "path": "backend/src/services/taskService.ts",
+     "lineStart": 45,
+     "lineEnd": 45,
+     "quote": "dueDate: data.dueDate ? new Date(data.dueDate) : null,"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q06-missing-cors",
+   "target": "seed:quests:grokjs-grokbuildjs/quiz/5be768567d1df45e",
+   "phase": "after",
+   "title": "The backend cannot start: cors is imported but not installed",
+   "body": "**Key: index.ts imports cors, but no cors entry is listed in backend/package.json dependencies.**\n\nLine 21 of `index.ts` is `import cors from 'cors'`. Node resolves imports from installed packages, and `npm install` only installs what `package.json` lists. The dependencies are `@prisma/client`, `express` and `zod`; there is no `cors`. So loading `index.ts` fails with a \"cannot find module\" error before the server listens. The README lists it first under \"Before You Try to Run It\", and PHASE2 0.1 adds `cors` and `@types/cors`.\n\nWhy the others are wrong:\n- *No Task model*: `schema.prisma` does define `model Task`.\n- *PORT has no default*: `const PORT = process.env.PORT || 5000;` falls back to 5000.\n- *express.json() never registered*: `app.use(express.json());` is on line 36.",
+   "excerpts": [
+    {
+     "path": "backend/src/index.ts",
+     "lineStart": 21,
+     "lineEnd": 21,
+     "quote": "import cors from 'cors';"
+    },
+    {
+     "path": "backend/package.json",
+     "lineStart": 13,
+     "lineEnd": 17,
+     "quote": "\"dependencies\": { \"@prisma/client\": \"^5.15.0\", \"express\": \"^4.19.2\", \"zod\": \"^3.23.8\" },"
+    },
+    {
+     "path": "backend/src/index.ts",
+     "lineStart": 25,
+     "lineEnd": 25,
+     "quote": "const PORT = process.env.PORT || 5000;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07-health",
+   "target": "seed:quests:grokjs-grokbuildjs/quiz/733bde73f3f350c9",
+   "phase": "after",
+   "title": "GET /health returns status ok and a timestamp",
+   "body": "**Key: JSON with status 'ok' and the current timestamp as an ISO string.**\n\nThe handler is one line: `res.json({ status: 'ok', timestamp: new Date().toISOString() })`. `toISOString()` formats the current time as a string such as `2026-10-06T12:00:00.000Z`. Nothing else is in the body.\n\nWhy the others are wrong:\n- *Plain text OK*: `res.json` sends a JSON body, not plain text.\n- *Task count and uptime*: the handler does not call the service or read the process uptime.\n- *Database connection state*: it never touches Prisma or the database. That means this health check only shows the Node process is answering; it would still say ok while Postgres is down.",
+   "excerpts": [
+    {
+     "path": "backend/src/index.ts",
+     "lineStart": 47,
+     "lineEnd": 49,
+     "quote": "app.get('/health', (req, res) => { res.json({ status: 'ok', timestamp: new Date().toISOString() }); });"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08-db-down-delete",
+   "target": "seed:quests:grokjs-grokbuildjs/quiz/7a0c5796ed8240f2",
+   "phase": "after",
+   "title": "With the database down, DELETE wrongly answers 404",
+   "body": "**Key: 404 Task not found: deleteTask catches every error and returns false.**\n\nWhen Postgres is stopped, `prisma.task.delete` throws a connection error. `deleteTask` has a bare `catch { return false; }`, which catches every kind of error, not only \"record not found\". The route receives `false` and runs `if (!deleted) return res.status(404)...`. The route's own `catch` never runs, because no exception reaches it. PHASE2 0.3 asks you to catch only Prisma's `P2025` and rethrow the rest, so this case becomes 500.\n\nWhy the others are wrong:\n- *204, queued*: nothing in the code queues work; 204 is only sent after a successful delete.\n- *500 from the route's catch*: that would be right if the service let the error through, but it swallows it.\n- *503*: no code in this router sends 503.",
+   "excerpts": [
+    {
+     "path": "backend/src/services/taskService.ts",
+     "lineStart": 65,
+     "lineEnd": 72,
+     "quote": "try { await prisma.task.delete({ where: { id } }); return true; } catch { return false; }"
+    },
+    {
+     "path": "backend/src/routes/tasks.ts",
+     "lineStart": 127,
+     "lineEnd": 129,
+     "quote": "if (!deleted) { return res.status(404).json({ error: 'Task not found' }); }"
+    },
+    {
+     "path": "PHASE2.md",
+     "lineStart": 25,
+     "lineEnd": 25,
+     "quote": "With Postgres stopped, `DELETE /api/tasks/1` returns 500, not 404."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09-delete-204",
+   "target": "seed:quests:grokjs-grokbuildjs/quiz/a59175fbdb337e64",
+   "phase": "after",
+   "title": "A successful DELETE sends 204 with no body",
+   "body": "**Key: status 204 and an empty response body.**\n\nAfter `deleteTask` returns `true`, the route runs `res.status(204).send()`. 204 means \"No Content\": the request worked and there is nothing to send back. `send()` with no argument sends an empty body. This is the one success in the router that does not use the `{ data }` envelope.\n\nWhy the others are wrong:\n- *200 with `{ data: true }`*: the route never sends the service's boolean to the client.\n- *202 queued*: 202 means \"accepted, will happen later\"; the delete has already happened here.\n- *200 with `{ data: deletedTask }`*: `deleteTask` does not return the deleted row, only `true` or `false`.",
+   "excerpts": [
+    {
+     "path": "backend/src/routes/tasks.ts",
+     "lineStart": 131,
+     "lineEnd": 131,
+     "quote": "res.status(204).send(); // 204 No Content is standard for successful DELETE"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10-create-null-due",
+   "target": "seed:quests:grokjs-grokbuildjs/quiz/ea41b6fa14c077a7",
+   "phase": "after",
+   "title": "Creating a task without a due date stores NULL",
+   "body": "**Key: NULL: createTask maps a missing dueDate to null, which DateTime? accepts.**\n\n`createTaskSchema` makes `dueDate` optional, so `{ \"title\": \"Read docs\" }` passes validation. In `createTask`, the line `dueDate: data.dueDate ? new Date(data.dueDate) : null` takes the `null` branch because `data.dueDate` is undefined. The Prisma model declares `dueDate DateTime?`; the `?` means the column may be null.\n\nWhy the others are wrong:\n- *The creation timestamp*: nothing copies `createdAt` into `dueDate`.\n- *An Invalid Date*: `new Date(...)` is only called inside the true branch of the ternary.\n- *Fails validation*: `dueDate` is `.optional()` in the schema; only `title` is required.",
+   "excerpts": [
+    {
+     "path": "backend/src/services/taskService.ts",
+     "lineStart": 44,
+     "lineEnd": 45,
+     "quote": "dueDate: data.dueDate ? new Date(data.dueDate) : null,"
+    },
+    {
+     "path": "backend/prisma/schema.prisma",
+     "lineStart": 19,
+     "lineEnd": 19,
+     "quote": "dueDate     DateTime?"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q11-zod-strips-completed",
+   "target": "seed:quests:grokjs-grokbuildjs/quiz/f8d04e6f6654a07c",
+   "phase": "after",
+   "title": "With a title added, Zod still drops completed",
+   "body": "**Key: it stays unchanged: validation passes, but Zod strips the unknown completed key.**\n\nNow the body has a `title`, so `createTaskSchema.parse` succeeds. But `createTaskSchema` declares only `title`, `description` and `dueDate`. A plain `z.object` returns only the keys it declares and quietly leaves out the rest, so the parsed result has no `completed`. The service updates the title (to the same value) and the completed flag is untouched. PHASE2 0.2 describes exactly this second, quieter failure.\n\nWhy the others are wrong:\n- *400, unrecognized key*: Zod only rejects unknown keys if the schema is made strict; this one is not.\n- *Becomes true, title reset*: the schema has no defaults and does not touch the title you sent.\n- *Becomes true*: passing validation does not keep undeclared keys; `completed` never reaches `updateTask`.",
+   "excerpts": [
+    {
+     "path": "PHASE2.md",
+     "lineStart": 20,
+     "lineEnd": 20,
+     "quote": "Even a body with a title would lose `completed`, because Zod strips unknown keys."
+    },
+    {
+     "path": "backend/src/routes/tasks.ts",
+     "lineStart": 37,
+     "lineEnd": 41,
+     "quote": "title: z.string().min(1, \"Title is required\"), description: z.string().optional(), dueDate: z.string().datetime().optional(),"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}
