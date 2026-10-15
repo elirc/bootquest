@@ -1,0 +1,475 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "agora-net",
+ "sha": "f60febf6bf087da03e9b687219fb0352cfaa91fe",
+ "guides": [
+  "docs/architecture.md",
+  "docs/adr/0001-decimal-as-cents.md",
+  "docs/adr/0002-money-value-object.md",
+  "docs/adr/0003-reserve-charge-commit.md",
+  "docs/adr/0004-tender-ordering.md",
+  "docs/adr/0005-derived-order-status.md",
+  "docs/adr/0006-optimistic-concurrency.md",
+  "docs/adr/0007-hmac-webhook-signing.md",
+  "docs/adr/0008-guest-cart-tokens.md"
+ ],
+ "items": [
+  {
+   "id": "q01-rate-through-cents-f",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0001-decimal-as-cents.md",
+    "lines": {
+     "start": 32,
+     "end": 36
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0001-decimal-as-cents.md",
+     "lineStart": 32,
+     "lineEnd": 36
+    },
+    {
+     "path": "src/Agora.Infrastructure/Persistence/SqliteValueConverters.cs",
+     "lineStart": 21,
+     "lineEnd": 29
+    }
+   ],
+   "prompt": "Suppose TaxZoneRate.Rate lost its per-property override and fell back to the global decimal convention. What would a saved rate of 0.095 read back as?",
+   "answer": "0.10, so orders in that zone are taxed at 10%",
+   "distractors": [
+    "0.095, because the cents converter keeps 3 decimal places",
+    "0.09, since the converter truncates toward zero",
+    "An error: SQLite rejects decimals with more than two places"
+   ],
+   "explanation": "DecimalToCentsConverter stores Math.Round(v * 100, AwayFromZero): 9.5 rounds to 10, which reads back as 0.10. That is why the rate columns opt out to millionths."
+  },
+  {
+   "id": "q02-fixed-discount-cap",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0002-money-value-object.md",
+    "lines": {
+     "start": 27,
+     "end": 32
+    }
+   },
+   "cites": [
+    {
+     "path": "src/Agora.Domain/Entities/DiscountCode.cs",
+     "lineStart": 31,
+     "lineEnd": 36
+    },
+    {
+     "path": "src/Agora.Infrastructure/Services/CheckoutService.cs",
+     "lineStart": 117,
+     "lineEnd": 118
+    }
+   ],
+   "prompt": "A fixed-amount discount code worth 80.00 is applied to a cart whose subtotal is 50.00. What DiscountAmount is stored on the order?",
+   "answer": "50.00, as CalculateDiscount caps a fixed amount at the subtotal",
+   "distractors": [
+    "80.00, and Subtract then clamps the discounted subtotal at zero",
+    "Nothing is stored: checkout rejects the code with a 422",
+    "0.00, because an oversized discount is ignored entirely"
+   ],
+   "explanation": "DiscountCode.CalculateDiscount returns new Money(Math.Min(Value, subtotal.Amount)) for FixedAmount, so the stored discount is the subtotal; Subtract would clamp too, but it never has to."
+  },
+  {
+   "id": "q03-free-shipping-discounted",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0004-tender-ordering.md",
+    "lines": {
+     "start": 33,
+     "end": 40
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0004-tender-ordering.md",
+     "lineStart": 39,
+     "lineEnd": 40
+    },
+    {
+     "path": "src/Agora.Domain/Entities/ShippingMethod.cs",
+     "lineStart": 45,
+     "lineEnd": 55
+    }
+   ],
+   "prompt": "A shipping method ships free at 50.00 or more. The cart subtotal is 60.00 and a 20% code applies. What shipping is charged?",
+   "answer": "The normal rate, because 48.00 is below the threshold",
+   "distractors": [
+    "Free shipping, since the 60.00 subtotal clears the threshold",
+    "Half the normal rate, prorated by the discount",
+    "Free shipping; the threshold is checked before discounts run"
+   ],
+   "explanation": "CalculateCharge receives the discounted subtotal (60.00 - 12.00 = 48.00) and ships free only when it is >= FreeThreshold; 48.00 is not, so BaseRate applies."
+  },
+  {
+   "id": "q04-gift-card-covers-all",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0003-reserve-charge-commit.md",
+    "lines": {
+     "start": 44,
+     "end": 47
+    }
+   },
+   "cites": [
+    {
+     "path": "src/Agora.Infrastructure/Services/CheckoutService.cs",
+     "lineStart": 175,
+     "lineEnd": 202
+    },
+    {
+     "path": "docs/adr/0003-reserve-charge-commit.md",
+     "lineStart": 44,
+     "lineEnd": 47
+    }
+   ],
+   "prompt": "A gift card with a 200.00 balance pays for an order whose total is 120.00. What happens with the payment gateway?",
+   "answer": "It is not called; the transaction id is gift_ plus the card code",
+   "distractors": [
+    "It is charged 0.00 and its returned id is stored on the order",
+    "It is skipped, and the transaction id is free_ plus the order number",
+    "It is charged 120.00 and the card balance is untouched"
+   ],
+   "explanation": "chargeAmount is total minus min(balance, total) = 0, so ChargeAsync is skipped; with a gift card present the id is gift_<code>. free_<order#> is for a zero total with no gift card."
+  },
+  {
+   "id": "q05-decline-cleanup-b",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0003-reserve-charge-commit.md",
+    "lines": {
+     "start": 27,
+     "end": 32
+    }
+   },
+   "cites": [
+    {
+     "path": "src/Agora.Infrastructure/Services/CheckoutService.cs",
+     "lineStart": 181,
+     "lineEnd": 191
+    },
+    {
+     "path": "docs/adr/0003-reserve-charge-commit.md",
+     "lineStart": 27,
+     "lineEnd": 29
+    }
+   ],
+   "prompt": "The payment gateway declines a checkout after the Pending order was saved. What is the state afterwards?",
+   "answer": "Reservations are released and the Pending order is deleted",
+   "distractors": [
+    "The Pending order stays so the customer can retry payment",
+    "Stock stays reserved and the cart lines are removed",
+    "The gift card is redeemed, then credited back by a refund"
+   ],
+   "explanation": "On !payment.Success the service calls ReleaseReservation per line, removes the order and saves, then throws PaymentFailedException (402). The cart and the gift card are untouched."
+  },
+  {
+   "id": "q06-crash-after-charge",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0003-reserve-charge-commit.md",
+    "lines": {
+     "start": 48,
+     "end": 52
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0003-reserve-charge-commit.md",
+     "lineStart": 48,
+     "lineEnd": 52
+    },
+    {
+     "path": "src/Agora.Infrastructure/Services/CheckoutService.cs",
+     "lineStart": 172,
+     "lineEnd": 217
+    }
+   ],
+   "prompt": "The process dies after the gateway approves a charge but before the final SaveChangesAsync. What state is left behind?",
+   "answer": "Units stay reserved and the order stays Pending; nothing expires them",
+   "distractors": [
+    "The reservation rolls back, because one transaction wraps the whole request",
+    "The order reads Paid, because MarkPaid ran before the charge",
+    "A sweeper releases the reserved units once a timeout has passed"
+   ],
+   "explanation": "Checkout uses two separate SaveChangesAsync calls with no wrapping transaction. The first persisted the reservations and the Pending order; the ADR says no sweeper expires stale reservations."
+  },
+  {
+   "id": "q07-last-unit-race",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0006-optimistic-concurrency.md",
+    "lines": {
+     "start": 29,
+     "end": 41
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0006-optimistic-concurrency.md",
+     "lineStart": 29,
+     "lineEnd": 32
+    },
+    {
+     "path": "src/Agora.Api/Filters/DomainExceptionFilter.cs",
+     "lineStart": 12,
+     "lineEnd": 18
+    }
+   ],
+   "prompt": "Two checkouts both read the last unit before either saves, so both pass Reserve. What does the slower writer get?",
+   "answer": "A 409 titled Concurrency conflict, via DbUpdateConcurrencyException",
+   "distractors": [
+    "A 409 titled Insufficient stock, thrown by the Reserve guard",
+    "A 201; the last write wins and the one unit is sold twice",
+    "A 500, because the concurrency exception is not mapped"
+   ],
+   "explanation": "Each Reserve passed on its own snapshot. InventoryItem.Version is a concurrency token, so the second UPDATE matches 0 rows, EF throws DbUpdateConcurrencyException and the filter maps it to 409 \"Concurrency conflict\"."
+  },
+  {
+   "id": "q08-discount-limit-race",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0006-optimistic-concurrency.md",
+    "lines": {
+     "start": 34,
+     "end": 36
+    }
+   },
+   "cites": [
+    {
+     "path": "src/Agora.Infrastructure/Persistence/AgoraDbContext.cs",
+     "lineStart": 151,
+     "lineEnd": 156
+    },
+    {
+     "path": "src/Agora.Domain/Entities/DiscountCode.cs",
+     "lineStart": 38,
+     "lineEnd": 46
+    },
+    {
+     "path": "docs/adr/0006-optimistic-concurrency.md",
+     "lineStart": 34,
+     "lineEnd": 36
+    }
+   ],
+   "prompt": "A code has UsageLimit 1 and TimesUsed 0. Two checkouts with no products in common load it before either saves. What does the code allow?",
+   "answer": "Both succeed, and TimesUsed ends at 1 with no token on DiscountCode",
+   "distractors": [
+    "The second gets a 409, from a Version check on the discount code row",
+    "The second gets a 422 when RegisterUse re-checks the usage limit",
+    "The unique index on Code makes the second update fail"
+   ],
+   "explanation": "Only InventoryItem, Cart and GiftCard carry Version tokens. RegisterUse checks the limit against each context's own stale TimesUsed (0), and both UPDATEs write 1, so the single-use code is used twice. The ADR treats discounts as survivable admin config; this lost update is the cost."
+  },
+  {
+   "id": "q09-rma-wrong-email",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0008-guest-cart-tokens.md",
+    "lines": {
+     "start": 24,
+     "end": 28
+    }
+   },
+   "cites": [
+    {
+     "path": "src/Agora.Infrastructure/Services/ReturnService.cs",
+     "lineStart": 216,
+     "lineEnd": 230
+    },
+    {
+     "path": "docs/adr/0008-guest-cart-tokens.md",
+     "lineStart": 24,
+     "lineEnd": 28
+    }
+   ],
+   "prompt": "A guest requests a return for a real order number but gives a different email than the order's. What status comes back?",
+   "answer": "404, so the endpoint never confirms that the order exists",
+   "distractors": [
+    "403, because the caller is known but is not the order's owner",
+    "401, because every return needs a signed-in account",
+    "422; the email counts as an unknown reference"
+   ],
+   "explanation": "EnsureRequesterOwnsOrder accepts a matching CustomerId or the order email (case-insensitive) and otherwise throws NotFoundException, which maps to 404."
+  },
+  {
+   "id": "q10-retry-same-bytes-e",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0007-hmac-webhook-signing.md",
+    "lines": {
+     "start": 15,
+     "end": 31
+    }
+   },
+   "cites": [
+    {
+     "path": "src/Agora.Infrastructure/Services/WebhookService.cs",
+     "lineStart": 108,
+     "lineEnd": 110
+    },
+    {
+     "path": "docs/adr/0007-hmac-webhook-signing.md",
+     "lineStart": 15,
+     "lineEnd": 19
+    }
+   ],
+   "prompt": "An admin retries a failed webhook delivery. What does the receiver get on that retry?",
+   "answer": "The stored payload and stored signature, resent byte for byte",
+   "distractors": [
+    "A re-serialized payload; fresh createdAt and a new signature",
+    "The same payload, re-signed with the current subscription secret",
+    "A new delivery row with its own id and attempt count of 1"
+   ],
+   "explanation": "RetryAsync sends delivery.Payload and delivery.Signature as stored and records the attempt on the same row. Nothing is re-serialized or re-signed."
+  },
+  {
+   "id": "q11-log-after-send",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0007-hmac-webhook-signing.md",
+    "lines": {
+     "start": 49,
+     "end": 52
+    }
+   },
+   "cites": [
+    {
+     "path": "src/Agora.Infrastructure/Services/WebhookService.cs",
+     "lineStart": 62,
+     "lineEnd": 86
+    },
+    {
+     "path": "docs/adr/0007-hmac-webhook-signing.md",
+     "lineStart": 49,
+     "lineEnd": 52
+    }
+   ],
+   "prompt": "In WebhookService.DispatchAsync, when are the WebhookDelivery rows saved relative to the HTTP sends?",
+   "answer": "After the loop sends them, in a single SaveChangesAsync",
+   "distractors": [
+    "Before any send, so that a crash leaves Pending rows to retry",
+    "Inside the checkout's own save, as one shared transaction",
+    "Only failed deliveries are saved; successes are not written"
+   ],
+   "explanation": "Each delivery is sent, its attempt recorded and the row added; a single SaveChangesAsync follows the loop. A crash mid-dispatch loses the log: at-most-once, as the ADR says."
+  },
+  {
+   "id": "q12-cancel-after-shipment-b",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0005-derived-order-status.md",
+    "lines": {
+     "start": 41,
+     "end": 46
+    }
+   },
+   "cites": [
+    {
+     "path": "src/Agora.Domain/Entities/Order.cs",
+     "lineStart": 97,
+     "lineEnd": 108
+    },
+    {
+     "path": "docs/adr/0005-derived-order-status.md",
+     "lineStart": 41,
+     "lineEnd": 43
+    }
+   ],
+   "prompt": "An order of 3 units has one shipment covering 2 of them. An admin then cancels it. What happens?",
+   "answer": "A 409, because Cancel accepts only Pending or Paid orders",
+   "distractors": [
+    "A 200, and the 1 unshipped unit goes back into stock",
+    "A 422 Invalid fulfillment, since a shipment exists",
+    "A 200, and the order becomes Refunded instead"
+   ],
+   "explanation": "The order is PartiallyFulfilled. Order.Cancel throws InvalidOrderStateException outside Pending/Paid, which maps to 409; the escape hatch is a refund."
+  },
+  {
+   "id": "f01-checkout-phases",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0003-reserve-charge-commit.md",
+    "lines": {
+     "start": 16,
+     "end": 32
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0003-reserve-charge-commit.md",
+     "lineStart": 21,
+     "lineEnd": 32
+    }
+   ],
+   "front": "Agora checkout: the three phases and what a decline undoes",
+   "back": "Validate side-effect free; reserve stock and persist the Pending order in one save; charge total minus gift-card tender. Decline: release reservations, delete the order, keep cart and gift card (402). Approve: redeem card, MarkPaid, commit reservations, register discount, clear active lines (201)."
+  },
+  {
+   "id": "f02-totals-order",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0004-tender-ordering.md",
+    "lines": {
+     "start": 18,
+     "end": 31
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0004-tender-ordering.md",
+     "lineStart": 23,
+     "lineEnd": 31
+    }
+   ],
+   "front": "Agora totals order, from subtotal to gateway charge",
+   "back": "discount (clamped) -> discountedSubtotal -> tax per line on the prorated discounted amount -> shipping on the discounted subtotal -> total -> giftCardTender = min(balance, total) -> gatewayCharge = total - tender."
+  },
+  {
+   "id": "f03-token-rows",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0006-optimistic-concurrency.md",
+    "lines": {
+     "start": 17,
+     "end": 36
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0006-optimistic-concurrency.md",
+     "lineStart": 23,
+     "lineEnd": 27
+    }
+   ],
+   "front": "Which Agora rows carry an int Version concurrency token, and why only those?",
+   "back": "InventoryItem, Cart and GiftCard: a lost update there costs money or goods. Admin config (products, discounts, shipping, tax, webhooks) has none; a lost update there means the second edit won."
+  },
+  {
+   "id": "f04-zero-charge-ids",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 95,
+     "end": 97
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 95,
+     "lineEnd": 97
+    }
+   ],
+   "front": "The two zero-charge transaction-id prefixes",
+   "back": "gift_<code> when a gift card covers the whole total; free_<order#> when discounts reduce the total to zero. Both skip the gateway and are real Paid orders."
+  }
+ ]
+}

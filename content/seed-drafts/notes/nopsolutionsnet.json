@@ -1,0 +1,427 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "nopsolutionsnet",
+ "repo": "nopsolutionsnet",
+ "sha": "775cf097d1081607acba483ae587915381321c30",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: three chapters on a 15-year-old shop",
+   "body": "nopCommerce is a large open-source ASP.NET Core MVC e-commerce platform. Its code is in `nopCommerce/src`: three libraries (`Nop.Core`, `Nop.Data`, `Nop.Services`) under two web projects (`Nop.Web` and `Nop.Web.Framework`). The repository is far too big to read end to end, and you do not need to build it: this quest is about reading.\n\nThe curriculum lives in `nopCommerce/fabledocs/`. Use three chapters of `03-architecture-and-patterns/`:\n\n1. `02-data-model-and-persistence.md`: repository semantics, soft delete, transactions, schema defaults.\n2. `03-validation-auth-and-permissions.md`: the login gates and permission layers.\n3. `04-side-effects-async-and-reliability.md`: events, scheduled tasks and locks.\n\nEach chapter has the same parts: a map, a feature trace, an **Exercise ladder** of Goal and Check pairs, **Senior findings**, a debugging scenario and a verification note. Every claim carries a `file#Lline` anchor into `src/`; open the anchors rather than trusting the summary. Some quiz items are the exercise ladder itself: for each Goal, know which Check proves it.",
+   "excerpts": [
+    {
+     "path": "nopCommerce/fabledocs/README.md",
+     "lineStart": 12,
+     "lineEnd": 12,
+     "quote": "nopCommerce is a full-featured open source e-commerce platform: ASP.NET Core MVC (`net10.0`), Razor views,"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "nopCommerce/fabledocs/README.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "What the curriculum is and how it is organised."
+    },
+    {
+     "path": "nopCommerce/fabledocs/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The side-effects chapter."
+    }
+   ]
+  },
+  {
+   "id": "r02-persistence-without-uow",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: persistence without a unit of work",
+   "body": "If you know EF Core, nopCommerce's data layer will surprise you. It uses Linq2Db with a generic `EntityRepository<T>`, and there is no change tracker and no unit of work: each repository call opens its own connection and runs its own statement. Whether two writes succeed or fail together depends entirely on whether something wrapped them in a `TransactionScope`.\n\nTwo more ideas recur. **Soft delete** marks a row as deleted instead of removing it, so history that points at the row still resolves; the price is that every read must decide whether it wants deleted rows. **Schema by convention** means the table definition comes from C# types plus a few explicit overrides.\n\nWhat to look for in `Nop.Data/EntityRepository.cs`:\n\n- the default value of every optional parameter on `GetByIdAsync`;\n- which of the list overloads call `CreateTransactionScope`, and how `BaseDataProvider` implements the others;\n- how the two `DeleteAsync` overloads (entity and predicate) treat `ISoftDeletedEntity`, and whether each calls the event publisher.\n\nThen read the `TypeMapping` table and the `ForeignKey` helper in `FluentMigratorExtensions.cs`.",
+   "excerpts": [
+    {
+     "path": "nopCommerce/fabledocs/03-architecture-and-patterns/02-data-model-and-persistence.md",
+     "lineStart": 56,
+     "lineEnd": 56,
+     "quote": "There is **no unit of work**: two repository calls in a service are two independent statements unless an ambient `TransactionScope` wraps them."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "nopCommerce/src/Libraries/Nop.Data/EntityRepository.cs",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The generic repository."
+    },
+    {
+     "path": "nopCommerce/src/Libraries/Nop.Data/Extensions/FluentMigratorExtensions.cs",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The schema type table and foreign-key helpers."
+    }
+   ]
+  },
+  {
+   "id": "r03-side-effects-and-login",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: best-effort side effects and the login gates",
+   "body": "Chapter 04 asks three questions of every side effect: what if it fails, what if it runs twice, and how would we know? Keep them in mind while reading these files.\n\n- `Nop.Services/Events/EventPublisher.cs`: twenty lines. Trace the loop for a consumer that throws and for one that succeeds, including every statement in the nested `try` inside the `catch` and the check after each `await`.\n- `Nop.Core/Caching/DistributedCacheLocker.cs`: list the cache calls in order. Note how each call reaches the cache and what the `finally` block does.\n- `ScheduleTaskRunner.ExecuteAsync`: work out the lock lifetime formula for a few task periods.\n\nChapter 03 is about login. In `CustomerRegistrationService.ValidateCustomerAsync`, write down the gates in order and, for the wrong-password branch, which fields change and under which condition. Then read the installer value of `FailedPasswordAllowedAttempts`, and the `switch` in `CustomerController` that turns each result into a message. Finally, in `ShoppingCartService.AddToCartAsync`, list the calls in order, up to and including the first warning check.",
+   "excerpts": [
+    {
+     "path": "nopCommerce/fabledocs/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "A **side effect** is anything a flow changes beyond its return value — rows, emails, caches, external APIs."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "nopCommerce/fabledocs/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The validation, authentication and permissions chapter."
+    },
+    {
+     "path": "nopCommerce/src/Libraries/Nop.Services/Events/EventPublisher.cs",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The whole event publisher."
+    }
+   ]
+  },
+  {
+   "id": "x01-consumer-throws",
+   "target": "seed:quests:nopsolutionsnet/quiz/7e63f329f295db67",
+   "phase": "after",
+   "title": "Why StopProcessing ends the consumer loop",
+   "body": "`PublishAsync` resolves every consumer and awaits them one by one. Right after a successful `HandleEventAsync`, still inside the `try`, it tests `@event is IStopProcessingEvent { StopProcessing: true }` and executes `break`. The second consumer set the flag, so the `foreach` ends there and consumers three and four are never called.\n\n- The flag is not just a marker: the publisher reads it and leaves the loop.\n- The later consumers never run, so there is nothing of theirs to discard.\n- No exception is needed; the check runs on the success path.",
+   "excerpts": [
+    {
+     "path": "nopCommerce/src/Libraries/Nop.Services/Events/EventPublisher.cs",
+     "lineStart": 30,
+     "lineEnd": 33,
+     "quote": "if (@event is IStopProcessingEvent { StopProcessing: true }) break;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x02-null-logger-return",
+   "target": "seed:quests:nopsolutionsnet/quiz/fbb355a44cc7b90c",
+   "phase": "after",
+   "title": "How a null logger skips the remaining consumers",
+   "body": "The `catch` contains a nested `try` that resolves `ILogger`. If that resolution returns null, the code runs `return;`. A `return` inside a loop body leaves the whole method, not just the current iteration, so consumers three to five never run. In practice the logger always resolves, which is why the guide calls this a latent edge rather than a live bug.\n\n- They do not still run: `return` exits the method.\n- Nothing retries a consumer.\n- Nothing queues the remaining work.",
+   "excerpts": [
+    {
+     "path": "nopCommerce/src/Libraries/Nop.Services/Events/EventPublisher.cs",
+     "lineStart": 41,
+     "lineEnd": 42,
+     "quote": "if (logger == null) return;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x03-lock-check-then-set",
+   "target": "seed:quests:nopsolutionsnet/quiz/cae75fd3153e76a8",
+   "phase": "after",
+   "title": "Why two nodes can both take the lock",
+   "body": "`PerformActionWithLockAsync` first calls `GetStringAsync(resource)` and returns false if a value exists. Only afterwards does it call `SetStringAsync`. Those are two separate round trips to the cache. Two nodes that both read before either writes both see an empty key, both set it and both run the task. An atomic set-if-absent with a per-holder token would close the gap.\n\n- `SetStringAsync` overwrites; it has no only-if-absent mode here.\n- The cache server runs each call separately, not the whole method.\n- Both nodes read before either writes, so neither sees a lock.",
+   "excerpts": [
+    {
+     "path": "nopCommerce/src/Libraries/Nop.Core/Caching/DistributedCacheLocker.cs",
+     "lineStart": 36,
+     "lineEnd": 37,
+     "quote": "if (!string.IsNullOrEmpty(await _distributedCache.GetStringAsync(resource))) return false;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x04-lock-finally-remove",
+   "target": "seed:quests:nopsolutionsnet/quiz/78073f5ff200ee93",
+   "phase": "after",
+   "title": "Why the slow runner deletes the other node's lock",
+   "body": "For an hourly task the lock lifetime is `Math.Min(Seconds, 300) - 1` = 299 seconds, so after five minutes the key expires while A is still working. B then sets the key and starts. When A finishes, its `finally` calls `RemoveAsync(resource)` with no check of who set the key. The stored value is just the resource name, so there is no owner to compare. A deletes B's lock.\n\n- The `finally` always removes the key.\n- No owner token exists, so nothing can detect a mismatch.\n- Nothing extends a lock; expiry is fixed when the key is set.",
+   "excerpts": [
+    {
+     "path": "nopCommerce/src/Libraries/Nop.Core/Caching/DistributedCacheLocker.cs",
+     "lineStart": 50,
+     "lineEnd": 53,
+     "quote": "await _distributedCache.RemoveAsync(resource);"
+    },
+    {
+     "path": "nopCommerce/src/Libraries/Nop.Services/ScheduleTasks/ScheduleTaskRunner.cs",
+     "lineStart": 137,
+     "lineEnd": 137,
+     "quote": "var expirationInSeconds = Math.Min(scheduleTask.Seconds, 300) - 1;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x05-lockout-off-default",
+   "target": "seed:quests:nopsolutionsnet/quiz/f893341960e74e19",
+   "phase": "after",
+   "title": "Why the attempt that triggers a lockout says WrongPassword",
+   "body": "`ValidateCustomerAsync` checks the lockout window before it compares passwords, and at that moment no lock exists, so the password check runs and fails. The wrong-password branch increments the counter to 3; because the setting is above 0 and 3 >= 3, it sets `CannotLoginUntilDateUtc` to now plus `FailedPasswordLockoutMinutes` and resets the counter to 0. Then it returns `WrongPassword`. The customer sees `LockedOut` only on their next attempt inside the window.\n\n- LockedOut comes from the earlier gate, which already passed for this attempt.\n- The comparison is `>=`, so the third failure starts the lock.\n- Lockout never touches `Active`, so NotActive does not apply.",
+   "excerpts": [
+    {
+     "path": "nopCommerce/src/Libraries/Nop.Services/Customers/CustomerRegistrationService.cs",
+     "lineStart": 161,
+     "lineEnd": 167,
+     "quote": "customer.CannotLoginUntilDateUtc = DateTime.UtcNow.AddMinutes(_customerSettings.FailedPasswordLockoutMinutes);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x06-stale-counter",
+   "target": "seed:quests:nopsolutionsnet/quiz/e8c195b4ddd90402",
+   "phase": "after",
+   "title": "Why an old failure count locks the customer at once",
+   "body": "While lockout was off, every wrong password still incremented `FailedLoginAttempts`, leaving 7. Changing the setting does not touch stored counters. On the next wrong password the counter becomes 8, and the condition `FailedPasswordAllowedAttempts > 0 && FailedLoginAttempts >= FailedPasswordAllowedAttempts` is 5 > 0 and 8 >= 5, so the customer is locked out immediately for `FailedPasswordLockoutMinutes` and the counter resets to 0.\n\n- Nothing resets counters when an admin edits the setting.\n- The comparison is against the stored count, not failures since the change.\n- The count is not added to the limit; 8 already meets 5.",
+   "excerpts": [
+    {
+     "path": "nopCommerce/src/Libraries/Nop.Services/Customers/CustomerRegistrationService.cs",
+     "lineStart": 161,
+     "lineEnd": 162,
+     "quote": "if (_customerSettings.FailedPasswordAllowedAttempts > 0 && customer.FailedLoginAttempts >= _customerSettings.FailedPasswordAllowedAttempts)"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x07-locked-right-password",
+   "target": "seed:quests:nopsolutionsnet/quiz/2f1194eab5f37472",
+   "phase": "after",
+   "title": "Why the right password still gets LockedOut",
+   "body": "`ValidateCustomerAsync` checks the lockout window, `CannotLoginUntilDateUtc > DateTime.UtcNow`, before it compares passwords. A customer inside the window gets `LockedOut` whatever they type, and the success branch that clears the timestamp is never reached. The guide's debugging scenario uses the same fact: a stale lockout timestamp survives until a successful login, which the locked customer cannot reach.\n\n- The correct password is never checked, so it cannot clear anything.\n- WrongPassword is returned only after a failed comparison.\n- MFA is checked after the password, which is never reached here.",
+   "excerpts": [
+    {
+     "path": "nopCommerce/src/Libraries/Nop.Services/Customers/CustomerRegistrationService.cs",
+     "lineStart": 154,
+     "lineEnd": 155,
+     "quote": "if (customer.CannotLoginUntilDateUtc.HasValue && customer.CannotLoginUntilDateUtc.Value > DateTime.UtcNow) return CustomerLoginResults.LockedOut;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x08-shared-message",
+   "target": "seed:quests:nopsolutionsnet/quiz/09f439c5cec09b3b",
+   "phase": "after",
+   "title": "Which login failures share one message",
+   "body": "The controller's `switch` gives `Deleted`, `NotActive` and `LockedOut` their own localized messages. `CustomerNotExist`, `NotRegistered`, `WrongPassword` and `default` fall through to one case that adds `Account.Login.WrongCredentials`. The generic message hides whether an email exists; the distinct ones do not, which is the enumeration finding F1.\n\n- Deleted, NotActive and LockedOut are exactly the ones with distinct messages.\n- Not every failure is generic; three states are revealed.\n- WrongPassword is not alone; two other results share its message.",
+   "excerpts": [
+    {
+     "path": "nopCommerce/src/Presentation/Nop.Web/Controllers/CustomerController.cs",
+     "lineStart": 521,
+     "lineEnd": 526,
+     "quote": "case CustomerLoginResults.CustomerNotExist: case CustomerLoginResults.NotRegistered: case CustomerLoginResults.WrongPassword: default:"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x09-getbyid-deleted",
+   "target": "seed:quests:nopsolutionsnet/quiz/b4a5e2cae162e0f4",
+   "phase": "after",
+   "title": "Why includeDeleted: false returns null",
+   "body": "`GetByIdAsync` builds its query with `AddDeletedFilter(Table, includeDeleted)`. With `includeDeleted: false` and an entity that implements `ISoftDeletedEntity`, the helper adds `Where(entry => !entry.Deleted)`, so the soft-deleted product is not in the query and `FirstOrDefaultAsync` returns null. The default is `includeDeleted = true`, so callers that want deleted rows hidden must say so.\n\n- A single-id lookup goes through the same filter helper as the others.\n- The repository returns null; it does not throw for a missing row.\n- Nothing modifies the entity; a filtered row is simply not loaded.",
+   "excerpts": [
+    {
+     "path": "nopCommerce/src/Libraries/Nop.Data/EntityRepository.cs",
+     "lineStart": 96,
+     "lineEnd": 105,
+     "quote": "return query.OfType<ISoftDeletedEntity>().Where(entry => !entry.Deleted).OfType<TEntity>();"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x10-predicate-delete",
+   "target": "seed:quests:nopsolutionsnet/quiz/eba9d693a8b4198a",
+   "phase": "after",
+   "title": "Why the predicate delete is a silent hard delete",
+   "body": "The predicate overload of `DeleteAsync` calls `BulkDeleteEntitiesAsync(predicate)` inside a transaction scope and returns the number of rows. Unlike the entity overload, it never checks `ISoftDeletedEntity`, so `Customer` rows are physically removed, and it never calls the event publisher, so no deleted events fire. Guest cleanup uses it deliberately.\n\n- The entity overload sets `Deleted = true`; this one does not.\n- No per-row events are published.\n- No scheduled task is involved; the rows are gone at once.",
+   "excerpts": [
+    {
+     "path": "nopCommerce/src/Libraries/Nop.Data/EntityRepository.cs",
+     "lineStart": 500,
+     "lineEnd": 504,
+     "quote": "var countDeletedRecords = await _dataProvider.BulkDeleteEntitiesAsync(predicate);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x11-update-list-not-atomic",
+   "target": "seed:quests:nopsolutionsnet/quiz/067adb12f7980347",
+   "phase": "after",
+   "title": "Why a failed list update leaves partial changes",
+   "body": "`UpdateAsync(IList<T>)` calls the provider's `UpdateEntitiesAsync` with no transaction scope, unlike the insert and delete list overloads. The provider loops over the entities and calls `UpdateEntityAsync` for each, and each of those opens its own connection and commits its own statement. When the third update throws, the first two are already committed, and the remaining products are never reached.\n\n- No transaction wraps the list, so nothing is all-or-nothing.\n- Nothing catches or retries the failure.\n- Committed statements cannot roll back afterwards.",
+   "excerpts": [
+    {
+     "path": "nopCommerce/src/Libraries/Nop.Data/DataProviders/BaseDataProvider.cs",
+     "lineStart": 289,
+     "lineEnd": 290,
+     "quote": "foreach (var entity in entities) await UpdateEntityAsync(entity);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x12-reset-before-warnings",
+   "target": "seed:quests:nopsolutionsnet/quiz/ac4323b316f21cca",
+   "phase": "after",
+   "title": "Why a rejected add-to-cart still clears checkout choices",
+   "body": "`AddToCartAsync` calls `ResetCheckoutDataAsync(customer, storeId)` before it looks up the cart item or computes the item warnings (only a few early guards, such as a non-positive quantity, return before it). That reset clears the selected shipping option, offered options, pickup point, delivery date, payment method and reward-points choice. The out-of-stock warning comes later and returns the warnings, but the reset has already happened. The guide's rule: validate, then mutate.\n\n- The add does have side effects before validation, so the choices are lost.\n- The reset does not depend on the cart becoming empty.\n- Nothing backs up or restores the cleared data.",
+   "excerpts": [
+    {
+     "path": "nopCommerce/src/Libraries/Nop.Services/Orders/ShoppingCartService.cs",
+     "lineStart": 1584,
+     "lineEnd": 1585,
+     "quote": "await _customerService.ResetCheckoutDataAsync(customer, storeId);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "g01-lock-lifetime",
+   "target": "seed:quests:nopsolutionsnet/quiz/006a381b5652b967",
+   "phase": "after",
+   "title": "Which Check proves the lock-lifetime goal",
+   "body": "The goal is to compute how long a task's lock lives. The matching Check works the formula on two periods: `Seconds = 60` gives a 59-second lock and `Seconds = 3600` gives 299 seconds, from `Math.Min(Seconds, 300) - 1` in `ScheduleTaskRunner`.\n\n- The grep for `IConsumer<OrderPlacedEvent>` belongs to the goal of listing synchronous checkout work.\n- Pointing at the `try/catch` in `EventPublisher` proves that a publish never throws to its caller.",
+   "excerpts": [
+    {
+     "path": "nopCommerce/src/Libraries/Nop.Services/ScheduleTasks/ScheduleTaskRunner.cs",
+     "lineStart": 137,
+     "lineEnd": 137,
+     "quote": "var expirationInSeconds = Math.Min(scheduleTask.Seconds, 300) - 1;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "g02-getbyid-soft-deleted",
+   "target": "seed:quests:nopsolutionsnet/quiz/1d65ff2ad4c98f81",
+   "phase": "after",
+   "title": "Which Check proves GetByIdAsync returns deleted rows",
+   "body": "To prove that `GetByIdAsync` returns soft-deleted rows, you cite its default parameter, `includeDeleted = true`, and the filter helper it would otherwise use, then find a caller that relies on the default (order history) and one that overrides it.\n\n- Finding the builder line or type-table entry for `Sku` and `Price` belongs to predicting column types.\n- Filling in the atomicity table from memory belongs to classifying repository writes.",
+   "excerpts": [
+    {
+     "path": "nopCommerce/src/Libraries/Nop.Data/EntityRepository.cs",
+     "lineStart": 122,
+     "lineEnd": 122,
+     "quote": "bool includeDeleted = true"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "g03-login-gate-order",
+   "target": "seed:quests:nopsolutionsnet/quiz/37edf5d7eb32cd63",
+   "phase": "after",
+   "title": "Which Check proves you know the login gate order",
+   "body": "Reproducing the gate order means listing gates 4 to 9 from `ValidateCustomerAsync` without the table, then comparing: lookup, deleted, inactive, not registered, lockout, password, MFA and success bookkeeping in the order the method runs them.\n\n- Following `[CheckPermission]` to its cache key belongs to tracing a permission check.\n- Citing the installer value and the `> 0` guard belongs to deciding whether lockout is on.",
+   "excerpts": [
+    {
+     "path": "nopCommerce/src/Libraries/Nop.Services/Customers/CustomerRegistrationService.cs",
+     "lineStart": 144,
+     "lineEnd": 146,
+     "quote": "if (customer == null) return CustomerLoginResults.CustomerNotExist;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "g04-publisher-never-throws",
+   "target": "seed:quests:nopsolutionsnet/quiz/3fa71b6d787b9ea8",
+   "phase": "after",
+   "title": "Which Check proves the publisher never throws",
+   "body": "To prove that the publisher never throws to its caller, point at the `try/catch` around each consumer in `PublishAsync` and at the nested `catch { }` that ignores errors from the logger itself. Together they leave no path for an exception to escape the loop.\n\n- The lock-lifetime arithmetic belongs to the scheduled-task goal.\n- The grep for `IConsumer<OrderPlacedEvent>` belongs to listing synchronous checkout work.",
+   "excerpts": [
+    {
+     "path": "nopCommerce/src/Libraries/Nop.Services/Events/EventPublisher.cs",
+     "lineStart": 46,
+     "lineEnd": 49,
+     "quote": "catch { // ignored }"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "g05-classify-atomicity",
+   "target": "seed:quests:nopsolutionsnet/quiz/8d24a3188632a708",
+   "phase": "after",
+   "title": "Which Check proves you classified repository writes",
+   "body": "Classifying every repository write by atomicity is done by filling in the semantics table yourself from `EntityRepository` lines 340 to 506, then comparing with the guide: which overloads use `CreateTransactionScope`, which are single statements, and which loop without a transaction.\n\n- Citing `includeDeleted = true` proves the soft-delete default of `GetByIdAsync`.\n- Finding the builder line for `Sku` and `Price` predicts column types.",
+   "excerpts": [
+    {
+     "path": "nopCommerce/src/Libraries/Nop.Data/EntityRepository.cs",
+     "lineStart": 360,
+     "lineEnd": 362,
+     "quote": "using var transaction = _dataProvider.CreateTransactionScope();"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "g06-sync-checkout-work",
+   "target": "seed:quests:nopsolutionsnet/quiz/9aca3a09491e6f10",
+   "phase": "after",
+   "title": "Which Check lists the synchronous checkout work",
+   "body": "Enumerating the synchronous work in checkout starts from the consumers of `OrderPlacedEvent`: grep for `IConsumer<OrderPlacedEvent>`, find the six files, and classify each handler as a local write, an external HTTP call or a no-op unless configured. They all run inside the checkout request.\n\n- The `try/catch` in `EventPublisher` proves a different goal: that a publish never throws.\n- The lock-lifetime arithmetic belongs to scheduled tasks.",
+   "excerpts": [
+    {
+     "path": "nopCommerce/fabledocs/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+     "lineStart": 42,
+     "lineEnd": 42,
+     "quote": "Six consumers of `OrderPlacedEvent` ship in this repo's plugins"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "g07-column-types",
+   "target": "seed:quests:nopsolutionsnet/quiz/f164cddc9759d437",
+   "phase": "after",
+   "title": "Which Check predicts column types",
+   "body": "Predicting a column's SQL type without running a migration means finding the rule that decides it. For `Product.Sku` that is the builder line, `AsString(400).Nullable()`. For `Product.Price` no builder line exists, so the type table's `decimal` entry, `AsDecimal(18, 4)`, applies.\n\n- Filling in the atomicity table belongs to classifying repository writes.\n- Citing `includeDeleted = true` belongs to the soft-delete goal.",
+   "excerpts": [
+    {
+     "path": "nopCommerce/src/Libraries/Nop.Data/Mapping/Builders/Catalog/ProductBuilder.cs",
+     "lineStart": 23,
+     "lineEnd": 23,
+     "quote": ".WithColumn(nameof(Product.Sku)).AsString(400).Nullable()"
+    },
+    {
+     "path": "nopCommerce/src/Libraries/Nop.Data/Extensions/FluentMigratorExtensions.cs",
+     "lineStart": 34,
+     "lineEnd": 34,
+     "quote": "[typeof(decimal)] = c => c.AsDecimal(18, 4),"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "g08-lockout-fresh-install",
+   "target": "seed:quests:nopsolutionsnet/quiz/fc240e7ed3e7c214",
+   "phase": "after",
+   "title": "Which Check settles lockout on a fresh install",
+   "body": "Whether lockout is on after installation is settled by two lines: the installer's `FailedPasswordAllowedAttempts = 0` and the `> 0` guard in the wrong-password branch of `ValidateCustomerAsync`. Together they show the lock branch cannot run until an admin changes the setting.\n\n- Listing gates 4 to 9 from memory proves the gate order, not the default.\n- Following `[CheckPermission]` to its cache key traces a permission check.",
+   "excerpts": [
+    {
+     "path": "nopCommerce/src/Libraries/Nop.Services/Installation/InstallRequiredData.cs",
+     "lineStart": 1627,
+     "lineEnd": 1627,
+     "quote": "FailedPasswordAllowedAttempts = 0,"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}

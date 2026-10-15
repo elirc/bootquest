@@ -1,0 +1,470 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "pulse-net",
+ "sha": "0a3451c6c7c16162bfe5b3547e94a87bd19d0aca",
+ "guides": [
+  "docs/architecture.md",
+  "docs/adr/0001-async-ingestion-durable-queue.md",
+  "docs/adr/0002-404-not-403-membership.md",
+  "docs/adr/0003-sha256-deterministic-rollout.md",
+  "docs/adr/0004-three-api-key-types.md",
+  "docs/adr/0005-named-in-memory-sqlite-test-harness.md",
+  "docs/adr/0006-utc-ticks-datetimeoffset-converter.md",
+  "docs/adr/0007-cursor-pagination-for-exports.md",
+  "docs/adr/0008-sql-slice-in-memory-query-engine.md"
+ ],
+ "items": [
+  {
+   "id": "q01-read-after-202",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0001-async-ingestion-durable-queue.md",
+    "lines": {
+     "start": 34,
+     "end": 47
+    }
+   },
+   "cites": [
+    {
+     "path": "src/Pulse.Api/Endpoints/CaptureEndpoints.cs",
+     "lineStart": 48,
+     "lineEnd": 62
+    },
+    {
+     "path": "docs/adr/0001-async-ingestion-durable-queue.md",
+     "lineStart": 44,
+     "lineEnd": 46
+    }
+   ],
+   "prompt": "A client gets 202 from POST /capture and immediately runs a trends query over the same event. Will the event be counted?",
+   "answer": "Not reliably, since reads lag until the queue drains",
+   "distractors": [
+    "Yes, because the 202 is sent only after the event row is saved",
+    "Yes, since capture runs CaptureService before it replies",
+    "No, events appear only after a nightly batch import"
+   ],
+   "explanation": "Capture saves QueuedEvents rows and returns 202; IngestionWorker writes the Events rows later. The ADR tells tests to wait for pending == 0 in the metrics endpoint."
+  },
+  {
+   "id": "q02-doorbell-capacity",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0001-async-ingestion-durable-queue.md",
+    "lines": {
+     "start": 25,
+     "end": 27
+    }
+   },
+   "cites": [
+    {
+     "path": "src/Pulse.Infrastructure/Services/IngestionPipeline.cs",
+     "lineStart": 14,
+     "lineEnd": 19
+    },
+    {
+     "path": "docs/adr/0001-async-ingestion-durable-queue.md",
+     "lineStart": 25,
+     "lineEnd": 27
+    }
+   ],
+   "prompt": "While the ingestion worker is busy draining, capture calls IngestionSignal.Ring() 50 times. How many wake-up signals are waiting afterwards?",
+   "answer": "One, as the capacity-1 DropWrite channel drops the rest",
+   "distractors": [
+    "Fifty, one per ring, which the worker then reads in order",
+    "None; the queued rows wait until the process restarts",
+    "Fifty, because each TryWrite blocks until it is read"
+   ],
+   "explanation": "Channel.CreateBounded(1) with FullMode = DropWrite keeps one item; TryWrite on a full channel drops the new write. The table is the truth, so one signal (or the 1 s sweep) is enough."
+  },
+  {
+   "id": "q03-dead-letter-attempts",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0001-async-ingestion-durable-queue.md",
+    "lines": {
+     "start": 29,
+     "end": 32
+    }
+   },
+   "cites": [
+    {
+     "path": "src/Pulse.Infrastructure/Services/IngestionPipeline.cs",
+     "lineStart": 102,
+     "lineEnd": 110
+    },
+    {
+     "path": "src/Pulse.Infrastructure/Services/IngestionPipeline.cs",
+     "lineStart": 170,
+     "lineEnd": 178
+    }
+   ],
+   "prompt": "A queued row throws a transient exception on every ingest attempt. When does it leave the queue, and what Attempts value does its DeadLetterEvent store?",
+   "answer": "After three attempts, as a dead letter with Attempts = 2",
+   "distractors": [
+    "It is retried without limit, with a growing backoff each time",
+    "After a 4th try, once the stored attempt count has reached 3",
+    "At once: any exception counts as a permanent failure"
+   ],
+   "explanation": "The third failure sees row.Attempts == 2, and 2 + 1 >= MaxAttempts (3), so it dead-letters; the DeadLetterEvent copies row.Attempts, which is 2, while the error text says \"Failed after 3 attempts\". The stored count is one low."
+  },
+  {
+   "id": "q04-crash-before-delete",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0001-async-ingestion-durable-queue.md",
+    "lines": {
+     "start": 76,
+     "end": 81
+    }
+   },
+   "cites": [
+    {
+     "path": "src/Pulse.Infrastructure/Services/IngestionPipeline.cs",
+     "lineStart": 94,
+     "lineEnd": 100
+    },
+    {
+     "path": "docs/adr/0001-async-ingestion-durable-queue.md",
+     "lineStart": 76,
+     "lineEnd": 81
+    }
+   ],
+   "prompt": "The process crashes after CaptureService saved an event but before the processor deleted its queue row. What happens on restart?",
+   "answer": "The row is ingested again, so the event is stored twice",
+   "distractors": [
+    "Nothing: ingest and delete run in one shared transaction",
+    "The row is dead-lettered as a suspected duplicate event",
+    "The saved event rolls back, since the delete never ran"
+   ],
+   "explanation": "DeleteRowAsync is a separate ExecuteDeleteAsync after IngestAsync has saved. A crash between them leaves the row queued, and there is no dedup by event id: at-least-once."
+  },
+  {
+   "id": "q05-non-member-404",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0002-404-not-403-membership.md",
+    "lines": {
+     "start": 13,
+     "end": 24
+    }
+   },
+   "cites": [
+    {
+     "path": "src/Pulse.Api/Auth/ProjectAccessService.cs",
+     "lineStart": 36,
+     "lineEnd": 51
+    },
+    {
+     "path": "docs/adr/0002-404-not-403-membership.md",
+     "lineStart": 15,
+     "lineEnd": 19
+    }
+   ],
+   "prompt": "A signed-in user who is not a member of project P requests P's persons list. What does the API return?",
+   "answer": "404, the same answer a nonexistent project id gets",
+   "distractors": [
+    "403, because the caller is known but not a member",
+    "401, as a failed membership check is unauthenticated",
+    "200 with an empty list, so that nothing leaks"
+   ],
+   "explanation": "RequireMemberAsync returns 401 only when no user id can be read; otherwise one AnyAsync over ProjectMemberships and Results.NotFound() on a miss. There is no 403 in the project-scoped API."
+  },
+  {
+   "id": "q06-read-key-with-jwt",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0002-404-not-403-membership.md",
+    "lines": {
+     "start": 45,
+     "end": 48
+    }
+   },
+   "cites": [
+    {
+     "path": "src/Pulse.Api/Auth/ProjectAccessService.cs",
+     "lineStart": 58,
+     "lineEnd": 75
+    },
+    {
+     "path": "docs/adr/0002-404-not-403-membership.md",
+     "lineStart": 45,
+     "lineEnd": 48
+    }
+   ],
+   "prompt": "A signed-in user who is not a member of project P sends their JWT and also P's valid rk_live_ key in X-Api-Key to a query endpoint. What happens?",
+   "answer": "404, since an authenticated caller gets the membership check",
+   "distractors": [
+    "200, since the valid read key on its own grants query access",
+    "401 Invalid read key, as a JWT and a key cannot be mixed",
+    "403, because the read key and the user disagree"
+   ],
+   "explanation": "RequireReadAsync looks at X-Api-Key only when GetUserId(http.User) is null. With a JWT present it falls through to RequireMemberAsync, which answers 404 for a non-member."
+  },
+  {
+   "id": "q07-personal-key-routing",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0004-three-api-key-types.md",
+    "lines": {
+     "start": 24,
+     "end": 27
+    }
+   },
+   "cites": [
+    {
+     "path": "src/Pulse.Api/Program.cs",
+     "lineStart": 49,
+     "lineEnd": 58
+    },
+    {
+     "path": "docs/adr/0004-three-api-key-types.md",
+     "lineStart": 24,
+     "lineEnd": 27
+    }
+   ],
+   "prompt": "Both JWTs and personal API keys arrive as Authorization: Bearer. What decides which authentication handler a request goes to?",
+   "answer": "An ordinal StartsWith check for \"Bearer pk_user_\"",
+   "distractors": [
+    "Whether the token has three dot-separated JWT segments",
+    "A lookup of the token's SHA-256 hash in the keys table",
+    "A case-insensitive match on any key that starts with pk_"
+   ],
+   "explanation": "The policy scheme's ForwardDefaultSelector does header.StartsWith(\"Bearer \" + PersonalPrefix, StringComparison.Ordinal): a match goes to PersonalApiKeyAuthenticationHandler, anything else to JwtBearer."
+  },
+  {
+   "id": "q08-offset-not-kept",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0006-utc-ticks-datetimeoffset-converter.md",
+    "lines": {
+     "start": 27,
+     "end": 35
+    }
+   },
+   "cites": [
+    {
+     "path": "src/Pulse.Infrastructure/PulseDbContext.cs",
+     "lineStart": 204,
+     "lineEnd": 210
+    },
+    {
+     "path": "docs/adr/0006-utc-ticks-datetimeoffset-converter.md",
+     "lineStart": 32,
+     "lineEnd": 35
+    }
+   ],
+   "prompt": "An event is captured with timestamp 2026-03-01T10:00:00+02:00. What does Pulse return when the event is read back?",
+   "answer": "2026-03-01T08:00:00+00:00, the same instant in UTC",
+   "distractors": [
+    "2026-03-01T10:00:00+02:00, with the offset preserved",
+    "2026-03-01T10:00:00+00:00, the clock time relabelled",
+    "A TEXT value that SQLite compares letter by letter"
+   ],
+   "explanation": "The converter stores v.UtcTicks and reads new DateTimeOffset(ticks, TimeSpan.Zero): the instant survives, the +02:00 offset does not."
+  },
+  {
+   "id": "q09-cursor-out-of-range",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0007-cursor-pagination-for-exports.md",
+    "lines": {
+     "start": 68,
+     "end": 78
+    }
+   },
+   "cites": [
+    {
+     "path": "src/Pulse.Infrastructure/Services/ExportService.cs",
+     "lineStart": 59,
+     "lineEnd": 76
+    },
+    {
+     "path": "src/Pulse.Api/Endpoints/ExportEndpoints.cs",
+     "lineStart": 56,
+     "lineEnd": 65
+    }
+   ],
+   "prompt": "A GET /export/events cursor decodes to \"-1:<valid guid>\". TryDecodeCursor catches only FormatException, and the DateTimeOffset constructor throws. What status comes back?",
+   "answer": "400, as the ArgumentException catch in the endpoint covers it",
+   "distractors": [
+    "500, because the exception escapes to the global exception handler",
+    "200 from the start, as a bad cursor restarts the scan",
+    "404, so the export does not reveal the project"
+   ],
+   "explanation": "ArgumentOutOfRangeException derives from ArgumentException, and ExportEndpoints wraps EventsPageAsync in catch (ArgumentException) => CursorProblem() (400). The ADR review note predicts the global handler; the code shows the 400."
+  },
+  {
+   "id": "q10-empty-filtered-page",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0007-cursor-pagination-for-exports.md",
+    "lines": {
+     "start": 32,
+     "end": 35
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0007-cursor-pagination-for-exports.md",
+     "lineStart": 32,
+     "lineEnd": 35
+    },
+    {
+     "path": "src/Pulse.Infrastructure/Services/ExportService.cs",
+     "lineStart": 81,
+     "lineEnd": 85
+    }
+   ],
+   "prompt": "A filtered event export returns a page with 0 rows but a non-null nextCursor. What should the client do?",
+   "answer": "Keep paging: the cursor tracks scan position, not matches",
+   "distractors": [
+    "Stop; an empty page means the export has finished",
+    "Retry the same page, since the filter step timed out",
+    "Treat it as a 400 error, because the filter matched no rows"
+   ],
+   "explanation": "Property filters run after the SQL page scan, so a page can hold fewer than limit rows (even zero) while the cursor still advances. null is the only end signal."
+  },
+  {
+   "id": "q11-variant-tie",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0003-sha256-deterministic-rollout.md",
+    "lines": {
+     "start": 14,
+     "end": 21
+    }
+   },
+   "cites": [
+    {
+     "path": "src/Pulse.Domain/FeatureFlagHasher.cs",
+     "lineStart": 34,
+     "lineEnd": 52
+    },
+    {
+     "path": "docs/adr/0003-sha256-deterministic-rollout.md",
+     "lineStart": 48,
+     "lineEnd": 49
+    }
+   ],
+   "prompt": "A flag has variants control 50 and test 50. One user's variant position, Rank(...) * 100, is exactly 50.0. Which variant do they get?",
+   "answer": "test, because the cumulative walk uses a strict less-than",
+   "distractors": [
+    "control, since 50.0 falls inside the first 50 points",
+    "Neither: an exact tie is re-ranked with a new salt",
+    "control, because ties always go to the earlier variant"
+   ],
+   "explanation": "PickVariant adds each rollout to cumulative and returns when position < cumulative. 50.0 < 50 is false for control; 50.0 < 100 is true for test."
+  },
+  {
+   "id": "q12-zero-rollout",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0003-sha256-deterministic-rollout.md",
+    "lines": {
+     "start": 14,
+     "end": 21
+    }
+   },
+   "cites": [
+    {
+     "path": "src/Pulse.Domain/FeatureFlagHasher.cs",
+     "lineStart": 25,
+     "lineEnd": 28
+    },
+    {
+     "path": "docs/adr/0003-sha256-deterministic-rollout.md",
+     "lineStart": 66,
+     "lineEnd": 68
+    }
+   ],
+   "prompt": "A flag is at rolloutPercentage = 0 and some user's Rank happens to be exactly 0.0. Is that user in the rollout?",
+   "answer": "No, because 0.0 * 100 < 0 is false under the strict test",
+   "distractors": [
+    "Yes, because a rank of 0.0 is always the first position",
+    "Yes: 0% is treated the same as 100% and short-circuits",
+    "It depends on the variant split, not on the rollout gate"
+   ],
+   "explanation": "IsInRollout short-circuits only at >= 100; otherwise it tests Rank * 100 < rolloutPercentage, and 0 < 0 is false, so 0% excludes everyone."
+  },
+  {
+   "id": "f01-three-keys",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0004-three-api-key-types.md",
+    "lines": {
+     "start": 13,
+     "end": 22
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0004-three-api-key-types.md",
+     "lineStart": 18,
+     "lineEnd": 22
+    }
+   ],
+   "front": "Pulse's three key types: prefix, scope and storage",
+   "back": "pk_live_ write key: POST /capture and /decide only, plaintext lookup key. rk_live_ read key: query endpoints and flag local evaluation via X-Api-Key, plaintext. pk_user_ personal key: everything its owner can do via Bearer, stored as SHA-256 only, shown once."
+  },
+  {
+   "id": "f02-test-harness",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0005-named-in-memory-sqlite-test-harness.md",
+    "lines": {
+     "start": 21,
+     "end": 35
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0005-named-in-memory-sqlite-test-harness.md",
+     "lineStart": 23,
+     "lineEnd": 32
+    }
+   ],
+   "front": "Why do Pulse integration tests use Data Source=pulse-tests-{guid};Mode=Memory;Cache=Shared?",
+   "back": "Named shared cache: handlers and background workers open their own connections to one in-memory DB. A keep-alive connection holds it open (it dies with its last connection). A Guid per factory isolates each test class."
+  },
+  {
+   "id": "f03-sql-vs-memory",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0008-sql-slice-in-memory-query-engine.md",
+    "lines": {
+     "start": 15,
+     "end": 31
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0008-sql-slice-in-memory-query-engine.md",
+     "lineStart": 19,
+     "lineEnd": 27
+    }
+   ],
+   "front": "ADR 0008: what runs in SQL and what runs in memory?",
+   "back": "SQL: ProjectId, event name, timestamp range (and PersonId not null when needed), using the indexes. Memory on that slice: property, person and cohort filters, time bucketing with zero-fill, breakdowns, funnel walk, retention math."
+  },
+  {
+   "id": "f04-export-cursor",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0007-cursor-pagination-for-exports.md",
+    "lines": {
+     "start": 15,
+     "end": 30
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0007-cursor-pagination-for-exports.md",
+     "lineStart": 17,
+     "lineEnd": 25
+    }
+   ],
+   "front": "Pulse export cursor: format and resume predicate",
+   "back": "base64 of \"{UtcTicks}:{Guid:N}\" of the last scanned row; order by (Timestamp, Id); resume WHERE Timestamp > t OR (Timestamp = t AND Id > id). null means done; malformed is 400."
+  }
+ ]
+}
