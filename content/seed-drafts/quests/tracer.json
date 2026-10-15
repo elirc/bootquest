@@ -1,0 +1,434 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "tracer",
+ "sha": "a554af85dfa7e82e80e8a9ddec8f3ade19d040e9",
+ "guides": [
+  "docs/LEARNER-GUIDE.md",
+  "docs/adr/0003-sessions-over-jwt.md",
+  "docs/adr/0004-cursor-pagination.md",
+  "docs/adr/0005-fractional-indexing.md",
+  "docs/adr/0006-mutation-log-sync.md",
+  "docs/adr/0007-overlay-store.md",
+  "docs/adr/0008-durable-vs-ephemeral.md",
+  "docs/adr/0012-degraded-mode-over-redundancy.md"
+ ],
+ "items": [
+  {
+   "id": "q01-cursor-tiebreaker",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0004-cursor-pagination.md",
+    "lines": {
+     "start": 27,
+     "end": 28
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/routes/issues.ts",
+     "lineStart": 224,
+     "lineEnd": 236
+    }
+   ],
+   "prompt": "The issues cursor encodes createdAt AND id. Why is the id needed?",
+   "answer": "Rows with equal createdAt could be skipped without it",
+   "distractors": [
+    "It lets the server jump straight to any numbered page",
+    "A bare createdAt cannot be base64url-encoded safely",
+    "It proves the client may read the team of that row"
+   ],
+   "explanation": "The keyset predicate is createdAt < c.createdAt OR (createdAt = c.createdAt AND id < c.id), matching the (createdAt desc, id desc) order. Without the id tie-breaker, rows with an equal createdAt after the page boundary would be lost."
+  },
+  {
+   "id": "q02-decode-bad-cursor",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0004-cursor-pagination.md",
+    "lines": {
+     "start": 13,
+     "end": 15
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/lib/pagination.ts",
+     "lineStart": 17,
+     "lineEnd": 26
+    },
+    {
+     "path": "apps/api/src/routes/issues.ts",
+     "lineStart": 203,
+     "lineEnd": 203
+    }
+   ],
+   "prompt": "decodeCursor gets a cursor whose decoded text has no \"|\" in it. What does it return?",
+   "answer": "null, so the list query runs with no keyset filter",
+   "distractors": [
+    "It throws, and the route answers 400 with BAD_FILTER",
+    "A cursor whose id is set to an empty string instead",
+    "A cursor with createdAt holding the whole decoded text"
+   ],
+   "explanation": "split(\"|\") yields a single element, so id is undefined and the guard `if (!createdAt || !id) return null` fires. With a null cursor the route adds no keyset predicate and returns the first page."
+  },
+  {
+   "id": "q03-key-between",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0005-fractional-indexing.md",
+    "lines": {
+     "start": 14,
+     "end": 16
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/shared/src/order.ts",
+     "lineStart": 6,
+     "lineEnd": 7
+    },
+    {
+     "path": "packages/shared/src/order.ts",
+     "lineStart": 18,
+     "lineEnd": 41
+    }
+   ],
+   "prompt": "What does keyBetween(\"a\", \"b\") return?",
+   "answer": "\"aV\"",
+   "distractors": [
+    "\"ab\"",
+    "\"a5\"",
+    "\"a0\""
+   ],
+   "explanation": "\"a\" (index 36) and \"b\" (37) are adjacent, so the loop copies \"a\" and goes one level deeper. There lo is padded with 0 and hi with 62, so mid = 31, which is \"V\". \"aV\" sorts after \"a\" and before \"b\"."
+  },
+  {
+   "id": "q04-fractional-flaw",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0005-fractional-indexing.md",
+    "lines": {
+     "start": 27,
+     "end": 28
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/shared/src/order.ts",
+     "lineStart": 57,
+     "lineEnd": 76
+    }
+   ],
+   "prompt": "What is planted flaw #2 in fractional indexing, and when is it harvested?",
+   "answer": "Keys grow longer on same-slot inserts; Sprint 12 rebalances",
+   "distractors": [
+    "Two clients can mint one key; Sprint 07 adds a lock around moves",
+    "Keys lose precision after ~50 inserts; Sprint 12 swaps in floats",
+    "Lowercase keys sort wrongly; Sprint 12 replaces the alphabet"
+   ],
+   "explanation": "Repeated inserts between the same neighbours make keys longer each time. evenKeys (S12) reassigns a column to evenly spaced short keys. Precision loss is the float alternative the ADR rejected; the alphabet is already in ascending ASCII order."
+  },
+  {
+   "id": "q05-publish-after-commit",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0006-mutation-log-sync.md",
+    "lines": {
+     "start": 15,
+     "end": 19
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/lib/mutations.ts",
+     "lineStart": 16,
+     "lineEnd": 24
+    },
+    {
+     "path": "apps/api/src/lib/mutations.ts",
+     "lineStart": 49,
+     "lineEnd": 58
+    }
+   ],
+   "prompt": "recordMutation calls fanout.publish only after its transaction commits. Why?",
+   "answer": "Publishing first could show clients a write that rolls back",
+   "distractors": [
+    "Publishing inside it would deadlock the workspace seq update",
+    "The fanout needs the commit timestamp to put deltas in order",
+    "Clients drop any delta that arrives before its row is indexed"
+   ],
+   "explanation": "The comment says it directly: announcing an uncommitted mutation would let clients see state that then rolls back. Order comes from the seq allocated inside the transaction, not from a timestamp."
+  },
+  {
+   "id": "q06-missed-delta",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0006-mutation-log-sync.md",
+    "lines": {
+     "start": 17,
+     "end": 19
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/lib/mutations.ts",
+     "lineStart": 16,
+     "lineEnd": 20
+    }
+   ],
+   "prompt": "A client misses one fanout delta while its socket is down. How does it get the change?",
+   "answer": "It replays the log from its lastSeq when it reconnects",
+   "distractors": [
+    "The server resends that delta until the client acks it",
+    "It does not; the change stays missing until the next edit",
+    "It asks the other clients in the workspace to send it"
+   ],
+   "explanation": "The log is truth and the fanout is a hint: each mutation is a durable row with a monotonic per-workspace seq, and a client catches up from its lastSeq. Nothing in the fanout retries or relays between clients."
+  },
+  {
+   "id": "q07-overlay-rollback",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0007-overlay-store.md",
+    "lines": {
+     "start": 18,
+     "end": 20
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/shared/src/store.ts",
+     "lineStart": 70,
+     "lineEnd": 82
+    }
+   ],
+   "prompt": "In the overlay store, how is a rejected optimistic edit rolled back?",
+   "answer": "Its pending mutation is dropped; committed was never changed",
+   "distractors": [
+    "committed is restored from an undo copy taken before the edit",
+    "The server sends an inverse delta that cancels out the edit",
+    "The whole store is reloaded from IndexedDB after the failure"
+   ],
+   "explanation": "Optimistic edits live only in `pending`; the view is materialize(committed, pending). Removing the pending entry removes the edit from the view, with no undo logic."
+  },
+  {
+   "id": "q08-ack-by-mutation-id",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0007-overlay-store.md",
+    "lines": {
+     "start": 20,
+     "end": 21
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/shared/src/store.ts",
+     "lineStart": 62,
+     "lineEnd": 68
+    },
+    {
+     "path": "packages/shared/src/store.ts",
+     "lineStart": 35,
+     "lineEnd": 44
+    }
+   ],
+   "prompt": "A server delta arrives whose mutationId matches a pending entry. What happens to that entry?",
+   "answer": "It is acked: it leaves pending, and committed holds the value",
+   "distractors": [
+    "It stays, and materialize keeps showing the optimistic one",
+    "It is ignored, since the edit is already visible on the screen",
+    "It is sent again so the server can confirm the ack it received"
+   ],
+   "explanation": "applyServerDelta writes the value into committed and ackMutation filters the matching mutationId out of pending, so the server's value now shows from committed."
+  },
+  {
+   "id": "q09-resent-create",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0007-overlay-store.md",
+    "lines": {
+     "start": 32,
+     "end": 33
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/routes/issues.ts",
+     "lineStart": 88,
+     "lineEnd": 100
+    }
+   ],
+   "prompt": "A client lost the ack and resends a create with the same mutationId. What does the API return?",
+   "answer": "The issue first created for that mutationId, not a second one",
+   "distractors": [
+    "409 Conflict, telling the client to drop its pending create",
+    "A second issue, which the client is then expected to delete",
+    "400, as a given mutationId may only ever be submitted once"
+   ],
+   "explanation": "The create handler looks up mutationLog by workspaceId + mutationId; if it was seen, it loads that entity and returns it. That is the exactly-once-in-effect rule."
+  },
+  {
+   "id": "q10-session-storage",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0003-sessions-over-jwt.md",
+    "lines": {
+     "start": 14,
+     "end": 15
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/auth/session.ts",
+     "lineStart": 13,
+     "lineEnd": 19
+    },
+    {
+     "path": "apps/api/src/auth/session.ts",
+     "lineStart": 35,
+     "lineEnd": 43
+    }
+   ],
+   "prompt": "What does Tracer store in Postgres for a signed-in session?",
+   "answer": "A SHA-256 hash of the cookie token, with userId and expiresAt",
+   "distractors": [
+    "The raw cookie token, so the lookup is one plain equality check",
+    "A signed JWT copy, so a token can be checked without the cookie",
+    "The user's OAuth access token, refreshed on every API request"
+   ],
+   "explanation": "createSession stores tokenHash: hashToken(token) and returns the raw token for the cookie; getUserByToken hashes the cookie value and looks it up. Revocation is deleting the row."
+  },
+  {
+   "id": "q11-presence-path",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0008-durable-vs-ephemeral.md",
+    "lines": {
+     "start": 16,
+     "end": 18
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0008-durable-vs-ephemeral.md",
+     "lineStart": 21,
+     "lineEnd": 24
+    }
+   ],
+   "prompt": "Why does presence (\"Ada is viewing ENG\") stay out of the mutation log?",
+   "answer": "It is high-churn and worthless a moment later, so it would only bloat it",
+   "distractors": [
+    "The log only accepts entities that have a database row and a team id",
+    "Presence must be encrypted, but the log keeps its patches as plain JSON",
+    "It has to reach other workspaces, which the log does not fan out to"
+   ],
+   "explanation": "Presence is a heartbeat every few seconds per viewer; logging it would add millions of rows an hour and slow every bootstrap. Durability is a choice per state kind."
+  },
+  {
+   "id": "q12-drill-finding",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0012-degraded-mode-over-redundancy.md",
+    "lines": {
+     "start": 21,
+     "end": 22
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0012-degraded-mode-over-redundancy.md",
+     "lineStart": 9,
+     "lineEnd": 13
+    }
+   ],
+   "prompt": "The S15 drill killed pub/sub mid-collaboration. What did the team treat as the real incident?",
+   "answer": "The API looked healthy while fanout was dead, so no page fired",
+   "distractors": [
+    "Clients lost unsent edits, as the pub/sub connection dropped",
+    "The durable log fell behind and needed a manual replay to recover",
+    "Reconnecting clients stampeded and took the database offline"
+   ],
+   "explanation": "Clients kept working from their overlay and caught up from lastSeq, so nothing was lost. The gap was observability: no alert fired. The fix is a fanout-liveness alert plus reconnect backoff with jitter."
+  },
+  {
+   "id": "f01-durable-or-ephemeral",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0008-durable-vs-ephemeral.md",
+    "lines": {
+     "start": 30,
+     "end": 31
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0008-durable-vs-ephemeral.md",
+     "lineStart": 14,
+     "lineEnd": 18
+    }
+   ],
+   "front": "Routing rule for any new collaborative state (ADR-0008)",
+   "back": "Ask: does it need to be correct across devices and survive a reload? Yes -> the mutation log (like comments). No -> an ephemeral channel (like presence on the in-process presenceBus)."
+  },
+  {
+   "id": "f02-seq-allocation",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0006-mutation-log-sync.md",
+    "lines": {
+     "start": 15,
+     "end": 17
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/lib/mutations.ts",
+     "lineStart": 25,
+     "lineEnd": 47
+    }
+   ],
+   "front": "How recordMutation assigns seq",
+   "back": "Inside one transaction it increments workspace.mutationSeq and writes the mutationLog row with that seq. Atomic per workspace, so the log has a total order; the fanout publish happens after commit."
+  },
+  {
+   "id": "f03-materialize",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0007-overlay-store.md",
+    "lines": {
+     "start": 18,
+     "end": 19
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/shared/src/store.ts",
+     "lineStart": 75,
+     "lineEnd": 82
+    }
+   ],
+   "front": "materialize(state) in the overlay store",
+   "back": "Copy committed, then apply each pending mutation in order (delete removes, create/update writes its value). Rollback = drop a pending entry; rebase happens on every render because the overlay is re-applied over new committed truth."
+  },
+  {
+   "id": "f04-session-cookie",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0003-sessions-over-jwt.md",
+    "lines": {
+     "start": 14,
+     "end": 15
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/auth/session.ts",
+     "lineStart": 21,
+     "lineEnd": 29
+    }
+   ],
+   "front": "Tracer session cookie settings",
+   "back": "Cookie tracer_session: httpOnly, sameSite lax, secure only in production, path /, maxAge 30 days. It carries a random token; only its SHA-256 hash is stored."
+  }
+ ]
+}
