@@ -35,6 +35,7 @@ import {
   UnitDetailResponse,
   UnitIdParams,
   UnitKeyParams,
+  UnitNotesResponse,
   WrittenAnswerBody,
   XpStatsResponse,
 } from '@bootquest/shared/api';
@@ -48,6 +49,7 @@ import { contentCounts, reviewQueue } from '../store/queries.ts';
 import { emptyContentStore, type UnitContentStore } from './content-store.ts';
 import { asyncRoute, errorBody, HttpError, sendJson, validate } from './http.ts';
 import { getRefContent } from './service.ts';
+import { getUnitNotes } from './notes-service.ts';
 import { reviewCardText } from './study-service.ts';
 import { campaignProgress, passRates, reviewStats, xpStats } from './stats-service.ts';
 import { defaultRunners, type RunnerRegistry } from './runners.ts';
@@ -173,6 +175,13 @@ export function createApp(opts: AppOptions): Express {
     validate(EmptyQuery, req.query, 'query');
     // strict response parse: defense in depth against private-key leaks
     sendJson(res, 200, UnitDetailResponse.parse(getUnitDetail(deps, id)));
+  }));
+
+  // "Learn more": readings always (open unit), explanations only after an answer (read-only)
+  router.get('/units/:id/notes', asyncRoute((req, res) => {
+    const { id } = validate(UnitIdParams, req.params, 'params');
+    validate(EmptyQuery, req.query, 'query');
+    sendJson(res, 200, UnitNotesResponse.parse(getUnitNotes(deps, id)));
   }));
 
   router.post('/units/:id/run', asyncRoute(async (req, res) => {

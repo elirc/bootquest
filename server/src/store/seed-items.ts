@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import { existsSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 import {
   SeedExplainBackItem,
   SeedFlashcardItem,
@@ -8,6 +8,8 @@ import {
   SeedQuizItem,
   SeedReadingStepItem,
   SeedVariantItem,
+  SeedNoteItem,
+  type SeedNoteItem as NoteItem,
   type SeedExplainBackItem as ExplainBackItem,
   type SeedFlashcardItem as FlashcardItem,
   type SeedQuizItem as QuizItem,
@@ -46,6 +48,8 @@ export interface SeedItemStore {
   questPacks(): ReadonlyMap<string, QuestPackItems>;
   quiz(key: string): QuizItem | undefined;
   flashcard(key: string): FlashcardItem | undefined;
+  /** seed:notes ("Learn more") notes of one quest pack's repo, in pack order (empty when none) */
+  notes(repo: string): readonly NoteItem[];
 }
 
 /** W8: one repo's seed:quests content (the study-quest unit is derived from it, store/study-quests.ts). */
@@ -68,6 +72,7 @@ export const emptySeedItemStore: SeedItemStore = {
   questPacks: () => new Map(),
   quiz: () => undefined,
   flashcard: () => undefined,
+  notes: () => [],
 };
 
 export class SeedItemLoadError extends Error {
@@ -94,6 +99,7 @@ export function mapSeedItemStore(items: readonly unknown[]): SeedItemStore {
     if (p.sha !== sha) throw new SeedItemLoadError(`seed:quests items for ${repo} come from two shas (${p.sha.slice(0, 12)} and ${sha.slice(0, 12)}); one pack per repo`);
     return p;
   };
+  const notes = new Map<string, NoteItem[]>();
   const seen = new Set<string>();
   const once = (key: string, kind: string) => {
     if (seen.has(key)) throw new SeedItemLoadError(`duplicate ${kind} item ${key}`);
@@ -127,12 +133,32 @@ export function mapSeedItemStore(items: readonly unknown[]): SeedItemStore {
       const it = SeedReadingStepItem.parse(raw);
       once(it.key, 'reading-step');
       packOf(it.provenance.repo, it.provenance.sha).readingSteps.push(it);
+    } else if (kind === 'note') {
+      const it = SeedNoteItem.parse(raw);
+      once(it.key, 'note');
+      const list = notes.get(it.provenance.repo) ?? [];
+      list.push(it);
+      notes.set(it.provenance.repo, list);
+    }
+  }
+  // seed:notes: every note annotates a LOADED quest pack of the same repo + sha, and targets one
+  // of its items ('after' notes: a quiz) — a note can never float free of the quiz it explains
+  for (const [repo, list] of notes) {
+    const p = quests.get(repo);
+    if (!p) throw new SeedItemLoadError(`seed:notes items for ${repo} but no seed:quests pack for ${repo} is loaded (notes annotate a quest pack)`);
+    const kinds = new Map<string, string>([...p.quizzes, ...p.flashcards, ...p.readingSteps].map((i) => [i.key, i.kind]));
+    for (const n of list) {
+      if (n.provenance.sha !== p.sha) throw new SeedItemLoadError(`note ${n.key} is pinned at ${n.provenance.sha.slice(0, 12)}, its quest pack at ${p.sha.slice(0, 12)}`);
+      const k = n.target === 'pack' ? 'pack' : kinds.get(n.target);
+      if (!k) throw new SeedItemLoadError(`note ${n.key} targets ${n.target}, which is not an item of the loaded ${repo} quest pack`);
+      if (n.phase === 'after' && k !== 'quiz') throw new SeedItemLoadError(`after note ${n.key} targets a ${k}, not a quiz`);
     }
   }
   return {
     explainBack: (k) => eb.get(k),
     kata: (k) => kata.get(k),
     size: () => eb.size + kata.size + variants.size + seen.size,
+    notes: (repo) => notes.get(repo) ?? [],
     explainBackItems: () => [...eb.values()],
     kataItems: () => [...kata.values()],
     variantItems: () => [...variants.values()],
@@ -194,7 +220,7 @@ export function readSeedPackItems(dir: string): unknown[] {
  */
 export function defaultSeedItemDirs(root: string): string[] {
   const out: string[] = [];
-  for (const gen of ['explainback', 'patches', 'variants', 'quests']) {
+  for (const gen of ['explainback', 'patches', 'variants', 'quests', 'notes']) {
     const base = join(root, gen);
     if (!existsSync(base)) continue;
     for (const d of readdirSync(base, { withFileTypes: true })) {
@@ -204,7 +230,31 @@ export function defaultSeedItemDirs(root: string): string[] {
   return out.sort();
 }
 
+/**
+ * seed:notes: a notes pack binds the exact items.json bytes of the quest pack it annotates
+ * (manifest source.inputs `quests:<pack>@items-sha256:<hex>`). That quest pack must be among the
+ * loaded dirs (<seed>/quests/<pack>) with those bytes; a re-seeded quest pack makes its notes
+ * stale and refuses startup until `npm run seed:notes` is re-run.
+ */
+export function verifyNotesBindings(dirs: readonly string[]): void {
+  const byPath = new Set(dirs.map((d) => resolve(d)));
+  for (const d of dirs) {
+    if (basename(dirname(resolve(d))) !== 'notes') continue;
+    const m = JSON.parse(readFileSync(join(d, 'manifest.json'), 'utf8')) as { generator?: string; source?: { inputs?: string[] } };
+    if (m.generator !== 'notes') continue;
+    const b = (m.source?.inputs ?? []).map((i) => /^quests:([^@]+)@items-sha256:([0-9a-f]{64})$/.exec(i)).find((x) => x !== null);
+    if (!b) throw new SeedItemLoadError(`${d}: notes manifest has no quests:<pack>@items-sha256 binding`);
+    const qdir = resolve(d, '..', '..', 'quests', b[1]!);
+    if (!byPath.has(qdir)) throw new SeedItemLoadError(`${d}: annotates quest pack ${b[1]}, which is not loaded (${qdir})`);
+    const got = sha256(readFileSync(join(qdir, 'items.json')));
+    if (got !== b[2]) {
+      throw new SeedItemLoadError(`${d}: stale notes — quest pack ${b[1]} items.json is ${got.slice(0, 12)}, the notes were validated against ${b[2]!.slice(0, 12)}; re-run \`npm run seed:notes\``);
+    }
+  }
+}
+
 export function loadSeedItemStore(dirs: readonly string[]): SeedItemStore {
+  verifyNotesBindings(dirs);
   return mapSeedItemStore(dirs.flatMap((d) => readSeedPackItems(d)));
 }
 
@@ -220,6 +270,7 @@ export interface SeedPackStat {
 export function loadSeedItemStoreWithStats(dirs: readonly string[]): { store: SeedItemStore; packs: SeedPackStat[] } {
   const packs: SeedPackStat[] = [];
   const all: unknown[] = [];
+  verifyNotesBindings(dirs);
   for (const d of dirs) {
     const items = readSeedPackItems(d);
     const byKind: Record<string, number> = {};
