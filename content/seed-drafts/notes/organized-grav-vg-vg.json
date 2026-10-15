@@ -1,0 +1,305 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "organized-grav-vg-vg",
+ "repo": "organized-grav-vg-vg",
+ "sha": "13c18563a2dd79465b2b06f640ad18b47e4fb053",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: Velocity Grid, an EOR platform under review",
+   "body": "Velocity Grid is a multi-tenant employer-of-record app: Next.js App Router, Prisma and Postgres, with employees, payroll, tax rules, leave, contracts and billing. The `fable/` folder is a code review written against this exact snapshot; `docs/` holds the original author's feature write-ups.\n\nRead in this order:\n\n1. `fable/README.md`: the verdict and the \"fix these first\" list.\n2. `fable/01-architecture.md`: the request path (routes, the `withRoute` wrapper, services, Prisma) and the auth model.\n3. `fable/02-bugs-and-security.md`: one finding at a time. Each names a file and line, a fix and a general rule.\n4. `docs/architecture.md`, the \"Payroll engine\" and \"Events and worker\" sections, for the tax maths and the outbox worker.\n\nKeep `src/lib/api.js`, `src/lib/permissions.js` and `src/services/payroll.service.js` open while you read. The quizzes give a concrete request or input and ask what this code does with it.",
+   "excerpts": [
+    {
+     "path": "fable/README.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "Every claim below is tied to a real file and line and was checked by reading that code."
+    },
+    {
+     "path": "fable/README.md",
+     "lineStart": 16,
+     "lineEnd": 16,
+     "quote": "**Strong skeleton, unreliable enforcement.**"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "fable/02-bugs-and-security.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The findings, ordered by severity."
+    },
+    {
+     "path": "fable/01-architecture.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "How a request flows and the patterns worth keeping."
+    }
+   ]
+  },
+  {
+   "id": "r02-two-paths-and-tenancy",
+   "target": "pack",
+   "phase": "before",
+   "title": "Two ways to reach the data, and who checks what",
+   "body": "Data reaches a user by two paths. **Writes and API reads** go through `withRoute` in `src/lib/api.js`, which loads the session, checks a declared permission, validates the body and maps errors. **Page reads** are Server Components under `src/app/(app)/` that call `requirePageUser` and then a service directly.\n\nFor each quiz scenario, ask three questions and answer them from the code, not the docs:\n\n- Which path is this request on, and what does that path check?\n- Which permission does the route declare, and which roles hold it in `ROLE_PERMISSIONS`?\n- Which identifiers does the service scope to the caller's organization with `resolveOrganizationId`, and which does it load with a bare `findUnique`?\n\nAlso read `loginWithPassword` in `src/services/auth.service.js` and list, in order, the checks it makes before issuing a session. Then read the user model's status values in `prisma/schema.prisma` and look for where each one is consulted.",
+   "excerpts": [
+    {
+     "path": "src/lib/api.js",
+     "lineStart": 16,
+     "lineEnd": 16,
+     "quote": "export function withRoute(options, handler) {"
+    },
+    {
+     "path": "fable/01-architecture.md",
+     "lineStart": 34,
+     "lineEnd": 34,
+     "quote": "Tenancy funnels through `resolveOrganizationId`"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/services/context.js",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "resolveOrganizationId and requireOrganizationAccess."
+    },
+    {
+     "path": "src/lib/permissions.js",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Which role holds which permission."
+    }
+   ]
+  },
+  {
+   "id": "r03-money-payroll-events",
+   "target": "pack",
+   "phase": "before",
+   "title": "Money, the payroll engine and the event worker",
+   "body": "Money is stored as `BigInt` minor units (cents). Read `src/lib/money.js` and note what each helper does with empty, non-numeric and fractional input.\n\nThe payroll engine in `src/services/payroll.service.js` has three steps: calculate, approve, process. For each step note what status it writes, what it checks first, and what it returns to the route. Then follow the return value back through `withRoute` to the HTTP response.\n\nThe tax maths is `computeTaxForRule` and its helpers near the top of the same file. Work one example per `calculationType` by hand, and read the `paidBy` branches at the end of the function.\n\nFinally, `src/workers/domain-events-worker.cjs` drains the `DomainEvent` outbox. Read the `findMany` filter and the status written on success and on failure, and decide which rows a later run can see.",
+   "excerpts": [
+    {
+     "path": "fable/01-architecture.md",
+     "lineStart": 40,
+     "lineEnd": 40,
+     "quote": "**Money as `BigInt` minor units**"
+    },
+    {
+     "path": "src/services/payroll.service.js",
+     "lineStart": 46,
+     "lineEnd": 46,
+     "quote": "function computeTaxForRule(rule, taxableMinor, ytdMinor) {"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 128,
+     "lineEnd": 159,
+     "why": "The payroll engine step by step, with line references."
+    },
+    {
+     "path": "src/workers/domain-events-worker.cjs",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The outbox worker."
+    }
+   ]
+  },
+  {
+   "id": "x-page-vs-api",
+   "target": "seed:quests:organized-grav-vg-vg/quiz/ef65bce3d1ea0bc1",
+   "phase": "after",
+   "title": "The page path never asks for a permission",
+   "body": "`/payroll` is a Server Component that calls `requirePageUser()` and then the payroll service. `requirePageUser` only redirects anonymous users to `/login`; it checks no permission. `GET /api/payroll` goes through `withRoute`, which calls `requirePermission(user, \"payroll.view\")`. EMPLOYEE holds `leave.request`, `notifications.view` and `contracts.view` only, so the API answers 403 while the page renders every run (finding A0).\n\n- *Both refused*: only the API path checks permissions.\n- *Redirect to /login*: the user is logged in, so the redirect does not fire.\n- *Both succeed*: the API does check, and EMPLOYEE lacks the permission.",
+   "excerpts": [
+    {
+     "path": "src/lib/page-auth.js",
+     "lineStart": 7,
+     "lineEnd": 8,
+     "quote": "if (!user) { redirect(\"/login\");"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-global-tax",
+   "target": "seed:quests:organized-grav-vg-vg/quiz/e049f27cb469d79b",
+   "phase": "after",
+   "title": "A permission name is not a scope",
+   "body": "The PATCH route requires `tax_rules.manage`, which every CLIENT_ADMIN holds, and anyone can become a CLIENT_ADMIN by signing up. `TaxRule` has no `organizationId`, and `updateTaxRule` applies no tenant filter. Payroll calculation loads every active rule regardless of tenant, so the change reaches every tenant (finding A7).\n\n- *403 for another organization*: there is no organization on a tax rule to compare with.\n- *Only the new tenant affected*: rules are global, so there is nothing to limit the effect.\n- *404 hidden rules*: the route serves any id to any holder of the permission.",
+   "excerpts": [
+    {
+     "path": "src/lib/permissions.js",
+     "lineStart": 56,
+     "lineEnd": 57,
+     "quote": "\"organizations.manage\", \"tax_rules.manage\","
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-bigint-500",
+   "target": "seed:quests:organized-grav-vg-vg/quiz/d71a8117ba0e22c2",
+   "phase": "after",
+   "title": "Committed first, serialised second",
+   "body": "`calculatePayrollRun` commits its transaction (run set to PENDING_APPROVAL with totals) and returns the run row, whose totals are `BigInt`. Back in `withRoute`, `NextResponse.json` runs inside the `try`; `JSON.stringify` throws a TypeError on BigInt, the `catch` hands it to `toErrorResponse`, and the client gets a generic 500 (finding A1).\n\n- *200 with strings*: nothing converts BigInt to strings on this path.\n- *Rolled back*: the error happens after the transaction has committed.\n- *Rounded dollars*: no rounding or conversion happens before serialisation.",
+   "excerpts": [
+    {
+     "path": "src/lib/api.js",
+     "lineStart": 56,
+     "lineEnd": 58,
+     "quote": "return NextResponse.json({ ok: true, data: result });"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-payslip-idor",
+   "target": "seed:quests:organized-grav-vg-vg/quiz/4bdef813650725e6",
+   "phase": "after",
+   "title": "An id in a URL is not authorization",
+   "body": "The payslip route is `withRoute({ permission: \"payroll.view\" }, ...)` and then builds `storage/payslips/<params.id>.pdf` straight from the URL. It never loads the PayrollItem, so it never learns which organization owns it and never calls `resolveOrganizationId`. If the file exists, it is streamed with status 200 (finding A2).\n\n- *403 Tenant access denied*: that error comes from `resolveOrganizationId`, which this route never calls.\n- *404 for another org's item*: 404 only happens when the file is missing.\n- *401 owner required*: the caller is authenticated; no owner check exists.",
+   "excerpts": [
+    {
+     "path": "src/app/api/documents/payslips/[id]/route.js",
+     "lineStart": 5,
+     "lineEnd": 6,
+     "quote": "const absolutePath = path.join(process.cwd(), \"storage\", \"payslips\", `${params.id}.pdf`);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-disabled-login",
+   "target": "seed:quests:organized-grav-vg-vg/quiz/40212c6b2cae9de8",
+   "phase": "after",
+   "title": "A status enum nothing branches on",
+   "body": "`loginWithPassword` finds the user, refuses an unknown email with 401, refuses a future `lockedUntil` with 423, compares the bcrypt hash, and on success resets the counters and issues the session. `status` is never read, so a DISABLED user with the right password logs in (finding A4).\n\n- *403 disabled*: there is no branch on status anywhere in login.\n- *423*: that is the `lockedUntil` check, and lockedUntil is null here.\n- *401 to hide the state*: 401 is only for an unknown email or a wrong password.",
+   "excerpts": [
+    {
+     "path": "src/services/auth.service.js",
+     "lineStart": 143,
+     "lineEnd": 145,
+     "quote": "if (user.lockedUntil && user.lockedUntil > new Date()) {"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-approve-draft",
+   "target": "seed:quests:organized-grav-vg-vg/quiz/38522281fe4ae55b",
+   "phase": "after",
+   "title": "Approve writes APPROVED without asking",
+   "body": "`approvePayrollRun` loads the run, checks it exists, resolves the tenant, then in a transaction updates the run to `status: \"APPROVED\"` and its CALCULATED items to APPROVED. There is no check that the run is PENDING_APPROVAL, so a DRAFT run becomes APPROVED (with no items to approve) (finding A5).\n\n- *409 for the wrong state*: that guard is the fix the review proposes; it is not in the code.\n- *400 for no items*: the function never counts items before updating.\n- *Calculates first*: approve never calls the calculate step.",
+   "excerpts": [
+    {
+     "path": "src/services/payroll.service.js",
+     "lineStart": 537,
+     "lineEnd": 539,
+     "quote": "data: { status: \"APPROVED\", approvedById: user.id,"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-wage-base-cap",
+   "target": "seed:quests:organized-grav-vg-vg/quiz/ca0775e8aa3259f0",
+   "phase": "after",
+   "title": "Only the room left under the cap is taxed",
+   "body": "For WAGE_BASE_CAP, `computeTaxForRule` converts to major units, then `remaining = Math.max(0, capMajor - ytdMajor)` is 10,000 - 9,500 = 500, and `taxMajor = Math.min(taxableMajor, remaining) * rate` is min(2,000, 500) * 0.062 = 31. `toMinorUnits(31)` gives 3,100.\n\n- *12,400* ignores the year-to-date amount and taxes the whole run.\n- *0* would need YTD at or above the cap; $500 of room remains.\n- *62,000* taxes the whole wage base, which is not this run's pay.",
+   "excerpts": [
+    {
+     "path": "src/services/payroll.service.js",
+     "lineStart": 70,
+     "lineEnd": 70,
+     "quote": "taxMajor = Math.min(taxableMajor, remaining) * rate;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-paid-by-both",
+   "target": "seed:quests:organized-grav-vg-vg/quiz/4f91722c6da0cbd7",
+   "phase": "after",
+   "title": "The fall-through charges both sides in full",
+   "body": "The end of `computeTaxForRule` has two explicit branches: EMPLOYEE returns the tax on the employee side and 0 for the employer; EMPLOYER does the reverse. Every other value, including the schema's third enum value BOTH, reaches the final `return`, which puts the full `taxMinor` on both sides.\n\n- *2,500 each*: nothing divides the amount.\n- *Employee only*: that is the EMPLOYEE branch, not BOTH.\n- *0 for both*: BOTH is handled, by the fall-through.",
+   "excerpts": [
+    {
+     "path": "src/services/payroll.service.js",
+     "lineStart": 83,
+     "lineEnd": 83,
+     "quote": "return { employeeAmountMinor: taxMinor, employerAmountMinor: taxMinor };"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-to-minor",
+   "target": "seed:quests:organized-grav-vg-vg/quiz/a9bdeccc6e4f97cb",
+   "phase": "after",
+   "title": "Silent zero on bad input, rounding on good",
+   "body": "`toMinorUnits(\"abc\")`: `Number.parseFloat` gives NaN, and the function returns `BigInt(0)` instead of failing (finding B5). `toMinorUnits(\"19.999\")`: 19.999 * 100 is about 1999.9, and `Math.round` makes it 2000, so the result is `2000n`.\n\n- *Throws for \"abc\"*: the NaN branch returns zero, it does not throw.\n- *1999n after truncation*: the code rounds; it does not truncate.\n- *NaN*: `BigInt` cannot hold NaN, and the guard returns 0 first.",
+   "excerpts": [
+    {
+     "path": "src/lib/money.js",
+     "lineStart": 10,
+     "lineEnd": 14,
+     "quote": "return BigInt(Math.round(numeric * MINOR_UNIT_MULTIPLIER));"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-failed-event",
+   "target": "seed:quests:organized-grav-vg-vg/quiz/50fbb47ca25b01dd",
+   "phase": "after",
+   "title": "FAILED is a dead end",
+   "body": "`runOnce` selects up to 50 events with `status: \"PENDING\"` and `availableAt <= now`. On an error it writes FAILED, or DEAD_LETTER when the attempt count reaches 10. A FAILED row never matches the PENDING filter again, so it is never retried and the 10-attempt branch can never be reached through retries (finding B9).\n\n- *Retried, dead-lettered at 10*: that needs the select to include FAILED.\n- *Backoff, then dropped*: there is no backoff code in the worker.\n- *Retried because availableAt passed*: the status filter excludes it first.",
+   "excerpts": [
+    {
+     "path": "src/workers/domain-events-worker.cjs",
+     "lineStart": 18,
+     "lineEnd": 20,
+     "quote": "const events = await prisma.domainEvent.findMany({ where: { status: \"PENDING\","
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-lockout",
+   "target": "seed:quests:organized-grav-vg-vg/quiz/a9ba91230065f5a1",
+   "phase": "after",
+   "title": "The lock is checked before the password",
+   "body": "Each wrong password increments `failedLoginAttempts`; at 5 the update also sets `lockedUntil` to 15 minutes ahead. The next login checks `lockedUntil > now` before calling bcrypt, so it answers 423 \"Account locked\" even with the right password. The counters reset only on a successful login after the lock expires.\n\n- *Successful login*: the lock check runs first and stops it.\n- *401*: 401 is for an unknown email or a wrong password, and this password is right.\n- *429 rate limiter*: the review notes there is no rate limiting at all.",
+   "excerpts": [
+    {
+     "path": "src/services/auth.service.js",
+     "lineStart": 150,
+     "lineEnd": 151,
+     "quote": "const lockout = attempts >= 5 ? new Date(Date.now() + 15 * 60 * 1000) : null;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-sign-anyones",
+   "target": "seed:quests:organized-grav-vg-vg/quiz/4ee70d5366143d45",
+   "phase": "after",
+   "title": "A class-of-action permission with no object check",
+   "body": "The sign route declares `permission: \"contracts.view\"`, which EMPLOYEE holds, and calls `signContract`. `signContract` never compares the caller with the contract's employee or contractor, so Jo signs Sam's contract and her signature is stored (finding A6).\n\n- *Needs contracts.manage*: the route asks only for contracts.view.\n- *Counterparty check*: that is the missing check the review asks for.\n- *DRAFT only*: signContract does not check the previous status at all.",
+   "excerpts": [
+    {
+     "path": "src/app/api/contracts/[id]/sign/route.js",
+     "lineStart": 6,
+     "lineEnd": 8,
+     "quote": "{ permission: \"contracts.view\", bodySchema: contractSignSchema },"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}

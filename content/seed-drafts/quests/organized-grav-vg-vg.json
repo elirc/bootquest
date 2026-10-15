@@ -1,0 +1,424 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "organized-grav-vg-vg",
+ "sha": "13c18563a2dd79465b2b06f640ad18b47e4fb053",
+ "guides": [
+  "fable/02-bugs-and-security.md",
+  "fable/README.md",
+  "fable/04-roadmap.md"
+ ],
+ "items": [
+  {
+   "id": "q01-page-skips-permission",
+   "kind": "quiz",
+   "source": {
+    "path": "fable/02-bugs-and-security.md",
+    "lines": {
+     "start": 10,
+     "end": 18
+    }
+   },
+   "cites": [
+    {
+     "path": "src/lib/page-auth.js",
+     "lineStart": 4,
+     "lineEnd": 12
+    },
+    {
+     "path": "src/lib/permissions.js",
+     "lineStart": 68,
+     "lineEnd": 72
+    },
+    {
+     "path": "src/lib/api.js",
+     "lineStart": 26,
+     "lineEnd": 28
+    }
+   ],
+   "prompt": "A user whose only role is EMPLOYEE opens the /payroll page in the browser, then calls GET /api/payroll. What happens?",
+   "answer": "The page renders all runs, but the API returns 403",
+   "distractors": [
+    "Both are refused, since neither path grants payroll.view",
+    "The page redirects to /login, and the API answers 403",
+    "Both succeed, as EMPLOYEE can see its own payroll runs"
+   ],
+   "explanation": "Server pages call requirePageUser, which only checks that someone is logged in, then call the service directly. Only withRoute checks the permission, so the API refuses (EMPLOYEE lacks payroll.view) while the page renders."
+  },
+  {
+   "id": "q02-global-tax-rules",
+   "kind": "quiz",
+   "source": {
+    "path": "fable/02-bugs-and-security.md",
+    "lines": {
+     "start": 23,
+     "end": 31
+    }
+   },
+   "cites": [
+    {
+     "path": "src/lib/permissions.js",
+     "lineStart": 33,
+     "lineEnd": 59
+    },
+    {
+     "path": "src/app/api/tax-rules/[id]/route.js",
+     "lineStart": 1,
+     "lineEnd": 10
+    }
+   ],
+   "prompt": "Someone signs up a brand-new tenant through /signup and, as its CLIENT_ADMIN, sends PATCH /api/tax-rules/<the seeded US rule id> with new brackets. What is the result?",
+   "answer": "200, and every tenant's next payroll uses the new rate",
+   "distractors": [
+    "403, as the rule belongs to some other organization entirely",
+    "200, but only the new tenant's payroll is affected",
+    "404, since tax rules are hidden from tenant admins"
+   ],
+   "explanation": "TaxRule has no organizationId, the update applies no scoping, and CLIENT_ADMIN holds tax_rules.manage. calculatePayrollRun then loads all active rules regardless of tenant."
+  },
+  {
+   "id": "q03-bigint-500",
+   "kind": "quiz",
+   "source": {
+    "path": "fable/02-bugs-and-security.md",
+    "lines": {
+     "start": 36,
+     "end": 44
+    }
+   },
+   "cites": [
+    {
+     "path": "src/lib/api.js",
+     "lineStart": 44,
+     "lineEnd": 59
+    },
+    {
+     "path": "src/services/payroll.service.js",
+     "lineStart": 520,
+     "lineEnd": 523
+    }
+   ],
+   "prompt": "A client admin clicks Calculate on a DRAFT payroll run. calculatePayrollRun finishes its transaction and returns the run row with BigInt totals. What do the user and the database see?",
+   "answer": "A 500 error, yet the run is already saved as PENDING_APPROVAL",
+   "distractors": [
+    "A 200 with the BigInt totals sent as strings, and the run saved",
+    "A 500 error, and the transaction is rolled back to DRAFT",
+    "A 200 with totals rounded to whole numbers of dollars"
+   ],
+   "explanation": "withRoute calls NextResponse.json inside its try block. JSON.stringify cannot serialise BigInt, so it throws after the service has committed; toErrorResponse turns that into a generic 500."
+  },
+  {
+   "id": "q04-payslip-idor",
+   "kind": "quiz",
+   "source": {
+    "path": "fable/02-bugs-and-security.md",
+    "lines": {
+     "start": 49,
+     "end": 57
+    }
+   },
+   "cites": [
+    {
+     "path": "src/app/api/documents/payslips/[id]/route.js",
+     "lineStart": 5,
+     "lineEnd": 19
+    }
+   ],
+   "prompt": "A payroll manager in Org B, holding payroll.view, requests GET /api/documents/payslips/<an Org A PayrollItem id> and the PDF exists on disk. What comes back?",
+   "answer": "Org A's payslip PDF, with status 200",
+   "distractors": [
+    "A 403 Tenant access denied for Org B",
+    "A 404, since the item is not in Org B",
+    "A 401, as payslips require the owner"
+   ],
+   "explanation": "The route is gated only on payroll.view and builds storage/payslips/<id>.pdf from the URL. It never loads the item or calls resolveOrganizationId, so any tenant can read any payslip by id."
+  },
+  {
+   "id": "q05-disabled-user-login",
+   "kind": "quiz",
+   "source": {
+    "path": "fable/02-bugs-and-security.md",
+    "lines": {
+     "start": 77,
+     "end": 80
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/auth.service.js",
+     "lineStart": 130,
+     "lineEnd": 170
+    }
+   ],
+   "prompt": "An admin sets a user's status to DISABLED. The user then logs in with the correct password; lockedUntil is null. What happens?",
+   "answer": "Login succeeds and a session is issued as usual",
+   "distractors": [
+    "A 403; the account is marked as disabled",
+    "A 423 is returned, the same as a locked account",
+    "A 401 Invalid credentials hides the disabled state"
+   ],
+   "explanation": "loginWithPassword checks only lockedUntil and the password; it never reads status, and the session code does not either. LOCKED and DISABLED are enum values nothing branches on."
+  },
+  {
+   "id": "q06-approve-draft",
+   "kind": "quiz",
+   "source": {
+    "path": "fable/02-bugs-and-security.md",
+    "lines": {
+     "start": 85,
+     "end": 92
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/payroll.service.js",
+     "lineStart": 525,
+     "lineEnd": 568
+    }
+   ],
+   "prompt": "A client admin calls POST /api/payroll/<id>/approve on a run that is still DRAFT and was never calculated. What does approvePayrollRun do?",
+   "answer": "Sets the run to APPROVED without any status check",
+   "distractors": [
+    "Throws 409, as only PENDING_APPROVAL can be approved",
+    "Calculates the run first, then approves the result",
+    "Throws 400; a DRAFT run has no items yet"
+   ],
+   "explanation": "approvePayrollRun loads the run, resolves the tenant, then updates status to APPROVED (and its CALCULATED items) with no check on the current status. decideLeaveRequest is the only service that guards its transition."
+  },
+  {
+   "id": "q07-wage-base-cap",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 153,
+     "end": 159
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/payroll.service.js",
+     "lineStart": 46,
+     "lineEnd": 84
+    }
+   ],
+   "prompt": "A WAGE_BASE_CAP rule has rate 0.062 and wageBaseCapMinor 1,000,000 ($10,000). The employee's year-to-date taxable is $9,500 and this run's taxable pay is $2,000. What tax, in minor units, does computeTaxForRule produce?",
+   "answer": "3,100: 6.2% of the $500 left under the cap",
+   "distractors": [
+    "12,400: 6.2% of the full $2,000 this run",
+    "0: the cap is applied to the run total only",
+    "62,000: 6.2% of the whole $10,000 wage base"
+   ],
+   "explanation": "remaining = max(0, cap - ytd) = $500; taxMajor = min($2,000, $500) * 0.062 = $31.00, which toMinorUnits turns into 3,100."
+  },
+  {
+   "id": "q08-paid-by-both",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 153,
+     "end": 159
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/payroll.service.js",
+     "lineStart": 76,
+     "lineEnd": 84
+    }
+   ],
+   "prompt": "A tax rule has paidBy BOTH, and computeTaxForRule computes a taxMinor of 5,000 for an employee. What employee and employer amounts does it return?",
+   "answer": "5,000 for the employee and 5,000 for the employer",
+   "distractors": [
+    "2,500 each, splitting the tax between the two sides",
+    "Only the employee is charged; the employer gets 0",
+    "0 for both, since BOTH is not handled by the code"
+   ],
+   "explanation": "Only EMPLOYEE and EMPLOYER have explicit branches. Any other value, including BOTH, falls through to the last return, which charges the full taxMinor to each side."
+  },
+  {
+   "id": "q09-to-minor-units",
+   "kind": "quiz",
+   "source": {
+    "path": "fable/02-bugs-and-security.md",
+    "lines": {
+     "start": 132,
+     "end": 132
+    }
+   },
+   "cites": [
+    {
+     "path": "src/lib/money.js",
+     "lineStart": 3,
+     "lineEnd": 15
+    }
+   ],
+   "prompt": "toMinorUnits is called with the strings \"abc\" and \"19.999\". What does it return for each?",
+   "answer": "0n for \"abc\", and 2000n for \"19.999\"",
+   "distractors": [
+    "It throws for \"abc\", and returns 1999n",
+    "0n for \"abc\", and 1999n after truncation",
+    "NaN for \"abc\", and 2000n for \"19.999\""
+   ],
+   "explanation": "parseFloat(\"abc\") is NaN, and the function returns BigInt(0) instead of failing. 19.999 * 100 is about 1999.9, and Math.round gives 2000."
+  },
+  {
+   "id": "q10-failed-event-stuck",
+   "kind": "quiz",
+   "source": {
+    "path": "fable/02-bugs-and-security.md",
+    "lines": {
+     "start": 144,
+     "end": 144
+    }
+   },
+   "cites": [
+    {
+     "path": "src/workers/domain-events-worker.cjs",
+     "lineStart": 17,
+     "lineEnd": 59
+    }
+   ],
+   "prompt": "A DomainEvent fails on its first processing attempt. The worker runs again an hour later. What happens to that event?",
+   "answer": "It stays FAILED, as the worker only ever selects PENDING rows",
+   "distractors": [
+    "It is retried, and dead-lettered after its tenth failed attempt",
+    "It is retried once more with exponential backoff, then dropped",
+    "It is retried at once, because availableAt has already passed"
+   ],
+   "explanation": "runOnce selects status PENDING only. A failure writes FAILED (or DEAD_LETTER at 10 attempts), and FAILED rows are never selected again, so the 10-attempt branch is unreachable."
+  },
+  {
+   "id": "q11-lockout-then-correct",
+   "kind": "quiz",
+   "source": {
+    "path": "fable/01-architecture.md",
+    "lines": {
+     "start": 32,
+     "end": 33
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/auth.service.js",
+     "lineStart": 143,
+     "lineEnd": 161
+    }
+   ],
+   "prompt": "A user mistypes their password five times in a row, then immediately enters the correct password. What does the sixth attempt return?",
+   "answer": "423 Account locked, even though the password is right",
+   "distractors": [
+    "A successful login that also resets the failure count",
+    "401 Invalid credentials, as the counter is still at 5",
+    "429 Too Many Requests from a per-IP rate limiter"
+   ],
+   "explanation": "The fifth failure sets lockedUntil to 15 minutes ahead. The lock is checked before the password, so the correct password is refused with 423 until the lock expires."
+  },
+  {
+   "id": "q12-sign-anyones-contract",
+   "kind": "quiz",
+   "source": {
+    "path": "fable/02-bugs-and-security.md",
+    "lines": {
+     "start": 102,
+     "end": 105
+    }
+   },
+   "cites": [
+    {
+     "path": "src/app/api/contracts/[id]/sign/route.js",
+     "lineStart": 6,
+     "lineEnd": 11
+    }
+   ],
+   "prompt": "Employee Jo, holding only EMPLOYEE, calls POST /api/contracts/<id>/sign on a SENT contract that belongs to her colleague Sam in the same tenant. What happens?",
+   "answer": "It is signed, and Jo's signature is recorded",
+   "distractors": [
+    "403, as signing needs contracts.manage, not view",
+    "403, because Jo is not the contract's counterparty",
+    "400, since an employee can only sign a DRAFT contract"
+   ],
+   "explanation": "The sign route requires only contracts.view, which EMPLOYEE holds, and signContract never checks that the signer is the contract's employee or contractor."
+  },
+  {
+   "id": "f01-with-route",
+   "kind": "flashcard",
+   "source": {
+    "path": "fable/01-architecture.md",
+    "lines": {
+     "start": 12,
+     "end": 16
+    }
+   },
+   "cites": [
+    {
+     "path": "src/lib/api.js",
+     "lineStart": 16,
+     "lineEnd": 60
+    }
+   ],
+   "front": "What does withRoute do, in order, for every API route?",
+   "back": "Load the session user (unless auth is false), require auth, check the declared permission, parse and validate the JSON body with Zod, run the handler, wrap the result as { ok: true, data }, and map any thrown error through toErrorResponse."
+  },
+  {
+   "id": "f02-outbox",
+   "kind": "flashcard",
+   "source": {
+    "path": "fable/01-architecture.md",
+    "lines": {
+     "start": 41,
+     "end": 41
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/employee.service.js",
+     "lineStart": 160,
+     "lineEnd": 180
+    }
+   ],
+   "front": "What is the transactional outbox here, and what does it buy?",
+   "back": "Services write an AuditLog row and a DomainEvent row with publishDomainEvent(tx, ...) inside the same transaction as the business change, so the event exists if and only if the change committed. A worker drains the table later."
+  },
+  {
+   "id": "f03-leave-race",
+   "kind": "flashcard",
+   "source": {
+    "path": "fable/02-bugs-and-security.md",
+    "lines": {
+     "start": 123,
+     "end": 123
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/leave.service.js",
+     "lineStart": 185,
+     "lineEnd": 192
+    }
+   ],
+   "front": "Why can two concurrent leave requests overdraw a balance?",
+   "back": "createLeaveRequest reads pendingDays, adds in JavaScript and writes the absolute value back. Two requests can both read the old value, both pass the balance check, and one increment is lost. An atomic increment or a row lock would close it."
+  },
+  {
+   "id": "f04-control-coverage",
+   "kind": "flashcard",
+   "source": {
+    "path": "fable/02-bugs-and-security.md",
+    "lines": {
+     "start": 3,
+     "end": 3
+    }
+   },
+   "cites": [
+    {
+     "path": "fable/02-bugs-and-security.md",
+     "lineStart": 3,
+     "lineEnd": 3
+    }
+   ],
+   "front": "What is the unifying theme of the bugs in fable/02?",
+   "back": "The right controls exist (resolveOrganizationId, permissions, BigInt storage, transitions) but hold on some paths, not all. A control that holds on 8 of 10 paths gives the security of 0, because an attacker only needs the other 2."
+  }
+ ]
+}
