@@ -1,0 +1,407 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "grok-build-team",
+ "repo": "grok-build-team",
+ "sha": "04f9cdaab78cc46e143964e562b93c4d73ceb00c",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: the team workspace course and its reading order",
+   "body": "This pack uses a team-workspace app: organizations (teams such as \"Cedar\" and \"Maple\") contain projects, projects contain tasks, tasks have optional assignees and due dates, and members comment on tasks. The backend is Express + Prisma on PostgreSQL; the frontend is React. The course lives in `astraupskill/`.\n\nFollow the course's own sequence:\n\n- **README.md** in `astraupskill/`: what the course is about and the learning sequence.\n- **01-CODEBASE-MAP.md**: read one request top to bottom, from the token to the selected team to the database query.\n- **02-CONCEPTS.md**: the core ideas this pack quizzes (who may act, how related records stay consistent, versions).\n- **03-WORKED-CHANGE.md**: one feature (assignee plus due date) added through every layer.\n- **06-SOLUTIONS-AND-REVIEW.md**: review reasoning, including the composite foreign keys and their limits.\n\nKeep `backend/src/middleware/tenantContext.ts` and `backend/src/repositories/` open while reading. Most quizzes ask for an HTTP status code. Find the exact line that throws it.",
+   "excerpts": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "The subject is a team workspace: projects contain tasks, tasks have optional assignees and due dates, and members discuss work through comments."
+    },
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "Read a single request vertically before reading every file."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 13,
+     "lineEnd": 20,
+     "why": "The full learning sequence and the completion artifact."
+    },
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Which file owns which responsibility."
+    }
+   ]
+  },
+  {
+   "id": "r02-request-layers",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: the layers a request passes before it touches data",
+   "body": "Every project, task or comment request goes through the same layers. Each layer can stop it with a different HTTP status, and the status tells you which layer said no.\n\n- **authenticate** checks the token's signature and sets `req.userId`. A bad or missing token stops here.\n- **attachTenantContext** reads the `x-org-id` header, which says which team the browser *wants*, then looks up that user's membership row for that team. It attaches `req.tenant` with the user, the team and the role.\n- **Validation** (`validation.ts`) parses the body with strict zod schemas before anything is saved.\n- **Repositories** run the queries. Every `where` includes the selected `organizationId`, and writes run inside a transaction with a version check.\n- **The database** has its own constraints (unique indexes, composite foreign keys) as a backstop.\n\nUseful codes to keep apart: 400 (the request itself is malformed), 401 (not signed in), 403 (signed in but not allowed), 404 (not found *in this scope*), 409 (conflict with a newer version).",
+   "excerpts": [
+    {
+     "path": "backend/src/middleware/tenantContext.ts",
+     "lineStart": 35,
+     "lineEnd": 39,
+     "quote": "req.tenant = { userId: req.userId, organizationId: parsed.data, role: membership.role, };"
+    },
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": 7,
+     "lineEnd": 7,
+     "quote": "This separation lets Supertest exercise the real route stack without starting the production listener."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "backend/src/middleware/tenantContext.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The tenant middleware and requireManager."
+    },
+    {
+     "path": "backend/src/lib/validation.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The strict request schemas."
+    }
+   ]
+  },
+  {
+   "id": "r03-ids-and-versions",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: stable ids, versions, and composite references",
+   "body": "Two ideas run through the whole course.\n\n**A record's id and its content have different lifetimes.** A task's id never changes; its title, status and assignee do. Each row also has a `version` number that goes up by one on every accepted edit. An editor remembers which version it started from (its *baseline*) and sends it with the save. The repository's `updateMany` only matches when the stored version still equals that number. If someone else saved first, nothing matches and the request fails with a conflict.\n\n**A reference can carry the team.** Instead of a task pointing at a user by id alone, it can point at a *pair*, such as (user id, organization id). A foreign key on a pair checks that the pair exists in the other table. That is a stronger statement than \"this id exists somewhere\". 06-SOLUTIONS-AND-REVIEW.md explains how these pairs are declared and what PostgreSQL needs for them.\n\nRead 02-CONCEPTS.md's sections on identity and on aggregate writes with these two ideas in mind.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 23,
+     "lineEnd": 23,
+     "quote": "A task ID remains stable when its title changes. The saved version describes which accepted state an editor started from."
+    },
+    {
+     "path": "backend/src/repositories/projectRepository.ts",
+     "lineStart": 236,
+     "lineEnd": 243,
+     "quote": "const changed = await tx.task.updateMany({ where: { id, projectId, organizationId: identity.parse(context.organizationId), version: expected, }, data: { ...taskData(data), version: { increment: 1 } },"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 27,
+     "lineEnd": 35,
+     "why": "What the composite foreign keys do and do not check."
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 21,
+     "lineEnd": 31,
+     "why": "Identity, versions and commit boundaries."
+    }
+   ]
+  },
+  {
+   "id": "x-author-vs-moderator",
+   "target": "seed:quests:grok-build-team/quiz/090ac14dfcc06cff",
+   "phase": "after",
+   "title": "Why an admin can delete but not reword someone's comment",
+   "body": "The comment repository has two separate rules. **Edit**: it loads the comment and throws 403 \"Only the author can edit a comment.\" unless `current.authorId === context.userId`; the update's `where` also requires `authorId: context.userId`. **Delete**: it allows the author *or* a user whose role is OWNER or ADMIN. So an admin can remove another member's comment as moderation, recorded under the admin's own identity, but cannot change its words. The reason in 02-CONCEPTS.md: letting an admin rewrite it \"would misrepresent who said it\". Authorship and moderation are different powers.\n\nWhy the others are wrong:\n- Editing is refused for non-authors, so no \"edited by admin\" row is ever written.\n- Comments are not immutable: authors can edit, and admins can delete.\n- Admin rights do not cover rewriting other people's words; the edit check has no role exception.",
+   "excerpts": [
+    {
+     "path": "backend/src/repositories/commentRepository.ts",
+     "lineStart": 138,
+     "lineEnd": 139,
+     "quote": "if (current.authorId !== context.userId) throw new AppError(403, \"Only the author can edit a comment.\");"
+    },
+    {
+     "path": "backend/src/repositories/commentRepository.ts",
+     "lineStart": 163,
+     "lineEnd": 170,
+     "quote": "if ( current.authorId !== context.userId && ![\"OWNER\", \"ADMIN\"].includes(context.role) ) throw new AppError( 403, \"Only the author or a team administrator can delete a comment.\", );"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 35,
+     "lineEnd": 35,
+     "quote": "Only a comment's author can edit its words. An owner or administrator may explicitly delete another person's comment, producing a moderation audit action under the moderator's identity."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-removed-member-403",
+   "target": "seed:quests:grok-build-team/quiz/1e8931cf0c8146aa",
+   "phase": "after",
+   "title": "Why a removed member's valid token now gets 403",
+   "body": "The token only proves *who* the user is (its subject). It does not hold their teams or roles. On every request, `attachTenantContext` looks up the membership row for (this user, the requested organization) with `findUnique`. Removing the user from Cedar deleted that row, so the lookup returns null and the code throws 403 \"You are not a member of that organization.\" The token still verifies, so authentication passes; authorization is what fails.\n\nWhy the others are wrong:\n- Removing a member does not revoke tokens; the token is still valid, which is why it is not 401.\n- The role is not baked into the token; it is read from the membership row each time.\n- There is no read-only fallback; without a membership row the request stops at 403.",
+   "excerpts": [
+    {
+     "path": "backend/src/middleware/tenantContext.ts",
+     "lineStart": 25,
+     "lineEnd": 34,
+     "quote": "const membership = await prisma.organizationMember.findUnique({ where: { userId_organizationId: { userId: req.userId, organizationId: parsed.data, }, }, }); if (!membership) throw new AppError(403, \"You are not a member of that organization.\");"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "The current role comes from that row."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-cross-tenant-404",
+   "target": "seed:quests:grok-build-team/quiz/28b66e92d18a3f4c",
+   "phase": "after",
+   "title": "Why a Cedar task id under a Maple path gives 404",
+   "body": "The caller really is a Maple member, so `attachTenantContext` passes and `organizationId` is Maple. Every repository query then includes that organization in its `where`, for example `organizationId: identity.parse(context.organizationId)` next to the task id and project id. The Cedar task does not match \"id = X *and* organization = Maple\", so to this request the row simply does not exist: 404. The concepts trace says the same: the row \"is invisible\".\n\nWhy the others are wrong:\n- 403 is for a missing membership in the *selected* team; this caller is a member of Maple.\n- 409 needs a matching row whose version differs; here no row matches at all.\n- Even if ids are unique, every query adds the organization, so another team's row is never found.",
+   "excerpts": [
+    {
+     "path": "backend/src/repositories/projectRepository.ts",
+     "lineStart": 236,
+     "lineEnd": 242,
+     "quote": "const changed = await tx.task.updateMany({ where: { id, projectId, organizationId: identity.parse(context.organizationId), version: expected, },"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 19,
+     "lineEnd": 19,
+     "quote": "a valid Maple member with a Cedar task id in the path (404, because the repository's `where` carries `organizationId` and the row is invisible)"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-assignee-membership",
+   "target": "seed:quests:grok-build-team/quiz/31e00bf7c74a80a6",
+   "phase": "after",
+   "title": "Why assigning a Maple-only user to a Cedar task gives 400",
+   "body": "Before saving an assignment, `verifyAssignee` looks up a membership row for (the chosen user, the task's organization). A user who exists only in Maple has no Cedar row, so it throws `AppError(400, \"Choose an assignee who belongs to this team.\")`. 400 means the request is invalid as sent: the caller is allowed to assign, but this value is not acceptable. The worked change adds that the composite foreign key in the schema \"enforces the same relationship for writers outside this code path\", so even code that skipped this check could not save the bad assignment.\n\nWhy the others are wrong:\n- This is not a permission problem for the caller, so it is not 403, and no \"owners only\" rule exists.\n- Being a registered user is not enough; the assignee must belong to the team.\n- Nothing adds the user to Cedar automatically.",
+   "excerpts": [
+    {
+     "path": "backend/src/repositories/projectRepository.ts",
+     "lineStart": 22,
+     "lineEnd": 31,
+     "quote": "async function verifyAssignee(tx: Tx, org: string, userId: string | null) { if (!userId) return; const member = await tx.organizationMember.findUnique({ where: { userId_organizationId: { userId, organizationId: identity.parse(org) }, }, }); if (!member) throw new AppError(400, \"Choose an assignee who belongs to this team.\"); }"
+    },
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": 28,
+     "lineEnd": 28,
+     "quote": "The compound foreign key in [the schema](../backend/prisma/schema.prisma) enforces the same relationship for writers outside this code path."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-composite-fk",
+   "target": "seed:quests:grok-build-team/quiz/5ee8bb471b684686",
+   "phase": "after",
+   "title": "Why the assignee key points at (userId, organizationId)",
+   "body": "A foreign key to `User(id)` would only prove that the user exists *somewhere*. The migration instead declares `FOREIGN KEY (\"assigneeId\", \"organizationId\") REFERENCES \"OrganizationMember\"(\"userId\", \"organizationId\")`. That pair must exist as a membership row, so the database itself guarantees that the assignee is a member of the task's own team. The schema adds `@@unique([userId, organizationId])` on OrganizationMember because PostgreSQL only accepts a foreign key that targets a primary key or a unique constraint.\n\nWhy the others are wrong:\n- Speed is not the reason. The review notes that \"Postgres does not index the referencing side for you.\"\n- A table in the same schema can reference User normally; that is not the limit.\n- The guide says each `id` is already unique on its own; the pair is about team membership, not uniqueness.",
+   "excerpts": [
+    {
+     "path": "backend/prisma/migrations/202609090001_team_workspace/migration.sql",
+     "lineStart": 139,
+     "lineEnd": 139,
+     "quote": "ALTER TABLE \"Task\" ADD CONSTRAINT \"Task_assigneeId_organizationId_fkey\" FOREIGN KEY (\"assigneeId\", \"organizationId\") REFERENCES \"OrganizationMember\"(\"userId\", \"organizationId\") ON DELETE RESTRICT ON UPDATE CASCADE;"
+    },
+    {
+     "path": "backend/prisma/schema.prisma",
+     "lineStart": 43,
+     "lineEnd": 43,
+     "quote": "@@unique([userId, organizationId])"
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 31,
+     "lineEnd": 31,
+     "quote": "PostgreSQL only accepts a foreign key that targets a primary key or unique constraint."
+    },
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 33,
+     "lineEnd": 33,
+     "quote": "**Postgres does not index the referencing side for you.**"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-forged-header-403",
+   "target": "seed:quests:grok-build-team/quiz/7460f2a87edb982f",
+   "phase": "after",
+   "title": "Why a forged x-org-id stops at 403 before any data query",
+   "body": "The `x-org-id` header is only a *selection*: the browser can send any value. `attachTenantContext` parses it (it is a valid identifier, so no 400), then looks up the membership row for (demo_member, demo_maple). There is none, so it throws 403 \"You are not a member of that organization.\" This happens in middleware, before any project or task route runs. The concepts trace shows the only query was the membership lookup, keyed by the caller, so no Maple data was touched. \"Selection is not authorization: the header selects, the membership row authorizes.\"\n\nWhy the others are wrong:\n- The request never reaches a project query, so there is no empty 200 list.\n- 404 is what a *member* gets for a row outside their team; here membership fails first, with 403.\n- The token is valid and has no team in it, so it is not 401.",
+   "excerpts": [
+    {
+     "path": "backend/src/middleware/tenantContext.ts",
+     "lineStart": 19,
+     "lineEnd": 34,
+     "quote": "const parsed = identity.safeParse(req.headers[\"x-org-id\"]); if (!parsed.success) throw new AppError( 400, \"Select an organization using the x-org-id header.\", ); const membership = await prisma.organizationMember.findUnique({ where: { userId_organizationId: { userId: req.userId, organizationId: parsed.data, }, }, }); if (!membership) throw new AppError(403, \"You are not a member of that organization.\");"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 16,
+     "lineEnd": 17,
+     "quote": "| decision | 403 `You are not a member of that organization.` | thrown before any project or task query runs | | Maple data touched | none | the only query was the membership lookup, keyed by the caller |"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-strict-calendar",
+   "target": "seed:quests:grok-build-team/quiz/7804dc06ee68ad26",
+   "phase": "after",
+   "title": "Why 2031-02-29 and an extra organizationId are both rejected",
+   "body": "`calendarDate` first checks the shape YYYY-MM-DD. Then it builds `new Date(value + \"T00:00:00.000Z\")` and requires that `toISOString().slice(0, 10)` gives back the exact same string. JavaScript turns \"2031-02-29\" into March 1 (2031 is not a leap year), so the round trip gives \"2031-03-01\", which differs, and the date is rejected. Separately, `taskInput` and `taskUpdate` end with `.strict()`: zod then rejects any key it does not list, such as `organizationId`. The worked change: unknown properties are \"rejected, rather than passed through to Prisma\".\n\nWhy the others are wrong:\n- The date is not accepted, and unknown fields are rejected, not dropped.\n- The round-trip check exists precisely to catch that March 1 rollover.\n- The task's organization comes from the verified context; a body field cannot move it.",
+   "excerpts": [
+    {
+     "path": "backend/src/lib/validation.ts",
+     "lineStart": 19,
+     "lineEnd": 27,
+     "quote": ".refine((value) => { const date = new Date(value + \"T00:00:00.000Z\"); return ( Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value && value >= \"1970-01-01\" && value <= \"2100-12-31\" ); }, \"Use a real calendar date from 1970 through 2100\");"
+    },
+    {
+     "path": "backend/src/lib/validation.ts",
+     "lineStart": 43,
+     "lineEnd": 44,
+     "quote": ".strict(); export const taskUpdate = z.object({ version, task: taskInput }).strict();"
+    },
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": 22,
+     "lineEnd": 22,
+     "quote": "February 29 is valid in 2032. The same day in 2031 is rejected."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-no-blind-retry",
+   "target": "seed:quests:grok-build-team/quiz/99a70fa0ad329868",
+   "phase": "after",
+   "title": "What the losing editor must not do after a version conflict",
+   "body": "Both clients started from version 4. The first `updateMany` matches `version: 4`, saves, and increments to 5. The second finds no row with version 4, so `changed.count` is 0 and it gets a conflict. The second client's content was written against version 4: it never saw the first client's changes. If it simply copied 5 into its request and sent the same content again, it would overwrite the first edit without anyone looking at it, and the version check would be pointless. 02-CONCEPTS.md: \"It must not silently replace its expected version with 5 and retry the old content.\"\n\nWhy the other options are fine (they are things the client *should* do):\n- Exporting the pending values with their baseline keeps the work safe.\n- Keeping the draft separate from the version 4 baseline is the recommended shape.\n- Showing the conflict with a recoverable draft lets the user decide.",
+   "excerpts": [
+    {
+     "path": "backend/src/repositories/projectRepository.ts",
+     "lineStart": 236,
+     "lineEnd": 248,
+     "quote": "const changed = await tx.task.updateMany({ where: { id, projectId, organizationId: identity.parse(context.organizationId), version: expected, }, data: { ...taskData(data), version: { increment: 1 } }, }); if (changed.count !== 1) { await taskIn(tx, context.organizationId, projectId, id); throw conflict(); }"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 23,
+     "lineEnd": 23,
+     "quote": "It must not silently replace its expected version with 5 and retry the old content."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-commit-not-delivery",
+   "target": "seed:quests:grok-build-team/quiz/ad9dd03c44683686",
+   "phase": "after",
+   "title": "Why resubmitting after a lost response duplicates the comment",
+   "body": "The comment create runs in a transaction and commits: the comment exists. Then the connection breaks, so the browser never learns that it worked. When the user clicks submit again, that is a brand-new create request. Nothing in it says \"this is the same comment as before\": there is no idempotency key, and the create code just inserts a row. So a second comment is created. 02-CONCEPTS.md: \"Transactions do not guarantee that the client receives the response,\" and the project \"deliberately documents that limit\".\n\nWhy the others are wrong:\n- A transaction only makes the steps of *one* request all-or-nothing; it knows nothing about an earlier request.\n- The first transaction already committed; a lost response does not roll it back.\n- A disabled button stops quick double clicks, but the guide says it \"does not solve an ambiguous network retry\".",
+   "excerpts": [
+    {
+     "path": "backend/src/repositories/commentRepository.ts",
+     "lineStart": 113,
+     "lineEnd": 126,
+     "quote": "return prisma.$transaction(async (tx) => { await parent(tx, context, projectId, taskId); const row = await tx.comment.create({ data: { ...data, taskId, organizationId: context.organizationId, authorId: context.userId, }, include, }); await audit(tx, context, row.id, \"CREATE\", row.version); return row; });"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 31,
+     "lineEnd": 31,
+     "quote": "Transactions do not guarantee that the client receives the response. A connection may break after commit. Repeating a create can therefore make a duplicate unless a durable idempotency design exists. This implementation deliberately documents that limit. A disabled button helps with local double clicks but does not solve an ambiguous network retry."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-match-simple",
+   "target": "seed:quests:grok-build-team/quiz/c6a1473af7a6d696",
+   "phase": "after",
+   "title": "What MATCH SIMPLE means for the composite assignee key",
+   "body": "The migration does not choose a match type, so PostgreSQL uses its default, **MATCH SIMPLE**. Under it, if *any* column of the referencing pair is null, the foreign key is not checked at all. That is what lets an unassigned task exist: `assigneeId` is null, so the check is skipped. It is safe here only because `Task.organizationId` is NOT NULL, so a real assignee is always checked against a real team. The trap: in a future composite key whose tenant column *can* be null, a row with a null tenant would skip the check entirely. The guide's advice: keep the tenant column NOT NULL, or declare MATCH FULL.\n\nWhy the others are wrong:\n- Nulls skip the check, so no placeholder user is needed.\n- MATCH SIMPLE checks both columns when neither is null; it does not check only the first.\n- MATCH SIMPLE is about nulls, not about deferring the check to commit.",
+   "excerpts": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 32,
+     "lineEnd": 32,
+     "quote": "- **Nullable columns use `MATCH SIMPLE`.** The migration doesn't specify a match type, so PostgreSQL uses the default, `MATCH SIMPLE`: if *any* referencing column is null, the constraint is not checked at all. That's what lets an unassigned task (`assigneeId` null) exist. It's safe here only because `Task.organizationId` is `NOT NULL`. If you add a composite reference whose tenant column can be null, a row with a null tenant skips the check entirely. Either keep the tenant column `NOT NULL` or declare `MATCH FULL`."
+    },
+    {
+     "path": "backend/prisma/migrations/202609090001_team_workspace/migration.sql",
+     "lineStart": 139,
+     "lineEnd": 139,
+     "quote": "ALTER TABLE \"Task\" ADD CONSTRAINT \"Task_assigneeId_organizationId_fkey\" FOREIGN KEY (\"assigneeId\", \"organizationId\") REFERENCES \"OrganizationMember\"(\"userId\", \"organizationId\") ON DELETE RESTRICT ON UPDATE CASCADE;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-role-per-team",
+   "target": "seed:quests:grok-build-team/quiz/db1e732f649066aa",
+   "phase": "after",
+   "title": "Why a Cedar owner is only a member when working in Maple",
+   "body": "`attachTenantContext` sets `req.tenant.role` from the membership row of the *selected* organization. With `x-org-id` set to Maple, it reads the user's Maple row, whose role is MEMBER. Changing a project calls `requireManager`, which throws 403 \"An owner or administrator must change projects. Members can manage tasks.\" unless the role is OWNER or ADMIN. Being OWNER of Cedar plays no part, because that row is not read for a Maple request. 02-CONCEPTS.md warns that treating role as a global user property \"would grant incorrect privileges\".\n\nWhy the others are wrong:\n- Project changes need OWNER or ADMIN, not just membership.\n- Roles are per team; an OWNER role elsewhere grants nothing in Maple.\n- They are a Maple member, so Maple projects are visible to them; the block is the role check, which gives 403.",
+   "excerpts": [
+    {
+     "path": "backend/src/middleware/tenantContext.ts",
+     "lineStart": 35,
+     "lineEnd": 39,
+     "quote": "req.tenant = { userId: req.userId, organizationId: parsed.data, role: membership.role, };"
+    },
+    {
+     "path": "backend/src/middleware/tenantContext.ts",
+     "lineStart": 50,
+     "lineEnd": 56,
+     "quote": "export function requireManager(context: TenantContext) { if (![\"OWNER\", \"ADMIN\"].includes(context.role)) throw new AppError( 403, \"An owner or administrator must change projects. Members can manage tasks.\", ); }"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "An owner of Cedar can be a regular member of Maple; treating role as a global user property would grant incorrect privileges."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-missing-header-400",
+   "target": "seed:quests:grok-build-team/quiz/ff276e4d5b521c21",
+   "phase": "after",
+   "title": "Why a missing x-org-id header gives 400",
+   "body": "The first thing `attachTenantContext` does is `identity.safeParse(req.headers[\"x-org-id\"])`. With no header the value is `undefined`, so parsing fails, and the code throws `AppError(400, \"Select an organization using the x-org-id header.\")`. This happens before the membership lookup, so no database read is made. 400 means the request itself is malformed: the server cannot know which team you mean.\n\nWhy the others are wrong:\n- The user is authenticated, so 401 does not apply; the missing piece is the team selection.\n- There is no \"default organization\" lookup; the code never reaches the membership query.\n- Nothing picks the caller's first organization for them; the request is rejected.",
+   "excerpts": [
+    {
+     "path": "backend/src/middleware/tenantContext.ts",
+     "lineStart": 19,
+     "lineEnd": 24,
+     "quote": "const parsed = identity.safeParse(req.headers[\"x-org-id\"]); if (!parsed.success) throw new AppError( 400, \"Select an organization using the x-org-id header.\", );"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 19,
+     "lineEnd": 19,
+     "quote": "no header at all (400 before the membership lookup)"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}
