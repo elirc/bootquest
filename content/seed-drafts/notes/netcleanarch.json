@@ -1,0 +1,382 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "netcleanarch",
+ "repo": "netcleanarch",
+ "sha": "bfb1e6905302b44c6f9c9a2d090f697d86e61026",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: the Clean Architecture template, read through its guides",
+   "body": "This pack uses Jason Taylor's Clean Architecture template for .NET: a small todo-list app whose real subject is the architecture (Domain, Application, Infrastructure and Web layers, MediatR, FluentValidation, EF Core). The `fabledocs` folders are a training course built on it, and `fabledocs3` holds short Architecture Decision Records (ADRs) that explain why things are built the way they are.\n\nSuggested reading order for this pack:\n\n1. `CleanArchitecture/fabledocs/README.md`: what the template is, and its caveat that it is a template with deliberate gaps.\n2. `fabledocs/03-architecture-and-patterns/03-validation-auth-and-permissions.md`: the four validation layers, authentication, authorization and the missing ownership check.\n3. `fabledocs3/adr-003-behaviour-pipeline.md`: the ordered MediatR pipeline.\n4. `fabledocs3/adr-009-in-process-precommit-domain-events.md`: when domain events are published, and the risks.\n5. `fabledocs2/03-data-access.md` and `fabledocs/03-architecture-and-patterns/04-side-effects-async-and-reliability.md` for background.\n\nOpen each linked source file as you go; the guides cite exact lines.",
+   "excerpts": [
+    {
+     "path": "CleanArchitecture/fabledocs/README.md",
+     "lineStart": 21,
+     "lineEnd": 21,
+     "quote": "The sample domain is deliberately small — todo lists and todo items — so the architecture is the star."
+    },
+    {
+     "path": "CleanArchitecture/fabledocs/README.md",
+     "lineStart": 23,
+     "lineEnd": 23,
+     "quote": "And it intentionally omits some production concerns (per-user data ownership, migrations, rate limiting) — those gaps are *teaching opportunities*, flagged throughout, not bugs."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "CleanArchitecture/fabledocs3/README.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The index of the ten architecture decision records."
+    },
+    {
+     "path": "CleanArchitecture/fabledocs/00-fast-track.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The weekend path: run it, trace two flows, make one safe change."
+    }
+   ]
+  },
+  {
+   "id": "r02-pipeline-behaviours",
+   "target": "pack",
+   "phase": "before",
+   "title": "MediatR behaviours: wrappers around every request",
+   "body": "In this template a web endpoint does not call business code directly. It sends a request object (a command or query) through MediatR, which finds its handler. Before the handler runs, the request passes through a chain of *behaviours*. Each behaviour is a small class that can do something before and after calling `next()`, like layers of an onion around the handler.\n\nThe order of the layers is the order they are registered in `Application/DependencyInjection.cs`. The first one registered is the outermost; the last one is closest to the handler.\n\nBefore the quizzes, read the five `AddOpenRequestPreProcessor`/`AddOpenBehavior` lines and draw the onion. For each behaviour, ask: which other layers are inside it, and what does it stop from happening if it throws? ADR-003 explains the choice and lists its costs.",
+   "excerpts": [
+    {
+     "path": "CleanArchitecture/src/Application/DependencyInjection.cs",
+     "lineStart": 16,
+     "lineEnd": 22,
+     "quote": "cfg.AddOpenRequestPreProcessor(typeof(LoggingBehaviour<>)); cfg.AddOpenBehavior(typeof(UnhandledExceptionBehaviour<,>));"
+    },
+    {
+     "path": "CleanArchitecture/fabledocs3/adr-003-behaviour-pipeline.md",
+     "lineStart": 11,
+     "lineEnd": 11,
+     "quote": "Wrap every MediatR request in a pipeline of `IPipelineBehavior` implementations, registered — and therefore executed — in a deliberate order."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "CleanArchitecture/fabledocs3/adr-003-behaviour-pipeline.md",
+     "lineStart": 26,
+     "lineEnd": 36,
+     "why": "The positive and negative consequences of the pipeline design."
+    }
+   ]
+  },
+  {
+   "id": "r03-events-and-saves",
+   "target": "pack",
+   "phase": "before",
+   "title": "Domain events and the SaveChanges seam",
+   "body": "A *domain event* is a message an entity raises to say \"something happened\" (here: a todo item was completed), so other code can react without the entity knowing who listens. In this template the entity only adds the event to a list. Nothing is sent yet.\n\nThe sending happens in an EF Core *interceptor*: code that EF calls around `SaveChanges`. `DispatchDomainEventsInterceptor` overrides both the asynchronous and the synchronous \"saving changes\" hooks and publishes the collected events through MediatR.\n\nThe key question for this part of the pack is *timing*. \"Saving changes\" runs before the database commit. Before the quizzes, read ADR-009's Decision and Alternatives, and write down: what can go wrong if a handler does something outside the database, and what can go wrong if events are published after the commit instead?",
+   "excerpts": [
+    {
+     "path": "CleanArchitecture/fabledocs3/adr-009-in-process-precommit-domain-events.md",
+     "lineStart": 7,
+     "lineEnd": 7,
+     "quote": "The domain needs to signal that something happened (\"a todo item was completed\") so other code can react without the trigger knowing who's listening."
+    },
+    {
+     "path": "CleanArchitecture/src/Infrastructure/Data/Interceptors/DispatchDomainEventsInterceptor.cs",
+     "lineStart": 25,
+     "lineEnd": 27,
+     "quote": "public override async ValueTask<InterceptionResult<int>> SavingChangesAsync(DbContextEventData eventData, InterceptionResult<int> result, CancellationToken cancellationToken = default)"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "CleanArchitecture/fabledocs/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Side effects, async and reliability across the codebase."
+    }
+   ]
+  },
+  {
+   "id": "x-q01-authz-before-validation",
+   "target": "seed:quests:netcleanarch/quiz/0753124e34686e02",
+   "phase": "after",
+   "title": "Authorization runs before validation so errors cannot leak",
+   "body": "**Key: anonymous callers never get validation feedback that could leak which resources exist.**\n\nValidators can do database checks, such as \"is this title already taken?\" or \"does this list exist?\". If validation ran first, someone who is not allowed in at all could send requests and read the validation messages to learn about data they should never see. Running `AuthorizationBehaviour` before `ValidationBehaviour` means an unauthorized caller is stopped before any validator says anything. ADR-003 calls this order \"load-bearing\".\n\nWhy the others are wrong:\n- *Validation errors logged with the user's name*: logging is a separate pre-processor; the order of these two is not about logs.\n- *Performance timing excludes authorization*: that is why `PerformanceBehaviour` is innermost, a different point.\n- *Validators may assume ids belong to the caller*: nothing checks ownership at all, as the guide stresses.",
+   "excerpts": [
+    {
+     "path": "CleanArchitecture/fabledocs3/adr-003-behaviour-pipeline.md",
+     "lineStart": 19,
+     "lineEnd": 19,
+     "quote": "authorization runs before validation so anonymous callers don't get validation feedback that could leak which resources exist"
+    },
+    {
+     "path": "CleanArchitecture/src/Application/DependencyInjection.cs",
+     "lineStart": 20,
+     "lineEnd": 21,
+     "quote": "cfg.AddOpenBehavior(typeof(AuthorizationBehaviour<,>)); cfg.AddOpenBehavior(typeof(ValidationBehaviour<,>));"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02-no-ownership",
+   "target": "seed:quests:netcleanarch/quiz/1459ad781a3a7e2f",
+   "phase": "after",
+   "title": "Logged in is not the same as allowed: the missing owner check",
+   "body": "**Key: read or change other users' lists, because nothing records or checks an owner.**\n\n`RequireAuthorization()` only asks \"are you logged in?\", and `[Authorize]` adds \"are you in this role?\". Neither asks \"is this todo list *yours*?\". TodoList has no owner column, queries are not filtered by user, and handlers do not check ownership before changing a row. So any logged-in user can read, edit or delete another user's lists by trying ids 1, 2, 3... This class of bug is IDOR, or broken object-level authorization.\n\nWhy the others are wrong:\n- *Writes filtered by CreatedBy*: `CreatedBy` is only an audit field; no handler filters on it.\n- *A per-user global filter on items*: there is no such filter.\n- *RequireAuthorization scopes every query*: it checks authentication, not ownership.",
+   "excerpts": [
+    {
+     "path": "CleanArchitecture/fabledocs/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 38,
+     "lineEnd": 38,
+     "quote": "Authorization here answers *authenticated?* and *in role?* — never *\"is this todo list yours?\"* There is no ownership column on TodoList (only audit fields)"
+    },
+    {
+     "path": "CleanArchitecture/fabledocs/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 38,
+     "lineEnd": 38,
+     "quote": "Any authenticated user can read, modify, or delete any other user's data by iterating small integer IDs."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "CleanArchitecture/fabledocs/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 40,
+     "lineEnd": 43,
+     "why": "The five checks a senior makes, in order, to rule out IDOR."
+    }
+   ]
+  },
+  {
+   "id": "x-q03-sync-over-async",
+   "target": "seed:quests:netcleanarch/quiz/21a0f65566e1fbc0",
+   "phase": "after",
+   "title": ".GetAwaiter().GetResult() blocks on async work",
+   "body": "**Key: it blocks on async work, which deadlocks wherever a synchronization context exists.**\n\n`DispatchDomainEvents` is an `async` method. On the synchronous `SavingChanges` path, the code calls it and then `.GetAwaiter().GetResult()`, which makes the current thread wait until the async work finishes. This is called \"sync over async\". In environments with a *synchronization context* (for example older ASP.NET or desktop UI apps), the async work wants to continue on the very thread that is now blocked waiting for it, so both wait forever: a deadlock. Modern ASP.NET Core has no such context, which is why ADR-009 calls it harmless here but a landmine elsewhere.\n\nWhy the others are wrong:\n- *Moves the save to a new thread*: `GetResult()` blocks the current thread; it does not move work.\n- *Swallows exceptions*: `GetResult()` rethrows the task's exception.\n- *Dispatches twice*: each save goes through one of the two overrides, not both.",
+   "excerpts": [
+    {
+     "path": "CleanArchitecture/src/Infrastructure/Data/Interceptors/DispatchDomainEventsInterceptor.cs",
+     "lineStart": 17,
+     "lineEnd": 19,
+     "quote": "public override InterceptionResult<int> SavingChanges(DbContextEventData eventData, InterceptionResult<int> result) { DispatchDomainEvents(eventData.Context).GetAwaiter().GetResult();"
+    },
+    {
+     "path": "CleanArchitecture/fabledocs3/adr-009-in-process-precommit-domain-events.md",
+     "lineStart": 30,
+     "lineEnd": 30,
+     "quote": "blocks on async work via `.GetAwaiter().GetResult()` on the synchronous save path — harmless under modern ASP.NET Core's lack of a synchronization context, a deadlock elsewhere."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q04-outbox-trigger",
+   "target": "seed:quests:netcleanarch/quiz/21df805164188389",
+   "phase": "after",
+   "title": "The outbox becomes necessary once a handler does external I/O",
+   "body": "**Key: as soon as a handler performs external I/O such as sending email.**\n\nA *transactional outbox* saves events in the same database transaction as the change, and a background worker delivers them afterwards with retries. It exists to make side effects *outside* the database reliable. Today the only event handler writes a log line, so the risks of in-process dispatch are latent. ADR-009 names the moment that changes: \"the moment a handler does I/O\", such as sending an email or calling another service.\n\nWhy the others are wrong:\n- *Once an event has two handlers*: the number of handlers does not change the reliability problem.\n- *In-process dispatch already guarantees at-least-once*: ADR-009 says the opposite: \"at-most-once, in-process, lost on crash\".\n- *When moving from SQLite to SQL Server*: the database engine is unrelated to where side effects happen.",
+   "excerpts": [
+    {
+     "path": "CleanArchitecture/fabledocs3/adr-009-in-process-precommit-domain-events.md",
+     "lineStart": 18,
+     "lineEnd": 18,
+     "quote": "The industry-standard answer for *reliable external* side effects. Not implemented — appropriate given every current handler only logs, but it's the upgrade path the moment a handler does I/O."
+    },
+    {
+     "path": "CleanArchitecture/fabledocs3/adr-009-in-process-precommit-domain-events.md",
+     "lineStart": 29,
+     "lineEnd": 29,
+     "quote": "There is no delivery guarantee beyond at-most-once, in-process, lost on crash."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q05-badbad-500",
+   "target": "seed:quests:netcleanarch/quiz/23cdedffa9b9fbe7",
+   "phase": "after",
+   "title": "An unsupported colour becomes a 500, not a 400",
+   "body": "**Key: 500, because the domain exception is not mapped like validation failures.**\n\nThere is no FluentValidation rule for colour, so the request passes layer 3. The value reaches the domain, where `Colour.From` throws `UnsupportedColourException` (layer 4). The exception handler maps validation exceptions to a 400 `ValidationProblemDetails`, but nothing maps this domain exception, so it becomes a generic 500. The guide calls it a gap: the same kind of bad input gets a different error contract depending on which layer catches it. Its suggested fix is both a validator rule and an exception mapping.\n\nWhy the others are wrong:\n- *400 like any invalid field*: only validator failures are mapped to 400.\n- *422 after validation passes*: no mapping produces 422.\n- *200 with a default colour*: `Colour.From` throws; it does not substitute.",
+   "excerpts": [
+    {
+     "path": "CleanArchitecture/fabledocs/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 16,
+     "lineEnd": 16,
+     "quote": "Send colour `\"#BADBAD\"` and `UnsupportedColourException` becomes a **500**, not a 400 — domain invariant violations and validation failures produce different contracts."
+    },
+    {
+     "path": "CleanArchitecture/fabledocs/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 10,
+     "lineEnd": 10,
+     "quote": "[Colour.From](../../src/Domain/ValueObjects/Colour.cs#L5-L15) throws `UnsupportedColourException`"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q06-ghost-notification",
+   "target": "seed:quests:netcleanarch/quiz/3d2e11f6eb913615",
+   "phase": "after",
+   "title": "Pre-commit dispatch can send a ghost notification",
+   "body": "**Key: a ghost notification: the email left even though the change never committed.**\n\nThe interceptor publishes events while EF is *saving changes*, before the database commit. The handler runs then and sends the email. If the save fails afterwards, the database rolls back, but an email that has been sent cannot be called back. The user is told about a change that does not exist. ADR-009 lists this first among the negative consequences: external side effects escape the transaction.\n\nWhy the others are wrong:\n- *The save is retried*: nothing retries the save.\n- *The email is queued in the transaction*: that would be an outbox, which is not implemented.\n- *Published again after a retry*: there is no retry, and events are cleared before publishing to prevent re-entrancy.",
+   "excerpts": [
+    {
+     "path": "CleanArchitecture/fabledocs3/adr-009-in-process-precommit-domain-events.md",
+     "lineStart": 28,
+     "lineEnd": 28,
+     "quote": "**Pre-commit dispatch means external side effects escape the transaction.** If a handler sends an email and the save then fails, you've sent a ghost notification"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07-precommit-benefit",
+   "target": "seed:quests:netcleanarch/quiz/4ba1cded147cec0f",
+   "phase": "after",
+   "title": "What pre-commit dispatch buys: same-context writes commit together",
+   "body": "**Key: handlers writing to the same DbContext commit atomically with the trigger.**\n\nBecause events are published during `SaveChanges`, before the commit, a handler that changes other rows through the *same* `DbContext` adds those changes to the same save. The trigger and the handler's writes then commit or fail together: no \"dual write\" where one succeeds and the other does not. ADR-009 says this is why the authors chose before-commit over after-commit dispatch.\n\nWhy the others are wrong:\n- *Events survive a crash*: events live in memory; ADR-009 says they are \"lost on crash\".\n- *Emails delivered exactly once*: pre-commit dispatch is exactly what causes ghost emails.\n- *Handlers run on a background thread*: `Publish` awaits handlers inline on the user's request.",
+   "excerpts": [
+    {
+     "path": "CleanArchitecture/fabledocs3/adr-009-in-process-precommit-domain-events.md",
+     "lineStart": 24,
+     "lineEnd": 24,
+     "quote": "A handler that writes to the *same* `DbContext` joins the same `SaveChanges` and commits atomically with the trigger — no dual-write for the common in-DB case."
+    },
+    {
+     "path": "CleanArchitecture/fabledocs3/adr-009-in-process-precommit-domain-events.md",
+     "lineStart": 17,
+     "lineEnd": 17,
+     "quote": "the authors chose before-commit for atomicity with same-context handler writes."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08-done-setter",
+   "target": "seed:quests:netcleanarch/quiz/68a56b4adf35b8d4",
+   "phase": "after",
+   "title": "TodoItemCompletedEvent fires only on false to true",
+   "body": "**Key: only when Done changes from false to true, inside the setter.**\n\nThe `Done` property has a custom setter. It adds the event only `if (value && !_done)`: the new value is true *and* the old value was false. Setting `Done = true` again on an item that is already done adds nothing. Because the rule lives in the setter, every code path that sets `Done` (handlers, seed data, tests) gets the same behaviour; no caller can forget to raise the event.\n\nWhy the others are wrong:\n- *Every assignment of true*: the `!_done` check stops repeats.\n- *Any property change on a completed item*: only the `Done` setter raises this event.\n- *A handler calls Publish after SaveChanges*: the entity adds the event; the interceptor publishes it before the commit.",
+   "excerpts": [
+    {
+     "path": "CleanArchitecture/src/Domain/Entities/TodoItem.cs",
+     "lineStart": 17,
+     "lineEnd": 24,
+     "quote": "if (value && !_done) { AddDomainEvent(new TodoItemCompletedEvent(this)); } _done = value;"
+    },
+    {
+     "path": "CleanArchitecture/fabledocs3/adr-009-in-process-precommit-domain-events.md",
+     "lineStart": 11,
+     "lineEnd": 11,
+     "quote": "adds a `TodoItemCompletedEvent` *only* on the false→true transition, an invariant encoded so no call site can forget it."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09-pipeline-io",
+   "target": "seed:quests:netcleanarch/quiz/875b3934789cff8e",
+   "phase": "after",
+   "title": "Every authenticated request pays a database lookup for a log label",
+   "body": "**Key: a database lookup of the username for log labels in two behaviours.**\n\n`LoggingBehaviour` and `PerformanceBehaviour` both want to write a readable user name in their log lines. They only have the user id, so each queries the database to turn the id into a username. Every request from a logged-in user therefore makes a database round trip just for logging. ADR-003 lists this under negative consequences as \"I/O in the pipeline\".\n\nWhy the others are wrong:\n- *Each behaviour opens its own transaction*: behaviours do not open transactions.\n- *Validated twice*: `ValidationBehaviour` runs once per request.\n- *The pipeline serialises requests*: behaviours wrap each request separately; nothing makes requests wait for each other.",
+   "excerpts": [
+    {
+     "path": "CleanArchitecture/fabledocs3/adr-003-behaviour-pipeline.md",
+     "lineStart": 35,
+     "lineEnd": 35,
+     "quote": "`LoggingBehaviour` and `PerformanceBehaviour` each do a DB query to turn a user id into a username"
+    },
+    {
+     "path": "CleanArchitecture/fabledocs3/adr-003-behaviour-pipeline.md",
+     "lineStart": 35,
+     "lineEnd": 35,
+     "quote": "so *every authenticated request* pays a round trip for a log label."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10-roles-or",
+   "target": "seed:quests:netcleanarch/quiz/88fa2ed72b5dc331",
+   "phase": "after",
+   "title": "Two role attributes OR together in this behaviour",
+   "body": "**Key: authorized: one flag spans all attributes, so they OR together.**\n\nTrace the loop. `authorized` starts as `false`, once, before the outer `foreach`. First attribute, roles \"A\": the user is not in A, so nothing changes. Second attribute, roles \"B\": the user is in B, so `authorized = true`. After the loop, `if (!authorized)` is false, so no exception. One match anywhere is enough. ASP.NET Core's own `[Authorize]` attributes work the other way: each attribute must be satisfied.\n\nNote: the guide's paragraph on line 32 first says role attributes \"AND together\", then tells you to check that claim yourself; its drill 2 answer and the code both say OR.\n\nWhy the others are wrong:\n- *Forbidden, every attribute must match*: that is ASP.NET Core's rule, not this loop's.\n- *Rejected at startup*: nothing validates attributes at startup.\n- *Only the first attribute counts*: the loop visits every attribute with roles.",
+   "excerpts": [
+    {
+     "path": "CleanArchitecture/src/Application/Common/Behaviours/AuthorizationBehaviour.cs",
+     "lineStart": 39,
+     "lineEnd": 48,
+     "quote": "var authorized = false; foreach (var roles in authorizeAttributesWithRoles.Select(a => a.Roles.Split(','))) { foreach (var role in roles) { var isInRole = _user.Roles?.Any(x => role == x)??false; if (isInRole) { authorized = true;"
+    },
+    {
+     "path": "CleanArchitecture/fabledocs/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 48,
+     "lineEnd": 48,
+     "quote": "(Answer: yes — one flag across all attributes, so attributes OR together, unlike ASP.NET Core's AND semantics."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q11-validation-authority",
+   "target": "seed:quests:netcleanarch/quiz/9181719a84913fcf",
+   "phase": "after",
+   "title": "FluentValidation is the contract authority, but uniqueness races",
+   "body": "**Key: FluentValidation in the pipeline; its uniqueness check races because nothing locks.**\n\nThe guide's table marks layer 3, FluentValidation run by `ValidationBehaviour`, as \"the contract authority\": it holds every rule, reports all errors at once, and can check the database (`MustAsync(BeUniqueTitle)`). Its weakness is cross-row rules. \"Is this title unique?\" is checked, then the insert happens later, with no lock in between. Two requests with the same title can both pass the check and both insert.\n\nWhy the others are wrong:\n- *Domain invariants*: the table calls them the \"last line\", and their weakness is surfacing as 500s, not racing.\n- *UI hints*: easily bypassed, but the table does not call them the authority.\n- *Model binding*: it checks JSON shape only and is not the authority either.",
+   "excerpts": [
+    {
+     "path": "CleanArchitecture/fabledocs/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "| 3. FluentValidation via pipeline | **The contract authority** — every rule, aggregated errors, async DB checks"
+    },
+    {
+     "path": "CleanArchitecture/fabledocs/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "racy for cross-row rules (no lock)"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q12-behaviours-not-filters",
+   "target": "seed:quests:netcleanarch/quiz/f60c6cc84963cf3e",
+   "phase": "after",
+   "title": "Behaviours work without HTTP; filters and middleware do not",
+   "body": "**Key: they must also apply to non-HTTP entry points, such as tests sending through ISender.**\n\nMVC filters and middleware run as part of handling an HTTP request. A MediatR behaviour runs whenever a request is sent through MediatR, however it got there. Tests send requests directly with `ISender`, and a future queue consumer would too. ADR-003 points to the functional test that denies an anonymous user: it proves authorization works \"with zero HTTP involved\", which is only possible because it is a behaviour.\n\nWhy the others are wrong:\n- *Behaviours are faster*: speed is not the reason the ADR gives.\n- *Middleware runs after the handler*: middleware runs before and after the endpoint; timing is not the issue.\n- *Filters cannot read the body*: the ADR's argument is about transport independence.",
+   "excerpts": [
+    {
+     "path": "CleanArchitecture/fabledocs3/adr-003-behaviour-pipeline.md",
+     "lineStart": 23,
+     "lineEnd": 23,
+     "quote": "Would tie cross-cutting logic to the HTTP transport — but these concerns are *application* concerns that must also apply to non-HTTP entry points (tests via `ISender`, a future queue consumer)."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q13-performance-innermost",
+   "target": "seed:quests:netcleanarch/quiz/f66a58b35fb55141",
+   "phase": "after",
+   "title": "The innermost behaviour times only the handler",
+   "body": "**Key: only the handler itself.**\n\n`PerformanceBehaviour` is registered last, so it is the layer closest to the handler. It starts its stopwatch, calls `next()` (which is the handler), and stops the stopwatch when `next()` returns. Everything outside it (exception logging, authorization, validation) has already run before it starts, so none of that time is counted. ADR-003 says this is why it is innermost.\n\nWhy the others are wrong:\n- *Only the EF interceptors*: interceptors run inside the handler's database calls; they are part of the handler's time, not all of it.\n- *The whole HTTP request*: model binding and routing happen before MediatR is even called.\n- *Authorization plus validation, not the handler*: those run outside it.",
+   "excerpts": [
+    {
+     "path": "CleanArchitecture/fabledocs3/adr-003-behaviour-pipeline.md",
+     "lineStart": 19,
+     "lineEnd": 19,
+     "quote": "performance timing is innermost so it measures only the handler."
+    },
+    {
+     "path": "CleanArchitecture/src/Application/DependencyInjection.cs",
+     "lineStart": 22,
+     "lineEnd": 22,
+     "quote": "cfg.AddOpenBehavior(typeof(PerformanceBehaviour<,>));"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}
