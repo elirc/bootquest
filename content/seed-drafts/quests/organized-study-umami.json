@@ -1,0 +1,435 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "organized-study-umami",
+ "sha": "a7a5a9ced62042fb2b4f6475848040c2ed43786b",
+ "guides": [
+  "umami/fabledocs/upskill/01-codebase-cartography/05-key-flows.md",
+  "umami/fabledocs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+  "umami/fabledocs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md"
+ ],
+ "items": [
+  {
+   "id": "q01-send-unknown-website",
+   "kind": "quiz",
+   "source": {
+    "path": "umami/fabledocs/upskill/01-codebase-cartography/05-key-flows.md",
+    "lines": {
+     "start": 34,
+     "end": 34
+    }
+   },
+   "cites": [
+    {
+     "path": "umami/src/app/api/send/route.ts",
+     "lineStart": 114,
+     "lineEnd": 121
+    },
+    {
+     "path": "umami/src/lib/load.ts",
+     "lineStart": 6,
+     "lineEnd": 20
+    },
+    {
+     "path": "umami/src/lib/response.ts",
+     "lineStart": 9,
+     "lineEnd": 15
+    }
+   ],
+   "prompt": "POST /api/send carries a website id that does not exist, and there is no x-umami-cache header. What does the handler return?",
+   "answer": "400 Bad request with the message Website not found.",
+   "distractors": [
+    "404 Not Found, from fetchWebsite returning null",
+    "200 with beep boop, as unknown ids are ignored",
+    "401 Unauthorized, since the website has no owner at all"
+   ],
+   "explanation": "When there is no cached websiteId, the handler calls fetchWebsite and, on null, returns badRequest({ message: \"Website not found.\" }), a 400. The guide table says 404, but the code answers 400; the code is keyed."
+  },
+  {
+   "id": "q02-bot-before-ip-block",
+   "kind": "quiz",
+   "source": {
+    "path": "umami/fabledocs/upskill/01-codebase-cartography/05-key-flows.md",
+    "lines": {
+     "start": 36,
+     "end": 36
+    }
+   },
+   "cites": [
+    {
+     "path": "umami/src/app/api/send/route.ts",
+     "lineStart": 130,
+     "lineEnd": 138
+    }
+   ],
+   "prompt": "A request to /api/send comes from a blocked IP and also has a bot user agent (DISABLE_BOT_CHECK unset). What does the handler respond?",
+   "answer": "A 200 JSON body { beep: \"boop\" }, nothing saved",
+   "distractors": [
+    "403 Forbidden, since the IP block is checked first",
+    "400 Bad request, because bots fail the Zod schema",
+    "200 with a cache token, and the event is stored"
+   ],
+   "explanation": "The bot check (isbot on the user agent) runs before hasBlockedIp, and it returns json({ beep: \"boop\" }) with status 200. The IP block never gets a chance to answer 403, and no event or session is written."
+  },
+  {
+   "id": "q03-distinct-id-session",
+   "kind": "quiz",
+   "source": {
+    "path": "umami/fabledocs/upskill/01-codebase-cartography/05-key-flows.md",
+    "lines": {
+     "start": 37,
+     "end": 37
+    }
+   },
+   "cites": [
+    {
+     "path": "umami/src/app/api/send/route.ts",
+     "lineStart": 140,
+     "lineEnd": 147
+    },
+    {
+     "path": "umami/src/lib/crypto.ts",
+     "lineStart": 60,
+     "lineEnd": 66
+    }
+   ],
+   "prompt": "A tracker payload includes id: \"user-42\". How is sessionId computed for that request?",
+   "answer": "uuid(sourceId, id): the IP and user agent are not used",
+   "distractors": [
+    "uuid(sourceId, ip, userAgent, salt), the same as without id",
+    "A random v4 uuid, stored against user-42 for later lookups",
+    "uuid(id, ip): the website id is dropped from the hash input"
+   ],
+   "explanation": "When the payload carries an id, the handler uses uuid(sourceId, id); otherwise it hashes source, IP, user agent and the rotating salt. uuid with arguments is a deterministic v5 UUID of their hash plus secret(), so the same id on another device maps to the same session."
+  },
+  {
+   "id": "q04-salt-rotation-default",
+   "kind": "quiz",
+   "source": {
+    "path": "umami/fabledocs/upskill/01-codebase-cartography/05-key-flows.md",
+    "lines": {
+     "start": 37,
+     "end": 37
+    }
+   },
+   "cites": [
+    {
+     "path": "umami/src/app/api/send/route.ts",
+     "lineStart": 143,
+     "lineEnd": 147
+    },
+    {
+     "path": "umami/src/lib/crypto.ts",
+     "lineStart": 72,
+     "lineEnd": 78
+    }
+   ],
+   "prompt": "SALT_ROTATION is not set. Over what window does the same visitor (same IP and user agent, no id) keep the same sessionId?",
+   "answer": "A calendar month, as getSalt defaults to startOfMonth",
+   "distractors": [
+    "A single day, since the salt is built from startOfDay",
+    "One hour, which is the window of the visit salt too",
+    "Forever, as no salt is mixed in without the variable"
+   ],
+   "explanation": "The handler uses process.env.SALT_ROTATION || \"month\", and getSalt hashes startOfMonth(createdAt) unless the value is day or week. The guide row says \"same visitor+day+salt\", but by default the session salt changes monthly; the hourly salt is for visits, not sessions."
+  },
+  {
+   "id": "q05-validation-before-auth",
+   "kind": "quiz",
+   "source": {
+    "path": "umami/fabledocs/upskill/01-codebase-cartography/05-key-flows.md",
+    "lines": {
+     "start": 82,
+     "end": 82
+    }
+   },
+   "cites": [
+    {
+     "path": "umami/src/lib/request.ts",
+     "lineStart": 23,
+     "lineEnd": 52
+    }
+   ],
+   "prompt": "A GET to an authenticated read route has no Authorization header and a query that fails the route's Zod schema. What status does parseRequest produce?",
+   "answer": "400, as checkAuth is skipped once validation fails",
+   "distractors": [
+    "401, because authentication always runs before validation",
+    "403, since the request has neither user nor share",
+    "200, as the error is only logged by parseRequest"
+   ],
+   "explanation": "parseRequest validates first; on failure it sets error to badRequest(...). Authentication runs only when !options?.skipAuth && !error, so with an error already set checkAuth is never called and the caller sees 400."
+  },
+  {
+   "id": "q06-record-empty-events",
+   "kind": "quiz",
+   "source": {
+    "path": "umami/fabledocs/upskill/01-codebase-cartography/05-key-flows.md",
+    "lines": {
+     "start": 194,
+     "end": 194
+    }
+   },
+   "cites": [
+    {
+     "path": "umami/src/app/api/record/route.ts",
+     "lineStart": 27,
+     "lineEnd": 46
+    }
+   ],
+   "prompt": "The recorder posts to /api/record with a valid website id, events: [], and no x-umami-cache header. What comes back?",
+   "answer": "200 { ok: true }, as the empty batch returns early",
+   "distractors": [
+    "400 Missing session token, from the header check below",
+    "400 Bad request, since Zod requires at least one event",
+    "403 Forbidden, because replay needs a session"
+   ],
+   "explanation": "The events array may be empty (only max(200) is enforced). Right after parsing, if (!events?.length) return json({ ok: true }) runs before the session-token check, so the missing header never matters."
+  },
+  {
+   "id": "q07-record-no-token",
+   "kind": "quiz",
+   "source": {
+    "path": "umami/fabledocs/upskill/01-codebase-cartography/05-key-flows.md",
+    "lines": {
+     "start": 195,
+     "end": 195
+    }
+   },
+   "cites": [
+    {
+     "path": "umami/src/app/api/record/route.ts",
+     "lineStart": 41,
+     "lineEnd": 52
+    }
+   ],
+   "prompt": "The recorder posts 50 events to /api/record without an x-umami-cache header. What does the route answer?",
+   "answer": "400 with the message Missing session token.",
+   "distractors": [
+    "200 ok, and a new session is created for it",
+    "401 Unauthorized, from the skipAuth guard",
+    "200 ok false, with reason replay_disabled"
+   ],
+   "explanation": "Replay cannot start a session: without the x-umami-cache header the route returns badRequest({ message: \"Missing session token.\" }). A header that parses but lacks sessionId or visitId gets \"Invalid session token.\" instead."
+  },
+  {
+   "id": "q08-record-replay-disabled",
+   "kind": "quiz",
+   "source": {
+    "path": "umami/fabledocs/upskill/01-codebase-cartography/05-key-flows.md",
+    "lines": {
+     "start": 196,
+     "end": 196
+    }
+   },
+   "cites": [
+    {
+     "path": "umami/src/app/api/record/route.ts",
+     "lineStart": 56,
+     "lineEnd": 65
+    }
+   ],
+   "prompt": "A valid replay chunk with a valid session token arrives for a website whose replayEnabled is false. What does /api/record return?",
+   "answer": "200 { ok: false, reason: \"replay_disabled\" }",
+   "distractors": [
+    "403 Forbidden with Business subscription required",
+    "400 Bad request with Website not found.",
+    "200 { ok: true }, and the chunk is stored anyway"
+   ],
+   "explanation": "The route reads the website directly with getWebsite (bypassing the Redis cache so the flag is fresh) and returns json({ ok: false, reason: \"replay_disabled\" }) when replay is off. The business-subscription 403 is a later CLOUD_MODE check."
+  },
+  {
+   "id": "q09-share-token-no-context",
+   "kind": "quiz",
+   "source": {
+    "path": "umami/fabledocs/upskill/01-codebase-cartography/05-key-flows.md",
+    "lines": {
+     "start": 233,
+     "end": 233
+    }
+   },
+   "cites": [
+    {
+     "path": "umami/src/lib/auth.ts",
+     "lineStart": 37,
+     "lineEnd": 48
+    }
+   ],
+   "prompt": "A script sends a valid share token in x-umami-share-token, with no bearer token and no x-umami-share-context header. What does checkAuth return?",
+   "answer": "null, as a share token needs the context header",
+   "distractors": [
+    "An Auth object with shareToken set and the user left null",
+    "An Auth for the user who created the share",
+    "It throws, and the route answers with a 500"
+   ],
+   "explanation": "checkAuth returns null when there is no user and no share token, and also when there is a share token but no user and the share-context header is missing. parseRequest turns null into 401, so a share token only works from share pages that send both headers."
+  },
+  {
+   "id": "q10-team-website-non-member",
+   "kind": "quiz",
+   "source": {
+    "path": "umami/fabledocs/upskill/01-codebase-cartography/05-key-flows.md",
+    "lines": {
+     "start": 83,
+     "end": 83
+    }
+   },
+   "cites": [
+    {
+     "path": "umami/src/permissions/website.ts",
+     "lineStart": 7,
+     "lineEnd": 40
+    }
+   ],
+   "prompt": "A non-admin user with no share token asks for metrics of a website owned by a team they do not belong to. What does canViewWebsite return?",
+   "answer": "false, as getTeamUser finds no team membership",
+   "distractors": [
+    "true, since any signed-in user may view metrics",
+    "true, because team websites are readable by all",
+    "false, but only after it throws a 403 error itself"
+   ],
+   "explanation": "There is no admin bypass and no share-token match. The entity has a teamId, not a userId, so the function returns !!(await getTeamUser(teamId, user.id)), which is false for a non-member. canViewWebsite returns a boolean; the route decides the status."
+  },
+  {
+   "id": "q11-login-uniform-error",
+   "kind": "quiz",
+   "source": {
+    "path": "umami/fabledocs/upskill/01-codebase-cartography/05-key-flows.md",
+    "lines": {
+     "start": 122,
+     "end": 122
+    }
+   },
+   "cites": [
+    {
+     "path": "umami/src/app/api/auth/login/route.ts",
+     "lineStart": 24,
+     "lineEnd": 30
+    }
+   ],
+   "prompt": "Login is tried once with an unknown username and once with a known username and a wrong password. How do the two responses differ?",
+   "answer": "They are identical, both 401 incorrect-username-password",
+   "distractors": [
+    "Unknown user gets 404, wrong password gets 401",
+    "Unknown user gets 401, wrong password gets 403",
+    "Both get 400, with a field error for the input"
+   ],
+   "explanation": "The route evaluates !user || !checkPassword(...) in one condition and returns the same unauthorized({ code: \"incorrect-username-password\" }) for either case, so the response does not reveal whether the username exists."
+  },
+  {
+   "id": "q12-redis-auth-expiry",
+   "kind": "quiz",
+   "source": {
+    "path": "umami/fabledocs/upskill/01-codebase-cartography/05-key-flows.md",
+    "lines": {
+     "start": 123,
+     "end": 123
+    }
+   },
+   "cites": [
+    {
+     "path": "umami/src/app/api/auth/login/route.ts",
+     "lineStart": 34,
+     "lineEnd": 40
+    },
+    {
+     "path": "umami/src/lib/auth.ts",
+     "lineStart": 62,
+     "lineEnd": 74
+    }
+   ],
+   "prompt": "Redis is enabled. After a successful login, how long does the auth:<key> entry that saveAuth wrote stay in Redis?",
+   "answer": "It has no TTL; login calls saveAuth without expire",
+   "distractors": [
+    "24 hours, which is the default expire value of saveAuth",
+    "7 days, matching the token's encrypted expiry",
+    "30 minutes, the same window as a tracked visit"
+   ],
+   "explanation": "saveAuth(data, expire = 0) sets an expiry only when expire is truthy, and the login route calls saveAuth({ userId, role }) with no second argument. The key therefore stays until something deletes it; revocation is possible because it lives server-side."
+  },
+  {
+   "id": "q13-pixel-handler-reuse",
+   "kind": "quiz",
+   "source": {
+    "path": "umami/fabledocs/upskill/01-codebase-cartography/05-key-flows.md",
+    "lines": {
+     "start": 159,
+     "end": 159
+    }
+   },
+   "cites": [
+    {
+     "path": "umami/src/app/(collect)/p/[slug]/route.ts",
+     "lineStart": 45,
+     "lineEnd": 70
+    }
+   ],
+   "prompt": "How does the pixel route p/[slug] record a hit before it returns its 1x1 GIF?",
+   "answer": "It builds a synthetic event Request and awaits the send POST",
+   "distractors": [
+    "It inserts a websiteEvent row itself with Prisma directly",
+    "It publishes the hit to Kafka and returns without waiting",
+    "It redirects the browser to /api/send with query params"
+   ],
+   "explanation": "The route builds { type: \"event\", payload: { pixel: id, url, referrer } } into a new POST Request (reusing the inbound headers) and calls await POST(req) from the send route, so pixels share the whole collection pipeline. Then it returns the GIF."
+  },
+  {
+   "id": "f01-send-pipeline",
+   "kind": "flashcard",
+   "source": {
+    "path": "umami/fabledocs/upskill/01-codebase-cartography/05-key-flows.md",
+    "lines": {
+     "start": 30,
+     "end": 43
+    }
+   },
+   "cites": [
+    {
+     "path": "umami/src/app/api/send/route.ts",
+     "lineStart": 66,
+     "lineEnd": 175
+    }
+   ],
+   "front": "List the main steps of POST /api/send in order.",
+   "back": "Zod parse with skipAuth; read the x-umami-cache token; fetchWebsite on a cache miss (400 if missing); client info (IP, UA, geo); bot check (200 beep boop) then IP block (403); sessionId = v5 hash; createSession on the relational path when not cached; visitId with 30-minute expiry; saveEvent; return a fresh signed cache token."
+  },
+  {
+   "id": "f02-two-token-strategies",
+   "kind": "flashcard",
+   "source": {
+    "path": "umami/fabledocs/upskill/01-codebase-cartography/05-key-flows.md",
+    "lines": {
+     "start": 109,
+     "end": 109
+    }
+   },
+   "cites": [
+    {
+     "path": "umami/src/app/api/auth/login/route.ts",
+     "lineStart": 34,
+     "lineEnd": 40
+    }
+   ],
+   "front": "What are Umami's two login token strategies, and what is the tradeoff?",
+   "back": "With Redis: saveAuth stores { userId, role } under auth:<random> and returns an encrypted token wrapping that key, so the session can be revoked by deleting the key. Without Redis: createSecureToken returns a self-contained encrypted token with userId and role, which cannot be revoked server-side."
+  },
+  {
+   "id": "f03-authn-vs-authz",
+   "kind": "flashcard",
+   "source": {
+    "path": "umami/fabledocs/upskill/01-codebase-cartography/05-key-flows.md",
+    "lines": {
+     "start": 89,
+     "end": 89
+    }
+   },
+   "cites": [
+    {
+     "path": "umami/src/permissions/website.ts",
+     "lineStart": 7,
+     "lineEnd": 40
+    }
+   ],
+   "front": "How do Umami read routes split authentication from authorization?",
+   "back": "parseRequest authenticates (checkAuth: bearer or share token) and returns 401 when neither works; the handler then authorizes explicitly with a can* function such as canViewWebsite (admin, share-token ids, owner, team member). Forgetting the can* call is the classic IDOR."
+  }
+ ]
+}
