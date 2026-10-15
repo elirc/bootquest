@@ -1,0 +1,536 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "notes",
+ "name": "3buildagentteachgem",
+ "items": [
+  {
+   "key": "seed:notes:3buildagentteachgem/note/329e57abe60f9ae9",
+   "provenance": {
+    "repo": "3buildagentteachgem",
+    "sha": "8b4aa9d3f4946a4afcb95f564e765b0b98dcdd88",
+    "path": "src/app/actions.ts",
+    "lines": {
+     "start": 519,
+     "end": 530
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-no-transaction",
+   "pack": "3buildagentteachgem",
+   "target": "seed:quests:3buildagentteachgem/quiz/d20d0403b8b764f1",
+   "phase": "after",
+   "title": "Why a failure mid-register leaves half the attendance saved",
+   "body": "`recordAttendanceAction` runs a `for` loop over the records. For each student it does an `upsert` and then an audit write, each as its own database call. Nothing wraps the loop in a transaction (`db.$transaction`), which is what would make all the writes succeed or fail together. So if the 12th student fails, the first 11 upserts and their audit rows are already committed and stay. The rest never run. The doc: \"A failure halfway through leaves a half-recorded register.\" 04-what-changed.md: still no `$transaction` anywhere.\n\nWhy the others are wrong:\n- Upserts are not deferred; each one runs inside the loop, before its audit write.\n- An error stops the loop; the failing student is not skipped and the rest are not written.\n- Server Actions do not add an implicit transaction.",
+   "excerpts": [
+    {
+     "path": "src/app/actions.ts",
+     "lineStart": 519,
+     "lineEnd": 530,
+     "quote": "for (const item of records) { const before = await db.attendance.findUnique({ where: { studentId_classSectionId_date: { studentId: item.studentId, classSectionId, date: targetDate, }, }, }); const attendance = await db.attendance.upsert({"
+    },
+    {
+     "path": "fabledocs/02-codebase-gotchas.md",
+     "lineStart": 128,
+     "lineEnd": 130,
+     "quote": "`recordAttendanceAction` (`actions.ts:228-270`) loops over students doing an `upsert` plus an audit write per student. A failure halfway through leaves a half-recorded register. There is no `db.$transaction` anywhere in the codebase."
+    },
+    {
+     "path": "fabledocs/04-what-changed.md",
+     "lineStart": 47,
+     "lineEnd": 47,
+     "quote": "| **B11/B12** — attendance date keys, non-transactional bulk write | Unchanged. There is still no `$transaction` anywhere — see Story 12's PR for why introducing the first one wasn't done as a side effect. |"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:3buildagentteachgem/note/42dc7e97aaa564f4",
+   "provenance": {
+    "repo": "3buildagentteachgem",
+    "sha": "8b4aa9d3f4946a4afcb95f564e765b0b98dcdd88",
+    "path": "fabledocs/02-codebase-gotchas.md",
+    "lines": {
+     "start": 66,
+     "end": 70
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-pooled-average",
+   "pack": "3buildagentteachgem",
+   "target": "seed:quests:3buildagentteachgem/quiz/0e7059855deb9c6c",
+   "phase": "after",
+   "title": "Why the \"Section Average\" badge still hides one failing class",
+   "body": "`calculateStudentRisk` is called from the student list, the student page and the dashboard with submissions from **all** of a student's sections pooled together. The badge is labelled \"Section Average\", but it is really an average over every class. One failing class next to three excellent ones averages out to a fine-looking number. 04-what-changed.md says B3 is \"Still true for risk badges\": only the Story 7 gradebook works per section.\n\nWhy the others are wrong:\n- Story 7 fixed the **gradebook**, not the risk badge.\n- Nothing picks the worst section; the submissions are pooled.\n- The badge shows one number, not one per section.",
+   "excerpts": [
+    {
+     "path": "fabledocs/02-codebase-gotchas.md",
+     "lineStart": 66,
+     "lineEnd": 70,
+     "quote": "`calculateStudentRisk` is called from `/students`, `/students/[id]`, and `/` with submissions from **all** of a student's sections pooled together (`students/[id]/page.tsx:38-44`). The badge says \"Section Average\". A student failing one class and acing three others averages out to fine. Worth knowing before you trust the number."
+    },
+    {
+     "path": "fabledocs/04-what-changed.md",
+     "lineStart": 45,
+     "lineEnd": 45,
+     "quote": "| **B3** — \"section average\" pools every section | Still true for risk badges. The **gradebook** (Story 7) is correctly scoped per section. |"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:3buildagentteachgem/note/53c43d3883a28bfc",
+   "provenance": {
+    "repo": "3buildagentteachgem",
+    "sha": "8b4aa9d3f4946a4afcb95f564e765b0b98dcdd88",
+    "path": "src/packages/observability/jobs.ts",
+    "lines": {
+     "start": 172,
+     "end": 183
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-claim-updatemany",
+   "pack": "3buildagentteachgem",
+   "target": "seed:quests:3buildagentteachgem/quiz/8f3d1b0f0451c551",
+   "phase": "after",
+   "title": "How claimJob lets only one worker take a job",
+   "body": "`claimJob` does the check and the write in one database statement: `updateMany` with `where: { id: jobId, status: { in: RUNNABLE_STATUSES } }`, setting status to `Running`. The database applies this atomically. The first worker's update matches the row and changes it to Running. The second worker's update runs after that, finds that the status is no longer runnable, and matches 0 rows. `claimJob` returns `result.count === 1`, so only the worker that really changed the row gets `true`. 04-what-changed.md points to PR #11 for \"why a queue is not `SELECT` then `UPDATE`, and why `updateMany`'s count is the claim\".\n\nWhy the others are wrong:\n- An in-process mutex cannot stop a different worker process; the guard is in the database write.\n- SELECT-then-skip is the rejected design: both workers can read \"Queued\" before either writes.\n- An update by id alone has no status condition, so it would succeed for both and overwrite the claim.",
+   "excerpts": [
+    {
+     "path": "src/packages/observability/jobs.ts",
+     "lineStart": 172,
+     "lineEnd": 183,
+     "quote": "export async function claimJob(jobId: string): Promise<boolean> { const result = await db.backgroundJob.updateMany({ where: { id: jobId, status: { in: RUNNABLE_STATUSES } }, data: { status: 'Running', attempts: { increment: 1 }, startedAt: new Date(), errorMessage: null, }, }); return result.count === 1;"
+    },
+    {
+     "path": "fabledocs/04-what-changed.md",
+     "lineStart": 106,
+     "lineEnd": 107,
+     "quote": "- **PR #11** (job runner) — why a queue is not `SELECT` then `UPDATE`, and why `updateMany`'s count is the claim."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:3buildagentteachgem/note/9eeb4973787e520c",
+   "provenance": {
+    "repo": "3buildagentteachgem",
+    "sha": "8b4aa9d3f4946a4afcb95f564e765b0b98dcdd88",
+    "path": "fabledocs/02-codebase-gotchas.md",
+    "lines": {
+     "start": 114,
+     "end": 117
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-keyword-excused",
+   "pack": "3buildagentteachgem",
+   "target": "seed:quests:3buildagentteachgem/quiz/27f452fd2e00f319",
+   "phase": "after",
+   "title": "Why an \"excused absence\" note still raised risk",
+   "body": "The original orchestrator matched support notes against a fixed keyword list: `['absence','fail','struggling','missed','absent','behind','backlog']`. It is a plain word match with no understanding of context. \"absence on Monday was excused\" contains \"absence\", so it matched and added +10 to the risk score. The gotcha doc says this explicitly: \"including a note saying the absence was *excused*.\" That is why the doc calls the keywords \"extremely broad\".\n\nWhy the others are wrong:\n- No code looks for \"excused\" to cancel a match.\n- Nothing routes notes to an advisor first; the match changes the score directly.\n- A match only ever adds risk; it never lowers it.",
+   "excerpts": [
+    {
+     "path": "fabledocs/02-codebase-gotchas.md",
+     "lineStart": 114,
+     "lineEnd": 117,
+     "quote": "`orchestrator.ts:147` matches notes against `['absence','fail','struggling','missed','absent','behind','backlog']`. Any support note mentioning an absence adds +10 to the risk score, including a note saying the absence was *excused*."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:3buildagentteachgem/note/ab0e82fe51b683bd",
+   "provenance": {
+    "repo": "3buildagentteachgem",
+    "sha": "8b4aa9d3f4946a4afcb95f564e765b0b98dcdd88",
+    "path": "fabledocs/04-what-changed.md",
+    "lines": {
+     "start": 80,
+     "end": 83
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-stale-dev-db",
+   "pack": "3buildagentteachgem",
+   "target": "seed:quests:3buildagentteachgem/quiz/2bd21ad9c5815a15",
+   "phase": "after",
+   "title": "Why every check passed while the database was missing tables",
+   "body": "`tsc` checks types, `next build` compiles the app, and the 129 unit tests check behaviour. The doc's point is that every one of them works from the **schema** (what the database *should* look like), and the schema was correct: 17 tables. None of them looked inside the actual `dev.db` file, which had only 15. So every check was green. Only starting the app ran a real query against `dev.db`, and it failed with \"The table main.Notification does not exist\". The lesson: a green build is not a running application.\n\nWhy the others are wrong:\n- The doc's reason is that the checks read the schema; it does not mention mocks.\n- The missing table (Notification) was used by the layout, which every page uses.\n- Type checking ran, against a correct schema; the problem was the database file, not the types.",
+   "excerpts": [
+    {
+     "path": "fabledocs/04-what-changed.md",
+     "lineStart": 80,
+     "lineEnd": 83,
+     "quote": "Nothing caught it. Not `tsc`, not `next build`, not 129 unit tests — because every one of those checks reads the *schema*, and the schema was correct. Only starting the app found it, and it failed loudly: every page 500ing with `The table main.Notification does not exist`, thrown from the layout's notification count."
+    },
+    {
+     "path": "fabledocs/04-what-changed.md",
+     "lineStart": 75,
+     "lineEnd": 78,
+     "quote": "`prisma/dev.db` was committed on the theory that a seeded fixture makes the repo runnable immediately. Stories 17 and 18 each added a model and ran `prisma db push`, which changed that binary — and the merge tooling restored it from git every time. The result: the repository shipped a **15-table database against a 17-table schema**."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:3buildagentteachgem/note/b3c88009db8267fd",
+   "provenance": {
+    "repo": "3buildagentteachgem",
+    "sha": "8b4aa9d3f4946a4afcb95f564e765b0b98dcdd88",
+    "path": "fabledocs/04-what-changed.md",
+    "lines": {
+     "start": 75,
+     "end": 78
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-db-in-git",
+   "pack": "3buildagentteachgem",
+   "target": "seed:quests:3buildagentteachgem/quiz/d9e040cfcb484c4f",
+   "phase": "after",
+   "title": "How the committed dev.db drifted, and the fix",
+   "body": "`prisma/dev.db` (the SQLite database file) was committed to git, so the repo would run with seeded data right away. Stories 17 and 18 each added a model and ran `prisma db push`, which changed that binary file. But the merge tooling restored the committed file from git each time, throwing those changes away. The schema said 17 tables, the file had 15. The fix: `dev.db` is now gitignored, and `db:push` + `db:seed` rebuild it in about two seconds. The lesson in the doc: \"A generated artefact in version control is a liability.\"\n\nWhy the others are wrong:\n- Nothing in the account mentions corruption or a move to Postgres.\n- The repo uses `db push`, not migrations, and no migrations folder was added.\n- The seed script is not blamed; the binary was restored by merges.",
+   "excerpts": [
+    {
+     "path": "fabledocs/04-what-changed.md",
+     "lineStart": 75,
+     "lineEnd": 78,
+     "quote": "`prisma/dev.db` was committed on the theory that a seeded fixture makes the repo runnable immediately. Stories 17 and 18 each added a model and ran `prisma db push`, which changed that binary — and the merge tooling restored it from git every time. The result: the repository shipped a **15-table database against a 17-table schema**."
+    },
+    {
+     "path": "fabledocs/04-what-changed.md",
+     "lineStart": 87,
+     "lineEnd": 89,
+     "quote": "1. **A generated artefact in version control is a liability.** `dev.db` is now gitignored; `db:push` + `db:seed` rebuild it in about two seconds, and those commands were already in the README."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:3buildagentteachgem/note/bdba843457f3ca38",
+   "provenance": {
+    "repo": "3buildagentteachgem",
+    "sha": "8b4aa9d3f4946a4afcb95f564e765b0b98dcdd88",
+    "path": "src/packages/domain/rules/grades.ts",
+    "lines": {
+     "start": 64,
+     "end": 66
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-no-grades-100",
+   "pack": "3buildagentteachgem",
+   "target": "seed:quests:3buildagentteachgem/quiz/5859197dd78721df",
+   "phase": "after",
+   "title": "Why a brand-new student shows 100% and Low risk",
+   "body": "`calculateSectionGrade` has an edge case: when `totalPointsPossible <= 0` (nothing graded yet) it returns `percentage: 100`, with the comment \"Default to 100% if nothing has been graded yet\". 100% feeds into risk as Low. The gotcha doc calls this a genuine product decision, \"innocent until proven guilty\", with a real downside: new students are invisible to the risk system. 04-what-changed.md marks it **Deliberate**: pinned by a characterisation test in `tests/grades.test.ts`, and since changing it moves every risk score, it needs its own ticket.\n\nWhy the others are wrong:\n- It is not a display bug, and it must not be patched in the UI; the doc says change the domain rule and add a test.\n- The value is 100%, not 0%, and hiding students is not the proposed answer.\n- The rule returns 100, not null.",
+   "excerpts": [
+    {
+     "path": "src/packages/domain/rules/grades.ts",
+     "lineStart": 64,
+     "lineEnd": 66,
+     "quote": "if (totalPointsPossible <= 0) { return { percentage: 100, // Default to 100% if nothing has been graded yet"
+    },
+    {
+     "path": "fabledocs/02-codebase-gotchas.md",
+     "lineStart": 50,
+     "lineEnd": 54,
+     "quote": "A brand-new student with zero submissions shows a 100% average and a `Low` risk tier everywhere — dashboard, roster, student profile. This is not a bug you should silently \"fix\": it's a genuine product decision (innocent until proven guilty) with a real downside (new students are invisible to the risk system). If a ticket asks you to change it, change it in the domain rule and add a test, not in the UI."
+    },
+    {
+     "path": "fabledocs/04-what-changed.md",
+     "lineStart": 42,
+     "lineEnd": 42,
+     "quote": "| **B1** — a student with no graded work scores 100% | **Deliberate.** Pinned by a characterisation test in `tests/grades.test.ts`. Changing it moves every risk score in the app, so it needs its own ticket. |"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:3buildagentteachgem/note/bf7afc7c604c1c35",
+   "provenance": {
+    "repo": "3buildagentteachgem",
+    "sha": "8b4aa9d3f4946a4afcb95f564e765b0b98dcdd88",
+    "path": "fabledocs/01-how-this-app-works.md",
+    "lines": {
+     "start": 177,
+     "end": 180
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r02-layers",
+   "pack": "3buildagentteachgem",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: the dependency rule and where logic lives",
+   "body": "01-how-this-app-works.md calls the app a **modular monolith**: one Next.js app split into packages with strict import rules. The one rule not to break: **`@/domain` imports nothing**. Domain rule functions (grades, risk, enrollment) take plain values and return plain objects. They never touch the database.\n\nThat shapes how you read every feature:\n\n- **Pages** (server components) fetch data with Prisma and call domain rules to compute things like averages and risk.\n- **Server Actions** in `src/app/actions.ts` handle writes: parse input, fetch the facts, ask a domain rule for a decision, write to the database, record an audit event.\n- **Observability** holds the audit log and the background-job runner.\n\nSo when a quiz asks \"why does the app do X\", look in two places. The domain rule decides *what* the answer is. The page or action decides *which data* it passes in. Several gotchas in this pack are not wrong rules but wrong inputs.",
+   "excerpts": [
+    {
+     "path": "fabledocs/01-how-this-app-works.md",
+     "lineStart": 177,
+     "lineEnd": 180,
+     "quote": "**`@/domain` imports nothing.** No Prisma, no Next.js, no logger. It takes plain numbers and strings and returns plain objects. That is what makes it trivially unit-testable, and it is the reason the same grade formula can be called from a page, a Server Action, a background job, and an agent without any of them diverging."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "fabledocs/01-how-this-app-works.md",
+     "lineStart": 187,
+     "lineEnd": 370,
+     "why": "The five packages and the request lifecycle."
+    },
+    {
+     "path": "src/packages/domain/rules/enrollment.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "A domain rule: plain facts in, a decision out."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:3buildagentteachgem/note/ca5ea0b3fb361c21",
+   "provenance": {
+    "repo": "3buildagentteachgem",
+    "sha": "8b4aa9d3f4946a4afcb95f564e765b0b98dcdd88",
+    "path": "fabledocs/04-what-changed.md",
+    "lines": {
+     "start": 49,
+     "end": 49
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-actions-unchecked",
+   "pack": "3buildagentteachgem",
+   "target": "seed:quests:3buildagentteachgem/quiz/a208b17642c60b95",
+   "phase": "after",
+   "title": "Why hiding the grade button did not fix grading security",
+   "body": "A Next.js **Server Action** is a function on the server that the browser calls with a POST request. A button is just one way to send that request; anyone can send it directly. Story 13 centralised the *UI* gating, so Students no longer see the button, but the actions themselves still trust the `actorId` they are given and do not re-check permissions. 04-what-changed.md: \"Actions still do not re-check permissions — hiding a button does not remove the endpoint. This is the top remaining security item.\"\n\nWhy the others are wrong:\n- Input schemas are not the issue the docs name; the issue is missing permission checks.\n- Story 13's permission table is used for UI gating; the gap is that actions do not call it.\n- The docs do not name the cookie's readability as the reason; the role switcher is \"unchanged by design\".",
+   "excerpts": [
+    {
+     "path": "fabledocs/04-what-changed.md",
+     "lineStart": 49,
+     "lineEnd": 49,
+     "quote": "Actions still do not re-check permissions — hiding a button does not remove the endpoint. This is the top remaining security item."
+    },
+    {
+     "path": "fabledocs/02-codebase-gotchas.md",
+     "lineStart": 147,
+     "lineEnd": 149,
+     "quote": "1. **Server Actions do no authorization.** Every action in `src/app/actions.ts` accepts an `actorId`/`authorId` parameter and trusts it. Buttons are hidden in the UI, but a Server Action is a POST endpoint; hiding the button doesn't remove the endpoint."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:3buildagentteachgem/note/cd0999a351cc9789",
+   "provenance": {
+    "repo": "3buildagentteachgem",
+    "sha": "8b4aa9d3f4946a4afcb95f564e765b0b98dcdd88",
+    "path": "fabledocs/04-what-changed.md",
+    "lines": {
+     "start": 100,
+     "end": 102
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r03-read-the-prs",
+   "pack": "3buildagentteachgem",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: reading a fix through its pull request",
+   "body": "04-what-changed.md's advice: if you read one thing, read the **pull requests**. Each has a \"Why\" section (the problem) and a \"How\" section that names the rejected approach and the reason. That is the part that teaches design.\n\nThe same file also has a short story worth studying on its own: \"A bug the build itself created\". It shows how all the automatic checks can be green while the app is broken, and what lesson the team drew. Read it slowly and ask: which check would have caught this, and why did none of them?\n\nA good habit for every gotcha in this pack:\n\n- Find the code line it cites.\n- Ask what input or timing makes it go wrong.\n- Check 04 to see if it was fixed, left alone on purpose, or only partly addressed.\n\n\"Left alone on purpose\" is a real answer. Some behaviour is pinned by tests precisely so nobody changes it by accident.",
+   "excerpts": [
+    {
+     "path": "fabledocs/04-what-changed.md",
+     "lineStart": 100,
+     "lineEnd": 102,
+     "quote": "If you read one thing, read the **pull requests**. Each has a `## Why` section naming the problem and a `## How` section naming **the approach that was rejected and why** — the part that separates a junior PR from a senior one."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "fabledocs/04-what-changed.md",
+     "lineStart": 98,
+     "lineEnd": 117,
+     "why": "PRs worth opening and what each teaches."
+    },
+    {
+     "path": "fabledocs/04-what-changed.md",
+     "lineStart": 71,
+     "lineEnd": 96,
+     "why": "The story of the committed database file."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:3buildagentteachgem/note/d2bd77cee3b28d46",
+   "provenance": {
+    "repo": "3buildagentteachgem",
+    "sha": "8b4aa9d3f4946a4afcb95f564e765b0b98dcdd88",
+    "path": "fabledocs/02-codebase-gotchas.md",
+    "lines": {
+     "start": 121,
+     "end": 124
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-attendance-time",
+   "pack": "3buildagentteachgem",
+   "target": "seed:quests:3buildagentteachgem/quiz/6d4db0925b8d634b",
+   "phase": "after",
+   "title": "Why a time in the attendance date creates a duplicate row",
+   "body": "The unique key is `[studentId, classSectionId, date]`, and `date` is a full `DateTime`, not a calendar day. `recordAttendanceAction` does `new Date(date)`. For a bare string like \"2026-05-22\" that is midnight UTC, so every writer using bare dates gets the same key and the upsert updates the same row. \"2026-05-22T09:00\" is a different moment (9 o'clock, not midnight). The key differs, so the upsert finds no row and creates a second one for the same day. The doc: \"Pass a date with a time component and you'll create a duplicate row for the same day.\"\n\nWhy the others are wrong:\n- Nothing truncates the time; the full DateTime is the key.\n- The key is different, so the unique constraint is not violated.\n- Only the date *portion* matches; the key compares the whole DateTime.",
+   "excerpts": [
+    {
+     "path": "fabledocs/02-codebase-gotchas.md",
+     "lineStart": 121,
+     "lineEnd": 124,
+     "quote": "The unique constraint is `[studentId, classSectionId, date]` where `date` is a full `DateTime`. `recordAttendanceAction` does `new Date(\"2026-05-22\")` → midnight UTC, so the upsert is idempotent **as long as every writer uses a bare `YYYY-MM-DD` string**. Pass a date with a time component and you'll create a duplicate row for the same day."
+    },
+    {
+     "path": "src/app/actions.ts",
+     "lineStart": 516,
+     "lineEnd": 517,
+     "quote": "const { classSectionId, date, records, actorId } = parseInput(recordAttendanceInput, payload); const targetDate = new Date(date);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:3buildagentteachgem/note/e984708290298c61",
+   "provenance": {
+    "repo": "3buildagentteachgem",
+    "sha": "8b4aa9d3f4946a4afcb95f564e765b0b98dcdd88",
+    "path": "src/packages/shared/auth.ts",
+    "lines": {
+     "start": 31,
+     "end": 37
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-admin-fallback",
+   "pack": "3buildagentteachgem",
+   "target": "seed:quests:3buildagentteachgem/quiz/f8f0ebb631afce9d",
+   "phase": "after",
+   "title": "Why a request with no cookie acts as the admin",
+   "body": "`getActiveUser()` reads the user from a cookie. If no user is found (no cookie, or the cookie points at a deleted user), the fallback runs: `db.user.findFirst({ where: { username: 'admin' } })`. So the request acts as the admin account. This is **fail-open**: when identity is unknown, the code grants the most access instead of the least. The gotcha doc lists it as a security seam, and 04-what-changed.md says it is unchanged by design because \"This is a lab, not a deployment.\"\n\nWhy the others are wrong:\n- Nothing remembers the last role switch per machine; the fallback is a fixed lookup by username.\n- No guest user is created.\n- It does not return null or redirect; it falls back to admin.",
+   "excerpts": [
+    {
+     "path": "src/packages/shared/auth.ts",
+     "lineStart": 31,
+     "lineEnd": 37,
+     "quote": "// Fallback if no user or deleted if (!dbUser) { dbUser = await db.user.findFirst({ where: { username: 'admin' }, include: { student: true, teacher: true }, }); }"
+    },
+    {
+     "path": "fabledocs/02-codebase-gotchas.md",
+     "lineStart": 156,
+     "lineEnd": 157,
+     "quote": "4. **`getActiveUser()` falls back to the admin account** whenever the cookie is missing or points at a deleted user (`shared/auth.ts:32-37`). Fail-open by default."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:3buildagentteachgem/note/ec0fd5a18a0139d9",
+   "provenance": {
+    "repo": "3buildagentteachgem",
+    "sha": "8b4aa9d3f4946a4afcb95f564e765b0b98dcdd88",
+    "path": "fabledocs/README.md",
+    "lines": {
+     "start": 3,
+     "end": 5
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r01-start-here",
+   "pack": "3buildagentteachgem",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: EduOps, its onboarding pack and what is still true",
+   "body": "EduOps is a Next.js school-operations app (students, class sections, grades, attendance, interventions) with Prisma over SQLite. The repo carries two sets of docs. This pack draws mostly on **fabledocs/**.\n\nRead in this order (it is the order fabledocs/README.md gives):\n\n- **fabledocs/01-how-this-app-works.md**, end to end: the data model, the layered \"modular monolith\", how a page read and a Server Action write flow, and how roles work today.\n- **fabledocs/02-codebase-gotchas.md**: verified traps (B1-B13) and security seams (C1-C4). Important: it describes the code *as first imported*.\n- **fabledocs/04-what-changed.md**: all 19 user stories were then built. This file says which gotchas are fixed, which still stand, and which pull requests are worth reading.\n- **docs/architectural-cartographer/02-mid-level-engineer.md**: background on full-stack tracing and state.\n\nMany quizzes ask what is true *today*. For those, check the gotcha in 02, then its row in 04's \"Gotchas that still stand\" table, then the code itself.",
+   "excerpts": [
+    {
+     "path": "fabledocs/README.md",
+     "lineStart": 3,
+     "lineEnd": 5,
+     "quote": "It was written by reading every file in `src/`, `prisma/`, and the config"
+    },
+    {
+     "path": "fabledocs/02-codebase-gotchas.md",
+     "lineStart": 3,
+     "lineEnd": 5,
+     "quote": "**This document describes the codebase as originally imported**"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "fabledocs/README.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The file list and when to read each one."
+    },
+    {
+     "path": "fabledocs/04-what-changed.md",
+     "lineStart": 36,
+     "lineEnd": 52,
+     "why": "Which gotchas still stand after the 19-story build."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:3buildagentteachgem/note/f69f1a1db9a6a64c",
+   "provenance": {
+    "repo": "3buildagentteachgem",
+    "sha": "8b4aa9d3f4946a4afcb95f564e765b0b98dcdd88",
+    "path": "fabledocs/02-codebase-gotchas.md",
+    "lines": {
+     "start": 134,
+     "end": 138
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-dropped-reenrol",
+   "pack": "3buildagentteachgem",
+   "target": "seed:quests:3buildagentteachgem/quiz/9e2e9406c804ff4a",
+   "phase": "after",
+   "title": "Why a dropped student cannot re-enrol",
+   "body": "Three facts combine. `Enrollment` has `@@unique([studentId, classSectionId])`: at most one row per student per section. `dropStudentAction` does not delete that row; it sets `status: 'Dropped'`. And the enrol action looks up the row with `findUnique` on that key without checking status, then passes `hasExistingEnrollment: !!existing` to the domain rule. The dropped row still exists, so the rule rejects with \"already enrolled or waitlisted\". 04-what-changed.md says B13 is unchanged, and now load-bearing: Story 12's waitlist promotion updates that single row because a second row is impossible.\n\nWhy the others are wrong:\n- Dropping changes the enrollment row's status; it does not delete the student.\n- The rejection comes from the existence check, not a waitlist or term rule.\n- Nothing is cached in local storage; the check reads the database.",
+   "excerpts": [
+    {
+     "path": "fabledocs/02-codebase-gotchas.md",
+     "lineStart": 134,
+     "lineEnd": 138,
+     "quote": "`Enrollment` has `@@unique([studentId, classSectionId])` and `dropStudentAction` sets `status: 'Dropped'` rather than deleting the row. `validateEnrollmentRules` then rejects the student for \"already enrolled\" (`enrollment.ts:30-36`) because `hasExistingEnrollment` is computed with `findUnique` regardless of status (`actions.ts:67-69`). Re-enrolment is impossible without reactivating the existing row."
+    },
+    {
+     "path": "src/app/actions.ts",
+     "lineStart": 218,
+     "lineEnd": 220,
+     "quote": "const existing = await db.enrollment.findUnique({ where: { studentId_classSectionId: { studentId, classSectionId } }, });"
+    },
+    {
+     "path": "fabledocs/04-what-changed.md",
+     "lineStart": 48,
+     "lineEnd": 48,
+     "quote": "| **B13** — dropped students cannot re-enrol | Unchanged, and now load-bearing: Story 12's promotion **updates** the waitlist row precisely because a second row is impossible. |"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}
