@@ -904,9 +904,9 @@ async function main() {
       const gjNotes = await api(base, 'GET', `/api/units/${sqQuest?.unitId}/notes`);
       const notesLine = serverOut.split(/\r?\n/).find((l) => l.startsWith('[bootquest] seed notes/storefront:'));
       step(
-        'notes gates (real server): a locked-act quest serves no notes (403 ACT_LOCKED); a quest without notes answers readings [] / explanations none; the storefront notes pack line is stamp-verified at startup',
+        'notes gates (real server): a locked-act quest serves no notes (403 ACT_LOCKED); grok-js (passed above) serves its readings and every explanation, one per quiz; the storefront notes pack line is stamp-verified at startup',
         sfLocked.status === 403 && sfLocked.json?.error?.code === 'ACT_LOCKED' &&
-          gjNotes.status === 200 && Array.isArray(gjNotes.json?.readings) && gjNotes.json.readings.length === 0 && gjNotes.json.explanations?.state === 'none' && Array.isArray(gjNotes.json.refs) &&
+          gjNotes.status === 200 && Array.isArray(gjNotes.json?.readings) && gjNotes.json.readings.length >= 2 && gjNotes.json.explanations?.state === 'released' && gjNotes.json.explanations.released.length === (questQuizzes.get('grok-js') ?? []).length && Array.isArray(gjNotes.json.refs) &&
           /15 item\(s\) \(15 note\), stamp verified$/.test(notesLine ?? ''),
         notesLine,
       );
