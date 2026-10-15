@@ -1,0 +1,387 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "tracer-net",
+ "repo": "tracer-net",
+ "sha": "2c0f21f6bc704811bec6fde07054a3ca1ace2346",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: read tracer-net through its decision records",
+   "body": "tracer-net is an issue tracker API (think a small Linear) in ASP.NET Core with EF Core on SQLite. Its best teaching material is `docs/adr/`: ten short Architecture Decision Records. Each one has the same shape: Context (the problem), Decision, Consequences, and \"Where it lives in the code\" with file and line pointers.\n\nRead them in number order. For each ADR, open the files its last section names and find the exact lines. This quest asks about ADRs 0001 to 0008: API keys, the 404 rule, the activity spine, the webhook outbox, signatures, relations, ranking and cycles.\n\nA good habit: before reading the Decision, write down how you would solve the Context yourself, then compare.",
+   "excerpts": [
+    {
+     "path": "docs/adr/README.md",
+     "lineStart": 3,
+     "lineEnd": 4,
+     "quote": "Each ADR records one decision that shaped tracer-net: the context that forced it, the decision, and the consequences accepted with it."
+    },
+    {
+     "path": "docs/adr/0003-activity-spine-single-source.md",
+     "lineStart": 15,
+     "lineEnd": 17,
+     "quote": "Route every issue mutation through one recorder (`ActivityRecorder`)"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "README.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The product overview and how to run the API."
+    },
+    {
+     "path": "docs/architecture.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The layers and request pipeline behind the ADRs."
+    }
+   ]
+  },
+  {
+   "id": "r02-one-transaction",
+   "target": "pack",
+   "phase": "before",
+   "title": "Core idea: one transaction for the change and its side effects",
+   "body": "When an issue changes, three other things must happen: an audit entry, outgoing webhooks, and in-app notifications. If any of them is done separately, they can disagree: a change might be audited but never announced.\n\ntracer-net's answer is to add every one of those rows to the same EF Core `DbContext` as the change itself, and let a single save commit them all. The webhook is not sent during the request; a row saying \"this delivery is due\" is written, and a background worker sends it later. This pattern is called a transactional outbox. Read ADR 0003 and then ADR 0004 with that picture in mind.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0003-activity-spine-single-source.md",
+     "lineStart": 7,
+     "lineEnd": 11,
+     "quote": "If each subscribed to changes independently, they would drift"
+    },
+    {
+     "path": "docs/adr/0004-transactional-outbox-webhooks.md",
+     "lineStart": 15,
+     "lineEnd": 17,
+     "quote": "Write a `WebhookDelivery` row **in the same transaction as the change**"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/Tracer.Api/Auth/ActivityRecorder.cs",
+     "lineStart": 64,
+     "lineEnd": 91,
+     "why": "The recorder: three Add/enqueue calls and no save."
+    },
+    {
+     "path": "src/Tracer.Api/Webhooks/WebhookSender.cs",
+     "lineStart": 33,
+     "lineEnd": 55,
+     "why": "The worker side that drains due deliveries."
+    }
+   ]
+  },
+  {
+   "id": "r03-status-codes-leak",
+   "target": "pack",
+   "phase": "before",
+   "title": "Core idea: a status code is information an attacker can read",
+   "body": "An HTTP status code tells the caller something. If asking about another team's id gives a different answer from asking about a random id, a caller can probe ids and learn which teams exist. ADR 0002 designs the codes so that this probing learns nothing.\n\nThe same thinking appears in the API-key handler (ADR 0001): some failures are deliberately given the same message. While reading, keep asking \"what could a stranger learn from this answer?\". Then look at `TeamAccess.cs`, the single place where the team boundary is decided.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0002-403-vs-404-existence-hiding.md",
+     "lineStart": 7,
+     "lineEnd": 11,
+     "quote": "the status code is a signal an attacker can read"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/Tracer.Api/Auth/TeamAccess.cs",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The single source of the team boundary used by every controller."
+    }
+   ]
+  },
+  {
+   "id": "x-q01-sha256",
+   "target": "seed:quests:tracer-net/quiz/b4dbe2157bfce28e",
+   "phase": "after",
+   "title": "Why a fast hash is right for random tokens",
+   "body": "The key is right. Slow hashes like bcrypt make guessing expensive, which matters when people choose short passwords. A tracer-net token is 24 random bytes (192 bits) from a CSPRNG; there is no realistic guess to slow down. A slow hash would only add cost to every authenticated request.\n\n- SHA-256 is one-way: a lost token is replaced, never recovered.\n- Nothing stops bcrypt running in a handler; the ADR rejects it on cost, not on possibility.\n- Tokens are machine-generated, and the ADR says the scheme is not suitable for user-chosen passwords.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0001-api-key-authentication.md",
+     "lineStart": 19,
+     "lineEnd": 21,
+     "quote": "A 192-bit random token has no keyspace to search, so a work factor buys nothing"
+    },
+    {
+     "path": "src/Tracer.Domain/ApiKeyToken.cs",
+     "lineStart": 32,
+     "lineEnd": 32,
+     "quote": "private const int EntropyBytes = 24; // 192 bits"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02-revoked",
+   "target": "seed:quests:tracer-net/quiz/8ad62c831523f47d",
+   "phase": "after",
+   "title": "Revoked and unknown keys look the same",
+   "body": "The key is right. Line 62 tests `key is null || key.RevokedAt is not null` and both cases return `AuthenticateResult.Fail(\"Invalid API key.\")`. Saying \"revoked\" would confirm that a stolen token was once genuine.\n\n- No separate \"revoked\" message exists in the handler.\n- `NoResult` is returned only when the `X-Api-Key` header is missing entirely.\n- A failed authentication is a 401, not a 403; ADR 0002 lists revoked keys under 401.",
+   "excerpts": [
+    {
+     "path": "src/Tracer.Api/Auth/ApiKeyAuthentication.cs",
+     "lineStart": 62,
+     "lineEnd": 64,
+     "quote": "if (key is null || key.RevokedAt is not null)"
+    },
+    {
+     "path": "docs/adr/0002-403-vs-404-existence-hiding.md",
+     "lineStart": 20,
+     "lineEnd": 20,
+     "quote": "`401` — no key, unknown key, revoked key."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q03-foreign-404",
+   "target": "seed:quests:tracer-net/quiz/fc4739ce50bfb551",
+   "phase": "after",
+   "title": "A team you are not on is \"not found\"",
+   "body": "The key is right. `ListForTeam` calls `access.CanAccessTeamAsync(User, teamId)` and returns `NotFoundProblem` when it is false. A random team id gives the same 404, so a member cannot tell \"no such team\" from \"a team I am not on\".\n\n- 403 is kept for \"right key, wrong role\" on something you can already see.\n- 401 means the key itself is missing, unknown or revoked; a valid key is not tied to one team.\n- 400 is for a request inside your team that points at another team's state, label or project.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0002-403-vs-404-existence-hiding.md",
+     "lineStart": 15,
+     "lineEnd": 16,
+     "quote": "a team you are not on is reported exactly like a team that never existed — `404`."
+    },
+    {
+     "path": "src/Tracer.Api/Controllers/IssuesController.cs",
+     "lineStart": 18,
+     "lineEnd": 20,
+     "quote": "return this.NotFoundProblem(\"Team\", teamId);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q04-key-routes",
+   "target": "seed:quests:tracer-net/quiz/ba19d6d2be5a2b2e",
+   "phase": "after",
+   "title": "Same rule, two different status codes",
+   "body": "The key is right. On `/users/{userId}/api-keys` the controller checks \"may you manage this user's keys?\" before it looks the user up (`ForbidManaging()` at line 38, the lookup after). A member gets 403 for every id except their own, so the 403 says nothing about which users exist.\n\n- Both routes are open to members; the difference is the order of checks.\n- Random ids are exactly why `/api-keys/{id}` must answer 404: a 403 there would only appear for keys that exist.\n- The ADR does not call user ids public; its argument is about the order of the check.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0002-403-vs-404-existence-hiding.md",
+     "lineStart": 29,
+     "lineEnd": 31,
+     "quote": "`/users/{userId}/api-keys` answers `403` because it checks permission *before* looking anything up"
+    },
+    {
+     "path": "src/Tracer.Api/Controllers/ApiKeysController.cs",
+     "lineStart": 38,
+     "lineEnd": 38,
+     "quote": "return ForbidManaging();"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q05-recorder",
+   "target": "seed:quests:tracer-net/quiz/e4dde4f8c828c506",
+   "phase": "after",
+   "title": "The recorder joins the caller's transaction",
+   "body": "The key is right. `RecordAsync` does `db.Activities.Add(activity)`, then `webhooks.EnqueueAsync(activity, issue)` and `notifications.HandleAsync(...)`, and returns. The outbox also never saves. Everything sits in the same `DbContext` as the issue change, so one `SaveChanges` by the controller commits all of it, or a rollback drops all of it.\n\n- Saving the Activity first is exactly what the design avoids: a rolled-back change would leave an audit entry.\n- Webhooks are not sent in the request; delivery rows are queued and sent by the worker.\n- No interceptor exists; ADR 0003 rejected that option.",
+   "excerpts": [
+    {
+     "path": "src/Tracer.Api/Auth/ActivityRecorder.cs",
+     "lineStart": 87,
+     "lineEnd": 89,
+     "quote": "db.Activities.Add(activity);"
+    },
+    {
+     "path": "docs/adr/0003-activity-spine-single-source.md",
+     "lineStart": 18,
+     "lineEnd": 19,
+     "quote": "so the record and the change commit together or not at all."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q06-interceptor",
+   "target": "seed:quests:tracer-net/quiz/34b2ae0b80b0c89a",
+   "phase": "after",
+   "title": "Why an interceptor cannot write a good audit log",
+   "body": "The key is right. A `SaveChanges` interceptor only sees which columns changed. It cannot tell a re-parent from an assignment, cannot know who the actor is without ambient request state, and would report a rank rebalance (moving other people's cards) as many phantom edits.\n\n- Interceptors run before or during the save, so timing is not the ADR's objection.\n- SQLite supports EF Core interceptors; availability is not the issue.\n- The ADR says the opposite: an explicit call CAN be forgotten, and tests are the guard.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0003-activity-spine-single-source.md",
+     "lineStart": 23,
+     "lineEnd": 27,
+     "quote": "An interceptor sees columns, not intent"
+    },
+    {
+     "path": "docs/adr/0003-activity-spine-single-source.md",
+     "lineStart": 41,
+     "lineEnd": 42,
+     "quote": "an explicit call can be forgotten"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07-payload-id",
+   "target": "seed:quests:tracer-net/quiz/7b0ba0d2e13c4a88",
+   "phase": "after",
+   "title": "Deduplicate on the activity id",
+   "body": "The key is right. The payload's `id = activity.Id` (line 105). Delivery is at-least-once, so a consumer may see the same event twice; the activity id is the same on every retry and for every subscribed team, so it is the right dedupe key.\n\n- The delivery id differs per subscriber; putting it in the body would need one payload and one signature per team.\n- A fresh GUID per attempt would make dedupe impossible.\n- The issue id repeats across many different events on the same issue.",
+   "excerpts": [
+    {
+     "path": "src/Tracer.Api/Webhooks/WebhookOutbox.cs",
+     "lineStart": 103,
+     "lineEnd": 105,
+     "quote": "The activity id: same across retries and across subscribers"
+    },
+    {
+     "path": "docs/adr/0004-transactional-outbox-webhooks.md",
+     "lineStart": 22,
+     "lineEnd": 23,
+     "quote": "The payload's `id` is the *activity* id — stable across retries, identical for every subscriber"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08-429",
+   "target": "seed:quests:tracer-net/quiz/6787a46462bd00e4",
+   "phase": "after",
+   "title": "429 is the one 4xx that retries",
+   "body": "The key is right. In `Classify`, the `429 => WebhookFailureClass.Transient` arm comes before the general `>= 400 and < 500 => Permanent` arm, and C# switch arms are tried in order. Rate limiting means \"come back later\", so the delivery is retried with backoff.\n\n- Not every 4xx is permanent: 408 and 429 are Transient.\n- The receiver's status code says nothing about our signature check.\n- Only 2xx counts as delivered (`>= 200 and < 300 => None`).",
+   "excerpts": [
+    {
+     "path": "src/Tracer.Domain/WebhookRetryPolicy.cs",
+     "lineStart": 40,
+     "lineEnd": 40,
+     "quote": "429 => WebhookFailureClass.Transient,"
+    },
+    {
+     "path": "src/Tracer.Domain/WebhookRetryPolicy.cs",
+     "lineStart": 35,
+     "lineEnd": 35,
+     "quote": ">= 200 and < 300 => WebhookFailureClass.None,"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09-batch-save",
+   "target": "seed:quests:tracer-net/quiz/ecfe0810f8e8c7d5",
+   "phase": "after",
+   "title": "One save per batch means a batch-sized duplicate window",
+   "body": "The key is right. `DeliverDueAsync` loads up to 20 due rows, attempts each one in a loop, and only then calls `SaveChangesAsync` once. If the process dies between the sends and that save, the rows are still Pending in the database, so after restart the worker finds them due and sends all of them again.\n\n- A send does not save its own row; the save is after the loop.\n- There is no per-attempt save, so the fifth is not special.\n- There is no dead-letter step for a crash; the rows stay due.\n\nThis is still within at-least-once, which is why consumers dedupe.",
+   "excerpts": [
+    {
+     "path": "src/Tracer.Api/Webhooks/WebhookSender.cs",
+     "lineStart": 44,
+     "lineEnd": 51,
+     "quote": "await db.SaveChangesAsync(cancellationToken);"
+    },
+    {
+     "path": "docs/adr/0004-transactional-outbox-webhooks.md",
+     "lineStart": 50,
+     "lineEnd": 50,
+     "quote": "a crash after several successful sends but before `:51` re-sends all of them."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10-signature",
+   "target": "seed:quests:tracer-net/quiz/5334ea55209ff67a",
+   "phase": "after",
+   "title": "Signing the timestamp stops replays",
+   "body": "The key is right. The HMAC input is `{unixSeconds}.{payload}`. A receiver rejects anything older than its tolerance. Because the timestamp is part of what was signed, an attacker who captured a delivery cannot change `t=` to a fresh time without breaking the signature.\n\n- The comparison must still be constant-time; the ADR says so.\n- The signing secret is stored in the clear, unlike API keys, because a hash cannot sign.\n- Dedupe uses the activity id; the timestamp is about freshness, not identity.",
+   "excerpts": [
+    {
+     "path": "src/Tracer.Domain/WebhookSignature.cs",
+     "lineStart": 42,
+     "lineEnd": 42,
+     "quote": "var signed = $\"{unixSeconds.ToString(CultureInfo.InvariantCulture)}.{payload}\";"
+    },
+    {
+     "path": "docs/adr/0005-signed-timestamp-webhook-signatures.md",
+     "lineStart": 20,
+     "lineEnd": 21,
+     "quote": "because the timestamp is signed, an attacker cannot refresh it to make an old capture look current."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q11-relates",
+   "target": "seed:quests:tracer-net/quiz/50389d6a69666aea",
+   "phase": "after",
+   "title": "The mirror spelling is the same fact",
+   "body": "The key is right. For `Relates`, `Canonicalize` puts the two ids in a fixed order (`subject.CompareTo(other) <= 0 ? (subject, other, ...) : (other, subject, ...)`). \"A relates B\" and \"B relates A\" become the same (source, target, type) tuple. The controller's duplicate check finds it and answers 409; the unique index backs that up under races.\n\n- No second inverse row is ever stored; inverses are derived on read.\n- Duplicates are refused for every type.\n- Either issue may create the link; the order is applied internally.",
+   "excerpts": [
+    {
+     "path": "src/Tracer.Domain/IssueRelations.cs",
+     "lineStart": 59,
+     "lineEnd": 61,
+     "quote": "IssueRelationKind.Relates => subject.CompareTo(other) <= 0"
+    },
+    {
+     "path": "docs/adr/0006-symmetric-relation-normalization.md",
+     "lineStart": 23,
+     "lineEnd": 24,
+     "quote": "so the mirror spelling becomes the same tuple."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q12-rank",
+   "target": "seed:quests:tracer-net/quiz/a990dc5e436116fa",
+   "phase": "after",
+   "title": "A move writes one row: the midpoint",
+   "body": "The key is right. `IssueRanker.Between(2.0, 3.0)` is `l + ((u - l) / 2)` = 2.5. Only the moved card's `Position` changes. A column renumber happens only when `NeedsRebalance` sees neighbours closer than `MinGap` (1e-6), and here the gap is 1.0.\n\n- Shifting every later card is the integer-row-number design the ADR rejected.\n- The neighbours keep their positions.\n- `RankAt` renumbering runs only for a too-small gap.",
+   "excerpts": [
+    {
+     "path": "src/Tracer.Domain/IssueRanker.cs",
+     "lineStart": 40,
+     "lineEnd": 40,
+     "quote": "({ } l, { } u) => l + ((u - l) / 2),"
+    },
+    {
+     "path": "docs/adr/0007-fractional-rank-ordering.md",
+     "lineStart": 14,
+     "lineEnd": 16,
+     "quote": "so it rewrites exactly one row."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q13-half-open",
+   "target": "seed:quests:tracer-net/quiz/8488acacde654e8c",
+   "phase": "after",
+   "title": "Half-open intervals tile without overlap",
+   "body": "The key is right. A cycle is `[startsAt, endsAt)`: the end instant belongs to the next cycle. `Overlaps` is `firstStart < secondEnd && secondStart < firstEnd`. If cycle 2 starts exactly at cycle 1's end, `secondStart < firstEnd` is false, so the result is false.\n\n- The boundary instant belongs only to cycle 2.\n- No gap is needed; that is the point of half-open intervals.\n- Status is not a stored field at all; it is derived from dates and `now`.",
+   "excerpts": [
+    {
+     "path": "src/Tracer.Domain/CycleSchedule.cs",
+     "lineStart": 41,
+     "lineEnd": 41,
+     "quote": "firstStart < secondEnd && secondStart < firstEnd;"
+    },
+    {
+     "path": "docs/adr/0008-half-open-cycle-intervals.md",
+     "lineStart": 16,
+     "lineEnd": 16,
+     "quote": "Consecutive cycles share a boundary with no overlap and no gap."
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}

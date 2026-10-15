@@ -1,0 +1,504 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "tracer-net",
+ "sha": "2c0f21f6bc704811bec6fde07054a3ca1ace2346",
+ "guides": [
+  "docs/adr/0001-api-key-authentication.md",
+  "docs/adr/0002-403-vs-404-existence-hiding.md",
+  "docs/adr/0003-activity-spine-single-source.md",
+  "docs/adr/0005-signed-timestamp-webhook-signatures.md",
+  "docs/adr/0006-symmetric-relation-normalization.md",
+  "docs/adr/0007-fractional-rank-ordering.md",
+  "docs/adr/0008-half-open-cycle-intervals.md"
+ ],
+ "items": [
+  {
+   "id": "q01-sha256-not-bcrypt",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0001-api-key-authentication.md",
+    "lines": {
+     "start": 19,
+     "end": 23
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0001-api-key-authentication.md",
+     "lineStart": 19,
+     "lineEnd": 23
+    },
+    {
+     "path": "src/Tracer.Domain/ApiKeyToken.cs",
+     "lineStart": 32,
+     "lineEnd": 40
+    }
+   ],
+   "prompt": "Why does tracer-net hash API keys with SHA-256 and not with bcrypt or argon2?",
+   "answer": "A 192-bit random token has no keyspace for a slow hash to protect",
+   "distractors": [
+    "SHA-256 can be reversed, so a lost token can be recovered later on",
+    "bcrypt cannot be run inside an ASP.NET Core authentication handler",
+    "The tokens are chosen by users, and SHA-256 suits short secrets"
+   ],
+   "explanation": "A slow hash defends low-entropy, human-chosen secrets. A CSPRNG token of 24 bytes has nothing to brute-force, and a work factor would cost an expensive hash on every request."
+  },
+  {
+   "id": "q02-revoked-same-message",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0001-api-key-authentication.md",
+    "lines": {
+     "start": 36,
+     "end": 36
+    }
+   },
+   "cites": [
+    {
+     "path": "src/Tracer.Api/Auth/ApiKeyAuthentication.cs",
+     "lineStart": 59,
+     "lineEnd": 65
+    },
+    {
+     "path": "docs/adr/0001-api-key-authentication.md",
+     "lineStart": 36,
+     "lineEnd": 36
+    }
+   ],
+   "prompt": "A caller presents a revoked API key. How does the handler's answer compare with an unknown key?",
+   "answer": "It returns the same \"Invalid API key.\" failure as for an unknown key",
+   "distractors": [
+    "It returns a distinct \"Key revoked\" failure so the user can rotate",
+    "It returns NoResult, letting the endpoint decide if a key was needed",
+    "It answers 403, since the key is genuine but no longer has a role"
+   ],
+   "explanation": "Lines 59-65: one message for \"no such key\" and \"revoked key\", because telling them apart confirms a stolen token is genuine. NoResult is only for a request with no header at all."
+  },
+  {
+   "id": "q03-foreign-team-404",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0002-403-vs-404-existence-hiding.md",
+    "lines": {
+     "start": 15,
+     "end": 24
+    }
+   },
+   "cites": [
+    {
+     "path": "src/Tracer.Api/Controllers/IssuesController.cs",
+     "lineStart": 15,
+     "lineEnd": 21
+    },
+    {
+     "path": "docs/adr/0002-403-vs-404-existence-hiding.md",
+     "lineStart": 15,
+     "lineEnd": 24
+    }
+   ],
+   "prompt": "A member of team A only calls GET /api/teams/{teamB}/issues. Which status comes back?",
+   "answer": "404, exactly the answer a made-up team id would get",
+   "distractors": [
+    "403, because team B exists and the caller is not on it",
+    "401, since the API key is valid only inside team A",
+    "400, as team B is a real reference not the caller's"
+   ],
+   "explanation": "ADR 0002 collapses existence and permission: a team you are not on is reported like a team that never existed, so probing ids cannot map the workspace. 400 is for pointing at another team's reference from inside your own request."
+  },
+  {
+   "id": "q04-key-routes-differ",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0002-403-vs-404-existence-hiding.md",
+    "lines": {
+     "start": 29,
+     "end": 33
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0002-403-vs-404-existence-hiding.md",
+     "lineStart": 29,
+     "lineEnd": 33
+    },
+    {
+     "path": "src/Tracer.Api/Controllers/ApiKeysController.cs",
+     "lineStart": 33,
+     "lineEnd": 43
+    }
+   ],
+   "prompt": "Why may /users/{userId}/api-keys answer 403 while /api-keys/{id} answers 404?",
+   "answer": "It checks permission first, so each foreign user id gets the same 403",
+   "distractors": [
+    "The first route is admin-only, and the second is open to every member",
+    "Key ids are random, so a 403 on the second route could reveal nothing",
+    "User ids are public, while API key ids are kept secret by the design"
+   ],
+   "explanation": "A member gets the same 403 for any user id but their own, so nothing leaks; on /api-keys/{id} a 403 would only be reachable for a key that exists, an existence oracle for opaque ids."
+  },
+  {
+   "id": "q05-recorder-never-saves",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0003-activity-spine-single-source.md",
+    "lines": {
+     "start": 15,
+     "end": 21
+    }
+   },
+   "cites": [
+    {
+     "path": "src/Tracer.Api/Auth/ActivityRecorder.cs",
+     "lineStart": 64,
+     "lineEnd": 91
+    },
+    {
+     "path": "docs/adr/0003-activity-spine-single-source.md",
+     "lineStart": 15,
+     "lineEnd": 21
+    }
+   ],
+   "prompt": "ActivityRecorder.RecordAsync adds rows but never calls SaveChanges. What does that buy?",
+   "answer": "The change, its Activity, webhook rows and notifications commit as one",
+   "distractors": [
+    "Each Activity is saved first, so that the audit entry survives a rollback",
+    "Webhooks are sent before the change commits, then retried if it fails",
+    "Notifications are written later by a SaveChanges interceptor instead"
+   ],
+   "explanation": "The recorder adds to the caller's DbContext, so the record, the outbox rows and the notifications join the mutation's transaction: all commit or none do."
+  },
+  {
+   "id": "q06-no-interceptor-x",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0003-activity-spine-single-source.md",
+    "lines": {
+     "start": 23,
+     "end": 27
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0003-activity-spine-single-source.md",
+     "lineStart": 23,
+     "lineEnd": 27
+    }
+   ],
+   "prompt": "Why is recording an explicit call in each controller and not a SaveChanges interceptor?",
+   "answer": "An interceptor sees columns, not intent, and it cannot name the actor",
+   "distractors": [
+    "Interceptors run after commit, too late to join the transaction",
+    "EF Core interceptors are unavailable on SQLite database connections",
+    "An explicit call cannot be forgotten, unlike a global interceptor"
+   ],
+   "explanation": "The ADR: an interceptor cannot tell a re-parent from an assignment, cannot name the actor without ambient request state, and would report a rank rebalance as phantom edits. The cost of the explicit call is that it CAN be forgotten; tests catch that."
+  },
+  {
+   "id": "q07-payload-id",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0004-transactional-outbox-webhooks.md",
+    "lines": {
+     "start": 22,
+     "end": 26
+    }
+   },
+   "cites": [
+    {
+     "path": "src/Tracer.Api/Webhooks/WebhookOutbox.cs",
+     "lineStart": 103,
+     "lineEnd": 105
+    },
+    {
+     "path": "docs/adr/0004-transactional-outbox-webhooks.md",
+     "lineStart": 22,
+     "lineEnd": 26
+    }
+   ],
+   "prompt": "Which id is sent as the webhook payload's `id`, and why that one?",
+   "answer": "The activity id, which stays stable across retries and subscribers",
+   "distractors": [
+    "The delivery id, so that each subscriber can dedupe its own copy",
+    "A fresh GUID for every attempt, so that retries can be told apart",
+    "The issue id, because consumers track issues rather than single events"
+   ],
+   "explanation": "Deliveries are at-least-once, so consumers dedupe on the activity id; the delivery id stays out of the body so one rendered, signed payload serves every subscriber."
+  },
+  {
+   "id": "q08-429-transient",
+   "kind": "quiz",
+   "source": {
+    "path": "src/Tracer.Domain/WebhookRetryPolicy.cs",
+    "lines": {
+     "start": 32,
+     "end": 52
+    }
+   },
+   "cites": [
+    {
+     "path": "src/Tracer.Domain/WebhookRetryPolicy.cs",
+     "lineStart": 37,
+     "lineEnd": 45
+    },
+    {
+     "path": "docs/adr/0004-transactional-outbox-webhooks.md",
+     "lineStart": 37,
+     "lineEnd": 38
+    }
+   ],
+   "prompt": "A subscriber answers HTTP 429. How does WebhookRetryPolicy.Classify treat it?",
+   "answer": "Transient: rate limiting asks the sender to come back",
+   "distractors": [
+    "Permanent: every 4xx is a refusal that will not change later",
+    "Permanent: any 4xx means the payload signature was rejected",
+    "None: any response with a status code counts as delivered"
+   ],
+   "explanation": "The 429 arm sits before the >= 400 and < 500 Permanent arm; 408, 5xx and no response are also Transient, other 4xx and 3xx are Permanent."
+  },
+  {
+   "id": "q09-batch-save",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0004-transactional-outbox-webhooks.md",
+    "lines": {
+     "start": 50,
+     "end": 50
+    }
+   },
+   "cites": [
+    {
+     "path": "src/Tracer.Api/Webhooks/WebhookSender.cs",
+     "lineStart": 44,
+     "lineEnd": 52
+    },
+    {
+     "path": "docs/adr/0004-transactional-outbox-webhooks.md",
+     "lineStart": 50,
+     "lineEnd": 50
+    }
+   ],
+   "prompt": "The worker sends 5 deliveries from a batch, then the process dies before SaveChangesAsync. What happens after restart?",
+   "answer": "All 5 go out again, as their results died with the process",
+   "distractors": [
+    "None is resent, since each send marked its own row as delivered",
+    "Only the fifth is resent, since every other attempt saved alone",
+    "The batch is dead-lettered and waits for a manual retry instead"
+   ],
+   "explanation": "Attempt results are saved once per batch (WebhookSender.cs:49-52); a crash before that save leaves the rows Pending and due, so they are re-sent: within at-least-once, with a whole-batch duplicate window."
+  },
+  {
+   "id": "q10-signed-timestamp",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0005-signed-timestamp-webhook-signatures.md",
+    "lines": {
+     "start": 14,
+     "end": 21
+    }
+   },
+   "cites": [
+    {
+     "path": "src/Tracer.Domain/WebhookSignature.cs",
+     "lineStart": 39,
+     "lineEnd": 45
+    },
+    {
+     "path": "docs/adr/0005-signed-timestamp-webhook-signatures.md",
+     "lineStart": 14,
+     "lineEnd": 21
+    }
+   ],
+   "prompt": "Why is the timestamp put inside the HMAC input, as {timestamp}.{payload}, and not just sent beside it?",
+   "answer": "An attacker then cannot refresh it to make an old capture look current",
+   "distractors": [
+    "Receivers can then skip the constant-time comparison of the two signatures",
+    "It lets the signing secret be stored as a SHA-256 hash, like API keys",
+    "It makes every payload unique, so consumers need no id to dedupe"
+   ],
+   "explanation": "A body-only signature is valid forever; with the timestamp signed, a receiver rejects anything outside its tolerance and a replay cannot be refreshed. The secret is stored in the clear because it must sign."
+  },
+  {
+   "id": "q11-relates-canonical-b",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0006-symmetric-relation-normalization.md",
+    "lines": {
+     "start": 23,
+     "end": 31
+    }
+   },
+   "cites": [
+    {
+     "path": "src/Tracer.Domain/IssueRelations.cs",
+     "lineStart": 54,
+     "lineEnd": 61
+    },
+    {
+     "path": "docs/adr/0006-symmetric-relation-normalization.md",
+     "lineStart": 26,
+     "lineEnd": 31
+    }
+   ],
+   "prompt": "Issue A already \"relates to\" B. A request now creates \"B relates to A\". What is the outcome?",
+   "answer": "409, because Canonicalize orders the two ids into the same row",
+   "distractors": [
+    "201, with the mirror stored as a second row in the other order",
+    "201, since Relates is symmetric and its duplicates are allowed",
+    "400, as a Relates link may be created only from the lower id"
+   ],
+   "explanation": "Relates endpoints are put in a fixed, stable order before the duplicate check, so the mirror spelling becomes the same (source, target, type) tuple; the unique index backs the clean 409."
+  },
+  {
+   "id": "q12-rank-midpoint-d",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0007-fractional-rank-ordering.md",
+    "lines": {
+     "start": 14,
+     "end": 19
+    }
+   },
+   "cites": [
+    {
+     "path": "src/Tracer.Domain/IssueRanker.cs",
+     "lineStart": 35,
+     "lineEnd": 41
+    },
+    {
+     "path": "docs/adr/0007-fractional-rank-ordering.md",
+     "lineStart": 14,
+     "lineEnd": 19
+    }
+   ],
+   "prompt": "A card is dropped between neighbours at Position 2.0 and 3.0, with plenty of gap. What gets written?",
+   "answer": "Its Position becomes 2.5, and no other row in the column changes",
+   "distractors": [
+    "Every card from 3.0 upward shifts by 1.0 to make room for it",
+    "It takes Position 2.0 and its old neighbour moves up to 3.0",
+    "The whole column is renumbered into 1.0 steps before the move"
+   ],
+   "explanation": "IssueRanker.Between returns l + (u - l) / 2, a one-row write. Renumbering (RankAt) only happens when NeedsRebalance finds the neighbours closer than MinGap = 1e-6."
+  },
+  {
+   "id": "q13-half-open-touch",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0008-half-open-cycle-intervals.md",
+    "lines": {
+     "start": 14,
+     "end": 16
+    }
+   },
+   "cites": [
+    {
+     "path": "src/Tracer.Domain/CycleSchedule.cs",
+     "lineStart": 32,
+     "lineEnd": 41
+    },
+    {
+     "path": "docs/adr/0008-half-open-cycle-intervals.md",
+     "lineStart": 14,
+     "lineEnd": 16
+    }
+   ],
+   "prompt": "Cycle 2 starts at exactly the instant cycle 1 ends. What does CycleSchedule.Overlaps return?",
+   "answer": "false, since touching half-open intervals have zero common instants",
+   "distractors": [
+    "true, since both cycles contain the boundary instant",
+    "true, unless a one-tick gap is left between the two cycles",
+    "false, but only after the two status fields are recomputed"
+   ],
+   "explanation": "Cycles are [startsAt, endsAt): the end instant belongs to the next cycle. Overlaps is firstStart < secondEnd && secondStart < firstEnd, false for touching intervals. Status is derived, never stored."
+  },
+  {
+   "id": "f01-status-codes",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0002-403-vs-404-existence-hiding.md",
+    "lines": {
+     "start": 18,
+     "end": 27
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0002-403-vs-404-existence-hiding.md",
+     "lineStart": 18,
+     "lineEnd": 27
+    }
+   ],
+   "front": "tracer-net status codes under ADR 0002: 401, 403, 404, 400?",
+   "back": "401 no/unknown/revoked key; 403 right key but wrong role, or a row not yours to edit; 404 does not exist OR belongs to a team you are not on; 400 a well-formed request pointing at another team's reference (state, label, project, parent)."
+  },
+  {
+   "id": "f02-csv-defuse",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0009-import-idempotency-external-id.md",
+    "lines": {
+     "start": 30,
+     "end": 31
+    }
+   },
+   "cites": [
+    {
+     "path": "src/Tracer.Api/Export/Csv.cs",
+     "lineStart": 22,
+     "lineEnd": 22
+    },
+    {
+     "path": "docs/adr/0009-import-idempotency-external-id.md",
+     "lineStart": 45,
+     "lineEnd": 45
+    }
+   ],
+   "front": "How does the CSV export stop formula injection?",
+   "back": "A cell starting with = + - @ (plus tab or carriage return) is prefixed with a single quote, so a spreadsheet treats it as text."
+  },
+  {
+   "id": "f03-import-idempotent",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0009-import-idempotency-external-id.md",
+    "lines": {
+     "start": 14,
+     "end": 28
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0009-import-idempotency-external-id.md",
+     "lineStart": 14,
+     "lineEnd": 28
+    }
+   ],
+   "front": "What makes bulk import safe to resend?",
+   "back": "Rows match existing issues by ExternalId (then by identifier like ENG-42), backed by a filtered unique index on (TeamId, ExternalId); import is all-or-nothing, and a dry run builds the exact plan a real import applies."
+  },
+  {
+   "id": "f04-outbox-limits",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0004-transactional-outbox-webhooks.md",
+    "lines": {
+     "start": 31,
+     "end": 36
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0004-transactional-outbox-webhooks.md",
+     "lineStart": 31,
+     "lineEnd": 36
+    },
+    {
+     "path": "docs/adr/0004-transactional-outbox-webhooks.md",
+     "lineStart": 49,
+     "lineEnd": 49
+    }
+   ],
+   "front": "Known limits of the webhook outbox?",
+   "back": "At-least-once, so consumers dedupe on the activity id; single instance only (the claim is not atomic); sequential sends give head-of-line blocking (up to 20 x 10 s per batch)."
+  }
+ ]
+}
