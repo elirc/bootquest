@@ -158,8 +158,41 @@ describe('guide shapes (real excerpts)', () => {
       'after `db:push` and `db:seed`, run the API and `curl -X POST -H "x-user-id: user-warehouse-lead" http://127.0.0.1:4000/api/orders/so-10035/reserve`.',
       'as `user-buyer`, call the reserve endpoint and the CSV export.',
     ]);
+    // verbatim checks: the first item's Check must NOT absorb the next list item's title
+    expect(items.map((i) => i.checks)).toEqual([
+      ['the response is `{ "ok": true, "status": "allocated", ... }`; `GET /api/inventory` now shows the west green pack (`PACK-22-GRN`) with `reserved` 38 and `available` 4; a second identical POST returns `ok: true` without changing the numbers.'],
+      ['reserve returns 403 with `requiredRoles: ["warehouse_manager", "admin"]`; the export returns 200.'],
+    ]);
+    expect(items.map((i) => [i.lineStart, i.lineEnd])).toEqual([[6, 7], [9, 10]]);
     expect(items.flatMap((i) => i.checks).some((c) => /you can observe/.test(c))).toBe(false);
     expect(skips).toEqual([expect.objectContaining({ line: 3, reason: 'check-without-goal' })]);
+  });
+
+  it('a Goal/Check on continuation lines ends at the next sibling list item (atlas final-system-design.md:111-116)', () => {
+    // verbatim organized-study-atlas-fulfillment@d82cc29 docs/architecture/final-system-design.md:111-116
+    // (+ two synthetic lines: a nested bullet under a Check stays part of it); before the fix each
+    // non-final Check ended with the next item's title ("... the export returns 200. 3. **Pass the actor through.**")
+    const md = [
+      '2. **See the role ranking.**',
+      '   *Goal:* as `user-buyer`, call the reserve endpoint and the CSV export.',
+      '   *Check:* reserve returns 403 with `requiredRoles: ["warehouse_manager", "admin"]`; the export returns 200.',
+      '3. **Pass the actor through.**',
+      '   *Goal:* add an `actorId` parameter to `reserveSalesOrder` and `runReconciliation`, and pass `request.actor.id` from `app.ts`.',
+      '   *Check:* after exercise 1, `GET /api/audit-logs` (as admin) shows an `order.reserved` row with `actorId: "user-warehouse-lead"`.',
+      '4. **Make reconciliation warehouse-aware.**',
+      '   *Goal:* include the warehouse code in the duplicate check (or store `inventoryItemId` on the notification).',
+      '   *Check:* a nested detail',
+      '     - still belongs to this check',
+    ].join('\n');
+    const lines = scanLines(md);
+    const { items, skips } = extractGoalChecks(lines, headings(lines));
+    expect(skips).toEqual([]);
+    expect(items.map((i) => i.checks)).toEqual([
+      ['reserve returns 403 with `requiredRoles: ["warehouse_manager", "admin"]`; the export returns 200.'],
+      ['after exercise 1, `GET /api/audit-logs` (as admin) shows an `order.reserved` row with `actorId: "user-warehouse-lead"`.'],
+      ['a nested detail - still belongs to this check'],
+    ]);
+    expect(items.flatMap((i) => i.checks).some((c) => /\*\*/.test(c))).toBe(false);
   });
 
   it('a bare **Goal** still counts at the start of a line or list item, and with a colon anywhere', () => {

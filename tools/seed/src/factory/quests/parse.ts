@@ -148,9 +148,34 @@ export function extractGoalChecks(lines: readonly GuideLine[], hs: readonly Head
       label = `goal ${k}`;
     }
 
+    // Campaign-2 fix pass: the Goal may sit on an indented CONTINUATION line of a list item
+    // (`1. **Title.**` / `   *Goal:* ...` / `   *Check:* ...`, organized-study-atlas-fulfillment
+    // final-system-design.md:107-121, 002-audit-log-viewer.md:58-69). The enclosing item is the
+    // nearest less-indented list-item line in the same paragraph; a sibling item (indent <= the
+    // enclosing one) ends the exercise, so the last Check no longer absorbs the next item's title.
+    let parentIndent = -1;
+    if (!listM) {
+      const ownIndent = /^\s*/.exec(l.text)![0].length;
+      for (let p = i - 1; p >= 0; p--) {
+        const q = lines[p]!;
+        if (q.fence || q.text.trim() === '' || isHeading(q)) break;
+        const qm = LIST_ITEM.exec(q.text);
+        if (qm && qm[1]!.length < ownIndent) {
+          parentIndent = qm[1]!.length;
+          break;
+        }
+      }
+    }
+
     // stop conditions for continuing past the Goal line
-    const ends = (x: GuideLine): boolean =>
-      isHeading(x) || (!x.fence && GOAL.test(x.text)) || (inline && !x.fence && LIST_ITEM.test(x.text) && (LIST_ITEM.exec(x.text)![1]!.length <= indent));
+    const siblingItem = (x: GuideLine): boolean => {
+      if (x.fence) return false;
+      const xm = LIST_ITEM.exec(x.text);
+      if (!xm) return false;
+      if (inline) return xm[1]!.length <= indent;
+      return parentIndent >= 0 && xm[1]!.length <= parentIndent;
+    };
+    const ends = (x: GuideLine): boolean => isHeading(x) || (!x.fence && GOAL.test(x.text)) || siblingItem(x);
 
     let goal = l.text.slice(goalAt).replace(GOAL, '');
     const checks: string[] = [];
