@@ -1,0 +1,389 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "organized-study-linkwarden",
+ "sha": "d98206e1829b15821d97e2555db7c269ba806d09",
+ "guides": [
+  "linkwarden/fabledocs/upskill/00-fast-track.md",
+  "linkwarden/fabledocs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+  "linkwarden/fabledocs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md"
+ ],
+ "items": [
+  {
+   "id": "l01-batch-idempotency",
+   "kind": "quiz",
+   "source": {
+    "path": "linkwarden/fabledocs/upskill/00-fast-track.md",
+    "lines": {
+     "start": 42,
+     "end": 44
+    }
+   },
+   "cites": [
+    {
+     "path": "linkwarden/apps/worker/lib/getLinkBatchFairly.ts",
+     "lineStart": 35,
+     "lineEnd": 38
+    }
+   ],
+   "prompt": "The archiving loop runs every few seconds. What stops it from archiving the same link again on every pass?",
+   "answer": "The batch query picks just the links whose lastPreserved is null",
+   "distractors": [
+    "A per-link Redis lock that is taken before archiving starts",
+    "A unique index on Link.url that rejects any repeated work",
+    "An archived flag that the web app sets when it serves a link"
+   ],
+   "explanation": "getLinkBatchFairly selects links with url not null and lastPreserved: null, and archiveHandler always stamps lastPreserved in its finally block. That column is the pipeline's idempotency key."
+  },
+  {
+   "id": "l02-failure-marked-done",
+   "kind": "quiz",
+   "source": {
+    "path": "linkwarden/fabledocs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+    "lines": {
+     "start": 7,
+     "end": 9
+    }
+   },
+   "cites": [
+    {
+     "path": "linkwarden/apps/worker/lib/archiveHandler.ts",
+     "lineStart": 199,
+     "lineEnd": 224
+    }
+   ],
+   "prompt": "Inside archiveHandler, page.goto throws partway through archiving a link. What does the finally block write to that link's row?",
+   "answer": "It stamps lastPreserved and marks each missing format unavailable",
+   "distractors": [
+    "It leaves lastPreserved null, so the next pass tries the link again",
+    "It deletes the link row, since no archive of it could be produced",
+    "It bumps a retry counter, then backs off before trying it again"
+   ],
+   "explanation": "The finally block runs on success and failure alike: if the row still exists it sets lastPreserved to now and every empty format to \"unavailable\", so a failing URL is not retried."
+  },
+  {
+   "id": "l03-delivery-semantics",
+   "kind": "quiz",
+   "source": {
+    "path": "linkwarden/fabledocs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+    "lines": {
+     "start": 30,
+     "end": 30
+    }
+   },
+   "cites": [
+    {
+     "path": "linkwarden/apps/worker/lib/archiveHandler.ts",
+     "lineStart": 212,
+     "lineEnd": 224
+    },
+    {
+     "path": "linkwarden/apps/worker/workers/linkIndexing.ts",
+     "lineStart": 145,
+     "lineEnd": 159
+    }
+   ],
+   "prompt": "archiveHandler marks a link as preserved even when archiving it failed. What reason does the side-effects guide give for that choice?",
+   "answer": "So that a poison URL is not archived over and over",
+   "distractors": [
+    "Because Prisma cannot store a failed state on a link row",
+    "Because the Wayback copy already preserves the failed page",
+    "Because indexing waits for lastPreserved before it runs"
+   ],
+   "explanation": "Archiving is at most once on purpose: duplicate indexing is harmless, but re-archiving a URL that always fails or hangs would waste the worker forever. A failed link is stored as unavailable formats, the Wayback call is fire-and-forget, and indexing selects on indexVersion, not lastPreserved."
+  },
+  {
+   "id": "l04-index-marked-on-timeout",
+   "kind": "quiz",
+   "source": {
+    "path": "linkwarden/fabledocs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+    "lines": {
+     "start": 10,
+     "end": 10
+    }
+   },
+   "cites": [
+    {
+     "path": "linkwarden/apps/worker/workers/linkIndexing.ts",
+     "lineStart": 145,
+     "lineEnd": 159
+    }
+   ],
+   "prompt": "In linkIndexing, the waitForTask call for a batch rejects with a timeout. What happens to the indexVersion of those links?",
+   "answer": "They get the current version anyway; the error is just logged",
+   "distractors": [
+    "It stays stale, so the next pass sends the same batch again",
+    "It is set to null, so the archive worker redoes those links",
+    "The loop throws, and the worker restarts that batch later"
+   ],
+   "explanation": "waitForTask(...).catch only logs the error; the code then runs prisma.link.updateMany setting indexVersion to MEILI_INDEX_VERSION for every id in the batch. The guide row says rows stay stale until success; that holds for an addDocuments failure, not for a waitForTask error."
+  },
+  {
+   "id": "l05-deleted-mid-archive",
+   "kind": "quiz",
+   "source": {
+    "path": "linkwarden/fabledocs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+    "lines": {
+     "start": 30,
+     "end": 30
+    }
+   },
+   "cites": [
+    {
+     "path": "linkwarden/apps/worker/lib/archiveHandler.ts",
+     "lineStart": 208,
+     "lineEnd": 227
+    }
+   ],
+   "prompt": "A user deletes a link while the worker is still archiving it. What does the finally block in archiveHandler do?",
+   "answer": "It finds the row gone, so it removes the files it just wrote",
+   "distractors": [
+    "It recreates the row, so that the finished archive is kept",
+    "It throws, and the supervisor restarts the whole worker",
+    "It marks the formats unavailable on a tombstone row instead"
+   ],
+   "explanation": "finally re-reads the link with findUnique; when it is gone (finalLink is null) it calls removeFiles(link.id, link.collectionId), a compensation step for files written mid-archive."
+  },
+  {
+   "id": "l06-worker-respawn",
+   "kind": "quiz",
+   "source": {
+    "path": "linkwarden/fabledocs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+    "lines": {
+     "start": 24,
+     "end": 24
+    }
+   },
+   "cites": [
+    {
+     "path": "linkwarden/apps/worker/index.ts",
+     "lineStart": 3,
+     "lineEnd": 16
+    }
+   ],
+   "prompt": "The worker.ts process crashes on an uncaught error. In this repo, what brings the worker loops back?",
+   "answer": "apps/worker/index.ts spawns it again with tsx after 5 seconds",
+   "distractors": [
+    "PM2, which the worker package uses as its process runner",
+    "The web app, which starts a worker on its next API request",
+    "Nothing; links stay unpreserved until someone restarts it by hand"
+   ],
+   "explanation": "index.ts spawns tsx worker.ts as a child and, on exit, logs and calls setTimeout(launch, 5000). The worker package scripts run tsx index.ts; the web worker route only reports stats."
+  },
+  {
+   "id": "l07-browser-rotation",
+   "kind": "quiz",
+   "source": {
+    "path": "linkwarden/fabledocs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+    "lines": {
+     "start": 24,
+     "end": 24
+    }
+   },
+   "cites": [
+    {
+     "path": "linkwarden/apps/worker/workers/linkProcessing.ts",
+     "lineStart": 29,
+     "lineEnd": 33
+    }
+   ],
+   "prompt": "How often does linkProcessing replace its Playwright browser even when nothing has gone wrong?",
+   "answer": "Every 30 minutes, checked at the top of each loop pass",
+   "distractors": [
+    "After every batch of 5 links, the ARCHIVE_TAKE_COUNT",
+    "Only when the browser reports that it has been disconnected",
+    "Once a day, on the first loop pass after midnight"
+   ],
+   "explanation": "The loop compares Date.now() - browserStartTs with BROWSER_MAX_AGE_MS (30 minutes) and calls restartBrowser(\"30-minute rotation\"). A disconnect also triggers a restart, but it is not the only trigger."
+  },
+  {
+   "id": "l08-member-cannot-move",
+   "kind": "quiz",
+   "source": {
+    "path": "linkwarden/fabledocs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 25,
+     "end": 31
+    }
+   },
+   "cites": [
+    {
+     "path": "linkwarden/apps/web/lib/api/controllers/links/linkId/updateLinkById.ts",
+     "lineStart": 88,
+     "lineEnd": 96
+    }
+   ],
+   "prompt": "A collection member with canUpdate edits a link and sets its collection to another collection they also belong to. What does updateLinkById do?",
+   "answer": "Refuses with a 401, since moving links is for owners",
+   "distractors": [
+    "Moves it, since canUpdate covers the collection field",
+    "Refuses with a 403, the usual authorization status",
+    "Moves it, provided the member has canCreate there"
+   ],
+   "explanation": "isCollectionOwner is false and the target id differs from the current collection, so unauthorizedSwitchCollection is true and the controller returns 401 \"You can't move a link to/from a collection you don't own.\" The repo uses 401 for authorization denials."
+  },
+  {
+   "id": "l09-getpermission-linkid",
+   "kind": "quiz",
+   "source": {
+    "path": "linkwarden/fabledocs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 35,
+     "end": 35
+    }
+   },
+   "cites": [
+    {
+     "path": "linkwarden/apps/web/lib/api/getPermission.ts",
+     "lineStart": 14,
+     "lineEnd": 26
+    }
+   ],
+   "prompt": "getPermission({ userId, linkId }) is called for a link in a collection the user has no relation to. What does it return?",
+   "answer": "The collection with its members; the caller applies the rule",
+   "distractors": [
+    "null, as the query filters on the owner or on a member of it",
+    "A 401 response object that the route can return directly",
+    "An empty members list, so the other users stay hidden"
+   ],
+   "explanation": "The linkId branch queries collection.findFirst({ where: { links: { some: { id: linkId } } }, include: { members: true } }) and never uses userId. It returns relationship data; each controller decides."
+  },
+  {
+   "id": "l10-url-change-removes-files",
+   "kind": "quiz",
+   "source": {
+    "path": "linkwarden/fabledocs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+    "lines": {
+     "start": 35,
+     "end": 35
+    }
+   },
+   "cites": [
+    {
+     "path": "linkwarden/apps/web/lib/api/controllers/links/linkId/updateLinkById.ts",
+     "lineStart": 133,
+     "lineEnd": 146
+    }
+   ],
+   "prompt": "updateLinkById receives a new, valid URL for an existing link. When are the old archive files deleted?",
+   "answer": "Before the Prisma update of the link row runs",
+   "distractors": [
+    "After the update commits, in a post-commit hook",
+    "Later, when the worker archives the new URL",
+    "Not at all; they stay until the link is deleted"
+   ],
+   "explanation": "When data.url differs from oldLink.url and is valid, removeFiles(oldLink.id, oldLink.collectionId) runs, and only afterwards prisma.link.update. If the update fails, the files are already gone."
+  },
+  {
+   "id": "l11-revoked-session",
+   "kind": "quiz",
+   "source": {
+    "path": "linkwarden/fabledocs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 17,
+     "end": 19
+    }
+   },
+   "cites": [
+    {
+     "path": "linkwarden/apps/web/lib/api/verifyToken.ts",
+     "lineStart": 19,
+     "lineEnd": 35
+    }
+   ],
+   "prompt": "A session JWT is not expired, but its AccessToken row has revoked: true. What does verifyToken give back?",
+   "answer": "The string saying the session expired, so the request is refused",
+   "distractors": [
+    "The decoded token, since its signature and exp claim are both valid",
+    "A status object with 403, the code for a revoked credential",
+    "A freshly issued token, after rotating the revoked jti value"
+   ],
+   "explanation": "After the exp check, verifyToken looks up accessToken.findFirst({ token: token.jti, revoked: true }); a hit returns \"Your session has expired, please log in again.\" instead of the token."
+  },
+  {
+   "id": "l12-sort-nan",
+   "kind": "quiz",
+   "source": {
+    "path": "linkwarden/fabledocs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 7,
+     "end": 11
+    }
+   },
+   "cites": [
+    {
+     "path": "linkwarden/apps/web/pages/api/v1/links/index.ts",
+     "lineStart": 13,
+     "lineEnd": 19
+    }
+   ],
+   "prompt": "A client calls GET /api/v1/links?sort=abc. What value does the route pass to getLinks as sort?",
+   "answer": "NaN, because Number(...) of the text is passed on unchecked",
+   "distractors": [
+    "0, the default sort that is used when the parse fails",
+    "undefined, because the route drops the invalid value",
+    "none; the route answers with 400 for an invalid sort value"
+   ],
+   "explanation": "The route builds convertedData with sort: Number(req.query.sort as string) and no check; Number(\"abc\") is NaN. The validation map calls this manual coercion a known gap."
+  },
+  {
+   "id": "f01-marker-columns",
+   "kind": "flashcard",
+   "source": {
+    "path": "linkwarden/fabledocs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+    "lines": {
+     "start": 21,
+     "end": 21
+    }
+   },
+   "cites": [
+    {
+     "path": "linkwarden/apps/worker/lib/archiveHandler.ts",
+     "lineStart": 212,
+     "lineEnd": 224
+    }
+   ],
+   "front": "Name the idempotency marker columns Linkwarden uses, one per side effect.",
+   "back": "lastPreserved (archiving), indexVersion (Meilisearch indexing), aiTagged (AI tagging), trialEndEmailSent (trial-end email). Each loop checks its column before acting: make the completion of an effect queryable."
+  },
+  {
+   "id": "f02-auth-chain",
+   "kind": "flashcard",
+   "source": {
+    "path": "linkwarden/fabledocs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 17,
+     "end": 19
+    }
+   },
+   "cites": [
+    {
+     "path": "linkwarden/apps/web/lib/api/verifyToken.ts",
+     "lineStart": 9,
+     "lineEnd": 35
+    }
+   ],
+   "front": "What does Linkwarden's authentication chain check, in order?",
+   "back": "verifyToken: decode the NextAuth JWT, check the user id, a manual exp check, then a jti revocation lookup in AccessToken. verifyUser: the user exists, has a username, has a verified email (if enabled) and a subscription (if Stripe)."
+  },
+  {
+   "id": "f03-bulkheads",
+   "kind": "flashcard",
+   "source": {
+    "path": "linkwarden/fabledocs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+    "lines": {
+     "start": 23,
+     "end": 25
+    }
+   },
+   "cites": [
+    {
+     "path": "linkwarden/apps/worker/workers/linkProcessing.ts",
+     "lineStart": 45,
+     "lineEnd": 72
+    }
+   ],
+   "front": "How does the worker keep one bad link from sinking a whole batch, and where is backpressure missing?",
+   "back": "Per-link try/catch in archiveLink, per-feed try/catch in RSS polling, and Promise.allSettled over each batch. Batch sizes are capped (ARCHIVE_TAKE_COUNT, INDEX_TAKE_COUNT), but RSS fan-out uses an unbounded Promise.all."
+  }
+ ]
+}
