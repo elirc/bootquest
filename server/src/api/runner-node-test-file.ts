@@ -1,9 +1,7 @@
-import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
-import { posix } from 'node:path';
 import type { CanonicalRunResult } from '@bootquest/shared/api';
 import { CheckIntegrityError, run as runNodeTestFile, type NodeTestFileSpec } from '../runners/node-test-file/index.ts';
 import type { GithubCache } from '../sync/cache.ts';
+import { TsconfigChainError, verifyTsconfigChain } from '../sync/tsconfig-chain.ts';
 import { CheckRefusedError, SubmissionShapeError, UnsupportedCheckError, type Runner } from './runners.ts';
 
 /**
@@ -14,16 +12,10 @@ import { CheckRefusedError, SubmissionShapeError, UnsupportedCheckError, type Ru
  * runs `node --test` in a fresh workspace mirroring the repo layout.
  * Any pin problem is a REFUSAL (CheckRefusedError -> 409 CHECK_INTEGRITY):
  * nothing is spawned, no attempt is recorded.
- */
-/** The extends chain never legitimately needs more files than this (signalpost: 2). */
-const MAX_TSCONFIG_FILES = 8;
-
-/**
- * U03 composite: collect the tsconfig `extends` chain from the pinned tree at `sha`
- * (cache.treeFile — a cache miss downloads that sha's tarball once, like the check
- * file itself). RELATIVE extends only (`./` / `../`): a package-ref extends would
- * need node_modules the workspace deliberately lacks, so it is left for tsc to
- * report. Depth/size-capped; a chain that escapes the repo is a refusal.
+ *
+ * U03 composite: the tsconfig `extends` chain from the pinned tree at `sha` (cache.treeFile — a
+ * cache miss downloads that sha's tarball once, like the check file itself), verified by the
+ * shared sync/tsconfig-chain.ts (F15: the same verifier sync uses for the recorded pins).
  *
  * campaign 2 (OPS review): every failure to obtain a chain file is a REFUSAL
  * (CheckRefusedError -> 409 CHECK_INTEGRITY), never a raw 500; and when the check
@@ -37,62 +29,12 @@ async function collectProjectFiles(
   project: string,
   pins?: Readonly<Record<string, string>>,
 ): Promise<Record<string, string>> {
-  const files: Record<string, string> = {};
-  const queue = [project];
-  while (queue.length > 0 && Object.keys(files).length < MAX_TSCONFIG_FILES) {
-    const rel = queue.shift()!;
-    if (rel in files) continue; // cycle / duplicate
-    let abs: string;
-    try {
-      abs = await cache.treeFile(repo, sha, rel);
-    } catch (err) {
-      throw new CheckRefusedError(
-        `tsconfig ${repo}@${sha.slice(0, 7)}:${rel} is not available (${err instanceof Error ? err.message : String(err)})`,
-      );
-    }
-    let bytes: Buffer;
-    try {
-      bytes = await readFile(abs);
-    } catch (err) {
-      throw new CheckRefusedError(
-        `tsconfig ${repo}@${sha.slice(0, 7)}:${rel} could not be read from the cache (${err instanceof Error ? err.message : String(err)})`,
-      );
-    }
-    if (pins) {
-      const want = pins[rel];
-      if (want === undefined) {
-        throw new CheckRefusedError(`tsconfig chain file ${rel} has no recorded pin (the chain at ${sha.slice(0, 7)} differs from check-specs tsc_files) — refusing to run`);
-      }
-      const got = createHash('sha256').update(bytes).digest('hex');
-      if (got !== want) {
-        throw new CheckRefusedError(`tsconfig ${rel} at ${sha.slice(0, 7)} does not hash to its recorded pin (sha256 ${got.slice(0, 12)}… != ${want.slice(0, 12)}…) — refusing to run`);
-      }
-    }
-    const content = bytes.toString('utf8');
-    files[rel] = content;
-    let ext: unknown;
-    try {
-      ext = (JSON.parse(content) as { extends?: unknown }).extends;
-    } catch {
-      continue; // not strict JSON (jsonc?): materialize what we have; tsc reports the real problem
-    }
-    const refs = typeof ext === 'string' ? [ext] : Array.isArray(ext) ? ext.filter((x): x is string => typeof x === 'string') : [];
-    for (const r of refs) {
-      if (!r.startsWith('./') && !r.startsWith('../')) continue; // relative extends only
-      const next = posix.normalize(posix.join(posix.dirname(rel), r.endsWith('.json') ? r : `${r}.json`));
-      if (next === '..' || next.startsWith('../')) {
-        throw new CheckRefusedError(`tsconfig extends chain escapes the repo: ${rel} -> ${r}`);
-      }
-      queue.push(next);
-    }
+  try {
+    return await verifyTsconfigChain((r, s, rel) => cache.treeFile(r, s, rel), repo, sha, project, pins);
+  } catch (err) {
+    if (err instanceof TsconfigChainError) throw new CheckRefusedError(err.message);
+    throw err;
   }
-  if (pins) {
-    const missing = Object.keys(pins).filter((p) => !(p in files));
-    if (missing.length > 0) {
-      throw new CheckRefusedError(`recorded tsconfig pin(s) ${missing.join(', ')} are not part of the ${project} extends chain at ${sha.slice(0, 7)} — refusing to run`);
-    }
-  }
-  return files;
 }
 
 export function createNodeTestFileRunner(cache: GithubCache, opts: { workRoot?: string } = {}): Runner {

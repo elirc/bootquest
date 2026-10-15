@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { createServer, type Server } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RunResponse, SubmitResponse } from '@bootquest/shared/api';
 import { assertPortFree, installShutdown, PortBusyError, PortConfigError, resolvePort, startServer } from '../../src/api/serve.ts';
 import { DbPathError } from '../../src/db/database.ts';
+import { defaultWorkParent, removeWorkParent } from '../../src/runners/node-test-file/index.ts';
 import { ledgerCounts } from '../../src/store/queries.ts';
 import { fixture, useApi } from './harness.ts';
 
@@ -64,6 +65,26 @@ describe('serve.ts guards', () => {
       await running.close();
     }
     await expect(assertPortFree(port)).resolves.toBeUndefined();
+  });
+
+  it('F12: a normal close removes this process\'s (empty) bq-ntf-<pid> workspace parent', async () => {
+    const parent = defaultWorkParent();
+    expect(parent).toBe(join(tmpdir(), `bq-ntf-${process.pid}`));
+    mkdirSync(parent, { recursive: true }); // as the node-test-file runner leaves it after its last run
+    const running = await startServer({ env: { BOOTQUEST_DB: join(dir, 'ntf.db'), BOOTQUEST_PORT: String(await freePort()) } });
+    await running.close();
+    expect(existsSync(parent)).toBe(false);
+  });
+
+  it('F12: removeWorkParent only removes an EMPTY parent (a run in flight is never pulled away)', async () => {
+    const parent = join(dir, 'bq-ntf-parent');
+    mkdirSync(join(parent, 'bq-ntf-inflight'), { recursive: true });
+    expect(await removeWorkParent(parent)).toBe(false);
+    expect(existsSync(join(parent, 'bq-ntf-inflight'))).toBe(true);
+    rmSync(join(parent, 'bq-ntf-inflight'), { recursive: true });
+    expect(await removeWorkParent(parent)).toBe(true);
+    expect(existsSync(parent)).toBe(false);
+    expect(await removeWorkParent(parent)).toBe(false); // already gone: nothing to do
   });
 
   it('SIGINT/SIGTERM trigger one graceful close then exit(0)', async () => {

@@ -7,6 +7,7 @@ import { createApp } from '../../src/api/app.ts';
 import { mapContentStore } from '../../src/api/content-store.ts';
 import type { Runner } from '../../src/api/runners.ts';
 import type { Db } from '../../src/db/database.ts';
+import { campaignStateStats } from '../../src/engines/campaign.ts';
 import { DAY_MS, fixedClock } from '../../src/engines/clock.ts';
 import { loadCampaignIntoDb, readCampaign } from '../../src/store/campaign.ts';
 import { insertCheck, insertUnit } from '../../src/store/content.ts';
@@ -212,5 +213,43 @@ describe('campaign slate slot, end to end through the API', { timeout: 30_000 },
     s = await slateCampaign(ctx.app);
     expect(s.dashboard.streak).toMatchObject({ current: 1, longest: 1, todayComplete: false, slateDaysBanked: 1 });
     expect(s.dashboard.heatmap.find((h) => h.day === '2026-10-01')!.status).toBe('slate');
+  });
+});
+
+describe('F16: GET /api/units/:id builds the campaign state ONCE per request', { timeout: 30_000 }, () => {
+  const ctx = useCampaignApi();
+
+  it('a campaign quest unit (locked or open) costs exactly one build; a non-quest unit costs none', async () => {
+    for (const [key, locked] of [
+      ['campaign/js/read-r1', false],
+      ['campaign/js/read-r3', true],
+    ] as const) {
+      const before = campaignStateStats.builds;
+      const res = await request(ctx.app).get(`/api/units/${unitOf(ctx.db, key)}`);
+      expect(res.status).toBe(200);
+      expect(Boolean(res.body.actGate?.locked)).toBe(locked);
+      expect(campaignStateStats.builds - before, key).toBe(1);
+    }
+    const plain = insertUnit(ctx.db, { key: 'fixture:plain', track: 'js', kind: 'reading', title: 'plain', difficulty: 1, competencies: ['language-fluency'] }, ctx.clock);
+    const before = campaignStateStats.builds;
+    expect((await request(ctx.app).get(`/api/units/${plain}`)).status).toBe(200);
+    expect(campaignStateStats.builds - before).toBe(0);
+  });
+
+  it('a unit held by quests of TWO tracks is judged with one build and unlocked iff ANY holding act is unlocked', async () => {
+    // also place js read-r3 (act 2, locked) into the csharp act 1 (unlocked): one open act suffices
+    const r3 = unitOf(ctx.db, 'campaign/js/read-r3');
+    const csAct = ctx.db.get<{ id: number }>(`SELECT id FROM campaign_act WHERE track_id = 'csharp' AND act_no = 1`)!.id;
+    ctx.db.run(
+      `INSERT INTO quest (act_id, key, quest_kind, title, repo, index_rank, unit_id, core, content_pending, verdict)
+       VALUES (?, 'campaign/csharp/twin-r3', 'reading', 'twin', 'twin-r3', 99, ?, 0, 0, 'skim')`,
+      csAct,
+      r3,
+    );
+    const before = campaignStateStats.builds;
+    const res = await request(ctx.app).get(`/api/units/${r3}`);
+    expect(res.status).toBe(200);
+    expect(res.body.actGate).toBeUndefined();
+    expect(campaignStateStats.builds - before).toBe(1);
   });
 });

@@ -27,6 +27,7 @@ import {
   recordedCheckSpec,
   sha256Hex,
 } from './program.ts';
+import { TsconfigChainError, verifyTsconfigChain } from './tsconfig-chain.ts';
 
 /**
  * The sync job (spec §3.2 / §7 `seed:sync`; BUILD-PLAN W4). For every
@@ -419,16 +420,18 @@ async function planProgram(
     if (sha256Hex(pinnedBytes) !== rec.sha256 || gitBlobSha(pinnedBytes) !== rec.blob_sha) {
       throw new ProgramError(`${m.code}: recorded check ${rec.path} does not hash to its pin at ${table.sha} — the table is wrong`);
     }
-    // campaign 2 (OPS review): the recorded tsconfig-chain pins must hold at the recorded sha too
-    for (const [p, pin] of Object.entries(rec.tsc_files ?? {})) {
-      let bytes: Buffer;
+    // campaign 2 (OPS review): the recorded tsconfig-chain pins must hold at the recorded sha too.
+    // F15: verified by the SAME walker the runner adapter uses before every U03 run, so sync also
+    // proves the pins are exactly the project's extends chain (sha256 + git blob sha). The schema
+    // guarantees tsc_files implies tsc_project.
+    if (rec.tsc_files !== undefined && rec.tsc_project !== undefined) {
       try {
-        bytes = readFileSync(await deps.cache.treeFile(repo, table.sha, p));
+        await verifyTsconfigChain((r, s, rel) => deps.cache.treeFile(r, s, rel), repo, table.sha, rec.tsc_project, rec.tsc_files);
       } catch (err) {
-        throw new ProgramError(`${m.code}: recorded tsconfig ${p} is not in the tree at ${table.sha} — the table is wrong (${err instanceof Error ? err.message : String(err)})`);
-      }
-      if (sha256Hex(bytes) !== pin.sha256 || gitBlobSha(bytes) !== pin.blob_sha) {
-        throw new ProgramError(`${m.code}: recorded tsconfig ${p} does not hash to its pin at ${table.sha} — the table is wrong`);
+        if (err instanceof TsconfigChainError) {
+          throw new ProgramError(`${m.code}: recorded tsconfig chain does not hold at ${table.sha} — the table is wrong (${err.message})`);
+        }
+        throw err;
       }
     }
     // drift at the synced sha is reported, never auto-re-pinned

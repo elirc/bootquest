@@ -644,3 +644,62 @@ difficulty/assistance anywhere; XP/evidence only via the submit pipeline.
   postdate last promotion/demotion, leg (c) matched by competency ≥48h after
   leg (b); `check` is an SQL keyword — always quote the table name; node 22.16
   returns plain numbers (not BigInt) for lastInsertRowid.
+
+## 2026-10-14 — Release decisions for the owner (campaign 2 review, docs/recon/campaign2-review.md)
+
+The release code-polish pass (branch `code-polish`) deliberately did NOT change behaviour for
+these five findings: each one is a product or spec call, not a bug fix. Current behaviour is
+what ships until the owner picks an option.
+
+- **F4: explain-back units of locked acts are not act-gated** (`server/src/engines/campaign.ts`
+  `questUnitUnlocked` only gates campaign QUEST units).
+  - *Current:* an explain-back ladder unit linked to an act-2/3 study quest is playable while
+    that act is locked; after a throwaway answer its key points are readable. Campaign 2 added
+    39 such sets.
+  - *Risk:* the key points summarize the same CONCEPTS docs the locked act's quiz gates test, so
+    a learner can pre-read locked-act material (not an XP exploit: the quiz gate still needs 80%
+    and its own answers).
+  - *Option A:* gate an explain-back unit (detail, answer, key) with 403 ACT_LOCKED while every
+    act of its linked quest is locked, like the quest unit itself.
+  - *Option B:* keep them open on purpose and say so on the unit ("reference practice, open
+    before its act").
+- **F8: `GET /refs/:id/content` has no act or track gate** (`server/src/api/app.ts`, V1).
+  - *Current:* any registered, non-quarantined markdown ref is served by id; a locked unit's
+    detail returns `refs: []`, but ref ids are sequential and can be enumerated.
+  - *Risk:* locked-act guide text is readable by id. It is the public upstream guide content, so
+    no key or grader material leaks.
+  - *Option A:* serve a ref only when at least one unit that references it is open (track
+    unlocked and act unlocked); 403 otherwise.
+  - *Option B:* accept refs as public guide content and document it next to the act-lock rule.
+- **F9: two definitions of "passed" on the Stats page** (`server/src/engines/stats.ts` pass
+  rates vs `server/src/store/queries.ts` `passedUnitIds` / `doneUnitIds`).
+  - *Current:* pass rates exclude guided passes (shown apart as `guidedPasses`); track progress,
+    campaign `coreDone` and the V1 act-unlock percentage count a guided pass as done.
+  - *Risk:* the page mixes the two numbers: a unit passed after a reveal reads as "done" in the
+    progress bars while the pass-rate panel says it was not a pass (no XP is paid for it either
+    way). Where a revealable unit counts toward an act's unlock percentage, the same split
+    applies to the unlock.
+  - *Option A:* show guided completions separately in the progress bars (display only; the
+    unlock rule is unchanged).
+  - *Option B:* make progress and unlock count solo/assisted passes only (a spec change to the
+    act-unlock rule; existing DBs may see acts re-lock).
+- **F10: the standalone ww6 ladder study unit pays study-quest XP** (`server/src/store/ladder.ts`
+  standalone study packs; `study-quiz -> study-quest` XP mapping).
+  - *Current:* its first verified pass pays 50 XP, the campaign study-quest rate, although it is
+    reference material outside the campaign.
+  - *Risk:* XP inflation from non-campaign study units (one unit today; every future unmatched
+    quest pack would do the same).
+  - *Option A:* pay a reduced amount (or 0) for ladder study units, via a distinct XP kind.
+  - *Option B:* confirm 50 XP as intended (a quiz gate at 80% is real work) and note it in the
+    XP table of the spec.
+- **F11: six V1 katas changed in place under the same item key** (`content/seed/patches/
+  {netcalendy,netgum,netslack,netzen,relay-app,tracer-net}-katas`).
+  - *Current:* diff, context and test changed (meaning unchanged; netgum also got a corrected
+    line citation); answers recorded earlier are refused with 409 CONTENT_CHANGED by the stored
+    item hash (W7), so nothing is silently re-labelled.
+  - *Risk:* a learner who answered the old version cannot see its key any more and cannot
+    re-answer the same key; the ladder avoids this for study units by versioning keys.
+  - *Option A:* accept with this note (meaning unchanged; the CONTENT_CHANGED refusal is the
+    honest outcome).
+  - *Option B:* version kata keys whenever a learner-visible diff changes (new key, old one
+    retired), so old answers keep their key and the new item is answerable.

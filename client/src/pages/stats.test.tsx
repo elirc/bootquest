@@ -1,9 +1,10 @@
 // Campaign 2 B2: Stats page charts (render tests), honest empty states, and ui-audit #26
 // (sidebar track % = the server's shared TrackProgress, explained in a tooltip, agreeing with the campaign page).
-import { screen, waitFor, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { createMockApi } from '../api/mock';
 import type { BootQuestApi, PassRatesResponse, ReviewStatsResponse, TracksResponse, XpStatsResponse } from '../api/types';
+import { RATE_LABEL_INSET, RateChart } from '../components/StatsCharts';
 import { renderApp } from '../test/render';
 
 /** the page mounts its panels after the dashboard load; give findBy room under multi-agent CPU load (no assertion is timing-based) */
@@ -241,5 +242,49 @@ describe('ui-audit #26: sidebar track % = campaign core progress, explained in a
     const ag = await screen.findByTestId('track-pct-agentic', {}, SLOW);
     expect(ag.closest('a')!.getAttribute('title')).toMatch(/practice units done|No progress counted/);
     expect(screen.queryByTestId('track-pct-java')).not.toBeInTheDocument();
+  });
+});
+
+describe('release (UI-FINAL CLS leftover): the panels are laid out together, once every panel request has settled', () => {
+  it('no panel (and no skeleton per panel) is placed while one request is still pending; then all appear at once', async () => {
+    const base = createMockApi();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const api: BootQuestApi = { ...base, getReviewStats: async () => (await gate, base.getReviewStats()) };
+    renderApp('/stats', api);
+    // the dashboard has loaded (the page's own load) but the grid waits for the slow panel
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Progress & evidence' })).toBeInTheDocument(), SLOW);
+    expect(screen.queryByRole('heading', { name: 'XP over time' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Pass rates' })).toBeNull();
+    expect(screen.getAllByLabelText('Loading')).toHaveLength(1);
+    release();
+    expect(await screen.findByRole('heading', { name: 'Reviews' }, SLOW)).toBeInTheDocument();
+    for (const t of ['XP over time', 'Pass rates', 'Campaign progress', 'Catch rate (G1)', 'Evidence browser']) {
+      expect(screen.getByRole('heading', { name: t })).toBeInTheDocument();
+    }
+  });
+
+  it('a FAILED panel request does not hold the page back: the grid appears with that panel\'s error and its own Retry', async () => {
+    const base = createMockApi();
+    let fail = true;
+    const api: BootQuestApi = { ...base, getPassRates: () => (fail ? Promise.reject(new Error('rates down')) : base.getPassRates()) };
+    const { user } = renderApp('/stats', api);
+    const panel = (await screen.findByRole('heading', { name: 'Pass rates' }, SLOW)).closest('section')!;
+    expect(within(panel as HTMLElement).getByRole('alert')).toHaveTextContent('rates down');
+    expect(screen.getByRole('heading', { name: 'XP over time' })).toBeInTheDocument();
+    fail = false;
+    await user.click(within(panel as HTMLElement).getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(within(panel as HTMLElement).queryByRole('alert')).toBeNull(), SLOW);
+  });
+});
+
+describe('release (UI-FINAL leftover): rate-chart row labels do not overhang x=0', () => {
+  it('every row label starts RATE_LABEL_INSET (>= 1px, the measured side bearing) inside the svg', async () => {
+    const row = { key: 'js', label: 'JS/TS', passRate: 0.5, passes: 1, attempts: 2, firstTryRate: 0.5, firstTryPasses: 1, units: 2 };
+    const { container } = render(<RateChart rows={[row, { ...row, key: 'cs', label: 'C#' }]} summary="rates" />);
+    const labels = [...container.querySelectorAll('text.chart-label')];
+    expect(labels.map((l) => l.textContent)).toEqual(['JS/TS', 'C#']);
+    expect(RATE_LABEL_INSET).toBeGreaterThanOrEqual(1);
+    for (const l of labels) expect(Number(l.getAttribute('x'))).toBe(RATE_LABEL_INSET);
   });
 });

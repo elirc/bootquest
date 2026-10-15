@@ -259,6 +259,9 @@ export interface RateRow {
  * label sits on its own line so the bars keep the full width at phone size; each bar's value is
  * printed as text at its end (never colour alone).
  */
+/** Row labels start this far inside the svg: a glyph's left side bearing drew 1px outside x=0 (W11 sweep). */
+export const RATE_LABEL_INSET = 2;
+
 export function RateChart({ rows, summary }: { rows: readonly RateRow[]; summary: string }) {
   const [ref, width] = useWidth<HTMLDivElement>(560);
   const valueW = 84;
@@ -286,7 +289,8 @@ export function RateChart({ rows, summary }: { rows: readonly RateRow[]; summary
           const y = top + i * rowH;
           return (
             <g key={r.key} data-row={r.key}>
-              <text x={left} y={y + 11} className="chart-label">
+              {/* release (UI-FINAL leftover): inset by the glyph side bearing so the first letter never overhangs x=0 */}
+              <text x={left + RATE_LABEL_INSET} y={y + 11} className="chart-label">
                 {r.label}
               </text>
               <rect className="chart-track" x={left} y={y + 16} width={plotW} height={10} rx={2} />

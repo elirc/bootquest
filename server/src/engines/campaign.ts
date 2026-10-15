@@ -172,24 +172,37 @@ export function currentLevel(db: Db): number {
   return levelForXp(totalXp(db));
 }
 
+/** Instrumentation for tests (F16): how many times the campaign state was built. */
+export const campaignStateStats = { builds: 0 };
+
 /** Every act (with its quests and derived state) of one track, or of all tracks when trackId is omitted. */
 export function campaignState(db: Db, trackId?: string, level: number = currentLevel(db)): ActState[] {
+  return buildCampaignState(db, trackId === undefined ? undefined : [trackId], level);
+}
+
+/** The acts of the given tracks (all tracks when undefined), built ONCE: one acts query, one quest query, one done/started/prereq read. */
+function buildCampaignState(db: Db, trackIds: readonly string[] | undefined, level: number): ActState[] {
+  campaignStateStats.builds++;
+  if (trackIds !== undefined && trackIds.length === 0) return [];
   const acts = db.all<ActRow>(
     `SELECT ca.id, ca.track_id AS trackId, ca.act_no AS actNo, ca.title, ca.theme, ca.unlock_pct AS unlockPct,
             ca.unlock_level AS unlockLevel, ca.locked, t.locked AS trackLocked
        FROM campaign_act ca JOIN track t ON t.id = ca.track_id
-      ${trackId === undefined ? '' : 'WHERE ca.track_id = ?'}
+      ${trackIds === undefined ? '' : `WHERE ca.track_id IN (${trackIds.map(() => '?').join(', ')})`}
       ORDER BY t.sort_order, ca.act_no`,
-    ...(trackId === undefined ? [] : [trackId]),
+    ...(trackIds ?? []),
   );
   if (acts.length === 0) return [];
+  // F16: only the quests of the acts being built (byAct below ignores any other act anyway)
   const quests = db.all<QuestRow>(
     `SELECT q.id, q.act_id AS actId, q.key, q.quest_kind AS questKind, q.title, q.repo, q.index_rank AS rank, q.ordinal,
             q.unit_id AS unitId, q.core, q.content_pending AS contentPending, q.twin_repo AS twinRepo, q.verdict,
             u.kind AS unitKind, (u.id IS NOT NULL AND u.retired_at IS NULL) AS unitLive,
             (SELECT COUNT(*) FROM "check" c WHERE c.unit_id = q.unit_id) AS checks
        FROM quest q LEFT JOIN unit u ON u.id = q.unit_id
+      ${trackIds === undefined ? '' : `WHERE q.act_id IN (${acts.map(() => '?').join(', ')})`}
       ORDER BY q.act_id, COALESCE(q.ordinal, q.index_rank), q.index_rank, q.id`,
+    ...(trackIds === undefined ? [] : acts.map((a) => a.id)),
   );
   const done = doneUnitIds(db);
   const started = startedUnitIds(db);
@@ -277,8 +290,13 @@ export function questUnitUnlocked(db: Db, unitId: number): boolean | null {
     unitId,
   );
   if (tracks.length === 0) return null;
-  const level = currentLevel(db);
-  return tracks.some((t) => campaignState(db, t.t, level).some((a) => a.unlocked && a.quests.some((q) => q.unitId === unitId)));
+  // F16: ONE build covering every track that holds this unit (was one full build per track)
+  const acts = buildCampaignState(
+    db,
+    tracks.map((t) => t.t),
+    currentLevel(db),
+  );
+  return acts.some((a) => a.unlocked && a.quests.some((q) => q.unitId === unitId));
 }
 
 /** Slate: is there a campaign step the learner can actually take today (an actionable, not-done quest in an unlocked act)? */

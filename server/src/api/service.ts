@@ -50,11 +50,10 @@ import { competencyRowsWithPromotion, explainBackPublicFor, kataPublicFor } from
 import type { SeedItemStore } from '../store/seed-items.ts';
 import { HttpError } from './http.ts';
 import { choiceOrdererFor, servedChoices, toServedIndex, toStoredAnswer } from './choice-order.ts';
+import { findTypeCheckSuppression } from './ts-directive-guard.ts';
 import { CheckRefusedError, gradeDeterministic, SubmissionShapeError, UnsupportedCheckError, type LearnerSubmission, type RunnerRegistry } from './runners.ts';
-import { statSync } from 'node:fs';
 import type { SyncService } from '../sync/service.ts';
-import { loadCheckSpecTable } from '../sync/config.ts';
-import { recordedCheckSpec } from '../sync/program.ts';
+import { uncoveredLegsFor } from '../sync/carve-outs.ts';
 import { CacheMissError, CachePathError } from '../sync/cache.ts';
 import { NetworkUnavailableError } from '../sync/github.ts';
 import type { RefContentResponse, RefLink } from '@bootquest/shared/sync';
@@ -161,93 +160,6 @@ export function getTrackUnits(deps: ServiceDeps, trackId: string) {
   };
 }
 
-/**
- * OPS: honest carve-outs on program units (gh:<repo>:UNN) — the recorded check
- * table's `uncovered_legs` say which acceptance legs the machine check deliberately
- * does NOT cover. Surfaced read-only on GET /units so the player sees what a green
- * check does not prove. Only non-empty lists are sent; a missing/malformed table
- * never breaks unit detail (sync is where table problems are reported).
- *
- * The carve-out is judged against the check that is actually REGISTERED, not just the
- * current table: sync keeps a registered check that attempts reference even when the
- * recorded spec changed (job.ts registerProgram). So when the table names a
- * tsc_project the registered check lacks, the typecheck leg is still reported as
- * uncovered; any other difference between the registered and the recorded spec is
- * reported as "this check predates the current recorded spec".
- */
-/**
- * campaign 2 (OPS review): GET /units/:id used to re-read + Zod-parse the recorded check table on
- * EVERY program-unit detail. Cached per path, invalidated when the file's mtime or size changes;
- * a malformed table is reported LOUDLY once per file version (console.error) instead of being
- * swallowed silently on every request. Exported for tests only.
- */
-interface CheckTableCacheEntry {
-  mtimeMs: number;
-  size: number;
-  table: ReturnType<typeof loadCheckSpecTable> | null;
-}
-const checkTableCache = new Map<string, CheckTableCacheEntry>();
-export const checkTableCacheStats = { parses: 0, malformedReports: 0 };
-
-export function cachedCheckSpecTable(path: string, report: (line: string) => void = (l) => console.error(l)): ReturnType<typeof loadCheckSpecTable> | null {
-  let st: { mtimeMs: number; size: number };
-  try {
-    st = statSync(path);
-  } catch {
-    checkTableCache.delete(path);
-    return null; // no table: nothing to surface (sync reports a missing table where it matters)
-  }
-  const hit = checkTableCache.get(path);
-  if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit.table;
-  checkTableCacheStats.parses++;
-  let table: CheckTableCacheEntry['table'] = null;
-  try {
-    table = loadCheckSpecTable(path);
-  } catch (err) {
-    checkTableCacheStats.malformedReports++;
-    report(
-      `[bootquest] the recorded check table ${path} is MALFORMED (${err instanceof Error ? err.message.split('\n')[0] : String(err)}): ` +
-        `uncovered-leg carve-outs are NOT shown on program units until it is fixed (sync refuses it too)`,
-    );
-  }
-  checkTableCache.set(path, { mtimeMs: st.mtimeMs, size: st.size, table });
-  return table;
-}
-
-function uncoveredLegsFor(deps: ServiceDeps, unitKey: string, check: CheckRecord | undefined): string[] | undefined {
-  if (!deps.sync) return undefined;
-  const m = /^gh:(.+):(U\d{2})$/.exec(unitKey);
-  if (!m) return undefined;
-  try {
-    const all = cachedCheckSpecTable(deps.sync.paths.checkSpecs);
-    if (!all) return undefined;
-    const table = all.repos[m[1]!];
-    const rec = table?.units[m[2]!];
-    if (!table || !rec) return undefined;
-    const legs = [...rec.uncovered_legs];
-    const registered = check?.spec;
-    if (registered && registered.type === 'node-test-file') {
-      if (rec.tsc_project !== undefined && registered.tscProject !== rec.tsc_project) {
-        legs.push(
-          `${rec.ticket} acceptance 'practice typecheck pass' (tsc -p ${rec.tsc_project}) is NOT covered by this unit's registered check: ` +
-            `it predates the tsc composite and stays pinned because attempts reference it (see the sync drift report)`,
-        );
-      } else {
-        const recorded = JSON.stringify(CheckSpec.parse(recordedCheckSpec(m[1]!, table.sha, rec)));
-        if (JSON.stringify(CheckSpec.parse(registered)) !== recorded) {
-          legs.push(
-            `${rec.ticket}: this unit's registered check predates the current recorded check spec and stays pinned because attempts reference it ` +
-              `(see the sync drift report); a green result is graded by that older check`,
-          );
-        }
-      }
-    }
-    return legs.length > 0 ? legs : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 export function getUnitDetail(deps: ServiceDeps, unitId: number): UnitDetailResponse {
   const { db } = deps;
   const unit = requireUnit(db, unitId);
@@ -287,7 +199,7 @@ export function getUnitDetail(deps: ServiceDeps, unitId: number): UnitDetailResp
   // W7 (audit #1): a closed changed-example retest withholds its task (no day-0 pre-solving)
   const gate = unit.kind === 'retest' ? retestGate(db, unit.id, deps.clock) : null;
   const withhold = gate !== null && !gate.open;
-  const uncoveredLegs = uncoveredLegsFor(deps, unit.key, check);
+  const uncoveredLegs = uncoveredLegsFor(deps.sync?.paths.checkSpecs ?? null, unit.key, check);
   // B4: a written unit's rubric is withheld until the learner's own answer is recorded (a
   // rubric line can quote the model answer's key point: no answer oracle in the detail)
   const writtenAnswered = unit.kind === 'written' ? firstWrittenAnswer(db, unit.id) !== null : null;
@@ -435,6 +347,15 @@ export function getCampaign(deps: ServiceDeps, trackId: string): CampaignRespons
 // ---------------------------------------------------------------- grading
 
 async function grade(deps: ServiceDeps, spec: CheckSpec, submission: LearnerSubmission): Promise<CanonicalRunResult> {
+  // F3: a learner directive that switches the graded type check off is refused before anything runs
+  const suppressed = submission.code === undefined ? null : findTypeCheckSuppression(spec, submission.code);
+  if (suppressed) {
+    throw new HttpError(
+      422,
+      'TYPECHECK_SUPPRESSED',
+      `line ${suppressed.line}: ${suppressed.directive} is not allowed here. This exercise's type check is part of the grade, so a directive that silences it would make a green result meaningless. Remove it and fix the type error instead.`,
+    );
+  }
   try {
     const builtIn = gradeDeterministic(spec, submission);
     if (builtIn) return builtIn;
