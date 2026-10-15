@@ -1,0 +1,459 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "astraspacegameweb",
+ "sha": "736b75f0f67bee12d6070c96e8b3f6dbd0926f83",
+ "guides": [
+  "learn/00-onramp.md",
+  "docs/architecture.md"
+ ],
+ "items": [
+  {
+   "id": "a01-resolver-migrates",
+   "kind": "quiz",
+   "source": {
+    "path": "learn/00-onramp.md",
+    "lines": {
+     "start": 9,
+     "end": 17
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/server/src/index.ts",
+     "lineStart": 16,
+     "lineEnd": 19
+    }
+   ],
+   "prompt": "A Warband process is started with ROLE=resolver. Does it run the database migrations when it boots?",
+   "answer": "Yes; initialize() runs before the role is even read",
+   "distractors": [
+    "No; only the api role calls initialize() during boot",
+    "Only when ROLE is all, which is the default role",
+    "No; migrations run from a separate CLI step only"
+   ],
+   "explanation": "index.ts calls await initialize() on line 16, and reads process.env.ROLE on the next line, so every role migrates at boot."
+  },
+  {
+   "id": "a02-resolver-http",
+   "kind": "quiz",
+   "source": {
+    "path": "learn/00-onramp.md",
+    "lines": {
+     "start": 9,
+     "end": 17
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/server/src/index.ts",
+     "lineStart": 20,
+     "lineEnd": 21
+    },
+    {
+     "path": "apps/server/src/index.ts",
+     "lineStart": 121,
+     "lineEnd": 121
+    }
+   ],
+   "prompt": "Does a process started with ROLE=resolver answer HTTP requests to /api/health and /metrics?",
+   "answer": "Yes, both: every role builds the app and listens on its PORT",
+   "distractors": [
+    "Only /metrics, because health checks are limited to api roles",
+    "Neither, since a resolver process never calls app.listen()",
+    "Only /api/health, because metrics install only for api roles"
+   ],
+   "explanation": "buildApp(), installMetrics(app) and app.listen() run unconditionally in index.ts, so a resolver serves the whole /api surface and /metrics."
+  },
+  {
+   "id": "a03-hint-refetch",
+   "kind": "quiz",
+   "source": {
+    "path": "learn/00-onramp.md",
+    "lines": {
+     "start": 19,
+     "end": 23
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/web/src/App.tsx",
+     "lineStart": 345,
+     "lineEnd": 351
+    },
+    {
+     "path": "apps/web/src/queryRefresh.ts",
+     "lineStart": 45,
+     "lineEnd": 60
+    }
+   ],
+   "prompt": "The browser receives a WebSocket message that is not a server_time or connected heartbeat. What does the client do with the message contents?",
+   "answer": "Ignores the payload and asks React Query to refetch server state",
+   "distractors": [
+    "Merges the outbox payload directly into the cached query data",
+    "Applies the payload only when it is newer than the cached state",
+    "Keeps it in the Zustand store until the next poll confirms it"
+   ],
+   "explanation": "socket.onmessage only calls refreshRef.current?.request(), which invalidates and refetches queries. The message is a hint; PostgreSQL state read through /api/state is the truth."
+  },
+  {
+   "id": "a04-socket-registry",
+   "kind": "quiz",
+   "source": {
+    "path": "learn/00-onramp.md",
+    "lines": {
+     "start": 25,
+     "end": 32
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/server/src/transport/app.ts",
+     "lineStart": 116,
+     "lineEnd": 144
+    }
+   ],
+   "prompt": "On main, tab A opens the WebSocket, then tab B opens it for the same player, then tab A closes. What does sockets.get(player) hold afterwards?",
+   "answer": "One Set that now holds only B; the map entry stays",
+   "distractors": [
+    "No entry: the close handler of A deletes the player key",
+    "A Set still holding A and B until the heartbeat fires",
+    "A new Set holding B that replaced the Set A was using"
+   ],
+   "explanation": "The second connection finds the existing Set and adds to it, so both handlers share one Set. A deletes itself; the Set still has B, so !set.size is false and the entry is kept."
+  },
+  {
+   "id": "a05-quantile-interpolates",
+   "kind": "quiz",
+   "source": {
+    "path": "learn/00-onramp.md",
+    "lines": {
+     "start": 34,
+     "end": 41
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/server/src/metrics.ts",
+     "lineStart": 16,
+     "lineEnd": 21
+    }
+   ],
+   "prompt": "warband_event_lag_seconds has buckets [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60]. 1,000 events each resolve exactly 0.3 s late. What does histogram_quantile(0.99, ...) return?",
+   "answer": "About 0.4975 s, interpolated inside the 0.25 to 0.5 bucket",
+   "distractors": [
+    "Exactly 0.3 s, the true lag that every event observed",
+    "0.5 s, the upper bound of the bucket that holds them all",
+    "0.25 s, the lower bound of the bucket that holds them all"
+   ],
+   "explanation": "Every observation lands in (0.25, 0.5]. Linear interpolation at rank 0.99 gives 0.25 + 0.25 x 0.99 = 0.4975; the histogram cannot know the real value was 0.3."
+  },
+  {
+   "id": "a06-quantile-caps",
+   "kind": "quiz",
+   "source": {
+    "path": "learn/00-onramp.md",
+    "lines": {
+     "start": 34,
+     "end": 41
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/server/src/metrics.ts",
+     "lineStart": 16,
+     "lineEnd": 21
+    }
+   ],
+   "prompt": "With the same buckets (top finite bucket 60), 1,000 events each resolve 90 s late. What does histogram_quantile(0.99, ...) return, and what follows for an alert written as > 120?",
+   "answer": "It returns 60, so an alert on > 120 can never fire",
+   "distractors": [
+    "It returns 90, so the alert fires once lag passes 120",
+    "It returns +Inf, so the alert fires on every evaluation",
+    "It returns NaN, so the alert reports no data instead"
+   ],
+   "explanation": "When the target rank falls in the +Inf bucket, histogram_quantile returns the upper bound of the highest finite bucket, 60. An alert threshold above the top bucket is unreachable."
+  },
+  {
+   "id": "a07-retries-stay-zero",
+   "kind": "quiz",
+   "source": {
+    "path": "learn/00-onramp.md",
+    "lines": {
+     "start": 43,
+     "end": 48
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/db/index.ts",
+     "lineStart": 74,
+     "lineEnd": 77
+    },
+    {
+     "path": "apps/server/src/application/engine.ts",
+     "lineStart": 797,
+     "lineEnd": 809
+    }
+   ],
+   "prompt": "warband_lock_retries_total reads 0 during heavy resolver lock contention. According to the code, why?",
+   "answer": "resolveDue calls transaction(fn, 1), so the retry branch never runs",
+   "distractors": [
+    "The gauge is reset on every scrape, so it reads 0 between the retries",
+    "Retries are counted for deadlocks (40P01) but not lock timeouts",
+    "The counter is incremented inside a transaction that rolls back"
+   ],
+   "explanation": "dbCounters.retries++ runs only when attempt < maxAttempts - 1. With maxAttempts = 1 that is never true, and resolveDue catches 40001/55P03/WB_BUSY and returns 0 with no metric."
+  },
+  {
+   "id": "a08-migration-edited",
+   "kind": "quiz",
+   "source": {
+    "path": "learn/00-onramp.md",
+    "lines": {
+     "start": 50,
+     "end": 56
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/db/index.ts",
+     "lineStart": 143,
+     "lineEnd": 148
+    }
+   ],
+   "prompt": "Yesterday's release applied 013_npc_players.sql. Today someone adds a single comment line to the top of that file. What happens when any role starts?",
+   "answer": "initialize() throws Applied migration was modified, and boot fails",
+   "distractors": [
+    "It re-runs 013 as-is, since a comment does not change the SQL",
+    "It logs a warning, skips 013, and goes on to apply later files",
+    "It records the new checksum for 013 and continues with 014"
+   ],
+   "explanation": "The checksum is sha256 over the raw file text, so a comment changes it. prior.checksum !== checksum throws, and the top-level await in index.ts rejects."
+  },
+  {
+   "id": "a09-no-half-migration",
+   "kind": "quiz",
+   "source": {
+    "path": "learn/00-onramp.md",
+    "lines": {
+     "start": 50,
+     "end": 56
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/db/index.ts",
+     "lineStart": 134,
+     "lineEnd": 135
+    }
+   ],
+   "prompt": "Boot throws at migration 013. Can migrations that ran earlier in that same boot be left committed?",
+   "answer": "No, because initialize() runs every migration in one transaction",
+   "distractors": [
+    "Yes, because each migration file commits in its own separate transaction",
+    "Yes, though only the schema_migrations table creation survives",
+    "No, because migrations run in reverse order, so file 013 is run first"
+   ],
+   "explanation": "initialize() is a single transaction(async (tx) => ...) call, so the throw rolls back everything it did, including the CREATE TABLE IF NOT EXISTS. The files are sorted ascending."
+  },
+  {
+   "id": "a10-health-check",
+   "kind": "quiz",
+   "source": {
+    "path": "learn/00-onramp.md",
+    "lines": {
+     "start": 58,
+     "end": 63
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/server/src/application/game.ts",
+     "lineStart": 62,
+     "lineEnd": 65
+    }
+   ],
+   "prompt": "Which check does the /api/health handler in game.ts actually perform before answering ok?",
+   "answer": "A single SELECT 1 query against the Postgres database",
+   "distractors": [
+    "A check that the resolver loop ran in the last minute",
+    "A count of unsent outbox rows against a fixed threshold",
+    "A Redis PING, so Caddy can drain instances on Redis loss"
+   ],
+   "explanation": "get_api_health runs await database.query(\"SELECT 1\") and returns { ok: true, server_now }. It checks nothing else."
+  },
+  {
+   "id": "a11-rate-limit-fallback",
+   "kind": "quiz",
+   "source": {
+    "path": "learn/00-onramp.md",
+    "lines": {
+     "start": 65,
+     "end": 73
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/server/src/redis.ts",
+     "lineStart": 15,
+     "lineEnd": 34
+    }
+   ],
+   "prompt": "Redis is down. Does per-player command rate limiting still work, and is the count shared by both api instances?",
+   "answer": "Yes; takeLimit falls back to a shared Postgres rate_buckets row",
+   "distractors": [
+    "No; limits are skipped so the engine keeps serving every player",
+    "Partly; each instance counts hits in its own in-memory map",
+    "No; each rate-limited request fails with 503 until Redis is back"
+   ],
+   "explanation": "When redis.isReady is false (or eval throws), takeLimit upserts into rate_buckets in Postgres, which both instances share. The comment says Redis loss must not remove abuse controls."
+  },
+  {
+   "id": "a12-outbox-redis-down",
+   "kind": "quiz",
+   "source": {
+    "path": "learn/00-onramp.md",
+    "lines": {
+     "start": 65,
+     "end": 73
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/server/src/index.ts",
+     "lineStart": 59,
+     "lineEnd": 60
+    },
+    {
+     "path": "apps/server/src/index.ts",
+     "lineStart": 88,
+     "lineEnd": 90
+    }
+   ],
+   "prompt": "What happens to unsent outbox rows while Redis is unreachable?",
+   "answer": "They stay unsent in Postgres and get published once Redis is back",
+   "distractors": [
+    "The relay marks them sent, so the backlog cannot grow without limit",
+    "They move to a BullMQ retry queue that is held in process memory",
+    "They are deleted, since clients poll /api/state every 10 s anyway"
+   ],
+   "explanation": "The relay interval returns early when !redis.isReady, so nothing selects or updates the rows; sent_at stays NULL until a later tick publishes them."
+  },
+  {
+   "id": "a13-partial-index",
+   "kind": "quiz",
+   "source": {
+    "path": "learn/00-onramp.md",
+    "lines": {
+     "start": 75,
+     "end": 82
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/db/migrations/001_initial.sql",
+     "lineStart": 9,
+     "lineEnd": 9
+    },
+    {
+     "path": "apps/server/src/application/engine.ts",
+     "lineStart": 787,
+     "lineEnd": 790
+    }
+   ],
+   "prompt": "The resolver query filters world_id=1 AND status='pending' AND due_at<=now, ordered by due_at,id with a LIMIT. Why does the partial index events_due ON scheduled_events(world_id,due_at,id) WHERE status='pending' fit it well?",
+   "answer": "It is already in query order and leaves out every done row",
+   "distractors": [
+    "It lets Postgres skip the LIMIT, since it stores row counts",
+    "It enforces one pending event per village at the database",
+    "It covers payload, so the query never reads the table heap"
+   ],
+   "explanation": "Equality on world_id then (due_at,id) order lets Postgres walk the index and stop after LIMIT rows with no sort, and the WHERE predicate keeps the growing history of done rows out of the index."
+  },
+  {
+   "id": "f01-row-to-refetch",
+   "kind": "flashcard",
+   "source": {
+    "path": "learn/00-onramp.md",
+    "lines": {
+     "start": 19,
+     "end": 23
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/server/src/index.ts",
+     "lineStart": 59,
+     "lineEnd": 90
+    },
+    {
+     "path": "apps/server/src/index.ts",
+     "lineStart": 29,
+     "lineEnd": 34
+    }
+   ],
+   "front": "List the hops from a committed outbox row to the defender's browser re-reading /api/state.",
+   "back": "Relay loop: SELECT unsent outbox rows FOR UPDATE SKIP LOCKED, redis.publish to warband:events, UPDATE sent_at. Each api/ws subscriber: parse, send to every open socket in sockets.get(player_id). Browser onmessage: refreshRef.request(). queryRefresh: invalidate and refetch active queries, GET /api/state."
+  },
+  {
+   "id": "f02-socket-close-timers",
+   "kind": "flashcard",
+   "source": {
+    "path": "learn/00-onramp.md",
+    "lines": {
+     "start": 25,
+     "end": 32
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/server/src/transport/app.ts",
+     "lineStart": 122,
+     "lineEnd": 137
+    }
+   ],
+   "front": "Which two timers can close a Warband WebSocket on main, and with what close code?",
+   "back": "heartbeat: every 5 s re-runs authenticate(req); on failure close(4001, \"Session revoked or expired\"). expiry: a timeout at the JWT exp; close(4001, \"Session refresh required\")."
+  },
+  {
+   "id": "f03-postgres-is-authority",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 5,
+     "end": 5
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/server/src/redis.ts",
+     "lineStart": 26,
+     "lineEnd": 33
+    }
+   ],
+   "front": "What does docs/architecture.md say PostgreSQL owns and what Redis is allowed to hold?",
+   "back": "PostgreSQL owns village aggregates, scheduled events, reports, idempotency records and the notification outbox. Redis holds only disposable caches, queue delivery state and invalidation hints; flushing Redis does not change the world."
+  },
+  {
+   "id": "f04-lag-never-negative",
+   "kind": "flashcard",
+   "source": {
+    "path": "learn/00-onramp.md",
+    "lines": {
+     "start": 84,
+     "end": 99
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/server/src/metrics.ts",
+     "lineStart": 27,
+     "lineEnd": 35
+    }
+   ],
+   "front": "What does committedResolutions(events) record for each event, and what does Math.max(0, ...) protect?",
+   "back": "One lag sample per event: (now - due) / 1000 seconds, with the kind, observed into eventLag and passed to the registered observer. Math.max(0, ...) clamps an event due in the future (clock skew) to 0 instead of a negative lag."
+  }
+ ]
+}

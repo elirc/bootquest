@@ -1,0 +1,406 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "astraspacegameweb",
+ "repo": "astraspacegameweb",
+ "sha": "736b75f0f67bee12d6070c96e8b3f6dbd0926f83",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: one server image, several roles, one database of truth",
+   "body": "Warband is a persistent browser strategy game. Its game clock is a table of scheduled events in PostgreSQL, and one TypeScript server image runs in several *roles* (api, ws, resolver, relay, sidejobs) chosen by the `ROLE` environment variable.\n\nThis quest follows the junior on-ramp, `learn/00-onramp.md`: ten short exercises that need only an editor. Work through them in order, writing your own answer before you look anything up. Then read `docs/architecture.md`, the design overview the exercises keep testing.\n\nKeep these files open:\n\n- `apps/server/src/index.ts`: process startup and the four `setInterval` loops.\n- `apps/server/src/transport/app.ts`: HTTP hooks and the WebSocket route.\n- `packages/db/index.ts`: the `transaction()` helper and `initialize()`.\n- `apps/server/src/metrics.ts` and `apps/server/src/redis.ts`.\n\nLine numbers in the on-ramp are close but not always exact at this commit, so search for the named function rather than jumping to a number. For each \"predict\" question, find the exact statement that decides the outcome before you settle on an answer.",
+   "excerpts": [
+    {
+     "path": "README.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "Persistent browser strategy game with construction, recruitment, scouting, battles, support, conquest"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "learn/README.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Why this app is in the portfolio and how learn/ leads into training/."
+    },
+    {
+     "path": "learn/00-onramp.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The ten warm-up exercises this quest is built from."
+    }
+   ]
+  },
+  {
+   "id": "r02-roles-and-delivery",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: roles, the outbox and invalidation hints",
+   "body": "Many systems split one codebase into processes with different jobs. Warband does this with a single entry file, `apps/server/src/index.ts`. Read it top to bottom and make a table: for each statement or loop, which roles run it? Mark the statements that sit outside any role check, and note which loops test the role themselves.\n\nThe second idea is the **transactional outbox**. When the game changes state, it also writes an `outbox` row in the same database transaction, so a notification is never promised for a change that rolled back. A separate *relay* loop later reads those rows and publishes them to Redis, and API processes forward them to browsers over WebSockets.\n\nQuestions to answer from the code, not from the docs:\n\n- What conditions make the relay loop skip a tick, and what does it update after publishing?\n- What does the browser do in `socket.onmessage`, and what does `apps/web/src/queryRefresh.ts` then do?\n- In `apps/server/src/redis.ts`, what does each function do when Redis is not ready?\n\nCompare your answers with the claim in `docs/architecture.md` about what Redis may hold.",
+   "excerpts": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 37,
+     "lineEnd": 37,
+     "quote": "The relay uses `FOR UPDATE SKIP LOCKED` to publish committed outbox rows."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "apps/server/src/index.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Startup, role checks and the relay loop."
+    },
+    {
+     "path": "apps/server/src/redis.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Rate limiting and caching with a Redis client."
+    }
+   ]
+  },
+  {
+   "id": "r03-metrics-and-migrations",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: histogram buckets, retry counters and migration checksums",
+   "body": "Three on-ramp exercises are about trusting what the operations stack tells you.\n\n**Histograms.** A Prometheus histogram does not keep raw values; it counts how many observations fell at or below each bucket boundary. `histogram_quantile` must *estimate* a quantile from those counts. Before exercises 4a and 4b, look up two things in the Prometheus docs: how it estimates a value inside a bucket, and what it returns when the target rank lands beyond the highest finite bucket. Then read the bucket list in `apps/server/src/metrics.ts`.\n\n**Retry counters.** `transaction()` in `packages/db/index.ts` takes a second argument. Trace where `dbCounters.retries` is incremented and the condition around it, then look at how `resolveDue()` in `apps/server/src/application/engine.ts` calls `transaction()` and what its `catch` does.\n\n**Migrations.** `initialize()` stores a checksum per migration file. Work out what input the checksum is computed over, what happens on a mismatch, and what wraps the whole loop.",
+   "excerpts": [
+    {
+     "path": "learn/00-onramp.md",
+     "lineStart": 36,
+     "lineEnd": 36,
+     "quote": "`warband_event_lag_seconds` has buckets"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "packages/db/index.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "transaction() with its retry loop, and initialize() with the checksum check."
+    }
+   ]
+  },
+  {
+   "id": "x-resolver-migrates",
+   "target": "seed:quests:astraspacegameweb/quiz/418d258fc530b901",
+   "phase": "after",
+   "title": "Every role migrates at boot",
+   "body": "The first statement in `index.ts` after the imports is `await initialize()`. Only on the next line is `process.env.ROLE` read and validated. So a resolver, a relay, an api process, every role runs the migrations when it starts. That is also why one bad migration takes down every role at once.\n\n- *Only the api role calls initialize()*: there is no role check around it.\n- *Only when ROLE is all*: `all` is the default value, but the call runs whatever the role is.\n- *A separate CLI step*: migrations run inside `initialize()` at boot, not from a separate command.",
+   "excerpts": [
+    {
+     "path": "apps/server/src/index.ts",
+     "lineStart": 16,
+     "lineEnd": 17,
+     "quote": "await initialize(); const role = process.env.ROLE || 'all';"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "learn/00-onramp.md",
+     "lineStart": 9,
+     "lineEnd": 17,
+     "why": "Exercise 1: predicting what a resolver process does."
+    }
+   ]
+  },
+  {
+   "id": "x-resolver-http",
+   "target": "seed:quests:astraspacegameweb/quiz/a9aae8df39aef1ae",
+   "phase": "after",
+   "title": "A resolver still serves HTTP",
+   "body": "`buildApp()`, `installMetrics(app)` and `app.listen(...)` run for every role; none of them sits behind a role check. A resolver therefore answers the whole `/api/*` surface, including `/api/health`, and serves `/metrics`. Only the loops inside `setInterval` callbacks check the role and return early.\n\n- *Only /metrics*: nothing limits the health route to api roles; it is registered by `buildApp()` like every other route.\n- *Neither*: `app.listen` is called unconditionally near the end of the file.\n- *Only /api/health*: `installMetrics(app)` also runs for every role.",
+   "excerpts": [
+    {
+     "path": "apps/server/src/index.ts",
+     "lineStart": 20,
+     "lineEnd": 21,
+     "quote": "const app = await buildApp(); installMetrics(app);"
+    },
+    {
+     "path": "apps/server/src/index.ts",
+     "lineStart": 121,
+     "lineEnd": 121,
+     "quote": "await app.listen({ port: Number(process.env.PORT || 3001), host: '0.0.0.0' });"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "learn/00-onramp.md",
+     "lineStart": 9,
+     "lineEnd": 17,
+     "why": "Exercise 1 parts (d) and (e)."
+    }
+   ]
+  },
+  {
+   "id": "x-hint-refetch",
+   "target": "seed:quests:astraspacegameweb/quiz/8a264940a5cbde96",
+   "phase": "after",
+   "title": "A WebSocket message is a hint, not data",
+   "body": "In `App.tsx`, `socket.onmessage` parses the message and, unless it is a `server_time` or `connected` message, calls `refreshRef.current?.request()`. It never reads the payload. `request()` in `queryRefresh.ts` invalidates the queries and refetches the active ones, so the browser re-reads `/api/state`. PostgreSQL is the authority; hints can be lost, repeated or arrive out of order, and a refetch is always correct.\n\n- *Merges the payload into cached data*: no code reads the payload into the cache.\n- *Applies it when newer*: there is no version comparison; the payload is ignored.\n- *Keeps it in Zustand*: Zustand holds selected village and camera, not server state.",
+   "excerpts": [
+    {
+     "path": "apps/web/src/App.tsx",
+     "lineStart": 348,
+     "lineEnd": 350,
+     "quote": "if (hint.type !== 'server_time' && hint.type !== 'connected') refreshRef.current?.request();"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "apps/web/src/queryRefresh.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "How a refresh request turns into refetches."
+    }
+   ]
+  },
+  {
+   "id": "x-socket-registry",
+   "target": "seed:quests:astraspacegameweb/quiz/c0c2fc90aaa790f1",
+   "phase": "after",
+   "title": "Two tabs share one Set",
+   "body": "The route does `let set = sockets.get(id); if (!set) sockets.set(id, (set = new Set()));`. Tab B finds A's Set and adds itself, so both connections hold a reference to the same Set. When A closes, its handler deletes A from that Set; the Set still contains B, so `!set?.size` is false and the map entry stays.\n\n- *No entry*: the entry is deleted only when the shared Set is empty.\n- *Still holding A and B*: the close handler removes A immediately; the heartbeat is unrelated.\n- *A new Set for B*: a new Set is created only when the player has no entry, which is not the case when B connects. (INC-003 is the change that breaks this.)",
+   "excerpts": [
+    {
+     "path": "apps/server/src/transport/app.ts",
+     "lineStart": 117,
+     "lineEnd": 119,
+     "quote": "let set = sockets.get(id); if (!set) sockets.set(id, (set = new Set()));"
+    },
+    {
+     "path": "apps/server/src/transport/app.ts",
+     "lineStart": 139,
+     "lineEnd": 141,
+     "quote": "if (!set?.size) sockets.delete(id);"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "learn/00-onramp.md",
+     "lineStart": 25,
+     "lineEnd": 32,
+     "why": "Exercise 3 on the WebSocket registry."
+    }
+   ]
+  },
+  {
+   "id": "x-quantile-interpolates",
+   "target": "seed:quests:astraspacegameweb/quiz/077f82f97d46967a",
+   "phase": "after",
+   "title": "The histogram only knows the bucket",
+   "body": "All 1,000 observations of 0.3 s fall into the bucket (0.25, 0.5]. No observations are below it. `histogram_quantile(0.99, ...)` puts the target rank at 0.99 of the way through that bucket and interpolates linearly: 0.25 + (0.5 - 0.25) x 0.99 = 0.4975 s. The real value was 0.3, but the histogram only stores counts per bucket.\n\n- *Exactly 0.3 s*: raw values are not stored, so the function cannot return them.\n- *0.5 s*: the upper bound is what you get at quantile 1.0, not 0.99.\n- *0.25 s*: the lower bound is where interpolation starts, at quantile 0.",
+   "excerpts": [
+    {
+     "path": "apps/server/src/metrics.ts",
+     "lineStart": 19,
+     "lineEnd": 19,
+     "quote": "buckets: [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60],"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "learn/00-onramp.md",
+     "lineStart": 34,
+     "lineEnd": 41,
+     "why": "Exercise 4 and its hint."
+    }
+   ]
+  },
+  {
+   "id": "x-quantile-caps",
+   "target": "seed:quests:astraspacegameweb/quiz/b67de2c2e10a1062",
+   "phase": "after",
+   "title": "A quantile cannot exceed the top finite bucket",
+   "body": "Observations of 90 s fall above 60, in the implicit +Inf bucket. When the target rank lands there, Prometheus's `histogram_quantile` returns the upper bound of the highest finite bucket, which is 60. A rule written as `histogram_quantile(...) > 120` compares a value that can never be more than 60, so it can never fire: an unreachable alert. The top bucket must sit above any threshold that reads it.\n\n- *Returns 90*: the histogram does not store 90; it only knows the value is above 60.\n- *Returns +Inf*: Prometheus substitutes the highest finite bound instead of +Inf.\n- *Returns NaN*: there is data; NaN appears only when there are no observations.",
+   "excerpts": [
+    {
+     "path": "apps/server/src/metrics.ts",
+     "lineStart": 19,
+     "lineEnd": 19,
+     "quote": "buckets: [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60],"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "learn/00-onramp.md",
+     "lineStart": 39,
+     "lineEnd": 41,
+     "why": "Exercise 4 parts (b) and (c)."
+    }
+   ]
+  },
+  {
+   "id": "x-retries-stay-zero",
+   "target": "seed:quests:astraspacegameweb/quiz/18fe226e6b959da0",
+   "phase": "after",
+   "title": "Why the retry counter never moves",
+   "body": "In `transaction()`, `dbCounters.retries++` sits inside `if ([...].includes(e.code) && attempt < maxAttempts - 1)`. `resolveDue()` calls `transaction(async (tx) => ..., 1)`, so `maxAttempts` is 1 and `attempt < 0` is never true. The error is rethrown, and `resolveDue` catches `40001`, `55P03` and `WB_BUSY` and returns 0 with no metric. Contention shows up only as rollbacks.\n\n- *Reset on every scrape*: the gauge reads a process variable; scraping does not reset it.\n- *Deadlocks but not lock timeouts*: the retry list includes `40P01` and `55P03` alike.\n- *Inside a rolled-back transaction*: the counter is a JavaScript variable, not a database row; a rollback cannot undo it.",
+   "excerpts": [
+    {
+     "path": "packages/db/index.ts",
+     "lineStart": 74,
+     "lineEnd": 75,
+     "quote": "if (['40001', '40P01', '55P03', 'WB_BUSY'].includes(e.code) && attempt < maxAttempts - 1) {"
+    },
+    {
+     "path": "apps/server/src/application/engine.ts",
+     "lineStart": 805,
+     "lineEnd": 807,
+     "quote": "if (['40001', '55P03', 'WB_BUSY'].includes(e.code)) return 0;"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "learn/00-onramp.md",
+     "lineStart": 43,
+     "lineEnd": 48,
+     "why": "Exercise 5 on the counter that never moves."
+    }
+   ]
+  },
+  {
+   "id": "x-migration-edited",
+   "target": "seed:quests:astraspacegameweb/quiz/15ce1f5217283202",
+   "phase": "after",
+   "title": "Any byte change breaks an applied migration",
+   "body": "For each file, `initialize()` computes `sha256` over the raw file text and compares it with the checksum stored in `schema_migrations`. A new comment line changes the bytes, so `prior.checksum !== checksum` and the code throws `Applied migration was modified: 013_npc_players.sql`. The top-level `await initialize()` rejects and the process fails to start; every role hits the same error.\n\n- *Re-runs 013*: an applied file is never re-run; a matching one is skipped and a mismatch throws.\n- *Logs a warning and skips*: there is no warning path; the mismatch is a thrown Error.\n- *Records the new checksum*: the checksum is only inserted for files that have no row yet.",
+   "excerpts": [
+    {
+     "path": "packages/db/index.ts",
+     "lineStart": 147,
+     "lineEnd": 148,
+     "quote": "if (prior.checksum !== checksum) throw new Error('Applied migration was modified: ' + name);"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "learn/00-onramp.md",
+     "lineStart": 50,
+     "lineEnd": 56,
+     "why": "Exercise 6, including the CRLF variant of the same failure."
+    }
+   ]
+  },
+  {
+   "id": "x-no-half-migration",
+   "target": "seed:quests:astraspacegameweb/quiz/f4c84626f798caa4",
+   "phase": "after",
+   "title": "One transaction around every migration",
+   "body": "`initialize()` is `await transaction(async (tx) => { ... })` around the whole loop: the world lock, the `CREATE TABLE IF NOT EXISTS schema_migrations`, every migration's SQL and every checksum insert. When the checksum check throws at 013, `transaction()` rolls back everything done in that call. Nothing is left half-applied.\n\n- *Each file commits on its own*: all files run on the same `tx`; there is one COMMIT at the end.\n- *Only the table creation survives*: the CREATE TABLE is inside the same transaction and rolls back too.\n- *Reverse order*: the file list is `.sort()`ed ascending, so 013 runs after 001 to 012.",
+   "excerpts": [
+    {
+     "path": "packages/db/index.ts",
+     "lineStart": 134,
+     "lineEnd": 135,
+     "quote": "export async function initialize() { await transaction(async (tx) => {"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "learn/00-onramp.md",
+     "lineStart": 55,
+     "lineEnd": 55,
+     "why": "Exercise 6(b): what wraps the whole function."
+    }
+   ]
+  },
+  {
+   "id": "x-health-check",
+   "target": "seed:quests:astraspacegameweb/quiz/903d068fc373a0ed",
+   "phase": "after",
+   "title": "The health endpoint checks only Postgres",
+   "body": "`get_api_health` in `game.ts` is two statements: `await database.query('SELECT 1')` and `return { ok: true, server_now: Date.now() }`. It proves the process can reach Postgres and nothing else. The `preHandler` hook in `app.ts` also returns before `authenticate` for `/api/health`, so Caddy and compose can call it without a session.\n\n- *Resolver loop ran recently*: no resolver state is read.\n- *Unsent outbox rows*: the outbox backlog is a metrics gauge, not part of health.\n- *A Redis PING*: Redis is not touched here; the INC-005 training branch is where a Redis check gets added, with bad results.",
+   "excerpts": [
+    {
+     "path": "apps/server/src/application/game.ts",
+     "lineStart": 62,
+     "lineEnd": 64,
+     "quote": "get_api_health: async () => { await database.query('SELECT 1');"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "learn/00-onramp.md",
+     "lineStart": 58,
+     "lineEnd": 63,
+     "why": "Exercise 7: who calls the health endpoint and what they do on 500."
+    }
+   ]
+  },
+  {
+   "id": "x-rate-limit-fallback",
+   "target": "seed:quests:astraspacegameweb/quiz/2dc1e1efe6ac9082",
+   "phase": "after",
+   "title": "Rate limits fall back to Postgres",
+   "body": "`takeLimit` first tries Redis, but only `if (redis.isReady)`, and a failed `eval` is caught. Otherwise it upserts into the `rate_buckets` table in Postgres and compares `hits` with the limit. Both api instances use the same database, so they count against the same row. The comment says it plainly: Redis loss must not remove abuse controls.\n\n- *Limits are skipped*: the fallback still enforces `row.hits <= max`.\n- *An in-memory map per instance*: there is no in-memory counter; the count lives in Postgres.\n- *Fails with 503*: requests are limited as usual; no Redis-down error is returned.",
+   "excerpts": [
+    {
+     "path": "apps/server/src/redis.ts",
+     "lineStart": 26,
+     "lineEnd": 29,
+     "quote": "// Redis loss must not remove abuse controls or stop the authoritative engine."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "apps/server/src/sidejobs.ts",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "why": "Where expired rate_buckets rows are deleted."
+    }
+   ]
+  },
+  {
+   "id": "x-outbox-redis-down",
+   "target": "seed:quests:astraspacegameweb/quiz/69d24acf3b573063",
+   "phase": "after",
+   "title": "The outbox waits for Redis",
+   "body": "The relay interval starts with `if (relaying || !redis.isReady || !['all', 'relay'].includes(role)) return;`. While Redis is down it returns before selecting anything, so no row is touched and `sent_at` stays NULL. When Redis is ready again, the next tick selects the unsent rows, publishes them and only then sets `sent_at`. Delivery is delayed, not lost.\n\n- *Marks them sent*: `sent_at` is updated only after a successful publish in the same transaction.\n- *Moves them to BullMQ*: the relay never enqueues outbox rows; BullMQ needs Redis too.\n- *Deletes them*: nothing deletes outbox rows here; the 10 s poll is a separate safety net.",
+   "excerpts": [
+    {
+     "path": "apps/server/src/index.ts",
+     "lineStart": 60,
+     "lineEnd": 60,
+     "quote": "if (relaying || !redis.isReady || !['all', 'relay'].includes(role)) return;"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 37,
+     "lineEnd": 37,
+     "why": "The architecture note on the relay and repeated hints."
+    }
+   ]
+  },
+  {
+   "id": "x-partial-index",
+   "target": "seed:quests:astraspacegameweb/quiz/042bd764de875e87",
+   "phase": "after",
+   "title": "Why events_due fits the resolver query",
+   "body": "The query has equality on `world_id`, a range on `due_at`, `ORDER BY due_at,id` and a `LIMIT`. The index is on `(world_id,due_at,id)`, so after the equality the entries are already in the requested order: Postgres can walk it and stop after LIMIT rows without sorting. Its `WHERE status='pending'` matches the query's filter, so the large and growing number of `done` rows is never in the index.\n\n- *Skips the LIMIT*: indexes do not store row counts; the LIMIT still applies, it just ends the scan early.\n- *One pending event per village*: it is `CREATE INDEX`, not `UNIQUE`; it enforces nothing.\n- *Covers payload*: `payload` is not an index column.",
+   "excerpts": [
+    {
+     "path": "packages/db/migrations/001_initial.sql",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "CREATE INDEX IF NOT EXISTS events_due ON scheduled_events(world_id,due_at,id) WHERE status='pending';"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "learn/00-onramp.md",
+     "lineStart": 75,
+     "lineEnd": 82,
+     "why": "Exercise 9 on the scheduled_events table."
+    }
+   ]
+  }
+ ]
+}
