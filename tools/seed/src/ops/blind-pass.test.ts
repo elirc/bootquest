@@ -33,28 +33,12 @@ const PASS_PCT = 80;
 const MAX_BLIND_PASS = 0.02;
 
 const EXEMPT: Record<string, number> = {
-  // most clause marks: 0.0207
-  '3buildagentteachgem': 0.021,
-  // eliminate starts It/They/The: 0.0864
-  '3buildanalytics': 0.087,
   // most clause marks: 0.0362
   'finance-dashboard': 0.037,
   // most clause marks: 0.0477
   'grokjs-dotnet-learning-lab': 0.048,
-  // drop because/since, then prefer comma: 0.0449
-  'grokjs-grokbuildjs': 0.045,
-  // most clause marks: 0.1667
-  'groktuts-web-dev-upskilling-lab': 0.167,
   // most clause marks: 0.0694
   'masterrnative': 0.07,
-  // prefer digit: 0.0376
-  'organized-dotnet-pastebin': 0.038,
-  // prefer and: 0.1250
-  'organized-dotnet-trello': 0.125,
-  // prefer comma, then most words: 0.0625
-  'organized-js-training-react': 0.063,
-  // prefer and: 0.0313
-  'ship-it': 0.032,
 };
 
 type Strategy = (choices: readonly string[], key: number) => number;
