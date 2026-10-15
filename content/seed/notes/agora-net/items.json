@@ -1,0 +1,541 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "notes",
+ "name": "agora-net",
+ "items": [
+  {
+   "key": "seed:notes:agora-net/note/031fb6b508e460b0",
+   "provenance": {
+    "repo": "agora-net",
+    "sha": "f60febf6bf087da03e9b687219fb0352cfaa91fe",
+    "path": "docs/adr/0006-optimistic-concurrency.md",
+    "lines": {
+     "start": 7,
+     "end": 8
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r03-checkout-and-races",
+   "pack": "agora-net",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: a checkout that spans a network call",
+   "body": "Checkout touches two systems: stock in Agora's own database and a payment gateway it does not control. Any design has to answer what happens when the network call fails, and what happens when two requests race for the same row.\n\nThe second question has a standard answer in EF Core: **optimistic concurrency**. A property mapped with `.IsConcurrencyToken()` is added to the `WHERE` clause of every UPDATE. If another writer changed the row since you read it, your UPDATE matches no row and EF throws instead of silently overwriting. Nothing is locked while the request runs.\n\nWhat to look for, with `CheckoutService.CheckoutAsync` open:\n\n- count the `SaveChangesAsync` calls and write down what each one persists;\n- find every branch that runs after the gateway answers, and what each branch undoes or keeps;\n- in `AgoraDbContext.cs`, list exactly which entities map a concurrency token;\n- in `DomainExceptionFilter.cs`, pair each exception type with its status and title;\n- in `WebhookService.cs`, compare `DispatchAsync` with `RetryAsync` line by line.\n\nThen read ADR-0003's Consequences and ask which failure it admits.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0006-optimistic-concurrency.md",
+     "lineStart": 7,
+     "lineEnd": 8,
+     "quote": "Checkout already guards stock logically: `InventoryItem.Reserve` throws when `QuantityAvailable < quantity`."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/adr/0003-reserve-charge-commit.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The reserve, charge and commit decision with its accepted costs."
+    },
+    {
+     "path": "docs/adr/0006-optimistic-concurrency.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Which rows got a version token and which did not."
+    },
+    {
+     "path": "docs/adr/0007-hmac-webhook-signing.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "How webhook payloads are signed, logged and retried."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:agora-net/note/250919ffcddd6039",
+   "provenance": {
+    "repo": "agora-net",
+    "sha": "f60febf6bf087da03e9b687219fb0352cfaa91fe",
+    "path": "src/Agora.Domain/Entities/ShippingMethod.cs",
+    "lines": {
+     "start": 52,
+     "end": 52
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x03-free-shipping-discounted",
+   "pack": "agora-net",
+   "target": "seed:quests:agora-net/quiz/5991d0853fd6259d",
+   "phase": "after",
+   "title": "Why 60.00 minus 20% does not ship free",
+   "body": "Checkout passes the **discounted** subtotal to `ShippingMethod.CalculateCharge`. A 20% code on 60.00 takes off 12.00, so the method sees 48.00. Free shipping applies only when that amount is `>=` the threshold, and 48.00 is below 50.00, so the method's `BaseRate` (plus any weight charge) is billed.\n\n- The pre-discount 60.00 is never compared with the threshold.\n- There is no proration of the shipping charge by the discount rate.\n- Discounts run before shipping, not after, so the threshold sees the reduced amount.",
+   "excerpts": [
+    {
+     "path": "src/Agora.Domain/Entities/ShippingMethod.cs",
+     "lineStart": 52,
+     "lineEnd": 52,
+     "quote": "if (FreeThreshold is { } threshold && discountedSubtotal.Amount >= threshold)"
+    },
+    {
+     "path": "src/Agora.Infrastructure/Services/CheckoutService.cs",
+     "lineStart": 127,
+     "lineEnd": 127,
+     "quote": "var shippingAmount = shippingMethod.CalculateCharge(discountedSubtotal, totalWeightGrams);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:agora-net/note/2536c3566aaaa63f",
+   "provenance": {
+    "repo": "agora-net",
+    "sha": "f60febf6bf087da03e9b687219fb0352cfaa91fe",
+    "path": "docs/adr/0001-decimal-as-cents.md",
+    "lines": {
+     "start": 7,
+     "end": 8
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r02-money-at-the-boundary",
+   "pack": "agora-net",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: money, rounding and the persistence boundary",
+   "body": "Two ideas carry most of the money code.\n\nFirst, a **value object**: `Money` is an immutable record that validates itself in its constructor, so no part of the program can hold an invalid amount. Read `src/Agora.Domain/Common/Money.cs` and note what the constructor rejects, how it rounds, and what each arithmetic method checks before it computes.\n\nSecond, a **value converter**: EF Core can translate a property to a different column type on the way in and out of the database. SQLite has no decimal type, so the team chose to convert globally in `ConfigureConventions` and to opt specific properties out in `OnModelCreating`. A global rule is convenient, and its sharp edge is any property that should not follow it.\n\nWhat to look for:\n\n- in `SqliteValueConverters.cs`, the multiplier and the `MidpointRounding` mode of each converter;\n- in `AgoraDbContext.cs`, which properties call `HasConversion` explicitly, and why;\n- in `DiscountCode.CalculateDiscount` and `ShippingMethod.CalculateCharge`, which amount each one receives and compares.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0001-decimal-as-cents.md",
+     "lineStart": 7,
+     "lineEnd": 8,
+     "quote": "The store runs on SQLite, which has no `decimal` affinity and no `DateTimeOffset` type."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/Agora.Infrastructure/Persistence/SqliteValueConverters.cs",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The three converters, each with a comment on why it exists."
+    },
+    {
+     "path": "docs/adr/0004-tender-ordering.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The fixed order in which discounts, tax, shipping and gift cards apply."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:agora-net/note/423449a3d4e58930",
+   "provenance": {
+    "repo": "agora-net",
+    "sha": "f60febf6bf087da03e9b687219fb0352cfaa91fe",
+    "path": "src/Agora.Infrastructure/Services/WebhookService.cs",
+    "lines": {
+     "start": 79,
+     "end": 86
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x11-log-after-send",
+   "pack": "agora-net",
+   "target": "seed:quests:agora-net/quiz/a14f92781dd253e5",
+   "phase": "after",
+   "title": "When delivery rows reach the database",
+   "body": "Inside the loop, each delivery is built, sent, given its attempt result and added to the context. Only after the loop does one `SaveChangesAsync` write every row. Dispatch also runs after checkout's own final save. So the log never records an event for a rolled-back order, but a crash after a send and before that save loses the record: at-most-once delivery logging.\n\n- No row is saved before sending, so there is no Pending row to retry.\n- Dispatch is a separate save after the business commit, not part of it.\n- Successful deliveries are logged too; the log is the audit trail.",
+   "excerpts": [
+    {
+     "path": "src/Agora.Infrastructure/Services/WebhookService.cs",
+     "lineStart": 79,
+     "lineEnd": 86,
+     "quote": "var result = await sender.SendAsync( subscription.Url, delivery.Payload, delivery.Signature, ct);"
+    },
+    {
+     "path": "docs/adr/0007-hmac-webhook-signing.md",
+     "lineStart": 51,
+     "lineEnd": 52,
+     "quote": "At-most-once, not at-least-once."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:agora-net/note/5399beb647086fe0",
+   "provenance": {
+    "repo": "agora-net",
+    "sha": "f60febf6bf087da03e9b687219fb0352cfaa91fe",
+    "path": "docs/adr/0003-reserve-charge-commit.md",
+    "lines": {
+     "start": 48,
+     "end": 50
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x06-crash-after-charge",
+   "pack": "agora-net",
+   "target": "seed:quests:agora-net/quiz/5c97a35dcdc641cb",
+   "phase": "after",
+   "title": "What a crash between charge and commit leaves behind",
+   "body": "The first `SaveChangesAsync` already persisted the reservations and the Pending order. The second save, which commits stock, marks the order Paid and clears the cart, never runs. There is no explicit transaction spanning both saves, and ADR-0003 says plainly that no sweeper expires stale reservations, so the units stay held and the order stays Pending.\n\n- Nothing wraps the request in one transaction; each save commits on its own.\n- `MarkPaid` runs after the charge, inside the second batch of changes.\n- No background sweeper exists; the ADR names it as the first thing to build.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0003-reserve-charge-commit.md",
+     "lineStart": 48,
+     "lineEnd": 50,
+     "quote": "If the process dies between the charge and the commit, the reservation stays held and the order stays Pending; there is no sweeper that expires stale reservations."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:agora-net/note/595f0ebb095c8ce2",
+   "provenance": {
+    "repo": "agora-net",
+    "sha": "f60febf6bf087da03e9b687219fb0352cfaa91fe",
+    "path": "src/Agora.Infrastructure/Services/CheckoutService.cs",
+    "lines": {
+     "start": 185,
+     "end": 189
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x05-decline-cleanup",
+   "pack": "agora-net",
+   "target": "seed:quests:agora-net/quiz/3437c829bada8c0e",
+   "phase": "after",
+   "title": "What a declined payment undoes",
+   "body": "On a decline the service loops over the lines calling `ReleaseReservation`, removes the Pending order, saves, and throws `PaymentFailedException`, which the filter maps to 402. The gift card has not been redeemed yet, and the cart lines are cleared only on the success path.\n\n- The Pending order does not stay; it is deleted in the same save that releases stock.\n- Stock is released, and the cart is kept intact.\n- No redeem-then-refund happens: `Redeem` runs only after an approved charge.",
+   "excerpts": [
+    {
+     "path": "src/Agora.Infrastructure/Services/CheckoutService.cs",
+     "lineStart": 185,
+     "lineEnd": 189,
+     "quote": "item.ProductVariant!.Inventory!.ReleaseReservation(item.Quantity);"
+    },
+    {
+     "path": "src/Agora.Infrastructure/Services/CheckoutService.cs",
+     "lineStart": 188,
+     "lineEnd": 188,
+     "quote": "db.Orders.Remove(order);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:agora-net/note/65fc6ad28f78d702",
+   "provenance": {
+    "repo": "agora-net",
+    "sha": "f60febf6bf087da03e9b687219fb0352cfaa91fe",
+    "path": "src/Agora.Infrastructure/Persistence/SqliteValueConverters.cs",
+    "lines": {
+     "start": 25,
+     "end": 25
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x01-rate-through-cents",
+   "pack": "agora-net",
+   "target": "seed:quests:agora-net/quiz/6a55dc81b02b09ab",
+   "phase": "after",
+   "title": "Why a 0.095 rate would come back as 0.10",
+   "body": "The global convention sends every `decimal` through `DecimalToCentsConverter`, which stores `Math.Round(v * 100m, MidpointRounding.AwayFromZero)`. For 0.095 that is 9.5, which rounds away from zero to 10, and 10 / 100 reads back as 0.10. A 9.5% zone would tax at 10%. That is why `TaxZone.DefaultRate` and `TaxZoneRate.Rate` override the convention with the millionths converter.\n\n- The cents converter keeps two decimal places, not three.\n- It does not truncate; the rounding mode is away from zero.\n- Nothing throws: the converter quietly rounds, which is what makes the bug dangerous.",
+   "excerpts": [
+    {
+     "path": "src/Agora.Infrastructure/Persistence/SqliteValueConverters.cs",
+     "lineStart": 25,
+     "lineEnd": 25,
+     "quote": "v => (long)Math.Round(v * 100m, MidpointRounding.AwayFromZero),"
+    },
+    {
+     "path": "docs/adr/0001-decimal-as-cents.md",
+     "lineStart": 32,
+     "lineEnd": 34,
+     "quote": "A rate of `0.095` through a cents converter rounds to `0.10`"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:agora-net/note/76962286c2204cea",
+   "provenance": {
+    "repo": "agora-net",
+    "sha": "f60febf6bf087da03e9b687219fb0352cfaa91fe",
+    "path": "src/Agora.Infrastructure/Services/WebhookService.cs",
+    "lines": {
+     "start": 108,
+     "end": 110
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x10-retry-same-bytes",
+   "pack": "agora-net",
+   "target": "seed:quests:agora-net/quiz/cdf5baab03c2ab76",
+   "phase": "after",
+   "title": "What a webhook retry resends",
+   "body": "`RetryAsync` loads the existing delivery row and calls `SendAsync` with `delivery.Payload` and `delivery.Signature`, then records the attempt on the same row. The payload was serialized once at dispatch and the signature computed over those bytes, so a retry is byte-identical, which is what lets a receiver verify it.\n\n- Nothing is re-serialized, so `createdAt` and the signature do not change.\n- The secret is not read again; the stored signature is reused.\n- No new row is created: `RecordAttempt` bumps the same delivery's attempt count.",
+   "excerpts": [
+    {
+     "path": "src/Agora.Infrastructure/Services/WebhookService.cs",
+     "lineStart": 108,
+     "lineEnd": 110,
+     "quote": "delivery.Subscription!.Url, delivery.Payload, delivery.Signature, ct);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:agora-net/note/7fb63e77e2af1af4",
+   "provenance": {
+    "repo": "agora-net",
+    "sha": "f60febf6bf087da03e9b687219fb0352cfaa91fe",
+    "path": "src/Agora.Domain/Entities/Order.cs",
+    "lines": {
+     "start": 100,
+     "end": 104
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x12-cancel-after-shipment",
+   "pack": "agora-net",
+   "target": "seed:quests:agora-net/quiz/1f1cfa3fbd7eaaac",
+   "phase": "after",
+   "title": "Why a partly shipped order cannot be cancelled",
+   "body": "After the first shipment covered 2 of 3 units, `FulfillmentService` derived the status PartiallyFulfilled. `Order.Cancel` accepts only Pending or Paid and otherwise throws `InvalidOrderStateException`, which the filter maps to 409. ADR-0005 names a refund as the escape hatch once anything has shipped.\n\n- Nothing is restocked, because the cancel throws before any refund or restock runs.\n- 422 Invalid fulfillment is for over-shipping a line, not for cancelling.\n- Cancel never turns into a refund; the caller must ask for one.",
+   "excerpts": [
+    {
+     "path": "src/Agora.Domain/Entities/Order.cs",
+     "lineStart": 100,
+     "lineEnd": 104,
+     "quote": "if (Status is not (OrderStatus.Pending or OrderStatus.Paid))"
+    },
+    {
+     "path": "docs/adr/0005-derived-order-status.md",
+     "lineStart": 41,
+     "lineEnd": 43,
+     "quote": "once anything ships, cancellation is 409 and the escape hatch is a refund"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:agora-net/note/82332301b03d0fe9",
+   "provenance": {
+    "repo": "agora-net",
+    "sha": "f60febf6bf087da03e9b687219fb0352cfaa91fe",
+    "path": "src/Agora.Domain/Entities/DiscountCode.cs",
+    "lines": {
+     "start": 34,
+     "end": 34
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x02-fixed-discount-cap",
+   "pack": "agora-net",
+   "target": "seed:quests:agora-net/quiz/24e59e65d47e5e82",
+   "phase": "after",
+   "title": "Why an 80.00 code stores a 50.00 discount",
+   "body": "`CalculateDiscount` handles the two discount types separately. For `FixedAmount` it builds `new Money(Math.Min(Value, subtotal.Amount), ...)`, so an 80.00 code on a 50.00 subtotal yields a 50.00 discount, and that is the `DiscountAmount` written to the order. The later `subtotal.Subtract(discountAmount)` would clamp at zero anyway, but it never needs to here.\n\n- 80.00 is not stored: the cap happens before the subtraction.\n- Checkout does not reject an oversized code; only a missing or unredeemable code is a 422.\n- The discount is not ignored; the customer gets the full subtotal off.",
+   "excerpts": [
+    {
+     "path": "src/Agora.Domain/Entities/DiscountCode.cs",
+     "lineStart": 34,
+     "lineEnd": 34,
+     "quote": "DiscountType.FixedAmount => new Money(Math.Min(Value, subtotal.Amount), subtotal.Currency),"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:agora-net/note/a33554135c6486f3",
+   "provenance": {
+    "repo": "agora-net",
+    "sha": "f60febf6bf087da03e9b687219fb0352cfaa91fe",
+    "path": "src/Agora.Infrastructure/Services/CheckoutService.cs",
+    "lines": {
+     "start": 177,
+     "end": 177
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x04-gift-card-covers-all",
+   "pack": "agora-net",
+   "target": "seed:quests:agora-net/quiz/8be4ce57debb4790",
+   "phase": "after",
+   "title": "Why a full gift-card payment never reaches the gateway",
+   "body": "The tender is `Math.Min(giftCard.Balance, total.Amount)`, here 120.00, so the charge amount is 0. `ChargeAsync` runs only when the charge amount is greater than zero, so the gateway is not called. The else branch picks the synthetic id: `gift_<code>` when a gift card is present, `free_<order#>` otherwise.\n\n- No zero-value charge is sent, so there is no gateway id to store.\n- `free_` is for an order discounted to zero with no gift card.\n- The card is redeemed for 120.00 after the branch; its balance does change.",
+   "excerpts": [
+    {
+     "path": "src/Agora.Infrastructure/Services/CheckoutService.cs",
+     "lineStart": 177,
+     "lineEnd": 177,
+     "quote": "if (chargeAmount.Amount > 0)"
+    },
+    {
+     "path": "src/Agora.Infrastructure/Services/CheckoutService.cs",
+     "lineStart": 199,
+     "lineEnd": 201,
+     "quote": "transactionId = giftCard is not null ? $\"gift_{giftCard.Code}\" : $\"free_{order.Number}\";"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:agora-net/note/acf1b6065efacd22",
+   "provenance": {
+    "repo": "agora-net",
+    "sha": "f60febf6bf087da03e9b687219fb0352cfaa91fe",
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 3,
+     "end": 4
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r01-start-here",
+   "pack": "agora-net",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: three projects, eight ADRs, one checkout",
+   "body": "agora-net is an e-commerce Web API in three layers: `Agora.Domain` (entities and the `Money` value object, no dependencies), `Agora.Infrastructure` (EF Core on SQLite, plus the services that orchestrate checkout, refunds, fulfillment and webhooks) and `Agora.Api` (controllers and one exception filter).\n\nRead `docs/architecture.md` first for the map, then the ADRs in `docs/adr/` in number order. Each ADR has the same shape: Context (the bug the decision prevents), Decision, Consequences. The Consequences sections are the most useful part: they name the costs the team accepted on purpose.\n\nThe quiz asks you to predict what the code does in edge cases, so keep the code open next to each ADR:\n\n- `src/Agora.Infrastructure/Services/CheckoutService.cs` for ADRs 3, 4 and 6;\n- `src/Agora.Infrastructure/Persistence/AgoraDbContext.cs` and `SqliteValueConverters.cs` for ADR 1;\n- `src/Agora.Api/Filters/DomainExceptionFilter.cs` for every status code.\n\nWhen an ADR and the code seem to disagree, trust the code and note the gap.",
+   "excerpts": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 3,
+     "lineEnd": 4,
+     "quote": "agora-net is a three-project ASP.NET Core Web API backed by EF Core on SQLite,"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The system map: layering, the checkout pipeline, concurrency, webhooks and the error contract."
+    },
+    {
+     "path": "docs/adr/README.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The index of the eight decision records."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:agora-net/note/b307a5993a68d45e",
+   "provenance": {
+    "repo": "agora-net",
+    "sha": "f60febf6bf087da03e9b687219fb0352cfaa91fe",
+    "path": "src/Agora.Infrastructure/Persistence/AgoraDbContext.cs",
+    "lines": {
+     "start": 151,
+     "end": 156
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x08-discount-limit-race",
+   "pack": "agora-net",
+   "target": "seed:quests:agora-net/quiz/37108ad221078cb7",
+   "phase": "after",
+   "title": "Why a single-use code can be used twice",
+   "body": "Only `InventoryItem`, `Cart` and `GiftCard` map a Version token. The `DiscountCode` mapping has none. Each checkout loaded `TimesUsed = 0`, so `RegisterUse` passes its `IsRedeemable` check in both contexts, and each issues an UPDATE setting `TimesUsed` to 1 with nothing in the `WHERE` to detect the other write. Both orders succeed and the counter ends at 1. ADR-0006 files discounts under survivable admin config; a usage limit is the case where that lost update costs money.\n\n- There is no Version property on the code row to produce a 409.\n- `RegisterUse` re-checks against the stale in-memory count, so it passes.\n- The unique index on `Code` only stops two codes with the same text.",
+   "excerpts": [
+    {
+     "path": "src/Agora.Infrastructure/Persistence/AgoraDbContext.cs",
+     "lineStart": 151,
+     "lineEnd": 156,
+     "quote": "discount.HasIndex(d => d.Code).IsUnique();"
+    },
+    {
+     "path": "docs/adr/0006-optimistic-concurrency.md",
+     "lineStart": 34,
+     "lineEnd": 36,
+     "quote": "Everything else — products, categories, discounts, shipping methods, tax zones, webhooks — has no token."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:agora-net/note/bc89c86a17300321",
+   "provenance": {
+    "repo": "agora-net",
+    "sha": "f60febf6bf087da03e9b687219fb0352cfaa91fe",
+    "path": "src/Agora.Api/Filters/DomainExceptionFilter.cs",
+    "lines": {
+     "start": 15,
+     "end": 16
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x07-last-unit-race",
+   "pack": "agora-net",
+   "target": "seed:quests:agora-net/quiz/77dadf1cfc9428c8",
+   "phase": "after",
+   "title": "Which 409 the losing checkout sees",
+   "body": "Both requests read stock before either saved, so each `Reserve` passed against its own snapshot: the logical guard cannot see the other writer. `InventoryItem.Version` is a concurrency token, so the slower UPDATE's `WHERE` no longer matches, EF throws `DbUpdateConcurrencyException`, and `DomainExceptionFilter` maps it to 409 with the title Concurrency conflict.\n\n- Insufficient stock is the title of the logical guard, which passed here.\n- Without the token the last write would win, but the token is mapped in `AgoraDbContext`.\n- The exception is mapped, first in the switch, so it is not a 500.",
+   "excerpts": [
+    {
+     "path": "src/Agora.Api/Filters/DomainExceptionFilter.cs",
+     "lineStart": 15,
+     "lineEnd": 16,
+     "quote": "Microsoft.EntityFrameworkCore.DbUpdateConcurrencyException => (StatusCodes.Status409Conflict, \"Concurrency conflict\"),"
+    },
+    {
+     "path": "src/Agora.Infrastructure/Persistence/AgoraDbContext.cs",
+     "lineStart": 117,
+     "lineEnd": 117,
+     "quote": "inventory.Property(i => i.Version).IsConcurrencyToken();"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:agora-net/note/d39a6396714aa0d5",
+   "provenance": {
+    "repo": "agora-net",
+    "sha": "f60febf6bf087da03e9b687219fb0352cfaa91fe",
+    "path": "src/Agora.Infrastructure/Services/ReturnService.cs",
+    "lines": {
+     "start": 229,
+     "end": 229
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x09-rma-wrong-email",
+   "pack": "agora-net",
+   "target": "seed:quests:agora-net/quiz/b2ab4412236342cb",
+   "phase": "after",
+   "title": "Why a wrong email gets 404 on a return",
+   "body": "`EnsureRequesterOwnsOrder` accepts two proofs: the signed-in account owns the order, or the request carries the order's email (compared case-insensitively). Anything else throws `NotFoundException`, which maps to 404. Answering as if the order did not exist means a caller who cannot name the email learns nothing about whether the number is real.\n\n- 403 would confirm the order exists, which is what the design avoids.\n- Guests do not need an account; the email is the guest credential.\n- 422 is for semantically invalid references such as an unknown discount code.",
+   "excerpts": [
+    {
+     "path": "src/Agora.Infrastructure/Services/ReturnService.cs",
+     "lineStart": 229,
+     "lineEnd": 229,
+     "quote": "throw new NotFoundException($\"Order '{order.Number}' not found.\");"
+    },
+    {
+     "path": "docs/adr/0008-guest-cart-tokens.md",
+     "lineStart": 26,
+     "lineEnd": 28,
+     "quote": "so the endpoint never confirms that an order number exists to someone who cannot name its email."
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}
