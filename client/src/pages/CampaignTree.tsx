@@ -74,14 +74,22 @@ const QUEST_LABEL: Record<QuestNodeState, string> = {
 
 const FALLBACK_WIDTH = 960; // jsdom / first paint before the box is measured
 
-function useWidth(ref: RefObject<HTMLElement>): number {
-  const [width, setWidth] = useState(FALLBACK_WIDTH);
+/**
+ * The tree box's width. `measured` turns true once the box has been measured (or found
+ * unmeasurable, as in jsdom): until then the layout is the FALLBACK_WIDTH guess, and any node
+ * position read from it (a scroll target) is wrong at phone width.
+ */
+function useWidth(ref: RefObject<HTMLElement>): { width: number; measured: boolean } {
+  const [state, setState] = useState({ width: FALLBACK_WIDTH, measured: false });
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
     const measure = () => {
       const w = el.clientWidth;
-      if (w > 0) setWidth(w);
+      setState((prev) => {
+        const width = w > 0 ? w : prev.width;
+        return prev.measured && prev.width === width ? prev : { width, measured: true };
+      });
     };
     measure();
     if (typeof ResizeObserver === 'undefined') {
@@ -92,7 +100,7 @@ function useWidth(ref: RefObject<HTMLElement>): number {
     ro.observe(el);
     return () => ro.disconnect();
   }, [ref]);
-  return width;
+  return state;
 }
 
 export function SkillTree({
@@ -108,7 +116,7 @@ export function SkillTree({
   targetQuestId?: number;
 }) {
   const boxRef = useRef<HTMLDivElement>(null);
-  const width = useWidth(boxRef);
+  const { width, measured } = useWidth(boxRef);
   const targetAct = targetQuestId === undefined ? undefined : acts.find((a) => a.quests.some((q) => q.id === targetQuestId));
   const [expanded, setExpanded] = useState<Set<number>>(() => {
     const open = defaultExpanded(acts);
@@ -135,7 +143,9 @@ export function SkillTree({
   })();
 
   useEffect(() => {
-    if (pendingFocus.current === null) return;
+    // wait for the measured-width layout: scrolling to a node placed by the fallback layout
+    // left a phone-width target ~2,000px below the fold once the real layout settled (W11 fix)
+    if (pendingFocus.current === null || !measured) return;
     const el = nodes.current.get(pendingFocus.current);
     el?.focus({ preventScroll: true });
     el?.scrollIntoView?.({ block: 'center' });

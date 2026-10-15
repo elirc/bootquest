@@ -240,8 +240,8 @@ function QuestNode({ quest, actUnlocked, target = false }: { quest: CampaignQues
       </span>
       <span className="step-main">
         <span className="step-title">{quest.title}</span>
-        {/* W11: the meta line ellipsizes at phone width; the full repo stays reachable as a tooltip */}
-        <span className="step-meta" title={`${quest.kind} · ${quest.repo}${quest.twinRepo ? ` · twin of ${quest.twinRepo}` : ''}`}>
+        {/* W11: the meta line wraps at phone width, so the full repo name is always visible text */}
+        <span className="step-meta">
           {quest.kind} · {quest.repo}
           {quest.twinRepo && <> · twin of {quest.twinRepo}</>}
         </span>

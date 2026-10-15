@@ -488,6 +488,32 @@ describe('written units: answer first (immutable), THEN the model answer (F9)', 
     expectApiError(await request(app).get(`/api/units/${id}/model-answer?peek=1`), 400, 'VALIDATION');
   });
 
+  it('W11: refuses the untouched starter template (stored immutably it would burn the first answer)', async () => {
+    const STARTER = '## Findings\n\n1. \n2. \n';
+    const id = insertUnit(ctx.db, { key: 'fixture:written-starter', track: 'js', kind: 'written', title: 'review with a template', competencies: ['code-reading'] }, ctx.clock);
+    const app = createApp({
+      db: ctx.db,
+      clock: ctx.clock,
+      runners: {},
+      content: mapContentStore({
+        ...fixture.content,
+        'fixture:written-starter': { instructions: 'Review the patch.', starter: STARTER, solution: MODEL, rubric: [{ id: 'race', label: 'Names the race' }] },
+      }),
+    });
+    expect((await request(app).get(`/api/units/${id}`)).body.starter).toBe(STARTER);
+    for (const same of [STARTER, STARTER.trim(), `  \n${STARTER}\n\t `]) {
+      expectApiError(await request(app).post(`/api/units/${id}/answer`).send({ answer: same, selfAssisted: false }), 422, 'UNTOUCHED_TEMPLATE');
+    }
+    expect(ledgerCounts(ctx.db).attempt).toBe(0);
+    expectApiError(await request(app).get(`/api/units/${id}/model-answer`), 403, 'NOT_ANSWERED');
+    // any edit to the template is an answer
+    const filled = `${STARTER.trim()} the stock check races the decrement`;
+    const ok = await request(app).post(`/api/units/${id}/answer`).send({ answer: filled, selfAssisted: false });
+    expect(ok.status).toBe(200);
+    expect(ledgerCounts(ctx.db).attempt).toBe(1);
+    expect((await request(app).get(`/api/units/${id}/model-answer`)).body.answer).toBe(filled);
+  });
+
   it('a raw empty-text submitted attempt (not via the API) does not unlock the model answer', async () => {
     const { app, id } = writtenApp();
     ctx.db.run(

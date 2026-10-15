@@ -3,9 +3,9 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { screen, waitFor, within } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMockApi } from '../api/mock';
-import type { BootQuestApi, CampaignActDto, UnitDetail } from '../api/types';
+import { ApiError, type BootQuestApi, type CampaignActDto, type UnitDetail } from '../api/types';
 import { fmtStamp, fmtWhen } from '../lib/format';
 import { renderApp } from '../test/render';
 import { CAMPAIGN_VIEW_KEY } from './CampaignTree';
@@ -61,6 +61,25 @@ describe('W11 #1/#2 campaign act cards (CSS regressions)', () => {
     const decl = rules(css('app.css'), '.uncovered');
     expect(decl[0]).toMatch(/border:\s*1px solid var\(--warning-line\)/);
     expect(css('app.css')).not.toMatch(/rgba\(210, 153, 34, 0\.4\)/);
+  });
+});
+
+describe('W11 #11 campaign list meta line at phone width', () => {
+  it('the repo meta line wraps (no ellipsis, no nowrap): the full repo name is visible text, not a tooltip', async () => {
+    const decl = rules(css('app.css'), '.step-meta');
+    expect(decl).toHaveLength(1);
+    expect(decl[0]).toMatch(/overflow-wrap:\s*anywhere/);
+    expect(decl[0]).not.toMatch(/text-overflow|white-space:\s*nowrap|overflow:\s*hidden/);
+
+    const c = await createMockApi().getCampaign('js');
+    const q = c.acts.flatMap((a) => a.quests)[0]!;
+    renderApp('/campaign/js');
+    const li = await waitFor(() => {
+      const n = document.querySelector<HTMLElement>(`[data-quest="${q.id}"]`);
+      expect(n).not.toBeNull();
+      return n!;
+    });
+    expect(li.querySelector('.step-meta')).toHaveTextContent(q.repo);
   });
 });
 
@@ -130,6 +149,41 @@ describe('W11 campaign `?unit=` target (ReadingEmpty / locked panel links)', () 
     await screen.findByRole('tabpanel', { name: 'Campaign acts' });
     expect(document.querySelectorAll('.step-target, [aria-current="location"]')).toHaveLength(0);
   });
+
+  it('tree view at phone width: the target is scrolled to on the MEASURED layout, not the fallback one', async () => {
+    // jsdom has no layout: give the tree box a phone width and record, for each scroll, whether
+    // the tree had already been laid out at that width (one column = `skilltree-narrow`). The
+    // fallback-width layout puts the node ~2,000px higher than where it ends up at 400px.
+    const q = await pickQuest(true);
+    const width = vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('skilltree') ? 368 : 0;
+    });
+    const scrolls: { node: string | undefined; narrow: boolean }[] = [];
+    const proto = Element.prototype as unknown as { scrollIntoView?: unknown }; // jsdom has none
+    const had = Object.prototype.hasOwnProperty.call(proto, 'scrollIntoView');
+    const prev = proto.scrollIntoView;
+    proto.scrollIntoView = function (this: HTMLElement) {
+      scrolls.push({ node: this.dataset.node, narrow: !!this.closest('.skilltree-narrow') });
+    };
+    try {
+      window.localStorage.setItem(CAMPAIGN_VIEW_KEY, 'tree');
+      renderApp(`/campaign/js?unit=${q.unitId}`);
+      await screen.findByTestId('skilltree');
+      const el = await waitFor(() => {
+        const n = document.querySelector<HTMLElement>(`[data-node="q:${q.id}"]`);
+        expect(n).toHaveFocus();
+        return n!;
+      });
+      expect(el.closest('.skilltree')).toHaveClass('skilltree-narrow');
+      const toTarget = scrolls.filter((s) => s.node === `q:${q.id}`);
+      expect(toTarget.length).toBeGreaterThan(0);
+      expect(toTarget.every((s) => s.narrow)).toBe(true);
+    } finally {
+      width.mockRestore();
+      if (had) proto.scrollIntoView = prev;
+      else delete proto.scrollIntoView;
+    }
+  });
 });
 
 describe('W11 #6/#7 written unit: no immutable store of the untouched template; focus follows the store', () => {
@@ -155,6 +209,31 @@ describe('W11 #6/#7 written unit: no immutable store of the untouched template; 
     const h = await screen.findByRole('heading', { name: 'Compare with the model answer' });
     await waitFor(() => expect(h).toHaveFocus());
     expect(screen.getByTestId('stored-meta')).not.toHaveTextContent('UTC');
+  });
+
+  it('the API refuses the untouched template too (422 UNTOUCHED_TEMPLATE), mirrored by the mock', async () => {
+    const api = createMockApi();
+    const starter = (await api.getUnit(REVIEW)).starter!;
+    expect(starter.trim()).not.toBe('');
+    await expect(api.answerWritten(REVIEW, { answer: `\n${starter}  `, selfAssisted: false })).rejects.toMatchObject({ status: 422, code: 'UNTOUCHED_TEMPLATE' });
+    await expect(api.getModelAnswer(REVIEW)).rejects.toMatchObject({ code: 'NOT_ANSWERED' });
+  });
+
+  it('a server UNTOUCHED_TEMPLATE refusal is shown as a learner-facing line, and nothing is stored', async () => {
+    // e.g. the client guard and the server disagree on whitespace: the server's refusal still reads well
+    const base = createMockApi();
+    const api: BootQuestApi = {
+      ...base,
+      answerWritten: async () => {
+        throw new ApiError(422, 'UNTOUCHED_TEMPLATE', 'unit: the answer is the unchanged starter template');
+      },
+    };
+    const { user } = renderApp(`/play/${REVIEW}`, api);
+    await user.type(await screen.findByRole('textbox', { name: 'Your answer' }), ' x');
+    await user.click(screen.getByRole('button', { name: /Submit answer/ }));
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: /Store answer and show the model answer/ }));
+    expect(await screen.findByText(/That is the unchanged starter template\. Write your answer into it before storing it\. \(UNTOUCHED_TEMPLATE\)/)).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Compare with the model answer' })).toBeNull();
   });
 });
 
