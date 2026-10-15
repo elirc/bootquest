@@ -1,0 +1,442 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "globehire",
+ "sha": "d38fb1477266c5591bc8340ebda3d699fc7008a6",
+ "guides": [
+  "astraupskill/01-CODEBASE-MAP.md",
+  "astraupskill/02-CONCEPTS.md",
+  "astraupskill/03-WORKED-CHANGE.md",
+  "astraupskill/04-TESTING-AND-DEBUGGING.md",
+  "astraupskill/07-TRACE-LAB.md",
+  "docs/concepts/effective-dated-policies.md"
+ ],
+ "items": [
+  {
+   "id": "q01-composite-key",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/01-CODEBASE-MAP.md",
+    "lines": {
+     "start": 5,
+     "end": 5
+    }
+   },
+   "cites": [
+    {
+     "path": "src/GlobeHire.Infrastructure/HireCases/InMemoryHireCaseRepository.cs",
+     "lineStart": 9,
+     "lineEnd": 9
+    },
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": 5,
+     "lineEnd": 5
+    }
+   ],
+   "prompt": "What does InMemoryHireCaseRepository use as the key of its dictionary?",
+   "answer": "The pair (ClientId, Guid), so a bare case id cannot match",
+   "distractors": [
+    "The case Guid alone, with the client checked later in the handler",
+    "The client id alone, mapped to a list of that client's cases",
+    "A hash of the candidate email, scoped per client by a prefix"
+   ],
+   "explanation": "The dictionary is Dictionary<(ClientId ClientId, Guid Id), HireCase>; a globally valid Guid with the wrong client produces no aggregate reference."
+  },
+  {
+   "id": "q02-wrong-client-null",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/07-TRACE-LAB.md",
+    "lines": {
+     "start": 5,
+     "end": 5
+    }
+   },
+   "cites": [
+    {
+     "path": "src/GlobeHire.Application/HireCases/HireCaseUseCases.cs",
+     "lineStart": 58,
+     "lineEnd": 60
+    },
+    {
+     "path": "astraupskill/07-TRACE-LAB.md",
+     "lineStart": 5,
+     "lineEnd": 5
+    }
+   ],
+   "prompt": "CompleteTaskAsync is called with client-other and the real Guid of client-acme's case. What happens?",
+   "answer": "It returns null and the owner case is left exactly as it was",
+   "distractors": [
+    "It returns a 403 that names the client who owns the case",
+    "It completes the task, as the Guid alone is globally unique",
+    "It throws version_mismatch, since the caller's copy is stale"
+   ],
+   "explanation": "FindAsync builds (client-other, id), which matches nothing; the null-conditional hireCase?.CompleteTask skips the mutation, and the endpoint turns null into 404 without revealing whether the Guid exists."
+  },
+  {
+   "id": "q03-complete-twice",
+   "kind": "quiz",
+   "source": {
+    "path": "src/GlobeHire.Domain/HireCases/HireCase.cs",
+    "lines": {
+     "start": 85,
+     "end": 106
+    }
+   },
+   "cites": [
+    {
+     "path": "src/GlobeHire.Domain/HireCases/HireCase.cs",
+     "lineStart": 99,
+     "lineEnd": 102
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 5,
+     "lineEnd": 5
+    }
+   ],
+   "prompt": "CompleteTask is called with the right version for a task that is already complete. What does it do?",
+   "answer": "It returns early with Version and CompletedAt untouched",
+   "distractors": [
+    "Version goes up by 1, and CompletedAt moves to the new time",
+    "It throws hire_case.task_not_found for the finished task",
+    "It throws, since a completed task cannot be named again"
+   ],
+   "explanation": "The guard `if (_tasks[index].IsComplete) return;` comes before the record replacement and Version++, so repeating a completion is a no-op."
+  },
+  {
+   "id": "q04-version-checked-first",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/07-TRACE-LAB.md",
+    "lines": {
+     "start": 9,
+     "end": 9
+    }
+   },
+   "cites": [
+    {
+     "path": "src/GlobeHire.Domain/HireCases/HireCase.cs",
+     "lineStart": 85,
+     "lineEnd": 88
+    },
+    {
+     "path": "astraupskill/07-TRACE-LAB.md",
+     "lineStart": 9,
+     "lineEnd": 9
+    }
+   ],
+   "prompt": "After identity was completed (Version 2), a request completes work-eligibility with stale version 1. Which check rejects it?",
+   "answer": "EnsureVersion, before the task is even looked up",
+   "distractors": [
+    "The task lookup, since work-eligibility is not found",
+    "The Draft status check, since identity locked the case",
+    "None of them; it completes and Version becomes 3"
+   ],
+   "explanation": "CompleteTask calls EnsureVersion first; 1 != 2 throws concurrency.version_mismatch, so work-eligibility stays incomplete with a null timestamp."
+  },
+  {
+   "id": "q05-submit-incomplete",
+   "kind": "quiz",
+   "source": {
+    "path": "src/GlobeHire.Domain/HireCases/HireCase.cs",
+    "lines": {
+     "start": 108,
+     "end": 120
+    }
+   },
+   "cites": [
+    {
+     "path": "src/GlobeHire.Domain/HireCases/HireCase.cs",
+     "lineStart": 111,
+     "lineEnd": 116
+    }
+   ],
+   "prompt": "SubmitForReview is called with the right version while one onboarding task is still incomplete. What happens?",
+   "answer": "It throws hire_case.tasks_incomplete with Status still Draft",
+   "distractors": [
+    "Status becomes ReadyForReview, and the open task is flagged",
+    "It completes the open task first, then submits the case",
+    "It throws concurrency.version_mismatch for the open task"
+   ],
+   "explanation": "After EnsureVersion, any incomplete task throws \"Every onboarding task must be completed before review.\"; Status and Version change only after that check."
+  },
+  {
+   "id": "q06-clock-port",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 7,
+     "end": 7
+    }
+   },
+   "cites": [
+    {
+     "path": "src/GlobeHire.Application/HireCases/HireCaseUseCases.cs",
+     "lineStart": 59,
+     "lineEnd": 59
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 7,
+     "lineEnd": 7
+    }
+   ],
+   "prompt": "Where does the CompletedAt timestamp of a task come from?",
+   "answer": "IClock.UtcNow, which the handler passes into CompleteTask",
+   "distractors": [
+    "DateTimeOffset.UtcNow, read inside HireCase.CompleteTask",
+    "The If-Match header, which carries the client's own time",
+    "The repository, which stamps each aggregate when it stores it"
+   ],
+   "explanation": "ChangeHireCaseHandler passes clock.UtcNow; the domain receives time as an argument and stores now.ToUniversalTime(). Tests inject a FixedClock for an exact value."
+  },
+  {
+   "id": "q07-if-match-required",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/01-CODEBASE-MAP.md",
+    "lines": {
+     "start": 3,
+     "end": 3
+    }
+   },
+   "cites": [
+    {
+     "path": "src/GlobeHire.Api/HireCases/HireCaseEndpoints.cs",
+     "lineStart": 93,
+     "lineEnd": 101
+    },
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": 3,
+     "lineEnd": 3
+    }
+   ],
+   "prompt": "A client calls the complete-task endpoint with no numeric If-Match header. What is the result?",
+   "answer": "It fails with business error concurrency.if_match_required",
+   "distractors": [
+    "It goes ahead using the case's current Version as expected",
+    "It goes ahead with version 1 as the default expected value",
+    "The endpoint retries on its own with a freshly read ETag"
+   ],
+   "explanation": "ParseVersion trims quotes and int.TryParse-s the header; anything non-numeric or missing throws BusinessRuleViolationException(\"concurrency.if_match_required\", ...)."
+  },
+  {
+   "id": "q08-lock-scope",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 9,
+     "end": 9
+    }
+   },
+   "cites": [
+    {
+     "path": "src/GlobeHire.Infrastructure/HireCases/InMemoryHireCaseRepository.cs",
+     "lineStart": 23,
+     "lineEnd": 31
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 9,
+     "lineEnd": 9
+    }
+   ],
+   "prompt": "What exactly does the lock in InMemoryHireCaseRepository protect?",
+   "answer": "Only dictionary access, while CompleteTask later runs unlocked",
+   "distractors": [
+    "The whole read-modify-write, exactly the same as a compare-and-swap",
+    "Every aggregate until a SaveChangesAsync call commits it",
+    "Cross-process access, like a database transaction would"
+   ],
+   "explanation": "FindAsync releases the lock before returning, so the version check in the aggregate is a check-then-act, not a compare-and-swap; the lock only keeps the dictionary from being corrupted."
+  },
+  {
+   "id": "q09-assert-owner-state",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/04-TESTING-AND-DEBUGGING.md",
+    "lines": {
+     "start": 7,
+     "end": 7
+    }
+   },
+   "cites": [
+    {
+     "path": "astraupskill/04-TESTING-AND-DEBUGGING.md",
+     "lineStart": 7,
+     "lineEnd": 7
+    },
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": 5,
+     "lineEnd": 5
+    }
+   ],
+   "prompt": "Why do the tenant-isolation tests check the owner's aggregate and not only the null or 404 result?",
+   "answer": "A 404 can hide an earlier mutation if code is badly ordered",
+   "distractors": [
+    "Null results are unreliable when the tests run in parallel",
+    "An application test can never see the HTTP status at all",
+    "Assertions on null always fail on CI machines without a database"
+   ],
+   "explanation": "The guide: avoid testing only HTTP status; these regressions assert both the outward outcome and the owner state, checking absence of mutation."
+  },
+  {
+   "id": "q10-policy-by-start-date",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/concepts/effective-dated-policies.md",
+    "lines": {
+     "start": 5,
+     "end": 5
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/concepts/effective-dated-policies.md",
+     "lineStart": 5,
+     "lineEnd": 5
+    },
+    {
+     "path": "src/GlobeHire.Domain/WorkforcePlans/CountryPolicySelector.cs",
+     "lineStart": 7,
+     "lineEnd": 16
+    }
+   ],
+   "prompt": "Which date selects the country employment policy used for a quote?",
+   "answer": "The proposed employment start date, rather than the request date",
+   "distractors": [
+    "The date the API received the quote request from the client",
+    "The policy row's last-updated date, with the newest one winning",
+    "The client's contract signing date with GlobeHire itself"
+   ],
+   "explanation": "Policies are effective-dated; the proposed start date selects one, and the quote stores the selected policy id so an old quote stays explainable."
+  },
+  {
+   "id": "q11-two-policies-overlap",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/concepts/effective-dated-policies.md",
+    "lines": {
+     "start": 14,
+     "end": 14
+    }
+   },
+   "cites": [
+    {
+     "path": "src/GlobeHire.Domain/WorkforcePlans/CountryPolicySelector.cs",
+     "lineStart": 18,
+     "lineEnd": 27
+    },
+    {
+     "path": "docs/concepts/effective-dated-policies.md",
+     "lineStart": 14,
+     "lineEnd": 14
+    }
+   ],
+   "prompt": "Two policy versions for the same country both apply on the start date. What does CountryPolicySelector do?",
+   "answer": "It throws country_policy.overlap as a configuration error",
+   "distractors": [
+    "It returns the one with the later EffectiveFrom, after sorting",
+    "It returns whichever row was loaded first from the store",
+    "It averages both into one blended employment estimate"
+   ],
+   "explanation": "The matches are sorted, but the switch still throws for more than one: \"More than one match is a configuration error, not an invitation to pick whichever row happened to load first.\""
+  },
+  {
+   "id": "q12-owner-submit-version",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/07-TRACE-LAB.md",
+    "lines": {
+     "start": 11,
+     "end": 11
+    }
+   },
+   "cites": [
+    {
+     "path": "src/GlobeHire.Domain/HireCases/HireCase.cs",
+     "lineStart": 118,
+     "lineEnd": 119
+    },
+    {
+     "path": "astraupskill/07-TRACE-LAB.md",
+     "lineStart": 11,
+     "lineEnd": 11
+    }
+   ],
+   "prompt": "The owner submits a Draft case whose tasks are all complete, at Version 4. What is the state afterwards?",
+   "answer": "Status is ReadyForReview and Version is 5",
+   "distractors": [
+    "Status is Submitted and Version resets to 1",
+    "It throws hire_case.not_editable at Version 4",
+    "Status is ReadyForReview, Version still 4"
+   ],
+   "explanation": "SubmitForReview finds no incomplete task, sets Status = ReadyForReview and increments Version, from 4 to 5."
+  },
+  {
+   "id": "f01-two-questions",
+   "kind": "flashcard",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 5,
+     "end": 5
+    }
+   },
+   "cites": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 5,
+     "lineEnd": 5
+    }
+   ],
+   "front": "Tenant scope vs version check: which question does each answer?",
+   "back": "Tenant scope: which aggregate may this request see? (ClientId + Guid lookup.) Version check: which observed state may this request change? (EnsureVersion.) Keeping them separate makes failure diagnosis clearer."
+  },
+  {
+   "id": "f02-matrix",
+   "kind": "flashcard",
+   "source": {
+    "path": "astraupskill/03-WORKED-CHANGE.md",
+    "lines": {
+     "start": 9,
+     "end": 9
+    }
+   },
+   "cites": [
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": 9,
+     "lineEnd": 9
+    }
+   ],
+   "front": "The four-case tenant-isolation test matrix?",
+   "back": "Wrong client + valid version (complete); wrong client + otherwise valid submit; right client + right version (success, exact clock, Version 2); right client + stale version (named error, second task unchanged)."
+  },
+  {
+   "id": "f03-debug-symptoms",
+   "kind": "flashcard",
+   "source": {
+    "path": "astraupskill/04-TESTING-AND-DEBUGGING.md",
+    "lines": {
+     "start": 5,
+     "end": 5
+    }
+   },
+   "cites": [
+    {
+     "path": "astraupskill/04-TESTING-AND-DEBUGGING.md",
+     "lineStart": 5,
+     "lineEnd": 5
+    }
+   ],
+   "front": "Diagnosing a failing tenant-isolation test?",
+   "back": "Wrong-client result non-null: check the handler args and the repository key. Null but state changed: a lookup or shared fixture exposed the aggregate. Timestamp differs: check IClock.UtcNow and FixedClock. Stale mutation changed state: EnsureVersion must run before task replacement."
+  }
+ ]
+}
