@@ -1,0 +1,384 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "organized-js-training-jstrain2.4",
+ "repo": "organized-js-training-jstrain2.4",
+ "sha": "d41d8849ae0381e8c03e9de2ff670aeb11d6b505",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: one request from button to database",
+   "body": "Orbit Deploy Console is a small internal deploy platform built with Next.js. The browser and the API live in one project: React components in `components/`, API route handlers in `app/api/*/route.js`, and the business rules in `lib/`.\n\nRead `_learning/00-ARCHITECTURE.md` first, especially the \"Request/Response Lifecycle\" section. It follows one \"New Deploy\" click through Zod validation, the actor lookup, the role checks, the lock checks and the service call. Then read `_learning/03-PATTERNS.md`, which names the patterns (state machine, lookup table, service layer) and is honest about the shortcuts.\n\nAfter that, open the code next to each guide in `_learning/guides/lib/`. The files are short. For every quiz in this quest, the answer is in a few lines of `lib/` or `app/api/`, so keep the source open and trace it instead of guessing.",
+   "excerpts": [
+    {
+     "path": "_learning/00-ARCHITECTURE.md",
+     "lineStart": 87,
+     "lineEnd": 87,
+     "quote": "Next.js App Router matches `/api/deployments` to `app/api/deployments/route.js` and calls its `POST` function."
+    },
+    {
+     "path": "_learning/00-ARCHITECTURE.md",
+     "lineStart": 173,
+     "lineEnd": 173,
+     "quote": "**Key dependency rule:** Components never import `lib/prisma.js` or any server-only module. The `\"use client\"` directive at the top of each component file tells Next.js \"this runs in the browser\" — and browser code can't access the database directly."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "_learning/00-ARCHITECTURE.md",
+     "lineStart": 76,
+     "lineEnd": 116,
+     "why": "The full lifecycle of one deploy request, step by step."
+    },
+    {
+     "path": "_learning/01-LEARNING-PATH.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The suggested reading order for every guide in the repo."
+    }
+   ]
+  },
+  {
+   "id": "r02-roles-as-tables",
+   "target": "pack",
+   "phase": "before",
+   "title": "Permissions are data: two lookup tables in lib/rbac.js",
+   "body": "Access control here is two plain objects. `ACTIONS` maps an action name (view, deploy, rollback, lockDeploys, editSecrets, editFlags) to the roles allowed to do it. `ENV_DEPLOY_PERMISSIONS` maps a role to the environment slugs it may deploy to.\n\n`canPerform(role, action)` and `canDeployToEnvironment(role, envSlug)` just look the key up and call `includes`. A missing key falls back to an empty list, so an unknown role or action is denied rather than allowed.\n\nA route usually asks two questions: may this role do the action at all, and may it do it in this environment? Read both tables, then look at which routes call these functions and which do not. The role itself comes from `getTeamRole` in `lib/session.js`, which defaults to VIEWER when there is no membership.",
+   "excerpts": [
+    {
+     "path": "lib/rbac.js",
+     "lineStart": 16,
+     "lineEnd": 19,
+     "quote": "export function canPerform(role, action) { const allowed = ACTIONS[action] ?? []; return allowed.includes(role); }"
+    },
+    {
+     "path": "lib/rbac.js",
+     "lineStart": 21,
+     "lineEnd": 24,
+     "quote": "export function canDeployToEnvironment(role, envSlug) { const allowedEnvs = ENV_DEPLOY_PERMISSIONS[role] ?? []; return allowedEnvs.includes(envSlug); }"
+    },
+    {
+     "path": "lib/session.js",
+     "lineStart": 20,
+     "lineEnd": 34,
+     "quote": "export async function getTeamRole({ userId, teamId }) { if (!userId || !teamId) { return \"VIEWER\"; } const member = await prisma.teamMember.findUnique({ where: { teamId_userId: { teamId, userId, }, }, }); return member?.role ?? \"VIEWER\";"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "_learning/03-PATTERNS.md",
+     "lineStart": 115,
+     "lineEnd": 137,
+     "why": "Why a lookup table beats an if/else chain for permissions."
+    }
+   ]
+  },
+  {
+   "id": "r03-status-and-history",
+   "target": "pack",
+   "phase": "before",
+   "title": "Deployment status is a state machine with an audit trail",
+   "body": "Every deployment row has a status. `lib/deployments.js` lists the legal moves in `DEPLOYMENT_TRANSITIONS`, and `canTransitionStatus` checks a move against that table. The service layer in `lib/platform-service.js` is the only place that changes status: it checks the move first, then updates the row, then writes an audit entry with `writeAuditEntry`.\n\nTwo more ideas show up across the quest. Versions are computed, not typed: `nextPatchVersion` sorts the existing versions with a numeric comparator and bumps the last part. And history is kept: the service prefers adding new rows to editing old ones, so the audit log and the deployment list can always explain what happened.\n\nWhile reading, ask of each service function: what does it read, what does it check, what does it write, and in which order?",
+   "excerpts": [
+    {
+     "path": "lib/deployments.js",
+     "lineStart": 9,
+     "lineEnd": 12,
+     "quote": "export function canTransitionStatus(fromStatus, toStatus) { const allowed = DEPLOYMENT_TRANSITIONS[fromStatus] ?? []; return allowed.includes(toStatus); }"
+    },
+    {
+     "path": "lib/platform-service.js",
+     "lineStart": 82,
+     "lineEnd": 84,
+     "quote": "if (!canTransitionStatus(deployment.status, toStatus)) { throw new Error(`Invalid transition ${deployment.status} -> ${toStatus}`); }"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "_learning/guides/lib/platform-service.js.guide.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "A line-by-line walk through the service layer."
+    },
+    {
+     "path": "_learning/guides/lib/deployments.js.guide.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The state machine, version comparison and masking helpers explained."
+    }
+   ]
+  },
+  {
+   "id": "x-q01-deployer-to-prod",
+   "target": "seed:quests:organized-js-training-jstrain2.4/quiz/acda64b26e8ba57c",
+   "phase": "after",
+   "title": "Why a DEPLOYER gets 403 on production",
+   "body": "The handler runs two checks in a row. `canPerform(role, \"deploy\")` passes, because `ACTIONS.deploy` is `[\"OWNER\", \"DEPLOYER\"]`. Then `canDeployToEnvironment(role, environment.slug)` looks up `ENV_DEPLOY_PERMISSIONS.DEPLOYER`, which is `[\"dev\", \"staging\"]`. \"production\" is not in it, so the route returns 403 with the message built from the role and slug.\n\n- 201 Created is wrong: passing the action check is not enough, the environment check runs next.\n- 423 Locked only happens when `deployLocked` or `deployFrozen` is set, and that check runs after the role checks.\n- 400 Invalid payload is wrong: the Zod schema only checks that the ids are strings, not which environment they name.",
+   "excerpts": [
+    {
+     "path": "lib/rbac.js",
+     "lineStart": 1,
+     "lineEnd": 5,
+     "quote": "const ENV_DEPLOY_PERMISSIONS = { OWNER: [\"dev\", \"staging\", \"production\"], DEPLOYER: [\"dev\", \"staging\"], VIEWER: [], };"
+    },
+    {
+     "path": "app/api/deployments/route.js",
+     "lineStart": 70,
+     "lineEnd": 75,
+     "quote": "if (!canDeployToEnvironment(role, environment.slug)) { return NextResponse.json( { error: `Role ${role} cannot deploy to ${environment.slug}` }, { status: 403 }, ); }"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02-unknown-email-actor",
+   "target": "seed:quests:organized-js-training-jstrain2.4/quiz/a788ae8a215b4b5c",
+   "phase": "after",
+   "title": "Why an unknown email acts as the oldest user",
+   "body": "`getActor` reads the `x-user-email` header and only uses `owner@acme.dev` when the header is empty. With a header present, it runs `findUnique` on that email. When no user matches, it does not stop: it returns `prisma.user.findFirst` ordered by `createdAt` ascending, which is the oldest user in the table.\n\n- null is wrong: the fallback query always returns a user when any exist.\n- owner@acme.dev is wrong here: that default is used only for a missing or empty header, and this request has one.\n- A new user row is wrong: nothing in `lib/session.js` creates users.\n\nThis is why the guide calls the session code a dev placeholder.",
+   "excerpts": [
+    {
+     "path": "lib/session.js",
+     "lineStart": 3,
+     "lineEnd": 18,
+     "quote": "export async function getActor(request) { const emailHeader = request.headers.get(\"x-user-email\"); const email = emailHeader || \"owner@acme.dev\"; const actor = await prisma.user.findUnique({ where: { email }, }); if (actor) { return actor; } return prisma.user.findFirst({ orderBy: { createdAt: \"asc\" }, }); }"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "_learning/03-PATTERNS.md",
+     "lineStart": 234,
+     "lineEnd": 245,
+     "why": "The guide's own critique of this placeholder auth."
+    }
+   ]
+  },
+  {
+   "id": "x-q03-mismatched-app-env",
+   "target": "seed:quests:organized-js-training-jstrain2.4/quiz/685f1d83bb00c8dc",
+   "phase": "after",
+   "title": "Why a mismatched app and environment slips through",
+   "body": "The route loads the environment with `findUnique({ where: { id: parsed.data.environmentId } })`. Nothing ties it to `parsed.data.applicationId`. The role check then uses `environment.application.teamId`, which is app B's team, and the freeze check reads app B too. Finally `createDeployment({ ...parsed.data })` writes the row with app A's `applicationId`.\n\n- 404 is what the maintained repo does after the fix; at this commit the lookup matches the environment id only.\n- Checking A's team is wrong: the team comes from the loaded environment, which belongs to B.\n- 400 is wrong: the schema only checks that both ids are strings.",
+   "excerpts": [
+    {
+     "path": "app/api/deployments/route.js",
+     "lineStart": 48,
+     "lineEnd": 55,
+     "quote": "const environment = await prisma.environment.findUnique({ where: { id: parsed.data.environmentId }, include: { application: { include: { team: true }, }, }, });"
+    },
+    {
+     "path": "app/api/deployments/route.js",
+     "lineStart": 61,
+     "lineEnd": 64,
+     "quote": "const role = await getTeamRole({ userId: actor?.id, teamId: environment.application.teamId, });"
+    },
+    {
+     "path": "_learning/00-ARCHITECTURE.md",
+     "lineStart": 93,
+     "lineEnd": 93,
+     "quote": "- Before any role check, the handler loads the environment with `findUnique({ where: { id: environmentId } })` (`app/api/deployments/route.js:48-55`). **Known gap (checked 2026-10-06):** that lookup does not also match `applicationId`, so a request can pair app A's `applicationId` with app B's `environmentId`. The role checks below then run against app B's team (`environment.application.teamId`), and `createDeployment` (`lib/platform-service.js:25`) still writes the row and audit entry under app A. The maintained repo, [elirc/jstrain2.4](https://github.com/elirc/jstrain2.4), later added `applicationId` to that `where` clause so a mismatched pair returns 404."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q04-masked-secret",
+   "target": "seed:quests:organized-js-training-jstrain2.4/quiz/928e14c3068ff589",
+   "phase": "after",
+   "title": "Why four characters of an 8-character secret show",
+   "body": "`maskedSecret` has three branches. An empty value returns \"\". A value shorter than 6 is replaced by the same number of stars. Anything else keeps `value.slice(0, 2)`, adds `value.length - 4` stars, and keeps `value.slice(-2)`.\n\nAn 8-character value is not shorter than 6, so it takes the last branch: two characters at the front, four stars, two at the end. Four characters stay visible.\n\n- Two is wrong: the last two characters are kept as well.\n- None is wrong: only values under 6 characters become all stars.\n- Six is wrong: the middle is `length - 4` stars, so only four characters survive.",
+   "excerpts": [
+    {
+     "path": "lib/deployments.js",
+     "lineStart": 54,
+     "lineEnd": 64,
+     "quote": "export function maskedSecret(value) { if (!value) { return \"\"; } if (value.length < 6) { return \"*\".repeat(value.length); } return `${value.slice(0, 2)}${\"*\".repeat(value.length - 4)}${value.slice(-2)}`; }"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q05-next-patch-numeric",
+   "target": "seed:quests:organized-js-training-jstrain2.4/quiz/da2436e91463b59c",
+   "phase": "after",
+   "title": "Why the next patch after v1.10.0 is v1.10.1",
+   "body": "`nextPatchVersion` copies the list and sorts it with `compareVersions`. That comparator strips the leading \"v\", splits on dots and compares each part as a number, so 10 is bigger than 3 and 2. The last element is \"v1.10.0\", and the function returns major and minor unchanged with patch + 1.\n\n- \"v1.3.5\" is what a plain string sort would give, because \"v1.10.0\" sorts before \"v1.2.9\" as text. The comparator exists to avoid that.\n- \"v1.2.10\" bumps the wrong version: v1.2.9 is not the latest.\n- \"v1.11.0\" bumps the minor part, but the function only ever adds one to the patch.",
+   "excerpts": [
+    {
+     "path": "lib/deployments.js",
+     "lineStart": 14,
+     "lineEnd": 19,
+     "quote": "export function toVersionNumber(version) { return version .replace(/^v/i, \"\") .split(\".\") .map((chunk) => Number.parseInt(chunk, 10) || 0); }"
+    },
+    {
+     "path": "lib/deployments.js",
+     "lineStart": 42,
+     "lineEnd": 52,
+     "quote": "export function nextPatchVersion(existingVersions) { if (!existingVersions.length) { return \"v1.0.0\"; } const sorted = [...existingVersions].sort(compareVersions); const latest = sorted[sorted.length - 1]; const [major, minor, patch] = toVersionNumber(latest); return `v${major}.${minor}.${patch + 1}`; }"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q06-live-to-deploying",
+   "target": "seed:quests:organized-js-training-jstrain2.4/quiz/91cbd1cd736c8914",
+   "phase": "after",
+   "title": "Why LIVE cannot move back to DEPLOYING",
+   "body": "`DEPLOYMENT_TRANSITIONS.LIVE` is `[\"ROLLED_BACK\"]`. `transitionDeployment` loads the row and calls `canTransitionStatus(deployment.status, toStatus)` before doing anything else. The check fails, so it throws `Invalid transition LIVE -> DEPLOYING`. The update and the audit write come after the throw, so neither runs.\n\n- Updating and resetting `completedAt` is wrong: the update line is never reached.\n- Writing the audit entry first is wrong: the audit write is the last step, after the update.\n- Succeeding is wrong: the table allows LIVE to go only to ROLLED_BACK.",
+   "excerpts": [
+    {
+     "path": "lib/deployments.js",
+     "lineStart": 1,
+     "lineEnd": 7,
+     "quote": "export const DEPLOYMENT_TRANSITIONS = { BUILDING: [\"DEPLOYING\", \"FAILED\"], DEPLOYING: [\"LIVE\", \"FAILED\"], LIVE: [\"ROLLED_BACK\"], FAILED: [\"ROLLED_BACK\"], ROLLED_BACK: [], };"
+    },
+    {
+     "path": "lib/platform-service.js",
+     "lineStart": 82,
+     "lineEnd": 92,
+     "quote": "if (!canTransitionStatus(deployment.status, toStatus)) { throw new Error(`Invalid transition ${deployment.status} -> ${toStatus}`); } const updated = await prisma.deployment.update({ where: { id: deploymentId }, data: { status: toStatus, completedAt: [\"LIVE\", \"FAILED\", \"ROLLED_BACK\"].includes(toStatus) ? new Date() : null, }, });"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07-rollback-new-row",
+   "target": "seed:quests:organized-js-training-jstrain2.4/quiz/a66e639278dd1bd0",
+   "phase": "after",
+   "title": "Why a rollback leaves the original row untouched",
+   "body": "`rollbackDeployment` reads the original deployment, then calls `prisma.deployment.create` for a new row. That row copies the version and commit, gets status \"ROLLED_BACK\", a completion time, and `rollbackOfId: deploymentId`, which points back at the original. The original is never updated.\n\nThe guide calls this a design choice: new records instead of edits keep the history readable.\n\n- Going through `transitionDeployment` is wrong: the function never calls it, so the state machine is not involved.\n- Deleting rows is wrong: there is no delete anywhere in the service.\n- Marking the original FAILED is wrong: nothing writes to the original row.",
+   "excerpts": [
+    {
+     "path": "lib/platform-service.js",
+     "lineStart": 119,
+     "lineEnd": 133,
+     "quote": "const rollback = await prisma.deployment.create({ data: { applicationId: deployment.applicationId, environmentId: deployment.environmentId, pipelineId: deployment.pipelineId, actorUserId, version: deployment.version, commitSha: deployment.commitSha, commitMessage: `Rollback to ${deployment.version}`, status: \"ROLLED_BACK\", rollbackOfId: deploymentId, diffSummary: `Rollback created from deployment ${deploymentId}`, completedAt: new Date(), }, });"
+    },
+    {
+     "path": "_learning/guides/lib/platform-service.js.guide.md",
+     "lineStart": 167,
+     "lineEnd": 167,
+     "quote": "**Design choice:** Rather than modifying the original deployment, a rollback creates a new record. This preserves history — you can always see that a rollback happened, when, and by whom."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08-cli-skips-rbac",
+   "target": "seed:quests:organized-js-training-jstrain2.4/quiz/f4d783823ee42c8b",
+   "phase": "after",
+   "title": "Why the CLI deploy route skips the role checks",
+   "body": "Read `app/api/cli/deploy/route.js` top to bottom. It parses the body with `cliDeploySchema.safeParse`, finds the environment with `findFirst` on `applicationId` and `slug`, refuses a locked environment with 423, and calls `createDeployment`. It never calls `getActor`, `getTeamRole` or `canPerform`, so no role is ever checked. `03-PATTERNS.md` lists this as an anti-pattern.\n\n- Zod parsing is wrong: the route does call `safeParse` and returns 400 on failure.\n- Trusting an environmentId is wrong: the CLI body has an environment slug, and the route looks it up.\n- Always v1.0.0 is wrong: no version is passed, so `createDeployment` computes the next patch version.",
+   "excerpts": [
+    {
+     "path": "app/api/cli/deploy/route.js",
+     "lineStart": 13,
+     "lineEnd": 26,
+     "quote": "export async function POST(request) { const payload = await request.json(); const parsed = cliDeploySchema.safeParse(payload); if (!parsed.success) { return NextResponse.json({ error: \"Invalid payload\", details: parsed.error.issues }, { status: 400 }); } const environment = await prisma.environment.findFirst({ where: { applicationId: parsed.data.applicationId, slug: parsed.data.environment, }, });"
+    },
+    {
+     "path": "app/api/cli/deploy/route.js",
+     "lineStart": 36,
+     "lineEnd": 41,
+     "quote": "const deployment = await createDeployment({ applicationId: parsed.data.applicationId, environmentId: environment.id, commitSha: parsed.data.commitSha, commitMessage: parsed.data.commitMessage || \"CLI deploy\", });"
+    },
+    {
+     "path": "_learning/03-PATTERNS.md",
+     "lineStart": 251,
+     "lineEnd": 251,
+     "quote": "**What's happening:** The web API routes (`/api/deployments`) check RBAC permissions, but the CLI routes (`/api/cli/deploy`) skip them."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09-flag-dependency",
+   "target": "seed:quests:organized-js-training-jstrain2.4/quiz/c18ce58f9afe6964",
+   "phase": "after",
+   "title": "Why enabling a flag with a disabled dependency returns 409",
+   "body": "The PATCH handler loads the flag with its `dependencies`. Only when the request sets `enabled === true` does it look for a dependency whose `dependsOnFlag.enabled` is false. If it finds one, it returns 409 with `Dependency not enabled:` followed by that flag's key. 409 Conflict fits: the request clashes with the current state of another flag.\n\n- 403 is wrong: `editFlags` allows OWNER and DEPLOYER, and the role check comes before the dependency check.\n- 200 is wrong: the handler returns before the update, and nothing switches the dependency on for you.\n- 423 is wrong: kill switches are a separate field and are not part of this check.",
+   "excerpts": [
+    {
+     "path": "app/api/feature-flags/route.js",
+     "lineStart": 129,
+     "lineEnd": 139,
+     "quote": "if (parsed.data.enabled === true) { const blockedByDependency = existing.dependencies.find((dependency) => !dependency.dependsOnFlag.enabled); if (blockedByDependency) { return NextResponse.json( { error: `Dependency not enabled: ${blockedByDependency.dependsOnFlag.key}`, }, { status: 409 }, ); } }"
+    },
+    {
+     "path": "lib/rbac.js",
+     "lineStart": 13,
+     "lineEnd": 13,
+     "quote": "editFlags: [\"OWNER\", \"DEPLOYER\"],"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10-secret-payload-format",
+   "target": "seed:quests:organized-js-training-jstrain2.4/quiz/0fcd4ce92cd40cb0",
+   "phase": "after",
+   "title": "Why the stored secret has three hex parts",
+   "body": "`encryptSecret` uses AES-256-GCM. It makes a fresh 12-byte iv with `randomBytes`, encrypts the value, asks the cipher for its authentication tag, and returns iv, tag and ciphertext as hex joined by colons. `decryptSecret` splits on \":\" and needs all three: the iv to start the decipher and the tag for `setAuthTag`.\n\n- Base64 with a key hash is wrong: everything is hex, and the key is never stored.\n- Two parts with no tag is wrong: GCM produces a tag, and decryption fails without it.\n- Ciphertext alone is wrong: the iv is random per call, so it must be stored next to the data.",
+   "excerpts": [
+    {
+     "path": "lib/secrets.js",
+     "lineStart": 10,
+     "lineEnd": 17,
+     "quote": "export function encryptSecret(value) { const iv = randomBytes(12); const cipher = createCipheriv(ALGORITHM, getKey(), iv); const encrypted = Buffer.concat([cipher.update(value, \"utf8\"), cipher.final()]); const tag = cipher.getAuthTag(); return `${iv.toString(\"hex\")}:${tag.toString(\"hex\")}:${encrypted.toString(\"hex\")}`; }"
+    },
+    {
+     "path": "_learning/guides/lib/secrets.js.guide.md",
+     "lineStart": 58,
+     "lineEnd": 58,
+     "quote": "Returns a string with three parts separated by colons: `IV:TAG:ENCRYPTED_DATA`. All three are needed for decryption. Each is converted to hex (a string of characters 0-9 and a-f)."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q11-prisma-global",
+   "target": "seed:quests:organized-js-training-jstrain2.4/quiz/b1ff53c7b9ab94d4",
+   "phase": "after",
+   "title": "Why the Prisma client is cached on globalThis in dev",
+   "body": "In development Next.js reloads modules often. A plain `new PrismaClient()` at module level would build a new client, with its own connection pool, on every reload. `lib/prisma.js` reuses `globalForPrisma.prisma` when it exists and stores the client there only when `NODE_ENV !== \"production\"`.\n\n- Letting client components import the database is wrong: browser code cannot reach the database, and the architecture guide forbids that import.\n- Sharing one connection across production servers is wrong: the global is not even set in production, and a global variable lives inside one process.\n- Logging only errors in dev is wrong: development logs `warn` and `error`.",
+   "excerpts": [
+    {
+     "path": "lib/prisma.js",
+     "lineStart": 3,
+     "lineEnd": 13,
+     "quote": "const globalForPrisma = globalThis; export const prisma = globalForPrisma.prisma || new PrismaClient({ log: process.env.NODE_ENV === \"development\" ? [\"warn\", \"error\"] : [\"error\"], }); if (process.env.NODE_ENV !== \"production\") { globalForPrisma.prisma = prisma; }"
+    },
+    {
+     "path": "_learning/03-PATTERNS.md",
+     "lineStart": 23,
+     "lineEnd": 23,
+     "quote": "**Why:** In development, Next.js hot-reloads modules frequently. Without the singleton, each reload would create a new database connection, eventually exhausting the connection pool. By storing the client on `globalThis`, it survives reloads."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q12-select-env",
+   "target": "seed:quests:organized-js-training-jstrain2.4/quiz/9e33998bb8577abc",
+   "phase": "after",
+   "title": "Why choosing an environment clears only the deployment",
+   "body": "Zustand's `set` merges the returned object into the state, so keys you do not return stay as they were. `setSelectedEnvironmentId` returns `selectedEnvironmentId` and `selectedDeploymentId: null`. It does not mention `selectedAppId`, so the app selection is kept, and the deployment, which belonged to the old environment, is cleared.\n\n- Resetting both is what `setSelectedAppId` does one level up, not this setter.\n- Keeping both is wrong: the setter explicitly returns `selectedDeploymentId: null`.\n- Resetting the app is wrong: the app is the parent and stays selected.",
+   "excerpts": [
+    {
+     "path": "lib/store.js",
+     "lineStart": 11,
+     "lineEnd": 21,
+     "quote": "setSelectedAppId: (selectedAppId) => set(() => ({ selectedAppId, selectedEnvironmentId: null, selectedDeploymentId: null, })), setSelectedEnvironmentId: (selectedEnvironmentId) => set(() => ({ selectedEnvironmentId, selectedDeploymentId: null, })),"
+    },
+    {
+     "path": "_learning/03-PATTERNS.md",
+     "lineStart": 196,
+     "lineEnd": 196,
+     "quote": "**Why:** If you select a different application, the previously selected environment and deployment belong to the old app. They need to be reset to prevent showing stale/incorrect data."
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}
