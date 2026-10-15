@@ -1,0 +1,391 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "recipeview",
+ "sha": "3dcb03435a755e9660d3aceca3ebd013524f316f",
+ "guides": [
+  "astraupskill/01-CODEBASE-MAP.md",
+  "astraupskill/02-CONCEPTS.md",
+  "astraupskill/03-WORKED-CHANGE.md",
+  "astraupskill/06-SOLUTIONS-AND-REVIEW.md"
+ ],
+ "items": [
+  {
+   "id": "q01-three-ingredient-cases",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 9,
+     "end": 17
+    }
+   },
+   "cites": [
+    {
+     "path": "server/index.ts",
+     "lineStart": 233,
+     "lineEnd": 239
+    }
+   ],
+   "prompt": "A recipe has 2 ingredients. Predict the count after PATCH {title:\"x\"}, then PATCH {ingredients: []}.",
+   "answer": "2, then 0",
+   "distractors": [
+    "0, then 0",
+    "2, then 2",
+    "2, then a 400"
+   ],
+   "explanation": "writeRecipeChildren only acts when Array.isArray(body.ingredients): an omitted key leaves children untouched, while an explicit [] runs the DELETE and inserts nothing - intentionally."
+  },
+  {
+   "id": "q02-validate-before-delete",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 17,
+     "end": 17
+    }
+   },
+   "cites": [
+    {
+     "path": "server/index.ts",
+     "lineStart": 235,
+     "lineEnd": 235
+    }
+   ],
+   "prompt": "Why must validatePayload run BEFORE writeRecipeChildren rather than inside it?",
+   "answer": "Replacement starts with a DELETE, so a bad row would wipe valid ingredients",
+   "distractors": [
+    "Because node:sqlite cannot roll back a DELETE once it has executed",
+    "Because validatePayload needs the old ingredient ids to compare against",
+    "Only for performance: validation is cheaper than a DELETE plus re-insert"
+   ],
+   "explanation": "h() runs validatePayload for every JSON POST/PATCH before the handler is even called, so a rejected body writes nothing (test 2 deep-equals the recipe after five bad PATCHes)."
+  },
+  {
+   "id": "q03-tx-not-reentrant",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 26,
+     "end": 29
+    }
+   },
+   "cites": [
+    {
+     "path": "server/db.ts",
+     "lineStart": 18,
+     "lineEnd": 28
+    }
+   ],
+   "prompt": "Why is the simple BEGIN/COMMIT/ROLLBACK tx(fn) helper safe in THIS app but not something to copy to an async PostgreSQL driver unchanged?",
+   "answer": "It relies on a synchronous single connection; async drivers need a client per transaction",
+   "distractors": [
+    "SQLite serializes every write anyway, so the transaction is not really needed here",
+    "PostgreSQL drivers do not support issuing ROLLBACK from inside a try/catch block",
+    "The helper is re-entrant on SQLite but not on PostgreSQL, so nesting would break"
+   ],
+   "explanation": "fn cannot await, so no other request runs mid-transaction. The helper is also NOT re-entrant: a nested tx would issue a second BEGIN and SQLite would throw."
+  },
+  {
+   "id": "q04-files-after-commit",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 31,
+     "end": 31
+    }
+   },
+   "cites": [
+    {
+     "path": "server/index.ts",
+     "lineStart": 478,
+     "lineEnd": 484
+    }
+   ],
+   "prompt": "Dish and recipe deletes collect photo filenames inside the transaction and remove files after commit. What goes wrong with the cook-log delete, which removes files inside the transaction?",
+   "answer": "A rollback leaves rows pointing at already-deleted photo files",
+   "distractors": [
+    "The files are never deleted, because fs.rm is skipped on rollback",
+    "SQLite locks the photo files, so fs.rm fails every time inside it",
+    "Nothing: fs.rm is asynchronous, so it always runs after the commit"
+   ],
+   "explanation": "A transaction cannot cover files on disk. Deleting after commit means a failure leaves an orphan FILE rather than a dangling ROW - the safer direction (review finding 1)."
+  },
+  {
+   "id": "q05-recipe-rename-reindex",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 37,
+     "end": 37
+    }
+   },
+   "cites": [
+    {
+     "path": "server/db.ts",
+     "lineStart": 101,
+     "lineEnd": 101
+    },
+    {
+     "path": "server/db.ts",
+     "lineStart": 105,
+     "lineEnd": 110
+    }
+   ],
+   "prompt": "Renaming a RECIPE re-indexes every cook log under it, but renaming a DISH does not cascade. Why the difference?",
+   "answer": "Cook-log titles embed the recipe title; dish names are resolved live",
+   "distractors": [
+    "Dishes have no search rows, so there is nothing to re-index for them",
+    "Dish renames are rare, so the cascade was skipped for performance",
+    "FTS5 triggers handle dish renames automatically inside the database"
+   ],
+   "explanation": "Cook-log titles are denormalised as `${recipe_title} — ${cooked_on}`, which forces reindexRecipeTree on a recipe PATCH."
+  },
+  {
+   "id": "q06-fts-quoting",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 39,
+     "end": 39
+    }
+   },
+   "cites": [
+    {
+     "path": "server/queries.ts",
+     "lineStart": 175,
+     "lineEnd": 183
+    }
+   ],
+   "prompt": "A user searches for: half-and-half cre. How does toFtsQuery shape that input for FTS5?",
+   "answer": "Each term quoted, with a prefix * on the last term only",
+   "distractors": [
+    "The raw text, passed through to MATCH unchanged",
+    "One quoted phrase covering the whole input",
+    "Split on hyphens too, with a prefix * on every term"
+   ],
+   "explanation": "It builds \"half-and-half\" \"cre\"*: double quotes are stripped, each whitespace-separated term is wrapped in quotes (so don't or half-and-half is not parsed as FTS syntax), and * is added to the last term for prefix matching. A query that still fails to parse returns [] rather than a 500."
+  },
+  {
+   "id": "q07-normalised-not-rejected",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 45,
+     "end": 56
+    }
+   },
+   "cites": [
+    {
+     "path": "server/index.ts",
+     "lineStart": 41,
+     "lineEnd": 55
+    }
+   ],
+   "prompt": "An API caller creates a cook log with rating_taste: 9 and changes: 42. What is stored?",
+   "answer": "rating_taste 5 and changes \"\"",
+   "distractors": [
+    "A 400, because validatePayload rejects out-of-range ratings",
+    "rating_taste 9 and changes \"42\"",
+    "Both stored as null"
+   ],
+   "explanation": "validatePayload covers dish and recipe fields only; cook-log fields pass through rating() (clamped to 1..5) and str() (non-strings become \"\") - normalised, never rejected: silent data loss for API callers (finding 3)."
+  },
+  {
+   "id": "q08-isdate-rollover",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 66,
+     "end": 66
+    }
+   },
+   "cites": [
+    {
+     "path": "server/index.ts",
+     "lineStart": 59,
+     "lineEnd": 62
+    }
+   ],
+   "prompt": "Why does isDate round-trip through toISOString() instead of only checking the YYYY-MM-DD pattern and Date.parse?",
+   "answer": "So 2026-02-30 is rejected instead of rolling over",
+   "distractors": [
+    "To convert the local calendar date to UTC before storing it",
+    "Because Date.parse returns NaN for every date before 1970",
+    "To strip the time component that Date.parse appends"
+   ],
+   "explanation": "cooked_on is a calendar label, not an instant; the stored string must equal its own ISO round-trip."
+  },
+  {
+   "id": "q09-id-canonical",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/03-WORKED-CHANGE.md",
+    "lines": {
+     "start": 69,
+     "end": 71
+    }
+   },
+   "cites": [
+    {
+     "path": "server/index.ts",
+     "lineStart": 73,
+     "lineEnd": 83
+    }
+   ],
+   "prompt": "h() already validated that an id looked like a positive integer. Why was rewriting \"01\" to \"1\" a separate fix?",
+   "answer": "Validating a shape and normalising a value are separate steps",
+   "distractors": [
+    "Because the regex /^\\d+$/ already rejects ids with leading zeros",
+    "Because Express strips leading zeros only on GET requests",
+    "Because SQLite stores ids as text and \"01\" would create a duplicate row"
+   ],
+   "explanation": "h() validated that \"01\" looked like a positive integer but left it as raw text; a handler comparing text would disagree with SQLite's integer id. The fourth test asserts PATCH /api/dishes/0<id> returns 200 and the same id."
+  },
+  {
+   "id": "q10-qty-vs-quantity",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/03-WORKED-CHANGE.md",
+    "lines": {
+     "start": 92,
+     "end": 92
+    }
+   },
+   "cites": [
+    {
+     "path": "server/index.ts",
+     "lineStart": 636,
+     "lineEnd": 657
+    }
+   ],
+   "prompt": "A client sends PATCH {\"ingredients\": [{\"item\": \"Salt\", \"quantity\": -1}]} (note: quantity, not qty). What happens?",
+   "answer": "200, replacing the list with one Salt row whose qty is NULL",
+   "distractors": [
+    "400, because the negative quantity is rejected just like qty would be",
+    "400, because validatePayload rejects unknown ingredient keys",
+    "200, but the existing ingredients are kept because the row is invalid"
+   ],
+   "explanation": "An allow-list validator checks only keys it knows and silently ignores misspelled fields - a good argument for rejecting unknown keys."
+  },
+  {
+   "id": "q11-delete-missing-204",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/03-WORKED-CHANGE.md",
+    "lines": {
+     "start": 57,
+     "end": 57
+    }
+   },
+   "cites": [
+    {
+     "path": "server/index.ts",
+     "lineStart": 474,
+     "lineEnd": 478
+    }
+   ],
+   "prompt": "What does DELETE /api/logs/99999 return when no such cook log exists, and why?",
+   "answer": "204, because nothing checks that the cook log exists",
+   "distractors": [
+    "404, because h() looks the record up before calling the handler",
+    "400, because the id is larger than any existing cook-log id",
+    "500, because the DELETE statement affects zero rows"
+   ],
+   "explanation": "Each read handler checks existence itself; the delete handlers do not, so typos are invisible (review finding 5)."
+  },
+  {
+   "id": "q12-binds-every-interface",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "lines": {
+     "start": 81,
+     "end": 81
+    }
+   },
+   "cites": [
+    {
+     "path": "server/index.ts",
+     "lineStart": 596,
+     "lineEnd": 599
+    }
+   ],
+   "prompt": "The log line says http://localhost:5274, and there is no authentication. Who can actually read and write the journal?",
+   "answer": "Anyone on the network who can reach port 5274",
+   "distractors": [
+    "Only processes on this machine, since the URL says localhost",
+    "Only browsers loaded from the Vite dev server's CORS origin",
+    "Nobody remotely, because Express refuses non-loopback connections"
+   ],
+   "explanation": "app.listen(PORT) passes no host, so Node binds every interface - the logged localhost URL is just text. Binding to 127.0.0.1 is the first change before running it anywhere but your own machine."
+  },
+  {
+   "id": "f01-best-score-disagree",
+   "kind": "flashcard",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 60,
+     "end": 62
+    }
+   },
+   "cites": [
+    {
+     "path": "server/queries.ts",
+     "lineStart": 59,
+     "lineEnd": 68
+    }
+   ],
+   "front": "Why can the recipe page's 'best cook' and the dish page's best_score disagree?",
+   "back": "Best cook picks the single log with the highest cookScore (mean of taste and texture, effort excluded; ties go to the most recent via strict >). The dish best_score averages taste over all logs and texture over all logs, then means those two averages - a different aggregate."
+  },
+  {
+   "id": "f02-javascript-href",
+   "kind": "flashcard",
+   "source": {
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "lines": {
+     "start": 72,
+     "end": 72
+    }
+   },
+   "cites": [
+    {
+     "path": "src/pages/RecipePage.tsx",
+     "lineStart": 120,
+     "lineEnd": 121
+    }
+   ],
+   "severity": "Medium",
+   "front": "source_url is stored unchecked and rendered as <a href> (RecipePage.tsx:120-121). What is the risk and fix?",
+   "back": "A javascript: URL is clickable - React 18 only logs a warning. Validate the scheme (http/https only) at the request boundary, and render untrusted URLs defensively; high severity once the app is multi-user."
+  },
+  {
+   "id": "f03-ref-not-state-guard",
+   "kind": "flashcard",
+   "source": {
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "lines": {
+     "start": 47,
+     "end": 48
+    }
+   },
+   "cites": [
+    {
+     "path": "src/pages/CookLogEditor.tsx",
+     "lineStart": 56,
+     "lineEnd": 60
+    }
+   ],
+   "front": "Cmd+Enter in the cook-log editor bypasses the disabled Save button, and save() (CookLogEditor.tsx:56) has no guard. Why would adding if (saving) return; still not fully stop a double submit?",
+   "back": "Two keydown events in the same tick both read the old state value before React re-renders. Use a ref (inFlight = useRef(false)) that is checked and set synchronously."
+  }
+ ]
+}

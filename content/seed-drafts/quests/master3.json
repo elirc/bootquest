@@ -1,0 +1,427 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "master3",
+ "sha": "913823efed266ca1105f5ced631201cb3618e006",
+ "guides": [
+  "astraupskill/07-TRACE-LAB.md",
+  "docs/walkthrough/important-files.md"
+ ],
+ "items": [
+  {
+   "id": "q01-gate-before-lookup",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/03-WORKED-CHANGE.md",
+    "lines": {
+     "start": 29,
+     "end": 38
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/modules/tickets/ticketService.ts",
+     "lineStart": 172,
+     "lineEnd": 181
+    }
+   ],
+   "prompt": "Why does updateTicket run canEditTicket BEFORE the tenant-scoped findFirst rather than after it?",
+   "answer": "After the lookup, a viewer could tell 404 from 403 and cost a query; first, it is a 403 with no DB work",
+   "distractors": [
+    "Because findFirst needs the caller's role to choose which include shape it should load for the ticket",
+    "Because Prisma refuses to run queries for requests whose role carries no write permission at all",
+    "Order does not matter for safety; the gate was moved first only to make the unit test simpler to write"
+   ],
+   "explanation": "The role gate is the first line of the service (ticketService.ts:172-174), so a viewer PATCH stops before the lookup at :176 and before the 404 at :181 could disclose anything."
+  },
+  {
+   "id": "q02-cross-tenant-404",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 13,
+     "end": 15
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/modules/tickets/ticketService.ts",
+     "lineStart": 176,
+     "lineEnd": 181
+    }
+   ],
+   "prompt": "An AGENT of tenant A sends a valid ticket id that belongs to tenant B. What status comes back, and why that one?",
+   "answer": "404: the lookup filters by id and tenantId, so a foreign id looks exactly like a missing one",
+   "distractors": [
+    "403: the service detects that the ticket belongs to another tenant and refuses explicitly",
+    "200: the AGENT role may edit any ticket by id, so the update goes through normally",
+    "500: PostgreSQL row-level security raises an error that the middleware does not map"
+   ],
+   "explanation": "`where: { id, tenantId: auth.tenantId }` - the schema has no row-level security; the service predicate is the only thing selecting the right tenant."
+  },
+  {
+   "id": "q03-viewer-cross-tenant",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/07-TRACE-LAB.md",
+    "lines": {
+     "start": 11,
+     "end": 11
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/modules/tickets/ticketService.ts",
+     "lineStart": 172,
+     "lineEnd": 174
+    }
+   ],
+   "prompt": "A VIEWER (rather than an agent) PATCHes the same foreign-tenant ticket id. What do they get?",
+   "answer": "403 from the role gate, before any tenant lookup runs",
+   "distractors": [
+    "404, the same as the agent, because tenant scope is checked before the role",
+    "200 with public comments only",
+    "401 for the foreign tenant"
+   ],
+   "explanation": "Trace D: canEditTicket(\"VIEWER\") is false, so the request never reaches the tenant-scoped findFirst."
+  },
+  {
+   "id": "q04-patch-response-leak",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 21,
+     "end": 23
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/modules/tickets/ticketService.ts",
+     "lineStart": 43,
+     "lineEnd": 56
+    },
+    {
+     "path": "apps/api/src/modules/tickets/ticketService.ts",
+     "lineStart": 213,
+     "lineEnd": 213
+    }
+   ],
+   "prompt": "Before the repair, GET hid an internal note from a viewer but PATCH returned it. What general rule does the fix encode?",
+   "answer": "Every endpoint that returns a ticket is a read path, so both share one role-aware include",
+   "distractors": [
+    "Write endpoints should never return the updated resource, only a status code and an id",
+    "Comment filtering belongs in the client, which already knows the signed-in viewer's role",
+    "Internal notes belong in a separate table that a PATCH response can never join against"
+   ],
+   "explanation": "getTicket filtered comments inline while updateTicket used the unfiltered ticketInclude; one shared helper means the two paths cannot drift again."
+  },
+  {
+   "id": "q05-outbox-rollback",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 27,
+     "end": 29
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/middleware/errors.ts",
+     "lineStart": 32,
+     "lineEnd": 33
+    }
+   ],
+   "prompt": "The outbox insert fails after the ticket update inside updateTicket's transaction. What does the client see, and does the audit row exist?",
+   "answer": "A 500, and no audit row: all three writes commit together or not at all",
+   "distractors": [
+    "A 200, because the ticket update succeeded and the outbox insert is best-effort",
+    "A 500, but the audit row remains because it was inserted before the outbox row",
+    "A 409 mapped from the Prisma error, with the ticket update itself kept in place"
+   ],
+   "explanation": "All three writes are in one prisma.$transaction callback; the Prisma error is not an HttpError, so errorMiddleware answers 500. A rolled-back change can never have announced itself."
+  },
+  {
+   "id": "q06-serializable-retry-scope",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 33,
+     "end": 33
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/modules/tickets/ticketService.ts",
+     "lineStart": 22,
+     "lineEnd": 31
+    }
+   ],
+   "prompt": "withSerializableRetry re-runs the callback on Prisma P2034 only. Why NOT also retry an HttpError or a P2002?",
+   "answer": "An HttpError is a decision and a unique violation will recur; only a serialization failure may succeed on retry",
+   "distractors": [
+    "Retrying those errors would exhaust Prisma's connection pool under load, so they are passed through",
+    "They are retried as well, just later, by Express's error middleware rather than inside the wrapper",
+    "P2002 and HttpError are thrown outside the transaction callback, so the wrapper can never catch them"
+   ],
+   "explanation": "Serializable means retry or it means nothing: SQLSTATE 40001 (Prisma P2034) is PostgreSQL asking the app to retry; everything else passes through untouched."
+  },
+  {
+   "id": "q07-stale-read-race",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "lines": {
+     "start": 24,
+     "end": 24
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/modules/tickets/ticketService.ts",
+     "lineStart": 176,
+     "lineEnd": 185
+    },
+    {
+     "path": "apps/api/src/modules/tickets/ticketService.ts",
+     "lineStart": 199,
+     "lineEnd": 201
+    }
+   ],
+   "prompt": "Agents A and B both read a NEW ticket; A sets RESOLVED and B sets PENDING. A commits first. Why does Serializable isolation not stop B from writing PENDING over RESOLVED?",
+   "answer": "The read and the transition check run before the transaction opens, so there is nothing for it to protect",
+   "distractors": [
+    "It does stop it: PostgreSQL raises 40001 and the retry re-validates the transition from the fresh state",
+    "RESOLVED to PENDING is a legal transition in the table, so there is nothing that needs to be stopped",
+    "Serializable isolation only applies to inserts, and this transaction performs an update on the ticket"
+   ],
+   "explanation": "Even a 40001 retry re-runs only the callback, which repeats the unvalidated update. The fix is to move the read and assertTicketTransition inside the transaction (or predicate the update on the expected status)."
+  },
+  {
+   "id": "q08-transition-500",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/07-TRACE-LAB.md",
+    "lines": {
+     "start": 13,
+     "end": 13
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/domain/src/index.ts",
+     "lineStart": 35,
+     "lineEnd": 41
+    },
+    {
+     "path": "apps/api/src/middleware/errors.ts",
+     "lineStart": 32,
+     "lineEnd": 33
+    }
+   ],
+   "prompt": "An AGENT sends { status: CLOSED } on an OPEN ticket. What is the response, and why is it arguably a bug?",
+   "answer": "500: agents may close only from RESOLVED or PENDING, and the plain Error is unmapped",
+   "distractors": [
+    "403, because the domain rule refuses agents and is mapped to an HttpError by the service",
+    "200: agents can close from any state; only viewers are refused by the transition table",
+    "409, the conventional status the middleware assigns to every invalid state transition"
+   ],
+   "explanation": "A client mistake reported as a server error. The suggested fix keeps HTTP out of the domain: export a TicketTransitionError and map it to 409 in errorMiddleware."
+  },
+  {
+   "id": "q09-sla-at-risk-boundary",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 41,
+     "end": 41
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/domain/src/index.ts",
+     "lineStart": 56,
+     "lineEnd": 68
+    }
+   ],
+   "prompt": "An OPEN ticket has exactly 0 ms left before its SLA deadline. What does getSlaState return?",
+   "answer": "AT_RISK",
+   "distractors": [
+    "BREACHED",
+    "MET",
+    "PAUSED"
+   ],
+   "explanation": "Only a negative remainder is BREACHED; the last hour is inclusive at both 60 minutes and zero: `if (msRemaining < 0) return BREACHED; if (msRemaining <= 60 * 60_000) return AT_RISK;`"
+  },
+  {
+   "id": "q10-paused-is-a-label",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "lines": {
+     "start": 7,
+     "end": 7
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/domain/src/index.ts",
+     "lineStart": 57,
+     "lineEnd": 59
+    }
+   ],
+   "prompt": "A HIGH ticket due at 17:00 sits in PENDING until 18:00 and is then reopened. What SLA state does it show right after reopening?",
+   "answer": "BREACHED: PAUSED was only a label, and the stored slaDueAt never moved",
+   "distractors": [
+    "MET: the hour spent in PENDING is credited back to the stored deadline",
+    "AT_RISK: reopening a ticket restarts the final-hour warning window",
+    "PAUSED, until an agent posts the first reply after the ticket reopens"
+   ],
+   "explanation": "SLA state is derived, not stored; truly pausing needs a stored pause start or accumulated paused time that pushes slaDueAt forward on leaving PENDING."
+  },
+  {
+   "id": "q11-priority-sla-reset",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "lines": {
+     "start": 40,
+     "end": 40
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/modules/tickets/ticketService.ts",
+     "lineStart": 208,
+     "lineEnd": 211
+    }
+   ],
+   "prompt": "An URGENT ticket is minutes from breaching. An agent sets it to LOW and then back to URGENT. What happens to the SLA?",
+   "answer": "It gets a fresh two hours, because every priority change recomputes slaDueAt from now",
+   "distractors": [
+    "Nothing changes: slaDueAt is computed from createdAt, so priority churn cannot move it",
+    "It breaches immediately, because the LOW step is recorded as an SLA downgrade",
+    "The second change is refused, because priority changes are rate-limited per ticket"
+   ],
+   "explanation": "`slaDueAt: priority changed ? calculateSlaDueAt(new Date(), priority) : undefined` - finding F5 calls this an SLA clock reset."
+  },
+  {
+   "id": "q12-viewer-first-response",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "lines": {
+     "start": 42,
+     "end": 42
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/modules/tickets/ticketService.ts",
+     "lineStart": 240,
+     "lineEnd": 242
+    },
+    {
+     "path": "apps/api/src/modules/tickets/ticketService.ts",
+     "lineStart": 262,
+     "lineEnd": 264
+    }
+   ],
+   "prompt": "A read-only VIEWER posts a PUBLIC reply on a ticket nobody has answered yet. What side effects follow?",
+   "answer": "It sets firstResponseAt and notifies the customer",
+   "distractors": [
+    "None: viewers cannot comment",
+    "The comment is saved but hidden until an agent approves it",
+    "It is stored as INTERNAL automatically, so nobody is notified"
+   ],
+   "explanation": "addTicketComment only blocks INTERNAL notes for viewers; a PUBLIC reply from anyone sets firstResponseAt when it is still null (finding F6)."
+  },
+  {
+   "id": "f01-header-identity",
+   "kind": "flashcard",
+   "source": {
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "lines": {
+     "start": 32,
+     "end": 32
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/middleware/auth.ts",
+     "lineStart": 20,
+     "lineEnd": 26
+    }
+   ],
+   "severity": "High",
+   "front": "authMiddleware picks the user from x-tenant-slug and x-user-email headers, defaulting to seeded values (auth.ts:20-26). Why is this a deployment blocker?",
+   "back": "Identity is asserted, not proved: any caller who knows an admin's email becomes that admin, and a request with no headers is agent@acme.test. Put a session or token check in front of authMiddleware; everything after it can stay."
+  },
+  {
+   "id": "f02-outbox-no-claim",
+   "kind": "flashcard",
+   "source": {
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "lines": {
+     "start": 44,
+     "end": 44
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/worker/src/worker.ts",
+     "lineStart": 7,
+     "lineEnd": 25
+    }
+   ],
+   "severity": "Medium",
+   "front": "The outbox worker selects PENDING rows, then marks each PROCESSING in a separate statement (worker.ts:7-25). What breaks at scale and how do you fix it?",
+   "back": "Two workers take the same batch and deliver twice; a crash mid-row leaves it PROCESSING forever; FAILED rows are never retried and attempts has no limit. Claim with UPDATE ... FOR UPDATE SKIP LOCKED and add a lease timeout."
+  },
+  {
+   "id": "f03-inbound-email-bypass",
+   "kind": "flashcard",
+   "source": {
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "lines": {
+     "start": 38,
+     "end": 38
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/modules/notifications/notificationRoutes.ts",
+     "lineStart": 16,
+     "lineEnd": 30
+    }
+   ],
+   "severity": "Medium",
+   "front": "POST /api/notifications/inbound-email creates tickets directly in the route (notificationRoutes.ts:16-30). List what it bypasses.",
+   "back": "No role gate (viewers can create tickets), no audit row, an unretried ticket-number race at default isolation, and no idempotency: a redelivered email hits the externalId unique constraint and returns 500. Route it through a service that looks up externalId first and reuses createTicket's numbering and retry."
+  },
+  {
+   "id": "f04-viewer-same-status",
+   "kind": "flashcard",
+   "source": {
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "lines": {
+     "start": 46,
+     "end": 46
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/domain/src/index.ts",
+     "lineStart": 32,
+     "lineEnd": 37
+    }
+   ],
+   "severity": "Low",
+   "front": "canTransitionTicket returns true for same-status moves before it checks for VIEWER (index.ts:33-34). Why does it matter if updateTicket already blocks viewers?",
+   "back": "It is latent: any new caller that relies on the domain function alone inherits a viewer no-op that passes. Order domain checks so role refusal comes before shortcuts, so the domain rule is safe on its own."
+  }
+ ]
+}

@@ -1,0 +1,406 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "organized-ai-learning-aiapplybotjs",
+ "sha": "d216880148b2b30f22f2f8dcba4ad8a9d400c239",
+ "guides": [
+  "docs/intern/SYSTEM_ARCHITECTURE.md",
+  "docs/intern/src_db_jobs.md",
+  "docs/intern/src_shared_llm.md",
+  "docs/intern/src_stages_apply_index.md",
+  "docs/intern/src_stages_apply_agents_parsing.md"
+ ],
+ "items": [
+  {
+   "id": "q01-mandatory-dash",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/ARCHITECTURE.md",
+    "lines": {
+     "start": 99,
+     "end": 102
+    }
+   },
+   "cites": [
+    {
+     "path": "src/stages/apply/agents/parsing.ts",
+     "lineStart": 59,
+     "lineEnd": 59
+    }
+   ],
+   "prompt": "An agent's final line is exactly \"RESULT: APPLIED\" with no dash and no reason. What does parseAgentOutcome return?",
+   "answer": "NEEDS_REVIEW, because the regex requires \"- <reason>\"",
+   "distractors": [
+    "APPLIED, with the reason \"No reason provided\" filled in",
+    "APPLIED with submitted false, because no reason was given",
+    "FAILED, because an incomplete marker is treated as an error"
+   ],
+   "explanation": "/^result\\s*:\\s*([a-z_]+)\\s*-\\s*(.+)$/i makes the dash mandatory. The Python sibling accepts a bare status token, so a shared prompt would silently degrade here."
+  },
+  {
+   "id": "q02-json-before-result-line",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/ARCHITECTURE.md",
+    "lines": {
+     "start": 40,
+     "end": 43
+    }
+   },
+   "cites": [
+    {
+     "path": "src/stages/apply/agents/parsing.ts",
+     "lineStart": 79,
+     "lineEnd": 88
+    }
+   ],
+   "prompt": "An agent prints a valid line \"RESULT: FAILED - form error\" and, earlier in the output, a bare JSON line {\"result\":\"APPLIED\"}. Which outcome wins?",
+   "answer": "APPLIED: the JSON path runs first and returns before RESULT lines are read",
+   "distractors": [
+    "FAILED, because the RESULT line is the more explicit terminal contract",
+    "FAILED, because the parser always prefers the last line of the output",
+    "NEEDS_REVIEW, because two conflicting terminal markers cancel each other out"
+   ],
+   "explanation": "parseAgentOutcome tries parseJsonOutcome and only falls back to parseResultLine when no JSON candidate validates - JSON precedence is one of the three behaviors the parsing suite pins."
+  },
+  {
+   "id": "q03-fence-vs-bare-order",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/ARCHITECTURE.md",
+    "lines": {
+     "start": 130,
+     "end": 135
+    }
+   },
+   "cites": [
+    {
+     "path": "src/stages/apply/agents/parsing.ts",
+     "lineStart": 18,
+     "lineEnd": 36
+    }
+   ],
+   "prompt": "Output contains a fenced ```json block with result FAILED, followed later by a bare-line JSON object with result APPLIED. Which candidate is returned?",
+   "answer": "The bare-line APPLIED object",
+   "distractors": [
+    "The fenced FAILED block",
+    "Neither; the output is ambiguous",
+    "The first candidate found in the raw text, whichever form it takes"
+   ],
+   "explanation": "Fences are pushed into the candidate list first, bare lines after, and the list is scanned last-to-first - so the bare line wins. Collection order is the implementation's only guard; exercise E2 asks for the test that documents it."
+  },
+  {
+   "id": "q04-unknown-status-token",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/ARCHITECTURE.md",
+    "lines": {
+     "start": 103,
+     "end": 105
+    }
+   },
+   "cites": [
+    {
+     "path": "src/stages/apply/agents/parsing.ts",
+     "lineStart": 10,
+     "lineEnd": 16
+    }
+   ],
+   "prompt": "An agent ends with \"RESULT: EXPIRED - posting closed\". How does this port treat it?",
+   "answer": "The token is not one of the five statuses, so the output becomes NEEDS_REVIEW",
+   "distractors": [
+    "It is folded into FAILED with an EXPIRED prefix, as the Python sibling does",
+    "It is stored as a new EXPIRED status in the jobs table",
+    "It throws a zod error that aborts the whole apply run"
+   ],
+   "explanation": "Python maps EXPIRED/LOGIN_ISSUE to FAILED with a prefix; here an unknown token returns null and the loop continues, so without another marker the default NEEDS_REVIEW applies."
+  },
+  {
+   "id": "q05-auto-fallback-cases",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/ARCHITECTURE.md",
+    "lines": {
+     "start": 47,
+     "end": 60
+    }
+   },
+   "cites": [
+    {
+     "path": "src/stages/apply/index.ts",
+     "lineStart": 254,
+     "lineEnd": 263
+    }
+   ],
+   "prompt": "Under --agent auto, Claude exits non-zero but printed a valid \"RESULT: CAPTCHA - blocked\" line. Does Codex run?",
+   "answer": "No: a parsed CAPTCHA is a terminal outcome",
+   "distractors": [
+    "Yes: any non-zero exit code triggers the Codex fallback",
+    "Yes: CAPTCHA is retryable, so the second backend gets a chance",
+    "Only under --dry-run, where a second attempt is harmless"
+   ],
+   "explanation": "Fallback needs a thrown runner, or a non-zero exit AND the specific no-marker NEEDS_REVIEW. FAILED, CAPTCHA and a genuine NEEDS_REVIEW never trigger Codex, so one job never gets two submission attempts."
+  },
+  {
+   "id": "q06-exit-zero-garbage",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/ARCHITECTURE.md",
+    "lines": {
+     "start": 62,
+     "end": 65
+    }
+   },
+   "cites": [
+    {
+     "path": "src/stages/apply/index.ts",
+     "lineStart": 256,
+     "lineEnd": 260
+    }
+   ],
+   "prompt": "Claude exits 0 but its output has no RESULT line and no JSON. Why does auto mode deliberately NOT fall back to Codex?",
+   "answer": "Exit 0 means the agent believes it finished; a rerun risks a duplicate application",
+   "distractors": [
+    "Because Codex cannot attach to the Chrome session that Claude already used",
+    "Because an exit code of 0 is mapped to APPLIED regardless of the output",
+    "It does fall back: unparseable output always hands the job to Codex"
+   ],
+   "explanation": "The condition is a conjunction - exitCode !== 0 && fallbackParseIndicator(...) - which the guide calls the subtlest line in the stage."
+  },
+  {
+   "id": "q07-string-coupling",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/ARCHITECTURE.md",
+    "lines": {
+     "start": 137,
+     "end": 146
+    }
+   },
+   "cites": [
+    {
+     "path": "src/stages/apply/index.ts",
+     "lineStart": 63,
+     "lineEnd": 65
+    },
+    {
+     "path": "src/stages/apply/agents/parsing.ts",
+     "lineStart": 90,
+     "lineEnd": 94
+    }
+   ],
+   "prompt": "Someone rewords the parser's \"No RESULT line or valid JSON terminal output found\" message. What breaks, and what fails in CI?",
+   "answer": "Auto-fallback for parse failures silently dies, and no test fails",
+   "distractors": [
+    "TypeScript fails to compile, because the indicator imports the message type",
+    "The parsing suite fails, because it snapshots the reason text",
+    "Nothing breaks: fallback keys off the NEEDS_REVIEW status alone"
+   ],
+   "explanation": "fallbackParseIndicator regex-matches the English reason string, so the two files agree only on a sentence. The fix is an exported constant or a machine-readable marker on ParsedOutcome used in both files, plus the test that would have caught the regression."
+  },
+  {
+   "id": "q08-submitted-default",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/ARCHITECTURE.md",
+    "lines": {
+     "start": 155,
+     "end": 161
+    }
+   },
+   "cites": [
+    {
+     "path": "src/stages/apply/agents/parsing.ts",
+     "lineStart": 45,
+     "lineEnd": 45
+    },
+    {
+     "path": "src/stages/apply/agents/parsing.ts",
+     "lineStart": 72,
+     "lineEnd": 72
+    }
+   ],
+   "prompt": "An agent hallucinates \"RESULT: APPLIED - ok\" without actually submitting. What does the database record?",
+   "answer": "submitted true, because it defaults to status === APPLIED",
+   "distractors": [
+    "submitted false, because the RESULT line carries no submitted flag",
+    "NEEDS_REVIEW, because \"ok\" is too short to count as a reason",
+    "APPLIED, pending a secondary check that confirms the submission"
+   ],
+   "explanation": "Both parse paths default submitted to status === 'APPLIED'; the Python lineage stores a verification_confidence, this schema does not."
+  },
+  {
+   "id": "q09-dry-run-after-the-fact",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/ARCHITECTURE.md",
+    "lines": {
+     "start": 162,
+     "end": 168
+    }
+   },
+   "cites": [
+    {
+     "path": "src/stages/apply/index.ts",
+     "lineStart": 270,
+     "lineEnd": 273
+    },
+    {
+     "path": "src/cli/apply.ts",
+     "lineStart": 33,
+     "lineEnd": 33
+    }
+   ],
+   "prompt": "With --dry-run, an agent ignores its prompt and really submits the application, then reports APPLIED. What actually protected the employer from a submission?",
+   "answer": "Nothing in code - the DRY_RUN rewrite only keeps the DB honest",
+   "distractors": [
+    "The Chrome session is opened read-only whenever --dry-run is set",
+    "The MCP config omits the browser click tool under --dry-run",
+    "The parser refuses APPLIED outcomes in dry-run mode before the agent exits"
+   ],
+   "explanation": "Dry-run is a prompt-level promise, not a code-level guarantee - a reviewer would want the --dry-run help text (\"Run without final submission\") to say so."
+  },
+  {
+   "id": "q10-upsert-coalesce",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/intern/src_db_jobs.md",
+    "lines": {
+     "start": 9,
+     "end": 26
+    }
+   },
+   "cites": [
+    {
+     "path": "src/db/jobs.ts",
+     "lineStart": 13,
+     "lineEnd": 24
+    }
+   ],
+   "prompt": "A job URL is rediscovered by a feed that omits salary, though the stored row has one. What happens to salary and title?",
+   "answer": "Salary keeps the stored value; title is overwritten",
+   "distractors": [
+    "Both are overwritten, so the stored salary becomes null",
+    "Both are kept, because an existing URL is never updated",
+    "A second row is inserted, since the new discovery has different fields"
+   ],
+   "explanation": "onConflictDoUpdate on jobs.url sets title from excluded unconditionally but coalesces salary, description, location, site, strategy and source."
+  },
+  {
+   "id": "q11-apply-eligibility",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/intern/src_db_jobs.md",
+    "lines": {
+     "start": 28,
+     "end": 46
+    }
+   },
+   "cites": [
+    {
+     "path": "src/db/jobs.ts",
+     "lineStart": 112,
+     "lineEnd": 117
+    }
+   ],
+   "prompt": "A job has its PDF, applyStatus FAILED, and applyAttempts below the cap. Is it picked up by a normal apply run?",
+   "answer": "Only when includeFailed is set",
+   "distractors": [
+    "Yes, while under the attempts cap",
+    "No: FAILED is terminal and is never retried",
+    "Never: FAILED is terminal"
+   ],
+   "explanation": "The or(...) includes eq(applyStatus, 'FAILED') only when includeFailed is true; isNotNull(pdfAt) and lt(applyAttempts, maxAttempts) apply in every case."
+  },
+  {
+   "id": "q12-llm-retry-prompt",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/intern/src_shared_llm.md",
+    "lines": {
+     "start": 42,
+     "end": 61
+    }
+   },
+   "cites": [
+    {
+     "path": "src/shared/llm.ts",
+     "lineStart": 120,
+     "lineEnd": 133
+    }
+   ],
+   "prompt": "A scoring call returns JSON whose keys do not match the zod schema. What does the shared LLM helper do next?",
+   "answer": "It retries, telling the model its previous output was invalid for the schema",
+   "distractors": [
+    "It returns the parsed object unvalidated and lets the stage handle it",
+    "It strips unknown keys and fills any missing ones with schema defaults",
+    "It switches to the next LLM provider configured in the pipeline"
+   ],
+   "explanation": "The loop returns only when schema.parse succeeds; each failure tightens the follow-up prompt so callers receive a typed T or an error."
+  },
+  {
+   "id": "f01-signal-shutdown",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/ARCHITECTURE.md",
+    "lines": {
+     "start": 75,
+     "end": 81
+    }
+   },
+   "cites": [
+    {
+     "path": "src/stages/apply/index.ts",
+     "lineStart": 129,
+     "lineEnd": 140
+    },
+    {
+     "path": "src/stages/apply/index.ts",
+     "lineStart": 329,
+     "lineEnd": 335
+    }
+   ],
+   "front": "What happens to the apply stage on SIGINT/SIGTERM (apply/index.ts:129-140, 329-335)?",
+   "back": "A once-handler sets aborted and fires an AbortController, so no new jobs are dequeued; after the workers settle, every job still in progress is marked FAILED (interrupted) and the summary records interrupted."
+  },
+  {
+   "id": "f02-stage-tracking",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/ARCHITECTURE.md",
+    "lines": {
+     "start": 30,
+     "end": 36
+    }
+   },
+   "cites": [
+    {
+     "path": "src/db/jobs.ts",
+     "lineStart": 28,
+     "lineEnd": 31
+    }
+   ],
+   "front": "Which three things does every pipeline stage track per job, and what makes a job eligible for a stage?",
+   "back": "Attempts (<stage>Attempts), error (<stage>Error) and a success marker (timestamp or path). Eligible = success marker missing AND attempts below the configured max - e.g. isNull(detailScrapedAt) and lt(detailAttempts, maxAttempts)."
+  },
+  {
+   "id": "f03-one-constant",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/ARCHITECTURE.md",
+    "lines": {
+     "start": 152,
+     "end": 154
+    }
+   },
+   "cites": [
+    {
+     "path": "src/stages/apply/index.ts",
+     "lineStart": 63,
+     "lineEnd": 65
+    }
+   ],
+   "front": "A reviewer flags 'string-typed coupling between modules' in the apply stage. What is coupled, and what is the minimal fix?",
+   "back": "fallbackParseIndicator in apply/index.ts regex-matches the English reason produced in parsing.ts; the type system cannot see that contract. Export one constant (or a machine-readable marker on ParsedOutcome) and use it in both places, with a test on the fallback decision."
+  }
+ ]
+}

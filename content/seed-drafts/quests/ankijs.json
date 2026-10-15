@@ -1,0 +1,387 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "ankijs",
+ "sha": "3578850d56e052c2bffd9cddc524f97be77926d3",
+ "guides": [
+  "docs/upskill/01-codebase-cartography/05-key-flows.md",
+  "docs/upskill/03-architecture-and-patterns/02-data-model-and-persistence.md",
+  "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+  "docs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+  "docs/upskill/03-architecture-and-patterns/06-architecture-critique.md",
+  "docs/upskill/08-reference/risk-register.md"
+ ],
+ "items": [
+  {
+   "id": "q01-review-transaction",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/02-data-model-and-persistence.md",
+    "lines": {
+     "start": 18,
+     "end": 23
+    }
+   },
+   "cites": [
+    {
+     "path": "src/db/repos/cardRepo.ts",
+     "lineStart": 46,
+     "lineEnd": 56
+    }
+   ],
+   "prompt": "Grading a card writes the card, a review log and outbox entries. Why does applyReview put all of them in one Dexie transaction?",
+   "answer": "So a crash cannot leave a review half-written or unqueued for sync",
+   "distractors": [
+    "Because Dexie allows only one table write per transaction otherwise",
+    "To batch the IndexedDB requests so the write completes faster",
+    "Because the outbox entry must exist before the card row is written"
+   ],
+   "explanation": "Card + review log + two outbox entries commit together; the outbox is how offline changes are guaranteed to reach the server later."
+  },
+  {
+   "id": "q02-outbox-dedupe",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+    "lines": {
+     "start": 18,
+     "end": 18
+    }
+   },
+   "cites": [
+    {
+     "path": "src/db/sync/outbox.ts",
+     "lineStart": 4,
+     "lineEnd": 17
+    }
+   ],
+   "prompt": "A card is edited five times while offline. How many outbox entries exist for it?",
+   "answer": "One, with its queued_at refreshed on each edit",
+   "distractors": [
+    "Five, replayed in order when the device reconnects",
+    "Zero, because offline edits go straight into the pull cursor",
+    "Two: one for the first edit and one for the latest"
+   ],
+   "explanation": "enqueueOutbox finds the existing [table_name+row_id] entry and only updates queued_at; push reads the CURRENT row, so one entry syncs the latest state - an idempotency property."
+  },
+  {
+   "id": "q03-single-flight",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+    "lines": {
+     "start": 20,
+     "end": 20
+    }
+   },
+   "cites": [
+    {
+     "path": "src/db/sync/engine.ts",
+     "lineStart": 55,
+     "lineEnd": 61
+    }
+   ],
+   "prompt": "syncNow is triggered by the 60-second interval while a sync started by an outbox event is still running. What happens?",
+   "answer": "It gets the in-flight promise; no second loop starts",
+   "distractors": [
+    "Both loops run concurrently and the outbox is pushed twice",
+    "The second call throws a 'sync already running' error",
+    "The in-flight sync is cancelled and restarted from scratch"
+   ],
+   "explanation": "if (running) return running; - the module-level promise makes sync single-flight and clears itself in finally."
+  },
+  {
+   "id": "q04-backoff",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+    "lines": {
+     "start": 19,
+     "end": 19
+    }
+   },
+   "cites": [
+    {
+     "path": "src/db/sync/engine.ts",
+     "lineStart": 80,
+     "lineEnd": 88
+    }
+   ],
+   "prompt": "Sync keeps failing because the server is down. How does the retry delay evolve?",
+   "answer": "It doubles from 5 s up to a 5-minute cap, resetting on success",
+   "distractors": [
+    "A fixed retry every 60 s, driven only by the interval timer",
+    "It retries immediately in a loop until the network returns",
+    "It stops retrying after three failures until the next sign-in"
+   ],
+   "explanation": "On error the last_error is stored, a retry timer is scheduled with backoffMs, and backoffMs = Math.min(backoffMs * 2, 300_000); success sets it back to 5_000."
+  },
+  {
+   "id": "q05-server-cursor",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/02-data-model-and-persistence.md",
+    "lines": {
+     "start": 29,
+     "end": 29
+    }
+   },
+   "cites": [
+    {
+     "path": "src/db/sync/engine.ts",
+     "lineStart": 143,
+     "lineEnd": 160
+    }
+   ],
+   "prompt": "Why does the pull cursor use server_updated_at rather than each row's client updated_at?",
+   "answer": "Client clocks and late offline pushes would let rows fall behind the cursor",
+   "distractors": [
+    "Client updated_at is not stored in the Supabase tables at all",
+    "server_updated_at is indexed while updated_at is not, so it is only faster",
+    "Using updated_at would download each user's own rows twice per sync"
+   ],
+   "explanation": "A device that was offline for a day pushes rows with old client times; a cursor on client time would skip them forever."
+  },
+  {
+   "id": "q06-split-merge",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/06-architecture-critique.md",
+    "lines": {
+     "start": 8,
+     "end": 8
+    }
+   },
+   "cites": [
+    {
+     "path": "src/db/sync/merge.ts",
+     "lineStart": 40,
+     "lineEnd": 66
+    }
+   ],
+   "prompt": "Device A edits a card's front text; device B, offline, reviews the same card. After both sync, what does the merged card hold?",
+   "answer": "A's new text and B's new scheduling state",
+   "distractors": [
+    "Only the newer of the two edits; the other is lost",
+    "Both versions, stored as two separate cards",
+    "A's text with the SRS state from before either change"
+   ],
+   "explanation": "mergeCard compares content_updated_at and srs_updated_at independently (ties go to remote), so text edits and reviews merge without clobbering each other."
+  },
+  {
+   "id": "q07-missing-deck-skip",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/08-reference/risk-register.md",
+    "lines": {
+     "start": 8,
+     "end": 8
+    }
+   },
+   "cites": [
+    {
+     "path": "src/db/sync/engine.ts",
+     "lineStart": 184,
+     "lineEnd": 189
+    }
+   ],
+   "prompt": "During a pull, a remote card arrives whose deck is not in the local database yet. What happens to it?",
+   "answer": "It is skipped, while the cursor still advances past it",
+   "distractors": [
+    "A placeholder deck is created so the card can be saved",
+    "The whole pull fails and is retried with backoff",
+    "It is saved with a null deck_id and fixed on the next sync"
+   ],
+   "explanation": "if (!deck) break; inside mergeRows, while the per-table cursor moves to the last row of the page - so the card can stay missing until it changes again. The register suggests buffering/retrying or pulling decks first."
+  },
+  {
+   "id": "q08-convert-two-steps",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/06-architecture-critique.md",
+    "lines": {
+     "start": 17,
+     "end": 17
+    }
+   },
+   "cites": [
+    {
+     "path": "src/features/inbox/ConvertNoteDialog.tsx",
+     "lineStart": 32,
+     "lineEnd": 43
+    }
+   ],
+   "prompt": "Converting an inbox note creates cards one by one and later calls markConverted. If the app closes between those steps, what state results?",
+   "answer": "Cards exist but the note is not marked converted",
+   "distractors": [
+    "Nothing is saved, because Dexie rolls back the dialog session",
+    "The note is marked converted but its cards are missing",
+    "The cards are created a second time when the dialog reopens"
+   ],
+   "explanation": "createCard and markConverted run from the UI as separate writes; the fix moves create + mark into one repository transaction helper with a partial-failure test."
+  },
+  {
+   "id": "q09-adoption-block",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 27,
+     "end": 29
+    }
+   },
+   "cites": [
+    {
+     "path": "src/db/sync/auth.ts",
+     "lineStart": 55,
+     "lineEnd": 70
+    }
+   ],
+   "prompt": "A user signs in on a device whose local rows already carry a DIFFERENT user_id. What does adoptLocalData do?",
+   "answer": "It refuses to adopt and records auth_blocked",
+   "distractors": [
+    "It reassigns every local row to the newly signed-in user",
+    "It deletes the foreign rows and keeps the local-only ones",
+    "It adopts rows with a null user_id and ignores the rest"
+   ],
+   "explanation": "Any row whose user_id is set and differs from uid blocks adoption, so one account cannot inherit another's local data; only otherwise are null-owned rows assigned. The guides flag that this path has no tests yet."
+  },
+  {
+   "id": "q10-rls-not-client-filter",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 17,
+     "end": 25
+    }
+   },
+   "cites": [
+    {
+     "path": "src/db/sync/engine.ts",
+     "lineStart": 146,
+     "lineEnd": 150
+    }
+   ],
+   "prompt": "The pull query filters .eq('user_id', uid). Why is that NOT what prevents one user from reading another's cards?",
+   "answer": "Client filters can be omitted; Postgres RLS is the real guard",
+   "distractors": [
+    "It is: Supabase rejects any query that omits a user_id filter",
+    "The anon key is scoped to one user, so other rows are invisible",
+    "Cards are encrypted per user, so foreign rows are unreadable anyway"
+   ],
+   "explanation": "IDOR prevention lives server-side in RLS policies on every synced table; the client filter is a convenience, not authorization."
+  },
+  {
+   "id": "q11-shallow-import",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/08-reference/risk-register.md",
+    "lines": {
+     "start": 5,
+     "end": 5
+    }
+   },
+   "cites": [
+    {
+     "path": "src/db/repos/dataRepo.ts",
+     "lineStart": 20,
+     "lineEnd": 27
+    }
+   ],
+   "prompt": "A hand-edited backup has version 1 and arrays for every table, but one card lacks its due date. What does import do?",
+   "answer": "It accepts it, because isBackup only checks top-level shape",
+   "distractors": [
+    "It rejects the whole file with an error naming the bad card",
+    "It drops only the malformed card and imports the rest",
+    "It fills the missing due date with today during the merge"
+   ],
+   "explanation": "Rated High confidence in the register: shallow validation can corrupt local data; the fix is per-row validators and a parse-result type with invalid-backup tests."
+  },
+  {
+   "id": "q12-undo-compensation",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+    "lines": {
+     "start": 21,
+     "end": 21
+    }
+   },
+   "cites": [
+    {
+     "path": "src/db/repos/cardRepo.ts",
+     "lineStart": 58,
+     "lineEnd": 67
+    }
+   ],
+   "prompt": "A learner grades a card and immediately presses Undo. What does undoReview do to sync state?",
+   "answer": "Restores the card, deletes the log, and drops the log's outbox entry",
+   "distractors": [
+    "Appends a compensating negative review log and pushes both of them",
+    "Only restores the card; the review log still syncs to the server later",
+    "Rolls back the original Dexie transaction from its saved handle"
+   ],
+   "explanation": "Undo is compensation, not rollback: one new transaction puts cardBefore with a fresh srs_updated_at, deletes the log and its outbox row."
+  },
+  {
+   "id": "f01-review-log-ignore-duplicates",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+    "lines": {
+     "start": 18,
+     "end": 18
+    }
+   },
+   "cites": [
+    {
+     "path": "src/db/sync/engine.ts",
+     "lineStart": 119,
+     "lineEnd": 121
+    }
+   ],
+   "front": "Review logs are pushed with upsert(..., { ignoreDuplicates: true }) while decks, notes and cards go through per-row RPCs (engine.ts:119-129). Why is ignoreDuplicates the right choice for logs?",
+   "back": "Review logs are append-only history: a retried push after a lost response must not duplicate or overwrite an existing log, so a duplicate insert is simply ignored - idempotent by id."
+  },
+  {
+   "id": "f02-markdown-url-policy",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/upskill/08-reference/risk-register.md",
+    "lines": {
+     "start": 9,
+     "end": 9
+    }
+   },
+   "cites": [
+    {
+     "path": "src/components/MarkdownView.tsx",
+     "lineStart": 13,
+     "lineEnd": 16
+    }
+   ],
+   "front": "MarkdownView skips raw HTML. Why does the risk register still list Markdown as an XSS/phishing risk?",
+   "back": "skipHtml only drops raw HTML; the link and image URL policy is left implicit (whatever the Markdown library does by default), and nothing in the repo pins it. Make the protocol allowlist explicit (e.g. http/https/mailto) and add a malicious-URL test - the register rates this Medium confidence, a hypothesis to verify."
+  },
+  {
+   "id": "f03-schema-change-steps",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/02-data-model-and-persistence.md",
+    "lines": {
+     "start": 31,
+     "end": 39
+    }
+   },
+   "cites": [
+    {
+     "path": "src/db/schema.ts",
+     "lineStart": 35,
+     "lineEnd": 36
+    }
+   ],
+   "front": "What are the steps to change the schema safely in this local-first app, and what is the senior question behind them?",
+   "back": "Update TS types; add a NEW Dexie version migration (never edit version 1 destructively); add a Supabase migration; update merge/import/export; test old data, new data and sync conflicts. Senior question: what data exists offline that the server has never seen yet?"
+  }
+ ]
+}
