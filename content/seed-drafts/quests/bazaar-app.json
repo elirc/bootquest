@@ -1,0 +1,476 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "bazaar-app",
+ "sha": "1694e78a144e5054a9baa06700243f46a3745d0c",
+ "guides": [
+  "docs/architecture.md",
+  "docs/adr/0001-money-as-cents.md",
+  "docs/adr/0002-tender-ordering.md",
+  "docs/adr/0003-reserve-charge-commit.md",
+  "docs/adr/0005-guids-value-generated-never.md",
+  "docs/adr/0006-claimtypes-role.md",
+  "docs/adr/0007-hmac-webhooks.md",
+  "docs/adr/0008-guest-cart-tokens.md",
+  "docs/adr/0010-optimistic-concurrency.md",
+  "docs/adr/0011-tender-aware-refunds.md"
+ ],
+ "items": [
+  {
+   "id": "q01-decline-writes-nothing",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0003-reserve-charge-commit.md",
+    "lines": {
+     "start": 11,
+     "end": 21
+    }
+   },
+   "cites": [
+    {
+     "path": "server/Bazaar.Infrastructure/Checkout/CheckoutService.cs",
+     "lineStart": 186,
+     "lineEnd": 202
+    },
+    {
+     "path": "docs/adr/0003-reserve-charge-commit.md",
+     "lineStart": 21,
+     "lineEnd": 21
+    }
+   ],
+   "prompt": "In Bazaar checkout the payment gateway declines the charge. What has been written to the database for this attempt?",
+   "answer": "Nothing, since the method returns before its only SaveChangesAsync",
+   "distractors": [
+    "The Pending order, which is kept so that the payment can be retried later",
+    "The stock reservation, which a later sweeper job releases",
+    "A Cancelled order row, kept as an audit record of the decline"
+   ],
+   "explanation": "Reservations live only on tracked entities in memory. The decline returns CheckoutOutcome.Fail before _db.Orders.Add and the single SaveChangesAsync, so nothing persists."
+  },
+  {
+   "id": "q02-tax-pre-discount",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0002-tender-ordering.md",
+    "lines": {
+     "start": 10,
+     "end": 24
+    }
+   },
+   "cites": [
+    {
+     "path": "server/Bazaar.Infrastructure/Checkout/CheckoutService.cs",
+     "lineStart": 101,
+     "lineEnd": 104
+    },
+    {
+     "path": "docs/adr/0002-tender-ordering.md",
+     "lineStart": 15,
+     "lineEnd": 15
+    }
+   ],
+   "prompt": "A cart has one 100.00 line, a 10% discount code applies, and the address matches a zone that taxes every category at 10%. What tax is charged?",
+   "answer": "10.00, as tax applies before the discount",
+   "distractors": [
+    "9.00, taxed on the 90.00 that is left after the discount",
+    "8.25, from the flat fallback rate on the whole cart",
+    "11.00, because shipping is taxed at the same rate"
+   ],
+   "explanation": "Tax lines are built from Price.Amount * Quantity before the discount is even looked up; ADR 0002 records tax on the pre-discount amount as deliberate. Shipping is never a tax line."
+  },
+  {
+   "id": "q03-no-zone-flat-rate",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 79,
+     "end": 82
+    }
+   },
+   "cites": [
+    {
+     "path": "server/Bazaar.Infrastructure/Tax/TaxService.cs",
+     "lineStart": 44,
+     "lineEnd": 54
+    },
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 81,
+     "lineEnd": 82
+    }
+   ],
+   "prompt": "The shipping address matches no TaxZone at all, by region or by country. What tax does checkout charge?",
+   "answer": "The legacy flat 8.25% rate on each line, via FallbackRate",
+   "distractors": [
+    "No tax: an unmatched address is treated as untaxed",
+    "The rate of the nearest country-wide zone in the TaxZones table",
+    "None; checkout fails with a 400 until a zone exists"
+   ],
+   "explanation": "When zone is null, zone?.RateFor(...) is null and the ?? falls back to FallbackRate (FlatRateTaxCalculator.Rate = 0.0825) so older order totals reproduce."
+  },
+  {
+   "id": "q04-half-even-tax",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 46,
+     "end": 48
+    }
+   },
+   "cites": [
+    {
+     "path": "server/Bazaar.Infrastructure/Tax/TaxService.cs",
+     "lineStart": 49,
+     "lineEnd": 57
+    },
+    {
+     "path": "server/Bazaar.Domain/Common/Money.cs",
+     "lineStart": 22,
+     "lineEnd": 22
+    }
+   ],
+   "prompt": "One cart line of 2.50 is taxed at 5%, so the exact tax is 0.125. What TaxTotal does Bazaar store?",
+   "answer": "0.12, because Money rounds a half to the even cent",
+   "distractors": [
+    "0.13, because Money rounds a half away from zero",
+    "0.125, held at full precision until a refund runs",
+    "0.13, since the cents converter rounds up on save"
+   ],
+   "explanation": "ZoneTaxService sums amount * rate and wraps the total in new Money, whose constructor uses MidpointRounding.ToEven: 0.125 becomes 0.12. The cents converter also rounds to even and receives 0.12 already."
+  },
+  {
+   "id": "q05-free-ship-pre-discount",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 83,
+     "end": 86
+    }
+   },
+   "cites": [
+    {
+     "path": "server/Bazaar.Infrastructure/Checkout/CheckoutService.cs",
+     "lineStart": 121,
+     "lineEnd": 122
+    },
+    {
+     "path": "server/Bazaar.Domain/Shipping/ShippingMethod.cs",
+     "lineStart": 46,
+     "lineEnd": 49
+    }
+   ],
+   "prompt": "The default method charges 5.99 and ships free at 75.00 or more. The subtotal is 80.00 and a fixed 20.00 code applies. What is the shipping charge?",
+   "answer": "Free, because the threshold is tested against the 80.00 subtotal",
+   "distractors": [
+    "5.99, because the 60.00 left after the 20.00 discount is under 75.00",
+    "Free only if a gift card pays the remaining balance",
+    "3.00, the flat fee prorated by the discount share"
+   ],
+   "explanation": "CalculateCost receives the pre-discount subtotal; shipping is priced before the discount code is even loaded. 80.00 >= 75.00, so the method returns Money.Zero."
+  },
+  {
+   "id": "q06-order-number-race",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0003-reserve-charge-commit.md",
+    "lines": {
+     "start": 23,
+     "end": 28
+    }
+   },
+   "cites": [
+    {
+     "path": "server/Bazaar.Infrastructure/Checkout/CheckoutService.cs",
+     "lineStart": 207,
+     "lineEnd": 211
+    },
+    {
+     "path": "server/Bazaar.Infrastructure/Persistence/BazaarDbContext.cs",
+     "lineStart": 346,
+     "lineEnd": 346
+    },
+    {
+     "path": "server/Bazaar.Api/GlobalExceptionHandler.cs",
+     "lineStart": 30,
+     "lineEnd": 31
+    }
+   ],
+   "prompt": "Two checkouts on different carts both run CountAsync on 5 existing orders before either saves, and both charges succeed. What happens to the slower one?",
+   "answer": "Its save breaks the unique Number index: a 500 after the charge",
+   "distractors": [
+    "It gets a 409 Conflict from the ConcurrencyStamp token check",
+    "It is numbered BZ-1007, since numbers come from a sequence",
+    "Its charge is refunded and the caller receives a 402"
+   ],
+   "explanation": "NextOrderNumberAsync is 1001 + count, so both build BZ-1006. Number has a unique index; the losing SaveChangesAsync throws DbUpdateException, which is not a DbUpdateConcurrencyException, so the handler answers 500. The gateway charge already happened. This is a real upstream bug."
+  },
+  {
+   "id": "q07-stamp-refresh",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0010-optimistic-concurrency.md",
+    "lines": {
+     "start": 10,
+     "end": 15
+    }
+   },
+   "cites": [
+    {
+     "path": "server/Bazaar.Infrastructure/Persistence/BazaarDbContext.cs",
+     "lineStart": 64,
+     "lineEnd": 71
+    },
+    {
+     "path": "docs/adr/0010-optimistic-concurrency.md",
+     "lineStart": 12,
+     "lineEnd": 15
+    }
+   ],
+   "prompt": "When does BazaarDbContext give an IConcurrencyStamped entity a new ConcurrencyStamp?",
+   "answer": "On each save, for every stamped entry in the Modified state",
+   "distractors": [
+    "Only on insert, so the first stamp lasts for the life of the row",
+    "On every read, so each request starts from a fresh stamp",
+    "In a database trigger that fires after each UPDATE statement"
+   ],
+   "explanation": "The SaveChanges overrides call RefreshConcurrencyStamps, which assigns Guid.NewGuid() only when entry.State == EntityState.Modified; EF then compares the original stamp in the WHERE clause."
+  },
+  {
+   "id": "q08-webhook-attempts",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0007-hmac-webhooks.md",
+    "lines": {
+     "start": 11,
+     "end": 19
+    }
+   },
+   "cites": [
+    {
+     "path": "server/Bazaar.Infrastructure/Webhooks/WebhookDispatcher.cs",
+     "lineStart": 51,
+     "lineEnd": 77
+    },
+    {
+     "path": "docs/adr/0007-hmac-webhooks.md",
+     "lineStart": 18,
+     "lineEnd": 19
+    }
+   ],
+   "prompt": "A subscription URL contains \"fail\", so the fake sender always errors. How many sends does one dispatch make, and how many delivery rows?",
+   "answer": "Three sends back to back, logged as one row with AttemptCount 3",
+   "distractors": [
+    "Four sends (one plus 3 retries) and four rows, one for each",
+    "One send now, then a background job retries it three times",
+    "Three sends and three rows, since each attempt gets its own row"
+   ],
+   "explanation": "The while loop runs while attempts < MaxAttempts (3), with no delay, and one WebhookDelivery is added per subscription after the loop. The docs say \"up to MaxAttempts = 3 retries\" and \"every attempt\"; the code makes 3 attempts in total and one row."
+  },
+  {
+   "id": "q09-refund-split-rounding",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0011-tender-aware-refunds.md",
+    "lines": {
+     "start": 13,
+     "end": 25
+    }
+   },
+   "cites": [
+    {
+     "path": "server/Bazaar.Infrastructure/Returns/ReturnService.cs",
+     "lineStart": 197,
+     "lineEnd": 212
+    },
+    {
+     "path": "server/Bazaar.Domain/Common/Money.cs",
+     "lineStart": 22,
+     "lineEnd": 22
+    }
+   ],
+   "prompt": "An order had GrandTotal 20.00, of which a gift card paid 10.00. An approved return computes a 10.05 refund. How is it split?",
+   "answer": "5.02 to the card and 5.03 restored to the gift card",
+   "distractors": [
+    "5.03 refunded via the gateway, with 5.02 credited back",
+    "10.05 to the card, as the gateway is refunded first",
+    "10.00 to the gift card and the last 0.05 to the card"
+   ],
+   "explanation": "cardShare = (20.00 - 10.00) / 20.00 = 0.5, so cardRefund = new Money(5.025), which rounds half to even: 5.02. The gift card gets the exact remainder, 5.03."
+  },
+  {
+   "id": "q10-customer-on-admin",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0006-claimtypes-role.md",
+    "lines": {
+     "start": 19,
+     "end": 23
+    }
+   },
+   "cites": [
+    {
+     "path": "server/Bazaar.Api/Program.cs",
+     "lineStart": 51,
+     "lineEnd": 54
+    },
+    {
+     "path": "docs/adr/0006-claimtypes-role.md",
+     "lineStart": 22,
+     "lineEnd": 23
+    }
+   ],
+   "prompt": "A shopper with a valid token whose role claim is Customer calls an Admin-only endpoint. What status does the API return?",
+   "answer": "403, since the token authenticates but then fails RequireRole",
+   "distractors": [
+    "401, because a wrong role counts as unauthenticated",
+    "404, so that the admin route is not revealed to a customer",
+    "400, because the role sits under a non-standard key"
+   ],
+   "explanation": "The Admin policy is RequireAuthenticatedUser().RequireRole(\"Admin\"). The token passes authentication, so the failed role requirement is a 403; only a guest gets 401."
+  },
+  {
+   "id": "q11-clock-skew",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 190,
+     "end": 199
+    }
+   },
+   "cites": [
+    {
+     "path": "server/Bazaar.Api/Program.cs",
+     "lineStart": 36,
+     "lineEnd": 48
+    }
+   ],
+   "prompt": "An admin token is otherwise valid, but its exp passed 20 seconds ago. What does the JwtBearer setup in Program.cs do with it?",
+   "answer": "Accepts it; ClockSkew is configured as 30 seconds",
+   "distractors": [
+    "Rejects it; this API configures ClockSkew as zero seconds",
+    "Rejects it, because exp is checked with no tolerance at all",
+    "Accepts it, then reissues it with a fresh exp claim"
+   ],
+   "explanation": "TokenValidationParameters sets ValidateLifetime = true and ClockSkew = TimeSpan.FromSeconds(30), so a token is accepted until exp + 30 s. Nothing reissues tokens."
+  },
+  {
+   "id": "q12-shared-money-instance-b",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 55,
+     "end": 59
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 55,
+     "lineEnd": 59
+    },
+    {
+     "path": "server/Bazaar.Domain/GiftCards/GiftCard.cs",
+     "lineStart": 18,
+     "lineEnd": 24
+    }
+   ],
+   "prompt": "Suppose checkout assigned one Money instance to both the order's GrandTotal and GiftCardTotal. According to the architecture guide, what happens?",
+   "answer": "EF Core throws, since owned-type tracking keys on the instance",
+   "distractors": [
+    "Both columns save fine, because Money is a record compared by value",
+    "EF silently writes GiftCardTotal as zero to break the shared link",
+    "SQLite rejects the insert with a unique-constraint error"
+   ],
+   "explanation": "Owned navigations are tracked per object instance, so one instance cannot be owned twice; the guide says EF throws, which is why AmountToApply builds a fresh Money."
+  },
+  {
+   "id": "f01-totals-order",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0002-tender-ordering.md",
+    "lines": {
+     "start": 10,
+     "end": 20
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0002-tender-ordering.md",
+     "lineStart": 14,
+     "lineEnd": 20
+    }
+   ],
+   "front": "Bazaar totals order, and where the gift card fits",
+   "back": "subtotal -> tax on each line pre-discount (zone rate, flat 8.25% fallback) -> shipping on the subtotal -> discount capped at subtotal -> grandTotal = subtotal - discount + tax + shipping -> gift card tenders min(balance, grandTotal) -> card charged the rest."
+  },
+  {
+   "id": "f02-in-memory-reservation",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0003-reserve-charge-commit.md",
+    "lines": {
+     "start": 11,
+     "end": 28
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0003-reserve-charge-commit.md",
+     "lineStart": 13,
+     "lineEnd": 21
+    }
+   ],
+   "front": "Bazaar reserve -> charge -> commit: where is the commit boundary?",
+   "back": "One SaveChangesAsync. Reserve only mutates tracked rows in memory; the charge runs (when positive); success commits stock, redeems the gift card, marks the discount, sets Paid, converts the cart, then saves once. A decline returns without saving."
+  },
+  {
+   "id": "f03-guid-keys",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0005-guids-value-generated-never.md",
+    "lines": {
+     "start": 11,
+     "end": 21
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0005-guids-value-generated-never.md",
+     "lineStart": 13,
+     "lineEnd": 19
+    }
+   ],
+   "front": "Why is every Guid primary key ValueGeneratedNever in Bazaar?",
+   "back": "Ids are assigned in the domain (Guid.NewGuid initializers). EF otherwise treats a Guid key as store-generated, so a new child added to a tracked aggregate (a cart line) could be UPDATEd instead of INSERTed."
+  },
+  {
+   "id": "f04-status-codes",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0008-guest-cart-tokens.md",
+    "lines": {
+     "start": 17,
+     "end": 23
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0006-claimtypes-role.md",
+     "lineStart": 22,
+     "lineEnd": 23
+    },
+    {
+     "path": "docs/adr/0008-guest-cart-tokens.md",
+     "lineStart": 22,
+     "lineEnd": 23
+    }
+   ],
+   "front": "Bazaar auth outcomes: guest, wrong role, someone else's resource",
+   "back": "Guest on a protected route: 401. Valid token without the Admin role: 403. Another customer's order, address, wishlist or return: 404, so existence never leaks. Cart routes need no auth: the token is a bearer capability."
+  }
+ ]
+}
