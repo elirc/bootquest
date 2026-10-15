@@ -127,18 +127,47 @@ export function defaultWorkParent(): string {
 }
 
 /**
+ * F12 race guard: runs in flight in THIS process, per resolved workspace parent. A run counts
+ * from its very first statement (before it mkdirs the parent) until its own workspace is gone,
+ * so removeWorkParent can never rmdir a parent between a run's mkdir(parent) and mkdtemp(...)
+ * — server close drops in-flight HTTP requests, but their runner promises keep going.
+ */
+const activeRuns = new Map<string, number>();
+const parentKey = (dir: string): string => path.resolve(dir);
+/** Number of run() calls in flight in this process whose workspace parent is `dir`. */
+export function activeRunCount(dir: string = defaultWorkParent()): number {
+  return activeRuns.get(parentKey(dir)) ?? 0;
+}
+
+/**
  * campaign 2 release (F12): remove this process's workspace parent on a normal shutdown.
  * Every run removes its own workspace in a finally, so after the last run the parent is
- * empty; it is removed only then (rmdir, never recursive), so a run still in flight is
- * never pulled out from under. A parent that is missing or still holds something is left
- * alone (false) — `npm run sweep:ntf` handles what a hard kill orphans.
+ * empty; it is removed only then: never while a run() in this process still counts against
+ * it (activeRunCount > 0 — that covers the window before the run's mkdtemp, when the parent
+ * is still empty), and only by rmdir, never recursive. A parent that is missing, still in
+ * use, or still holds something is left alone (false) — `npm run sweep:ntf` handles what a
+ * hard kill orphans.
  */
 export async function removeWorkParent(dir: string = defaultWorkParent()): Promise<boolean> {
+  if (activeRunCount(dir) > 0) return false;
   try {
     await rmdir(dir);
     return true;
   } catch {
     return false;
+  }
+}
+
+/** mkdir the parent then mkdtemp under it; one re-mkdir + retry if the parent vanished in between
+ *  (another process — e.g. `sweep:ntf` — removing it; this process's own close is held off by the counter). */
+async function makeWorkspace(workParent: string): Promise<string> {
+  await mkdir(workParent, { recursive: true });
+  try {
+    return await mkdtemp(path.join(workParent, "bq-ntf-"));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    await mkdir(workParent, { recursive: true });
+    return mkdtemp(path.join(workParent, "bq-ntf-"));
   }
 }
 const OUTPUT_LIMIT = 64 * 1024;
@@ -483,6 +512,23 @@ export async function run(
   submission: Submission,
   options: RunOptions = {},
 ): Promise<RunnerResult> {
+  // F12: count this run against its workspace parent BEFORE the first await (see activeRuns)
+  const key = parentKey(options.workRoot ?? defaultWorkParent());
+  activeRuns.set(key, (activeRuns.get(key) ?? 0) + 1);
+  try {
+    return await runCounted(exercise, submission, options);
+  } finally {
+    const n = (activeRuns.get(key) ?? 1) - 1;
+    if (n > 0) activeRuns.set(key, n);
+    else activeRuns.delete(key);
+  }
+}
+
+async function runCounted(
+  exercise: NodeTestFileExercise,
+  submission: Submission,
+  options: RunOptions,
+): Promise<RunnerResult> {
   const { spec } = exercise;
   const started = performance.now();
   // 1. Integrity first — tamper ⇒ throw, nothing is executed.
@@ -492,8 +538,7 @@ export async function run(
   // Hygiene: per-PROCESS parent dir, so concurrent suites never snapshot each other's
   // workspaces and a sweeper can tell a dead process's leftovers from a live run's.
   const workParent = options.workRoot ?? defaultWorkParent();
-  await mkdir(workParent, { recursive: true });
-  const root = await mkdtemp(path.join(workParent, "bq-ntf-"));
+  const root = await makeWorkspace(workParent);
   try {
     // 2. Mirror the source layout; check copied fresh every run and made read-only.
     const checkAbs = resolveInside(root, spec.path, "check");

@@ -249,7 +249,9 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
         server.close(() => {
           db.close();
           // stop the compiler server (named pipe) + any live dotnet child we started; F12: then drop
-          // this process's (by now empty) node-test-file workspace parent when we own that runner
+          // this process's node-test-file workspace parent when we own that runner. closeAllConnections
+          // drops in-flight requests but not their runner promises: removeWorkParent skips the rmdir
+          // while any run() still counts against the parent (left for `npm run sweep:ntf`)
           void (csharp ? csharp.shutdown() : Promise.resolve())
             .then(() => (opts.runners ? false : removeWorkParent()))
             .catch(() => undefined)

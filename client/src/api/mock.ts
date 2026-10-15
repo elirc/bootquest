@@ -32,6 +32,7 @@ import {
   type ReviewGrade,
   type ReviewQueueItem,
   type TrackId,
+  type CheckType,
   type TracksResponse,
   type UnitDetail,
   type UnitSummary,
@@ -96,6 +97,86 @@ const err = (status: number, code: ApiError['code'], message: string) => new Api
 export interface MockApiOptions {
   /** Artificial latency per call (ms). 0 = resolve on the next microtask. */
   latencyMs?: number;
+  /**
+   * Graded-submit history the pass rates start from. 'fixture' (default): a deterministic
+   * synthetic history so dev:mock shows populated stats; 'empty': none, like a fresh server DB
+   * (the F17 mock/server contract). Either way every submit made through this instance is
+   * recorded and the rates are DERIVED from the rows by the server's rule (passRateOf below).
+   */
+  passRateHistory?: 'fixture' | 'empty';
+}
+
+// ---- pass rates: mirrors server/src/engines/stats.ts passRate / passRatesBy and the
+// server's group order (shared/src/enums.ts TRACK_IDS / CHECK_TYPES); the F17 contract test
+// (server/test/api/mock-contract.test.ts) asserts both sides return the same numbers.
+interface GradedRow {
+  id: number;
+  unitId: number;
+  trackId: TrackId;
+  checkType: CheckType;
+  mode: 'solo' | 'assisted' | 'guided';
+  verified: boolean;
+  createdAt: number;
+}
+const RATE_TRACK_ORDER: readonly TrackId[] = ['js', 'csharp', 'java', 'agentic'];
+const RATE_CHECK_ORDER: readonly CheckType[] = [
+  'drill-js', 'drill-cs', 'quiz', 'predict-output', 'guided-step', 'http', 'repo', 'study-quiz',
+  'explain-back', 'patch-kata', 'review', 'node-test-file', 'self-run', 'vitest-project',
+];
+type Rate = PassRatesResponse['overall'];
+/** A guided pass (after a reveal) stays in the denominator but is never a pass: reported as guidedPasses. */
+function passRateOf(rows: readonly GradedRow[]): Rate {
+  const sorted = [...rows].sort((a, b) => a.createdAt - b.createdAt || a.id - b.id);
+  const first = new Map<number, GradedRow>();
+  for (const r of sorted) if (!first.has(r.unitId)) first.set(r.unitId, r);
+  const passes = rows.filter((r) => r.verified && r.mode !== 'guided').length;
+  const firstTryPasses = [...first.values()].filter((r) => r.verified && r.mode === 'solo').length;
+  return {
+    attempts: rows.length,
+    passes,
+    guidedPasses: rows.filter((r) => r.verified && r.mode === 'guided').length,
+    passRate: rows.length === 0 ? null : passes / rows.length,
+    units: first.size,
+    firstTryPasses,
+    firstTryRate: first.size === 0 ? null : firstTryPasses / first.size,
+  };
+}
+function ratesBy<K extends string>(rows: readonly GradedRow[], keyOf: (r: GradedRow) => K, order: readonly K[]): { key: K; rate: Rate }[] {
+  return order.flatMap((k) => {
+    const g = rows.filter((r) => keyOf(r) === k);
+    return g.length > 0 ? [{ key: k, rate: passRateOf(g) }] : [];
+  });
+}
+/** The synthetic dev:mock history: per (track, check type) [attempts, passes, units, firstTryPasses, guidedPasses].
+ *  Derives overall 47/62 with 4 guided passes, JS/TS 35/44, C# 12/18 (the numbers the Stats page tests read). */
+const HISTORY: [TrackId, CheckType, number, number, number, number, number][] = [
+  ['js', 'drill-js', 24, 20, 14, 12, 2],
+  ['js', 'quiz', 14, 11, 11, 9, 1],
+  ['js', 'predict-output', 6, 4, 4, 2, 0],
+  ['csharp', 'drill-cs', 14, 9, 8, 5, 1],
+  ['csharp', 'study-quiz', 4, 3, 2, 1, 0],
+];
+function fixtureHistory(): GradedRow[] {
+  const rows: GradedRow[] = [];
+  let id = 1;
+  let unitId = -1;
+  for (const [trackId, checkType, attempts, passes, unitsN, first, guided] of HISTORY) {
+    const retryPasses = passes - first;
+    if (retryPasses < 0 || retryPasses + guided > attempts - unitsN) throw new Error(`mock pass-rate history ${trackId}/${checkType} is inconsistent`);
+    const unitIds: number[] = [];
+    // one first attempt per unit (the first `first` pass solo), then retries on those units
+    for (let k = 0; k < unitsN; k++) {
+      unitIds.push(unitId);
+      rows.push({ id, unitId: unitId--, trackId, checkType, mode: 'solo', verified: k < first, createdAt: NOW - 1e9 + id });
+      id++;
+    }
+    for (let k = 0; k < attempts - unitsN; k++) {
+      const mode = k >= retryPasses && k < retryPasses + guided ? 'guided' : 'solo';
+      rows.push({ id, unitId: unitIds[k % unitIds.length]!, trackId, checkType, mode, verified: k < retryPasses + guided, createdAt: NOW - 1e9 + id });
+      id++;
+    }
+  }
+  return rows;
 }
 
 export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
@@ -121,6 +202,10 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
   const ebXpPaid = new Set<number>();
   const evidence: EvidenceRowDto[] = clone(evidenceFixtures);
   const attempts = new Map<number, AttemptDetailResponse>();
+  // graded submits the pass rates derive from (seed history + every submit through this instance)
+  const gradedRows: GradedRow[] = opts.passRateHistory === 'empty' ? [] : fixtureHistory();
+  const recordGraded = (u: UnitSummary, checkType: CheckType, attemptId: number, mode: GradedRow['mode'], pass: boolean) =>
+    gradedRows.push({ id: attemptId, unitId: u.id, trackId: u.trackId, checkType, mode, verified: pass, createdAt: NOW });
 
   const respond = <T>(value: T): Promise<T> =>
     latency > 0
@@ -355,12 +440,15 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
       studyPassed.add(u.id);
       u.state = 'done';
     }
+    const mode = body.selfAssisted ? ('assisted' as const) : ('solo' as const);
+    const attemptId = nextId++;
+    recordGraded(u, 'study-quiz', attemptId, mode, passed);
     return {
       result: passed
         ? { pass: true, output: `${correct}/${items.length} correct`, failures: [], durationMs: 0 }
         : { pass: false, output: `${correct}/${items.length} correct`, failures: missed.map((n) => ({ name: `Q${n}`, message: 'incorrect' })), durationMs: 0 },
       verdict: passed ? 'pass' : 'fail',
-      attempt: { id: nextId++, mode: body.selfAssisted ? 'assisted' : 'solo', outcome: passed ? 'pass' : 'fail' },
+      attempt: { id: attemptId, mode, outcome: passed ? 'pass' : 'fail' },
       runId: nextId++,
       xp,
       evidenceIds: [nextId++],
@@ -468,10 +556,12 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
           }
           u.state = 'done';
         }
+        const attemptId = nextId++;
+        recordGraded(u, spec!.type, attemptId, mode, result.pass);
         return {
           result,
           verdict: result.pass ? ('pass' as const) : ('fail' as const),
-          attempt: { id: nextId++, mode, outcome: result.pass ? 'pass' : 'fail' },
+          attempt: { id: attemptId, mode, outcome: result.pass ? 'pass' : 'fail' },
           runId: nextId++,
           xp,
           evidenceIds: result.pass ? [nextId++] : [],
@@ -768,32 +858,12 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
       }),
 
     getPassRates: () =>
-      wrap((): PassRatesResponse => {
-        // same rule as the server: a pass after a reveal (guided) is reported, never counted as a pass
-        const row = (attempts: number, passes: number, unitsN: number, first: number, guided = 0) => ({
-          attempts,
-          passes,
-          guidedPasses: guided,
-          passRate: attempts ? passes / attempts : null,
-          units: unitsN,
-          firstTryPasses: first,
-          firstTryRate: unitsN ? first / unitsN : null,
-        });
-        return {
-          overall: row(62, 47, 41, 29, 4),
-          byTrack: [
-            { trackId: 'js', ...row(44, 35, 30, 23, 3) },
-            { trackId: 'csharp', ...row(18, 12, 11, 6, 1) },
-          ],
-          byCheckType: [
-            { checkType: 'drill-js', ...row(26, 21, 17, 13, 2) },
-            { checkType: 'drill-cs', ...row(12, 8, 7, 4, 1) },
-            { checkType: 'quiz', ...row(14, 11, 11, 9, 1) },
-            { checkType: 'predict-output', ...row(6, 4, 4, 2) },
-            { checkType: 'study-quiz', ...row(4, 3, 2, 1) },
-          ],
-        };
-      }),
+      wrap((): PassRatesResponse => ({
+        // derived from the recorded graded submits by the server's rule (passRateOf)
+        overall: passRateOf(gradedRows),
+        byTrack: ratesBy(gradedRows, (r) => r.trackId, RATE_TRACK_ORDER).map(({ key, rate }) => ({ trackId: key, ...rate })),
+        byCheckType: ratesBy(gradedRows, (r) => r.checkType, RATE_CHECK_ORDER).map(({ key, rate }) => ({ checkType: key, ...rate })),
+      })),
 
     getReviewStats: () =>
       wrap((): ReviewStatsResponse => {
