@@ -1,0 +1,459 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "meterforge-upskilling",
+ "repo": "meterforge-upskilling",
+ "sha": "c71962c62dea5883c3735ba3360b38c42fe14e1a",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: from your first request to reliability notes",
+   "body": "MeterForge is an example C# billing API. The `astra docs/` folder is a handbook with two layers, and this pack draws on both.\n\n**Foundations** (for beginners, in `astra docs/foundations/`):\n\n1. `03-requests-and-data.md`: start the server, create a product with POST, read it back with GET, and explain why one lookup works and another fails.\n2. `04-first-test.md`: run one xUnit test, write your own, and prove the assertion really runs.\n\n**Notes** (deeper topics, in `astra docs/notes/`):\n\n3. `03-persistence-concurrency.md`: which operation must be atomic, locks, versions and transactions.\n4. `04-distributed-reliability.md`: timeouts, idempotency keys and the outbox.\n5. `05-testing-operations.md`: connecting claims to evidence.\n\nIf C# itself is new, `astra docs/start-here.md` and `foundations/01-reading-csharp.md` come first. In each lesson, write your prediction down before you run anything; the lessons are built around comparing a prediction with what actually happened.",
+   "excerpts": [
+    {
+     "path": "astra docs/start-here.md",
+     "lineStart": 7,
+     "lineEnd": 7,
+     "quote": "If this is your first programming course, start with [reading C#](foundations/01-reading-csharp.md)."
+    },
+    {
+     "path": "astra docs/foundations/03-requests-and-data.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "**Outcome:** create a product, read it back, and explain why one lookup succeeds and another fails."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astra docs/foundations/README.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The order of the five foundation lessons and how to prepare your terminal once."
+    },
+    {
+     "path": "astra docs/glossary.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Short definitions of the terms the handbook uses."
+    }
+   ]
+  },
+  {
+   "id": "r02-where-a-product-lives",
+   "target": "pack",
+   "phase": "before",
+   "title": "Core idea: where a product is stored, and under which key",
+   "body": "When you POST a product, the code path is short: the endpoint calls the use case, the use case builds a `Product` with a fresh id, and the repository stores it. The repository is not a database. It is a C# `ConcurrentDictionary` field inside the running server.\n\nTwo words from the lesson matter for every exercise:\n\n- **Key.** A dictionary finds a value by its key. Read the type of `_products` carefully: the key is not one value but a *pair*. Both halves take part in every lookup.\n- **In memory.** The dictionary is an object inside the server process. Ask yourself what happens to an object when the process that owns it stops, and what `new()` at the end of that field means when a fresh process starts.\n\nAlso keep in mind that a POST and a GET behave differently when you repeat them. Before running the exercises, read `ProductUseCases.cs` and decide which of the two makes something new each time.",
+   "excerpts": [
+    {
+     "path": "src/MeterForge.Infrastructure/Catalog/InMemoryProductRepository.cs",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "private readonly ConcurrentDictionary<(string TenantId, Guid ProductId), Product> _products = new();"
+    },
+    {
+     "path": "astra docs/foundations/03-requests-and-data.md",
+     "lineStart": 13,
+     "lineEnd": 13,
+     "quote": "**In memory** means held in the running process rather than saved durably for its next start."
+    },
+    {
+     "path": "src/MeterForge.Infrastructure/Catalog/InMemoryProductRepository.cs",
+     "lineStart": 14,
+     "lineEnd": 14,
+     "quote": "_products[(product.TenantId, product.Id)] = product;"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/MeterForge.Application/Catalog/ProductUseCases.cs",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Where a product is constructed and handed to the repository."
+    },
+    {
+     "path": "src/MeterForge.Api/Program.cs",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Where the repository is registered with the server."
+    }
+   ]
+  },
+  {
+   "id": "r03-atomic-and-unknown",
+   "target": "pack",
+   "phase": "before",
+   "title": "Core idea: atomic operations and unknown outcomes",
+   "body": "The two notes this pack uses ask one question in two settings: what exactly must happen as one indivisible step, and what do you really know after a failure?\n\n**Inside one process.** A thread-safe collection makes each single call safe, such as one lookup or one insert. It does not make a *sequence* of calls safe. Look at the usage service: it looks for an event, decides, then adds. Read the timeline table in the persistence note row by row and watch what each caller *returns*, not only what is stored.\n\n**Across the network.** When you call a remote service and get no answer, you do not know what happened on the other side. The reliability note's table lists each failure point and what may have happened remotely. Learn to read that table before thinking about retries.\n\nThe note also covers optimistic concurrency (apply a change only if the version is still the one you read), transactions and the outbox pattern.",
+   "excerpts": [
+    {
+     "path": "astra docs/notes/03-persistence-concurrency.md",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "Thread-safe collections protect their individual operations. They do not automatically make a read-decide-write sequence atomic."
+    },
+    {
+     "path": "src/MeterForge.Application/Usage/UsageIngestionService.cs",
+     "lineStart": 19,
+     "lineEnd": 23,
+     "quote": "var existing = await store.FindByExternalIdAsync(tenantId, externalEventId, cancellationToken).ConfigureAwait(false); if (existing is not null) return new UsageIngestionResult(existing, true); var usageEvent = new UsageEvent(Guid.NewGuid(), tenantId, subscriptionId, meter, quantity, occurredAt, externalEventId); await store.AddAsync(usageEvent, cancellationToken).ConfigureAwait(false);"
+    },
+    {
+     "path": "astra docs/notes/04-distributed-reliability.md",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "A remote operation can succeed even when the caller receives no result. A timeout describes what the caller observed, not what the provider committed. Model this explicitly before adding automatic retries."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astra docs/notes/03-persistence-concurrency.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The full persistence note: the race timeline, locks, conditional updates and transactions."
+    },
+    {
+     "path": "astra docs/notes/04-distributed-reliability.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The full reliability note: the failure table, idempotency identity, outbox and retry policy."
+    }
+   ]
+  },
+  {
+   "id": "x-q01-idempotency-level",
+   "target": "seed:quests:meterforge-upskilling/quiz/0beee524a6eff5f6",
+   "phase": "after",
+   "title": "Why the payment key belongs to the business operation",
+   "body": "An idempotency key tells the provider \"these attempts are the same thing\". So it has to match the thing you want done once: one collection of money. The note says to choose the identity at the business-operation level. A retry of the same collection keeps its key, so the provider can recognise it; a newly authorised collection is a different operation and gets a new key.\n\n- **Per customer:** one key for all of a customer's charges would make the provider treat a second, real charge as a duplicate of the first.\n- **Per tenant:** the note warns *not* to assume tenants can share a provider key unless the provider or your adapter makes that true.\n- **Per HTTP request:** a fresh key on every attempt means a retry looks like a new charge, so the key cannot prevent double charging.\n\nThe note also says to define the key's scope, what happens if the payload changes, and how long keys are kept.",
+   "excerpts": [
+    {
+     "path": "astra docs/notes/04-distributed-reliability.md",
+     "lineStart": 20,
+     "lineEnd": 20,
+     "quote": "Choose idempotency identity at the business-operation level. A retry of one collection should keep its identity; a newly authorized collection is a separate operation."
+    },
+    {
+     "path": "astra docs/notes/04-distributed-reliability.md",
+     "lineStart": 20,
+     "lineEnd": 20,
+     "quote": "Do not assume two tenants may safely reuse one provider key unless the provider's namespace or your adapter construction makes that true."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02-wrong-name-experiment",
+   "target": "seed:quests:meterforge-upskilling/quiz/16809c082d8dd72c",
+   "phase": "after",
+   "title": "What the \"Wrong name\" experiment actually proves",
+   "body": "A test that never runs, or whose assertion is never reached, also shows green. Changing the expected value to `\"Wrong name\"` and watching the test fail shows two things: the test was discovered and run, and its `Assert.Equal` really compares and rejects a mismatch. Then you restore it. The lesson is explicit that this proves the assertion is executed; it does *not* prove every implementation bug would be caught.\n\n- **Compiles without warnings in Release:** the run only shows the project compiled for this test run; warnings and Release mode are never checked.\n- **Trimming correct for every input:** one test with one input says nothing about all inputs; the lesson says later exercises challenge the implementation itself.\n- **No longer depends on discovery:** the opposite; the test still needs xUnit to discover it through `[Fact]`.",
+   "excerpts": [
+    {
+     "path": "astra docs/foundations/04-first-test.md",
+     "lineStart": 71,
+     "lineEnd": 71,
+     "quote": "Changing an expected value proves this assertion is being executed and can reject a mismatch. It does not prove that every possible implementation bug would be caught."
+    },
+    {
+     "path": "astra docs/foundations/04-first-test.md",
+     "lineStart": 67,
+     "lineEnd": 67,
+     "quote": "The program compiled and the assertion detected the deliberate mismatch."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q03-stable-key-not-guarantee",
+   "target": "seed:quests:meterforge-upskilling/quiz/2ad0da270a371e25",
+   "phase": "after",
+   "title": "Why a stable payment key is not yet a guarantee",
+   "body": "Keeping `ProviderIdempotencyKey` the same across retries while `AttemptNumber` goes up is a good *local* rule. But a key only protects you if something on the other side enforces it. Here the simulated provider always reports success (it returns `true` every time) and never deduplicates anything, and `PaymentService` does not save attempts. So nothing stores the key, checks it, or recovers after a restart. The note puts it this way: a stable string becomes a guarantee only when the storage and provider contracts enforce its meaning.\n\n- **The key changes every attempt:** the question says, and the note confirms, that it is preserved.\n- **AttemptNumber not incremented on timeouts:** the note does not say that; the problem is that attempts are not stored at all.\n- **Keys only work on GET:** nothing in the note supports that; idempotency keys exist precisely for writes like payments.",
+   "excerpts": [
+    {
+     "path": "astra docs/notes/04-distributed-reliability.md",
+     "lineStart": 18,
+     "lineEnd": 18,
+     "quote": "The simulator always reports success and does not prove deduplication, remote persistence, timeout handling, or safe recovery after restart. `PaymentService` also does not persist attempts."
+    },
+    {
+     "path": "src/MeterForge.Infrastructure/Payments/SimulatedPaymentProvider.cs",
+     "lineStart": 10,
+     "lineEnd": 10,
+     "quote": "return Task.FromResult(new ProviderChargeResult(true, $\"sim_{request.InvoiceId:N}\"));"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/MeterForge.Domain/Payments/PaymentAttempt.cs",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The payment model that keeps the key and counts attempts."
+    }
+   ]
+  },
+  {
+   "id": "x-q04-find-then-add-race",
+   "target": "seed:quests:meterforge-upskilling/quiz/2e63f998205b0823",
+   "phase": "after",
+   "title": "Why find-then-add is unsafe even with one stored row",
+   "body": "The usage service first calls `FindByExternalIdAsync`; if nothing is found, it builds a new event and calls `AddAsync`. Each call is thread-safe on its own, but the *sequence* is not one step. Follow the note's table: caller A finds nothing, caller B finds nothing, A creates and inserts event A, B creates event B whose insert loses. Only one row is stored, yet if B's insert result is ignored, B still returns event B \"as new\". Two callers were told two different identities. The guarantee must cover what is returned, not just what is stored; the note proposes an atomic get-or-add operation as an exercise.\n\n- **A single row proves idempotency:** the note says one stored row is insufficient if callers see different identities.\n- **Both rows stored:** the dictionary key is unique; B's insert loses.\n- **A deadlock exception:** nothing here takes locks that could deadlock; the losing insert simply does not store.",
+   "excerpts": [
+    {
+     "path": "astra docs/notes/03-persistence-concurrency.md",
+     "lineStart": 15,
+     "lineEnd": 17,
+     "quote": "| 3 | Creates event A and inserts | | | 4 | | Creates event B; duplicate insert loses | | 5 | Returns event A as new | Returns event B as new if insertion result is ignored |"
+    },
+    {
+     "path": "astra docs/notes/03-persistence-concurrency.md",
+     "lineStart": 19,
+     "lineEnd": 19,
+     "quote": "One stored row is insufficient if callers observe different identities."
+    },
+    {
+     "path": "src/MeterForge.Application/Usage/UsageIngestionService.cs",
+     "lineStart": 19,
+     "lineEnd": 24,
+     "quote": "var existing = await store.FindByExternalIdAsync(tenantId, externalEventId, cancellationToken).ConfigureAwait(false); if (existing is not null) return new UsageIngestionResult(existing, true); var usageEvent = new UsageEvent(Guid.NewGuid(), tenantId, subscriptionId, meter, quantity, occurredAt, externalEventId); await store.AddAsync(usageEvent, cancellationToken).ConfigureAwait(false); return new UsageIngestionResult(usageEvent, false);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q05-process-wide-lock",
+   "target": "seed:quests:meterforge-upskilling/quiz/2e8443d1bcfdcd54",
+   "phase": "after",
+   "title": "What is weak about the subscription repository's lock",
+   "body": "The repository does its version check and the change inside `lock (_mutationGate)`, and `_mutationGate` is one object for the whole repository. So every subscription update, for any tenant and any subscription, waits in the same single line, even when the updates have nothing to do with each other. And a C# `lock` only works inside one process: a second API instance has its own lock and its own memory, so the lock cannot coordinate them. The note also asks you to check whether objects returned by `GetAsync` can be changed outside that path.\n\n- **Lock cannot span async code, so the check never runs:** the version check (`subscription.Version != expectedVersion`) is inside the lock and does run.\n- **Lock is per tenant:** it is the opposite; one gate covers everything.\n- **Reads are stale from a cached copy:** the note's read concern is about mutable references escaping, not about a cache.",
+   "excerpts": [
+    {
+     "path": "astra docs/notes/03-persistence-concurrency.md",
+     "lineStart": 21,
+     "lineEnd": 21,
+     "quote": "a single process-wide gate serializes unrelated mutations, and a process lock cannot coordinate separate API instances."
+    },
+    {
+     "path": "src/MeterForge.Infrastructure/Subscriptions/InMemorySubscriptionRepository.cs",
+     "lineStart": 10,
+     "lineEnd": 10,
+     "quote": "private readonly object _mutationGate = new();"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/MeterForge.Infrastructure/Subscriptions/InMemorySubscriptionRepository.cs",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The repository itself: the gate, the version check and GetAsync."
+    }
+   ]
+  },
+  {
+   "id": "x-q06-zero-tests-discovered",
+   "target": "seed:quests:meterforge-upskilling/quiz/41de93f9f9ab4665",
+   "phase": "after",
+   "title": "Why a run with zero discovered tests tells you nothing",
+   "body": "A filtered `dotnet test` only runs the tests whose names match the filter. If nothing matches, no test runs, so of course nothing fails. A green result with zero tests is not the same as a green result with *your* test: nothing about the behavior was checked. The lesson says the filter or test discovery needs fixing first. It also says that if there is a restore or build error, the tests never reached their assertions, so read that first error before investigating any product rule.\n\n- **The build failed silently, just retry:** no build failure was reported, and retrying the same filter would match nothing again.\n- **It passed but output was hidden:** the runner reported no matching tests, so no test ran at all.\n- **The behavior is correct:** no assertion ran, so nothing could report a failure.",
+   "excerpts": [
+    {
+     "path": "astra docs/foundations/04-first-test.md",
+     "lineStart": 21,
+     "lineEnd": 21,
+     "quote": "If the runner reports no matching tests, the filter or test discovery needs fixing; zero tests is not evidence of correct behavior."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07-snapshot-conflict-clauses",
+   "target": "seed:quests:meterforge-upskilling/quiz/44bec901688e6830",
+   "phase": "after",
+   "title": "Why do-nothing conflict clauses hide changed replays",
+   "body": "The snapshot store does wrap the header insert and the line inserts in one transaction, so they succeed or fail together. Each insert ends with `on conflict (...) do nothing`. That clause only says \"if a row with this key exists, skip it\". It never looks at what the existing row contains. So replaying the same invoice with changed fields under existing ids is silently skipped, and replaying it with new line ids can *add* lines. The conflict is hidden. The note says replays need a deliberate policy: accept only identical snapshots, reject the rest.\n\n- **The transaction does not cover the lines:** the note says header and lines are in one transaction.\n- **Identical replays fail with a unique violation:** `do nothing` exists precisely to avoid that error.\n- **Different tenants after a replay:** the schema's composite foreign key keeps each line with a header in the same tenant.",
+   "excerpts": [
+    {
+     "path": "astra docs/notes/03-persistence-concurrency.md",
+     "lineStart": 25,
+     "lineEnd": 25,
+     "quote": "Its conflict clauses suppress duplicate-key inserts; they do not compare existing data with the requested snapshot."
+    },
+    {
+     "path": "src/MeterForge.Infrastructure/Persistence/PostgresInvoiceSnapshotStore.cs",
+     "lineStart": 19,
+     "lineEnd": 19,
+     "quote": "on conflict (tenant_id, id) do nothing;"
+    },
+    {
+     "path": "astra docs/notes/03-persistence-concurrency.md",
+     "lineStart": 27,
+     "lineEnd": 27,
+     "quote": "The schema's composite foreign key keeps each line attached to a header in the same tenant."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08-timeout-unknown",
+   "target": "seed:quests:meterforge-upskilling/quiz/4a6d22f2adfbdcf8",
+   "phase": "after",
+   "title": "What a payment timeout really tells you",
+   "body": "A timeout only tells you what *you* saw: no answer arrived in time. It does not tell you what the provider did. The request may never have arrived, or the provider may have charged the card and the response got lost on the way back. The note's table lists exactly this row, \"Request sent, response missing\", with the remote state \"Nothing or success\". The right reasoning is to keep the operation's identity (its idempotency key) and use the provider's supported way to query or replay, then reconcile.\n\n- **The provider rolled back on disconnect:** nothing says a provider undoes a committed charge because the client went away.\n- **A charge definitely happened:** that is only one of the two possibilities; marking it succeeded could be wrong.\n- **Nothing happened:** also only one possibility; assuming it and charging again could double charge.",
+   "excerpts": [
+    {
+     "path": "astra docs/notes/04-distributed-reliability.md",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "A timeout describes what the caller observed, not what the provider committed."
+    },
+    {
+     "path": "astra docs/notes/04-distributed-reliability.md",
+     "lineStart": 14,
+     "lineEnd": 14,
+     "quote": "| Request sent, response missing | Nothing or success | Preserve identity; query/replay using provider-supported semantics |"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09-restart-empty",
+   "target": "seed:quests:meterforge-upskilling/quiz/4bcb59b46e229939",
+   "phase": "after",
+   "title": "Why a product is gone after the server restarts",
+   "body": "`Program.cs` registers `InMemoryProductRepository` as the product store, and that repository keeps products in a dictionary field created with `new()`. That dictionary is an object inside the running server process. Ctrl+C ends the process, and everything in its memory goes with it. The next start builds a new repository with a new, empty dictionary, so the lookup finds nothing and the endpoint returns 404, even under the original tenant. The 201 you got earlier proved the old process stored the product in memory, not that it would survive a restart.\n\n- **Flushed to disk on shutdown:** no code writes the dictionary anywhere; \"in memory\" means not saved for the next start.\n- **A local SQLite file:** the registered repository is the in-memory one; no database is needed for this exercise.\n- **500 from a disposed object:** the new process never sees the old object at all; it just finds an empty dictionary.",
+   "excerpts": [
+    {
+     "path": "astra docs/foundations/03-requests-and-data.md",
+     "lineStart": 103,
+     "lineEnd": 103,
+     "quote": "After restarting the default server, reading either old product returns `404`, even under its original tenant: the new process has a new empty dictionary."
+    },
+    {
+     "path": "src/MeterForge.Infrastructure/Catalog/InMemoryProductRepository.cs",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "private readonly ConcurrentDictionary<(string TenantId, Guid ProductId), Product> _products = new();"
+    },
+    {
+     "path": "src/MeterForge.Api/Program.cs",
+     "lineStart": 28,
+     "lineEnd": 28,
+     "quote": "builder.Services.AddSingleton<IProductRepository, InMemoryProductRepository>();"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10-other-tenant-404",
+   "target": "seed:quests:meterforge-upskilling/quiz/629bf4007c44bff4",
+   "phase": "after",
+   "title": "Why the same product id under learner-b is a 404",
+   "body": "The products dictionary is keyed by a *pair*: `(TenantId, ProductId)`. The product was stored under `(learner-a, id)`. The GET for learner-b looks up `(learner-b, id)`. That pair was never stored, so `TryGetValue` finds nothing, `GetAsync` returns `null`, and the endpoint answers `Results.NotFound()`, a 404. Both halves of the key must match; a valid product id alone is not enough.\n\n- **200 because ids are global GUIDs:** the GUID is unique, but the lookup uses the whole pair, so the tenant still matters.\n- **A connection error:** the route takes the tenant as a value in the URL; there is no per-tenant route to register. A connection error would mean the server is not reachable.\n- **403 because learner-b is not allowed:** there is no authorization here. The lesson says this demonstrates scoped lookup and \"does not establish authenticated access control\".",
+   "excerpts": [
+    {
+     "path": "src/MeterForge.Infrastructure/Catalog/InMemoryProductRepository.cs",
+     "lineStart": 18,
+     "lineEnd": 22,
+     "quote": "_products.TryGetValue((tenantId, productId), out var product);"
+    },
+    {
+     "path": "astra docs/foundations/03-requests-and-data.md",
+     "lineStart": 85,
+     "lineEnd": 85,
+     "quote": "Explain the missing dictionary key as `(learner-b, same ID)` instead of `(learner-a, same ID)`. This demonstrates scoped lookup; it does not establish authenticated access control."
+    },
+    {
+     "path": "astra docs/foundations/03-requests-and-data.md",
+     "lineStart": 97,
+     "lineEnd": 97,
+     "quote": "**Hint 2:** Both parts of the key must match. A valid product ID alone is not enough."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q11-outbox-crash-window",
+   "target": "seed:quests:meterforge-upskilling/quiz/d222214ed5d5f1c7",
+   "phase": "after",
+   "title": "Why an outbox can still deliver a record twice",
+   "body": "An outbox fixes one gap: the state change and the outbox record are written in the *same* transaction, so you never commit a change without its event. A separate worker later publishes committed records and marks them published. Publishing (sending to another system) and marking (writing to your database) are two separate steps. If the worker crashes between them, the record still looks unpublished, so it is sent again on restart. That is why consumers must tolerate duplicates. The note says \"We use an outbox\" does not mean exactly-once.\n\n- **Publishing and marking share one transaction:** the outbox transaction covers the state change and the record, not the external publish.\n- **The state change is rolled back:** it was already committed before the worker started.\n- **A unique constraint blocks the second publish:** the database cannot stop a message that was already sent to another system.",
+   "excerpts": [
+    {
+     "path": "astra docs/notes/04-distributed-reliability.md",
+     "lineStart": 22,
+     "lineEnd": 22,
+     "quote": "Write the state change and outbox record in the same transaction, then let a worker publish committed records."
+    },
+    {
+     "path": "astra docs/notes/04-distributed-reliability.md",
+     "lineStart": 24,
+     "lineEnd": 24,
+     "quote": "A worker can crash after publishing but before marking a record published. Therefore consumers must tolerate duplicate delivery."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q12-connection-vs-404",
+   "target": "seed:quests:meterforge-upskilling/quiz/d5ed17446379f54f",
+   "phase": "after",
+   "title": "Why a connection message is different from a 404",
+   "body": "A 404 is an HTTP *response*: the server was running, received your request, looked, and answered \"not found\". A connection error message means no HTTP response came back at all. The catch block prints the status code only when `$_.Exception.Response` exists; otherwise it prints the exception message. So a message instead of a number points at the connection. The lesson says to first check terminal A, where the server should be running.\n\n- **Missing tenant header:** this API takes the tenant from the URL path, and a missing-data problem would still produce an HTTP status.\n- **PowerShell reports every 404 as a connection error:** the catch block prints the 404 status when a response exists; the lesson expects `404` there.\n- **Invalid JSON body:** this is a GET with no body; and a bad body would also get an HTTP response.",
+   "excerpts": [
+    {
+     "path": "astra docs/foundations/03-requests-and-data.md",
+     "lineStart": 76,
+     "lineEnd": 81,
+     "quote": "if ($null -ne $_.Exception.Response) { [int]$_.Exception.Response.StatusCode } else { $_.Exception.Message }"
+    },
+    {
+     "path": "astra docs/foundations/03-requests-and-data.md",
+     "lineStart": 85,
+     "lineEnd": 85,
+     "quote": "If it prints a connection message, first check terminal A: no HTTP response is different from a server returning 404."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q13-zero-rows-policy",
+   "target": "seed:quests:meterforge-upskilling/quiz/dabbb70b1d879d41",
+   "phase": "after",
+   "title": "What zero affected rows means for a conditional update",
+   "body": "The update only changes a row if *all* parts of the `WHERE` match: the tenant, the id and the version you read. Zero affected rows tells you just one thing: that combined condition did not match. It does not say which part failed. Maybe the row does not exist (or not in this tenant), or maybe it exists with a newer version. The note says zero rows needs an explicit API policy for not-found versus stale version.\n\n- **Always a stale version, always 409:** the row might not exist at all, which is not a version conflict.\n- **Rolled back, retry until it works:** a zero-row update is not a failure that a retry would fix; the same stale version would match nothing again.\n- **Deleted by another writer, always 404:** that is only one possible reason; a newer version would also give zero rows.",
+   "excerpts": [
+    {
+     "path": "astra docs/notes/03-persistence-concurrency.md",
+     "lineStart": 23,
+     "lineEnd": 23,
+     "quote": "Affected-row count tells you whether that condition matched, but zero rows needs an explicit API policy for not-found versus stale-version."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q14-repeat-post-get",
+   "target": "seed:quests:meterforge-upskilling/quiz/e232ed15d17f75a7",
+   "phase": "after",
+   "title": "Why repeating POST creates a second product",
+   "body": "Each POST goes to the create use case, and the use case always builds a new product with `Guid.NewGuid()`. Nothing compares the body with products already stored, so an identical second POST simply creates a second product with a different id. GET only reads: it looks up the id and returns what is stored, and reading twice changes nothing. The lesson states it directly: repeating GET reads the stored product; repeating POST creates another product with another id.\n\n- **The second POST returns the first product:** there is no deduplication by body in this API.\n- **409 because the code PRO exists:** nothing checks product codes for uniqueness; the repository just stores by `(tenant, id)`.\n- **The second GET makes a copy:** GET calls `GetAsync`, which only reads the dictionary.",
+   "excerpts": [
+    {
+     "path": "astra docs/foundations/03-requests-and-data.md",
+     "lineStart": 54,
+     "lineEnd": 54,
+     "quote": "Repeating GET reads the stored product; repeating POST creates another product with another ID."
+    },
+    {
+     "path": "src/MeterForge.Application/Catalog/ProductUseCases.cs",
+     "lineStart": 22,
+     "lineEnd": 22,
+     "quote": "var product = new Product(Guid.NewGuid(), tenantId, code, name, new Money(monthlyAmount, currency));"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}
