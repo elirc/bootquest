@@ -595,18 +595,18 @@
    "prompt": "A scoped lookup returns null. It might be a deleted row, another tenant's row, or a stale id. How should the service respond?",
    "choices": [
     {
-     "text": "Inspect the database provider's error text to decide which of the three it was",
-     "evidence": []
-    },
-    {
-     "text": "410 Gone for deletions",
-     "evidence": []
-    },
-    {
-     "text": "One safe not-found response for all three",
+     "text": "One safe not-found response for all three, with no hint which it was",
      "evidence": [
       "src/lib/db/tenantContext.ts"
      ]
+    },
+    {
+     "text": "410 Gone for deletions and a plain 404 for the stale id or other tenant",
+     "evidence": []
+    },
+    {
+     "text": "Inspect the database provider's error text to decide which case it was",
+     "evidence": []
     },
     {
      "text": "403 for the other tenant's row and 404 for the other two cases",
@@ -617,11 +617,11 @@
     "type": "quiz",
     "itemKey": "seed:quests:zz1/quiz/2054d3e0ea99577e",
     "grading": "choice",
-    "answerKey": 2,
+    "answerKey": 0,
     "choices": [
-     "Inspect the database provider's error text to decide which of the three it was",
-     "410 Gone for deletions",
-     "One safe not-found response for all three",
+     "One safe not-found response for all three, with no hint which it was",
+     "410 Gone for deletions and a plain 404 for the stale id or other tenant",
+     "Inspect the database provider's error text to decide which case it was",
      "403 for the other tenant's row and 404 for the other two cases"
     ]
    },
@@ -654,18 +654,18 @@
    "prompt": "Does the null-reread guard prove the returned deal is fresh?",
    "choices": [
     {
-     "text": "No: it proves existence, not freshness",
-     "evidence": [
-      "src/services/dealService.ts"
-     ]
+     "text": "Yes: serializable isolation on the transaction guarantees a fresh read",
+     "evidence": []
     },
     {
      "text": "No, so the service should add a second reread of its own to be certain",
      "evidence": []
     },
     {
-     "text": "Yes, serializable isolation guarantees it",
-     "evidence": []
+     "text": "No: it proves the row exists, not that the returned copy is fresh",
+     "evidence": [
+      "src/services/dealService.ts"
+     ]
     },
     {
      "text": "Yes: a non-null reread is always the latest committed version of the row",
@@ -676,11 +676,11 @@
     "type": "quiz",
     "itemKey": "seed:quests:zz1/quiz/28bcbecc245af82e",
     "grading": "choice",
-    "answerKey": 0,
+    "answerKey": 2,
     "choices": [
-     "No: it proves existence, not freshness",
+     "Yes: serializable isolation on the transaction guarantees a fresh read",
      "No, so the service should add a second reread of its own to be certain",
-     "Yes, serializable isolation guarantees it",
+     "No: it proves the row exists, not that the returned copy is fresh",
      "Yes: a non-null reread is always the latest committed version of the row"
     ]
    },
@@ -768,15 +768,7 @@
    "prompt": "A SALES_REP POSTs {} (an invalid body) to /api/org/invitations. Which status comes back?",
    "choices": [
     {
-     "text": "400",
-     "evidence": []
-    },
-    {
-     "text": "422 validation_error, because the empty body fails createInvitationSchema",
-     "evidence": []
-    },
-    {
-     "text": "403 permission_denied: the guard runs before parsing",
+     "text": "403 permission_denied: the guard runs before the body is parsed",
      "evidence": [
       "src/lib/middleware/withTenantGuard.ts"
      ]
@@ -784,18 +776,26 @@
     {
      "text": "201, because SALES_REP holds the permission to invite users",
      "evidence": []
+    },
+    {
+     "text": "422 validation_error: the empty body fails createInvitationSchema first",
+     "evidence": []
+    },
+    {
+     "text": "400 bad_request: the JSON body is empty, so the route refuses it",
+     "evidence": []
     }
    ],
    "check": {
     "type": "quiz",
     "itemKey": "seed:quests:zz1/quiz/488428546ebb1f88",
     "grading": "choice",
-    "answerKey": 2,
+    "answerKey": 0,
     "choices": [
-     "400",
-     "422 validation_error, because the empty body fails createInvitationSchema",
-     "403 permission_denied: the guard runs before parsing",
-     "201, because SALES_REP holds the permission to invite users"
+     "403 permission_denied: the guard runs before the body is parsed",
+     "201, because SALES_REP holds the permission to invite users",
+     "422 validation_error: the empty body fails createInvitationSchema first",
+     "400 bad_request: the JSON body is empty, so the route refuses it"
     ]
    },
    "explanation": "requireOrgRequest(..., 'org.users.write') sits on the line before createInvitationSchema.parse, so the parse never runs."
@@ -978,14 +978,14 @@
    "prompt": "A rep's JWT is valid for 7 days. An admin sets the rep's membership to DISABLED. When is the rep blocked?",
    "choices": [
     {
-     "text": "Immediately, through server-side revocation",
-     "evidence": []
-    },
-    {
-     "text": "Next request: 403 inactive_membership",
+     "text": "On its very next request, since every request reloads the membership",
      "evidence": [
       "src/lib/middleware/withTenantGuard.ts"
      ]
+    },
+    {
+     "text": "Immediately, because a server-side revocation list drops the token",
+     "evidence": []
     },
     {
      "text": "Only when the JWT expires, since the token itself carries the membership",
@@ -1000,10 +1000,10 @@
     "type": "quiz",
     "itemKey": "seed:quests:zz1/quiz/6ab376eecd27d176",
     "grading": "choice",
-    "answerKey": 1,
+    "answerKey": 0,
     "choices": [
-     "Immediately, through server-side revocation",
-     "Next request: 403 inactive_membership",
+     "On its very next request, since every request reloads the membership",
+     "Immediately, because a server-side revocation list drops the token",
      "Only when the JWT expires, since the token itself carries the membership",
      "Never for read routes, because they skip the tenant guard to stay fast"
     ]
@@ -1046,22 +1046,22 @@
    "prompt": "GET /api/org/me with no cookie, then with atlas_session=garbage. What codes come back?",
    "choices": [
     {
-     "text": "401 invalid_session for both requests, since neither carries a valid token",
-     "evidence": []
-    },
-    {
-     "text": "401 auth_required for both",
-     "evidence": []
-    },
-    {
-     "text": "401 auth_required, then 401 invalid_session",
+     "text": "401 auth_required for the first, then 401 invalid_session for the second",
      "evidence": [
       "src/lib/auth/session.ts",
       "src/lib/middleware/withAuth.ts"
      ]
     },
     {
-     "text": "200 with an anonymous session for the missing cookie, then 401 for the garbage one",
+     "text": "200 with an anonymous session first, then 401 invalid_session for garbage",
+     "evidence": []
+    },
+    {
+     "text": "401 invalid_session for both, since neither request carries a valid token",
+     "evidence": []
+    },
+    {
+     "text": "401 auth_required for both: a bad token is treated the same as no token",
      "evidence": []
     }
    ],
@@ -1069,12 +1069,12 @@
     "type": "quiz",
     "itemKey": "seed:quests:zz1/quiz/778a4c41a91c0fe9",
     "grading": "choice",
-    "answerKey": 2,
+    "answerKey": 0,
     "choices": [
-     "401 invalid_session for both requests, since neither carries a valid token",
-     "401 auth_required for both",
-     "401 auth_required, then 401 invalid_session",
-     "200 with an anonymous session for the missing cookie, then 401 for the garbage one"
+     "401 auth_required for the first, then 401 invalid_session for the second",
+     "200 with an anonymous session first, then 401 invalid_session for garbage",
+     "401 invalid_session for both, since neither request carries a valid token",
+     "401 auth_required for both: a bad token is treated the same as no token"
     ]
    },
    "explanation": "A missing cookie returns null and the caller decides; a bad signature or expiry throws inside getOptionalSession."
@@ -1106,34 +1106,34 @@
    "prompt": "withTenantScope(ctx /* tenantId A */, { organizationId: \"B\", status: \"NEW\" }) returns what organizationId?",
    "choices": [
     {
-     "text": "It throws cross_tenant_access because the two tenants differ",
+     "text": "\"B\": the caller's explicit filter is spread last and wins over the context",
      "evidence": []
     },
     {
-     "text": "Both, combined into an OR condition on organizationId",
-     "evidence": []
-    },
-    {
-     "text": "\"B\": the caller's explicit filter wins over the context",
-     "evidence": []
-    },
-    {
-     "text": "\"A\": the tenant key is written after the spread",
+     "text": "\"A\": the tenant key is written after the spread, so it overwrites B",
      "evidence": [
       "src/lib/db/tenantContext.ts"
      ]
+    },
+    {
+     "text": "It throws cross_tenant_access, because the two tenant ids differ",
+     "evidence": []
+    },
+    {
+     "text": "Both: they are combined into an OR condition on organizationId",
+     "evidence": []
     }
    ],
    "check": {
     "type": "quiz",
     "itemKey": "seed:quests:zz1/quiz/7ce569b5f5b69c29",
     "grading": "choice",
-    "answerKey": 3,
+    "answerKey": 1,
     "choices": [
-     "It throws cross_tenant_access because the two tenants differ",
-     "Both, combined into an OR condition on organizationId",
-     "\"B\": the caller's explicit filter wins over the context",
-     "\"A\": the tenant key is written after the spread"
+     "\"B\": the caller's explicit filter is spread last and wins over the context",
+     "\"A\": the tenant key is written after the spread, so it overwrites B",
+     "It throws cross_tenant_access, because the two tenant ids differ",
+     "Both: they are combined into an OR condition on organizationId"
     ]
    },
    "explanation": "Writing the tenant key after the spread means callers cannot widen or redirect the scope."
@@ -1241,14 +1241,14 @@
      "evidence": []
     },
     {
-     "text": "It succeeds: the target's status is never checked",
+     "text": "It is reassigned to the manager, who becomes the fallback owner",
+     "evidence": []
+    },
+    {
+     "text": "It succeeds, because the target membership's status is not checked",
      "evidence": [
       "src/lib/permissions/assignment.ts"
      ]
-    },
-    {
-     "text": "Reassigned to the manager",
-     "evidence": []
     },
     {
      "text": "404 membership_not_found, because disabled memberships are filtered out of the lookup",
@@ -1259,11 +1259,11 @@
     "type": "quiz",
     "itemKey": "seed:quests:zz1/quiz/935a167f678b689c",
     "grading": "choice",
-    "answerKey": 1,
+    "answerKey": 2,
     "choices": [
      "403, because disabled members cannot own any records in the organization",
-     "It succeeds: the target's status is never checked",
-     "Reassigned to the manager",
+     "It is reassigned to the manager, who becomes the fallback owner",
+     "It succeeds, because the target membership's status is not checked",
      "404 membership_not_found, because disabled memberships are filtered out of the lookup"
     ]
    },
@@ -1318,14 +1318,14 @@
      "evidence": []
     },
     {
-     "text": "A 500, and the Lead count is unchanged because every write shared the transaction client and rolled back together",
+     "text": "A 500, and the Lead count is unchanged because the shared transaction rolled back",
      "evidence": [
       "src/lib/http/responses.ts",
       "src/services/leadService.ts"
      ]
     },
     {
-     "text": "201 with the lead saved but no audit row",
+     "text": "201 with the lead saved but no audit row, since audit runs outside the transaction",
      "evidence": []
     },
     {
@@ -1340,8 +1340,8 @@
     "answerKey": 1,
     "choices": [
      "A 422, because audit failures are reported as validation errors",
-     "A 500, and the Lead count is unchanged because every write shared the transaction client and rolled back together",
-     "201 with the lead saved but no audit row",
+     "A 500, and the Lead count is unchanged because the shared transaction rolled back",
+     "201 with the lead saved but no audit row, since audit runs outside the transaction",
      "A 500, but the lead and its histories remain because they committed earlier"
     ]
    },
@@ -1382,26 +1382,26 @@
      "evidence": []
     },
     {
-     "text": "Inside the repository",
-     "evidence": []
-    },
-    {
-     "text": "Right after the update, before history and audit",
+     "text": "Right after dealRepository.update, before the stage history and audit writes",
      "evidence": [
       "src/services/dealService.ts"
      ]
+    },
+    {
+     "text": "Inside the repository's update, before updateMany returns to the service",
+     "evidence": []
     }
    ],
    "check": {
     "type": "quiz",
     "itemKey": "seed:quests:zz1/quiz/c6314813e9e9e252",
     "grading": "choice",
-    "answerKey": 3,
+    "answerKey": 2,
     "choices": [
      "After the audit write, so failed moves are still recorded in the audit log",
      "Before the update, so a missing deal never reaches the database at all",
-     "Inside the repository",
-     "Right after the update, before history and audit"
+     "Right after dealRepository.update, before the stage history and audit writes",
+     "Inside the repository's update, before updateMany returns to the service"
     ]
    },
    "explanation": "Placing the guard immediately after dealRepository.update means history and audit are only attempted after a non-null updated deal is observed; on failure their call counters stay zero."
@@ -1516,22 +1516,22 @@
    "prompt": "A reviewer proposes catching any database exception in moveDealStage and returning deal_not_found. Why reject it?",
    "choices": [
     {
-     "text": "It is fine, as long as the error message says that a race may have occurred",
+     "text": "404 responses are cached by browsers and proxies for a long time",
      "evidence": []
     },
     {
-     "text": "It would report outages and unrelated errors as a missing deal",
+     "text": "Prisma errors cannot be caught inside an interactive transaction",
+     "evidence": []
+    },
+    {
+     "text": "It would report outages and unrelated uniqueness errors as a missing deal",
      "evidence": [
       "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
       "src/lib/http/responses.ts"
      ]
     },
     {
-     "text": "Because 404 responses are cached by browsers and proxies for a long time",
-     "evidence": []
-    },
-    {
-     "text": "Prisma errors can't be caught in a transaction",
+     "text": "Nothing is wrong with it, as long as the message mentions a possible race",
      "evidence": []
     }
    ],
@@ -1539,12 +1539,12 @@
     "type": "quiz",
     "itemKey": "seed:quests:zz1/quiz/db2857261368a95b",
     "grading": "choice",
-    "answerKey": 1,
+    "answerKey": 2,
     "choices": [
-     "It is fine, as long as the error message says that a race may have occurred",
-     "It would report outages and unrelated errors as a missing deal",
-     "Because 404 responses are cached by browsers and proxies for a long time",
-     "Prisma errors can't be caught in a transaction"
+     "404 responses are cached by browsers and proxies for a long time",
+     "Prisma errors cannot be caught inside an interactive transaction",
+     "It would report outages and unrelated uniqueness errors as a missing deal",
+     "Nothing is wrong with it, as long as the message mentions a possible race"
     ]
    },
    "explanation": "Unknown failures should reach the generic 500 path; only the observed null result maps to not-found."
@@ -1576,21 +1576,21 @@
    "prompt": "dealRepository.update runs updateMany and then a scoped reread. The reread returns null but no exception was thrown. What does that mean for the service?",
    "choices": [
     {
-     "text": "The update succeeded; a null reread only means the read cache was cold at the time",
-     "evidence": []
-    },
-    {
-     "text": "Retry the update",
-     "evidence": []
-    },
-    {
-     "text": "Treat it as not found: no tenant-owned row is proven updated",
+     "text": "Treat it as not found: no tenant-owned row is proven to have been updated",
      "evidence": [
       "src/repositories/dealRepository.ts"
      ]
     },
     {
-     "text": "Nothing: updateMany guarantees the row exists whenever it completes without throwing",
+     "text": "Treat it as success: a null reread only means the read cache was cold",
+     "evidence": []
+    },
+    {
+     "text": "Nothing: updateMany guarantees the row exists whenever it does not throw",
+     "evidence": []
+    },
+    {
+     "text": "Retry the update once, since updateMany may have hit a transient lock",
      "evidence": []
     }
    ],
@@ -1598,12 +1598,12 @@
     "type": "quiz",
     "itemKey": "seed:quests:zz1/quiz/e15ea77cb46e6778",
     "grading": "choice",
-    "answerKey": 2,
+    "answerKey": 0,
     "choices": [
-     "The update succeeded; a null reread only means the read cache was cold at the time",
-     "Retry the update",
-     "Treat it as not found: no tenant-owned row is proven updated",
-     "Nothing: updateMany guarantees the row exists whenever it completes without throwing"
+     "Treat it as not found: no tenant-owned row is proven to have been updated",
+     "Treat it as success: a null reread only means the read cache was cold",
+     "Nothing: updateMany guarantees the row exists whenever it does not throw",
+     "Retry the update once, since updateMany may have hit a transient lock"
     ]
    },
    "explanation": "A null reread is meaningful without a provider exception; treating it as success lets dependent writes describe a state that does not exist."
@@ -1644,35 +1644,35 @@
    "prompt": "POST /api/activities with a leadId copied from another organization. What happens today?",
    "choices": [
     {
-     "text": "The foreign key is silently dropped and the activity is saved with no lead",
+     "text": "403 cross_tenant_access, raised by assertSameTenant before the insert",
      "evidence": []
     },
     {
-     "text": "403 cross_tenant_access, raised by assertSameTenant before the activity is created",
+     "text": "404, because the lead lookup inside the service is tenant-scoped",
      "evidence": []
     },
     {
-     "text": "404, because the lead lookup is tenant-scoped",
-     "evidence": []
-    },
-    {
-     "text": "The activity is created in your org and attached to their lead, because tenant scoping covers the primary row, not the ids it points to",
+     "text": "It is created in your org and attached to their lead; only the primary row is scoped",
      "evidence": [
       "src/lib/db/tenantContext.ts",
       "src/services/activityService.ts"
      ]
+    },
+    {
+     "text": "The foreign key is silently dropped; the activity is saved with no lead",
+     "evidence": []
     }
    ],
    "check": {
     "type": "quiz",
     "itemKey": "seed:quests:zz1/quiz/e35eb4a4f12b0a9c",
     "grading": "choice",
-    "answerKey": 3,
+    "answerKey": 2,
     "choices": [
-     "The foreign key is silently dropped and the activity is saved with no lead",
-     "403 cross_tenant_access, raised by assertSameTenant before the activity is created",
-     "404, because the lead lookup is tenant-scoped",
-     "The activity is created in your org and attached to their lead, because tenant scoping covers the primary row, not the ids it points to"
+     "403 cross_tenant_access, raised by assertSameTenant before the insert",
+     "404, because the lead lookup inside the service is tenant-scoped",
+     "It is created in your org and attached to their lead; only the primary row is scoped",
+     "The foreign key is silently dropped; the activity is saved with no lead"
     ]
    },
    "explanation": "Tenant scoping covers the primary row, not foreign-key ids; the schema only requires the lead to exist. The unused assertSameTenant (or loading each parent through its scoped repository) is the intended fix."

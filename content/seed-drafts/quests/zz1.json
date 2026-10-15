@@ -30,11 +30,11 @@
     }
    ],
    "prompt": "dealRepository.update runs updateMany and then a scoped reread. The reread returns null but no exception was thrown. What does that mean for the service?",
-   "answer": "Treat it as not found: no tenant-owned row is proven updated",
+   "answer": "Treat it as not found: no tenant-owned row is proven to have been updated",
    "distractors": [
-    "The update succeeded; a null reread only means the read cache was cold at the time",
-    "Retry the update",
-    "Nothing: updateMany guarantees the row exists whenever it completes without throwing"
+    "Treat it as success: a null reread only means the read cache was cold",
+    "Retry the update once, since updateMany may have hit a transient lock",
+    "Nothing: updateMany guarantees the row exists whenever it does not throw"
    ],
    "explanation": "A null reread is meaningful without a provider exception; treating it as success lets dependent writes describe a state that does not exist."
   },
@@ -56,11 +56,11 @@
     }
    ],
    "prompt": "Where does the deal_not_found guard sit in moveDealStage, and what invariant does that placement buy?",
-   "answer": "Right after the update, before history and audit",
+   "answer": "Right after dealRepository.update, before the stage history and audit writes",
    "distractors": [
     "Before the update, so a missing deal never reaches the database at all",
     "After the audit write, so failed moves are still recorded in the audit log",
-    "Inside the repository"
+    "Inside the repository's update, before updateMany returns to the service"
    ],
    "explanation": "Placing the guard immediately after dealRepository.update means history and audit are only attempted after a non-null updated deal is observed; on failure their call counters stay zero."
   },
@@ -82,10 +82,10 @@
     }
    ],
    "prompt": "Does the null-reread guard prove the returned deal is fresh?",
-   "answer": "No: it proves existence, not freshness",
+   "answer": "No: it proves the row exists, not that the returned copy is fresh",
    "distractors": [
     "Yes: a non-null reread is always the latest committed version of the row",
-    "Yes, serializable isolation guarantees it",
+    "Yes: serializable isolation on the transaction guarantees a fresh read",
     "No, so the service should add a second reread of its own to be certain"
    ],
    "explanation": "Adding another reread in the service would duplicate repository responsibility and add latency without evidence."
@@ -113,11 +113,11 @@
     }
    ],
    "prompt": "A reviewer proposes catching any database exception in moveDealStage and returning deal_not_found. Why reject it?",
-   "answer": "It would report outages and unrelated errors as a missing deal",
+   "answer": "It would report outages and unrelated uniqueness errors as a missing deal",
    "distractors": [
-    "Because 404 responses are cached by browsers and proxies for a long time",
-    "Prisma errors can't be caught in a transaction",
-    "It is fine, as long as the error message says that a race may have occurred"
+    "404 responses are cached by browsers and proxies for a long time",
+    "Prisma errors cannot be caught inside an interactive transaction",
+    "Nothing is wrong with it, as long as the message mentions a possible race"
    ],
    "explanation": "Unknown failures should reach the generic 500 path; only the observed null result maps to not-found."
   },
@@ -139,11 +139,11 @@
     }
    ],
    "prompt": "A scoped lookup returns null. It might be a deleted row, another tenant's row, or a stale id. How should the service respond?",
-   "answer": "One safe not-found response for all three",
+   "answer": "One safe not-found response for all three, with no hint which it was",
    "distractors": [
     "403 for the other tenant's row and 404 for the other two cases",
-    "410 Gone for deletions",
-    "Inspect the database provider's error text to decide which of the three it was"
+    "410 Gone for deletions and a plain 404 for the stale id or other tenant",
+    "Inspect the database provider's error text to decide which case it was"
    ],
    "explanation": "Tenant scope is added by the repository; distinguishing the cases would leak cross-tenant existence."
   },
@@ -165,11 +165,11 @@
     }
    ],
    "prompt": "withTenantScope(ctx /* tenantId A */, { organizationId: \"B\", status: \"NEW\" }) returns what organizationId?",
-   "answer": "\"A\": the tenant key is written after the spread",
+   "answer": "\"A\": the tenant key is written after the spread, so it overwrites B",
    "distractors": [
-    "\"B\": the caller's explicit filter wins over the context",
-    "Both, combined into an OR condition on organizationId",
-    "It throws cross_tenant_access because the two tenants differ"
+    "\"B\": the caller's explicit filter is spread last and wins over the context",
+    "Both: they are combined into an OR condition on organizationId",
+    "It throws cross_tenant_access, because the two tenant ids differ"
    ],
    "explanation": "Writing the tenant key after the spread means callers cannot widen or redirect the scope."
   },
@@ -196,11 +196,11 @@
     }
    ],
    "prompt": "POST /api/activities with a leadId copied from another organization. What happens today?",
-   "answer": "The activity is created in your org and attached to their lead, because tenant scoping covers the primary row, not the ids it points to",
+   "answer": "It is created in your org and attached to their lead; only the primary row is scoped",
    "distractors": [
-    "404, because the lead lookup is tenant-scoped",
-    "403 cross_tenant_access, raised by assertSameTenant before the activity is created",
-    "The foreign key is silently dropped and the activity is saved with no lead"
+    "404, because the lead lookup inside the service is tenant-scoped",
+    "403 cross_tenant_access, raised by assertSameTenant before the insert",
+    "The foreign key is silently dropped; the activity is saved with no lead"
    ],
    "explanation": "Tenant scoping covers the primary row, not foreign-key ids; the schema only requires the lead to exist. The unused assertSameTenant (or loading each parent through its scoped repository) is the intended fix."
   },
@@ -227,11 +227,11 @@
     }
    ],
    "prompt": "GET /api/org/me with no cookie, then with atlas_session=garbage. What codes come back?",
-   "answer": "401 auth_required, then 401 invalid_session",
+   "answer": "401 auth_required for the first, then 401 invalid_session for the second",
    "distractors": [
-    "401 invalid_session for both requests, since neither carries a valid token",
-    "401 auth_required for both",
-    "200 with an anonymous session for the missing cookie, then 401 for the garbage one"
+    "401 invalid_session for both, since neither request carries a valid token",
+    "401 auth_required for both: a bad token is treated the same as no token",
+    "200 with an anonymous session first, then 401 invalid_session for garbage"
    ],
    "explanation": "A missing cookie returns null and the caller decides; a bad signature or expiry throws inside getOptionalSession."
   },
@@ -253,10 +253,10 @@
     }
    ],
    "prompt": "A rep's JWT is valid for 7 days. An admin sets the rep's membership to DISABLED. When is the rep blocked?",
-   "answer": "Next request: 403 inactive_membership",
+   "answer": "On its very next request, since every request reloads the membership",
    "distractors": [
     "Only when the JWT expires, since the token itself carries the membership",
-    "Immediately, through server-side revocation",
+    "Immediately, because a server-side revocation list drops the token",
     "Never for read routes, because they skip the tenant guard to stay fast"
    ],
    "explanation": "The session loads the membership without a status filter; requireOrgRequest is what rejects non-ACTIVE memberships, so a route that skips it loses the check."
@@ -279,10 +279,10 @@
     }
    ],
    "prompt": "A SALES_REP POSTs {} (an invalid body) to /api/org/invitations. Which status comes back?",
-   "answer": "403 permission_denied: the guard runs before parsing",
+   "answer": "403 permission_denied: the guard runs before the body is parsed",
    "distractors": [
-    "422 validation_error, because the empty body fails createInvitationSchema",
-    "400",
+    "422 validation_error: the empty body fails createInvitationSchema first",
+    "400 bad_request: the JSON body is empty, so the route refuses it",
     "201, because SALES_REP holds the permission to invite users"
    ],
    "explanation": "requireOrgRequest(..., 'org.users.write') sits on the line before createInvitationSchema.parse, so the parse never runs."
@@ -305,11 +305,11 @@
     }
    ],
    "prompt": "A SALES_MANAGER assigns a lead to a colleague whose membership is DISABLED. What happens?",
-   "answer": "It succeeds: the target's status is never checked",
+   "answer": "It succeeds, because the target membership's status is not checked",
    "distractors": [
     "403, because disabled members cannot own any records in the organization",
     "404 membership_not_found, because disabled memberships are filtered out of the lookup",
-    "Reassigned to the manager"
+    "It is reassigned to the manager, who becomes the fallback owner"
    ],
    "explanation": "Assignment is an authorization boundary (leads.assign, tenant-scoped lookup) but the target status is never checked."
   },
@@ -341,9 +341,9 @@
     }
    ],
    "prompt": "During POST /api/leads, auditService.logOrgEvent throws after the lead and its histories were inserted. What is the end state?",
-   "answer": "A 500, and the Lead count is unchanged because every write shared the transaction client and rolled back together",
+   "answer": "A 500, and the Lead count is unchanged because the shared transaction rolled back",
    "distractors": [
-    "201 with the lead saved but no audit row",
+    "201 with the lead saved but no audit row, since audit runs outside the transaction",
     "A 500, but the lead and its histories remain because they committed earlier",
     "A 422, because audit failures are reported as validation errors"
    ],
