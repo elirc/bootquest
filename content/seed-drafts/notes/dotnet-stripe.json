@@ -1,0 +1,303 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "dotnet-stripe",
+ "repo": "dotnet-stripe",
+ "sha": "8f402575b200ba258dbd43b5802642c1ecbfa63e",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: a small subscription-billing API",
+   "body": "This repo is a Stripe-style subscription billing dashboard: Billing.Api is a .NET 8 minimal API with in-memory storage, background workers for payments and outbound webhooks, and Billing.Web is the front end. This pack uses two short design notes in **docs/**:\n\n1. **docs/architecture.md**: the backend layout, the money representation, idempotency and background jobs. Read its status box first; it records what the original note left out.\n2. **docs/webhooks.md**: how inbound payment-provider webhooks are verified, and what the endpoint does not do.\n\nBoth notes are short, so the real work is in the code they point to: WebhookSignatureVerifier, IdempotencyMiddleware, Money, BillingEngine and the endpoint definitions in Program.cs. The status box also warns that main does not compile as committed; you do not need to build anything for this pack, only to read.",
+   "excerpts": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 13,
+     "lineEnd": 13,
+     "quote": "`Billing.Api` is a dependency-free .NET 8 minimal API."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/Billing.Api/Program.cs",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Every endpoint and the service registrations in one file."
+    },
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 11,
+     "lineEnd": 18,
+     "why": "The backend layout: Domain, Contracts, Infrastructure and Program.cs."
+    }
+   ]
+  },
+  {
+   "id": "r02-signed-webhooks",
+   "target": "pack",
+   "phase": "before",
+   "title": "Core idea: signed webhooks and replay windows",
+   "body": "A webhook is an HTTP call from a payment provider to your API. Because anyone can send an HTTP request, the provider signs each one: it computes an HMAC (a keyed hash) over the payload with a secret both sides share, and sends the result in a header. Only a holder of the secret can produce a matching signature. Signing a timestamp together with the body lets the receiver refuse old captured requests, which limits replay.\n\nRead WebhookSignatureVerifier.IsValid and list every condition under which it returns false, in order. For the timestamp check, work out the sign of the subtraction for a timestamp in the past and for one in the future, and compare with what the webhook note says. Look at how both signature strings are prepared before comparison, then look up CryptographicOperations.FixedTimeEquals in the .NET docs and find out which attack it is designed to stop.\n\nFinally, follow the endpoint in Program.cs after verification succeeds: what it stores, what it echoes back, and which engine method it calls.",
+   "excerpts": [
+    {
+     "path": "docs/webhooks.md",
+     "lineStart": 13,
+     "lineEnd": 13,
+     "quote": "Signed payload: `{timestamp}.{rawBody}`."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/Billing.Api/Infrastructure/WebhookSignatureVerifier.cs",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The whole signature check in about forty lines."
+    },
+    {
+     "path": "src/Billing.Api/Infrastructure/BillingEngine.cs",
+     "lineStart": 157,
+     "lineEnd": 200,
+     "why": "ApplyPaymentResult: what a payment webhook changes."
+    }
+   ]
+  },
+  {
+   "id": "r03-idempotency-and-money",
+   "target": "pack",
+   "phase": "before",
+   "title": "Core idea: idempotency keys, and money as whole cents",
+   "body": "An idempotency key is a client-chosen string sent with an unsafe request so that retrying the same request returns the first result instead of doing the work twice. The architecture note describes the intent; IdempotencyMiddleware is the implementation, about seventy lines.\n\nRead InvokeAsync and draw every path through it as a small flowchart: which requests it skips, what it does when the header is absent, the length rule, what is hashed into the request hash versus what forms the cache key, what happens on a cache hit with the same or a different hash, and exactly when and under what condition store.Set runs. Then ask what two requests arriving together would each see.\n\nFor money, the note says amounts are integer minor units plus a currency code. Read Money.FromMajor, the constructor and NormalizeCurrency, and note the rounding mode used and what happens to the currency string.",
+   "excerpts": [
+    {
+     "path": "docs/architecture.md",
+     "lineStart": 30,
+     "lineEnd": 30,
+     "quote": "Money is represented as integer minor units plus ISO currency."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/Billing.Api/Infrastructure/IdempotencyMiddleware.cs",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The idempotency middleware and its in-memory store."
+    },
+    {
+     "path": "src/Billing.Api/Domain/Money.cs",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The Money value type."
+    }
+   ]
+  },
+  {
+   "id": "x-q01-future-timestamp",
+   "target": "seed:quests:dotnet-stripe/quiz/38f1f5e162395c1d",
+   "phase": "after",
+   "title": "The tolerance only looks backwards",
+   "body": "**Key: valid, because only timestamps over five minutes old are rejected.**\n\nThe check is `DateTimeOffset.UtcNow - timestamp > TimestampTolerance`. For a timestamp one hour ahead, UtcNow - timestamp is minus one hour, which is never greater than five minutes, so the check passes and, with a correct HMAC, IsValid returns true. The webhook note flags exactly this: a far-future signed request can be replayed indefinitely, and comparing the absolute difference closes it.\n\nWhy the others are wrong:\n- **Both directions**: that needs Math.Abs, which the code does not use.\n- **FromUnixTimeSeconds refuses the future**: it accepts any value up to year 9999.\n- **Only within five minutes of the clock**: that is the symmetric rule the guide recommends, not the current one.",
+   "excerpts": [
+    {
+     "path": "src/Billing.Api/Infrastructure/WebhookSignatureVerifier.cs",
+     "lineStart": 25,
+     "lineEnd": 25,
+     "quote": "if (DateTimeOffset.UtcNow - timestamp > TimestampTolerance)"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02-stale-timestamp",
+   "target": "seed:quests:dotnet-stripe/quiz/7217bda2c396d0d7",
+   "phase": "after",
+   "title": "A failed verification is a 401",
+   "body": "**Key: 401, from Results.Unauthorized once IsValid returns false.**\n\nSix minutes is more than the five-minute tolerance, so IsValid returns false at the timestamp check, before it even computes the HMAC. The endpoint's first decision after reading the body is `if (!verifier.IsValid(request, rawBody)) return Results.Unauthorized();`.\n\nWhy the others are wrong:\n- **400 Invalid webhook payload**: that message is used only when the verified body deserializes to null.\n- **200 because the HMAC is valid**: the timestamp check runs first and fails.\n- **403**: the endpoint never returns Forbid; it uses Unauthorized.",
+   "excerpts": [
+    {
+     "path": "src/Billing.Api/Program.cs",
+     "lineStart": 230,
+     "lineEnd": 233,
+     "quote": "return Results.Unauthorized();"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q03-uppercase-hex",
+   "target": "seed:quests:dotnet-stripe/quiz/6357a27f36ab6484",
+   "phase": "after",
+   "title": "Both sides are lowercased before the comparison",
+   "body": "**Key: yes, since both sides are lowercased before they are compared.**\n\nThe expected signature is `Convert.ToHexString(hmac.ComputeHash(payloadBytes)).ToLowerInvariant()`, and the header value is `signatureValues.ToString().Trim().ToLowerInvariant()`. An uppercase hex header becomes the same lowercase string, so the UTF-8 bytes passed to FixedTimeEquals are identical.\n\nWhy the others are wrong:\n- **FixedTimeEquals compares exactly**: it does, but on the already-lowercased strings.\n- **Base64 only**: the note and the code use hex.\n- **Re-signs the uppercase form**: nothing is re-signed; the HMAC is computed once over timestamp.body.",
+   "excerpts": [
+    {
+     "path": "src/Billing.Api/Infrastructure/WebhookSignatureVerifier.cs",
+     "lineStart": 35,
+     "lineEnd": 35,
+     "quote": "var actual = signatureValues.ToString().Trim().ToLowerInvariant();"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q04-fixed-time",
+   "target": "seed:quests:dotnet-stripe/quiz/cea84d9cb2c0506a",
+   "phase": "after",
+   "title": "Constant-time comparison defeats timing attacks",
+   "body": "**Key: its run time does not depend on where the bytes first differ.**\n\nAn ordinary equality check stops at the first mismatching character, so a response arrives slightly sooner when an early byte is wrong. By measuring many requests an attacker can guess a valid signature one character at a time. CryptographicOperations.FixedTimeEquals examines every byte of equal-length inputs regardless of mismatches, removing that signal.\n\nWhy the others are wrong:\n- **Ignores case**: case-insensitivity comes from the two ToLowerInvariant calls.\n- **Faster**: it is designed to be predictable, not faster.\n- **Decodes the hex first**: the code passes UTF-8 bytes of the hex strings, not decoded HMAC bytes.",
+   "excerpts": [
+    {
+     "path": "src/Billing.Api/Infrastructure/WebhookSignatureVerifier.cs",
+     "lineStart": 37,
+     "lineEnd": 39,
+     "quote": "return CryptographicOperations.FixedTimeEquals("
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q05-event-replay",
+   "target": "seed:quests:dotnet-stripe/quiz/d64a7c63762b9ad0",
+   "phase": "after",
+   "title": "No event store means a retry runs again",
+   "body": "**Key: the result is applied again, adding another Payment row.**\n\nThe endpoint deserializes the payload, calls engine.ApplyPaymentResult and returns `new { received = true, payload.EventId, payload.EventType }`. EventId is only echoed; nothing records it. With no Idempotency-Key header, IdempotencyMiddleware passes the request straight through. ApplyPaymentResult then saves the invoice as Paid again with a new PaidAt, adds another Payment and enqueues another outbound webhook, without checking the current status.\n\nWhy the others are wrong:\n- **Replay by eventId**: no code looks up eventId.\n- **409 for a seen event**: there is no record of seen events to conflict with.\n- **Skipped because Paid**: ApplyPaymentResult has no status guard.",
+   "excerpts": [
+    {
+     "path": "src/Billing.Api/Program.cs",
+     "lineStart": 244,
+     "lineEnd": 244,
+     "quote": "return Results.Ok(new { received = true, payload.EventId, payload.EventType });"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q06-no-key-bypass",
+   "target": "seed:quests:dotnet-stripe/quiz/0662424544ea68ab",
+   "phase": "after",
+   "title": "No header, no idempotency",
+   "body": "**Key: it calls the next middleware straight away, so the handler runs again.**\n\nAfter confirming the request is an unsafe /api method, InvokeAsync tries to read the Idempotency-Key header. When it is missing, it awaits next(context) and returns, with no hashing, caching or lookup. Each retry therefore runs the pay handler again. The architecture note's status box says requests without the header bypass the middleware entirely.\n\nWhy the others are wrong:\n- **400 for a missing header**: the 400 is only for a key of the wrong length.\n- **Replay by body hash**: the cache is keyed by method, path and key; without a key there is no entry.\n- **409 for a repeated body**: 409 needs an existing entry under the same key.",
+   "excerpts": [
+    {
+     "path": "src/Billing.Api/Infrastructure/IdempotencyMiddleware.cs",
+     "lineStart": 17,
+     "lineEnd": 21,
+     "quote": "if (!context.Request.Headers.TryGetValue(\"Idempotency-Key\", out var idempotencyKeyValues))"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07-short-key",
+   "target": "seed:quests:dotnet-stripe/quiz/49f39622a87f1dbe",
+   "phase": "after",
+   "title": "Keys must be 8 to 200 characters",
+   "body": "**Key: it returns 400, since the key is under 8 characters.**\n\nThe middleware trims the header and checks `idempotencyKey.Length is < 8 or > 200`. abc123 has six characters, so it writes a 400 with the error \"Idempotency-Key must be between 8 and 200 characters.\" and returns without calling the handler.\n\nWhy the others are wrong:\n- **Cached for 24 hours**: caching happens only for valid keys after a 2xx response.\n- **Padded**: nothing modifies the key besides Trim.\n- **Ignored**: an absent header is ignored; a present but invalid one is rejected.",
+   "excerpts": [
+    {
+     "path": "src/Billing.Api/Infrastructure/IdempotencyMiddleware.cs",
+     "lineStart": 24,
+     "lineEnd": 27,
+     "quote": "await context.Response.WriteAsJsonAsync(new { error = \"Idempotency-Key must be between 8 and 200 characters.\" });"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08-key-new-body",
+   "target": "seed:quests:dotnet-stripe/quiz/6b581e336e3d028b",
+   "phase": "after",
+   "title": "Same key, different body: 409",
+   "body": "**Key: a 409 saying the key was reused with a different payload.**\n\nThe cache key is method, path and Idempotency-Key, so the second request finds the stored entry. The middleware then compares the entry's RequestHash, a SHA-256 of method, path and body, with the new one; the bodies differ, so it writes 409 with \"Idempotency key reused with a different request payload.\". This matches the architecture note.\n\nWhy the others are wrong:\n- **Replayed**: replay happens only when the hashes match.\n- **A fresh run**: the lookup is by key, not by body, so the entry is found.\n- **400, keys are single-use**: reusing a key with the same body is allowed; it replays.",
+   "excerpts": [
+    {
+     "path": "src/Billing.Api/Infrastructure/IdempotencyMiddleware.cs",
+     "lineStart": 37,
+     "lineEnd": 40,
+     "quote": "error = \"Idempotency key reused with a different request payload.\""
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09-failed-not-cached",
+   "target": "seed:quests:dotnet-stripe/quiz/e852d1f561977071",
+   "phase": "after",
+   "title": "Only successful responses are remembered",
+   "body": "**Key: the handler runs again, because only 2xx responses are cached.**\n\nAfter next(context) returns, the middleware copies the buffered response to the client and then stores it only `if (context.Response.StatusCode is >= 200 and < 300)`. A 400 is not stored, so the identical retry finds no entry and goes to the handler again. The status box in the architecture note states this limit.\n\nWhy the others are wrong:\n- **The 400 is replayed**: there is no entry to replay.\n- **409 for a used key**: 409 needs a stored entry with a different hash.\n- **400 from the middleware**: the middleware only produces 400 for a key of the wrong length.",
+   "excerpts": [
+    {
+     "path": "src/Billing.Api/Infrastructure/IdempotencyMiddleware.cs",
+     "lineStart": 63,
+     "lineEnd": 63,
+     "quote": "if (context.Response.StatusCode is >= 200 and < 300)"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10-concurrent-first",
+   "target": "seed:quests:dotnet-stripe/quiz/f38b300a2bf9be9b",
+   "phase": "after",
+   "title": "Check, run, then store: a race window",
+   "body": "**Key: both run the handler, since nothing is stored until a response exists.**\n\nEach request calls store.TryGet at line 35 and finds nothing. The entry is written by store.Set only after `await next(context)` completes and the status is 2xx. In between, nothing marks the key as in progress, so both requests reach the handler. The lock in IdempotencyStore makes each dictionary call thread-safe, but it is released before the handler runs.\n\nWhy the others are wrong:\n- **The second waits on the lock**: the lock covers only TryGet and Set, not the handler.\n- **409 because the key is reserved**: nothing reserves the key; the status box says so.\n- **A replay**: there is nothing to replay until the first response is stored.",
+   "excerpts": [
+    {
+     "path": "src/Billing.Api/Infrastructure/IdempotencyMiddleware.cs",
+     "lineStart": 35,
+     "lineEnd": 35,
+     "quote": "if (store.TryGet(cacheKey, out var cached))"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q11-key-scope",
+   "target": "seed:quests:dotnet-stripe/quiz/2a1ed0f3369b167c",
+   "phase": "after",
+   "title": "The cache key includes method and path",
+   "body": "**Key: a normal run of its handler, since the cache key includes the path.**\n\nThe middleware builds `cacheKey = $\"{context.Request.Method}:{context.Request.Path}:{idempotencyKey}\"`. POST:/api/customers:key and POST:/api/plans:key are different entries, so the second request finds nothing and runs normally. Its request hash also includes the path, but the lookup fails before any comparison.\n\nWhy the others are wrong:\n- **409**: a 409 requires an entry under the same cache key.\n- **Replay of the customers response**: the entries are separate.\n- **400 for a non-unique key**: the only 400 is for key length.",
+   "excerpts": [
+    {
+     "path": "src/Billing.Api/Infrastructure/IdempotencyMiddleware.cs",
+     "lineStart": 33,
+     "lineEnd": 33,
+     "quote": "var cacheKey = $\"{context.Request.Method}:{context.Request.Path}:{idempotencyKey}\";"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q12-from-major",
+   "target": "seed:quests:dotnet-stripe/quiz/c4f617db29166e95",
+   "phase": "after",
+   "title": "Round to whole cents, then normalise the currency",
+   "body": "**Key: 2000 minor units in USD, with the midpoint rounded away from zero.**\n\nFromMajor computes `decimal.Round(amount * 100m, 0, MidpointRounding.AwayFromZero)`: 19.995 * 100 is 1999.5, which rounds to 2000. It then calls the constructor, which sets Currency to NormalizeCurrency(currency), that is Trim().ToUpperInvariant(), so \" usd \" becomes USD.\n\nWhy the others are wrong:\n- **1999, truncated**: decimal.Round rounds; nothing truncates.\n- **Currency kept as given**: the constructor always normalises it.\n- **1999.5 kept**: MinorUnits is a long, and the value is rounded before the cast.",
+   "excerpts": [
+    {
+     "path": "src/Billing.Api/Domain/Money.cs",
+     "lineStart": 14,
+     "lineEnd": 14,
+     "quote": "var minor = decimal.Round(amount * 100m, 0, MidpointRounding.AwayFromZero);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q13-failed-after-paid",
+   "target": "seed:quests:dotnet-stripe/quiz/92add395a340f4fa",
+   "phase": "after",
+   "title": "A late failure can reopen a paid invoice",
+   "body": "**Key: it goes back to Open, with a failed Payment added.**\n\nApplyPaymentResult builds `succeeded ? invoice with { Status = Paid, PaidAt = now } : invoice with { Status = Open }` and saves it, then records a Payment whose status follows the event. It never reads the invoice's current status first, so a payment.failed event after success moves a Paid invoice back to Open. Because events are not deduplicated or ordered, a delayed or replayed failure can do this.\n\nWhy the others are wrong:\n- **Nothing changes**: there is no guard on the current status.\n- **Void and reversal**: no Void transition or reversal exists on this path.\n- **409**: the endpoint returns 200 unless the invoice id is unknown (400).",
+   "excerpts": [
+    {
+     "path": "src/Billing.Api/Infrastructure/BillingEngine.cs",
+     "lineStart": 165,
+     "lineEnd": 167,
+     "quote": ": invoice with { Status = InvoiceStatus.Open };"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}
