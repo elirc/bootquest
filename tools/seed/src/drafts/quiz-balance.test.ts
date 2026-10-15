@@ -43,6 +43,22 @@ const GUARDED = [
   'grokjs-grokbuildjs',
   'grokjs-javascript-learning-lab',
   'groktuts-web-dev-upskilling-lab',
+  // campaign 2 final wave, rebalance-2 (key was the longest choice in 83-100% of these)
+  'jobtrack',
+  'js1',
+  'jsdrillv2',
+  'jsprojectlearn',
+  'jstrain2.2',
+  'master',
+  'masterrnative',
+  'mobiletagalog',
+  'nettodo',
+  'newcodexjs',
+  'organized-app-job-track',
+  'organized-build-gum',
+  'organized-build-subbox',
+  'organized-dotnet-pastebin',
+  'organized-dotnet-trello',
 ];
 const MAX_LONGEST_SHARE = 0.35;
 const MAX_SHORTEST_SHARE = 0.4;

@@ -17,13 +17,13 @@
     { "path": "01-task-manager/server/src/services/taskService.js", "lineStart": 17, "lineEnd": 19 }
    ],
    "prompt": "A client sends `PUT /api/tasks/7` with body `{ \"status\": \"done\" }` and no title. Why does the stored title survive instead of failing title validation or being blanked?",
-   "answer": "buildUpdatePayload only normalizes fields the body actually owns (hasOwn), so an omitted title never enters the update set",
+   "answer": "buildUpdatePayload only touches keys the body owns, so title never enters the update",
    "distractors": [
-    "normalizeTitle falls back to the existing row's title whenever the incoming value is undefined",
-    "Knex drops undefined values from the update object, so validation runs but the column is skipped",
+    "normalizeTitle falls back to the existing row's title when the incoming one is undefined",
+    "Knex drops undefined values from the update, so validation runs but the column is skipped",
     "The controller merges the request body over the stored row before calling the service"
    ],
-   "explanation": "`hasOwn(payload, 'title')` is false for an omitted key, so `updates.title` is never assigned; a supplied `null` would be present and would be validated."
+   "explanation": "buildUpdatePayload only normalizes fields the body actually owns: `hasOwn(payload, 'title')` is false for an omitted key, so `updates.title` is never assigned; a supplied `null` would be present and would be validated."
   },
   {
    "id": "q02-safe-integer-id",
@@ -34,13 +34,13 @@
     { "path": "01-task-manager/server/test/tasks.test.cjs", "lineStart": 53, "lineEnd": 56 }
    ],
    "prompt": "The test requests `GET /api/tasks/9007199254740992` and expects 400. Why would checking the id with Number.isInteger alone let this request through?",
-   "answer": "2^53 is an integer but not a safe one: it cannot be told apart from neighbouring values, so only Number.isSafeInteger rejects it",
+   "answer": "2^53 is an integer but not a safe one: isInteger accepts it, isSafeInteger does not",
    "distractors": [
-    "Number.isInteger returns false for strings, so the id would be rejected before any parsing",
-    "Number.isInteger rejects values above 2147483647, the Postgres integer limit",
+    "Number.isInteger returns false for strings, so the id would be rejected before parsing",
+    "Number.isInteger already rejects values above 2147483647, the Postgres integer limit",
     "Number('9007199254740992') is NaN, which Number.isInteger already treats as invalid"
    ],
-   "explanation": "parseTaskId uses `Number.isSafeInteger(id)` plus the 1..2147483647 range; the guide notes that Number.isInteger alone is insufficient."
+   "explanation": "2^53 cannot be told apart from its neighbouring values. parseTaskId uses `Number.isSafeInteger(id)` plus the 1..2147483647 range; the guide notes that Number.isInteger alone is insufficient."
   },
   {
    "id": "q03-unchanged-overdue-date",
@@ -51,13 +51,13 @@
     { "path": "01-task-manager/server/test/tasks.test.cjs", "lineStart": 62, "lineEnd": 88 }
    ],
    "prompt": "A task stored with due_date 2020-01-01 is edited twice: first `{ title, due_date: '2020-01-01' }`, then `{ due_date: '2020-01-02' }`. Which outcome does the service produce, and why?",
-   "answer": "First 200, second 400: a submitted date equal to the stored one bypasses the future-date rule, but any changed date is validated again",
+   "answer": "First 200, then 400: only a date equal to the stored one skips the future-date rule",
    "distractors": [
-    "Both 400: every submitted due_date must be in the future, overdue or not",
-    "Both 200: once a task is overdue the future-date rule is switched off for it",
-    "First 400, second 200: only the title edit is blocked while the task is overdue"
+    "Both 400: each submitted due_date has to be in the future, overdue task or not",
+    "Both 200: once a task is overdue, the future-date rule is switched off for it",
+    "First 400, then 200: the title edit is what gets blocked while a task is overdue"
    ],
-   "explanation": "Line 277 compares the payload with the stored date normalized to YYYY-MM-DD and only calls normalizeDueDate when they differ; the exception is deliberately narrow."
+   "explanation": "A submitted date equal to the stored one bypasses the future-date rule, but any changed date is validated again. Line 277 compares the payload with the stored date normalized to YYYY-MM-DD and only calls normalizeDueDate when they differ; the exception is deliberately narrow."
   },
   {
    "id": "q04-completed-at-preserved",
@@ -67,11 +67,11 @@
     { "path": "01-task-manager/server/src/services/taskService.js", "lineStart": 264, "lineEnd": 272 }
    ],
    "prompt": "A task finished last week is saved again through `PUT` with `status: 'done'` (the form resends every field). What happens to `completed_at`?",
-   "answer": "It keeps last week's timestamp, because the update reuses the stored completion time when one exists",
+   "answer": "It keeps last week's timestamp, since the stored completion time is reused",
    "distractors": [
-    "It is reset to now, because every status write recomputes the completion time",
-    "It becomes null, because completed_at is only set by the toggle endpoint",
-    "It is left out of the update, because status did not change"
+    "It is reset to now, because each status write recomputes the completion time",
+    "It becomes null, because completed_at is set by the toggle endpoint alone",
+    "It is left out of the update, because the status value did not change"
    ],
    "explanation": "`updates.completed_at = existingTask.completed_at || new Date()` keeps the original completion moment; any non-done status clears it to null."
   },
@@ -85,11 +85,11 @@
     { "path": "01-task-manager/server/src/middleware/errorMiddleware.js", "lineStart": 24, "lineEnd": 28 }
    ],
    "prompt": "The title column is already `varchar(255)`, so Postgres would refuse a 256-character title anyway. What would the client see if the service did NOT check the length first?",
-   "answer": "A 500 with the generic INTERNAL_ERROR envelope, because a raw database error is not an operational AppError",
+   "answer": "A 500 INTERNAL_ERROR, since a raw database error is not an operational AppError",
    "distractors": [
-    "A 400 VALIDATION_ERROR, because the middleware maps every database error to a client error",
-    "A 201, because Postgres silently truncates the title to 255 characters",
-    "A 409 conflict, because constraint violations are reported as conflicts"
+    "A 400 VALIDATION_ERROR, because the middleware maps database errors to client errors",
+    "A 201, because Postgres silently truncates an over-long title to 255 characters",
+    "A 409 conflict, because the middleware reports constraint violations as conflicts"
    ],
    "explanation": "errorHandler only passes through `AppError` with isOperational; anything else becomes status 500 'An unexpected error occurred.'. Validating first turns expected bad input into a useful 400."
   },
@@ -102,10 +102,10 @@
     { "path": "01-task-manager/server/src/services/taskService.js", "lineStart": 94, "lineEnd": 96 }
    ],
    "prompt": "taskModel.listTasks interpolates `filters.order` straight into `orderByRaw`. What keeps `?order=asc;DROP TABLE tasks` from reaching SQL?",
-   "answer": "The service maps the order value through an asc/desc allowlist and throws a 400 for anything else before the model runs",
+   "answer": "The service allowlists order to asc/desc and throws a 400 before the model runs",
    "distractors": [
-    "Knex escapes every orderByRaw string, so the interpolation is bound like a parameter",
-    "Express rejects query strings that contain semicolons before routing",
+    "Knex escapes each orderByRaw string, so the interpolation is bound like a parameter",
+    "Express rejects query strings that contain semicolons before the route matches",
     "Postgres refuses multiple statements in one query, so the payload is harmless"
    ],
    "explanation": "normalizeListFilters calls validateAllowedValue('order', ..., ['asc','desc']); the model trusts only already-validated filters, so the raw fragment is safe only because of that layer."
@@ -118,13 +118,13 @@
     { "path": "01-task-manager/server/src/services/taskService.js", "lineStart": 382, "lineEnd": 387 }
    ],
    "prompt": "getTaskStats wraps each grouped row with `Number(row.count)`. If someone removes that conversion, what does `stats.total` become with counts 2 and 3?",
-   "answer": "The string \"023\": Postgres COUNT is a bigint the driver returns as text, so += concatenates instead of adding",
+   "answer": "The string \"023\": COUNT comes back as text, so += concatenates",
    "distractors": [
-    "5, because the driver already converts COUNT results to JavaScript numbers",
-    "NaN, because adding a string to a number always produces NaN",
-    "A thrown TypeError, because bigint and number cannot be mixed"
+    "5, because the driver already converts COUNT results to numbers",
+    "NaN, because adding a string to a number produces NaN in JavaScript",
+    "A thrown TypeError, because bigint and number values do not mix"
    ],
-   "explanation": "node-postgres returns int8 as strings to avoid precision loss; `0 + '2'` is '02', then '02' + '3' is '023'."
+   "explanation": "Postgres COUNT is a bigint, and node-postgres returns int8 as strings to avoid precision loss; `0 + '2'` is '02', then '02' + '3' is '023'."
   },
   {
    "id": "q08-sanitize-then-empty",
@@ -135,11 +135,11 @@
     { "path": "01-task-manager/server/src/utils/sanitize.js", "lineStart": 7, "lineEnd": 9 }
    ],
    "prompt": "A client posts `{ \"title\": \"<>\" }`. Which response comes back, and what ordering inside normalizeTitle produces it?",
-   "answer": "400 'Title is required.': the brackets are stripped first, and the empty check runs on the sanitized result",
+   "answer": "400 'Title is required.': brackets are stripped, then the empty check runs",
    "distractors": [
-    "201 with the title stored as '<>', because sanitizing only trims whitespace",
-    "400 'Title is required and must be a string.', because angle brackets are not text",
-    "201 with an empty title, because the length check happens before sanitizing"
+    "201 with the title stored as '<>', because sanitizing just trims whitespace",
+    "400 'Title is required and must be a string.', since brackets are not text",
+    "201 with an empty title, because the length check runs before sanitizing"
    ],
    "explanation": "sanitizeString trims and removes `<` and `>`; normalizeTitle then rejects length > 255 or === 0 on that result."
   },
@@ -152,13 +152,13 @@
     { "path": "01-task-manager/server/src/models/taskModel.js", "lineStart": 71, "lineEnd": 81 }
    ],
    "prompt": "Two users open the same task, each changes the priority and saves a few seconds apart. With the current updateTask, what happens?",
-   "answer": "Both PUTs return 200 and the second silently overwrites the first, since the UPDATE matches on id alone",
+   "answer": "Both get 200, and the second silently overwrites the first (UPDATE by id only)",
    "distractors": [
-    "The second PUT gets 409, because updated_at changed since that user loaded the task",
-    "The second PUT blocks until the first transaction commits, then fails",
-    "Postgres merges both changes because they touch the same column in separate statements"
+    "The second PUT gets 409, because updated_at changed since that user loaded it",
+    "The second PUT blocks until the first transaction commits, and then it fails",
+    "Postgres merges both changes, since they arrive in two separate statements"
    ],
-   "explanation": "There is no version column; `where({ id }).update(...)` is last-write-wins. Exercise 3's fix updates `WHERE id = ? AND version = ?` and answers 409 on zero rows."
+   "explanation": "The UPDATE matches on id alone and there is no version column; `where({ id }).update(...)` is last-write-wins. Exercise 3's fix updates `WHERE id = ? AND version = ?` and answers 409 on zero rows."
   },
   {
    "id": "q10-calendar-roundtrip",
@@ -168,11 +168,11 @@
     { "path": "01-task-manager/server/src/services/taskService.js", "lineStart": 167, "lineEnd": 175 }
    ],
    "prompt": "`2099-02-30` matches the `^\\d{4}-\\d{2}-\\d{2}$` pattern. What actually rejects it in normalizeDueDate?",
-   "answer": "Parsing rolls it over to March 2, so formatting the parsed date back to YYYY-MM-DD no longer equals the input",
+   "answer": "It rolls over to March 2, so formatting it back no longer equals the input",
    "distractors": [
-    "new Date('2099-02-30T00:00:00.000Z') is an Invalid Date, so the NaN check catches it",
-    "The future-date comparison fails because the string sorts before today",
-    "Postgres rejects the date when the row is inserted, and the error becomes a 400"
+    "new Date('2099-02-30T00:00:00.000Z') is an Invalid Date, so the NaN check fires",
+    "The future-date comparison fails, because the string sorts before today",
+    "Postgres rejects the date on insert, and that error is mapped to a 400"
    ],
    "explanation": "JavaScript Date normalizes overflowing days; the round-trip `toDateOnly(parsed) !== value` is what detects an impossible calendar date."
   },
@@ -184,13 +184,13 @@
     { "path": "01-task-manager/server/test/tasks.test.cjs", "lineStart": 43, "lineEnd": 61 }
    ],
    "prompt": "The 'invalid inputs' test asserts each POST returns 400 AND compares the row count before and after. What would the status check alone fail to catch?",
-   "answer": "A handler that writes the row and then throws: it still answers 400 but leaves a persisted record behind",
+   "answer": "A handler that writes the row and then throws, still answering 400",
    "distractors": [
     "A handler that returns 422 instead of 400 for the same bad input",
-    "A validation message whose wording changed between releases",
-    "A slow handler that exceeds the default node:test timeout"
+    "A validation message whose wording changed between two releases",
+    "A slow handler that runs past the default node:test timeout"
    ],
-   "explanation": "The invariant is 'invalid input never creates rows'; only reading authoritative state (the table count) observes it — a response code is not evidence about persistence."
+   "explanation": "Such a handler still answers 400 but leaves a persisted record behind. The invariant is 'invalid input never creates rows'; only reading authoritative state (the table count) observes it - a response code is not evidence about persistence."
   },
   {
    "id": "q12-bound-search",
@@ -200,13 +200,13 @@
     { "path": "01-task-manager/server/src/models/taskModel.js", "lineStart": 21, "lineEnd": 27 }
    ],
    "prompt": "For Exercise 1 a learner writes `query.whereRaw(\"title ILIKE '%\" + q + \"%'\")`. Besides injection, why does the review demand a test whose search term contains `%` and `'`?",
-   "answer": "Those characters break or widen a concatenated pattern; the test proves the term is bound and matches only the intended rows",
+   "answer": "They break or widen a concatenated pattern; the test proves the term is bound",
    "distractors": [
-    "Postgres ILIKE cannot compare strings that contain a percent sign at all",
-    "The quote character is stripped by sanitizeString, so the test checks sanitizing",
-    "A percent sign in the URL is decoded twice by Express, which the test detects"
+    "Postgres ILIKE is unable to compare strings that contain a percent sign",
+    "sanitizeString strips the quote character, so the test checks sanitizing",
+    "Express decodes a percent sign in the URL twice, which the test detects"
    ],
-   "explanation": "A quote ends the SQL literal (error or injection) and `%` acts as a wildcard; binding via whereILike plus an exact-match assertion pins the search policy."
+   "explanation": "A quote ends the SQL literal (error or injection) and `%` acts as a wildcard; binding via whereILike plus an exact-match assertion proves the term is bound and matches only the intended rows."
   },
   {
    "id": "f01-pg-date-timezone",

@@ -17,13 +17,13 @@
     { "path": "src/lib/sync.ts", "lineStart": 99, "lineEnd": 99 }
    ],
    "prompt": "A sync request is pending when the user logs out and signs back into the SAME account. Why is a user-id check alone not enough to discard the old response?",
-   "answer": "The user id matches again, but the request belongs to an abandoned session; only the generation, bumped on every setSession, tells them apart",
+   "answer": "The id matches again; only the generation, bumped per setSession, differs",
    "distractors": [
-    "Because the user id changes on every login, so the check always fails",
-    "Because access tokens are compared instead, and they are identical",
-    "It is enough - the server rejects requests from previous sessions"
+    "Because the user id changes on each login, so the check would always fail",
+    "Because access tokens are compared instead of ids, and those are identical",
+    "It is enough on its own - the server rejects requests from earlier sessions"
    ],
-   "explanation": "The coordinator increments generation on every setSession and captures it when sync is requested, so a same-identity re-login still invalidates old work."
+   "explanation": "The user id matches again, but the request belongs to an abandoned session. The coordinator increments generation on every setSession and captures it when sync is requested, so a same-identity re-login still invalidates old work."
   },
   {
    "id": "q02-tail-catch",
@@ -31,13 +31,13 @@
    "source": { "path": "astraupskill/03-WORKED-CHANGE.md", "lines": { "start": 3, "end": 3 } },
    "cites": [{ "path": "src/lib/sync.ts", "lineStart": 72, "lineEnd": 77 }],
    "prompt": "sync() stores this.tail = operation.catch(() => undefined) but returns operation itself. What would break if it stored this.tail = operation?",
-   "answer": "After one failed attempt every later sync() would chain onto a rejected promise, runOnce would never run, and syncing would silently stop until restart",
+   "answer": "After one failure, each later sync() chains onto a rejection and never runs",
    "distractors": [
-    "Nothing - the caller would simply see the error twice",
-    "Concurrent syncs would run in parallel instead of serially",
-    "The caller would no longer receive rejections from failed syncs"
+    "Nothing important - the caller would just see the same error reported twice",
+    "Concurrent syncs would start running in parallel instead of one at a time",
+    "The caller would stop receiving rejections from syncs that had failed"
    ],
-   "explanation": "Catching only on the internal tail keeps the queue alive while the caller still observes the failure."
+   "explanation": "After one failed attempt every later sync() would chain onto a rejected promise, runOnce would never run, and syncing would silently stop until restart. Catching only on the internal tail keeps the queue alive while the caller still observes the failure."
   },
   {
    "id": "q03-batch-cap",
@@ -45,11 +45,11 @@
    "source": { "path": "astraupskill/03-WORKED-CHANGE.md", "lines": { "start": 5, "end": 5 } },
    "cites": [{ "path": "src/lib/sync.ts", "lineStart": 83, "lineEnd": 86 }],
    "prompt": "The outbox holds 1,200 events when a sync starts. What does one runOnce send?",
-   "answer": "The first 500 events (readOutbox().slice(0, 500)) with the active credentials",
+   "answer": "The first 500 events, via readOutbox().slice(0, 500)",
    "distractors": [
-    "All 1,200 events in a single request",
-    "Events in pages of 500 until the outbox is empty, within one runOnce",
-    "Only events recorded since the previous successful sync"
+    "The 1,200 events together in a single push request",
+    "Pages of 500 until the outbox is empty, in one runOnce",
+    "The events recorded since the last successful sync"
    ],
    "explanation": "Each attempt reads at most five hundred outbox events; the rest wait for a later sync."
   },
@@ -59,13 +59,13 @@
    "source": { "path": "astraupskill/02-CONCEPTS.md", "lines": { "start": 5, "end": 5 } },
    "cites": [{ "path": "src/lib/sync.ts", "lineStart": 87, "lineEnd": 93 }],
    "prompt": "A push returns 401 after the user has already logged out. What does runOnce do?",
-   "answer": "The generation check before refresh fails, so it returns without requesting new credentials for the abandoned account",
+   "answer": "It returns at the generation check, without refreshing the abandoned account",
    "distractors": [
-    "It refreshes the token and retries, then discards the result",
-    "It rethrows the 401 to the caller as an ordinary failure",
-    "It clears the outbox because the session is gone"
+    "It refreshes the token and retries the push, then quietly discards the new result",
+    "It rethrows the 401 to the caller as an ordinary sync failure",
+    "It clears the outbox, because the session it belonged to is gone"
    ],
-   "explanation": "Checking before refresh (line 91) and after refresh (line 93) keeps a late 401 from restoring a logged-out session."
+   "explanation": "The generation check before refresh fails, so it returns without requesting new credentials. Checking before refresh (line 91) and after refresh (line 93) keeps a late 401 from restoring a logged-out session."
   },
   {
    "id": "q05-non401-propagates",
@@ -73,13 +73,13 @@
    "source": { "path": "astraupskill/03-WORKED-CHANGE.md", "lines": { "start": 5, "end": 5 } },
    "cites": [{ "path": "src/lib/sync.ts", "lineStart": 87, "lineEnd": 90 }],
    "prompt": "push rejects with a network error that has no status. What happens?",
-   "answer": "The error is rethrown: only a 401 triggers a refresh, and nothing is committed or acknowledged",
+   "answer": "It is rethrown; only a 401 triggers a refresh, and nothing is committed",
    "distractors": [
-    "A refresh is attempted for any failure, then push retries once",
-    "The batch is acknowledged so the outbox does not grow forever",
-    "The coordinator retries the push with exponential backoff"
+    "A refresh is attempted for this failure too, and then push retries once",
+    "The batch is acknowledged anyway, so the outbox does not grow forever",
+    "The coordinator retries the push itself with exponential backoff"
    ],
-   "explanation": "Other failures propagate without pretending progress was committed."
+   "explanation": "Only a 401 triggers a refresh, and nothing is committed or acknowledged. Other failures propagate without pretending progress was committed."
   },
   {
    "id": "q06-ack-intersection",
@@ -87,11 +87,11 @@
    "source": { "path": "astraupskill/02-CONCEPTS.md", "lines": { "start": 7, "end": 7 } },
    "cites": [{ "path": "src/lib/sync.ts", "lineStart": 100, "lineEnd": 101 }],
    "prompt": "push returns acknowledgedIds [\"a\", \"c\"] but only event a was in the sent batch; c was recorded while the request was pending. What gets deleted from the outbox?",
-   "answer": "Only a - acknowledgements are intersected with the ids of the sent batch, so c stays queued for the next sync",
+   "answer": "Only a - acks are intersected with the sent batch, so c stays queued",
    "distractors": [
-    "Both a and c, because the server acknowledged them",
-    "Nothing - an acknowledgement for an unknown id aborts the commit",
-    "The whole outbox, since the server returned fresh progress"
+    "Both a and c, because the server acknowledged both of those ids",
+    "Neither - an ack for an id outside the batch aborts the commit",
+    "The whole outbox, since the server returned fresh progress state"
    ],
    "explanation": "The acknowledgement boundary is narrower than clearing the outbox: only identifiers present in the sent batch may be removed."
   },
@@ -101,13 +101,13 @@
    "source": { "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md", "lines": { "start": 21, "end": 21 } },
    "cites": [{ "path": "src/lib/progress.tsx", "lineStart": 47, "lineEnd": 54 }],
    "prompt": "Why can the intersection at sync.ts:100-101 never filter anything in production today?",
-   "answer": "The production push adapter builds acknowledgedIds from the sent events themselves, so nothing outside the batch can arrive",
+   "answer": "The production adapter builds acknowledgedIds from the sent events themselves",
    "distractors": [
-    "Because the server never returns acknowledgements at all",
-    "Because the outbox is cleared before each push",
-    "Because TypeScript prevents unknown ids from reaching the filter"
+    "Because runOnce skips the filter whenever the push succeeds on its first try",
+    "Because the outbox is cleared before each push, so no stale ids remain in it",
+    "Because TypeScript prevents ids outside the batch from reaching the filter"
    ],
-   "explanation": "It is belt-and-braces for a future adapter that trusts a server-supplied id list; keep it and pin it with a test."
+   "explanation": "The push adapter maps acknowledgedIds from the sent events, so nothing outside the batch can arrive. It is belt-and-braces for a future adapter that trusts a server-supplied id list; keep it and pin it with a test."
   },
   {
    "id": "q08-one-transaction",
@@ -115,13 +115,13 @@
    "source": { "path": "astraupskill/03-WORKED-CHANGE.md", "lines": { "start": 7, "end": 9 } },
    "cites": [{ "path": "src/lib/storage.ts", "lineStart": 42, "lineEnd": 52 }],
    "prompt": "What replaced the original separate baseline write followed by outboxClear?",
-   "answer": "commitSyncedProgress, which upserts the baseline and deletes only the acknowledged ids inside one SQLite transaction",
+   "answer": "commitSyncedProgress: upsert baseline and delete acked ids in one transaction",
    "distractors": [
-    "A server-side endpoint that clears the outbox remotely",
-    "Two writes ordered so the outbox is cleared before the baseline is saved",
-    "An in-memory cache that is flushed to SQLite on app background"
+    "A server-side endpoint that clears the device's outbox remotely after sync",
+    "The same two writes, reordered so the outbox is cleared before the baseline",
+    "An in-memory cache that is flushed to SQLite when the app is backgrounded"
    ],
-   "explanation": "Writing baseline and deleting acknowledgements together means a crash cannot leave one without the other."
+   "explanation": "commitSyncedProgress upserts the baseline and deletes only the acknowledged ids inside one SQLite transaction. Writing baseline and deleting acknowledgements together means a crash cannot leave one without the other."
   },
   {
    "id": "q09-reread-after-commit",
@@ -129,13 +129,13 @@
    "source": { "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md", "lines": { "start": 7, "end": 7 } },
    "cites": [{ "path": "src/lib/sync.ts", "lineStart": 102, "lineEnd": 103 }],
    "prompt": "Why does onCommit receive a fresh readOutbox() instead of the array read before the request?",
-   "answer": "Events recorded while the request was pending must stay visible; publishing the pre-request array would re-show acknowledged events or hide new ones",
+   "answer": "Events recorded while the request was pending must stay visible after commit",
    "distractors": [
-    "Because the pre-request array was mutated by push and is no longer valid",
-    "Because React requires a new array reference to re-render",
-    "Because readOutbox is cheaper than copying the old array"
+    "Because push mutated the pre-request array in place, so it is no longer valid",
+    "Because React needs a new array reference before it will re-render",
+    "Because calling readOutbox is cheaper than copying the old array"
    ],
-   "explanation": "Publication re-reads storage after the commit so the displayed state matches what is actually queued."
+   "explanation": "Publishing the pre-request array would re-show acknowledged events or hide new ones. Publication re-reads storage after the commit so the displayed state matches what is actually queued."
   },
   {
    "id": "q10-profile-current-tokens",
@@ -143,13 +143,13 @@
    "source": { "path": "astraupskill/02-CONCEPTS.md", "lines": { "start": 9, "end": 9 } },
    "cites": [{ "path": "src/lib/sync.ts", "lineStart": 57, "lineEnd": 70 }],
    "prompt": "A profile update (updateMe) returns after a token refresh happened mid-flight. How does applyUserUpdate avoid restoring the outdated access token?",
-   "answer": "After the generation and account checks, it merges the returned user into the coordinator's current tokens rather than the captured ones",
+   "answer": "It merges the returned user into the current tokens, not the captured ones",
    "distractors": [
-    "It refreshes the token again before saving the profile",
-    "It replaces the whole token set with the one captured when updateMe started",
-    "It drops the profile update whenever a refresh has occurred"
+    "It refreshes the token a second time before saving the updated profile",
+    "It replaces the token set with the one captured when updateMe started",
+    "It drops the returned profile update whenever a token refresh happened mid-flight"
    ],
-   "explanation": "{ ...this.tokens, user } preserves newer credentials instead of rebuilding authentication from an old closure."
+   "explanation": "After the generation and account checks, { ...this.tokens, user } preserves newer credentials instead of rebuilding authentication from an old closure."
   },
   {
    "id": "q11-mutation-survives",
@@ -157,13 +157,13 @@
    "source": { "path": "astraupskill/02-CONCEPTS.md", "lines": { "start": 11, "end": 11 } },
    "cites": [{ "path": "src/lib/sync.ts", "lineStart": 99, "lineEnd": 99 }],
    "prompt": "Deleting the generation half of the guard on sync.ts line 99 leaves all six coordinator tests green. Why?",
-   "answer": "The tests only switch to a different user or to logged out, which the user-id half already catches; no test re-logs in as the same user",
+   "answer": "No test re-logs in as the same user; user-id checks catch the other cases",
    "distractors": [
-    "The generation check on line 80 makes line 99 redundant",
-    "The tests mock the coordinator, so line 99 never runs",
-    "Vitest skips assertions inside async callbacks by default"
+    "The generation check on line 80 already makes the one on line 99 redundant",
+    "The tests mock the coordinator itself, so line 99 is not actually executed",
+    "Vitest skips assertions placed inside async callbacks unless told otherwise"
    ],
-   "explanation": "The case that needs the generation is described but untested; exercise 6's same-user test kills the mutation."
+   "explanation": "The tests only switch to a different user or to logged out, which the user-id half already catches. The case that needs the generation is described but untested; exercise 6's same-user test kills the mutation."
   },
   {
    "id": "q12-rejected-dropped",
@@ -171,13 +171,13 @@
    "source": { "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md", "lines": { "start": 19, "end": 19 } },
    "cites": [{ "path": "src/lib/progress.tsx", "lineStart": 47, "lineEnd": 55 }],
    "prompt": "The server's /sync response lists some events as rejected. What does the app do with them?",
-   "answer": "The push adapter acknowledges every sent id and ignores rejected, so those events are deleted from the outbox and never surfaced or logged",
+   "answer": "They are acknowledged like the rest, so they leave the outbox unreported",
    "distractors": [
-    "They stay in the outbox and are retried on every sync",
-    "They are shown to the user as a sync error banner",
-    "They are moved to a separate dead-letter table for review"
+    "They stay in the outbox and are retried again on each later sync",
+    "They are shown to the user in a sync error banner on the progress home screen",
+    "They are moved to a separate dead-letter table for later review"
    ],
-   "explanation": "Deleting poison rows may be fine, but it should be a visible decision rather than a silent side effect."
+   "explanation": "The push adapter acknowledges every sent id and ignores rejected, so those events are deleted from the outbox and never surfaced or logged. Deleting poison rows may be fine, but it should be a visible decision rather than a silent side effect."
   },
   {
    "id": "f01-ownership-principle",
