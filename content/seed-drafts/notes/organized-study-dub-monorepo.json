@@ -1,0 +1,321 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "organized-study-dub-monorepo",
+ "repo": "organized-study-dub-monorepo",
+ "sha": "2a6ffa1022ac201473d1df154a5b2f52ccc56686",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: seven traced flows through the Dub monorepo",
+   "body": "Dub is a link-management product (short links, click analytics, webhooks) built as a Next.js monorepo. The study material lives in `dub/fable docs/upskill/`, and this quest uses three of its pages.\n\nRead in this order:\n\n1. `01-codebase-cartography/05-key-flows.md`: seven end-to-end traces, each as a table of steps with the file and line range that owns the step. Flows 1 (redirect), 2 (create a link), 3 (click recording), 5 (`withWorkspace`) and 6 (webhooks) carry this quest.\n2. `03-architecture-and-patterns/03-validation-auth-and-permissions.md`: the layers a request passes through.\n3. `03-architecture-and-patterns/04-side-effects-async-and-reliability.md`: what happens after the response is sent.\n\nThe guide's line anchors point into `dub/apps/web/`. Keep the cited file open next to the table and read the real branch, not only the summary row: the quiz asks what the code does in a specific situation, and a table cell compresses several branches into one phrase. Where the guide and the code seem to disagree, trust the code. Some files were removed from this import by a security filter (see `SECURITY_FILTERED_FILES.md`), so a few links in the guide point at nothing.",
+   "excerpts": [
+    {
+     "path": "dub/fable docs/upskill/01-codebase-cartography/05-key-flows.md",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "it is the product. It runs on every click at redirect-latency budgets"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "dub/fable docs/upskill/01-codebase-cartography/05-key-flows.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The seven flow traces this quest is built on."
+    },
+    {
+     "path": "SECURITY_FILTERED_FILES.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Which files this study import left out, so dead links in the guide make sense."
+    }
+   ]
+  },
+  {
+   "id": "r02-hot-path-and-side-effects",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: a hot path that defers its side effects",
+   "body": "A short-link redirect must be fast, so `lib/middleware/link.ts` does as little as possible before it answers. Two ideas explain most of the file.\n\n**Deferred work.** `ev.waitUntil(promise)` (and `waitUntil` from `@vercel/functions`) lets the handler return a response while the promise keeps running. Cache writes, click recording and webhooks are pushed there, so the visitor never waits for them, and a failure there cannot change a response that was already sent.\n\n**Settled, not joined.** `Promise.allSettled` waits for every promise and reports each one as fulfilled or rejected; unlike `Promise.all` it does not stop at the first failure. Read `lib/tinybird/record-click.ts` and make a list of every write inside its `allSettled` array and what store each one touches.\n\nAs you read `link.ts`, write down each early `return` in order and the condition that triggers it. Then read `lib/api/links/cache.ts` and trace `get` path by path: what is tried first, what is tried next, and the exact condition under which each later tier is consulted. Those are the details the quiz probes.",
+   "excerpts": [
+    {
+     "path": "dub/apps/web/lib/tinybird/record-click.ts",
+     "lineStart": 191,
+     "lineEnd": 192,
+     "quote": "cache the recorded click for the corresponding IP address in Redis for 1 hour"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "dub/fable docs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The side-effect map and the reliability vocabulary used across the repo."
+    }
+   ]
+  },
+  {
+   "id": "r03-tenant-auth-spine",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: one wrapper authorizes every workspace route",
+   "body": "Every workspace API route is wrapped in `withWorkspace` (`lib/auth/workspace.ts`). It accepts two kinds of caller: a browser session or an API key sent as `Authorization: Bearer ...`. Keys that start with `dub_` are restricted tokens tied to one workspace and carry a list of scopes.\n\nTwo terms to keep apart:\n\n- A **role** (owner, member, ...) belongs to a user in a workspace and maps to a list of permissions in `lib/api/rbac/permissions.ts`.\n- A **scope** belongs to a token and also maps to permissions.\n\nWhen you read the wrapper, find the block where scopes and role permissions meet and work out what the final list is made of. Then read the membership block: list every error code a caller who is not a member can receive, and look each code up in `lib/api/error-codes.ts`, where codes become HTTP statuses.\n\nFinally open `app/api/links/route.ts` and note the order of the POST handler's steps (listed here alphabetically: anonymous rate limit, body parse, createLink, processLink, usage check, webhook) and write them down in the order they actually run. Order matters whenever two of those steps could each reject the same request.",
+   "excerpts": [
+    {
+     "path": "dub/apps/web/lib/auth/workspace.ts",
+     "lineStart": 110,
+     "lineEnd": 111,
+     "quote": "Misconfigured authorization header. Did you forget to add 'Bearer '?"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "dub/fable docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The validation ladder and the isolation mechanics, in the guide's words."
+    }
+   ]
+  },
+  {
+   "id": "x-q01",
+   "target": "seed:quests:organized-study-dub-monorepo/quiz/2329ce2328d6c820",
+   "phase": "after",
+   "title": "Why a protected link skips inspect mode",
+   "body": "The inspect rewrite is guarded by `inspectMode && !password`. A link with a password never takes that branch, so the request reaches the password guard. With no `pw` param and no matching cookie, the guard rewrites to `/password/<linkId>`, and nothing is recorded because click tracking comes later in the function.\n\n- *Inspect page*: only links without a password can be inspected.\n- *302 to the destination*: the password check stops the request first.\n- *401 JSON error*: the middleware serves a page via a rewrite; it does not return an API error.",
+   "excerpts": [
+    {
+     "path": "dub/apps/web/lib/middleware/link.ts",
+     "lineStart": 174,
+     "lineEnd": 175,
+     "quote": "if (inspectMode && !password) {"
+    },
+    {
+     "path": "dub/apps/web/lib/middleware/link.ts",
+     "lineStart": 196,
+     "lineEnd": 198,
+     "quote": "this will also ensure that no clicks are tracked unless the password is correct"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02",
+   "target": "seed:quests:organized-study-dub-monorepo/quiz/62b6cf6afd26eb72",
+   "phase": "after",
+   "title": "Why a clean Redis miss goes straight to MySQL",
+   "body": "In `LinkCache.get`, a Redis call that succeeds but finds nothing takes the `else` branch and returns `null`. Back in `link.ts`, `!cachedLink` triggers `getLinkViaEdge`, the database read. The Vercel runtime cache is read only inside the `catch` block, when the Redis call throws. The guide's tier list (LRU, then Redis, then Vercel cache) reads as if the third tier always follows the second; the code keys this answer.\n\n- *Reads the Vercel runtime cache*: only on a Redis error.\n- *Retries after 5 seconds*: there is no retry; the 5 seconds is the LRU TTL.\n- *Negative entry for 24 hours*: a missing link is rewritten to the not-found page and nothing is cached.",
+   "excerpts": [
+    {
+     "path": "dub/apps/web/lib/api/links/cache.ts",
+     "lineStart": 91,
+     "lineEnd": 96,
+     "quote": "Not found in LRU or Redis, falling back to MySQL..."
+    },
+    {
+     "path": "dub/apps/web/lib/api/links/cache.ts",
+     "lineStart": 97,
+     "lineEnd": 100,
+     "quote": "cachedLink = (await vercelCache.get(cacheKey)) as RedisLinkProps | null;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q03",
+   "target": "seed:quests:organized-study-dub-monorepo/quiz/533467357a5ccca4",
+   "phase": "after",
+   "title": "Why ordinary links use 302 and root links 301",
+   "body": "The redirect status is chosen in one expression: `key === \"_root\" ? 301 : 302`. A 301 tells browsers the move is permanent, so they may skip the server next time; that would hide later clicks from analytics. Ordinary short links therefore use 302. The domain root link is the one exception and uses 301.\n\n- *301 for both*: that would let browsers bypass click tracking for every link.\n- *302 for both*: the root link is the stated exception.\n- *307 and 308*: the code never uses these codes in this branch.",
+   "excerpts": [
+    {
+     "path": "dub/apps/web/lib/middleware/link.ts",
+     "lineStart": 575,
+     "lineEnd": 575,
+     "quote": "status: key === \"_root\" ? 301 : 302,"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q04",
+   "target": "seed:quests:organized-study-dub-monorepo/quiz/3fc1dcd7a9a8f667",
+   "phase": "after",
+   "title": "Why an expired link with expiredUrl redirects there",
+   "body": "The expiry guard first checks `expiresAt && new Date(expiresAt) < new Date()`. Inside it, if the link has an `expiredUrl`, the middleware returns `NextResponse.redirect(expiredUrl, ...)` with status 302. Only when no `expiredUrl` is set does it rewrite to the `/<domain>/expired` page.\n\n- *Rewrite to the expired page*: that is the branch for links without an expiredUrl.\n- *410 Gone*: no such status appears in this guard.\n- *Original destination*: an expired link returns before the redirect branch runs, so the destination is never used.",
+   "excerpts": [
+    {
+     "path": "dub/apps/web/lib/middleware/link.ts",
+     "lineStart": 234,
+     "lineEnd": 241,
+     "quote": "return NextResponse.redirect(expiredUrl, {"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q05",
+   "target": "seed:quests:organized-study-dub-monorepo/quiz/5280431d0bdcd169",
+   "phase": "after",
+   "title": "Why a Redis error during dedup drops the click",
+   "body": "The dedup check runs in a `try` block. If `recordClickCache.get` throws, the `catch` logs the error and returns `null` before any write is attempted. The comment gives the reason: if Redis is failing, letting every click through would flood Tinybird and MySQL. The code prefers protecting the stores over counting every click.\n\n- *Tinybird without dedup*: the function has already returned, so the Tinybird call never runs.\n- *Queued in QStash*: recordClick has no retry queue; QStash is used for webhooks.\n- *MySQL only*: the MySQL counter is in the same allSettled list as Tinybird, which is never reached.",
+   "excerpts": [
+    {
+     "path": "dub/apps/web/lib/tinybird/record-click.ts",
+     "lineStart": 103,
+     "lineEnd": 106,
+     "quote": "if redis fails, return null so we don't overwhelm TB/MySQL"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q06",
+   "target": "seed:quests:organized-study-dub-monorepo/quiz/48b2edea459f0d3c",
+   "phase": "after",
+   "title": "Why EU clicks store an empty ip field",
+   "body": "`isEuCountry` is true when the geolocated country is in `EU_COUNTRY_CODES`. The `ip` field keeps the address only when it is a non-empty string and `!isEuCountry`; otherwise it is the empty string. That is the GDPR filter the guide mentions.\n\n- *A SHA-256 hash*: recordClick computes an identity hash for dedup, but it goes into `identity_hash`, not `ip`.\n- *Last octet zeroed*: there is no truncation code here.\n- *Full address with an EU flag*: the address is dropped, and there is no EU flag column.",
+   "excerpts": [
+    {
+     "path": "dub/apps/web/lib/tinybird/record-click.ts",
+     "lineStart": 143,
+     "lineEnd": 145,
+     "quote": "only record IP if it's a valid IP and not from a EU country"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07",
+   "target": "seed:quests:organized-study-dub-monorepo/quiz/e92c7bd2fd9601a5",
+   "phase": "after",
+   "title": "Why the click counter is one atomic SQL update",
+   "body": "recordClick runs `UPDATE Link SET clicks = clicks + 1, lastClicked = NOW() WHERE id = ?` through `conn.execute`, the PlanetScale connection. The database applies `clicks + 1` to the current value itself, so two concurrent clicks cannot overwrite each other. The comment says Prisma is avoided here because of connection pooling on the hot path.\n\n- *prisma.link.update in a transaction*: the code deliberately does not use Prisma for this write.\n- *Read, add one in JavaScript, write back*: that read-modify-write would lose updates under concurrency, and it is not what the code does.\n- *Nightly copy from Tinybird*: no such job is involved; the counter is updated per click.",
+   "excerpts": [
+    {
+     "path": "dub/apps/web/lib/tinybird/record-click.ts",
+     "lineStart": 195,
+     "lineEnd": 198,
+     "quote": "UPDATE Link SET clicks = clicks + 1, lastClicked = NOW() WHERE id = ?"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08",
+   "target": "seed:quests:organized-study-dub-monorepo/quiz/0ee14ba1df6c3e30",
+   "phase": "after",
+   "title": "Why a pending invite returns 409",
+   "body": "When the workspace exists but the caller has no membership row, withWorkspace looks up a `projectInvite` for the caller's email. No invite throws `not_found`; an invite whose `expires` is in the past throws `invite_expired`; any other invite throws `invite_pending`. `lib/api/error-codes.ts` maps `invite_pending` to 409.\n\n- *403 forbidden*: forbidden comes from role and permission checks, which run only for members.\n- *404 not_found*: that is the answer for a non-member with no invite at all.\n- *410 invite_expired*: only an invite past its expiry date gets 410.",
+   "excerpts": [
+    {
+     "path": "dub/apps/web/lib/auth/workspace.ts",
+     "lineStart": 397,
+     "lineEnd": 400,
+     "quote": "code: \"invite_pending\","
+    },
+    {
+     "path": "dub/apps/web/lib/api/error-codes.ts",
+     "lineStart": 10,
+     "lineEnd": 11,
+     "quote": "invite_pending: 409,"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09",
+   "target": "seed:quests:organized-study-dub-monorepo/quiz/8bb1b898e6e9529d",
+   "phase": "after",
+   "title": "Why a token cannot exceed its user",
+   "body": "withWorkspace first sets `permissions` from the user's role. For a restricted token with scopes, it replaces that list with the scope permissions filtered by `permissions.includes(p)`: only permissions present in both survive. Since the role lacks `links.write`, the filtered list lacks it too, and the required-permission check fails.\n\n- *Token scopes alone*: the scopes are filtered by the role, never used on their own.\n- *Role permissions alone*: for a restricted token with scopes, the scopes do narrow the list.\n- *Union of both*: a union would let a token exceed its user, which the filter prevents.",
+   "excerpts": [
+    {
+     "path": "dub/apps/web/lib/auth/workspace.ts",
+     "lineStart": 412,
+     "lineEnd": 417,
+     "quote": "permissions = mapScopesToPermissions(tokenScopes).filter((p) =>"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10",
+   "target": "seed:quests:organized-study-dub-monorepo/quiz/9c1eed8c7b031013",
+   "phase": "after",
+   "title": "Why the bad body fails before the IP rate limit",
+   "body": "For an anonymous request, withWorkspace's carve-out calls the handler without a workspace or session. The POST handler then skips the usage gate (no workspace), and parses the body with `createLinkBodySchemaAsync.parseAsync` before the `if (!session)` rate-limit block. A body that fails the schema throws a ZodError, which `handleApiError` turns into status 422. The rate limiter is never consulted.\n\n- *429 from the IP limit*: that check comes after the parse.\n- *401 for the missing session*: the anonymous-creation header makes the wrapper call the handler without one.\n- *403 exceeded_limit*: the usage gate runs only when a workspace exists.",
+   "excerpts": [
+    {
+     "path": "dub/apps/web/app/api/links/route.ts",
+     "lineStart": 54,
+     "lineEnd": 56,
+     "quote": "const body = await createLinkBodySchemaAsync.parseAsync("
+    },
+    {
+     "path": "dub/apps/web/lib/api/errors.ts",
+     "lineStart": 100,
+     "lineEnd": 103,
+     "quote": "status: ErrorCodes.unprocessable_entity,"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q11",
+   "target": "seed:quests:organized-study-dub-monorepo/quiz/1f92fa5beb2dd469",
+   "phase": "after",
+   "title": "When link.created is sent from the create route",
+   "body": "After `createLink` returns, the route checks `response.projectId && response.userId`. Only then does it call `sendWorkspaceWebhook` inside `waitUntil`, so the response does not wait for it. An anonymous link has no project, so it never sends this webhook.\n\n- *Every successful create*: the condition excludes links without a project and a user.\n- *Before the database write*: the webhook payload is built from the created row, so it must come after.\n- *After the R2 upload*: the image upload is a separate background job inside createLink, and the route does not wait for it.",
+   "excerpts": [
+    {
+     "path": "dub/apps/web/app/api/links/route.ts",
+     "lineStart": 87,
+     "lineEnd": 90,
+     "quote": "if (response.projectId && response.userId) {"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q12",
+   "target": "seed:quests:organized-study-dub-monorepo/quiz/5e736c0a5f781911",
+   "phase": "after",
+   "title": "The idempotency gap in webhook publishing",
+   "body": "`publishJSON` is given the webhook URL, the transformed payload, a `Dub-Signature` header computed with the webhook's secret, a success `callback` and a `failureCallback`. Right above it is a TODO: add a deduplicationId. The guide reads this as an idempotency gap: duplicate deliveries are possible, and receivers have to deduplicate by event id themselves.\n\n- *Dub-Signature header*: it is sent on every publish.\n- *failureCallback URL*: it is built with `failed: \"true\"` and passed in.\n- *Success callback URL*: it is passed as `callback`.",
+   "excerpts": [
+    {
+     "path": "dub/apps/web/lib/webhook/qstash.ts",
+     "lineStart": 69,
+     "lineEnd": 71,
+     "quote": "Add deduplicationId to the webhook"
+    },
+    {
+     "path": "dub/apps/web/lib/webhook/qstash.ts",
+     "lineStart": 76,
+     "lineEnd": 76,
+     "quote": "\"Dub-Signature\": signature,"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q13",
+   "target": "seed:quests:organized-study-dub-monorepo/quiz/29bc614f86aba15d",
+   "phase": "after",
+   "title": "Why QStash verification is skipped locally",
+   "body": "`verifyQstashSignature` starts with `if (process.env.VERCEL !== \"1\") return;`. Off Vercel it returns before it reads any header, so a request without a signature is accepted. The `bad_request` for a missing `Upstash-Signature` header is only reached on Vercel. That is convenient for local development, and it is the reason the guide warns about it: any deployment that is not on Vercel has no check.\n\n- *bad_request for the missing header*: that line runs only on Vercel.\n- *Local signing keys*: there is no local verification path.\n- *Warning, then 401*: the function neither logs nor rejects in this case.",
+   "excerpts": [
+    {
+     "path": "dub/apps/web/lib/cron/verify-qstash.ts",
+     "lineStart": 18,
+     "lineEnd": 21,
+     "quote": "if (process.env.VERCEL !== \"1\") {"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}
