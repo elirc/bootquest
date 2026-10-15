@@ -87,6 +87,8 @@ const questPackDirs = existsSync(QUEST_DIR) ? readdirSync(QUEST_DIR).filter((n) 
 const questQuizzes = new Map(
   questPackDirs.map((n) => [n, JSON.parse(readFileSync(join(QUEST_DIR, n, 'items.json'), 'utf8')).items.filter((i) => i.kind === 'quiz')]),
 );
+// "Learn more": the stamped seed:notes packs (each binds its quest pack's bytes)
+const notesPackDirs = existsSync(join(SEED_DIR, 'notes')) ? readdirSync(join(SEED_DIR, 'notes')).filter((n) => existsSync(join(SEED_DIR, 'notes', n, 'items.json'))) : [];
 const campaignQuests = campaignManifest.tracks.flatMap((t) => JSON.parse(readFileSync(join(CAMPAIGN_DIR, t.file), 'utf8')).acts.flatMap((a) => a.quests));
 const campaignStudyGates = campaignQuests.filter((q) => q.kind === 'study-quest' && q.unit !== null && (questQuizzes.get(q.repo)?.length ?? 0) > 0).length;
 // quest packs (with quiz items) matching NO campaign study quest load as standalone ladder study units (e.g. ww6)
@@ -257,7 +259,7 @@ async function main() {
         BOOTQUEST_CS_SCRATCH: csScratch,
         BOOTQUEST_CAMPAIGN: CAMPAIGN_DIR,
         // W7: the real default seed packs + authored units (named explicitly so a caller's shell cannot override them)
-        BOOTQUEST_SEED_ITEMS: ['explainback', 'patches', 'variants', 'quests']
+        BOOTQUEST_SEED_ITEMS: ['explainback', 'patches', 'variants', 'quests', 'notes']
           .flatMap((g) => (existsSync(join(SEED_DIR, g)) ? readdirSync(join(SEED_DIR, g)).map((n) => join(SEED_DIR, g, n)) : []))
           .filter((d) => existsSync(join(d, 'items.json')))
           .join(','),
@@ -630,12 +632,12 @@ async function main() {
       // 10e. W7: startup summary — one line per loaded source, with its counts
       const seedLines = serverOut.split(/\r?\n/).filter((l) => l.startsWith('[bootquest] seed '));
       step(
-        `startup summary: pack + campaign lines, one stamp-verified line per seed pack (${readdirSync(join(SEED_DIR, 'explainback')).length + readdirSync(join(SEED_DIR, 'patches')).filter((n) => !n.endsWith('.json')).length + (existsSync(join(SEED_DIR, 'variants')) ? readdirSync(join(SEED_DIR, 'variants')).length : 0) + questPackDirs.length}), and the ladder line`,
+        `startup summary: pack + campaign lines, one stamp-verified line per seed pack (${readdirSync(join(SEED_DIR, 'explainback')).length + readdirSync(join(SEED_DIR, 'patches')).filter((n) => !n.endsWith('.json')).length + (existsSync(join(SEED_DIR, 'variants')) ? readdirSync(join(SEED_DIR, 'variants')).length : 0) + questPackDirs.length + notesPackDirs.length}), and the ladder line`,
         /\[bootquest\] pack bootforge: .*loaded \d+ === built \d+/.test(serverOut) &&
           /\[bootquest\] campaign js: .*loaded \d+ === built \d+/.test(serverOut) &&
           seedLines.length > 0 &&
           seedLines.every((l) => /stamp verified$/.test(l)) &&
-          seedLines.length === readdirSync(join(SEED_DIR, 'explainback')).length + readdirSync(join(SEED_DIR, 'patches')).filter((n) => !n.endsWith('.json')).length + (existsSync(join(SEED_DIR, 'variants')) ? readdirSync(join(SEED_DIR, 'variants')).length : 0) + questPackDirs.length &&
+          seedLines.length === readdirSync(join(SEED_DIR, 'explainback')).length + readdirSync(join(SEED_DIR, 'patches')).filter((n) => !n.endsWith('.json')).length + (existsSync(join(SEED_DIR, 'variants')) ? readdirSync(join(SEED_DIR, 'variants')).length : 0) + questPackDirs.length + notesPackDirs.length &&
           /\[bootquest\] ladder: explain-back (\d+) === \1 .*kata bank (\d+) === \2 .*authored (\d+) === \3/.test(serverOut) &&
           /\[bootquest\] study quests js: loaded (\d+) === built \1 quiz gates/.test(serverOut),
         `${seedLines.length} seed line(s)`,
@@ -890,6 +892,107 @@ async function main() {
         'W8 study quest pass: +50 study-quest XP (dashboard delta), quest done on the campaign map, flashcards enrolled',
         sqPass.json?.verdict === 'pass' && sqPass.json.xp?.amount === 50 && sqXp1 === sqXp0 + 50 && sqAfter?.state === 'done' && sqPass.json.studyQuiz.flashcardsEnrolled > 0,
         `xp ${sqXp0} -> ${sqXp1}`,
+      );
+
+      // 10o. "Learn more" notes (GET /units/:id/notes) — gates on the REAL server, then the REAL
+      // storefront notes pack end to end on a second real server (storefront is a locked act-3 quest
+      // here, so the second server loads it without a campaign: a standalone ladder study unit)
+      const nCamp = await api(base, 'GET', '/api/tracks/js/campaign');
+      const nQuests = (nCamp.json?.acts ?? []).flatMap((a) => a.quests);
+      const sfQuest = nQuests.find((q) => q.repo === 'storefront');
+      const sfLocked = await api(base, 'GET', `/api/units/${sfQuest?.unitId}/notes`);
+      const gjNotes = await api(base, 'GET', `/api/units/${sqQuest?.unitId}/notes`);
+      const notesLine = serverOut.split(/\r?\n/).find((l) => l.startsWith('[bootquest] seed notes/storefront:'));
+      step(
+        'notes gates (real server): a locked-act quest serves no notes (403 ACT_LOCKED); a quest without notes answers readings [] / explanations none; the storefront notes pack line is stamp-verified at startup',
+        sfLocked.status === 403 && sfLocked.json?.error?.code === 'ACT_LOCKED' &&
+          gjNotes.status === 200 && Array.isArray(gjNotes.json?.readings) && gjNotes.json.readings.length === 0 && gjNotes.json.explanations?.state === 'none' && Array.isArray(gjNotes.json.refs) &&
+          /15 item\(s\) \(15 note\), stamp verified$/.test(notesLine ?? ''),
+        notesLine,
+      );
+
+      const sfNotes = JSON.parse(readFileSync(join(SEED_DIR, 'notes', 'storefront', 'items.json'), 'utf8')).items;
+      const sfQuiz = new Map((questQuizzes.get('storefront') ?? []).map((q) => [q.key, q]));
+      const nPort = await freePort();
+      const nDb = join(dir, 'notes.db');
+      const nChild = spawn(process.execPath, ['--import', 'tsx', SERVE], {
+        cwd: REPO,
+        env: cleanEnv({
+          BOOTQUEST_DB: nDb,
+          BOOTQUEST_PORT: String(nPort),
+          BOOTQUEST_PACKS: '',
+          BOOTQUEST_CAMPAIGN: '',
+          BOOTQUEST_SEED_ITEMS: [join(SEED_DIR, 'quests', 'storefront'), join(SEED_DIR, 'notes', 'storefront')].join(','),
+          BOOTQUEST_AUTHORED_UNITS: '',
+        }),
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+      });
+      let nOut = '';
+      nChild.stdout.on('data', (d) => (nOut += d));
+      nChild.stderr.on('data', (d) => (nOut += d));
+      const nBase = `http://127.0.0.1:${nPort}`;
+      try {
+        let nUp = false;
+        const nDeadline = Date.now() + 120_000;
+        while (!nUp && Date.now() < nDeadline && nChild.exitCode === null) {
+          try {
+            nUp = (await fetch(`${nBase}/api/health`)).ok;
+          } catch {
+            /* not listening yet */
+          }
+          if (!nUp) await sleep(250);
+        }
+        const nLad = nUp ? await api(nBase, 'GET', '/api/ladder') : null;
+        const nUnit = (nLad?.json?.units ?? []).find((u) => u.family === 'study' && u.repo === 'storefront');
+        const n0 = await api(nBase, 'GET', `/api/units/${nUnit?.id}/notes`);
+        const afterTitles = sfNotes.filter((x) => x.phase === 'after').map((x) => x.title);
+        step(
+          'notes (real storefront pack, second real server): 3 readings before answering; all 12 explanations withheld as a COUNT ("unlock after you answer"); no explanation title in the response',
+          nUp && n0.status === 200 && n0.json.readings.length === 3 && n0.json.readings.every((r) => r.phase === 'before' && r.excerpts.every((e) => e.url.includes('/blob/9d52bffef289c23d3136f868d201ba76b89a314c/'))) &&
+            n0.json.explanations.state === 'locked' && n0.json.explanations.withheld === 12 && n0.json.explanations.released.length === 0 &&
+            /unlock after you answer/.test(n0.json.explanations.message) && afterTitles.every((t) => !n0.text.includes(t)),
+          nUp ? `unit ${nUnit?.key}` : nOut.slice(-400),
+        );
+        const nD = await api(nBase, 'GET', `/api/units/${nUnit?.id}`);
+        const qs = nD.json?.studyQuest?.questions ?? [];
+        const right = qs.map((q) => servedStudyChoice(q, sfQuiz.get(q.itemKey), sfQuiz.get(q.itemKey).check.answerKey));
+        const wrong = right.map((a, i) => (i < 3 ? (a + 1) % qs[i].choices.length : a));
+        const nRun = await api(nBase, 'POST', `/api/units/${nUnit?.id}/run`, { answers: right });
+        const nAfterRun = await api(nBase, 'GET', `/api/units/${nUnit?.id}/notes`);
+        const nFail = await api(nBase, 'POST', `/api/units/${nUnit?.id}/submit`, { answers: wrong });
+        const n1 = await api(nBase, 'GET', `/api/units/${nUnit?.id}/notes`);
+        const missedKeys = new Set(qs.slice(0, 3).map((q) => q.itemKey));
+        step(
+          'notes gate: /run (409) releases nothing; after a FAILED submit the 9 questions answered right are explained, the 3 missed stay withheld until their review cards are due (no key the day it was missed)',
+          nRun.status === 409 && nAfterRun.json?.explanations?.state === 'locked' &&
+            nFail.json?.verdict === 'fail' && n1.json?.explanations?.state === 'partial' && n1.json.explanations.withheld === 3 && n1.json.explanations.released.length === 9 &&
+            n1.json.explanations.released.every((x) => !missedKeys.has(x.target)) && typeof n1.json.explanations.nextAt === 'number' && n1.json.explanations.nextAt > Date.now(),
+          n1.json?.explanations?.message,
+        );
+        const nPass = await api(nBase, 'POST', `/api/units/${nUnit?.id}/submit`, { answers: right });
+        const n2 = await api(nBase, 'GET', `/api/units/${nUnit?.id}/notes`);
+        step(
+          'notes gate: after a PASSING submit all 12 explanations (one per quiz) are released, each linked to its pinned source',
+          nPass.json?.verdict === 'pass' && n2.json?.explanations?.state === 'released' && n2.json.explanations.released.length === 12 &&
+            new Set(n2.json.explanations.released.map((x) => x.target)).size === sfQuiz.size && n2.json.explanations.released.every((x) => x.excerpts.length > 0),
+          `${n2.json?.explanations?.released?.length} released`,
+        );
+      } finally {
+        nChild.kill();
+      }
+
+      // stale refusal: the notes bind the quest pack's items.json bytes; a re-seeded quest pack refuses startup
+      const stale = join(dir, 'stale-seed');
+      cpSync(join(SEED_DIR, 'quests', 'storefront'), join(stale, 'quests', 'storefront'), { recursive: true });
+      cpSync(join(SEED_DIR, 'notes', 'storefront'), join(stale, 'notes', 'storefront'), { recursive: true });
+      writeFileSync(join(stale, 'quests', 'storefront', 'items.json'), `${readFileSync(join(stale, 'quests', 'storefront', 'items.json'), 'utf8')} `);
+      const sPort = await freePort();
+      const staleRun = runNode(SERVE, [], cleanEnv({ BOOTQUEST_DB: join(dir, 'stale.db'), BOOTQUEST_PORT: String(sPort), BOOTQUEST_PACKS: '', BOOTQUEST_CAMPAIGN: '', BOOTQUEST_SEED_ITEMS: [join(stale, 'quests', 'storefront'), join(stale, 'notes', 'storefront')].join(','), BOOTQUEST_AUTHORED_UNITS: '' }));
+      step(
+        'notes stale refusal: the quest pack changed after its notes were validated -> the real entrypoint refuses to start (exit 1, "stale notes"), port never bound',
+        staleRun.code === 1 && /failed to start/.test(staleRun.out) && /stale notes/.test(staleRun.out) && (await portIsFree(sPort)),
+        staleRun.out.split(/\r?\n/).find((l) => /failed to start/.test(l))?.slice(0, 200),
       );
 
       // 11. errors are JSON

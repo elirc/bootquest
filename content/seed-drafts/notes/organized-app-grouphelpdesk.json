@@ -1,0 +1,337 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "organized-app-grouphelpdesk",
+ "repo": "organized-app-grouphelpdesk",
+ "sha": "6a391ffba8d5eac953cb5930b375241512e53c33",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: a helpdesk app, its decisions and its validation upgrade",
+   "body": "This pack uses HelpDesk, a team-built learning app (Express + TypeScript backend, Prisma, a React client) where requesters open tickets and agents work them. Three short documents carry the pack:\n\n1. `docs/learning/runtime-validation-guide.md`: the Phase 2 change that added Zod validation at every route. Read it fully; it is the source of most quizzes.\n2. `docs/architecture/adr/002-ticket-status-workflow.md`: why tickets have five statuses and which moves between them are allowed.\n3. `docs/architecture/adr/003-comment-visibility-model.md`: how public comments and internal notes share one table.\n\nAn ADR (Architecture Decision Record) has the same parts each time: Context, Decision, Alternatives Considered, Consequences. Read the Consequences section closely; it is where a team writes down what it gave up.\n\nThen open the code the guide lists: `packages/server/src/middleware/validateRequest.ts`, the schemas in `packages/server/src/validation/`, and `packages/server/src/utils/statusMachine.ts`.",
+   "excerpts": [
+    {
+     "path": "docs/learning/runtime-validation-guide.md",
+     "lineStart": 7,
+     "lineEnd": 9,
+     "quote": "The goal is to teach why TypeScript types are not enough at HTTP boundaries and how Zod helps turn untrusted request data into trusted application input."
+    },
+    {
+     "path": "docs/architecture/adr/002-ticket-status-workflow.md",
+     "lineStart": 17,
+     "lineEnd": 19,
+     "quote": "## Decision Tickets use five statuses:"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/learning/runtime-validation-guide.md",
+     "lineStart": 11,
+     "lineEnd": 20,
+     "why": "The list of files the validation guide asks you to read."
+    },
+    {
+     "path": "docs/learning/codebase-reading-guide.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "A guided tour of the codebase for new contributors."
+    }
+   ]
+  },
+  {
+   "id": "r02-shape-versus-rules",
+   "target": "pack",
+   "phase": "before",
+   "title": "Two questions: is the request well-formed, is it allowed?",
+   "body": "The validation guide draws a clean line between two kinds of checking:\n\n- **Shape validation**, done by Zod schemas in route middleware: are the fields present, of the right type, within bounds, and is an enum value one of the known ones? A failure is a `400` with a `VALIDATION_ERROR` body listing the bad fields.\n- **Business rules**, done in services: given the current data, is this operation allowed? For example, may a ticket move from its current status to the requested one?\n\nThe guide also explains why TypeScript types do not help here: they are checked when the code compiles, but the JSON in a request arrives at runtime, from any client at all.\n\nBefore the quizzes, read the guide's sections \"Where Validation Belongs\", \"Common Mistakes\" and \"How To Review This In A PR\", and for each kind of mistake decide which of the two layers it belongs to.",
+   "excerpts": [
+    {
+     "path": "docs/learning/runtime-validation-guide.md",
+     "lineStart": 162,
+     "lineEnd": 164,
+     "quote": "Validation schemas should answer: \"Is this request shaped correctly?\" Services should answer: \"Is this operation allowed by business rules?\""
+    },
+    {
+     "path": "docs/learning/runtime-validation-guide.md",
+     "lineStart": 24,
+     "lineEnd": 25,
+     "quote": "TypeScript checks code before it runs. It does not check JSON sent by a browser, curl command, mobile app, script, or malicious client."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/learning/runtime-validation-guide.md",
+     "lineStart": 121,
+     "lineEnd": 136,
+     "why": "TypeScript types versus runtime validation, as two lists of questions."
+    }
+   ]
+  },
+  {
+   "id": "r03-validate-middleware",
+   "target": "pack",
+   "phase": "before",
+   "title": "How the validate middleware works",
+   "body": "`validateRequest.ts` builds one small function, `validate(part, schema)`, and exports three wrappers: `validateBody`, `validateQuery`, `validateParams`. Each returns Express middleware that:\n\n1. runs `schema.safeParse(req[part])` (`safeParse` returns a result object instead of throwing);\n2. on failure, passes an `AppError(400, 'VALIDATION_ERROR', ...)` with the formatted issues to `next`;\n3. on success, stores the parsed data on `res.locals` under a name built from the part, and calls `next()`.\n\nRoutes attach these before the controller, as in `ticketRouter.get('/', validateQuery(listTicketsQuerySchema), ...)`. Before the quizzes, work out the exact `res.locals` key for a body, and find the `getValidated*` helpers the controllers use to read it. Then read the list-tickets query schema and note every bound on `page` and `limit`.",
+   "excerpts": [
+    {
+     "path": "packages/server/src/middleware/validateRequest.ts",
+     "lineStart": 19,
+     "lineEnd": 21,
+     "quote": "function validate(part: RequestPart, schema: ZodTypeAny) { return (req: Request, res: Response, next: NextFunction) => { const result = schema.safeParse(req[part]);"
+    },
+    {
+     "path": "packages/server/src/middleware/validateRequest.ts",
+     "lineStart": 32,
+     "lineEnd": 33,
+     "quote": "res.locals[`validated${part[0].toUpperCase()}${part.slice(1)}`] = result.data; next();"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "packages/server/src/validation/ticketSchemas.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "All ticket schemas: create, update, assign and list query."
+    }
+   ]
+  },
+  {
+   "id": "x-q01-business-rule",
+   "target": "seed:quests:organized-app-grouphelpdesk/quiz/03730fc62ab75765",
+   "phase": "after",
+   "title": "Schema passed, service refused: that is a business rule",
+   "body": "**Key: a business-rule rejection, not a shape problem.**\n\nThe schema's job is only to say the request is shaped correctly. If it passes, the fields are present and of the right types. When the service still refuses, the request broke a rule that depends on the data, such as an illegal status transition. The guide's debugging step 4 says exactly this, and step 5 adds: write a validation test before you change any schema.\n\nWhy the others are wrong:\n- *A TypeScript compile error*: compile errors stop the build; they do not reject single requests.\n- *A client-side validation gap*: the server received the request and its own schema accepted it; the client is not the issue.\n- *A stale schema to loosen*: loosening the schema would not change the service's rule, and the guide says not to change the schema first.",
+   "excerpts": [
+    {
+     "path": "docs/learning/runtime-validation-guide.md",
+     "lineStart": 222,
+     "lineEnd": 224,
+     "quote": "If the schema accepts the request but the service rejects it, you are probably dealing with a business rule, not a shape problem. 5. Add a validation test before changing the schema."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02-one-table-discipline",
+   "target": "seed:quests:organized-app-grouphelpdesk/quiz/0809182a0a5e595b",
+   "phase": "after",
+   "title": "One comment table means every reader must filter",
+   "body": "**Key: every comment-returning path must filter visibility or leak internal notes.**\n\nWith one `Comment` table and an `isInternal` flag, public comments and internal notes sit side by side. That makes one chronological thread easy. The cost is that nothing in the table itself hides internal notes: each piece of code that returns comments must remember to filter them for requesters. Forget once (a new endpoint, an export) and agents' private notes reach customers. ADR-003 names this as the trade-off: \"discipline\".\n\nWhy the others are wrong:\n- *Merging two result sets*: that was the cost of the rejected two-table design.\n- *Internal notes cannot be indexed*: nothing in the ADR says so; a boolean column can be indexed.\n- *Requesters can never comment*: public comments are exactly what `isInternal = false` is for.",
+   "excerpts": [
+    {
+     "path": "docs/architecture/adr/003-comment-visibility-model.md",
+     "lineStart": 32,
+     "lineEnd": 34,
+     "quote": "The trade-off is discipline: every API path that returns comments must consistently apply visibility filtering."
+    },
+    {
+     "path": "docs/architecture/adr/003-comment-visibility-model.md",
+     "lineStart": 22,
+     "lineEnd": 24,
+     "quote": "The frontend wants one chronological thread, and two tables would require merging records after fetching."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q03-self-transition",
+   "target": "seed:quests:organized-app-grouphelpdesk/quiz/0d5e7c5ac615b637",
+   "phase": "after",
+   "title": "canTransition allows staying in the same status",
+   "body": "**Key: true, because same-status requests short-circuit as allowed.**\n\n`canTransition` begins with `if (from === to) return true;`. For WAITING to WAITING, the two values are equal, so it returns `true` before it ever looks at the transition list. That detail is in the code but not in ADR-002's list of edges, which only shows moves between different statuses.\n\nWhy the others are wrong:\n- *undefined*: the function always returns a boolean, and the lookup is never reached here.\n- *It throws*: nothing in the function throws.\n- *false, WAITING lists only IN_PROGRESS and CLOSED*: true for the list, but the same-status check runs first.",
+   "excerpts": [
+    {
+     "path": "packages/server/src/utils/statusMachine.ts",
+     "lineStart": 14,
+     "lineEnd": 19,
+     "quote": "export function canTransition(from: TicketStatus, to: TicketStatus): boolean { if (from === to) { return true; } return VALID_TRANSITIONS[from].includes(to);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q04-400-not-422",
+   "target": "seed:quests:organized-app-grouphelpdesk/quiz/0eccb68e1c139930",
+   "phase": "after",
+   "title": "Invalid requests in this repo answer 400",
+   "body": "**Key: 400, the repo's consistent status for invalid requests.**\n\nSome APIs use 422 (\"Unprocessable Entity\") for well-formed JSON with bad values. This repo chose one rule: every validation failure is a `400` with the structured `VALIDATION_ERROR` body. The review checklist asks for exactly that, and the middleware builds `AppError(400, 'VALIDATION_ERROR', ...)` for any part that fails. Consistency matters because clients write one error handler for it.\n\nWhy the others are wrong:\n- *422 is correct*: the checklist names 422 as what it does *not* want.\n- *409 for a schema conflict*: 409 is for conflicts with current state, not bad input.\n- *500 to get a stack trace*: the guide lists a generic 500 for bad user input as a common mistake.",
+   "excerpts": [
+    {
+     "path": "docs/learning/runtime-validation-guide.md",
+     "lineStart": 233,
+     "lineEnd": 233,
+     "quote": "- Are invalid requests returning `400`, not `422` or `500`?"
+    },
+    {
+     "path": "packages/server/src/middleware/validateRequest.ts",
+     "lineStart": 25,
+     "lineEnd": 25,
+     "quote": "new AppError(400, 'VALIDATION_ERROR', `Invalid request ${part}.`, {"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q05-closed-to-open",
+   "target": "seed:quests:organized-app-grouphelpdesk/quiz/336ca99123ad802c",
+   "phase": "after",
+   "title": "A closed ticket can only be reopened",
+   "body": "**Key: CLOSED -> OPEN only; work resumes after the reopen.**\n\n`VALID_TRANSITIONS` maps `CLOSED` to a list with one entry, `OPEN`. So the only move out of CLOSED is a reopen. From OPEN the ticket can then go to IN_PROGRESS (with an assignee, per ADR-002), and work continues.\n\nWhy the others are wrong:\n- *CLOSED -> WAITING*: WAITING is not in CLOSED's list.\n- *CLOSED is terminal*: it has one outgoing edge, to OPEN.\n- *CLOSED -> IN_PROGRESS directly*: IN_PROGRESS is not in CLOSED's list either.",
+   "excerpts": [
+    {
+     "path": "packages/server/src/utils/statusMachine.ts",
+     "lineStart": 11,
+     "lineEnd": 11,
+     "quote": "[TicketStatus.CLOSED]: [TicketStatus.OPEN],"
+    },
+    {
+     "path": "docs/architecture/adr/002-ticket-status-workflow.md",
+     "lineStart": 29,
+     "lineEnd": 35,
+     "quote": "RESOLVED -> CLOSED, OPEN CLOSED -> OPEN"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q06-frontend-is-not-the-only-caller",
+   "target": "seed:quests:organized-app-grouphelpdesk/quiz/37140e87e60ef07f",
+   "phase": "after",
+   "title": "Browser checks help users; server checks protect the system",
+   "body": "**Key: anyone can call the API directly; frontend checks are only UX.**\n\nThe form's check only runs in that form. Anyone can skip the form and send a request with `curl`, a script or another app; the guide shows a curl command with a bad body. If the server trusted the frontend, that request would go straight in. So the guide puts it this way: frontend validation improves user experience, backend validation protects the system boundary.\n\nWhy the others are wrong:\n- *TypeScript cannot compile without a server schema*: the form and the server schema are independent.\n- *Browsers can disable JS validation only in development*: any user can bypass browser checks at any time.\n- *Duplication is a listed mistake*: the listed mistake is duplicating rules in controller *and* service; \"Trusting frontend validation and skipping backend validation\" is also on that list.",
+   "excerpts": [
+    {
+     "path": "docs/learning/runtime-validation-guide.md",
+     "lineStart": 140,
+     "lineEnd": 140,
+     "quote": "The frontend is not the only caller of your API. Anyone can send a request:"
+    },
+    {
+     "path": "docs/learning/runtime-validation-guide.md",
+     "lineStart": 148,
+     "lineEnd": 149,
+     "quote": "Frontend validation improves user experience. Backend validation protects the system boundary."
+    },
+    {
+     "path": "docs/learning/runtime-validation-guide.md",
+     "lineStart": 205,
+     "lineEnd": 205,
+     "quote": "- Trusting frontend validation and skipping backend validation."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07-transition-in-service",
+   "target": "seed:quests:organized-app-grouphelpdesk/quiz/3f60d1469e78fa7e",
+   "phase": "after",
+   "title": "Transition rules belong to the service",
+   "body": "**Key: the service, since the transition rule is a business rule.**\n\n\"RESOLVED\" is a valid status value, so the request is shaped correctly and the Zod schema accepts it. Whether OPEN may move to RESOLVED depends on the ticket's *current* status, which only code that loads the ticket knows. That is a business rule, and the guide places it in the service. (OPEN's allowed moves are IN_PROGRESS and CLOSED, so this one is refused there.)\n\nWhy the others are wrong:\n- *A database CHECK constraint*: a CHECK sees one row's values, not the old and new status together; the docs keep the rule in `statusMachine.ts`.\n- *The controller*: the guide keeps controllers thin, with rules in services; ADR-002 says the state machine keeps transition rules out of controllers.\n- *The Zod schema*: the guide lists \"Letting Zod schemas grow business rules\" as a mistake.",
+   "excerpts": [
+    {
+     "path": "docs/learning/runtime-validation-guide.md",
+     "lineStart": 168,
+     "lineEnd": 170,
+     "quote": "- Zod checks that `status` is one of the known ticket statuses. - The service checks whether the transition from the old status to the new status is allowed."
+    },
+    {
+     "path": "docs/architecture/adr/002-ticket-status-workflow.md",
+     "lineStart": 53,
+     "lineEnd": 55,
+     "quote": "it prevents invalid transitions from being spread across controllers or UI code."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08-limit-max-100",
+   "target": "seed:quests:organized-app-grouphelpdesk/quiz/6c561b79ea3afba3",
+   "phase": "after",
+   "title": "limit=1000 fails the list schema with a 400",
+   "body": "**Key: a 400 VALIDATION_ERROR, because the list query schema caps limit at 100.**\n\nThe list route runs `validateQuery(listTicketsQuerySchema)` before anything else. In that schema, `limit` is `z.coerce.number().int().min(1).max(100)`: the text \"1000\" is turned into the number 1000, which fails `.max(100)`. `safeParse` reports the failure and the middleware passes on a 400 `VALIDATION_ERROR` naming the `limit` field. The controller and the database never see the request.\n\nWhy the others are wrong:\n- *A 500 from the database*: the request never reaches the database.\n- *Clamped to 20*: Zod rejects out-of-range values; the default 20 is used only when `limit` is missing.\n- *Query params are not validated*: since Phase 2 they are; the guide warns against forgetting them.",
+   "excerpts": [
+    {
+     "path": "packages/server/src/validation/ticketSchemas.ts",
+     "lineStart": 60,
+     "lineEnd": 60,
+     "quote": "limit: z.coerce.number().int().min(1).max(100).optional().default(20),"
+    },
+    {
+     "path": "packages/server/src/modules/tickets/ticket.routes.ts",
+     "lineStart": 28,
+     "lineEnd": 28,
+     "quote": "ticketRouter.get('/', validateQuery(listTicketsQuerySchema), requireAuth, listTickets);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09-in-progress-needs-assignee",
+   "target": "seed:quests:organized-app-grouphelpdesk/quiz/82d004324001f2c1",
+   "phase": "after",
+   "title": "An allowed edge can still be refused: IN_PROGRESS needs an owner",
+   "body": "**Key: it must still be refused, since IN_PROGRESS requires an assignee.**\n\nThe edge list says OPEN may move to IN_PROGRESS. ADR-002 adds a second rule right after the list: moving a ticket to IN_PROGRESS requires an assignee, so it is always clear who is working on it. An unassigned ticket therefore cannot make that move, even though the edge exists. A transition is allowed only when every rule passes.\n\nWhy the others are wrong:\n- *OPEN can only move to CLOSED*: OPEN lists both IN_PROGRESS and CLOSED.\n- *Only the edge list governs*: the assignee rule is a separate business rule in the same ADR.\n- *Auto-assigns the requester*: nothing describes auto-assignment, and a requester is not an agent.",
+   "excerpts": [
+    {
+     "path": "docs/architecture/adr/002-ticket-status-workflow.md",
+     "lineStart": 37,
+     "lineEnd": 38,
+     "quote": "Moving a ticket to `IN_PROGRESS` requires an assignee. This keeps ownership clear before active work begins."
+    },
+    {
+     "path": "docs/architecture/adr/002-ticket-status-workflow.md",
+     "lineStart": 29,
+     "lineEnd": 30,
+     "quote": "OPEN -> IN_PROGRESS, CLOSED"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10-cast-is-not-validation",
+   "target": "seed:quests:organized-app-grouphelpdesk/quiz/8b99db109c6ec267",
+   "phase": "after",
+   "title": "`as TicketStatus[]` silenced TypeScript and let BANANA through",
+   "body": "**Key: the cast silenced TypeScript, so BANANA flowed on as a real status.**\n\nA TypeScript `as` cast is an instruction to the compiler: \"treat this value as this type, trust me\". It produces no runtime code. At runtime `splitQuery(req.query.status)` simply returned `[\"BANANA\"]`, and the rest of the code handled it as if it were a valid status. The guide's words: the cast makes TypeScript quiet but does not prove anything. Phase 2 replaced it with a Zod enum check that returns a readable 400.\n\nWhy the others are wrong:\n- *Express filters unknown enum values*: Express knows nothing about the app's enums.\n- *The cast converts BANANA to undefined*: casts never change values.\n- *TypeScript throws at runtime*: TypeScript does not run at runtime; its types are gone.",
+   "excerpts": [
+    {
+     "path": "docs/learning/runtime-validation-guide.md",
+     "lineStart": 112,
+     "lineEnd": 116,
+     "quote": "const status = splitQuery(req.query.status) as TicketStatus[] | undefined;"
+    },
+    {
+     "path": "docs/learning/runtime-validation-guide.md",
+     "lineStart": 115,
+     "lineEnd": 116,
+     "quote": "That cast makes TypeScript quiet. It does not prove the query string contains a real ticket status."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q11-validated-body",
+   "target": "seed:quests:organized-app-grouphelpdesk/quiz/b6b859451c445762",
+   "phase": "after",
+   "title": "Controllers read res.locals.validatedBody, not req.body",
+   "body": "**Key: from res.locals.validatedBody, read through getValidatedBody.**\n\nAfter `validateBody` parses `req.body` successfully, it stores Zod's *parsed* result on `res.locals`, under the key built from the part name: `validated` + `Body`. The controller then calls `getValidatedBody(res)` to read it. Reading the parsed copy matters: it has defaults applied, strings trimmed and numbers coerced by the schema, which the raw `req.body` does not.\n\nWhy the others are wrong:\n- *A global request cache*: `res.locals` belongs to the one response object; there is no global cache.\n- *From req.body, validateBody only logs*: invalid input is stopped with a 400; it is not just logged.\n- *The service re-parses*: the guide lists validating in both controller and service as a mistake; the service receives already-parsed data.",
+   "excerpts": [
+    {
+     "path": "docs/learning/runtime-validation-guide.md",
+     "lineStart": 64,
+     "lineEnd": 67,
+     "quote": "2. `validateBody` parses `req.body` with Zod. 3. Invalid input returns a structured `400` response. 4. Valid input is stored on `res.locals.validatedBody`."
+    },
+    {
+     "path": "docs/learning/runtime-validation-guide.md",
+     "lineStart": 72,
+     "lineEnd": 72,
+     "quote": "const body = getValidatedBody<CreateTicketBody>(res);"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}

@@ -1,0 +1,476 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "organized-experiment-support-hub",
+ "repo": "organized-experiment-support-hub",
+ "sha": "cb836235987a4fc717b6ff656629c6514ac15a6d",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: a support-ticket hub and its verified findings",
+   "body": "This pack uses Support Hub, a Next.js + Prisma app where support agents, leads and managers work customer tickets, and customers use a portal. Tickets move between statuses, get reassigned, and carry SLA deadlines (first response, resolution).\n\nThe docs come in two folders:\n\n- `docs/learning/`: `guided-reading-path.md` walks the code file by file; `concepts-demonstrated.md` explains each pattern with a Mechanism, a Limit and a Check; `testing-rationale.md` lists the checks C1-C10.\n- `docs/architecture/`: `README.md` ends with thirteen verified findings (F1-F13), and `auth-and-permissions.md` has the role matrix and a five-rung Goal/Check ladder.\n\nSuggested order: the guided reading path (steps 1-5 at least), then `concepts-demonstrated.md` from \"Service layer\" onwards, then `auth-and-permissions.md`, then the findings in `docs/architecture/README.md`. Most quizzes are about what the code *really* does where it differs from the design, so keep `src/services/ticket-service.ts` open and check every line number the docs give.",
+   "excerpts": [
+    {
+     "path": "docs/learning/concepts-demonstrated.md",
+     "lineStart": 55,
+     "lineEnd": 55,
+     "quote": "The entries above say where to look. This section says what the code actually does, where it stops, and how to confirm you understood it."
+    },
+    {
+     "path": "docs/learning/guided-reading-path.md",
+     "lineStart": 13,
+     "lineEnd": 13,
+     "quote": "The UI is not the source of truth for permissions or transitions; it only surfaces the server-owned workflows."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/learning/guided-reading-path.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The step-by-step reading path, with what a junior would likely miss in each file."
+    },
+    {
+     "path": "docs/learning/testing-rationale.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The checks C1-C10 that the findings refer to."
+    }
+   ]
+  },
+  {
+   "id": "r02-thin-routes-services",
+   "target": "pack",
+   "phase": "before",
+   "title": "Thin routes, services that own the rules",
+   "body": "The intended design: a route handler in `src/app/api/**` reads the session, validates the body with Zod, and hands over to a service function. The service checks permissions with the `assert*` helpers from `src/lib/permissions/policies.ts`, loads the ticket, and does its writes in one `prisma.$transaction`. Errors are turned into HTTP responses in one place, `withRouteErrorHandling`.\n\nWhen you trace a quiz scenario, follow it through four questions:\n\n1. Which route and which service function does the request hit?\n2. Which permission helper (if any) runs, and which error does it throw?\n3. Does the service go through the status transition table, or write `status` directly?\n4. What does `withRouteErrorHandling` turn the error into?\n\nThe \"Limit\" lines in `concepts-demonstrated.md` tell you where each of these steps is weaker than it looks.",
+   "excerpts": [
+    {
+     "path": "docs/learning/guided-reading-path.md",
+     "lineStart": 25,
+     "lineEnd": 25,
+     "quote": "Route handlers stay small on purpose; they should not start owning workflow conditions or permission branches."
+    },
+    {
+     "path": "docs/learning/concepts-demonstrated.md",
+     "lineStart": 78,
+     "lineEnd": 78,
+     "quote": "boolean role predicates plus `assert*` wrappers in `src/lib/permissions/policies.ts`, called at the top of each service function."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/architecture/request-lifecycle.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "How one request travels from route to response, including the non-permission failures."
+    }
+   ]
+  },
+  {
+   "id": "r03-sla-states",
+   "target": "pack",
+   "phase": "before",
+   "title": "How an SLA state is computed",
+   "body": "Each ticket has deadlines computed as `createdAt + N minutes`. On every write, the service recomputes an SLA *state* for each deadline with `getSlaState` in `src/lib/utils/dates.ts`. The possible states are MET, PAUSED, BREACHED, AT_RISK and HEALTHY.\n\n`getSlaState` is a short chain of `if` statements, and **the order of the checks decides the answer** when more than one condition is true. Two details from `date-fns` matter:\n\n- `isAfter(a, b)` is strict: it is false when the two times are equal.\n- `differenceInMinutes` counts whole minutes and drops the remainder.\n\nBefore the quizzes, write out the order of the checks in `getSlaState`, then read `evaluateSlaTracking` in `src/services/sla-service.ts` (lines 67-100) and ask what happens to paused time when a ticket resumes.",
+   "excerpts": [
+    {
+     "path": "src/lib/utils/dates.ts",
+     "lineStart": 9,
+     "lineEnd": 15,
+     "quote": "export const getSlaState = ( dueAt: Date, actualAt: Date | null, now: Date, thresholdMinutes: number, isPaused: boolean, ): SlaState => {"
+    },
+    {
+     "path": "docs/learning/concepts-demonstrated.md",
+     "lineStart": 93,
+     "lineEnd": 93,
+     "quote": "deadlines are `createdAt + N minutes` (`src/services/sla-service.ts:37-38`)"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/architecture/domain-model.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The ticket, SLA tracking and history models."
+    }
+   ]
+  },
+  {
+   "id": "x-q01-observer-409",
+   "target": "seed:quests:organized-experiment-support-hub/quiz/1dbf63e0992c029c",
+   "phase": "after",
+   "title": "A permission failure that answers 409",
+   "body": "**Key: 409, which reads like a state conflict rather than a refusal.**\n\n`updateTicketMetadata` starts with `if (!canModifyTickets(session.role)) throw conflict(...)`. An observer cannot modify tickets, so this line throws. `conflict()` creates a 409 error, the code normally used for \"the data is in a state that conflicts with your request\". A client seeing 409 might reload and retry, when the real answer is \"you are not allowed\", which is 403. Finding F12(a) lists this, and the ladder's rung 5 fixes it with `forbidden()`.\n\nWhy the others are wrong:\n- *401*: the observer is signed in; 401 means \"not authenticated\".\n- *403*: that is what it *should* return, but the code calls `conflict()`.\n- *400 VALIDATION_ERROR*: the permission check runs before anything looks at the fields.",
+   "excerpts": [
+    {
+     "path": "src/services/ticket-service.ts",
+     "lineStart": 403,
+     "lineEnd": 405,
+     "quote": "if (!canModifyTickets(session.role)) { throw conflict(\"This role cannot edit ticket metadata.\"); }"
+    },
+    {
+     "path": "docs/architecture/README.md",
+     "lineStart": 97,
+     "lineEnd": 97,
+     "quote": "(a) permission failures in `createTicket()` and `updateTicketMetadata()` throw `conflict()` and return **409**, not 403"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02-email-case",
+   "target": "seed:quests:organized-experiment-support-hub/quiz/3d34b83f47d1d6ff",
+   "phase": "after",
+   "title": "Two email checks that disagree about letter case",
+   "body": "**Key: the detail page opens, but the ticket is missing from their list.**\n\nThere are two ownership checks for portal users. The detail check in `policies.ts` lowercases both emails before comparing, so \"Pat@Example.com\" matches \"pat@example.com\" and the page opens. The list query in `ticket-repository.ts` filters with `requester: { email: visibility.requesterEmail }`, an exact match in the database, so the ticket is left out of the list. The same user sees the ticket in one place and not the other.\n\nWhy the others are wrong:\n- *Both list and detail*: the list query is case-sensitive.\n- *List but 403 on detail*: it is the other way round.\n- *Nowhere*: the detail check does match.",
+   "excerpts": [
+    {
+     "path": "src/lib/permissions/policies.ts",
+     "lineStart": 46,
+     "lineEnd": 49,
+     "quote": "session.role === \"CUSTOMER_PORTAL\" && session.email.toLowerCase() === ticket.requester.email.toLowerCase()"
+    },
+    {
+     "path": "src/repositories/ticket-repository.ts",
+     "lineStart": 103,
+     "lineEnd": 109,
+     "quote": "...(visibility?.requesterEmail ? { requester: { email: visibility.requesterEmail, }, }"
+    },
+    {
+     "path": "docs/learning/concepts-demonstrated.md",
+     "lineStart": 104,
+     "lineEnd": 104,
+     "quote": "detail compares case-insensitively, list compares exactly (`policies.ts:48` vs `ticket-repository.ts:103-109`)"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q03-escalate-direct",
+   "target": "seed:quests:organized-experiment-support-hub/quiz/5a0b44ddbb5c381c",
+   "phase": "after",
+   "title": "Escalation writes the status directly",
+   "body": "**Key: a transition check and the status-history row for the change.**\n\n`escalateTicket` updates the ticket with `status: ticket.status === \"CLOSED\" ? ticket.status : \"ESCALATED\"`. It never calls `assertValidStatusTransition` (so PENDING → ESCALATED is not checked against the table) and never calls `createStatusHistory` (so the timeline shows an escalation but no status change). Finding F7 adds that SLA tracking is not re-evaluated, so a PENDING ticket stays paused.\n\nWhy the others are wrong:\n- *Nothing, it goes through changeTicketStatus*: it does not; only `changeTicketStatus` uses the table.\n- *The status change stays PENDING*: the update does set ESCALATED.\n- *No audit row*: every mutating workflow writes an AuditLog row in its transaction; what is missing is the *status history*.",
+   "excerpts": [
+    {
+     "path": "src/services/ticket-service.ts",
+     "lineStart": 863,
+     "lineEnd": 867,
+     "quote": "await repository.updateTicket(ticket.id, { isEscalated: true, escalatedAt: ticket.escalatedAt ?? new Date(), status: ticket.status === \"CLOSED\" ? ticket.status : \"ESCALATED\", });"
+    },
+    {
+     "path": "docs/architecture/README.md",
+     "lineStart": 92,
+     "lineEnd": 92,
+     "quote": "but never calls `assertValidStatusTransition()` or `createStatusHistory()`. The ticket timeline therefore shows an escalation but no status change."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q04-gc-httponly",
+   "target": "seed:quests:organized-experiment-support-hub/quiz/691692988e577833",
+   "phase": "after",
+   "title": "Rung 1's check: name the line and what it should do instead",
+   "body": "**Key: \"you can name the line that would need to change (`session.ts:30`) and what it would do instead (verify a signature, or look up a server-side session row).\"**\n\nThis is a goal-check question: the Goal/Check ladder at the end of `auth-and-permissions.md` pairs five goals with five checks, and the wrong choices are the checks of the other rungs.\n\nRung 1's goal is to explain why `httpOnly` does not make the session trustworthy. `httpOnly` stops page scripts from reading the cookie, but the user can still edit it, and `readSession` trusts whatever JSON it finds on line 30. Showing you understand means naming that line and the two real fixes: check a signature, or keep the session on the server.\n\nWhy the others do not fit:\n- *List both reassignment paths*: rung 2.\n- *`forbidden()` on lines 283 and 404*: rung 5, the 409 bug.\n- *`dashboard: null` for agents*: rung 4, the bootstrap fix.",
+   "excerpts": [
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 99,
+     "lineEnd": 99,
+     "quote": "1. **Goal:** explain why `httpOnly` does not make this session trustworthy. **Check:** you can name the line that would need to change (`session.ts:30`)"
+    },
+    {
+     "path": "src/lib/auth/session.ts",
+     "lineStart": 29,
+     "lineEnd": 30,
+     "quote": "return JSON.parse(raw) as SessionUser;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q05-gc-agent-bootstrap",
+   "target": "seed:quests:organized-experiment-support-hub/quiz/7a8bdc5399b9a609",
+   "phase": "after",
+   "title": "Rung 4's check: dashboard null instead of a thrown error",
+   "body": "**Key: \"`getBootstrapData()` returns `dashboard: null` for roles that fail `canSeeSystemDashboards()` instead of throwing, and an agent session gets `200` from `/api/bootstrap`.\"**\n\nThis is a goal-check question: the Goal/Check ladder at the end of `auth-and-permissions.md` pairs five goals with five checks, and the wrong choices are the checks of the other rungs.\n\nRung 4's goal has two parts: agents must be able to load the workspace, and they must still not see the dashboard. The check proves both: the dashboard slot is `null` for roles that may not see it (so it does not leak), and the whole bootstrap now returns 200 for an agent (so the workspace loads).\n\nWhy the others do not fit:\n- *Name `session.ts:30`*: rung 1, the session cookie.\n- *`forbidden()` on 283 and 404*: rung 5.\n- *List both reassignment paths*: rung 2.",
+   "excerpts": [
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 102,
+     "lineEnd": 102,
+     "quote": "4. **Goal:** make agents able to load the workspace without letting them see the dashboard."
+    },
+    {
+     "path": "src/services/ticket-service.ts",
+     "lineStart": 893,
+     "lineEnd": 893,
+     "quote": "session.role === \"CUSTOMER_PORTAL\" ? Promise.resolve(null) : getOverviewDashboard(session),"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q06-pause-not-credited",
+   "target": "seed:quests:organized-experiment-support-hub/quiz/7d8c17ebaf9695f0",
+   "phase": "after",
+   "title": "Paused SLA time is never credited",
+   "body": "**Key: BREACHED, because the pause is only a label and no time is credited.**\n\nWhen the ticket resumes, `evaluateSlaTracking` sets `pausedAt` to `null` (line 78) and copies `accumulatedPauseMs` through unchanged (line 83). No code anywhere adds the paused minutes to it or moves the due date. So the deadline is still 13:00. At 14:00 the ticket is no longer paused, `now` is after the deadline, and `getSlaState` returns BREACHED. Finding F4 reproduces exactly this case.\n\nWhy the others are wrong:\n- *HEALTHY, deadline pushed to 14:40*: that would need code that credits pause time; there is none.\n- *Still PAUSED*: `shouldPause` is false after resume, so `isPaused` is false.\n- *AT_RISK*: the deadline is in the past, so the BREACHED check comes first.",
+   "excerpts": [
+    {
+     "path": "src/services/sla-service.ts",
+     "lineStart": 78,
+     "lineEnd": 83,
+     "quote": "const pausedAt = shouldPause ? input.existing.pausedAt ?? input.now : null; return { isPaused: shouldPause, pausedAt, accumulatedPauseMs: input.existing.accumulatedPauseMs,"
+    },
+    {
+     "path": "docs/architecture/README.md",
+     "lineStart": 89,
+     "lineEnd": 89,
+     "quote": "Nothing in `src/` ever adds to `accumulatedPauseMs`, and no code moves a due date after creation."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07-at-risk-boundaries",
+   "target": "seed:quests:organized-experiment-support-hub/quiz/88d5a11d817768da",
+   "phase": "after",
+   "title": "At the deadline and at 15m59s, both are AT_RISK",
+   "body": "**Key: AT_RISK both times, as neither moment is past the deadline yet.**\n\nExactly at the deadline, `isAfter(now, dueAt)` compares two equal times. `isAfter` is strict, so it is false and BREACHED is skipped. `differenceInMinutes` is 0, and 0 <= 15, so AT_RISK. At 15 minutes 59 seconds before, `isAfter` is false again. `differenceInMinutes` counts whole minutes and drops the 59 seconds, giving 15, and 15 <= 15, so AT_RISK.\n\nWhy the others are wrong:\n- *HEALTHY at 15m59s*: that would need rounding up to 16; the function truncates.\n- *BREACHED at the due instant*: strict `isAfter` is false at equality.\n- *Both*: the same two mistakes combined.",
+   "excerpts": [
+    {
+     "path": "src/lib/utils/dates.ts",
+     "lineStart": 24,
+     "lineEnd": 29,
+     "quote": "if (isAfter(now, dueAt)) { return \"BREACHED\"; } const remainingMinutes = differenceInMinutes(dueAt, now); return remainingMinutes <= thresholdMinutes ? \"AT_RISK\" : \"HEALTHY\";"
+    },
+    {
+     "path": "docs/learning/concepts-demonstrated.md",
+     "lineStart": 94,
+     "lineEnd": 94,
+     "quote": "Exactly at the deadline the state is `AT_RISK`, not `BREACHED`, because `isAfter` is strict (check C6)."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08-late-is-met",
+   "target": "seed:quests:organized-experiment-support-hub/quiz/8f9ed0519199301c",
+   "phase": "after",
+   "title": "A late first response still counts as MET",
+   "body": "**Key: MET, because actualAt short-circuits before dueAt is compared.**\n\nThe first line of `getSlaState` is `if (actualAt) return \"MET\"`. As soon as a response exists, the function returns MET without ever comparing the response time with the deadline. Five hours late or five minutes early, the result is the same. Finding F5 notes the effect: late responses disappear from every BREACHED counter on the dashboard.\n\nWhy the others are wrong:\n- *BREACHED, actualAt is later than dueAt*: the function never compares those two.\n- *PAUSED for review*: there is no review step; PAUSED is only reached when there is no response.\n- *AT_RISK until acknowledged*: no acknowledgement exists in the code.",
+   "excerpts": [
+    {
+     "path": "src/lib/utils/dates.ts",
+     "lineStart": 16,
+     "lineEnd": 18,
+     "quote": "if (actualAt) { return \"MET\"; }"
+    },
+    {
+     "path": "docs/architecture/README.md",
+     "lineStart": 90,
+     "lineEnd": 90,
+     "quote": "`getSlaState()` returns `MET` as soon as `actualAt` is set, before comparing it to `dueAt`"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09-gc-portal-bootstrap",
+   "target": "seed:quests:organized-experiment-support-hub/quiz/9c238b4edab73efd",
+   "phase": "after",
+   "title": "Rung 3's check: the full list of what bootstrap sends a customer",
+   "body": "**Key: \"your list includes `requesters`, `assignableUsers`, `queueOptions`, `queues` (summaries) and `savedViews`, and you can point to the line for each ...\".**\n\nThis is a goal-check question: the Goal/Check ladder at the end of `auth-and-permissions.md` pairs five goals with five checks, and the wrong choices are the checks of the other rungs.\n\nRung 3's goal is an inventory: everything a `CUSTOMER_PORTAL` session gets back from `GET /api/bootstrap`. The check is that inventory, with a source line for each item. It matters because finding F2 shows the endpoint returns internal data (every requester's details, assignable staff, queue counts) to any session.\n\nWhy the others do not fit:\n- *`forbidden()` on 283 and 404*: rung 5.\n- *Name `session.ts:30`*: rung 1.\n- *`dashboard: null` for agents*: rung 4, which is about agents, not customers.",
+   "excerpts": [
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 101,
+     "lineEnd": 101,
+     "quote": "3. **Goal:** list everything a `CUSTOMER_PORTAL` session receives from `GET /api/bootstrap`."
+    },
+    {
+     "path": "docs/architecture/README.md",
+     "lineStart": 87,
+     "lineEnd": 87,
+     "quote": "**F2: the bootstrap endpoint leaks internal data to portal users (Traced).**"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10-customer-reply-status",
+   "target": "seed:quests:organized-experiment-support-hub/quiz/9c742d9dc08bef14",
+   "phase": "after",
+   "title": "A customer reply forces WAITING_ON_CUSTOMER, even from RESOLVED",
+   "body": "**Key: WAITING_ON_CUSTOMER, an edge that the transition table rejects.**\n\nIn `addPublicReply`, `nextStatus` is `\"WAITING_ON_CUSTOMER\"` whenever the author's role is `CUSTOMER_PORTAL`, whatever the current status. The code does not call `assertValidStatusTransition`, so nothing checks the move. From RESOLVED that produces RESOLVED → WAITING_ON_CUSTOMER, which the real transition table rejects (check C2). The name is also backwards: after the customer has replied, support is the one who must act.\n\nWhy the others are wrong:\n- *OPEN via the reopen edge*: the code never picks OPEN for a customer author.\n- *Refused with 409*: there is no check that could refuse it.\n- *Stays RESOLVED*: `nextStatus` is written to the ticket.",
+   "excerpts": [
+    {
+     "path": "src/services/ticket-service.ts",
+     "lineStart": 571,
+     "lineEnd": 572,
+     "quote": "const nextStatus = session.role === \"CUSTOMER_PORTAL\" ? \"WAITING_ON_CUSTOMER\" : ticket.status === \"NEW\" ? \"OPEN\" : ticket.status;"
+    },
+    {
+     "path": "docs/architecture/README.md",
+     "lineStart": 88,
+     "lineEnd": 88,
+     "quote": "Run against the real transition table, a reply on a `RESOLVED` ticket produces `RESOLVED -> WAITING_ON_CUSTOMER`, which the table rejects (check C2)."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q11-gc-reassign-paths",
+   "target": "seed:quests:organized-experiment-support-hub/quiz/abe2b0fdde0277c4",
+   "phase": "after",
+   "title": "Rung 2's check: both reassignment paths, and which one is guarded",
+   "body": "**Key: \"you list both `reassignTicket()` (`ticket-service.ts:785`) and `updateTicketMetadata()` (`:388`), and state which one enforces `canReassignTickets()`.\"**\n\nThis is a goal-check question: the Goal/Check ladder at the end of `auth-and-permissions.md` pairs five goals with five checks, and the wrong choices are the checks of the other rungs.\n\nRung 2's goal is to find *every* way a ticket's assignee can change. There are two: the dedicated `/assign` workflow and the general PATCH that also accepts `assigneeId` and `queueId`. The check asks you to list both and say which one actually enforces the lead-or-manager rule, because that difference is finding F6.\n\nWhy the others do not fit:\n- *Name `session.ts:30`*: rung 1.\n- *`dashboard: null` for agents*: rung 4.\n- *The bootstrap inventory*: rung 3.",
+   "excerpts": [
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 100,
+     "lineEnd": 100,
+     "quote": "2. **Goal:** find every reassignment path."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/architecture/README.md",
+     "lineStart": 91,
+     "lineEnd": 91,
+     "why": "Finding F6: what the two paths enforce."
+    }
+   ]
+  },
+  {
+   "id": "x-q12-gc-409-fix",
+   "target": "seed:quests:organized-experiment-support-hub/quiz/b7c10e18ecb4244d",
+   "phase": "after",
+   "title": "Rung 5's check: forbidden() on both lines and a real 403",
+   "body": "**Key: \"`ticket-service.ts:283` and `:404` throw `forbidden()`, and a `READ_ONLY_OBSERVER` posting to `/api/tickets` gets `403`.\"**\n\nThis is a goal-check question: the Goal/Check ladder at the end of `auth-and-permissions.md` pairs five goals with five checks, and the wrong choices are the checks of the other rungs.\n\nRung 5's goal is to fix the bug where permission failures return 409. The fix is visible in two places (the two lines that call `conflict()` today), and the check proves it end to end: an observer who tries to create a ticket now gets 403, the correct \"not allowed\" code.\n\nWhy the others do not fit:\n- *The bootstrap inventory*: rung 3.\n- *List both reassignment paths*: rung 2.\n- *Name `session.ts:30`*: rung 1.\n\nOnly rung 5 changes an HTTP status code.",
+   "excerpts": [
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 103,
+     "lineEnd": 103,
+     "quote": "5. **Goal:** fix the 409-for-permission bug. **Check:** `ticket-service.ts:283` and `:404` throw `forbidden()`, and a `READ_ONLY_OBSERVER` posting to `/api/tickets` gets `403`."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q13-bad-json-500",
+   "target": "seed:quests:organized-experiment-support-hub/quiz/c528c4047e02f930",
+   "phase": "after",
+   "title": "Malformed JSON is a 500; an empty object is a 400",
+   "body": "**Key: 500 for `{`, a SyntaxError, and 400 for `{}`, a ZodError from parseJson.**\n\n`parseJson` does two steps: `await request.json()`, then `schema.parse(json)`. The body `{` is not valid JSON, so the first step throws a `SyntaxError`. Only `ZodError` is mapped to 400; anything else falls through to 500. The body `{}` is valid JSON, so Zod runs and fails because required create fields are missing: a `ZodError`, so 400 VALIDATION_ERROR.\n\nWhy the others are wrong:\n- *400 for both*: `request.json()` fails before Zod can run.\n- *201 for `{}`*: the create schema has required fields.\n- *500 for both*: the route does handle errors, through `withRouteErrorHandling`.",
+   "excerpts": [
+    {
+     "path": "src/lib/http/route-helpers.ts",
+     "lineStart": 17,
+     "lineEnd": 20,
+     "quote": "export const parseJson = async <T>(request: Request, schema: ZodSchema<T>) => { const json = await request.json(); return schema.parse(json); };"
+    },
+    {
+     "path": "docs/learning/concepts-demonstrated.md",
+     "lineStart": 69,
+     "lineEnd": 70,
+     "quote": "a body that is not JSON throws before Zod runs and becomes `500`."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q14-forgeable-cookie",
+   "target": "seed:quests:organized-experiment-support-hub/quiz/d6baa91c2e7b3ea2",
+   "phase": "after",
+   "title": "httpOnly does not stop a user from editing their own cookie",
+   "body": "**Key: yes, because the cookie is unsigned JSON that the user can edit.**\n\n`readSession` reads the cookie and returns `JSON.parse(raw) as SessionUser`. There is no signature check and no database lookup. A user can open their browser's tools and set the cookie to JSON with `\"role\":\"SUPPORT_MANAGER\"`, and the server will believe it. `httpOnly` only stops *page scripts* from reading the cookie; it does nothing about the user changing it. Finding F1 reproduced this.\n\nWhy the others are wrong:\n- *Role re-read from the database*: `readSession` only parses the cookie.\n- *Encrypted*: `writeSessionCookie` stores plain `JSON.stringify(session)`.\n- *httpOnly cookies cannot be modified*: the user can modify them; scripts cannot read them.",
+   "excerpts": [
+    {
+     "path": "src/lib/auth/session.ts",
+     "lineStart": 29,
+     "lineEnd": 30,
+     "quote": "return JSON.parse(raw) as SessionUser;"
+    },
+    {
+     "path": "docs/architecture/README.md",
+     "lineStart": 86,
+     "lineEnd": 86,
+     "quote": "`httpOnly` (`:50`) stops page scripts from reading the cookie; it does not stop a user from editing their own cookie."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q15-read-outside-tx",
+   "target": "seed:quests:organized-experiment-support-hub/quiz/f0600e83ac753073",
+   "phase": "after",
+   "title": "Reading before the transaction: last write wins",
+   "body": "**Key: both succeed, the last write wins, and both rows record a stale fromAssigneeId.**\n\n`reassignTicket` loads the ticket with `requireWorkflowTicket` (line 791) *before* opening `prisma.$transaction` (line 793), and `updateTicket` updates by id alone. Both leads read the same current assignee. Both transactions then write their new assignee; the second simply overwrites the first. Each writes an `AssignmentHistory` row whose \"from\" is the assignee they read, so both say \"from\" the same old person, and the history does not chain.\n\nWhy the others are wrong:\n- *The second waits on a row lock*: the read happens outside the transaction and takes no lock.\n- *One rolls back*: nothing compares versions, so neither fails.\n- *Serialization error*: Prisma uses the database default, READ COMMITTED, which does not raise one here.",
+   "excerpts": [
+    {
+     "path": "src/services/ticket-service.ts",
+     "lineStart": 791,
+     "lineEnd": 793,
+     "quote": "const ticket = await requireWorkflowTicket(ticketId); const updated = await prisma.$transaction(async (tx) => {"
+    },
+    {
+     "path": "docs/architecture/README.md",
+     "lineStart": 93,
+     "lineEnd": 93,
+     "quote": "two leads reassigning at once both succeed, the last write wins, and both `AssignmentHistory` rows record the same stale `fromAssigneeId`."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q16-patch-reassign",
+   "target": "seed:quests:organized-experiment-support-hub/quiz/f10fb65f78da4e42",
+   "phase": "after",
+   "title": "The lead-only rule is skipped on PATCH",
+   "body": "**Key: through PATCH, which checks only canModifyTickets before writing.**\n\n`reassignTicket` (the `/assign` route) starts with `assertCanReassignTicket`, which requires a lead or manager. But `updateTicketMetadata` (PATCH) only checks `canModifyTickets`, which includes `SUPPORT_AGENT`, and its schema accepts `assigneeId` and `queueId`, which it writes. So an agent can do through PATCH what `/assign` forbids. Finding F6: the same rule enforced on one endpoint and not the other.\n\nWhy the others are wrong:\n- *Both endpoints call assertCanReassignTicket*: only `reassignTicket` does.\n- *Escalating auto-assigns*: `escalateTicket` sets escalation fields and status, not the assignee.\n- *A note mentioning an agent*: notes do not change assignment.",
+   "excerpts": [
+    {
+     "path": "src/services/ticket-service.ts",
+     "lineStart": 403,
+     "lineEnd": 404,
+     "quote": "if (!canModifyTickets(session.role)) {"
+    },
+    {
+     "path": "docs/architecture/README.md",
+     "lineStart": 91,
+     "lineEnd": 91,
+     "quote": "`reassignTicket()` requires a lead or manager (`ticket-service.ts:790`), but `updateTicketMetadata()` only requires `canModifyTickets()` (`:403`), which includes `SUPPORT_AGENT`."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q17-agent-bootstrap-fails",
+   "target": "seed:quests:organized-experiment-support-hub/quiz/fdd67849de9d82bc",
+   "phase": "after",
+   "title": "One rejected branch of Promise.all breaks the whole bootstrap",
+   "body": "**Key: the dashboard call inside Promise.all rejects agents and fails bootstrap.**\n\n`getBootstrapData` runs three things together with `Promise.all`: the ticket list, the queue summaries, and, for every role except customers, `getOverviewDashboard`. The dashboard permission allows only leads, managers and observers, so for an agent that call throws 403. `Promise.all` rejects as soon as any one of its promises rejects, so the whole bootstrap fails and the agent sees only an error box. Since an agent is the default demo user, a first visit hits this (F13).\n\nWhy the others are wrong:\n- *Bootstrap requires the reassign permission*: the failure comes from the dashboard check.\n- *No queue memberships*: queue membership is never read anywhere.\n- *By design, agents use email*: nothing in the docs says so; F13 calls it a bug.",
+   "excerpts": [
+    {
+     "path": "src/services/ticket-service.ts",
+     "lineStart": 890,
+     "lineEnd": 894,
+     "quote": "const [tickets, queueSummaries, dashboard] = await Promise.all([ listTickets(session, filters), createQueueRepository(prisma).listQueueSummaries(), session.role === \"CUSTOMER_PORTAL\" ? Promise.resolve(null) : getOverviewDashboard(session), ]);"
+    },
+    {
+     "path": "docs/architecture/README.md",
+     "lineStart": 98,
+     "lineEnd": 98,
+     "quote": "`assertCanViewDashboards()` allows only lead, manager and observer"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}

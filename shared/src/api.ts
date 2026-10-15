@@ -1209,3 +1209,78 @@ export const CampaignProgressResponse = z
   })
   .strict();
 export type CampaignProgressResponse = z.infer<typeof CampaignProgressResponse>;
+
+// ---------------------------------------------------------------- "Learn more" notes (GET /units/:id/notes)
+
+/**
+ * The "Learn more" panel of a unit. READ-ONLY: the endpoint writes nothing, and it applies the
+ * same honesty gates as the rest of the API:
+ *   - a locked track / campaign act -> 403 (TRACK_LOCKED / ACT_LOCKED), like every unit read;
+ *   - readings (seed:notes 'before' notes) are always served for an open unit: the validator
+ *     proved none contains a keyed answer of its quest pack;
+ *   - an explanation ('after' note) of one quiz is served only after the learner's recorded
+ *     study-quiz answer covers it: the gate was PASSED, or that question was answered right, or
+ *     its missed-question review card is due (the moment the card itself shows the key). Before
+ *     that only a COUNT is served (titles can hint at the key);
+ *   - units without notes get their registered refs (the /refs viewer) and, after a verified
+ *     pass or a reveal, the unit's post-solve explanation; the solution only after a reveal
+ *     (exactly what GET /solution already releases).
+ */
+export const NoteLinkDto = z
+  .object({
+    path: z.string(),
+    lineStart: z.number().nullable(),
+    lineEnd: z.number().nullable(),
+    /** https://github.com/<owner>/<repo>/blob/<sha>/<path>#L.. (pinned sha) */
+    url: z.string(),
+    /** a registered content_ref for the same repo/path/sha (opens in the /refs viewer), else null */
+    refId: z.number().nullable(),
+  })
+  .strict();
+export const NoteExcerptDto = NoteLinkDto.extend({ lineStart: z.number(), lineEnd: z.number(), quote: z.string() }).strict();
+export const NoteReadMoreDto = NoteLinkDto.extend({ why: z.string() }).strict();
+export const NoteDto = z
+  .object({
+    key: z.string(),
+    id: z.string(),
+    phase: z.enum(['before', 'after']),
+    /** 'pack' or the quest item key the note is about */
+    target: z.string(),
+    targetKind: z.enum(['pack', 'quiz', 'flashcard', 'reading-step']),
+    title: z.string(),
+    /** markdown (no HTML, no images) */
+    body: z.string(),
+    excerpts: z.array(NoteExcerptDto),
+    readMore: z.array(NoteReadMoreDto),
+  })
+  .strict();
+export type NoteDto = z.infer<typeof NoteDto>;
+
+export const UnitNotesResponse = z
+  .object({
+    unitId: z.number(),
+    /** the quest pack the notes come from (repo @ pinned sha), null when the unit has none */
+    source: z.object({ repo: z.string(), sha: z.string() }).strict().nullable(),
+    /** 'before' notes: safe before answering */
+    readings: z.array(NoteDto),
+    explanations: z
+      .object({
+        /** none: no explanations exist; locked: none released yet; partial: some; released: all */
+        state: z.enum(['none', 'locked', 'partial', 'released']),
+        message: z.string(),
+        released: z.array(NoteDto),
+        /** withheld explanations: a count only, never their titles */
+        withheld: z.number(),
+        /** earliest time a withheld explanation releases (a missed question's review card), else null */
+        nextAt: z.number().nullable(),
+      })
+      .strict(),
+    /** the unit's registered refs (GET /refs/:id/content renders the markdown ones) */
+    refs: z.array(RefLink),
+    /** units without notes: the post-solve explanation (after a verified pass or a reveal), else null */
+    explanation: z.string().nullable(),
+    /** the revealed solution (only after a reveal: what GET /solution serves), else null */
+    solution: RevealResponse.shape.solution.nullable(),
+  })
+  .strict();
+export type UnitNotesResponse = z.infer<typeof UnitNotesResponse>;
