@@ -16,13 +16,13 @@
       "source": { "path": "backend/Data/PasteStore.cs", "lines": { "start": 24, "end": 52 } },
       "cites": [{ "path": "backend/Data/PasteStore.cs", "lineStart": 36, "lineEnd": 44 }],
       "prompt": "A client issues GET /api/pastes/{slug} for an existing, unexpired paste. Besides returning the paste, what does PasteStore.GetAsync do?",
-      "answer": "It bumps ViewCount, stamps LastViewedAt, and rewrites the entire pastes.json file - every successful read is also a disk write",
+      "answer": "Bumps ViewCount and LastViewedAt, then rewrites the whole pastes.json file",
       "distractors": [
-        "Nothing - GetAsync is a pure read and only deserializes the file",
-        "It updates ViewCount in memory and the change is persisted only by the next create or update",
-        "It appends a view event to a separate analytics log instead of touching the paste record"
+        "No side effects - GetAsync is a pure read that just deserializes the file",
+        "Bumps ViewCount in memory, persisted later by the next create or update",
+        "Appends a view event to a separate analytics log, leaving the paste as is"
       ],
-      "explanation": "GetAsync builds `updated = paste with { ViewCount = paste.ViewCount + 1, LastViewedAt = ... }`, swaps it into the list and calls WriteAllUnsafeAsync - so reads mutate and persist state."
+      "explanation": "Every successful read is also a disk write: GetAsync builds `updated = paste with { ViewCount = paste.ViewCount + 1, LastViewedAt = ... }`, swaps it into the list and calls WriteAllUnsafeAsync - so reads mutate and persist state."
     },
     {
       "id": "q02-expired-delete-asymmetry",
@@ -33,13 +33,13 @@
         { "path": "backend/Data/PasteStore.cs", "lineStart": 139, "lineEnd": 144 }
       ],
       "prompt": "A paste expired an hour ago but is still physically present in pastes.json. The caller holds the correct delete key. Which mutation can still succeed?",
-      "answer": "Only DELETE - UpdateAsync refuses expired pastes, but DeleteAsync checks just existence and the key hash, never expiry",
+      "answer": "DELETE alone - its guard checks existence and the key hash, not expiry",
       "distractors": [
-        "Only PUT - updates renew the expiry while deletes of expired pastes are rejected",
-        "Neither - both operations call IsExpired before touching the record",
-        "Both - mutations ignore expiry entirely as long as the delete key matches"
+        "PUT alone - an update renews the expiry, while deleting expired pastes fails",
+        "Neither - both of them call IsExpired before they touch the record",
+        "Both - mutations skip the expiry check as long as the delete key matches"
       ],
-      "explanation": "UpdateAsync's guard is `paste is null || paste.IsExpired(...) || DeleteKeyHash != ...`; DeleteAsync's guard omits the IsExpired clause, so an expired-but-unpurged paste is still deletable."
+      "explanation": "UpdateAsync refuses expired pastes: its guard is `paste is null || paste.IsExpired(...) || DeleteKeyHash != ...`. DeleteAsync's guard omits the IsExpired clause, so an expired-but-unpurged paste is still deletable."
     },
     {
       "id": "q03-lazy-expiry-purge",
@@ -47,13 +47,13 @@
       "source": { "path": "backend/Data/PasteStore.cs", "lines": { "start": 185, "end": 206 } },
       "cites": [{ "path": "backend/Data/PasteStore.cs", "lineStart": 197, "lineEnd": 206 }],
       "prompt": "When is an expired paste physically removed from pastes.json?",
-      "answer": "On the next write of any kind - WriteAllUnsafeAsync filters expired pastes out before serializing, so purging piggybacks on unrelated operations",
+      "answer": "On the next write of any kind, which filters out expired pastes before saving",
       "distractors": [
-        "Immediately when its ExpiresAt instant passes, via a background timer",
-        "On the first read that notices it is expired, which deletes the record before returning null",
-        "Never - expired pastes stay on disk forever and are only hidden from queries"
+        "Right when its ExpiresAt instant passes, removed by a background timer",
+        "On the first read that notices the expiry, which deletes it before returning",
+        "It stays on disk indefinitely and is merely hidden from queries and reads"
       ],
-      "explanation": "There is no scheduler; WriteAllUnsafeAsync keeps only `!p.IsExpired(now)` entries whenever anything saves the file. Reads filter but do not remove (GetAsync returns null yet still leaves the record)."
+      "explanation": "Purging piggybacks on unrelated operations. There is no scheduler; WriteAllUnsafeAsync keeps only `!p.IsExpired(now)` entries whenever anything saves the file. Reads filter but do not remove (GetAsync returns null yet still leaves the record)."
     },
     {
       "id": "q04-put-wrong-key-status",
@@ -64,27 +64,27 @@
         { "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md", "lineStart": 31, "lineEnd": 31 }
       ],
       "prompt": "A PUT /api/pastes/{slug} arrives with a well-formed body but the wrong delete key. What does the API return?",
-      "answer": "404 with one blended message - a wrong key is deliberately indistinguishable from a missing or expired paste",
+      "answer": "404 with one blended message, same as a missing or expired paste",
       "distractors": [
         "401 Unauthorized, since the delete key is the authentication credential",
-        "403 Forbidden with a field error naming the DeleteKey property",
+        "403 Forbidden, with a field error naming the DeleteKey property",
         "400 Bad Request, because Validate() rejects keys that do not match"
       ],
-      "explanation": "UpdateAsync returns null for not-found, expired, and wrong-key alike, and the endpoint maps null to Results.NotFound(\"Paste not found, expired, or delete key is incorrect.\") - the guide calls out that auth errors are not distinguishable."
+      "explanation": "A wrong key is deliberately indistinguishable from a missing or expired paste. UpdateAsync returns null for not-found, expired, and wrong-key alike, and the endpoint maps null to Results.NotFound(\"Paste not found, expired, or delete key is incorrect.\") - the guide calls out that auth errors are not distinguishable."
     },
     {
       "id": "q05-slug-alphabet",
       "kind": "quiz",
       "source": { "path": "backend/Data/PasteStore.cs", "lines": { "start": 242, "end": 246 } },
       "cites": [{ "path": "backend/Data/PasteStore.cs", "lineStart": 242, "lineEnd": 246 }],
-      "prompt": "The 8-character slug is drawn from a 58-character alphabet. Which characters were deliberately left out, and why?",
-      "answer": "Lowercase l, uppercase I and O, and digits 0 and 1 - the visually confusable look-alikes",
+      "prompt": "The 8-character slug is drawn from a 57-character alphabet. Which characters were deliberately left out, and why?",
+      "answer": "l, I, O, 0 and 1 - the look-alikes that people easily misread",
       "distractors": [
-        "All vowels, to prevent random slugs from spelling real words",
-        "All uppercase letters, so slugs stay valid in case-insensitive URLs",
-        "Punctuation like hyphen and underscore, which would break route matching"
+        "The vowels, so that random slugs do not spell out real words",
+        "Uppercase letters, so slugs stay valid in case-insensitive URLs",
+        "Hyphen and underscore, which would break the route's matching"
       ],
-      "explanation": "RandomToken's alphabet is abcdefghijk(m)nopqrstuvwxyz / ABCDEFGH(J)KLMN(P)QRSTUVWXYZ / 23456789: l, I, O, 0 and 1 are missing so humans cannot misread a slug."
+      "explanation": "RandomToken's alphabet is abcdefghijk(m)nopqrstuvwxyz / ABCDEFGH(J)KLMN(P)QRSTUVWXYZ / 23456789 - 25 + 24 + 8 = 57 characters: lowercase l, uppercase I and O, and digits 0 and 1 are missing so humans cannot misread a slug. (Prompt corrected from '58-character' in the quiz rebalance: the alphabet string has 57 characters.)"
     },
     {
       "id": "q06-slug-case-insensitive",
@@ -95,13 +95,13 @@
         { "path": "backend/Data/PasteStore.cs", "lineStart": 208, "lineEnd": 218 }
       ],
       "prompt": "Slugs mix upper- and lowercase letters, yet SlugEquals uses StringComparison.OrdinalIgnoreCase everywhere. What follows?",
-      "answer": "abC123xy and ABc123XY address the same paste, and uniqueness is enforced case-insensitively, shrinking the effective namespace",
+      "answer": "abC123xy and ABc123XY name the same paste, shrinking the effective namespace",
       "distractors": [
-        "Nothing changes for lookups - the comparison only affects how new slugs are generated",
-        "Lookups become case-sensitive but creation is not, so duplicate slugs can be minted",
-        "The store normalizes every slug to lowercase before saving it to disk"
+        "Lookups are unaffected - the comparison matters just when new slugs are made",
+        "Lookups become case-sensitive but creation is not, so duplicates get minted",
+        "The store lowercases each slug before saving it, so the mixed case is lost"
       ],
-      "explanation": "Every lookup (get, update, delete) and the CreateUniqueSlugAsync collision loop go through SlugEquals, which ignores case - so mixed-case output does not multiply the address space."
+      "explanation": "Every lookup (get, update, delete) and the CreateUniqueSlugAsync collision loop go through SlugEquals, which ignores case - uniqueness is enforced case-insensitively, so mixed-case output does not multiply the address space."
     },
     {
       "id": "q07-delete-key-storage",
@@ -109,13 +109,13 @@
       "source": { "path": "backend/Data/PasteStore.cs", "lines": { "start": 236, "end": 240 } },
       "cites": [{ "path": "backend/Data/PasteStore.cs", "lineStart": 236, "lineEnd": 240 }],
       "prompt": "How does the store persist the delete key a creator chooses?",
-      "answer": "As an unsalted SHA-256 hash, hex-encoded - the raw key never reaches pastes.json",
+      "answer": "As an unsalted, hex-encoded SHA-256 hash of the key",
       "distractors": [
-        "In plaintext inside pastes.json, since the file is local anyway",
-        "With bcrypt and a per-paste salt, tuned for slow verification",
-        "It is not persisted at all - the key is verified against a value held only in memory"
+        "In plaintext in pastes.json, since the file is local",
+        "With bcrypt and a per-paste salt, tuned to verify slowly",
+        "It is not stored - it is checked against a value kept in memory"
       ],
-      "explanation": "HashDeleteKey = Convert.ToHexString(SHA256.HashData(UTF8(deleteKey))). It avoids raw storage, but it is a fast unsalted hash, not a password-grade KDF."
+      "explanation": "HashDeleteKey = Convert.ToHexString(SHA256.HashData(UTF8(deleteKey))); the raw key never reaches pastes.json. It avoids raw storage, but it is a fast unsalted hash, not a password-grade KDF."
     },
     {
       "id": "q08-single-gate-concurrency",
@@ -126,13 +126,13 @@
         { "path": "docs/upskill/08-reference/risk-register.md", "lineStart": 11, "lineEnd": 11 }
       ],
       "prompt": "Two POST /api/pastes requests land at the same instant on one server process. What stops them from corrupting pastes.json, and where does that protection end?",
-      "answer": "A single SemaphoreSlim(1,1) serializes every store operation - but it is process-local, so a second deployed instance could still interleave writes",
+      "answer": "One SemaphoreSlim(1,1) serializes store operations, but only within one process",
       "distractors": [
-        "The OS file lock taken by File.OpenRead blocks the second request until the first finishes",
-        "Optimistic concurrency - a write retries when UpdatedAt changed under it",
-        "Nothing - concurrent creates in one process routinely lose one of the two pastes"
+        "The OS file lock taken by File.OpenRead blocks the second request until done",
+        "Optimistic concurrency: a write retries when UpdatedAt changed underneath it",
+        "No protection - concurrent creates in one process routinely lose a paste"
       ],
-      "explanation": "Every public method does `await _gate.WaitAsync()` around read-modify-write of the whole file. The risk register flags exactly this: process-local lock only, race under multi-instance."
+      "explanation": "Every public method does `await _gate.WaitAsync()` around read-modify-write of the whole file. The lock is process-local, so a second deployed instance could still interleave writes; the risk register flags exactly this: process-local lock only, race under multi-instance."
     },
     {
       "id": "q09-expiry-mapping",
@@ -140,11 +140,11 @@
       "source": { "path": "backend/Data/PasteStore.cs", "lines": { "start": 220, "end": 228 } },
       "cites": [{ "path": "backend/Data/PasteStore.cs", "lineStart": 220, "lineEnd": 228 }],
       "prompt": "In ResolveExpiry, what do PasteExpiration.Never and an unrecognized enum value each produce?",
-      "answer": "Never yields a null ExpiresAt (no expiry), while the fallback arm quietly assigns one day",
+      "answer": "Never gives a null ExpiresAt; the fallback arm quietly assigns one day",
       "distractors": [
-        "Never yields DateTimeOffset.MaxValue and unknown values throw an ArgumentException",
-        "Both fall through to the default arm, so every paste lives exactly one day",
-        "Never is rejected during validation, and unknown values store a null expiry"
+        "Never gives DateTimeOffset.MaxValue; unknown values throw an exception",
+        "Both reach the default arm, so each of those pastes lives for one day",
+        "Never is rejected during validation; unknown values get a null expiry"
       ],
       "explanation": "The switch maps OneHour/OneDay/OneWeek to offsets, Never to null, and `_ => now.AddDays(1)` as a silent default. (Unknown values normally never reach it: Validate() checks Enum.IsDefined.)"
     },
@@ -157,13 +157,13 @@
         { "path": "backend/Data/PasteStore.cs", "lineStart": 169, "lineEnd": 177 }
       ],
       "prompt": "What does GET /api/pastes/search?q=a return, and how would the search behave if that guard were removed?",
-      "answer": "400 with a ProblemDetails - and without the guard the store would scan title, content and language of every unexpired public paste on each call",
+      "answer": "400 ProblemDetails; without the guard, each call scans every public paste",
       "distractors": [
-        "200 with an empty array, because the store returns [] for short queries without an error",
-        "200 with the 20 most recent public pastes, since an empty filter matches everything",
-        "404, because search is routed per-slug and 'a' is not a known slug"
+        "200 with an empty array, because the store returns [] for short queries",
+        "200 with the 20 newest public pastes, since a tiny filter matches them all",
+        "404, because search is routed per slug and 'a' is not a known paste slug"
       ],
-      "explanation": "The endpoint rejects queries shorter than 2 chars (after trim) with BadRequest. SearchPublicAsync is a full linear scan using Contains(OrdinalIgnoreCase) over three fields - the risk register lists 'Search full scan' as a latency risk."
+      "explanation": "The endpoint rejects queries shorter than 2 chars (after trim) with BadRequest. Without it, SearchPublicAsync would run its full linear scan using Contains(OrdinalIgnoreCase) over title, content and language of every unexpired public paste - the risk register lists 'Search full scan' as a latency risk."
     },
     {
       "id": "fc01-read-side-effect",

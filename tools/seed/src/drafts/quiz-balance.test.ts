@@ -26,9 +26,38 @@ const GUARDED = [
   '3buildanalytics',
   'elihyper2',
   'fableopusrecallv2',
+  // campaign 2 final wave, rebalance-2 (key was the longest choice in 83-100% of these)
+  'jobtrack',
+  'js1',
+  'jsdrillv2',
+  'jsprojectlearn',
+  'jstrain2.2',
+  'master',
+  'masterrnative',
+  'mobiletagalog',
+  'nettodo',
+  'newcodexjs',
+  'organized-app-job-track',
+  'organized-build-gum',
+  'organized-build-subbox',
+  'organized-dotnet-pastebin',
+  'organized-dotnet-trello',
 ];
 const MAX_LONGEST_SHARE = 0.35;
 const MAX_SHORTEST_SHARE = 0.4;
+/**
+ * Typical key length relative to its longest distractor. A median far above 1
+ * means keys are padded with justification the distractors lack (the classic
+ * tell); far below 1 inverts it. Both bounds are deliberate, do not widen them.
+ */
+const MEDIAN_RATIO_MIN = 0.8;
+const MEDIAN_RATIO_MAX = 1.2;
+
+const median = (xs: number[]): number => {
+  const s = [...xs].sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+};
 
 interface DraftQuiz { id: string; kind: 'quiz'; answer: string; distractors: string[] }
 interface PackQuiz { kind: string; label?: string; check: { answerKey: number }; choices: unknown[] }
@@ -47,6 +76,13 @@ describe('hand-authored quiz drafts do not leak the key by length or position', 
       const shortest = qs.filter((q) => q.answer.length < Math.min(...q.distractors.map((d) => d.length)));
       expect(longest.length / qs.length, `longest: ${longest.map((q) => q.id).join(', ')}`).toBeLessThanOrEqual(MAX_LONGEST_SHARE);
       expect(shortest.length / qs.length, `shortest: ${shortest.map((q) => q.id).join(', ')}`).toBeLessThanOrEqual(MAX_SHORTEST_SHARE);
+    });
+
+    it(`${repo}: the key is about as long as its longest distractor (median ratio)`, () => {
+      const qs = quizzes(repo);
+      const ratio = median(qs.map((q) => q.answer.length / Math.max(...q.distractors.map((d) => d.length))));
+      expect(ratio).toBeGreaterThanOrEqual(MEDIAN_RATIO_MIN);
+      expect(ratio).toBeLessThanOrEqual(MEDIAN_RATIO_MAX);
     });
 
     it(`${repo}: the stamped pack uses every answer slot`, () => {

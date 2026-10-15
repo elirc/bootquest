@@ -13,13 +13,13 @@
    "source": { "path": "upskilling/chapters/04-pure-functions-and-never-trusting-the-client.md", "lines": { "start": 30, "end": 30 } },
    "cites": [{ "path": "src/app/api/attempts/route.ts", "lineStart": 47, "lineEnd": 72 }],
    "prompt": "A tampered client POSTs to /api/attempts with an extra \"correct\": true and \"score\": 1 next to a wrong answer. What happens to those two fields?",
-   "answer": "They are never copied: checkBody builds a fresh object from exactly itemId, response, timeSpent, mode and attempt, so the server re-grades and stores its own verdict",
+   "answer": "Dropped: checkBody copies only the allow-listed fields, and the server re-grades",
    "distractors": [
-    "checkBody rejects the request with a 400 because unknown fields are forbidden",
+    "checkBody rejects the whole request with a 400, since unknown fields are forbidden",
     "They are stored as the client's claim and later compared against the server grade",
-    "The server trusts them only when the response kind is self-graded"
+    "The server accepts them as-is, but only when the response kind is self-graded"
    ],
-   "explanation": "Dropping by construction (copy the allow-listed fields into a new object) means the client can submit an answer but can never claim a result."
+   "explanation": "checkBody builds a fresh object from exactly itemId, response, timeSpent, mode and attempt, so the server re-grades and stores its own verdict. Dropping by construction (copy the allow-listed fields into a new object) means the client can submit an answer but can never claim a result."
   },
   {
    "id": "q02-pure-two-call-sites",
@@ -30,13 +30,13 @@
     { "path": "src/app/api/attempts/route.ts", "lineStart": 139, "lineEnd": 141 }
    ],
    "prompt": "Why does it matter that grade() reads no database, clock or window?",
-   "answer": "Purity lets the same function run unchanged in the browser for instant feedback and on the server for the authoritative re-grade, so the two can never drift apart",
+   "answer": "The same function can run in the browser and on the server, so the two cannot drift",
    "distractors": [
-    "Pure functions are memoized by React, so grading is computed only once per item",
-    "It lets the server skip re-grading whenever the client verdict arrives",
-    "It is needed so grade() can be called inside a database transaction"
+    "Pure functions are memoized by React, so each item's grade is computed exactly once",
+    "It lets the server skip its own re-grade whenever a client verdict is attached",
+    "It is required so that grade() can be called inside a single database transaction"
    ],
-   "explanation": "A grader that read Date.now(), the DB or window could not run in both places. One pure function serves the client, the route and the content checker."
+   "explanation": "Purity lets the same function run unchanged in the browser for instant feedback and on the server for the authoritative re-grade. A grader that read Date.now(), the DB or window could not run in both places. One pure function serves the client, the route and the content checker."
   },
   {
    "id": "q03-runtests-injection",
@@ -44,13 +44,13 @@
    "source": { "path": "upskilling/chapters/04-pure-functions-and-never-trusting-the-client.md", "lines": { "start": 38, "end": 51 } },
    "cites": [{ "path": "src/lib/grader.ts", "lineStart": 199, "lineEnd": 202 }],
    "prompt": "gradeCode() uses options.runTests ?? runTests. What does this single optional parameter achieve?",
-   "answer": "The server can inject the node:vm runner while grader.ts keeps no node: import, so it still bundles for the browser and tests can pass a fake runner",
+   "answer": "The server injects the node:vm runner while grader.ts has no node: imports",
    "distractors": [
-    "It lets the grader detect at runtime whether it is in Node or a browser",
-    "It allows learners to supply their own test runner with their submission",
-    "It makes code grading asynchronous so the API can stream results"
+    "It lets the grader detect at runtime whether it is running in Node or a browser",
+    "It lets learners supply their own test runner alongside their code submission",
+    "It makes code grading asynchronous, so the API can stream test results back"
    ],
-   "explanation": "Dependency injection at the smallest useful size: one optional parameter with a default keeps the grader pure and portable."
+   "explanation": "Dependency injection at the smallest useful size: one optional parameter with a default keeps the grader pure and portable - grader.ts still bundles for the browser, and tests can pass a fake runner."
   },
   {
    "id": "q04-multi-select-everything",
@@ -58,11 +58,11 @@
    "source": { "path": "upskilling/chapters/04-pure-functions-and-never-trusting-the-client.md", "lines": { "start": 57, "end": 68 } },
    "cites": [{ "path": "src/lib/grader.ts", "lineStart": 122, "lineEnd": 130 }],
    "prompt": "A multi-select item has 2 correct options out of 4. A learner ticks all 4. What score does gradeMulti give?",
-   "answer": "0 - two false positives cancel the two hits, and the net is floored at zero",
+   "answer": "0 - each false positive cancels a hit; the net is floored at zero",
    "distractors": [
-    "1 - both correct options were selected",
-    "0.5 - hits and misses are averaged across all four options",
-    "A negative score, so guessing everything is actively punished"
+    "1 - both correct options were selected, so the item counts as solved",
+    "0.5 - hits and misses are averaged evenly across the four options",
+    "-0.5 - the net goes negative, so ticking everything is punished"
    ],
    "explanation": "Each wrong pick cancels one right pick and the net never goes negative, so selecting everything is never a winning strategy."
   },
@@ -75,13 +75,13 @@
     { "path": "src/app/api/attempts/route.ts", "lineStart": 145, "lineEnd": 148 }
    ],
    "prompt": "A learner gets an item right on the second try, but the client sends attempt: 1. Why can't the server catch this?",
-   "answer": "The first miss on a retryable item is never posted, so the server has no record to check the attempt number against; it is a documented, accepted local-first risk",
+   "answer": "The first miss on a retryable item is never posted, so nothing contradicts it",
    "distractors": [
-    "It can: the route looks up the previous attempt row and overrides the field",
-    "The grader detects second tries from the response shape and caps the score",
-    "attempt is ignored entirely; every success earns full credit regardless"
+    "It can: the route looks up the earlier attempt row and overrides the field",
+    "The grader spots second tries from the response shape and caps the score",
+    "attempt is ignored by the route, so each success earns full credit anyway"
    ],
-   "explanation": "attempt === 2 caps the score at 0.5, but only the client knows it was a second try. The route's Trust boundary comment names the hole and the fix (post the first miss)."
+   "explanation": "attempt === 2 caps the score at 0.5, but only the client knows it was a second try - the server has no record to check the number against. The route's Trust boundary comment names this documented, accepted local-first risk and the fix (post the first miss)."
   },
   {
    "id": "q06-timespent-easy",
@@ -92,11 +92,11 @@
     { "path": "src/lib/fsrs.ts", "lineStart": 62, "lineEnd": 68 }
    ],
    "prompt": "timeSpent is clamped to 0..3600 seconds. How can a forged value still affect scheduling?",
-   "answer": "Claiming a tiny time on a correct review of a card seen before makes ratingFor return Easy, pushing the next review further out",
+   "answer": "A tiny time on a correct, previously-seen review earns Easy, pushing it further out",
    "distractors": [
-    "A huge value overflows the FSRS interval and schedules the card in the past",
-    "It cannot: the server measures time itself and ignores the client's number",
-    "A negative value is stored as-is and resets the card to New"
+    "A huge value overflows the FSRS interval and schedules the card in the past instead",
+    "It has no effect: the server measures the time itself and ignores the client value",
+    "A negative value is stored as-is by the route and resets the card back to New"
    ],
    "explanation": "Clamping bounds the range but not the meaning: timeSpent < budget * 0.5 with reps > 0 earns Easy. The route comment lists this as a known limit."
   },
@@ -109,13 +109,13 @@
     { "path": "src/lib/executor.ts", "lineStart": 192, "lineEnd": 197 }
    ],
    "prompt": "In the browser runner, a submission contains while (true) {}. What does the TIME_BUDGET_MS check do?",
-   "answer": "Nothing - it runs only after the call returns, which never happens, so the tab hangs; the check only catches slow code that finishes",
+   "answer": "Nothing - the check runs only after the call returns, so the tab simply hangs",
    "distractors": [
-    "It interrupts the loop after 2 seconds and reports a timeout verdict",
-    "The browser's new Function compile step refuses infinite loops",
-    "It throws a TimeoutError from a setTimeout scheduled before the call"
+    "It interrupts the loop after the 2-second budget and reports a timeout verdict",
+    "The browser's new Function compile step detects and refuses the infinite loop",
+    "It throws a TimeoutError from a setTimeout that was scheduled before the call"
    ],
-   "explanation": "JavaScript cannot interrupt a synchronous function from the same thread. Preempting a runaway loop client-side needs a terminable Worker."
+   "explanation": "The budget check only catches slow code that finishes. JavaScript cannot interrupt a synchronous function from the same thread; preempting a runaway loop client-side needs a terminable Worker."
   },
   {
    "id": "q08-vm-hard-timeout",
@@ -123,13 +123,13 @@
    "source": { "path": "upskilling/chapters/04-pure-functions-and-never-trusting-the-client.md", "lines": { "start": 121, "end": 128 } },
    "cites": [{ "path": "src/lib/executor.server.ts", "lineStart": 133, "lineEnd": 139 }],
    "prompt": "On the server the same infinite loop is graded through vmCompile. Why does it stop there?",
-   "answer": "Each call runs via vm.Script runInContext with a timeout, which V8 enforces mid-loop and Node reports as ERR_SCRIPT_EXECUTION_TIMEOUT",
+   "answer": "runInContext gets a timeout, which V8 enforces even partway through the loop",
    "distractors": [
     "The route runs grading in a worker thread that is terminated after 2 seconds",
-    "Next.js aborts any request handler that exceeds its response deadline",
-    "The vm context has no while keyword, so the code fails to compile"
+    "Next.js aborts a request handler that runs past its response deadline",
+    "The vm context exposes no while keyword, so the code fails to compile there"
    ],
-   "explanation": "vm's timeout is enforced by V8 inside synchronous execution, so liveness is restored even though the code shares the server's thread."
+   "explanation": "Each call runs via vm.Script runInContext with a timeout; Node reports ERR_SCRIPT_EXECUTION_TIMEOUT. vm's timeout is enforced by V8 inside synchronous execution, so liveness is restored even though the code shares the server's thread."
   },
   {
    "id": "q09-clone-args",
@@ -140,11 +140,11 @@
     { "path": "src/lib/executor.ts", "lineStart": 221, "lineEnd": 233 }
    ],
    "prompt": "A learner's solution calls arr.sort() on its input. Why can't that corrupt later test cases sharing the same array literal?",
-   "answer": "runTests passes cloneArgs(tc.input), which structured-clones each argument before every call",
+   "answer": "runTests structured-clones each argument with cloneArgs before every call",
    "distractors": [
-    "Test inputs are frozen with Object.freeze, so sort() throws",
-    "Each test case is re-parsed from JSON storage right before it runs",
-    "The vm context copies arguments automatically on every call"
+    "Test inputs are frozen with Object.freeze, so the call to sort() throws",
+    "Each test case is re-parsed from JSON storage right before it is run",
+    "The vm context copies the arguments automatically on every single call"
    ],
    "explanation": "Structured cloning isolates each test's inputs. Only uncloneable values (functions, objects holding functions) pass through as-is."
   },
@@ -154,13 +154,13 @@
    "source": { "path": "upskilling/chapters/08-migrations-seeding-and-not-breaking-users.md", "lines": { "start": 24, "end": 35 } },
    "cites": [{ "path": "src/lib/db/seed.ts", "lineStart": 348, "lineEnd": 353 }],
    "prompt": "Why does seed() derive item ids as item-<authored id> instead of generating a UUID per run?",
-   "answer": "So a re-seed upserts the same row and the learner's user_cards and attempts keep pointing at the item they were about",
+   "answer": "So a re-seed upserts the same row and history keeps pointing at it",
    "distractors": [
-    "UUIDs are not supported as primary keys by better-sqlite3",
-    "Deterministic ids make the seed run faster because no randomness is needed",
-    "So that renaming an item id automatically migrates its history"
+    "Because better-sqlite3 does not support UUID columns as primary keys",
+    "Deterministic ids make seeding faster, since no randomness is generated",
+    "So that renaming an item id automatically migrates its learner history"
    ],
-   "explanation": "The price is that an authored id becomes a permanent public key: a rename is seen as one removal plus one new item, and the new item starts with a fresh card."
+   "explanation": "The learner's user_cards and attempts keep pointing at the item they were about. The price is that an authored id becomes a permanent public key: a rename is seen as one removal plus one new item, and the new item starts with a fresh card."
   },
   {
    "id": "q11-user-rows-do-nothing",
@@ -168,13 +168,13 @@
    "source": { "path": "upskilling/chapters/08-migrations-seeding-and-not-breaking-users.md", "lines": { "start": 53, "end": 53 } },
    "cites": [{ "path": "src/lib/db/seed.ts", "lineStart": 408, "lineEnd": 419 }],
    "prompt": "The seeder upserts content rows with onConflictDoUpdate. Which strategy does it use for user_track_progress rows, and why?",
-   "answer": "onConflictDoNothing - the row is created if missing and never overwritten, so a re-seed cannot reset a learner's level to 1",
+   "answer": "onConflictDoNothing, so a re-seed cannot reset a learner's level to 1",
    "distractors": [
-    "onConflictDoUpdate, so content edits to level thresholds reach every learner",
-    "DELETE then INSERT, so stale progress rows are cleaned up each run",
-    "They are not written by the seeder at all; the API creates them lazily"
+    "onConflictDoUpdate, so edits to level thresholds reach every learner",
+    "DELETE then INSERT, so stale progress rows are cleaned up on each run",
+    "None: the seeder skips them, and the API creates the rows lazily"
    ],
-   "explanation": "Content is a cache that may be refreshed freely; user state exists nowhere else, so the seeder only fills gaps in it."
+   "explanation": "The row is created if missing and never overwritten. Content is a cache that may be refreshed freely; user state exists nowhere else, so the seeder only fills gaps in it."
   },
   {
    "id": "q12-soft-delete",
@@ -185,13 +185,13 @@
     { "path": "src/lib/db/seed.ts", "lineStart": 422, "lineEnd": 431 }
    ],
    "prompt": "An item disappears from the content files. What does the current seeder do with its database row?",
-   "answer": "It sets is_published = 0 and keeps the row, because attempts and user_cards cascade on delete and a hard delete would erase the learner's history",
+   "answer": "It sets is_published = 0 and keeps the row, so cascades cannot erase history",
    "distractors": [
-    "It deletes the row; ON DELETE CASCADE then cleans up its attempts",
-    "It leaves the row published so existing cards keep being scheduled",
-    "It renames the row's id with a deleted- prefix to free the old id"
+    "It deletes the row, and ON DELETE CASCADE then cleans up the item's attempts",
+    "It leaves the row published, so existing cards keep being scheduled as usual",
+    "It renames the row's id with a deleted- prefix to free the old id for reuse"
    ],
-   "explanation": "Soft delete: unpublished items drop out of sessions and progress totals, and if the id returns the upsert republishes it with its history intact."
+   "explanation": "attempts and user_cards cascade on delete, so a hard delete would erase the learner's history. Soft delete: unpublished items drop out of sessions and progress totals, and if the id returns the upsert republishes it with its history intact."
   },
   {
    "id": "f01-trust-boundary",
