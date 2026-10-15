@@ -103,6 +103,20 @@ export function goalCheckExplanation(guide: string, g: Pick<GoalCheck, 'label' |
   return `In ${where}${titled ? ` (exercise "${g.label.trim()}")` : ''}, the guide pairs this Goal with this Check; the other choices are the Checks of other exercises in the same guide.`;
 }
 
+/**
+ * The review-card explanation of a generated finding-location quiz: the finding's label and
+ * severity ("F3 (Medium)"), as it always was. A finding whose label is a bare list number with no
+ * severity used to ship the explanation "3" (release review, the F5 sibling); it now says where
+ * the guide records the finding instead.
+ */
+export function findingLocationExplanation(guide: string, f: { label: string; severity?: string | null; lineStart: number; lineEnd: number }): string {
+  const label = f.label.trim();
+  if (f.severity) return `${label} (${f.severity})`;
+  if (label !== '' && !/^(d+|-)$/.test(label)) return label;
+  const where = `${guide}:${f.lineStart}${f.lineEnd !== f.lineStart ? `-${f.lineEnd}` : ''}`;
+  return `In ${where}, the guide records this defect at this location; the other choices are where other findings in the same guide point.`;
+}
+
 export interface GuideCandidates {
   guide: string;
   items: SeedItem[];
@@ -272,7 +286,7 @@ export function generateQuestCandidates(co: Checkout, guides: readonly string[],
     }
     const prompt = `Which location holds this defect?\n\n${stripCitationSpans(fc.finding.title)}`;
     gc.items.push(
-      quiz(key, 'finding-location', { repo: co.repo, sha: co.sha, path: fc.guide, lines: { start: fc.finding.lineStart, end: fc.finding.lineEnd } }, fc.citations, prompt, { text: loc(fc.primary), evidence: fc.files }, distractors, `${fc.finding.label}${fc.finding.severity ? ` (${fc.finding.severity})` : ''}`),
+      quiz(key, 'finding-location', { repo: co.repo, sha: co.sha, path: fc.guide, lines: { start: fc.finding.lineStart, end: fc.finding.lineEnd } }, fc.citations, prompt, { text: loc(fc.primary), evidence: fc.files }, distractors, findingLocationExplanation(fc.guide, fc.finding)),
     );
   }
   return out;

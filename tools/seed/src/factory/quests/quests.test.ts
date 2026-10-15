@@ -8,7 +8,8 @@ import { plantAndie } from '../demo/plant.ts';
 import { Exclusions } from '../exclusions.ts';
 import { loadSeedPack } from '../pack.ts';
 import { hashOrder } from '../util.ts';
-import { generateQuestCandidates, goalCheckExplanation, LENGTH_TELL_RATIO, lengthTellReason, MAX_DISTRACTORS, pickGoalCheckDistractors } from './generate.ts';
+import { isArtifactExplanation } from '../../ops/explanation-lint.ts';
+import { findingLocationExplanation, generateQuestCandidates, goalCheckExplanation, LENGTH_TELL_RATIO, lengthTellReason, MAX_DISTRACTORS, pickGoalCheckDistractors } from './generate.ts';
 import { extractFindings, extractGoalChecks, headings, scanLines } from './parse.ts';
 import { runQuests } from './run.ts';
 import { singleKeyedProblems, validateQuestItem } from './validate.ts';
@@ -393,6 +394,19 @@ describe('goal-check answer-LENGTH tells (factory-3, docs/SEEDING.md backlog)', 
       const key = q.choices[q.check.answerKey]!.text;
       const longest = Math.max(...q.choices.filter((_, i) => i !== q.check.answerKey).map((c) => c.text.length));
       expect(key.length, q.key).toBeLessThanOrEqual(LENGTH_TELL_RATIO * longest);
+    }
+  });
+});
+
+describe('finding-location explanations (release review: bare "3" explanations)', () => {
+  it('keep the label and severity, but never ship a bare list number as the explanation', () => {
+    expect(findingLocationExplanation('docs/r.md', { label: 'F3', severity: 'Medium', lineStart: 9, lineEnd: 9 })).toBe('F3 (Medium)');
+    expect(findingLocationExplanation('docs/r.md', { label: '3', severity: 'High', lineStart: 9, lineEnd: 9 })).toBe('3 (High)');
+    expect(findingLocationExplanation('docs/r.md', { label: 'Missing tenant filter', lineStart: 9, lineEnd: 9 })).toBe('Missing tenant filter');
+    for (const label of ['3', '12', '-', '']) {
+      const s = findingLocationExplanation('docs/r.md', { label, lineStart: 9, lineEnd: 11 });
+      expect(s, label).toMatch(/^In docs/r.md:9-11, the guide records this defect/);
+      expect(isArtifactExplanation(s), label).toBe(false);
     }
   });
 });
