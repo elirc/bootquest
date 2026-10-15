@@ -62,17 +62,6 @@ const EXEMPT: Record<string, Guard[]> = {
   // CONTENT-4
 
   // CONTENT-5
-  'astra-learning-studio': ['rank', 'format'],
-  'elihyper2': ['format'],
-  'grok-build-order': ['longest', 'format'],
-  'js1': ['format'],
-  'master3': ['longest', 'format'],
-  'nethris': ['longest', 'rank', 'format'],
-  'organized-anti-helpdesk': ['longest', 'format', 'slots'],
-  'organized-dotnet-vg': ['longest', 'format'],
-  'organized-js-training-trainjs': ['format'],
-  'signalpost-swe-bootcamp': ['format'],
-  'ww39': ['median-ratio', 'format'],
 
   // CONTENT-6
   'bootlocalopusv2': ['format'],
