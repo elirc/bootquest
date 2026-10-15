@@ -1,0 +1,581 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "notes",
+ "name": "organized-dotnet-calendy",
+ "items": [
+  {
+   "key": "seed:notes:organized-dotnet-calendy/note/0480a763f50a5a86",
+   "provenance": {
+    "repo": "organized-dotnet-calendy",
+    "sha": "d17a20d41afd555178fc45dc0c55ab45419abb04",
+    "path": "docs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+    "lines": {
+     "start": 19,
+     "end": 19
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r04-side-effects",
+   "pack": "organized-dotnet-calendy",
+   "target": "pack",
+   "phase": "before",
+   "title": "Core idea: domain events, the outbox and retries",
+   "body": "A domain event is a record that something happened in the domain, such as a booking being created. Aggregates collect events in memory, and AppDbContext.SaveChangesAsync gathers them from the change tracker and hands them to MediatR's IPublisher. Read that method and note exactly where the publish loop sits relative to the database write, and what happens to the events list before the write.\n\nThen search the repo for classes that implement INotificationHandler, and look up what MediatR does when Publish finds none.\n\nThe transactional outbox is the standard fix for side effects that must not be lost: the event is stored as a row in the same transaction as the business change, and a separate worker sends it later and retries on failure. The side-effects guide explains why NetCalendy does not have one yet.\n\nLast, read the reliability gaps table and then DependencyInjection.cs. Check every claim in the table against the code.",
+   "excerpts": [
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+     "lineStart": 19,
+     "lineEnd": 19,
+     "quote": "**Problem:** You want durable side effects"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/NetCalendy.Infrastructure/Persistence/AppDbContext.cs",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The SaveChangesAsync override that collects and publishes domain events."
+    },
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/06-architecture-critique.md",
+     "lineStart": 61,
+     "lineEnd": 68,
+     "why": "RISK-004: what changes once event handlers exist."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:organized-dotnet-calendy/note/111baf464bec2121",
+   "provenance": {
+    "repo": "organized-dotnet-calendy",
+    "sha": "d17a20d41afd555178fc45dc0c55ab45419abb04",
+    "path": "src/NetCalendy.Infrastructure/DependencyInjection.cs",
+    "lines": {
+     "start": 25,
+     "end": 25
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q12-retry-on-failure",
+   "pack": "organized-dotnet-calendy",
+   "target": "seed:quests:organized-dotnet-calendy/quiz/0067c7b458cb3140",
+   "phase": "after",
+   "title": "Npgsql retries transient failures three times here",
+   "body": "**Key: EF Core retries the operation up to three times before it fails.**\n\nDependencyInjection.cs configures UseNpgsql with EnableRetryOnFailure(3). That installs a retrying execution strategy: transient errors (dropped connections, timeouts and similar) are retried up to three times with a delay before the exception surfaces. The gaps table row says transient errors return 500, but the note directly under the table corrects it, and the code is what counts.\n\nWhy the others are wrong:\n- **Straight to a 500**: only after the retries are exhausted.\n- **Polly with backoff**: no Polly policy exists; the guide mentions it only as an option.\n- **Error.Conflict from a catch**: no handler catches database exceptions.",
+   "excerpts": [
+    {
+     "path": "src/NetCalendy.Infrastructure/DependencyInjection.cs",
+     "lineStart": 25,
+     "lineEnd": 25,
+     "quote": "npgsql.EnableRetryOnFailure(3);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:organized-dotnet-calendy/note/116ee985b34b37a5",
+   "provenance": {
+    "repo": "organized-dotnet-calendy",
+    "sha": "d17a20d41afd555178fc45dc0c55ab45419abb04",
+    "path": "src/NetCalendy.Api/Extensions/ResultExtensions.cs",
+    "lines": {
+     "start": 29,
+     "end": 29
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q01-forbidden-by-code",
+   "pack": "organized-dotnet-calendy",
+   "target": "seed:quests:organized-dotnet-calendy/quiz/409fd45d98cd1b41",
+   "phase": "after",
+   "title": "The error code string, not the factory, picks the status",
+   "body": "**Key: 403, because ResultExtensions matches Forbidden in the error code.**\n\nUpdateEventTypeHandler builds the failure with Error.Validation(\"EventType.Forbidden\", ...). ResultExtensions.ToActionResult switches only on error.Code: EndsWith(\".NotFound\") gives 404, Conflict/Taken/AlreadyCancelled give 409, Contains(\"Forbidden\") gives 403, and everything else 400. \"EventType.Forbidden\" contains Forbidden, so the response is a 403 ProblemDetails.\n\nWhy the others are wrong:\n- **400 from Error.Validation**: the factory only fills Code and Description; the mapping never looks at which factory made the error.\n- **404 to hide existence**: the handler found the event type; it returns NotFound only when GetByIdAsync gives null.\n- **401**: the caller passed [Authorize], so authentication succeeded.",
+   "excerpts": [
+    {
+     "path": "src/NetCalendy.Api/Extensions/ResultExtensions.cs",
+     "lineStart": 29,
+     "lineEnd": 29,
+     "quote": "_ when error.Code.Contains(\"Forbidden\") => 403,"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:organized-dotnet-calendy/note/11deeece3bffddf1",
+   "provenance": {
+    "repo": "organized-dotnet-calendy",
+    "sha": "d17a20d41afd555178fc45dc0c55ab45419abb04",
+    "path": "docs/upskill/03-architecture-and-patterns/02-data-model-and-persistence.md",
+    "lines": {
+     "start": 135,
+     "end": 135
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q09-two-saves",
+   "pack": "organized-dotnet-calendy",
+   "target": "seed:quests:organized-dotnet-calendy/quiz/904eab96d23d6f67",
+   "phase": "after",
+   "title": "Each SaveChanges call is its own transaction",
+   "body": "**Key: the User, because the first save had already committed by itself.**\n\nEF Core wraps each SaveChangesAsync call in its own implicit transaction and commits it when the call returns. The first call commits the User. The second call opens a new transaction for the Schedule; when it throws, only that transaction rolls back. The guide names this pattern a code-review red flag.\n\nWhy the others are wrong:\n- **Nothing, rolled back per request**: there is no request-wide transaction; you would need BeginTransactionAsync for that.\n- **The Schedule only**: the failed save is the one that wrote nothing.\n- **Retried until it succeeds**: EnableRetryOnFailure retries transient errors a few times (three here) and only for transient faults.",
+   "excerpts": [
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/02-data-model-and-persistence.md",
+     "lineStart": 135,
+     "lineEnd": 135,
+     "quote": "the first save commits permanently even if the second fails"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:organized-dotnet-calendy/note/14584e1023553cca",
+   "provenance": {
+    "repo": "organized-dotnet-calendy",
+    "sha": "d17a20d41afd555178fc45dc0c55ab45419abb04",
+    "path": "docs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+    "lines": {
+     "start": 7,
+     "end": 7
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q10-no-handlers",
+   "pack": "organized-dotnet-calendy",
+   "target": "seed:quests:organized-dotnet-calendy/quiz/e1e1d65b754879d3",
+   "phase": "after",
+   "title": "Publishing to zero handlers is a no-op",
+   "body": "**Key: nothing visible; MediatR finds no handler and simply returns.**\n\nAppDbContext publishes each collected domain event after the save. The repository has no `INotificationHandler<BookingCreatedEvent>` (or any other notification handler), and MediatR's Publish with no registered handlers completes without error. The guide calls the events scaffolding for future notifications.\n\nWhy the others are wrong:\n- **MediatR throws**: that is Send for a request with no handler; Publish tolerates zero handlers.\n- **A background job sends email**: no Hangfire or other job runner is configured; the guide suggests it as future work.\n- **Written to an outbox**: there is no outbox table; its absence is the guide's first reliability gap.",
+   "excerpts": [
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+     "lineStart": 7,
+     "lineEnd": 7,
+     "quote": "Events fire but nothing consumes them."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:organized-dotnet-calendy/note/1d42d156314bf29f",
+   "provenance": {
+    "repo": "organized-dotnet-calendy",
+    "sha": "d17a20d41afd555178fc45dc0c55ab45419abb04",
+    "path": "src/NetCalendy.Domain/Bookings/Booking.cs",
+    "lines": {
+     "start": 63,
+     "end": 64
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q13-cancel-twice",
+   "pack": "organized-dotnet-calendy",
+   "target": "seed:quests:organized-dotnet-calendy/quiz/72e7f7c3559db963",
+   "phase": "after",
+   "title": "A second cancel is a conflict, mapped to 409",
+   "body": "**Key: 409, from the Booking.AlreadyCancelled conflict error.**\n\nCancelBookingHandler finds the booking by its token (cancelled bookings keep it) and calls booking.Cancel. Cancel checks the status first and returns Error.Conflict(\"Booking.AlreadyCancelled\", ...). ResultExtensions maps any code containing .Conflict, Taken or AlreadyCancelled to 409.\n\nWhy the others are wrong:\n- **200 no-op**: the domain method refuses the second cancel instead of ignoring it.\n- **404, token retired**: the token stays on the row; GetByCancellationTokenAsync still finds it.\n- **400 default**: the 409 branch matches before the default arm is reached.",
+   "excerpts": [
+    {
+     "path": "src/NetCalendy.Domain/Bookings/Booking.cs",
+     "lineStart": 63,
+     "lineEnd": 64,
+     "quote": "return Result.Failure(Error.Conflict(\"Booking.AlreadyCancelled\", \"Booking is already cancelled.\"));"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:organized-dotnet-calendy/note/1e188af184e962a1",
+   "provenance": {
+    "repo": "organized-dotnet-calendy",
+    "sha": "d17a20d41afd555178fc45dc0c55ab45419abb04",
+    "path": "src/NetCalendy.Application/Schedules/Queries/GetAvailableSlots/GetAvailableSlotsHandler.cs",
+    "lines": {
+     "start": 20,
+     "end": 20
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q04-bang-value",
+   "pack": "organized-dotnet-calendy",
+   "target": "seed:quests:organized-dotnet-calendy/quiz/c5682ce4a2197c1a",
+   "phase": "after",
+   "title": "The null-forgiving operator does nothing at run time",
+   "body": "**Key: Value throws InvalidOperationException; the middleware sends 500.**\n\nWith no token, User has no tenant_id claim, so CurrentTenantService.TenantId returns null. `TenantId!.Value` compiles because ! tells the compiler to stop warning, but at run time `Nullable<Guid>.Value` on a null throws InvalidOperationException (\"Nullable object must have a value\"). Nothing catches it in the handler, so ExceptionHandlingMiddleware's catch-all writes a 500. Because available-slots is [AllowAnonymous] and meant for public visitors, this is a real bug.\n\nWhy the others are wrong:\n- **Guid.Empty**: ! never substitutes a value; `?? Guid.Empty` would.\n- **HttpContext.Items fallback**: CurrentTenantService reads only the claim.\n- **Compile error**: the ! suppresses the warning, and nullable warnings are not errors here.",
+   "excerpts": [
+    {
+     "path": "src/NetCalendy.Application/Schedules/Queries/GetAvailableSlots/GetAvailableSlotsHandler.cs",
+     "lineStart": 20,
+     "lineEnd": 20,
+     "quote": "var tenantId = TenantId.From(currentTenant.TenantId!.Value);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:organized-dotnet-calendy/note/21d7eab7fb549a9f",
+   "provenance": {
+    "repo": "organized-dotnet-calendy",
+    "sha": "d17a20d41afd555178fc45dc0c55ab45419abb04",
+    "path": "src/NetCalendy.Application/Bookings/Queries/GetBooking/GetBookingHandler.cs",
+    "lines": {
+     "start": 13,
+     "end": 14
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q14-get-by-id-gap",
+   "pack": "organized-dotnet-calendy",
+   "target": "seed:quests:organized-dotnet-calendy/quiz/0df6b717bc990e9b",
+   "phase": "after",
+   "title": "Load by id with no tenant check is an IDOR",
+   "body": "**Key: 200 with the booking, as GetBookingHandler checks no tenant.**\n\nGetBookingHandler calls bookings.GetByIdAsync, which is RepositoryBase's FindAsync on the id alone, returns NotFound only when the row is missing, and otherwise maps it to a DTO. Nothing compares booking.TenantId with the caller's tenant claim. The critique ranks this as RISK-001, an insecure direct object reference.\n\nWhy the others are wrong:\n- **A global query filter**: no HasQueryFilter is configured; the critique proposes adding one later.\n- **403 on a claim mismatch**: no code compares the claim with the row.\n- **401**: the token is valid for its own tenant, so authentication succeeds.",
+   "excerpts": [
+    {
+     "path": "src/NetCalendy.Application/Bookings/Queries/GetBooking/GetBookingHandler.cs",
+     "lineStart": 13,
+     "lineEnd": 14,
+     "quote": "var booking = await bookings.GetByIdAsync(BookingId.From(query.BookingId), ct);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:organized-dotnet-calendy/note/3a5f2805c6b43e76",
+   "provenance": {
+    "repo": "organized-dotnet-calendy",
+    "sha": "d17a20d41afd555178fc45dc0c55ab45419abb04",
+    "path": "src/NetCalendy.Infrastructure/DependencyInjection.cs",
+    "lines": {
+     "start": 28,
+     "end": 28
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q06-shared-context",
+   "pack": "organized-dotnet-calendy",
+   "target": "seed:quests:organized-dotnet-calendy/quiz/2a8e49386c88149f",
+   "phase": "after",
+   "title": "Scoped means one change tracker for the whole request",
+   "body": "**Key: both rows are saved in one transaction by the shared scoped context.**\n\nAddDbContext registers AppDbContext as scoped, IUnitOfWork is registered to resolve that same instance, and every repository is scoped and takes AppDbContext in its constructor. So within one request all of them hold the same context. Both Add calls register with one change tracker, and the single SaveChangesAsync sends both INSERTs in one implicit transaction.\n\nWhy the others are wrong:\n- **Separate transactions per repository**: there is one context and one save, so one transaction.\n- **Only the last Add**: Add appends to the tracker; it does not replace earlier entries.\n- **Each repository must save**: repositories expose Add, Update and Remove only; saving belongs to the unit of work.",
+   "excerpts": [
+    {
+     "path": "src/NetCalendy.Infrastructure/DependencyInjection.cs",
+     "lineStart": 28,
+     "lineEnd": 28,
+     "quote": "services.AddScoped<IUnitOfWork>(sp => sp.GetRequiredService<AppDbContext>());"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:organized-dotnet-calendy/note/4eb3fe1c3062a7f1",
+   "provenance": {
+    "repo": "organized-dotnet-calendy",
+    "sha": "d17a20d41afd555178fc45dc0c55ab45419abb04",
+    "path": "src/NetCalendy.Infrastructure/Persistence/Repositories/RepositoryBase.cs",
+    "lines": {
+     "start": 19,
+     "end": 19
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q08-full-update",
+   "pack": "organized-dotnet-calendy",
+   "target": "seed:quests:organized-dotnet-calendy/quiz/0f5a54a07f4f0d4f",
+   "phase": "after",
+   "title": "DbSet.Update marks every property as modified",
+   "body": "**Key: one that writes every mapped column, since Update marks all of them.**\n\nThe entity was loaded through FindAsync, so it is already tracked; changing the name alone would make EF's snapshot comparison write just that column. But RepositoryBase.Update calls Set.Update, which puts the entity in the Modified state with every property flagged modified, so the UPDATE sets all columns. The guide calls this the full-update pattern.\n\nWhy the others are wrong:\n- **Only the name**: that is what happens without the Update call.\n- **Update detaches**: Update attaches or keeps tracking; it never detaches.\n- **An INSERT**: Update marks an entity with a set key as Modified, not Added.",
+   "excerpts": [
+    {
+     "path": "src/NetCalendy.Infrastructure/Persistence/Repositories/RepositoryBase.cs",
+     "lineStart": 19,
+     "lineEnd": 19,
+     "quote": "public void Update(TAggregate aggregate) => Set.Update(aggregate);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:organized-dotnet-calendy/note/5ecc59a61b23b794",
+   "provenance": {
+    "repo": "organized-dotnet-calendy",
+    "sha": "d17a20d41afd555178fc45dc0c55ab45419abb04",
+    "path": "docs/upskill/03-architecture-and-patterns/02-data-model-and-persistence.md",
+    "lines": {
+     "start": 90,
+     "end": 90
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q07-captive-context",
+   "pack": "organized-dotnet-calendy",
+   "target": "seed:quests:organized-dotnet-calendy/quiz/efb69bb4be153139",
+   "phase": "after",
+   "title": "A singleton that holds a DbContext keeps it forever",
+   "body": "**Key: the context outlives requests, piles up entities and goes stale.**\n\nThe guide calls this a captive dependency. A singleton is created once and keeps the context it was given, so that context is never disposed at the end of a request. It keeps tracking everything it ever loaded, returns cached tracked instances instead of fresh data, and eventually throws (a DbContext is also not thread-safe across concurrent requests).\n\nWhy the others are wrong:\n- **EF scopes it itself**: EF does not change lifetimes; the DI container decides, and the singleton holds one instance.\n- **The container upgrades the singleton**: lifetimes are never changed silently. In Development, scope validation throws at startup instead.\n- **Only speed suffers**: the guide warns about stale data and exceptions, not only performance.",
+   "excerpts": [
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/02-data-model-and-persistence.md",
+     "lineStart": 90,
+     "lineEnd": 90,
+     "quote": "creates a \"captive dependency\" — the context lives forever, accumulates entities, and eventually throws or returns stale data."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:organized-dotnet-calendy/note/87ab9a7a353c744d",
+   "provenance": {
+    "repo": "organized-dotnet-calendy",
+    "sha": "d17a20d41afd555178fc45dc0c55ab45419abb04",
+    "path": "src/NetCalendy.Api/Middleware/TenantResolutionMiddleware.cs",
+    "lines": {
+     "start": 30,
+     "end": 31
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q03-subdomain-rule",
+   "pack": "organized-dotnet-calendy",
+   "target": "seed:quests:organized-dotnet-calendy/quiz/2e3182d808dae785",
+   "phase": "after",
+   "title": "A subdomain needs at least three host labels",
+   "body": "**Key: acme.calendy.io, which yields the slug acme.**\n\nExtractSubdomain splits Request.Host.Host on '.' and returns parts[0] only when there are three or more parts. acme.calendy.io has three, so the slug is acme and the middleware looks it up.\n\nWhy the others are wrong:\n- **calendy.io**: two parts, so ExtractSubdomain returns null and no lookup happens.\n- **localhost:5000**: Host.Host is just localhost (the port is separate), one part, so null.\n- **Any host**: the length check on line 31 is exactly what stops one- and two-label hosts.",
+   "excerpts": [
+    {
+     "path": "src/NetCalendy.Api/Middleware/TenantResolutionMiddleware.cs",
+     "lineStart": 30,
+     "lineEnd": 31,
+     "quote": "return parts.Length >= 3 ? parts[0] : null;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:organized-dotnet-calendy/note/8a99e9212ff66a65",
+   "provenance": {
+    "repo": "organized-dotnet-calendy",
+    "sha": "d17a20d41afd555178fc45dc0c55ab45419abb04",
+    "path": "src/NetCalendy.Infrastructure/Persistence/AppDbContext.cs",
+    "lines": {
+     "start": 44,
+     "end": 47
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q11-handler-throws",
+   "pack": "organized-dotnet-calendy",
+   "target": "seed:quests:organized-dotnet-calendy/quiz/5742bc05e1e0cb82",
+   "phase": "after",
+   "title": "Publish after commit: the row stays, the request fails",
+   "body": "**Key: a 500 error, while the booking row has already been committed.**\n\nIn AppDbContext.SaveChangesAsync, base.SaveChangesAsync runs first and commits; only then does the loop await publisher.Publish for each event. MediatR runs handlers in-process, so the email handler's exception propagates out of Publish, out of SaveChangesAsync and the command handler, and ExceptionHandlingMiddleware returns 500. The booking exists, but the client was told it failed and no email was sent.\n\nWhy the others are wrong:\n- **201, failure swallowed**: nothing catches the exception.\n- **EF rolls the row back**: the transaction already committed before publishing.\n- **Retried by an outbox**: there is no outbox, so nothing retries.",
+   "excerpts": [
+    {
+     "path": "src/NetCalendy.Infrastructure/Persistence/AppDbContext.cs",
+     "lineStart": 44,
+     "lineEnd": 47,
+     "quote": "var result = await base.SaveChangesAsync(ct);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:organized-dotnet-calendy/note/907a9cb8c914a7ca",
+   "provenance": {
+    "repo": "organized-dotnet-calendy",
+    "sha": "d17a20d41afd555178fc45dc0c55ab45419abb04",
+    "path": "src/NetCalendy.Api/Program.cs",
+    "lines": {
+     "start": 87,
+     "end": 89
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r01-start-here",
+   "pack": "organized-dotnet-calendy",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: a Calendly-style API in four layers",
+   "body": "NetCalendy is a multi-tenant scheduling API: hosts publish event types and weekly schedules, invitees book slots. It is an ASP.NET Core controller API using MediatR commands and queries, EF Core over Postgres, and a Result type for expected failures. This pack uses four guides from **docs/upskill/03-architecture-and-patterns/**:\n\n1. **02-data-model-and-persistence.md**: tables, EF Core mappings, DbContext lifetime and transactions.\n2. **03-validation-auth-and-permissions.md**: the validation layers, JWT authentication and tenant resolution.\n3. **04-side-effects-async-and-reliability.md**: domain events, the missing outbox and retries.\n4. **06-architecture-critique.md**: strengths, ranked risks and a three-month plan.\n\nBefore reading them, open **src/NetCalendy.Api/Program.cs** and write down the middleware pipeline in the order `app.Use...` calls appear. Several questions in this pack depend on what has, and has not, run by the time a given piece of code executes. Then follow one request, for example updating an event type, from its controller action through `mediator.Send` to the handler and back through `ToActionResult`.",
+   "excerpts": [
+    {
+     "path": "src/NetCalendy.Api/Program.cs",
+     "lineStart": 87,
+     "lineEnd": 89,
+     "quote": "app.UseMiddleware<TenantResolutionMiddleware>();"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/01-boundaries-and-layers.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The dependency rule between Domain, Application, Infrastructure and Api, with examples."
+    },
+    {
+     "path": "docs/upskill/01-codebase-cartography/05-key-flows.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Step-by-step traces of the main flows through the code."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:organized-dotnet-calendy/note/91db2ee15dcfcbcd",
+   "provenance": {
+    "repo": "organized-dotnet-calendy",
+    "sha": "d17a20d41afd555178fc45dc0c55ab45419abb04",
+    "path": "docs/upskill/03-architecture-and-patterns/02-data-model-and-persistence.md",
+    "lines": {
+     "start": 85,
+     "end": 85
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r02-persistence",
+   "pack": "organized-dotnet-calendy",
+   "target": "pack",
+   "phase": "before",
+   "title": "Core idea: one DbContext per request, and what SaveChanges writes",
+   "body": "EF Core's DbContext is a unit of work: it tracks the entities you load or add, and SaveChangesAsync turns those changes into SQL. Two questions decide how that behaves here.\n\n**Lifetime.** Read how DependencyInjection.cs registers AppDbContext and IUnitOfWork, and what lifetime the repositories get. Ask which objects share a context within one request, and what would change if a longer-lived service held one. The guide's section on why scoped matters is the place to compare your answer.\n\n**What gets written.** EF Core tracks each property's original value. Open RepositoryBase and see which DbSet method each repository method calls; then look up in the EF Core docs what DbSet.Update does to the state of every property, compared with just changing a tracked property. Finally, count how many times each handler calls SaveChangesAsync, and remind yourself what EF wraps around a single call.",
+   "excerpts": [
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/02-data-model-and-persistence.md",
+     "lineStart": 85,
+     "lineEnd": 85,
+     "quote": "All repositories injected in the same request share the same `DbContext`."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/NetCalendy.Infrastructure/Persistence/Repositories/RepositoryBase.cs",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The four generic repository methods every repository inherits."
+    },
+    {
+     "path": "src/NetCalendy.Infrastructure/DependencyInjection.cs",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "How the context, unit of work and repositories are registered."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:organized-dotnet-calendy/note/a8ade0a7e20c5c7c",
+   "provenance": {
+    "repo": "organized-dotnet-calendy",
+    "sha": "d17a20d41afd555178fc45dc0c55ab45419abb04",
+    "path": "src/NetCalendy.Api/Middleware/TenantResolutionMiddleware.cs",
+    "lines": {
+     "start": 25,
+     "end": 25
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q02-unknown-slug",
+   "pack": "organized-dotnet-calendy",
+   "target": "seed:quests:organized-dotnet-calendy/quiz/26f80632d07113c5",
+   "phase": "after",
+   "title": "An unknown slug is silently ignored by the middleware",
+   "body": "**Key: it sets nothing in Items and just passes the request on.**\n\nThe middleware reads the header (line 12), and because the header is present the ?? never falls through to the subdomain. GetBySlugAsync returns null, the `if (tenant is not null)` block is skipped, and line 25 calls next(context) unconditionally. The request continues with no TenantId in Items.\n\nWhy the others are wrong:\n- **A 404 naming the tenant**: the middleware never writes a response or a status.\n- **Falls back to the subdomain**: the subdomain is used only when the header value is null, not when the lookup fails.\n- **A 400 before authentication**: nothing short-circuits; authentication runs next as usual.",
+   "excerpts": [
+    {
+     "path": "src/NetCalendy.Api/Middleware/TenantResolutionMiddleware.cs",
+     "lineStart": 25,
+     "lineEnd": 25,
+     "quote": "await next(context);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "key": "seed:notes:organized-dotnet-calendy/note/b0700773e3c306d7",
+   "provenance": {
+    "repo": "organized-dotnet-calendy",
+    "sha": "d17a20d41afd555178fc45dc0c55ab45419abb04",
+    "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 51,
+     "end": 51
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r03-tenancy-and-errors",
+   "pack": "organized-dotnet-calendy",
+   "target": "pack",
+   "phase": "before",
+   "title": "Core idea: where the tenant comes from and how errors become statuses",
+   "body": "Every row belongs to a tenant, so code has to know the current tenant on each request. NetCalendy has two separate mechanisms for that. Read TenantResolutionMiddleware and CurrentTenantService side by side and answer: where does each one get its value, where does it store or return it, and what does each do when it finds nothing? Then read GetAvailableSlotsHandler's first line and note which of the two it uses, which type it returns, and which C# operator is applied to it.\n\nFor authentication, read the AddJwtBearer block in Program.cs and list every TokenValidationParameters property it sets. Then look up the defaults for the ones it leaves out.\n\nExpected failures travel as Result and Error values, not exceptions. Read ResultExtensions.ToActionResult and list, for each error code a handler in this pack can return, the status it produces.",
+   "excerpts": [
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 51,
+     "lineEnd": 51,
+     "quote": "**How tenant is resolved:**"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/NetCalendy.Infrastructure/Services/CurrentTenantService.cs",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Reads the tenant id and slug for the current request."
+    },
+    {
+     "path": "src/NetCalendy.Api/Extensions/ResultExtensions.cs",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The single place where Error values are mapped to HTTP responses."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:organized-dotnet-calendy/note/ff39d29cda52647c",
+   "provenance": {
+    "repo": "organized-dotnet-calendy",
+    "sha": "d17a20d41afd555178fc45dc0c55ab45419abb04",
+    "path": "src/NetCalendy.Api/Program.cs",
+    "lines": {
+     "start": 34,
+     "end": 34
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-q05-clock-skew",
+   "pack": "organized-dotnet-calendy",
+   "target": "seed:quests:organized-dotnet-calendy/quiz/280642633bb36883",
+   "phase": "after",
+   "title": "JwtBearer allows five minutes of clock skew by default",
+   "body": "**Key: yes, since the default five-minute ClockSkew still covers it.**\n\nThe AddJwtBearer block sets ValidateLifetime = true and never sets ClockSkew. TokenValidationParameters.ClockSkew defaults to TimeSpan.FromMinutes(5), and lifetime validation accepts a token until exp plus that skew. A token two minutes past exp is therefore still accepted.\n\nWhy the others are wrong:\n- **Rejects any token past exp**: true only with ClockSkew = TimeSpan.Zero, which this code does not set.\n- **Default skew is zero**: the default is five minutes; teams set zero explicitly when they want strict expiry.\n- **Only checks nbf**: lifetime validation checks both nbf and exp.",
+   "excerpts": [
+    {
+     "path": "src/NetCalendy.Api/Program.cs",
+     "lineStart": 34,
+     "lineEnd": 34,
+     "quote": "ValidateLifetime = true,"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}
