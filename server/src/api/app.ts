@@ -3,6 +3,7 @@ import express, { type Express, type NextFunction, type Request, type Response }
 import {
   AnswerRecordedResponse,
   AttemptDetailResponse,
+  CampaignProgressResponse,
   AttemptIdParams,
   CampaignResponse,
   CompetenciesResponse,
@@ -21,11 +22,13 @@ import {
   LadderResponse,
   MutationMarkerBody,
   MutationMarkerResponse,
+  PassRatesResponse,
   EmptyQuery,
   GradeBody,
   ReviewItemParams,
   ReviewQueueQuery,
   ReviewQueueResponse,
+  ReviewStatsResponse,
   SubmissionBody,
   SubmitResponse,
   TrackIdParams,
@@ -33,6 +36,7 @@ import {
   UnitIdParams,
   UnitKeyParams,
   WrittenAnswerBody,
+  XpStatsResponse,
 } from '@bootquest/shared/api';
 import { RefContentResponse, RefIdParams, SeedQueueQuery, SeedQueueResponse, SyncRequestBody } from '@bootquest/shared/sync';
 import type { Db } from '../db/database.ts';
@@ -45,6 +49,7 @@ import { emptyContentStore, type UnitContentStore } from './content-store.ts';
 import { asyncRoute, errorBody, HttpError, sendJson, validate } from './http.ts';
 import { getRefContent } from './service.ts';
 import { reviewCardText } from './study-service.ts';
+import { campaignProgress, passRates, reviewStats, xpStats } from './stats-service.ts';
 import { defaultRunners, type RunnerRegistry } from './runners.ts';
 import { emptySeedItemStore, type SeedItemStore } from '../store/seed-items.ts';
 import { ladderUnits } from '../store/ladder.ts';
@@ -295,6 +300,27 @@ export function createApp(opts: AppOptions): Express {
   router.get('/stats/katas', asyncRoute((req, res) => {
     validate(EmptyQuery, req.query, 'query');
     sendJson(res, 200, KataStatsResponse.parse(kataStats(ladder)));
+  }));
+
+  // campaign 2 B2: read-only stats charts (every number server-side; strict response parse)
+  router.get('/stats/xp', asyncRoute((req, res) => {
+    validate(EmptyQuery, req.query, 'query');
+    sendJson(res, 200, XpStatsResponse.parse(xpStats(deps)));
+  }));
+
+  router.get('/stats/pass-rates', asyncRoute((req, res) => {
+    validate(EmptyQuery, req.query, 'query');
+    sendJson(res, 200, PassRatesResponse.parse(passRates(deps)));
+  }));
+
+  router.get('/stats/reviews', asyncRoute((req, res) => {
+    validate(EmptyQuery, req.query, 'query');
+    sendJson(res, 200, ReviewStatsResponse.parse(reviewStats(deps)));
+  }));
+
+  router.get('/stats/campaign', asyncRoute((req, res) => {
+    validate(EmptyQuery, req.query, 'query');
+    sendJson(res, 200, CampaignProgressResponse.parse(campaignProgress(deps)));
   }));
 
   // W7: the ladder units (explain-back / G2 / kata bank / retests / authored G3-G4) with campaign links

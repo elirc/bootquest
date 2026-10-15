@@ -2,11 +2,23 @@ import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useApi } from '../api/context';
 import { errorText } from '../api/errors';
-import type { AttemptDetailResponse, CompetencyId, EvidenceRowDto } from '../api/types';
-import { Chip, LoadState, PageHeader, Panel } from '../components/ui';
+import type {
+  AttemptDetailResponse,
+  CampaignProgressResponse,
+  CheckType,
+  CompetencyId,
+  EvidenceRowDto,
+  PassRatesResponse,
+  ReviewStatsResponse,
+  XpStatsResponse,
+} from '../api/types';
+import { BarChart, DataTable, Legend, RateChart, ShareBar, type BarDatum, type ChartSeries } from '../components/StatsCharts';
+import { Chip, LoadState, PageHeader, Panel, ProgressBar } from '../components/ui';
+import { fmtRate, longDate, monthStarts, shortDate, weekdayLabel } from '../lib/chart';
 import { fmtInt } from '../lib/format';
 import { buildHeatGrid } from '../lib/heatmap';
 import { useAsync } from '../lib/useAsync';
+import { progressLabel, progressTitle, TRACK_LABEL } from '../lib/view';
 
 const COMPETENCIES: { id: CompetencyId; label: string }[] = [
   { id: 'language-fluency', label: 'Language fluency' },
@@ -19,7 +31,7 @@ const COMPETENCIES: { id: CompetencyId; label: string }[] = [
 ];
 const isCompetency = (v: string | null): v is CompetencyId => COMPETENCIES.some((c) => c.id === v);
 
-/** Stats: tiles + G1 catch rate + the evidence browser. XP-over-time / pass rates are placeholders (the stats wave). */
+/** Stats: tiles, XP over time, pass rates, review forecast + retention, campaign progress, G1 catch rate, evidence. */
 export function StatsPage() {
   const api = useApi();
   const q = useAsync(() => api.getDashboard(), [api]);
@@ -56,24 +68,331 @@ export function StatsPage() {
             </div>
           </div>
           <div className="stats-grid">
-            {[
-              ['XP over time', 'Weekly XP by track, stacked.'],
-              ['Pass rates', 'First-try pass rate per unit kind and track.'],
-            ].map(([title, body]) => (
-              <Panel key={title} title={title}>
-                <div className="placeholder">
-                  <p>{body}</p>
-                  {/* W9 (ui-audit #9): no stale wave promise — say plainly it is not built */}
-                  <span className="muted small">Not charted yet: planned for the stats wave.</span>
-                </div>
-              </Panel>
-            ))}
+            <XpPanel />
+            <PassRatePanel />
+            <ReviewPanel />
+            <CampaignProgressPanel />
             <CatchRatePanel />
             <EvidenceBrowser />
           </div>
         </div>
       )}
     </>
+  );
+}
+
+// ---------------------------------------------------------------- XP over time
+
+/** Bottom-first stack order; colour follows the track (tokens), "no track" (review XP) is the neutral base. */
+const XP_SERIES: readonly (ChartSeries & { id: keyof XpStatsResponse['days'][number]['byTrack'] })[] = [
+  { id: 'none', label: 'Reviews & other', className: 'series-none' },
+  { id: 'js', label: TRACK_LABEL.js, className: 'series-js' },
+  { id: 'csharp', label: TRACK_LABEL.csharp, className: 'series-csharp' },
+  { id: 'agentic', label: TRACK_LABEL.agentic, className: 'series-agentic' },
+  { id: 'java', label: TRACK_LABEL.java, className: 'series-java' },
+];
+
+type XpRange = 'days' | 'weeks';
+
+function XpPanel() {
+  const api = useApi();
+  const q = useAsync(() => api.getXpStats(), [api]);
+  const [range, setRange] = useState<XpRange>('days');
+  return (
+    <Panel
+      title="XP over time"
+      className="span-all"
+      aside={
+        <span className="seg" role="group" aria-label="XP range">
+          {(
+            [
+              ['days', 'Last 90 days'],
+              ['weeks', 'All time (weekly)'],
+            ] as const
+          ).map(([id, label]) => (
+            <button key={id} type="button" className={`seg-opt${range === id ? ' on' : ''}`} aria-pressed={range === id} onClick={() => setRange(id)}>
+              {label}
+            </button>
+          ))}
+        </span>
+      }
+    >
+      {q.status !== 'ready' ? <LoadState error={q.error} onRetry={q.reload} minHeight={262} /> : <XpChart data={q.data} range={range} />}
+    </Panel>
+  );
+}
+
+function XpChart({ data, range }: { data: XpStatsResponse; range: XpRange }) {
+  if (data.totals.allTime === 0) {
+    return (
+      <div className="chart-empty" data-testid="xp-empty">
+        <p>No XP earned yet.</p>
+        <p className="muted small">Bars appear after your first verified pass, reading self-attest or review.</p>
+      </div>
+    );
+  }
+  const weekly = range === 'weeks';
+  const rows: BarDatum[] = weekly
+    ? data.weeks.map((w) => ({ key: w.weekStart, label: `Week of ${longDate(w.weekStart)}`, values: w.byTrack }))
+    : data.days.map((d) => ({ key: d.day, label: longDate(d.day), values: d.byTrack }));
+  const used = XP_SERIES.filter((s) => rows.some((r) => (r.values[s.id] ?? 0) > 0));
+  const total = weekly ? data.totals.allTime : data.totals.lastDays;
+  const keys = rows.map((r) => r.key);
+  const summary = weekly
+    ? `Weekly XP since the week of ${shortDate(keys[0]!)}: ${fmtInt(total)} XP across ${rows.length} week${rows.length === 1 ? '' : 's'}.`
+    : `Daily XP, last ${rows.length} days: ${fmtInt(total)} XP on ${rows.filter((r) => Object.values(r.values).some((v) => v > 0)).length} active days.`;
+  return (
+    <div data-testid={`xp-chart-${range}`}>
+      <p className="chart-sub muted small">
+        {weekly ? (
+          <>
+            <span className="num">{fmtInt(total)}</span> XP all time, {rows.length} week{rows.length === 1 ? '' : 's'} (Monday starts)
+          </>
+        ) : (
+          <>
+            <span className="num">{fmtInt(total)}</span> XP in the last {rows.length} days · <span className="num">{fmtInt(data.totals.allTime)}</span> XP all time
+          </>
+        )}
+      </p>
+      {weekly || data.totals.lastDays > 0 ? (
+        <BarChart data={rows} series={used} xLabels={monthStarts(keys, weekly)} unit="XP" summary={summary} highlightLast={false} />
+      ) : (
+        <div className="chart-empty" data-testid="xp-empty-window">
+          <p>No XP in the last {rows.length} days.</p>
+          <p className="muted small">Switch to all time to see earlier weeks.</p>
+        </div>
+      )}
+      <Legend series={used} />
+      <DataTable
+        caption={summary}
+        head={[weekly ? 'Week of' : 'Day', 'Total', ...used.map((s) => s.label)]}
+        rows={rows
+          .filter((r) => weekly || Object.values(r.values).some((v) => v > 0))
+          .map((r) => [weekly ? shortDate(r.key) : r.label, fmtInt(Object.values(r.values).reduce((a, b) => a + b, 0)), ...used.map((s) => fmtInt(r.values[s.id] ?? 0))])}
+      />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- pass rates
+
+const CHECK_LABEL: Partial<Record<CheckType, string>> = {
+  'drill-js': 'JS drills',
+  'drill-cs': 'C# drills',
+  quiz: 'Quizzes',
+  'predict-output': 'Predict output',
+  'guided-step': 'Guided steps',
+  http: 'HTTP labs',
+  repo: 'Repo tasks',
+  'study-quiz': 'Study quizzes',
+  'node-test-file': 'Program units',
+  'self-run': 'Self-run',
+  'vitest-project': 'Vitest projects',
+};
+
+function PassRatePanel() {
+  const api = useApi();
+  const q = useAsync(() => api.getPassRates(), [api]);
+  return (
+    <Panel title="Pass rates" className="span-2">
+      {q.status !== 'ready' ? <LoadState error={q.error} onRetry={q.reload} minHeight={220} /> : <PassRates data={q.data} />}
+    </Panel>
+  );
+}
+
+function PassRates({ data }: { data: PassRatesResponse }) {
+  if (data.overall.attempts === 0) {
+    return (
+      <div className="chart-empty" data-testid="pass-empty">
+        <p>No graded attempts yet.</p>
+        <p className="muted small">Rates appear after your first machine-checked submit.</p>
+      </div>
+    );
+  }
+  const o = data.overall;
+  const trackRows = data.byTrack.map((r) => ({ key: r.trackId, label: TRACK_LABEL[r.trackId], ...r }));
+  const typeRows = data.byCheckType.map((r) => ({ key: r.checkType, label: CHECK_LABEL[r.checkType] ?? r.checkType, ...r }));
+  return (
+    <div data-testid="pass-rates">
+      <p className="chart-sub small">
+        <span className="num">{fmtRate(o.passRate)}</span> of <span className="num">{fmtInt(o.attempts)}</span> graded submits passed ·{' '}
+        <span className="num">{fmtRate(o.firstTryRate)}</span> of <span className="num">{fmtInt(o.units)}</span> units passed on the first try, solo
+      </p>
+      <ul className="chart-legend" aria-label="Legend">
+        <li>
+          <svg width="10" height="10" aria-hidden="true">
+            <rect className="series-pass" width="10" height="10" rx="2" />
+          </svg>
+          Pass rate (passes / graded submits)
+        </li>
+        <li>
+          <svg width="10" height="10" aria-hidden="true">
+            <rect className="series-first" width="10" height="10" rx="2" />
+          </svg>
+          First try, solo (units / units tried)
+        </li>
+      </ul>
+      <div className="rate-groups">
+        <div>
+          <h3 className="chart-h">By track</h3>
+          <RateChart rows={trackRows} summary={`Pass rate by track: ${trackRows.map((r) => `${r.label} ${fmtRate(r.passRate)}`).join(', ')}.`} />
+        </div>
+        <div>
+          <h3 className="chart-h">By check type</h3>
+          <RateChart rows={typeRows} summary={`Pass rate by check type: ${typeRows.map((r) => `${r.label} ${fmtRate(r.passRate)}`).join(', ')}.`} />
+        </div>
+      </div>
+      <DataTable
+        caption="Pass rates by track and check type"
+        head={['Group', 'Pass rate', 'Passes / submits', 'First try', 'First-try units']}
+        rows={[...trackRows, ...typeRows].map((r) => [r.label, fmtRate(r.passRate), `${r.passes}/${r.attempts}`, fmtRate(r.firstTryRate), `${r.firstTryPasses}/${r.units}`])}
+      />
+      <p className="muted small">
+        A graded submit is a machine-checked submit; reading self-attests, written answers and self-scored explain-backs or katas are not counted. First try =
+        the unit&apos;s earliest graded submit passed with no self-assist and no reveal.
+      </p>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- reviews
+
+const RATING_PARTS = [
+  { id: 'again', label: 'Again', className: 'series-again' },
+  { id: 'hard', label: 'Hard', className: 'series-hard' },
+  { id: 'good', label: 'Good', className: 'series-good' },
+  { id: 'easy', label: 'Easy', className: 'series-easy' },
+] as const;
+
+function ReviewPanel() {
+  const api = useApi();
+  const q = useAsync(() => api.getReviewStats(), [api]);
+  return <Panel title="Reviews">{q.status !== 'ready' ? <LoadState error={q.error} onRetry={q.reload} minHeight={220} /> : <ReviewStats data={q.data} />}</Panel>;
+}
+
+function ReviewStats({ data }: { data: ReviewStatsResponse }) {
+  const ret = data.retention;
+  const rows: BarDatum[] = data.forecast.map((d, i) => ({
+    key: d.day,
+    label: i === 0 ? `Today (${shortDate(d.day)})` : longDate(d.day),
+    values: { due: d.due },
+  }));
+  const ahead = data.forecast.reduce((s, d) => s + d.due, 0);
+  const labels = data.forecast.map((d, i) => ({ i, text: i === 0 ? 'Today' : weekdayLabel(d.day).slice(0, 2) }));
+  const ratingsTotal = data.ratings.again + data.ratings.hard + data.ratings.good + data.ratings.easy;
+  return (
+    <div data-testid="review-stats">
+      <dl className="mini-stats">
+        <div>
+          <dt>Due now</dt>
+          <dd className="num">{fmtInt(data.dueNow)}</dd>
+        </div>
+        <div>
+          <dt>Retention, 30d</dt>
+          <dd className="num">{fmtRate(ret.window.rate)}</dd>
+        </div>
+        <div>
+          <dt>All time</dt>
+          <dd className="num">{fmtRate(ret.allTime.rate)}</dd>
+        </div>
+      </dl>
+      <h3 className="chart-h">Due, next {data.forecast.length} days</h3>
+      {data.cards === 0 ? (
+        <div className="chart-empty" data-testid="review-empty">
+          <p>No review cards yet.</p>
+          <p className="muted small">Cards are enrolled by study quests (missed questions, flashcards).</p>
+        </div>
+      ) : (
+        <>
+          <BarChart
+            data={rows}
+            series={[{ id: 'due', label: 'Due', className: 'series-due' }]}
+            xLabels={labels}
+            height={150}
+            unit="due"
+            valueLabels
+            summary={`Review cards due over the next ${data.forecast.length} days: ${fmtInt(ahead)}, of which ${fmtInt(data.forecast[0]?.due ?? 0)} today.`}
+            describe={(d) => `${d.label}: ${fmtInt(d.values.due ?? 0)} card${d.values.due === 1 ? '' : 's'} due`}
+          />
+          <p className="muted small">
+            Today includes <span className="num">{fmtInt(data.overdue)}</span> overdue · <span className="num">{fmtInt(data.later)}</span> due later · <span className="num">{fmtInt(data.cards)}</span> cards
+          </p>
+        </>
+      )}
+      <h3 className="chart-h">Grades</h3>
+      {ratingsTotal === 0 ? (
+        <p className="muted small" data-testid="retention-empty">
+          No reviews graded yet: retention is shown after the first one.
+        </p>
+      ) : (
+        <ShareBar
+          parts={RATING_PARTS.map((p) => ({ ...p, value: data.ratings[p.id] }))}
+          summary={`Review grades: ${RATING_PARTS.map((p) => `${p.label} ${data.ratings[p.id]}`).join(', ')}.`}
+        />
+      )}
+      <DataTable
+        caption="Review cards due per day"
+        head={['Day', 'Due']}
+        rows={rows.map((r) => [r.label, fmtInt(r.values.due ?? 0)])}
+      />
+      <p className="muted small">Retention = graded reviews not marked Again ({fmtInt(ret.window.recalled)}/{fmtInt(ret.window.reviews)} in the last 30 days).</p>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- campaign progress
+
+function CampaignProgressPanel() {
+  const api = useApi();
+  const q = useAsync(() => api.getCampaignProgress(), [api]);
+  return (
+    <Panel title="Campaign progress" className="span-2">
+      {q.status !== 'ready' ? <LoadState error={q.error} onRetry={q.reload} minHeight={200} /> : <CampaignProgress data={q.data} />}
+    </Panel>
+  );
+}
+
+function CampaignProgress({ data }: { data: CampaignProgressResponse }) {
+  return (
+    <div className="camp-progress" data-testid="campaign-progress">
+      {data.tracks.map((t) => (
+        <section key={t.trackId} className={`camp-track${t.locked ? ' track-locked' : ''}`} aria-label={`${t.name} progress`}>
+          <header className="camp-track-head">
+            <h3 className="chart-h">{t.name}</h3>
+            <span className="num" title={progressTitle(t.progress)}>
+              {t.locked ? 'Locked' : progressLabel(t.progress)}
+            </span>
+          </header>
+          {t.acts.length === 0 ? (
+            <p className="muted small">
+              No campaign acts seeded{t.progress.basis === 'practice' ? ` · practice ${t.progress.practiceDone}/${t.progress.practiceTotal} units` : ''}.
+            </p>
+          ) : (
+            <ol className="camp-acts">
+              {t.acts.map((a) => (
+                <li key={a.actNo} className={a.unlocked ? '' : 'camp-act-locked'}>
+                  <span className="camp-act-name">
+                    Act {a.actNo}: {a.title}
+                    {!a.unlocked && !t.locked && <span className="muted"> (locked)</span>}
+                  </span>
+                  <ProgressBar value={a.coreDone} max={Math.max(1, a.coreTotal)} label={`${t.name} act ${a.actNo} core progress`} tone="success" />
+                  <span className="camp-act-num small">
+                    core <span className="num">{a.coreDone}/{a.coreTotal}</span>
+                    {a.corePending > 0 && <span className="muted"> · {a.corePending} content pending</span>}
+                    {a.readingTotal > 0 && (
+                      <span className="muted">
+                        {' '}
+                        · reading {a.readingDone}/{a.readingTotal}
+                      </span>
+                    )}
+                  </span>
+                </li>
+              ))}
+            </ol>
+          )}
+        </section>
+      ))}
+    </div>
   );
 }
 

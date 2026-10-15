@@ -14,6 +14,11 @@ import type { z } from 'zod';
 import type {
   AnswerRecordedResponse,
   AttemptDetailResponse,
+  TrackProgress,
+  XpStatsResponse,
+  ReviewStatsResponse,
+  PassRatesResponse,
+  CampaignProgressResponse,
   CampaignActDto,
   CampaignQuestDto,
   CampaignResponse,
@@ -67,6 +72,11 @@ import type {
 export type {
   AnswerRecordedResponse,
   AttemptDetailResponse,
+  TrackProgress,
+  XpStatsResponse,
+  ReviewStatsResponse,
+  PassRatesResponse,
+  CampaignProgressResponse,
   CampaignActDto,
   CampaignQuestDto,
   CampaignResponse,
@@ -222,6 +232,15 @@ export interface BootQuestApi {
   getAttempt(attemptId: number): Promise<AttemptDetailResponse>;
   /** GET /api/stats/katas — the G1 aggregate. */
   getKataStats(): Promise<KataStatsResponse>;
+  // ---- campaign 2 B2: read-only stats charts
+  /** GET /api/stats/xp — 90 local days + all-time Monday weeks, split by track. */
+  getXpStats(): Promise<XpStatsResponse>;
+  /** GET /api/stats/pass-rates — graded attempts per track / check type, honest first-try. */
+  getPassRates(): Promise<PassRatesResponse>;
+  /** GET /api/stats/reviews — 14-day due forecast + retention. */
+  getReviewStats(): Promise<ReviewStatsResponse>;
+  /** GET /api/stats/campaign — per track the shared TrackProgress + per-act counts. */
+  getCampaignProgress(): Promise<CampaignProgressResponse>;
 }
 
 /** Codes the client can raise itself on top of the server's envelope codes. */

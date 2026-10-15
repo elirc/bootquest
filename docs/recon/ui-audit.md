@@ -263,7 +263,7 @@ Not defects (re-checked): the streak shows 0 days on a day with +950 XP — toda
 | 23 | polish | FIXED | "The question is in the answer pane." | `w9-play-quiz-*` |
 | 24 | bad | ROUTED | content / factory (see the finding) | — |
 | 25 | polish | ROUTED | content | — |
-| 26 | obs | NOT CHANGED | stats wave | — |
+| 26 | obs | FIXED (campaign 2 B2, branch `stats-charts`) | one server-owned `TrackProgress` (shared/src/api.ts; rule in server/src/engines/stats.ts `trackProgress`): campaign core quests done / total over all acts (practice units when a track has no core); GET /tracks, /tracks/:id/units and /stats/campaign all use it; sidebar + campaign page show it with the definition as tooltip; the sidebar re-reads /tracks silently after each navigation (lib/tracks.tsx) | `b2b-campaign-*`, `b2b-stats-*` |
 
 Client regression tests: `client/src/pages/ui-audit.test.tsx` (16 tests: renderer parse + escape-safety, prompt case +
 fence, numbered listing, locked act, 404 without Retry, no key probe, kata heading + wrap, confirm focus / Escape, one

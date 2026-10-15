@@ -5,6 +5,10 @@ import {
   ApiError,
   type AnswerRecordedResponse,
   type AttemptDetailResponse,
+  type CampaignProgressResponse,
+  type PassRatesResponse,
+  type ReviewStatsResponse,
+  type XpStatsResponse,
   type CampaignResponse,
   type CompetenciesResponse,
   type EvidenceListResponse,
@@ -114,5 +118,9 @@ export function createHttpApi(baseUrl = '/api', fetchImpl: typeof fetch = (...a)
     },
     getAttempt: (id) => call<AttemptDetailResponse>(`/attempts/${encodeURIComponent(String(id))}`),
     getKataStats: () => call<KataStatsResponse>('/stats/katas'),
+    getXpStats: () => call<XpStatsResponse>('/stats/xp'),
+    getPassRates: () => call<PassRatesResponse>('/stats/pass-rates'),
+    getReviewStats: () => call<ReviewStatsResponse>('/stats/reviews'),
+    getCampaignProgress: () => call<CampaignProgressResponse>('/stats/campaign'),
   };
 }

@@ -45,6 +45,7 @@ import {
   type UnitRecord,
 } from '../store/queries.ts';
 import type { UnitContentStore } from './content-store.ts';
+import { coreCountsByTrack, trackCounts } from './stats-service.ts';
 import { competencyRowsWithPromotion, explainBackPublicFor, kataPublicFor } from './ladder-service.ts';
 import type { SeedItemStore } from '../store/seed-items.ts';
 import { HttpError } from './http.ts';
@@ -119,22 +120,17 @@ function summarize(
   };
 }
 
-function trackSummary(db: Db, t: TrackRecord, passed: Set<number>) {
-  const units = unitsForTrack(db, t.id);
-  return {
-    id: t.id,
-    name: t.name,
-    locked: t.locked,
-    unitCount: units.length,
-    doneCount: t.locked ? 0 : units.filter((u) => passed.has(u.id)).length,
-  };
+/** Practice counts + the shared TrackProgress (campaign 2 B2, ui-audit #26: one definition, stats-service.ts). */
+function trackSummary(db: Db, t: TrackRecord, passed: Set<number>, core: ReadonlyMap<string, { coreDone: number; coreTotal: number }>) {
+  return { id: t.id, name: t.name, locked: t.locked, ...trackCounts(db, t, passed, core) };
 }
 
 // ---------------------------------------------------------------- tracks + units
 
 export function getTracks(deps: ServiceDeps) {
   const passed = passedUnitIds(deps.db);
-  return { tracks: listTracks(deps.db).map((t) => trackSummary(deps.db, t, passed)) };
+  const core = coreCountsByTrack(campaignState(deps.db));
+  return { tracks: listTracks(deps.db).map((t) => trackSummary(deps.db, t, passed, core)) };
 }
 
 export function getTrackUnits(deps: ServiceDeps, trackId: string) {
@@ -144,7 +140,7 @@ export function getTrackUnits(deps: ServiceDeps, trackId: string) {
   const revealed = revealedUnitIds(deps.db);
   const prereqs = prerequisiteMap(deps.db);
   return {
-    track: trackSummary(deps.db, track, passed),
+    track: trackSummary(deps.db, track, passed, coreCountsByTrack(campaignState(deps.db, track.id))),
     units: unitsForTrack(deps.db, track.id).map((u) => summarize(u, track.locked, passed, revealed, prereqs)),
   };
 }

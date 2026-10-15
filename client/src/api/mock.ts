@@ -36,7 +36,14 @@ import {
   type EvidenceRowDto,
   type KataFinding,
   type SubmitResponse,
+  type CampaignActDto,
+  type CampaignProgressResponse,
+  type PassRatesResponse,
+  type ReviewStatsResponse,
+  type TrackProgress,
+  type XpStatsResponse,
 } from './types';
+import type { XpByTrack } from '@bootquest/shared/api';
 
 /** Private, fixture-only grading material. Never crosses the API boundary. */
 interface PrivateFixture {
@@ -119,6 +126,37 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
   const allUnits = () => Object.values(units).flat();
   const findUnit = (id: number) => allUnits().find((u) => u.id === id) ?? null;
   const trackOf = (id: TrackId) => fx.tracks.tracks.find((t) => t.id === id)!;
+
+  // W8: a passed study quest is done, and its act's core progress follows (derived, like the server)
+  function campaignActs(trackId: TrackId): CampaignActDto[] {
+    const c = campaignFixtures[trackId];
+    if (!c) return [];
+    return c.acts.map((a) => {
+      const quests = a.quests.map((q) => (q.unitId !== undefined && studyPassed.has(q.unitId) ? { ...q, state: 'done' as const } : q));
+      const bump = quests.filter((q, i) => q.core && q.state === 'done' && a.quests[i]!.state !== 'done').length;
+      return { ...a, quests, progress: { ...a.progress, coreDone: a.progress.coreDone + bump } };
+    });
+  }
+
+  /** Mirrors the server's ONE track-progress rule (server/src/engines/stats.ts trackProgress). */
+  function trackCounts(id: TrackId, locked: boolean): { unitCount: number; doneCount: number; progress: TrackProgress } {
+    const list = units[id] ?? [];
+    const unitCount = list.length;
+    const doneCount = locked ? 0 : list.filter((u) => u.state === 'done').length;
+    const acts = campaignActs(id);
+    const coreDone = acts.reduce((n, a) => n + a.progress.coreDone, 0);
+    const coreTotal = acts.reduce((n, a) => n + a.progress.coreTotal, 0);
+    const counts = { coreDone, coreTotal, practiceDone: doneCount, practiceTotal: unitCount };
+    const pct = (d: number, t: number) => Math.min(100, Math.floor((d * 100) / t));
+    const progress: TrackProgress = locked
+      ? { pct: 0, basis: 'none', ...counts }
+      : coreTotal > 0
+        ? { pct: pct(coreDone, coreTotal), basis: 'campaign-core', ...counts }
+        : unitCount > 0
+          ? { pct: pct(doneCount, unitCount), basis: 'practice', ...counts }
+          : { pct: 0, basis: 'none', ...counts };
+    return { unitCount, doneCount, progress };
+  }
 
   function detail(u: UnitSummary): DetailFixture {
     const sq = studyQuestFixtures[String(u.id)];
@@ -351,19 +389,14 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
 
     getTracks: () =>
       wrap(() => ({
-        tracks: fx.tracks.tracks.map((t) => ({
-          ...t,
-          unitCount: units[t.id]?.length ?? 0,
-          doneCount: units[t.id]?.filter((u) => u.state === 'done').length ?? 0,
-        })),
+        tracks: fx.tracks.tracks.map((t) => ({ id: t.id, name: t.name, locked: t.locked, ...trackCounts(t.id, t.locked) })),
       })),
 
     getTrackUnits: (trackId) =>
       wrap(() => {
         const track = fx.tracks.tracks.find((t) => t.id === trackId);
         if (!track) throw err(404, 'NOT_FOUND', `track ${trackId} not found`);
-        const list = units[trackId] ?? [];
-        return { track: { ...track, unitCount: list.length, doneCount: list.filter((u) => u.state === 'done').length }, units: list };
+        return { track: { id: track.id, name: track.name, locked: track.locked, ...trackCounts(track.id, track.locked) }, units: units[trackId] ?? [] };
       }),
 
     getUnit: (id) =>
@@ -489,13 +522,7 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
       wrap(() => {
         const c = campaignFixtures[trackId];
         if (!c) throw err(404, 'NOT_FOUND', `track ${trackId} not found`);
-        // W8: a passed study quest is done, and its act's core progress follows (derived, like the server)
-        const acts = c.acts.map((a) => {
-          const quests = a.quests.map((q) => (q.unitId !== undefined && studyPassed.has(q.unitId) ? { ...q, state: 'done' as const } : q));
-          const bump = quests.filter((q, i) => q.core && q.state === 'done' && a.quests[i]!.state !== 'done').length;
-          return { ...a, quests, progress: { ...a.progress, coreDone: a.progress.coreDone + bump } };
-        });
-        return { ...c, acts, level: 3 };
+        return { ...c, acts: campaignActs(trackId), level: 3 };
       }),
 
     answerExplainBack: (id, body) =>
@@ -665,6 +692,106 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
           },
         };
       }),
+
+    // ---- campaign 2 B2 stats (fixture-derived; the same shapes and empty-state rules as the server)
+    getXpStats: () =>
+      wrap((): XpStatsResponse => {
+        // the heatmap fixture's daily XP, split deterministically across tracks (mock only)
+        const split = (xp: number, i: number): XpByTrack => {
+          const none = Math.min(xp, i % 3 === 0 ? 12 : 4);
+          const rest = xp - none;
+          const cs = i % 2 === 0 ? Math.round(rest * 0.35) : Math.round(rest * 0.15);
+          const ag = i % 5 === 0 ? Math.round(rest * 0.2) : 0;
+          return { js: rest - cs - ag, csharp: cs, java: 0, agentic: ag, none };
+        };
+        const all = fx.heatmap.map((d, i) => ({ day: d.day, total: d.xp, byTrack: split(d.xp, i) }));
+        const days = all.slice(-90);
+        const firstXp = all.findIndex((d) => d.total > 0);
+        const weeks: XpStatsResponse['weeks'] = [];
+        if (firstXp !== -1) {
+          for (const d of all.slice(firstXp)) {
+            const noon = Date.parse(`${d.day}T12:00:00Z`);
+            const dow = (new Date(noon).getUTCDay() + 6) % 7;
+            const ws = new Date(noon - dow * DAY_MS).toISOString().slice(0, 10);
+            let w = weeks.at(-1);
+            if (!w || w.weekStart !== ws) {
+              w = { weekStart: ws, total: 0, byTrack: { js: 0, csharp: 0, java: 0, agentic: 0, none: 0 } };
+              weeks.push(w);
+            }
+            w.total += d.total;
+            for (const k of Object.keys(w.byTrack) as (keyof XpByTrack)[]) w.byTrack[k] += d.byTrack[k];
+          }
+        }
+        const sum = (l: { total: number }[]) => l.reduce((n, d) => n + d.total, 0);
+        return { today: fx.dashboard.today, days, weeks, totals: { allTime: sum(all), lastDays: sum(days), events: all.filter((d) => d.total > 0).length * 4 } };
+      }),
+
+    getPassRates: () =>
+      wrap((): PassRatesResponse => {
+        const row = (attempts: number, passes: number, unitsN: number, first: number) => ({
+          attempts,
+          passes,
+          passRate: attempts ? passes / attempts : null,
+          units: unitsN,
+          firstTryPasses: first,
+          firstTryRate: unitsN ? first / unitsN : null,
+        });
+        return {
+          overall: row(62, 47, 41, 29),
+          byTrack: [
+            { trackId: 'js', ...row(44, 35, 30, 23) },
+            { trackId: 'csharp', ...row(18, 12, 11, 6) },
+          ],
+          byCheckType: [
+            { checkType: 'drill-js', ...row(26, 21, 17, 13) },
+            { checkType: 'drill-cs', ...row(12, 8, 7, 4) },
+            { checkType: 'quiz', ...row(14, 11, 11, 9) },
+            { checkType: 'predict-output', ...row(6, 4, 4, 2) },
+            { checkType: 'study-quiz', ...row(4, 3, 2, 1) },
+          ],
+        };
+      }),
+
+    getReviewStats: () =>
+      wrap((): ReviewStatsResponse => {
+        const due = queue().length;
+        const ahead = [3, 5, 2, 0, 4, 1, 0, 6, 2, 0, 1, 3, 0];
+        const today = fx.dashboard.today;
+        const dayN = (n: number) => new Date(Date.parse(`${today}T12:00:00Z`) + n * DAY_MS).toISOString().slice(0, 10);
+        return {
+          today,
+          cards: due + ahead.reduce((a, b) => a + b, 0) + 9,
+          dueNow: due,
+          overdue: Math.min(due, 4),
+          later: 9,
+          forecast: [{ day: today, due }, ...ahead.map((n, i) => ({ day: dayN(i + 1), due: n }))],
+          retention: { window: { reviews: 48, recalled: 41, rate: 41 / 48 }, allTime: { reviews: 131, recalled: 109, rate: 109 / 131 } },
+          ratings: { again: 22, hard: 17, good: 80, easy: 12 },
+        };
+      }),
+
+    getCampaignProgress: () =>
+      wrap((): CampaignProgressResponse => ({
+        tracks: fx.tracks.tracks.map((t) => ({
+          trackId: t.id,
+          name: t.name,
+          locked: t.locked,
+          progress: trackCounts(t.id, t.locked).progress,
+          acts: campaignActs(t.id).map((a) => {
+            const reading = a.quests.filter((q) => q.kind === 'reading');
+            return {
+              actNo: a.ordinal,
+              title: a.title,
+              unlocked: a.unlocked,
+              coreDone: a.progress.coreDone,
+              coreTotal: a.progress.coreTotal,
+              corePending: a.quests.filter((q) => q.core && q.contentPending && q.state !== 'done').length,
+              readingDone: reading.filter((q) => q.state === 'done').length,
+              readingTotal: reading.length,
+            };
+          }),
+        })),
+      })),
   };
 }
 

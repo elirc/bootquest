@@ -5,7 +5,7 @@ import { useApi } from '../api/context';
 import { CHORD_WINDOW_MS, GO_CHORDS, hasModifier, isEditableTarget, useKeydown } from '../lib/keys';
 import { useAsync } from '../lib/useAsync';
 import { TracksProvider, useTracks } from '../lib/tracks';
-import { TRACK_PLACEHOLDER, TRACK_SHORT } from '../lib/view';
+import { progressLabel, progressTitle, TRACK_PLACEHOLDER, TRACK_SHORT } from '../lib/view';
 import { Icon, type IconName } from './Icon';
 import { ShortcutHelp } from './ShortcutHelp';
 import { Kbd } from './ui';
@@ -137,10 +137,13 @@ function Shell({ children }: { children: ReactNode }) {
                     <Icon name="lock" size={14} label="Locked" />
                   </NavLink>
                 ) : (
-                  <NavLink to={`/campaign/${t.id}`} className="track-link">
+                  // campaign 2 B2 (ui-audit #26): the server's shared TrackProgress, explained in the tooltip
+                  <NavLink to={`/campaign/${t.id}`} className="track-link" title={progressTitle(t.progress)}>
                     <span className={`track-badge track-${t.id}`}>{TRACK_SHORT[t.id]}</span>
                     <span className="track-name">{t.name}</span>
-                    <span className="track-count">{Math.round((t.doneCount / Math.max(1, t.unitCount)) * 100)}%</span>
+                    <span className="track-count" data-testid={`track-pct-${t.id}`}>
+                      {progressLabel(t.progress)}
+                    </span>
                   </NavLink>
                 )}
               </li>

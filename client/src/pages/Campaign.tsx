@@ -1,14 +1,14 @@
 import { useRef, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
 import { useApi } from '../api/context';
-import type { CampaignActDto, CampaignQuestDto, QuestState, TrackId, TrackSummary } from '../api/types';
+import type { CampaignActDto, CampaignQuestDto, QuestState, TrackId, TrackProgress, TrackSummary } from '../api/types';
 import { Icon } from '../components/Icon';
 import { Chip, LoadState, PageHeader, ProgressBar } from '../components/ui';
 import { toRoman } from '../lib/format';
 import { hasModifier, isEditableTarget, useKeydown } from '../lib/keys';
 import { useAsync } from '../lib/useAsync';
 import { useTracks } from '../lib/tracks';
-import { TRACK_PLACEHOLDER, isTrackId } from '../lib/view';
+import { TRACK_PLACEHOLDER, isTrackId, progressLabel, progressTitle } from '../lib/view';
 
 const STATE_LABEL: Record<QuestState, string> = {
   done: 'Done',
@@ -55,6 +55,7 @@ function CampaignView({ trackId }: { trackId: TrackId }) {
     <>
       <PageHeader eyebrow="Campaign" title={track ? track.name : ' '} />
       <TrackTabs tracks={tracks.data?.tracks ?? []} current={trackId} />
+      <TrackProgressLine progress={tracks.data?.tracks.find((t) => t.id === trackId)?.progress} locked={locked} />
       <div className={`campaign${locked ? ' campaign-locked' : ''}`} ref={mapRef}>
         {locked && track && (
           <div className="locked-banner" role="note">
@@ -81,6 +82,33 @@ function CampaignView({ trackId }: { trackId: TrackId }) {
         )}
       </div>
     </>
+  );
+}
+
+/**
+ * Campaign 2 B2 (ui-audit #26): the track's headline percentage, the SAME server number the sidebar
+ * shows (TrackProgress), with its definition. Reserved height: no layout shift while /tracks loads.
+ */
+function TrackProgressLine({ progress, locked }: { progress: TrackProgress | undefined; locked: boolean }) {
+  return (
+    // one short line (no wrap at 400px, so no shift when /tracks lands); the full definition is the tooltip
+    <p className="track-progress-line small" data-testid="track-progress">
+      {progress && !locked && progress.basis !== 'none' ? (
+        <>
+          <span className="muted">Track progress </span>
+          <strong className="num" title={progressTitle(progress)}>
+            {progressLabel(progress)}
+          </strong>
+          <span className="muted">
+            {progress.basis === 'campaign-core'
+              ? ` · ${progress.coreDone}/${progress.coreTotal} core quests, all acts`
+              : ` · ${progress.practiceDone}/${progress.practiceTotal} practice units`}
+          </span>
+        </>
+      ) : (
+        ' '
+      )}
+    </p>
   );
 }
 
