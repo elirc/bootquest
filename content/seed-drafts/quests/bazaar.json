@@ -1,0 +1,393 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "bazaar",
+ "sha": "5dc2dd6e342b4eae57689ed5fa8a0d7ab9420b91",
+ "guides": [
+  "docs/adr/0006-multi-layer-cache-coherence.md",
+  "docs/adr/0007-inventory-consistency.md",
+  "docs/adr/0008-checkout-idempotency.md",
+  "docs/cache-conventions.md",
+  "docs/curriculum/sprint-06.md",
+  "docs/curriculum/sprint-07.md",
+  "docs/curriculum/sprint-08.md"
+ ],
+ "items": [
+  {
+   "id": "z01-naive-oversell",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/curriculum/sprint-07.md",
+    "lines": {
+     "start": 3,
+     "end": 8
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/inventory.ts",
+     "lineStart": 14,
+     "lineEnd": 20
+    }
+   ],
+   "prompt": "Two buyers call NaiveInventoryService.reserve for the last unit at the same moment. What can happen?",
+   "answer": "Both read one free unit, so both succeed and the item oversells",
+   "distractors": [
+    "The second write hits a version conflict, so its reserve returns false",
+    "The second buyer waits on a row lock, then sees no units left",
+    "Redis rejects the second reservation as its counter goes negative"
+   ],
+   "explanation": "reserve reads a snapshot, checks onHand - reserved, then writes snapshot.reserved + quantity. Both reads happen before either write, so both checks pass and both writes claim the same unit."
+  },
+  {
+   "id": "z02-affected-rows",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0007-inventory-consistency.md",
+    "lines": {
+     "start": 8,
+     "end": 16
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/inventory.ts",
+     "lineStart": 23,
+     "lineEnd": 26
+    },
+    {
+     "path": "apps/api/src/inventory.ts",
+     "lineStart": 80,
+     "lineEnd": 86
+    }
+   ],
+   "prompt": "ADR-0007 reserves stock with UPDATE inventory_item SET reserved = reserved + $qty WHERE id = $id AND on_hand - reserved >= $qty. What decides whether the reservation succeeded?",
+   "answer": "Whether that conditional UPDATE changed a row",
+   "distractors": [
+    "Whether Redis still lists the item in stock",
+    "Whether a SELECT run first had found stock",
+    "Whether the reservation record saved first"
+   ],
+   "explanation": "Affected rows determine success: the check and the increment are one atomic statement, so a row is only updated when enough stock is free. A prior SELECT would reintroduce the race, and Redis never authorizes a sale."
+  },
+  {
+   "id": "z03-redis-hint-only",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0007-inventory-consistency.md",
+    "lines": {
+     "start": 16,
+     "end": 18
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0007-inventory-consistency.md",
+     "lineStart": 11,
+     "lineEnd": 14
+    }
+   ],
+   "prompt": "According to ADR-0007, what may Redis do with inventory in Bazaar?",
+   "answer": "Cache the buyer-facing availability hint, but never authorize a sale",
+   "distractors": [
+    "Hold the authoritative counter, with Postgres kept as the backup copy",
+    "Serialize all reservations through a queue, one buyer at a time",
+    "Store the reservation records, since those expire on a short TTL"
+   ],
+   "explanation": "Inventory truth is the database row with on-hand and reserved counts. Redis may cache the availability hint shown to buyers, which can briefly say \"in stock\", but the reservation is authoritative."
+  },
+  {
+   "id": "z04-hold-compensates",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/curriculum/sprint-07.md",
+    "lines": {
+     "start": 24,
+     "end": 27
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/inventory.ts",
+     "lineStart": 41,
+     "lineEnd": 56
+    }
+   ],
+   "prompt": "In ReservationService.hold, tryReserve succeeds but saving the reservation record throws. What does hold do?",
+   "answer": "It releases the stock it claimed, then rethrows the error",
+   "distractors": [
+    "It returns undefined and leaves the stock reserved until TTL",
+    "It retries saving the record until that write finally works",
+    "It returns the reservation anyway, with no stored record"
+   ],
+   "explanation": "The catch block calls this.inventory.release(itemId, quantity) and then throw error: a compensation for ports that cannot put the claim and the record in one transaction."
+  },
+  {
+   "id": "z05-release-once",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0007-inventory-consistency.md",
+    "lines": {
+     "start": 16,
+     "end": 17
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/inventory.ts",
+     "lineStart": 58,
+     "lineEnd": 62
+    }
+   ],
+   "prompt": "ReservationService.release is called twice for the same active reservation. How much stock is released?",
+   "answer": "The quantity once, as the second transition from active fails",
+   "distractors": [
+    "Twice the quantity, so the item then shows extra free units to buyers",
+    "None at all, until the reservation TTL has run out",
+    "None, because release only flips the record to released"
+   ],
+   "explanation": "release first runs reservations.transition(id, \"active\", \"released\") and only releases stock if that returned true. The second call finds the reservation no longer active, gets false, and returns false without touching stock."
+  },
+  {
+   "id": "z06-ttl-backstop",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0006-multi-layer-cache-coherence.md",
+    "lines": {
+     "start": 8,
+     "end": 12
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/cache-conventions.md",
+     "lineStart": 10,
+     "lineEnd": 11
+    }
+   ],
+   "prompt": "Writes in Bazaar publish cache invalidations after they commit. Why does ADR-0006 still put a TTL on every cache entry?",
+   "answer": "So an entry heals itself if an invalidation event goes missing",
+   "distractors": [
+    "So the CDN can ignore invalidation events and rely on the TTL",
+    "So single-flight knows when to merge concurrent cache misses",
+    "So writes no longer have to publish any cache invalidations"
+   ],
+   "explanation": "Event-only invalidation risks permanent staleness when an event is lost; TTL-only allows predictable lies. Events give precise freshness and the TTL is the self-healing backstop."
+  },
+  {
+   "id": "z07-single-flight",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/curriculum/sprint-06.md",
+    "lines": {
+     "start": 15,
+     "end": 19
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/cache/src/index.ts",
+     "lineStart": 85,
+     "lineEnd": 106
+    }
+   ],
+   "prompt": "A hundred requests miss the same key at the same instant through ProtectedReadThroughCache. How many times does the origin load run?",
+   "answer": "Once, and every other request awaits that same promise",
+   "distractors": [
+    "A hundred times, since every request records its own miss",
+    "Twice: one load, then a confirming re-read of the store",
+    "Zero times until the previous entry's TTL has run out"
+   ],
+   "explanation": "Each miss calls singleFlight.run(key, load). The first call stores the load promise in #inFlight; concurrent calls for the key get the existing promise. Each request still records a miss metric, but only one load runs."
+  },
+  {
+   "id": "z08-swr-stale-window",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0006-multi-layer-cache-coherence.md",
+    "lines": {
+     "start": 10,
+     "end": 12
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/cache/src/index.ts",
+     "lineStart": 121,
+     "lineEnd": 140
+    }
+   ],
+   "prompt": "An entry is past freshUntil but still before staleUntil. What does StaleWhileRevalidateCache.read return?",
+   "answer": "The stale value right away, while one refresh runs in the background",
+   "distractors": [
+    "The new value, once the caller has waited for the refresh to complete",
+    "undefined, so that the caller can load from Postgres by itself",
+    "An error, because the entry is no longer inside its fresh window"
+   ],
+   "explanation": "In the stale window read fires singleFlight.run(key, refresh) without awaiting it (errors swallowed) and returns entry.value. Only past staleUntil, or with no entry, does the caller wait for the load."
+  },
+  {
+   "id": "z09-attempt-key",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0008-checkout-idempotency.md",
+    "lines": {
+     "start": 19,
+     "end": 21
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/checkout.ts",
+     "lineStart": 47,
+     "lineEnd": 71
+    }
+   ],
+   "prompt": "Why does ADR-0008 have the browser mint one key per checkout attempt instead of using the cart ID as the idempotency key?",
+   "answer": "A cart may have several valid attempts, and the key names just one",
+   "distractors": [
+    "Cart IDs are secret, and sending them on to the provider would leak data",
+    "The server cannot store keys, so the browser has to hold them",
+    "Payment providers reject any key that a server has generated"
+   ],
+   "explanation": "The retrier owns attempt identity: a declined cart can form a new, legitimate attempt, which must not be deduplicated against the old one. The cart ID stays a secondary guard."
+  },
+  {
+   "id": "z10-crash-before-charge",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0008-checkout-idempotency.md",
+    "lines": {
+     "start": 8,
+     "end": 11
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/checkout.ts",
+     "lineStart": 57,
+     "lineEnd": 70
+    }
+   ],
+   "prompt": "IdempotentCheckoutService creates the order, then the process dies before payments.charge runs. The browser retries with the same key. What does the retry do?",
+   "answer": "Returns the pending order as replayed, and still never charges",
+   "distractors": [
+    "Charges the order now, because it is still in the pending state",
+    "Creates a second order, because the first one was never paid for",
+    "Fails with a conflict error, because that key has an order"
+   ],
+   "explanation": "getOrCreate returns created: false for the existing order, and the method returns { order, replayed: true } before reaching charge. Only the creator charges, so an order created by a crashed request stays pending and uncharged."
+  },
+  {
+   "id": "z11-webhook-duplicate",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/curriculum/sprint-08.md",
+    "lines": {
+     "start": 23,
+     "end": 26
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/payments.ts",
+     "lineStart": 31,
+     "lineEnd": 41
+    }
+   ],
+   "prompt": "A valid payment.succeeded webhook is delivered a second time, one minute after the first, with the same body, timestamp and signature. What does PaymentWebhookHandler.handle do?",
+   "answer": "Returns duplicate: true, because claim(event.id) now fails",
+   "distractors": [
+    "Marks the order paid again, which is harmless to repeat anyway",
+    "Throws Invalid payment signature, as it was already used",
+    "Rejects it as stale, because an earlier copy came first"
+   ],
+   "explanation": "After the timestamp and HMAC checks pass, handle calls events.claim(event.id); the second claim returns false, so it returns { duplicate: true } without calling markOrderPaid."
+  },
+  {
+   "id": "z12-webhook-signs-timestamp",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0008-checkout-idempotency.md",
+    "lines": {
+     "start": 13,
+     "end": 15
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/payments.ts",
+     "lineStart": 17,
+     "lineEnd": 24
+    }
+   ],
+   "prompt": "What exactly does Bazaar's payment webhook HMAC cover, according to payments.ts?",
+   "answer": "The timestamp and the raw body, joined by a dot",
+   "distractors": [
+    "The raw body alone, as the ADR summary words it",
+    "The parsed JSON event, sorted by key",
+    "The event id and order id, joined by a colon"
+   ],
+   "explanation": "signPaymentWebhook computes createHmac(\"sha256\", secret).update(`${timestamp}.${body}`). Signing the timestamp is what makes the 5-minute staleness check meaningful. ADR-0008 says \"HMAC over the raw body\"; the code signs timestamp.body."
+  },
+  {
+   "id": "f01-cache-conventions",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/cache-conventions.md",
+    "lines": {
+     "start": 1,
+     "end": 11
+    }
+   },
+   "cites": [
+    {
+     "path": "packages/cache/src/index.ts",
+     "lineStart": 149,
+     "lineEnd": 155
+    }
+   ],
+   "front": "State Bazaar's cache key, tag and ownership conventions.",
+   "back": "Key: bazaar:v1:store:{storeId}:{resource}:{id} (versioned namespace). Tag: {resource}:{id} for every entity whose change alters the projection. Owner: the committed write path invalidates after durable success. Layers CDN, ISR, Redis, Postgres. Catalog: 60 s fresh + 5 min SWR; admin/cart/checkout: zero staleness."
+  },
+  {
+   "id": "f02-checkout-defenses",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0008-checkout-idempotency.md",
+    "lines": {
+     "start": 6,
+     "end": 15
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/checkout.ts",
+     "lineStart": 73,
+     "lineEnd": 91
+    }
+   ],
+   "front": "What does ADR-0008 do at the money boundary to charge once and charge the right amount?",
+   "back": "One browser-minted key per attempt; the API atomically get-or-creates one order by that key and only the creator charges, passing the key to the provider. Before charge it revalidates catalog prices and active holds. Webhooks verify HMAC and atomically claim event ids; a decline marks the order failed and releases reservations once."
+  },
+  {
+   "id": "f03-order-transitions",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0008-checkout-idempotency.md",
+    "lines": {
+     "start": 11,
+     "end": 11
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/api/src/order-state.ts",
+     "lineStart": 3,
+     "lineEnd": 16
+    }
+   ],
+   "front": "Which order status transitions does order-state.ts allow from pending and from paid?",
+   "back": "pending -> paid, failed or cancelled. paid -> partially_fulfilled, fulfilled, cancelled or refunded. failed, cancelled and refunded are terminal; anything else throws \"Illegal order transition\"."
+  }
+ ]
+}

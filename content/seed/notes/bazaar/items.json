@@ -1,0 +1,565 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "notes",
+ "name": "bazaar",
+ "items": [
+  {
+   "key": "seed:notes:bazaar/note/1bebb3e1c2de52b9",
+   "provenance": {
+    "repo": "bazaar",
+    "sha": "5dc2dd6e342b4eae57689ed5fa8a0d7ab9420b91",
+    "path": "docs/adr/0007-inventory-consistency.md",
+    "lines": {
+     "start": 16,
+     "end": 16
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-affected-rows",
+   "pack": "bazaar",
+   "target": "seed:quests:bazaar/quiz/5eac24b498e4f457",
+   "phase": "after",
+   "title": "The UPDATE is both the check and the claim",
+   "body": "The statement adds to `reserved` only `WHERE ... on_hand - reserved >= $qty`. The database evaluates that condition and performs the update atomically for the row, so when two buyers race for the last unit only one update matches. ADR-0007: \"Affected rows determine success.\" In code, `AtomicInventoryPort.tryReserve` returns that boolean.\n\n- *Redis shows stock*: Redis may cache a hint, but never authorizes a sale.\n- *A SELECT first*: a separate read before the update is exactly the naive race.\n- *The record saved first*: the reservation record is created after the claim, in `hold`.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0007-inventory-consistency.md",
+     "lineStart": 16,
+     "lineEnd": 16,
+     "quote": "Affected rows determine success."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/adr/0007-inventory-consistency.md",
+     "lineStart": 8,
+     "lineEnd": 18,
+     "why": "The decision section of ADR-0007."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:bazaar/note/27733efc325a4c5b",
+   "provenance": {
+    "repo": "bazaar",
+    "sha": "5dc2dd6e342b4eae57689ed5fa8a0d7ab9420b91",
+    "path": "apps/api/src/inventory.ts",
+    "lines": {
+     "start": 50,
+     "end": 53
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-hold-compensates",
+   "pack": "bazaar",
+   "target": "seed:quests:bazaar/quiz/0d1aa13684031eb8",
+   "phase": "after",
+   "title": "Compensate a claim that cannot be recorded",
+   "body": "`hold` first calls `tryReserve`, which claims the stock. It then calls `this.reservations.create(reservation)` inside a `try`. If that throws, the `catch` calls `this.inventory.release(itemId, quantity)` and rethrows. The comment explains why: normally the claim and the record share one transaction, but ports without that facility must compensate at once.\n\n- *Returns undefined, stock held*: `undefined` is returned only when `tryReserve` fails; here the error is rethrown.\n- *Retries the save*: there is no retry loop.\n- *Returns the reservation anyway*: the `return` comes after the `try/catch` and is never reached when the save throws.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/inventory.ts",
+     "lineStart": 50,
+     "lineEnd": 53,
+     "quote": "await this.inventory.release(itemId, quantity);"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/curriculum/sprint-07.md",
+     "lineStart": 26,
+     "lineEnd": 26,
+     "why": "Exercise 3: crash between reserve and record creation."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:bazaar/note/2aebb2137b05e983",
+   "provenance": {
+    "repo": "bazaar",
+    "sha": "5dc2dd6e342b4eae57689ed5fa8a0d7ab9420b91",
+    "path": "docs/adr/0007-inventory-consistency.md",
+    "lines": {
+     "start": 17,
+     "end": 18
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-redis-hint-only",
+   "pack": "bazaar",
+   "target": "seed:quests:bazaar/quiz/007e83f2676a4171",
+   "phase": "after",
+   "title": "Redis informs, the database decides",
+   "body": "ADR-0007 makes the database row with on-hand and reserved counts the only inventory truth. Redis \"may cache the buyer-facing availability hint but never authorizes a sale\", so the storefront can briefly say \"in stock\" while the reservation itself decides. Sprint 07's debate explains why: Redis counters are fast but drift from the truth.\n\n- *Authoritative counter in Redis*: rejected in the debate as drift-prone truth.\n- *A serialized queue*: considered and rejected for its latency; the conditional update is used instead.\n- *Reservation records in Redis*: reservations are database records with a short TTL.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0007-inventory-consistency.md",
+     "lineStart": 17,
+     "lineEnd": 18,
+     "quote": "Redis may cache the buyer-facing availability hint but never authorizes a sale."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/curriculum/sprint-07.md",
+     "lineStart": 16,
+     "lineEnd": 20,
+     "why": "The debate captured in Sprint 07."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:bazaar/note/3c1452165cc8316c",
+   "provenance": {
+    "repo": "bazaar",
+    "sha": "5dc2dd6e342b4eae57689ed5fa8a0d7ab9420b91",
+    "path": "packages/cache/src/index.ts",
+    "lines": {
+     "start": 89,
+     "end": 90
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-single-flight",
+   "pack": "bazaar",
+   "target": "seed:quests:bazaar/quiz/09a0b905a0e04b22",
+   "phase": "after",
+   "title": "Single-flight shares one promise",
+   "body": "`ProtectedReadThroughCache.read` passes `() => this.singleFlight.run(key, load)` to the read-through cache. `SingleFlight.run` returns the existing promise from `#inFlight` when one is stored for the key; otherwise it starts `load()`, stores the promise, and deletes it in `finally`. So concurrent misses for one key share one origin load. Each request still records its own miss in the metrics.\n\n- *A hundred loads*: the miss metric counts requests, not loads.\n- *A confirming re-read*: there is no second load; the store is written once per caller.\n- *Zero until TTL*: a miss means there is no entry to wait for.",
+   "excerpts": [
+    {
+     "path": "packages/cache/src/index.ts",
+     "lineStart": 89,
+     "lineEnd": 90,
+     "quote": "if (existing) return existing;"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/curriculum/sprint-06.md",
+     "lineStart": 24,
+     "lineEnd": 24,
+     "why": "Exercise 2: count origin loads without single-flight."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:bazaar/note/422f4f2d5df57f00",
+   "provenance": {
+    "repo": "bazaar",
+    "sha": "5dc2dd6e342b4eae57689ed5fa8a0d7ab9420b91",
+    "path": "apps/api/src/inventory.ts",
+    "lines": {
+     "start": 59,
+     "end": 60
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-release-once",
+   "pack": "bazaar",
+   "target": "seed:quests:bazaar/quiz/d9d69862fd1ee55d",
+   "phase": "after",
+   "title": "Release is guarded by a state transition",
+   "body": "`release` calls `this.reservations.transition(reservation.id, \"active\", \"released\")` and only `if (changed)` releases the stock. The first call moves the reservation from active to released and frees the quantity. The second call finds it no longer active, `transition` returns false, and nothing else happens. ADR-0007 calls this active-only transitions making release idempotent.\n\n- *Twice the quantity*: the second release of stock never runs.\n- *None until TTL*: the first call frees the stock immediately.\n- *Only flips the record*: when the transition succeeds, `inventory.release` is called too.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/inventory.ts",
+     "lineStart": 59,
+     "lineEnd": 60,
+     "quote": "if (changed) await this.inventory.release(reservation.inventoryItemId, reservation.quantity);"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/adr/0007-inventory-consistency.md",
+     "lineStart": 16,
+     "lineEnd": 17,
+     "why": "Short-TTL reservations and idempotent transitions."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:bazaar/note/52bc075f43347881",
+   "provenance": {
+    "repo": "bazaar",
+    "sha": "5dc2dd6e342b4eae57689ed5fa8a0d7ab9420b91",
+    "path": "docs/adr/0006-multi-layer-cache-coherence.md",
+    "lines": {
+     "start": 21,
+     "end": 22
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-ttl-backstop",
+   "pack": "bazaar",
+   "target": "seed:quests:bazaar/quiz/c3e3c8a5a163d3d5",
+   "phase": "after",
+   "title": "Events for precision, TTLs for recovery",
+   "body": "Invalidation events are precise but can be lost (a crash, a dropped message). With events alone, a lost event leaves an entry stale forever. ADR-0006 therefore keeps a TTL on every entry so it expires and reloads even if no event arrives: \"Event-only invalidation risks permanent staleness; TTL-only allows predictable lies.\"\n\n- *The CDN ignores events*: invalidation must reach every serving layer, CDN included.\n- *Single-flight timing*: single-flight collapses concurrent misses; it does not use the TTL.\n- *Writes stop publishing invalidations*: the committed write path still invalidates after durable success; the TTL is only the backstop.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0006-multi-layer-cache-coherence.md",
+     "lineStart": 21,
+     "lineEnd": 22,
+     "quote": "Event-only invalidation risks permanent staleness; TTL-only"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/cache-conventions.md",
+     "lineStart": 10,
+     "lineEnd": 11,
+     "why": "The convention page on events and TTLs."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:bazaar/note/612335ab5d10eafb",
+   "provenance": {
+    "repo": "bazaar",
+    "sha": "5dc2dd6e342b4eae57689ed5fa8a0d7ab9420b91",
+    "path": "docs/curriculum/sprint-06.md",
+    "lines": {
+     "start": 17,
+     "end": 19
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r03-cache-layers",
+   "pack": "bazaar",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: freshness, self-healing and stampedes",
+   "body": "A cache trades freshness for speed, and it can fail in three ways: it keeps showing old data after a change, it never recovers from a missed update, or many requests miss at once and all hit the database together (a *stampede*).\n\nSprint 06 and ADR-0006 describe how Bazaar handles each; `docs/cache-conventions.md` gives the key and tag format. Then read `packages/cache/src/index.ts`:\n\n- `ReadThroughCache` and `TaggedCache`: what is stored, and what an invalidation deletes.\n- `SingleFlight`: what is kept in `#inFlight`, and when it is removed.\n- `ProtectedReadThroughCache`: where single-flight wraps the load.\n- `StaleWhileRevalidateCache`: write down what `read` does in each of three cases (fresh, between fresh and stale, past stale or missing) and whether the caller waits.\n\nAlso note which parts of the app ADR-0006 says may *not* use catalog caches as truth.",
+   "excerpts": [
+    {
+     "path": "docs/curriculum/sprint-06.md",
+     "lineStart": 17,
+     "lineEnd": 19,
+     "quote": "TTL-only is simple but knowingly stale."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "packages/cache/src/index.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The cache core: tags, single-flight and SWR."
+    },
+    {
+     "path": "docs/cache-conventions.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Key, tag and ownership conventions."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:bazaar/note/a0a2c7a52ece026e",
+   "provenance": {
+    "repo": "bazaar",
+    "sha": "5dc2dd6e342b4eae57689ed5fa8a0d7ab9420b91",
+    "path": "packages/cache/src/index.ts",
+    "lines": {
+     "start": 135,
+     "end": 137
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-swr-stale-window",
+   "pack": "bazaar",
+   "target": "seed:quests:bazaar/quiz/2ba8e46e851a7fd1",
+   "phase": "after",
+   "title": "Stale-while-revalidate serves old data quickly",
+   "body": "`read` returns `entry.value` immediately while `now < entry.freshUntil`. Between `freshUntil` and `staleUntil` it starts `this.singleFlight.run(key, refresh)` without awaiting it (and swallows its errors), then returns the stale `entry.value`. Only with no entry, or past `staleUntil`, does it `return this.singleFlight.run(key, refresh)`, making the caller wait.\n\n- *Waits for the refresh*: that happens only past the stale window.\n- *Returns undefined*: the cache never hands loading back to the caller.\n- *An error*: a stale entry inside the window is served normally.",
+   "excerpts": [
+    {
+     "path": "packages/cache/src/index.ts",
+     "lineStart": 135,
+     "lineEnd": 137,
+     "quote": "void this.singleFlight.run(key, refresh).catch(() => undefined);"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/adr/0006-multi-layer-cache-coherence.md",
+     "lineStart": 10,
+     "lineEnd": 12,
+     "why": "Bounded stale data while one refresh runs."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:bazaar/note/a403120f2ffd1223",
+   "provenance": {
+    "repo": "bazaar",
+    "sha": "5dc2dd6e342b4eae57689ed5fa8a0d7ab9420b91",
+    "path": "docs/adr/0008-checkout-idempotency.md",
+    "lines": {
+     "start": 20,
+     "end": 21
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-attempt-key",
+   "pack": "bazaar",
+   "target": "seed:quests:bazaar/quiz/cfe19fe3efea33c5",
+   "phase": "after",
+   "title": "The retrier owns the attempt identity",
+   "body": "An idempotency key must mean \"this is the same attempt again\". A cart can legitimately be checked out more than once, for example after a declined card, so deduplicating by cart ID would wrongly merge a new attempt into the old one. Server-generated keys cannot recognise a client retry either. So the browser mints one random key per attempt and reuses it for double-clicks, retries and network recovery.\n\n- *Cart IDs are secret*: the reason is attempt identity, not secrecy.\n- *The server cannot store keys*: it stores them, on the order, through `getOrCreate`.\n- *Providers reject server keys*: no such rule; the API passes the client key to the provider.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0008-checkout-idempotency.md",
+     "lineStart": 20,
+     "lineEnd": 21,
+     "quote": "cart ID remains a secondary guard, not the key, because one cart may have multiple legitimate attempts."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/curriculum/sprint-08.md",
+     "lineStart": 17,
+     "lineEnd": 19,
+     "why": "The debate captured in Sprint 08."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:bazaar/note/c26df0b51088dfeb",
+   "provenance": {
+    "repo": "bazaar",
+    "sha": "5dc2dd6e342b4eae57689ed5fa8a0d7ab9420b91",
+    "path": "apps/api/src/payments.ts",
+    "lines": {
+     "start": 37,
+     "end": 37
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-webhook-duplicate",
+   "pack": "bazaar",
+   "target": "seed:quests:bazaar/quiz/e9dff30cd14d92ab",
+   "phase": "after",
+   "title": "Webhook replays are claimed once",
+   "body": "`handle` first rejects stale timestamps and bad signatures. A redelivered webhook passes both, because it is the same valid request. It then calls `this.events.claim(event.id)`; the first delivery claimed that id, so this claim returns false and `handle` returns `{ duplicate: true }` without calling `markOrderPaid`.\n\n- *Marks paid again*: `markOrderPaid` is only reached after a successful claim.\n- *Invalid signature*: signatures are not single-use; the same body and timestamp verify again.\n- *Stale*: staleness is based on the timestamp age (5 minutes), not on earlier deliveries.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/payments.ts",
+     "lineStart": 37,
+     "lineEnd": 37,
+     "quote": "if (!(await this.events.claim(event.id))) return { duplicate: true };"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/curriculum/sprint-08.md",
+     "lineStart": 24,
+     "lineEnd": 24,
+     "why": "Exercise 2: replay a webhook 100 times."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:bazaar/note/d215fd47d0201d37",
+   "provenance": {
+    "repo": "bazaar",
+    "sha": "5dc2dd6e342b4eae57689ed5fa8a0d7ab9420b91",
+    "path": "apps/api/src/payments.ts",
+    "lines": {
+     "start": 17,
+     "end": 18
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-webhook-signs-timestamp",
+   "pack": "bazaar",
+   "target": "seed:quests:bazaar/quiz/f10ec5f90fe42d63",
+   "phase": "after",
+   "title": "The signature covers timestamp.body",
+   "body": "`signPaymentWebhook` runs SHA-256 HMAC over the string made of the timestamp, a dot and the raw body, and `verifyPaymentWebhook` recomputes it and compares with `timingSafeEqual`. Because the timestamp is inside the signed string, an attacker cannot reuse an old signed body with a fresh timestamp to get past the 5-minute staleness check. ADR-0008's summary says \"HMAC over the raw body\"; the code signs the timestamp too.\n\n- *The raw body alone*: that is the ADR wording, not the code.\n- *Sorted parsed JSON*: the body is signed as raw text, before `JSON.parse`.\n- *Event and order ids*: the ids are inside the body; they are not signed separately.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/payments.ts",
+     "lineStart": 17,
+     "lineEnd": 18,
+     "quote": "createHmac(\"sha256\", secret).update(`${timestamp}.${body}`).digest(\"hex\");"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/adr/0008-checkout-idempotency.md",
+     "lineStart": 14,
+     "lineEnd": 14,
+     "why": "The ADR line on webhook verification."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:bazaar/note/df7a5c23973442d2",
+   "provenance": {
+    "repo": "bazaar",
+    "sha": "5dc2dd6e342b4eae57689ed5fa8a0d7ab9420b91",
+    "path": "docs/curriculum/sprint-07.md",
+    "lines": {
+     "start": 10,
+     "end": 14
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r01-start-here",
+   "pack": "bazaar",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: three sprints on caching, inventory and checkout",
+   "body": "Bazaar is a teaching e-commerce monorepo (storefront, admin, API and worker apps over shared packages), built in 15 sprints. Each sprint has a curriculum page in `docs/curriculum/` and usually an ADR in `docs/adr/` that records the decision. This quest covers the three consistency sprints:\n\n1. Sprint 06 with ADR-0006 and `docs/cache-conventions.md`: cache invalidation and stampede protection, code in `packages/cache/src/index.ts`.\n2. Sprint 07 with ADR-0007: inventory reservations, code in `apps/api/src/inventory.ts`.\n3. Sprint 08 with ADR-0008: checkout and payment idempotency, code in `apps/api/src/checkout.ts` and `apps/api/src/payments.ts`.\n\nEach curriculum page has a **Review before reveal** step: read the naive version and predict how it fails before you read the fix. Do that. The code is written against small *ports* (interfaces) so the logic can be tested without a database; read the class bodies carefully, because the quiz asks what they do in specific situations, and an ADR's one-line summary is not always the whole story.",
+   "excerpts": [
+    {
+     "path": "docs/curriculum/sprint-07.md",
+     "lineStart": 10,
+     "lineEnd": 14,
+     "quote": "Read the naïve service and red commit, predict the two-success result"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "README.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "What Bazaar is and how the repo is laid out."
+    },
+    {
+     "path": "docs/sprints/README.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The sprint plan behind the curriculum pages."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:bazaar/note/e2907221568eccf4",
+   "provenance": {
+    "repo": "bazaar",
+    "sha": "5dc2dd6e342b4eae57689ed5fa8a0d7ab9420b91",
+    "path": "apps/api/src/checkout.ts",
+    "lines": {
+     "start": 64,
+     "end": 64
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-crash-before-charge",
+   "pack": "bazaar",
+   "target": "seed:quests:bazaar/quiz/325cc155ab0c770c",
+   "phase": "after",
+   "title": "Only the creator charges, even after a crash",
+   "body": "`IdempotentCheckoutService.checkout` calls `getOrCreate(requestKey, ...)`. On the retry the order exists, so `created` is false, and the method returns `{ order: result.order, replayed: true }` before `payments.charge` is ever reached. If the first request created the order and then died before charging, no request with that key will charge it, and the order stays pending. ADR-0008's \"only the creator charges\" prevents double charges but leaves this zero-charge gap.\n\n- *Charges now because pending*: the code never looks at the order status.\n- *A second order*: `getOrCreate` returns the existing one for the key.\n- *A conflict error*: a replay is returned as a normal result, not an error.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/checkout.ts",
+     "lineStart": 64,
+     "lineEnd": 64,
+     "quote": "if (!result.created) return { order: result.order, replayed: true };"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/adr/0008-checkout-idempotency.md",
+     "lineStart": 8,
+     "lineEnd": 11,
+     "why": "The get-or-create decision."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:bazaar/note/ea26f56a3c22b6ec",
+   "provenance": {
+    "repo": "bazaar",
+    "sha": "5dc2dd6e342b4eae57689ed5fa8a0d7ab9420b91",
+    "path": "docs/curriculum/sprint-08.md",
+    "lines": {
+     "start": 15,
+     "end": 19
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r02-stock-and-money",
+   "pack": "bazaar",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: authorizing stock and money exactly once",
+   "body": "Two classic e-commerce failures are *overselling* (two buyers get the last unit) and *double charging* (one checkout is paid twice). Both come from the same root: deciding something from a value you read earlier, while another request is doing the same.\n\nFor inventory, read Sprint 07 and ADR-0007, then `apps/api/src/inventory.ts`:\n\n- Compare `NaiveInventoryService.reserve` with the SQL in ADR-0007. Where is the check, and where is the write, in each?\n- In `ReservationService`, follow `hold` and `release` line by line, including the `catch` and the `if` on the transition result.\n\nFor checkout, read Sprint 08 and ADR-0008, then `apps/api/src/checkout.ts`:\n\n- Compare `NaiveCheckoutService` and `IdempotentCheckoutService`. List every path through `checkout` and what each returns.\n- Think through failure points: after the order is created, after the charge, after the response is sent.\n\nFinally read `PaymentWebhookHandler` in `payments.ts` and `signPaymentWebhook` above it: note what is signed and what is checked before the event is processed.",
+   "excerpts": [
+    {
+     "path": "docs/curriculum/sprint-08.md",
+     "lineStart": 15,
+     "lineEnd": 19,
+     "quote": "A client-generated per-attempt key expresses exactly what “same retry” means"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "apps/api/src/inventory.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Naive and atomic inventory services, and reservations."
+    },
+    {
+     "path": "apps/api/src/checkout.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Naive and idempotent checkout services."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:bazaar/note/f1e88526c11fbd53",
+   "provenance": {
+    "repo": "bazaar",
+    "sha": "5dc2dd6e342b4eae57689ed5fa8a0d7ab9420b91",
+    "path": "apps/api/src/inventory.ts",
+    "lines": {
+     "start": 15,
+     "end": 18
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-naive-oversell",
+   "pack": "bazaar",
+   "target": "seed:quests:bazaar/quiz/31b376aff857d835",
+   "phase": "after",
+   "title": "Read, check, write is a race",
+   "body": "`NaiveInventoryService.reserve` reads a snapshot, checks `snapshot.onHand - snapshot.reserved < quantity`, waits (the injected `concurrencyWindow`), then writes `reserved: snapshot.reserved + quantity`. Two buyers can both read the snapshot with one free unit, both pass the check, and both write `reserved + 1` from the same old value: both get `true`, and the last unit is sold twice.\n\n- *A version conflict*: the port has no version or concurrency token, so the second write simply lands.\n- *A row lock*: the service takes no lock between read and write.\n- *Redis goes negative*: Redis is not involved in this service at all.",
+   "excerpts": [
+    {
+     "path": "apps/api/src/inventory.ts",
+     "lineStart": 15,
+     "lineEnd": 18,
+     "quote": "await this.inventory.write({ ...snapshot, reserved: snapshot.reserved + quantity });"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/curriculum/sprint-07.md",
+     "lineStart": 3,
+     "lineEnd": 8,
+     "why": "Sprint 07 objectives, starting with this race."
+    }
+   ]
+  }
+ ]
+}

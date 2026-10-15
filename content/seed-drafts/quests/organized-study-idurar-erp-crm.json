@@ -1,0 +1,424 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "organized-study-idurar-erp-crm",
+ "sha": "5a12b71b5f1b585c10cfe9e97f46e1e85ea1d876",
+ "guides": [
+  "idurar-erp-crm/fable docs/03-architecture-and-patterns/02-data-model-and-persistence.md",
+  "idurar-erp-crm/fable docs/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+  "idurar-erp-crm/fable docs/05-quality-engineering/05-security-checklist.md"
+ ],
+ "items": [
+  {
+   "id": "o01-embed-vs-reference",
+   "kind": "quiz",
+   "source": {
+    "path": "idurar-erp-crm/fable docs/03-architecture-and-patterns/02-data-model-and-persistence.md",
+    "lines": {
+     "start": 19,
+     "end": 23
+    }
+   },
+   "cites": [
+    {
+     "path": "idurar-erp-crm/backend/src/models/appModels/Invoice.js",
+     "lineStart": 51,
+     "lineEnd": 95
+    },
+    {
+     "path": "idurar-erp-crm/backend/src/models/appModels/Invoice.js",
+     "lineStart": 126,
+     "lineEnd": 131
+    }
+   ],
+   "prompt": "Why does IDURAR embed invoice line items in the Invoice document but keep payments in their own collection?",
+   "answer": "Items only exist inside their invoice, while payments stand alone",
+   "distractors": [
+    "Embedding lets MongoDB enforce a unique index on each itemName",
+    "Payments are embedded as well, but inside the client document",
+    "Mongoose cannot reference subdocuments, so items had to be embedded"
+   ],
+   "explanation": "Items are owned and bounded: no identity outside the invoice, always read with it, never queried across invoices. Payments are created, edited, deleted and listed independently, so Invoice.payment holds refs to them."
+  },
+  {
+   "id": "o02-concurrent-status",
+   "kind": "quiz",
+   "source": {
+    "path": "idurar-erp-crm/fable docs/03-architecture-and-patterns/02-data-model-and-persistence.md",
+    "lines": {
+     "start": 39,
+     "end": 39
+    }
+   },
+   "cites": [
+    {
+     "path": "idurar-erp-crm/backend/src/controllers/appControllers/paymentController/create.js",
+     "lineStart": 19,
+     "lineEnd": 30
+    },
+    {
+     "path": "idurar-erp-crm/backend/src/controllers/appControllers/paymentController/create.js",
+     "lineStart": 59,
+     "lineEnd": 71
+    }
+   ],
+   "prompt": "An invoice totals 100 with no discount and no credit. Two payments of 50 are posted at the same instant, and both requests read the invoice before either one updates it. What does the invoice end up with?",
+   "answer": "credit 100, but paymentStatus left at partially",
+   "distractors": [
+    "credit 50, since one $inc overwrites the other one",
+    "credit 100 and paymentStatus paid, as $inc is atomic",
+    "credit 50 and paymentStatus paid, from the last writer"
+   ],
+   "explanation": "The guide is right that $inc never loses an increment, so credit reaches 100. But each request computes paymentStatus from the credit it read (0 + 50 is not 100), so both $set partially. The status is derived from a stale read."
+  },
+  {
+   "id": "o03-transactions-need-replica-set",
+   "kind": "quiz",
+   "source": {
+    "path": "idurar-erp-crm/fable docs/03-architecture-and-patterns/02-data-model-and-persistence.md",
+    "lines": {
+     "start": 31,
+     "end": 37
+    }
+   },
+   "cites": [
+    {
+     "path": "idurar-erp-crm/backend/src/controllers/appControllers/paymentController/create.js",
+     "lineStart": 41,
+     "lineEnd": 77
+    }
+   ],
+   "prompt": "What must be true of the MongoDB deployment before IDURAR could wrap its payment writes in a Mongoose withTransaction?",
+   "answer": "It has to run as a replica set, not as a single standalone node",
+   "distractors": [
+    "It has to use WiredTiger with the write-ahead journal switched off",
+    "It has to be a sharded cluster spread across at least three shards",
+    "It has to enable the Mongoose autopopulate plugin on every model"
+   ],
+   "explanation": "MongoDB multi-document transactions need a replica set (or a sharded cluster); a standalone node, the default dev setup, rejects them. Journaling and autopopulate are unrelated, and sharding is not required."
+  },
+  {
+   "id": "o04-number-unique-index",
+   "kind": "quiz",
+   "source": {
+    "path": "idurar-erp-crm/fable docs/03-architecture-and-patterns/02-data-model-and-persistence.md",
+    "lines": {
+     "start": 41,
+     "end": 55
+    }
+   },
+   "cites": [
+    {
+     "path": "idurar-erp-crm/backend/src/models/appModels/Invoice.js",
+     "lineStart": 10,
+     "lineEnd": 17
+    }
+   ],
+   "prompt": "The guide lists indexes IDURAR is missing. Which one does it say would also close the duplicate invoice number race?",
+   "answer": "A unique compound index on { number: 1, year: 1 }",
+   "distractors": [
+    "A unique index on the Invoice.client field by itself",
+    "A compound index on { removed: 1, enabled: -1 }",
+    "A TTL index on Invoice.date to expire old drafts"
+   ],
+   "explanation": "With a unique {number, year} index the database rejects a second invoice with the same number in a year, whatever the application does. The {removed, enabled} index only serves the default sort."
+  },
+  {
+   "id": "o05-no-ownership-filter",
+   "kind": "quiz",
+   "source": {
+    "path": "idurar-erp-crm/fable docs/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 15,
+     "end": 27
+    }
+   },
+   "cites": [
+    {
+     "path": "idurar-erp-crm/backend/src/controllers/middlewaresControllers/createCRUDController/read.js",
+     "lineStart": 1,
+     "lineEnd": 6
+    }
+   ],
+   "prompt": "Suppose IDURAR gains a second admin account. Admin A requests GET /api/client/read/<id> for a client that admin B created. What happens?",
+   "answer": "A gets the client, as read filters only on _id and removed",
+   "distractors": [
+    "A gets a 403, as read compares createdBy with the req.admin id",
+    "A gets a 404, as every lookup is scoped to the caller",
+    "A gets a 401, as that token belongs to a different owner"
+   ],
+   "explanation": "The generic read does Model.findOne({ _id, removed: false }). Authentication passed, and nothing compares createdBy with the caller, so any admin can read any record: an IDOR the moment there is a second user."
+  },
+  {
+   "id": "o06-download-unauthenticated",
+   "kind": "quiz",
+   "source": {
+    "path": "idurar-erp-crm/fable docs/05-quality-engineering/05-security-checklist.md",
+    "lines": {
+     "start": 25,
+     "end": 26
+    }
+   },
+   "cites": [
+    {
+     "path": "idurar-erp-crm/backend/src/app.js",
+     "lineStart": 39,
+     "lineEnd": 43
+    }
+   ],
+   "prompt": "app.js mounts several routers. Which one, serving generated business PDFs, has no isValidAuthToken in front of it?",
+   "answer": "coreDownloadRouter, mounted on the /download path",
+   "distractors": [
+    "erpApiRouter, mounted on the /api path after auth",
+    "coreApiRouter, mounted on the /api path after auth",
+    "the invoice routes of erpApiRouter, on /api/invoice"
+   ],
+   "explanation": "app.use(\"/download\", coreDownloadRouter) has no auth middleware, unlike the two /api mounts that list adminAuth.isValidAuthToken first."
+  },
+  {
+   "id": "o07-nosql-object-guard",
+   "kind": "quiz",
+   "source": {
+    "path": "idurar-erp-crm/fable docs/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 3,
+     "end": 13
+    }
+   },
+   "cites": [
+    {
+     "path": "idurar-erp-crm/backend/src/controllers/middlewaresControllers/createCRUDController/paginatedList.js",
+     "lineStart": 18,
+     "lineEnd": 29
+    }
+   ],
+   "prompt": "A list request arrives with filter=email and equal parsed into an object such as { $ne: null }. What does the generic paginatedList do?",
+   "answer": "It answers 400 Invalid filter value before any query runs",
+   "distractors": [
+    "It runs the query, so every record that has an email matches",
+    "It casts the object to a string and so matches no record",
+    "It drops the equal value and returns the unfiltered list"
+   ],
+   "explanation": "paginatedList checks typeof equal === \"object\" and returns 400 \"Invalid filter value\"; only a primitive equal becomes { [filter]: equal }. This blocks the classic operator-injection payload."
+  },
+  {
+   "id": "o08-update-forces-removed",
+   "kind": "quiz",
+   "source": {
+    "path": "idurar-erp-crm/fable docs/05-quality-engineering/05-security-checklist.md",
+    "lines": {
+     "start": 28,
+     "end": 29
+    }
+   },
+   "cites": [
+    {
+     "path": "idurar-erp-crm/backend/src/controllers/middlewaresControllers/createCRUDController/update.js",
+     "lineStart": 1,
+     "lineEnd": 14
+    }
+   ],
+   "prompt": "A client sends PATCH /api/client/update/:id whose body contains removed: true and a new name. What does the generic update controller do?",
+   "answer": "Saves the new name, and forces removed back to false",
+   "distractors": [
+    "Soft-deletes the client, since req.body is the whole update",
+    "Rejects the body with a 400, since removed is not allowed",
+    "Ignores the whole body, since removed is a protected field"
+   ],
+   "explanation": "update.js sets req.body.removed = false before passing req.body to findOneAndUpdate, so removed cannot be switched on this way; the other fields are applied. The security checklist lists removed among settable fields; the code overrides it. Fields such as createdBy or credit are still mass-assignable."
+  },
+  {
+   "id": "o09-download-ignores-removed",
+   "kind": "quiz",
+   "source": {
+    "path": "idurar-erp-crm/fable docs/05-quality-engineering/05-security-checklist.md",
+    "lines": {
+     "start": 25,
+     "end": 26
+    }
+   },
+   "cites": [
+    {
+     "path": "idurar-erp-crm/backend/src/handlers/downloadHandler/downloadPdf.js",
+     "lineStart": 6,
+     "lineEnd": 16
+    }
+   ],
+   "prompt": "An invoice has been soft-deleted. Someone still has its /download/invoice/invoice-<id>.pdf link. What does the download handler do?",
+   "answer": "Serves the PDF, since its lookup does not filter on removed",
+   "distractors": [
+    "Returns 404, since the lookup requires removed to be false",
+    "Returns 401, since the download route requires a valid session",
+    "Returns 410 Gone, since the invoice was marked as removed"
+   ],
+   "explanation": "downloadPdf runs Model.findOne({ _id: id }) with no removed: false condition, so a soft-deleted invoice is still found and its PDF served, and the route has no auth."
+  },
+  {
+   "id": "o10-sessions-never-pruned",
+   "kind": "quiz",
+   "source": {
+    "path": "idurar-erp-crm/fable docs/05-quality-engineering/05-security-checklist.md",
+    "lines": {
+     "start": 21,
+     "end": 21
+    }
+   },
+   "cites": [
+    {
+     "path": "idurar-erp-crm/backend/src/controllers/middlewaresControllers/createAuthMiddleware/authUser.js",
+     "lineStart": 23,
+     "lineEnd": 29
+    },
+    {
+     "path": "idurar-erp-crm/backend/src/controllers/middlewaresControllers/createAuthMiddleware/logout.js",
+     "lineStart": 11,
+     "lineEnd": 18
+    }
+   ],
+   "prompt": "Every login pushes a new JWT into AdminPassword.loggedSessions. What removes old tokens from that array?",
+   "answer": "Only logout; expired tokens otherwise stay in the array",
+   "distractors": [
+    "A nightly job that drops tokens past their exp claim",
+    "isValidAuthToken, which pulls a token when it expires",
+    "A TTL index on loggedSessions that MongoDB enforces"
+   ],
+   "explanation": "authUser $pushes on every login; logout $pulls the one token (or clears the array when called without one). No other code prunes it, so the array grows with every login that never logs out."
+  },
+  {
+   "id": "o11-required-field-deploy",
+   "kind": "quiz",
+   "source": {
+    "path": "idurar-erp-crm/fable docs/03-architecture-and-patterns/02-data-model-and-persistence.md",
+    "lines": {
+     "start": 62,
+     "end": 65
+    }
+   },
+   "cites": [
+    {
+     "path": "idurar-erp-crm/backend/src/models/appModels/Invoice.js",
+     "lineStart": 1,
+     "lineEnd": 20
+    }
+   ],
+   "prompt": "Invoice.notes must become a required field on a collection holding a million existing invoices. Which deploy order does the guide give?",
+   "answer": "Add it as optional, backfill old documents, then require it",
+   "distractors": [
+    "Make it required now; MongoDB rejects old documents until fixed",
+    "Make it required with a default, which rewrites stored documents",
+    "Rename the field first, so each next save fixes the old documents"
+   ],
+   "explanation": "MongoDB stores no schema, so old documents lack the field; a required rule would fail their next validated save. Add optional, backfill, then tighten in a later deploy. A Mongoose default fills the value in memory, but stored documents are not rewritten until each one is saved, and MongoDB itself enforces no schema."
+  },
+  {
+   "id": "o12-extra-salt",
+   "kind": "quiz",
+   "source": {
+    "path": "idurar-erp-crm/fable docs/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 39,
+     "end": 43
+    }
+   },
+   "cites": [
+    {
+     "path": "idurar-erp-crm/backend/src/controllers/middlewaresControllers/createAuthMiddleware/authUser.js",
+     "lineStart": 5,
+     "lineEnd": 5
+    },
+    {
+     "path": "idurar-erp-crm/backend/src/models/coreModels/AdminPassword.js",
+     "lineStart": 38,
+     "lineEnd": 40
+    }
+   ],
+   "prompt": "IDURAR stores bcrypt(salt + password), where salt is a random shortid kept beside the hash. What does the guide say that extra salt adds?",
+   "answer": "Little, because bcrypt already salts each hash internally",
+   "distractors": [
+    "Its main defence, because bcrypt by itself stores no salt",
+    "Secrecy like a pepper, because the salt is kept elsewhere",
+    "Speed, because the shortid shortens the bcrypt work factor"
+   ],
+   "explanation": "bcrypt generates and embeds its own salt in every hash. The prepended shortid is stored in the same AdminPassword document, so it is not a secret pepper; the guide calls it a talking point, not a vulnerability."
+  },
+  {
+   "id": "f01-validation-layers",
+   "kind": "flashcard",
+   "source": {
+    "path": "idurar-erp-crm/fable docs/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 3,
+     "end": 13
+    }
+   },
+   "cites": [
+    {
+     "path": "idurar-erp-crm/backend/src/controllers/middlewaresControllers/createCRUDController/paginatedList.js",
+     "lineStart": 18,
+     "lineEnd": 29
+    }
+   ],
+   "front": "Name IDURAR's validation layers and which requests each covers.",
+   "back": "Client form rules (UX only, never trusted); Joi at the boundary (invoice, payment, auth only); the list query guard rejecting object equal values; Mongoose schema rules on save/update (all models); the /public path-traversal guard. Generic CRUD entities get only Mongoose validation."
+  },
+  {
+   "id": "f02-authn-vs-authz",
+   "kind": "flashcard",
+   "source": {
+    "path": "idurar-erp-crm/fable docs/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 15,
+     "end": 27
+    }
+   },
+   "cites": [
+    {
+     "path": "idurar-erp-crm/backend/src/app.js",
+     "lineStart": 39,
+     "lineEnd": 43
+    }
+   ],
+   "front": "Authentication versus authorization in IDURAR: what is enforced, and what is missing?",
+   "back": "Authentication: every /api route except login/reset passes isValidAuthToken (JWT signature plus loggedSessions membership). Authorization: none; queries never filter by createdBy and there is one owner role. Fine single-tenant, an IDOR once a second user exists; fix it in shared middleware."
+  },
+  {
+   "id": "f03-credit-invariant",
+   "kind": "flashcard",
+   "source": {
+    "path": "idurar-erp-crm/fable docs/03-architecture-and-patterns/02-data-model-and-persistence.md",
+    "lines": {
+     "start": 25,
+     "end": 39
+    }
+   },
+   "cites": [
+    {
+     "path": "idurar-erp-crm/backend/src/controllers/appControllers/paymentController/create.js",
+     "lineStart": 66,
+     "lineEnd": 77
+    }
+   ],
+   "front": "What invariant does Invoice.credit cache, and how can it break?",
+   "back": "credit === sum of the non-removed payments' amounts (and paymentStatus is derived from it). It is maintained by separate writes with no transaction, so a crash between the payment insert and the invoice update, or between invoice and payment soft-deletes, silently breaks it."
+  },
+  {
+   "id": "f04-schema-change-rules",
+   "kind": "flashcard",
+   "source": {
+    "path": "idurar-erp-crm/fable docs/03-architecture-and-patterns/02-data-model-and-persistence.md",
+    "lines": {
+     "start": 62,
+     "end": 69
+    }
+   },
+   "cites": [
+    {
+     "path": "idurar-erp-crm/backend/src/models/utils/index.js",
+     "lineStart": 22,
+     "lineEnd": 47
+    }
+   ],
+   "front": "The data-model guide gives four kinds of schema change. Which are safe, and what is the trap with renaming a model file?",
+   "back": "Additive optional field: safe. New required field: add optional, backfill, then require. Rename a field: dual-write, backfill, drop. Change an enum: migrate docs holding removed values first. Renaming a model file also renames its generated API route."
+  }
+ ]
+}

@@ -1,0 +1,365 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "organized-study-idurar-erp-crm",
+ "repo": "organized-study-idurar-erp-crm",
+ "sha": "5a12b71b5f1b585c10cfe9e97f46e1e85ea1d876",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: an ERP data model and its security findings",
+   "body": "IDURAR is an open-source ERP/CRM for clients, invoices and payments: Express and Mongoose in `idurar-erp-crm/backend/`, React in `idurar-erp-crm/frontend/`. This quest studies it the way a reviewer joining the team would: what the data model promises, and where the code does not keep those promises.\n\nRead these three guides from `fable docs/`, in order:\n\n1. `03-architecture-and-patterns/02-data-model-and-persistence.md`: entities, embedding versus referencing, the cached balance, transactions, indexes and schema changes.\n2. `03-architecture-and-patterns/03-validation-auth-and-permissions.md`: the validation layers, authentication versus authorization, password handling.\n3. `05-quality-engineering/05-security-checklist.md`: a threat map with findings marked *confirmed* or *investigate*.\n\nEvery finding cites a file and line. Open each one and decide for yourself whether it holds at this commit; a guide can overstate a finding, and the code is what runs. Several file names repeat (`paginatedList.js`, `update.js`, `read.js` exist per controller), so check the full path before you trust a line number.",
+   "excerpts": [
+    {
+     "path": "idurar-erp-crm/fable docs/05-quality-engineering/05-security-checklist.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "The security surfaces of IDURAR mapped to real code, then a pre-merge checklist."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "idurar-erp-crm/fable docs/03-architecture-and-patterns/README.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The architecture module this quest draws on."
+    },
+    {
+     "path": "idurar-erp-crm/backend/src/app.js",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Where every router is mounted."
+    }
+   ]
+  },
+  {
+   "id": "r02-cached-balance",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: a cached balance kept by several writes",
+   "body": "An invoice stores `credit` (money paid so far) and `paymentStatus` on itself instead of summing its payments on every read. That is **denormalization**: faster reads, in exchange for keeping the copy correct on every write that affects it.\n\nTwo separate questions decide whether such a copy stays correct:\n\n- **Crashes.** If one logical change takes several writes, what is left when the process stops halfway? Look up what MongoDB requires before a multi-document transaction can be used, and compare it with how IDURAR runs in development.\n- **Concurrency.** If two requests change the same invoice at once, can one overwrite the other? Read `backend/src/controllers/appControllers/paymentController/create.js` and, for each field it writes to the invoice, note how its new value is produced and from which data.\n\nThen read the **Indexes** and **How to safely change the schema** sections of the data-model guide. For each proposed index, ask what query it serves and whether it would also enforce a rule.",
+   "excerpts": [
+    {
+     "path": "idurar-erp-crm/fable docs/03-architecture-and-patterns/02-data-model-and-persistence.md",
+     "lineStart": 26,
+     "lineEnd": 26,
+     "quote": "is a cached running total of payments"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "idurar-erp-crm/backend/src/controllers/appControllers/paymentController/create.js",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The payment controller that maintains the cached balance."
+    }
+   ]
+  },
+  {
+   "id": "r03-access-and-input",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: who may do what, and which input is trusted",
+   "body": "*Authentication* asks who you are; *authorization* asks what you may do. A system can be strict about the first and silent about the second.\n\nMap both in IDURAR:\n\n- In `backend/src/app.js`, list every `app.use` mount and the middleware in front of it.\n- In `backend/src/controllers/middlewaresControllers/createCRUDController/`, read `read.js`, `paginatedList.js` and `update.js` in full. For each, write down the exact query filter it builds and which request fields reach the database unchanged.\n- Read `backend/src/handlers/downloadHandler/downloadPdf.js` and compare its lookup filter with the CRUD ones.\n\nFor input handling, the validation guide lists a *query guard*. Find it, and note what kind of value it rejects and how.\n\nFinally, `authUser.js` and `logout.js` in `createAuthMiddleware/` both write to the same array. List every place in the backend that writes to it.",
+   "excerpts": [
+    {
+     "path": "idurar-erp-crm/fable docs/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 17,
+     "lineEnd": 17,
+     "quote": "These are different and the distinction is a top interview topic."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "idurar-erp-crm/fable docs/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Validation layers, authentication and authorization."
+    },
+    {
+     "path": "idurar-erp-crm/fable docs/05-quality-engineering/05-security-checklist.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The threat map and pre-merge checklist."
+    }
+   ]
+  },
+  {
+   "id": "x-embed-vs-reference",
+   "target": "seed:quests:organized-study-idurar-erp-crm/quiz/44619c84385b834e",
+   "phase": "after",
+   "title": "Embed what is owned, reference what stands alone",
+   "body": "Line items are part of an invoice: no identity outside it, always read with it, never queried across invoices. The guide calls this \"embed when owned and bounded\", so `Invoice.items` is an embedded array. Payments are created, edited, deleted and listed on their own, so they are a collection, and `Invoice.payment` keeps an array of refs to them.\n\n- *A unique index on itemName*: no index is declared on items; embedding is about ownership, not indexing.\n- *Payments embedded in the client*: `Payment` is its own model with `client` and `invoice` refs.\n- *Mongoose cannot reference subdocuments*: the choice is a modeling decision; Mongoose supports refs from any schema path.",
+   "excerpts": [
+    {
+     "path": "idurar-erp-crm/fable docs/03-architecture-and-patterns/02-data-model-and-persistence.md",
+     "lineStart": 20,
+     "lineEnd": 20,
+     "quote": "This is the \"embed when owned and bounded\" rule."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "idurar-erp-crm/backend/src/models/appModels/Invoice.js",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The Invoice schema with embedded items and payment refs."
+    }
+   ]
+  },
+  {
+   "id": "x-concurrent-status",
+   "target": "seed:quests:organized-study-idurar-erp-crm/quiz/564cf0f2527d30c4",
+   "phase": "after",
+   "title": "Atomic credit, stale status",
+   "body": "Both requests read the invoice first (`credit` 0) and pass the overpay guard. Each then runs `$inc: { credit: 50 }`, which is atomic, so credit ends at 100: no increment is lost, as the guide says. But each computes `paymentStatus` in JavaScript from the credit it read: 100 is not equal to 0 + 50, and 0 + 50 > 0, so both `$set: { paymentStatus: 'partially' }`. The invoice is fully paid but marked partially.\n\n- *credit 50*: `$inc` is applied by the server atomically, so neither increment overwrites the other.\n- *credit 100 and paid*: correct credit, but status comes from the stale read, not from the new credit.\n- *credit 50 and paid*: no request ever computes paid here.",
+   "excerpts": [
+    {
+     "path": "idurar-erp-crm/backend/src/controllers/appControllers/paymentController/create.js",
+     "lineStart": 59,
+     "lineEnd": 64,
+     "quote": "calculate.sub(total, discount) === calculate.add(credit, amount)"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "idurar-erp-crm/fable docs/03-architecture-and-patterns/02-data-model-and-persistence.md",
+     "lineStart": 39,
+     "lineEnd": 39,
+     "why": "The guide on $inc and concurrent payments."
+    }
+   ]
+  },
+  {
+   "id": "x-transactions-need-replica-set",
+   "target": "seed:quests:organized-study-idurar-erp-crm/quiz/9f2d8c901e4386a6",
+   "phase": "after",
+   "title": "Transactions need a replica set",
+   "body": "MongoDB multi-document transactions run only on a replica set or a sharded cluster. A single standalone `mongod`, the default local setup for IDURAR, rejects `startTransaction`. So the fix for the crash window (\"wrap the payment insert and invoice update in `withTransaction`\") first needs a deployment change, which the guide calls the crux of the interview answer.\n\n- *WiredTiger without journaling*: transactions need WiredTiger, but turning the journal off is not a requirement and weakens durability.\n- *A sharded cluster with three shards*: sharding is one option, not a requirement; a replica set is enough.\n- *Autopopulate everywhere*: that plugin only populates refs; it has nothing to do with transactions.",
+   "excerpts": [
+    {
+     "path": "idurar-erp-crm/fable docs/03-architecture-and-patterns/02-data-model-and-persistence.md",
+     "lineStart": 37,
+     "lineEnd": 37,
+     "quote": "but **only on a replica set**, which the default single-node dev setup isn"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "idurar-erp-crm/fable docs/03-architecture-and-patterns/02-data-model-and-persistence.md",
+     "lineStart": 31,
+     "lineEnd": 39,
+     "why": "The transaction boundaries section."
+    }
+   ]
+  },
+  {
+   "id": "x-number-unique-index",
+   "target": "seed:quests:organized-study-idurar-erp-crm/quiz/83ca074e1a8c1150",
+   "phase": "after",
+   "title": "A unique index enforces what code cannot",
+   "body": "Invoice numbers are allocated by the application, so two concurrent creates can pick the same `number`. A unique compound index on `{ number: 1, year: 1 }` makes MongoDB reject the second insert, which closes the race at the database no matter what the code does. The guide marks it as one of the two safe bets.\n\n- *Unique on client alone*: that would allow only one invoice per client.\n- *`{ removed: 1, enabled: -1 }`*: the guide lists it for the default sort; it is not unique and enforces nothing.\n- *TTL on date*: a TTL index deletes documents after a time; it would destroy invoices, not prevent duplicates.",
+   "excerpts": [
+    {
+     "path": "idurar-erp-crm/fable docs/03-architecture-and-patterns/02-data-model-and-persistence.md",
+     "lineStart": 53,
+     "lineEnd": 53,
+     "quote": "| duplicate-number guard | `{number:1, year:1}` **unique** |"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "idurar-erp-crm/backend/src/models/appModels/Invoice.js",
+     "lineStart": 9,
+     "lineEnd": 16,
+     "why": "The number and year fields with no index."
+    }
+   ]
+  },
+  {
+   "id": "x-no-ownership-filter",
+   "target": "seed:quests:organized-study-idurar-erp-crm/quiz/16d3be55d8731c9d",
+   "phase": "after",
+   "title": "Authenticated is not authorized",
+   "body": "The request passes `isValidAuthToken`, so A is authenticated. The generic `read.js` then runs `Model.findOne({ _id: req.params.id, removed: false })`. Nothing compares the record's `createdBy` with `req.admin`, so A receives B's client. With one owner this is by design; with two users it is an IDOR (insecure direct object reference).\n\n- *403 on createdBy*: no controller checks `createdBy`; it is stamped for attribution only.\n- *404 scoped to the caller*: the filter has no caller condition.\n- *401 for another owner's token*: A's token is A's own and valid; whose record it is never enters authentication.",
+   "excerpts": [
+    {
+     "path": "idurar-erp-crm/backend/src/controllers/middlewaresControllers/createCRUDController/read.js",
+     "lineStart": 3,
+     "lineEnd": 6,
+     "quote": "const result = await Model.findOne({ _id: req.params.id, removed: false, }).exec();"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "idurar-erp-crm/fable docs/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 23,
+     "lineEnd": 27,
+     "why": "Why missing authorization is fine today and critical with a second user."
+    }
+   ]
+  },
+  {
+   "id": "x-download-unauthenticated",
+   "target": "seed:quests:organized-study-idurar-erp-crm/quiz/1ca7a571beb2f7ea",
+   "phase": "after",
+   "title": "The download router has no auth",
+   "body": "`app.js` mounts `coreAuthRouter` on `/api` (login and reset), then `coreApiRouter` and `erpApiRouter` on `/api` behind `adminAuth.isValidAuthToken`, then `app.use('/download', coreDownloadRouter)` with no middleware at all. That router serves the generated invoice and payment PDFs, so anyone holding a URL can fetch one.\n\n- *erpApiRouter*: mounted with `isValidAuthToken` first.\n- *coreApiRouter*: also mounted with `isValidAuthToken` first.\n- *The invoice routes of erpApiRouter*: they live inside a protected router, so they inherit its auth.",
+   "excerpts": [
+    {
+     "path": "idurar-erp-crm/backend/src/app.js",
+     "lineStart": 42,
+     "lineEnd": 42,
+     "quote": "app.use('/download', coreDownloadRouter);"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "idurar-erp-crm/fable docs/05-quality-engineering/05-security-checklist.md",
+     "lineStart": 25,
+     "lineEnd": 26,
+     "why": "The unauthenticated PDF download finding."
+    }
+   ]
+  },
+  {
+   "id": "x-nosql-object-guard",
+   "target": "seed:quests:organized-study-idurar-erp-crm/quiz/cb6f5b2d164b4f96",
+   "phase": "after",
+   "title": "Objects are rejected where a value is expected",
+   "body": "With Express 4's default query parser, `equal[$ne]=` arrives as the object `{ $ne: ... }`. The generic `paginatedList` checks `typeof equal === 'object'` and returns `400` with \"Invalid filter value\" before building any query. Only a primitive `equal` becomes `{ [filter]: equal }`. This is the guide's \"query guard\" layer.\n\n- *Runs the query with $ne*: that is the attack the guard exists to stop.\n- *Casts to a string*: no cast happens; the request is rejected.\n- *Drops equal*: the code returns early; it does not fall back to an unfiltered list.",
+   "excerpts": [
+    {
+     "path": "idurar-erp-crm/backend/src/controllers/middlewaresControllers/createCRUDController/paginatedList.js",
+     "lineStart": 21,
+     "lineEnd": 26,
+     "quote": "if (typeof equal === 'object') {"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "idurar-erp-crm/fable docs/05-quality-engineering/05-security-checklist.md",
+     "lineStart": 11,
+     "lineEnd": 11,
+     "why": "The threat map row for NoSQL injection."
+    }
+   ]
+  },
+  {
+   "id": "x-update-forces-removed",
+   "target": "seed:quests:organized-study-idurar-erp-crm/quiz/670ee70776894507",
+   "phase": "after",
+   "title": "The generic update resets removed",
+   "body": "The first statement of `createCRUDController/update.js` is `req.body.removed = false;`, and only then is `req.body` passed as the update to `findOneAndUpdate`. So the new name is saved and `removed` is written as false. The mass-assignment finding is real for other fields (`createdBy`, `enabled`, any schema path), but the security checklist's claim that a client \"could set `removed`\" does not hold at this commit.\n\n- *Soft-deletes the client*: the override runs before the update, so removed stays false.\n- *400 for a disallowed field*: there is no whitelist or Joi check on generic updates.\n- *Ignores the whole body*: every other body field is applied.",
+   "excerpts": [
+    {
+     "path": "idurar-erp-crm/backend/src/controllers/middlewaresControllers/createCRUDController/update.js",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "req.body.removed = false;"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "idurar-erp-crm/fable docs/05-quality-engineering/05-security-checklist.md",
+     "lineStart": 28,
+     "lineEnd": 29,
+     "why": "The mass-assignment finding this question tests."
+    }
+   ]
+  },
+  {
+   "id": "x-download-ignores-removed",
+   "target": "seed:quests:organized-study-idurar-erp-crm/quiz/63bfa9ec5bc89cf3",
+   "phase": "after",
+   "title": "Soft-deleted invoices stay downloadable",
+   "body": "`downloadPdf` derives the model from the directory and runs `Model.findOne({ _id: id })`. Unlike the CRUD controllers it has no `removed: false` condition, so a soft-deleted invoice is still found and its PDF generated and served. The route is also outside the authenticated mounts.\n\n- *404 for removed*: only a missing document triggers the not-found path; removed ones are found.\n- *401 without a session*: `/download` has no auth middleware.\n- *410 Gone*: the handler never uses 410.",
+   "excerpts": [
+    {
+     "path": "idurar-erp-crm/backend/src/handlers/downloadHandler/downloadPdf.js",
+     "lineStart": 9,
+     "lineEnd": 11,
+     "quote": "const result = await Model.findOne({ _id: id, }).exec();"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "idurar-erp-crm/fable docs/05-quality-engineering/05-security-checklist.md",
+     "lineStart": 26,
+     "lineEnd": 26,
+     "why": "The guide on the download route and soft delete."
+    }
+   ]
+  },
+  {
+   "id": "x-sessions-never-pruned",
+   "target": "seed:quests:organized-study-idurar-erp-crm/quiz/b4fd7bf67254dda9",
+   "phase": "after",
+   "title": "loggedSessions only shrinks on logout",
+   "body": "Each successful login runs `$push: { loggedSessions: token }` (password reset pushes too). The only code that removes entries is `logout.js`: it `$pull`s the presented token, or clears the array when no token is sent. A user who never logs out leaves every old token in the array, expired or not, so it grows without bound.\n\n- *A nightly job*: no scheduled job exists in the backend.\n- *isValidAuthToken pulls expired tokens*: it only reads `loggedSessions`; it never writes it.\n- *A TTL index*: TTL indexes expire whole documents by a date field, not array elements, and none is declared.",
+   "excerpts": [
+    {
+     "path": "idurar-erp-crm/backend/src/controllers/middlewaresControllers/createAuthMiddleware/authUser.js",
+     "lineStart": 23,
+     "lineEnd": 26,
+     "quote": "{ $push: { loggedSessions: token } },"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "idurar-erp-crm/fable docs/05-quality-engineering/05-security-checklist.md",
+     "lineStart": 21,
+     "lineEnd": 21,
+     "why": "The unbounded-growth row of the threat map."
+    }
+   ]
+  },
+  {
+   "id": "x-required-field-deploy",
+   "target": "seed:quests:organized-study-idurar-erp-crm/quiz/4d523c3d3264b8cc",
+   "phase": "after",
+   "title": "Add, backfill, then require",
+   "body": "MongoDB stores no schema, so existing invoices simply lack `notes`. If the Mongoose schema made it `required` at once, every old invoice would fail validation the next time it is saved. The guide's order is: deploy it as optional, backfill the existing documents, then tighten it to `required` in a later deploy.\n\n- *MongoDB rejects old documents*: MongoDB itself enforces no schema here; only Mongoose validates, and only on save.\n- *Required with a default rewrites documents*: a default fills the value in memory; stored documents change only when each is saved.\n- *Rename first*: renaming is a different, riskier change and does not populate old documents.",
+   "excerpts": [
+    {
+     "path": "idurar-erp-crm/fable docs/03-architecture-and-patterns/02-data-model-and-persistence.md",
+     "lineStart": 65,
+     "lineEnd": 65,
+     "quote": "add as optional → backfill existing docs → tighten to `required` in a later deploy"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "idurar-erp-crm/fable docs/03-architecture-and-patterns/02-data-model-and-persistence.md",
+     "lineStart": 62,
+     "lineEnd": 69,
+     "why": "The four kinds of schema change."
+    }
+   ]
+  },
+  {
+   "id": "x-extra-salt",
+   "target": "seed:quests:organized-study-idurar-erp-crm/quiz/d97cef09530c0f26",
+   "phase": "after",
+   "title": "bcrypt already salts",
+   "body": "bcrypt creates a random salt for every hash and stores it inside the hash string. IDURAR also prepends its own random `shortid` and stores it in the same `AdminPassword` document. Since it sits next to the hash, it is not a secret, and bcrypt's own salt already defeats precomputed tables, so the guide calls it a talking point that adds little, not a vulnerability.\n\n- *Main defence, bcrypt stores no salt*: bcrypt embeds its salt in the hash.\n- *A pepper kept elsewhere*: the shortid is stored in the database beside the hash.\n- *Speed*: the bcrypt cost factor sets the work; prepending a string does not change it.",
+   "excerpts": [
+    {
+     "path": "idurar-erp-crm/backend/src/controllers/middlewaresControllers/createAuthMiddleware/authUser.js",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "bcrypt.compare(databasePassword.salt + password, databasePassword.password)"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "idurar-erp-crm/fable docs/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 39,
+     "lineEnd": 43,
+     "why": "The password-handling notes."
+    }
+   ]
+  }
+ ]
+}

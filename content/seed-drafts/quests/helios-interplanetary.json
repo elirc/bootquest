@@ -1,0 +1,427 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "helios-interplanetary",
+ "sha": "4e043bdee9b29558651376740d9953d73c0b6ffc",
+ "guides": [
+  "astraupskill/02-CONCEPTS.md",
+  "astraupskill/03-WORKED-CHANGE.md",
+  "astraupskill/04-TESTING-AND-DEBUGGING.md",
+  "astraupskill/07-TRACE-LAB.md",
+  "upskilling/lessons/01-request-to-row.md",
+  "docs/architecture/system-overview.md"
+ ],
+ "items": [
+  {
+   "id": "q01-receipt-same-client",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 1,
+     "end": 3
+    }
+   },
+   "cites": [
+    {
+     "path": "src/server/operations.ts",
+     "lineStart": 20,
+     "lineEnd": 45
+    },
+    {
+     "path": "src/server/db.ts",
+     "lineStart": 16,
+     "lineEnd": 32
+    }
+   ],
+   "prompt": "In idempotentCommand, the operation_commands receipt is inserted on the same PoolClient that ran the repair work. What does that buy?",
+   "answer": "The receipt commits or rolls back together with the repair writes",
+   "distractors": [
+    "It lets the advisory lock be released before the receipt is saved",
+    "It allows the receipt lookup to read other requests' uncommitted rows",
+    "It avoids the cost of a second BEGIN, but changes nothing about atomicity"
+   ],
+   "explanation": "transaction() wraps work and the receipt INSERT in one BEGIN/COMMIT, so a late failure leaves no receipt and a committed repair always has one. The advisory lock is transaction-scoped and is released at commit or rollback, not before."
+  },
+  {
+   "id": "q02-retry-after-rollback",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 5,
+     "end": 12
+    }
+   },
+   "cites": [
+    {
+     "path": "src/server/operations.ts",
+     "lineStart": 24,
+     "lineEnd": 44
+    }
+   ],
+   "prompt": "complete_repair failed at the injected postmortem trigger and rolled back. The trigger is dropped and the exact same command (same commandId and payload) is sent again. What does that call return?",
+   "answer": "A fresh run that completes the repair and reports replayed: false",
+   "distractors": [
+    "The stored result of the first attempt, reported as replayed: true",
+    "A 409 IDEMPOTENCY_CONFLICT, since that commandId was already used",
+    "The original trigger error again, replayed from the stored receipt"
+   ],
+   "explanation": "The rollback removed every effect including the receipt, so the lookup finds no row and the work runs normally. A retry after a rollback is a fresh execution, not a replay."
+  },
+  {
+   "id": "q03-same-id-new-payload",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 5,
+     "end": 12
+    }
+   },
+   "cites": [
+    {
+     "path": "src/server/operations.ts",
+     "lineStart": 30,
+     "lineEnd": 37
+    }
+   ],
+   "prompt": "After a successful complete_repair, a client sends the same commandId again but with a different workOrderId. What happens?",
+   "answer": "It is rejected with a 409 and no repair work runs",
+   "distractors": [
+    "It returns the stored result marked replayed: true",
+    "It runs as a fresh command for the other work order",
+    "It overwrites the stored receipt with the new payload"
+   ],
+   "explanation": "A receipt exists but payload=$3::jsonb is false, so idempotentCommand throws DomainError 409 IDEMPOTENCY_CONFLICT before work() is called."
+  },
+  {
+   "id": "q04-auditor-rejected-where",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/07-TRACE-LAB.md",
+    "lines": {
+     "start": 5,
+     "end": 7
+    }
+   },
+   "cites": [
+    {
+     "path": "src/server/operations.ts",
+     "lineStart": 13,
+     "lineEnd": 20
+    },
+    {
+     "path": "src/server/identity.ts",
+     "lineStart": 121,
+     "lineEnd": 124
+    }
+   ],
+   "prompt": "A read-only auditor persona sends a complete_repair command to executeOperation. Where is it stopped?",
+   "answer": "In requireOperator with a 403, before a transaction begins",
+   "distractors": [
+    "After BEGIN and the advisory lock, at the receipt lookup",
+    "Inside maintenanceCommandTx, once the work order is locked",
+    "At the receipt insert, which then rolls back with a 403"
+   ],
+   "explanation": "idempotentCommand calls requireOperator(p) on line 19, before transaction() opens a connection, so no lock, lookup or work happens for a non-operator."
+  },
+  {
+   "id": "q05-jsonb-key-order",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 33,
+     "end": 35
+    }
+   },
+   "cites": [
+    {
+     "path": "src/server/operations.ts",
+     "lineStart": 24,
+     "lineEnd": 29
+    }
+   ],
+   "prompt": "The receipt lookup compares stored and incoming input with payload=$3::jsonb. Two requests carry the same fields with their JSON keys in a different order. How does the lookup treat them?",
+   "answer": "As the same payload, because jsonb equality ignores key order",
+   "distractors": [
+    "As different payloads, because the stored text differs by bytes",
+    "As different payloads unless the client sorts its keys first",
+    "As the same payload only if both raw bodies are byte-identical"
+   ],
+   "explanation": "jsonb stores a parsed value, and jsonb equality compares values, not text. The compared input is also the zod-parsed object, not the raw request body."
+  },
+  {
+   "id": "q06-second-idempotency-layer",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 36,
+     "end": 36
+    }
+   },
+   "cites": [
+    {
+     "path": "src/server/maintenance.ts",
+     "lineStart": 164,
+     "lineEnd": 165
+    }
+   ],
+   "prompt": "complete_repair returns early when the work order is already COMPLETED. Which request sequence does that guard protect against that the receipt does not?",
+   "answer": "A different command id completing the same repair again",
+   "distractors": [
+    "The same command id resent after its first attempt committed",
+    "Two concurrent calls that share a single command id",
+    "A retry of a command whose first attempt rolled back"
+   ],
+   "explanation": "The receipt is keyed by commandId, so only a different id gets past it; the status guard catches that. Same-id resends hit the receipt, concurrent same-id calls queue on the advisory lock, and after a rollback the work order is still VERIFYING."
+  },
+  {
+   "id": "q07-why-fail-last-write",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/03-WORKED-CHANGE.md",
+    "lines": {
+     "start": 26,
+     "end": 28
+    }
+   },
+   "cites": [
+    {
+     "path": "src/server/maintenance.ts",
+     "lineStart": 184,
+     "lineEnd": 221
+    }
+   ],
+   "prompt": "The regression makes a BEFORE INSERT trigger on postmortems raise an error. Why fail at that insert rather than an earlier write?",
+   "answer": "It is the last write, so the other repair effects already ran",
+   "distractors": [
+    "Postmortems has no foreign keys, so nothing else can be affected",
+    "PostgreSQL only allows BEFORE INSERT triggers on that one table",
+    "Its UNIQUE constraint would make any later retry fail with a 409"
+   ],
+   "explanation": "The postmortem insert follows stock consumption, the work order, crew and incident updates and the audit event, so a rollback there proves all of them were undone."
+  },
+  {
+   "id": "q08-audit-baseline",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/04-TESTING-AND-DEBUGGING.md",
+    "lines": {
+     "start": 15,
+     "end": 18
+    }
+   },
+   "cites": [
+    {
+     "path": "tests/integration/repair.test.ts",
+     "lineStart": 266,
+     "lineEnd": 272
+    }
+   ],
+   "prompt": "The rollback assertions compare the organization's audit_events count with a value captured before the attempt. Why not simply assert that the count is zero?",
+   "answer": "Fixture setup already wrote audit rows for this organization",
+   "distractors": [
+    "audit() writes on its own connection, so its rows never roll back",
+    "PostgreSQL count(*) returns null, not zero, for an empty table",
+    "The count spans every tenant, so it can never drop down to zero"
+   ],
+   "explanation": "reserve_parts, assign_crew and the other setup commands all record audit events, so zero would fail for the wrong reason. The query is filtered by organization_id, audit() uses the transaction client, and count(*) returns 0 on no rows."
+  },
+  {
+   "id": "q09-finally-cleanup",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/03-WORKED-CHANGE.md",
+    "lines": {
+     "start": 34,
+     "end": 43
+    }
+   },
+   "cites": [
+    {
+     "path": "tests/integration/repair.test.ts",
+     "lineStart": 324,
+     "lineEnd": 327
+    }
+   ],
+   "prompt": "Why does the regression drop its test trigger and function inside a finally block?",
+   "answer": "So a failed assertion cannot leave the trigger to break later tests",
+   "distractors": [
+    "So the DROP statements run inside the executeOperation transaction",
+    "Because PostgreSQL refuses to drop a trigger while a test is running",
+    "So the recovery call afterwards can reuse it to check its own work"
+   ],
+   "explanation": "If any of the seven rollback assertions throws, finally still runs the DROP statements, so later tests in the file are not poisoned by a trigger that rejects every postmortem insert."
+  },
+  {
+   "id": "q10-missing-nominal-telemetry",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/03-WORKED-CHANGE.md",
+    "lines": {
+     "start": 24,
+     "end": 24
+    }
+   },
+   "cites": [
+    {
+     "path": "src/server/maintenance.ts",
+     "lineStart": 176,
+     "lineEnd": 183
+    },
+    {
+     "path": "tests/integration/repair.test.ts",
+     "lineStart": 260,
+     "lineEnd": 264
+    }
+   ],
+   "prompt": "In the regression setup, suppose the nominal runScenario call after begin_verification were deleted. What would the complete_repair attempt do?",
+   "answer": "Fail with VERIFICATION_REQUIRED, the wrong reason for this test",
+   "distractors": [
+    "Fail with INVALID_TRANSITION, because verification never began",
+    "Hit the trigger anyway, since telemetry is checked after the insert",
+    "Succeed, because the earlier degradation run supplied the telemetry"
+   ],
+   "explanation": "complete_repair demands NOMINAL status and telemetry newer than verification_after before any write, so it would throw VERIFICATION_REQUIRED before the postmortem trigger fires. begin_verification still ran, and the degradation readings predate verification."
+  },
+  {
+   "id": "q11-equal-time-reading",
+   "kind": "quiz",
+   "source": {
+    "path": "upskilling/lessons/01-request-to-row.md",
+    "lines": {
+     "start": 28,
+     "end": 34
+    }
+   },
+   "cites": [
+    {
+     "path": "src/server/telemetry.ts",
+     "lineStart": 74,
+     "lineEnd": 97
+    }
+   ],
+   "prompt": "A new reading with a distinct id arrives whose observed_at exactly equals the asset's last_observed_at. What does ingestion do with it?",
+   "answer": "Stores it as not applied, leaving asset state and incidents alone",
+   "distractors": [
+    "Rejects it with 409 IDEMPOTENCY_CONFLICT as a duplicate timestamp",
+    "Applies it and replaces the asset state, since it arrived last",
+    "Discards it without storing anything, as it adds no newer data"
+   ],
+   "explanation": "applied requires observedAt strictly greater than last_observed_at, so an equal-time reading is inserted with applied=false and the state and incident branch is skipped; the result disposition is stale."
+  },
+  {
+   "id": "q12-one-active-incident",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/system-overview.md",
+    "lines": {
+     "start": 45,
+     "end": 45
+    }
+   },
+   "cites": [
+    {
+     "path": "src/server/telemetry.ts",
+     "lineStart": 22,
+     "lineEnd": 24
+    },
+    {
+     "path": "db/migrations/001-core.sql",
+     "lineStart": 62,
+     "lineEnd": 62
+    }
+   ],
+   "prompt": "Helios must never store two unresolved incidents for the same asset. Which pair of mechanisms enforces that?",
+   "answer": "A FOR UPDATE lock on the asset row, plus a partial unique index",
+   "distractors": [
+    "An advisory lock on the run id, plus a CHECK constraint on status",
+    "A serializable transaction, plus a unique index on incident titles",
+    "A retry loop in the route handler, plus ON CONFLICT DO NOTHING"
+   ],
+   "explanation": "Ingestion locks the tenant's asset row FOR UPDATE, which serialises the find-or-create decision, and one_active_incident_per_asset is a unique index on (organization_id, asset_id) WHERE status <> RESOLVED."
+  },
+  {
+   "id": "f01-four-outcomes",
+   "kind": "flashcard",
+   "source": {
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 5,
+     "end": 12
+    }
+   },
+   "cites": [
+    {
+     "path": "src/server/operations.ts",
+     "lineStart": 24,
+     "lineEnd": 44
+    }
+   ],
+   "front": "Name the four outcomes of sending a command through idempotentCommand, and what is observable for each.",
+   "back": "Rollback: work threw, ROLLBACK, no effects and no receipt. Fresh execution: no receipt, work runs, receipt inserted, replayed false. Replay: receipt with same actor and payload, stored result returned with replayed true, work never runs. Conflict: receipt with different payload or actor, 409 IDEMPOTENCY_CONFLICT."
+  },
+  {
+   "id": "f02-test-isolation-guard",
+   "kind": "flashcard",
+   "source": {
+    "path": "astraupskill/04-TESTING-AND-DEBUGGING.md",
+    "lines": {
+     "start": 22,
+     "end": 24
+    }
+   },
+   "cites": [
+    {
+     "path": "tests/helpers.ts",
+     "lineStart": 10,
+     "lineEnd": 18
+    }
+   ],
+   "front": "What does testPool() in tests/helpers.ts require of TEST_DATABASE_URL before it will connect?",
+   "back": "It must be set, its path must be /helios_test, its host must be loopback (127.0.0.1, localhost or [::1]), and it must differ from DATABASE_URL."
+  },
+  {
+   "id": "f03-three-times",
+   "kind": "flashcard",
+   "source": {
+    "path": "upskilling/lessons/01-request-to-row.md",
+    "lines": {
+     "start": 28,
+     "end": 34
+    }
+   },
+   "cites": [
+    {
+     "path": "src/server/telemetry.ts",
+     "lineStart": 74,
+     "lineEnd": 76
+    }
+   ],
+   "front": "Helios records three different times for telemetry. What are they?",
+   "back": "observed_at: when the simulated sensor observation happened. received_at: when PostgreSQL received the reading. audit_events.occurred_at: wall time when the operation was recorded. Only a strictly newer observed_at updates current asset state."
+  },
+  {
+   "id": "f04-what-a-transaction-does-not-prove",
+   "kind": "flashcard",
+   "source": {
+    "path": "upskilling/lessons/01-request-to-row.md",
+    "lines": {
+     "start": 36,
+     "end": 38
+    }
+   },
+   "cites": [
+    {
+     "path": "src/server/db.ts",
+     "lineStart": 16,
+     "lineEnd": 32
+    }
+   ],
+   "front": "Lesson 1 lists what the first slice's transaction does not prove. What is on that list?",
+   "back": "Atomicity holds only inside this database: it does not prove delivery to an external queue, or that in-memory work survives a process exit. A rendered page does not prove the transaction ran correctly, and a seeded scenario says nothing about a future LLM's determinism."
+  }
+ ]
+}

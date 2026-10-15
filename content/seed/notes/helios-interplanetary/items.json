@@ -1,0 +1,595 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "notes",
+ "name": "helios-interplanetary",
+ "items": [
+  {
+   "key": "seed:notes:helios-interplanetary/note/14d6bd0fbd9b57ef",
+   "provenance": {
+    "repo": "helios-interplanetary",
+    "sha": "4e043bdee9b29558651376740d9953d73c0b6ffc",
+    "path": "src/server/operations.ts",
+    "lines": {
+     "start": 40,
+     "end": 43
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-receipt-same-client",
+   "pack": "helios-interplanetary",
+   "target": "seed:quests:helios-interplanetary/quiz/4b9dc6f4937bb960",
+   "phase": "after",
+   "title": "Why the receipt shares the repair transaction",
+   "body": "`idempotentCommand` runs everything inside `transaction(pool, async (client) => ...)`. The work and the receipt INSERT both use that same `client`, so they sit between one BEGIN and one COMMIT. If the work throws, `transaction()` runs ROLLBACK and no receipt survives; if the commit succeeds, the receipt is there too. The receipt therefore means \"this command really committed\".\n\n- *Advisory lock released early*: `pg_advisory_xact_lock` is transaction-scoped; it is held until commit or rollback, not released before the receipt.\n- *Reading uncommitted rows*: PostgreSQL never shows one transaction another's uncommitted writes; sharing a client does not change that.\n- *Saving a BEGIN*: the point is atomicity. With a separate transaction, a crash between the two commits could leave work without a receipt, or a receipt without work.",
+   "excerpts": [
+    {
+     "path": "src/server/operations.ts",
+     "lineStart": 40,
+     "lineEnd": 43,
+     "quote": "\"INSERT INTO operation_commands(organization_id,id,actor_id,payload,result) VALUES($1,$2,$3,$4,$5)\","
+    },
+    {
+     "path": "src/server/db.ts",
+     "lineStart": 26,
+     "lineEnd": 28,
+     "quote": "await client.query(\"ROLLBACK\");"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "why": "The guide paragraph on why both writes share one transaction."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:helios-interplanetary/note/34d3ce4290ac9980",
+   "provenance": {
+    "repo": "helios-interplanetary",
+    "sha": "4e043bdee9b29558651376740d9953d73c0b6ffc",
+    "path": "src/server/telemetry.ts",
+    "lines": {
+     "start": 74,
+     "end": 76
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-equal-time-reading",
+   "pack": "helios-interplanetary",
+   "target": "seed:quests:helios-interplanetary/quiz/8c4a1624648a2d71",
+   "phase": "after",
+   "title": "Equal timestamps do not update state",
+   "body": "`applied` is true only when there is no previous observation or `new Date(input.observedAt).getTime() > asset.last_observed_at.getTime()`. Equal is not greater, so `applied` is false. The reading is still inserted into `telemetry_readings` with `applied=false`, but the `if (applied)` block that finds or opens an incident and updates the asset is skipped, and the disposition is `stale`.\n\n- *409 IDEMPOTENCY_CONFLICT*: that is for a reused reading **id** with different data; this reading has a new id.\n- *Applies it because it arrived last*: ordering uses observation time, not arrival time.\n- *Discards it*: it remains stored and queryable; it just does not change current state.",
+   "excerpts": [
+    {
+     "path": "src/server/telemetry.ts",
+     "lineStart": 74,
+     "lineEnd": 76,
+     "quote": "new Date(input.observedAt).getTime() > asset.last_observed_at.getTime();"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/architecture/system-overview.md",
+     "lineStart": 61,
+     "lineEnd": 61,
+     "why": "The architecture note on strictly increasing observation timestamps."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:helios-interplanetary/note/38f5a10c6e79ed3a",
+   "provenance": {
+    "repo": "helios-interplanetary",
+    "sha": "4e043bdee9b29558651376740d9953d73c0b6ffc",
+    "path": "src/server/maintenance.ts",
+    "lines": {
+     "start": 177,
+     "end": 183
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-missing-nominal-telemetry",
+   "pack": "helios-interplanetary",
+   "target": "seed:quests:helios-interplanetary/quiz/729bd85c663ed125",
+   "phase": "after",
+   "title": "Without fresh telemetry the test fails too early",
+   "body": "`complete_repair` checks two preconditions before writing anything: the work order must be VERIFYING, and the asset must be NOMINAL with `last_observed_at` newer than `verification_after`. The nominal `runScenario` call supplies those newer readings. Without it the second `demand` throws VERIFICATION_REQUIRED, so the trigger never fires and the test fails, but for a reason it was not written to test.\n\n- *INVALID_TRANSITION*: `begin_verification` still runs, so the status check passes.\n- *Hits the trigger anyway*: the telemetry check comes before the postmortem insert.\n- *Degradation run supplied it*: those readings were recorded before verification began, and they are not nominal.",
+   "excerpts": [
+    {
+     "path": "src/server/maintenance.ts",
+     "lineStart": 177,
+     "lineEnd": 183,
+     "quote": "\"VERIFICATION_REQUIRED\","
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/04-TESTING-AND-DEBUGGING.md",
+     "lineStart": 25,
+     "lineEnd": 25,
+     "why": "The debugging table row for this exact symptom."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:helios-interplanetary/note/580f244b531b77bb",
+   "provenance": {
+    "repo": "helios-interplanetary",
+    "sha": "4e043bdee9b29558651376740d9953d73c0b6ffc",
+    "path": "tests/integration/repair.test.ts",
+    "lines": {
+     "start": 268,
+     "end": 270
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-audit-baseline",
+   "pack": "helios-interplanetary",
+   "target": "seed:quests:helios-interplanetary/quiz/5aea4b1fc87d8d76",
+   "phase": "after",
+   "title": "Why audit is compared with a baseline",
+   "body": "Before the failing attempt, the test runs many real commands through `executeOperation`: reserve parts, assign crew, start the repair, complete tasks, begin verification, plus scenario runs. Those write audit events for the organization, so the count is already above zero. The test captures `auditBefore` and asserts the count is unchanged after the rollback.\n\n- *audit() on its own connection*: `audit(client, ...)` takes the transaction client, so its rows roll back with the repair.\n- *count(*) returns null*: `count(*)` returns 0 for no rows, and the query casts it to int.\n- *Spans every tenant*: the query filters `WHERE organization_id=$1`.",
+   "excerpts": [
+    {
+     "path": "tests/integration/repair.test.ts",
+     "lineStart": 268,
+     "lineEnd": 270,
+     "quote": "SELECT count(*)::int AS n FROM audit_events WHERE organization_id=$1"
+    },
+    {
+     "path": "astraupskill/04-TESTING-AND-DEBUGGING.md",
+     "lineStart": 17,
+     "lineEnd": 17,
+     "quote": "The audit assertion compares with a **captured baseline**, not with zero"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/server/audit.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The audit helper and the client it writes with."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:helios-interplanetary/note/646df767f27a1082",
+   "provenance": {
+    "repo": "helios-interplanetary",
+    "sha": "4e043bdee9b29558651376740d9953d73c0b6ffc",
+    "path": "astraupskill/04-TESTING-AND-DEBUGGING.md",
+    "lines": {
+     "start": 3,
+     "end": 3
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r02-receipts-and-transactions",
+   "pack": "helios-interplanetary",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: command receipts and the transaction around them",
+   "body": "A network call can time out after the server has already done the work. The client cannot tell, so it sends the request again. An **idempotency key** (here called a command id) lets the server recognise a repeat: the first time it does the work, it stores a *receipt* keyed by that id; later it can look the receipt up.\n\nTwo questions decide whether this is safe, and Helios answers both in `src/server/operations.ts`:\n\n- *Where is the receipt written relative to the work?* Compare the receipt insert with the `transaction()` helper in `src/server/db.ts`, and note which database connection each statement uses.\n- *What counts as \"the same request\"?* Read the SELECT in `idempotentCommand` and find which columns it compares, and how.\n\nAs you read `idempotentCommand`, write down each step in order and mark which ones run inside `transaction()`. Then read the `complete_repair` branch in `src/server/maintenance.ts`. It has its own early return; work out which kind of repeat it is meant for.\n\nThe regression test proves these properties by checking stored rows, not by trusting a thrown error. The guides explain why that distinction matters.",
+   "excerpts": [
+    {
+     "path": "astraupskill/04-TESTING-AND-DEBUGGING.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "The regression needs a real PostgreSQL database"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/server/operations.ts",
+     "lineStart": 13,
+     "lineEnd": 46,
+     "why": "idempotentCommand: the lock, the receipt lookup, the work and the receipt insert."
+    },
+    {
+     "path": "src/server/db.ts",
+     "lineStart": 16,
+     "lineEnd": 32,
+     "why": "The BEGIN/COMMIT/ROLLBACK wrapper every command runs inside."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:helios-interplanetary/note/6a7f51228c227abf",
+   "provenance": {
+    "repo": "helios-interplanetary",
+    "sha": "4e043bdee9b29558651376740d9953d73c0b6ffc",
+    "path": "tests/integration/repair.test.ts",
+    "lines": {
+     "start": 329,
+     "end": 331
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-retry-after-rollback",
+   "pack": "helios-interplanetary",
+   "target": "seed:quests:helios-interplanetary/quiz/aabcb09de4ffb49f",
+   "phase": "after",
+   "title": "A retry after a rollback is a fresh run",
+   "body": "The failed attempt rolled back, and the receipt insert was part of that transaction, so no `operation_commands` row exists for the command id. On the next call the lookup returns no row, `work(client)` runs, the repair completes, the receipt is inserted and the result carries `replayed: false`. The regression asserts exactly this on `recovered.replayed`.\n\n- *Stored result, replayed: true*: there is nothing stored to replay; that only happens on the call after a successful one.\n- *409 IDEMPOTENCY_CONFLICT*: a conflict needs an existing receipt with a different payload or actor. There is no receipt at all.\n- *The trigger error again*: errors are never stored. A thrown error rolls the whole transaction back.",
+   "excerpts": [
+    {
+     "path": "tests/integration/repair.test.ts",
+     "lineStart": 329,
+     "lineEnd": 331,
+     "quote": "const recovered = await executeOperation(actor, input, pool);"
+    },
+    {
+     "path": "src/server/operations.ts",
+     "lineStart": 24,
+     "lineEnd": 29,
+     "quote": "FROM operation_commands WHERE organization_id=$1 AND id=$2"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/07-TRACE-LAB.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The three-column trace: failed attempt, recovery, replay."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:helios-interplanetary/note/78f9e92deec80257",
+   "provenance": {
+    "repo": "helios-interplanetary",
+    "sha": "4e043bdee9b29558651376740d9953d73c0b6ffc",
+    "path": "astraupskill/README.md",
+    "lines": {
+     "start": 3,
+     "end": 3
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r01-start-here",
+   "pack": "helios-interplanetary",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: one repair command, one transaction, one regression test",
+   "body": "Helios is a simulated mission-control app: telemetry comes in from pumps, breaches open incidents, and operators run repair commands against a PostgreSQL database. This quest studies how one repair command is made safe to retry.\n\nRead in this order:\n\n1. `astraupskill/02-CONCEPTS.md`: the vocabulary of rollback, fresh execution, replay and conflict.\n2. `astraupskill/03-WORKED-CHANGE.md`: a walk through the regression test in `tests/integration/repair.test.ts`.\n3. `astraupskill/04-TESTING-AND-DEBUGGING.md` and `astraupskill/07-TRACE-LAB.md`: how to run it and how to trace one command id through several attempts.\n4. `upskilling/lessons/01-request-to-row.md` and `docs/architecture/system-overview.md`: the wider path from a button to a stored row, including telemetry.\n\nKeep `src/server/operations.ts`, `src/server/db.ts` and `src/server/maintenance.ts` open while you read. The guides quote line numbers; check each one against the file rather than trusting the quote. Many quiz questions ask you to predict what the database holds after a call, so when a guide describes an outcome, find the statement in the code that produces it.",
+   "excerpts": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "Helios already completes a repair through a PostgreSQL transaction."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The mini-course overview and the route through its eight files."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:helios-interplanetary/note/812c5fc92aeac4c9",
+   "provenance": {
+    "repo": "helios-interplanetary",
+    "sha": "4e043bdee9b29558651376740d9953d73c0b6ffc",
+    "path": "tests/integration/repair.test.ts",
+    "lines": {
+     "start": 324,
+     "end": 326
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-finally-cleanup",
+   "pack": "helios-interplanetary",
+   "target": "seed:quests:helios-interplanetary/quiz/9cb6213a734b8705",
+   "phase": "after",
+   "title": "Cleanup belongs in finally",
+   "body": "The trigger rejects every insert into `postmortems`. If one of the rollback assertions failed and the DROP statements came after the `try` block, they would never run, and every later test that completes a repair would fail for an unrelated reason. Putting them in `finally` makes them run whether the assertions pass or throw.\n\n- *Inside the executeOperation transaction*: the DROPs run on the pool after that call has finished; they are not part of its transaction.\n- *PostgreSQL refuses while a test runs*: there is no such rule; the test itself drops them mid-run.\n- *Reuse by the recovery call*: the recovery must succeed, so the trigger has to be gone before it runs.",
+   "excerpts": [
+    {
+     "path": "tests/integration/repair.test.ts",
+     "lineStart": 324,
+     "lineEnd": 326,
+     "quote": "await pool.query(\"DROP TRIGGER IF EXISTS test_reject_postmortem_sol15 ON postmortems\");"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Exercise 4 makes you move the DROPs out of finally and watch what happens."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:helios-interplanetary/note/a1ff5febb6894092",
+   "provenance": {
+    "repo": "helios-interplanetary",
+    "sha": "4e043bdee9b29558651376740d9953d73c0b6ffc",
+    "path": "src/server/telemetry.ts",
+    "lines": {
+     "start": 23,
+     "end": 23
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-one-active-incident",
+   "pack": "helios-interplanetary",
+   "target": "seed:quests:helios-interplanetary/quiz/94b593f4cd5a4d7b",
+   "phase": "after",
+   "title": "Two layers guard one active incident",
+   "body": "Ingestion first runs `SELECT ... FROM assets ... FOR UPDATE`, which locks the asset row; a second request for the same asset waits, so \"look for an active incident, create one if none\" is serialised. Independently, the migration creates `one_active_incident_per_asset`, a unique index on `(organization_id, asset_id) WHERE status <> 'RESOLVED'`, so the database refuses a second unresolved incident even if code went wrong.\n\n- *Advisory lock on the run id and a CHECK*: advisory locks guard command ids, and a CHECK constraint cannot compare rows.\n- *Serializable transaction and unique titles*: ingestion sets no isolation level, so it runs at PostgreSQL's default READ COMMITTED, and titles are not unique.\n- *Retry loop and ON CONFLICT*: no retry loop exists, and the incident insert has no ON CONFLICT clause.",
+   "excerpts": [
+    {
+     "path": "src/server/telemetry.ts",
+     "lineStart": 23,
+     "lineEnd": 23,
+     "quote": "SELECT id, designation, last_observed_at FROM assets WHERE organization_id=$1 AND id=$2 FOR UPDATE"
+    },
+    {
+     "path": "db/migrations/001-core.sql",
+     "lineStart": 62,
+     "lineEnd": 62,
+     "quote": "CREATE UNIQUE INDEX one_active_incident_per_asset"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "upskilling/lessons/01-request-to-row.md",
+     "lineStart": 20,
+     "lineEnd": 24,
+     "why": "The lesson section on why the lock matters."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:helios-interplanetary/note/a9121c60566e3dc3",
+   "provenance": {
+    "repo": "helios-interplanetary",
+    "sha": "4e043bdee9b29558651376740d9953d73c0b6ffc",
+    "path": "src/server/maintenance.ts",
+    "lines": {
+     "start": 184,
+     "end": 184
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-why-fail-last-write",
+   "pack": "helios-interplanetary",
+   "target": "seed:quests:helios-interplanetary/quiz/16be9bde7fcb427f",
+   "phase": "after",
+   "title": "Why the trigger targets the postmortem insert",
+   "body": "In the `complete_repair` branch the postmortem INSERT is the final write. Before it, the code consumes the reservation, sets the work order COMPLETED, frees the crew, resolves the incident and writes an audit event. Failing at the last step means every earlier effect has already been attempted, so a clean rollback proves all of them are undone together.\n\n- *No foreign keys*: `postmortems` references the incident and work order; the choice is about position in the code, not the schema.\n- *Only table allowing such triggers*: PostgreSQL allows BEFORE INSERT triggers on any ordinary table.\n- *UNIQUE makes retries fail*: the insert uses ON CONFLICT DO NOTHING, and the recovery in the test succeeds with exactly one postmortem.",
+   "excerpts": [
+    {
+     "path": "src/server/maintenance.ts",
+     "lineStart": 184,
+     "lineEnd": 184,
+     "quote": "await closeReservationTx(client, p, work, true);"
+    },
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": 28,
+     "lineEnd": 28,
+     "quote": "The postmortem insert is the **last** write in `complete_repair`"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": 26,
+     "lineEnd": 28,
+     "why": "Step 2 of the walkthrough: the baseline and the injected failure."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:helios-interplanetary/note/aaa13b7363f4c514",
+   "provenance": {
+    "repo": "helios-interplanetary",
+    "sha": "4e043bdee9b29558651376740d9953d73c0b6ffc",
+    "path": "src/server/maintenance.ts",
+    "lines": {
+     "start": 164,
+     "end": 165
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-second-idempotency-layer",
+   "pack": "helios-interplanetary",
+   "target": "seed:quests:helios-interplanetary/quiz/263228ec22f1d638",
+   "phase": "after",
+   "title": "What the COMPLETED guard catches",
+   "body": "Receipts are keyed by command id. A second command that uses a *new* id has no receipt, so it reaches `maintenanceCommandTx`. Without the guard it would try to complete an already completed repair. The guard `if (work.status === \"COMPLETED\") return ...` stops that without writing anything.\n\n- *Same id after a commit*: the receipt lookup finds the row and returns it as a replay; the guard is never reached.\n- *Two concurrent calls with one id*: `pg_advisory_xact_lock` on the command id makes the second wait; it then finds the receipt.\n- *Retry after a rollback*: the rollback left the work order in VERIFYING, so the guard does not fire and the repair runs normally.",
+   "excerpts": [
+    {
+     "path": "src/server/maintenance.ts",
+     "lineStart": 164,
+     "lineEnd": 165,
+     "quote": "if (work.status === \"COMPLETED\") return { id: work.id, status: work.status };"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 36,
+     "lineEnd": 36,
+     "why": "The guide bullet on the second idempotency layer."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:helios-interplanetary/note/caf98bd492b03174",
+   "provenance": {
+    "repo": "helios-interplanetary",
+    "sha": "4e043bdee9b29558651376740d9953d73c0b6ffc",
+    "path": "src/server/operations.ts",
+    "lines": {
+     "start": 26,
+     "end": 26
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-jsonb-key-order",
+   "pack": "helios-interplanetary",
+   "target": "seed:quests:helios-interplanetary/quiz/ed7c73e269b1ae48",
+   "phase": "after",
+   "title": "jsonb compares values, not text",
+   "body": "The lookup casts the incoming JSON to `jsonb` and compares it with the stored `payload` column. A jsonb value is stored parsed, and jsonb equality compares the parsed values, so the order of object keys does not matter. On top of that, the compared value is `JSON.stringify(input)` of the zod-parsed object from `executeOperation`, not the raw request body.\n\n- *Different because the stored text differs*: the comparison is not on text, so byte differences in key order are irrelevant.\n- *Unless the client sorts its keys*: no sorting is needed for the same reason.\n- *Only if the raw bodies are byte-identical*: the raw body is never compared; the parsed input is.",
+   "excerpts": [
+    {
+     "path": "src/server/operations.ts",
+     "lineStart": 26,
+     "lineEnd": 26,
+     "quote": "SELECT actor_id,payload=$3::jsonb AS same,result FROM operation_commands"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 33,
+     "lineEnd": 35,
+     "why": "The guide note on jsonb comparison and the parsed input."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:helios-interplanetary/note/ed4b53dabdfda946",
+   "provenance": {
+    "repo": "helios-interplanetary",
+    "sha": "4e043bdee9b29558651376740d9953d73c0b6ffc",
+    "path": "src/server/operations.ts",
+    "lines": {
+     "start": 31,
+     "end": 36
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-same-id-new-payload",
+   "pack": "helios-interplanetary",
+   "target": "seed:quests:helios-interplanetary/quiz/c14a0738b4ef8762",
+   "phase": "after",
+   "title": "Reusing a command id with a different payload",
+   "body": "After the successful run there is a receipt for the command id. The lookup selects `payload=$3::jsonb AS same`; with a different `workOrderId` that comparison is false, so `idempotentCommand` throws `DomainError(409, \"IDEMPOTENCY_CONFLICT\", ...)`. It throws before `work(client)` is called, so no repair code runs for the other work order.\n\n- *Returns the stored result*: a replay requires the same payload and the same actor; here the payload differs.\n- *Runs as a fresh command*: a fresh run happens only when no receipt exists for the id.\n- *Overwrites the receipt*: nothing updates `operation_commands`; the only write is the INSERT after work, which is never reached.",
+   "excerpts": [
+    {
+     "path": "src/server/operations.ts",
+     "lineStart": 31,
+     "lineEnd": 36,
+     "quote": "if (!previous.same || previous.actor_id !== p.id)"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/07-TRACE-LAB.md",
+     "lineStart": 22,
+     "lineEnd": 22,
+     "why": "The fourth-column thought experiment on reusing an id."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:helios-interplanetary/note/ed629ce1794cd5ff",
+   "provenance": {
+    "repo": "helios-interplanetary",
+    "sha": "4e043bdee9b29558651376740d9953d73c0b6ffc",
+    "path": "upskilling/lessons/01-request-to-row.md",
+    "lines": {
+     "start": 3,
+     "end": 3
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "r03-telemetry-ordering",
+   "pack": "helios-interplanetary",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: late telemetry and racing incident creation",
+   "body": "Telemetry has two classic problems. First, readings can arrive out of order: a sensor value observed earlier may reach the server after a newer one. A system must pick a rule for which reading describes the *current* state. Second, two requests can race: both check \"is there an open incident?\", both see none, and both create one.\n\nLesson 1 (`upskilling/lessons/01-request-to-row.md`) and the architecture overview (`docs/architecture/system-overview.md`) describe Helios's choices. Check them in code:\n\n- In `src/server/telemetry.ts`, find how the `applied` flag is computed and what the function does differently when it is false. Read the comparison closely.\n- Find what happens when the same reading id arrives twice, with identical and with different data.\n- For the race, read both `telemetry.ts` and `db/migrations/001-core.sql`, list what each contributes, and ask why an application check on its own would not be enough.\n\nThe lesson also distinguishes three different timestamps. Note which one the ordering rule uses.",
+   "excerpts": [
+    {
+     "path": "upskilling/lessons/01-request-to-row.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "Learning outcome: you can trace one operation through the browser, identity boundary, domain rules, transaction, and evidence query."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "upskilling/lessons/01-request-to-row.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Traces one scenario from the browser button to committed rows."
+    },
+    {
+     "path": "src/server/telemetry.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Reading ingestion: duplicate check, ordering rule and incident creation."
+    }
+   ]
+  },
+  {
+   "key": "seed:notes:helios-interplanetary/note/f99dba0697731a3c",
+   "provenance": {
+    "repo": "helios-interplanetary",
+    "sha": "4e043bdee9b29558651376740d9953d73c0b6ffc",
+    "path": "src/server/operations.ts",
+    "lines": {
+     "start": 19,
+     "end": 20
+    }
+   },
+   "citations": [],
+   "kind": "note",
+   "noteId": "x-auditor-rejected-where",
+   "pack": "helios-interplanetary",
+   "target": "seed:quests:helios-interplanetary/quiz/83345b8dd0a0ee7e",
+   "phase": "after",
+   "title": "The role check runs before the transaction",
+   "body": "The first statement of `idempotentCommand` is `requireOperator(p)`, and only then does it call `transaction(pool, ...)`. `requireOperator` throws `DomainError(403, \"FORBIDDEN\", ...)` for any role other than operator, so a read-only auditor never gets a connection, a BEGIN, a lock or a receipt lookup.\n\n- *At the receipt lookup*: the lookup is inside the transaction callback, which is never entered.\n- *Inside maintenanceCommandTx*: that is reached only through `work(client)`, far later.\n- *At the receipt insert*: nothing is inserted or rolled back; the request fails before any database work starts.",
+   "excerpts": [
+    {
+     "path": "src/server/operations.ts",
+     "lineStart": 19,
+     "lineEnd": 20,
+     "quote": "requireOperator(p); return transaction(pool, async (client) => {"
+    },
+    {
+     "path": "src/server/identity.ts",
+     "lineStart": 121,
+     "lineEnd": 123,
+     "quote": "if (principal.role !== \"operator\")"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": 6,
+     "lineEnd": 6,
+     "why": "The codebase map row for the role check."
+    }
+   ]
+  }
+ ]
+}
