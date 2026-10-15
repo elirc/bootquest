@@ -201,7 +201,11 @@
    "prompt": "The worker dies after staging 1,200 of 5,000 CSV rows. Why does the next worker re-read and discard 1,200 records instead of seeking to a saved byte offset?",
    "choices": [
     {
-     "text": "The file is compressed",
+     "text": "The CSV is gzip-compressed, so it cannot seek to an offset",
+     "evidence": []
+    },
+    {
+     "text": "Byte offsets differ between Windows and Linux readers of a file",
      "evidence": []
     },
     {
@@ -211,11 +215,7 @@
      ]
     },
     {
-     "text": "Seeking would skip the SHA-256 rehash that guards the original against mutation",
-     "evidence": []
-    },
-    {
-     "text": "Byte offsets are not portable between Windows and Linux workers reading the same file",
+     "text": "Seeking would skip the SHA-256 rehash guarding the source file",
      "evidence": []
     }
    ],
@@ -223,12 +223,12 @@
     "type": "quiz",
     "itemKey": "seed:quests:relay-upskilling/quiz/28bf62917ed15651",
     "grading": "choice",
-    "answerKey": 1,
+    "answerKey": 2,
     "choices": [
-     "The file is compressed",
+     "The CSV is gzip-compressed, so it cannot seek to an offset",
+     "Byte offsets differ between Windows and Linux readers of a file",
      "Quoted values may contain newlines, so position is a record count",
-     "Seeking would skip the SHA-256 rehash that guards the original against mutation",
-     "Byte offsets are not portable between Windows and Linux workers reading the same file"
+     "Seeking would skip the SHA-256 rehash guarding the source file"
     ]
    },
    "explanation": "A reopened cursor reads and discards `skip` records; LogicalCsvResumeHandlesQuotedNewlines pins a \\r\\n inside quotes."
@@ -329,15 +329,11 @@
    "prompt": "Why does the worker re-verify the approval hash inside every batch transaction, after SELECT ... FOR UPDATE on the job?",
    "choices": [
     {
-     "text": "The C# hash differs from the TypeScript one",
+     "text": "So the C# worker can cache the hash once and reuse it for each batch",
      "evidence": []
     },
     {
-     "text": "Because PostgreSQL forgets approvals between transactions on a pooled connection",
-     "evidence": []
-    },
-    {
-     "text": "To refresh the reviewer's session before each batch is committed",
+     "text": "So PostgreSQL keeps the approval across pooled connections",
      "evidence": []
     },
     {
@@ -345,18 +341,22 @@
      "evidence": [
       "worker/ImportWorker.cs"
      ]
+    },
+    {
+     "text": "So the reviewer's session is refreshed before each batch commits",
+     "evidence": []
     }
    ],
    "check": {
     "type": "quiz",
     "itemKey": "seed:quests:relay-upskilling/quiz/3b216153cc57aa5e",
     "grading": "choice",
-    "answerKey": 3,
+    "answerKey": 2,
     "choices": [
-     "The C# hash differs from the TypeScript one",
-     "Because PostgreSQL forgets approvals between transactions on a pooled connection",
-     "To refresh the reviewer's session before each batch is committed",
-     "So a racing mapping edit cannot slip between check and effect"
+     "So the C# worker can cache the hash once and reuse it for each batch",
+     "So PostgreSQL keeps the approval across pooled connections",
+     "So a racing mapping edit cannot slip between check and effect",
+     "So the reviewer's session is refreshed before each batch commits"
     ]
    },
    "explanation": "Checking once at queue time leaves a window; locking the job and re-checking per batch closes it."
@@ -388,21 +388,21 @@
    "prompt": "A worker's cached source cursor says it is at record 900, but the job's checkpoint in PostgreSQL says 1,000. What does the worker do?",
    "choices": [
     {
-     "text": "Rolls the database checkpoint back to 900 so it matches the cached cursor",
-     "evidence": []
-    },
-    {
-     "text": "Continues from 900 and relies on ON CONFLICT to skip the duplicate records",
-     "evidence": []
-    },
-    {
      "text": "Drops the cursor and reopens from the database checkpoint",
      "evidence": [
       "worker/ImportWorker.cs"
      ]
     },
     {
-     "text": "Fails the job",
+     "text": "Continues from 900 and lets ON CONFLICT skip the duplicates",
+     "evidence": []
+    },
+    {
+     "text": "Rolls the database checkpoint back to 900 to match the cursor",
+     "evidence": []
+    },
+    {
+     "text": "Fails the job with a checkpoint mismatch error for an operator",
      "evidence": []
     }
    ],
@@ -410,12 +410,12 @@
     "type": "quiz",
     "itemKey": "seed:quests:relay-upskilling/quiz/3c2812a125119fe1",
     "grading": "choice",
-    "answerKey": 2,
+    "answerKey": 0,
     "choices": [
-     "Rolls the database checkpoint back to 900 so it matches the cached cursor",
-     "Continues from 900 and relies on ON CONFLICT to skip the duplicate records",
      "Drops the cursor and reopens from the database checkpoint",
-     "Fails the job"
+     "Continues from 900 and lets ON CONFLICT skip the duplicates",
+     "Rolls the database checkpoint back to 900 to match the cursor",
+     "Fails the job with a checkpoint mismatch error for an operator"
     ]
    },
    "explanation": "PostgreSQL, not worker memory, owns progress."
@@ -453,15 +453,15 @@
      ]
     },
     {
-     "text": "It is cleared only when the worker next re-validates the job in the background",
+     "text": "It stays attached, as one-row corrections are below a threshold",
      "evidence": []
     },
     {
-     "text": "It stays attached, because a single-row correction is below the change threshold",
+     "text": "It is cleared later, when the worker next re-validates the job",
      "evidence": []
     },
     {
-     "text": "It stays; the row is skipped",
+     "text": "It stays, and the corrected row is skipped during the import",
      "evidence": []
     }
    ],
@@ -472,9 +472,9 @@
     "answerKey": 0,
     "choices": [
      "It is cleared in the same UPDATE that bumps mapping_version",
-     "It is cleared only when the worker next re-validates the job in the background",
-     "It stays attached, because a single-row correction is below the change threshold",
-     "It stays; the row is skipped"
+     "It stays attached, as one-row corrections are below a threshold",
+     "It is cleared later, when the worker next re-validates the job",
+     "It stays, and the corrected row is skipped during the import"
     ]
    },
    "explanation": "There is no path that changes what will be imported while an approval stays attached."
@@ -506,21 +506,21 @@
    "prompt": "The destination receives a key it has a receipt for, but with a different payload. What does it return?",
    "choices": [
     {
-     "text": "A new receipt under an automatically suffixed key",
+     "text": "201: a new receipt under an automatically suffixed key",
      "evidence": []
     },
     {
-     "text": "409: the key cannot be reused for different data",
+     "text": "200: the original outcome, ignoring the new payload",
+     "evidence": []
+    },
+    {
+     "text": "409: the key may not be reused for different data",
      "evidence": [
       "scripts/test-destination.mjs"
      ]
     },
     {
-     "text": "The original outcome, ignoring the new payload",
-     "evidence": []
-    },
-    {
-     "text": "201, with the new payload applied over the existing contact",
+     "text": "201: the new payload is applied over the existing contact",
      "evidence": []
     }
    ],
@@ -528,12 +528,12 @@
     "type": "quiz",
     "itemKey": "seed:quests:relay-upskilling/quiz/598183a7c2640c9d",
     "grading": "choice",
-    "answerKey": 1,
+    "answerKey": 2,
     "choices": [
-     "A new receipt under an automatically suffixed key",
-     "409: the key cannot be reused for different data",
-     "The original outcome, ignoring the new payload",
-     "201, with the new payload applied over the existing contact"
+     "201: a new receipt under an automatically suffixed key",
+     "200: the original outcome, ignoring the new payload",
+     "409: the key may not be reused for different data",
+     "201: the new payload is applied over the existing contact"
     ]
    },
    "explanation": "Same key + same payload returns the original outcome; same key + changed payload is rejected."
@@ -565,34 +565,34 @@
    "prompt": "A reviewer looked at mapping version 3, but a correction made it version 4 before they clicked Approve. What happens?",
    "choices": [
     {
-     "text": "The approval is accepted, and version 3 is the one that gets imported",
+     "text": "403: the reviewer's permission expired with the old version",
      "evidence": []
     },
     {
-     "text": "403, because the reviewer's permission expired along with the old version",
+     "text": "200: the approval binds to version 4 automatically",
      "evidence": []
     },
     {
-     "text": "409: the approval must name the version the reviewer saw",
+     "text": "200: the approval is accepted, and version 3 is imported",
+     "evidence": []
+    },
+    {
+     "text": "409: the approval has to name the version the reviewer saw",
      "evidence": [
       "src/app/api/[...path]/route.ts"
      ]
-    },
-    {
-     "text": "The approval binds to version 4 automatically",
-     "evidence": []
     }
    ],
    "check": {
     "type": "quiz",
     "itemKey": "seed:quests:relay-upskilling/quiz/83b051b023767355",
     "grading": "choice",
-    "answerKey": 2,
+    "answerKey": 3,
     "choices": [
-     "The approval is accepted, and version 3 is the one that gets imported",
-     "403, because the reviewer's permission expired along with the old version",
-     "409: the approval must name the version the reviewer saw",
-     "The approval binds to version 4 automatically"
+     "403: the reviewer's permission expired with the old version",
+     "200: the approval binds to version 4 automatically",
+     "200: the approval is accepted, and version 3 is imported",
+     "409: the approval has to name the version the reviewer saw"
     ]
    },
    "explanation": "The approve request carries the version; a mismatch rejects stale reviews."
@@ -628,17 +628,17 @@
      "evidence": []
     },
     {
-     "text": "The outbox encrypts payloads before they leave the private network",
-     "evidence": []
-    },
-    {
      "text": "No single transaction can span its database and Relay's",
      "evidence": [
       "db/002_platform.sql"
      ]
     },
     {
-     "text": "Local inserts are never retried, so they need no durable record of what was sent",
+     "text": "The outbox encrypts payloads before they leave the network",
+     "evidence": []
+    },
+    {
+     "text": "Local inserts are not retried, so they need no record",
      "evidence": []
     }
    ],
@@ -646,12 +646,12 @@
     "type": "quiz",
     "itemKey": "seed:quests:relay-upskilling/quiz/8de77e0df208b540",
     "grading": "choice",
-    "answerKey": 2,
+    "answerKey": 1,
     "choices": [
      "The external API is slower, so batches must be queued",
-     "The outbox encrypts payloads before they leave the private network",
      "No single transaction can span its database and Relay's",
-     "Local inserts are never retried, so they need no durable record of what was sent"
+     "The outbox encrypts payloads before they leave the network",
+     "Local inserts are not retried, so they need no record"
     ]
    },
    "explanation": "Locally, contacts and the job ledger share one PostgreSQL database; externally, a commit/response-loss window appears that only stable keys and receipts can cover."
@@ -683,21 +683,21 @@
    "prompt": "A parse batch is replayed after a crash. Why does that not duplicate staged rows?",
    "choices": [
     {
+     "text": "The API clears the job's staged rows before the replayed batch",
+     "evidence": []
+    },
+    {
      "text": "Checkpoint and rows commit together, with ON CONFLICT DO NOTHING",
      "evidence": [
       "worker/ImportWorker.cs"
      ]
     },
     {
-     "text": "Replays are impossible, because the advisory lock is never released after a crash",
+     "text": "Replays cannot happen, as the advisory lock stays held after a crash",
      "evidence": []
     },
     {
-     "text": "The worker keeps an in-memory set of the row numbers it has already staged",
-     "evidence": []
-    },
-    {
-     "text": "The API deletes staged rows",
+     "text": "The worker keeps an in-memory set of row numbers it already staged",
      "evidence": []
     }
    ],
@@ -705,12 +705,12 @@
     "type": "quiz",
     "itemKey": "seed:quests:relay-upskilling/quiz/9d16469b50f9c310",
     "grading": "choice",
-    "answerKey": 0,
+    "answerKey": 1,
     "choices": [
+     "The API clears the job's staged rows before the replayed batch",
      "Checkpoint and rows commit together, with ON CONFLICT DO NOTHING",
-     "Replays are impossible, because the advisory lock is never released after a crash",
-     "The worker keeps an in-memory set of the row numbers it has already staged",
-     "The API deletes staged rows"
+     "Replays cannot happen, as the advisory lock stays held after a crash",
+     "The worker keeps an in-memory set of row numbers it already staged"
     ]
    },
    "explanation": "Atomic progress plus idempotent inserts make a replayed batch harmless."
@@ -742,15 +742,7 @@
    "prompt": "The approval hash is sha256(file_hash:mapping_version:schema_version:schema_hash:destination), yet the API still checks reviewer permission separately. Why?",
    "choices": [
     {
-     "text": "Permission checks are too slow to run inside the hash",
-     "evidence": []
-    },
-    {
-     "text": "The hash covers only the file bytes, so it cannot tell which mapping version was approved",
-     "evidence": []
-    },
-    {
-     "text": "The hash is salted per reviewer, so it has to be recomputed for each new approver",
+     "text": "The hash covers the file bytes alone, not the mapping version",
      "evidence": []
     },
     {
@@ -758,18 +750,26 @@
      "evidence": [
       "src/app/api/[...path]/route.ts"
      ]
+    },
+    {
+     "text": "The hash is salted per reviewer and recomputed for each approver",
+     "evidence": []
+    },
+    {
+     "text": "Permission checks are too slow to run inside the hash function",
+     "evidence": []
     }
    ],
    "check": {
     "type": "quiz",
     "itemKey": "seed:quests:relay-upskilling/quiz/abee03ccf0f4f8be",
     "grading": "choice",
-    "answerKey": 3,
+    "answerKey": 1,
     "choices": [
-     "Permission checks are too slow to run inside the hash",
-     "The hash covers only the file bytes, so it cannot tell which mapping version was approved",
-     "The hash is salted per reviewer, so it has to be recomputed for each new approver",
-     "The hash is a version binding anyone can compute, not a signature"
+     "The hash covers the file bytes alone, not the mapping version",
+     "The hash is a version binding anyone can compute, not a signature",
+     "The hash is salted per reviewer and recomputed for each approver",
+     "Permission checks are too slow to run inside the hash function"
     ]
    },
    "explanation": "The hash binds an approval to exactly what will be imported (bytes, mapping generation, schema, destination); a change un-approves. It proves nothing about who approved, so reviewer permission is checked on its own."
@@ -801,37 +801,37 @@
    "prompt": "Local destination: the worker is killed once just before a batch commits, and once just after. What does the operator see in each case?",
    "choices": [
     {
-     "text": "Both leave uncertain rows",
-     "evidence": []
-    },
-    {
-     "text": "Before: half the batch is visible; after: the batch is retried and deduplicated",
-     "evidence": []
-    },
-    {
-     "text": "Both require manual cleanup of duplicate contacts before the job can resume",
-     "evidence": []
-    },
-    {
-     "text": "Before: nothing from the batch happened and it reruns identically. After: progress to the checkpoint is permanent and resume continues after it",
+     "text": "Before: the batch reruns identically. After: resume continues past the checkpoint",
      "evidence": [
       "worker/ImportWorker.cs"
      ]
+    },
+    {
+     "text": "Before: duplicates need manual cleanup. After: the job cannot resume",
+     "evidence": []
+    },
+    {
+     "text": "Before: half the batch is already visible. After: the batch is retried and deduplicated",
+     "evidence": []
+    },
+    {
+     "text": "Before: rows are left uncertain. After: rows are left uncertain as well",
+     "evidence": []
     }
    ],
    "check": {
     "type": "quiz",
     "itemKey": "seed:quests:relay-upskilling/quiz/c1b413577c1ce4d7",
     "grading": "choice",
-    "answerKey": 3,
+    "answerKey": 0,
     "choices": [
-     "Both leave uncertain rows",
-     "Before: half the batch is visible; after: the batch is retried and deduplicated",
-     "Both require manual cleanup of duplicate contacts before the job can resume",
-     "Before: nothing from the batch happened and it reruns identically. After: progress to the checkpoint is permanent and resume continues after it"
+     "Before: the batch reruns identically. After: resume continues past the checkpoint",
+     "Before: duplicates need manual cleanup. After: the job cannot resume",
+     "Before: half the batch is already visible. After: the batch is retried and deduplicated",
+     "Before: rows are left uncertain. After: rows are left uncertain as well"
     ]
    },
-   "explanation": "Effects and checkpoint commit together in one transaction, so the two windows are symmetric (exits 74 and 73)."
+   "explanation": "Before the commit (exit 74) everything rolls back and the batch reruns identically; after it (exit 73) the committed prefix is permanent and the next worker starts at the checkpoint. Effects and checkpoint commit together in one transaction, so the two windows are symmetric."
   },
   {
    "key": "seed:quests:relay-upskilling/quiz/c1b9480f25a189df",
@@ -860,7 +860,7 @@
    "prompt": "Why does the worker mark missing keys 'uncertain' in a committed transaction before POSTing the batch?",
    "choices": [
     {
-     "text": "To make the POST faster by letting the destination skip payload validation",
+     "text": "So the outbox row stays locked while the HTTP request is in flight",
      "evidence": []
     },
     {
@@ -870,11 +870,11 @@
      ]
     },
     {
-     "text": "The destination rejects pending keys",
+     "text": "So the destination can reject keys that are still pending",
      "evidence": []
     },
     {
-     "text": "To hold a row lock on the outbox for as long as the HTTP request is in flight",
+     "text": "So the destination can skip payload validation and answer faster",
      "evidence": []
     }
    ],
@@ -884,10 +884,10 @@
     "grading": "choice",
     "answerKey": 1,
     "choices": [
-     "To make the POST faster by letting the destination skip payload validation",
+     "So the outbox row stays locked while the HTTP request is in flight",
      "So a crash mid-flight still leaves 'I may have sent this' on record",
-     "The destination rejects pending keys",
-     "To hold a row lock on the outbox for as long as the HTTP request is in flight"
+     "So the destination can reject keys that are still pending",
+     "So the destination can skip payload validation and answer faster"
     ]
    },
    "explanation": "The same short transaction re-checks that the job is still active, serializing permission-to-send with pause/cancel."
@@ -932,31 +932,31 @@
      "evidence": []
     },
     {
-     "text": "It asks the destination for receipts for the batch's keys before resending, finds all seven, and marks them delivered without sending again",
+     "text": "It abandons the seven rows and marks them failed for an operator to review",
+     "evidence": []
+    },
+    {
+     "text": "It resends all seven, and the destination's unique email constraint absorbs every duplicate",
+     "evidence": []
+    },
+    {
+     "text": "It looks up receipts for the batch's keys first, finds all seven, and marks them delivered",
      "evidence": [
       "scripts/test-destination.mjs",
       "worker/ExternalDelivery.cs"
      ]
-    },
-    {
-     "text": "It abandons the seven rows",
-     "evidence": []
-    },
-    {
-     "text": "It resends all seven; the destination's ON CONFLICT on email absorbs the duplicates",
-     "evidence": []
     }
    ],
    "check": {
     "type": "quiz",
     "itemKey": "seed:quests:relay-upskilling/quiz/e70f3bf5ed5e3cac",
     "grading": "choice",
-    "answerKey": 1,
+    "answerKey": 3,
     "choices": [
      "It deletes the seven contacts at the destination and starts the batch over",
-     "It asks the destination for receipts for the batch's keys before resending, finds all seven, and marks them delivered without sending again",
-     "It abandons the seven rows",
-     "It resends all seven; the destination's ON CONFLICT on email absorbs the duplicates"
+     "It abandons the seven rows and marks them failed for an operator to review",
+     "It resends all seven, and the destination's unique email constraint absorbs every duplicate",
+     "It looks up receipts for the batch's keys first, finds all seven, and marks them delivered"
     ]
    },
    "explanation": "Receipt lookup before resending recovers the commit/response-loss window; delivered=7, imported=7 with exactly seven receipts, by lookup, not resend."
@@ -1038,7 +1038,11 @@
    "prompt": "After a preview showed an email as new, another job imports the same email first. What happens when this job's batch commits?",
    "choices": [
     {
-     "text": "The newer job overwrites the contact with its own values",
+     "text": "Both contacts are inserted; the preview had already approved the row",
+     "evidence": []
+    },
+    {
+     "text": "The batch fails; the job stops for a reviewer to resolve the duplicate",
      "evidence": []
     },
     {
@@ -1049,11 +1053,7 @@
      ]
     },
     {
-     "text": "The batch fails and the job stops for a reviewer to resolve the duplicate manually",
-     "evidence": []
-    },
-    {
-     "text": "Both contacts are inserted, because the preview had already approved the row as new",
+     "text": "The newer job overwrites the contact; its values replace the old ones",
      "evidence": []
     }
    ],
@@ -1061,12 +1061,12 @@
     "type": "quiz",
     "itemKey": "seed:quests:relay-upskilling/quiz/f3975add08e4c88d",
     "grading": "choice",
-    "answerKey": 1,
+    "answerKey": 2,
     "choices": [
-     "The newer job overwrites the contact with its own values",
+     "Both contacts are inserted; the preview had already approved the row",
+     "The batch fails; the job stops for a reviewer to resolve the duplicate",
      "ON CONFLICT skips it; the row is classified existing or conflict",
-     "The batch fails and the job stops for a reviewer to resolve the duplicate manually",
-     "Both contacts are inserted, because the preview had already approved the row as new"
+     "The newer job overwrites the contact; its values replace the old ones"
     ]
    },
    "explanation": "Destination uniqueness is the final arbiter, even if another job committed after preview; INSERT RETURNING identifies only the truly new rows."

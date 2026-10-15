@@ -31,8 +31,8 @@
    "prompt": "A v2 PATCH body is {\"marketingOptIn\": false}. What canonical patch does the adapter produce?",
    "answer": "{ marketingOptIn: false } and no other keys",
    "distractors": [
-    "{} because false is treated as 'not provided' by the adapter",
-    "Every canonical field, with the omitted ones explicitly set to undefined",
+    "{} with no keys, as false counts as not provided",
+    "{ marketingOptIn: undefined } and no other keys",
     "{ marketingOptIn: false, lifecycleState: 'ACTIVE' }"
    ],
    "explanation": "The adapter builds a fresh object and assigns a key only when the payload value is !== undefined, so an explicit false survives and omitted fields stay absent."
@@ -55,11 +55,11 @@
     }
    ],
    "prompt": "Prisma skips undefined values on update anyway. Why does the guide still object to padding every optional key with undefined?",
-   "answer": "Object.keys would list every field, so the audit's changedFields lies",
+   "answer": "Object.keys would list each padded field, so the audit's changedFields lies",
    "distractors": [
-    "Prisma actually writes NULL for undefined keys",
-    "Undefined keys make JSON.stringify throw when the audit metadata is serialized to the log",
-    "TypeScript rejects undefined values in optional properties under exactOptionalPropertyTypes"
+    "Prisma actually writes NULL for undefined keys on an update call",
+    "JSON.stringify throws on undefined keys when the audit is logged",
+    "Undefined keys make the Zod schema reject the patch as malformed"
    ],
    "explanation": "The audit record uses changedFields: Object.keys(input); a padded object makes the audit trail claim every field changed."
   },
@@ -83,9 +83,9 @@
    "prompt": "A v1 client PATCHes only {\"email\": \"a@b.co\"}. Which keys does the canonical patch contain?",
    "answer": "Only email: givenName/familyName are added only when fullName was present",
    "distractors": [
-    "email, givenName and familyName, with the names copied from the stored profile",
-    "email plus familyName 'Unknown', because v1 cannot express a family name",
-    "email plus lifecycleState, because v1 status defaults to active"
+    "email, givenName, familyName: the names are copied from the stored profile",
+    "email and familyName: v1 sets familyName to 'Unknown' when it is missing",
+    "email and lifecycleState: v1 status defaults to active on every patch"
    ],
    "explanation": "migrated is undefined when fullName is absent, so no name keys are assigned."
   },
@@ -109,9 +109,9 @@
    "prompt": "A v1 client creates a profile with fullName \"Cher\". What does a v2 client later read as the name?",
    "answer": "givenName 'Cher', familyName 'Unknown'",
    "distractors": [
-    "givenName 'Cher', familyName '' (an empty string)",
+    "givenName 'Cher', familyName '' (empty)",
     "givenName '', familyName 'Cher'",
-    "Nothing: the create is rejected because v1 requires at least two name parts"
+    "a 400 error, as v1 needs two name parts"
    ],
    "explanation": "splitFullName joins the remaining parts or falls back to 'Unknown'; v1 compatibility is intentionally lossy."
   },
@@ -135,9 +135,9 @@
    "prompt": "A profile is in TRIAL. A v1 client reads it and writes its status straight back unchanged. What is the stored lifecycle afterwards?",
    "answer": "ACTIVE: TRIAL reads as 'active', and 'active' maps back to ACTIVE",
    "distractors": [
-    "TRIAL: unchanged values are skipped by the adapter, so nothing is written",
-    "SUSPENDED: v1 cannot represent TRIAL, so it is mapped to inactive on the way back",
-    "A 409 lifecycle error"
+    "TRIAL: unchanged values are skipped, so nothing is written",
+    "SUSPENDED: TRIAL is mapped to inactive on the way back",
+    "409: the lifecycle change from TRIAL is rejected as invalid"
    ],
    "explanation": "toLegacyStatus presents ACTIVE and TRIAL as active; fromLegacyStatus maps active to ACTIVE. The round-trip silently ends the trial (senior finding 5)."
   },
@@ -161,9 +161,9 @@
    "prompt": "Where should the owner of a newly created profile come from?",
    "answer": "The trusted session, never the request body",
    "distractors": [
-    "The request body's ownerId, after Zod has validated it as a UUID",
-    "The x-api-version header",
-    "Whichever of body or session is non-empty, preferring the body when both are present"
+    "The request body's ownerId, once Zod validates it",
+    "The x-api-version header sent with the request",
+    "The body if present, and only otherwise the session"
    ],
    "explanation": "The route passes apiContext.session.userId into toCanonicalCreateInput; the service must also refuse a foreign owner from direct callers."
   },
@@ -187,9 +187,9 @@
    "prompt": "A client sends x-api-version: v9. Why does it get a framework 500 instead of a 400?",
    "answer": "The catch block calls getRequestedVersion again, which throws outside any try",
    "distractors": [
-    "The registry has no v9 entry, so a TypeError escapes before the try block even starts",
+    "The registry has no v9 entry, so a TypeError escapes before the try starts",
     "The route deliberately maps unknown versions to 500 so operators get alerted",
-    "Zod rejects the header and Next.js converts ZodError to 500"
+    "Zod rejects the header and Next.js converts every ZodError into a 500"
    ],
    "explanation": "An error handler that re-runs the failing operation turns a clean 400 into an uncaught error."
   },
@@ -213,9 +213,9 @@
    "prompt": "After a successful create, recordVersionUsage throws because the metrics store is down. What does the client experience, and what is the knock-on risk?",
    "answer": "An error despite the saved profile; a retry may duplicate it",
    "distractors": [
-    "A 201, because usage recording runs after the response has already been sent",
-    "A 201 with a warning header",
-    "An error, and the profile write is rolled back together with the failed metrics call"
+    "A 201; usage recording runs after the response has been sent",
+    "A 201 with a warning header; the failure is logged for operators",
+    "An error; the profile write is rolled back with the metrics call"
    ],
    "explanation": "Usage recording is awaited on the success path before returning, coupling a non-critical side effect to the client's outcome."
   },
@@ -239,9 +239,9 @@
    "prompt": "Why is the version rollout gate trivially bypassable?",
    "answer": "The bucket hashes a caller-chosen clientId header",
    "distractors": [
-    "The bucket uses Math.random, so simply retrying eventually lands inside the percentage",
-    "The allowlist uses startsWith",
-    "Percentages above 100 silently disable the rollout check for every client"
+    "The bucket uses Math.random, so a retry lands inside",
+    "The allowlist matches client ids with startsWith",
+    "Percentages above 100 silently disable the check"
    ],
    "explanation": "stableBucket sums clientId character codes mod 100 and clientId comes from a request header, so a caller picks a clientId whose sum lands under the percentage; the hash is also poorly distributed."
   },
@@ -265,9 +265,9 @@
    "prompt": "The services enforce role and ownership checks carefully. Why does the review still call every authorization rule 'advisory' in this demo?",
    "answer": "Identity and role come from headers, so anyone can claim ADMIN",
    "distractors": [
-    "The checks run after the repository write, so they never actually block anything",
-    "Roles are cached per process",
-    "The services skip their checks entirely whenever NODE_ENV is development"
+    "The checks run after the repository write, so they block nothing",
+    "Roles are cached per process, so a revoked admin stays an admin",
+    "The services skip their checks whenever NODE_ENV is development"
    ],
    "explanation": "requireSession trusts x-user-id / x-user-role / x-client-id; a signed session must replace this adapter."
   },
@@ -291,9 +291,9 @@
    "prompt": "In updateProfile, what is the order of guards, repository write and audit record?",
    "answer": "All guards, then repository.update, then the audit record",
    "distractors": [
-    "The audit first, so that every attempted change is logged even when it is refused",
-    "Update first, then guards on the result",
-    "Guards and update first; lifecycle is checked after the write so the stored state is authoritative"
+    "The audit first, so every attempted change is logged",
+    "repository.update first, then guards on the stored result",
+    "Guards and update first, then lifecycle checks after the write"
    ],
    "explanation": "'Validate before each side effect': a rejected operation must leave rows and audit entries unchanged."
   },
@@ -317,8 +317,8 @@
    "prompt": "A client sends no x-api-version header. Which contract does it get, and why is that a problem?",
    "answer": "v1, the deprecated contract, because it is still marked isDefault",
    "distractors": [
-    "v2, because the newest registered version is always the default",
-    "A 400: the header is mandatory",
+    "v2, because the newest registered version is the default",
+    "A 400, because the header is mandatory for every request",
     "Whichever version the client's rollout bucket happens to select"
    ],
    "explanation": "The registry marks v1 isDefault: true while its lifecycle is DEPRECATED."
