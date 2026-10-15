@@ -19,8 +19,9 @@ import { Icon } from '../components/Icon';
 import { Chip, Kbd, LoadState, PageHeader } from '../components/ui';
 import { hasModifier, isEditableTarget, isMod, useKeydown } from '../lib/keys';
 import { useAsync } from '../lib/useAsync';
+import { useTracksRefresh } from '../lib/tracks';
 import { InlineProse, Prose, ProseBlocks, splitPrompt } from '../lib/prose';
-import { TRACK_LABEL, languageOf, unitProse } from '../lib/view';
+import { TRACK_LABEL, campaignSourceOf, languageOf, readingTitle, unitProse } from '../lib/view';
 import { ExplainBackPane, KataPane } from './LadderPanes';
 import { StudyQuestPane } from './StudyQuestPane';
 
@@ -111,10 +112,22 @@ function Player({ detail }: { detail: UnitDetail }) {
             <Prose text={prose.instructions} className="ins-prose" />
           ) : promptOnRight ? (
             <p className="muted">The question is in the answer pane.</p>
+          ) : answerFirst && spec && (spec.type === 'study-quiz' ? detail.studyQuest : spec.type === 'patch-kata' ? detail.kata : detail.explainBack) ? (
+            // W10: answer-first units carry their task in the work pane (cf. ui-audit #23)
+            <p className="muted" data-testid="task-in-pane">
+              {spec.type === 'study-quiz'
+                ? 'The reading list and the quiz gate are in the study pane.'
+                : spec.type === 'patch-kata'
+                  ? 'The patch to review is in the review pane.'
+                  : 'The questions are in the answer pane.'}
+            </p>
+          ) : isReading && (detail.refs ?? []).length === 0 ? (
+            <ReadingEmpty unitKey={unit.key} trackId={unit.trackId} />
           ) : (
             <p className="muted">No written instructions are served for this unit yet.</p>
           )}
           {detail.refs && detail.refs.length > 0 && <RefList refs={detail.refs} />}
+          {detail.uncoveredLegs && detail.uncoveredLegs.length > 0 && <UncoveredLegs legs={detail.uncoveredLegs} />}
           {detail.retestGate?.reason === 'practice' && (
             <p className="muted small" data-testid="retest-practice">
               Practice retest: the artifact&apos;s solution was revealed, so attempts here are guided and never count as the retest leg.
@@ -224,6 +237,53 @@ function ActLocked({ detail }: { detail: UnitDetail }) {
   );
 }
 
+/**
+ * W10 (ui-audit #8): a reading unit that serves no prose and no material refs (a campaign quest
+ * whose reading content has not been seeded). Say so honestly and point at what the unit's own
+ * data names (its campaign quest and source repo); nothing is invented, so no GitHub link is
+ * built for a repo whose owner the unit does not carry.
+ */
+function ReadingEmpty({ unitKey, trackId }: { unitKey: string; trackId: UnitDetail['unit']['trackId'] }) {
+  const src = campaignSourceOf(unitKey);
+  return (
+    <div className="reading-empty" data-testid="reading-empty">
+      <p>No reading material is served for this unit yet: it has no written instructions and no linked guide.</p>
+      {src ? (
+        <p>
+          It is a reading quest on the <Link to={`/campaign/${trackId}`}>{TRACK_LABEL[trackId]} campaign map</Link>, sourced from the repo{' '}
+          <code>{src.repo}</code>. Work through that repo directly, then mark the unit as read.
+        </p>
+      ) : (
+        <p className="muted">
+          The unit does not name its source. <Link to={`/campaign/${trackId}`}>Open the campaign map</Link>.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * W10 (OPS uncovered_legs): program-unit acceptance legs the machine check deliberately does NOT
+ * cover. A green result on this unit says nothing about them.
+ */
+function UncoveredLegs({ legs }: { legs: string[] }) {
+  return (
+    <div className="uncovered" role="note" aria-labelledby="uncovered-title" data-testid="uncovered-legs">
+      <h3 className="uncovered-title" id="uncovered-title">
+        <Icon name="warn" size={14} /> Not machine-checked
+      </h3>
+      <p className="small">A passing check on this unit does not cover {legs.length === 1 ? 'this acceptance leg' : `these ${legs.length} acceptance legs`}; verify {legs.length === 1 ? 'it' : 'them'} yourself:</p>
+      <ul>
+        {legs.map((l, i) => (
+          <li key={i}>
+            <InlineProse text={l} />
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 /** GitHub blob link of a content ref, pinned to its sha (+ line range when known). */
 type Ref = NonNullable<UnitDetail['refs']>[number];
 const refUrl = (r: Ref) =>
@@ -239,7 +299,7 @@ function RefList({ refs }: { refs: Ref[] }) {
         {refs.map((r) => (
           <li key={`${r.role}-${r.id}`}>
             <a href={refUrl(r)} target="_blank" rel="noopener noreferrer">
-              {r.title}
+              {readingTitle(r.title, r.path)}
             </a>{' '}
             <span className="muted small">
               {r.repo}@{r.sha.slice(0, 7)}
@@ -384,6 +444,7 @@ function CodePane({ detail, spec }: { detail: UnitDetail; spec: PublicCheck }) {
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [error, setError] = useState<string | null>(null);
   const language = languageOf(spec) ?? 'code';
+  const refreshTracks = useTracksRefresh();
 
   const go = async (kind: 'run' | 'submit') => {
     if (busy) return;
@@ -391,7 +452,10 @@ function CodePane({ detail, spec }: { detail: UnitDetail; spec: PublicCheck }) {
     setError(null);
     try {
       if (kind === 'run') setOutcome({ kind, result: (await api.runUnit(id, { code })).result });
-      else setOutcome({ kind, submit: await api.submitUnit(id, { code, selfAssisted: assisted }) });
+      else {
+        setOutcome({ kind, submit: await api.submitUnit(id, { code, selfAssisted: assisted }) });
+        refreshTracks(); // W10: a recorded submit can change the track's done count
+      }
     } catch (e) {
       // W6: a changed-example retest submitted before its >= 2-day schedule opens is refused (409 NOT_DUE)
       if (isApiError(e, 'NOT_DUE') && detail.unit.kind === 'retest') setError(`Retest not open yet: ${e.message} (NOT_DUE)`);
@@ -579,12 +643,14 @@ function useAnswerSubmit(unitId: number) {
   const [submit, setSubmit] = useState<SubmitResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const refreshTracks = useTracksRefresh();
   const send = async (s: Submission) => {
     if (busy) return;
     setBusy(true);
     setError(null);
     try {
       setSubmit(await api.submitUnit(unitId, s));
+      refreshTracks(); // W10: a recorded submit can change the track's done count
     } catch (e) {
       setError(errorText(e));
     } finally {
@@ -749,6 +815,7 @@ function ReadingPane({ unitId, initiallyDone }: { unitId: number; initiallyDone:
   const [state, setState] = useState<'open' | 'busy' | 'attested' | 'already'>(initiallyDone ? 'already' : 'open');
   const [result, setResult] = useState<SelfAttestResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const refreshTracks = useTracksRefresh();
 
   const attest = async () => {
     if (state !== 'open') return;
@@ -757,6 +824,7 @@ function ReadingPane({ unitId, initiallyDone }: { unitId: number; initiallyDone:
     try {
       setResult(await api.selfAttest(unitId));
       setState('attested');
+      refreshTracks(); // W10: the unit is now done
     } catch (e) {
       if (isApiError(e, 'ALREADY_ATTESTED')) setState('already');
       else {

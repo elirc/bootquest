@@ -127,10 +127,11 @@ describe('#10 no expected-403 key probe on unanswered explain-back / kata', () =
 
   it('kata with answered=false never requests the key on mount; an answered one loads it', async () => {
     const first = spyApi();
-    renderApp(`/play/${KATA}`, first.api);
+    const firstApp = renderApp(`/play/${KATA}`, first.api);
     await screen.findByTestId('diff');
     await new Promise((r) => setTimeout(r, 50));
     expect(first.calls).not.toContain('getKataKey');
+    firstApp.unmount(); // W10: one app at a time (two mounted shells doubled the render work under load)
 
     const base = createMockApi();
     await base.submitKataFindings(KATA, { findings: [{ scenario: 's', evidence: 'e:1', consequence: 'c' }], selfAssisted: false });

@@ -2,8 +2,12 @@
 // choices and review cards. It understands exactly what the content packs use:
 //   - ``` fenced code blocks (optional language tag), with or without surrounding blank lines
 //   - 4-space / tab indented code blocks (after a blank line or at the start)
-//   - line-numbered listings ("1 app.patch(...)", "2   const x = ...") — 2+ consecutive lines
-//     numbered 1, 2, 3 … — kept verbatim as code (review tasks cite those numbers)
+//   - line-numbered listings ("1 app.patch(...)", "2   const x = ...") — consecutive lines
+//     numbered 1, 2, 3 … — kept verbatim as code (review tasks cite those numbers). W10: a run
+//     counts as code only with 3+ lines or a code-like character ( ( { ; = ) in some line, so
+//     a two-step prose list ("1 Read the guide" / "2 Take the quiz") stays prose
+//   - W10: a fence closes only on a line that is EXACTLY a marker of the same character and at
+//     least the opening length (CommonMark), so a ``` inside a code line does not end the block
 //   - inline `code` and **bold**
 //   - a line ending in two spaces is a hard break; other single newlines are soft wraps
 // It builds React nodes only (never innerHTML), so every character of the source is rendered
@@ -16,6 +20,15 @@ export type ProseBlock = { kind: 'p'; lines: string[] } | { kind: 'code'; text: 
 const FENCE_RE = /^\s{0,3}(```+|~~~+)\s*([\w#+.-]*)\s*$/;
 const INDENT_RE = /^( {4}|\t)/;
 const NUMBERED_RE = /^(\d{1,3}) +\S/;
+const NUMBER_PREFIX_RE = /^\d{1,3} +/;
+const CLOSE_FENCE_RE = /^\s{0,3}(```+|~~~+)\s*$/;
+const CODE_CHAR_RE = /[({;=]/;
+
+/** W10: does `line` close a fence opened with `marker` (same character, same or longer run)? */
+export function closesFence(line: string, marker: string): boolean {
+  const m = CLOSE_FENCE_RE.exec(line);
+  return m !== null && m[1]![0] === marker[0] && m[1]!.length >= marker.length;
+}
 
 /** Split prose into paragraph and code blocks. Pure; exported for tests. */
 export function parseProse(src: string): ProseBlock[] {
@@ -35,7 +48,7 @@ export function parseProse(src: string): ProseBlock[] {
       const marker = fence[1]!;
       const body: string[] = [];
       i++;
-      while (i < lines.length && !lines[i]!.trim().startsWith(marker)) body.push(lines[i++]!);
+      while (i < lines.length && !closesFence(lines[i]!, marker)) body.push(lines[i++]!);
       i++; // the closing fence (or EOF: an unclosed fence runs to the end)
       out.push({ kind: 'code', text: body.join('\n'), lang: fence[2] || null });
       continue;
@@ -54,17 +67,17 @@ export function parseProse(src: string): ProseBlock[] {
       out.push({ kind: 'code', text: dedent(body), lang: null });
       continue;
     }
-    // a numbered listing: "1 …", "2 …" … on consecutive lines (at least two)
+    // a numbered listing: "1 …", "2 …" … on consecutive lines. W10: code only when the run has
+    // 3+ lines or a code-like character after a number; otherwise the lines stay prose
     if (numberAt(line) === 1 && numberAt(lines[i + 1] ?? '') === 2) {
-      flush();
-      const body: string[] = [];
-      let n = 1;
-      while (i < lines.length && numberAt(lines[i]!) === n) {
-        body.push(lines[i++]!);
-        n++;
+      const run: string[] = [];
+      for (let j = i, n = 1; j < lines.length && numberAt(lines[j]!) === n; j++, n++) run.push(lines[j]!);
+      if (run.length >= 3 || run.some((l) => CODE_CHAR_RE.test(l.replace(NUMBER_PREFIX_RE, '')))) {
+        flush();
+        out.push({ kind: 'code', text: run.join('\n'), lang: null });
+        i += run.length;
+        continue;
       }
-      out.push({ kind: 'code', text: body.join('\n'), lang: null });
-      continue;
     }
     para.push(line);
     i++;
@@ -146,13 +159,17 @@ export function Prose({ text, className }: { text: string; className?: string })
   );
 }
 
-/** Split a quiz / predict prompt into a heading line and what follows it (code, more prose). */
+/**
+ * Split a quiz / predict prompt into a heading line and what follows it (code, more prose).
+ * W10: only a LEADING paragraph becomes the heading. A prompt that opens with code keeps its
+ * source order under the caller's fallback heading (heading ''), so prose written AFTER the
+ * code is never hoisted above it.
+ */
 export function splitPrompt(text: string): { heading: string; rest: ProseBlock[] } {
   const blocks = parseProse(text);
-  const at = blocks.findIndex((b) => b.kind === 'p');
-  if (at === -1) return { heading: '', rest: blocks };
-  const head = blocks[at] as Extract<ProseBlock, { kind: 'p' }>;
-  return { heading: head.lines.join('\n'), rest: blocks.filter((_, i) => i !== at) };
+  const first = blocks[0];
+  if (!first || first.kind !== 'p') return { heading: '', rest: blocks };
+  return { heading: first.lines.join('\n'), rest: blocks.slice(1) };
 }
 
 /** Split prose into chunks at blank lines OUTSIDE ``` fences (a fence may contain blank lines). */
@@ -163,7 +180,7 @@ export function proseChunks(src: string): string[] {
   for (const line of src.replace(/\r\n?/g, '\n').split('\n')) {
     const f = FENCE_RE.exec(line);
     if (fence === null && f) fence = f[1]!;
-    else if (fence !== null && line.trim().startsWith(fence)) fence = null;
+    else if (fence !== null && closesFence(line, fence)) fence = null;
     if (fence === null && line.trim() === '' && !f) {
       if (cur.length) chunks.push(cur.join('\n'));
       cur = [];

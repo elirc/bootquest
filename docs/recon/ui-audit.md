@@ -4,6 +4,8 @@
 > (section **Completion pass** at the end) finished the interactive matrix, confirmed #4 and #15,
 > added findings #16-#26 and FIXED every bad and polish UI finding (fix-status table at the end).
 > Two content findings (#24, #25) are routed to the content/factory owners, not fixed here.
+> 2026-10-14 **W10 polish** (section at the end, branch `ui-polish`): the routed prose / tracks-refresh / uncovered-legs /
+> empty-reading / untitled-guide items, plus re-audit findings #27-#28, all fixed.
 
 Audit of the live stack at 3795a39: server `BOOTQUEST_DB=<temp> BOOTQUEST_PORT=4178 node --import tsx server/src/api/serve.ts`
 (all packs loaded: 3,987 pack units, 259/67/4 campaign quests, 26 study-quest gates), client `npm run build:client` +
@@ -269,3 +271,49 @@ Client regression tests: `client/src/pages/ui-audit.test.tsx` (16 tests: rendere
 fence, numbered listing, locked act, 404 without Retry, no key probe, kata heading + wrap, confirm focus / Escape, one
 shared `/tracks` + placeholder rows, refs + hidden empty competencies). Server: no-leak + 403
 (`server/test/api/study-quests.test.ts`), `answered` flags (`server/test/api/ladder.test.ts`).
+
+
+---
+
+## W10 polish (2026-10-14, branch `ui-polish`)
+
+Rig: server `BOOTQUEST_DB=<copy of ui3.db> BOOTQUEST_PORT=4301 node --import tsx server/src/api/serve.ts` + client dev
+`BOOTQUEST_PORT=4301 npx vite --port 5301` (the vite `/api` proxy now reads `BOOTQUEST_PORT`, default still 4178, so a
+parallel rig never collides with 4178/5173). Same CDP driver as W9 on its own debugging port (9401), one foreground
+shell call per sweep (`rig.sh`: boot, capture, tree-kill 4301/5301/9401). Sweep: dashboard, campaign js, drill, drill with
+uncovered legs, quiz, written, study quest, study quest with untitled guides (4026), explain-back, kata, reading (4003),
+review, stats at 1440x900 and 400x850, `prefers-color-scheme` dark AND light (76 viewport shots + bottoms, prefixes
+`w10-`, `w10s-`, `w10b-`, `<scratchpad>/w10/shots/`). Every shot: zero document-level horizontal overflow, zero console
+errors or warnings. The light-scheme shots are byte-identical to the dark ones (`cmp`): the app is dark-only by design
+(tokens.css declares no light variant; settled in P5), so "light" is verified as "renders the same, legibly", not themed.
+Rig gotcha: `Tab.waitFor` treats a STRING as a CSS selector; pass a function for a predicate (the first W10 sweep waited
+the full 20s per screen because of this; its shots are still post-load, the re-shoots `w10s-`/`w10b-` settle properly).
+
+### Routed findings fixed
+
+| item | fix (file) | test | shot |
+|------|------------|------|------|
+| prose (a) | a numbered run is code only with 3+ lines or a code-like character `( { ; =` (`=>` included) after the number; a two-step prose list stays prose (`lib/prose.tsx`) | `w10-polish.test.tsx` prose (a) | `w10-play-written-*` |
+| prose (b) | a fence closes only on a line that is exactly a marker (`/^\s{0,3}(```+\|~~~+)\s*$/`) of the same character and at least the opening length; `proseChunks` uses the same rule (`closesFence`) | prose (b) | — |
+| prose (c) | `splitPrompt` promotes the first block to the heading only when it is a paragraph; a code-first prompt keeps source order under the fallback heading | prose (c) incl. a render test | `w10b-play-quiz-*` |
+| tracks refresh | `TracksProvider.refresh()`: background re-read, rows stay until the answer lands (no placeholder flash, no `aria-busy`, no shift); requests never overlap (a refresh during a read queues ONE follow-up; `{join:true}` shares the in-flight read); a failed background refresh keeps the rows. Called after every recorded drill / quiz / predict submit, reading self-attest, study-quiz submit and explain-back / kata self-score, and on Campaign mount (joins the first read on a cold load, so the W9 one-request test still holds) (`lib/tracks.tsx`, `Player.tsx`, `StudyQuestPane.tsx`, `LadderPanes.tsx`, `Campaign.tsx`) | 6 tests | live: attest on /play/4005 fired a 2nd `/api/tracks`, then dashboard -> campaign a 3rd (`refresh10.mjs`, `w10-refresh-after-attest-1440`) |
+| uncoveredLegs | the program-unit player shows an honest "Not machine-checked" note (warning tokens, `role=note`) listing every leg under the instructions; nothing when absent (`Player.tsx` `UncoveredLegs`) | 2 tests | `w10-play-uncovered-*` (legs INJECTED via CDP `Fetch` into `/api/units/4`: this DB has no synced `gh:` program unit and `check-specs.json` currently declares no legs) |
+| #8 reading empty | a reading unit with no prose and no refs says so and names what its own key does (`campaign/<track>/<repo>`): the campaign map link + the source repo as code; no GitHub link is built (the unit carries no owner); a non-campaign key says the source is not named (`Player.tsx` `ReadingEmpty`, `view.ts` `campaignSourceOf`) | 3 tests | `w10s-play-reading-*` |
+| "(untitled guide)" | client-only: a reading item titled with the factory placeholder shows its path basename (study-quest reading list and unit refs); factory untouched (`view.ts` `readingTitle`) | 2 tests | `w10-play-study-untitled-*` (4026 shows `taskService.ts`, `tasks.ts`) |
+
+### New findings (W10 re-audit)
+
+27. **polish — FIXED** — answer-first units (study quest, explain-back, kata) said "No written instructions are served
+    for this unit yet." in the instructions panel although their task sits in the work pane (same class as #23). Now:
+    "The reading list and the quiz gate are in the study pane." / "The patch to review is in the review pane." / "The
+    questions are in the answer pane."; a content-pending study quest (no `studyQuest`) keeps the old honest line.
+    Test in `w10-polish.test.tsx`; shots `w10b-play-study-*`, `w10b-play-kata-*`, `w10b-play-explainback-*`.
+28. **test flake — FIXED (no assertion weakened)** — under ten-agent CPU load the client suite's full-app flows
+    intermittently missed Testing Library's 1s `findBy`/`waitFor` window (seen: W9's kata key test, a W10 render test).
+    `client/src/test/setup.ts` sets `asyncUtilTimeout: 5000` (a longer window only delays a failing wait), and the W9
+    kata test now unmounts its first app before mounting the second. Three consecutive full client runs green after.
+
+Observed, not changed: at 400px a short page title lets the header chips sit beside the eyebrow (quiz) while a long one
+wraps them under the title (drill, kata), both readable (W9 #21 behaviour); the study reading list repeats the file name
+in the path line after the basename fallback (the path carries the directory and line range, so it stays); sidebar
+track % stays 0% after campaign progress (#26, practice units only).

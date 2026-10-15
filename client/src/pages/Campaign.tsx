@@ -1,4 +1,4 @@
-import { useRef, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
 import { useApi } from '../api/context';
 import type { CampaignActDto, CampaignQuestDto, QuestState, TrackId, TrackSummary } from '../api/types';
@@ -32,6 +32,12 @@ function CampaignView({ trackId }: { trackId: TrackId }) {
   const mapRef = useRef<HTMLDivElement>(null);
   const track = campaign.data?.track ?? tracks.data?.tracks.find((t) => t.id === trackId);
   const locked = track?.locked === true;
+  // W10: progress made elsewhere (player submits) changes counts and lock state; re-read the
+  // shared /tracks in the background on mount (joins the app's first read on a cold load).
+  const refreshTracks = tracks.refresh;
+  useEffect(() => {
+    refreshTracks({ join: true });
+  }, [refreshTracks]);
 
   // j / k walk the quests (including locked ones, which are focusable but not actionable).
   useKeydown((e) => {
