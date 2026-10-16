@@ -191,23 +191,24 @@
    "id": "x-q04-two-workers-no-claim",
    "target": "seed:quests:organized-study-support-desk-crm/quiz/7b00b8a7824e432f",
    "phase": "after",
-   "title": "What happens when two workers poll the same outbox",
-   "body": "**Key: both workers may process it, because nothing claims the event first.**\n\nEach worker runs `findMany` for `status: \"PENDING\"`, then loops over what it got and updates each row by id. A plain read takes no lock and changes nothing, so both workers can read the same PENDING event before either marks it. Both then mark it PROCESSING, log it and mark it PROCESSED. Plan 003 says it directly: \"There is no claim step, so two workers process the same events twice.\" The suggested fix is to claim rows atomically with `FOR UPDATE SKIP LOCKED`.\n\nWhy the others are wrong:\n- *The second worker blocks on a row lock*: `findMany` takes no row lock.\n- *findMany skips rows another connection has read*: reads do not hide rows from other readers; skipping locked rows needs `SKIP LOCKED`, which this code does not use.\n- *PROCESSING status guarantees one worker*: PROCESSING is set *after* both may have read the row as PENDING, and the update is by id only.",
+   "title": "Ten at a time, oldest first",
+   "body": "**Key: the 10 oldest by createdAt; the other 5 wait for the next pass.**\n\n`processOutboxBatch` asks Prisma for `where: { status: \"PENDING\" }`, `orderBy: { createdAt: \"asc\" }` and `take: 10`. It loops over that array once and returns. `loop()` then schedules the next pass, which picks up the remaining five.\n\nWhy the others are wrong:\n- *All 15*: the query has `take: 10`, and there is no inner loop that fetches again.\n- *The 10 newest*: the order is ascending, so the oldest go first.\n- *Any 10*: `orderBy` fixes the order.",
    "excerpts": [
     {
      "path": "apps/worker/src/worker.ts",
-     "lineStart": 7,
-     "lineEnd": 11,
-     "quote": "const events = await prisma.outboxEvent.findMany({ where: { status: \"PENDING\" },"
-    },
-    {
-     "path": "docs/features/003-outbox-worker-notifications.md",
-     "lineStart": 46,
-     "lineEnd": 46,
-     "quote": "There is no claim step, so two workers process the same events twice."
+     "lineStart": 8,
+     "lineEnd": 10,
+     "quote": "where: { status: \"PENDING\" }, orderBy: { createdAt: \"asc\" }, take: 10"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "apps/worker/src/worker.ts",
+     "lineStart": 36,
+     "lineEnd": 39,
+     "why": "How the next pass is scheduled."
+    }
+   ]
   },
   {
    "id": "x-q05-gc-atomic-claim",
@@ -257,29 +258,24 @@
    "id": "x-q07-failed-is-terminal",
    "target": "seed:quests:organized-study-support-desk-crm/quiz/881d97f9567289b2",
    "phase": "after",
-   "title": "When a FAILED outbox event is retried",
-   "body": "**Key: never, because the poller only selects events still in PENDING.**\n\nWhen an event's handling throws, the `catch` sets `status: \"FAILED\"` and saves `lastError`. The next poll asks only for `status: \"PENDING\"`, so the event is never selected again. Plan 003 calls FAILED terminal: \"nothing retries it, and attempts is counted but never compared to a limit.\"\n\nWhy the others are wrong:\n- *Next poll, up to five attempts*: that is what exercise 1 asks you to build; the current code has no attempt limit and no FAILED selection.\n- *Exponential backoff*: the plan lists backoff as a *future* improvement.\n- *When the API writes the next event for the ticket*: a new event is a new row; nothing in the worker or the producers touches the old FAILED row.",
+   "title": "setTimeout after the batch, not setInterval",
+   "body": "**Key: 4 seconds, counted from when the previous batch has finished.**\n\n`pollIntervalMs` falls back to `4000` when the environment variable is missing. `loop()` first `await`s `processOutboxBatch()` and only then calls `setTimeout(loop, pollIntervalMs)`. So the wait starts when a batch finishes, and a slow batch simply pushes the next pass later; passes never overlap.\n\nWhy the others are wrong:\n- *a fixed clock*: that would be `setInterval`-like timing; here the timer is set only after the `await`.\n- *1 second*: the fallback is 4000 ms.\n- *no wait*: every pass goes through `setTimeout`.",
    "excerpts": [
     {
      "path": "apps/worker/src/worker.ts",
-     "lineStart": 26,
-     "lineEnd": 31,
-     "quote": "data: { status: \"FAILED\", lastError: message }"
-    },
-    {
-     "path": "docs/features/003-outbox-worker-notifications.md",
-     "lineStart": 46,
-     "lineEnd": 46,
-     "quote": "it does, but `FAILED` is terminal: nothing retries it, and `attempts` is counted but never compared to a limit."
-    },
-    {
-     "path": "docs/features/003-outbox-worker-notifications.md",
-     "lineStart": 38,
-     "lineEnd": 38,
-     "quote": "Future versions should add exponential backoff, dead-letter queues, idempotency keys, and real providers."
+     "lineStart": 4,
+     "lineEnd": 4,
+     "quote": "const pollIntervalMs = Number(process.env.WORKER_POLL_INTERVAL_MS ?? 4000);"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "apps/worker/src/worker.ts",
+     "lineStart": 36,
+     "lineEnd": 39,
+     "why": "The loop: await the batch, then set the timer."
+    }
+   ]
   },
   {
    "id": "x-q08-worker-stops-silently",
