@@ -9,7 +9,7 @@
    "target": "pack",
    "phase": "before",
    "title": "Start here: a to-do CLI rebuilt for safe saves",
-   "body": "j1 is the same terminal to-do manager as the original starter, reworked so that data survives mistakes: bad files, interrupted input, failed writes and two sessions on one file. The code is only five files, but it is dense, often several statements per line, so read slowly.\n\nFollow the course in `astraupskill/`: the README sets the order, then 01 (codebase map), 02 (concepts), 03 (a worked edit), 04 (testing), 06 (review findings) and 07 (trace lab). The map table names the lines to look at first in each file.\n\nCompile from the repo root with `javac -encoding UTF-8 --release 17 -d out \"@sources.txt\"`. Always pass a throwaway file name, for example `java -cp out todo.App practice.txt`, so experiments never touch real data. The unit suite runs with no libraries: compile `src` and `test` together and run `todo.TaskWorkflowTest` with a scratch folder; it prints one PASS line per test.\n\nThe `docs/onboarding` notes describe the older starter. When they disagree with the code, the code and the astraupskill course win.",
+   "body": "j1 is the same terminal to-do manager as the original starter, reworked so that data survives mistakes: bad files, interrupted input, failed writes and two sessions on one file. The code is only five files, but it is dense, often several statements per line, so read slowly.\n\nFollow the course in `astraupskill/`: the README sets the order, then 01 (codebase map), 02 (concepts), 03 (a worked edit), 04 (testing) and 07 (trace lab). The map table names the lines to look at first in each file.\n\nCompile from the repo root with `javac -encoding UTF-8 --release 17 -d out \"@sources.txt\"`. Always pass a throwaway file name, for example `java -cp out todo.App practice.txt`, so experiments never touch real data. The unit suite runs with no libraries: compile `src` and `test` together and run `todo.TaskWorkflowTest` with a scratch folder; it prints one PASS line per test.\n\nThe `docs/onboarding` notes describe the older starter. When they disagree with the code, the code and the astraupskill course win.",
    "excerpts": [
     {
      "path": "astraupskill/01-CODEBASE-MAP.md",
@@ -73,7 +73,7 @@
    "target": "pack",
    "phase": "before",
    "title": "Concept: strict values, strict files and exact menu input",
-   "body": "This version refuses to guess. A `Task` validates itself in its constructor, a `TaskSnapshot` validates the whole set, and the file decoder checks types instead of coercing them.\n\nQuestions to answer from the code:\n\n- In `Task`, which rules does the constructor enforce for title, description, id, version and the completion timestamp? Which methods create a new version, and under exactly what conditions?\n- In `TaskSnapshot`, what is `nextId` checked against? Find where `addTask` reads it and where the `TODOLIST1` encoder writes it.\n- The old key=value format can still be read. Find the method that reads it and how it decides the next id, since that format has no header.\n- In `App` and `search`, find how each typed reply is compared: the menu choice, the delete confirmation and the search status. Note the method each comparison uses and what happens to a reply that does not match.\n- Find what `App.line` does when input has run out, and which handler deals with it.",
+   "body": "This version refuses to guess. A `Task` validates itself in its constructor, a `TaskSnapshot` validates the whole set, and the file decoder checks types instead of coercing them.\n\nQuestions to answer from the code:\n\n- In `Task`, which rules does the constructor enforce for title, description, id, version and the completion timestamp? Which methods create a new version, and under exactly what conditions?\n- In `TaskSnapshot`, what is `nextId` checked against? Then trace where `addTask` gets the id for a new task, and follow that value through `commit`, `deleteTask`, `encode` and `decode`.\n- The old key=value format can still be read. Find the method that reads it, and note how it decides the next id.\n- In `App` and `search`, find how each typed reply is compared: the menu choice, the delete confirmation and the search status. Note the method each comparison uses and what happens to a reply that does not match.\n- Find what `App.line` does when input has run out, and which handler deals with it.",
    "excerpts": [
     {
      "path": "astraupskill/02-CONCEPTS.md",
@@ -345,119 +345,114 @@
    "readMore": []
   },
   {
-   "id": "x-loc-crlf",
-   "target": "seed:quests:j1/quiz/0592b44365c19f53",
+   "id": "x-crlf-file",
+   "target": "seed:quests:j1/quiz/298119c1def4b09a",
    "phase": "after",
-   "title": "Where the CRLF misdiagnosis happens",
-   "body": "The wrong turn is taken in `decode`, at **TaskRepository.java:107**: any text that does not start with exactly `TODOLIST1\\n` is handed to the legacy parser. A file whose line endings an editor converted to `\\r\\n` starts with `TODOLIST1\\r\\n`, so it is treated as an old key=value file, and the legacy parser then fails on the first line with a message about legacy fields.\n\n- *App.java:43* is `selected`, the task-id parser; it is where the oversized-id finding lives.\n- *TaskWorkflowTest.java:62* is the two-session conflict test, cited by the whole-file-lock finding.\n\nThe review guide suggests detecting the CRLF header right there, before the legacy fallback, and naming line endings in the error.",
+   "title": "Why a CRLF copy of the file stops startup",
+   "body": "`decode` decides the format from the first bytes: only text that starts with `TODOLIST1` followed by a bare line feed takes the snapshot branch. An editor that converts line endings to CRLF puts a carriage return before that line feed, so the file is handed to `legacy`. The legacy parser splits the lines and rejects `TODOLIST1` because it is not a `key=value` field. `main` catches the `IOException`, prints **\"Startup stopped; existing data was not replaced.\"** followed by the legacy-field message, and exits with code 1. Nothing is written.\n\n- *CR stripped, tasks open*: no code removes carriage returns before the format check.\n- *\"Truncated snapshot.\"*: that check belongs to the TODOLIST1 branch, which this file never reaches.\n- *Starts empty and saves a fresh file*: a failed load stops the program; only a missing file starts empty.\n\nThe data is safe, but the message points at the wrong format. A better fix detects the CRLF header before the legacy fallback and names line endings in the error.",
    "excerpts": [
     {
      "path": "src/todo/repository/TaskRepository.java",
-     "lineStart": 107,
-     "lineEnd": 107,
-     "quote": "if (!text.startsWith(\"TODOLIST1\\n\")) return legacy(text);"
+     "lineStart": 126,
+     "lineEnd": 126,
+     "quote": "int split = line.indexOf('='); if (split < 1 || !keys.contains(line.substring(0, split))"
+    },
+    {
+     "path": "src/todo/App.java",
+     "lineStart": 17,
+     "lineEnd": 17,
+     "quote": "System.err.println(\"Startup stopped; existing data was not replaced. \" + e.getMessage()); System.exit(1);"
     }
    ],
-   "readMore": [
-    {
-     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
-     "lineStart": 63,
-     "lineEnd": 63,
-     "why": "Finding 1 and the one-line fix suggested for it."
-    }
-   ]
+   "readMore": []
   },
   {
-   "id": "x-loc-oversized-id",
-   "target": "seed:quests:j1/quiz/53f228b426b75f19",
+   "id": "x-oversized-id",
+   "target": "seed:quests:j1/quiz/faab8ac0d032b987",
    "phase": "after",
-   "title": "Where the oversized-id message leaks",
-   "body": "The defect is in `selected` at **App.java:43**. It checks the reply against `[1-9][0-9]*`, which allows any number of digits, then calls `Integer.parseInt`. A value larger than an `int` throws `NumberFormatException`; that is a subclass of `IllegalArgumentException`, so the menu's catch prints the raw Java message. It is handled, but by accident.\n\n- *TaskRepository.java:107* is the format check in `decode` (the CRLF finding).\n- *TaskWorkflowTest.java:62* is the two-session conflict test.\n\nThe guide's fix belongs in `selected` too: bound the pattern, or catch the parse error there and rethrow the friendly message.",
+   "title": "Why an eleven-digit id prints a raw Java message",
+   "body": "`selected` checks the reply with `raw.matches(\"[1-9][0-9]*\")`. The pattern accepts any number of digits, so `99999999999` passes and goes to `Integer.parseInt`, which throws `NumberFormatException` because the value does not fit in an `int`. `NumberFormatException` extends `IllegalArgumentException`, so the menu's `catch (IOException | IllegalArgumentException | IllegalStateException e)` catches it and prints the raw message: **Change not accepted: For input string: \"99999999999\"**. It is handled, but by accident.\n\n- *\"Enter a positive task id.\"*: that is thrown only when the pattern fails, and eleven digits match it.\n- *\"Task not found.\"*: the lookup never runs, because parsing fails first.\n- *A stack trace*: a catch for a superclass also catches its subclasses.\n\nBounding the pattern, or catching the parse error inside `selected`, would give the user a friendly message instead.",
    "excerpts": [
     {
      "path": "src/todo/App.java",
      "lineStart": 43,
      "lineEnd": 43,
      "quote": "if (!raw.matches(\"[1-9][0-9]*\")) throw new IllegalArgumentException(\"Enter a positive task id.\");"
+    },
+    {
+     "path": "src/todo/App.java",
+     "lineStart": 37,
+     "lineEnd": 37,
+     "quote": "} catch (IOException | IllegalArgumentException | IllegalStateException e) { System.out.println(\"Change not accepted: \" + e.getMessage()); }"
     }
    ],
-   "readMore": [
-    {
-     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
-     "lineStart": 64,
-     "lineEnd": 64,
-     "why": "Finding 2 and its suggested fix."
-    }
-   ]
+   "readMore": []
   },
   {
-   "id": "x-loc-empty-backup",
-   "target": "seed:quests:j1/quiz/579f29d8a2a5d6d3",
+   "id": "x-empty-file-backup",
+   "target": "seed:quests:j1/quiz/6d7fc56e94979b22",
    "phase": "after",
-   "title": "Where an empty file turns into an empty backup",
-   "body": "The chain starts in `legacy` at **TaskRepository.java:121**: an empty text returns an empty snapshot instead of an error. The baseline is then a non-null, zero-byte array. On the first save, the check at line 51 sees a baseline that does not start with `TODOLIST1` and \"preserves\" it as a 0-byte `.legacy-backup`, which later blocks a real legacy conversion to the same path.\n\n- *App.java:43* is the task-id parser (oversized-id finding).\n- *TaskWorkflowTest.java:62* is the two-session conflict test (whole-file-lock finding).\n\nThe guide places the one-line fix in `save`: back up only a non-empty baseline.",
+   "title": "Why an empty file leaves an empty legacy backup",
+   "body": "The file exists, so `bytes()` returns an empty array, not `null`. `decode` sends it to `legacy`, which returns an empty snapshot for empty text, so the load succeeds. On the first save, the check `baseline != null && !decodeUtf8(baseline).startsWith(...)` sees a non-null baseline that is not a TODOLIST1 file and preserves it: it writes those 0 bytes to `<file>.legacy-backup`, then replaces the data file with the new snapshot. The result is **a 0-byte .legacy-backup** beside the file, plus the `.lock` file.\n\n- *No backup for an empty file*: the code tests for `null`, not for zero length.\n- *A copy of the new snapshot*: the backup is written from `baseline`, the old bytes.\n- *Add refused*: empty text is accepted as an empty legacy file.\n\nThat empty backup later blocks a real legacy conversion to the same path with \"A different legacy backup exists\".",
    "excerpts": [
     {
      "path": "src/todo/repository/TaskRepository.java",
      "lineStart": 121,
      "lineEnd": 121,
      "quote": "if (text.isEmpty()) return TaskSnapshot.empty();"
+    },
+    {
+     "path": "src/todo/repository/TaskRepository.java",
+     "lineStart": 52,
+     "lineEnd": 53,
+     "quote": "Path backup = filePath.resolveSibling(filePath.getFileName() + \".legacy-backup\"); try { Files.write(backup, baseline, CREATE_NEW, WRITE); }"
     }
    ],
-   "readMore": [
-    {
-     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
-     "lineStart": 65,
-     "lineEnd": 65,
-     "why": "Finding 3 and where its fix belongs."
-    }
-   ]
+   "readMore": []
   },
   {
-   "id": "x-loc-whole-file-lock",
-   "target": "seed:quests:j1/quiz/ce8ac09a2c18a076",
+   "id": "x-version-check-cli",
+   "target": "seed:quests:j1/quiz/1c39148b2ff62364",
    "phase": "after",
-   "title": "Where the whole-file optimistic lock is shown",
-   "body": "This finding is a design fact, so the guide points at the test that demonstrates it: **TaskWorkflowTest.java:62**. Two managers load the same file; one adds a task; the other's add of a different task is rejected with an `IOException`, then succeeds after `reload`. The baseline compares the whole file, so any accepted save elsewhere makes this session's next mutation fail, even when it touches a different task.\n\n- *App.java:43* is the task-id parser.\n- *TaskRepository.java:121* is the empty-text branch of `legacy` (empty-backup finding).\n\nA store with per-row versions would only conflict when two writers touch the same task.",
+   "title": "Why the version check never fires inside the CLI",
+   "body": "`editTask` calls `expected(id, version)`, which compares the version passed in with the task in this manager's snapshot. Option 6 got that version from `selected()`, which read the same snapshot a moment earlier, in the same command, on one thread. The two always match, so **the check cannot fail from the menu**.\n\n- *Another terminal saved an edit*: that save does not change this session's snapshot, so the version still matches; the stale write is caught later in `save`, by the baseline comparison.\n- *Completed or reopened earlier*: those commits update the snapshot, and `selected()` then reads the new version.\n- *Reloaded with option 9*: reload replaces the snapshot before the next command reads from it.\n\nThe version parameter matters for a client that holds a version across time, such as a browser form. The unit tests exercise it by calling the service directly.",
    "excerpts": [
     {
-     "path": "test/todo/TaskWorkflowTest.java",
-     "lineStart": 62,
-     "lineEnd": 62,
-     "quote": "rejects(IOException.class,()->b.addTask(\"Stale title\",\"\"));"
+     "path": "src/todo/service/TaskManager.java",
+     "lineStart": 41,
+     "lineEnd": 41,
+     "quote": "if (task.getVersion() != version) throw new IllegalStateException(\"Task version changed. Reload and review before retrying.\");"
+    },
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": 29,
+     "lineEnd": 29,
+     "quote": "Selection and save happen within one command on one thread, so nothing in this process can change the task in between"
     }
    ],
-   "readMore": [
-    {
-     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
-     "lineStart": 67,
-     "lineEnd": 67,
-     "why": "Finding 5 and the per-row alternative."
-    }
-   ]
+   "readMore": []
   },
   {
-   "id": "x-loc-two-locks",
-   "target": "seed:quests:j1/quiz/e643475674e6495d",
+   "id": "x-local-locks",
+   "target": "seed:quests:j1/quiz/90aea5d83ca8bd1a",
    "phase": "after",
-   "title": "Where the in-process lock map lives",
-   "body": "The good design the guide names is the static `LOCAL_LOCKS` map at **TaskRepository.java:18**. `FileChannel.lock()` coordinates separate processes, but a second lock attempt on the same file from the same JVM throws `OverlappingFileLockException` instead of waiting. So `save` first synchronises on a per-path object from `LOCAL_LOCKS`, and only then takes the file lock. That keeps two managers in one test process from crashing each other.\n\n- *App.java:43* is the task-id parser.\n- *TaskWorkflowTest.java:62* is the two-session conflict test; it relies on this lock map but does not define it.",
+   "title": "Why save takes a JVM lock before the file lock",
+   "body": "A `FileChannel` lock is held on behalf of the whole JVM. If code in the same JVM asks for a second lock on an overlapping region, `lock()` does not wait: it throws `OverlappingFileLockException`. Two `TaskManager`s in one process, as in the unit tests, could reach `channel.lock()` at the same time, so `save` first synchronizes on one shared object per lock path from `LOCAL_LOCKS`. Same-JVM callers queue there, and each one still takes the file lock, which is what coordinates separate processes. So **a second lock() in one JVM would throw instead of waiting**.\n\n- *Skip the file lock for speed*: every save still calls `channel.lock()` inside the synchronized block.\n- *Stops other processes writing*: `synchronized` only works inside one JVM, and the file lock is cooperative.\n- *lock() needs a monitor first*: `FileChannel.lock()` works across processes on its own; the monitor only orders threads in this JVM.",
    "excerpts": [
     {
      "path": "src/todo/repository/TaskRepository.java",
      "lineStart": 18,
      "lineEnd": 18,
      "quote": "private static final Map<Path, Object> LOCAL_LOCKS = new ConcurrentHashMap<>();"
+    },
+    {
+     "path": "src/todo/repository/TaskRepository.java",
+     "lineStart": 47,
+     "lineEnd": 47,
+     "quote": "synchronized (LOCAL_LOCKS.computeIfAbsent(lockPath, ignored -> new Object())) {"
     }
    ],
-   "readMore": [
-    {
-     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
-     "lineStart": 68,
-     "lineEnd": 68,
-     "why": "Finding 6, two locks on purpose."
-    }
-   ]
+   "readMore": []
   }
  ]
 }
