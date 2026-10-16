@@ -47,6 +47,7 @@ describe('XP amounts (spec §6.1), each paid only for a verified attempt', () =>
     expect(map).toEqual({
       'drill-js': 'code',
       'drill-cs': 'code',
+      'drill-java': 'code',
       quiz: 'quiz',
       'predict-output': 'predict',
       'guided-step': 'code',
