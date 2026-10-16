@@ -304,10 +304,10 @@
    "provenance": {
     "repo": "master3",
     "sha": "913823efed266ca1105f5ced631201cb3618e006",
-    "path": "astraupskill/02-CONCEPTS.md",
+    "path": "apps/api/src/modules/tickets/ticketService.ts",
     "lines": {
-     "start": 35,
-     "end": 35
+     "start": 207,
+     "end": 207
     }
    },
    "citations": [],
@@ -316,34 +316,22 @@
    "pack": "master3",
    "target": "seed:quests:master3/quiz/c3ba562089302eb1",
    "phase": "after",
-   "title": "Why Serializable does not stop PENDING over RESOLVED",
-   "body": "**Key: the read and transition check run before the transaction opens, so it has nothing to guard.** Both agents' `findFirst` reads see NEW, and both transitions (NEW to RESOLVED, NEW to PENDING) are legal, so both pass `assertTicketTransition`. Only then does each open a transaction, which does a blind `update({ where: { id } })`. Serializable protects reads made *inside* the transaction, and this one makes none.\n\n- **It does stop it with 40001 and a re-validating retry**: even if PostgreSQL raised 40001, the retry re-runs only the callback, which repeats the update without checking the transition again.\n- **RESOLVED to PENDING is legal**: the table allows RESOLVED only to OPEN or CLOSED.\n- **Serializable only applies to inserts**: isolation levels apply to all reads and writes in the transaction; the problem is where the read is.",
+   "title": "Resolving stamps resolvedAt and pauses the SLA label",
+   "body": "**Key: resolvedAt is set to now, and slaState is PAUSED for the resolved ticket.**\n\nOPEN to RESOLVED is in `allowedTransitions`, and the only special agent rule concerns `CLOSED`, so the transition passes. The update writes `resolvedAt: input.status === \"RESOLVED\" ? new Date() : undefined`; `slaDueAt` stays as stored because no priority was sent. The response goes through `enrichTicket`, and `getSlaState` returns `PAUSED` for any PENDING, RESOLVED or CLOSED ticket.\n\nWhy the others are wrong:\n- *slaState unchanged*: it is recomputed from the updated row.\n- *500*: the agent rule only limits moves to CLOSED.\n- *slaDueAt cleared*: `slaDueAt` changes only when the priority changes.",
    "excerpts": [
     {
-     "path": "astraupskill/02-CONCEPTS.md",
-     "lineStart": 35,
-     "lineEnd": 35,
-     "quote": "Serializable protects the reads made inside the transaction, and the transaction makes none."
-    },
-    {
-     "path": "packages/domain/src/index.ts",
-     "lineStart": 28,
-     "lineEnd": 28,
-     "quote": "RESOLVED: [\"OPEN\", \"CLOSED\"],"
-    },
-    {
-     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
-     "lineStart": 24,
-     "lineEnd": 24,
-     "quote": "or PostgreSQL raises `40001` and `withSerializableRetry` re-runs the callback, which repeats the unvalidated update."
+     "path": "apps/api/src/modules/tickets/ticketService.ts",
+     "lineStart": 207,
+     "lineEnd": 207,
+     "quote": "resolvedAt: input.status === \"RESOLVED\" ? new Date() : undefined,"
     }
    ],
    "readMore": [
     {
-     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
-     "lineStart": 24,
-     "lineEnd": 24,
-     "why": "Exercise 6 solution: the race step by step and two ways to close it."
+     "path": "packages/domain/src/index.ts",
+     "lineStart": 56,
+     "lineEnd": 59,
+     "why": "Which statuses read as PAUSED."
     }
    ]
   },
@@ -352,10 +340,10 @@
    "provenance": {
     "repo": "master3",
     "sha": "913823efed266ca1105f5ced631201cb3618e006",
-    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "path": "apps/api/src/modules/tickets/ticketService.ts",
     "lines": {
-     "start": 7,
-     "end": 7
+     "start": 61,
+     "end": 61
     }
    },
    "citations": [],
@@ -364,26 +352,14 @@
    "pack": "master3",
    "target": "seed:quests:master3/quiz/6d8a3c52ba800fb7",
    "phase": "after",
-   "title": "Why a reopened ticket shows BREACHED after PENDING",
-   "body": "**Key: BREACHED, because PAUSED was just a label and the stored slaDueAt did not move.** `getSlaState` returns PAUSED for any PENDING ticket, but nothing changes the saved deadline while it waits. The HIGH ticket was due at 17:00. Once it is reopened at 18:00 its status is OPEN, so the PAUSED line no longer applies, the remainder is negative, and the state is BREACHED. `slaDueAt` is only recomputed when priority changes.\n\n- **Still PAUSED**: PAUSED is returned only while the status is PENDING, RESOLVED or CLOSED; a reopened ticket is none of those.\n- **AT_RISK, the warning window restarts**: nothing restarts on reopen; the deadline is an hour in the past.\n- **MET, the hour is credited back**: the review says PENDING time is never credited back; that would need a stored pause start.",
+   "title": "slaState is computed on read; only slaDueAt is stored",
+   "body": "**Key: enrichTicket computes it from the current time on every read.**\n\n`enrichTicket` returns `{ ...ticket, slaState: getSlaState(new Date(), { status, priority, dueAt: ticket.slaDueAt }) }`. `listTickets`, `getTicket`, `createTicket` and `updateTicket` all pass their result through it, so the label always reflects the moment of the request. The row stores only `slaDueAt`.\n\nWhy the others are wrong:\n- *a column rewritten by the worker*: nothing stores slaState.\n- *computed once at creation*: it is computed on every response.\n- *derived by the client*: the API adds the field before sending.",
    "excerpts": [
     {
-     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
-     "lineStart": 7,
-     "lineEnd": 7,
-     "quote": "The HIGH ticket was due 17:00; at 18:00 it shows PAUSED while PENDING and BREACHED the instant it reopens."
-    },
-    {
-     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
-     "lineStart": 7,
-     "lineEnd": 7,
-     "quote": "`slaDueAt` is stored once and recomputed only on a priority change (`ticketService.ts:208-211`)."
-    },
-    {
-     "path": "packages/domain/src/index.ts",
-     "lineStart": 57,
-     "lineEnd": 59,
-     "quote": "if (ticket.status === \"PENDING\" || ticket.status === \"RESOLVED\" || ticket.status === \"CLOSED\") { return \"PAUSED\"; }"
+     "path": "apps/api/src/modules/tickets/ticketService.ts",
+     "lineStart": 61,
+     "lineEnd": 61,
+     "quote": "slaState: getSlaState(new Date(), {"
     }
    ],
    "readMore": []
@@ -395,8 +371,8 @@
     "sha": "913823efed266ca1105f5ced631201cb3618e006",
     "path": "apps/api/src/modules/tickets/ticketService.ts",
     "lines": {
-     "start": 43,
-     "end": 44
+     "start": 91,
+     "end": 94
     }
    },
    "citations": [],
@@ -405,34 +381,22 @@
    "pack": "master3",
    "target": "seed:quests:master3/quiz/8c9c14a1017b05a7",
    "phase": "after",
-   "title": "The rule behind the internal-note leak fix",
-   "body": "**Key: every endpoint returning a ticket is a read path, so both share one role-aware include.** Before the repair, `getTicket` filtered comments for viewers inline, while `updateTicket` returned the unfiltered `ticketInclude`. So a PATCH response leaked an internal note that GET hid. Now `ticketIncludeForRole(auth.role)` builds the include for both, using `visibleCommentWhere`, which limits a VIEWER to PUBLIC comments. A write that returns data is also a read, and must follow the same visibility rule.\n\n- **A separate table for internal notes**: the fix kept the same table and added a shared filter.\n- **Filter in the client**: the server must not send hidden data at all; a tampered client could just show it.\n- **Writes return only a status and an id**: `updateTicket` still returns the full updated ticket; it is just shaped by role.",
+   "title": "The ticket list carries no comments",
+   "body": "**Key: none; the list include loads only the customer and the assigned user.**\n\n`listTickets` does not use `ticketInclude` or `ticketIncludeForRole`. Its `findMany` has its own `include` with `customer` (and its company) and `assignedUser`, and nothing for comments. So no role sees comments in the list; they appear only on the single-ticket paths, which use the role-aware include.\n\nWhy the others are wrong:\n- *Only PUBLIC ones*: `visibleCommentWhere` is used by `ticketIncludeForRole`, which the list does not call.\n- *All of them*: no comments are loaded at all.\n- *Latest PUBLIC comment*: there is no preview field.",
    "excerpts": [
     {
      "path": "apps/api/src/modules/tickets/ticketService.ts",
-     "lineStart": 43,
-     "lineEnd": 44,
-     "quote": "export function visibleCommentWhere(role: AuthContext[\"role\"]) { return role === \"VIEWER\" ? { visibility: \"PUBLIC\" as const } : {};"
-    },
-    {
-     "path": "apps/api/src/modules/tickets/ticketService.ts",
-     "lineStart": 213,
-     "lineEnd": 213,
-     "quote": "include: ticketIncludeForRole(auth.role)"
-    },
-    {
-     "path": "astraupskill/02-CONCEPTS.md",
-     "lineStart": 23,
-     "lineEnd": 23,
-     "quote": "The general rule: every endpoint that returns a ticket is a read path, including the ones whose verb is a write."
+     "lineStart": 91,
+     "lineEnd": 94,
+     "quote": "include: { customer: { include: { company: true } }, assignedUser: { select: { id: true, name: true, email: true, role: true } } },"
     }
    ],
    "readMore": [
     {
-     "path": "astraupskill/03-WORKED-CHANGE.md",
-     "lineStart": 40,
-     "lineEnd": 44,
-     "why": "\"The response is shaped by role\" explains the change from ticketInclude."
+     "path": "apps/api/src/modules/tickets/ticketService.ts",
+     "lineStart": 43,
+     "lineEnd": 56,
+     "why": "The role-aware include used by the single-ticket paths."
     }
    ]
   },
@@ -490,8 +454,8 @@
     "sha": "913823efed266ca1105f5ced631201cb3618e006",
     "path": "packages/domain/src/index.ts",
     "lines": {
-     "start": 65,
-     "end": 66
+     "start": 46,
+     "end": 47
     }
    },
    "citations": [],
@@ -500,29 +464,24 @@
    "pack": "master3",
    "target": "seed:quests:master3/quiz/6cf24fcd5fa048fd",
    "phase": "after",
-   "title": "Exactly 0 ms left on an OPEN ticket is AT_RISK",
-   "body": "**Key: AT_RISK.** Walk `getSlaState` line by line. The ticket is OPEN, so the PAUSED line does not apply. It has a due date, so it is not MET by default. `msRemaining` is 0. `0 < 0` is false, so it is not BREACHED. `0 <= 60 * 60_000` is true, so it returns AT_RISK. Both boundaries of the last hour (exactly 60 minutes and exactly zero) count as AT_RISK.\n\n- **MET**: MET needs more than one hour left, or no due date at all.\n- **PAUSED**: only PENDING, RESOLVED and CLOSED tickets are PAUSED; this one is OPEN.\n- **BREACHED**: only a negative remainder, meaning the deadline has already passed, is BREACHED.",
+   "title": "24 hours for NORMAL, and the last hour is AT_RISK",
+   "body": "**Key: AT_RISK, because the deadline is 09:00 Tuesday, 30 minutes away.**\n\n`calculateSlaDueAt` adds `priorityMinutes[priority]` minutes to the creation time. NORMAL is `24 * 60`, so the deadline is 09:00 Tuesday. At 08:30, `msRemaining` is 30 minutes. It is not below 0, so not BREACHED, and it is `<= 60 * 60_000`, so the ticket is AT_RISK.\n\nWhy the others are wrong:\n- *72 hours*: that is LOW.\n- *8 hours*: that is HIGH.\n- *15 minutes*: the window is the last 60 minutes.",
    "excerpts": [
     {
      "path": "packages/domain/src/index.ts",
-     "lineStart": 65,
-     "lineEnd": 66,
-     "quote": "if (msRemaining < 0) return \"BREACHED\"; if (msRemaining <= 60 * 60_000) return \"AT_RISK\";"
-    },
-    {
-     "path": "packages/domain/src/index.ts",
-     "lineStart": 57,
-     "lineEnd": 58,
-     "quote": "if (ticket.status === \"PENDING\" || ticket.status === \"RESOLVED\" || ticket.status === \"CLOSED\") { return \"PAUSED\";"
-    },
-    {
-     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
-     "lineStart": 7,
-     "lineEnd": 7,
-     "quote": "so exactly 60 minutes and exactly zero are both AT_RISK; only a negative remainder is BREACHED"
+     "lineStart": 46,
+     "lineEnd": 47,
+     "quote": "LOW: 72 * 60, NORMAL: 24 * 60,"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "packages/domain/src/index.ts",
+     "lineStart": 56,
+     "lineEnd": 68,
+     "why": "The full getSlaState boundary logic."
+    }
+   ]
   },
   {
    "key": "seed:notes:master3/note/b750196fe720b6fd",
@@ -570,10 +529,10 @@
    "provenance": {
     "repo": "master3",
     "sha": "913823efed266ca1105f5ced631201cb3618e006",
-    "path": "packages/domain/src/index.ts",
+    "path": "apps/api/src/modules/tickets/ticketService.ts",
     "lines": {
-     "start": 35,
-     "end": 35
+     "start": 262,
+     "end": 262
     }
    },
    "citations": [],
@@ -582,34 +541,22 @@
    "pack": "master3",
    "target": "seed:quests:master3/quiz/d35f176e7b36e7c1",
    "phase": "after",
-   "title": "An agent closing an OPEN ticket gets a 500",
-   "body": "**Key: 500, because agents may close only from RESOLVED or PENDING, and the plain Error is unmapped.** `canTransitionTicket` has a special rule: when an AGENT moves a ticket to CLOSED, it is allowed only from RESOLVED or PENDING. OPEN fails, so `assertTicketTransition` throws a plain `Error`. `errorMiddleware` only knows `ZodError` (400) and `HttpError` (its status); everything else becomes 500. It is arguably a bug because a client mistake is reported as a server error.\n\n- **200, agents close from any state**: the AGENT rule on line 35 says otherwise; a MANAGER sending the same request gets 200.\n- **409 from the middleware**: 409 is only the *suggested* fix; today no code maps anything to 409.\n- **403 via an HttpError**: the domain package throws a plain `Error`, not an `HttpError`, and the service does not convert it.",
+   "title": "An internal note is audited but never announced",
+   "body": "**Key: the comment and an internal_note_added audit row; no outbox event.**\n\nInside the transaction, `addTicketComment` always creates the comment and always writes an audit row; its action is `ticket.public_reply_added` or `ticket.internal_note_added` depending on visibility. Setting `firstResponseAt` requires `input.visibility === \"PUBLIC\"` (and no earlier response), and so does the `notification.customer_reply` outbox event. An internal note gets neither.\n\nWhy the others are wrong:\n- *firstResponseAt and a notification*: both are PUBLIC-only.\n- *no audit row*: the audit insert is unconditional.\n- *audit only for updates*: comments write their own audit rows.",
    "excerpts": [
     {
-     "path": "packages/domain/src/index.ts",
-     "lineStart": 35,
-     "lineEnd": 35,
-     "quote": "if (to === \"CLOSED\" && actorRole === \"AGENT\") return from === \"RESOLVED\" || from === \"PENDING\";"
-    },
-    {
-     "path": "packages/domain/src/index.ts",
-     "lineStart": 41,
-     "lineEnd": 41,
-     "quote": "throw new Error(`Cannot transition ticket from ${transition.from} to ${transition.to}`);"
-    },
-    {
-     "path": "astraupskill/07-TRACE-LAB.md",
-     "lineStart": 13,
-     "lineEnd": 13,
-     "quote": "Response: `500 {\"error\":\"Cannot transition ticket from OPEN to CLOSED\"}`. Same request as the manager: 200."
+     "path": "apps/api/src/modules/tickets/ticketService.ts",
+     "lineStart": 262,
+     "lineEnd": 262,
+     "quote": "if (input.visibility === \"PUBLIC\" && !ticket.firstResponseAt) {"
     }
    ],
    "readMore": [
     {
-     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
-     "lineStart": 20,
-     "lineEnd": 20,
-     "why": "Exercise 4 solution sketches the TicketTransitionError fix."
+     "path": "apps/api/src/modules/tickets/ticketService.ts",
+     "lineStart": 266,
+     "lineEnd": 285,
+     "why": "The audit row and the PUBLIC-only outbox event."
     }
    ]
   },
@@ -618,10 +565,10 @@
    "provenance": {
     "repo": "master3",
     "sha": "913823efed266ca1105f5ced631201cb3618e006",
-    "path": "astraupskill/07-TRACE-LAB.md",
+    "path": "apps/api/src/modules/tickets/ticketService.ts",
     "lines": {
-     "start": 11,
-     "end": 11
+     "start": 193,
+     "end": 193
     }
    },
    "citations": [],
@@ -630,29 +577,24 @@
    "pack": "master3",
    "target": "seed:quests:master3/quiz/b3027fcb969463d4",
    "phase": "after",
-   "title": "A viewer with a foreign-tenant id gets 403, not 404",
-   "body": "**Key: 403 from the role gate, before any tenant lookup runs.** `updateTicket` checks `canEditTicket(auth.role)` on its first line. For a VIEWER that is false, so the service throws a 403 at once. The tenant-scoped `findFirst`, which would have produced the agent's 404, never runs. The trace lab warns not to call this a cross-tenant 404.\n\n- **401 for the foreign tenant**: 401 only comes from `authMiddleware` when the header user is not found; the viewer is a real user of their own tenant.\n- **200 with public comments only**: that is what a viewer GET returns; PATCH is an edit, and viewers may not edit.\n- **404 like the agent**: the role check runs before the tenant check, so the viewer never gets that far.",
+   "title": "The assignee must be active and in the tenant",
+   "body": "**Key: 404 \"Assignee not found\", and no audit or outbox row is written.**\n\nAn AGENT passes the edit gate and the assign check (`canAssignTicket` is `canEditTicket`). Because `assignedUserId` is set, `updateTicket` looks the user up with `where: { id, tenantId: auth.tenantId, active: true }`. A deactivated user fails `active: true`, so the service throws `HttpError(404, \"Assignee not found\")`. That happens before `withSerializableRetry(() => prisma.$transaction(...))`, which is where the audit and outbox rows are written.\n\nWhy the others are wrong:\n- *200*: being in the tenant is not enough; the user must also be active.\n- *403*: agents are allowed to assign.\n- *409*: the service never throws 409 here.",
    "excerpts": [
     {
-     "path": "astraupskill/07-TRACE-LAB.md",
-     "lineStart": 11,
-     "lineEnd": 11,
-     "quote": "A *viewer* sending the same id gets 403 from the gate before any lookup; do not describe that as a cross-tenant 404."
-    },
-    {
      "path": "apps/api/src/modules/tickets/ticketService.ts",
-     "lineStart": 172,
-     "lineEnd": 173,
-     "quote": "if (!canEditTicket(auth.role)) { throw new HttpError(403, \"You do not have permission to update tickets\");"
-    },
-    {
-     "path": "apps/api/src/middleware/auth.ts",
-     "lineStart": 28,
-     "lineEnd": 29,
-     "quote": "if (!user) { res.status(401)"
+     "lineStart": 193,
+     "lineEnd": 193,
+     "quote": "where: { id: input.assignedUserId, tenantId: auth.tenantId, active: true },"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "packages/domain/src/index.ts",
+     "lineStart": 78,
+     "lineEnd": 85,
+     "why": "Who may assign and who may edit."
+    }
+   ]
   },
   {
    "key": "seed:notes:master3/note/e3eb7ef961d781a4",
