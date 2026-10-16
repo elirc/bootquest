@@ -104,19 +104,19 @@
    },
    "cites": [
     {
-     "path": "src/server/modules/orders/orders.service.ts",
-     "lineStart": 46,
-     "lineEnd": 48
+     "path": "src/shared/inventoryRules.ts",
+     "lineStart": 29,
+     "lineEnd": 43
     }
    ],
-   "prompt": "A manager clicks Reserve twice on an order. What does the second request do?",
-   "answer": "Returns ok: true with the current status and changes nothing",
+   "prompt": "An order line asks for 2 units of a SKU that has no inventory balance row in the order's warehouse, though another warehouse stocks it. What does planReservation report?",
+   "answer": "A failure with available 0: no balance exists in that warehouse",
    "distractors": [
-    "Reserves the stock a second time, doubling reserved quantities",
-    "Returns 409 Conflict because the order is already allocated",
-    "Releases the first reservation and then creates a fresh one"
+    "No failure, since the other warehouse's balance covers the line",
+    "A failure with the other warehouse's available count as available",
+    "Nothing for that line, as lines without a balance are just skipped"
    ],
-   "explanation": "A second click is a no-op, not an error - the status guard makes the endpoint safe to repeat (exercise 1 checks that the numbers do not change)."
+   "explanation": "The service loads balances only for order.warehouseId. planReservation finds no balance for the line, so available is 0 and it returns the failure 'No inventory balance exists for this SKU in the selected warehouse.'"
   },
   {
    "id": "q05-failed-attempt-committed",
@@ -239,19 +239,19 @@
    },
    "cites": [
     {
-     "path": "src/server/modules/worker/reconciliation.service.ts",
-     "lineStart": 10,
-     "lineEnd": 17
+     "path": "src/shared/inventoryRules.ts",
+     "lineStart": 81,
+     "lineEnd": 97
     }
    ],
-   "prompt": "SKU PACK-22-BLK is low in both the west and east warehouses, with no unread notification yet. How many notifications does one reconciliation run create for it?",
-   "answer": "One, because the title has no warehouse in it",
+   "prompt": "A balance has onHand 100, reserved 92, reorderPoint 8 and safetyStock 5. What does stockHealth return for it?",
+   "answer": "low, as the 8 units available sit right at the reorder point",
    "distractors": [
-    "Two, one for each warehouse where it is low",
-    "Zero, because the SKU is already flagged as low",
-    "Two, but the second one is marked read at once"
+    "healthy, since onHand 100 is far above the safety stock of 5",
+    "stockout, since almost every unit on hand is already reserved",
+    "healthy, as low needs available strictly below the reorder point"
    ],
-   "explanation": "After the first notification is created, the second alert finds an unread notification with the same title and skips. The run is also not transactional, so overlapping runs can still duplicate."
+   "explanation": "availableToPromise is 100 - 92 = 8, which is above 0, so not stockout. isLowStock tests available <= reorderPoint (8 <= 8, true) or onHand <= safetyStock, so the result is low."
   },
   {
    "id": "q10-csv-formula-injection",
@@ -270,14 +270,14 @@
      "lineEnd": 7
     }
    ],
-   "prompt": "A user names a SKU =2+5 (no commas, no quotes) and an admin opens the inventory CSV export in a spreadsheet. What did csvCell do with that value?",
-   "answer": "Wrote it unchanged, so the spreadsheet may evaluate it",
+   "prompt": "A SKU is named Tote \"XL\", with the double quotes and no comma. What text does csvCell write for that name in the inventory export?",
+   "answer": "\"Tote \"\"XL\"\"\", wrapped in quotes with each inner quote doubled",
    "distractors": [
-    "Quoted it, which stops spreadsheets evaluating it",
-    "Prefixed it with a single quote, as safe exports do",
-    "Dropped the cell because it begins with ="
+    "Tote \"XL\" unchanged, since only a comma makes csvCell add quotes",
+    "\"Tote \"XL\"\", wrapped in quotes with the inner quotes left as is",
+    "Tote \"\"XL\"\", with the inner quotes doubled but no outer quotes"
    ],
-   "explanation": "csvCell only quotes values containing a comma or a double quote; it never neutralises a leading =, +, - or @, so anyone who can name a SKU can plant a formula. (Quoting would not defuse a formula anyway - the fix prefixes such values with a single quote and also quotes line breaks.)"
+   "explanation": "csvCell quotes when the text includes a comma or a double quote. It then returns `\"${text.replaceAll('\"', '\"\"')}\"`: outer quotes, inner quotes doubled."
   },
   {
    "id": "q11-fallback-looks-real",
@@ -318,18 +318,18 @@
    "cites": [
     {
      "path": "src/server/modules/orders/orders.service.ts",
-     "lineStart": 63,
-     "lineEnd": 63
+     "lineStart": 85,
+     "lineEnd": 95
     }
    ],
-   "prompt": "A warehouse lead reserves an order. Whose id appears as actorId in the order.reserved audit row, and why?",
-   "answer": "The system admin's, hard-coded",
+   "prompt": "A reservation succeeds. What status and expiry does reserveSalesOrder give each StockReservation row it creates?",
+   "answer": "Status active, with expiresAt 72 hours after the row is written",
    "distractors": [
-    "The warehouse lead's, from request.actor",
-    "Null",
-    "The buyer who originally placed the order"
+    "Status pending until it ships, with no expiry date set at all",
+    "Status active, with expiresAt set to the order's promisedShipBy",
+    "Status allocated, with expiresAt 24 hours after the row is written"
    ],
-   "explanation": "Routes know the caller but services take no actor parameter - the journal calls 'who is the actor?' the next architecture decision, blocking real audit trails."
+   "explanation": "Each line's stockReservation.create sets status: 'active' and expiresAt: new Date(Date.now() + 72 * 60 * 60 * 1000). The design doc notes that nothing reads expiresAt yet."
   },
   {
    "id": "f01-two-schema-copies",
