@@ -109,7 +109,7 @@ describe('migration 004 (written unit kind, FK-off table rebuild)', () => {
       const before = db.get('SELECT * FROM unit WHERE id = ?', unitId);
 
       // 007 (W5b campaign) and 008 (W6 ladder rebuilds) also apply here; the enumeration was stale since W5b
-      expect(migrate(db)).toEqual([4, 5, 6, 7, 8, 9]);
+      expect(migrate(db)).toEqual([4, 5, 6, 7, 8, 9, 10]);
       // 005 only adds the nullable retired_at column (live by default)
       expect(db.get('SELECT * FROM unit WHERE id = ?', unitId)).toEqual({ ...(before as object), retired_at: null });
       expect(db.get<{ unit_id: number }>('SELECT unit_id FROM attempt WHERE id = ?', attempt.id)!.unit_id).toBe(unitId);
@@ -153,7 +153,7 @@ describe('migration 008 (W6: evidence + review_item rebuilds)', () => {
       const evBefore = db.all('SELECT * FROM evidence ORDER BY id');
       const riBefore = db.all('SELECT * FROM review_item ORDER BY id');
 
-      expect(migrate(db)).toEqual([8, 9]);
+      expect(migrate(db)).toEqual([8, 9, 10]);
       expect(db.all('SELECT * FROM evidence ORDER BY id')).toEqual(evBefore);
       expect(db.all('SELECT * FROM review_item ORDER BY id')).toEqual(riBefore);
       expect(db.all('PRAGMA foreign_key_check')).toEqual([]);
@@ -171,6 +171,41 @@ describe('migration 008 (W6: evidence + review_item rebuilds)', () => {
       db.run(`INSERT INTO evidence (competency_id, kind, intention, observation, assistance, assessor, verified, score, created_at) VALUES ('data-http', 'mutation', 'i', 'o', 'none', 'pipeline', 1, 0.9, 0)`);
       db.run(`INSERT INTO review_item (card_key, kind, fsrs_state, due_at, created_at, updated_at) VALUES ('r1', 'retest', '{}', 0, 0, 0)`);
       expect(() => db.run(`INSERT INTO review_item (card_key, kind, fsrs_state, due_at, created_at, updated_at) VALUES ('r2', 'nope', '{}', 0, 0, 0)`)).toThrow();
+    } finally {
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('migration 010 (drill-java check type, FK-off "check" rebuild)', () => {
+  it('preserves checks and their FK-referencing attempts/runs, keeps the spec triggers + index, and accepts drill-java', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bootquest-mig10-'));
+    const partial = join(dir, 'migs');
+    mkdirSync(partial);
+    for (const f of readdirSync(MIGRATIONS).filter((f) => /^00\d_/.test(f))) copyFileSync(join(MIGRATIONS, f), join(partial, f));
+    const db = new Db(join(dir, 'm.db'));
+    try {
+      expect(migrate(db, partial)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+      const unitId = makeUnit(db, clock, { key: 'pre-010' });
+      const attempt = submit(db, clock, unitId);
+      const checksBefore = db.all('SELECT * FROM "check" ORDER BY id');
+      const runsBefore = db.all('SELECT * FROM run ORDER BY id');
+
+      expect(migrate(db)).toEqual([10]);
+      expect(db.all('SELECT * FROM "check" ORDER BY id')).toEqual(checksBefore);
+      expect(db.all('SELECT * FROM run ORDER BY id')).toEqual(runsBefore);
+      expect(db.get<{ check_id: number }>('SELECT check_id FROM attempt WHERE id = ?', attempt.id)!.check_id).toBe((checksBefore[0] as { id: number }).id);
+      expect(db.all('PRAGMA foreign_key_check')).toEqual([]);
+      expect(db.get<{ foreign_keys: number }>('PRAGMA foreign_keys')!.foreign_keys).toBe(1);
+      const names = db.all<{ name: string }>(`SELECT name FROM sqlite_master WHERE tbl_name = 'check' ORDER BY name`).map((t) => t.name);
+      expect(names).toEqual(expect.arrayContaining(['check', 'check_spec_type_agrees', 'check_spec_type_agrees_update', 'check_unit']));
+      // FKs still enforced against the rebuilt table
+      expect(() => db.run(`INSERT INTO "check" (unit_id, type, spec, created_at) VALUES (999999, 'drill-js', '{"type":"drill-js"}', 0)`)).toThrow();
+      // the new type is accepted; the spec triggers and unknown types still bite
+      db.run(`INSERT INTO "check" (unit_id, type, spec, created_at) VALUES (?, 'drill-java', '{"type":"drill-java"}', 0)`, unitId);
+      expect(() => db.run(`INSERT INTO "check" (unit_id, type, spec, created_at) VALUES (?, 'drill-java', '{"type":"drill-cs"}', 0)`, unitId)).toThrow(/must match the spec/);
+      expect(() => db.run(`INSERT INTO "check" (unit_id, type, spec, created_at) VALUES (?, 'drill-kotlin', '{"type":"drill-kotlin"}', 0)`, unitId)).toThrow();
     } finally {
       db.close();
       rmSync(dir, { recursive: true, force: true });
