@@ -1,0 +1,375 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "j3",
+ "repo": "j3",
+ "sha": "d2fc1dcf4f816529e3da4111a3fdfad739184b5e",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: a bank simulator built to teach state ownership",
+   "body": "This repo is a Java 17 command-line bank simulator. It keeps accounts and their transaction history, supports deposits, withdrawals, transfers, renames and a restricted delete, and saves everything to a data directory. No real money or network is involved.\n\nThe code is small:\n\n- **model/** - BankAccount, Transaction, TransactionType, Money (amount rules) and BankSnapshot.\n- **service/BankService** - owns the accounts and history and implements every command.\n- **storage/FileStorage** - reads and writes the data files.\n- **App** - the menu.\n\nRead astraupskill/ in this order: README, 01-CODEBASE-MAP (it has a line-anchor table), 02-CONCEPTS, 03-WORKED-CHANGE, 04-TESTING-AND-DEBUGGING, 07-TRACE-LAB. The course says a strong outcome is being able to explain five things; write your own answer to each as you read.\n\nThe 28 regression tests run with plain javac and java; 04 shows how to compile into a temporary folder so the repo stays clean.",
+   "excerpts": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 26,
+     "lineEnd": 26,
+     "quote": "A strong outcome is the ability to explain five things: who owns mutable state, which related changes happen together, when a command becomes durable"
+    },
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "It simulates balances and transactions locally."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": 17,
+     "lineEnd": 31,
+     "why": "The line-anchor table points at every method the course discusses."
+    }
+   ]
+  },
+  {
+   "id": "r02-follow-one-command",
+   "target": "pack",
+   "phase": "before",
+   "title": "Core idea: follow one command from the menu to the file",
+   "body": "The best way into this codebase is to follow a single command all the way through, writing down who holds the data at each step.\n\nPick a transfer. Start in App: which method reads the input, how is the amount text turned into a BigDecimal, and what is called after the service returns? Then read BankService.transfer line by line and list its steps in order: which checks run first, when the two Transaction values are built, and when balances and history change. Then follow saveData into FileStorage.saveSnapshot.\n\nTwo questions to keep asking:\n\n1. **Who can reach this object?** For every account value that leaves BankService (from a read, a create, a list, a snapshot), work out whether it is the service's own object or something else.\n2. **What happens if this step fails?** For each line, note what has already changed in memory and on disk.\n\n04-TESTING-AND-DEBUGGING has a five-step debugger sequence that walks exactly this path.",
+   "excerpts": [
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "The menu is a transport adapter."
+    },
+    {
+     "path": "astraupskill/04-TESTING-AND-DEBUGGING.md",
+     "lineStart": 21,
+     "lineEnd": 21,
+     "quote": "A useful debugger sequence is:"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/bankapp/service/BankService.java",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Every command is a synchronized method; requireAccount is the private lookup."
+    }
+   ]
+  },
+  {
+   "id": "r03-the-snapshot-file",
+   "target": "pack",
+   "phase": "before",
+   "title": "Core idea: one snapshot file with tagged records",
+   "body": "Everything the bank knows is written to one text file in the data directory. 03-WORKED-CHANGE shows a sample: a version header line, one line per account starting with A, one line per transaction starting with T, and a final line with counts. Fields are separated by pipes, and text fields escape backslashes, pipes and line breaks so a holder name cannot break a record.\n\nRead loadSnapshot and saveSnapshot in FileStorage side by side and answer:\n\n- Which line does the loader treat as the footer, and which lines does it parse as records?\n- What does the loader do when there is no snapshot file yet? List each combination of the two older files it might find.\n- In saveSnapshot, what happens before the temporary file is created, and what is the very last step?\n\nThen open the regression tests whose names mention snapshot, legacy or replacement and match each to a branch of the code.",
+   "excerpts": [
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": 11,
+     "lineEnd": 11,
+     "quote": "A|A|Alice|7.50|2026-01-02T03:04"
+    },
+    {
+     "path": "src/bankapp/storage/FileStorage.java",
+     "lineStart": 24,
+     "lineEnd": 24,
+     "quote": "public BankSnapshot loadSnapshot() throws IOException {"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/bankapp/storage/FileStorage.java",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The whole storage adapter; escape and split are at the bottom."
+    }
+   ]
+  },
+  {
+   "id": "x-q01-detached-account",
+   "target": "seed:quests:j3/quiz/94eec436e723dd5d",
+   "phase": "after",
+   "title": "Why changing a returned account does not change the bank",
+   "body": "**Key: A still reports 10.00 with unchanged history, because the caller changed a detached copy.**\n\ngetAccountById looks up the service's own BankAccount and returns account.copy(). BankAccount is still mutable, so increaseBalance succeeds, but it changes the copy only. The service's object, its balance and its transaction list are untouched. The first regression test does exactly this and rereads 10.00.\n\nWhy the others are wrong:\n- **15.00 because the caller holds the service's object**: that was the original defect; every outward read now copies.\n- **15.00 with a deposit row**: increaseBalance only adds to a field; transactions are created by BankService commands, not by the account.\n- **IllegalStateException**: the copy is an ordinary mutable BankAccount; nothing marks it read-only.",
+   "excerpts": [
+    {
+     "path": "src/bankapp/service/BankService.java",
+     "lineStart": 68,
+     "lineEnd": 68,
+     "quote": "return account == null ? null : account.copy();"
+    },
+    {
+     "path": "test/bankapp/RegressionTests.java",
+     "lineStart": 30,
+     "lineEnd": 30,
+     "quote": "returned account cannot change service balance"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02-list-copy-not-enough",
+   "target": "seed:quests:j3/quiz/d2dc0ec1f0cf212f",
+   "phase": "after",
+   "title": "Why a copied list still leaked the accounts",
+   "body": "**Key: the new list still held the same mutable account objects the service used.**\n\nnew ArrayList<>(collection) copies references. The caller could not add or remove entries in the service's map, but each element was the very BankAccount the service kept, so calling increaseBalance on it changed the bank without a transaction. The course calls this the starting defect, and the fix copies every account on the way out.\n\nWhy the others are wrong:\n- **Cast back to the map**: an ArrayList cannot be cast to a LinkedHashMap; that is not how the leak worked.\n- **Lazy copying**: ArrayList copies eagerly; the problem was what was copied, not when.\n- **Accounts added to the copy were saved**: saving read the service's own map, so extra entries in a caller's list were never saved.",
+   "excerpts": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "Copying only the surrounding list did not solve that problem, because the list still contained the same mutable objects."
+    },
+    {
+     "path": "src/bankapp/service/BankService.java",
+     "lineStart": 61,
+     "lineEnd": 61,
+     "quote": "accountsById.values().stream().map(BankAccount::copy).toList()"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q03-legacy-first-save",
+   "target": "seed:quests:j3/quiz/dc8426a4069a4260",
+   "phase": "after",
+   "title": "What the first save does to the old two-file data",
+   "body": "**Key: a new bank.snapshot.txt appears, and both legacy files are left exactly as they were.**\n\nWhen no snapshot exists, loadSnapshot reads the complete accounts.txt and transactions.txt pair. saveSnapshot always writes bank.snapshot.txt and never touches the legacy names. From then on the snapshot is authoritative: the regression test overwrites accounts.txt with garbage after the save and the next load still returns the snapshot's account.\n\nWhy the others are wrong:\n- **Legacy files deleted**: nothing in FileStorage deletes them; they are kept as a recovery copy.\n- **Legacy files rewritten**: the save path has no code that writes the old format.\n- **Renamed to .bak**: there is no rename step either.",
+   "excerpts": [
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": 20,
+     "lineEnd": 20,
+     "quote": "The first successful save creates the snapshot and leaves both legacy files unchanged."
+    },
+    {
+     "path": "test/bankapp/RegressionTests.java",
+     "lineStart": 70,
+     "lineEnd": 70,
+     "quote": "legacy migration retains original files and makes snapshot authoritative"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q04-one-legacy-file",
+   "target": "seed:quests:j3/quiz/cd7d3487c2329d2c",
+   "phase": "after",
+   "title": "Why a single legacy file stops startup",
+   "body": "**Key: startup refuses with an incomplete-legacy-data error before any menu appears.**\n\nWith no snapshot, loadSnapshot checks whether each legacy file is missing. If exactly one is missing it throws \"Incomplete legacy data: both accounts.txt and transactions.txt are required.\" The App constructor runs loadSnapshot, so the exception reaches main before run prints the welcome text. A missing history file is not the same as an empty history.\n\nWhy the others are wrong:\n- **Accounts with empty history**: the code refuses to guess that the missing file was empty.\n- **New empty bank**: an empty bank is used only when both legacy files are absent.\n- **transactions.txt created on save**: the app never writes legacy files, and it never gets to a save here.",
+   "excerpts": [
+    {
+     "path": "src/bankapp/storage/FileStorage.java",
+     "lineStart": 48,
+     "lineEnd": 48,
+     "quote": "if(noAccounts != noTransactions) throw new IOException(\"Incomplete legacy data: both accounts.txt and transactions.txt are required.\");"
+    },
+    {
+     "path": "test/bankapp/RegressionTests.java",
+     "lineStart": 75,
+     "lineEnd": 75,
+     "quote": "incomplete legacy pair fails explicitly"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q05-exit-status-on-bad-snapshot",
+   "target": "seed:quests:j3/quiz/dab8d59eff751d03",
+   "phase": "after",
+   "title": "Why a failed startup still exits with status 0",
+   "body": "**Key: 0, because main catches the IOException, prints it and returns normally.**\n\nloadSnapshot throws \"Unsupported or missing bank snapshot header.\" main's try/catch(IOException) prints \"Failed to load or save bank data: ...\" and then the method ends. Nothing calls System.exit with another value, so the JVM exits 0. Running the CLI on a directory whose snapshot starts with garbage prints that line and exit=0. The data is safe, but a script cannot tell the failure apart from success.\n\nWhy the others are wrong:\n- **System.exit(1)**: main has no System.exit call at all.\n- **Exit code 2**: no special code exists for corrupt data.\n- **Uncaught exception**: IOException is caught in main, so it does not escape.",
+   "excerpts": [
+    {
+     "path": "src/bankapp/App.java",
+     "lineStart": 37,
+     "lineEnd": 38,
+     "quote": "catch (IOException exception) { System.out.println(\"Failed to load or save bank data: \" + exception.getMessage());"
+    },
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "the process exit code is still 0"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q06-appended-broken-line",
+   "target": "seed:quests:j3/quiz/a9a20da1a895ac5b",
+   "phase": "after",
+   "title": "Why a line after the footer makes the footer look like a bad record",
+   "body": "**Key: an invalid-record error on the old footer line, because END is read as an unknown record type.**\n\nloadSnapshot treats only the last line as the footer and parses every line between the header and the last line as a record. After \"broken\" is appended, the old END line falls inside that range. It starts with neither A| nor T|, so it throws \"Unknown record type\", reported as \"Invalid bank snapshot record on line N.\" A probe appending one line gets exactly that error.\n\nWhy the others are wrong:\n- **A footer error**: the record loop fails first, before the footer check ever runs.\n- **Lines after the footer ignored**: the loader has no idea where the footer was; it only looks at the last line.\n- **Header error**: the header line is unchanged and still valid.",
+   "excerpts": [
+    {
+     "path": "src/bankapp/storage/FileStorage.java",
+     "lineStart": 30,
+     "lineEnd": 30,
+     "quote": "for(int i=1;i<lines.size()-1;i++) {"
+    },
+    {
+     "path": "astraupskill/07-TRACE-LAB.md",
+     "lineStart": 28,
+     "lineEnd": 28,
+     "quote": "the loader treats the old `END|...` footer as an ordinary record, and `END` is an unknown record type"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07-sub-cent-deposit",
+   "target": "seed:quests:j3/quiz/fdc1f090f0d7a0d0",
+   "phase": "after",
+   "title": "How a three-decimal deposit is refused",
+   "body": "**Key: \"Operation failed: Deposit: Amount must use at most 2 decimal places.\" and the balance stays 10.00.**\n\nreadAmount parses \"1.001\" with new BigDecimal, which succeeds. BankService.deposit calls validateAmount, which calls Money.positive and then Money.nonNegative. setScale(2, RoundingMode.UNNECESSARY) would have to round, so it throws, and validateAmount rethrows with the \"Deposit: \" prefix. The menu loop prints \"Operation failed: \" plus that text. The validation runs before increaseBalance, so nothing changed.\n\nWhy the others are wrong:\n- **Rounded to 11.00**: UNNECESSARY never rounds; it throws instead.\n- **\"Please enter a valid number\"**: that message is only for text BigDecimal cannot parse, and 1.001 parses fine.\n- **11.001 stored exactly**: the two-decimal rule rejects it before any balance changes.",
+   "excerpts": [
+    {
+     "path": "src/bankapp/model/Money.java",
+     "lineStart": 9,
+     "lineEnd": 10,
+     "quote": "try { normalized=amount.setScale(2,RoundingMode.UNNECESSARY); }"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 20,
+     "lineEnd": 20,
+     "quote": "A submitted `1.001` is rejected rather than silently changed to `1.00`."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08-delete-used-zero-balance",
+   "target": "seed:quests:j3/quiz/ce16e08757a6044d",
+   "phase": "after",
+   "title": "Why a used account cannot be deleted even at zero",
+   "body": "**Key: the delete is refused, because Bob's transaction history protects him from deletion.**\n\ndeleteUnusedAccount requires both a zero balance and that no transaction names the account, either as its own account or as the related account of a transfer. Bob's balance is zero, but his TRANSFER_IN and WITHDRAWAL rows reference him, so it throws \"Only a zero-balance account with no transaction history can be deleted.\" A probe reproduces this.\n\nWhy the others are wrong:\n- **Zero balance is enough**: the history condition is checked as well.\n- **Deleted with his history**: deletion never removes transactions; removing Bob would leave history pointing at a missing account, which the loader rejects.\n- **Transfer reversed**: there is no reversal logic anywhere.",
+   "excerpts": [
+    {
+     "path": "src/bankapp/service/BankService.java",
+     "lineStart": 191,
+     "lineEnd": 192,
+     "quote": "throw new IllegalStateException(\"Only a zero-balance account with no transaction history can be deleted.\");"
+    },
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 20,
+     "lineEnd": 20,
+     "quote": "an account with history cannot be deleted even after its balance later returns to zero"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09-competing-withdrawals",
+   "target": "seed:quests:j3/quiz/f6c70f35be9ebe28",
+   "phase": "after",
+   "title": "Why concurrent withdrawals cannot overdraw one service",
+   "body": "**Key: exactly 10 succeed, because withdraw is synchronized on the service instance.**\n\nwithdraw checks the balance, builds the transaction, debits and appends inside one synchronized method. Only one thread holds the service monitor at a time, so the check and the debit cannot be split by another withdrawal. Ten withdrawals of 1.00 empty the account, and the other 54 see an insufficient balance. The regression test asserts 10 successes, a 0.00 balance and 10 history rows.\n\nWhy the others are wrong:\n- **More than 10 by racing**: that would happen without synchronized; with it, check-then-act is one critical section.\n- **All 64, negative balance**: decreaseBalance also refuses to go below zero, and the service checks first.\n- **None**: concurrency is not refused; it is serialized.",
+   "excerpts": [
+    {
+     "path": "src/bankapp/service/BankService.java",
+     "lineStart": 87,
+     "lineEnd": 87,
+     "quote": "public synchronized Transaction withdraw(String accountId, BigDecimal amount, String description) {"
+    },
+    {
+     "path": "astraupskill/04-TESTING-AND-DEBUGGING.md",
+     "lineStart": 17,
+     "lineEnd": 17,
+     "quote": "Exactly ten operations must succeed, balance must finish at zero, and history must contain ten entries."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10-two-processes",
+   "target": "seed:quests:j3/quiz/fb662e09ceb0ce82",
+   "phase": "after",
+   "title": "How two processes on one directory lose an update",
+   "body": "**Key: the snapshot holds Alice alone, because the first process rewrites the file from its own state.**\n\nEach process loads the snapshot once at startup. saveSnapshot validates the in-memory snapshot, writes it to a temporary file and moves it over bank.snapshot.txt. It never compares the file on disk with what it loaded. The second process saved Bob first; the first process then replaced the whole file with its own view, which never contained Bob. synchronized only protects threads in one JVM. The trace lab walks through this exact sequence.\n\nWhy the others are wrong:\n- **Merged**: there is no merge; the whole file is replaced.\n- **First process gives up**: no stale-write detection exists yet (practice exercise 3).\n- **Corrupt snapshot**: atomic replacement means each save leaves one complete, valid file.",
+   "excerpts": [
+    {
+     "path": "src/bankapp/storage/FileStorage.java",
+     "lineStart": 83,
+     "lineEnd": 83,
+     "quote": "Files.move(temporary,snapshotFile,StandardCopyOption.ATOMIC_MOVE,StandardCopyOption.REPLACE_EXISTING);"
+    },
+    {
+     "path": "astraupskill/07-TRACE-LAB.md",
+     "lineStart": 30,
+     "lineEnd": 30,
+     "quote": "Restart, and only the first terminal"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q11-self-transfer-missing-id",
+   "target": "seed:quests:j3/quiz/aba9bc83454f5480",
+   "phase": "after",
+   "title": "Which transfer check runs first",
+   "body": "**Key: \"You cannot transfer money to the same account.\"**\n\ntransfer runs its checks in a fixed order. First it rejects null ids, then it compares the two ids. Only after that does it call requireAccount for each side, then validate the amount and the balance. With \"X\" and \"X\", the equality check fires before anything looks up X, so the missing account is never reported. A probe confirms the message.\n\nWhy the others are wrong:\n- **\"Account not found: X\"**: requireAccount runs after the same-account check.\n- **\"Insufficient balance\"**: the balance check comes later still.\n- **\"Source and destination account ids are required.\"**: both ids are present, just equal.",
+   "excerpts": [
+    {
+     "path": "src/bankapp/service/BankService.java",
+     "lineStart": 111,
+     "lineEnd": 112,
+     "quote": "if (fromAccountId.equals(toAccountId)) { throw new IllegalArgumentException(\"You cannot transfer money to the same account.\");"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q12-failed-save-after-command",
+   "target": "seed:quests:j3/quiz/ff988aa5a0412214",
+   "phase": "after",
+   "title": "What a failed save does after a command already ran",
+   "body": "**Key: the CLI leaves the menu, prints the save error, and skips the success line.**\n\nApp.deposit calls bankService.deposit, which changes the balance and history in memory, then calls saveData. saveSnapshot throws IOException. The menu loop only catches IllegalArgumentException and IllegalStateException, so the IOException escapes run, and main prints \"Failed to load or save bank data: ...\". \"Deposit completed successfully.\" is after saveData, so it never prints. The course calls this memory changing before persistence, acceptable here only because the process ends.\n\nWhy the others are wrong:\n- **Rolled back**: nothing undoes the in-memory deposit; the process just ends.\n- **Success printed, retried at exit**: success is printed only after a successful save, and there is no retry.\n- **Menu shown again**: the IOException is not caught inside the loop.",
+   "excerpts": [
+    {
+     "path": "src/bankapp/App.java",
+     "lineStart": 70,
+     "lineEnd": 70,
+     "quote": "catch (IllegalArgumentException | IllegalStateException exception) {"
+    },
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "A save failure exits the CLI through its existing IOException path rather than allowing more operations to continue on an unsaved state."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q13-pairing-transfers",
+   "target": "seed:quests:j3/quiz/6f9aef16a1b65df1",
+   "phase": "after",
+   "title": "Why two identical transfers cannot be paired from storage",
+   "body": "**Key: not reliably, since nothing but the reciprocal account ids links the two halves.**\n\ntransfer calls createTransaction twice. Each call generates its own TXN- id from a random UUID and its own LocalDateTime.now() timestamp. The OUT row names Bob as the related account and the IN row names Alice, but two identical transfers produce two OUT rows and two IN rows that look alike. 02-CONCEPTS lists this as a known limitation, and a correlation id is a practice exercise.\n\nWhy the others are wrong:\n- **A shared transfer id**: no such field exists in Transaction or the file format.\n- **IN id is OUT id plus one**: ids are random UUIDs, not sequential numbers.\n- **Same millisecond**: each record calls LocalDateTime.now() separately, and even equal timestamps would not say which pairs belong together.",
+   "excerpts": [
+    {
+     "path": "src/bankapp/service/BankService.java",
+     "lineStart": 233,
+     "lineEnd": 234,
+     "quote": "return prefix + \"-\" + UUID.randomUUID();"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 24,
+     "lineEnd": 24,
+     "quote": "Timestamps and amounts are insufficient to correlate identical repeated transfers reliably."
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}
