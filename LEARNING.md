@@ -767,3 +767,19 @@ what ships until the owner picks an option.
   different branches. Merge only review branches; drop the writer's late duplicate.
 - **Counts re-summed.** demo:campaign now asserts 192 packs and JS 143 + C# 48 gates.
 
+
+## 2026-10-16 — Java track
+
+- **Shape.** Java went from one locked act of 4 inert quests to a playable track like C#: a new
+  `drill-java` check type graded by a Java runner (`javac --release 17` + `java` per attempt, no
+  resident JVM), the javabootcamp pack (private `elirc/javabootcamp`, pinned, imported and stamped
+  by `seed:validate -- --source javabootcamp`), migration 011 unlocking the track with a slate drill
+  slot, and a 3-act campaign of 12 core study quests (content-pending until their quest packs land).
+- **Verdicts come from a nonce-checked result file, never stdout.** BqMain deletes the nonce file
+  before loading the exercise and report() writes `#bq-result <nonce> <json>`; a printed `#done`
+  line or `System.exit(0)` proves nothing. Same pass rule as drill-cs: passed > 0, failed = 0, todo = 0.
+- **No warm compile server, on purpose.** javac costs about 2 s per grade; the warm gate is met
+  without a resident JVM that would cost RAM on this machine (docs/recon/java-timings.md).
+- **Smoke:** `smoke:api` grades one real javabootcamp unit over HTTP (starter todo FAIL, a wrong
+  answer FAIL with expected/received, reference solution PASS) and proves no javac/java process
+  outlives the server. Final numbers: added by the orchestrator.

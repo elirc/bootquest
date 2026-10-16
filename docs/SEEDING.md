@@ -70,6 +70,12 @@ git -C .cache/repos/<repo> archive <sha> | tar -x -C ".cache/checkouts/<repo>@<s
 working tree that autocrlf has converted. `seed:check` accepts `--checkouts <dir>`, and
 `BOOTQUEST_CHECKOUTS` points every tool at another checkout root.
 
+**Java checkouts.** The 12 Java study-quest repos (the campaign's `content/campaign/java.json`
+names them, e.g. `organized-experiment-quiz-engine`, `j1`, `j7`) use the same
+`<repo>@<sha>` layout and recipe; a Java quest pack directory is named exactly after its
+repo. The javabootcamp drill source is different: it is not a checkout under
+`.cache/checkouts/` but the importer's own cache, `.cache/sources/javabootcamp` (see §3).
+
 ## 3. Seed CLIs, with real invocations
 
 All of these run from the repo root in the **foreground**: background jobs get
@@ -85,7 +91,23 @@ npm run seed:import:bootforge -- --source C:/Users/Owner/Desktop/opusboot2 --out
 # csbootcamp: fetches elirc/csbootcamp at the pinned sha into .cache/sources/csbootcamp
 npm run seed:import:csbootcamp
 npm run seed:import:csbootcamp -- --sha e05b3505f22acbb95ed4531204e08991d29a7da9
+
+# javabootcamp: fetches elirc/javabootcamp (private) at the pinned sha into .cache/sources/javabootcamp
+npm run seed:import:javabootcamp
+npm run seed:import:javabootcamp -- --sha c1e14aa8238bf5b281bd0829b799b0d2b54dab2a
+# dev mode: read a local working copy in place (its HEAD and dirtiness go into the manifest)
+npm run seed:import:javabootcamp -- --source C:/Users/Owner/Desktop/javabootcamp
 ```
+
+The javabootcamp importer (`tools/seed/src/javabootcamp/`) reuses the csbootcamp header
+grammar and checkout code. Each module `bootcamp/NN-topic/` becomes one course file; each
+`exercises/NN-name.java` + `solutions/NN-name.java` pair becomes one `drill-java` unit.
+The check spec carries the canonical tests block and the file tail
+(`{type: 'drill-java', files: {tests, tail}, className: 'Exercise', timeoutMs}`); grading
+is the learner's head + the canonical tests block + the learner's tail. The solution and
+its `Walkthrough:` stay in the pack's private content (revealed only through the
+solution endpoint). The pin lives in `tools/seed/src/javabootcamp/source.ts`
+(`JAVABOOTCAMP_SHA`).
 
 ### The import gate: `seed:validate`
 
@@ -101,12 +123,25 @@ npm run seed:validate -- --source bootforge --course react-state
 # final full run: re-checks from the journal, asserts the counts, writes the stamp
 npm run seed:validate -- --source bootforge
 npm run seed:validate -- --source csbootcamp
+npm run seed:validate -- --source javabootcamp
 # start over / re-run only failures
 npm run seed:validate -- --source bootforge --fresh
 npm run seed:validate -- --source bootforge --retry-failed
 ```
 
 A full BootForge sweep takes about 3 to 5 minutes (2,571 exercises).
+
+#### javabootcamp (`--source javabootcamp`)
+
+Needs JDK 17 (`javac`/`java` on PATH). Each `drill-java` unit is graded twice by the real
+Java runner (`tools/seed/src/validate/validate-java.ts`): the reference solution must pass
+(passed > 0, failed = 0, todo = 0; one retry for a non-compile failure or a timeout) and the
+untouched starter must fail as a test verdict (its `UnsupportedOperationException("TODO")`
+stubs count as todo; a compile error, timeout or crash quarantines the unit). Scratch is
+`BOOTQUEST_JAVA_SCRATCH`, else `.cache/seed-java`. The verdict is read from BqMain's nonce-checked result file, never from stdout or
+the exit code. Grades are serialized (one attempt dir), about 2 to 3 s each, so a full
+sweep takes a few minutes (timings: `docs/recon/java-timings.md`). The stamp records
+`graderKind: "java"` and the JDK version.
 
 ### GitHub sync: `seed:sync`
 
@@ -399,8 +434,12 @@ warnings.
   fingerprint** per grader kind: `js` covers grade-core, the JS adapter,
   `server/src/api/runners.ts`, the validator, node and esbuild; `csharp` covers the C#
   runner sources, the Check harness, the drill-cs adapter, the validator and the .NET
-  SDK and reference versions. If you edit any of those, or upgrade node, esbuild or
-  .NET, the server refuses to start with that pack until a fresh full `seed:validate`
+  SDK and reference versions; `java` covers the `drill-java` check type's grader: the Java
+  runner and split rules (`server/src/runners/java/`), the process helpers it imports from
+  the C# scratch module, the javabootcamp harness it compiles (`Check.java`, `BqMain.java`),
+  the drill-java adapter (`server/src/api/runner-java.ts`), the Java validator, node and the
+  JDK (`javac -version`). If you edit any of those, or upgrade node, esbuild, .NET or the
+  JDK, the server refuses to start with that pack until a fresh full `seed:validate`
   re-stamps it.
 - **Seed packs** (`content/seed/**/validation.json`) are bound to a **seed fingerprint**
   per generator. It covers `shared/src/seed-pack.ts`, the exclusion registry, the
