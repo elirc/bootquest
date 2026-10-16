@@ -238,10 +238,10 @@
    "provenance": {
     "repo": "nethris",
     "sha": "6b58c91230eaa23d68a5b0fccf9bb1b7511a1cef",
-    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "path": "server/Nethris.Api/HrisRequest.cs",
     "lines": {
-     "start": 96,
-     "end": 96
+     "start": 37,
+     "end": 38
     }
    },
    "citations": [],
@@ -250,26 +250,14 @@
    "pack": "nethris",
    "target": "seed:quests:nethris/quiz/888e6b49f4deb79f",
    "phase": "after",
-   "title": "Old version gets 409; missing If-Match gets 428",
-   "body": "**Key: 409 for the old version, 428 for the missing header.**\n\nTwo different checks run, in two places.\n\n1. **HrisRequest.Expected** only asks \"did the client state a version for this record, in the right shape?\" The tag must start with the quoted record id and a dash, end with a quote, and hold a positive number. If the header is missing or malformed, it throws 428 (Precondition Required). It never looks at the stored row.\n2. **HrisRules.Version** runs later, against the loaded row. If the stated version differs from the stored one, it throws a Conflict, which is 409.\n\nThe first request has a well-formed tag for the right record, so it passes step 1 and fails step 2: 409. The second has no If-Match at all, so it fails step 1: 428.\n\nWhy the others are wrong:\n- **428 for both**: the old-version tag is well formed, so it passes the 428 check.\n- **409 for both**: with no header there is no version to compare; Expected stops it first.\n- **412 and 400**: Nethris uses neither of these statuses for this contract.",
+   "title": "An ETag names its record",
+   "body": "**Key: 428, because the tag must start with this record's own id.**\n\n`HrisRequest.Expected` builds `prefix = $\"\\\"{id:N}-\"` from the id in the URL and accepts the header only if it starts with that prefix, ends with a quote and holds a positive number. B's ETag starts with B's id, so `wellFormed` is false and the method throws `HrisError(428, \"precondition\", ...)`. The version number never gets compared.\n\nWhy the others are wrong:\n- *409*: the stored-version comparison happens later and is never reached.\n- *200*: the version alone is not accepted; the id part must match.\n- *412*: Nethris uses 428 for a missing or malformed If-Match and 409 for an old version.",
    "excerpts": [
     {
-     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
-     "lineStart": 96,
-     "lineEnd": 96,
-     "quote": "it never compares the version with the stored row."
-    },
-    {
      "path": "server/Nethris.Api/HrisRequest.cs",
-     "lineStart": 44,
-     "lineEnd": 44,
-     "quote": "throw new HrisError(428, \"precondition\", \"Send the record's strong ETag in If-Match.\");"
-    },
-    {
-     "path": "server/Nethris.Api/Domain/HrisRules.cs",
-     "lineStart": 46,
-     "lineEnd": 48,
-     "quote": "if (value.Version != expected) throw HrisError.Conflict(\"This record changed. Reload and review your draft before saving.\");"
+     "lineStart": 37,
+     "lineEnd": 38,
+     "quote": "var wellFormed = tag.StartsWith(prefix, StringComparison.Ordinal) && tag.EndsWith('\"');"
     }
    ],
    "readMore": []
@@ -279,10 +267,10 @@
    "provenance": {
     "repo": "nethris",
     "sha": "6b58c91230eaa23d68a5b0fccf9bb1b7511a1cef",
-    "path": "astraupskill/02-CONCEPTS.md",
+    "path": "server/Nethris.Api/HrisApi.Mutations.cs",
     "lines": {
-     "start": 23,
-     "end": 23
+     "start": 67,
+     "end": 67
     }
    },
    "citations": [],
@@ -291,23 +279,24 @@
    "pack": "nethris",
    "target": "seed:quests:nethris/quiz/814952098377bc9d",
    "phase": "after",
-   "title": "Why the browser must not quietly retry with the new ETag",
-   "body": "**Key: it would silently overwrite Jordan's change instead of letting Maya review it.**\n\nMaya's draft was built on version 4. Jordan then saved version 5 with a new manager. If the browser fetched the version 5 ETag and resent Maya's draft on its own, the version would now match and Maya's old values would replace Jordan's change. Nobody would have looked at the conflict. The ETag exists to stop that. So the editor shows the current saved values beside the draft and makes Maya choose. Only after that review may she keep her draft and send it with the latest version as a new attempt.\n\nThe debugging chapter says the same thing about tests: do not \"fix\" a stale save by refreshing the version before every PUT.\n\nWhy the others are wrong:\n- **Strong ETags cannot be refreshed while a draft exists**: nothing stops a refresh; the reason not to do it is the lost change.\n- **The server would reject it because the key was already used**: a new attempt gets a new key; the key is not the problem.\n- **It would lose Maya's draft, which lives in the ETag**: an ETag is only id plus version; the draft is kept in the editor.",
+   "title": "A new ETag makes a different request",
+   "body": "**Key: 409 conflict, because If-Match is part of the request fingerprint.**\n\n`Fingerprint` hashes `method`, the path, the query string, `http.Request.Headers.IfMatch` and the body. The receipt for this key holds the fingerprint of the first attempt, which carried the old ETag. The new attempt hashes differently, so `Replay` throws `HrisError.Conflict(\"This operation key was already used for a different request.\")`. A real retry must resend exactly what it sent before; a new ETag means a new attempt, which needs a new key.\n\nWhy the others are wrong:\n- *the stored first response*: replay needs the whole fingerprint to match, not just the key and body.\n- *a fresh save*: a key with a receipt never executes again.\n- *428*: the If-Match header is present and well formed, and the receipt check runs first anyway.",
    "excerpts": [
     {
-     "path": "astraupskill/02-CONCEPTS.md",
-     "lineStart": 23,
-     "lineEnd": 23,
-     "quote": "Refreshing the ETag automatically would silently overwrite Jordan's change. Instead, the editor shows current saved values alongside the draft and requires explicit review."
-    },
-    {
-     "path": "astraupskill/04-TESTING-AND-DEBUGGING.md",
-     "lineStart": 53,
-     "lineEnd": 53,
-     "quote": "Do not “fix” the test by refreshing the version immediately before every PUT."
+     "path": "server/Nethris.Api/HrisApi.Mutations.cs",
+     "lineStart": 67,
+     "lineEnd": 67,
+     "quote": "var material = method + \"\\n\" + http.Request.Path + \"\\n\" + http.Request.QueryString + \"\\n\" + http.Request.Headers.IfMatch + \"\\n\" + body;"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "server/Nethris.Api/HrisApi.Mutations.cs",
+     "lineStart": 71,
+     "lineEnd": 76,
+     "why": "Replay and its fingerprint comparison."
+    }
+   ]
   },
   {
    "key": "seed:notes:nethris/note/98059e85803496d6",
@@ -362,10 +351,10 @@
    "provenance": {
     "repo": "nethris",
     "sha": "6b58c91230eaa23d68a5b0fccf9bb1b7511a1cef",
-    "path": "astraupskill/02-CONCEPTS.md",
+    "path": "server/Nethris.Api/Data/HrisDbContext.cs",
     "lines": {
-     "start": 31,
-     "end": 31
+     "start": 87,
+     "end": 87
     }
    },
    "citations": [],
@@ -374,23 +363,24 @@
    "pack": "nethris",
    "target": "seed:quests:nethris/quiz/b681c342730ef698",
    "phase": "after",
-   "title": "Same key with a different body is a conflict, not a replay",
-   "body": "**Key: a conflict, because the fingerprint stored for that key differs from this body.**\n\nWhen a write arrives, Mutate looks for an earlier receipt with the same account and key. If it finds one, Replay compares fingerprints. The fingerprint is a hash of method, path, query, If-Match and the exact body. A different body gives a different hash, so the server throws a Conflict (409): \"This operation key was already used for a different request.\" A key promises \"this is the same request again\"; a changed body breaks that promise, which points to a client bug.\n\nWhy the others are wrong:\n- **Returns the first request's result**: that only happens when the fingerprint also matches. Replaying here would hide that the new body was never applied.\n- **Runs the new body under the same key**: then one key would stand for two different outcomes and retries would become ambiguous.\n- **A 428 because If-Match must change**: 428 is about a missing or malformed If-Match header, not about bodies.",
+   "title": "Receipts belong to one account",
+   "body": "**Key: it runs as a new mutation, because receipts are keyed per account.**\n\n`Mutate` looks for a prior receipt with `r.UserAccountId == actor.UserId && r.Key == key`. The second account has never used this key, so `prior` is null and its request executes, writing its own receipt. The database agrees: the unique index is on the pair `(UserAccountId, Key)`, not on the key alone.\n\nWhy the others are wrong:\n- *409*: the fingerprint is only compared against a receipt of the same account.\n- *the first account's response*: that receipt is never found for another account.\n- *the unique index*: it allows the same key under different accounts.",
    "excerpts": [
     {
-     "path": "astraupskill/02-CONCEPTS.md",
-     "lineStart": 31,
-     "lineEnd": 31,
-     "quote": "Reusing the key with the same fingerprint returns the recorded result. Reusing it with different content returns a conflict."
-    },
-    {
-     "path": "server/Nethris.Api/HrisApi.Mutations.cs",
-     "lineStart": 73,
-     "lineEnd": 75,
-     "quote": "throw HrisError.Conflict(\"This operation key was already used for a different request.\");"
+     "path": "server/Nethris.Api/Data/HrisDbContext.cs",
+     "lineStart": 87,
+     "lineEnd": 87,
+     "quote": "entity.HasIndex(r => new { r.UserAccountId, r.Key }).IsUnique();"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "server/Nethris.Api/HrisApi.Mutations.cs",
+     "lineStart": 28,
+     "lineEnd": 36,
+     "why": "The receipt lookup at the top of Mutate."
+    }
+   ]
   },
   {
    "key": "seed:notes:nethris/note/a0fe15e36f179476",
