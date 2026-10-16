@@ -23,6 +23,7 @@ npm run typecheck && npm run smoke:api        # fast confidence
 npm test -w @bootquest/shared ; npm test -w @bootquest/client
 npm test -w @bootquest/cli ; npx vitest run --root tools/seed
 npm test -w @bootquest/server                 # slowest; retry flaked timing test solo
+npm run test:csharp ; npm run test:java       # runner suites (test:java needs JDK 17 on PATH)
 npm run demo:promotion ; npm run demo:campaign
 npm run seed:check                            # all seed packs stamped
 npm run build:client
@@ -34,6 +35,8 @@ npm run build:client
   REFUSES to start until re-swept. JS fingerprint: `server/src/runners/js/*`,
   `server/src/api/runners.ts`, `tools/seed/src/validate/validate.ts`.
   C# fingerprint adds the csharp runner + dotnet SDK. selfrun likewise.
+  Java fingerprint: `server/src/runners/java/*`, `server/src/api/runner-java.ts`,
+  the javabootcamp harness, the Java validator, node + JDK (`javac -version`).
   Seed-pack fingerprint: `tools/seed/src/factory/**`, `citations/**`,
   `shared/src/seed-pack.ts`, `exclusions.json`.
 - Remedies: code packs → `npm run seed:validate` per source (chunk

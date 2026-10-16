@@ -1,10 +1,9 @@
 # BootQuest
 
 BootQuest is a single-user, local-first, gamified upskilling platform for the JS/TS +
-React and C#/.NET tracks. Java is a locked third track, and agentic engineering is a
-fourth. Its content is the owner's own estate: thousands of verified exercises and
-hundreds of curriculum guides across the elirc GitHub repos. It keeps growing as guides
-are added.
+React, C#/.NET and Java tracks; agentic engineering is a fourth. Its content is the
+owner's own estate: thousands of verified exercises and hundreds of curriculum guides
+across the elirc GitHub repos. It keeps growing as guides are added.
 
 Five rules shape everything:
 
@@ -89,16 +88,35 @@ serves without re-running anything. At startup the server:
 - **refuses to start** on a missing or stale stamp, edited bytes, loaded !== built, a
   duplicate seed-item key, or a busy port.
 
-A stamp goes stale when you edit a grader or validator, or upgrade node, esbuild or
-.NET. If that happens:
+A stamp goes stale when you edit a grader or validator, or upgrade node, esbuild,
+.NET or the JDK. If that happens:
 
-- run `npm run seed:validate -- --source bootforge` and/or
-  `npm run seed:validate -- --source csbootcamp` (foreground, about 3 to 5 minutes
-  each) to re-stamp the code packs;
+- run `npm run seed:validate -- --source bootforge`,
+  `npm run seed:validate -- --source csbootcamp` and/or
+  `npm run seed:validate -- --source javabootcamp` (foreground, a few minutes each)
+  to re-stamp the code packs;
 - run `npm run seed:check -- --restamp` for seed packs.
 
 `seed:check` and its `--restamp` also need the source checkouts in
 `.cache/checkouts/` (SEEDING.md §2).
+
+### The Java track
+
+Java is unlocked (migration 011) and plays like C#:
+
+- **Drills:** the `javabootcamp` pack (`content/packs/javabootcamp/`, 64 `drill-java`
+  units in 8 modules) is imported from the private repo `elirc/javabootcamp` at a pinned
+  sha (`npm run seed:import:javabootcamp`) and stamped by
+  `npm run seed:validate -- --source javabootcamp`. The Java runner
+  (`server/src/runners/java/`) compiles each attempt with `javac --release 17` against the
+  bootcamp harness and runs it under `bootcamp.BqMain`. The verdict comes only from a
+  nonce-checked result file, never from stdout or the exit code. Pass means passed > 0,
+  failed = 0 and todo = 0, so an untouched starter (its stubs throw
+  `UnsupportedOperationException("TODO")`) fails. Nothing stays resident between grades;
+  scratch lives under `BOOTQUEST_JAVA_SCRATCH` (default `<db dir>/bootquest-scratch/java`).
+- **Campaign:** 3 acts of 12 core study quests (`content/campaign/java.json`). A Java
+  study quest stays content-pending until its quest pack is seeded.
+- **Requires JDK 17** with `javac` and `java` on PATH. No Maven, Gradle or JUnit.
 
 ### Resetting the DB
 
@@ -176,12 +194,14 @@ Each gate is a real command that must exit 0. Run them in the foreground.
 | `npm test` | Unit and API suites of every workspace (shared, server, client, cli, tools/seed), incl. engine honesty rules, append-only triggers, planted-bad validator tests, and the answer-tell guards (`quiz-balance` per draft; `blind-pass`: no blind strategy clears any quest pack's 80% gate with probability > 2%) |
 | `npm run typecheck` | Root TypeScript project, strict |
 | `npm run build:client` | The client compiles (tsc) and bundles (vite) |
-| `npm run smoke:api` | Boots the REAL server entrypoint on a temp DB and free port, then walks the honesty flows over HTTP with real runners: drills, quiz, predict, csbootcamp C#, http check, reveal, reviews, campaign, the ladder flow (real explain-back and kata), stamp refusal, busy-port refusal and the reset guard. It also proves no zombie process or port is left. See the `npm run smoke:api` output for the step list |
+| `npm run smoke:api` | Boots the REAL server entrypoint on a temp DB and free port, then walks the honesty flows over HTTP with real runners: drills, quiz, predict, csbootcamp C#, javabootcamp Java (untouched starter, a wrong answer, the reference solution), http check, reveal, reviews, campaign, the ladder flow (real explain-back and kata), stamp refusal, busy-port refusal and the reset guard. It also proves no zombie process or port is left. See the `npm run smoke:api` output for the step list |
 | `npm run demo:promotion` | One full competency promotion cycle (artifact → explain-back → ≥2-day retest) plus the negative legs, over HTTP on a temp DB with an injected clock |
 | `npm run demo:m4` | Real GitHub sync of signalpost; U01 renders from the per-SHA cache; its real `u01.test.mjs` fails the starter and passes the solution; new-guide detection; fully offline re-run |
 | `npm run seed:check` | Every seed pack re-verified: stamp, pins, every shipped item re-validated (variants and katas re-executed) |
-| `npm run seed:validate -- --source <bootforge\|csbootcamp>` | The import gate: every imported reference solution executes green under BootQuest's runners (quarantine otherwise) |
+| `npm run seed:validate -- --source <bootforge\|csbootcamp\|javabootcamp>` | The import gate: every imported reference solution executes green under BootQuest's runners (quarantine otherwise) |
+| `npm run seed:import:javabootcamp` | Re-imports the javabootcamp Java pack from `elirc/javabootcamp` at the pinned sha (then re-run `seed:validate -- --source javabootcamp`) |
 | `npm run test:csharp` | The warm C# runner suite (slow; its own gate) |
+| `npm run test:java` | The Java runner suite: split rules, verdicts, verbatim `javac` errors, timeout kill and recovery, forgery and early-exit refusals, timings (needs JDK 17) |
 | `npm run test:mutate-fixture` | `bootquest mutate` end to end on a fixture project (Stryker; slow) |
 | `npm run seed:demo:planted` | Every generator refuses planted-bad input for the right reason |
 
@@ -193,6 +213,9 @@ Each gate is a real command that must exit 0. Run them in the foreground.
 - **Node 22.16** today; the engines field allows ≥22.16. Stryker 10 wants ≥22.18 (an
   EBADENGINE warning, but it runs). Upgrading node invalidates every grader and seed
   fingerprint, so re-validate and restamp afterwards.
+- **JDK 17** (Microsoft build 17.0.10) with `javac` and `java` on PATH, for the Java
+  runner. Upgrading it changes the `java` grader fingerprint, so re-run
+  `seed:validate -- --source javabootcamp`.
 - **No Docker.** It hangs on this machine and nothing uses it.
 - **Run gates in the foreground.** Background jobs get memory-reaped on this laptop.
   Under heavy load, child-process tests can time out; re-run once before you believe a
