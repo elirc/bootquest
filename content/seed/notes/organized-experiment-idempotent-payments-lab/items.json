@@ -43,10 +43,10 @@
    "provenance": {
     "repo": "organized-experiment-idempotent-payments-lab",
     "sha": "7e9832bab90cba8b26fffebb884edc0a7397cee0",
-    "path": "src/lib/auth/guards.ts",
+    "path": "src/services/paymentAccessPolicy.ts",
     "lines": {
-     "start": 32,
-     "end": 32
+     "start": 24,
+     "end": 24
     }
    },
    "citations": [],
@@ -55,23 +55,24 @@
    "pack": "organized-experiment-idempotent-payments-lab",
    "target": "seed:quests:organized-experiment-idempotent-payments-lab/quiz/c91619f738788140",
    "phase": "after",
-   "title": "Finding A1: the auth check runs outside the try",
-   "body": "`withRouteAuth()` returns a function whose first line is `const session = requirePermission(await getSessionForRequest(request), options.permission);`. For a SUPPORT session `requirePermission` throws a 403 `RouteError`. That throw happens before `handler(...)` is called, and the `try { ... } catch { return jsonError(error); }` lives inside the handler, so nothing converts the error into JSON. It escapes the route and Next.js answers with an unstructured error.\n\n- \"A JSON 403 from jsonError()\" is what the docs first claimed; the correction shows it never runs.\n- \"A redirect to /\" is the PAGE guard (`requirePagePermission`), not the API route.\n- \"202\" is wrong: SUPPORT lacks RECONCILIATION_RUN; read access does not grant it.",
+   "title": "Staff may create on behalf of a customer",
+   "body": "**Key: the customer owns it, and createdByUserId is the OPS user.**\n\n`resolvePaymentOwnerForCreate` returns the requested owner when it differs from the caller only if the caller's role holds `PAYMENT_READ_ANY`. OPS has it, so the customer's id comes back. The service checks that the user exists and then calls `createPayment` with `ownerUserId: owner.id` and `createdByUserId: input.session.userId`.\n\nWhy the others are wrong:\n- *403 FORBIDDEN_OWNER_OVERRIDE*: that is for a role without `PAYMENT_READ_ANY`, such as CUSTOMER.\n- *owned by OPS*: the requested owner is used, not ignored.\n- *created by the customer*: the creator is always the session user.",
    "excerpts": [
     {
-     "path": "src/lib/auth/guards.ts",
-     "lineStart": 32,
-     "lineEnd": 32,
-     "quote": "const session = requirePermission(await getSessionForRequest(request), options.permission);"
-    },
-    {
-     "path": "docs/architecture/auth-and-permissions.md",
-     "lineStart": 65,
-     "lineEnd": 65,
-     "quote": "outside the handler's `try/catch`"
+     "path": "src/services/paymentAccessPolicy.ts",
+     "lineStart": 24,
+     "lineEnd": 24,
+     "quote": "if (!roleHasPermission(session.role, Permission.PAYMENT_READ_ANY)) {"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "src/lib/permissions.ts",
+     "lineStart": 20,
+     "lineEnd": 37,
+     "why": "Which roles hold PAYMENT_CREATE and PAYMENT_READ_ANY."
+    }
+   ]
   },
   {
    "key": "seed:notes:organized-experiment-idempotent-payments-lab/note/35ee4418cbf4be16",
@@ -192,8 +193,8 @@
     "sha": "7e9832bab90cba8b26fffebb884edc0a7397cee0",
     "path": "src/services/paymentService.ts",
     "lines": {
-     "start": 66,
-     "end": 67
+     "start": 47,
+     "end": 50
     }
    },
    "citations": [],
@@ -202,23 +203,24 @@
    "pack": "organized-experiment-idempotent-payments-lab",
    "target": "seed:quests:organized-experiment-idempotent-payments-lab/quiz/b781a0afed7d19b0",
    "phase": "after",
-   "title": "Finding A4: the idempotency scope ignores the caller",
-   "body": "The record's identity is `(route, key)`, and the fingerprint hashes only the parsed body; `session.userId` appears in neither. When user B sends the same key and an identical body, the lookup finds user A's COMPLETED record, the hashes match, and B receives a replay of A's response, including A's `paymentId` and `reference`. No payment is created for B.\n\n- \"409, the record belongs to another user\" would need the record to store or compare the caller; it does not.\n- \"A new payment because the fingerprint includes session.userId\" is the suggested FIX, not the current code.\n- \"FORBIDDEN_OWNER_OVERRIDE\" only fires when a customer tries to set `ownerUserId`, and the replay returns before owner resolution runs.",
+   "title": "A replay repeats the stored status",
+   "body": "**Key: 202 again, with the stored body and replayed set to true.**\n\nThe first run calls `markIdempotencyCompleted` with `responseStatusCode: 202` and the response body. A later identical request finds the COMPLETED record, and `buildCompletedReplay` returns `record.responseStatusCode ?? 200` (so 202) and the stored body spread with `replayed: true`. The route sends that status with `jsonOk`.\n\nWhy the others are wrong:\n- *200*: 200 is only the fallback when no status was stored.\n- *201 with a new paymentId*: a replay creates nothing.\n- *409*: 409 is for a different fingerprint or an unfinished record.",
    "excerpts": [
     {
      "path": "src/services/paymentService.ts",
-     "lineStart": 66,
-     "lineEnd": 67,
-     "quote": "const requestHash = buildRequestFingerprint(input.body);"
-    },
-    {
-     "path": "docs/architecture/auth-and-permissions.md",
-     "lineStart": 71,
-     "lineEnd": 71,
-     "quote": "the second user receives the first user's `paymentId` and `reference` as a \"replay\""
+     "lineStart": 47,
+     "lineEnd": 50,
+     "quote": "statusCode: record.responseStatusCode ?? 200, body: { ...(record.responseBody as Record<string, unknown>), replayed: true,"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "src/services/paymentService.ts",
+     "lineStart": 152,
+     "lineEnd": 161,
+     "why": "Where the 202 and the body are stored."
+    }
+   ]
   },
   {
    "key": "seed:notes:organized-experiment-idempotent-payments-lab/note/5eb7f8ef0a6ff08e",
@@ -361,8 +363,8 @@
     "sha": "7e9832bab90cba8b26fffebb884edc0a7397cee0",
     "path": "src/services/paymentService.ts",
     "lines": {
-     "start": 168,
-     "end": 173
+     "start": 100,
+     "end": 101
     }
    },
    "citations": [],
@@ -371,23 +373,24 @@
    "pack": "organized-experiment-idempotent-payments-lab",
    "target": "seed:quests:organized-experiment-idempotent-payments-lab/quiz/ca8d0ee005378b9b",
    "phase": "after",
-   "title": "The unique index, not the pre-read, makes the race safe",
-   "body": "Request 2 runs `findIdempotencyRecord` at line 68 and sees nothing, because request 1 has not committed. It then opens its own transaction and inserts the record at line 88. PostgreSQL makes an insert that collides with an UNCOMMITTED row on a unique index wait. When request 1 commits, request 2 fails with `P2002`; the catch (lines 168-185) re-reads the now-committed record, the hashes match, the status is `COMPLETED`, and `buildCompletedReplay` returns the original body with `replayed: true`.\n\n- \"Both create a payment\" ignores `@@unique([route, key])`.\n- \"409 IN_PROGRESS\" cannot happen: the IN_PROGRESS row is never visible outside request 1's transaction.\n- \"Prisma retries in a loop\" is wrong: there is no retry; the catch makes one decision.",
+   "title": "A rolled-back attempt leaves no key behind",
+   "body": "**Key: the same 404, after running the whole create again from scratch.**\n\n`createIdempotencyRecord` is called with `tx`, as the first write inside `prisma.$transaction`. The owner check throws `RouteError(404, \"OWNER_NOT_FOUND\", ...)` inside the same callback, so the whole transaction rolls back, record included. The catch block only handles P2002 and rethrows anything else. On the retry, `findIdempotencyRecord` finds nothing, the transaction runs again, and the owner is still missing.\n\nWhy the others are wrong:\n- *IN_PROGRESS*: no record survives to be in progress.\n- *a stored 404 replay*: only a completed 202 response is ever stored.\n- *KEY_REUSED_WITH_DIFFERENT_PAYLOAD*: nothing is stored to compare against, and the body is identical anyway.",
    "excerpts": [
     {
      "path": "src/services/paymentService.ts",
-     "lineStart": 168,
-     "lineEnd": 173,
-     "quote": "const collision = await findIdempotencyRecord(route, input.idempotencyKey);"
-    },
-    {
-     "path": "docs/learning/flow-traces.md",
-     "lineStart": 92,
-     "lineEnd": 92,
-     "quote": "Request 2's insert now fails with `P2002`; Prisma aborts request 2's transaction."
+     "lineStart": 100,
+     "lineEnd": 101,
+     "quote": "if (!owner) { throw new RouteError(404, \"OWNER_NOT_FOUND\", \"The selected payment owner does not exist.\");"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "src/services/paymentService.ts",
+     "lineStart": 86,
+     "lineEnd": 95,
+     "why": "The record is written through tx, inside the transaction."
+    }
+   ]
   },
   {
    "key": "seed:notes:organized-experiment-idempotent-payments-lab/note/6d2ddc180b25582b",
@@ -541,10 +544,10 @@
    "provenance": {
     "repo": "organized-experiment-idempotent-payments-lab",
     "sha": "7e9832bab90cba8b26fffebb884edc0a7397cee0",
-    "path": "src/repositories/webhookRepository.ts",
+    "path": "src/services/providerSimulatorService.ts",
     "lines": {
-     "start": 31,
-     "end": 33
+     "start": 157,
+     "end": 158
     }
    },
    "citations": [],
@@ -553,23 +556,24 @@
    "pack": "organized-experiment-idempotent-payments-lab",
    "target": "seed:quests:organized-experiment-idempotent-payments-lab/quiz/096b6033a4f011f4",
    "phase": "after",
-   "title": "Finding L4: failed deliveries are dead letters",
-   "body": "`markWebhookDeliveryFailed` sets `status: FAILED` and `nextAttemptAt: new Date(Date.now() + 60_000)`. But the relay's query, `listPendingWebhookDeliveries`, filters on `status: WebhookDeliveryStatus.PENDING` and nothing else; no code anywhere reads `nextAttemptAt`. A FAILED row is therefore never picked up again. There is even an index on `[status, nextAttemptAt]` for a query that does not exist.\n\n- \"Next Deliver click after nextAttemptAt\" describes the design the column suggests, not the code.\n- \"A timer in the simulator\" is wrong: delivery only runs when an operator triggers it from the UI.\n- \"Five tries, then a dead-letter table\" mixes in another system; this repo has no attempt limit or dead-letter table for deliveries.",
+   "title": "Each delivery succeeds or fails on its own",
+   "body": "**Key: delivered 1, failed 1, and the third stays PENDING for a later run.**\n\n`deliverPendingWebhooks(limit)` asks `listPendingWebhookDeliveries(limit)` for at most `limit` PENDING rows, oldest first, so only two are selected. The loop wraps each delivery in its own `try/catch`: the first is marked DELIVERED, the second's error is caught and the row is marked FAILED, and the loop goes on. The third row was never fetched, so it is untouched.\n\nWhy the others are wrong:\n- *the third replaces the failed one*: the list is fetched once, before the loop.\n- *the loop stops*: the catch handles the error and continues.\n- *one throw rolls back the batch*: there is no surrounding transaction; each mark is its own write.",
    "excerpts": [
     {
-     "path": "src/repositories/webhookRepository.ts",
-     "lineStart": 31,
-     "lineEnd": 33,
-     "quote": "status: WebhookDeliveryStatus.PENDING,"
-    },
-    {
-     "path": "src/repositories/webhookRepository.ts",
-     "lineStart": 62,
-     "lineEnd": 62,
-     "quote": "nextAttemptAt: new Date(Date.now() + 60_000),"
+     "path": "src/services/providerSimulatorService.ts",
+     "lineStart": 157,
+     "lineEnd": 158,
+     "quote": "export async function deliverPendingWebhooks(limit: number) { const deliveries = await listPendingWebhookDeliveries(limit);"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "src/repositories/webhookRepository.ts",
+     "lineStart": 29,
+     "lineEnd": 37,
+     "why": "The PENDING filter, order and limit."
+    }
+   ]
   },
   {
    "key": "seed:notes:organized-experiment-idempotent-payments-lab/note/9d971fb09b98868a",
