@@ -752,3 +752,18 @@ what ships until the owner picks an option.
 - **Load, not a bug.** `[vitest-worker]: Timeout calling "onTaskUpdate"` appeared while ten agents
   ran suites at once and vanished on a quiet machine (tools/seed 1277/1277, exit 0). Re-run on a
   quiet machine before believing it.
+
+## 2026-10-15 — Wave 4: the last 61 study quests get packs (crash-recovered)
+
+- **Shape.** Seven writers (one clone each), then seven cross-author reviews, merged one by one into
+  `wave4`. The orchestrator crashed with one review (rv-e) not started and one sweep (xleak) 2/20 done;
+  the recovery session rebuilt state from branch tips plus the prior transcript's last messages and
+  finished both. Committing per pack is what made that cheap: nothing was lost but one cite fix.
+- **A leak no guard measured.** Generator goal-checks ("prove GetByIdAsync returns soft-deleted
+  rows") can state a hand quiz's answer in the same pack. Neither answer-tell guard nor the reading
+  leak rule covers quiz-to-quiz leaks; the sweep over older mixed packs found them in 19 of 20
+  (gitjira: all 12 hand quizzes). Replacements are new questions, so they got their own review.
+- **Two agents, one fix.** A writer and a reviewer both rewrote nopsolutionsnet's leaked quizzes on
+  different branches. Merge only review branches; drop the writer's late duplicate.
+- **Counts re-summed.** demo:campaign now asserts 192 packs and JS 143 + C# 48 gates.
+
