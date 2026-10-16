@@ -2,7 +2,7 @@
 //   npm run demo:campaign      (= node --import tsx server/scripts/campaign-e2e.mjs)
 //
 // Temp DBs + an injected, settable clock; the owner's DB (BOOTQUEST_DB) is never opened.
-// Content is REAL: the 192 stamped seed:quests packs (content/seed/quests, full stamp verified by
+// Content is REAL: the 204 stamped seed:quests packs (content/seed/quests, full stamp verified by
 // the server's seed loader) and the committed campaign map (content/campaign). The script reads
 // the pack files directly ONLY as the seed-time oracle for the right answers.
 //
@@ -105,11 +105,11 @@ async function main() {
   const open = [];
   try {
     // ------------------------------------------------------------ content
-    section('content: the 192 stamped seed:quests packs through the stamp-checking seed loader');
+    section('content: the 204 stamped seed:quests packs through the stamp-checking seed loader');
     const packDirs = readdirSync(QUESTS).filter((n) => existsSync(join(QUESTS, n, 'items.json'))).map((n) => join(QUESTS, n)).sort();
     const { store, packs } = loadSeedItemStoreWithStats(packDirs);
     const quizTotal = packs.reduce((n, p) => n + (p.byKind.quiz ?? 0), 0);
-    step('192 quest packs loaded, full stamp verified (quiz + flashcard + reading-step items)', packs.length === 192 && store.questPacks().size === 192, `${quizTotal} quiz items across ${packs.length} packs`);
+    step('204 quest packs loaded, full stamp verified (quiz + flashcard + reading-step items)', packs.length === 204 && store.questPacks().size === 204, `${quizTotal} quiz items across ${packs.length} packs`);
 
     // ============================================================ PART A: the committed campaign
     section('PART A — the committed campaign map (content/campaign), unmodified');
@@ -118,14 +118,12 @@ async function main() {
     open.push(A);
     const js = A.stats.tracks.find((t) => t.track === 'js');
     const cs = A.stats.tracks.find((t) => t.track === 'csharp');
-    // Java: 12 core study quests (content/campaign/java.json); every one stays content-pending until its
-    // quest pack merges, so the java gate count is reported (built/loaded/pending) and only its
-    // consistency is asserted here; the integration sets the final numbers.
+    // Java: 12 core study quests (content/campaign/java.json), every one gated by its quest pack.
     const javaStudy = JSON.parse(readFileSync(join(CAMPAIGN, 'manifest.json'), 'utf8')).tracks.find((t) => t.track === 'java').counts.studyQuests;
     const jv = A.stats.tracks.find((t) => t.track === 'java') ?? { built: 0, loaded: 0, pending: 0 };
     step(
-      `loader: JS 143 + C# 48 study-quest gates, loaded === built; Java ${jv.loaded}/${javaStudy} gated (rest content-pending); ww6 matches no quest`,
-      js.built === 143 && js.loaded === 143 && cs.built === 48 && cs.loaded === 48 && jv.loaded === jv.built && jv.built + jv.pending === javaStudy && A.stats.unmatchedPacks.join() === 'ww6',
+      'loader: JS 143 + C# 48 + Java 12 study-quest gates, loaded === built; quests without a pack stay content-pending; ww6 matches no quest',
+      js.built === 143 && js.loaded === 143 && cs.built === 48 && cs.loaded === 48 && javaStudy === 12 && jv.built === 12 && jv.loaded === 12 && jv.pending === 0 && A.stats.unmatchedPacks.join() === 'ww6',
       `js ${js.loaded}/${js.built} (${js.pending} pending), csharp ${cs.loaded}/${cs.built} (${cs.pending} pending), java ${jv.loaded}/${jv.built} (${jv.pending} pending), unmatched ${A.stats.unmatchedPacks.join(',')}`,
     );
     let camp = (await A.api('GET', '/tracks/js/campaign')).json;
@@ -185,7 +183,7 @@ async function main() {
     const jsAct1 = packedAct1.slice(0, 7);
     const jsAct2 = realJs.acts[1].quests.filter((q) => q.kind === 'study-quest' && hasPack(q));
     const csAct1 = realCs.acts[0].quests.filter((q) => q.kind === 'study-quest' && hasPack(q)).slice(0, 3);
-    step(`Part B store withholds ${noPack.repo}'s pack (191 of 192 loaded)`, storeB.questPacks().size === 191 && !hasPack(noPack) && jsAct1.every(hasPack));
+    step(`Part B store withholds ${noPack.repo}'s pack (203 of 204 loaded)`, storeB.questPacks().size === 203 && !hasPack(noPack) && jsAct1.every(hasPack));
     const ACT2_LEVEL = 3;
     const tracks = defaultFixtureTracks();
     tracks.js = {
