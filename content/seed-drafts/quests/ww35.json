@@ -23,18 +23,18 @@
    "cites": [
     {
      "path": "src/lib/availability/schedule.ts",
-     "lineStart": 81,
-     "lineEnd": 86
+     "lineStart": 76,
+     "lineEnd": 96
     }
    ],
-   "prompt": "An appointment runs 23:30 to 00:30 the next local day; the rule is 09:00-17:00. Why could comparing only clock minutes wrongly accept something like it, and what does the code do instead?",
-   "answer": "Minutes drop the date, so dateKeys are compared and only an exact midnight end may cross",
+   "prompt": "A staff member in America/New_York has one rule: Monday (dayOfWeek 1), minutes 1200-1380. Is the slot 02:00-03:00 UTC on Tuesday 2026-07-14 inside working hours?",
+   "answer": "Yes: locally it is Monday 22:00-23:00, inside the Monday rule",
    "distractors": [
-    "The code converts both endpoints to UTC minutes, which can never wrap past local midnight",
-    "The code adds 1440 to each end time that is smaller than its start time",
-    "The client has to split overnight appointments into two separate bookings"
+    "No: it is Tuesday in UTC, and the rule only covers Monday",
+    "No: 02:00-03:00 is before the rule's start at minute 1200",
+    "Yes, but just because the rules are compared in plain UTC minutes"
    ],
-   "explanation": "getZonedParts returns a dateKey; when the dates differ, the end is accepted only if it is local midnight and the instant 1ms earlier is still on the start date."
+   "explanation": "getZonedParts converts both ends to New York time (UTC-4 in July): Monday 22:00 and 23:00 on the same date. The day index comes from the local weekday, and 1320-1380 lies within 1200-1380."
   },
   {
    "id": "q02-midnight-1440",
@@ -49,18 +49,18 @@
    "cites": [
     {
      "path": "src/lib/availability/schedule.ts",
-     "lineStart": 81,
-     "lineEnd": 86
+     "lineStart": 131,
+     "lineEnd": 137
     }
    ],
-   "prompt": "With a rule ending at minute 1440, which appointment is accepted?",
-   "answer": "23:00 ending exactly at the following local midnight, minute 1440",
+   "prompt": "Availability is built for a Saturday on which the staff member has no working-hours rule, no time off and no bookings. What do the returned slots say?",
+   "answer": "isOpen false with reason 'blocked', the only reason ever set",
    "distractors": [
-    "23:00 ending one millisecond after the following local midnight",
-    "23:30 to 00:30 next day, as most of that interval falls inside the rule",
-    "None of them, as no appointment may end on the following local day"
+    "isOpen false with reason 'outside_hours' for every slot",
+    "An empty list, as days without a rule are skipped by the loop",
+    "isOpen true, as neither a booking nor time off covers those times"
    ],
-   "explanation": "An exact midnight endpoint whose preceding instant is on the start date becomes localEnd = 1440; anything past it stays on the next day and is rejected."
+   "explanation": "buildAvailabilitySlots sets reason: open ? null : \"blocked\" for every closed slot, whatever made isSlotOpen return false."
   },
   {
    "id": "q03-millis-matter",
@@ -75,18 +75,18 @@
    "cites": [
     {
      "path": "src/lib/availability/schedule.ts",
-     "lineStart": 79,
-     "lineEnd": 80
+     "lineStart": 57,
+     "lineEnd": 63
     }
    ],
-   "prompt": "Why does the policy add seconds and milliseconds into the local-minute comparison?",
-   "answer": "So an end just past a boundary cannot slip through by truncation",
+   "prompt": "One stored working-hours rule of a staff member has endMinute 1500. A client then asks for that staff member's availability. What happens?",
+   "answer": "The query fails with 'Working hours require an ordered single-day minute range.'",
    "distractors": [
-    "To sort appointments that start within the same minute of the hour",
-    "As Intl.DateTimeFormat cannot report minutes, they are derived from seconds",
-    "To round DST transitions to the nearest hour before comparing"
+    "The rule is clamped to 1440, and the other slots are then computed as usual",
+    "That one rule is ignored, and slots come from the other valid rules instead",
+    "Slots after midnight are opened, as the rule runs on into the next day"
    ],
-   "explanation": "localStart/localEnd include getUTCSeconds()/60 and getUTCMilliseconds()/60000."
+   "explanation": "buildAvailabilitySlots calls validateCalendar, which throws a ValidationAppError when any rule has endMinute > 1440 (or is otherwise not an ordered single-day range)."
   },
   {
    "id": "q04-dst-not-plus-24h",
@@ -101,18 +101,18 @@
    "cites": [
     {
      "path": "src/lib/availability/schedule.ts",
-     "lineStart": 76,
-     "lineEnd": 77
+     "lineStart": 57,
+     "lineEnd": 59
     }
    ],
-   "prompt": "On the spring daylight-saving day in America/New_York, why is 'start-of-day + 24 hours' the wrong way to find the next local midnight?",
-   "answer": "That day has 23 hours, so adding 24 hours lands at 01:00 the next day",
+   "prompt": "A staff profile's timezone is stored as \"Mars/Base\". What does isSlotOpen do for any slot of theirs?",
+   "answer": "Throws 'A valid IANA timezone is required.'",
    "distractors": [
-    "JavaScript Dates are local time, so adding 24h double-counts the UTC offset",
-    "The next midnight is written 24:00, not 00:00, under hourCycle h23",
-    "It is fine, as only leap seconds break that calculation"
+    "Falls back to UTC and evaluates the slot",
+    "Returns false, so each of their slots reads closed",
+    "Uses the server's local timezone instead"
    ],
-   "explanation": "The UTC offset changes during the spring-forward local date, so the next local midnight must come from the timezone formatter, not from fixed elapsed hours."
+   "explanation": "validateCalendar builds an Intl.DateTimeFormat with that timeZone; the RangeError is caught and rethrown as ValidationAppError(\"A valid IANA timezone is required.\")."
   },
   {
    "id": "q05-h23",
@@ -153,18 +153,18 @@
    "cites": [
     {
      "path": "src/lib/availability/schedule.ts",
-     "lineStart": 67,
-     "lineEnd": 69
+     "lineStart": 119,
+     "lineEnd": 140
     }
    ],
-   "prompt": "A meeting ends at 10:00; another for the same staff member starts at 10:00. Does the overlap predicate block it?",
-   "answer": "No, as half-open intervals may touch without overlapping",
+   "prompt": "buildAvailabilitySlots runs for 09:00-10:45 with slotMinutes 30. How many slots does it return?",
+   "answer": "Three, at 09:00, 09:30 and 10:00",
    "distractors": [
-    "Yes, as both meetings contain the 10:00 instant at their edges",
-    "Yes, unless a buffer minute is configured between appointments",
-    "The SQL constraint blocks it, though the TypeScript predicate allows it"
+    "Four, the last one cut to 10:30-10:45",
+    "Four, the last one 10:30-11:00",
+    "Two, at 09:00 and 09:30, with 10:00 dropped"
    ],
-   "explanation": "overlaps() uses left.startsAt < right.endsAt && left.endsAt > right.startsAt; the SQL tsrange '[)' encodes the same convention."
+   "explanation": "The cursor starts at 09:00 and steps by 30 minutes. The 10:30 slot would end at 11:00, after the window's end, so the loop breaks; slots are never shortened."
   },
   {
    "id": "q07-cancelled-rows-free-slot",
@@ -204,24 +204,24 @@
    },
    "cites": [
     {
-     "path": "src/repositories/appointmentRepository.ts",
-     "lineStart": 154,
-     "lineEnd": 158
+     "path": "src/services/appointmentService.ts",
+     "lineStart": 49,
+     "lineEnd": 62
     },
     {
-     "path": "src/services/appointmentService.ts",
-     "lineStart": 102,
-     "lineEnd": 106
+     "path": "src/services/availabilityService.ts",
+     "lineStart": 149,
+     "lineEnd": 171
     }
    ],
-   "prompt": "The scoped read saw BOOKED, but by the time the conditional updateMany runs another request has already cancelled it (count 0). What should the service do?",
-   "answer": "Raise a conflict, as count zero means the BOOKED precondition no longer held",
+   "prompt": "A client tries to book a time that overlaps another client's BOOKED appointment with the same staff member, with no race involved. Which error message comes back?",
+   "answer": "\"That slot is not available\", from the canBookSlot check",
    "distractors": [
-    "Retry the update by id alone, so the user's cancellation still lands",
-    "Return it as cancelled, since the end state matches the request",
-    "Throw not found, as the appointment vanished between the two steps"
+    "\"That slot was just taken\", from findConflictingAppointment",
+    "\"That slot was just taken\", from the exclusion constraint",
+    "\"Appointments must be booked in the future\", from validation"
    ],
-   "explanation": "Count zero is decisive: there is no successful mutation to return, so ConflictAppError is raised."
+   "explanation": "canBookSlot passes BOOKED appointments in the window to isSlotOpen as blocked windows, so it returns false and bookAppointment throws ConflictAppError(\"That slot is not available\") before the conflict query or the insert."
   },
   {
    "id": "q09-not-found-before-status",
@@ -261,19 +261,24 @@
    },
    "cites": [
     {
-     "path": "src/lib/data/appointmentErrors.ts",
-     "lineStart": 1,
-     "lineEnd": 11
+     "path": "src/services/appointmentService.ts",
+     "lineStart": 19,
+     "lineEnd": 26
+    },
+    {
+     "path": "src/lib/auth/permissions.ts",
+     "lineStart": 13,
+     "lineEnd": 17
     }
    ],
-   "prompt": "A network error's message contains the word 'conflict'. Does the booking API report 'slot taken'?",
-   "answer": "No, as only a typed P2004 naming the exclusion constraint means slot taken",
+   "prompt": "A user with role STAFF calls bookAppointment to book a slot with a colleague. What happens?",
+   "answer": "ForbiddenAppError 'This action is limited to a different role'",
    "distractors": [
-    "Yes, as any error message containing 'conflict' counts as a booking conflict",
-    "Yes, whenever the error carries an HTTP status code of 409",
-    "No, as it is retried silently until the network recovers and then books"
+    "The booking is made, since staff may book for a colleague's calendar",
+    "NotFoundAppError, as STAFF users have a staff profile instead",
+    "ValidationAppError, as the staffProfileId refers to staff"
    ],
-   "explanation": "Arbitrary prose is not a stable contract; matching error type plus constraint metadata avoids misreporting."
+   "explanation": "bookAppointment starts with requireRole(actor, [\"CLIENT\"]); a STAFF actor fails hasRole, so ForbiddenAppError is thrown before parsing or any lookup."
   },
   {
    "id": "q11-grid-anchor",
@@ -288,18 +293,18 @@
    "cites": [
     {
      "path": "src/lib/availability/schedule.ts",
-     "lineStart": 119,
-     "lineEnd": 139
+     "lineStart": 112,
+     "lineEnd": 117
     }
    ],
-   "prompt": "With a 09:00-17:00 rule and 60-minute appointments, a client requests availability from 09:30. A second client books 09:15 directly. What happens?",
-   "answer": "The preview starts at 09:30-10:30, and 09:15 is accepted if free",
+   "prompt": "A client asks for one staff member's availability across 91 days with a 60-minute slot length. What does buildAvailabilitySlots do?",
+   "answer": "Throws a ValidationAppError, as no query may span over 90 days",
    "distractors": [
-    "The preview snaps to 09:00-10:00, and 09:15 is rejected as off-grid",
-    "The 09:30 request is refused, and 09:15 is snapped back to 09:00",
-    "The preview is empty as 09:30 is off the hour, and 09:15 is accepted"
+    "Returns the first 90 days of slots and silently drops the last day",
+    "Returns all 91 days, since the limit applies only to time-off rows",
+    "Throws only when the slot length is above 60 minutes, not here"
    ],
-   "explanation": "The grid is anchored to the caller's from; bookAppointment does not require grid alignment (senior finding 1)."
+   "explanation": "The guard throws 'Calendar queries require a positive minute interval and at most 90 days.' when endsAt - startsAt exceeds 90 * 86_400_000 ms."
   },
   {
    "id": "q12-staff-creation-orphan",
@@ -314,18 +319,18 @@
    "cites": [
     {
      "path": "src/services/availabilityService.ts",
-     "lineStart": 41,
-     "lineEnd": 63
+     "lineStart": 36,
+     "lineEnd": 56
     }
    ],
-   "prompt": "In createStaffMember, createUser succeeds and createStaffProfile then fails. What is left behind?",
-   "answer": "A STAFF user with no profile, as the two writes share no transaction",
+   "prompt": "Two admins create staff members with the same new email at the same moment. Both pass findUserByEmail. What does the second one get when its createUser fails on the unique email?",
+   "answer": "ConflictAppError 'A user with this email already exists'",
    "distractors": [
-    "Nothing, as Prisma rolls back the user once a later call in the function fails",
-    "A staff profile with no user, as the profile is written first",
-    "A duplicate user, as the service retries the whole function on failure"
+    "The raw Prisma unique-constraint error, passed through",
+    "A second STAFF user, since findUserByEmail had already passed",
+    "NotFoundAppError, since its user row was never created"
    ],
-   "explanation": "The writes are sequential and independent; wrap them in one transaction to make creation atomic."
+   "explanation": "The catch around createUser maps any error whose message contains 'unique' or 'User_email_key' to the same ConflictAppError the pre-check uses."
   },
   {
    "id": "f01-validation-vs-availability",

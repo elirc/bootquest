@@ -89,17 +89,24 @@
    "id": "x-q01-rule-ends-1440",
    "target": "seed:quests:ww35/quiz/0f6af4ff708ddf9d",
    "phase": "after",
-   "title": "Only an end exactly at local midnight can use minute 1440",
-   "body": "**Key: 23:00 ending exactly at the following local midnight, minute 1440.**\n\nWhen start and end fall on different local dates, `isWithinWorkingHours` accepts the end only if its local minutes are exactly 0 (midnight) *and* the instant 1 ms earlier is still on the start date. Then it treats the end as minute 1440. 23:00 to midnight passes both tests, and a rule ending at 1440 contains it.\n\nWhy the others are wrong:\n- *One millisecond after midnight*: milliseconds count in `localEnd`, so it is not exactly 0 and the check returns `false`.\n- *23:30 to 00:30*: the end is on the next date and not midnight, so it is rejected; \"most of it fits\" is not a rule.\n- *None*: the exact-midnight case is the one allowed exception.",
+   "title": "Every closed slot is labelled blocked",
+   "body": "**Key: isOpen false with reason 'blocked', the only reason the code ever sets.**\n\n`buildAvailabilitySlots` asks `isSlotOpen` for each slot and pushes `reason: open ? null : \"blocked\"`. With no rule for Saturday, `isWithinWorkingHours` returns false, so every slot is closed, and each gets the same `\"blocked\"` label as a slot covered by time off or a booking.\n\nWhy the others are wrong:\n- *'outside_hours'*: no such reason exists in the code.\n- *An empty list*: the loop walks the whole window whatever the rules say.\n- *isOpen true*: a slot must also fit a working-hours rule.",
    "excerpts": [
     {
      "path": "src/lib/availability/schedule.ts",
-     "lineStart": 81,
-     "lineEnd": 86,
-     "quote": "if (start.dateKey !== end.dateKey) { // A midnight endpoint belongs to the preceding day only when it ends that day exactly. const preceding = getZonedParts(new Date(slot.endsAt.getTime() - 1), timeZone); if (localEnd !== 0 || preceding.dateKey !== start.dateKey) return false; localEnd = 1440;"
+     "lineStart": 136,
+     "lineEnd": 136,
+     "quote": "reason: open ? null : \"blocked\","
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "src/services/availabilityService.ts",
+     "lineStart": 141,
+     "lineEnd": 146,
+     "why": "How the service passes the reason on."
+    }
+   ]
   },
   {
    "id": "x-q02-gc-stale-loser",
@@ -150,20 +157,14 @@
    "id": "x-q04-seconds-in-minutes",
    "target": "seed:quests:ww35/quiz/2748bc7dd80a3c61",
    "phase": "after",
-   "title": "Seconds and milliseconds stop truncation at the boundary",
-   "body": "**Key: so an end just past a boundary cannot slip through by truncation.**\n\nThe formatter only gives whole hours and minutes. If the code used only those, an end at 17:00:30 would look like minute 1020 (17:00) and fit a rule ending at 1020, even though it is 30 seconds too late. So `localStart` and `localEnd` add `getUTCSeconds() / 60` and `getUTCMilliseconds() / 60_000`, turning 17:00:30 into 1020.5, which is past the rule's end.\n\nWhy the others are wrong:\n- *To sort appointments in the same minute*: this code compares against rules; it does not sort.\n- *Intl cannot report minutes*: it does report minutes (`minute: \"2-digit\"`); it is seconds that are left out.\n- *To round DST transitions*: nothing here rounds to hours.",
+   "title": "One bad rule fails the whole calendar",
+   "body": "**Key: the query fails with 'Working hours require an ordered single-day minute range.'**\n\n`buildAvailabilitySlots` and `isSlotOpen` both call `validateCalendar` first. It throws a `ValidationAppError` if any rule has a non-integer field, a weekday outside 0-6, `startMinute < 0`, `endMinute > 1440`, or `endMinute <= startMinute`. A rule with `endMinute` 1500 fails, so no slots are computed at all.\n\nWhy the others are wrong:\n- *clamped to 1440*: nothing adjusts rules; they are validated.\n- *that rule ignored*: `some(...)` over all rules makes one bad rule fatal.\n- *into the next day*: rules are single-day ranges by design.",
    "excerpts": [
     {
      "path": "src/lib/availability/schedule.ts",
-     "lineStart": 79,
-     "lineEnd": 80,
-     "quote": "const localStart = start.hour * 60 + start.minute + slot.startsAt.getUTCSeconds() / 60 + slot.startsAt.getUTCMilliseconds() / 60_000;"
-    },
-    {
-     "path": "astraupskill/02-CONCEPTS.md",
-     "lineStart": 5,
-     "lineEnd": 5,
-     "quote": "Seconds and milliseconds are included in minute comparisons, so a meeting ending just beyond the boundary cannot slip through a truncation."
+     "lineStart": 62,
+     "lineEnd": 63,
+     "quote": "rule.dayOfWeek < 0 || rule.dayOfWeek > 6 || rule.startMinute < 0 || rule.endMinute > 1440 || rule.endMinute <= rule.startMinute)) throw new ValidationAppError(\"Working hours require an ordered single-day minute range.\");"
     }
    ],
    "readMore": []
@@ -194,26 +195,14 @@
    "id": "x-q06-staff-orphan",
    "target": "seed:quests:ww35/quiz/41bc3d7328c497bc",
    "phase": "after",
-   "title": "Staff creation can leave a STAFF user with no profile",
-   "body": "**Key: a STAFF user with no profile, as the two writes share no transaction.**\n\n`createStaffMember` calls `createUser` (role \"STAFF\") and then, as a separate step, `createStaffProfile`. They are two independent database writes with no transaction around them. If the first succeeds and the second throws, the user row is already saved and nothing removes it. The review lists this as finding 3, \"Staff creation is not atomic\". The fix is to run both writes in one transaction.\n\nWhy the others are wrong:\n- *A profile with no user*: the user is written first; the profile needs `user.id`.\n- *Nothing, Prisma rolls back*: Prisma only rolls back writes inside a transaction you open; these are separate calls.\n- *A duplicate user from a retry*: nothing in the function retries.",
+   "title": "The unique email backs up the pre-check",
+   "body": "**Key: ConflictAppError 'A user with this email already exists'.**\n\nBoth requests pass `findUserByEmail`, so both call `createUser`. The database's unique email index lets only one insert succeed. The loser's error message contains 'Unique constraint' (or the `User_email_key` name), and the `catch` turns it into the same `ConflictAppError` the pre-check would have thrown.\n\nWhy the others are wrong:\n- *the raw Prisma error*: the catch maps it.\n- *a second STAFF user*: the unique index refuses it.\n- *NotFoundAppError*: nothing in this path throws not found.",
    "excerpts": [
     {
      "path": "src/services/availabilityService.ts",
-     "lineStart": 43,
-     "lineEnd": 46,
-     "quote": "user = await createUser({ email: input.email, name: input.name, role: \"STAFF\","
-    },
-    {
-     "path": "src/services/availabilityService.ts",
-     "lineStart": 58,
-     "lineEnd": 59,
-     "quote": "const staffProfile = await createStaffProfile({ userId: user.id,"
-    },
-    {
-     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
-     "lineStart": 19,
-     "lineEnd": 20,
-     "quote": "If the second fails, a `STAFF` user with no profile remains; there is no transaction."
+     "lineStart": 51,
+     "lineEnd": 52,
+     "quote": "if (message.toLowerCase().includes(\"unique\") || message.includes(\"User_email_key\")) { throw new ConflictAppError(\"A user with this email already exists\");"
     }
    ],
    "readMore": []
@@ -222,23 +211,24 @@
    "id": "x-q07-overnight-wrap",
    "target": "seed:quests:ww35/quiz/4295861a576f8fe2",
    "phase": "after",
-   "title": "Clock minutes forget the date; the code compares dates",
-   "body": "**Key: minutes drop the date, so dateKeys are compared and only an exact midnight end may cross.**\n\n23:30 is minute 1410 and 00:30 is minute 30. Clock minutes alone lose the fact that 00:30 is on the next day, which is how the original check went wrong: the end minute wrapped back to a small number. The fixed code gets a `dateKey` for both ends. If they differ, the interval is rejected unless the end is exactly local midnight closing the start day (then it counts as 1440).\n\nWhy the others are wrong:\n- *Adds 1440 to a smaller end time*: the code never does that; it only sets 1440 for an exact midnight.\n- *Converts to UTC minutes*: UTC times also wrap at UTC midnight, and working hours are local, so this would not help.\n- *The client splits the booking*: nothing requires that; the code simply rejects the interval.",
+   "title": "The rule's day is the staff member's local day",
+   "body": "**Key: yes, because locally it is Monday 22:00-23:00, inside the Monday rule.**\n\n`isWithinWorkingHours` turns both instants into New York parts with `getZonedParts`. In July New York is UTC-4, so 02:00 and 03:00 UTC on Tuesday are 22:00 and 23:00 on Monday, the same local date. `localDayIndex` comes from the local weekday (`Mon`, index 1), and minutes 1320-1380 fit inside 1200-1380.\n\nWhy the others are wrong:\n- *Tuesday in UTC*: the weekday is taken from the zoned parts, not from UTC.\n- *before minute 1200*: the minutes are local too (1320 and 1380).\n- *compared in UTC*: nothing here uses UTC minutes; seconds and milliseconds are the only UTC parts read.",
    "excerpts": [
     {
      "path": "src/lib/availability/schedule.ts",
-     "lineStart": 81,
-     "lineEnd": 84,
-     "quote": "if (start.dateKey !== end.dateKey) {"
-    },
-    {
-     "path": "astraupskill/README.md",
-     "lineStart": 5,
-     "lineEnd": 5,
-     "quote": "A meeting beginning late at night and ending after midnight could appear to fit a daytime rule because the end minute wrapped back to a small number."
+     "lineStart": 78,
+     "lineEnd": 78,
+     "quote": "const localDayIndex = DAY_NAMES.indexOf(start.weekday);"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "src/lib/availability/schedule.ts",
+     "lineStart": 29,
+     "lineEnd": 50,
+     "why": "getZonedParts and what it returns."
+    }
+   ]
   },
   {
    "id": "x-q08-gc-grid-anchor",
@@ -310,20 +300,14 @@
    "id": "x-q11-narrow-error-mapping",
    "target": "seed:quests:ww35/quiz/97dca56d2a274aba",
    "phase": "after",
-   "title": "Only the named exclusion error means 'slot taken'",
-   "body": "**Key: no, as only a typed P2004 naming the exclusion constraint means slot taken.**\n\n`isAppointmentExclusionViolation` returns true only if all of these hold: the error is a `Prisma.PrismaClientKnownRequestError`, its code is `P2004`, and its database detail names the constraint `Appointment_staffProfileId_time_window_excl` (and mentions 23P01 or \"exclusion constraint\"). A network error is not that type, so the function returns false at the first line, whatever its message says. The code comment says why: never match \"arbitrary prose containing the word conflict\".\n\nWhy the others are wrong:\n- *Retried silently*: nothing retries; unknown errors go to the generic error response.\n- *Any message with 'conflict'*: the message text is never read for that word.\n- *Any 409*: the check looks at the Prisma error type and code, not an HTTP status.",
+   "title": "Booking is for clients only",
+   "body": "**Key: ForbiddenAppError 'This action is limited to a different role'.**\n\nThe first line of `bookAppointment` is `requireRole(actor, [\"CLIENT\"])`. `requireRole` throws `ForbiddenAppError(\"This action is limited to a different role\")` whenever `hasRole` is false, and a STAFF actor is not in the list. Nothing else runs.\n\nWhy the others are wrong:\n- *the booking is made*: the role check comes first.\n- *NotFoundAppError*: no lookup happens before the role check, whatever profile the user has.\n- *ValidationAppError*: parsing comes after the role check.",
    "excerpts": [
     {
-     "path": "src/lib/data/appointmentErrors.ts",
-     "lineStart": 4,
-     "lineEnd": 10,
-     "quote": "if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== \"P2004\") return false;"
-    },
-    {
-     "path": "src/lib/data/appointmentErrors.ts",
-     "lineStart": 7,
-     "lineEnd": 8,
-     "quote": "// Prisma wraps PostgreSQL exclusion errors in P2004. Match the named constraint, // never arbitrary prose containing the word conflict or another integrity failure."
+     "path": "src/lib/auth/permissions.ts",
+     "lineStart": 14,
+     "lineEnd": 15,
+     "quote": "if (!hasRole(actor, roles)) { throw new ForbiddenAppError(\"This action is limited to a different role\");"
     }
    ],
    "readMore": []
@@ -332,23 +316,24 @@
    "id": "x-q12-touching-meetings",
    "target": "seed:quests:ww35/quiz/a4653c335b4b80cd",
    "phase": "after",
-   "title": "Meetings that touch at 10:00 do not overlap",
-   "body": "**Key: no, as half-open intervals may touch without overlapping.**\n\n`overlaps` is `left.startsAt < right.endsAt && left.endsAt > right.startsAt`. Take left = the meeting ending at 10:00 and right = the one starting at 10:00. Is `left.endsAt > right.startsAt`? 10:00 > 10:00 is false, so the whole test is false: no overlap. The comparisons are strict (`<`, `>`), so equal edges never count. The SQL constraint uses `tsrange(..., '[)')`, the same convention, so the database agrees.\n\nWhy the others are wrong:\n- *SQL blocks it, TypeScript allows it*: both use half-open ranges, so both allow it.\n- *Both contain the 10:00 instant*: under `[start, end)`, a meeting does not contain its end instant.\n- *Unless a buffer is configured*: no buffer setting exists in this code.",
+   "title": "Slots are whole, so the tail is dropped",
+   "body": "**Key: three, at 09:00, 09:30 and 10:00.**\n\nThe loop builds a slot from `cursor` to `cursor + slotMinutes`, and `break`s as soon as a slot would end after `window.endsAt`. 09:00, 09:30 and 10:00 all end by 10:30; the next slot, 10:30-11:00, ends after 10:45, so the loop stops. No slot is ever shortened to fit.\n\nWhy the others are wrong:\n- *cut to 10:30-10:45*: slots always have the full length.\n- *10:30-11:00*: it ends past the window, which triggers the `break`.\n- *Two*: the 10:00 slot ends at 10:30, still inside the window.",
    "excerpts": [
     {
      "path": "src/lib/availability/schedule.ts",
-     "lineStart": 67,
-     "lineEnd": 69,
-     "quote": "function overlaps(left: TimeWindow, right: TimeWindow) { return left.startsAt < right.endsAt && left.endsAt > right.startsAt; }"
-    },
-    {
-     "path": "prisma/migrations/0001_initial/migration.sql",
-     "lineStart": 102,
-     "lineEnd": 102,
-     "quote": "tsrange(\"startsAt\", \"endsAt\", '[)') WITH &&"
+     "lineStart": 127,
+     "lineEnd": 129,
+     "quote": "if (slot.endsAt > window.endsAt) { break; }"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "src/lib/availability/schedule.ts",
+     "lineStart": 119,
+     "lineEnd": 140,
+     "why": "The whole slot loop."
+    }
+   ]
   },
   {
    "id": "x-q13-gc-overnight",
@@ -370,20 +355,14 @@
    "id": "x-q14-dst-23-hours",
    "target": "seed:quests:ww35/quiz/c4493c093e6c6713",
    "phase": "after",
-   "title": "On spring-forward day, +24 hours overshoots midnight",
-   "body": "**Key: that day has 23 hours, so adding 24 hours lands at 01:00 the next day.**\n\nOn the spring daylight-saving date in New York, clocks jump from 02:00 to 03:00, so that local day is only 23 hours long. Start at local midnight and add 24 real hours: you pass the next midnight by one hour and land at 01:00. That is why the code never adds fixed hours; it formats instants in the timezone (`getZonedParts`) and compares local dates.\n\nWhy the others are wrong:\n- *It is fine*: DST, not leap seconds, is the problem here.\n- *JavaScript Dates are local time*: a `Date` holds a UTC instant; adding milliseconds adds real elapsed time, which is exactly why it overshoots.\n- *Midnight is 24:00 under h23*: h23 writes midnight as 00; it is h24 that would use 24.",
+   "title": "An unknown timezone is refused, not guessed",
+   "body": "**Key: it throws 'A valid IANA timezone is required.'**\n\n`validateCalendar` runs `new Intl.DateTimeFormat(\"en-US\", { timeZone: window.timezone }).format(0)` inside `try`. An unknown zone such as \"Mars/Base\" makes the constructor throw a `RangeError`, and the `catch` throws `ValidationAppError(\"A valid IANA timezone is required.\")`. `isSlotOpen` calls `validateCalendar` before looking at working hours.\n\nWhy the others are wrong:\n- *UTC fallback*: the code never substitutes a zone.\n- *returns false*: the error is thrown, not turned into a closed slot.\n- *server timezone*: no default is used.",
    "excerpts": [
     {
-     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
-     "lineStart": 5,
-     "lineEnd": 5,
-     "quote": "On a spring transition day in New York, the UTC offset changes during the local date. Convert the actual endpoint through the timezone formatter rather than assuming the day has exactly twenty-four elapsed hours."
-    },
-    {
      "path": "src/lib/availability/schedule.ts",
-     "lineStart": 76,
-     "lineEnd": 77,
-     "quote": "const start = getZonedParts(slot.startsAt, timeZone); const end = getZonedParts(slot.endsAt, timeZone);"
+     "lineStart": 58,
+     "lineEnd": 59,
+     "quote": "try { new Intl.DateTimeFormat(\"en-US\", { timeZone: window.timezone }).format(0); } catch { throw new ValidationAppError(\"A valid IANA timezone is required.\"); }"
     }
    ],
    "readMore": []
@@ -414,20 +393,14 @@
    "id": "x-q16-grid-from-caller",
    "target": "seed:quests:ww35/quiz/daf2375fb994441e",
    "phase": "after",
-   "title": "The preview grid starts at the caller's from; bookings need no grid",
-   "body": "**Key: the preview starts at 09:30-10:30, and 09:15 is accepted if free.**\n\n`buildAvailabilitySlots` sets `cursor` to the requested start (`window.startsAt`, the caller's `from`) and steps by the appointment length. A request from 09:30 with 60-minute appointments gives 09:30-10:30, 10:30-11:30, and so on. Booking is separate: `bookAppointment` checks that the interval fits working hours and is free, but not that it lines up with any grid, so 09:15-10:15 is accepted if nothing else is booked. The review lists this as finding 1.\n\nWhy the others are wrong:\n- *Preview is empty off the hour*: there is no on-the-hour rule; 09:30-10:30 fits 09:00-17:00.\n- *Snaps to 09:00; 09:15 rejected as off-grid*: nothing snaps, and nothing checks grid alignment.\n- *09:30 refused, 09:15 snapped back*: neither refusal nor snapping exists.",
+   "title": "Availability queries are capped at 90 days",
+   "body": "**Key: it throws a ValidationAppError, as no query may span over 90 days.**\n\nBefore building any slot, `buildAvailabilitySlots` checks the slot length and `window.endsAt.getTime() - window.startsAt.getTime() > 90 * 86_400_000`. A 91-day window is over the limit, so it throws 'Calendar queries require a positive minute interval and at most 90 days.'\n\nWhy the others are wrong:\n- *first 90 days*: the window is refused, not trimmed.\n- *time-off only*: the limit is on the query window.\n- *only for long slots*: 60 minutes is a valid slot length; the span is the problem.",
    "excerpts": [
     {
      "path": "src/lib/availability/schedule.ts",
-     "lineStart": 119,
-     "lineEnd": 125,
-     "quote": "let cursor = new Date(window.startsAt); while (cursor < window.endsAt) { const slot = { startsAt: new Date(cursor), endsAt: new Date(cursor.getTime() + window.slotMinutes * 60 * 1000), };"
-    },
-    {
-     "path": "astraupskill/02-CONCEPTS.md",
-     "lineStart": 26,
-     "lineEnd": 27,
-     "quote": "`bookAppointment` does not require the requested start to be on that grid: any future start whose whole interval fits working hours and is free can be booked."
+     "lineStart": 116,
+     "lineEnd": 117,
+     "quote": "window.endsAt.getTime() - window.startsAt.getTime() > 90 * 86_400_000) throw new ValidationAppError(\"Calendar queries require a positive minute interval and at most 90 days.\");"
     }
    ],
    "readMore": []
@@ -458,29 +431,24 @@
    "id": "x-q18-count-zero-conflict",
    "target": "seed:quests:ww35/quiz/eaf590a1f0728a21",
    "phase": "after",
-   "title": "updateMany changed zero rows: report a conflict",
-   "body": "**Key: raise a conflict, as count zero means the BOOKED precondition no longer held.**\n\nThe conditional `updateMany` only changes a row that is still BOOKED and in the caller's scope. A count of 0 means that condition was false at the moment of the write: someone else changed it first. The repository returns `null` when the count is not 1, and the service turns that into `ConflictAppError`. The guide says count zero is decisive: there is no successful change to report.\n\nWhy the others are wrong:\n- *Return it as cancelled*: this request did not cancel anything, and its reason was not saved; pretending otherwise misreports.\n- *Not found*: the scoped read already found it; the row still exists.\n- *Retry by id alone*: dropping the BOOKED condition would overwrite the earlier cancellation, which \"would undo the protection and recreate the original race\".",
+   "title": "Existing bookings already close the slot",
+   "body": "**Key: \"That slot is not available\", from the canBookSlot check.**\n\n`canBookSlot` loads the staff member's BOOKED appointments in the window (`listAppointmentsInWindow` filters on `status: \"BOOKED\"`) and passes them to `isSlotOpen` as blocked windows. An overlapping booking makes it return false, so `bookAppointment` throws `ConflictAppError(\"That slot is not available\")`. The later `findConflictingAppointment` check and the exclusion constraint only matter when a booking appears between these steps.\n\nWhy the others are wrong:\n- *just taken, from findConflictingAppointment*: that line is not reached.\n- *just taken, from the constraint*: no insert happens.\n- *in the future*: the time is valid; only the overlap is the problem.",
    "excerpts": [
     {
-     "path": "src/repositories/appointmentRepository.ts",
-     "lineStart": 158,
-     "lineEnd": 158,
-     "quote": "if (result.count !== 1) return null;"
-    },
-    {
      "path": "src/services/appointmentService.ts",
-     "lineStart": 106,
-     "lineEnd": 106,
-     "quote": "if (!updated) throw new ConflictAppError(\"The appointment was already changed or is no longer accessible.\");"
-    },
-    {
-     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
-     "lineStart": 9,
-     "lineEnd": 9,
-     "quote": "For a stale cancellation, count zero is decisive. There is no successful mutation to return, so the service raises a conflict. Repeating the write by ID alone would undo the protection and recreate the original race."
+     "lineStart": 49,
+     "lineEnd": 52,
+     "quote": "const isOpen = await canBookSlot(actor, staff.id, startsAt, endsAt); if (!isOpen) { throw new ConflictAppError(\"That slot is not available\");"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "src/services/availabilityService.ts",
+     "lineStart": 149,
+     "lineEnd": 171,
+     "why": "canBookSlot and its blocked windows."
+    }
+   ]
   },
   {
    "id": "x-q19-hourcycle-h23",
