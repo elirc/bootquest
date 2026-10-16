@@ -43,6 +43,7 @@ const LANGUAGE_LABEL: Record<string, string> = { js: 'JavaScript', ts: 'TypeScri
 export function languageOf(spec: PublicCheck | null | undefined): string | null {
   if (!spec) return null;
   if (spec.type === 'drill-cs') return 'C#';
+  if (spec.type === 'drill-java') return 'Java';
   if ('language' in spec) return LANGUAGE_LABEL[spec.language] ?? spec.language;
   return null;
 }
