@@ -83,42 +83,37 @@
    "id": "x-q01-same-404",
    "target": "seed:quests:master/quiz/1220d36052961754",
    "phase": "after",
-   "title": "Why missing and foreign projects both get 404",
-   "body": "**Key: a distinct answer would be an oracle.** The lookup asks for a project with this id *and* this user's id. If it finds nothing, there are two possible reasons: the project does not exist, or it belongs to someone else. If the route answered 403 only in the second case, any caller could test ids and learn which ones exist in other accounts. The concepts guide names this an *id oracle* and says returning the same not-found shape avoids revealing which explanation applies.\n\n- *Route handlers cannot return 403*: they can return any status; the guard itself builds its response with `Response.json(..., { status: 404 })`.\n- *A 403 makes the client retry*: nothing in the guide or code describes retry behaviour.\n- *Browsers cache 403s*: not the reason given; the concern is information leakage.",
+   "title": "A new project goes after the last one in its area",
+   "body": "**Key: 6, one more than the highest order among her projects in area A.**\n\nBefore creating, POST runs `prisma.project.findFirst` for her projects in `body.areaId`, sorted by `order` descending, and keeps only `order`. That finds 5. The create then uses `body.order ?? (last?.order ?? -1) + 1`: no order was sent, so 5 + 1 = 6. Gaps in the sequence are not filled.\n\nWhy the others are wrong:\n- *3, the count*: the code reads the highest order, not the number of rows.\n- *0*: 0 is only the result when she has no project in that area (`-1 + 1`).\n- *1, the lowest unused value*: nothing looks for gaps.",
    "excerpts": [
     {
-     "path": "astraupskill/02-CONCEPTS.md",
-     "lineStart": 10,
-     "lineEnd": 14,
-     "quote": "The destination lookup combines two predicates: the submitted project ID and the authenticated user's ID. A result proves the requested relationship is allowed at that moment. No result means either the project is absent or it is outside the user's scope. Returning the same not-found shape avoids revealing which explanation applies (an *id oracle*). The task write must still keep its"
-    },
-    {
-     "path": "src/app/api/tasks/route.ts",
-     "lineStart": 42,
-     "lineEnd": 44,
-     "quote": "if (!project) { return Response.json({ error: \"Project not found\" }, { status: 404 }); }"
+     "path": "src/app/api/projects/route.ts",
+     "lineStart": 48,
+     "lineEnd": 48,
+     "quote": "order: body.order ?? (last?.order ?? -1) + 1,"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "src/app/api/projects/route.ts",
+     "lineStart": 37,
+     "lineEnd": 41,
+     "why": "The lookup of the last project in the area."
+    }
+   ]
   },
   {
    "id": "x-q02-mass-assignment",
    "target": "seed:quests:master/quiz/18e155c3a5250441",
    "phase": "after",
-   "title": "What a caller still controls in settings import",
-   "body": "**Key: every column but userId.** Each imported row is built as `{ ...item, userId }`. Because `userId` is written last, it overrides any `userId` the caller put in the row, so ownership cannot be forged. But everything else in `item` is copied as-is and there is no schema, so the caller chooses `id`, `projectId`, `areaId`, `taskId`, `goalId` and every other column. That is **mass assignment**. The guide adds that reusing another user's `id` makes `createMany` fail, which is itself an existence oracle.\n\n- *Prisma regenerates the ids*: no; the guide's fix is to *start* regenerating ids, which means the route does not today.\n- *Spreading userId last discards other fields*: spreading copies all fields; only a later key with the same name is overridden.\n- *Just userId*: the reverse; userId is the one field the caller cannot choose.",
+   "title": "A read filter is not an ownership check, but userId still scopes it",
+   "body": "**Key: 200 with an empty tasks list, because userId still filters the query.**\n\n`GET /api/tasks` does not look the project up at all. It builds one `where` with `userId: auth.user.id`, `archived: false` and, when the query string has one, `projectId`. Bob's tasks carry Bob's `userId`, so none of them match, and the handler answers `{ tasks: [] }` with the default 200.\n\nWhy the others are wrong:\n- *404 'Project not found'*: that lookup exists in POST and PATCH, not in GET.\n- *Bob's tasks*: `projectId` is added to the user filter; it does not replace it.\n- *403*: no branch of this handler returns 403.",
    "excerpts": [
     {
-     "path": "src/app/api/settings/import/route.ts",
-     "lineStart": 29,
-     "lineEnd": 32,
-     "quote": "const projects = (body.projects as Record<string, unknown>[]) ?? []; if (projects.length) { await tx.project.createMany({ data: projects.map((item) => ({ ...item, userId })) as never[] }); }"
-    },
-    {
-     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
-     "lineStart": 73,
-     "lineEnd": 77,
-     "quote": "4. **Mass assignment in settings import.** Every row is created as `{ ...item, userId }` (`settings/import/route.ts` lines 26-71) with no schema. Because `userId` is spread last, the caller cannot forge it, but they choose `id`, `projectId`, `areaId`, `taskId`, `goalId` and every other column. An `id` that already belongs to another user's row makes"
+     "path": "src/app/api/tasks/route.ts",
+     "lineStart": 13,
+     "lineEnd": 16,
+     "quote": "where: { userId: auth.user.id, archived: false, ...(projectId ? { projectId } : {}),"
     }
    ],
    "readMore": []
@@ -221,51 +216,47 @@
    "id": "x-q07-error-oracle",
    "target": "seed:quests:master/quiz/499fe6fbced1106b",
    "phase": "after",
-   "title": "Why different errors for missing ids are a problem",
-   "body": "**Key: handleError echoes error.message, so the responses reveal whether an id exists.** `handleError` returns any `Error`'s message with a 400. A nonexistent `areaId` makes the insert fail on a foreign key, so the caller sees Prisma's message. Bob's real `areaId` passes the foreign key (nobody checks ownership), so the caller gets 201. Comparing the two answers tells the caller whether an id exists, and the raw message exposes internals. The guide's fix: an ownership lookup returning the same 404 for both cases, plus a generic message for non-validation errors.\n\n- *Localized messages break clients*: not what the guide is about.\n- *A 400 violates HTTP semantics*: the issue is information leaking, not the status number.\n- *cuid ids cannot be guessed*: unguessable ids make it hard to exploit, but the guide still calls the difference an oracle and recommends fixing it.",
+   "title": "The project PATCH never checks the area",
+   "body": "**Key: it returns 200, with her project now filed under Bob's area.**\n\nThe project `patchSchema` accepts `areaId`, `name` and `order`. The handler then runs `prisma.project.updateMany({ where: { id, userId: auth.user.id }, data: body })`. That `where` protects the project row being changed (it is hers), but there is no lookup for the area she names. The area exists, so the foreign key is satisfied, and the update succeeds. This is the same bug class as the lesson's task PATCH, and `06-SOLUTIONS-AND-REVIEW.md` lists it as an open finding.\n\nWhy the others are wrong:\n- *404*: that only happens when the project itself is not hers.\n- *400*: `areaId` is in the schema.\n- *areaId dropped*: `data: body` writes every parsed field.",
    "excerpts": [
     {
-     "path": "src/lib/api.ts",
-     "lineStart": 24,
-     "lineEnd": 26,
-     "quote": "if (error instanceof Error) { return json({ error: error.message }, { status: 400 }); }"
-    },
-    {
-     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
-     "lineStart": 67,
-     "lineEnd": 70,
-     "quote": "`POST /api/projects` with a nonexistent `areaId` fails the `Project_areaId_fkey` constraint and returns the Prisma message; with Bob's real `areaId` it returns 201. The difference tells a caller whether an id exists, and the raw message exposes internals. The fix is an ownership"
+     "path": "src/app/api/projects/[id]/route.ts",
+     "lineStart": 20,
+     "lineEnd": 23,
+     "quote": "const updated = await prisma.project.updateMany({ where: { id, userId: auth.user.id }, data: body, });"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+     "lineStart": 50,
+     "lineEnd": 58,
+     "why": "The open finding that lists this route."
+    }
+   ]
   },
   {
    "id": "x-q08-project-deleted-mid-post",
    "target": "seed:quests:master/quiz/655ff90105c0b102",
    "phase": "after",
-   "title": "What happens if the project is deleted mid-request",
-   "body": "**Key: the foreign key rejects the insert and handleError returns 400 with Prisma's message.** The lookup and the create are two separate statements. If `DELETE /api/projects/[id]` lands between them, the lookup has already said yes, but by the time `task.create` runs the project is gone. The database's `Task_projectId_fkey` constraint refuses the insert, Prisma throws, and `handleError` turns that `Error` into a 400 carrying the raw message. Ugly, but integrity holds and no cross-user relationship is made.\n\n- *An orphaned task is created*: the foreign key prevents exactly that.\n- *withUser re-checks after the create*: `withUser` only runs at the start to find the logged-in user.\n- *A deadlock*: the guide describes a rejected insert, not a deadlock.",
+   "title": "Deleting a task archives it",
+   "body": "**Key: the row stays with archived set to true, and GET /api/tasks stops listing it.**\n\nThe DELETE handler does not call `delete`. It runs `prisma.task.updateMany` scoped to `{ id, userId: auth.user.id }` with `data: { archived: true }`, returns 404 if no row matched, and otherwise `{ ok: true }`. The list route filters on `archived: false`, so the task disappears from the list while the row and its links remain.\n\nWhy the others are wrong:\n- *Removed with a cascade*: no row is removed.\n- *Unchanged, hidden by the client*: the server writes `archived: true`.\n- *Removed only without time entries*: there is no delete and no such condition.",
    "excerpts": [
     {
-     "path": "astraupskill/02-CONCEPTS.md",
-     "lineStart": 36,
-     "lineEnd": 40,
-     "quote": "- **Can the project disappear?** Yes: `DELETE /api/projects/[id]` (line 41) or `POST /api/settings/reset`. If that lands between Alice's lookup and her `task.create`, the `Task_projectId_fkey` constraint rejects the insert; Prisma throws, and `handleError` turns it into a 400 carrying the raw Prisma message instead of a clean 404."
-    },
-    {
-     "path": "src/app/api/projects/[id]/route.ts",
-     "lineStart": 41,
-     "lineEnd": 41,
-     "quote": "const deleted = await prisma.project.deleteMany({ where: { id, userId: auth.user.id } });"
-    },
-    {
-     "path": "src/lib/api.ts",
-     "lineStart": 24,
-     "lineEnd": 26,
-     "quote": "if (error instanceof Error) { return json({ error: error.message }, { status: 400 }); }"
+     "path": "src/app/api/tasks/[id]/route.ts",
+     "lineStart": 55,
+     "lineEnd": 57,
+     "quote": "const archived = await prisma.task.updateMany({ where: { id, userId: auth.user.id }, data: { archived: true },"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "src/app/api/tasks/route.ts",
+     "lineStart": 12,
+     "lineEnd": 17,
+     "why": "The list query and its archived filter."
+    }
+   ]
   },
   {
    "id": "x-q09-api-oracle-location",

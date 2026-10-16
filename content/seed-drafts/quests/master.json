@@ -26,15 +26,15 @@
    "id": "q02-uniform-404",
    "kind": "quiz",
    "source": { "path": "astraupskill/02-CONCEPTS.md", "lines": { "start": 10, "end": 16 } },
-   "cites": [{ "path": "src/app/api/tasks/route.ts", "lineStart": 38, "lineEnd": 44 }],
-   "prompt": "The destination lookup returns the same 404 'Project not found' whether the project does not exist or belongs to another user. Why not a 403 for the second case?",
-   "answer": "A distinct answer would be an oracle revealing that another user's id exists",
+   "cites": [{ "path": "src/app/api/projects/route.ts", "lineStart": 37, "lineEnd": 48 }],
+   "prompt": "Alice's projects in area A have order 0, 2 and 5. She POSTs a new project to area A with no order field. What order does it get?",
+   "answer": "6, one more than the highest order among her projects in area A",
    "distractors": [
-    "Next.js route handlers have no supported way to return a 403 status code",
-    "A 403 would make the client retry the request with a refreshed session cookie",
-    "Browsers cache 403 responses, so a later valid request for that id would fail too"
+    "3, the count of projects that she already has in area A",
+    "0, because order is optional and new projects go first",
+    "1, the lowest order value in area A that is still unused"
    ],
-   "explanation": "Combining id and userId in one predicate makes absent and out-of-scope indistinguishable by design."
+   "explanation": "POST looks up her last project in that area by order desc and uses body.order ?? (last?.order ?? -1) + 1, so 5 + 1 = 6."
   },
   {
    "id": "q03-empty-string-presence",
@@ -127,46 +127,46 @@
    "id": "q09-handleerror-oracle",
    "kind": "quiz",
    "source": { "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md", "lines": { "start": 65, "end": 72 } },
-   "cites": [{ "path": "src/lib/api.ts", "lineStart": 24, "lineEnd": 26 }],
-   "prompt": "POST /api/projects with a nonexistent areaId returns a 400 with a Prisma foreign-key message; with Bob's real areaId it returns 201. Why is that a problem?",
-   "answer": "handleError echoes error.message, so the responses reveal whether an id exists",
+   "cites": [{ "path": "src/app/api/projects/[id]/route.ts", "lineStart": 6, "lineEnd": 30 }],
+   "prompt": "Alice PATCHes her own project with { areaId } set to the id of one of Bob's areas. What does PATCH /api/projects/[id] do?",
+   "answer": "Returns 200, with her project now filed under Bob's area",
    "distractors": [
-    "Prisma messages are localized, so they break clients that use other languages",
-    "A 400 for a missing foreign key violates the HTTP specification's status semantics",
-    "It is not a problem, because cuid() ids are far too random for anyone to guess"
+    "Returns 404 'Project not found', as that area is not hers",
+    "Returns 400, since patchSchema does not accept an areaId",
+    "Returns 200, but areaId is dropped and her old area is kept"
    ],
-   "explanation": "handleError returns error.message for any Error, so the difference is an existence oracle and leaks internals. The fix is an ownership lookup returning the same 404 for both cases plus a generic message for non-validation errors."
+   "explanation": "patchSchema allows areaId, and the updateMany is scoped only by the project's id and userId. Nothing checks who owns the area, so the write succeeds: one of the open findings in 06."
   },
   {
    "id": "q10-mass-assignment-import",
    "kind": "quiz",
    "source": { "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md", "lines": { "start": 73, "end": 82 } },
-   "cites": [{ "path": "src/app/api/settings/import/route.ts", "lineStart": 29, "lineEnd": 32 }],
-   "prompt": "Settings import creates each row as { ...item, userId }. What can a caller still control?",
-   "answer": "Each column but userId, including ids and foreign keys, as rows have no schema",
+   "cites": [{ "path": "src/app/api/tasks/route.ts", "lineStart": 6, "lineEnd": 28 }],
+   "prompt": "Alice has no tasks in Bob's project. She calls GET /api/tasks?projectId=<id of Bob's project>. What does she get back?",
+   "answer": "200 with an empty tasks list, as userId still filters the query",
    "distractors": [
-    "Nothing, as spreading userId last discards the caller's other fields in each row",
-    "Just userId, because it is the last property that is written into each created row",
-    "Display fields such as names, since Prisma regenerates the ids during createMany"
+    "404 'Project not found', from the same lookup that POST runs",
+    "200 with Bob's tasks in that project, as projectId is the filter",
+    "403, because that projectId belongs to another user's project"
    ],
-   "explanation": "Spreading userId last stops forging ownership, but the caller still chooses ids and relationships: mass assignment."
+   "explanation": "GET has no project lookup; it adds projectId to a where clause that always contains userId: auth.user.id and archived: false, so Bob's tasks never match."
   },
   {
    "id": "q11-delete-race",
    "kind": "quiz",
    "source": { "path": "astraupskill/02-CONCEPTS.md", "lines": { "start": 36, "end": 42 } },
    "cites": [
-    { "path": "src/app/api/projects/[id]/route.ts", "lineStart": 41, "lineEnd": 44 },
-    { "path": "src/lib/api.ts", "lineStart": 24, "lineEnd": 26 }
+    { "path": "src/app/api/tasks/[id]/route.ts", "lineStart": 49, "lineEnd": 65 },
+    { "path": "src/app/api/tasks/route.ts", "lineStart": 12, "lineEnd": 17 }
    ],
-   "prompt": "Alice deletes her project between her own task POST's lookup and its task.create. What does the client see?",
-   "answer": "The foreign key rejects the insert and handleError returns 400 with Prisma's message",
+   "prompt": "Alice sends DELETE /api/tasks/[id] for one of her tasks. What happens to the task row?",
+   "answer": "It stays with archived set to true, and GET /api/tasks stops listing it",
    "distractors": [
-    "A task pointing at the deleted project is created and left orphaned in the table",
-    "A clean 404 'Project not found', because withUser re-checks ownership after the create",
-    "A deadlock, because the delete and the create lock the same project row"
+    "It is removed, and the database cascades the delete to its day entries",
+    "It stays unchanged; only the client hides it until the next reload",
+    "It is removed only when no time entries still point at that task"
    ],
-   "explanation": "The Task_projectId_fkey constraint rejects the insert and handleError returns a 400 carrying the raw Prisma message - ugly, but no cross-user relationship. Lookup and write are two statements; the database's foreign key preserves integrity, and only the response is untidy."
+   "explanation": "DELETE runs task.updateMany({ where: { id, userId }, data: { archived: true } }) and returns { ok: true }. GET /api/tasks filters on archived: false."
   },
   {
    "id": "q12-no-owner-transfer",
