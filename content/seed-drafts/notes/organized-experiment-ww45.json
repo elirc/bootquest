@@ -195,23 +195,24 @@
    "id": "x-q05-tag-rename",
    "target": "seed:quests:organized-experiment-ww45/quiz/0df497390d352f8c",
    "phase": "after",
-   "title": "What saving \"SECURITY\" does to the shared \"Security\" tag",
-   "body": "The key is right: the existing tag is renamed to \"SECURITY\" for every entry that uses it. `upsertTagsByNames` does an **upsert** (update if it exists, insert if not) keyed on the tag's slug: `where: { slug }`, `update: { name }`. \"SECURITY\" and \"Security\" both slugify to `security`, so the upsert finds the existing row and overwrites its display name. Tags are global, so every entry shows the new casing. Review finding 4 calls this out.\n\nWhy the others are wrong:\n- \"A second tag is created\": the slug matches, so the update branch runs, not the create.\n- \"The save fails on a unique constraint\": an upsert avoids the conflict by updating.\n- \"The new casing is discarded\": the update writes the new name.",
+   "title": "Trim first, then deduplicate",
+   "body": "**Key: one tag named Runbooks, because names are trimmed before the dedupe.**\n\n`upsertTagsByNames` computes `dedupe(tagNames.map((tag) => tag.trim()))`. Trimming turns both inputs into `\"Runbooks\"`, and `dedupe` (a `Set`) keeps one. That name gets slug `runbooks`, one upsert runs, and the final `findMany` by slug returns a single tag. (The save schema already trims each tag too.)\n\nWhy the others are wrong:\n- *Two tags*: the order is trim, then dedupe.\n- *spaces kept*: both the schema and the repository trim.\n- *unique constraint failure*: only one upsert runs for that slug.",
    "excerpts": [
     {
      "path": "src/repositories/tagRepository.ts",
-     "lineStart": 22,
-     "lineEnd": 25,
-     "quote": "client.tag.upsert({ where: { slug: tag.slug }, update: { name: tag.name }, create: tag,"
-    },
-    {
-     "path": "docs/architecture/auth-and-permissions.md",
-     "lineStart": 70,
-     "lineEnd": 70,
-     "quote": "so saving an entry with the tag \"SECURITY\" renames the global \"Security\" tag for everyone."
+     "lineStart": 15,
+     "lineEnd": 15,
+     "quote": "const normalizedTags = dedupe(tagNames.map((tag) => tag.trim())).map((name) => ({"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "src/lib/utils.ts",
+     "lineStart": 8,
+     "lineEnd": 18,
+     "why": "slugify and dedupe."
+    }
+   ]
   },
   {
    "id": "x-q06-empty-slug-refine",
@@ -245,23 +246,24 @@
    "id": "x-q07-foreign-draft-404",
    "target": "seed:quests:organized-experiment-ww45/quiz/4e771be3a341adda",
    "phase": "after",
-   "title": "Why another editor's draft gives 404, not 403",
-   "body": "The key is right: 404, because the lookup is scoped by `authorId` for non-admins. `changeEntryStatus` starts with `findEditableEntryById(actor.id, actor.role, entryId)`. For an editor that query includes `authorId`, so someone else's draft simply does not match and the result is null. The next lines throw `NotFoundError`. A useful side effect: the editor cannot even learn that the entry exists.\n\nWhy the others are wrong:\n- \"409 because the draft is locked\": there is no locking; 409 is for invalid transitions.\n- \"403 from canTransitionEntry\": that check would only run if the entry had been found.\n- \"200, editors may transition any draft\": status transitions are limited to own entries.",
+   "title": "An entry never conflicts with its own slug",
+   "body": "**Key: it saves, because the slug lookup leaves out the entry being edited.**\n\nAfter the ownership lookup, `updateDraftEntry` checks for a slug clash with `findEntryBySlug(input.slug, entryId)`. The repository adds `NOT: { id: excludeId }` when an id is passed, so the entry's own row is skipped. With no other entry using that slug, nothing is found and the update runs in its transaction.\n\nWhy the others are wrong:\n- *409 That slug is already in use*: that needs a different entry with the same slug.\n- *a numeric suffix*: nothing appends suffixes; a real clash is refused.\n- *400*: the schema always derives a slug, and an unchanged one is valid.",
    "excerpts": [
     {
-     "path": "src/services/knowledgeEntryService.ts",
-     "lineStart": 164,
-     "lineEnd": 167,
-     "quote": "const currentEntry = await findEditableEntryById(actor.id, actor.role, entryId); if (!currentEntry) { throw new NotFoundError(\"Knowledge entry not found\");"
-    },
-    {
-     "path": "docs/architecture/auth-and-permissions.md",
-     "lineStart": 57,
-     "lineEnd": 57,
-     "quote": "Every mutation path in the service goes through it, so an editor gets 404, not 403, for another editor's entry."
+     "path": "src/repositories/knowledgeEntryRepository.ts",
+     "lineStart": 111,
+     "lineEnd": 111,
+     "quote": "...(excludeId ? { NOT: { id: excludeId } } : {}),"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "src/services/knowledgeEntryService.ts",
+     "lineStart": 121,
+     "lineEnd": 136,
+     "why": "The checks before the update transaction."
+    }
+   ]
   },
   {
    "id": "x-q08-empty-slug-goal",

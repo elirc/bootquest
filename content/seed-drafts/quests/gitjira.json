@@ -28,19 +28,19 @@
    },
    "cites": [
     {
-     "path": "apps/api/src/services/sprint.service.js",
-     "lineStart": 14,
-     "lineEnd": 28
+     "path": "apps/api/src/domain/sprint-state-machine.js",
+     "lineStart": 53,
+     "lineEnd": 55
     }
    ],
-   "prompt": "Every attempt inside serializable() fails with Prisma P2034. How often does the work run, and what reaches the caller?",
-   "answer": "Three runs, then the domain 409 \"Sprint changed during this request\"",
+   "prompt": "assertTransition is called with the action name 'cancel', which has no row in the TRANSITIONS table. What does it do?",
+   "answer": "Throws a 409 conflict with Unknown sprint action \"cancel\"",
    "distractors": [
-    "Two runs; the second P2034 is rethrown to the caller as a raw Prisma error",
-    "It reruns until one commits, so a P2034 never reaches the caller at all",
-    "Three runs, and then the error middleware answers with a generic 500"
+    "Returns the current state unchanged, so the write is a no-op",
+    "Throws a plain Error, which the middleware reports as a 500",
+    "Returns null, and the service then skips its sprint update"
    ],
-   "explanation": "The loop bound is attempt < 3, a retry happens only while attempt < 2, and on the third P2034 the helper throws conflict(...), a 409. Any other error is rethrown unchanged."
+   "explanation": "const t = TRANSITIONS[action]; if (!t) throw conflict(`Unknown sprint action \"${action}\"`). conflict() builds an ApiError with code CONFLICT, which maps to status 409."
   },
   {
    "id": "q02-other-error",
@@ -55,18 +55,23 @@
    "cites": [
     {
      "path": "apps/api/src/services/sprint.service.js",
-     "lineStart": 20,
-     "lineEnd": 25
+     "lineStart": 120,
+     "lineEnd": 123
+    },
+    {
+     "path": "apps/api/src/services/sprint.service.js",
+     "lineStart": 180,
+     "lineEnd": 191
     }
    ],
-   "prompt": "The work passed to serializable() throws a Prisma P2002 that it does not catch itself. What does the helper do?",
-   "answer": "It rethrows the error unchanged on the first attempt, with no retry",
+   "prompt": "Sprint S held issues of 5 and 3 points. It was completed with moveUnfinishedTo 'backlog' while only the 5-point issue sat in a DONE column. What does sprintReport show for S now?",
+   "answer": "committed 5, completed 5, total 1, with unfinished empty",
    "distractors": [
-    "It retries it like P2034, for up to three attempts in all",
-    "It converts it into the domain 409 \"Sprint changed during this request\"",
-    "It swallows the error, and the transaction resolves to undefined"
+    "committed 8, completed 5, total 2, with the 3-point issue unfinished",
+    "committed 8, completed 8, total 2, since completion closes all work",
+    "committed 0, completed 0, total 0, as a completed sprint is empty"
    ],
-   "explanation": "retryable requires PrismaClientKnownRequestError AND code === \"P2034\" (sprint.service.js:21-22). A P2002 is not retryable, so line 25 rethrows it at once. startSprint catches its own P2002 inside the work and maps it to 409."
+   "explanation": "Completion set the 3-point issue's sprintId to null. sprintReport reads the issues whose sprintId is still S, so only the DONE 5-point issue is counted: committed 5, completed 5, total 1, unfinished []."
   },
   {
    "id": "q03-future-clock",
@@ -81,23 +86,18 @@
    "cites": [
     {
      "path": "apps/api/src/services/sprint.service.js",
-     "lineStart": 152,
-     "lineEnd": 152
-    },
-    {
-     "path": "apps/api/test/sprint.test.js",
-     "lineStart": 96,
-     "lineEnd": 112
+     "lineStart": 180,
+     "lineEnd": 191
     }
    ],
-   "prompt": "An issue's stored updatedAt is 60 seconds in the future. A valid assignment sends that exact token. What is the new updatedAt?",
-   "answer": "Exactly the stored value plus 1 ms, as Math.max picks previous + 1",
+   "prompt": "An ACTIVE sprint holds three issues: 5 points in a DONE column, 3 points in progress, and one in progress with storyPoints null. What does sprintReport return?",
+   "answer": "committed 8, completed 5, total 3, and two unfinished issues",
    "distractors": [
-    "The current wall time, roughly 60,000 ms earlier than the stored value",
-    "The stored value unchanged, because the clock has not caught up yet",
-    "None: a token from the future fails the version check with 409"
+    "committed 8, completed 5, total 2, as unestimated issues are skipped",
+    "committed 8, completed 5, total 3, and only one unfinished issue",
+    "It throws a 409, because one issue in the sprint has no estimate"
    ],
-   "explanation": "nextUpdatedAt = new Date(Math.max(Date.now(), issue.updatedAt.getTime() + 1)) (line 152). With the clock a minute behind, the second argument wins; the test asserts toBe(captured.getTime() + 1)."
+   "explanation": "Both sums use (i.storyPoints ?? 0), so the null issue adds 0 to committed (8) and is still in total (3). unfinished is every issue not in a DONE column: the 3-point one and the null one."
   },
   {
    "id": "q04-missing-token",
@@ -112,23 +112,23 @@
    "cites": [
     {
      "path": "apps/api/src/services/sprint.service.js",
-     "lineStart": 153,
-     "lineEnd": 159
+     "lineStart": 79,
+     "lineEnd": 79
     },
     {
-     "path": "packages/shared/src/issue-schemas.js",
-     "lineStart": 77,
-     "lineEnd": 80
+     "path": "apps/api/src/services/sprint.service.js",
+     "lineStart": 120,
+     "lineEnd": 123
     }
    ],
-   "prompt": "Suppose the issue-list projection did not select updatedAt. What would a backlog sprint assignment do?",
-   "answer": "Skip the stale check silently, as the undefined token is dropped from the JSON body",
+   "prompt": "completeSprint is called on an ACTIVE sprint with moveUnfinishedTo set to the string 'backlog'. What happens to its unfinished issues?",
+   "answer": "Their sprintId becomes null, as 'backlog' is mapped to null first",
    "distractors": [
-    "Fail with 400, because assignSprintSchema requires expectedUpdatedAt to be set",
-    "Return 409 every time, as an undefined token never matches the stored version",
-    "Crash in the controller when it reads req.body.expectedUpdatedAt and finds none"
+    "A 404 Destination sprint, since no sprint row has the id 'backlog'",
+    "Their sprintId is set to the literal string 'backlog' by the update",
+    "A 409, because 'backlog' is not a PLANNED sprint of this project"
    ],
-   "explanation": "expectedUpdatedAt is z.string().datetime().optional(), JSON.stringify drops undefined fields, and the service spreads the updatedAt term only when a token is present (line 156). No error would reveal the gap; that is why the list now selects updatedAt."
+   "explanation": "Line 79 maps 'backlog' to null before the transaction, so the destination checks (if (destination)) are skipped and the bulk update writes sprintId: null."
   },
   {
    "id": "q05-shared-token-race",
@@ -142,24 +142,19 @@
    },
    "cites": [
     {
-     "path": "apps/api/test/sprint.test.js",
-     "lineStart": 114,
-     "lineEnd": 136
-    },
-    {
      "path": "apps/api/src/services/sprint.service.js",
-     "lineStart": 153,
-     "lineEnd": 162
+     "lineStart": 142,
+     "lineEnd": 159
     }
    ],
-   "prompt": "Two assignments of the same issue race, each carrying the same captured updatedAt token. What does the regression require?",
-   "answer": "One 200 and one 409, and the winner's returned updatedAt has advanced",
+   "prompt": "Issue GJ-7 still sits in a COMPLETED sprint. A member sends a sprint assignment with sprintId null and a current expectedUpdatedAt. What does assignIssueToSprint do?",
+   "answer": "Moves it to the backlog, since the sprint checks need a sprintId",
    "distractors": [
-    "Two 200s, with the later write deciding which sprint finally keeps the issue",
-    "Two 409s, as serializable isolation aborts both of the writers",
-    "One 200, while the other is retried by the helper until it also wins"
+    "Refuses with 409, as issues cannot leave a completed sprint",
+    "Refuses with 404, because a null sprintId matches no sprint row",
+    "Moves it, but leaves updatedAt alone because no sprint was set"
    ],
-   "explanation": "The token is in the updateMany predicate, so once the winner advances updatedAt the loser matches zero rows and gets conflict (lines 160-162). The test sorts the statuses to [200, 409] and checks the winner's timestamp changed."
+   "explanation": "The sprint lookup and the COMPLETED check sit inside if (sprintId), so null skips them. The updateMany then writes sprintId: null and a new updatedAt."
   },
   {
    "id": "q06-nonmember",
@@ -174,23 +169,23 @@
    "cites": [
     {
      "path": "apps/api/src/services/project.service.js",
-     "lineStart": 79,
-     "lineEnd": 80
+     "lineStart": 65,
+     "lineEnd": 70
     },
     {
-     "path": "apps/api/test/sprint.test.js",
-     "lineStart": 138,
-     "lineEnd": 153
+     "path": "packages/shared/src/policy.js",
+     "lineStart": 40,
+     "lineEnd": 41
     }
    ],
-   "prompt": "A user who is not a member of project GJ sends a sprint assignment for one of its issues. What comes back?",
-   "answer": "A 404 for the project, and the issue keeps both its sprintId and its updatedAt",
+   "prompt": "A user who is a VIEWER of project GJ sends a sprint assignment for one of its issues. What comes back?",
+   "answer": "403: Your role (VIEWER) is not permitted to sprint:manage",
    "distractors": [
-    "A 403 that names the sprint:manage action that the outsider's role does not hold",
-    "A 401, because the outsider's token is not valid for this project at all",
-    "A 409, because the outsider's expectedUpdatedAt is treated as a stale token"
+    "404: the project is hidden, as viewers count as outsiders here",
+    "200: a viewer may read sprints, and so may assign to them",
+    "409: a viewer's expectedUpdatedAt is treated as a stale token"
    ],
-   "explanation": "requireMembership throws notFound(\"Project\") when the user has no role in the member map, concealing the project. The test then reads the row through __realClient: sprintId is still null and updatedAt unchanged."
+   "explanation": "assignIssueToSprint loads the project with 'sprint:manage'. The viewer is a member, so requireMembership passes, but the policy lists only ADMIN and MEMBER for sprint:manage and authorize throws forbidden (403)."
   },
   {
    "id": "q07-completed-target",
@@ -205,18 +200,23 @@
    "cites": [
     {
      "path": "apps/api/src/services/sprint.service.js",
-     "lineStart": 143,
-     "lineEnd": 150
+     "lineStart": 47,
+     "lineEnd": 54
+    },
+    {
+     "path": "apps/api/src/domain/sprint-state-machine.js",
+     "lineStart": 26,
+     "lineEnd": 32
     }
    ],
-   "prompt": "An issue is assigned to a sprint of the same project whose state is COMPLETED. What does assignIssueToSprint answer?",
-   "answer": "A 409 conflict that says the sprint is already completed",
+   "prompt": "Another sprint of the project is already ACTIVE. Someone starts a PLANNED sprint of it that has no issues. Which error does startSprint return?",
+   "answer": "409 \"Cannot start a sprint with no issues\" from the state machine",
    "distractors": [
-    "404 Sprint; completed sprints are hidden from the project lookup",
-    "200, and the issue is attached to the completed sprint as asked",
-    "400 from assignSprintSchema, which refuses completed sprint ids"
+    "409 \"Another sprint is already active in this project\" from P2002",
+    "404 Sprint, since an empty sprint is filtered out of the lookup",
+    "None: it starts, as the issue count is only checked at completion"
    ],
-   "explanation": "The project-scoped findFirst finds the sprint (it is not hidden), then sprint.state === \"COMPLETED\" throws conflict (lines 148-149). The schema only checks shapes, not sprint states."
+   "explanation": "assertTransition('start', ...) runs its guard with issueCount 0 before any update, so the no-issues conflict is thrown first and the unique index is never reached."
   },
   {
    "id": "q08-foreign-destination",
@@ -233,21 +233,16 @@
      "path": "apps/api/src/services/sprint.service.js",
      "lineStart": 87,
      "lineEnd": 99
-    },
-    {
-     "path": "apps/api/test/sprint.test.js",
-     "lineStart": 181,
-     "lineEnd": 217
     }
    ],
-   "prompt": "completeSprint is called with moveUnfinishedTo set to a PLANNED sprint of another project. What is the outcome?",
-   "answer": "A 404 for the destination; the source sprint stays ACTIVE and keeps its issues",
+   "prompt": "completeSprint is called on ACTIVE sprint S with moveUnfinishedTo set to the id of S itself. What is the outcome?",
+   "answer": "409 \"Unfinished issues cannot stay in the completed sprint\"",
    "distractors": [
-    "409 \"Unfinished issues can only move to a planned sprint\", and nothing changes",
-    "200, and the unfinished issues are moved into the other project's sprint",
-    "The sprint completes, yet movedCount is 0 because no destination was found"
+    "409 \"Unfinished issues can only move to a planned sprint\"",
+    "200: the unfinished issues simply stay attached to S",
+    "404 Destination sprint, as S is excluded from that lookup"
    ],
-   "explanation": "The destination lookup is scoped by projectId: project.id (lines 91-94), so a foreign sprint is simply not found and notFound(\"Destination sprint\") is thrown before the first write. The regression checks the source is still ACTIVE and the issue still assigned."
+   "explanation": "The destination === sprint.id check comes first inside if (destination), so it throws before the destination lookup and the PLANNED check run."
   },
   {
    "id": "q09-double-complete",
@@ -262,18 +257,18 @@
    "cites": [
     {
      "path": "apps/api/src/services/sprint.service.js",
-     "lineStart": 114,
-     "lineEnd": 118
+     "lineStart": 143,
+     "lineEnd": 163
     }
    ],
-   "prompt": "Two completion requests for the same ACTIVE sprint race. How does the service let only one of them win?",
-   "answer": "The loser's updateMany on state ACTIVE matches 0 rows, so it gets 409",
+   "prompt": "Issue GJ-3 is already in PLANNED sprint P. A member assigns it to P again with a current expectedUpdatedAt. What does assignIssueToSprint return?",
+   "answer": "The issue, with its updatedAt moved forward by the write",
    "distractors": [
-    "Both return 200, and the second request then reports a movedCount of zero",
-    "Both move the unfinished issues, so every issue is moved twice",
-    "It does not: the second waits on a row lock, then also succeeds"
+    "The issue unchanged, as nothing about it is different",
+    "A 409, as the issue is already assigned to that same sprint",
+    "A 204 with no body, since a no-op assignment is skipped"
    ],
-   "explanation": "The claim is tx.sprint.updateMany({ where: { id, projectId, state: \"ACTIVE\" } }); once one request completes the sprint, the other changes zero rows and throws conflict(\"Sprint was already completed\") (line 118)."
+   "explanation": "Nothing compares the old and new sprintId. The sprint exists and is not COMPLETED, the token matches, so updateMany writes the same sprintId with a new updatedAt and the issue is returned (200)."
   },
   {
    "id": "q10-concurrent-starts",
@@ -287,24 +282,24 @@
    },
    "cites": [
     {
-     "path": "apps/api/src/services/sprint.service.js",
-     "lineStart": 63,
-     "lineEnd": 73
+     "path": "apps/api/prisma/schema.prisma",
+     "lineStart": 254,
+     "lineEnd": 254
     },
     {
-     "path": "apps/api/prisma/migrations/20260709220000_sprints/migration.sql",
-     "lineStart": 31,
-     "lineEnd": 32
+     "path": "apps/api/src/services/sprint.service.js",
+     "lineStart": 82,
+     "lineEnd": 85
     }
    ],
-   "prompt": "Two different PLANNED sprints of one project are started at the same moment. What decides that one of them gets 409?",
-   "answer": "The partial unique index, whose P2002 startSprint maps to 409",
+   "prompt": "A member creates a sprint with only a name and goal, then immediately calls completeSprint on it. What comes back?",
+   "answer": "409 \"Cannot complete a sprint that is PLANNED (must be ACTIVE)\"",
    "distractors": [
-    "The state machine's start guard sees the other ACTIVE sprint and refuses",
-    "Nothing does; both start, as each update touches a different sprint row",
-    "serializable() retries both until one gives up, which ends in a 500"
+    "409 \"Sprint was already completed\" from the guarded updateMany",
+    "200 with movedCount 0, since the new sprint has no issues to move",
+    "404 Sprint, because a sprint cannot be found until it is started"
    ],
-   "explanation": "The two updates hit different rows, so the per-sprint guard passes for both. The index Sprint_one_active_per_project allows one ACTIVE sprint per project; its violation is P2002, caught at lines 68-71 and turned into conflict."
+   "explanation": "A new sprint gets state PLANNED from the schema default. completeSprint calls assertTransition('complete', 'PLANNED') at line 85, which throws before the updateMany guard runs."
   },
   {
    "id": "q11-update-issue-weaker",
@@ -319,23 +314,23 @@
    "cites": [
     {
      "path": "apps/api/src/services/issue.service.js",
-     "lineStart": 173,
-     "lineEnd": 187
+     "lineStart": 205,
+     "lineEnd": 205
     },
     {
      "path": "apps/api/src/services/issue.service.js",
-     "lineStart": 210,
-     "lineEnd": 214
+     "lineStart": 225,
+     "lineEnd": 249
     }
    ],
-   "prompt": "Why is updateIssue's expectedUpdatedAt check weaker than the one in sprint assignment?",
-   "answer": "It compares in JavaScript, then runs an update whose where is only { id }",
+   "prompt": "Issue GJ-9 is assigned to user U. A member PATCHes it with { assigneeId: null } and nothing else. What does updateIssue do?",
+   "answer": "Clears the assignee and logs assignee.changed, with no notification",
    "distractors": [
-    "It compares timestamps only to the whole second, so close edits always collide",
-    "It skips the comparison whenever the patch leaves out the title field",
-    "It writes outside any transaction, so its history entry can be lost"
+    "Leaves U assigned, because null is treated like a field left out",
+    "Clears the assignee and enqueues issue.assigned for the old user U",
+    "Clears the assignee but writes no activity, as no one was assigned"
    ],
-   "explanation": "updateIssue reads the issue, compares ISO strings, and only later updates by id alone. Two requests can both pass the compare. Assignment puts the token in the updateMany predicate, so the database decides."
+   "explanation": "'assigneeId' in patch copies null into data, so the update clears it and the activity entry is recorded (null differs from U). The notification needs a truthy data.assigneeId, so none is enqueued."
   },
   {
    "id": "q12-old-moved-count",
@@ -350,18 +345,28 @@
    "cites": [
     {
      "path": "apps/api/src/services/sprint.service.js",
-     "lineStart": 120,
-     "lineEnd": 126
+     "lineStart": 7,
+     "lineEnd": 11
+    },
+    {
+     "path": "apps/api/src/services/sprint.service.js",
+     "lineStart": 168,
+     "lineEnd": 169
+    },
+    {
+     "path": "packages/shared/src/policy.js",
+     "lineStart": 40,
+     "lineEnd": 40
     }
    ],
-   "prompt": "In the pre-change completeSprint, where did the reported movedCount come from?",
-   "answer": "A count() taken before the move, not the move's own result",
+   "prompt": "A project VIEWER requests the report of one of the project's sprints. What does sprintReport do?",
+   "answer": "Returns the report, because its default action sprint:read admits VIEWER",
    "distractors": [
-    "From the updateMany result of the bulk move, as in the current service",
-    "From the number of DONE workflow columns found in the project",
-    "From the sprint's _count of issues, read again after completion"
+    "Refuses with 403, since the report needs sprint:manage like writes",
+    "Refuses with 404 for the project, as viewers cannot see sprints",
+    "Returns the report, but with the story point sums hidden from the viewer"
    ],
-   "explanation": "Chapter 03 lists four gaps in the old version; (d) is that movedCount came from a count() before the move. The current code returns moved.count from the bulk updateMany (lines 120-126)."
+   "explanation": "sprintReport calls loadProject without an action, so the default 'sprint:read' applies, and the policy grants sprint:read to ADMIN, MEMBER and VIEWER."
   },
   {
    "id": "f01-three-mechanisms",

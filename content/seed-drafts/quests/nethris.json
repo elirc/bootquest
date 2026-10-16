@@ -126,19 +126,19 @@
    },
    "cites": [
     {
-     "path": "astraupskill/02-CONCEPTS.md",
-     "lineStart": 23,
-     "lineEnd": 23
+     "path": "server/Nethris.Api/HrisApi.Mutations.cs",
+     "lineStart": 64,
+     "lineEnd": 76
     }
    ],
-   "prompt": "Maya's PUT carries the ETag for version 4, but Jordan already saved version 5. Why must the browser not just fetch the new ETag and resend Maya's draft automatically?",
-   "answer": "It would silently overwrite Jordan's change instead of letting Maya review it",
+   "prompt": "A browser retries a PUT with the same Idempotency-Key and the same body, but it has fetched a newer ETag and now sends that in If-Match. What does Nethris return?",
+   "answer": "409 conflict, because If-Match is part of the request fingerprint",
    "distractors": [
-    "The server would reject the resend, because the operation key was already used",
-    "Strong ETags cannot be refreshed while an unsaved draft exists in the editor",
-    "It would lose Maya's draft, as the draft lives inside the old ETag value"
+    "The stored first response, since the key and the body still match",
+    "A fresh save under the new version, recorded on the same receipt",
+    "428, as a retried request may not carry a different If-Match"
    ],
-   "explanation": "A version protects intent. After review the user may keep the draft and retry with the latest version; the server stays authoritative."
+   "explanation": "Fingerprint hashes method, path, query string, If-Match and body. A changed If-Match gives a different fingerprint, so Replay throws HrisError.Conflict (409) instead of replaying."
   },
   {
    "id": "q06-receipt-fingerprint",
@@ -152,19 +152,24 @@
    },
    "cites": [
     {
-     "path": "astraupskill/02-CONCEPTS.md",
+     "path": "server/Nethris.Api/HrisApi.Mutations.cs",
      "lineStart": 31,
-     "lineEnd": 31
+     "lineEnd": 36
+    },
+    {
+     "path": "server/Nethris.Api/Data/HrisDbContext.cs",
+     "lineStart": 85,
+     "lineEnd": 89
     }
    ],
-   "prompt": "A client reuses an operation key but sends a different body. What does Nethris return?",
-   "answer": "A conflict, because the fingerprint stored for that key differs from this body",
+   "prompt": "Two different accounts each send a POST with the same Idempotency-Key UUID but different bodies, a minute apart. What happens to the second request?",
+   "answer": "It runs as a new mutation, as receipts are keyed per account",
    "distractors": [
-    "The recorded result of the first request, since the operation key matches",
-    "A fresh execution of the new body, stored under that same operation key again",
-    "A 428, because the If-Match header must change whenever the body changes"
+    "409, because that key already has a receipt with another fingerprint",
+    "It gets the first account's stored response, replayed under that key",
+    "It fails on the unique index, since each key may be stored only once"
    ],
-   "explanation": "Same key plus same fingerprint replays the recorded result; same key plus different content is a conflict. Receipts are scoped to account and key, kept 24 hours."
+   "explanation": "The receipt lookup matches UserAccountId == actor.UserId and Key == key, and the unique index is on (UserAccountId, Key). The other account has no receipt for that key, so its request executes normally."
   },
   {
    "id": "q07-version-vs-receipt",
@@ -283,23 +288,18 @@
    "cites": [
     {
      "path": "server/Nethris.Api/HrisRequest.cs",
-     "lineStart": 34,
+     "lineStart": 33,
      "lineEnd": 45
-    },
-    {
-     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
-     "lineStart": 79,
-     "lineEnd": 96
     }
    ],
-   "prompt": "An update arrives with a well-formed strong ETag for the right record but an old version. Another arrives with no If-Match at all. Which statuses do they get?",
-   "answer": "409 for the old version, 428 for the missing header",
+   "prompt": "A PUT to employee A carries in If-Match the strong ETag of employee B, at exactly the version A has now. Which status comes back?",
+   "answer": "428, as the tag must start with this record's own id",
    "distractors": [
-    "428 for both, as neither matches the stored row",
-    "409 for both, as both fail the concurrency check",
-    "412 for the old version, 400 for the missing header"
+    "409, as the version check also compares the stored row's id",
+    "200, as only the version number inside the tag is compared",
+    "412, the standard status for an If-Match that does not match"
    ],
-   "explanation": "HrisRequest.Expected only checks that the client stated a version for this record in the right form (428 otherwise); the comparison with the stored row happens later in HrisRules.Version (409)."
+   "explanation": "Expected builds the prefix \"<A's id>-\" and requires the tag to start with it. B's tag fails wellFormed, so it throws HrisError(428, \"precondition\") before any version comparison."
   },
   {
    "id": "q12-one-test-per-guarantee",

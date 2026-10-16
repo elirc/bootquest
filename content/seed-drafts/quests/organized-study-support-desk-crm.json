@@ -219,17 +219,17 @@
     {
      "path": "apps/worker/src/worker.ts",
      "lineStart": 6,
-     "lineEnd": 18
+     "lineEnd": 13
     }
    ],
-   "prompt": "You start two worker processes. What happens to each PENDING event?",
-   "answer": "Both workers may process it, because nothing claims the event first",
+   "prompt": "One worker is running and 15 outbox events are PENDING. Which of them does a single polling pass process?",
+   "answer": "The 10 oldest by createdAt; the other 5 wait for the next pass",
    "distractors": [
-    "Exactly one worker processes it, thanks to the PROCESSING status",
-    "The second worker blocks on a row lock until the first one is done",
-    "One worker only, as findMany skips rows another connection has read"
+    "All 15, since the loop keeps reading until no PENDING rows remain",
+    "The 10 newest by createdAt, so that fresh changes go out first",
+    "Any 10 of them, as findMany here returns rows in no fixed order"
    ],
-   "explanation": "Selecting PENDING then updating by id is not a claim; FOR UPDATE SKIP LOCKED with RETURNING is the suggested fix."
+   "explanation": "processOutboxBatch runs findMany with where status PENDING, orderBy createdAt asc and take: 10, then handles only that batch before the loop waits."
   },
   {
    "id": "q09-failed-terminal",
@@ -244,18 +244,23 @@
    "cites": [
     {
      "path": "apps/worker/src/worker.ts",
-     "lineStart": 26,
-     "lineEnd": 31
+     "lineStart": 4,
+     "lineEnd": 4
+    },
+    {
+     "path": "apps/worker/src/worker.ts",
+     "lineStart": 36,
+     "lineEnd": 39
     }
    ],
-   "prompt": "An event's handler throws once and is marked FAILED. When is it retried?",
-   "answer": "Never, because the poller only selects events still in PENDING",
+   "prompt": "WORKER_POLL_INTERVAL_MS is not set. How long does the worker wait between polling passes, and when does that wait start?",
+   "answer": "4 seconds, counted from when the previous batch has finished",
    "distractors": [
-    "On the next poll, up to five attempts in total for the event",
-    "After an exponential backoff computed from the attempts counter",
-    "When the API writes the next outbox event for the same ticket"
+    "Every 4 seconds on a fixed clock, even while a batch still runs",
+    "1 second, the default interval when the variable is unset",
+    "No wait at all: the next pass starts as soon as a batch ends"
    ],
-   "explanation": "FAILED is terminal; a crash between the two status updates also leaves events stuck in PROCESSING."
+   "explanation": "pollIntervalMs is Number(process.env.WORKER_POLL_INTERVAL_MS ?? 4000). loop() awaits processOutboxBatch() and only then calls setTimeout(loop, pollIntervalMs), so the 4000 ms starts after the batch completes."
   },
   {
    "id": "q10-outbox-why",

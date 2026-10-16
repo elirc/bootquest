@@ -81,18 +81,23 @@
    "cites": [
     {
      "path": "src/services/refundService.ts",
-     "lineStart": 25,
-     "lineEnd": 34
+     "lineStart": 36,
+     "lineEnd": 62
+    },
+    {
+     "path": "src/repositories/refundRepository.ts",
+     "lineStart": 11,
+     "lineEnd": 26
     }
    ],
-   "prompt": "Two OPS users each refund 40 on a 100 payment that already has 60 refunded, at the same moment, with today's prisma.$transaction code under READ COMMITTED. What is the final SUCCEEDED refund total?",
-   "answer": "140: both transactions read 60, both pass the check, and both commit",
+   "prompt": "During one successful createRefundForPayment call, which statuses does the new Refund row hold, and when?",
+   "answer": "PENDING when created, then SUCCEEDED later in the same transaction",
    "distractors": [
-    "100: the transaction makes the second request wait until the first commits",
-    "100: the second commit fails since the aggregate it read changed underneath it",
-    "60: both requests deadlock on the payment row, and both roll back"
+    "SUCCEEDED from the start, as the simulated provider never fails",
+    "PENDING until a provider webhook arrives and marks it SUCCEEDED",
+    "PENDING, then REFUNDED once the payment total has been covered"
    ],
-   "explanation": "Passing tx gives atomicity (one BEGIN...COMMIT per request) but does not serialize concurrent transactions; both aggregates see 60 before either commits."
+   "explanation": "createRefund writes status: RefundStatus.PENDING; after the REFUND_REQUESTED event the service calls transitionRefundStatus(refund.id, RefundStatus.SUCCEEDED, providerRefundId, tx), all inside the one prisma.$transaction."
   },
   {
    "id": "q04-for-update-error",
@@ -262,19 +267,24 @@
    },
    "cites": [
     {
-     "path": "src/lib/auth/guards.ts",
-     "lineStart": 28,
-     "lineEnd": 35
+     "path": "src/app/api/payments/[paymentId]/refund/route.ts",
+     "lineStart": 9,
+     "lineEnd": 19
+    },
+    {
+     "path": "src/services/refundService.ts",
+     "lineStart": 93,
+     "lineEnd": 99
     }
    ],
-   "prompt": "A SUPPORT user (no refund permission) calls the refund route. Does the 403 reach the handler's jsonError?",
-   "answer": "No: requirePermission throws in withRouteAuth before the handler's try/catch starts",
+   "prompt": "An OPS user refunds 30 of a SUCCEEDED 100 payment that has nothing refunded yet. What HTTP status and paymentStatus does the response carry?",
+   "answer": "202, with paymentStatus SUCCEEDED since the refund is partial",
    "distractors": [
-    "Yes: withRouteAuth wraps the handler call in the same try/catch that calls jsonError",
-    "Yes: Next.js middleware converts every RouteError through jsonError globally",
-    "No: the guard returns an empty 204 instead of throwing for a missing permission"
+    "201, with paymentStatus SUCCEEDED, as a new Refund row was made",
+    "200, with paymentStatus PARTIALLY_REFUNDED for the partial amount",
+    "202, with paymentStatus REFUNDED, as any refund flips the payment"
    ],
-   "explanation": "guards.ts:32 runs requirePermission before invoking the handler; the documented { error: { code: 'FORBIDDEN' } } body is not what callers receive."
+   "explanation": "The route returns jsonOk(result, 202). fullyRefunded is 0 + 30 === 100, which is false, so the payment is not transitioned and the result reports payment.status, still SUCCEEDED."
   },
   {
    "id": "q11-reconciliation-false-positive",

@@ -135,23 +135,24 @@
    "id": "x-reserve-twice",
    "target": "seed:quests:organized-study-atlas-fulfillment/quiz/09eec5d0a297d461",
    "phase": "after",
-   "title": "Why clicking Reserve twice is harmless",
-   "body": "The service first loads the order. Then it checks `if (order.status !== 'pending_reservation')` and, if so, returns `{ ok: true, orderId, status: order.status, failures: [] }` straight away. After the first click the order is no longer pending (it is allocated), so the second request hits this early return. Nothing is reserved again and nothing changes; the caller just gets the current status. The design doc: \"a second click is a no-op, not an error.\" An operation that is safe to repeat like this is called **idempotent**.\n\nWhy the others are wrong:\n- Nothing is released or re-created; the code returns before any write.\n- The early return stops a second reservation, so reserved quantities do not double.\n- It answers `ok: true`, not a 409 error.",
+   "title": "Only the order's warehouse counts",
+   "body": "**Key: a failure with available 0, because no balance exists in that warehouse.**\n\n`reserveSalesOrder` loads balances with `where: { warehouseId: order.warehouseId, skuId: { in: ... } }`, so other warehouses never reach `planReservation`. There, `balances.find(...)` returns nothing for the line, `available` is 0, and the `!balance` branch returns a failure with the reason 'No inventory balance exists for this SKU in the selected warehouse.'\n\nWhy the others are wrong:\n- *the other warehouse covers it*: reservations are per warehouse, and other warehouses are not loaded.\n- *the other warehouse's count*: `available` is set to 0 when the balance is missing.\n- *skipped*: the missing-balance case is reported as a failure, not dropped.",
    "excerpts": [
     {
-     "path": "src/server/modules/orders/orders.service.ts",
-     "lineStart": 46,
-     "lineEnd": 48,
-     "quote": "if (order.status !== 'pending_reservation') { return { ok: true, orderId, status: order.status, failures: [] } }"
-    },
-    {
-     "path": "docs/architecture/final-system-design.md",
-     "lineStart": 30,
-     "lineEnd": 30,
-     "quote": "a second click is a no-op, not an error."
+     "path": "src/shared/inventoryRules.ts",
+     "lineStart": 40,
+     "lineEnd": 40,
+     "quote": "reason: 'No inventory balance exists for this SKU in the selected warehouse.',"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "src/server/modules/orders/orders.service.ts",
+     "lineStart": 50,
+     "lineEnd": 56,
+     "why": "Which balances the service loads."
+    }
+   ]
   },
   {
    "id": "x-goal-audit-filters",
@@ -323,45 +324,47 @@
    "id": "x-title-dedup",
    "target": "seed:quests:organized-study-atlas-fulfillment/quiz/5255a7960986ae1d",
    "phase": "after",
-   "title": "Why a SKU low in two warehouses gets only one notification",
-   "body": "For each low-stock alert, reconciliation first looks for an existing unread notification with `type: 'low_stock'` and a title of \"Low stock: \" followed by the SKU code. The title contains the SKU code but not the warehouse. The first alert for PACK-22-BLK (say, west) finds nothing and creates a notification titled \"Low stock: PACK-22-BLK\". The second alert (east) builds the same title, finds that unread notification, and skips. So one notification, not two. The design doc: \"if the same SKU is low in two warehouses, only the first produces a notification.\"\n\nWhy the others are wrong:\n- There was no unread notification yet, so the first alert does create one.\n- The second alert is skipped, so there are not two.\n- Nothing creates a second notification marked read.",
+   "title": "At the reorder point already counts as low",
+   "body": "**Key: low, because the 8 units available sit right at the reorder point.**\n\n`availableToPromise` gives `Math.max(0, 100 - 92)`, which is 8. `stockHealth` returns `stockout` only when that is 0 or less. Next it asks `isLowStock`, which is true when `available <= reorderPoint` **or** `onHand <= safetyStock`. The first test is `8 <= 8`, so the balance is `low`.\n\nWhy the others are wrong:\n- *healthy, onHand is high*: either test is enough; the reorder-point test already fired.\n- *stockout*: 8 units are still available.\n- *strictly below*: the comparison is `<=`.",
    "excerpts": [
     {
-     "path": "src/server/modules/worker/reconciliation.service.ts",
-     "lineStart": 10,
-     "lineEnd": 17,
-     "quote": "const existing = await db.notification.findFirst({ where: { tenantId: defaultTenantId, type: 'low_stock', title: `Low stock: ${alert.skuCode}`, read: false, }, })"
-    },
-    {
-     "path": "docs/architecture/final-system-design.md",
-     "lineStart": 42,
-     "lineEnd": 42,
-     "quote": "The title has no warehouse in it, so if the same SKU is low in two warehouses, only the first produces a notification."
+     "path": "src/shared/inventoryRules.ts",
+     "lineStart": 82,
+     "lineEnd": 82,
+     "quote": "return availableToPromise(balance) <= balance.reorderPoint || balance.onHand <= balance.safetyStock"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "src/shared/inventoryRules.ts",
+     "lineStart": 85,
+     "lineEnd": 97,
+     "why": "The order of the stockHealth checks."
+    }
+   ]
   },
   {
    "id": "x-hardcoded-actor",
    "target": "seed:quests:organized-study-atlas-fulfillment/quiz/5baf4f2166c70ad0",
    "phase": "after",
-   "title": "Why the audit row names the system user, not the warehouse lead",
-   "body": "The route knows who is calling: `request.actor` is set by the auth middleware. But the service functions take no actor parameter, so they cannot know. Instead, every audit row the service writes uses a fixed value, `actorId: systemUserId`. The architecture journal: \"services do not take an actor parameter, so audit rows hard-code `user-ops-admin`\". So the warehouse lead's reservation is recorded as done by the system admin. The journal calls deciding how the actor flows into services \"the next architecture decision\", because it blocks real audit trails. Design exercise 3 is that change.\n\nWhy the others are wrong:\n- The service never sees `request.actor`, so it cannot use the lead's id.\n- The id is not null; it is a fixed user id.\n- The buyer who placed the order is not involved in this write.",
+   "title": "Reservations are written active for 72 hours",
+   "body": "**Key: status active, with expiresAt 72 hours after the row is written.**\n\nFor every line with a balance, the service increments `reserved` and then calls `tx.stockReservation.create` with `status: 'active'` and `expiresAt: new Date(Date.now() + 72 * 60 * 60 * 1000)`. The order itself moves to `allocated`, but that is the order's status, not the reservation's. The design document adds that nothing reads `expiresAt` yet.\n\nWhy the others are wrong:\n- *pending, no expiry*: both fields are set at creation.\n- *promisedShipBy*: the expiry is computed from the current time.\n- *allocated, 24 hours*: allocated is the order status, and the window is 72 hours.",
    "excerpts": [
     {
      "path": "src/server/modules/orders/orders.service.ts",
-     "lineStart": 63,
-     "lineEnd": 63,
-     "quote": "actorId: systemUserId,"
-    },
-    {
-     "path": "docs/architecture/architecture-journal.md",
-     "lineStart": 53,
-     "lineEnd": 53,
-     "quote": "Routes know the caller (`request.actor`), but services do not take an actor parameter, so audit rows hard-code `user-ops-admin`."
+     "lineStart": 92,
+     "lineEnd": 93,
+     "quote": "status: 'active', expiresAt: new Date(Date.now() + 72 * 60 * 60 * 1000),"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "docs/architecture/final-system-design.md",
+     "lineStart": 36,
+     "lineEnd": 36,
+     "why": "What reads expiresAt today."
+    }
+   ]
   },
   {
    "id": "x-goal-decouple-panel",
@@ -389,23 +392,24 @@
    "id": "x-csv-formula",
    "target": "seed:quests:organized-study-atlas-fulfillment/quiz/6c4d9f5a3ae1afd4",
    "phase": "after",
-   "title": "What csvCell does with a SKU named =2+5",
-   "body": "`csvCell` turns the value into text and has one rule: if it contains a comma or a double quote, wrap it in quotes (doubling inner quotes); otherwise return it unchanged. \"=2+5\" has neither, so it is written exactly as \"=2+5\". Spreadsheet programs treat a cell starting with `=` as a formula, so opening the export may evaluate it. The design doc: it \"does not neutralise values that start with `=`, `+`, `-` or `@`\", so anyone who can name a SKU could plant a formula in the export.\n\nWhy the others are wrong:\n- Nothing drops cells.\n- No single-quote prefix is added; that is what design exercise 5 asks you to add.\n- It is not quoted, since it has no comma or quote. (And the doc's fix uses a prefix, not quoting, for formulas.)",
+   "title": "A double quote alone triggers quoting",
+   "body": "**Key: \"Tote \"\"XL\"\"\", wrapped in quotes with each inner quote doubled.**\n\n`csvCell` quotes a value when `text.includes(',') || text.includes('\"')`. The name contains double quotes, so it takes the quoting branch: every `\"` becomes `\"\"`, and the result is wrapped in one pair of outer quotes. That is the standard CSV way to keep a quote inside a field.\n\nWhy the others are wrong:\n- *unchanged*: a double quote is enough to trigger quoting; a comma is not required.\n- *inner quotes left as is*: `replaceAll('\"', '\"\"')` doubles them.\n- *no outer quotes*: the doubled text is always wrapped.",
    "excerpts": [
     {
      "path": "src/server/modules/platform/export.service.ts",
-     "lineStart": 4,
-     "lineEnd": 7,
-     "quote": "function csvCell(value: string | number) { const text = String(value) return text.includes(',') || text.includes('\"') ? `\"${text.replaceAll('\"', '\"\"')}\"` : text }"
-    },
-    {
-     "path": "docs/architecture/final-system-design.md",
-     "lineStart": 101,
-     "lineEnd": 101,
-     "quote": "It does not quote values containing line breaks, and it does not neutralise values that start with `=`, `+`, `-` or `@`, which spreadsheet programs may evaluate as formulas."
+     "lineStart": 6,
+     "lineEnd": 6,
+     "quote": "return text.includes(',') || text.includes('\"') ? `\"${text.replaceAll('\"', '\"\"')}\"` : text"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "docs/features/003-csv-export.md",
+     "lineStart": 31,
+     "lineEnd": 31,
+     "why": "The guide's description of the escaping rule."
+    }
+   ]
   },
   {
    "id": "x-fallback-data",

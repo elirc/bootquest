@@ -43,10 +43,10 @@
    "provenance": {
     "repo": "relay-upskilling",
     "sha": "2f6bd82e16ea35f21dd94c0f8a5d39f3f480d089",
-    "path": "upskilling/course/CODE-TOUR.md",
+    "path": "src/app/api/[...path]/route.ts",
     "lines": {
-     "start": 90,
-     "end": 94
+     "start": 17,
+     "end": 17
     }
    },
    "citations": [],
@@ -55,17 +55,24 @@
    "pack": "relay-upskilling",
    "target": "seed:quests:relay-upskilling/quiz/3b216153cc57aa5e",
    "phase": "after",
-   "title": "Re-checking the approval inside every batch",
-   "body": "Checking the approval once, when the job is queued, leaves a gap: someone could edit the mapping after the check but before a batch is written, and the worker would import a version nobody approved. So for every batch the worker opens a transaction, locks the job row with `SELECT ... FOR UPDATE`, and recomputes and compares the approval hash right there. Because the row is locked, an edit cannot slip in between that check and the write. This closes the gap between check and effect.\n\nWhy the others are wrong:\n- **cache the hash once**: caching is exactly what would reopen the gap.\n- **keep the approval across pooled connections**: the approval is stored in the jobs table; connections do not hold it.\n- **refresh the reviewer's session**: the worker does not use reviewer sessions; the reviewer was involved only at approval time.",
+   "title": "Format 1 approvals bind three values",
+   "body": "**Key: the file hash, mapping version and schema version, and nothing else.**\n\nThe worker's `Approval` method hashes `$\"{j.Hash}:{j.Version}:{j.Schema}\"` when `ApprovalFormat==1` and adds `SchemaHash` and `Destination` otherwise. The route's `approvalHash` mirrors it: it appends `':'+job.schema_hash+':'+job.destination` only when `job.approval_format===2`. The column defaults to 1 in `db/002_platform.sql`, so older jobs keep the shorter binding.\n\nWhy the others are wrong:\n- *five values*: that is format 2.\n- *the reviewer's id*: who approved is stored in `approved_by`, not in the hash.\n- *file hash and destination*: format 1 has the schema version but no destination.",
    "excerpts": [
     {
-     "path": "upskilling/course/CODE-TOUR.md",
-     "lineStart": 90,
-     "lineEnd": 94,
-     "quote": "the worker re-verifies the approval *inside every batch transaction*, after `SELECT ... FOR UPDATE` (`ImportWorker.cs:128`). A mapping edit racing the import cannot slip between check and effect."
+     "path": "src/app/api/[...path]/route.ts",
+     "lineStart": 17,
+     "lineEnd": 17,
+     "quote": "(job.approval_format===2?':'+job.schema_hash+':'+job.destination:'')"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "db/002_platform.sql",
+     "lineStart": 6,
+     "lineEnd": 6,
+     "why": "The column and its default."
+    }
+   ]
   },
   {
    "key": "seed:notes:relay-upskilling/note/367d879850a81940",
@@ -156,8 +163,8 @@
     "sha": "2f6bd82e16ea35f21dd94c0f8a5d39f3f480d089",
     "path": "src/app/api/[...path]/route.ts",
     "lines": {
-     "start": 153,
-     "end": 153
+     "start": 160,
+     "end": 160
     }
    },
    "citations": [],
@@ -166,23 +173,24 @@
    "pack": "relay-upskilling",
    "target": "seed:quests:relay-upskilling/quiz/83b051b023767355",
    "phase": "after",
-   "title": "An approval must name the version the reviewer saw",
-   "body": "The approve request carries the `version` the reviewer was looking at. The route rejects it unless the job is in `review` **and** that version equals the current `mapping_version`. Here the reviewer saw version 3, but a correction made it 4, so the request gets **409** \"The preview has changed. Refresh it before approving.\" This stops an approval meant for one version from landing on a different one.\n\nWhy the others are wrong:\n- **403, permission expired**: permission is checked separately and has not changed; this is a version mismatch.\n- **200, binds to version 4**: binding to a version the reviewer never saw is exactly what the check prevents.\n- **200, imports version 3**: version 3 no longer exists as the current mapping; nothing imports it.",
+   "title": "Retry re-arms only the uncertain deliveries",
+   "body": "**Key: only this job's rows in state 'uncertain', each set back to 0 attempts.**\n\nThe retry branch first checks that the job is `failed` with a retryable `suspended_status`, and, for `queued` or `running`, that `approved_hash` still matches. It then restores the status, clears the job's attempts, and runs `UPDATE delivery_outbox SET attempts=0 WHERE job_id=$1 AND state='uncertain'`. Rows in any other state keep their attempt counts.\n\nWhy the others are wrong:\n- *Every row*: the `WHERE` clause names `state='uncertain'`.\n- *None*: the outbox update is part of the retry branch.\n- *Delivered rows*: they are excluded, so a retry never re-sends what is known to be delivered.",
    "excerpts": [
     {
      "path": "src/app/api/[...path]/route.ts",
-     "lineStart": 153,
-     "lineEnd": 153,
-     "quote": "if(job.status!=='review' || job.mapping_version!==body.version) throw new HttpError(409,'The preview has changed. Refresh it before approving.');"
-    },
-    {
-     "path": "upskilling/course/CODE-TOUR.md",
-     "lineStart": 78,
-     "lineEnd": 79,
-     "quote": "approving requires `status='review'` **and** the version the reviewer looked at; a stale approval gets 409."
+     "lineStart": 160,
+     "lineEnd": 160,
+     "quote": "await client.query(\"UPDATE delivery_outbox SET attempts=0 WHERE job_id=$1 AND state='uncertain'\",[id]);"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "src/app/api/[...path]/route.ts",
+     "lineStart": 156,
+     "lineEnd": 161,
+     "why": "The whole retry branch and its checks."
+    }
+   ]
   },
   {
    "key": "seed:notes:relay-upskilling/note/55f39d564b743106",

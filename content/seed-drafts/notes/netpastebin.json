@@ -113,23 +113,24 @@
    "id": "x-412-keep-draft",
    "target": "seed:quests:netpastebin/quiz/008bb41376166f1c",
    "phase": "after",
-   "title": "Why Tab B gets 412 and must keep its text",
-   "body": "Both tabs started from version 4. Tab A saves first with `If-Match: \"4\"`, so the server stores \"alpha\" as version 5. Tab B also says `If-Match: \"4\"`, but the current version is now 5. The precondition fails, the server answers **412** and changes nothing: version 5 stays. On the client, Tab B's text \"beta\" must be kept so the user can review it. It must not swap in 5 and resend, because that would overwrite \"alpha\" without anyone seeing it. The concepts chapter: \"The expected version belongs to the draft, while the latest saved version belongs to the current server representation.\"\n\nWhy the others are wrong:\n- Arriving later does not win; the version check rejects it.\n- There is no merging.\n- Automatically resending with version 5 is exactly what the guide forbids.",
+   "title": "Updates refuse expired pastes with the same 404",
+   "body": "**Key: 404, because an expired paste is unavailable to updates, whatever the key.**\n\n`UpdateAsync` calls `RequireOwner(workspace, slug, key, now, allowExpired: false)`. That helper throws one 404 for three cases: no such paste, an expired paste when expiry is not allowed, and a wrong key. The version check comes after it, so it is never reached. (Delete passes `allowExpired: true`, so an owner can still remove an expired paste.)\n\nWhy the others are wrong:\n- *410*: no update path throws 410; that status belongs to a create retry whose paste is gone.\n- *200 with renewal*: an expired paste cannot be updated at all.\n- *412*: the version is never compared.",
    "excerpts": [
     {
-     "path": "astraupskill/02-CONCEPTS.md",
-     "lineStart": 14,
-     "lineEnd": 17,
-     "quote": "Tab A sends If-Match: \"4\" and content \"alpha\". Server stores version 5 and returns it. Tab B sends If-Match: \"4\" and content \"beta\". Server returns 412; version 5 remains unchanged."
-    },
-    {
-     "path": "astraupskill/02-CONCEPTS.md",
-     "lineStart": 20,
-     "lineEnd": 20,
-     "quote": "The client must keep Tab B's text. It should not silently replace `4` with `5` and retry, because that would overwrite `alpha` without review."
+     "path": "backend/Domain/PasteCommands.cs",
+     "lineStart": 129,
+     "lineEnd": 130,
+     "quote": "throw new PasteRuleException(\"Paste is unavailable or the edit key is incorrect.\", 404);"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "backend/Domain/PasteCommands.cs",
+     "lineStart": 115,
+     "lineEnd": 123,
+     "why": "DeleteAsync, which allows expired pastes."
+    }
+   ]
   },
   {
    "id": "x-lease-plus-version",
@@ -173,23 +174,24 @@
    "id": "x-idempotent-receipt",
    "target": "seed:quests:netpastebin/quiz/224e99340befdc01",
    "phase": "after",
-   "title": "What a retry with the same request ID gets",
-   "body": "When the server accepts a create, it stores a **receipt** keyed by the request ID. If the response is lost and the browser retries with the same ID, the same exact body and the same key, the server finds that receipt and returns the paste it already created. It does not write another revision. That makes the create **idempotent**: doing it twice has the effect of doing it once. The concepts chapter lists the other cases: a changed body under the same ID is a conflict (409), and a deleted or expired result is gone (410), never recreated. Only a *new* request ID can create a second paste.\n\nWhy the others are wrong:\n- 409 is for the same ID with a *different* body; this retry is identical.\n- 410 is for a paste that was deleted or has expired; nothing timed out here.\n- A second paste only comes from a new request ID.",
+   "title": "The edit key is part of what a retry must repeat",
+   "body": "**Key: 409, because the creation fingerprint includes a hash of the edit key.**\n\n`CreateAsync` builds `fingerprint` from the cleaned title, the content, the language, visibility, expiration and `keyHash = hash` of the edit key. The receipt for this request ID stores the first fingerprint. With a different key the hashes differ, so `FixedTimeEquals` fails and the method throws the 409 \"already accepted with different data or an edit key\".\n\nWhy the others are wrong:\n- *The first paste is returned*: that needs the whole fingerprint to match, key hash included.\n- *A second paste*: a request ID with a receipt never creates again.\n- *410*: that is for a matching retry whose paste is deleted or expired.",
    "excerpts": [
     {
-     "path": "astraupskill/02-CONCEPTS.md",
-     "lineStart": 9,
-     "lineEnd": 9,
-     "quote": "A retry with the same ID, exact body and key finds the accepted receipt. The response identifies the existing paste and does not write another workspace revision."
-    },
-    {
      "path": "backend/Domain/PasteCommands.cs",
-     "lineStart": 71,
-     "lineEnd": 72,
-     "quote": "if (existing is null || existing.IsExpired(now)) throw new PasteRuleException(\"This creation request was already accepted, but its paste is deleted or expired. It was not created again.\", 410);"
+     "lineStart": 61,
+     "lineEnd": 61,
+     "quote": "var fingerprint = WorkspaceRules.Fingerprint(new { title, command.Content, language, command.Visibility, command.Expiration, keyHash = hash });"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "backend/Domain/PasteCommands.cs",
+     "lineStart": 65,
+     "lineEnd": 75,
+     "why": "The receipt branch: 409, 410 or replay."
+    }
+   ]
   },
   {
    "id": "x-visible-receipt",
@@ -365,17 +367,24 @@
    "id": "x-zero-rows-reread",
    "target": "seed:quests:netpastebin/quiz/8f372d90965197c2",
    "phase": "after",
-   "title": "How the sketch tells 404 from 412 when no row was updated",
-   "body": "The update runs `WHERE Slug == slug && Version == expected`. If it changes 0 rows, there are two possible reasons: no paste has that slug, or one exists but someone already moved its version on. The comment in the sketch says exactly this. So the sketch re-reads the paste without tracking. If it is missing, 404 \"Paste was not found.\"; if it exists, 412 \"The paste changed since you loaded it.\" That gives a precise answer \"rather than a vague 409\".\n\nWhy the others are wrong:\n- Zero rows does not always mean stale; the slug may not exist.\n- Retrying with the current version would overwrite someone else's change.\n- The cause *can* be known by re-reading, so a vague 409 is avoided.",
+   "title": "A malformed If-Match is a bad request, not a missing one",
+   "body": "**Key: 400, since If-Match takes one quoted positive integer version.**\n\n`ReadVersion` throws 428 only when the request has no `If-Match` header. Here the header exists, so it checks the value: length at least 3, a quote at each end, and a positive integer between them. `5` has no quotes, so it throws `PasteRuleException(\"If-Match must contain one quoted positive integer version.\")`, whose default status is 400. The update itself never runs.\n\nWhy the others are wrong:\n- *200*: the value is rejected before the version is compared.\n- *428*: that is only for an absent header.\n- *412*: the stored version is never reached.",
    "excerpts": [
     {
-     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
-     "lineStart": 84,
-     "lineEnd": 92,
-     "quote": "if (affected == 0) { // Zero rows means either \"no such slug\" or \"somebody else already advanced the version\". // Re-read to tell those apart, so you can answer 404 vs 412 rather than a vague 409. var current = await db.Pastes.AsNoTracking().FirstOrDefaultAsync(p => p.Slug == slug, cancellationToken); throw current is null ? new PasteRuleException(\"Paste was not found.\", 404) : new PasteRuleException(\"The paste changed since you loaded it.\", 412); }"
+     "path": "backend/Api/AppHost.cs",
+     "lineStart": 214,
+     "lineEnd": 214,
+     "quote": "throw new PasteRuleException(\"If-Match must contain one quoted positive integer version.\");"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "backend/Domain/WorkspaceDocument.cs",
+     "lineStart": 35,
+     "lineEnd": 38,
+     "why": "PasteRuleException and its default status."
+    }
+   ]
   },
   {
    "id": "x-base64url-not-encryption",

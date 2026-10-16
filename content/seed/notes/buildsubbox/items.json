@@ -128,8 +128,8 @@
     "sha": "8ef020d1e8d9377904674348ef03b74612c4ab6c",
     "path": "src/repository.js",
     "lines": {
-     "start": 14,
-     "end": 18
+     "start": 39,
+     "end": 39
     }
    },
    "citations": [],
@@ -138,20 +138,14 @@
    "pack": "buildsubbox",
    "target": "seed:quests:buildsubbox/quiz/3d2505de75e31e9b",
    "phase": "after",
-   "title": "The last-unit loser fails the baseline check, not the stock check",
-   "body": "**Key: the raw-baseline check in the lock rejects it before reduce sees stock, so unrelated writes conflict too.**\n\nBoth tabs loaded the same stored text as their `base`. The winner commits first and the stored text changes. When the loser gets the lock, `commit` reloads storage, `replay` finds nothing (new request key), and then `current.raw !== base.raw` is true, so it throws \"Workspace changed in another tab\" before `reduce` runs. Because the comparison is on the whole stored text, any accepted write by another tab, even to an unrelated record, causes the same refusal.\n\nWhy the others are wrong:\n- *replay rejects it*: each attempt has its own request key, and replay only returns a receipt; it is not the check that fails here.\n- *Web Locks reject the second tab*: the lock only makes the second tab wait its turn.\n- *reduce's stock check rejects it*: the guide says stock \"never gets the chance\" in this race.",
+   "title": "Restore always moves the revision forward",
+   "body": "**Key: 11, one more than the larger of the two revisions.**\n\nInside the lock, `restore` first checks that the stored text still equals the one the user reviewed. It then decodes the current revision (10 here; 0 if storage is empty or unreadable) and builds the new state from the backup with `revision: Math.max(revision, imported.revision) + 1`. max(10, 3) + 1 is 11. Keeping the counter moving forward means a restore is never mistaken for an older state.\n\n- *3*: the backup content is used, but its revision is replaced.\n- *4*: that would ignore the current revision of 10.\n- *10*: the counter is increased, not kept.",
    "excerpts": [
     {
      "path": "src/repository.js",
-     "lineStart": 14,
-     "lineEnd": 18,
-     "quote": "if (replay(current.state, command)) return current; if (current.raw !== base.raw) throw new Error( \"Workspace changed in another tab. Export your draft and reload before saving.\", );"
-    },
-    {
-     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
-     "lineStart": 31,
-     "lineEnd": 31,
-     "quote": "Consequence: any two concurrent writes conflict, even on unrelated records, and the user is asked to reload. Safe, but coarse."
+     "lineStart": 39,
+     "lineEnd": 39,
+     "quote": "revision: Math.max(revision, imported.revision) + 1,"
     }
    ],
    "readMore": []
@@ -253,8 +247,8 @@
     "sha": "8ef020d1e8d9377904674348ef03b74612c4ab6c",
     "path": "src/model.js",
     "lines": {
-     "start": 506,
-     "end": 513
+     "start": 385,
+     "end": 388
     }
    },
    "citations": [],
@@ -263,20 +257,14 @@
    "pack": "buildsubbox",
    "target": "seed:quests:buildsubbox/quiz/83ef08cb9e7e7ca3",
    "phase": "after",
-   "title": "A cancelled month is still taken, whatever the request key",
-   "body": "**Key: it is refused: the subscriber-month cycle rule still holds after cancellation, whatever the key.**\n\nIn the `reserve` branch of `reduce`, the first business check looks for any shipment with the same subscriber and cycle, without looking at status. The cancelled May shipment is still in the list, so the check fails with \"This subscriber cycle already has a reservation, including cancelled history.\" The request key does not matter: it answers \"is this a retry of the same attempt?\", while the cycle rule answers \"is this month's slot free?\".\n\nWhy the others are wrong:\n- *Succeeds with a new key*: the cycle check does not look at keys.\n- *Succeeds if fingerprints match*: fingerprints only matter when the same request key is reused.\n- *Returns the cancelled shipment*: `replay` matches on the request key, and a brand-new key finds nothing.",
+   "title": "Only active subscribers can be quoted",
+   "body": "**Key: refused with \"Only an active subscriber can reserve a box.\"**\n\n`quoteBox` loads the subscriber and its first check is `ensure(u && u.status === \"Active\", ...)`. A Paused subscriber fails it, so the function throws before it reads the plan or any item. Because `reduce` builds the current quote with `quoteBox` when it handles `reserve`, the same rule also protects a reservation command that was prepared earlier.\n\n- *Quoted, rejected only by reserve*: the quote itself is refused.\n- *Quoted, pause only skips billing*: there is no billing logic; status is checked directly.\n- *Empty line list*: the function throws instead of returning a partial quote.",
    "excerpts": [
     {
      "path": "src/model.js",
-     "lineStart": 506,
-     "lineEnd": 513,
-     "quote": "sh.quote.subscriberId === c.quote.subscriberId && sh.cycle === c.cycle, ), \"This subscriber cycle already has a reservation, including cancelled history.\","
-    },
-    {
-     "path": "astraupskill/02-CONCEPTS.md",
-     "lineStart": 17,
-     "lineEnd": 19,
-     "quote": "A new request key cannot create another shipment for that same subscriber-month, even after cancellation."
+     "lineStart": 385,
+     "lineEnd": 388,
+     "quote": "\"Only an active subscriber can reserve a box.\""
     }
    ],
    "readMore": []
@@ -475,10 +463,10 @@
    "provenance": {
     "repo": "buildsubbox",
     "sha": "8ef020d1e8d9377904674348ef03b74612c4ab6c",
-    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "path": "src/model.js",
     "lines": {
-     "start": 79,
-     "end": 79
+     "start": 229,
+     "end": 229
     }
    },
    "citations": [],
@@ -487,20 +475,14 @@
    "pack": "buildsubbox",
    "target": "seed:quests:buildsubbox/quiz/b9526df4dbb09854",
    "phase": "after",
-   "title": "A skip and a reserve must fight over one slot",
-   "body": "**Key: skip racing a reserve for the same month; both must go through one subscriber-month slot.**\n\nA skip says \"no box this month\"; a reserve says \"a box this month\". If one client skips while another reserves at the same moment, and each checks a different place (say, a skip flag and the shipments table), both checks can pass and both writes succeed: the month is skipped and shipped. The fix is to give the subscriber-month one authoritative slot with an explicit state (available, skipped, reserved) and a transactional or unique-constraint guard, so only one side can win.\n\nWhy the others are wrong:\n- *Two skips; disable the button*: UI state does not stop a second client, and the guide warns against keeping skip state in a button label.\n- *A skip racing a catalog edit*: they touch different data; this is not the critical race.\n- *No race, skips do not touch stock*: the conflict is over the month slot, not stock.",
+   "title": "A shipped box can only be delivered",
+   "body": "**Key: it is refused with \"This shipment transition is not allowed.\"**\n\nThe `transitions` table lists the allowed next states: Reserved to Packed or Cancelled, Packed to Shipped or Cancelled, Shipped to Delivered only, and nothing after Delivered or Cancelled. In the `shipment.transition` branch, `reduce` checks the expected version and then `transitions[sh.status].includes(c.status)`. Cancelled is not in the Shipped list, so it throws and nothing changes.\n\n- *Cancelled with stock returned*: cancellation is only reachable from Reserved or Packed.\n- *Cancelled, stock kept*: the transition never happens at all.\n- *Delivered, then cancelled*: no code chains transitions, and Delivered is terminal.",
    "excerpts": [
     {
-     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
-     "lineStart": 79,
-     "lineEnd": 79,
-     "quote": "The critical race is one client skipping while another reserves. Both must use the same authoritative cycle boundary. If each checks a separate table without an appropriate transaction or uniqueness design, both could succeed."
-    },
-    {
-     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
-     "lineStart": 77,
-     "lineEnd": 77,
-     "quote": "Give a subscriber-month slot an explicit state, such as available, skipped, or reserved"
+     "path": "src/model.js",
+     "lineStart": 229,
+     "lineEnd": 229,
+     "quote": "Shipped: [\"Delivered\"],"
     }
    ],
    "readMore": []
@@ -856,8 +838,8 @@
     "sha": "8ef020d1e8d9377904674348ef03b74612c4ab6c",
     "path": "src/model.js",
     "lines": {
-     "start": 354,
-     "end": 356
+     "start": 46,
+     "end": 46
     }
    },
    "citations": [],
@@ -866,26 +848,14 @@
    "pack": "buildsubbox",
    "target": "seed:quests:buildsubbox/quiz/2690b92258c03026",
    "phase": "after",
-   "title": "A blocked tag removes the item before any scoring",
-   "body": "**Key: nowhere: excluded tags are a hard eligibility filter applied before scoring.**\n\n`recommendations` first runs `.filter((i) => eligible(i, subscriber))` and only then computes scores with `.map`. `eligible` returns false when any of the item's tags matches one of the subscriber's blocked tags (case-insensitive). So the item never reaches the scoring step: preferred-tag matches cannot rescue it.\n\nWhy the others are wrong:\n- *In the middle, rating halved*: there is no halving; the score formula is 10 per preferred tag plus 5 × rating.\n- *Near the top*: matches only count for items that passed the filter.\n- *At the bottom, points subtracted*: the guide says exclusion \"is a hard eligibility rule, not a small score penalty\".",
+   "title": "A box cannot list the same item twice",
+   "body": "**Key: unique() rejects it with \"Duplicate identifier, email or tag.\"**\n\nThe first two lines of `quoteBox` are `array(itemIds, 20)` and `unique(itemIds)`. `unique` compares `new Set(v).size` with `v.length`; two copies of `itm_101` give a set of size 1 for an array of length 2, so `ensure` throws its generic duplicate message. Nothing about the plan, the subscriber or stock is read yet.\n\n- *Two units of itm_101*: the model never counts quantities per line; duplicates are refused.\n- *Deduplicated, then the count fails*: nothing deduplicates; the duplicate check throws first.\n- *Second id silently dropped*: the input is rejected, not cleaned.",
    "excerpts": [
     {
      "path": "src/model.js",
-     "lineStart": 354,
-     "lineEnd": 356,
-     "quote": "!item.tags.some((t) => subscriber.blockedTags.some((b) => b.toLowerCase() === t.toLowerCase()), )"
-    },
-    {
-     "path": "src/model.js",
-     "lineStart": 362,
-     "lineEnd": 364,
-     "quote": "return s.items .filter((i) => eligible(i, subscriber)) .map((item) => ({"
-    },
-    {
-     "path": "astraupskill/02-CONCEPTS.md",
-     "lineStart": 29,
-     "lineEnd": 29,
-     "quote": "Exclusion is a hard eligibility rule, not a small score penalty."
+     "lineStart": 46,
+     "lineEnd": 46,
+     "quote": "ensure(new Set(v).size === v.length, \"Duplicate identifier, email or tag.\");"
     }
    ],
    "readMore": []
@@ -895,10 +865,10 @@
    "provenance": {
     "repo": "buildsubbox",
     "sha": "8ef020d1e8d9377904674348ef03b74612c4ab6c",
-    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "path": "src/model.js",
     "lines": {
-     "start": 71,
-     "end": 71
+     "start": 487,
+     "end": 488
     }
    },
    "citations": [],
@@ -907,20 +877,14 @@
    "pack": "buildsubbox",
    "target": "seed:quests:buildsubbox/quiz/de6fc733adb95422",
    "phase": "after",
-   "title": "A new ledger cannot explain stock that existed before it",
-   "body": "**Key: seed stock existed before any movement was recorded, so it needs an opening balance.**\n\nA ledger explains stock as \"start value plus every change since\". The seed items already have stock when the app starts, and no movement created those units. If you only add up movements, you get the change since the ledger began, not the current number. So the ledger needs an opening balance per item (or an accepted stocktake event that resets the starting point).\n\nWhy the others are wrong:\n- *Floating-point drift*: stock and quantities are integers; the problem is the missing starting value.\n- *Seed is generated by replaying movements*: the seed is a fixed starting state, which is exactly why it has no movements.\n- *Cancellations are not recorded*: in the proposed design they are recorded, as positive movements linked to the shipment.",
+   "title": "Ratings count as history: archive instead of delete",
+   "body": "**Key: it is refused, and the error asks them to archive the item instead.**\n\nThe item delete branch in `reduce` first checks the expected version, then ensures two things: no shipment quote line uses the id, and no subscriber has a rating for it. The rating fails the second condition, so `ensure` throws \"Item has shipment or rating history. Archive it instead.\" The design keeps references valid by never deleting referenced records.\n\n- *Deleted, rating removed*: nothing edits subscribers during an item delete.\n- *Deleted, dangling rating*: the check exists to prevent exactly that.\n- *Refused only with stock*: stock plays no part in the delete check.",
    "excerpts": [
     {
-     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
-     "lineStart": 71,
-     "lineEnd": 71,
-     "quote": "Movement totals alone cannot explain existing sample stock unless there is an opening balance."
-    },
-    {
-     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
-     "lineStart": 73,
-     "lineEnd": 73,
-     "quote": "Cancellation appends matching positive movements linked to that shipment."
+     "path": "src/model.js",
+     "lineStart": 487,
+     "lineEnd": 488,
+     "quote": "\"Item has shipment or rating history. Archive it instead.\""
     }
    ],
    "readMore": []

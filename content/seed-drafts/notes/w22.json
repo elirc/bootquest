@@ -251,23 +251,24 @@
    "id": "x-q08-read-committed-race",
    "target": "seed:quests:w22/quiz/76693c93d126a0e9",
    "phase": "after",
-   "title": "Two concurrent refunds both pass and both commit",
-   "body": "**Key: 140: both transactions read 60, both pass the check, and both commit.**\n\nUnder READ COMMITTED a transaction only sees rows other transactions have *committed*. Timeline: A sums SUCCEEDED refunds and gets 60; B does the same before A commits and also gets 60. Each has 40 left to refund, so `40 > 40` is false and both pass. Each inserts its refund and commits. The total is 60 + 40 + 40 = 140 on a 100 payment. Passing `tx` made each request atomic, but nothing made B wait for A.\n\nWhy the others are wrong:\n- *100, the second waits*: a transaction does not lock rows it only reads; that needs `FOR UPDATE` or serializable isolation.\n- *100, the second commit fails*: READ COMMITTED does not check whether data you read changed.\n- *60, deadlock*: neither transaction locks the payment row, so there is nothing to deadlock on.",
+   "title": "The Refund row goes PENDING then SUCCEEDED inside one transaction",
+   "body": "**Key: PENDING when created, then SUCCEEDED later in the same transaction.**\n\n`createRefund` writes the row with `status: RefundStatus.PENDING`. The service then records the `REFUND_REQUESTED` event, mints a `prov_ref_` id, and calls `transitionRefundStatus(refund.id, RefundStatus.SUCCEEDED, providerRefundId, tx)`. All of it runs through `tx` inside one `prisma.$transaction`, so other connections only ever see the committed SUCCEEDED row.\n\nWhy the others are wrong:\n- *SUCCEEDED from the start*: the create uses PENDING.\n- *until a webhook*: this path flips the status itself, synchronously.\n- *REFUNDED*: that is a payment status, not a refund status.",
    "excerpts": [
     {
-     "path": "astraupskill/02-CONCEPTS.md",
-     "lineStart": 20,
-     "lineEnd": 22,
-     "quote": "Under READ COMMITTED, transaction A and transaction B can both run the aggregate at line 32, both see `refunded = 60` on a 100 payment, both pass a 40-unit check, and both commit — 140 refunded against a 100 payment."
-    },
-    {
      "path": "src/services/refundService.ts",
-     "lineStart": 32,
-     "lineEnd": 34,
-     "quote": "const remainingRefundableAmount = payment.amountMinor - refundedAmount;"
+     "lineStart": 62,
+     "lineEnd": 62,
+     "quote": "await transitionRefundStatus(refund.id, RefundStatus.SUCCEEDED, providerRefundId, tx);"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "src/repositories/refundRepository.ts",
+     "lineStart": 11,
+     "lineEnd": 26,
+     "why": "createRefund and its PENDING status."
+    }
+   ]
   },
   {
    "id": "x-q09-gc-single-requests",
@@ -450,23 +451,24 @@
    "id": "x-q17-guard-outside-try",
    "target": "seed:quests:w22/quiz/dfd472183ec8199e",
    "phase": "after",
-   "title": "The permission error is thrown before the handler's try",
-   "body": "**Key: no: requirePermission throws in withRouteAuth before the handler's try/catch starts.**\n\n`withRouteAuth` returns a function that first runs `requirePermission(...)` on line 32 and only then calls `handler(...)` on line 34. The handler's `try`/`catch` (which calls `jsonError`) is inside the handler. A SUPPORT user without the refund permission makes line 32 throw, so the handler never starts and its `catch` never sees the error. Next.js handles it as an uncaught error, not with the documented `{ error: { code: \"FORBIDDEN\" } }` body.\n\nWhy the others are wrong:\n- *withRouteAuth wraps the handler in try/catch*: lines 28-35 have no `try`.\n- *Next.js middleware calls jsonError globally*: nothing in the code does that.\n- *An empty 204*: `requirePermission` throws; it does not return a response.",
+   "title": "A partial refund answers 202 and leaves the payment SUCCEEDED",
+   "body": "**Key: 202, with paymentStatus SUCCEEDED, because the refund is partial.**\n\nThe refund route returns `jsonOk(result, 202)`. Inside the service, `fullyRefunded` is `refundedAmount + refund.amountMinor === payment.amountMinor`, here `0 + 30 === 100`, which is false. So `transitionPaymentStatus` is skipped, and the result's `paymentStatus` is `fullyRefunded ? \"REFUNDED\" : payment.status`, which is SUCCEEDED.\n\nWhy the others are wrong:\n- *201*: the route passes 202 explicitly.\n- *PARTIALLY_REFUNDED*: the code has no such status; a partial refund leaves the payment as it was.\n- *REFUNDED*: only an exact full refund flips the payment.",
    "excerpts": [
     {
-     "path": "src/lib/auth/guards.ts",
-     "lineStart": 32,
-     "lineEnd": 34,
-     "quote": "const session = requirePermission(await getSessionForRequest(request), options.permission); const params = context.params ? await context.params : ({} as TParams); return handler({ request, params, session });"
-    },
-    {
-     "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
-     "lineStart": 55,
-     "lineEnd": 57,
-     "quote": "The `RouteError` rejects the route function itself and is handled by Next.js as an uncaught error, not by `jsonError`."
+     "path": "src/services/refundService.ts",
+     "lineStart": 64,
+     "lineEnd": 64,
+     "quote": "const fullyRefunded = refundedAmount + refund.amountMinor === payment.amountMinor;"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "src/app/api/payments/[paymentId]/refund/route.ts",
+     "lineStart": 19,
+     "lineEnd": 19,
+     "why": "The status code the route sends."
+    }
+   ]
   },
   {
    "id": "x-q18-status-mismatch",

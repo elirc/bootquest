@@ -8,10 +8,10 @@
    "provenance": {
     "repo": "organized-experiment-support-hub",
     "sha": "cb836235987a4fc717b6ff656629c6514ac15a6d",
-    "path": "src/services/ticket-service.ts",
+    "path": "src/services/ticket-workflow.ts",
     "lines": {
-     "start": 890,
-     "end": 894
+     "start": 19,
+     "end": 20
     }
    },
    "citations": [],
@@ -20,23 +20,24 @@
    "pack": "organized-experiment-support-hub",
    "target": "seed:quests:organized-experiment-support-hub/quiz/fdd67849de9d82bc",
    "phase": "after",
-   "title": "One rejected branch of Promise.all breaks the whole bootstrap",
-   "body": "**Key: the dashboard call inside Promise.all rejects agents and fails bootstrap.**\n\n`getBootstrapData` runs three things together with `Promise.all`: the ticket list, the queue summaries, and, for every role except customers, `getOverviewDashboard`. The dashboard permission allows only leads, managers and observers, so for an agent that call throws 403. `Promise.all` rejects as soon as any one of its promises rejects, so the whole bootstrap fails and the agent sees only an error box. Since an agent is the default demo user, a first visit hits this (F13).\n\nWhy the others are wrong:\n- *Bootstrap requires the reassign permission*: the failure comes from the dashboard check.\n- *No queue memberships*: queue membership is never read anywhere.\n- *By design, agents use email*: nothing in the docs says so; F13 calls it a bug.",
+   "title": "The table speaks before the closed-ticket rule",
+   "body": "**Key: \"Tickets cannot move directly from CLOSED to PENDING.\"**\n\n`changeTicketStatus` runs `assertCanChangeStatus` (an agent passes), loads the ticket, and then calls `assertValidStatusTransition(ticket.status, input.status)`. In `allowedTransitions`, `CLOSED` lists only `OPEN`, so it throws `conflict(`Tickets cannot move directly from ${current} to ${next}.`)`. The closed-ticket check on the following lines is never reached.\n\nWhy the others are wrong:\n- *Closed tickets must reopen to OPEN*: that check comes after the table and only fires for moves the table allows.\n- *Allowed*: the table has no CLOSED to PENDING edge.\n- *This role cannot change ticket workflow status*: agents pass `canModifyTickets`.",
    "excerpts": [
     {
-     "path": "src/services/ticket-service.ts",
-     "lineStart": 890,
-     "lineEnd": 894,
-     "quote": "const [tickets, queueSummaries, dashboard] = await Promise.all([ listTickets(session, filters), createQueueRepository(prisma).listQueueSummaries(), session.role === \"CUSTOMER_PORTAL\" ? Promise.resolve(null) : getOverviewDashboard(session), ]);"
-    },
-    {
-     "path": "docs/architecture/README.md",
-     "lineStart": 98,
-     "lineEnd": 98,
-     "quote": "`assertCanViewDashboards()` allows only lead, manager and observer"
+     "path": "src/services/ticket-workflow.ts",
+     "lineStart": 19,
+     "lineEnd": 20,
+     "quote": "RESOLVED: [\"OPEN\", \"CLOSED\", \"ESCALATED\"], CLOSED: [\"OPEN\"],"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "src/services/ticket-service.ts",
+     "lineStart": 694,
+     "lineEnd": 700,
+     "why": "The order of the checks in changeTicketStatus."
+    }
+   ]
   },
   {
    "key": "seed:notes:organized-experiment-support-hub/note/2d51edf21e079064",
@@ -497,10 +498,10 @@
    "provenance": {
     "repo": "organized-experiment-support-hub",
     "sha": "cb836235987a4fc717b6ff656629c6514ac15a6d",
-    "path": "src/services/ticket-service.ts",
+    "path": "src/lib/permissions/policies.ts",
     "lines": {
-     "start": 403,
-     "end": 405
+     "start": 63,
+     "end": 64
     }
    },
    "citations": [],
@@ -509,23 +510,24 @@
    "pack": "organized-experiment-support-hub",
    "target": "seed:quests:organized-experiment-support-hub/quiz/1dbf63e0992c029c",
    "phase": "after",
-   "title": "A permission failure that answers 409",
-   "body": "**Key: 409, which reads like a state conflict rather than a refusal.**\n\n`updateTicketMetadata` starts with `if (!canModifyTickets(session.role)) throw conflict(...)`. An observer cannot modify tickets, so this line throws. `conflict()` creates a 409 error, the code normally used for \"the data is in a state that conflicts with your request\". A client seeing 409 might reload and retry, when the real answer is \"you are not allowed\", which is 403. Finding F12(a) lists this, and the ladder's rung 5 fixes it with `forbidden()`.\n\nWhy the others are wrong:\n- *401*: the observer is signed in; 401 means \"not authenticated\".\n- *403*: that is what it *should* return, but the code calls `conflict()`.\n- *400 VALIDATION_ERROR*: the permission check runs before anything looks at the fields.",
+   "title": "Internal is not the same as allowed to write",
+   "body": "**Key: 403 with \"Only internal support staff can add internal notes.\"**\n\n`addInternalNote` starts with `assertCanAddInternalNote(session)`. That helper tests `canModifyTickets`, which is true only for `SUPPORT_AGENT`, `SUPPORT_LEAD` and `SUPPORT_MANAGER`. The observer fails it, and `forbidden(...)` gives a 403. The message is a little ironic: `isInternalUser` does count the observer as internal, but writing needs `canModifyTickets`.\n\nWhy the others are wrong:\n- *200*: being internal lets an observer read notes, not write them.\n- *409*: this helper uses `forbidden`, not `conflict`.\n- *404*: the permission check runs before the ticket is loaded.",
    "excerpts": [
     {
-     "path": "src/services/ticket-service.ts",
-     "lineStart": 403,
-     "lineEnd": 405,
-     "quote": "if (!canModifyTickets(session.role)) { throw conflict(\"This role cannot edit ticket metadata.\"); }"
-    },
-    {
-     "path": "docs/architecture/README.md",
-     "lineStart": 97,
-     "lineEnd": 97,
-     "quote": "(a) permission failures in `createTicket()` and `updateTicketMetadata()` throw `conflict()` and return **409**, not 403"
+     "path": "src/lib/permissions/policies.ts",
+     "lineStart": 63,
+     "lineEnd": 64,
+     "quote": "if (!canModifyTickets(session.role)) { throw forbidden(\"Only internal support staff can add internal notes.\");"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "src/lib/permissions/policies.ts",
+     "lineStart": 15,
+     "lineEnd": 33,
+     "why": "Internal roles versus roles that may modify tickets."
+    }
+   ]
   },
   {
    "key": "seed:notes:organized-experiment-support-hub/note/a0ee2ff2d1f2ba2e",
@@ -669,7 +671,7 @@
     "path": "src/lib/auth/session.ts",
     "lines": {
      "start": 29,
-     "end": 30
+     "end": 33
     }
    },
    "citations": [],
@@ -678,23 +680,24 @@
    "pack": "organized-experiment-support-hub",
    "target": "seed:quests:organized-experiment-support-hub/quiz/d6baa91c2e7b3ea2",
    "phase": "after",
-   "title": "httpOnly does not stop a user from editing their own cookie",
-   "body": "**Key: yes, because the cookie is unsigned JSON that the user can edit.**\n\n`readSession` reads the cookie and returns `JSON.parse(raw) as SessionUser`. There is no signature check and no database lookup. A user can open their browser's tools and set the cookie to JSON with `\"role\":\"SUPPORT_MANAGER\"`, and the server will believe it. `httpOnly` only stops *page scripts* from reading the cookie; it does nothing about the user changing it. Finding F1 reproduced this.\n\nWhy the others are wrong:\n- *Role re-read from the database*: `readSession` only parses the cookie.\n- *Encrypted*: `writeSessionCookie` stores plain `JSON.stringify(session)`.\n- *httpOnly cookies cannot be modified*: the user can modify them; scripts cannot read them.",
+   "title": "A cookie that does not parse is no session",
+   "body": "**Key: 401, since an unparsable cookie reads as no session at all.**\n\n`readSession` gets the cookie value and runs `JSON.parse(raw)` inside `try`; the `catch` returns `null`. The notes route calls `requireRouteSession()`, which is `requireSession()`, and that throws `unauthorized()` when the session is null. `withRouteErrorHandling` turns that `AppError` into a 401.\n\nWhy the others are wrong:\n- *500*: the parse error is caught inside `readSession`.\n- *403*: there is no session to check a role on.\n- *400*: the body is never reached; the session check comes first.",
    "excerpts": [
     {
      "path": "src/lib/auth/session.ts",
      "lineStart": 29,
-     "lineEnd": 30,
-     "quote": "return JSON.parse(raw) as SessionUser;"
-    },
-    {
-     "path": "docs/architecture/README.md",
-     "lineStart": 86,
-     "lineEnd": 86,
-     "quote": "`httpOnly` (`:50`) stops page scripts from reading the cookie; it does not stop a user from editing their own cookie."
+     "lineEnd": 33,
+     "quote": "try { return JSON.parse(raw) as SessionUser; } catch { return null; }"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "src/lib/http/errors.ts",
+     "lineStart": 16,
+     "lineEnd": 17,
+     "why": "The unauthorized() helper and its status."
+    }
+   ]
   },
   {
    "key": "seed:notes:organized-experiment-support-hub/note/fe86fc0ecf167f7d",
@@ -703,8 +706,8 @@
     "sha": "cb836235987a4fc717b6ff656629c6514ac15a6d",
     "path": "src/services/ticket-service.ts",
     "lines": {
-     "start": 403,
-     "end": 404
+     "start": 654,
+     "end": 655
     }
    },
    "citations": [],
@@ -713,20 +716,14 @@
    "pack": "organized-experiment-support-hub",
    "target": "seed:quests:organized-experiment-support-hub/quiz/f10fb65f78da4e42",
    "phase": "after",
-   "title": "The lead-only rule is skipped on PATCH",
-   "body": "**Key: through PATCH, which checks only canModifyTickets before writing.**\n\n`reassignTicket` (the `/assign` route) starts with `assertCanReassignTicket`, which requires a lead or manager. But `updateTicketMetadata` (PATCH) only checks `canModifyTickets`, which includes `SUPPORT_AGENT`, and its schema accepts `assigneeId` and `queueId`, which it writes. So an agent can do through PATCH what `/assign` forbids. Finding F6: the same rule enforced on one endpoint and not the other.\n\nWhy the others are wrong:\n- *Both endpoints call assertCanReassignTicket*: only `reassignTicket` does.\n- *Escalating auto-assigns*: `escalateTicket` sets escalation fields and status, not the assignee.\n- *A note mentioning an agent*: notes do not change assignment.",
+   "title": "Closed tickets take no more notes",
+   "body": "**Key: 409, because closed tickets must be reopened before internal work continues.**\n\n`addInternalNote` first runs `assertCanAddInternalNote`, which an agent passes. It then loads the ticket and checks `ticket.status === \"CLOSED\"`, throwing `conflict(\"Closed tickets must be reopened before internal work continues.\")` before the transaction that would write the note.\n\nWhy the others are wrong:\n- *Adds the note*: the CLOSED check applies to notes as well as replies.\n- *403 for leads and managers*: no role-based exception exists here; the refusal is a 409 for everyone.\n- *Reopens automatically*: nothing changes the status in this function.",
    "excerpts": [
     {
      "path": "src/services/ticket-service.ts",
-     "lineStart": 403,
-     "lineEnd": 404,
-     "quote": "if (!canModifyTickets(session.role)) {"
-    },
-    {
-     "path": "docs/architecture/README.md",
-     "lineStart": 91,
-     "lineEnd": 91,
-     "quote": "`reassignTicket()` requires a lead or manager (`ticket-service.ts:790`), but `updateTicketMetadata()` only requires `canModifyTickets()` (`:403`), which includes `SUPPORT_AGENT`."
+     "lineStart": 654,
+     "lineEnd": 655,
+     "quote": "if (ticket.status === \"CLOSED\") { throw conflict(\"Closed tickets must be reopened before internal work continues.\");"
     }
    ],
    "readMore": []

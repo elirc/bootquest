@@ -159,19 +159,24 @@
    },
    "cites": [
     {
+     "path": "src/lib/auth/session.ts",
+     "lineStart": 75,
+     "lineEnd": 99
+    },
+    {
      "path": "src/lib/db/tenantContext.ts",
-     "lineStart": 24,
-     "lineEnd": 29
+     "lineStart": 12,
+     "lineEnd": 15
     }
    ],
-   "prompt": "withTenantScope(ctx /* tenantId A */, { organizationId: \"B\", status: \"NEW\" }) returns what organizationId?",
-   "answer": "\"A\": the tenant key is written after the spread, so it overwrites B",
+   "prompt": "A user's JWT names an activeMembershipId whose membership row has since been deleted. They call GET /api/leads. What comes back?",
+   "answer": "403 tenant_scope_required: there is no organization context",
    "distractors": [
-    "\"B\": the caller's explicit filter is spread last and wins over the context",
-    "Both: they are combined into an OR condition on organizationId",
-    "It throws cross_tenant_access, because the two tenant ids differ"
+    "401 invalid_session: the JWT no longer matches a membership",
+    "200: the session falls back to the user's first ACTIVE membership",
+    "404 membership_not_found, raised while loading the session"
    ],
-   "explanation": "Writing the tenant key after the spread means callers cannot widen or redirect the scope."
+   "explanation": "With activeMembershipId set, the session query filters memberships by that id only, finds none, and returns membership: null, so tenantId is null. requireOrgRequest calls requireTenantContext, which throws forbiddenError(\"tenant_scope_required\", ...)."
   },
   {
    "id": "q07-cross-tenant-fk",
@@ -185,24 +190,24 @@
    },
    "cites": [
     {
-     "path": "src/services/activityService.ts",
-     "lineStart": 64,
-     "lineEnd": 67
+     "path": "src/app/api/activities/route.ts",
+     "lineStart": 24,
+     "lineEnd": 30
     },
     {
-     "path": "src/lib/db/tenantContext.ts",
-     "lineStart": 31,
-     "lineEnd": 36
+     "path": "src/lib/permissions/policy.ts",
+     "lineStart": 77,
+     "lineEnd": 85
     }
    ],
-   "prompt": "POST /api/activities with a leadId copied from another organization. What happens today?",
-   "answer": "It is created in your org and attached to their lead; only the primary row is scoped",
+   "prompt": "A READ_ONLY member of an active organization sends a well-formed POST /api/activities. What comes back?",
+   "answer": "403 permission_denied, as READ_ONLY lacks activities.write",
    "distractors": [
-    "404, because the lead lookup inside the service is tenant-scoped",
-    "403 cross_tenant_access, raised by assertSameTenant before the insert",
-    "The foreign key is silently dropped; the activity is saved with no lead"
+    "201, since READ_ONLY holds activities.read for that resource",
+    "403 inactive_membership, as read-only members count as inactive",
+    "404, since read-only members cannot see the activity owner"
    ],
-   "explanation": "Tenant scoping covers the primary row, not foreign-key ids; the schema only requires the lead to exist. The unused assertSameTenant (or loading each parent through its scoped repository) is the intended fix."
+   "explanation": "The POST handler calls requireOrgRequest(baseCtx, ORG_PERMISSIONS.ACTIVITIES_WRITE). The READ_ONLY list has activities.read but not activities.write, so assertOrgPermission throws forbiddenError(\"permission_denied\", ...)."
   },
   {
    "id": "q08-missing-vs-bad-cookie",
@@ -217,23 +222,23 @@
    "cites": [
     {
      "path": "src/lib/auth/session.ts",
-     "lineStart": 59,
-     "lineEnd": 69
+     "lineStart": 95,
+     "lineEnd": 97
     },
     {
      "path": "src/lib/middleware/withAuth.ts",
-     "lineStart": 21,
-     "lineEnd": 23
+     "lineStart": 17,
+     "lineEnd": 27
     }
    ],
-   "prompt": "GET /api/org/me with no cookie, then with atlas_session=garbage. What codes come back?",
-   "answer": "401 auth_required for the first, then 401 invalid_session for the second",
+   "prompt": "A user's status is set to DISABLED while their JWT is still valid. They call GET /api/org/me. Which error code comes back?",
+   "answer": "401 user_inactive, raised while the session is being loaded",
    "distractors": [
-    "401 invalid_session for both, since neither request carries a valid token",
-    "401 auth_required for both: a bad token is treated the same as no token",
-    "200 with an anonymous session first, then 401 invalid_session for garbage"
+    "401 user_disabled, from the status check in requireAuthenticatedRequest",
+    "403 inactive_membership, from the tenant guard's membership check",
+    "200, since the JWT signature is valid for seven days after signing"
    ],
-   "explanation": "A missing cookie returns null and the caller decides; a bad signature or expiry throws inside getOptionalSession."
+   "explanation": "getOptionalSession reloads the user and throws unauthorizedError(\"user_inactive\", ...) when user.status !== ACTIVE. requireAuthenticatedRequest's own user_disabled check never sees a disabled user."
   },
   {
    "id": "q09-jwt-but-live-membership",
@@ -252,14 +257,14 @@
      "lineEnd": 30
     }
    ],
-   "prompt": "A rep's JWT is valid for 7 days. An admin sets the rep's membership to DISABLED. When is the rep blocked?",
-   "answer": "On its very next request, since every request reloads the membership",
+   "prompt": "A rep's membership is ACTIVE, but an admin sets the organization's status to SUSPENDED. What does the rep's next GET /api/leads return?",
+   "answer": "403 organization_unavailable from the tenant guard",
    "distractors": [
-    "Only when the JWT expires, since the token itself carries the membership",
-    "Immediately, because a server-side revocation list drops the token",
-    "Never for read routes, because they skip the tenant guard to stay fast"
+    "200, since the rep's own membership is still ACTIVE",
+    "403 inactive_membership, as a suspension disables it",
+    "401 invalid_session, as the organization was changed"
    ],
-   "explanation": "The session loads the membership without a status filter; requireOrgRequest is what rejects non-ACTIVE memberships, so a route that skips it loses the check."
+   "explanation": "requireOrgRequest checks the membership status first (ACTIVE passes), then requires organizationStatus to be ACTIVE or TRIALING. SUSPENDED fails, so it throws forbiddenError(\"organization_unavailable\", ...)."
   },
   {
    "id": "q10-guard-before-parse",
@@ -273,19 +278,29 @@
    },
    "cites": [
     {
-     "path": "src/lib/middleware/withTenantGuard.ts",
-     "lineStart": 25,
-     "lineEnd": 27
+     "path": "src/app/api/org/users/route.ts",
+     "lineStart": 18,
+     "lineEnd": 18
+    },
+    {
+     "path": "src/app/api/org/users/[membershipId]/route.ts",
+     "lineStart": 18,
+     "lineEnd": 18
+    },
+    {
+     "path": "src/lib/permissions/policy.ts",
+     "lineStart": 41,
+     "lineEnd": 59
     }
    ],
-   "prompt": "A SALES_REP POSTs {} (an invalid body) to /api/org/invitations. Which status comes back?",
-   "answer": "403 permission_denied: the guard runs before the body is parsed",
+   "prompt": "A SALES_MANAGER calls GET /api/org/users and then PATCH /api/org/users/[membershipId] for a colleague. What happens to each?",
+   "answer": "The list loads, but the PATCH gets 403 permission_denied",
    "distractors": [
-    "422 validation_error: the empty body fails createInvitationSchema first",
-    "400 bad_request: the JSON body is empty, so the route refuses it",
-    "201, because SALES_REP holds the permission to invite users"
+    "Both succeed, since managers can manage the users they list",
+    "Both get 403, as only ORGANIZATION_ADMIN may touch users",
+    "The list gets 403, but the PATCH is allowed for a manager"
    ],
-   "explanation": "requireOrgRequest(..., 'org.users.write') sits on the line before createInvitationSchema.parse, so the parse never runs."
+   "explanation": "GET requires org.users.read and PATCH requires org.users.write. SALES_MANAGER's list includes ORG_USERS_READ but not ORG_USERS_WRITE."
   },
   {
    "id": "q11-assignment-boundary",

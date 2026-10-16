@@ -82,156 +82,175 @@
    "id": "x-q01-retry-bound",
    "target": "seed:quests:gitjira/quiz/05a8c918b49d389b",
    "phase": "after",
-   "title": "Three attempts, then a domain conflict",
-   "body": "In `serializable()` the loop is `for (let attempt = 0; attempt < 3; attempt += 1)`. On a P2034, `if (retryable && attempt < 2) continue;` retries after attempts 0 and 1. On attempt 2 the next line runs: `throw conflict('Sprint changed during this request; refresh and try again')`, which the app maps to 409.\n\n- \"Two runs, then a raw error\" miscounts the loop: there are three attempts, and P2034 is never rethrown raw.\n- \"Reruns until one commits\" ignores the loop bound.\n- \"A generic 500\" is what an unrecognized error could become; P2034 is recognized and turned into the domain conflict.",
+   "title": "An unknown action is a conflict, not a crash",
+   "body": "**Key: it throws a 409 conflict with Unknown sprint action \"cancel\".**\n\n`assertTransition` looks the action up in `TRANSITIONS`. When there is no row, `if (!t) throw conflict(...)` runs. `conflict()` builds an `ApiError` with code `CONFLICT`, and `ERROR_CODES` maps that to 409.\n\nWhy the others are wrong:\n- *Returns the current state*: nothing returns early; a missing row throws.\n- *Plain Error, 500*: the function uses the domain `conflict` helper, not `new Error`. (A plain Error is what `can()` in the policy throws for an unknown policy action, a different function.)\n- *Returns null*: the function either throws or returns `t.to`.",
    "excerpts": [
     {
-     "path": "apps/api/src/services/sprint.service.js",
-     "lineStart": 23,
-     "lineEnd": 24,
-     "quote": "if (retryable && attempt < 2) continue;"
+     "path": "apps/api/src/domain/sprint-state-machine.js",
+     "lineStart": 55,
+     "lineEnd": 55,
+     "quote": "if (!t) throw conflict(`Unknown sprint action \"${action}\"`);"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "apps/api/src/lib/errors.js",
+     "lineStart": 7,
+     "lineEnd": 14,
+     "why": "How the CONFLICT code becomes HTTP 409."
+    }
+   ]
   },
   {
    "id": "x-q02-other-error",
    "target": "seed:quests:gitjira/quiz/e5269bbefc7101a6",
    "phase": "after",
-   "title": "Only P2034 is retried",
-   "body": "`retryable` is true only for a `PrismaClientKnownRequestError` whose `code === 'P2034'`. For P2002 it is false, so both `if (retryable ...)` lines are skipped and `throw error;` rethrows the original error on the very first attempt.\n\n- \"Retried like P2034\" is wrong: the code check is an exact string comparison.\n- \"Converted into the domain 409\" only happens after the third P2034.\n- \"Swallowed\" is wrong: the catch block always ends in a throw or a continue.\n\nThat is why `startSprint` catches its own P2002 inside the work (lines 68-71) and maps it to a 409 there; the helper would not do it.",
+   "title": "The report reads the sprint's issues as they are now",
+   "body": "**Key: committed 5, completed 5, total 1, with unfinished empty.**\n\nCompletion's bulk move wrote `sprintId: null` (the 'backlog' destination) on the 3-point issue, because it was not in a DONE column. `sprintReport` keeps no snapshot: it reads `prisma.issue.findMany` with `where: { sprintId: sprint.id }`. Only the DONE 5-point issue still points at S, so it is the whole report.\n\nWhy the others are wrong:\n- *committed 8, total 2*: the 3-point issue no longer belongs to S.\n- *completed 8*: completion moves unfinished work out; it does not mark it done.\n- *all zeros*: issues in DONE columns are not moved, so the 5-point one stays.",
    "excerpts": [
     {
      "path": "apps/api/src/services/sprint.service.js",
-     "lineStart": 21,
-     "lineEnd": 25,
-     "quote": "error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034';"
+     "lineStart": 180,
+     "lineEnd": 181,
+     "quote": "const issues = await prisma.issue.findMany({ where: { sprintId: sprint.id },"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "apps/api/src/services/sprint.service.js",
+     "lineStart": 120,
+     "lineEnd": 123,
+     "why": "The bulk move that completion runs."
+    }
+   ]
   },
   {
    "id": "x-q03-future-clock",
    "target": "seed:quests:gitjira/quiz/0143ca350c96e7ef",
    "phase": "after",
-   "title": "Strict advancement without trusting the clock",
-   "body": "The new token is `new Date(Math.max(Date.now(), issue.updatedAt.getTime() + 1))`. When the stored value is a minute ahead, `previous + 1` is larger than the wall clock, so the result is exactly the stored value plus one millisecond. The test asserts `toBe(captured.getTime() + 1)`, an exact equality.\n\n- \"The current wall time\" would move the version BACKWARDS, so an old token could match again; that is what `Math.max` prevents.\n- \"Unchanged\" would break strict advancement: a second assignment with the same token would still match.\n- \"A 409\" is wrong: the request sends the exact stored token, so the version check passes.",
+   "title": "A missing estimate counts as zero, not as an error",
+   "body": "**Key: committed 8, completed 5, total 3, and two unfinished issues.**\n\nBoth sums use `sum + (i.storyPoints ?? 0)`, so the unestimated issue adds 0. `total` is `issues.length`, which counts all three. `unfinished` keeps every issue whose column is not a DONE column: the 3-point issue and the unestimated one.\n\nWhy the others are wrong:\n- *total 2*: nothing filters out issues with null points.\n- *one unfinished issue*: the null issue is also in progress, so it is unfinished too.\n- *409*: the report never throws on a missing estimate.",
    "excerpts": [
     {
      "path": "apps/api/src/services/sprint.service.js",
-     "lineStart": 152,
-     "lineEnd": 152,
-     "quote": "const nextUpdatedAt = new Date(Math.max(Date.now(), issue.updatedAt.getTime() + 1));"
-    },
-    {
-     "path": "apps/api/test/sprint.test.js",
-     "lineStart": 111,
-     "lineEnd": 111,
-     "quote": "expect(new Date(assigned.body.issue.updatedAt).getTime()).toBe(captured.getTime() + 1);"
+     "lineStart": 185,
+     "lineEnd": 185,
+     "quote": "const committed = issues.reduce((sum, i) => sum + (i.storyPoints ?? 0), 0);"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "apps/api/src/services/sprint.service.js",
+     "lineStart": 185,
+     "lineEnd": 191,
+     "why": "The three report figures and the unfinished list."
+    }
+   ]
   },
   {
    "id": "x-q04-missing-token",
    "target": "seed:quests:gitjira/quiz/95c506411f9d5cf1",
    "phase": "after",
-   "title": "A missing token disables the check without any error",
-   "body": "The backlog sends `expectedUpdatedAt: issue.updatedAt`. If the list endpoint never selected `updatedAt`, that value is `undefined`, and `JSON.stringify` leaves undefined fields out of the body. The schema marks the field `.optional()`, so validation passes. In the service the predicate uses `...(expectedUpdatedAt ? { updatedAt: ... } : {})`, so with no token the stale check is simply not added. Every request would succeed and nothing would reveal the gap.\n\n- \"400\" is wrong because the field is optional.\n- \"409 every time\" assumes the token is compared; it is never added to the predicate.\n- \"A controller crash\" is wrong: reading a missing property gives `undefined`, not an exception.",
+   "title": "'backlog' is a word, not a sprint id",
+   "body": "**Key: their sprintId becomes null, because 'backlog' is mapped to null first.**\n\nBefore the transaction starts, line 79 turns `'backlog'` into `null` (and a missing value into `null` too). With `destination` null, the whole `if (destination)` block is skipped, and the bulk move writes `data: { sprintId: destination }`, which is `null`: the backlog.\n\nWhy the others are wrong:\n- *404 Destination sprint*: the lookup is inside `if (destination)` and never runs.\n- *literal 'backlog'*: the string was replaced by `null` on line 79.\n- *409 planned sprint*: that check is also inside the skipped block.",
    "excerpts": [
     {
-     "path": "packages/shared/src/issue-schemas.js",
+     "path": "apps/api/src/services/sprint.service.js",
      "lineStart": 79,
      "lineEnd": 79,
-     "quote": "expectedUpdatedAt: z.string().datetime().optional(),"
-    },
-    {
-     "path": "apps/api/src/services/sprint.service.js",
-     "lineStart": 156,
-     "lineEnd": 156,
-     "quote": "...(expectedUpdatedAt ? { updatedAt: new Date(expectedUpdatedAt) } : {}),"
+     "quote": "const destination = moveUnfinishedTo === 'backlog' ? null : (moveUnfinishedTo ?? null);"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "packages/shared/src/issue-schemas.js",
+     "lineStart": 74,
+     "lineEnd": 76,
+     "why": "The schema comment: a sprint id, 'backlog', or null."
+    }
+   ]
   },
   {
    "id": "x-q05-shared-token-race",
    "target": "seed:quests:gitjira/quiz/a6b3313081fd0a1e",
    "phase": "after",
-   "title": "The token in the predicate picks exactly one winner",
-   "body": "Both requests carry the same `expectedUpdatedAt`. The first write to commit matches the predicate and advances `updatedAt`. The second write's `updateMany` now looks for the OLD timestamp, matches zero rows, and `changed.count === 0` throws a conflict (409). The test checks `[r1.status, r2.status].sort()` equals `[200, 409]`, that the winner's timestamp changed, and that the issue sits in one of the two sprints.\n\n- \"Two 200s\" is the lost-update bug a version check exists to stop.\n- \"Two 409s\" is wrong: serializable isolation aborts at most the conflicting one, and the predicate lets the first through.\n- \"Retried until it also wins\" is wrong: a retry reruns with the same old token and still matches zero rows.",
+   "title": "Leaving a completed sprint is allowed",
+   "body": "**Key: it moves the issue to the backlog, since the sprint checks need a sprintId.**\n\nThe sprint lookup and the `COMPLETED` rejection live inside `if (sprintId)`. They guard the sprint the issue is going *to*. With `sprintId` null they are skipped, the token matches, and `updateMany` writes `sprintId: null` with a new `updatedAt`.\n\nWhy the others are wrong:\n- *409, cannot leave*: no code looks at the sprint the issue is coming from.\n- *404 for null*: the lookup is skipped, so nothing can be not found.\n- *updatedAt left alone*: every successful assignment writes `nextUpdatedAt`.",
    "excerpts": [
     {
-     "path": "apps/api/test/sprint.test.js",
-     "lineStart": 132,
-     "lineEnd": 132,
-     "quote": "expect([r1.status, r2.status].sort()).toEqual([200, 409]);"
-    },
-    {
      "path": "apps/api/src/services/sprint.service.js",
-     "lineStart": 160,
-     "lineEnd": 161,
-     "quote": "if (changed.count === 0) {"
+     "lineStart": 142,
+     "lineEnd": 143,
+     "quote": "// sprintId null = move to backlog. Validate the sprint belongs to the project. if (sprintId) {"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "apps/api/src/services/sprint.service.js",
+     "lineStart": 152,
+     "lineEnd": 159,
+     "why": "The write that runs for every assignment."
+    }
+   ]
   },
   {
    "id": "x-q06-nonmember",
    "target": "seed:quests:gitjira/quiz/16dbc163d10f8783",
    "phase": "after",
-   "title": "Nonmembers get a concealing 404",
-   "body": "`assignIssueToSprint` starts with `loadProject(..., 'sprint:manage')`, which calls `authorize`, which calls `requireMembership`. When the user has no role in the project's member map, it throws `notFound('Project')`. The project is hidden rather than refused, so an outsider cannot learn that it exists. Because this happens before the transaction, nothing is written; the test confirms it by reading the row directly.\n\n- \"403 naming sprint:manage\" is what a MEMBER with a weaker role gets from `authorize`.\n- \"401\" would need an invalid login; the outsider is authenticated, just not a member.\n- \"409\" is wrong: the version check is never reached.",
+   "title": "A member with the wrong role gets 403",
+   "body": "**Key: 403, Your role (VIEWER) is not permitted to sprint:manage.**\n\n`assignIssueToSprint` calls `loadProject(projectKey, actorId, 'sprint:manage')`, which calls `authorize`. `requireMembership` finds the viewer in the member map, so there is no 404. Then `can('VIEWER', 'sprint:manage')` is false, because the policy lists only `ADMIN` and `MEMBER`, and `authorize` throws `forbidden(...)`.\n\nWhy the others are wrong:\n- *404*: that is for non-members, whose role lookup comes back empty.\n- *200*: reading sprints (`sprint:read`) and managing them are separate actions.\n- *409*: the token is never checked; authorization fails first.",
    "excerpts": [
     {
      "path": "apps/api/src/services/project.service.js",
-     "lineStart": 80,
-     "lineEnd": 80,
-     "quote": "if (!role) throw notFound('Project');"
-    },
-    {
-     "path": "apps/api/test/sprint.test.js",
-     "lineStart": 149,
-     "lineEnd": 149,
-     "quote": "expect(denied.status).toBe(404);"
+     "lineStart": 67,
+     "lineEnd": 68,
+     "quote": "if (!can(role, action)) { throw forbidden(`Your role (${role}) is not permitted to ${action}`);"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "packages/shared/src/policy.js",
+     "lineStart": 39,
+     "lineEnd": 41,
+     "why": "Who may read and who may manage sprints."
+    }
+   ]
   },
   {
    "id": "x-q07-completed-target",
    "target": "seed:quests:gitjira/quiz/8e7cc376ed27a908",
    "phase": "after",
-   "title": "Completed sprints are found, then refused",
-   "body": "The sprint lookup is `tx.sprint.findFirst({ where: { id: sprintId, projectId: project.id } })`. It filters by project only, so a COMPLETED sprint of the same project IS found. The next line checks `sprint.state === 'COMPLETED'` and throws `conflict('Issues cannot be assigned to a completed sprint')`, a 409.\n\n- \"404 Sprint\" would be the answer for a sprint of ANOTHER project; completed sprints are not hidden.\n- \"200\" would strand work in a closed sprint, which this guard exists to prevent.\n- \"400 from the schema\" is wrong: `assignSprintSchema` only checks that `sprintId` is a string or null.",
+   "title": "The per-sprint guard runs before the write",
+   "body": "**Key: 409 \"Cannot start a sprint with no issues\", from the state machine.**\n\n`startSprint` loads the sprint with its issue count and calls `assertTransition('start', sprint.state, { issueCount })` on line 54. The start transition's guard returns the no-issues message when the count is 0, and `assertTransition` throws it as a conflict. The update on line 64, where the one-active-sprint index could fire, is never reached.\n\nWhy the others are wrong:\n- *Another sprint is already active*: that needs the update to run, and it does not.\n- *404 Sprint*: the lookup filters by id and project only.\n- *It starts*: the guard belongs to the start transition; completion has no guards.",
    "excerpts": [
     {
-     "path": "apps/api/src/services/sprint.service.js",
-     "lineStart": 148,
-     "lineEnd": 149,
-     "quote": "if (sprint.state === 'COMPLETED')"
+     "path": "apps/api/src/domain/sprint-state-machine.js",
+     "lineStart": 31,
+     "lineEnd": 31,
+     "quote": "(ctx) => ((ctx.issueCount ?? 0) > 0 ? null : 'Cannot start a sprint with no issues'),"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "apps/api/src/services/sprint.service.js",
+     "lineStart": 47,
+     "lineEnd": 67,
+     "why": "The order: lookup, guard, then the update."
+    }
+   ]
   },
   {
    "id": "x-q08-foreign-destination",
    "target": "seed:quests:gitjira/quiz/c5e97b2b533a8cf0",
    "phase": "after",
-   "title": "A foreign destination is simply not found",
-   "body": "In `completeSprint`, the destination is looked up with `where: { id: destination, projectId: project.id }`. A sprint of another project does not match, so `target` is null and `notFound('Destination sprint')` is thrown. That throw comes before `tx.sprint.updateMany`, the first write, so the source sprint stays ACTIVE and its issues stay assigned. The regression reads both back after the 404.\n\n- \"409 only to a planned sprint\" is the answer for a destination in the SAME project that is not PLANNED.\n- \"200 with issues moved across projects\" is the bug the pre-change code had.\n- \"Completes with movedCount 0\" is wrong because nothing is written once the lookup fails.",
+   "title": "A sprint cannot be its own destination",
+   "body": "**Key: 409 \"Unfinished issues cannot stay in the completed sprint\".**\n\nInside `if (destination)`, the first test is `destination === sprint.id`. It throws before the destination lookup, before the PLANNED check, and before any write.\n\nWhy the others are wrong:\n- *can only move to a planned sprint*: S is ACTIVE, so that check would fail too, but the self-check comes first.\n- *200, issues stay*: completion never leaves unfinished issues in the completed sprint.\n- *404 Destination sprint*: the lookup is never reached; it would find S anyway.",
    "excerpts": [
     {
      "path": "apps/api/src/services/sprint.service.js",
-     "lineStart": 91,
-     "lineEnd": 95,
-     "quote": "if (!target) throw notFound('Destination sprint');"
-    },
-    {
-     "path": "apps/api/test/sprint.test.js",
-     "lineStart": 211,
-     "lineEnd": 211,
-     "quote": "expect(sprints.body.sprints.find((s) => s.id === source.id).state).toBe('ACTIVE');"
+     "lineStart": 88,
+     "lineEnd": 89,
+     "quote": "if (destination === sprint.id) { throw conflict('Unfinished issues cannot stay in the completed sprint');"
     }
    ],
    "readMore": []
@@ -240,83 +259,93 @@
    "id": "x-q09-double-complete",
    "target": "seed:quests:gitjira/quiz/3ebd23e3ac5d4ddf",
    "phase": "after",
-   "title": "A state-qualified update claims the transition",
-   "body": "Both requests may read the sprint as ACTIVE. The claim, though, is `tx.sprint.updateMany({ where: { id: sprint.id, projectId: project.id, state: 'ACTIVE' }, ... })`. Only one request can change the row from ACTIVE to COMPLETED. The other matches zero rows and throws `conflict('Sprint was already completed')`, so it never reaches the bulk issue move.\n\n- \"Both 200, second with movedCount 0\" is wrong: the loser throws before returning anything.\n- \"Every issue moved twice\" is wrong for the same reason.\n- \"Waits on a lock, then succeeds\" is wrong: even after waiting, its predicate no longer matches.",
+   "title": "Re-assigning to the same sprint is still a write",
+   "body": "**Key: the issue comes back, with its updatedAt moved forward.**\n\nNo line compares the issue's current `sprintId` with the requested one. The sprint exists and is not COMPLETED, so the checks pass. `updateMany` matches the token and writes the same `sprintId` with `nextUpdatedAt`, and the function returns the re-read issue (the controller sends 200).\n\nWhy the others are wrong:\n- *unchanged*: `updatedAt` is always written.\n- *409 already assigned*: there is no such rule.\n- *204*: the controller always answers with `res.json({ issue })`.",
    "excerpts": [
     {
      "path": "apps/api/src/services/sprint.service.js",
-     "lineStart": 114,
-     "lineEnd": 118,
-     "quote": "if (completed.count === 0) throw conflict('Sprint was already completed');"
+     "lineStart": 158,
+     "lineEnd": 158,
+     "quote": "data: { sprintId, updatedAt: nextUpdatedAt },"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "apps/api/src/controllers/sprint.controller.js",
+     "lineStart": 18,
+     "lineEnd": 26,
+     "why": "How the controller answers an assignment."
+    }
+   ]
   },
   {
    "id": "x-q10-concurrent-starts",
    "target": "seed:quests:gitjira/quiz/49d10da26892aa18",
    "phase": "after",
-   "title": "The constraint, not the state machine, decides",
-   "body": "Each start updates a different row (s1 or s2), and each sprint passes its own state-machine guard (PLANNED, has issues). The only rule that sees both rows is the database's partial unique index `Sprint_one_active_per_project`. The second update violates it, Prisma raises P2002, and `startSprint` catches exactly that code and throws `conflict('Another sprint is already active in this project')`.\n\n- \"The state machine refuses\" is wrong: it only checks per-sprint rules.\n- \"Both start\" is what would happen without the index.\n- \"Retried into a 500\" is wrong: a P2034 retry would hit the same constraint or exhaust into a 409, never a 500.",
+   "title": "A new sprint is PLANNED, and the state machine says so first",
+   "body": "**Key: 409 \"Cannot complete a sprint that is PLANNED (must be ACTIVE)\".**\n\n`createSprint` writes only `projectId`, `name` and `goal`; the schema default gives `state` the value `PLANNED`. `completeSprint` finds the sprint and calls `assertTransition('complete', sprint.state)` on line 85. The complete transition starts from ACTIVE, so it throws that message before the guarded `updateMany` runs.\n\nWhy the others are wrong:\n- *Sprint was already completed*: that comes from line 118, which is not reached.\n- *200 with movedCount 0*: the transition check fails first.\n- *404 Sprint*: the lookup filters by id and project, not by state.",
    "excerpts": [
     {
-     "path": "apps/api/src/services/sprint.service.js",
-     "lineStart": 69,
-     "lineEnd": 70,
-     "quote": "if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {"
-    },
-    {
-     "path": "apps/api/prisma/migrations/20260709220000_sprints/migration.sql",
-     "lineStart": 31,
-     "lineEnd": 32,
-     "quote": "CREATE UNIQUE INDEX \"Sprint_one_active_per_project\""
+     "path": "apps/api/src/domain/sprint-state-machine.js",
+     "lineStart": 57,
+     "lineEnd": 57,
+     "quote": "throw conflict(`Cannot ${action} a sprint that is ${currentState} (must be ${t.from})`);"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "apps/api/prisma/schema.prisma",
+     "lineStart": 249,
+     "lineEnd": 263,
+     "why": "The Sprint model and its default state."
+    }
+   ]
   },
   {
    "id": "x-q11-update-issue-weaker",
    "target": "seed:quests:gitjira/quiz/c3e09cd93c98fc43",
    "phase": "after",
-   "title": "Compare-then-write versus a guarded write",
-   "body": "`updateIssue` reads the issue, compares `issue.updatedAt.toISOString()` with the token in JavaScript, and only later runs `tx.issue.update({ where: { id: issue.id }, ... })`. Between the compare and the write, another request can pass the same compare. Both then write, and the second silently overwrites the first. Assignment avoids this by putting the token in the `updateMany` predicate, so the database checks it at write time.\n\n- \"Only to the second\" is wrong: ISO strings keep milliseconds.\n- \"Skips when the title is missing\" is wrong: the check depends only on `patch.expectedUpdatedAt`.\n- \"Outside any transaction\" is wrong: the update and its history entry share one `$transaction`.",
+   "title": "null clears the assignee, and a cleared assignee gets no notification",
+   "body": "**Key: it clears the assignee and logs assignee.changed, with no notification.**\n\n`if ('assigneeId' in patch) data.assigneeId = patch.assigneeId;` copies `null` into the update (the comment says \"null clears\"). Inside the transaction, `data.assigneeId !== issue.assigneeId` is true, so an `assignee.changed` entry is recorded. After the commit, the notification needs `data.assigneeId` to be truthy, and `null` is not.\n\nWhy the others are wrong:\n- *U stays assigned*: only `undefined` means leave alone; `null` is copied.\n- *notification to U*: the condition requires a new, truthy assignee.\n- *no activity*: the activity check compares the old and new values, which differ.",
    "excerpts": [
     {
      "path": "apps/api/src/services/issue.service.js",
-     "lineStart": 182,
-     "lineEnd": 184,
-     "quote": "if (current !== new Date(patch.expectedUpdatedAt).toISOString()) {"
-    },
-    {
-     "path": "apps/api/src/services/issue.service.js",
-     "lineStart": 211,
-     "lineEnd": 212,
-     "quote": "where: { id: issue.id },"
+     "lineStart": 241,
+     "lineEnd": 241,
+     "quote": "if ('assigneeId' in data && data.assigneeId && data.assigneeId !== issue.assigneeId) {"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "apps/api/src/services/issue.service.js",
+     "lineStart": 189,
+     "lineEnd": 205,
+     "why": "Why undefined and null mean different things in a PATCH."
+    }
+   ]
   },
   {
    "id": "x-q12-old-moved-count",
    "target": "seed:quests:gitjira/quiz/49bf579a7c384a1a",
    "phase": "after",
-   "title": "Report what the write actually did",
-   "body": "Chapter 03 lists four gaps in the old `completeSprint`. Gap (d): `movedCount` came from a `count()` taken BEFORE the move, so it reported what the code expected to move rather than what it did move. Today the service returns `movedCount: moved.count`, the result of the bulk `updateMany` itself, inside the same transaction.\n\n- \"From the updateMany result\" describes the current code, not the old one.\n- \"From the number of DONE columns\" confuses the filter with the result: DONE column ids only select which issues are unfinished.\n- \"From the sprint's _count after completion\" is wrong: `_count` is used by `startSprint` for its issue guard, not by completion.",
+   "title": "Reading a sprint report is a read permission",
+   "body": "**Key: it returns the report, because its default action sprint:read admits VIEWER.**\n\n`loadProject` has the default `action = 'sprint:read'`, and `sprintReport` calls it with no action. In the policy, `sprint:read` lists `ADMIN`, `MEMBER` and `VIEWER`. The writes (`createSprint`, `startSprint`, `completeSprint`, `assignIssueToSprint`) pass `'sprint:manage'` instead.\n\nWhy the others are wrong:\n- *403*: only the writes ask for `sprint:manage`.\n- *404*: the viewer is a member, so the membership check passes.\n- *sums hidden from the viewer*: the report has no role-based fields.",
    "excerpts": [
     {
-     "path": "astraupskill/03-WORKED-CHANGE.md",
-     "lineStart": 77,
-     "lineEnd": 77,
-     "quote": "(d) `movedCount` came from a `count()` taken before the move, not from the move's own result."
-    },
-    {
      "path": "apps/api/src/services/sprint.service.js",
-     "lineStart": 126,
-     "lineEnd": 126,
-     "quote": "return { sprint: persisted, movedCount: moved.count };"
+     "lineStart": 7,
+     "lineEnd": 7,
+     "quote": "async function loadProject(projectKey, actorId, action = 'sprint:read') {"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "packages/shared/src/policy.js",
+     "lineStart": 40,
+     "lineEnd": 41,
+     "why": "The two sprint actions and their roles."
+    }
+   ]
   },
   {
    "id": "x-g-rejections-before-write",

@@ -24,27 +24,22 @@
     {
      "path": "src/services/paymentService.ts",
      "lineStart": 86,
-     "lineEnd": 95
+     "lineEnd": 102
     },
     {
      "path": "src/services/paymentService.ts",
      "lineStart": 168,
-     "lineEnd": 185
-    },
-    {
-     "path": "prisma/schema.prisma",
-     "lineStart": 135,
-     "lineEnd": 135
+     "lineEnd": 191
     }
    ],
-   "prompt": "An API client retries POST /api/payments with the same Idempotency-Key and body while request 1 is still inside its transaction. What happens to request 2?",
-   "answer": "Its insert waits on the unique index, fails with P2002, then replays the stored 202 body",
+   "prompt": "An OPS user's create with a fresh Idempotency-Key fails with 404 OWNER_NOT_FOUND. The client retries with the same key and body. What does the retry get?",
+   "answer": "The same 404, after running the whole create again from scratch",
    "distractors": [
-    "Both requests create a payment, since the pre-read at line 68 ran before either one committed",
-    "It gets 409 IDEMPOTENCY_REQUEST_IN_PROGRESS, because the pre-read sees the IN_PROGRESS row",
-    "Prisma retries its transaction in a loop; it gives up once request 1 has rolled back"
+    "409 IDEMPOTENCY_REQUEST_IN_PROGRESS, as the record never completed",
+    "A replay of the stored 404 response, marked with replayed: true",
+    "409 IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD, as no payment exists"
    ],
-   "explanation": "The pre-read at paymentService.ts:68 misses (request 1 has not committed). Request 2's insert at :88 collides with the uncommitted row on @@unique([route, key]) and waits; after request 1 commits it fails with P2002, the catch re-reads the COMPLETED record (:173-184) and buildCompletedReplay returns the original body with replayed: true."
+   "explanation": "The idempotency record is created through tx inside the transaction, and the 404 is thrown inside it too, so the record rolls back. The retry finds no record, runs the transaction again and hits the same missing owner."
   },
   {
    "id": "q02-same-key-new-amount",
@@ -198,24 +193,24 @@
    },
    "cites": [
     {
-     "path": "src/lib/auth/guards.ts",
-     "lineStart": 28,
-     "lineEnd": 35
+     "path": "src/services/paymentAccessPolicy.ts",
+     "lineStart": 12,
+     "lineEnd": 30
     },
     {
-     "path": "src/app/api/admin/reconciliation/run/route.ts",
-     "lineStart": 6,
-     "lineEnd": 16
+     "path": "src/services/paymentService.ts",
+     "lineStart": 97,
+     "lineEnd": 117
     }
    ],
-   "prompt": "A SUPPORT user calls POST /api/admin/reconciliation/run directly. What does the client receive?",
-   "answer": "An unstructured error, as the 403 RouteError escapes the handler's try",
+   "prompt": "An OPS user sends POST /api/payments with ownerUserId set to a customer's id. Who owns and who created the resulting payment?",
+   "answer": "The customer owns it, and createdByUserId is the OPS user",
    "distractors": [
-    "A JSON 403 body whose error.code is FORBIDDEN, produced for it by jsonError()",
-    "A redirect to /, the page guard's branch for a missing permission",
-    "202 with a run summary, as SUPPORT holds the PAYMENT_READ_ANY grant"
+    "403 FORBIDDEN_OWNER_OVERRIDE; only the owner may create it",
+    "The OPS user owns it, as a staff ownerUserId is just ignored",
+    "The customer owns it, and createdByUserId is that customer too"
    ],
-   "explanation": "withRouteAuth calls requirePermission at guards.ts:32, before handler(...) runs, so the throw happens outside the try/catch that would call jsonError (Finding A1, check C12)."
+   "explanation": "resolvePaymentOwnerForCreate allows another owner when the role holds PAYMENT_READ_ANY, which OPS does. createPayment then writes ownerUserId: owner.id and createdByUserId: input.session.userId."
   },
   {
    "id": "q08-rejected-webhook-trace",
@@ -291,24 +286,24 @@
    },
    "cites": [
     {
-     "path": "src/repositories/webhookRepository.ts",
-     "lineStart": 29,
-     "lineEnd": 37
+     "path": "src/services/providerSimulatorService.ts",
+     "lineStart": 157,
+     "lineEnd": 186
     },
     {
      "path": "src/repositories/webhookRepository.ts",
-     "lineStart": 53,
-     "lineEnd": 65
+     "lineStart": 29,
+     "lineEnd": 37
     }
    ],
-   "prompt": "A WebhookDelivery fails and is marked FAILED with nextAttemptAt set 60 seconds ahead. When is it delivered again?",
-   "answer": "Never, because the relay query selects PENDING rows alone",
+   "prompt": "Three PENDING webhook deliveries exist. deliverPendingWebhooks(2) runs; the first one processes fine and the second one's handler throws. What is the outcome?",
+   "answer": "delivered 1, failed 1, and the third stays PENDING for a later run",
    "distractors": [
-    "On the next Deliver click, but not before nextAttemptAt has passed",
-    "After 60 seconds, by a timer that runs inside the provider simulator",
-    "Up to 5 times; after that it moves to a dead-letter table"
+    "delivered 1, failed 1, delivered 1: the third replaces the failed one",
+    "delivered 1, and the loop stops at the throw with no FAILED mark",
+    "delivered 0, failed 2: one throw rolls back the whole relay batch"
    ],
-   "explanation": "markWebhookDeliveryFailed schedules nextAttemptAt (webhookRepository.ts:62), but the relay query filters status: PENDING only and nothing reads nextAttemptAt (Finding L4)."
+   "explanation": "listPendingWebhookDeliveries(2) takes only the two oldest PENDING rows. Each is processed in its own try/catch: the first is marked DELIVERED, the second FAILED, and the third was never selected."
   },
   {
    "id": "q11-admin-vs-ops",
@@ -349,23 +344,23 @@
    "cites": [
     {
      "path": "src/services/paymentService.ts",
-     "lineStart": 66,
-     "lineEnd": 80
+     "lineStart": 42,
+     "lineEnd": 53
     },
     {
-     "path": "prisma/schema.prisma",
-     "lineStart": 135,
-     "lineEnd": 135
+     "path": "src/services/paymentService.ts",
+     "lineStart": 152,
+     "lineEnd": 166
     }
    ],
-   "prompt": "User A and user B each send POST /api/payments with the same Idempotency-Key and an identical body, A first. What does B get?",
-   "answer": "A replay carrying user A's paymentId instead of a payment of its own",
+   "prompt": "A create completed and stored its response. The same client repeats it later with the same key and identical body. Which HTTP status and body does it get?",
+   "answer": "202 again, with the stored body and replayed set to true",
    "distractors": [
-    "A 409, because the stored record belongs to a different user than B",
-    "A new payment for B, since the fingerprint includes session.userId",
-    "403 FORBIDDEN_OWNER_OVERRIDE from resolvePaymentOwnerForCreate()"
+    "200, since a replay is a read and no payment is created",
+    "201 with a new paymentId, because the first one completed",
+    "409, because the key's record is already marked COMPLETED"
    ],
-   "explanation": "IdempotencyRecord is unique on (route, key) and the fingerprint hashes only the body (paymentService.ts:67), so B's request matches A's COMPLETED record and is replayed (Finding A4)."
+   "explanation": "The first run stores responseStatusCode 202 and the response body. buildCompletedReplay returns that status (falling back to 200 only when none is stored) and the body spread with replayed: true."
   },
   {
    "id": "f01-create-transaction",

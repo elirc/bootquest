@@ -46,18 +46,18 @@
    "cites": [
     {
      "path": "src/lib/auth/session.ts",
-     "lineStart": 28,
-     "lineEnd": 31
+     "lineStart": 21,
+     "lineEnd": 44
     }
    ],
-   "prompt": "The session cookie is httpOnly. Can a user still make themselves a SUPPORT_MANAGER?",
-   "answer": "Yes, because the cookie is unsigned JSON that the user can edit",
+   "prompt": "A request to POST /api/tickets/[ticketId]/notes carries a support-hub-session cookie whose value is not valid JSON. What comes back?",
+   "answer": "401, since an unparsable cookie reads as no session at all",
    "distractors": [
-    "No, because httpOnly cookies cannot be modified by the client",
-    "No, because the role is re-read from the database on each request",
-    "Only by stealing a manager's cookie, because the value is encrypted"
+    "500, since JSON.parse throws and nothing catches the error",
+    "403, as the cookie exists but carries no role that may write",
+    "400 BAD_REQUEST, since the route treats it as a bad request body"
    ],
-   "explanation": "readSession returns JSON.parse(raw) as SessionUser with no signature or DB lookup (F1); PATCH /api/session also lets any signed-in user switch to any active user."
+   "explanation": "readSession wraps JSON.parse in try/catch and returns null on failure. requireSession (via requireRouteSession) then throws unauthorized(), a 401 AppError."
   },
   {
    "id": "q03-customer-reply-bypass",
@@ -176,23 +176,18 @@
    "cites": [
     {
      "path": "src/services/ticket-service.ts",
-     "lineStart": 402,
-     "lineEnd": 404
-    },
-    {
-     "path": "src/services/ticket-service.ts",
-     "lineStart": 426,
-     "lineEnd": 428
+     "lineStart": 646,
+     "lineEnd": 656
     }
    ],
-   "prompt": "Reassignment via /assign is lead-or-manager only. How can a SUPPORT_AGENT still reassign or transfer a ticket?",
-   "answer": "Through PATCH, which checks only canModifyTickets before writing",
+   "prompt": "A SUPPORT_AGENT adds an internal note to a ticket whose status is CLOSED. What does addInternalNote do?",
+   "answer": "409: closed tickets must be reopened before internal work continues",
    "distractors": [
-    "They cannot, as both endpoints call assertCanReassignTicket first",
-    "By posting an internal note that mentions another agent by name",
-    "By escalating, which auto-assigns the ticket to a team lead"
+    "Adds the note, since internal notes are never shown to customers",
+    "403: only leads and managers may write on closed tickets",
+    "Adds the note and moves the ticket back to OPEN automatically"
    ],
-   "explanation": "The same rule is enforced on one endpoint and not the other (F6): rules must live with the data they protect, not with one route."
+   "explanation": "assertCanAddInternalNote passes for an agent; then if (ticket.status === \"CLOSED\") throws conflict(\"Closed tickets must be reopened before internal work continues.\") before the transaction."
   },
   {
    "id": "q08-409-for-permission",
@@ -207,18 +202,23 @@
    "cites": [
     {
      "path": "src/services/ticket-service.ts",
-     "lineStart": 403,
-     "lineEnd": 404
+     "lineStart": 646,
+     "lineEnd": 652
+    },
+    {
+     "path": "src/lib/permissions/policies.ts",
+     "lineStart": 62,
+     "lineEnd": 66
     }
    ],
-   "prompt": "An OBSERVER calls PATCH on a ticket. What status code comes back, and why is it misleading?",
-   "answer": "409, which reads like a state conflict rather than a refusal",
+   "prompt": "A READ_ONLY_OBSERVER posts an internal note on an OPEN ticket. What comes back?",
+   "answer": "403 with \"Only internal support staff can add internal notes.\"",
    "distractors": [
-    "403, the standard permission-denied response every service uses",
-    "401, since the observer's session lacks the ticket write scope",
-    "400 VALIDATION_ERROR, since the body has fields observers can't set"
+    "200, since observers count as internal users for internal notes",
+    "409, since the role check for notes reports a conflict as well",
+    "404, since observers cannot load tickets for writing at all"
    ],
-   "explanation": "F12(a): createTicket and updateTicketMetadata use conflict() for permission failures."
+   "explanation": "assertCanAddInternalNote requires canModifyTickets, which lists agents, leads and managers only. It throws forbidden(...), a 403, even though isInternalUser includes the observer."
   },
   {
    "id": "q09-malformed-json-500",
@@ -290,18 +290,23 @@
    "cites": [
     {
      "path": "src/services/ticket-service.ts",
-     "lineStart": 889,
-     "lineEnd": 894
+     "lineStart": 686,
+     "lineEnd": 700
+    },
+    {
+     "path": "src/services/ticket-workflow.ts",
+     "lineStart": 14,
+     "lineEnd": 32
     }
    ],
-   "prompt": "Why can a SUPPORT_AGENT not load the workspace at all?",
-   "answer": "The dashboard call inside Promise.all rejects agents and fails bootstrap",
+   "prompt": "A SUPPORT_AGENT asks changeTicketStatus to move a CLOSED ticket to PENDING. Which message comes back with the 409?",
+   "answer": "\"Tickets cannot move directly from CLOSED to PENDING.\"",
    "distractors": [
-    "Agents have no queue memberships, so the ticket list query fails",
-    "The bootstrap route requires the reassign permission for every role",
-    "It is by design, since agents are meant to work only from email notifications"
+    "\"Closed tickets must reopen to OPEN before other workflow transitions.\"",
+    "No error: CLOSED to PENDING is allowed, so the change goes through",
+    "\"This role cannot change ticket workflow status.\" from the policy"
    ],
-   "explanation": "One failing branch of Promise.all fails the combined result; the default demo user is an agent, so a first visit hits this (F13)."
+   "explanation": "assertValidStatusTransition runs first; CLOSED allows only OPEN, so it throws the table's conflict. The closed-ticket check on the next lines is never reached."
   },
   {
    "id": "q12-escalate-no-history",
