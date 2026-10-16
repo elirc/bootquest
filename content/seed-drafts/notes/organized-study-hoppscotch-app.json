@@ -1,0 +1,293 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "organized-study-hoppscotch-app",
+ "repo": "organized-study-hoppscotch-app",
+ "sha": "ff054e5a2b5196f14101b094237cad85a766b68f",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: the Hoppscotch backend through its architecture guides",
+   "body": "Hoppscotch is an open-source API client (think Postman). This checkout keeps the real monorepo under `hoppscotch/`, and adds a study course in `hoppscotch/fabledocs/upskill/`. This quest uses the backend: `hoppscotch/packages/hoppscotch-backend`, a NestJS server with a GraphQL API and Prisma over PostgreSQL.\n\nRead these guides in order, all under `03-architecture-and-patterns/` unless noted:\n\n1. `03-validation-auth-and-permissions.md`: the checks a request passes through, and the tenant-isolation (IDOR) section.\n2. `02-data-model-and-persistence.md`: the schema and its unique constraints.\n3. `04-side-effects-async-and-reliability.md`: every way the backend causes effects outside the request.\n4. `05-pattern-catalog.md`, patterns 3 to 9 and 17 to 18.\n5. `06-architecture-critique.md` and `09-reference/risk-register.md`.\n\nThe guides label claims as confirmed or as a hypothesis. Treat every link to a code line as a prompt to open that line: several quiz questions ask what the code does where a comment or a guide sentence says something looser.",
+   "excerpts": [
+    {
+     "path": "hoppscotch/fabledocs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 15,
+     "lineEnd": 15,
+     "quote": "client validation is a convenience; server validation is the contract."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "hoppscotch/fabledocs/upskill/README.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "How the whole upskill course is organised and where each track starts."
+    },
+    {
+     "path": "hoppscotch/fabledocs/upskill/01-codebase-cartography/01-system-map.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "A map of the packages, if the monorepo layout is new to you."
+    }
+   ]
+  },
+  {
+   "id": "r02-guards-and-tenants",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: guards, metadata and the tenant-isolation question",
+   "body": "In NestJS a **guard** is a class with `canActivate(context)` that runs before a resolver. It can read metadata that a decorator attached to the handler (through `Reflector`) and the GraphQL arguments of the call. Hoppscotch combines `GqlTeamMemberGuard` with the `@RequiresTeamRole(...)` decorator to say which team roles may call a resolver.\n\nOpen `src/team/guards/gql-team-member.guard.ts` and write down, in order:\n\n- each value the guard reads (metadata, user, arguments);\n- what it does when each one is missing;\n- what decides the final result.\n\nThen read the IDOR section of the validation guide. Its question is: when a call names a resource by ID, which line proves that the caller may touch it? Look at how operations that receive a `collectionID` are protected (`src/team-collection/guards`), and read `createCollection` in `team-collection.service.ts` and find the line that compares a parent collection with the team it is created for. Do the same for `verifyAdmin` in `src/auth/auth.service.ts`, and note which HTTP method its route in `auth.controller.ts` uses.",
+   "excerpts": [
+    {
+     "path": "hoppscotch/fabledocs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 27,
+     "lineEnd": 27,
+     "quote": "when a request names a resource ID, who checks the caller may touch it?"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "hoppscotch/packages/hoppscotch-backend/src/team/guards/gql-team-member.guard.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The team-membership guard, about 40 lines."
+    },
+    {
+     "path": "hoppscotch/fabledocs/upskill/03-architecture-and-patterns/05-pattern-catalog.md",
+     "lineStart": 31,
+     "lineEnd": 52,
+     "why": "Patterns 3 and 4: declarative guards and the service-level re-check."
+    }
+   ]
+  },
+  {
+   "id": "r03-concurrency-and-events",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: locks, unique constraints and publish-after-commit",
+   "body": "Three ideas carry most of this quest.\n\n**Ordering under concurrency.** Team collections keep a sibling order in `orderIndex`. Read `createCollection` and `deleteCollectionAndUpdateSiblingsOrderIndex` in `team-collection.service.ts`, and `lockTeamCollectionByTeamAndParent` in `src/prisma/prisma.service.ts`. Note what is locked, when, and how the new index is computed. Then compare the two branches of the lock query with `@@unique([teamID, parentID, orderIndex])` in the schema, and ask why root collections get a branch of their own.\n\n**Count-then-write.** In `src/team/team.service.ts`, read `leaveTeam` and `updateTeamAccessRole`. List the reads, the checks and the writes, and whether a transaction or lock surrounds them. Then imagine two calls arriving together.\n\n**Events.** Every mutation publishes to `PubSubService` for GraphQL subscriptions. Open `src/pubsub/pubsub.service.ts` and read both its header comment and `onModuleInit`. Find where each `publish` sits relative to its `$transaction`, and ask what a subscriber sees if the process stops at each point, or if the backend runs on more than one machine.\n\nFinally, read `verifyMagicLinkTokens` in `auth.service.ts` and list its steps in order.",
+   "excerpts": [
+    {
+     "path": "hoppscotch/fabledocs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+     "lineStart": 17,
+     "lineEnd": 17,
+     "quote": "Absence is architecture too"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "hoppscotch/packages/hoppscotch-backend/src/team-collection/team-collection.service.ts",
+     "lineStart": 452,
+     "lineEnd": 517,
+     "why": "createCollection: validation, the locked transaction, then the publish."
+    },
+    {
+     "path": "hoppscotch/packages/hoppscotch-backend/src/team/team.service.ts",
+     "lineStart": 152,
+     "lineEnd": 240,
+     "why": "The two owner-related methods to trace."
+    },
+    {
+     "path": "hoppscotch/fabledocs/upskill/09-reference/risk-register.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The claims ledger: each risk with its evidence and confidence."
+    }
+   ]
+  },
+  {
+   "id": "x-pubsub-implementation",
+   "target": "seed:quests:organized-study-hoppscotch-app/quiz/c76292864741563b",
+   "phase": "after",
+   "title": "Why the PubSub is in-memory everywhere",
+   "body": "The header comment says the service figures out which PubSub to use, simple for dev and Redis for production. The code makes no such choice: `onModuleInit` always runs `this.pubsub = new LocalPubSub()`, where `LocalPubSub` is the `PubSub` class from `graphql-subscriptions`, which keeps subscribers in process memory. The comment is stale, so the code is keyed.\n\n- *Redis when NODE_ENV is production*: no environment is read at all.\n- *Redis with a memory fallback*: no Redis client is imported.\n- *A PUBSUB_DRIVER setting*: no configuration is consulted.",
+   "excerpts": [
+    {
+     "path": "hoppscotch/packages/hoppscotch-backend/src/pubsub/pubsub.service.ts",
+     "lineStart": 14,
+     "lineEnd": 18,
+     "quote": "this.pubsub = new LocalPubSub();"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-two-replicas",
+   "target": "seed:quests:organized-study-hoppscotch-app/quiz/28401c5e18aa12bd",
+   "phase": "after",
+   "title": "Why a second replica misses the event",
+   "body": "Replica A handles the mutation and calls `pubsub.publish`. Its PubSub is an in-process object, so the event reaches only subscriptions held by A's process. The subscriber's socket is on B, whose PubSub never hears about it, so no live update arrives. Risk R2 calls this certain at more than one replica.\n\n- *Relayed through Postgres*: nothing listens to the database for events.\n- *Delivered twice*: only the replica that ran the mutation publishes.\n- *An error frame*: B is not involved at all, so it has nothing to reject.",
+   "excerpts": [
+    {
+     "path": "hoppscotch/fabledocs/upskill/09-reference/risk-register.md",
+     "lineStart": 8,
+     "lineEnd": 8,
+     "quote": "In-memory pubsub silently breaks real-time across replicas"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-leave-team-race",
+   "target": "seed:quests:organized-study-hoppscotch-app/quiz/f9e7291c18512111",
+   "phase": "after",
+   "title": "Why two owners leaving together can leave no owner",
+   "body": "`leaveTeam` counts OWNER rows, loads the member, refuses only when `ownerCount === 1` and the member is an owner, and then deletes. None of this runs in a transaction or takes a lock. Two concurrent calls can both read a count of 2, both pass the check and both delete, leaving zero owners. The guides mark it as a hypothesis to test against real Postgres; the code supports it.\n\n- *One success and one error every time*: that needs the count and delete to be serialized, and they are not.\n- *A unique-constraint error and a retry*: deleting two different rows breaks no constraint, and leaveTeam has no retry loop.\n- *A deadlock*: no rows are locked.",
+   "excerpts": [
+    {
+     "path": "hoppscotch/packages/hoppscotch-backend/src/team/team.service.ts",
+     "lineStart": 219,
+     "lineEnd": 221,
+     "quote": "if (ownerCount === 1 && member.role === TeamAccessRole.OWNER) { return E.left(TEAM_ONLY_ONE_OWNER);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-guard-missing-role",
+   "target": "seed:quests:organized-study-hoppscotch-app/quiz/3c92eef5a7c725b6",
+   "phase": "after",
+   "title": "Why a missing @RequiresTeamRole fails closed",
+   "body": "The first thing `canActivate` does is read the `requiresTeamRole` metadata. If it is absent, it throws `Error(BUG_TEAM_NO_REQUIRE_TEAM_ROLE)` before it looks at the user or the arguments. So a resolver that forgot the decorator is unusable for everyone, which is loud and safe. The critique lists this fail-closed convention as one of the strongest choices in the repo.\n\n- *Any member gets through*: that would be fail-open, the opposite of what the code does.\n- *Falls back to OWNER*: there is no default role list.\n- *Membership only*: the role metadata is required before membership is even checked.",
+   "excerpts": [
+    {
+     "path": "hoppscotch/packages/hoppscotch-backend/src/team/guards/gql-team-member.guard.ts",
+     "lineStart": 26,
+     "lineEnd": 26,
+     "quote": "if (!requireRoles) throw new Error(BUG_TEAM_NO_REQUIRE_TEAM_ROLE);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-guard-literal-teamid",
+   "target": "seed:quests:organized-study-hoppscotch-app/quiz/6f2026254911a176",
+   "phase": "after",
+   "title": "Why the guard needs an argument literally named teamID",
+   "body": "After the metadata and user checks, the guard runs `const { teamID } = gqlExecCtx.getArgs()` and throws `BUG_TEAM_NO_TEAM_ID` when it is missing. It never maps a collection ID to a team. A mutation that only takes `collectionID` therefore fails for every caller, member or not; operations on child IDs need the collection-specific guards instead.\n\n- *Looks up the collection's team*: that ownership walk lives in `team-collection/guards`, not here.\n- *Passes for a member of some team*: membership is looked up only for the given `teamID`.\n- *Returns false, plain 403*: the guard throws errors; it has no `return false` path.",
+   "excerpts": [
+    {
+     "path": "hoppscotch/packages/hoppscotch-backend/src/team/guards/gql-team-member.guard.ts",
+     "lineStart": 34,
+     "lineEnd": 35,
+     "quote": "if (!teamID) throw new Error(BUG_TEAM_NO_TEAM_ID);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-parent-other-team",
+   "target": "seed:quests:organized-study-hoppscotch-app/quiz/26946e3ec55d03b8",
+   "phase": "after",
+   "title": "Why the cross-team parent is refused before any write",
+   "body": "`createCollection` validates in order: title length, then, when `parentID` is not null, `isOwnerCheck(parentID, teamID)`. If the parent is not in the same team, it returns `E.left(TEAM_NOT_OWNER)` immediately; the transaction and lock come later and never start. The guide calls this the service check that stops grafting a collection into another team's tree.\n\n- *Inside the transaction*: the lock query runs only after this check passes.\n- *A foreign-key check at commit*: the schema has no constraint tying a child's team to its parent's team, which is why the service check exists.\n- *Grafted under team B*: the early return prevents exactly that.",
+   "excerpts": [
+    {
+     "path": "hoppscotch/packages/hoppscotch-backend/src/team-collection/team-collection.service.ts",
+     "lineStart": 461,
+     "lineEnd": 464,
+     "quote": "const isOwner = await this.isOwnerCheck(parentID, teamID); if (O.isNone(isOwner)) return E.left(TEAM_NOT_OWNER);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-first-order-index",
+   "target": "seed:quests:organized-study-hoppscotch-app/quiz/0d18dec2ecc6687a",
+   "phase": "after",
+   "title": "Why the first child gets orderIndex 1 under a lock",
+   "body": "Inside `$transaction`, the service first calls `lockTeamCollectionByTeamAndParent`, a raw `SELECT \"orderIndex\" ... FOR UPDATE` on the same team and parent. Then it reads the highest `orderIndex` and writes `lastCollection ? lastCollection.orderIndex + 1 : 1`. With no siblings, `lastCollection` is null, so the new row gets 1.\n\n- *orderIndex 0, zero-based*: the fallback in the code is 1.\n- *An advisory lock counter*: the lock is a row lock on the siblings, and the value comes from the max read.\n- *Numbered later by a job*: the index is written in the same insert; the backend has no job queue.",
+   "excerpts": [
+    {
+     "path": "hoppscotch/packages/hoppscotch-backend/src/team-collection/team-collection.service.ts",
+     "lineStart": 499,
+     "lineEnd": 499,
+     "quote": "orderIndex: lastCollection ? lastCollection.orderIndex + 1 : 1,"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-null-parent-unique",
+   "target": "seed:quests:organized-study-hoppscotch-app/quiz/6f96c99b9b27f78f",
+   "phase": "after",
+   "title": "Why the unique constraint misses root collections",
+   "body": "Root collections have `parentID` NULL. By default a Postgres unique index treats NULLs as distinct from each other, so two rows `[teamA, NULL, 3]` do not conflict. The constraint therefore protects child siblings but not root siblings, and the application lock is what really keeps root ordering clean. That is why the lock query has a separate `\"parentID\" IS NULL` branch.\n\n- *Prisma leaves null parentID out*: the index covers the column; it is Postgres semantics that let NULLs repeat.\n- *Checked only at commit*: this constraint is not deferred; it is checked per statement.\n- *A synthetic parent row*: roots are stored with a NULL parent, as the lock query shows.",
+   "excerpts": [
+    {
+     "path": "hoppscotch/fabledocs/upskill/03-architecture-and-patterns/05-pattern-catalog.md",
+     "lineStart": 185,
+     "lineEnd": 185,
+     "quote": "Postgres treats NULLs as distinct"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-delete-not-found",
+   "target": "seed:quests:organized-study-hoppscotch-app/quiz/3932fa96519a8ef2",
+   "phase": "after",
+   "title": "Why an already-deleted collection ends the job quietly",
+   "body": "The delete is wrapped in its own `try`. When Prisma reports `P2025` (record not found), the code returns from the transaction callback, so the sibling `updateMany` never runs. The transaction completes, the loop breaks, and the method returns `E.right(true)`. Pattern 7 calls this idempotency: the end state is the same whether this request or another one deleted the row.\n\n- *ConflictException and retry*: only other delete errors are rethrown and wrapped.\n- *Reindex still runs*: the early return skips it, so indexes are not shifted twice.\n- *TEAM_COL_REORDERING_FAILED*: that is returned only after a failed transaction, and this one succeeded.",
+   "excerpts": [
+    {
+     "path": "hoppscotch/packages/hoppscotch-backend/src/team-collection/team-collection.service.ts",
+     "lineStart": 577,
+     "lineEnd": 578,
+     "quote": "if (deleteError?.code === PrismaError.RECORD_NOT_FOUND) return;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-publish-crash-gap",
+   "target": "seed:quests:organized-study-hoppscotch-app/quiz/5f6f20a8ec9eb753",
+   "phase": "after",
+   "title": "Why a crash after commit loses the live event",
+   "body": "The publish sits after the `$transaction` block on purpose: an event is never sent for a write that later rolls back. The price is the gap between the two. If the process dies after the commit, the collection exists in the database, but `publish` never ran and the in-memory PubSub kept nothing, so subscribers get no event. Pattern 9 calls this at-most-once and notes the repo accepts it because clients can refetch.\n\n- *Rolled back*: the commit had already completed.\n- *Replayed from an outbox*: the side-effects guide lists the outbox as absent.\n- *PubSub retries*: there is nothing to retry from; the publish was never called.",
+   "excerpts": [
+    {
+     "path": "hoppscotch/fabledocs/upskill/03-architecture-and-patterns/05-pattern-catalog.md",
+     "lineStart": 102,
+     "lineEnd": 102,
+     "quote": "crash *between* commit and publish loses the event (at-most-once)"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-expired-magic-link",
+   "target": "seed:quests:organized-study-hoppscotch-app/quiz/3a22ae8a8309ca19",
+   "phase": "after",
+   "title": "Why an expired link still writes an Account row",
+   "body": "`verifyMagicLinkTokens` looks for a `magic` provider account and creates one when it is missing (lines 285-297). Only after that does it compare `currentTime > expiresOn` and return `MAGIC_LINK_EXPIRED` with status 401. So an expired link still leaves a new Account row behind. Risk R3 flags the ordering; the suggested fix moves the expiry check up.\n\n- *Writes nothing*: the account write runs before the expiry check.\n- *Signs the user in*: the server does enforce expiry and returns early.\n- *Deletes the token first*: the token is deleted only on the success path, after tokens are generated.",
+   "excerpts": [
+    {
+     "path": "hoppscotch/packages/hoppscotch-backend/src/auth/auth.service.ts",
+     "lineStart": 299,
+     "lineEnd": 303,
+     "quote": "if (currentTime > passwordlessTokens.value.expiresOn) return E.left({ message: MAGIC_LINK_EXPIRED,"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-verify-admin",
+   "target": "seed:quests:organized-study-hoppscotch-app/quiz/bd5e978b3f935797",
+   "phase": "after",
+   "title": "Why the only user becomes admin on a GET",
+   "body": "`verifyAdmin` returns `isAdmin: true` straight away for an admin. Otherwise it counts users; when the count is exactly 1 it calls `makeAdmin(user.uid)` and returns `isAdmin: true`. The controller exposes it as `@Get('verify/admin')`, so a GET request changes state. That is the 'GET endpoint with side effects' the validation guide says it found.\n\n- *Waits for an InfraToken*: no token is involved in this method.\n- *Records a pending request*: there is no such table or write.\n- *CLI only*: the browser's call is what triggers the promotion.",
+   "excerpts": [
+    {
+     "path": "hoppscotch/packages/hoppscotch-backend/src/auth/auth.service.ts",
+     "lineStart": 374,
+     "lineEnd": 376,
+     "quote": "if (usersCount === 1) { const elevatedUser = await this.usersService.makeAdmin(user.uid);"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}

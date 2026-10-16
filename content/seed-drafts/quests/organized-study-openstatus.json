@@ -1,0 +1,442 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "organized-study-openstatus",
+ "sha": "55d4ccfe4953b84c98c771141216d5a8dde3e099",
+ "guides": [
+  "openstatus/fabledocs3/adr-003-go-checker-and-queue.md",
+  "openstatus/fabledocs3/adr-004-two-data-planes.md",
+  "openstatus/fabledocs3/adr-007-validation-and-errors.md",
+  "openstatus/fabledocs3/adr-008-fail-closed-audit.md",
+  "openstatus/fabledocs/upskill/03-architecture-and-patterns/06-architecture-critique.md",
+  "openstatus/fabledocs/upskill/09-reference/risk-register.md"
+ ],
+ "items": [
+  {
+   "id": "q01-quorum-threshold",
+   "kind": "quiz",
+   "source": {
+    "path": "openstatus/fabledocs/upskill/03-architecture-and-patterns/06-architecture-critique.md",
+    "lines": {
+     "start": 9,
+     "end": 9
+    }
+   },
+   "cites": [
+    {
+     "path": "openstatus/apps/workflows/src/checker/index.ts",
+     "lineStart": 135,
+     "lineEnd": 151
+    },
+    {
+     "path": "openstatus/apps/workflows/src/checker/index.ts",
+     "lineStart": 216,
+     "lineEnd": 216
+    }
+   ],
+   "prompt": "A monitor probes from 4 regions and its global status is active. Two regions report error and two report active. Does /updateStatus flip it to error?",
+   "answer": "Yes, because 2 affected regions meet the at-least-half test",
+   "distractors": [
+    "No, because a flip needs a strict majority, here 3 of 4",
+    "No, because every region must agree before the status flips",
+    "Yes, because any single failing region flips the status"
+   ],
+   "explanation": "The flip condition is affectedRegionCount >= numberOfRegions / 2 || numberOfRegions === 1. With 4 regions, 2 >= 2 is true, so a tie flips the status. A single region is enough only for a one-region monitor. The guides call this quorum; in code it is at least half, not a strict majority."
+  },
+  {
+   "id": "q02-concurrent-reports",
+   "kind": "quiz",
+   "source": {
+    "path": "openstatus/fabledocs/upskill/03-architecture-and-patterns/06-architecture-critique.md",
+    "lines": {
+     "start": 18,
+     "end": 18
+    }
+   },
+   "cites": [
+    {
+     "path": "openstatus/apps/workflows/src/checker/index.ts",
+     "lineStart": 128,
+     "lineEnd": 134
+    },
+    {
+     "path": "openstatus/apps/workflows/src/checker/index.ts",
+     "lineStart": 216,
+     "lineEnd": 231
+    },
+    {
+     "path": "openstatus/fabledocs/upskill/09-reference/risk-register.md",
+     "lineStart": 7,
+     "lineEnd": 7
+    }
+   ],
+   "prompt": "Two regions' error reports for the same monitor reach /updateStatus at the same moment. Why can both requests act on the transition?",
+   "answer": "Each reads monitor.status before the other writes; no transaction",
+   "distractors": [
+    "Both write status inside one transaction that serializes the pair",
+    "Cloud Tasks delivers both reports to a single worker process",
+    "A compare-and-set on monitor.status stops the second request"
+   ],
+   "explanation": "Each request upserts its region row, reads the monitor with a plain select, decides from that snapshot and later updates monitor.status; nothing wraps the read-check-write in a transaction. Both can see the old status and both proceed. The risk register's fixes are a CAS update (WHERE status = ?) or per-monitor serialization; neither exists yet."
+  },
+  {
+   "id": "q03-user-actor-scope",
+   "kind": "quiz",
+   "source": {
+    "path": "openstatus/fabledocs3/adr-007-validation-and-errors.md",
+    "lines": {
+     "start": 18,
+     "end": 18
+    }
+   },
+   "cites": [
+    {
+     "path": "openstatus/packages/services/src/auth/require-scope.ts",
+     "lineStart": 25,
+     "lineEnd": 30
+    }
+   ],
+   "prompt": "A dashboard user (actor type 'user') calls a write verb that starts with requireScope(ctx, 'write'). What does requireScope do?",
+   "answer": "It returns at once, as scope checks apply to apiKey and mcp actors",
+   "distractors": [
+    "Checks the member's workspace role and throws for a viewer",
+    "Throws ForbiddenError, as a dashboard session holds no scopes at all",
+    "Writes a denied-attempt audit row and then lets the call run"
+   ],
+   "explanation": "The first branch returns when actor.type is neither 'apiKey' nor 'mcp', so a user session passes untouched. The docblock says member-role enforcement for users is a separate project; ADR-007 adds that any workspace member can currently do anything in the workspace. A denied API key logs with console.warn, not an audit row."
+  },
+  {
+   "id": "q04-scope-before-tx",
+   "kind": "quiz",
+   "source": {
+    "path": "openstatus/packages/services/src/auth/require-scope.ts",
+    "lines": {
+     "start": 21,
+     "end": 23
+    }
+   },
+   "cites": [
+    {
+     "path": "openstatus/packages/services/src/auth/require-scope.ts",
+     "lineStart": 21,
+     "lineEnd": 23
+    }
+   ],
+   "prompt": "requireScope's docblock says to call it as the first line of a write verb, before withTransaction. What reason does it give?",
+   "answer": "A failed check would open a transaction only to roll it back",
+   "distractors": [
+    "The transaction would hold a write lock on the api_key row meanwhile",
+    "Scope rows must be read outside the tenant's transaction",
+    "withTransaction swallows a ForbiddenError thrown inside it"
+   ],
+   "explanation": "The comment reads: a failed check shouldn't open a tx just to roll it back, and the check has no DB dependency. It is a pure function of ctx.actor.scopes, so there is no row to lock or read, and errors thrown inside a transaction do propagate."
+  },
+  {
+   "id": "q05-tag-other-workspace",
+   "kind": "quiz",
+   "source": {
+    "path": "openstatus/fabledocs3/adr-007-validation-and-errors.md",
+    "lines": {
+     "start": 19,
+     "end": 19
+    }
+   },
+   "cites": [
+    {
+     "path": "openstatus/packages/services/src/monitor/internal.ts",
+     "lineStart": 62,
+     "lineEnd": 84
+    },
+    {
+     "path": "openstatus/packages/services/src/monitor/relations.ts",
+     "lineStart": 102,
+     "lineEnd": 120
+    }
+   ],
+   "prompt": "Updating a monitor's tags (updateMonitorTags), a caller passes a tag id that belongs to another workspace. What does validateTagIds throw?",
+   "answer": "ForbiddenError, with the message 'Tag <id> is not accessible.'",
+   "distractors": [
+    "NotFoundError, matching the other fetch-or-throw helpers",
+    "A ZodError, as tag ids are checked by the input schema",
+    "Nothing; unknown tag ids are dropped from the list silently"
+   ],
+   "explanation": "validateTagIds selects tags whose id is in the list AND whose workspaceId matches, then throws ForbiddenError for any id not returned. Other tenancy helpers throw NotFoundError for a foreign id, which is the 404-versus-403 inconsistency ADR-007 lists as a known cleanup."
+  },
+  {
+   "id": "q06-unknown-error-trpc",
+   "kind": "quiz",
+   "source": {
+    "path": "openstatus/fabledocs3/adr-007-validation-and-errors.md",
+    "lines": {
+     "start": 11,
+     "end": 11
+    }
+   },
+   "cites": [
+    {
+     "path": "openstatus/packages/api/src/service-adapter.ts",
+     "lineStart": 32,
+     "lineEnd": 87
+    }
+   ],
+   "prompt": "A service verb throws a plain Error('SQLITE_BUSY: database is locked'). How does toTRPCError present it to the tRPC client?",
+   "answer": "INTERNAL_SERVER_ERROR with the generic 'Internal server error'",
+   "distractors": [
+    "INTERNAL_SERVER_ERROR whose message is the original SQLITE_BUSY text",
+    "BAD_REQUEST with 'Invalid input', the same as a validation error",
+    "CONFLICT, since a locked database is treated as a write conflict"
+   ],
+   "explanation": "toTRPCError passes TRPCErrors through, maps ZodError to BAD_REQUEST 'Invalid input', and maps each ServiceError code. Anything else falls to the end: INTERNAL_SERVER_ERROR with the fixed message 'Internal server error' and the original kept on cause, because raw messages can leak database strings."
+  },
+  {
+   "id": "q07-quota-codes",
+   "kind": "quiz",
+   "source": {
+    "path": "openstatus/fabledocs/upskill/09-reference/risk-register.md",
+    "lines": {
+     "start": 19,
+     "end": 19
+    }
+   },
+   "cites": [
+    {
+     "path": "openstatus/apps/server/src/routes/v1/monitors/post.ts",
+     "lineStart": 59,
+     "lineEnd": 64
+    },
+    {
+     "path": "openstatus/packages/api/src/service-adapter.ts",
+     "lineStart": 57,
+     "lineEnd": 65
+    }
+   ],
+   "prompt": "A workspace at its monitor limit creates one more monitor through v1 REST and again through tRPC. Which errors do the two surfaces return?",
+   "answer": "402 PAYMENT_REQUIRED on v1 REST, and TOO_MANY_REQUESTS on tRPC",
+   "distractors": [
+    "403 FORBIDDEN on both surfaces, as the plan forbids the create",
+    "429 on v1 REST, and PAYMENT_REQUIRED on the tRPC surface",
+    "409 CONFLICT on both, since the monitor count is already full"
+   ],
+   "explanation": "The v1 route throws OpenStatusApiError({ code: 'PAYMENT_REQUIRED', message: 'Upgrade for more monitors' }) when count >= limits.monitors. The service path throws a LIMIT_EXCEEDED ServiceError, which service-adapter maps to TRPCError TOO_MANY_REQUESTS (429). Risk R13 records the mismatch."
+  },
+  {
+   "id": "q08-tinybird-send-fails",
+   "kind": "quiz",
+   "source": {
+    "path": "openstatus/fabledocs3/adr-004-two-data-planes.md",
+    "lines": {
+     "start": 15,
+     "end": 15
+    }
+   },
+   "cites": [
+    {
+     "path": "openstatus/apps/checker/handlers/checker.go",
+     "lineStart": 254,
+     "lineEnd": 256
+    }
+   ],
+   "prompt": "The Go checker finishes a probe, but the Tinybird SendEvent call returns an error. What happens to that probe result?",
+   "answer": "It is logged as an error and dropped, with no buffer or retry",
+   "distractors": [
+    "It is written to libSQL instead, so nothing is lost before a sync",
+    "It is retried with backoff until Tinybird accepts the event",
+    "It fails the Cloud Task, so the whole probe is run again later"
+   ],
+   "explanation": "The handler does if err := h.TbClient.SendEvent(...); err != nil { log ... 'failed to send event to tinybird' } and carries on. Probe results never touch SQL (ADR-004), and there is no spool or retry; ADR-004 calls the telemetry plane the system's weakest durability, with no loss metric."
+  },
+  {
+   "id": "q09-noop-with-metadata",
+   "kind": "quiz",
+   "source": {
+    "path": "openstatus/fabledocs3/adr-008-fail-closed-audit.md",
+    "lines": {
+     "start": 11,
+     "end": 11
+    }
+   },
+   "cites": [
+    {
+     "path": "openstatus/packages/services/src/audit/emit.ts",
+     "lineStart": 113,
+     "lineEnd": 148
+    }
+   ],
+   "prompt": "A service update calls emitAudit with identical before and after snapshots, but with a metadata object (a join-table change). What does emitAudit do?",
+   "answer": "Inserts the row, with changed_fields as an empty array",
+   "distractors": [
+    "Skips the insert, since the diff of the two snapshots is empty",
+    "Inserts the row, with changed_fields left as NULL",
+    "Throws, since an update audit entry must change some field"
+   ],
+   "explanation": "changedFields is diffTopLevel(before, after) when both are present, here []. The skip applies only when changedFields is an empty array AND metadata is undefined; with metadata the row still lands, carrying changedFields []. NULL is used only when a snapshot is missing, as on creates and deletes."
+  },
+  {
+   "id": "q10-audit-insert-fails",
+   "kind": "quiz",
+   "source": {
+    "path": "openstatus/fabledocs3/adr-008-fail-closed-audit.md",
+    "lines": {
+     "start": 11,
+     "end": 11
+    }
+   },
+   "cites": [
+    {
+     "path": "openstatus/packages/services/src/audit/emit.ts",
+     "lineStart": 92,
+     "lineEnd": 107
+    }
+   ],
+   "prompt": "Inside a service-layer monitor update, the audit entry fails auditEntrySchema.parse. What happens to the monitor update?",
+   "answer": "It rolls back, as the ZodError propagates out of the transaction",
+   "distractors": [
+    "It commits, and the failed audit entry is logged for later retry",
+    "It commits, and the audit row is written later by a queued job",
+    "It commits, as audit errors are caught inside emitAudit itself"
+   ],
+   "explanation": "emitAudit runs inside the caller's transaction and does not catch: auditEntrySchema.parse throws a ZodError, which propagates and rolls back the enclosing mutation. ADR-008 calls this fail-closed: an audit problem blocks the write rather than leaving a hole, and queue-based audit was rejected."
+  },
+  {
+   "id": "q11-status-flip-audit",
+   "kind": "quiz",
+   "source": {
+    "path": "openstatus/fabledocs3/adr-008-fail-closed-audit.md",
+    "lines": {
+     "start": 19,
+     "end": 19
+    }
+   },
+   "cites": [
+    {
+     "path": "openstatus/apps/workflows/src/checker/index.ts",
+     "lineStart": 227,
+     "lineEnd": 230
+    },
+    {
+     "path": "openstatus/fabledocs/upskill/03-architecture-and-patterns/06-architecture-critique.md",
+     "lineStart": 22,
+     "lineEnd": 22
+    }
+   ],
+   "prompt": "/updateStatus flips a monitor's global status to active after a recovery. Does that flip leave an audit_log row for a support engineer to find?",
+   "answer": "No, as the pipeline updates monitor directly, outside the services",
+   "distractors": [
+    "Yes, as emitAudit runs inside the same update as a system actor",
+    "Yes, because every write to the monitor table fires an audit trigger",
+    "No, as audit_log rows are only kept for apiKey and mcp actors"
+   ],
+   "explanation": "The flip is db.update(schema.monitor).set({ status: 'active' }) in the workflows app, not a service verb, so emitAudit never runs. The critique (R5) and ADR-008 both name this asymmetry, along with the free-plan auto-pause. There are no DB triggers, and audit_log attributes users and other actors too."
+  },
+  {
+   "id": "q12-deleted-not-probed",
+   "kind": "quiz",
+   "source": {
+    "path": "openstatus/fabledocs/upskill/03-architecture-and-patterns/06-architecture-critique.md",
+    "lines": {
+     "start": 37,
+     "end": 37
+    }
+   },
+   "cites": [
+    {
+     "path": "openstatus/apps/workflows/src/cron/checker.ts",
+     "lineStart": 98,
+     "lineEnd": 108
+    },
+    {
+     "path": "openstatus/packages/services/src/monitor/delete.ts",
+     "lineStart": 46,
+     "lineEnd": 48
+    }
+   ],
+   "prompt": "The cron query that selects monitors to probe has no deletedAt filter. Why are soft-deleted monitors not probed today?",
+   "answer": "Each soft-delete writer sets active = false in the same update",
+   "distractors": [
+    "The query's maintenance filter also leaves out the deleted monitors",
+    "A database view hides every row that has deleted_at set",
+    "The Go checker skips any payload whose deletedAt is set"
+   ],
+   "explanation": "The selection filters periodicity, active = true and the maintenance list only. The service delete runs .set({ deletedAt: new Date(), active: false }), and the guide found the same in the other soft-delete paths, so deleted implies inactive. That holds by convention in the writers, not by the query, which is why the guide suggests adding isNull(deletedAt)."
+  },
+  {
+   "id": "f01-two-planes",
+   "kind": "flashcard",
+   "source": {
+    "path": "openstatus/fabledocs3/adr-004-two-data-planes.md",
+    "lines": {
+     "start": 11,
+     "end": 11
+    }
+   },
+   "cites": [
+    {
+     "path": "openstatus/fabledocs3/adr-004-two-data-planes.md",
+     "lineStart": 11,
+     "lineEnd": 11
+    }
+   ],
+   "front": "ADR-004: what are OpenStatus's two data planes, and how does consistency between them work?",
+   "back": "libSQL via Drizzle (packages/db) holds transactional state: workspaces, monitors, pages, incidents. Tinybird holds probe telemetry: the Go checker appends results to ping_response__v8 and reads go through typed pipe clients in packages/tinybird, versioned by name suffix. Cross-plane consistency is eventual and not enforced, so the UI must tolerate disagreement."
+  },
+  {
+   "id": "f02-actor-union",
+   "kind": "flashcard",
+   "source": {
+    "path": "openstatus/fabledocs3/adr-007-validation-and-errors.md",
+    "lines": {
+     "start": 11,
+     "end": 11
+    }
+   },
+   "cites": [
+    {
+     "path": "openstatus/packages/services/src/context.ts",
+     "lineStart": 13,
+     "lineEnd": 20
+    }
+   ],
+   "front": "ADR-007's three rules for validation and errors, and the Actor union's members?",
+   "back": "1. Validation belongs to the invariant owner: transports check wire shape, every verb re-parses its input, DB reads are parsed on the way out. 2. Services throw ServiceError subclasses; each transport translates at its edge (toTRPCError). 3. Callers become one Actor union: user, apiKey, mcp, slack, system, webhook, subscriber."
+  },
+  {
+   "id": "f03-cron-secret",
+   "kind": "flashcard",
+   "source": {
+    "path": "openstatus/fabledocs3/adr-003-go-checker-and-queue.md",
+    "lines": {
+     "start": 25,
+     "end": 25
+    }
+   },
+   "cites": [
+    {
+     "path": "openstatus/fabledocs/upskill/09-reference/risk-register.md",
+     "lineStart": 10,
+     "lineEnd": 10
+    }
+   ],
+   "front": "Which hops does the single CRON_SECRET authenticate, and what is the suggested successor?",
+   "back": "cron to workflows, workflows to the Go checker, and the checker back to workflows (/updateStatus). One leaked secret exposes the whole machine pipeline, and no rotation or scoping is visible. Successors: per-edge secrets, or Cloud Tasks OIDC tokens, which GCP supports natively."
+  },
+  {
+   "id": "f04-cron-parse-abort",
+   "kind": "flashcard",
+   "source": {
+    "path": "openstatus/fabledocs/upskill/09-reference/risk-register.md",
+    "lines": {
+     "start": 15,
+     "end": 15
+    }
+   },
+   "cites": [
+    {
+     "path": "openstatus/apps/workflows/src/cron/checker.ts",
+     "lineStart": 115,
+     "lineEnd": 120
+    }
+   ],
+   "front": "Risk R9: what happens to a cron tick when one selected monitor row fails schema validation?",
+   "back": "The tick parses every row at once with z.array(selectMonitorSchema).safeParse; on failure it logs and throws 'Error while fetching the monitors', so no monitor of that periodicity is checked that tick. Suggested fix: parse per row, skip the bad one and alert."
+  }
+ ]
+}

@@ -1,0 +1,436 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "masteropen",
+ "sha": "7fb603aa0838cab1ab711b40577937cfd0f27cf2",
+ "guides": [
+  "openstatus/fabledocs4/02-capstone-at-least-once-alerting.md",
+  "openstatus/fabledocs4/03-labs-sql-and-drizzle.md",
+  "openstatus/fabledocs3/adr-005-libsql-and-schema-style.md",
+  "openstatus/fabledocs3/adr-009-idempotency-over-outbox.md",
+  "openstatus/fabledocs2/03-data-access.md"
+ ],
+ "items": [
+  {
+   "id": "q01-crash-after-trigger-insert",
+   "kind": "quiz",
+   "source": {
+    "path": "openstatus/fabledocs3/adr-009-idempotency-over-outbox.md",
+    "lines": {
+     "start": 22,
+     "end": 22
+    }
+   },
+   "cites": [
+    {
+     "path": "openstatus/apps/workflows/src/checker/alerting.ts",
+     "lineStart": 130,
+     "lineEnd": 176
+    }
+   ],
+   "prompt": "In alerting.ts the process dies after insertNotificationTrigger succeeds but before the provider's sendAlert runs. Cloud Tasks redelivers the request. What does the customer get?",
+   "answer": "No alert, as the retry hits its own trigger row and skips the send",
+   "distractors": [
+    "One alert, sent by the retry because the first send never ran",
+    "Two alerts, as the retry re-sends and the provider keeps both copies",
+    "One alert, sent later by a sweep job that finds the unsent row"
+   ],
+   "explanation": "The loop inserts the notification_trigger row first and, if that insert throws, logs 'already exists' and continues without sending. On redelivery the row from the crashed attempt is already there, so the send is skipped for good. ADR-009 calls this at-most-once alerting; no sweep exists today, which is what the capstone builds."
+  },
+  {
+   "id": "q02-clean-redelivery",
+   "kind": "quiz",
+   "source": {
+    "path": "openstatus/fabledocs3/adr-009-idempotency-over-outbox.md",
+    "lines": {
+     "start": 11,
+     "end": 11
+    }
+   },
+   "cites": [
+    {
+     "path": "openstatus/apps/workflows/src/checker/alerting.ts",
+     "lineStart": 130,
+     "lineEnd": 139
+    },
+    {
+     "path": "openstatus/packages/db/src/schema/notifications/notification.ts",
+     "lineStart": 46,
+     "lineEnd": 52
+    }
+   ],
+   "prompt": "An alert was sent successfully, then Cloud Tasks delivers the same transition again (same monitor, notification and cronTimestamp). What stops a second page?",
+   "answer": "The unique index on notificationId, monitorId and cronTimestamp",
+   "distractors": [
+    "A Redis key with a TTL that is written just before each provider send",
+    "The provider's own idempotency key, passed along with every send call",
+    "A status column on the trigger row marking the send as done"
+   ],
+   "explanation": "notification_trigger has uniqueIndex(notificationId, monitorId, cronTimestamp). The second insert violates it, the catch logs and continues, and nothing is sent. Redis TTL keys dedupe the lifecycle emails, not alerts; no provider idempotency key and no status column exist yet (adding one is the capstone's design A)."
+  },
+  {
+   "id": "q03-send-retries",
+   "kind": "quiz",
+   "source": {
+    "path": "openstatus/fabledocs3/adr-009-idempotency-over-outbox.md",
+    "lines": {
+     "start": 16,
+     "end": 16
+    }
+   },
+   "cites": [
+    {
+     "path": "openstatus/apps/workflows/src/checker/alerting.ts",
+     "lineStart": 144,
+     "lineEnd": 176
+    }
+   ],
+   "prompt": "A provider's sendAlert keeps throwing. How does alerting.ts handle it, and what happens once its retries are used up?",
+   "answer": "Effect.retry with times 3 and exponential backoff, then it logs",
+   "distractors": [
+    "Effect.retry with times 3, after which the trigger row is deleted",
+    "Cloud Tasks retries the whole request, five times by default",
+    "No retry at all, as the error propagates and fails the whole request"
+   ],
+   "explanation": "The send is wrapped in Effect.tryPromise(...).pipe(Effect.retry({ times: 3, schedule: Schedule.exponential('1000 millis') })), so up to three retries follow the first try. Effect.runPromise(...).catch logs 'Failed to send alert notification' and the loop moves on; the trigger row stays, so this alert is never tried again."
+  },
+  {
+   "id": "q04-sms-quota-boundary",
+   "kind": "quiz",
+   "source": {
+    "path": "openstatus/fabledocs3/adr-009-idempotency-over-outbox.md",
+    "lines": {
+     "start": 11,
+     "end": 11
+    }
+   },
+   "cites": [
+    {
+     "path": "openstatus/apps/workflows/src/checker/alerting.ts",
+     "lineStart": 71,
+     "lineEnd": 122
+    },
+    {
+     "path": "openstatus/packages/db/src/schema/plan/config.ts",
+     "lineStart": 147,
+     "lineEnd": 147
+    }
+   ],
+   "prompt": "A workspace on a plan with sms-limit 50 already has exactly 50 SMS trigger rows in the past month. An SMS alert fires. What does the quota check do?",
+   "answer": "Lets it through, since it skips only when the count is above 50",
+   "distractors": [
+    "Skips it, since the count has reached the plan's monthly limit of 50",
+    "Skips it and sends the alert to the workspace by email instead",
+    "Lets it through, since the SMS quota is checked only on recovery"
+   ],
+   "explanation": "The check counts notification_trigger rows for the workspace's SMS notifications since one month ago and does continue only when count > data.limits['sms-limit']. With 50 rows, 50 > 50 is false, so the 51st SMS is sent: the quota admits one more than the limit. There is no email fallback, and the check runs for every SMS notification before the switch on alert or recovery."
+  },
+  {
+   "id": "q05-capstone-target",
+   "kind": "quiz",
+   "source": {
+    "path": "openstatus/fabledocs4/02-capstone-at-least-once-alerting.md",
+    "lines": {
+     "start": 7,
+     "end": 7
+    }
+   },
+   "cites": [
+    {
+     "path": "openstatus/fabledocs4/02-capstone-at-least-once-alerting.md",
+     "lineStart": 7,
+     "lineEnd": 7
+    },
+    {
+     "path": "openstatus/fabledocs3/adr-009-idempotency-over-outbox.md",
+     "lineStart": 22,
+     "lineEnd": 22
+    }
+   ],
+   "prompt": "What delivery semantics does the alerting capstone set as its target?",
+   "answer": "At-least-once with dedupe, accepting the rare duplicate page",
+   "distractors": [
+    "Exactly-once, by making the trigger insert and send atomic",
+    "At-most-once, keeping today's trigger-before-send order",
+    "Best-effort, with alert failures logged to the wide event"
+   ],
+   "explanation": "The capstone states the target as at-least-once delivery with dedupe: a down customer may rarely get two pages, but never zero. ADR-009 explains why: for a paging product, duplicates are survivable and silent suppression is not. Exactly-once across a database and a provider is not on offer."
+  },
+  {
+   "id": "q06-design-b-extra",
+   "kind": "quiz",
+   "source": {
+    "path": "openstatus/fabledocs4/02-capstone-at-least-once-alerting.md",
+    "lines": {
+     "start": 16,
+     "end": 19
+    }
+   },
+   "cites": [
+    {
+     "path": "openstatus/fabledocs4/02-capstone-at-least-once-alerting.md",
+     "lineStart": 16,
+     "lineEnd": 19
+    }
+   ],
+   "prompt": "The capstone compares A (send status on the trigger row plus a sweep) with B (a transactional outbox). Which gap does only design B also close?",
+   "answer": "A crash after the incident insert but before the trigger insert",
+   "distractors": [
+    "A crash after the trigger insert but before the provider send",
+    "Duplicate sends when the sweep retries a row that was already sent",
+    "Two concurrent sweeps that both claim the same pending row"
+   ],
+   "explanation": "Design A only adds state to the trigger row, so anything that dies before that row exists is still lost. B writes the outbox row in the same transaction as the incident insert, which also covers the incident-then-crash gap. The trigger-then-send crash is what both designs fix; duplicates and concurrent claims are problems both must handle."
+  },
+  {
+   "id": "q07-backfill-sent",
+   "kind": "quiz",
+   "source": {
+    "path": "openstatus/fabledocs4/02-capstone-at-least-once-alerting.md",
+    "lines": {
+     "start": 27,
+     "end": 27
+    }
+   },
+   "cites": [
+    {
+     "path": "openstatus/fabledocs4/02-capstone-at-least-once-alerting.md",
+     "lineStart": 27,
+     "lineEnd": 27
+    }
+   ],
+   "prompt": "Milestone 2 asks for a backfill of existing notification_trigger rows when the status column is added. Which status does the capstone suggest, and why is it the safe default?",
+   "answer": "sent, so the new sweep does not treat old rows as stale pending",
+   "distractors": [
+    "pending, so the sweep can re-check every historical alert once",
+    "failed, so that only rows proven delivered are ever marked sent",
+    "NULL, so old rows stay out of the sweep without any backfill"
+   ],
+   "explanation": "The guide says 'sent, presumably' and asks you to argue it: the sweep claims stale pending or failed rows, so any other value would make it resend months of old alerts. Leaving NULL dodges the question rather than answering it, and the capstone wants an explicit backfill statement."
+  },
+  {
+   "id": "q08-partial-index-query",
+   "kind": "quiz",
+   "source": {
+    "path": "openstatus/fabledocs4/03-labs-sql-and-drizzle.md",
+    "lines": {
+     "start": 11,
+     "end": 11
+    }
+   },
+   "cites": [
+    {
+     "path": "openstatus/packages/db/src/schema/monitors/monitor.ts",
+     "lineStart": 68,
+     "lineEnd": 72
+    }
+   ],
+   "prompt": "monitor has index monitor_workspace_id_active_idx on workspace_id WHERE deleted_at IS NULL. Which dashboard filter can SQLite serve from that partial index?",
+   "answer": "workspace_id = ? AND deleted_at IS NULL, the index's own condition",
+   "distractors": [
+    "workspace_id = ? AND (deleted_at IS NULL OR deleted_at > ?)",
+    "workspace_id = ? on its own, with soft-deleted rows filtered later",
+    "deleted_at IS NULL on its own, across every workspace at once"
+   ],
+   "explanation": "SQLite uses a partial index only when the query's WHERE clause implies the index's WHERE clause. deleted_at IS NULL does; the OR form also admits rows the index left out, and a bare workspace_id filter does too. A filter without workspace_id has no use for an index keyed on that column. Lab 1's rule: index the filtered working set."
+  },
+  {
+   "id": "q09-monitor-other-workspace",
+   "kind": "quiz",
+   "source": {
+    "path": "openstatus/fabledocs4/03-labs-sql-and-drizzle.md",
+    "lines": {
+     "start": 15,
+     "end": 17
+    }
+   },
+   "cites": [
+    {
+     "path": "openstatus/packages/services/src/monitor/internal.ts",
+     "lineStart": 27,
+     "lineEnd": 47
+    }
+   ],
+   "prompt": "getMonitorInWorkspace is called with a monitor id that exists, but in another workspace. What does it do?",
+   "answer": "Throws NotFoundError, because the query also filters by workspace",
+   "distractors": [
+    "Throws ForbiddenError naming the workspace that owns the monitor",
+    "Returns the row, since workspace checks happen in the tRPC router",
+    "Returns undefined and leaves the caller to decide what to do next"
+   ],
+   "explanation": "The select filters on eq(monitor.id, id), eq(monitor.workspaceId, workspaceId) and isNull(monitor.deletedAt), and throws NotFoundError('monitor', id) when no row comes back. A foreign id looks exactly like a missing one. ForbiddenError is imported in the file but not used here."
+  },
+  {
+   "id": "q10-regions-column",
+   "kind": "quiz",
+   "source": {
+    "path": "openstatus/fabledocs4/03-labs-sql-and-drizzle.md",
+    "lines": {
+     "start": 47,
+     "end": 47
+    }
+   },
+   "cites": [
+    {
+     "path": "openstatus/packages/db/src/schema/monitors/monitor.ts",
+     "lineStart": 26,
+     "lineEnd": 26
+    },
+    {
+     "path": "openstatus/fabledocs3/adr-005-libsql-and-schema-style.md",
+     "lineStart": 11,
+     "lineEnd": 11
+    }
+   ],
+   "prompt": "How does the monitor table store a monitor's probe regions, and what does that cost for 'all monitors probing from ams'?",
+   "answer": "As comma-joined text, so the query needs an unindexed LIKE or instr",
+   "distractors": [
+    "As a JSON array, so json_each can serve it from an expression index",
+    "As a monitor_region join table, so the query is a plain indexed join",
+    "As a bitmask integer, so a bitwise AND finds the region in one scan"
+   ],
+   "explanation": "monitor.regions is text('regions').default('').notNull(), the comma-joined serialization ADR-005 chose for speed. Finding one region means substring matching such as LIKE or instr, which no ordinary index can serve. Lab 6 asks you to write the join-table counterfactual and decide when the trade flips."
+  },
+  {
+   "id": "q11-scheduled-time-unit",
+   "kind": "quiz",
+   "source": {
+    "path": "openstatus/fabledocs4/03-labs-sql-and-drizzle.md",
+    "lines": {
+     "start": 53,
+     "end": 53
+    }
+   },
+   "cites": [
+    {
+     "path": "openstatus/apps/workflows/src/cron/monitor.ts",
+     "lineStart": 393,
+     "lineEnd": 407
+    },
+    {
+     "path": "openstatus/fabledocs2/03-data-access.md",
+     "lineStart": 16,
+     "lineEnd": 16
+    }
+   ],
+   "prompt": "Several guides say getScheduledTime in cron/monitor.ts mixes milliseconds and seconds. What unit does each of its three branches actually return?",
+   "answer": "Seconds in all three, as each divides a millisecond value by 1000",
+   "distractors": [
+    "Seconds for 14days, milliseconds for the 3days and paused steps",
+    "Milliseconds in each branch, since setDate returns milliseconds",
+    "Seconds for 3days and paused, but milliseconds for the 14days step"
+   ],
+   "explanation": "14days returns new Date().getTime() / 1000; 3days and paused return new Date().setDate(...) / 1000, and setDate returns the new time in milliseconds. So all three are (fractional) unix seconds, which is what scheduleTime.seconds expects. Lab 7 asks for exactly this trace; the code is keyed, and the docs' 'mixes conventions' claim does not hold here."
+  },
+  {
+   "id": "q12-nullable-tenancy",
+   "kind": "quiz",
+   "source": {
+    "path": "openstatus/fabledocs3/adr-005-libsql-and-schema-style.md",
+    "lines": {
+     "start": 23,
+     "end": 23
+    }
+   },
+   "cites": [
+    {
+     "path": "openstatus/packages/db/src/schema/monitors/monitor.ts",
+     "lineStart": 37,
+     "lineEnd": 37
+    },
+    {
+     "path": "openstatus/fabledocs3/adr-005-libsql-and-schema-style.md",
+     "lineStart": 16,
+     "lineEnd": 17
+    }
+   ],
+   "prompt": "Is monitor.workspace_id declared NOT NULL, and what does ADR-005 say about that choice in hindsight?",
+   "answer": "Nullable, which ADR-005 calls wrong since tenancy rests on discipline",
+   "distractors": [
+    "NOT NULL with a foreign key, so a monitor can never be without a workspace",
+    "Nullable, which ADR-005 calls right because zod checks it on reads",
+    "NOT NULL, added later by the migration that Lab 4 walks you through"
+   ],
+   "explanation": "workspaceId is integer('workspace_id').references(() => workspace.id) with no .notNull(). ADR-005's verdict: right for the serialized columns, wrong for nullable workspaceId, because every query must remember the filter. The NOT NULL migration is still hypothetical; Lab 4 asks you to write it."
+  },
+  {
+   "id": "f01-three-identity-layers",
+   "kind": "flashcard",
+   "source": {
+    "path": "openstatus/fabledocs3/adr-009-idempotency-over-outbox.md",
+    "lines": {
+     "start": 11,
+     "end": 11
+    }
+   },
+   "cites": [
+    {
+     "path": "openstatus/fabledocs3/adr-009-idempotency-over-outbox.md",
+     "lineStart": 11,
+     "lineEnd": 11
+    }
+   ],
+   "front": "ADR-009 rests pipeline consistency on deterministic identity at three layers instead of transactions. Name them.",
+   "back": "1. Probe enqueue: Cloud Task names are deterministic, so a double enqueue is a no-op. 2. Notification send: a unique notification_trigger row inserted before the provider call, so retries dedupe. 3. Lifecycle email: Redis keys with a TTL. Status flips separate evidence (per-region monitor_status rows) from the verdict (global monitor.status, flipped on quorum)."
+  },
+  {
+   "id": "f02-crash-table",
+   "kind": "flashcard",
+   "source": {
+    "path": "openstatus/fabledocs4/02-capstone-at-least-once-alerting.md",
+    "lines": {
+     "start": 15,
+     "end": 15
+    }
+   },
+   "cites": [
+    {
+     "path": "openstatus/apps/workflows/src/checker/alerting.ts",
+     "lineStart": 130,
+     "lineEnd": 176
+    }
+   ],
+   "front": "Capstone milestone 1: give the crash-consequence table for today's alerting write/send order.",
+   "back": "Crash before the trigger insert: the redelivered request inserts and sends, so one alert. Crash after the insert, before the send: the retry hits the unique row and skips, so zero alerts, forever. Crash after the send: the retry hits the row and skips, so exactly one alert. Today's order trades duplicates for silent loss."
+  },
+  {
+   "id": "f03-sweep-decisions",
+   "kind": "flashcard",
+   "source": {
+    "path": "openstatus/fabledocs4/02-capstone-at-least-once-alerting.md",
+    "lines": {
+     "start": 39,
+     "end": 39
+    }
+   },
+   "cites": [
+    {
+     "path": "openstatus/fabledocs4/02-capstone-at-least-once-alerting.md",
+     "lineStart": 39,
+     "lineEnd": 39
+    }
+   ],
+   "front": "Capstone milestone 4: which decisions must the sweep endpoint make and defend?",
+   "back": "The claim mechanism (an UPDATE ... WHERE status='pending' AND lastAttemptAt < ? that stamps a claim time, and what two concurrent sweeps do), the attempt cap and what happens at it (a dead-letter status plus a wide event), and pacing (a token bucket, like the email pattern in cron/monitor.ts). It is CRON_SECRET-authed like its sibling endpoints."
+  },
+  {
+   "id": "f04-fault-tests",
+   "kind": "flashcard",
+   "source": {
+    "path": "openstatus/fabledocs4/02-capstone-at-least-once-alerting.md",
+    "lines": {
+     "start": 47,
+     "end": 51
+    }
+   },
+   "cites": [
+    {
+     "path": "openstatus/fabledocs4/02-capstone-at-least-once-alerting.md",
+     "lineStart": 47,
+     "lineEnd": 51
+    }
+   ],
+   "front": "Capstone milestone 5: which three fault-injection tests prove the fix?",
+   "back": "1. Crash after insert, before send: the row is pending; run the sweep with a fake clock past the threshold; the provider is called and the row is sent (fails on main, passes on the branch). 2. Crash after send, before mark: the provider is called twice with the same idempotency key. 3. Poison alert: the attempt cap dead-letters it with a queryable status and a wide event."
+  }
+ ]
+}

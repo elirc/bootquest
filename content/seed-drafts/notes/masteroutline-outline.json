@@ -1,0 +1,313 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "masteroutline-outline",
+ "repo": "masteroutline-outline",
+ "sha": "6511cbb6da848428cf552bfa7eb106dacd4e0c57",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: four ADRs and one capstone in a real Outline checkout",
+   "body": "This quest studies Outline, a real collaborative wiki, through the teaching docs added next to its code. `fabledocs3/` holds ten architecture decision records (ADRs); each one states a context, the decision, the rejected alternatives, the consequences, and an **Evidence** list of files. `fabledocs4/` turns the weak spots those ADRs admit into drills and capstones.\n\nRead in this order:\n\n1. `fabledocs3/adr-004-policy-authorization.md` (who may do what).\n2. `fabledocs3/adr-005-sequelize-explicit-transactions.md` (how a mutation stays atomic).\n3. `fabledocs3/adr-006-event-spine.md` (how side effects leave the request).\n4. `fabledocs3/adr-007-crdt-triple-representation.md` (real-time editing and its storage).\n5. `fabledocs4/02-capstone-outbox-relay.md` (a design exercise built on ADR-006).\n\nFor every ADR, open each file in its Evidence list before you move on. The quiz asks what the CODE does, and an ADR is a summary written by a person: when the two disagree, trust the code. Keep a note of each place where you find such a difference.",
+   "excerpts": [
+    {
+     "path": "fabledocs3/adr-004-policy-authorization.md",
+     "lineStart": 7,
+     "lineEnd": 9,
+     "quote": "Authorization here is per-object and conditional, not role-lookup"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "fabledocs3/README.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The index of all ten ADRs and how they depend on each other."
+    },
+    {
+     "path": "fabledocs4/README.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "How the drills, capstones and labs in fabledocs4 fit together."
+    }
+   ]
+  },
+  {
+   "id": "r02-policy-engine",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: one policy engine for the API and the UI",
+   "body": "Outline's permissions depend on the object: team, collection, membership, sharing and archive state all combine. ADR-004 puts every rule in one in-house engine, `server/policies/cancan.ts`, plus one policy file per model (`server/policies/document.ts`, `collection.ts`, ...). The same rules also travel to the browser, so the UI can hide a button the server would refuse.\n\nRead `cancan.ts` top to bottom; it is under 300 lines. Answer these from the code:\n\n- What does `allow()` store, and how is the index keyed?\n- Which abilities does `getMatchingAbilities` collect for a given performer, action and target? Note the special action name it also looks up.\n- In `can()`, which kinds of value may a condition return, and how are the results combined into the return value? Compare what you find with the ADR's Negative consequences.\n- What do `cannot()` and `authorize()` add on top of `can()`?\n- How does `serialize()` decide which actions to include, and how does it treat each one?\n\nThen open `app/models/Policy.ts` to see the client side of the same object.",
+   "excerpts": [
+    {
+     "path": "fabledocs3/adr-004-policy-authorization.md",
+     "lineStart": 10,
+     "lineEnd": 12,
+     "quote": "The same rules must gate API requests **and** drive UI affordances"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "server/policies/cancan.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The whole engine: allow, can, cannot, authorize and serialize."
+    },
+    {
+     "path": "server/policies/document.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The most complex composed policy, built from the engine above."
+    }
+   ]
+  },
+  {
+   "id": "r03-transactions-and-events",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: explicit transactions, then the event spine",
+   "body": "A mutation in Outline writes several rows: the change itself and an `events` row that websockets, webhooks, revisions and search all depend on. ADR-005 is about keeping those writes together; ADR-006 is about what happens to the event afterwards.\n\nFor ADR-005, read `server/middlewares/transaction.ts` (about 20 lines). Look up the difference between a *managed* and an *unmanaged* transaction in the Sequelize docs, then work out what the middleware's shape means for a route that succeeds and for one that fails. Read the rejected alternatives slowly: each names a failure mode, and the status line explains why the decision is weakening.\n\nFor ADR-006, open `server/models/Event.ts` and find the hook that hands a saved event to `globalEventQueue`. Note which hook it uses, what it does when a transaction is present, and the bug link in the comment. Then read the ADR's Negative consequences and ask: what happens to an event if the process stops at each point of that path?\n\nThe outbox capstone asks you to design a relay. While reading it, list every decision it makes: the marker column, old rows, step order, two relays at once, and the grace window. Write down why each choice is made.",
+   "excerpts": [
+    {
+     "path": "fabledocs3/adr-006-event-spine.md",
+     "lineStart": 7,
+     "lineEnd": 9,
+     "quote": "Every mutation has a fan-out of side effects: websocket broadcasts to other"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "server/middlewares/transaction.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The transaction policy for every mutating route."
+    },
+    {
+     "path": "server/models/Event.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The event model and the hook that publishes to the queue."
+    },
+    {
+     "path": "server/collaboration/PersistenceExtension.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "ADR-007 evidence: how a document is loaded for real-time editing."
+    }
+   ]
+  },
+  {
+   "id": "x-authorize-throws",
+   "target": "seed:quests:masteroutline-outline/quiz/dfaa68db5f21c9a4",
+   "phase": "after",
+   "title": "Why authorize() stops the handler with an error",
+   "body": "`authorize` calls `cannot()` and, when it is true, throws `AuthorizationError(\"Authorization error\")`. Its return type is an assertion (`asserts target`), so nothing comes back on success. ADR-004 describes this as authorization being \"an assertion, not a query\": a handler cannot forget to check a returned value.\n\n- *Returns false* describes `can()` or `cannot()`, not `authorize()`.\n- *Returns a denial-reason string* is not in the code; `authorize` returns nothing.\n- *Continues read-only* would need a downgrade path, and there is none: the throw ends the handler.",
+   "excerpts": [
+    {
+     "path": "server/policies/cancan.ts",
+     "lineStart": 187,
+     "lineEnd": 190,
+     "quote": "if (this.cannot(performer, action, target, options)) { throw AuthorizationError(\"Authorization error\");"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-can-membership-string",
+   "target": "seed:quests:masteroutline-outline/quiz/eb8f4cf1fd9a7c04",
+   "phase": "after",
+   "title": "Why a string condition result comes back as a membership array",
+   "body": "In `can()`, every truthy result that is a string is pushed to `membershipIds`; a `true` result only sets `hasNonMembershipMatch`. The function then returns `membershipIds` when it is non-empty, otherwise the boolean. So a single condition returning `\"m1\"` makes `can()` return `[\"m1\"]`, which is truthy and grants the ability.\n\n- *false, as a denial reason*: ADR-004 line 54 says \"string = denial reason\", but the code treats the string as a grant that carries membership ids. The code is keyed; the ADR wording is wrong here.\n- *true*: the boolean is returned only when no string result was seen.\n- *The string itself*: strings are collected into an array, not returned one by one.",
+   "excerpts": [
+    {
+     "path": "server/policies/cancan.ts",
+     "lineStart": 112,
+     "lineEnd": 119,
+     "quote": "return membershipIds.length > 0 ? membershipIds : hasNonMembershipMatch;"
+    },
+    {
+     "path": "fabledocs3/adr-004-policy-authorization.md",
+     "lineStart": 54,
+     "lineEnd": 55,
+     "quote": "Conditions may return `boolean | string` (string = denial reason)"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-serialize-throwing-action",
+   "target": "seed:quests:masteroutline-outline/quiz/e58c5595a8724767",
+   "phase": "after",
+   "title": "Why one failing action serializes as false",
+   "body": "`serialize()` first gathers the action names that apply to the performer and target, then checks each one inside its own `try`. The `catch` writes `output[action] = false` and the loop carries on, so the response still has a full policies object and the failing action is simply denied.\n\n- *The error propagates*: the catch swallows it.\n- *No entry*: the key is written, with the value false.\n- *Set to true*: a failure never grants; failing closed is the point of the catch.",
+   "excerpts": [
+    {
+     "path": "server/policies/cancan.ts",
+     "lineStart": 146,
+     "lineEnd": 152,
+     "quote": "output[action] = this.can(performer, action, target); } catch (_err) { output[action] = false; }"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-transaction-rollback",
+   "target": "seed:quests:masteroutline-outline/quiz/450146fdf8aeee6c",
+   "phase": "after",
+   "title": "Why both writes roll back when the command throws",
+   "body": "The middleware is `sequelize.transaction(async (t) => { ctx.state.transaction = t; return next(); })`. That is a managed transaction: Sequelize commits when the callback's promise resolves and rolls back when it rejects. `next()` runs the whole rest of the route inside the callback, so a throw after two writes that used `ctx.state.transaction` rejects the callback and undoes both.\n\n- *Each query autocommits*: only a query that is NOT given the transaction autocommits; these two were given it.\n- *Only the second rolls back*: the two writes share one transaction, so they succeed or fail together.\n- *Both commit*: the commit happens only on a resolved callback.",
+   "excerpts": [
+    {
+     "path": "server/middlewares/transaction.ts",
+     "lineStart": 15,
+     "lineEnd": 18,
+     "quote": "await sequelize.transaction(async (t: Transaction) => { ctx.state.transaction = t; return next(); });"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-cls-rejected",
+   "target": "seed:quests:masteroutline-outline/quiz/645e24086dc82ccd",
+   "phase": "after",
+   "title": "Why implicit CLS propagation was rejected",
+   "body": "ADR-005 lists AsyncLocalStorage/CLS as alternative 3 and rejects it for its failure mode: when async context is lost (a stray timer, a callback boundary), the query runs outside the transaction and autocommits, and nothing reports it. Passing the transaction as a parameter fails visibly in review instead.\n\n- *Conflicts with Koa*: the ADR names no compile problem, and CLS is a runtime mechanism.\n- *Doubled latency*: no measurement is mentioned anywhere in the ADR.\n- *Support dropped*: the ADR says Sequelize supports it; the objection is about how it fails.",
+   "excerpts": [
+    {
+     "path": "fabledocs3/adr-005-sequelize-explicit-transactions.md",
+     "lineStart": 40,
+     "lineEnd": 43,
+     "quote": "CLS fails *silently into autocommit*"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-eroding-status",
+   "target": "seed:quests:masteroutline-outline/quiz/04b3c24fdbb8f282",
+   "phase": "after",
+   "title": "Why ADR-005 is marked Active-Eroding",
+   "body": "The Negative consequences give the reason directly: every command signature carries `transaction`, and forgetting to pass it compiles and passes low-concurrency tests. Enforcement is convention and review, not types, so nothing structural stops a new autocommit query from slipping in. That is what \"Eroding\" means here.\n\n- *Back to ad hoc transactions*: that was the original starting point, rejected after partial commits; the ADR does not report a return to it.\n- *Routes after the v1 API*: the ADR says the middleware wraps every mutating route and names no exception.\n- *Dropped decorators*: typing ceremony is listed as a cost, but no one dropped the decorators.",
+   "excerpts": [
+    {
+     "path": "fabledocs3/adr-005-sequelize-explicit-transactions.md",
+     "lineStart": 57,
+     "lineEnd": 59,
+     "quote": "this is why the status is Eroding: nothing structural stops a new autocommit"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-event-after-commit",
+   "target": "seed:quests:masteroutline-outline/quiz/687f089f985e9c63",
+   "phase": "after",
+   "title": "Why the event reaches the queue only after the commit",
+   "body": "`Event.enqueue` is an `@AfterSave` hook, but when the save had a transaction it does not enqueue right away. It registers `afterCommit` on `options.transaction.parent || options.transaction`, so the job is added once the outer transaction commits. The comment explains the `parent`: `findOrCreate` opens a child transaction whose own `afterCommit` would never fire. Without a transaction it enqueues at once.\n\n- *Right away inside AfterSave*: that is only the no-transaction branch.\n- *afterRollback*: no rollback hook exists; a rolled-back event is never published.\n- *A cron sweep*: no relay exists today; building one is the capstone.",
+   "excerpts": [
+    {
+     "path": "server/models/Event.ts",
+     "lineStart": 91,
+     "lineEnd": 93,
+     "quote": "(options.transaction.parent || options.transaction).afterCommit( () => void globalEventQueue().add(model) );"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-at-most-once",
+   "target": "seed:quests:masteroutline-outline/quiz/b7ce53e80cb37f0b",
+   "phase": "after",
+   "title": "Why getting into the queue is at-most-once",
+   "body": "ADR-006 separates two legs. From the queue onward, Bull retries jobs: at-least-once. But the event row commits first and the process publishes to Redis after, in-process. If the process crashes in between, the committed event never becomes a job, and no relay reconciles it. So the hand-off INTO the queue happens once or not at all.\n\n- *Exactly-once*: the row and the Redis job are in different systems and cannot share a commit.\n- *Bull retries the publish*: Bull retries jobs it already holds; a publish that never happened is not a job.\n- *A relay re-sends*: the ADR says there is no relay; that is what the capstone builds.",
+   "excerpts": [
+    {
+     "path": "fabledocs3/adr-006-event-spine.md",
+     "lineStart": 59,
+     "lineEnd": 62,
+     "quote": "at-least-once from the queue, but *at-most-once into* it. No relay reconciles the gap."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-backfill",
+   "target": "seed:quests:masteroutline-outline/quiz/8f9ee901fdf40a7b",
+   "phase": "after",
+   "title": "Why old rows need publishedAt = createdAt",
+   "body": "The relay claims rows `WHERE \"publishedAt\" IS NULL`. If the migration left every existing row NULL, the first relay run would treat years of already-published events as unpublished and enqueue them all again: a replay storm. Backfilling `publishedAt = createdAt` marks history as already sent.\n\n- *A partial index needs no NULLs*: the capstone asks for a partial index WHERE NULL, which is exactly the rows it targets.\n- *Postgres refuses a nullable column*: adding a nullable column is allowed on a table with rows.\n- *CleanupOldEventsTask deletes NULL rows*: that task selects by `createdAt` against a 365-day cutoff; it never reads `publishedAt`.",
+   "excerpts": [
+    {
+     "path": "fabledocs4/02-capstone-outbox-relay.md",
+     "lineStart": 26,
+     "lineEnd": 28,
+     "quote": "and why must it not be NULL for them? (If old rows look unpublished, your relay replays history"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "server/queues/tasks/CleanupOldEventsTask.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "What the cleanup task really selects on when it deletes old events."
+    }
+   ]
+  },
+  {
+   "id": "x-publish-then-mark",
+   "target": "seed:quests:masteroutline-outline/quiz/652f17529bd72f5d",
+   "phase": "after",
+   "title": "Why the relay publishes before it marks",
+   "body": "With publish-then-mark, a crash after the enqueue but before the UPDATE leaves the row unpublished, so the next sweep enqueues it again: a duplicate. Duplicates are survivable when consumers are idempotent. With mark-then-publish, a crash or a failed enqueue after the UPDATE leaves the row marked as sent although no job exists, and nothing will ever retry it: the loss the relay was built to remove.\n\n- *Holding the lock across Redis*: both orders run in the same claiming transaction; the order of the two steps does not change the lock.\n- *publishedAt in the payload*: the job carries the event, not the marker.\n- *Fast path skips the row*: the fast path never reads `publishedAt`; the relay sweeps only rows older than the grace window.",
+   "excerpts": [
+    {
+     "path": "fabledocs4/02-capstone-outbox-relay.md",
+     "lineStart": 33,
+     "lineEnd": 37,
+     "quote": "You are *choosing* duplicates over loss."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-skip-locked",
+   "target": "seed:quests:masteroutline-outline/quiz/db2de3afa422c4e0",
+   "phase": "after",
+   "title": "Why FOR UPDATE SKIP LOCKED keeps two relays apart",
+   "body": "`FOR UPDATE` locks the rows a relay selects until its transaction ends. `SKIP LOCKED` makes a second relay's SELECT pass over rows that are already locked instead of waiting for them, so each pod claims a different batch and no event is enqueued twice by two pods.\n\n- *ORDER BY ... LIMIT 100*: picks a batch but takes no lock, so both pods can select the same 100 rows.\n- *FOR SHARE*: a shared lock lets both pods hold the same rows at once.\n- *SET LOCAL lock_timeout*: limits how long a lock wait may last; it does not keep two readers apart.",
+   "excerpts": [
+    {
+     "path": "fabledocs4/02-capstone-outbox-relay.md",
+     "lineStart": 72,
+     "lineEnd": 72,
+     "quote": "FOR UPDATE SKIP LOCKED"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "fabledocs4/04-sql-concurrency-lab.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The SQL lab where the capstone expects you to practise SKIP LOCKED."
+    }
+   ]
+  },
+  {
+   "id": "x-load-fast-path",
+   "target": "seed:quests:masteroutline-outline/quiz/d92938d435b75313",
+   "phase": "after",
+   "title": "Why a document with state loads without a lock",
+   "body": "`onLoadDocument` first reads only the `state` attribute with `Document.unscoped().findOne`, outside any transaction. If state exists it applies it to a new `Y.Doc` and returns. The locked path, a transaction with `lock: transaction.LOCK.UPDATE` plus a second check of state, runs only for a legacy document with no state yet, which is then built from `content` or `text`.\n\n- *Locks FOR UPDATE and rebuilds from content*: that is the legacy-document path.\n- *Rebuilds from markdown text*: text is the last fallback for a document with neither state nor content.\n- *A 15s lock_timeout*: that `SET LOCAL` lives in `documentCollaborativeUpdater`, the write-back path.",
+   "excerpts": [
+    {
+     "path": "server/collaboration/PersistenceExtension.ts",
+     "lineStart": 42,
+     "lineEnd": 43,
+     "quote": "If the document already has state, we can return it without needing a transaction"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}

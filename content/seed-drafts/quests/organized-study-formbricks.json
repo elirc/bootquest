@@ -1,0 +1,413 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "organized-study-formbricks",
+ "sha": "284ccbfc6484e3b717421fe16a7b1807d415c0af",
+ "guides": [
+  "formbricks/fabledocs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+  "formbricks/fabledocs/upskill/09-reference/risk-register.md"
+ ],
+ "items": [
+  {
+   "id": "q01-cron-secret-unset",
+   "kind": "quiz",
+   "source": {
+    "path": "formbricks/fabledocs/upskill/09-reference/risk-register.md",
+    "lines": {
+     "start": 20,
+     "end": 20
+    }
+   },
+   "cites": [
+    {
+     "path": "formbricks/apps/web/app/lib/pipelines.ts",
+     "lineStart": 5,
+     "lineEnd": 24
+    },
+    {
+     "path": "formbricks/apps/web/app/api/v1/client/[environmentId]/responses/route.ts",
+     "lineStart": 208,
+     "lineEnd": 222
+    }
+   ],
+   "prompt": "CRON_SECRET is not set on a Formbricks instance. A respondent submits a response through the v1 client API. What happens?",
+   "answer": "The response is saved, and the pipeline promise rejects unhandled",
+   "distractors": [
+    "The submission fails with a 500, since the pipeline call throws first",
+    "The pipeline still runs, using an empty x-api-key header instead",
+    "The error is caught by the fetch .catch and logged as a pipeline error"
+   ],
+   "explanation": "sendToPipeline is async and throws 'CRON_SECRET is not set' before the fetch, so the .catch on the fetch is never attached; the route calls it without await, so the returned promise rejects unhandled. The response has already been written and the route goes on to return. Risk R14 records exactly this."
+  },
+  {
+   "id": "q02-webhook-500",
+   "kind": "quiz",
+   "source": {
+    "path": "formbricks/fabledocs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+    "lines": {
+     "start": 7,
+     "end": 7
+    }
+   },
+   "cites": [
+    {
+     "path": "formbricks/apps/web/app/api/(internal)/pipeline/route.ts",
+     "lineStart": 156,
+     "lineEnd": 177
+    }
+   ],
+   "prompt": "A customer's webhook endpoint answers HTTP 500 to a pipeline delivery. What does the pipeline route do with that result?",
+   "answer": "Nothing, since fetch resolves on a 500 and no error is logged",
+   "distractors": [
+    "It retries the call up to three times with a five-second timeout",
+    "It logs 'Webhook call ... failed' through the .catch handler",
+    "It disables the webhook after the failed delivery is recorded"
+   ],
+   "explanation": "fetch only rejects on network errors, aborts or timeouts; an HTTP 500 is a resolved Response. The promise chain's .catch therefore never runs, and the code never inspects response.ok, so a 500 is neither retried nor logged. Only thrown errors reach logger.error('Webhook call to ... failed')."
+  },
+  {
+   "id": "q03-webhook-selection",
+   "kind": "quiz",
+   "source": {
+    "path": "formbricks/fabledocs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+    "lines": {
+     "start": 7,
+     "end": 7
+    }
+   },
+   "cites": [
+    {
+     "path": "formbricks/apps/web/app/api/(internal)/pipeline/route.ts",
+     "lineStart": 82,
+     "lineEnd": 93
+    }
+   ],
+   "prompt": "A responseFinished event fires for survey S. Which webhooks in the environment receive it?",
+   "answer": "Those listing responseFinished whose surveyIds hold S or are empty",
+   "distractors": [
+    "Every webhook in the environment, whatever triggers it lists",
+    "Only webhooks whose surveyIds explicitly include survey S",
+    "Those with responseFinished in triggers, whatever their surveyIds say"
+   ],
+   "explanation": "getWebhooksForPipeline queries environmentId, triggers: { has: event } and OR [ surveyIds has surveyId, surveyIds isEmpty ]. An empty surveyIds list means 'all surveys'; a non-empty list that omits S excludes the webhook."
+  },
+  {
+   "id": "q04-standard-headers",
+   "kind": "quiz",
+   "source": {
+    "path": "formbricks/fabledocs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+    "lines": {
+     "start": 22,
+     "end": 22
+    }
+   },
+   "cites": [
+    {
+     "path": "formbricks/apps/web/app/api/(internal)/pipeline/route.ts",
+     "lineStart": 136,
+     "lineEnd": 154
+    }
+   ],
+   "prompt": "Which Standard Webhooks headers does a pipeline delivery send for a webhook that has no secret?",
+   "answer": "webhook-id (a fresh uuidv7) and webhook-timestamp, in unix seconds",
+   "distractors": [
+    "webhook-id, webhook-timestamp and a signature made with an empty key",
+    "No webhook-* headers, as those are added only once a secret exists",
+    "webhook-signature alone, made from the environment's API key instead"
+   ],
+   "explanation": "requestHeaders always gets webhook-id = uuidv7() and webhook-timestamp = Math.floor(Date.now() / 1000); webhook-signature is added only inside if (webhook.secret). The id is generated per call, which is why the guide notes the dedupe key protects nobody while there are no retries."
+  },
+  {
+   "id": "q05-abort-not-race",
+   "kind": "quiz",
+   "source": {
+    "path": "formbricks/fabledocs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+    "lines": {
+     "start": 27,
+     "end": 27
+    }
+   },
+   "cites": [
+    {
+     "path": "formbricks/apps/web/app/api/(internal)/pipeline/route.ts",
+     "lineStart": 102,
+     "lineEnd": 115
+    }
+   ],
+   "prompt": "fetchWithTimeout uses AbortSignal.timeout(5000) rather than Promise.race with a timer. What reason does its comment give?",
+   "answer": "A race leaves the fetch open, which then deadlocks dispatcher.close()",
+   "distractors": [
+    "Promise.race is not available in the Edge runtime that runs this route",
+    "AbortSignal lets the webhook retry on its own after the 5 seconds",
+    "Promise.race would reject the other webhooks in the same batch too"
+   ],
+   "explanation": "The comment: AbortSignal actually cancels the underlying fetch when the timer fires, whereas a Promise.race would only reject the wrapper while the fetch keeps the socket open, which then deadlocks dispatcher.close() (graceful drain waits for it). Nothing retries after the abort."
+  },
+  {
+   "id": "q06-redirect-manual",
+   "kind": "quiz",
+   "source": {
+    "path": "formbricks/fabledocs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+    "lines": {
+     "start": 7,
+     "end": 7
+    }
+   },
+   "cites": [
+    {
+     "path": "formbricks/apps/web/app/api/(internal)/pipeline/route.ts",
+     "lineStart": 96,
+     "lineEnd": 101
+    }
+   ],
+   "prompt": "Why does the pipeline set redirect: 'manual' on webhook fetches unless DANGEROUSLY_ALLOW_WEBHOOK_INTERNAL_URLS is on?",
+   "answer": "So that a redirect cannot lead the request to an internal address",
+   "distractors": [
+    "So the customer's endpoint can confirm each delivery by a 302",
+    "Because undici cannot follow redirects through a pinned agent",
+    "To keep the 5-second timeout from restarting on each redirect"
+   ],
+   "explanation": "The comment explains: webhook URLs are validated against private and internal ranges before delivery, but a redirect target would bypass that check, so redirects are not followed. Self-hosters who opted into trusting internal URLs get the old follow behaviour. The code also pins the TCP connect to the validated IP against DNS rebinding."
+  },
+  {
+   "id": "q07-quota-race",
+   "kind": "quiz",
+   "source": {
+    "path": "formbricks/fabledocs/upskill/09-reference/risk-register.md",
+    "lines": {
+     "start": 8,
+     "end": 8
+    }
+   },
+   "cites": [
+    {
+     "path": "formbricks/apps/web/modules/ee/quotas/lib/utils.ts",
+     "lineStart": 135,
+     "lineEnd": 164
+    }
+   ],
+   "prompt": "A quota has limit 1, and two respondents finish matching responses at the same instant. What can handleQuotas produce?",
+   "answer": "Both responses get screened in, as each counts 0 others first",
+   "distractors": [
+    "One screened in and one screened out, guaranteed by the row lock",
+    "Neither is screened in, because each sees the other one as the first",
+    "A unique-constraint error on the second responseQuotaLink insert"
+   ],
+   "explanation": "The function counts screenedIn links for each quota, excluding the current response (id: { not: responseId }), compares with quota.limit, and only then upserts links. No lock or conditional update guards the count, so two concurrent transactions can both see 0 < 1 and both screen in. Risk R2 suggests a conditional counter update or FOR UPDATE."
+  },
+  {
+   "id": "q08-auto-complete",
+   "kind": "quiz",
+   "source": {
+    "path": "formbricks/fabledocs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+    "lines": {
+     "start": 36,
+     "end": 36
+    }
+   },
+   "cites": [
+    {
+     "path": "formbricks/apps/web/app/api/(internal)/pipeline/route.ts",
+     "lineStart": 272,
+     "lineEnd": 301
+    }
+   ],
+   "prompt": "A survey has autoComplete 100. Its 100th response finishes and the responseFinished event is then delivered twice. What happens to the survey?",
+   "answer": "It is set to completed again, which does no harm",
+   "distractors": [
+    "It is completed once; the second event is rejected as stale",
+    "It is completed only after the count goes above 100, at 101",
+    "It stays in progress until an admin confirms that it is closed"
+   ],
+   "explanation": "The route runs if (survey.autoComplete && responseCount >= survey.autoComplete) updateSurvey({ ...survey, status: 'completed' }) for each responseFinished event, with no guard against a repeat. The guide's analysis: the count is racy and the event can double-fire, but the target state is idempotent, so it is tolerable."
+  },
+  {
+   "id": "q09-rate-limit-redis-down",
+   "kind": "quiz",
+   "source": {
+    "path": "formbricks/fabledocs/upskill/09-reference/risk-register.md",
+    "lines": {
+     "start": 9,
+     "end": 9
+    }
+   },
+   "cites": [
+    {
+     "path": "formbricks/apps/web/modules/core/rate-limit/rate-limit.ts",
+     "lineStart": 25,
+     "lineEnd": 33
+    },
+    {
+     "path": "formbricks/apps/web/modules/core/rate-limit/rate-limit.ts",
+     "lineStart": 112,
+     "lineEnd": 134
+    }
+   ],
+   "prompt": "Redis is unreachable when checkRateLimit runs for a login attempt. What does it return?",
+   "answer": "ok({ allowed: true }), as the limiter fails open, logins included",
+   "distractors": [
+    "ok({ allowed: false }), so that logins are refused until it is back",
+    "An error result, which the login route turns into a 503 response",
+    "ok({ allowed: true }) only after a three-second retry, then false"
+   ],
+   "explanation": "With no Redis client it logs 'Redis unavailable' and returns ok({ allowed: true }); if the Redis call throws, the catch logs, reports to Sentry and also returns ok({ allowed: true }), with the comment 'Fail open'. That applies to every namespace, including auth, which is risk R3."
+  },
+  {
+   "id": "q10-with-cache-stampede",
+   "kind": "quiz",
+   "source": {
+    "path": "formbricks/fabledocs/upskill/09-reference/risk-register.md",
+    "lines": {
+     "start": 17,
+     "end": 17
+    }
+   },
+   "cites": [
+    {
+     "path": "formbricks/packages/cache/src/service.ts",
+     "lineStart": 241,
+     "lineEnd": 260
+    }
+   ],
+   "prompt": "Twenty concurrent requests call cache.withCache(fn, key, ttl) on a key that has just expired. How many times does fn run?",
+   "answer": "Up to 20 times, as each miss calls fn with no lock or single-flight",
+   "distractors": [
+    "Once, as the first miss takes a Redis lock the others then wait on",
+    "Once, as an in-process promise map shares the first call's result",
+    "Zero times, as the stale value keeps being served while it renews"
+   ],
+   "explanation": "withCache is plain cache-aside: tryGetCachedValue, and on a miss await fn() then trySetCache. Nothing coordinates concurrent misses, so every request that misses runs fn. Risk R11 notes the class has a lock helper elsewhere but withCache does not use it, and there is no stale-while-revalidate."
+  },
+  {
+   "id": "q11-backup-code-race",
+   "kind": "quiz",
+   "source": {
+    "path": "formbricks/fabledocs/upskill/09-reference/risk-register.md",
+    "lines": {
+     "start": 19,
+     "end": 19
+    }
+   },
+   "cites": [
+    {
+     "path": "formbricks/apps/web/modules/auth/lib/authOptions.ts",
+     "lineStart": 280,
+     "lineEnd": 306
+    }
+   ],
+   "prompt": "Two logins submit the same valid 2FA backup code at the same moment. Why can both succeed?",
+   "answer": "Both read and decrypt the codes before either one writes back",
+   "distractors": [
+    "The code is checked in Redis, which has no transaction for it",
+    "Backup codes are reusable by design until all ten are used up",
+    "The second login waits on a row lock and then sees the code burned"
+   ],
+   "explanation": "authorize decrypts user.backupCodes, finds the index, sets it to null and runs prisma.user.update({ where: { id } }) with the re-encrypted array: an unconditioned read-modify-write. Two concurrent requests can both read the old blob, both find the code and both succeed. No row lock or version check exists."
+  },
+  {
+   "id": "q12-browser-at-least-once",
+   "kind": "quiz",
+   "source": {
+    "path": "formbricks/fabledocs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+    "lines": {
+     "start": 23,
+     "end": 23
+    }
+   },
+   "cites": [
+    {
+     "path": "formbricks/fabledocs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+     "lineStart": 23,
+     "lineEnd": 23
+    }
+   ],
+   "prompt": "The side-effects guide calls the system at-least-once from browser to server and at-most-once beyond. What supplies the browser-side half?",
+   "answer": "The survey SDK's ResponseQueue, with retries and offline persistence",
+   "distractors": [
+    "A BullMQ worker that retries failed response inserts on the server",
+    "The pipeline route, which redelivers each event to the server once more",
+    "A Postgres trigger that replays inserts that failed on the server"
+   ],
+   "explanation": "The guide: retries are absent server-side but present client-side, in ResponseQueue (retryAttempts plus offline persistence, packages/surveys/src/lib/response-queue.ts). A DB unique constraint dedupes retries for single-use links; there is no queue or worker fleet on the server."
+  },
+  {
+   "id": "f01-one-door",
+   "kind": "flashcard",
+   "source": {
+    "path": "formbricks/fabledocs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+    "lines": {
+     "start": 18,
+     "end": 18
+    }
+   },
+   "cites": [
+    {
+     "path": "formbricks/fabledocs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+     "lineStart": 18,
+     "lineEnd": 18
+    }
+   ],
+   "front": "How does all async work leave a Formbricks request, and what does that imply for reliability?",
+   "back": "Everything funnels through one door: sendToPipeline posts to /api/pipeline, which fans out to webhooks, integrations, emails, autoComplete and metering. There is no queue, no in-process cron scheduler and no worker fleet, so reliability is exactly as good as one HTTP request's lifetime."
+  },
+  {
+   "id": "f02-outbox-upgrade",
+   "kind": "flashcard",
+   "source": {
+    "path": "formbricks/fabledocs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+    "lines": {
+     "start": 40,
+     "end": 40
+    }
+   },
+   "cites": [
+    {
+     "path": "formbricks/fabledocs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+     "lineStart": 40,
+     "lineEnd": 40
+    }
+   ],
+   "front": "What does the guide name as the first reliability investment, and why is it cheap here?",
+   "back": "An outbox table written inside the existing response transaction, drained by a worker with backoff. The fan-out code in pipeline/route.ts barely moves, and the Standard Webhooks headers already carry a message id, so adding retries later will not break consumers."
+  },
+  {
+   "id": "f03-env-state-staleness",
+   "kind": "flashcard",
+   "source": {
+    "path": "formbricks/fabledocs/upskill/09-reference/risk-register.md",
+    "lines": {
+     "start": 10,
+     "end": 10
+    }
+   },
+   "cites": [
+    {
+     "path": "formbricks/apps/web/app/api/v1/client/[environmentId]/environment/lib/environmentState.ts",
+     "lineStart": 65,
+     "lineEnd": 70
+    }
+   ],
+   "front": "Risk R4: how stale can the client environment state be after a survey is paused, and why?",
+   "back": "Up to about CDN 60 s plus Redis 60 s, and the SDK may keep its copy up to an hour. The Redis entry has a one-minute TTL, the endpoint sends CDN cache headers, and no write path deletes the cached key, so a paused or edited survey can keep displaying until the layers expire."
+  },
+  {
+   "id": "f04-webhook-fanout-limits",
+   "kind": "flashcard",
+   "source": {
+    "path": "formbricks/fabledocs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+    "lines": {
+     "start": 26,
+     "end": 26
+    }
+   },
+   "cites": [
+    {
+     "path": "formbricks/apps/web/app/api/(internal)/pipeline/route.ts",
+     "lineStart": 119,
+     "lineEnd": 177
+    }
+   ],
+   "front": "What bounds the webhook fan-out for one event, and what does not?",
+   "back": "Each delivery is bounded in time by the 5 s AbortSignal timeout, but concurrency is unbounded: webhooks.map starts every fetch at once, so a customer with 50 webhooks gets 50 parallel requests per event (risk R6; a p-limit cap is the suggested fix)."
+  }
+ ]
+}

@@ -1,0 +1,419 @@
+{
+ "format": "bootquest-quest-drafts@1",
+ "repo": "organized-study-twenty",
+ "sha": "751a066f6f7902a2ab2fa79db3a6be4b2ff616ae",
+ "guides": [
+  "twenty/fabledocs3/adr-005-twenty-orm-authz-in-data-layer.md",
+  "twenty/fabledocs3/adr-007-coded-exceptions-boundary-translation.md",
+  "twenty/fabledocs3/adr-010-event-emission-webhook-delivery.md"
+ ],
+ "items": [
+  {
+   "id": "q01-503-not-retried",
+   "kind": "quiz",
+   "source": {
+    "path": "twenty/fabledocs3/adr-010-event-emission-webhook-delivery.md",
+    "lines": {
+     "start": 37,
+     "end": 40
+    }
+   },
+   "cites": [
+    {
+     "path": "twenty/packages/twenty-server/src/engine/metadata-modules/webhook/jobs/call-webhook.job.ts",
+     "lineStart": 102,
+     "lineEnd": 116
+    },
+    {
+     "path": "twenty/packages/twenty-server/src/engine/metadata-modules/webhook/jobs/call-webhook-jobs.job.ts",
+     "lineStart": 68,
+     "lineEnd": 73
+    }
+   ],
+   "prompt": "A subscriber's endpoint answers 503 to a webhook POST. CallWebhookJob was enqueued with { retryLimit: 3 }. What happens next?",
+   "answer": "An audit event records the failure, and BullMQ never retries it",
+   "distractors": [
+    "BullMQ retries the job up to 3 more times, then marks it failed",
+    "The job is moved to a dead-letter queue for a manual replay",
+    "The whole fan-out job reruns and re-matches the subscriptions"
+   ],
+   "explanation": "callWebhook wraps the POST in try/catch; the catch inserts a WEBHOOK_RESPONSE_EVENT audit row with success: false and does not rethrow. The job therefore completes normally, so BullMQ never sees a failure and retryLimit: 3 is dead configuration. No dead-letter path exists, and the fan-out job is not rerun."
+  },
+  {
+   "id": "q02-crash-before-enqueue",
+   "kind": "quiz",
+   "source": {
+    "path": "twenty/fabledocs3/adr-010-event-emission-webhook-delivery.md",
+    "lines": {
+     "start": 20,
+     "end": 24
+    }
+   },
+   "cites": [
+    {
+     "path": "twenty/fabledocs3/adr-010-event-emission-webhook-delivery.md",
+     "lineStart": 20,
+     "lineEnd": 24
+    }
+   ],
+   "prompt": "A record mutation commits, and the server process crashes before the event batch is enqueued. Per ADR-010, what becomes of the event?",
+   "answer": "It is lost for good, as no outbox row was written with the change",
+   "distractors": [
+    "It is re-emitted at startup from Postgres's write-ahead log",
+    "It is sent later by a relay that polls the database for unsent event rows",
+    "It is rebuilt by the audit timeline the next time it is read"
+   ],
+   "explanation": "Emission happens in-process after the mutation, through workspace-event-emitter. There is no transactional outbox and no relay, so nothing durable records the pending event; a crash in that window loses it with no trace. That is the first half of ADR-010's 'at-most-once, twice over'."
+  },
+  {
+   "id": "q03-signature-input",
+   "kind": "quiz",
+   "source": {
+    "path": "twenty/fabledocs3/adr-010-event-emission-webhook-delivery.md",
+    "lines": {
+     "start": 31,
+     "end": 33
+    }
+   },
+   "cites": [
+    {
+     "path": "twenty/packages/twenty-server/src/engine/metadata-modules/webhook/jobs/call-webhook.job.ts",
+     "lineStart": 23,
+     "lineEnd": 32
+    },
+    {
+     "path": "twenty/packages/twenty-server/src/engine/metadata-modules/webhook/jobs/call-webhook.job.ts",
+     "lineStart": 58,
+     "lineEnd": 66
+    }
+   ],
+   "prompt": "When a webhook has a secret, what does callWebhook feed into the HMAC-SHA256 that produces X-Twenty-Webhook-Signature?",
+   "answer": "The timestamp, a colon and the JSON payload without the secret",
+   "distractors": [
+    "The JSON payload alone, with the secret field still included in it",
+    "The nonce and the payload, joined together by a colon",
+    "The target URL followed by the timestamp in seconds"
+   ],
+   "explanation": "generateSignature runs createHmac('sha256', secret).update(`${timestamp}:${JSON.stringify(payload)}`). The payload passed is payloadWithoutSecret, and the timestamp is the X-Twenty-Webhook-Timestamp header value, Date.now() in milliseconds. The nonce and URL are not signed."
+  },
+  {
+   "id": "q04-no-secret-headers",
+   "kind": "quiz",
+   "source": {
+    "path": "twenty/fabledocs3/adr-010-event-emission-webhook-delivery.md",
+    "lines": {
+     "start": 31,
+     "end": 33
+    }
+   },
+   "cites": [
+    {
+     "path": "twenty/packages/twenty-server/src/engine/metadata-modules/webhook/jobs/call-webhook.job.ts",
+     "lineStart": 54,
+     "lineEnd": 70
+    }
+   ],
+   "prompt": "A webhook was created without a secret. Which X-Twenty-Webhook-* headers does its POST carry?",
+   "answer": "None, as all three are set only when a secret exists",
+   "distractors": [
+    "All three, with the signature computed using an empty secret",
+    "Timestamp and nonce, but no signature since there is no key",
+    "Only the signature header, built from the workspace's API key"
+   ],
+   "explanation": "The headers object starts with Content-Type only, and the Timestamp, Signature and Nonce headers are all assigned inside if (secret) { ... }. Without a secret none of them is sent, so the receiver has nothing to verify."
+  },
+  {
+   "id": "q05-nonce-per-attempt",
+   "kind": "quiz",
+   "source": {
+    "path": "twenty/fabledocs3/adr-010-event-emission-webhook-delivery.md",
+    "lines": {
+     "start": 46,
+     "end": 49
+    }
+   },
+   "cites": [
+    {
+     "path": "twenty/packages/twenty-server/src/engine/metadata-modules/webhook/jobs/call-webhook.job.ts",
+     "lineStart": 67,
+     "lineEnd": 69
+    }
+   ],
+   "prompt": "Could a consumer use X-Twenty-Webhook-Nonce to recognise a redelivered event?",
+   "answer": "No, as callWebhook draws 16 fresh random bytes for every POST",
+   "distractors": [
+    "Yes, as the nonce is derived from the event id and webhook id",
+    "Yes, as the nonce is stored and reused on each retry attempt",
+    "No, as the nonce is only sent for events of type *.deleted"
+   ],
+   "explanation": "The nonce is crypto.randomBytes(16).toString('hex') at call time, so two deliveries of the same event carry different nonces. ADR-010 notes the payload carries no delivery-attempt identifier; a real idempotency key would have to be stable per (event, webhook)."
+  },
+  {
+   "id": "q06-wildcard-patterns",
+   "kind": "quiz",
+   "source": {
+    "path": "twenty/fabledocs3/adr-010-event-emission-webhook-delivery.md",
+    "lines": {
+     "start": 25,
+     "end": 30
+    }
+   },
+   "cites": [
+    {
+     "path": "twenty/packages/twenty-server/src/engine/metadata-modules/webhook/jobs/call-webhook-jobs.job.ts",
+     "lineStart": 39,
+     "lineEnd": 59
+    }
+   ],
+   "prompt": "An event batch named company.updated reaches CallWebhookJobsJob. Which operation patterns does it match webhooks against?",
+   "answer": "company.updated, *.updated, company.* and *.*",
+   "distractors": [
+    "company.updated and *.* only, as other wildcards are not read",
+    "company.updated, company.* and *, but not *.updated",
+    "company.*, *.updated and *.*, but not the exact name"
+   ],
+   "explanation": "The job splits the batch name into nameSingular and operation and builds operationsToMatch = [`${nameSingular}.${operation}`, `*.${operation}`, `${nameSingular}.*`, '*.*']. A webhook matches when its operations include any one of them. A bare '*' is not in the list."
+  },
+  {
+   "id": "q07-chunk-count",
+   "kind": "quiz",
+   "source": {
+    "path": "twenty/fabledocs3/adr-010-event-emission-webhook-delivery.md",
+    "lines": {
+     "start": 25,
+     "end": 30
+    }
+   },
+   "cites": [
+    {
+     "path": "twenty/packages/twenty-server/src/engine/metadata-modules/webhook/jobs/call-webhook-jobs.job.ts",
+     "lineStart": 19,
+     "lineEnd": 19
+    },
+    {
+     "path": "twenty/packages/twenty-server/src/engine/metadata-modules/webhook/jobs/call-webhook-jobs.job.ts",
+     "lineStart": 66,
+     "lineEnd": 74
+    }
+   ],
+   "prompt": "One event batch matches 45 webhook deliveries. How many CallWebhookJob jobs does CallWebhookJobsJob enqueue?",
+   "answer": "3 jobs, of 20, 20 and 5 deliveries, each with retryLimit 3",
+   "distractors": [
+    "45 jobs, one for each delivery, so each can retry on its own",
+    "1 job holding all 45 deliveries, run under one Promise.all",
+    "5 jobs of 9 deliveries each, as the chunk size adapts to load"
+   ],
+   "explanation": "WEBHOOK_JOBS_CHUNK_SIZE is 20, and the job loops over chunk(webhookEvents, 20), adding one CallWebhookJob per chunk with { retryLimit: 3 }. 45 deliveries give chunks of 20, 20 and 5. The size is a fixed constant."
+  },
+  {
+   "id": "q08-naive-rethrow",
+   "kind": "quiz",
+   "source": {
+    "path": "twenty/fabledocs3/adr-010-event-emission-webhook-delivery.md",
+    "lines": {
+     "start": 46,
+     "end": 49
+    }
+   },
+   "cites": [
+    {
+     "path": "twenty/packages/twenty-server/src/engine/metadata-modules/webhook/jobs/call-webhook.job.ts",
+     "lineStart": 34,
+     "lineEnd": 41
+    }
+   ],
+   "prompt": "A developer 'fixes' retries by rethrowing in callWebhook's catch. In a 20-delivery chunk, one POST fails. What does ADR-010 warn will happen?",
+   "answer": "The whole chunk is retried, so successful deliveries go out again",
+   "distractors": [
+    "Only the failed delivery is retried, as BullMQ tracks each one apart",
+    "The chunk is dropped, as Promise.all rejects before any POST",
+    "Nothing changes, since the fan-out job catches the rethrow"
+   ],
+   "explanation": "handle() runs the chunk with Promise.all, so one rejection fails the whole job, and a BullMQ retry re-runs every delivery in it, including the 19 that already succeeded. ADR-010 says correct retries need per-delivery jobs or idempotency keys. The POSTs have all started by the time Promise.all rejects."
+  },
+  {
+   "id": "q09-post-timeout",
+   "kind": "quiz",
+   "source": {
+    "path": "twenty/fabledocs3/adr-010-event-emission-webhook-delivery.md",
+    "lines": {
+     "start": 31,
+     "end": 31
+    }
+   },
+   "cites": [
+    {
+     "path": "twenty/packages/twenty-server/src/engine/metadata-modules/webhook/jobs/call-webhook.job.ts",
+     "lineStart": 81,
+     "lineEnd": 88
+    }
+   ],
+   "prompt": "How long does callWebhook wait for a subscriber's endpoint before the POST fails?",
+   "answer": "5 seconds, set by timeout 5_000 on the axios post call",
+   "distractors": [
+    "30 seconds, the default timeout of the shared HTTP client",
+    "10 minutes, the job's start-to-close limit in the queue",
+    "No limit; the POST waits until the socket is closed"
+   ],
+   "explanation": "The call is axiosClient.post(url, payload, { headers, timeout: 5_000 }). A slow endpoint therefore fails after 5 s, lands in the catch, and, as with any failure, is recorded and not retried. ADR-010 also lists the 5s timeout."
+  },
+  {
+   "id": "q10-soft-delete-injected",
+   "kind": "quiz",
+   "source": {
+    "path": "twenty/fabledocs3/adr-005-twenty-orm-authz-in-data-layer.md",
+    "lines": {
+     "start": 26,
+     "end": 31
+    }
+   },
+   "cites": [
+    {
+     "path": "twenty/fabledocs3/adr-005-twenty-orm-authz-in-data-layer.md",
+     "lineStart": 26,
+     "lineEnd": 31
+    }
+   ],
+   "prompt": "ADR-005: why can a service using twenty-orm not forget the deletedAt IS NULL filter, even on joined relations?",
+   "answer": "The query-builder subclasses inject it into every query they build",
+   "distractors": [
+    "A Postgres row-level security policy hides rows that are trashed",
+    "A lint rule fails the build when a query lacks the deletedAt filter",
+    "Trashed rows are moved to a separate archive schema right away"
+   ],
+   "explanation": "ADR-005: per-operation query-builder subclasses (select, insert, update, delete, soft-delete) inject schema resolution, permission predicates and default deletedAt IS NULL filtering, including on joined relations, so a caller cannot forget them. RLS was rejected, and trashed rows stay in place until trash cleanup."
+  },
+  {
+   "id": "q11-rls-rejected",
+   "kind": "quiz",
+   "source": {
+    "path": "twenty/fabledocs3/adr-005-twenty-orm-authz-in-data-layer.md",
+    "lines": {
+     "start": 41,
+     "end": 44
+    }
+   },
+   "cites": [
+    {
+     "path": "twenty/fabledocs3/adr-005-twenty-orm-authz-in-data-layer.md",
+     "lineStart": 41,
+     "lineEnd": 44
+    }
+   ],
+   "prompt": "ADR-005 considered Postgres row-level security for permissions. Why was it rejected?",
+   "answer": "Policies would have to be regenerated on each metadata change",
+   "distractors": [
+    "RLS cannot express field-level permissions on a custom object",
+    "Postgres RLS is not available on the managed databases in use",
+    "RLS policies would leak each workspace's schema name to clients"
+   ],
+   "explanation": "The ADR says policies would have to be generated and migrated per metadata change, on top of ADR-004's already nontrivial DDL engine, and that debugging authz inside the database at this level of dynamism is worse than in application code. Availability and leaks are not the reasons given."
+  },
+  {
+   "id": "q12-jobs-no-boundary",
+   "kind": "quiz",
+   "source": {
+    "path": "twenty/fabledocs3/adr-007-coded-exceptions-boundary-translation.md",
+    "lines": {
+     "start": 60,
+     "end": 63
+    }
+   },
+   "cites": [
+    {
+     "path": "twenty/fabledocs3/adr-007-coded-exceptions-boundary-translation.md",
+     "lineStart": 60,
+     "lineEnd": 63
+    }
+   ],
+   "prompt": "ADR-007 translates coded exceptions at each protocol boundary. What does it say happens in background jobs, which have no such boundary?",
+   "answer": "Throwing or catching becomes a delivery-semantics decision",
+   "distractors": [
+    "Exceptions in jobs are turned into HTTP 500 responses for the queue",
+    "Jobs reuse the GraphQL exception hooks to translate their codes",
+    "Jobs may only throw bare Error, which the queue always retries"
+   ],
+   "explanation": "The negative consequences: in background jobs there is no protocol boundary, so the throw/catch decision silently becomes a delivery-semantics decision, and the sharpest example is ADR-010, where a swallowing catch disables retries. There is no HTTP response for a queue job, and bare Errors are a legacy pattern, not a rule."
+  },
+  {
+   "id": "f01-at-most-once-twice",
+   "kind": "flashcard",
+   "source": {
+    "path": "twenty/fabledocs3/adr-010-event-emission-webhook-delivery.md",
+    "lines": {
+     "start": 37,
+     "end": 40
+    }
+   },
+   "cites": [
+    {
+     "path": "twenty/fabledocs3/adr-010-event-emission-webhook-delivery.md",
+     "lineStart": 37,
+     "lineEnd": 40
+    }
+   ],
+   "front": "Why does ADR-010 call webhook delivery 'at-most-once, twice over'?",
+   "back": "Two independent gaps: (1) events are emitted in-process after commit with no transactional outbox, so a crash between commit and enqueue loses them; (2) callWebhook catches every delivery failure without rethrowing, so BullMQ never retries and retryLimit: 3 never fires."
+  },
+  {
+   "id": "f02-orm-entry-point",
+   "kind": "flashcard",
+   "source": {
+    "path": "twenty/fabledocs3/adr-005-twenty-orm-authz-in-data-layer.md",
+    "lines": {
+     "start": 24,
+     "end": 33
+    }
+   },
+   "cites": [
+    {
+     "path": "twenty/fabledocs3/adr-005-twenty-orm-authz-in-data-layer.md",
+     "lineStart": 24,
+     "lineEnd": 33
+    }
+   ],
+   "front": "ADR-005: what does twenty-orm push into query construction, and what is the single sanctioned entry point?",
+   "back": "repository/workspace.repository.ts is the one entry point for record reads and writes. Its query-builder subclasses inject schema resolution, permission predicates (permissions.utils.ts) and default deletedAt IS NULL filtering, including on joins, and Postgres errors are translated into typed exceptions before they escape."
+  },
+  {
+   "id": "f03-exception-tiers",
+   "kind": "flashcard",
+   "source": {
+    "path": "twenty/fabledocs3/adr-007-coded-exceptions-boundary-translation.md",
+    "lines": {
+     "start": 19,
+     "end": 33
+    }
+   },
+   "cites": [
+    {
+     "path": "twenty/fabledocs3/adr-007-coded-exceptions-boundary-translation.md",
+     "lineStart": 19,
+     "lineEnd": 33
+    }
+   ],
+   "front": "ADR-007's three tiers of error handling?",
+   "back": "1. Domain code throws typed, coded exceptions owned by each module; raw Postgres errors are converted inside the data layer. 2. Boundaries translate codes to protocol semantics (REST exception filter, GraphQL hooks). 3. Reporting is centralized behind a driver interface (Sentry or console), so where exceptions go is deployment configuration."
+  },
+  {
+   "id": "f04-webhook-fix",
+   "kind": "flashcard",
+   "source": {
+    "path": "twenty/fabledocs3/adr-010-event-emission-webhook-delivery.md",
+    "lines": {
+     "start": 64,
+     "end": 65
+    }
+   },
+   "cites": [
+    {
+     "path": "twenty/fabledocs3/adr-010-event-emission-webhook-delivery.md",
+     "lineStart": 60,
+     "lineEnd": 65
+    }
+   ],
+   "front": "What harm does ADR-010 list for today's webhook delivery, and what bounded project fixes it?",
+   "back": "Any consumer blip (deploy, 503, timeout) silently drops events; worker crashes drop them with no trace; retryLimit: 3 misleads readers into assuming at-least-once; failures are recorded in audit rows that nothing consumes, so customers find the loss. Fix: outbox, per-delivery idempotency keys, rethrow, dead-letter alerting."
+  }
+ ]
+}
