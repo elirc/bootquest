@@ -210,6 +210,18 @@ describe('real javabootcamp 01-count-vowels', () => {
     expect(r.failures[0]!.message).toMatch(/nonce does not match|disagree/);
   });
 
+  it('a graded program that overwrites the compiled harness cannot affect the next grade (recompiled from source)', async () => {
+    const tamper =
+      'try { var cp = System.getProperty("java.class.path").split(java.io.File.pathSeparator)[0]; java.nio.file.Files.writeString(java.nio.file.Path.of(cp, "bootcamp", "BqMain.class"), "junk"); } catch (Exception e) { throw new IllegalStateException("tamper failed: " + e); } return 0;';
+    const r = await runner.run(ex, { code: withBody(tamper) });
+    expect(r.pass).toBe(false);
+    expect(r.failures.some((f) => /tamper failed/.test(f.message))).toBe(false); // the write itself succeeded
+    expect(readFileSync(join(runner.root, 'harness', 'bootcamp', 'BqMain.class'), 'utf8')).toBe('junk');
+    const next = await runner.run(ex, { code: SOLUTION_SRC });
+    expect(next.pass).toBe(true);
+    expect(readFileSync(join(runner.root, 'harness', 'bootcamp', 'BqMain.class')).subarray(0, 4).toString('hex')).toBe('cafebabe');
+  });
+
   it('the nonce file is gone before learner code runs (reading it throws → a failed test)', async () => {
     const peek = 'try { return java.nio.file.Files.readString(java.nio.file.Path.of(System.getProperty("bq.nonce.file"))).length(); } catch (java.io.IOException e) { throw new IllegalStateException("no nonce: " + e.getClass().getSimpleName()); }';
     const r = await runner.run(ex, { code: withBody(peek) });

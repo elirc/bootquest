@@ -191,6 +191,7 @@ export function createJavaRunner(opts: JavaRunnerOptions) {
   const javac = javaTool('javac', opts.javaHome);
   const java = javaTool('java', opts.javaHome);
   const mutex = new Mutex();
+  let trusted: { sources: string; classes: string } | null = null;
 
   function harnessDigest(): string {
     const h = createHash('sha256');
@@ -198,12 +199,27 @@ export function createJavaRunner(opts: JavaRunnerOptions) {
     return h.digest('hex');
   }
 
-  /** Compile the harness once (re-done when its sources change). Caller holds the mutex. */
+  /** sha256 over the compiled harness classes (graded code runs with write access to the scratch dir) */
+  function classesDigest(): string {
+    const dir = join(harnessOut, 'bootcamp');
+    const h = createHash('sha256');
+    if (!existsSync(dir)) return 'missing';
+    for (const f of readdirSync(dir).sort()) h.update(f).update('\0').update(readFileSync(join(dir, f))).update('\0');
+    return h.digest('hex');
+  }
+
+  /**
+   * Compile the harness once per runner instance; re-done when its sources change OR its
+   * compiled classes no longer match what this process compiled (graded code runs with
+   * write access to the scratch dir: a program that rewrote BqMain.class must not grade the
+   * next attempt). The trusted digest lives in memory, never on disk. Caller holds the mutex.
+   */
   async function prepareLocked(): Promise<{ prepared: boolean; ms: number }> {
     const started = Date.now();
     const marker = join(harnessOut, '.ready');
     const digest = harnessDigest();
-    if (existsSync(marker) && readFileSync(marker, 'utf8') === digest) return { prepared: false, ms: 0 };
+    if (trusted && trusted.sources === digest && trusted.classes === classesDigest()) return { prepared: false, ms: 0 };
+    trusted = null;
     rmSync(harnessOut, { recursive: true, force: true });
     mkdirSync(harnessOut, { recursive: true });
     const r = await runProc(javac, ['--release', '17', '-encoding', 'UTF-8', ...JAVAC_LOCALE, '-J-XX:TieredStopAtLevel=1', '-J-XX:+UseSerialGC', '-J-Xmx256m', '-proc:none', '-d', harnessOut, ...harnessSources], {
@@ -212,7 +228,8 @@ export function createJavaRunner(opts: JavaRunnerOptions) {
       env: JVM_ENV,
     });
     if (r.timedOut || r.code !== 0) throw new Error(`java: the bootcamp harness failed to compile\n${r.output}`);
-    writeFileSync(marker, digest);
+    trusted = { sources: digest, classes: classesDigest() };
+    writeFileSync(marker, `${trusted.sources} ${trusted.classes}\n`); // informational only
     return { prepared: true, ms: Date.now() - started };
   }
 
