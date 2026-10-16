@@ -14,6 +14,8 @@ export default defineConfig({
       '**/node_modules/**',
       'src/runners/**/fixtures/**',
       'src/runners/csharp/runner.test.ts',
+      // own pass (vitest.java.config.ts, `npm run test:java`): spawns real javac/java
+      'src/runners/java/runner.test.ts',
       // own pass (vitest.selfrun.config.ts): spawns node/tsc children, run without file parallelism
       'src/runners/self-run/**',
     ],

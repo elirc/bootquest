@@ -471,7 +471,13 @@ describe('import-gate stamp (validation.json): the loader refuses a pack seed:va
     expect(shared.map((f) => f.replace(/\\/g, '/').split('/').pop())).toEqual(['validate.ts']);
     expect(FINGERPRINT_FILES.csharp.some((f) => /grade-core/.test(f))).toBe(false);
     expect(graderKindForTrack('csharp')).toBe('csharp');
-    expect(() => graderKindForTrack('java')).toThrow(/no grader kind/);
+    expect(graderKindForTrack('java')).toBe('java');
+    expect(() => graderKindForTrack('agentic')).toThrow(/no grader kind/);
+    // the java fingerprint covers the Java runner + its harness + validators, not the JS grader or runners.ts
+    const base = (f: string) => f.replace(/\\/g, '/').split('/').pop();
+    expect(FINGERPRINT_FILES.java.filter((f) => js.has(f)).map(base)).toEqual(['validate.ts']);
+    expect(FINGERPRINT_FILES.java.some((f) => /runners\.ts$|grade-core/.test(f))).toBe(false);
+    expect(FINGERPRINT_FILES.java.map(base)).toEqual(expect.arrayContaining(['Check.java', 'BqMain.java', 'runner-java.ts', 'validate-java.ts', 'scratch.ts']));
   });
 
   it('W3c: a manifest\'s explicit grader wins over its track (jstrain = track js, grader selfrun); a js stamp is refused for it', () => {

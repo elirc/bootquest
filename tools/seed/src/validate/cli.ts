@@ -3,17 +3,30 @@
 //                           [--concurrency <n>] [--retry-failed] [--fresh]
 // --source picks content/packs/<source> (default bootforge); --pack overrides it.
 // Each source has its own journal (.seed-journal/<source>.jsonl), stamp and
-// grader fingerprint (js | csharp, from the manifest track).
+// grader fingerprint (js | csharp | selfrun | java, from the manifest grader/track).
 // Per-course foreground runs are the intended use on this laptop (10-minute
 // shell cap, memory reaper): the journal makes every run resumable, and a final
 // run without --course re-checks everything from the journal (fast) and asserts
 // the full counts. Exit 0 only when every assertion holds. Only that clean
 // full run writes the validation.json stamp the server's pack loader requires
 // (and re-executes a random 2% / min-20 sample of journaled passes first).
+import { readFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
+import { PackManifest } from '@bootquest/shared';
+import { graderKindForManifest, type GraderKind } from '@bootquest/server/grader-fingerprint';
 import { DEFAULT_OUT_DIR } from '../bootforge/import.ts';
 import { pruneStaleQuarantine } from './prune.ts';
 import { DEFAULT_JOURNAL_DIR, formatCounts, QUARANTINE_CEILING, runValidate, shutdownValidatorRunners, validatorCsharpScratch } from './validate.ts';
+import { javaValidator, shutdownJavaValidatorRunner, validatorJavaScratch } from './validate-java.ts';
+
+/** The pack's grader kind, when its manifest parses (runValidate reports a bad manifest itself). */
+function packGrader(packDir: string): GraderKind | undefined {
+  try {
+    return graderKindForManifest(PackManifest.parse(JSON.parse(readFileSync(join(packDir, 'manifest.json'), 'utf8'))));
+  } catch {
+    return undefined;
+  }
+}
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -40,9 +53,12 @@ async function main(): Promise<number> {
   // would stay bound into every stamp — prune them before validating
   pruneStaleQuarantine(packDir, (l) => console.log(`[seed:validate] ${l}`));
 
+  // java packs (drill-java) go through the Java validator; validate.ts itself stays unchanged
+  const javaPack = packGrader(packDir) === 'java';
   let report;
   try {
     report = await runValidate({
+      ...(javaPack ? { validator: javaValidator } : {}),
       packDir,
       journalPath,
       concurrency,
@@ -54,8 +70,9 @@ async function main(): Promise<number> {
   } finally {
     // stops the C# compiler server + any dotnet child the validator started
     await shutdownValidatorRunners();
+    await shutdownJavaValidatorRunner();
   }
-  console.log(`[seed:validate] grader ${report.graderKind ?? '?'}${report.graderKind === 'csharp' ? ` (scratch ${validatorCsharpScratch()})` : ''}`);
+  console.log(`[seed:validate] grader ${report.graderKind ?? '?'}${report.graderKind === 'csharp' ? ` (scratch ${validatorCsharpScratch()})` : report.graderKind === 'java' ? ` (scratch ${validatorJavaScratch()})` : ''}`);
 
   console.log('');
   for (const c of report.courses) {
