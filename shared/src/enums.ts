@@ -22,6 +22,7 @@ export type CompetencyId = z.infer<typeof CompetencyId>;
 export const CHECK_TYPES = [
   'drill-js',
   'drill-cs',
+  'drill-java',
   'quiz',
   'predict-output',
   'guided-step',

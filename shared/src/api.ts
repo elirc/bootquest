@@ -136,7 +136,7 @@ export const MAX_STUDY_QUIZ_ANSWERS = 200;
 
 /**
  * Body of POST /api/units/:id/run and /submit. Exactly one of:
- *  - `code`     for drill-js / drill-cs (learner source)
+ *  - `code`     for drill-js / drill-cs / drill-java (learner source)
  *  - `answer`   for quiz (choice index or exact text) / predict-output (predicted stdout)
  *  - `answers`  for study-quiz (W8): the FULL answer set, one choice index per question in
  *               the order GET /units/:id serves them (submit only; graded server-side, >= 80%)
@@ -203,6 +203,7 @@ export type GradeBody = z.infer<typeof GradeBody>;
  *   quiz           answerKey
  *   predict-output expected, runAs, keyTokens
  *   drill-cs       files (tests block + types tail)
+ *   drill-java     files (tests block + tail), className
  *   http           requests[].expect, body, headers (public: name, method, path)
  *   repo           predicates[].branch / path / n / pattern / heading (public: kind, name)
  *   node-test-file checkPath, checkSha256
@@ -215,6 +216,7 @@ export type GradeBody = z.infer<typeof GradeBody>;
 export const PUBLIC_CHECK_FIELDS: Readonly<Record<CheckTypeT, readonly string[]>> = {
   'drill-js': ['type', 'language', 'tests', 'timeoutMs'],
   'drill-cs': ['type', 'shape', 'timeoutMs'],
+  'drill-java': ['type', 'timeoutMs'],
   quiz: ['type', 'itemKey', 'grading', 'choices'],
   'predict-output': ['type', 'language', 'normalize'],
   'guided-step': ['type', 'step', 'runner', 'timeoutMs'],
@@ -332,6 +334,7 @@ const PublicRepoPredicate = z
 export const PublicCheck = z.discriminatedUnion('type', [
   z.object({ type: z.literal('drill-js'), language: z.enum(['js', 'ts', 'sql']), tests: z.array(z.object({ name: z.string() }).strict()), timeoutMs: z.number() }).strict(),
   z.object({ type: z.literal('drill-cs'), shape: z.enum(['console-check', 'xunit']), timeoutMs: z.number() }).strict(),
+  z.object({ type: z.literal('drill-java'), timeoutMs: z.number() }).strict(),
   z.object({ type: z.literal('quiz'), itemKey: z.string(), grading: z.enum(['exact', 'choice', 'self']), choices: z.array(z.string()).optional() }).strict(),
   z.object({ type: z.literal('predict-output'), language: z.enum(['js', 'ts', 'cs']), normalize: z.boolean() }).strict(),
   z.object({ type: z.literal('guided-step'), step: z.number(), runner: z.string(), timeoutMs: z.number() }).strict(),

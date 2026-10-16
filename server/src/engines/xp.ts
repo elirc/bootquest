@@ -41,6 +41,7 @@ export function xpKindForCheck(type: CheckType): Exclude<XpKind, 'review' | 'rea
       return null;
     case 'drill-js':
     case 'drill-cs':
+    case 'drill-java':
     case 'guided-step':
     case 'http':
     case 'repo':

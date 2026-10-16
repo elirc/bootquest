@@ -23,6 +23,11 @@ Test("${S}", () => Eq(1, 1));
 return Report();
 `, tail: `record ${S}();
 ` } },
+  'drill-java': { type: 'drill-java', className: S, files: { tests: `    // ─── tests ───
+    public static void main(String[] args) { test("${S}", () -> eq(1, 1)); System.exit(report()); }
+    // ─── end tests ───
+`, tail: `} // ${S}
+` } },
   quiz: { type: 'quiz', itemKey: 'q1', grading: 'exact', answerKey: S },
   'predict-output': { type: 'predict-output', language: 'js', expected: S },
   'guided-step': { type: 'guided-step', step: 1, testFile: `${S}/step1.test.mjs`, runner: 'node-test' },
