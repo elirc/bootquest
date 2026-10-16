@@ -173,6 +173,54 @@ export const campaignFixtures: Record<TrackId, Omit<CampaignResponse, 'level'>> 
     ],
   },
   agentic: { track: { id: 'agentic', name: 'Agentic engineering', locked: false }, acts: [] },
+  // the unlocked Java track (migration 011): 3 acts of core study quests; act 1 open, its quest packs
+  // still content-pending except one, acts 2-3 behind the 80% + level rule
+  java: {
+    track: { id: 'java', name: 'Java', locked: false },
+    acts: [
+      {
+        id: 9,
+        title: 'Foundations',
+        theme: 'plain-Java CLI apps: classes, single-responsibility layers, file persistence',
+        ordinal: 1,
+        unlocked: true,
+        unlockRule: { previousCorePct: 0, level: 1, staticLock: false },
+        progress: { coreDone: 0, coreTotal: 2 },
+        quests: [
+          { id: 91, kind: 'study-quest', title: 'organized-experiment-cli-to-do-manager', repo: 'organized-experiment-cli-to-do-manager', rank: 11, unitId: 601, state: 'pending', core: true, contentPending: true, twinRepo: null, inProgress: false, prerequisites: [] },
+          { id: 92, kind: 'study-quest', title: 'organized-experiment-quiz-engine', repo: 'organized-experiment-quiz-engine', rank: 13, unitId: 602, state: 'pending', core: true, contentPending: true, twinRepo: null, inProgress: false, prerequisites: [] },
+        ],
+      },
+      {
+        id: 10,
+        title: 'Money & validation',
+        theme: 'BigDecimal money, input validation, CRUD with safe persistence',
+        ordinal: 2,
+        unlocked: false,
+        unlockRule: { previousCorePct: 80, level: 4, staticLock: false },
+        progress: { coreDone: 0, coreTotal: 1 },
+        quests: [{ id: 93, kind: 'study-quest', title: 'j5', repo: 'j5', rank: 212, unitId: 603, state: 'locked', core: true, contentPending: true, twinRepo: null, inProgress: false, prerequisites: [] }],
+      },
+      {
+        id: 11,
+        title: 'Domain rules & consistency',
+        theme: 'business rules, state transitions, history and atomic writes, regression tests',
+        ordinal: 3,
+        unlocked: false,
+        unlockRule: { previousCorePct: 80, level: 8, staticLock: false },
+        progress: { coreDone: 0, coreTotal: 1 },
+        quests: [{ id: 94, kind: 'study-quest', title: 'j7', repo: 'j7', rank: 275, unitId: 604, state: 'locked', core: true, contentPending: true, twinRepo: null, inProgress: false, prerequisites: [] }],
+      },
+    ],
+  },
+};
+
+/**
+ * A LOCKED track's campaign (createMockApi({ lockedTracks })): the server still supports a locked
+ * track and a statically locked act with inert quests (no unitId); no shipped track uses it since
+ * Java unlocked, so the lock rendering is tested against this fixture.
+ */
+export const lockedCampaignFixtures: Partial<Record<TrackId, Omit<CampaignResponse, 'level'>>> = {
   java: {
     track: { id: 'java', name: 'Java', locked: true },
     acts: [
@@ -184,7 +232,7 @@ export const campaignFixtures: Record<TrackId, Omit<CampaignResponse, 'level'>> 
         unlocked: false,
         unlockRule: { previousCorePct: 0, level: 1, staticLock: true },
         progress: { coreDone: 0, coreTotal: 2 },
-        // inert placeholder quests: no unitId, never playable (server: java act is statically locked)
+        // inert quests: no unitId, never playable (a statically locked act)
         quests: [
           { id: 91, kind: 'study-quest', title: 'Java language tour', repo: 'javatrain', rank: 1, state: 'locked', core: true, contentPending: true, twinRepo: null, inProgress: false, prerequisites: [] },
           { id: 92, kind: 'study-quest', title: 'Spring Boot REST service', repo: 'springdesk', rank: 2, state: 'locked', core: true, contentPending: true, twinRepo: null, inProgress: false, prerequisites: [91] },

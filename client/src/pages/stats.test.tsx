@@ -132,6 +132,13 @@ describe('Stats: pass rates, reviews, campaign progress', () => {
     const panel = await screen.findByTestId('campaign-progress', {}, SLOW);
     const js = within(panel).getByRole('region', { name: 'JS/TS + React progress' });
     for (const a of camp.acts) expect(js.textContent).toContain(`${a.progress.coreDone}/${a.progress.coreTotal}`);
+    // java ships unlocked: its campaign core counts show, not the lock
+    expect(within(panel).getByRole('region', { name: 'Java progress' }).textContent).not.toContain('Locked');
+  });
+
+  it('campaign progress: a locked track shows Locked', async () => {
+    renderApp('/stats', createMockApi({ lockedTracks: ['java'] }));
+    const panel = await screen.findByTestId('campaign-progress', {}, SLOW);
     expect(within(panel).getByRole('region', { name: 'Java progress' }).textContent).toContain('Locked');
   });
 
@@ -237,11 +244,16 @@ describe('ui-audit #26: sidebar track % = campaign core progress, explained in a
     expect(calls).toBe(1);
   });
 
-  it('a track without campaign core quests uses practice units; locked java shows the lock, not a %', async () => {
-    renderApp('/stats');
+  it('a track without campaign core quests uses practice units; a locked track shows the lock, not a %', async () => {
+    renderApp('/stats', createMockApi({ lockedTracks: ['java'] }));
     const ag = await screen.findByTestId('track-pct-agentic', {}, SLOW);
     expect(ag.closest('a')!.getAttribute('title')).toMatch(/practice units done|No progress counted/);
     expect(screen.queryByTestId('track-pct-java')).not.toBeInTheDocument();
+  });
+
+  it('the unlocked java track shows its campaign % like the others', async () => {
+    renderApp('/stats');
+    expect(await screen.findByTestId('track-pct-java', {}, SLOW)).toBeInTheDocument();
   });
 });
 

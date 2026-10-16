@@ -68,11 +68,15 @@ describe('routing + global keyboard navigation', () => {
     expect(await within(sidebar).findByLabelText('12 due')).toBeInTheDocument();
   });
 
-  it('sidebar shows Java greyed out and the review badge (count from /reviews/queue)', async () => {
-    renderApp('/stats');
+  it('sidebar shows Java unlocked by default, a locked track greyed out, and the review badge (count from /reviews/queue)', async () => {
+    const open = renderApp('/stats');
+    const openJava = await within(screen.getByRole('complementary', { name: 'Primary' })).findByRole('link', { name: /Java/ });
+    expect(openJava).not.toHaveClass('track-locked');
+    open.unmount();
+    renderApp('/stats', createMockApi({ lockedTracks: ['java'] }));
     const sidebar = screen.getByRole('complementary', { name: 'Primary' });
     const java = await within(sidebar).findByRole('link', { name: /Java/ });
-    expect(java).toHaveClass('track-locked');
+    await waitFor(() => expect(java).toHaveClass('track-locked'));
     expect(within(java).getByRole('img', { name: 'Locked' })).toBeInTheDocument();
     expect(await within(sidebar).findByLabelText('12 due')).toBeInTheDocument();
   });
@@ -106,8 +110,8 @@ describe('campaign map (bound to GET /tracks/:id/campaign)', () => {
     expect(await screen.findByTestId('campaign-empty')).toHaveTextContent('No campaign acts are seeded');
   });
 
-  it('arrow keys switch track tabs; Java renders locked', async () => {
-    const { user, path } = renderApp('/campaign/agentic');
+  it('arrow keys switch track tabs; a locked Java renders locked', async () => {
+    const { user, path } = renderApp('/campaign/agentic', createMockApi({ lockedTracks: ['java'] }));
     const tab = await screen.findByRole('tab', { name: /Agentic engineering/ });
     tab.focus();
     await user.keyboard('{ArrowRight}');

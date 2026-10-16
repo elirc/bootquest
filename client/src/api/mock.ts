@@ -18,7 +18,7 @@ import tracksJson from './fixtures/tracks.json';
 import unitDetailsJson from './fixtures/unit-details.json';
 import unitsJson from './fixtures/units.json';
 import { notesFixtures, type NoteFixture } from './fixtures/notes';
-import { campaignFixtures, emptyPromotion, evidenceFixtures, explainBackFixtures, kataFixtures, promotionFixtures, studyQuestFixtures } from './fixtures/ladder';
+import { campaignFixtures, emptyPromotion, lockedCampaignFixtures, evidenceFixtures, explainBackFixtures, kataFixtures, promotionFixtures, studyQuestFixtures } from './fixtures/ladder';
 import { writtenFixtures } from './fixtures/written';
 import {
   ApiError,
@@ -45,6 +45,7 @@ import {
   type KataFinding,
   type SubmitResponse,
   type CampaignActDto,
+  type CampaignResponse,
   type CampaignProgressResponse,
   type PassRatesResponse,
   type ReviewStatsResponse,
@@ -110,6 +111,12 @@ export interface MockApiOptions {
    * recorded and the rates are DERIVED from the rows by the server's rule (passRateOf below).
    */
   passRateHistory?: 'fixture' | 'empty';
+  /**
+   * Tracks served as LOCKED (track.locked, like the server's `track.locked = 1`). Every track
+   * ships unlocked; tests of the lock rendering lock one here. A locked track's campaign is
+   * `lockedCampaignFixtures[id]` when one exists (a statically locked act, inert quests).
+   */
+  lockedTracks?: readonly TrackId[];
 }
 
 // ---- pass rates: mirrors server/src/engines/stats.ts passRate / passRatesBy and the
@@ -225,11 +232,18 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
 
   const allUnits = () => Object.values(units).flat();
   const findUnit = (id: number) => allUnits().find((u) => u.id === id) ?? null;
-  const trackOf = (id: TrackId) => fx.tracks.tracks.find((t) => t.id === id)!;
+  const lockedTracks = new Set(opts.lockedTracks ?? []);
+  const trackList = fx.tracks.tracks.map((t) => (lockedTracks.has(t.id) ? { ...t, locked: true } : t));
+  const campaigns: Partial<Record<TrackId, Omit<CampaignResponse, 'level'>>> = { ...campaignFixtures };
+  for (const id of lockedTracks) {
+    const c = lockedCampaignFixtures[id] ?? campaignFixtures[id];
+    if (c) campaigns[id] = { ...c, track: { ...c.track, locked: true } };
+  }
+  const trackOf = (id: TrackId) => trackList.find((t) => t.id === id)!;
 
   // W8: a passed study quest is done, and its act's core progress follows (derived, like the server)
   function campaignActs(trackId: TrackId): CampaignActDto[] {
-    const c = campaignFixtures[trackId];
+    const c = campaigns[trackId];
     if (!c) return [];
     return c.acts.map((a) => {
       const quests = a.quests.map((q) => (q.unitId !== undefined && studyPassed.has(q.unitId) ? { ...q, state: 'done' as const, inProgress: false } : q));
@@ -495,12 +509,12 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
 
     getTracks: () =>
       wrap(() => ({
-        tracks: fx.tracks.tracks.map((t) => ({ id: t.id, name: t.name, locked: t.locked, ...trackCounts(t.id, t.locked) })),
+        tracks: trackList.map((t) => ({ id: t.id, name: t.name, locked: t.locked, ...trackCounts(t.id, t.locked) })),
       })),
 
     getTrackUnits: (trackId) =>
       wrap(() => {
-        const track = fx.tracks.tracks.find((t) => t.id === trackId);
+        const track = trackList.find((t) => t.id === trackId);
         if (!track) throw err(404, 'NOT_FOUND', `track ${trackId} not found`);
         return { track: { id: track.id, name: track.name, locked: track.locked, ...trackCounts(track.id, track.locked) }, units: units[trackId] ?? [] };
       }),
@@ -662,7 +676,7 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
 
     getCampaign: (trackId) =>
       wrap(() => {
-        const c = campaignFixtures[trackId];
+        const c = campaigns[trackId];
         if (!c) throw err(404, 'NOT_FOUND', `track ${trackId} not found`);
         return { ...c, acts: campaignActs(trackId), level: 3 };
       }),
@@ -896,7 +910,7 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
 
     getCampaignProgress: () =>
       wrap((): CampaignProgressResponse => ({
-        tracks: fx.tracks.tracks.map((t) => ({
+        tracks: trackList.map((t) => ({
           trackId: t.id,
           name: t.name,
           locked: t.locked,
