@@ -349,6 +349,8 @@ export function createJavaRunner(opts: JavaRunnerOptions) {
     run,
     prepare,
     root,
+    /** run `fn` holding the grade mutex (tests: proves grades serialize) */
+    withLock: <T>(fn: () => Promise<T>) => mutex.run(fn),
     /** nothing stays resident between grades (no compiler server); wait for the in-flight grade */
     shutdown: () => mutex.drain(),
     /** files left in the attempt dir (tests: the nonce file must be gone after a launch) */
