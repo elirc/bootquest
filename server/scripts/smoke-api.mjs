@@ -10,6 +10,9 @@
 // shut down + process-checked at the end), and (W3c) the http-check fixture
 // lesson graded by the real http runner against a fixture server booted on a
 // free port —
+// the javabootcamp Java pack (untouched starter FAIL as todo, a wrong answer FAIL with
+// expected/received, the reference solution PASS, all on the real Java runner; nothing resident,
+// scratch process-checked at the end) —
 // shut down + process-checked at the end) — and (W3c) jstrain: self-run JS
 // + TS drills (real self-run runner, real tsc), a forged `#done` line, a quiz
 // predict-output item and one jstrain-cs C# drill on the jstrain harness —
@@ -57,6 +60,16 @@ const csManifest = JSON.parse(readFileSync(join(CS_DIR, 'manifest.json'), 'utf8'
 const csCourses = csManifest.courses.map((c) => JSON.parse(readFileSync(join(CS_DIR, c.file), 'utf8')));
 const csUnit = csCourses.flatMap((c) => c.units).find((u) => u.unit.difficulty === 2);
 const csContent = csCourses.find((c) => csUnit.unit.key in c.content).content[csUnit.unit.key];
+// Java track: the javabootcamp pack (all modules), graded by the real Java runner (javac + java,
+// nothing resident; scratch in the temp dir, process-checked at the end). The pinned unit is
+// 01-count-vowels: its walkthrough names the classic wrong turn (no capitals), used as the wrong answer.
+const JAVA_DIR = join(REPO, 'content', 'packs', 'javabootcamp');
+const javaManifest = JSON.parse(readFileSync(join(JAVA_DIR, 'manifest.json'), 'utf8'));
+const javaCourses = javaManifest.courses.map((c) => JSON.parse(readFileSync(join(JAVA_DIR, c.file), 'utf8')));
+const JAVA_KEY = 'javabootcamp/01-language-core/01-count-vowels';
+const javaUnit = javaCourses.flatMap((c) => c.units).find((u) => u.unit.key === JAVA_KEY);
+const javaContent = javaCourses.find((c) => JAVA_KEY in c.content).content[JAVA_KEY];
+const javaWrong = javaContent.solution.replace('"aeiouAEIOU".indexOf(c)', '"aeiou".indexOf(c)');
 // W5b: the committed campaign map (seed:campaign output), loaded at startup (light stamp + loaded === built)
 const CAMPAIGN_DIR = join(REPO, 'content', 'campaign');
 const campaignManifest = JSON.parse(readFileSync(join(CAMPAIGN_DIR, 'manifest.json'), 'utf8'));
@@ -232,6 +245,7 @@ async function main() {
   const dbPath = join(dir, 'smoke.db');
   const contentPath = join(dir, 'unit-content.json');
   const csScratch = join(dir, 'cs-scratch');
+  const javaScratch = join(dir, 'java-scratch');
   let child = null;
   let port = 0;
   try {
@@ -255,9 +269,10 @@ async function main() {
         BOOTQUEST_DB: dbPath,
         BOOTQUEST_PORT: String(port),
         BOOTQUEST_UNIT_CONTENT: contentPath,
-        BOOTQUEST_PACKS: `${PACK_DIR},${CS_DIR},${JS_DIR},${JCS_DIR}`,
-        BOOTQUEST_PACK_COURSES: [PACK_COURSE, ...csManifest.courses.map((c) => c.id), ...JS_COURSES, JCS_COURSE].join(','),
+        BOOTQUEST_PACKS: `${PACK_DIR},${CS_DIR},${JS_DIR},${JCS_DIR},${JAVA_DIR}`,
+        BOOTQUEST_PACK_COURSES: [PACK_COURSE, ...csManifest.courses.map((c) => c.id), ...JS_COURSES, JCS_COURSE, ...javaManifest.courses.map((c) => c.id)].join(','),
         BOOTQUEST_CS_SCRATCH: csScratch,
+        BOOTQUEST_JAVA_SCRATCH: javaScratch,
         BOOTQUEST_CAMPAIGN: CAMPAIGN_DIR,
         // W7: the real default seed packs + authored units (named explicitly so a caller's shell cannot override them)
         BOOTQUEST_SEED_ITEMS: ['explainback', 'patches', 'variants', 'quests', 'notes']
@@ -303,10 +318,10 @@ async function main() {
       // + every csbootcamp drill + one placeholder unit per playable campaign quest (no checks until seed:quests)
       // + W7: one ladder unit per explain-back set / kata + the authored G3/G4 units + the retests whose
       //   pre-seeded artifact made them live at boot (each with one check)
-      const wantUnits = 3 + packCounts.total + csManifest.totals.total + campaignUnits + ladderUnitCount + jsCount('total') + jcsFile.units.length + standaloneStudyUnits;
-      const wantChecks = 3 + packCounts.total - packCounts.written + csManifest.totals.total + ladderUnitCount + jsCount('total') - jsCount('written') + jcsFile.units.length + campaignStudyGates + standaloneStudyUnits;
+      const wantUnits = 3 + packCounts.total + csManifest.totals.total + javaManifest.totals.total + campaignUnits + ladderUnitCount + jsCount('total') + jcsFile.units.length + standaloneStudyUnits;
+      const wantChecks = 3 + packCounts.total - packCounts.written + csManifest.totals.total + javaManifest.totals.total + ladderUnitCount + jsCount('total') - jsCount('written') + jcsFile.units.length + campaignStudyGates + standaloneStudyUnits;
       step(
-        `health (3 fixture + ${packCounts.total} BootForge ${PACK_COURSE} + ${csManifest.totals.total} csbootcamp + ${campaignUnits} campaign + ${ladderUnitCount} ladder/authored + ${jsCount('total')} jstrain + ${jcsFile.units.length} jstrain-cs + ${standaloneStudyUnits} standalone study units; + ${campaignStudyGates} W8 study-quest gates: loaded === built)`,
+        `health (3 fixture + ${packCounts.total} BootForge ${PACK_COURSE} + ${csManifest.totals.total} csbootcamp + ${javaManifest.totals.total} javabootcamp + ${campaignUnits} campaign + ${ladderUnitCount} ladder/authored + ${jsCount('total')} jstrain + ${jcsFile.units.length} jstrain-cs + ${standaloneStudyUnits} standalone study units; + ${campaignStudyGates} W8 study-quest gates: loaded === built)`,
         h.status === 200 && h.json?.ok === true && h.json.counts.units === wantUnits && h.json.counts.checks === wantChecks,
         JSON.stringify(h.json),
       );
@@ -597,6 +612,93 @@ async function main() {
       );
       const d3 = await api(base, 'GET', '/api/dashboard');
       step(`dashboard xp total ${3 + 5 + wantXp + 2 + 4 + csXp} after the C# submission`, d3.json?.xp?.total === 3 + 5 + wantXp + 2 + 4 + csXp, `xp=${d3.json?.xp?.total}`);
+
+      // 10c-java. javabootcamp on the java track, graded by the REAL Java runner (javac + java per attempt)
+      const jvTu = await api(base, 'GET', '/api/tracks/java/units');
+      const javaListed = (jvTu.json?.units ?? []).filter((x) => x.key.startsWith('javabootcamp/'));
+      const javaTrack = tr.json?.tracks?.find((t) => t.id === 'java');
+      step(
+        `java track lists all ${javaManifest.totals.total} javabootcamp drills in pack order (java unitCount = the pack, 0 done)`,
+        jvTu.status === 200 &&
+          javaListed.length === javaManifest.totals.total &&
+          javaListed.map((x) => x.key).join('\n') === javaCourses.flatMap((c) => c.units.map((u) => u.unit.key)).join('\n') &&
+          javaTrack?.unitCount === javaManifest.totals.total && javaTrack.doneCount === 0,
+        `listed ${javaListed.length}; java unitCount ${javaTrack?.unitCount}`,
+      );
+      const javaId = javaListed.find((x) => x.key === JAVA_KEY)?.id;
+      const jvD = await api(base, 'GET', `/api/units/${javaId}`);
+      const jWalkLine = javaContent.explanation.split('\n').find((l) => l.trim().length > 30) ?? javaContent.explanation;
+      step(
+        'javabootcamp detail: public drill-java spec {type, timeoutMs}, instructions + starter; no tests block, no solution, no walkthrough',
+        jvD.status === 200 &&
+          JSON.stringify(Object.keys(jvD.json.check.spec).sort()) === JSON.stringify(['timeoutMs', 'type']) &&
+          jvD.json.check.spec.type === 'drill-java' &&
+          jvD.json.instructions === javaContent.instructions &&
+          jvD.json.starter === javaContent.starter &&
+          !jvD.text.includes('"files"') &&
+          !jvD.text.includes('"aeiouAEIOU"') &&
+          !jvD.text.includes(JSON.stringify(jWalkLine).slice(1, -1)),
+        `unit ${javaId} ${JAVA_KEY}`,
+      );
+
+      const jvC0 = counts();
+      const jvSt = await api(base, 'POST', `/api/units/${javaId}/submit`, { code: javaContent.starter });
+      const jvC1 = counts();
+      const jvStFailures = jvSt.json?.result?.failures ?? [];
+      step(
+        'javabootcamp: the untouched STARTER (exits 0 upstream) is graded FAIL by the real Java runner: every test todo, recorded, no XP',
+        jvSt.status === 200 &&
+          jvSt.json.verdict === 'fail' &&
+          jvSt.json.result.pass === false &&
+          jvSt.json.xp === null &&
+          jvStFailures.length > 0 &&
+          jvStFailures.every((f) => typeof f.name === 'string' && f.name.length > 0 && /todo/.test(f.message)) &&
+          /#done passed=0 failed=0 todo=\d+/.test(jvSt.json.result.output) &&
+          jvC1.attempt === jvC0.attempt + 1 && jvC1.run === jvC0.run + 1 && jvC1.xp_event === jvC0.xp_event,
+        `failures=${jvStFailures.length} ${jvSt.json?.result?.durationMs}ms (incl. first-run harness compile)`,
+      );
+
+      const jvW = await api(base, 'POST', `/api/units/${javaId}/submit`, { code: javaWrong });
+      const jvC2 = counts();
+      const jvWCase = (jvW.json?.result?.failures ?? []).find((f) => f.name === 'is case-insensitive');
+      step(
+        'javabootcamp: a WRONG answer (lowercase-only vowels) compiles and FAILs by test name with expected/received, recorded, no XP',
+        javaWrong !== javaContent.solution &&
+          jvW.status === 200 &&
+          jvW.json.verdict === 'fail' &&
+          jvW.json.xp === null &&
+          jvWCase?.expected === '2' && jvWCase?.actual === '0' &&
+          /#done passed=\d+ failed=[1-9]\d* todo=0/.test(jvW.json.result.output) &&
+          jvC2.attempt === jvC1.attempt + 1 && jvC2.xp_event === jvC1.xp_event,
+        JSON.stringify(jvW.json?.result?.failures ?? null).slice(0, 300),
+      );
+
+      const jvR = await api(base, 'POST', `/api/units/${javaId}/submit`, { code: javaContent.solution });
+      const jvC3 = counts();
+      const javaXp = 10 * javaUnit.unit.difficulty;
+      const jvAttempt = reader.get('SELECT id, unit_id, mode, outcome FROM attempt WHERE id = ?', jvR.json?.attempt?.id ?? -1);
+      const jvRun = reader.get('SELECT kind, attempt_id, verdict FROM run WHERE id = ?', jvR.json?.runId ?? -1);
+      const jvXpRow = reader.get('SELECT amount, kind, unit_id, attempt_id FROM xp_event WHERE id = ?', jvR.json?.xp?.id ?? -1);
+      step(
+        `javabootcamp: reference solution submitted -> real Java grade pass (failed=0 todo=0), +${javaXp} code XP (10 x difficulty ${javaUnit.unit.difficulty}), attempt + run + xp rows`,
+        jvR.status === 200 &&
+          jvR.json.verdict === 'pass' &&
+          jvR.json.result.pass === true &&
+          jvR.json.result.failures.length === 0 &&
+          /#done passed=\d+ failed=0 todo=0/.test(jvR.json.result.output) &&
+          jvR.json.xp?.amount === javaXp &&
+          jvC3.attempt === jvC2.attempt + 1 && jvC3.run === jvC2.run + 1 && jvC3.xp_event === jvC2.xp_event + 1 &&
+          jvAttempt?.unit_id === javaId && jvAttempt.mode === 'solo' && jvAttempt.outcome === 'pass' &&
+          jvRun?.kind === 'submit' && jvRun.attempt_id === jvAttempt.id && jvRun.verdict === 'pass' &&
+          jvXpRow?.amount === javaXp && jvXpRow.kind === 'code' && jvXpRow.unit_id === javaId && jvXpRow.attempt_id === jvAttempt.id,
+        `xp=${JSON.stringify(jvR.json?.xp)} ${jvR.json?.result?.durationMs}ms`,
+      );
+      const jvDash = await api(base, 'GET', '/api/dashboard');
+      step(
+        `dashboard xp total ${3 + 5 + wantXp + 2 + 4 + csXp + javaXp} after the Java submission; drill:java slate slot present (now completable: javabootcamp drills exist)`,
+        jvDash.json?.xp?.total === 3 + 5 + wantXp + 2 + 4 + csXp + javaXp && (jvDash.json?.slate?.items ?? []).some((i) => i.slot === 'drill:java'),
+        `xp=${jvDash.json?.xp?.total}`,
+      );
 
       // 10d. W3c: the http-check lesson, graded by the REAL http runner against a fixture server
       const httpId = ids[httpLesson.key];
@@ -1037,6 +1139,15 @@ async function main() {
         await sleep(250);
       }
       step('C# runner: compiler server shut down, no dotnet process mentions the scratch dir/pipe', lingering.length === 0, `pipe ${sm.pipe} ${lingering.join('; ')}`);
+      // Java runner: nothing stays resident between grades (no compiler server); prove no javac/java
+      // process mentions its scratch dir after the kill
+      let javaLingering = [];
+      for (let i = 0; i < 20; i++) {
+        javaLingering = processesMentioning(javaScratch);
+        if (javaLingering.length === 0) break;
+        await sleep(250);
+      }
+      step('Java runner: no javac/java process mentions the Java scratch dir (nothing resident)', javaLingering.length === 0, `${javaScratch} ${javaLingering.join('; ')}`);
     }
     rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
