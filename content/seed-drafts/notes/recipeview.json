@@ -179,23 +179,24 @@
    "id": "x-43d32fec5903cc7c",
    "target": "seed:quests:recipeview/quiz/43d32fec5903cc7c",
    "phase": "after",
-   "title": "Validate before the DELETE, not after it",
-   "body": "`writeRecipeChildren` replaces ingredients wholesale. When `body.ingredients` is an array, its very first action is `DELETE FROM ingredients WHERE recipe_id = ?`, and only then does it insert the new rows. If validation happened inside that function after the delete, one bad row (say a negative quantity) would be found only after every valid ingredient was already gone. So validation runs earlier, in `h()`, before the handler is even called; a rejected body writes nothing.\n\nWhy the others are wrong:\n- **only for performance**: the concepts chapter gives a correctness reason: a typo would wipe a valid recipe.\n- **needs the old ingredient ids**: `validatePayload` only looks at the request body; it never reads the database.\n- **node:sqlite cannot roll back a DELETE**: it can; `tx()` issues ROLLBACK on any throw. The design avoids relying on that.",
+   "title": "The validator answers before the handler",
+   "body": "**Key: \"name must contain valid text\", from validatePayload in h().**\n\n`h()` calls `validatePayload(req.body)` for every POST and PATCH (except photo uploads) before the handler runs. For the keys `name` and `title`, the validator also requires `(b[key] as string).trim()` to be non-empty; `\"   \"` fails, so it throws `InputError(`${key} must contain valid text`)` and `fail()` answers 400. The handler's own `\"Name is required\"` check would catch the same case, but it is never reached.\n\nWhy the others are wrong:\n- *\"Name is required\"*: that line sits in the handler, after validation.\n- *\"Send a JSON object\"*: the body is an object; only the name is blank.\n- *created*: both the validator and the handler refuse a blank name.",
    "excerpts": [
     {
      "path": "server/index.ts",
-     "lineStart": 234,
-     "lineEnd": 235,
-     "quote": "if (Array.isArray(body?.ingredients)) { db.prepare(\"DELETE FROM ingredients WHERE recipe_id = ?\").run(recipeId);"
-    },
-    {
-     "path": "astraupskill/02-CONCEPTS.md",
-     "lineStart": 17,
-     "lineEnd": 17,
-     "quote": "If `validatePayload` ran after line 235, a typo would wipe an otherwise valid recipe. It runs in `h()` (`:85-89`), before the handler is even called."
+     "lineStart": 618,
+     "lineEnd": 620,
+     "quote": "([\"name\", \"title\"].includes(key) && !(b[key] as string).trim()) ) throw new InputError(`${key} must contain valid text`);"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "server/index.ts",
+     "lineStart": 85,
+     "lineEnd": 89,
+     "why": "Where h() calls validatePayload."
+    }
+   ]
   },
   {
    "id": "x-4d89a94adc44a989",
@@ -301,23 +302,24 @@
    "id": "x-7d09ec52921df096",
    "target": "seed:quests:recipeview/quiz/7d09ec52921df096",
    "phase": "after",
-   "title": "Omitted ingredients versus an empty list",
-   "body": "`writeRecipeChildren` only touches ingredients when `Array.isArray(body?.ingredients)` is true.\n\n- `PATCH {title:\"x\"}` has no `ingredients` key, so the check is false and the existing 2 rows are untouched: **2**.\n- `PATCH {ingredients: []}` is an array, so the DELETE runs and the insert loop runs zero times: **0**. The concepts table calls this intentional: an empty list means \"remove them all\".\n\nWhy the others are wrong:\n- **2, then a 400**: an empty array is valid; `validatePayload` only rejects non-arrays, too many rows or bad rows.\n- **2, then 2**: that would treat `[]` like an omitted key, but an empty array is still an array.\n- **0, then 0**: omitting the key does not delete anything; test 1 relies on that.",
+   "title": "Blank rows are skipped without using up a position",
+   "body": "**Key: Salt 0 and Flour 1.**\n\n`writeRecipeChildren` deletes the old ingredients and starts `let pos = 0`. For each row it trims `item`; the blank row becomes `\"\"` and the loop hits `continue` before the insert. The insert is the only place that runs `pos++`, so Salt takes 0 and Flour takes 1. (Flour's `qty: 2` passes `validatePayload` because it is a nonnegative number.)\n\nWhy the others are wrong:\n- *Salt 0, Flour 2*: the skipped row never increments `pos`.\n- *Salt 1, Flour 3*: positions start at 0.\n- *a blank row at 1*: blank rows are not stored.",
    "excerpts": [
     {
      "path": "server/index.ts",
-     "lineStart": 234,
-     "lineEnd": 235,
-     "quote": "if (Array.isArray(body?.ingredients)) { db.prepare(\"DELETE FROM ingredients WHERE recipe_id = ?\").run(recipeId);"
-    },
-    {
-     "path": "astraupskill/02-CONCEPTS.md",
-     "lineStart": 13,
-     "lineEnd": 14,
-     "quote": "| no `ingredients` key | `Array.isArray` is false (`:234`) | Existing rows untouched | | `ingredients: []` | Array, loop runs zero times | All ingredients removed — intentional |"
+     "lineStart": 239,
+     "lineEnd": 239,
+     "quote": "if (!item) continue; // a blank row in the editor is not an ingredient"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "server/index.ts",
+     "lineStart": 240,
+     "lineEnd": 250,
+     "why": "The insert, with pos++ inside it."
+    }
+   ]
   },
   {
    "id": "x-949751e920f216ac",
@@ -367,29 +369,24 @@
    "id": "x-a2983e3db0b41884",
    "target": "seed:quests:recipeview/quiz/a2983e3db0b41884",
    "phase": "after",
-   "title": "Why a recipe rename cascades but a dish rename does not",
-   "body": "A cook log's search title is stored as the recipe title plus the cook date. That copy is a denormalisation: when the recipe is renamed, every cook log's stored title is now stale, so the recipe PATCH calls `reindexRecipeTree` to rebuild them. Dish names are not copied into those titles. Wherever the dish name is shown in search results, it is looked up live at query time, so renaming a dish only needs to rebuild the dish's own search row.\n\nWhy the others are wrong:\n- **dishes have no search rows**: `search_index` holds three kinds of rows, and dishes are one; the dish PATCH calls `reindexDish`.\n- **skipped for performance**: the code comment gives the real reason: nothing needs it.\n- **FTS5 triggers**: the schema deliberately uses no triggers; handlers re-index by hand.",
+   "title": "The search body keeps only non-empty parts",
+   "body": "**Key: 'too salty' then 'top' on two lines, with the empty values dropped.**\n\n`reindexCookLog` collects the photo captions and builds `[l.changes, l.taste_notes, l.process_notes, l.next_time, ...captions].filter(Boolean).join('\\n')`. `filter(Boolean)` removes the empty strings and nulls (the changes, process notes, next-time text and the empty caption), so two parts are left and they are joined by a newline.\n\nWhy the others are wrong:\n- *captions left out*: the captions are spread into the list.\n- *blank lines kept*: `filter(Boolean)` removes them first.\n- *spaces*: the separator is `'\\n'`.",
    "excerpts": [
     {
      "path": "server/db.ts",
-     "lineStart": 101,
-     "lineEnd": 101,
-     "quote": "`${l.recipe_title} — ${l.cooked_on}`"
-    },
-    {
-     "path": "server/index.ts",
-     "lineStart": 165,
-     "lineEnd": 166,
-     "quote": "// Cook-log search titles don't embed the dish name, but recipe context // strings resolve live, so only the dish row needs reindexing here."
-    },
-    {
-     "path": "server/schema.sql",
-     "lineStart": 112,
-     "lineEnd": 112,
-     "quote": "triggers, because a recipe's searchable body spans four source tables."
+     "lineStart": 98,
+     "lineEnd": 98,
+     "quote": "const body = [l.changes, l.taste_notes, l.process_notes, l.next_time, ...captions].filter(Boolean).join('\\n');"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "server/db.ts",
+     "lineStart": 84,
+     "lineEnd": 102,
+     "why": "The whole reindexCookLog function."
+    }
+   ]
   },
   {
    "id": "x-b04cc257aa4d45e2",
