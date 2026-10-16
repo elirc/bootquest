@@ -69,6 +69,32 @@ export const DrillCsCheck = z.object({
   timeoutMs: timeoutMs.default(10000),
 });
 
+/**
+ * Java drill graded by the Java runner (server/src/runners/java; javabootcamp).
+ * The graded program is learner.head + files.tests + learner.tail: files.tests
+ * is the exercise's `// ─── tests ───` line through the `// ─── end tests ───`
+ * line, files.tail what follows it (the class's closing brace; used only when
+ * the learner sends code without the tests markers). The verdict comes from
+ * the nonce-checked result file BqMain writes (stdout `#done` is display only).
+ * Pass = passed > 0 AND failed == 0 AND todo == 0; the exit code is never trusted.
+ * files.* are PRIVATE (not in the public whitelist).
+ */
+export const DrillJavaCheck = z.object({
+  type: z.literal('drill-java'),
+  files: z
+    .object({
+      tests: z.string().min(1),
+      tail: z.string().default(''),
+    })
+    .strict(),
+  /** the exercise's top-level class (javabootcamp: always `Exercise`) */
+  className: z
+    .string()
+    .regex(/^[A-Za-z_$][A-Za-z0-9_$]*$/)
+    .default('Exercise'),
+  timeoutMs: timeoutMs.default(10000),
+});
+
 export const QuizCheck = z.object({
   type: z.literal('quiz'),
   itemKey: z.string().min(1),
@@ -382,6 +408,7 @@ export const VitestProjectCheck = z.object({
 export const CheckSpec = z.discriminatedUnion('type', [
   DrillJsCheck,
   DrillCsCheck,
+  DrillJavaCheck,
   QuizCheck,
   PredictOutputCheck,
   GuidedStepCheck,

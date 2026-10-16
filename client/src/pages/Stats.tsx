@@ -198,6 +198,7 @@ function XpChart({ data, range }: { data: XpStatsResponse; range: XpRange }) {
 const CHECK_LABEL: Partial<Record<CheckType, string>> = {
   'drill-js': 'JS drills',
   'drill-cs': 'C# drills',
+  'drill-java': 'Java drills',
   quiz: 'Quizzes',
   'predict-output': 'Predict output',
   'guided-step': 'Guided steps',

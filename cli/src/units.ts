@@ -28,7 +28,7 @@ import type { ProjectConfig } from './config.ts';
  *    Refused with an explicit "not wired yet" message rather than guessing a
  *    body shape.
  */
-export const CODE_CHECKS: ReadonlySet<string> = new Set(['drill-js', 'drill-cs', 'node-test-file']);
+export const CODE_CHECKS: ReadonlySet<string> = new Set(['drill-js', 'drill-cs', 'drill-java', 'node-test-file']);
 export const PROJECT_CHECKS: ReadonlySet<string> = new Set(['http', 'repo']);
 export const BROWSER_CHECKS: ReadonlySet<string> = new Set(['quiz', 'predict-output', 'study-quiz', 'explain-back', 'patch-kata', 'review']);
 export const PENDING_CLI_CHECKS: ReadonlySet<string> = new Set(['guided-step', 'self-run', 'vitest-project']);

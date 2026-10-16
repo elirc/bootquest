@@ -62,8 +62,8 @@ export const PackUnit = z
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: `origin type ${u.origin.type} must map to unit kind ${kindFor[u.origin.type]}`, path: ['unit', 'kind'] });
     }
     const checkType = u.unit.checks[0]?.spec.type;
-    // code drills: drill-js (BootForge, JS track), drill-cs (csbootcamp, C# track) or self-run (jstrain, W3c)
-    const wantCheck: Record<PackOriginType, readonly string[]> = { code: ['drill-js', 'drill-cs', 'self-run'], quiz: ['quiz'], output: ['predict-output'], written: [] };
+    // code drills: drill-js (BootForge, JS track), drill-cs (csbootcamp, C# track), drill-java (javabootcamp, Java track) or self-run (jstrain, W3c)
+    const wantCheck: Record<PackOriginType, readonly string[]> = { code: ['drill-js', 'drill-cs', 'drill-java', 'self-run'], quiz: ['quiz'], output: ['predict-output'], written: [] };
     if (u.unit.checks.length > 1) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'pack units carry at most one check', path: ['unit', 'checks'] });
     }
@@ -129,7 +129,7 @@ export const PackManifestCourse = z
   .strict();
 
 /** Grader kinds a pack can be bound to (server/src/store/grader-fingerprint.ts). */
-export const PACK_GRADER_KINDS = ['js', 'csharp', 'selfrun'] as const;
+export const PACK_GRADER_KINDS = ['js', 'csharp', 'selfrun', 'java'] as const;
 export const PackGraderKind = z.enum(PACK_GRADER_KINDS);
 export type PackGraderKind = z.infer<typeof PackGraderKind>;
 
@@ -230,6 +230,8 @@ export const PackValidationStamp = z
         /** selfrun (W3c): the repo-pinned TypeScript that type-checks TS exercises + the tsx loader */
         typescript: z.string().min(1).optional(),
         tsx: z.string().min(1).optional(),
+        /** java: the JDK `javac -version` reports */
+        jdk: z.string().min(1).optional(),
       })
       .strict(),
     /** which grader the fingerprint covers (absent on stamps written before W3a = 'js') */

@@ -12,6 +12,7 @@ import { ALLOW_UNSTAMPED_ENV, loadPackIntoDb, packContentEntries, PackLoadError,
 import { createApp } from './app.ts';
 import { combineContentStores, fileContentEntries } from './content-store.ts';
 import { createDrillCsRunner, resolveCsScratchDir, type DrillCsRunner } from './runner-csharp.ts';
+import { createDrillJavaRunner, resolveJavaScratchDir, type DrillJavaRunner } from './runner-java.ts';
 import { defaultRunners, type RunnerRegistry } from './runners.ts';
 import { createNodeTestFileRunner } from './runner-node-test-file.ts';
 import { removeWorkParent } from '../runners/node-test-file/index.ts';
@@ -130,6 +131,8 @@ export interface RunningServer {
   campaign: CampaignLoadStats | null;
   /** the C# runner's app-data dir (null when the caller injected its own registry) */
   csharpScratch: string | null;
+  /** the Java runner's app-data dir (null when the caller injected runners) */
+  javaScratch: string | null;
   /** W7: one row per loaded seed pack (full stamp verified) */
   seedPacks: SeedPackStat[];
   /** W7: ladder wiring stats (loaded === built per family already asserted) */
@@ -179,6 +182,7 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
 
   const db = openDb({ path: dbPath, env: {} });
   let csharp: DrillCsRunner | null = null;
+  let java: DrillJavaRunner | null = null;
   try {
     db.exec('PRAGMA journal_mode = WAL;');
     db.exec('PRAGMA busy_timeout = 5000;');
@@ -231,9 +235,15 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
     const content = combineContentStores(sources);
     // drill-cs -> the warm C# runner (lazy: no dotnet process until the first C# grade)
     csharp = opts.runners ? null : createDrillCsRunner({ appDataDir: resolveCsScratchDir(env, dbPath) });
+    // drill-java -> the Java runner (lazy: no JVM until the first Java grade); merged here, not in
+    // runners.ts, so the js/selfrun grader fingerprints (which hash runners.ts) stay unchanged
+    java = opts.runners ? null : createDrillJavaRunner({ appDataDir: resolveJavaScratchDir(env, dbPath) });
     const sync = opts.sync ?? createSyncService(resolveSyncPaths(env));
     const runners: RunnerRegistry =
-      opts.runners ?? defaultRunners({ ...(csharp ? { drillCs: csharp.runner } : {}), nodeTestFile: createNodeTestFileRunner(sync.cache) });
+      opts.runners ?? {
+        ...defaultRunners({ ...(csharp ? { drillCs: csharp.runner } : {}), nodeTestFile: createNodeTestFileRunner(sync.cache) }),
+        ...(java ? { 'drill-java': java.runner } : {}),
+      };
     // a sync can register new project units (signalpost U01...): re-link explain-backs + create pending retests
     const app = createApp({ db, clock, content, runners, sync, seedItems, afterSync: () => void loadLadderIntoDb(db, ladderInputs, clock) });
 
@@ -252,7 +262,7 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
           // this process's node-test-file workspace parent when we own that runner. closeAllConnections
           // drops in-flight requests but not their runner promises: removeWorkParent skips the rmdir
           // while any run() still counts against the parent (left for `npm run sweep:ntf`)
-          void (csharp ? csharp.shutdown() : Promise.resolve())
+          void Promise.all([csharp ? csharp.shutdown() : undefined, java ? java.shutdown() : undefined])
             .then(() => (opts.runners ? false : removeWorkParent()))
             .catch(() => undefined)
             .finally(done);
@@ -261,7 +271,7 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
       });
       return closing;
     };
-    return { server, db, port, host, close, packs: packStats, campaign, csharpScratch: csharp?.appDataDir ?? null, seedPacks, ladder, studyQuests };
+    return { server, db, port, host, close, packs: packStats, campaign, csharpScratch: csharp?.appDataDir ?? null, javaScratch: java?.appDataDir ?? null, seedPacks, ladder, studyQuests };
   } catch (err) {
     db.close();
     throw err;

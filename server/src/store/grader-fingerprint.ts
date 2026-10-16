@@ -5,6 +5,7 @@ import esbuild from 'esbuild';
 import type { PackManifest } from '@bootquest/shared';
 import { discoverToolchain } from '../runners/csharp/scratch.ts';
 import { resolveTsx, resolveTypescript } from '../runners/self-run/index.ts';
+import { jdkVersion } from '../runners/java/index.ts';
 
 /**
  * The grader fingerprint binds seed:validate verdicts (journal entries) and the
@@ -27,16 +28,21 @@ import { resolveTsx, resolveTypescript } from '../runners/self-run/index.ts';
  *           snippet runner, the registry adapter / deterministic graders and
  *           grade-core's normalizeOutput (runners.ts, grade-core.mjs); node,
  *           esbuild, the repo-pinned TypeScript and tsx.
+ *   java    drill-java (javabootcamp): the Java runner + split rules + the
+ *           process helpers it imports from the C# scratch module + the
+ *           javabootcamp harness it compiles (Check.java, BqMain.java) + the
+ *           drill-java adapter + the Java validator; node + the JDK (`javac -version`).
  * The validator (validate.ts) is in all of them: it decides what "validated" means.
  */
 
-export type GraderKind = 'js' | 'csharp' | 'selfrun';
-export const GRADER_KINDS: readonly GraderKind[] = ['js', 'csharp', 'selfrun'];
+export type GraderKind = 'js' | 'csharp' | 'selfrun' | 'java';
+export const GRADER_KINDS: readonly GraderKind[] = ['js', 'csharp', 'selfrun', 'java'];
 
 const REPO = resolve(import.meta.dirname, '..', '..', '..');
 const VALIDATOR = join(REPO, 'tools', 'seed', 'src', 'validate', 'validate.ts');
 const CSHARP = join(REPO, 'server', 'src', 'runners', 'csharp');
 const SELFRUN = join(REPO, 'server', 'src', 'runners', 'self-run');
+const JAVA = join(REPO, 'server', 'src', 'runners', 'java');
 
 export const FINGERPRINT_FILES: Readonly<Record<GraderKind, readonly string[]>> = {
   js: [
@@ -69,13 +75,24 @@ export const FINGERPRINT_FILES: Readonly<Record<GraderKind, readonly string[]>> 
     join(REPO, 'server', 'src', 'runners', 'js', 'grade-core.mjs'),
     VALIDATOR,
   ],
+  java: [
+    join(JAVA, 'index.ts'),
+    join(JAVA, 'split.ts'),
+    join(CSHARP, 'scratch.ts'),
+    join(JAVA, 'fixtures', 'javabootcamp', '_lib', 'check', 'bootcamp', 'Check.java'),
+    join(JAVA, 'fixtures', 'javabootcamp', '_lib', 'check', 'bootcamp', 'BqMain.java'),
+    join(REPO, 'server', 'src', 'api', 'runner-java.ts'),
+    VALIDATOR,
+    join(REPO, 'tools', 'seed', 'src', 'validate', 'validate-java.ts'),
+  ],
 };
 
 /** The grader kind that executes a pack, from its manifest track (manifests without a `grader` field). */
 export function graderKindForTrack(track: string): GraderKind {
   if (track === 'js') return 'js';
   if (track === 'csharp') return 'csharp';
-  throw new Error(`no grader kind for pack track "${track}" (known: js, csharp)`);
+  if (track === 'java') return 'java';
+  throw new Error(`no grader kind for pack track "${track}" (known: js, csharp, java)`);
 }
 
 /** The grader kind of a pack: its manifest's explicit `grader` (W3c), else derived from the track. */
@@ -90,11 +107,13 @@ export interface Toolchain {
   dotnetRef?: string;
   typescript?: string;
   tsx?: string;
+  jdk?: string;
 }
 
-/** Versions bound into a kind's fingerprint. csharp shells out to `dotnet --list-sdks` once (cached). */
+/** Versions bound into a kind's fingerprint. csharp shells out to `dotnet --list-sdks`, java to `javac -version` (each once, cached). */
 export function toolchainVersions(kind: GraderKind = 'js'): Toolchain {
   if (kind === 'js') return { node: process.version, esbuild: esbuild.version };
+  if (kind === 'java') return { node: process.version, jdk: jdkVersion() };
   if (kind === 'selfrun') return { node: process.version, esbuild: esbuild.version, typescript: resolveTypescript().version, tsx: resolveTsx().version };
   const tc = discoverToolchain();
   return { node: process.version, dotnetSdk: tc.sdkVersion, dotnetRef: tc.refVersion };

@@ -126,7 +126,7 @@ interface GradedRow {
 }
 const RATE_TRACK_ORDER: readonly TrackId[] = ['js', 'csharp', 'java', 'agentic'];
 const RATE_CHECK_ORDER: readonly CheckType[] = [
-  'drill-js', 'drill-cs', 'quiz', 'predict-output', 'guided-step', 'http', 'repo', 'study-quiz',
+  'drill-js', 'drill-cs', 'drill-java', 'quiz', 'predict-output', 'guided-step', 'http', 'repo', 'study-quiz',
   'explain-back', 'patch-kata', 'review', 'node-test-file', 'self-run', 'vitest-project',
 ];
 type Rate = PassRatesResponse['overall'];
