@@ -1,0 +1,359 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "j2",
+ "repo": "j2",
+ "sha": "d5869879670a68e2029468ddffe5978196ffc1cc",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: a library tracker where one action touches several records",
+   "body": "This repo is a Java 17 command-line library tracker: books, borrowers and loans, saved to a data directory. It looks small, but the course in astraupskill/ uses it to teach consistency: one librarian action has to keep several related records in agreement.\n\nThe code, in the order the codebase map suggests:\n\n- **model/** - Book, Borrower and Loan (immutable values) plus Values (shared validation helpers).\n- **storage/LibraryData** - the whole workspace as one record, with a constructor that validates it.\n- **service/LibraryManager** - the business operations (add, edit, check out, return, delete, archive).\n- **storage/FileStorage** - reading and writing the data files.\n- **App** - the numbered menu; 01-CODEBASE-MAP has a table of every option and its prompts.\n\nRead README, 01, 02, 03, 04 and 07 in astraupskill/. The 44 regression tests in test/librarytracker run with plain javac and java; 04 shows the commands.",
+   "excerpts": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "one business action changes several related records"
+    },
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": 17,
+     "lineEnd": 17,
+     "quote": "Each row lists the prompts in the order the CLI reads them"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": 15,
+     "lineEnd": 38,
+     "why": "The CLI menu table maps each number to its prompts and service call."
+    }
+   ]
+  },
+  {
+   "id": "r02-one-aggregate",
+   "target": "pack",
+   "phase": "before",
+   "title": "Core idea: the whole library is validated as one value",
+   "body": "Each model class checks its own fields: a Book checks its title and its loan fields, a Loan checks its dates, Values checks text, emails, ids and date ranges. But some rules are about several records at once, and no single object can check them. Those live in the LibraryData constructor.\n\nLibraryData holds a revision number, three id watermarks and the three lists. Its constructor runs every time the manager builds a new candidate state and every time a file is loaded, so a bad combination is refused whether it came from a command or from disk.\n\nRead that constructor slowly and write each rule it enforces as one plain sentence. Then, for each rule, find which manager method could break it and the regression test that proves it is refused. Also find which manager methods enforce a rule themselves before LibraryData ever sees the candidate, and compare their messages.",
+   "excerpts": [
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": 7,
+     "lineEnd": 7,
+     "quote": "[LibraryData](../src/librarytracker/storage/LibraryData.java) validates the aggregate."
+    },
+    {
+     "path": "src/librarytracker/storage/LibraryData.java",
+     "lineStart": 6,
+     "lineEnd": 13,
+     "quote": "public record LibraryData("
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Chapter 02 explains why related records form a consistency boundary."
+    }
+   ]
+  },
+  {
+   "id": "r03-commit-and-sessions",
+   "target": "pack",
+   "phase": "before",
+   "title": "Core idea: candidate, commit, and a second session",
+   "body": "Every mutating method in LibraryManager ends the same way: it builds replacement lists and calls a private method, commit. commit creates a candidate LibraryData with the next revision and hands it to FileStorage.save. Trace commit and note the exact order of its statements.\n\nFileStorage.save then does the file work under a cooperative lock and ends by replacing the snapshot file atomically. Read it and list every check it makes before it writes anything, and which fields it updates afterwards.\n\nTwo experiments make this concrete. First, read the test that injects a failure into the replacement step and list what it checks afterwards. Second, imagine two app windows open on the same directory. Write down what each one has in memory and on disk after the first one saves, then read the test about separate sessions to check your answer.\n\nStartup also has rules: the file store reads library.snapshot if it exists, and otherwise looks at the two older text files.",
+   "excerpts": [
+    {
+     "path": "src/librarytracker/storage/FileStorage.java",
+     "lineStart": 67,
+     "lineEnd": 67,
+     "quote": "public synchronized void save(LibraryData next) throws IOException {"
+    },
+    {
+     "path": "src/librarytracker/service/LibraryManager.java",
+     "lineStart": 32,
+     "lineEnd": 32,
+     "quote": "private void commit("
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/librarytracker/storage/FileStorage.java",
+     "lineStart": 48,
+     "lineEnd": 106,
+     "why": "load and save are the first two methods; the rest is encoding and decoding."
+    }
+   ]
+  },
+  {
+   "id": "x-q01-first-loan-id",
+   "target": "seed:quests:j2/quiz/e7d1d68a78c33ac9",
+   "phase": "after",
+   "title": "Why the first loan in a new workspace is loan 0",
+   "body": "**Key: Loan 0, because an empty workspace starts all three id watermarks at 0.**\n\nLibraryData.empty() builds the first state with revision 0 and nextBookId, nextBorrowerId and nextLoanId all 0. Each record type allocates from its own watermark, so the first book is 0, the first borrower is 0 and the first loan is 0. Values.identity accepts 0; it only rejects negative ids and Long.MAX_VALUE. Piping the three commands into the CLI prints \"Book checked out and saved. Loan 0.\"\n\nWhy the others are wrong:\n- **identity(id, 1) makes loans start at 1**: the 1 is a placeholder version so the id rule can be reused; 02-CONCEPTS warns that it is easy to misread.\n- **Zero means \"no loan\"**: a book with no loan has a null borrowerId; ids do not reserve zero.\n- **Loan 2 after book and borrower**: watermarks are per record type, not shared.",
+   "excerpts": [
+    {
+     "path": "src/librarytracker/storage/LibraryData.java",
+     "lineStart": 63,
+     "lineEnd": 63,
+     "quote": "return new LibraryData(0, 0, 0, 0, List.of(), List.of(), List.of());"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 11,
+     "lineEnd": 11,
+     "quote": "the first checkout in a new workspace prints `Loan 0.`"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02-receipt-after-rename",
+   "target": "seed:quests:j2/quiz/cc90db40d8794fb0",
+   "phase": "after",
+   "title": "Why loan history keeps the old title and name",
+   "body": "**Key: history shows \"Reliable systems\" and \"Sam Reader\", the text accepted at checkout.**\n\ncheckOutBook builds the Loan with b.getTitle() and person.getName(), so the receipt holds its own copy of both strings next to the book and borrower ids. Editing a book or borrower replaces that Book or Borrower object; the Loan is never touched. Return uses loan.returned(date), which copies every field and only adds the return date. A probe that renames both records before returning prints the original text.\n\nWhy the others are wrong:\n- **Looked up through the ids**: the history printer reads l.bookTitle() and l.borrowerName() from the receipt, not the current records.\n- **Return rewrites the text**: returned() keeps bookTitle and borrowerName as they were.\n- **Only ids**: Loan has bookTitle and borrowerName fields precisely so history stays understandable.",
+   "excerpts": [
+    {
+     "path": "src/librarytracker/service/LibraryManager.java",
+     "lineStart": 229,
+     "lineEnd": 231,
+     "quote": "new Loan( data.nextLoanId(), bookId, borrowerId, b.getTitle(), person.getName(), at, due, null);"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 17,
+     "lineEnd": 17,
+     "quote": "Renaming the profile preserves the reference while leaving the receipt text unchanged."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q03-version-after-return",
+   "target": "seed:quests:j2/quiz/21b43ccb00bdba87",
+   "phase": "after",
+   "title": "Why checkout and return each bump the book version",
+   "body": "**Key: version 3, because checkout and return each build a replacement with the next version.**\n\nBook is immutable. checkOut returns a new Book built with Values.nextVersion(version), so version 1 becomes 2. returnBook does the same, so 2 becomes 3. The regression test quoted in 04 asserts returned.getVersion() == 3 and also that the old object still reports checked out, which proves nothing was mutated in place.\n\nWhy the others are wrong:\n- **Only edits bump the version**: any replacement of the book does, because the version protects a librarian's view of the whole record, including its loan state.\n- **Return restores version 2... or 1**: versions only move forward; there is no \"restore\".\n- **Loan state lives only in the receipt**: the book itself carries checkedOut, borrowerId and dates, and LibraryData checks they agree with the active loan.",
+   "excerpts": [
+    {
+     "path": "src/librarytracker/model/Book.java",
+     "lineStart": 86,
+     "lineEnd": 86,
+     "quote": "id, Values.nextVersion(version), title, author, isbn, true, true, borrower, at, due);"
+    },
+    {
+     "path": "astraupskill/04-TESTING-AND-DEBUGGING.md",
+     "lineStart": 34,
+     "lineEnd": 34,
+     "quote": "&& returned.getVersion() == 3);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q04-archive-borrower-with-loan",
+   "target": "seed:quests:j2/quiz/740c42f1b4757c51",
+   "phase": "after",
+   "title": "Why a borrower with an active loan cannot be archived",
+   "body": "**Key: it is refused until the borrower's active loans have been returned.**\n\nsetBorrowerActive checks the version, then, when archiving, looks for any loan with that borrower id and no return date. One exists, so it throws \"Return this borrower's active loans before archiving.\" The App prints it after \"Change not accepted:\". Even without this check, LibraryData refuses a state where an active loan belongs to an archived borrower.\n\nWhy the others are wrong:\n- **Loan closed with today's date**: archiving never touches loans; only returnBook stamps a return date.\n- **Book stays out to an archived borrower**: that is exactly the inconsistent state both the service and LibraryData refuse.\n- **Book made available**: archiving a borrower does not change any book.",
+   "excerpts": [
+    {
+     "path": "src/librarytracker/service/LibraryManager.java",
+     "lineStart": 205,
+     "lineEnd": 207,
+     "quote": "throw new IllegalStateException(\"Return this borrower's active loans before archiving.\");"
+    },
+    {
+     "path": "test/librarytracker/LibraryWorkflowTest.java",
+     "lineStart": 301,
+     "lineEnd": 301,
+     "quote": "active loans block book and borrower archival"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q05-delete-book-with-history",
+   "target": "seed:quests:j2/quiz/84bd399c75185f2d",
+   "phase": "after",
+   "title": "Why a book with loan history cannot be deleted",
+   "body": "**Key: \"Change not accepted: Book has loan history. Archive it instead.\"**\n\ndeleteBook checks the version, then refuses if any loan refers to the book, whether that loan is active or returned. Deleting it would leave a receipt pointing at a record that no longer exists, and LibraryData would refuse such a loan reference anyway. Archival (option 17) retires the book while keeping history valid.\n\nWhy the others are wrong:\n- **\"Book deleted and saved.\"**: only books with no loans at all can be deleted.\n- **The borrower message**: that wording belongs to deleteBorrower; this is a book.\n- **\"Active loan missing.\"**: that message comes from returnBook when no active loan exists, not from delete.",
+   "excerpts": [
+    {
+     "path": "src/librarytracker/service/LibraryManager.java",
+     "lineStart": 166,
+     "lineEnd": 167,
+     "quote": "if (data.loans().stream().anyMatch(l -> l.bookId() == id)) throw new IllegalStateException(\"Book has loan history. Archive it instead.\");"
+    },
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 23,
+     "lineEnd": 23,
+     "quote": "Once history exists, deletion is rejected."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q06-email-uniqueness",
+   "target": "seed:quests:j2/quiz/ad0acde26a56a4cd",
+   "phase": "after",
+   "title": "How email normalization decides which registration collides",
+   "body": "**Key: only the fourth is refused, because emails are lowercased and blank ones are stored as null.**\n\nValues.email strips the text. A blank result becomes null; anything else must look like name@domain.tld and is lowercased with Locale.ROOT. LibraryData adds each non-null email to a set and throws \"Borrower email is already registered.\" on a repeat. The first two are null, so they never collide. The third is stored as sam@x.org, and the fourth normalizes to the same value. A probe registering these four confirms it.\n\nWhy the others are wrong:\n- **The second (two empties)**: null emails are skipped by the uniqueness check; the test \"blank optional emails may repeat\" pins this.\n- **None, exact comparison**: the comparison happens after lowercasing.\n- **Capitals rejected**: capitals are accepted and normalized, not refused.",
+   "excerpts": [
+    {
+     "path": "src/librarytracker/model/Values.java",
+     "lineStart": 29,
+     "lineEnd": 29,
+     "quote": "return clean == null ? null : clean.toLowerCase(Locale.ROOT);"
+    },
+    {
+     "path": "src/librarytracker/storage/LibraryData.java",
+     "lineStart": 37,
+     "lineEnd": 38,
+     "quote": "if (b.getEmail() != null && !emails.add(b.getEmail())) throw new IllegalArgumentException(\"Borrower email is already registered.\");"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07-failed-save-during-checkout",
+   "target": "seed:quests:j2/quiz/53449b49d12847ea",
+   "phase": "after",
+   "title": "Why a failed save leaves no half-finished checkout",
+   "body": "**Key: the book is still available and there is no new receipt, because data is assigned only after save.**\n\ncommit builds the candidate LibraryData (new book version plus the appended loan), calls storage.save(candidate), and only on the next line assigns data = candidate. When save throws, that assignment never happens, so every read still sees the previous accepted state. The regression test injects a throwing replacement step and checks the book, the loan list and the file bytes.\n\nWhy the others are wrong:\n- **Written on the next save**: there is no pending queue; a rejected candidate is simply dropped.\n- **Book out, no receipt**: book and loan are in one candidate and one file, so they are accepted or rejected together.\n- **Empty library**: the old state is kept, not cleared.",
+   "excerpts": [
+    {
+     "path": "src/librarytracker/service/LibraryManager.java",
+     "lineStart": 44,
+     "lineEnd": 45,
+     "quote": "storage.save(candidate); data = candidate;"
+    },
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": 30,
+     "lineEnd": 30,
+     "quote": "If the manager assigned its candidate before saving, the terminal could show a checkout that disappears after restart."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08-two-sessions",
+   "target": "seed:quests:j2/quiz/227edfdf289f5fa3",
+   "phase": "after",
+   "title": "How a second session is stopped from overwriting the first",
+   "body": "**Key: B is refused because the snapshot changed, and after a reload it can retry.**\n\nEach FileStorage remembers the snapshot bytes it last read (baseline). In save, under the library.lock file lock, it compares the baseline with the current file. A's save changed the file, so B's comparison fails and save throws \"Library changed in another session. Reload and review before retrying.\" Option 15 reloads, which refreshes B's data and baseline, and the retried registration succeeds. A probe shows exactly this sequence.\n\nWhy the others are wrong:\n- **B saves and A's book is lost**: preventing that lost update is the purpose of the baseline check.\n- **Changes merged**: there is no merge logic; the whole snapshot is replaced or the save is refused.\n- **B waits on the lock**: A released the lock when its save finished; B gets the lock immediately and then fails the comparison.",
+   "excerpts": [
+    {
+     "path": "src/librarytracker/storage/FileStorage.java",
+     "lineStart": 83,
+     "lineEnd": 88,
+     "quote": "if (!Arrays.equals(baseline, read(snapshotFile))"
+    },
+    {
+     "path": "test/librarytracker/LibraryWorkflowTest.java",
+     "lineStart": 466,
+     "lineEnd": 466,
+     "quote": "separate sessions reject stale files then recover by reload"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09-due-date-before-checkout",
+   "target": "seed:quests:j2/quiz/172a0b665cd7ca59",
+   "phase": "after",
+   "title": "Which layer rejects a due date before the checkout date",
+   "body": "**Key: \"Change not accepted: Due date cannot precede checkout.\"**\n\ncheckOutBook takes today's date from the clock and calls old.checkOut(borrowerId, at, due) before it builds the Loan. Book.checkOut constructs a new Book, and the Book constructor throws \"Due date cannot precede checkout.\" when the due date is earlier than the checkout date. The Loan constructor has a similar rule with different wording, but it is never reached. A probe with yesterday's date returns the Book message.\n\nWhy the others are wrong:\n- **\"Due date precedes checkout.\"**: that is the Loan's message; the Book check runs first.\n- **Checked out with the date moved to today**: nothing adjusts dates; invalid input is refused.\n- **\"Date must be within 1970..2100.\"**: yesterday is inside that range.",
+   "excerpts": [
+    {
+     "path": "src/librarytracker/model/Book.java",
+     "lineStart": 50,
+     "lineEnd": 51,
+     "quote": "throw new IllegalArgumentException(\"Due date cannot precede checkout.\");"
+    },
+    {
+     "path": "src/librarytracker/service/LibraryManager.java",
+     "lineStart": 228,
+     "lineEnd": 228,
+     "quote": "Book b = old.checkOut(borrowerId, at, due);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10-deleted-id-not-reused",
+   "target": "seed:quests:j2/quiz/49d849944259f730",
+   "phase": "after",
+   "title": "Why a deleted book id is never handed out again",
+   "body": "**Key: the new book gets id 2, because nextBookId is a stored watermark that a delete never lowers.**\n\naddBook creates the book with data.nextBookId() and commits nextBookId + 1. deleteBook commits the same watermark it had, so after deleting book 1 the watermark is still 2. The watermark is written into the snapshot, and FileStorage.save refuses any candidate whose watermark moves backward, so a restart cannot reuse 1 either. A probe shows the next book is 2.\n\nWhy the others are wrong:\n- **Lowest unused id**: there is no gap search; allocation only reads the watermark.\n- **Rebuilt from the highest present**: that is how some projects work, but here the watermark is persisted precisely to avoid it.\n- **Restart at 0**: book 0 still exists, and LibraryData rejects an id that is not below the watermark.",
+   "excerpts": [
+    {
+     "path": "src/librarytracker/service/LibraryManager.java",
+     "lineStart": 116,
+     "lineEnd": 116,
+     "quote": "data.nextBookId() + 1,"
+    },
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 24,
+     "lineEnd": 24,
+     "quote": "A durable next-ID watermark prevents reuse after deletion."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q11-one-legacy-file-missing",
+   "target": "seed:quests:j2/quiz/6ef6137dcd30b0fa",
+   "phase": "after",
+   "title": "Why a lone legacy file stops startup",
+   "body": "**Key: startup stops with exit code 1, because both legacy files are required.**\n\nWith no library.snapshot, load reads books.txt and borrowers.txt. If exactly one exists it throws \"Both legacy files are required; missing data is not an empty collection.\" main catches the IOException, prints \"Startup stopped; existing library files were not replaced.\" with that message, and calls System.exit(1). Running the CLI on such a directory prints this and exits 1.\n\nWhy the others are wrong:\n- **Books with an empty borrower list**: a missing file is treated as missing data, not as zero borrowers, because a checked-out book could point at a borrower that is gone.\n- **Start empty and write a snapshot**: startup stops before the menu, so nothing is written.\n- **borrowers.txt created later**: the app never writes the legacy files; it only creates library.snapshot.",
+   "excerpts": [
+    {
+     "path": "src/librarytracker/storage/FileStorage.java",
+     "lineStart": 55,
+     "lineEnd": 57,
+     "quote": "if ((books == null) != (borrowers == null))"
+    },
+    {
+     "path": "src/librarytracker/App.java",
+     "lineStart": 28,
+     "lineEnd": 30,
+     "quote": "\"Startup stopped; existing library files were not replaced. \" + e.getMessage()); System.exit(1);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q12-search-status-case",
+   "target": "seed:quests:j2/quiz/86985fc564edebc1",
+   "phase": "after",
+   "title": "Why a capitalized search status is refused",
+   "body": "**Key: \"Change not accepted: Invalid search or status.\"**\n\nsearchBooks accepts a status only if List.of(\"all\", \"available\", \"out\", \"archived\").contains(status) is true. contains uses equals, which is case-sensitive, so \"Available\" fails and the method throws IllegalArgumentException. Every handler in App shares one catch that prints \"Change not accepted: \", so even this read-only command gets that wording. Piped input prints exactly this line.\n\nWhy the others are wrong:\n- **Case-folded to available**: only the query text is lowercased; the status is compared as typed.\n- **\"No matching books.\"**: that is printed for a valid search with no results, and this search is not valid.\n- **Unknown status falls back to all**: an unknown status throws; it has no fallback.",
+   "excerpts": [
+    {
+     "path": "src/librarytracker/service/LibraryManager.java",
+     "lineStart": 264,
+     "lineEnd": 265,
+     "quote": "!List.of(\"all\", \"available\", \"out\", \"archived\").contains(status)) throw new IllegalArgumentException(\"Invalid search or status.\");"
+    },
+    {
+     "path": "src/librarytracker/App.java",
+     "lineStart": 180,
+     "lineEnd": 180,
+     "quote": "System.out.println(\"Change not accepted: \" + e.getMessage());"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}
