@@ -114,8 +114,8 @@ Java is unlocked (migration 011) and plays like C#:
   failed = 0 and todo = 0, so an untouched starter (its stubs throw
   `UnsupportedOperationException("TODO")`) fails. Nothing stays resident between grades;
   scratch lives under `BOOTQUEST_JAVA_SCRATCH` (default `<db dir>/bootquest-scratch/java`).
-- **Campaign:** 3 acts of 12 core study quests (`content/campaign/java.json`). A Java
-  study quest stays content-pending until its quest pack is seeded.
+- **Campaign:** 3 acts of 12 core study quests (`content/campaign/java.json`), one per owner Java
+  repo, each gated by its quest pack (with Learn-more notes); j5 and j7 also have explain-back sets.
 - **Requires JDK 17** with `javac` and `java` on PATH. No Maven, Gradle or JUnit.
 
 ### Resetting the DB

@@ -774,7 +774,8 @@ what ships until the owner picks an option.
   `drill-java` check type graded by a Java runner (`javac --release 17` + `java` per attempt, no
   resident JVM), the javabootcamp pack (private `elirc/javabootcamp`, pinned, imported and stamped
   by `seed:validate -- --source javabootcamp`), migration 011 unlocking the track with a slate drill
-  slot, and a 3-act campaign of 12 core study quests (content-pending until their quest packs land).
+  slot, and a 3-act campaign of 12 core study quests, one per owner Java repo (7 promoted from
+  assessed skims, listed in the campaign manifest's `report.promotedToStudy`).
 - **Verdicts come from a nonce-checked result file, never stdout.** BqMain deletes the nonce file
   before loading the exercise and report() writes `#bq-result <nonce> <json>`; a printed `#done`
   line or `System.exit(0)` proves nothing. Same pass rule as drill-cs: passed > 0, failed = 0, todo = 0.
@@ -782,4 +783,14 @@ what ships until the owner picks an option.
   without a resident JVM that would cost RAM on this machine (docs/recon/java-timings.md).
 - **Smoke:** `smoke:api` grades one real javabootcamp unit over HTTP (starter todo FAIL, a wrong
   answer FAIL with expected/received, reference solution PASS) and proves no javac/java process
-  outlives the server. Final numbers: added by the orchestrator.
+  outlives the server.
+- **Final numbers.** javabootcamp: 64 exercises in 8 modules (882 tests), 64/64 validated at
+  `0ec7155`. 12 Java quest packs: 152 quizzes, 40 flashcards, 36 readings, 152 explanations, plus
+  explain-back sets for j5 and j7. Quest packs in total: 204.
+- **Review still pays.** Every Java pack and the bootcamp were reviewed by a second author: 0 of 147
+  hand keys were wrong (every key was checked by running the code), but the bootcamp review found
+  two wrong reference solutions whose tests were too weak to notice (02/08 retry, 05/05 best
+  discount), and the pack reviews removed two solution guides that had slipped in as generator
+  input (j1 06-SOLUTIONS, j5 06-SOLUTIONS; j4's trace-lab answer table dropped at integration).
+- **Run the code to check the keys.** The Java writers compiled each repo, ran its regression
+  suite and piped scripted input into the CLI. That found real upstream bugs (docs/SEEDING.md).
