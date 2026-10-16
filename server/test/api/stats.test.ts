@@ -94,7 +94,7 @@ describe('GET /api/stats/*: honest empty states on a fresh ledger', () => {
     expect(r).toMatchObject({ cards: 0, dueNow: 0, overdue: 0, later: 0, retention: { window: { reviews: 0, rate: null }, allTime: { reviews: 0, rate: null } } });
   });
 
-  it('campaign: per-track acts with the campaign map counts; locked java is basis none', async () => {
+  it('campaign: per-track acts with the campaign map counts; a locked track is basis none', async () => {
     const c = await get(ctx.app, '/api/stats/campaign', CampaignProgressResponse);
     expect(c.tracks.map((t) => t.trackId)).toEqual(['js', 'csharp', 'java', 'agentic']);
     const js = c.tracks[0]!;
@@ -103,7 +103,10 @@ describe('GET /api/stats/*: honest empty states on a fresh ledger', () => {
       { actNo: 1, title: 'Act 1', unlocked: true, coreDone: 0, coreTotal: 1, corePending: 1, readingDone: 0, readingTotal: 2 },
       { actNo: 2, title: 'Act 2', unlocked: false, coreDone: 0, coreTotal: 1, corePending: 1, readingDone: 0, readingTotal: 1 },
     ]);
-    expect(c.tracks[2]!.progress.basis).toBe('none');
+    expect(c.tracks[2]!.progress).toMatchObject({ basis: 'campaign-core', pct: 0, coreDone: 0 }); // java unlocked (011)
+    ctx.db.run(`UPDATE track SET locked = 1 WHERE id = 'java'`);
+    const locked = await get(ctx.app, '/api/stats/campaign', CampaignProgressResponse);
+    expect(locked.tracks[2]!.progress.basis).toBe('none');
     expect(c.tracks[3]).toMatchObject({ acts: [], progress: { basis: 'none', pct: 0 } });
   });
 

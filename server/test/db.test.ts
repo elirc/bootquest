@@ -46,14 +46,14 @@ describe('migrations', () => {
     const tmp = makeTempDb();
     try {
       const first = tmp.db.all<{ version: number }>('SELECT version FROM schema_version ORDER BY version');
-      expect(first.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+      expect(first.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
       tmp.db.close();
 
       const again = openDb({ path: tmp.path, env: {} });
       try {
         expect(migrate(again)).toEqual([]); // third pass, explicit
-        expect(schemaVersion(again)).toBe(9);
-        expect(again.get<{ n: number }>('SELECT COUNT(*) AS n FROM schema_version')!.n).toBe(9);
+        expect(schemaVersion(again)).toBe(11);
+        expect(again.get<{ n: number }>('SELECT COUNT(*) AS n FROM schema_version')!.n).toBe(11);
         // 009: exactly one choice-order secret, and re-opening never regenerates it
         expect(again.all<{ secret: string }>('SELECT secret FROM server_secret')).toHaveLength(1);
         expect(again.all<{ checksum: string }>('SELECT checksum FROM schema_version').every((r) => /^[0-9a-f]{64}$/.test(r.checksum))).toBe(true);
@@ -115,13 +115,13 @@ describe('migrations', () => {
 describe('seed rows', () => {
   const ctx = useTempDb();
 
-  it('seeds tracks js, csharp, java (locked), agentic', () => {
-    const tracks = ctx.db.all<{ id: string; locked: boolean }>('SELECT id, locked FROM track ORDER BY sort_order');
+  it('seeds tracks js, csharp, java, agentic; 011 unlocks java with a slate drill slot like csharp', () => {
+    const tracks = ctx.db.all<{ id: string; locked: boolean; slate_drills: boolean }>('SELECT id, locked, slate_drills FROM track ORDER BY sort_order');
     expect(tracks).toEqual([
-      { id: 'js', locked: false },
-      { id: 'csharp', locked: false },
-      { id: 'java', locked: true },
-      { id: 'agentic', locked: false },
+      { id: 'js', locked: false, slate_drills: true },
+      { id: 'csharp', locked: false, slate_drills: true },
+      { id: 'java', locked: false, slate_drills: true },
+      { id: 'agentic', locked: false, slate_drills: false },
     ]);
   });
 
@@ -142,8 +142,8 @@ describe('row hygiene', () => {
     expect(Object.getPrototypeOf(raw)).toBe(null);
     const clean = ctx.db.get(`SELECT id, locked FROM track WHERE id = 'java'`);
     expect(Object.getPrototypeOf(clean)).toBe(Object.prototype);
-    deepStrictEqual(clean, { id: 'java', locked: true }); // would throw on a null-prototype row
-    expect(JSON.parse(JSON.stringify(clean))).toEqual({ id: 'java', locked: true });
+    deepStrictEqual(clean, { id: 'java', locked: false }); // would throw on a null-prototype row
+    expect(JSON.parse(JSON.stringify(clean))).toEqual({ id: 'java', locked: false });
   });
 
   it('converts BigInt values (readBigInts) and insert ids to numbers', () => {

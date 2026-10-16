@@ -76,9 +76,9 @@ describe('GET /api/tracks/:id/campaign', { timeout: 30_000 }, () => {
     expect(q[0]).toMatchObject({ core: true, contentPending: true, twinRepo: null });
   });
 
-  it('java: one statically locked act, inert quests without a unitId', async () => {
+  it('a statically locked act (synthetic fixture on java): locked whatever the progress, inert quests without a unitId', async () => {
     const body = await campaign(ctx.app, 'java');
-    expect(body.track.locked).toBe(true);
+    expect(body.track.locked).toBe(false); // the java TRACK is unlocked (011); only the fixture's act is statically locked
     expect(body.acts).toHaveLength(1);
     expect(body.acts[0]).toMatchObject({ unlocked: false, unlockRule: { staticLock: true } });
     expect(body.acts[0]!.quests[0]!.state).toBe('locked');
@@ -183,7 +183,7 @@ describe('campaign slate slot, end to end through the API', { timeout: 30_000 },
   });
 
   it('a full slate day (5 drills per track + a campaign reading step + clear queue) is streak day 1', async () => {
-    for (const track of ['js', 'csharp']) {
+    for (const track of ['js', 'csharp', 'java']) {
       for (let i = 0; i < 5; i++) {
         const id = insertUnit(
           ctx.db,
@@ -198,6 +198,7 @@ describe('campaign slate slot, end to end through the API', { timeout: 30_000 },
     expect(s.dashboard.slate.items.map((i) => [i.slot, i.done])).toEqual([
       ['drill:js', true],
       ['drill:csharp', true],
+      ['drill:java', true],
       ['campaign', false],
       ['review', true],
     ]);

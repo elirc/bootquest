@@ -118,13 +118,13 @@ describe('drill-cs units through the API (W3a)', () => {
     await real.shutdown(); // no-op: no C# grade ran, so no dotnet is spawned
   });
 
-  it('tracks: js, csharp (unlocked), java (locked), agentic — in that order', async () => {
+  it('tracks: js, csharp, java (unlocked since 011), agentic — in that order', async () => {
     const { app } = csApp(ctx, fakeCs([]));
     const t = TracksResponse.parse((await request(app).get('/api/tracks')).body);
     expect(t.tracks.map((x) => [x.id, x.locked])).toEqual([
       ['js', false],
       ['csharp', false],
-      ['java', true],
+      ['java', false],
       ['agentic', false],
     ]);
   });

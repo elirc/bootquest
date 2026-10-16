@@ -142,11 +142,13 @@ describe('campaign loader', { timeout: 30_000 }, () => {
     expect(first.inserted).toBe(c.manifest.report.seeded);
     const again = loadCampaignIntoDb(ctx.db, readCampaign(real), ctx.clock);
     expect(again).toMatchObject({ inserted: 0, updated: 0, unchanged: c.manifest.report.seeded, removed: 0 });
-    // java: one statically locked act, four inert quests
+    // java: three playable acts of four core study quests; act 1 open, its quests content-pending
+    // until their quest packs merge; acts 2-3 gated by the 80% + level rule
     const java = campaignState(ctx.db, 'java');
-    expect(java).toHaveLength(1);
-    expect(java[0]!.unlocked).toBe(false);
-    expect(java[0]!.quests.map((q) => [q.unitId, q.state])).toEqual(Array(4).fill([null, 'locked']));
+    expect(java).toHaveLength(3);
+    expect(java.map((a) => a.unlocked)).toEqual([true, false, false]);
+    expect(java.map((a) => a.quests.length)).toEqual([4, 4, 4]);
+    expect(java.flatMap((a) => a.quests).every((q) => q.unitId !== null && q.core)).toBe(true);
   });
 });
 
