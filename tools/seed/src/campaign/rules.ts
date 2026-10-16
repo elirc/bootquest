@@ -96,24 +96,66 @@ export const CSHARP_ACTS: readonly ActSpec[] = [
   { actNo: 5, title: 'Mastery', theme: 'netopen1 eShop curriculum, buildsql, csharp-interview vault', anchors: ['netopen1', 'buildsql', 'csharp-interview'] },
 ];
 
-export const JAVA_ACT = {
-  actNo: 1 as const,
-  title: 'Java (locked placeholder)',
-  theme: 'the four ranked beginner Java repos; the Java track is greyed out in V1',
-};
-
-/** "the four" = the four lowest-ranked Java study repos, ranks 11-14 (estate-contract §0.5). */
-export const JAVA_PLACEHOLDER: readonly string[] = [
-  'organized-experiment-cli-to-do-manager',
-  'organized-experiment-library-book-tracker',
-  'organized-experiment-quiz-engine',
-  'organized-experiment-src',
+/**
+ * Java (owner request 2026-10-16: "fill out the java track like others"): three acts
+ * over all twelve non-skip Java repos, every one a core study quest. Anchors are the
+ * exact assessed names; each act is ordered by INDEX rank inside buildActs.
+ */
+export const JAVA_ACTS: readonly ActSpec[] = [
+  {
+    actNo: 1,
+    title: 'Foundations',
+    theme: 'plain-Java CLI apps: classes, single-responsibility layers, file persistence',
+    anchors: [
+      'organized-experiment-cli-to-do-manager',
+      'organized-experiment-library-book-tracker',
+      'organized-experiment-quiz-engine',
+      'organized-experiment-bank-account-simulator',
+    ],
+  },
+  {
+    actNo: 2,
+    title: 'Money & validation',
+    theme: 'BigDecimal money, input validation, CRUD with safe persistence',
+    anchors: ['organized-experiment-src', 'j1', 'j4', 'j5'],
+  },
+  {
+    actNo: 3,
+    title: 'Domain rules & consistency',
+    theme: 'business rules, state transitions, history and atomic writes, regression tests',
+    anchors: ['organized-experiment-src-j7', 'j2', 'j3', 'j7'],
+  },
 ];
+
+/**
+ * Assessed skims the owner promoted to core study quests (parity with the other tracks:
+ * every Java act is study quests). `why` is grounded in each repo's assess row.
+ */
+export const JAVA_PROMOTE_TO_STUDY: readonly { repo: string; why: string }[] = [
+  { repo: 'j1', why: 'owner chose parity; assessed r3 with an astraupskill learning path, docs and tests (CRUD + safe persistence)' },
+  { repo: 'j2', why: 'owner chose parity; assessed r3 with an astraupskill course, docs and tests (relational CRUD + history)' },
+  { repo: 'j3', why: 'owner chose parity; assessed r3 with an astraupskill code map and 28 regression tests (money validation, atomic writes)' },
+  { repo: 'j4', why: 'owner chose parity; assessed r3 with astraupskill lessons + worked changes and tests (input validation)' },
+  { repo: 'j5', why: 'owner chose parity; assessed r3 with an astraupskill CRUD/persistence course and tests (BigDecimal money)' },
+  { repo: 'j7', why: 'owner chose parity; assessed r3 with an astraupskill CRUD course and 35 regression tests (order state transitions)' },
+  {
+    repo: 'organized-experiment-bank-account-simulator',
+    why: 'owner chose parity; assessed r1 (beginner README only, no tests or guide course): a small model/service/storage split, the quest pack carries the teaching',
+  },
+];
+
+/** Act + reason for a Java repo that no anchor pins (future repos): by difficulty band. */
+export function placeJava(r: Placeable): [act: number, placement: string] {
+  if (r.difficulty <= 1) return [1, 'rule:d1'];
+  if (r.difficulty === 2) return [2, 'rule:d2'];
+  return [3, 'rule:d3+'];
+}
 
 /** Spec anchors whose assessed stack points elsewhere: the spec's explicit act list wins. */
 export function anchorTrack(name: string): CampaignTrack | null {
   if (JS_ACTS.some((a) => a.anchors.includes(name))) return 'js';
   if (CSHARP_ACTS.some((a) => a.anchors.includes(name))) return 'csharp';
+  if (JAVA_ACTS.some((a) => a.anchors.includes(name))) return 'java';
   return null;
 }
 

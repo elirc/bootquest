@@ -12,10 +12,11 @@ import {
   BUILD_FAMILY_RULE,
   CSHARP_ACTS,
   FAMILIES,
-  JAVA_ACT,
-  JAVA_PLACEHOLDER,
+  JAVA_ACTS,
+  JAVA_PROMOTE_TO_STUDY,
   JS_ACTS,
   placeCsharp,
+  placeJava,
   placeJs,
   TRACK_FOR_STACK,
   TWIN_ACT,
@@ -30,7 +31,7 @@ import {
  * Pure campaign builder: upskillorder rows -> track files + manifest. Same
  * input -> byte-identical output (no clock, no randomness, rank-sorted, stable
  * JSON). Every assessed repo lands in exactly one bucket, asserted at the end:
- *   skip (absent) | no V1 track | Java beyond the placeholder | family-sampled |
+ *   skip (absent) | no V1 track | family-sampled |
  *   twin snapshot (consumed by a spot-the-fix pair) | seeded quest.
  */
 
@@ -64,12 +65,15 @@ interface Placed {
   family: string | null;
   familyPick: boolean;
   twin: AssessRow | null;
+  /** an assessed skim the owner promoted to a core study quest (JAVA_PROMOTE_TO_STUDY) */
+  promoted: boolean;
 }
 
-function makeQuest(track: CampaignTrack, p: Placed, inert: boolean): CampaignQuest {
+function makeQuest(track: CampaignTrack, p: Placed): CampaignQuest {
   const r = p.row;
   if (r.verdict === 'skip') throw new CampaignBuildError(`skip repo ${r.name} reached quest construction`);
-  const study = r.verdict === 'study';
+  if (p.promoted && r.verdict !== 'skim') throw new CampaignBuildError(`promoted repo ${r.name} is not an assessed skim`);
+  const study = r.verdict === 'study' || p.promoted;
   const key = `campaign/${track}/${r.name}`;
   const title = p.twin ? `${r.name} vs ${p.twin.name}` : r.name;
   const unitTitle = p.twin ? `Spot the fix: ${r.name} vs ${p.twin.name}` : study ? `Study quest: ${r.name}` : `Reading: ${r.name}`;
@@ -79,7 +83,7 @@ function makeQuest(track: CampaignTrack, p: Placed, inert: boolean): CampaignQue
     repo: r.name,
     title,
     rank: r.rank,
-    verdict: r.verdict,
+    verdict: study ? 'study' : 'skim',
     confidence: r.confidence,
     difficulty: r.difficulty,
     richness: r.richness,
@@ -92,7 +96,7 @@ function makeQuest(track: CampaignTrack, p: Placed, inert: boolean): CampaignQue
     twinRepo: p.twin?.name ?? null,
     placement: p.placement,
     focus: oneLine(r.focus),
-    unit: inert ? null : { key, kind: study ? 'study' : 'reading', title: unitTitle, difficulty: r.difficulty },
+    unit: { key, kind: study ? 'study' : 'reading', title: unitTitle, difficulty: r.difficulty },
     provenance: p.twin ? [prov(r), prov(p.twin)] : [prov(r)],
   };
 }
@@ -108,7 +112,7 @@ function buildActs(track: CampaignTrack, specs: readonly ActSpec[], placed: Plac
     quests: placed
       .filter((p) => p.act === s.actNo)
       .sort((a, b) => a.row.rank - b.row.rank)
-      .map((p) => makeQuest(track, p, false)),
+      .map((p) => makeQuest(track, p)),
   }));
 }
 
@@ -133,21 +137,17 @@ export function buildCampaign(input: UpskillorderInput, seederFingerprint: strin
   };
 
   // every named anchor / pick / twin must exist: a typo must fail loudly, never thin the map silently
-  for (const a of [...JS_ACTS, ...CSHARP_ACTS]) {
+  for (const a of [...JS_ACTS, ...CSHARP_ACTS, ...JAVA_ACTS]) {
     for (const n of a.anchors) {
       if (need(n, `act anchor (${a.title})`).verdict === 'skip') throw new CampaignBuildError(`act anchor ${n} is a skip verdict`);
     }
   }
   for (const f of FAMILIES) for (const n of f.picks) need(n, `family ${f.id} pick`);
-  for (const n of JAVA_PLACEHOLDER) need(n, 'java placeholder');
-  for (const n of TWIN_PAIRS) {
-    need(n, 'twin canonical');
-    need(`organized-experiment-${n}`, 'twin snapshot');
-  }
-  // "the four" are the four best-ranked Java study repos (ranks 11-14 today): re-derive, don't trust the list
-  const javaStudy = rows.filter((r) => r.stack === 'java' && r.verdict === 'study').slice(0, 4).map((r) => r.name);
-  if (JSON.stringify([...javaStudy].sort()) !== JSON.stringify([...JAVA_PLACEHOLDER].sort())) {
-    throw new CampaignBuildError(`the four best-ranked Java study repos are now ${javaStudy.join(', ')}, not the placeholder list`);
+  const promoteToStudy = new Map(JAVA_PROMOTE_TO_STUDY.map((p) => [p.repo, p.why]));
+  for (const { repo } of JAVA_PROMOTE_TO_STUDY) {
+    const r = need(repo, 'java promote-to-study');
+    if (r.stack !== 'java' || r.verdict !== 'skim') throw new CampaignBuildError(`promote-to-study ${repo} must be an assessed java skim (is ${r.stack}/${r.verdict})`);
+    if (!JAVA_ACTS.some((a) => a.anchors.includes(repo))) throw new CampaignBuildError(`promote-to-study ${repo} is not a Java act anchor`);
   }
 
   const buildFamilyMembers = new Set<string>();
@@ -163,7 +163,7 @@ export function buildCampaign(input: UpskillorderInput, seederFingerprint: strin
     assessed: rows.length,
     skipAbsent: 0,
     noTrack: [],
-    javaBeyondPlaceholder: [],
+    promotedToStudy: [],
     families: [
       ...FAMILIES.map((f) => ({ family: f.id, rule: f.rule, picks: [...f.picks], picksNotSeeded: [] as { repo: string; why: string }[], familySampled: [] as string[] })),
       {
@@ -181,8 +181,7 @@ export function buildCampaign(input: UpskillorderInput, seederFingerprint: strin
   const familyReport = (id: string) => report.families.find((f) => f.family === id)!;
   const excluded = (r: AssessRow) => ({ repo: r.name, rank: r.rank, stack: r.stack, verdict: r.verdict as 'study' | 'skim', provenance: prov(r) });
 
-  const placed: Record<'js' | 'csharp', Placed[]> = { js: [], csharp: [] };
-  const javaPlaced: Placed[] = [];
+  const placed: Record<CampaignTrack, Placed[]> = { js: [], csharp: [], java: [] };
   const twinCanonical = new Set(TWIN_PAIRS);
   const twinSnapshot = new Set(TWIN_PAIRS.map((n) => `organized-experiment-${n}`));
   let twinConsumed = 0;
@@ -204,10 +203,16 @@ export function buildCampaign(input: UpskillorderInput, seederFingerprint: strin
       for (const f of FAMILIES) if (f.picks.includes(r.name)) familyReport(f.id).picksNotSeeded.push({ repo: r.name, why: `stack ${r.stack} has no V1 track` });
       continue;
     }
-    // 2. Java: only the locked four-repo placeholder act
+    // 2. Java: every non-skip repo is placed, BEFORE family sampling (the organized-experiment
+    //    family rule would otherwise drop the organized-experiment-* Java repos)
     if (track === 'java') {
-      if (JAVA_PLACEHOLDER.includes(r.name)) javaPlaced.push({ row: r, act: 1, placement: 'anchor:java placeholder (the four ranked beginner repos)', family: null, familyPick: false, twin: null });
-      else report.javaBeyondPlaceholder.push(excluded(r));
+      const anchorAct = JAVA_ACTS.find((a) => a.anchors.includes(r.name));
+      const why = promoteToStudy.get(r.name);
+      const [act, placement] = anchorAct
+        ? [anchorAct.actNo as number, why !== undefined ? `anchor:${r.name} (promoted from assessed skim)` : `anchor:${r.name}`]
+        : placeJava(r);
+      if (why !== undefined) report.promotedToStudy.push({ repo: r.name, assessedVerdict: 'skim', why, provenance: prov(r) });
+      placed.java.push({ row: r, act, placement, family: null, familyPick: false, twin: null, promoted: why !== undefined });
       continue;
     }
     // 3. spot-the-fix twin pairs (one reading step on the canonical repo)
@@ -219,7 +224,7 @@ export function buildCampaign(input: UpskillorderInput, seederFingerprint: strin
       const snap = byName.get(`organized-experiment-${r.name}`)!;
       if (track !== 'js' || snap.verdict === 'skip') throw new CampaignBuildError(`twin pair ${r.name}: needs a js canonical and a non-skip snapshot`);
       report.twinPairs.push({ canonical: r.name, snapshot: snap.name });
-      placed.js.push({ row: r, act: TWIN_ACT, placement: 'anchor:spot-the-fix twin pairs', family: 'spot-the-fix-twins', familyPick: true, twin: snap });
+      placed.js.push({ row: r, act: TWIN_ACT, placement: 'anchor:spot-the-fix twin pairs', family: 'spot-the-fix-twins', familyPick: true, twin: snap, promoted: false });
       continue;
     }
     // 4. template families: named picks only
@@ -234,7 +239,7 @@ export function buildCampaign(input: UpskillorderInput, seederFingerprint: strin
     const specs = track === 'js' ? JS_ACTS : CSHARP_ACTS;
     const anchorAct = specs.find((a) => a.anchors.includes(r.name));
     const [act, placement] = anchorAct ? [anchorAct.actNo as number, `anchor:${r.name}`] : track === 'js' ? placeJs(r) : placeCsharp(r);
-    placed[track].push({ row: r, act, placement, family: fam ? fam.id : null, familyPick: fam !== null, twin: null });
+    placed[track].push({ row: r, act, placement, family: fam ? fam.id : null, familyPick: fam !== null, twin: null, promoted: false });
   }
 
   for (const n of TWIN_PAIRS) if (!report.twinPairs.some((p) => p.canonical === n)) throw new CampaignBuildError(`twin pair ${n} was not seeded`);
@@ -244,24 +249,7 @@ export function buildCampaign(input: UpskillorderInput, seederFingerprint: strin
   const trackFiles: [CampaignTrack, CampaignTrackFile][] = [
     ['js', { format: CAMPAIGN_FORMAT, track: 'js', acts: buildActs('js', JS_ACTS, placed.js) }],
     ['csharp', { format: CAMPAIGN_FORMAT, track: 'csharp', acts: buildActs('csharp', CSHARP_ACTS, placed.csharp) }],
-    [
-      'java',
-      {
-        format: CAMPAIGN_FORMAT,
-        track: 'java',
-        acts: [
-          {
-            actNo: JAVA_ACT.actNo,
-            title: JAVA_ACT.title,
-            theme: JAVA_ACT.theme,
-            unlockPct: UNLOCK_PCT,
-            unlockLevel: UNLOCK_LEVELS[0],
-            locked: true,
-            quests: javaPlaced.sort((a, b) => a.row.rank - b.row.rank).map((p) => makeQuest('java', p, true)),
-          },
-        ],
-      },
-    ],
+    ['java', { format: CAMPAIGN_FORMAT, track: 'java', acts: buildActs('java', JAVA_ACTS, placed.java) }],
   ];
   const manifestTracks: CampaignManifest['tracks'] = [];
   for (const [track, raw] of trackFiles) {
@@ -284,11 +272,12 @@ export function buildCampaign(input: UpskillorderInput, seederFingerprint: strin
 
   for (const f of report.families) f.familySampled.sort();
   report.noTrack.sort((a, b) => a.rank - b.rank);
-  report.javaBeyondPlaceholder.sort((a, b) => a.rank - b.rank);
+  report.promotedToStudy.sort((a, b) => byName.get(a.repo)!.rank - byName.get(b.repo)!.rank);
+  if (report.promotedToStudy.length !== JAVA_PROMOTE_TO_STUDY.length) throw new CampaignBuildError('a java promote-to-study repo was not seeded');
   report.seeded = manifestTracks.reduce((n, t) => n + t.counts.quests, 0);
 
   // accounting: every assessed repo exactly once
-  const accounted = report.skipAbsent + report.noTrack.length + report.javaBeyondPlaceholder.length + sampled + twinConsumed + report.seeded;
+  const accounted = report.skipAbsent + report.noTrack.length + sampled + twinConsumed + report.seeded;
   if (accounted !== rows.length) {
     throw new CampaignBuildError(`accounting mismatch: ${accounted} bucketed vs ${rows.length} assessed`);
   }

@@ -70,7 +70,8 @@ export const CampaignQuest = z
     /** one-line study focus from the assessment (served from the pack, never a DB column) */
     focus: z.string().max(280),
     /**
-     * The placeholder unit the quest plays through; null = inert (Java placeholder act).
+     * The placeholder unit the quest plays through; null = inert (a quest of a statically
+     * locked act; the shipped campaign has none since the Java track unlocked).
      * study-quest -> unit kind 'study' (no check until seed:quests);
      * reading     -> unit kind 'reading' (self-attest, 5 XP).
      */
@@ -105,7 +106,7 @@ export const CampaignAct = z
     unlockPct: z.number().min(0).max(1),
     /** minimum (global) level to enter this act */
     unlockLevel: z.number().int().min(1),
-    /** statically locked (Java placeholder): never unlocks, whatever the progress */
+    /** statically locked: never unlocks, whatever the progress (no shipped act uses it today) */
     locked: z.boolean(),
     quests: z.array(CampaignQuest),
   })
@@ -148,7 +149,7 @@ export const CampaignCounts = z
     quests: z.number().int().nonnegative(),
     studyQuests: z.number().int().nonnegative(),
     readingSteps: z.number().int().nonnegative(),
-    /** quests that get a placeholder unit row (Java's inert quests do not) */
+    /** quests that get a placeholder unit row (inert quests of a statically locked act do not) */
     units: z.number().int().nonnegative(),
   })
   .strict();
@@ -184,8 +185,8 @@ export const CampaignManifest = z
         skipAbsent: z.number().int().nonnegative(),
         /** study/skim repos whose stack has no V1 track (python / other), never silently dropped */
         noTrack: z.array(ExcludedRepo),
-        /** study/skim Java repos beyond the four-repo locked placeholder act */
-        javaBeyondPlaceholder: z.array(ExcludedRepo),
+        /** assessed skims promoted to core study quests by an explicit owner decision (rules.ts JAVA_PROMOTE_TO_STUDY) */
+        promotedToStudy: z.array(z.object({ repo: z.string(), assessedVerdict: z.literal('skim'), why: z.string().min(1), provenance: QuestProvenance }).strict()),
         /** template families: named picks seeded, the rest absent ('family-sampled') */
         families: z.array(
           z
