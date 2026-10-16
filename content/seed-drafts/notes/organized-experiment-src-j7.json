@@ -1,0 +1,341 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "organized-experiment-src-j7",
+ "repo": "organized-experiment-src-j7",
+ "sha": "ffa95f6c6e983971e75e3cf5d53c4f308f0175ed",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: an order system in four small layers",
+   "body": "This repo is a plain Java 17 command-line Order Management System: customers, products, orders with line items, discounts and a status workflow, all saved to text files in a data folder.\n\nThe code is split into four layers under src/oms:\n\n- **domain** - Customer, Product, Order, OrderItem and the OrderStatus enum.\n- **service** - CustomerService, ProductService and OrderService, where the rules are enforced.\n- **persistence** - FileDataStore, DelimitedFileUtil and StoreSnapshot, which read and write the files.\n- **App** - the numbered menu and the prompts.\n\nThe README is the only guide. Read its overview and the \"What A Beginner Should Study First\" list, then open the classes in that order. There are no automated tests in this repo, so the best way to check your understanding is to compile everything with javac into an out folder and drive the menu, or write a tiny main that calls the services directly.",
+   "excerpts": [
+    {
+     "path": "README.md",
+     "lineStart": 7,
+     "lineEnd": 7,
+     "quote": "It is larger than a basic CRUD demo because orders have real rules"
+    },
+    {
+     "path": "README.md",
+     "lineStart": 469,
+     "lineEnd": 469,
+     "quote": "`OrderService.java` because most business rules live there"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "README.md",
+     "lineStart": 269,
+     "lineEnd": 365,
+     "why": "The method-by-method section lists every public method with a one-line purpose."
+    }
+   ]
+  },
+  {
+   "id": "r02-rules-and-totals",
+   "target": "pack",
+   "phase": "before",
+   "title": "Core idea: services check first, the order keeps its own numbers",
+   "body": "Business rules in this project live in two kinds of place, and it pays to keep them apart in your head.\n\n1. **OrderService** decides whether a request is allowed at all. Each public method starts with a series of checks and throws IllegalArgumentException with a message the App prints.\n2. **Order** owns its numbers. Every change to its items or discount ends by calling recalculateTotals, which rebuilds subtotal and total from the lines.\n\nFor each OrderService method (addProductToOrder, removeProductFromOrder, applyDiscount, updateStatus), write the checks it makes in the order they run. The order matters: when two things are wrong at once, only the first failing check produces a message.\n\nThen read recalculateTotals line by line and note which fields it reads and which it writes. Finally, compare the README's list of rules with what the code actually checks, rule by rule. The README is a description; the code is the truth.",
+   "excerpts": [
+    {
+     "path": "README.md",
+     "lineStart": 15,
+     "lineEnd": 15,
+     "quote": "They also contain workflows, validation, calculations, and state transitions."
+    },
+    {
+     "path": "src/oms/domain/Order.java",
+     "lineStart": 92,
+     "lineEnd": 92,
+     "quote": "public void recalculateTotals() {"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/oms/domain/OrderStatus.java",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The transition table lives in allowedTransitions."
+    }
+   ]
+  },
+  {
+   "id": "r03-files-and-startup",
+   "target": "pack",
+   "phase": "before",
+   "title": "Core idea: four text files and the startup and exit path",
+   "body": "The app keeps everything in memory while it runs and writes four files in the data folder: customers, products, orders and order items. Orders and their items are saved in separate files and joined back together by order id when the app starts.\n\nTwo things are worth tracing yourself.\n\n**One order through a save and a load.** Pick an order with items and a discount. Read saveOrders to see which fields reach the files, then read loadOrdersWithItems and follow, step by step, how the Order object is rebuilt and when each piece of data is put back. Compare every field before and after.\n\n**What the App does around the files.** Read the App constructor and the save path (saveNow, exitApplication, saveData). Note what happens when loading throws and what each save writes.\n\nDelimitedFileUtil escapes the pipe separator and newlines inside a field, so names and emails cannot break a line.",
+   "excerpts": [
+    {
+     "path": "README.md",
+     "lineStart": 444,
+     "lineEnd": 444,
+     "quote": "The files are plain text so you can open them and see the stored data directly."
+    },
+    {
+     "path": "src/oms/persistence/FileDataStore.java",
+     "lineStart": 99,
+     "lineEnd": 99,
+     "quote": "private List<Order> loadOrdersWithItems() throws IOException {"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/oms/persistence/FileDataStore.java",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "All loading and saving; each save method writes a header comment line first."
+    }
+   ]
+  },
+  {
+   "id": "x-q01-discount-after-restart",
+   "target": "seed:quests:organized-experiment-src-j7/quiz/d11a8550e992cb63",
+   "phase": "after",
+   "title": "Why a saved discount comes back as zero after a restart",
+   "body": "**Key: the order shows discount $0.00 and total $20.00, because the reload clamps the discount before the items return.**\n\nsaveOrders does write discountAmount (5.00) to orders.txt. The bug is in the load order. loadOrdersWithItems builds each Order with its saved discount but no items yet. The Order constructor calls recalculateTotals, which finds a subtotal of 0.00 and lowers the discount to the subtotal, 0.00. The items are restored afterwards with addRestoredItem, but the discount has already been overwritten. A save-and-reload probe shows discount 0.00. The README describes saving and loading without mentioning this.\n\nWhy the others are wrong:\n- **$5.00 and $15.00**: the value is in the file, but the constructor clamps it on the way in.\n- **$5.00 and $20.00**: discount and total are always consistent after recalculateTotals.\n- **Fails to load**: every field parses, so no exception is thrown.",
+   "excerpts": [
+    {
+     "path": "src/oms/domain/Order.java",
+     "lineStart": 98,
+     "lineEnd": 100,
+     "quote": "if (discountAmount.compareTo(subtotal) > 0) { discountAmount = subtotal; }"
+    },
+    {
+     "path": "src/oms/persistence/FileDataStore.java",
+     "lineStart": 137,
+     "lineEnd": 137,
+     "quote": "order.addRestoredItem(item);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q02-clamp-is-permanent",
+   "target": "seed:quests:organized-experiment-src-j7/quiz/394569ab2b400980",
+   "phase": "after",
+   "title": "Why the discount stays reduced after items are added back",
+   "body": "**Key: the discount is now 5.00, because removing the pen clamped the stored discount to the subtotal.**\n\nremoveItemByProductId calls recalculateTotals. With only the ink line left the subtotal is 5.00, and the discount of 30.00 is larger, so recalculateTotals assigns the subtotal to discountAmount itself, not just to the total. The original 30.00 is gone. Adding three pens later raises the subtotal to 35.00, but the stored discount is still 5.00, so the total is 30.00. A probe shows exactly these numbers.\n\nWhy the others are wrong:\n- **Still 30.00**: the clamp writes to the discountAmount field, so the old value is not kept anywhere.\n- **0.00**: removal does not clear the discount; it only lowers it to the new subtotal.\n- **Removal refused**: removeProductFromOrder checks only that the order is editable and the product is present.",
+   "excerpts": [
+    {
+     "path": "src/oms/domain/Order.java",
+     "lineStart": 99,
+     "lineEnd": 99,
+     "quote": "discountAmount = subtotal;"
+    },
+    {
+     "path": "src/oms/domain/Order.java",
+     "lineStart": 60,
+     "lineEnd": 63,
+     "quote": "boolean removed = items.removeIf(item -> item.getProductId().equals(productId)); if (removed) { touch(); recalculateTotals();"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q03-discount-over-subtotal",
+   "target": "seed:quests:organized-experiment-src-j7/quiz/19ed099547a38adf",
+   "phase": "after",
+   "title": "Why a discount larger than the subtotal is refused",
+   "body": "**Key: it is refused with \"Discount cannot be greater than the order subtotal.\"**\n\napplyDiscount in OrderService checks the order exists and is editable, rejects a negative amount, then compares the amount with the current subtotal. 36.00 is greater than 35.00, so it throws before calling Order.setDiscountAmount. App prints \"Could not apply discount: \" plus that message.\n\nWhy the others are wrong:\n- **Clamped to 35.00**: the README's clamp lives in Order.recalculateTotals. It never sees this request, because the service refuses it first; the clamp matters when the subtotal falls later.\n- **Total -1.00**: neither layer allows a negative total.\n- **Credit for the next item**: there is no credit concept anywhere in the code.",
+   "excerpts": [
+    {
+     "path": "src/oms/service/OrderService.java",
+     "lineStart": 73,
+     "lineEnd": 74,
+     "quote": "if (discountAmount.compareTo(order.getSubtotal()) > 0) { throw new IllegalArgumentException(\"Discount cannot be greater than the order subtotal.\");"
+    },
+    {
+     "path": "README.md",
+     "lineStart": 392,
+     "lineEnd": 392,
+     "quote": "the order clamps the discount down to the subtotal"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q04-paid-orders-are-editable",
+   "target": "seed:quests:organized-experiment-src-j7/quiz/6939e5bf8c12e815",
+   "phase": "after",
+   "title": "Why a paid order still accepts new items",
+   "body": "**Key: the item is added and the total rises, because only SHIPPED or CANCELLED block edits.**\n\naddProductToOrder calls ensureEditable, which calls Order.isEditable. That method returns false only for SHIPPED and CANCELLED. PAID passes, so the product is checked and added, and recalculateTotals raises the total of an order that was already paid. A probe adding to a PAID order shows the new total. The README's rule list says the same thing (shipped or cancelled orders cannot be edited); it is a design gap worth noticing, not a crash.\n\nWhy the others are wrong:\n- **Refused once paid**: no check looks at PAID.\n- **Must go back to SUBMITTED**: PAID to SUBMITTED is not even an allowed transition.\n- **Status drops automatically**: adding items never calls setStatus.",
+   "excerpts": [
+    {
+     "path": "src/oms/domain/Order.java",
+     "lineStart": 85,
+     "lineEnd": 85,
+     "quote": "return status != OrderStatus.SHIPPED && status != OrderStatus.CANCELLED;"
+    },
+    {
+     "path": "src/oms/service/OrderService.java",
+     "lineStart": 43,
+     "lineEnd": 43,
+     "quote": "ensureEditable(order);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q05-empty-order-status",
+   "target": "seed:quests:organized-experiment-src-j7/quiz/9e20952bdfb293e7",
+   "phase": "after",
+   "title": "Which status changes an empty order may make",
+   "body": "**Key: SUBMITTED succeeds, and PAID is refused because the order has no items.**\n\nupdateStatus runs three checks. The new status must differ from the current one, the transition must be in the table, and an order moving to PAID or SHIPPED must have items. DRAFT to SUBMITTED passes all three, because the empty-order check names only PAID and SHIPPED. SUBMITTED to PAID is in the table but fails the item check with \"An empty order cannot be moved to PAID.\"\n\nWhy the others are wrong:\n- **Both refused**: SUBMITTED and CANCELLED do not require items.\n- **Both succeed**: the condition covers PAID as well as SHIPPED.\n- **PAID allowed at 0.00**: the rule tests hasItems, not the total, and the transition from SUBMITTED is what makes PAID reachable at all.",
+   "excerpts": [
+    {
+     "path": "src/oms/service/OrderService.java",
+     "lineStart": 88,
+     "lineEnd": 89,
+     "quote": "if ((newStatus == OrderStatus.PAID || newStatus == OrderStatus.SHIPPED) && !order.hasItems()) {"
+    },
+    {
+     "path": "src/oms/domain/OrderStatus.java",
+     "lineStart": 19,
+     "lineEnd": 19,
+     "quote": "case DRAFT -> EnumSet.of(SUBMITTED, CANCELLED);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q06-same-status-again",
+   "target": "seed:quests:organized-experiment-src-j7/quiz/49198f0db1edec23",
+   "phase": "after",
+   "title": "What happens when the status is set to its current value",
+   "body": "**Key: \"Could not update order status: Order is already in that status.\"**\n\nupdateStatus first compares the current status with the requested one. They are equal, so it throws \"Order is already in that status.\" immediately. The transition table is never consulted, and App prints its \"Could not update order status: \" prefix.\n\nWhy the others are wrong:\n- **Invalid transition from PAID to PAID**: that message would come from the second check, which is not reached. (PAID to PAID is also not in the table, so without the first check this would be the message.)\n- **\"Order status updated.\"**: the first check throws, so setStatus never runs and nothing is updated.\n- **\"Orders in PAID status cannot be edited.\"**: that message belongs to ensureEditable, which updateStatus does not call, and PAID orders are editable anyway.",
+   "excerpts": [
+    {
+     "path": "src/oms/service/OrderService.java",
+     "lineStart": 82,
+     "lineEnd": 83,
+     "quote": "if (currentStatus == newStatus) { throw new IllegalArgumentException(\"Order is already in that status.\");"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q07-unknown-status-text",
+   "target": "seed:quests:organized-experiment-src-j7/quiz/e14a986514713f87",
+   "phase": "after",
+   "title": "Why an unknown status word fails before the order lookup",
+   "body": "**Key: \"Could not update order status: No enum constant oms.domain.OrderStatus.DONE\"**\n\nupdateOrderStatus in App reads the order id, prints the statuses, then upper-cases the typed status and calls OrderStatus.valueOf. \"DONE\" is not a constant, so valueOf throws IllegalArgumentException with the JDK message before the service is called, so the missing order is never looked up. The catch prints that message after the prefix. Piping these inputs into the app prints exactly this line.\n\nWhy the others are wrong:\n- **\"Order not found.\"**: requireOrder runs inside the service, which is not reached.\n- **\"Invalid menu choice.\"**: the menu choice 11 was valid; this error happens inside the flow.\n- **Invalid transition to DONE**: there is no DONE status for the transition check to compare, and the order does not exist.",
+   "excerpts": [
+    {
+     "path": "src/oms/App.java",
+     "lineStart": 244,
+     "lineEnd": 245,
+     "quote": "String statusInput = prompt(\"New status: \").trim().toUpperCase(); OrderStatus newStatus = OrderStatus.valueOf(statusInput);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q08-corrupt-load-then-exit",
+   "target": "seed:quests:organized-experiment-src-j7/quiz/458e01469440a44f",
+   "phase": "after",
+   "title": "How one bad line in orders.txt can erase all customers",
+   "body": "**Key: customers.txt is rewritten with just its header line, so every saved customer is gone.**\n\nFileDataStore.load wraps the three loaders; OrderStatus.valueOf(\"BOGUS\") throws, and the whole load fails. The App constructor catches any RuntimeException, prints \"Warning: could not load saved data. Starting with empty data.\" and builds empty services. Exit calls saveData, which writes all four files from memory, and saveCustomers writes the header followed by zero customers. A run against a scratch data folder shows the customer gone.\n\nWhy the others are wrong:\n- **Only changed files are written**: save always rewrites all four files.\n- **Customers kept because only orders failed**: load is all or nothing, and the App replaces everything with empty lists.\n- **Startup aborts**: the constructor catches the failure and continues with empty data.",
+   "excerpts": [
+    {
+     "path": "src/oms/App.java",
+     "lineStart": 39,
+     "lineEnd": 40,
+     "quote": "System.out.println(\"Warning: could not load saved data. Starting with empty data.\");"
+    },
+    {
+     "path": "src/oms/persistence/FileDataStore.java",
+     "lineStart": 146,
+     "lineEnd": 146,
+     "quote": "lines.add(\"# id|name|email|phone|createdAt\");"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q09-same-product-merges",
+   "target": "seed:quests:organized-experiment-src-j7/quiz/3644251c976f53ea",
+   "phase": "after",
+   "title": "How adding the same product again changes an order",
+   "body": "**Key: one pen line with quantity 3 and a line total of 30.00.**\n\naddOrMergeItem walks the existing lines. When it finds one with the same productId, it calls increaseQuantity on that line, which goes through setQuantity and recalculates the line total from the line's unit price. Then the order recalculates its totals and returns without adding a second line. A probe adding the same pen twice shows one line with quantity 3.\n\nWhy the others are wrong:\n- **Two lines**: a second line is added only when no existing line has that productId.\n- **Quantity replaced with 1**: increaseQuantity adds to the current quantity; it does not overwrite it.\n- **Refused as a duplicate**: there is no duplicate check; merging is the designed behaviour, listed in the README under Order.",
+   "excerpts": [
+    {
+     "path": "src/oms/domain/Order.java",
+     "lineStart": 47,
+     "lineEnd": 48,
+     "quote": "if (existingItem.getProductId().equals(newItem.getProductId())) { existingItem.increaseQuantity(newItem.getQuantity());"
+    },
+    {
+     "path": "README.md",
+     "lineStart": 149,
+     "lineEnd": 149,
+     "quote": "merge items when the same product is added again"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q10-item-snapshot-fields",
+   "target": "seed:quests:organized-experiment-src-j7/quiz/acf6ff3d1ccd6ddc",
+   "phase": "after",
+   "title": "Why order lines copy the product name and price",
+   "body": "**Key: so old orders keep the name and price that held when the line was added.**\n\nOrderItem stores productId as a reference plus productName and unitPrice as snapshots. The README says it directly: orders should keep their own pricing history, so if a product changes later, old order items still show the old unit price. That is how real order systems keep invoices stable.\n\nWhy the others are wrong:\n- **So the product file can be deleted**: products are still saved and loaded; nothing deletes them.\n- **So price changes reach open orders**: snapshots do the opposite; they stop later changes from reaching existing lines.\n- **Product hides its fields**: Product has public getName and getPrice, and OrderService calls them to build the item.",
+   "excerpts": [
+    {
+     "path": "README.md",
+     "lineStart": 115,
+     "lineEnd": 115,
+     "quote": "If the product changes later, old order items still keep the old unit price."
+    },
+    {
+     "path": "src/oms/service/OrderService.java",
+     "lineStart": 54,
+     "lineEnd": 54,
+     "quote": "OrderItem item = new OrderItem(product.getId(), product.getName(), quantity, product.getPrice());"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q11-tiny-product-price",
+   "target": "seed:quests:organized-experiment-src-j7/quiz/ee39e3c92c76fe6c",
+   "phase": "after",
+   "title": "Why a price of 0.004 is rejected",
+   "body": "**Key: the price is rejected, because it rounds to 0.00 and Product needs a price above zero.**\n\nApp.readMoney parses the text and immediately applies setScale(2, RoundingMode.HALF_UP). 0.004 rounds down to 0.00. ProductService passes that to the Product constructor, whose normalizePrice throws \"Product price must be greater than zero.\" The App prints \"Could not create product: \" plus that message. Piped input confirms it.\n\nWhy the others are wrong:\n- **Stored as 0.004**: readMoney rounds to two places before anything else sees the value.\n- **Shown as $0.01**: HALF_UP rounds 0.004 down, not up; only 0.005 and above round up.\n- **The readMoney hint**: that hint prints only for text BigDecimal cannot parse, and 0.004 parses fine.",
+   "excerpts": [
+    {
+     "path": "src/oms/App.java",
+     "lineStart": 337,
+     "lineEnd": 337,
+     "quote": "return new BigDecimal(value).setScale(2, RoundingMode.HALF_UP);"
+    },
+    {
+     "path": "src/oms/domain/Product.java",
+     "lineStart": 24,
+     "lineEnd": 25,
+     "quote": "if (value.compareTo(BigDecimal.ZERO) <= 0) { throw new IllegalArgumentException(\"Product price must be greater than zero.\");"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q12-check-order-shipped-qty-zero",
+   "target": "seed:quests:organized-experiment-src-j7/quiz/eb5a70477f7b5646",
+   "phase": "after",
+   "title": "Which check wins when two things are wrong at once",
+   "body": "**Key: \"Orders in SHIPPED status cannot be edited.\"**\n\naddProductToOrder runs its checks in a fixed order: find the order, ensureEditable, then the quantity, then the product lookup, then the active flag. A SHIPPED order fails ensureEditable, so that message is thrown and the later checks never run. A probe calling the service directly with quantity 0 returns this message. (Through the menu, App would have stopped earlier, because readPositiveInt refuses 0.)\n\nWhy the others are wrong:\n- **Quantity must be greater than zero**: true about the input, but that check runs after ensureEditable.\n- **Product not found**: the product lookup comes later still, and the product exists.\n- **Invalid status transition**: adding an item never changes or checks a transition.",
+   "excerpts": [
+    {
+     "path": "src/oms/service/OrderService.java",
+     "lineStart": 42,
+     "lineEnd": 44,
+     "quote": "Order order = requireOrder(orderId); ensureEditable(order); if (quantity <= 0) {"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}
