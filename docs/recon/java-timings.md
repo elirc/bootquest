@@ -21,6 +21,9 @@ Source of truth: `server/src/runners/java/runner.test.ts` (`npm run test:java`, 
 Real pack: `seed:validate` over 32 javabootcamp exercises (each exercise is graded twice:
 the reference solution and the untouched starter, so 64 grades) took 172.8 s with
 concurrency 1. That is about 2.7 s per grade. Result: 32/32 pass, 0 quarantined.
+That was an early dry run (4 modules). The committed pack (64 exercises @ 0ec7155, 128 grades)
+validated 64/64, 0 quarantined, in 335.4 s at c1e14aa and 230.5 s at 0ec7155 (20 journaled
+passes re-used), about 2.6 s per grade.
 
 ## Phase split (warm, suite run 2)
 
