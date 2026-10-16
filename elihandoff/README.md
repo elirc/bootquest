@@ -1,3 +1,5 @@
+> **Newest (2026-10-15):** read `WAVE4-REPORT-2026-10-15.md` first. It covers wave 4 (192 packs, every study quest covered), the crash recovery, all gates, and open owner items. The rest of this folder dates from 2026-10-09 and is historical.
+
 # BootQuest handoff — START HERE
 
 Written 2026-10-09 by the outgoing orchestrator (Fable) at session pause.
