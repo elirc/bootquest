@@ -1,0 +1,458 @@
+{
+ "format": "bootquest-notes-draft@1",
+ "pack": "j1",
+ "repo": "j1",
+ "sha": "efc26ca7e2cd19dd481aeeba1aedf6bf0265948b",
+ "notes": [
+  {
+   "id": "r01-start-here",
+   "target": "pack",
+   "phase": "before",
+   "title": "Start here: a to-do CLI rebuilt for safe saves",
+   "body": "j1 is the same terminal to-do manager as the original starter, reworked so that data survives mistakes: bad files, interrupted input, failed writes and two sessions on one file. The code is only five files, but it is dense, often several statements per line, so read slowly.\n\nFollow the course in `astraupskill/`: the README sets the order, then 01 (codebase map), 02 (concepts), 03 (a worked edit), 04 (testing) and 07 (trace lab). The map table names the lines to look at first in each file.\n\nCompile from the repo root with `javac -encoding UTF-8 --release 17 -d out \"@sources.txt\"`. Always pass a throwaway file name, for example `java -cp out todo.App practice.txt`, so experiments never touch real data. The unit suite runs with no libraries: compile `src` and `test` together and run `todo.TaskWorkflowTest` with a scratch folder; it prints one PASS line per test.\n\nThe `docs/onboarding` notes describe the older starter. When they disagree with the code, the code and the astraupskill course win.",
+   "excerpts": [
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "The code is dense, often with several statements per line, so read it slowly."
+    },
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": 13,
+     "lineEnd": 13,
+     "quote": "Identify the terminal adapter, service, immutable task value, snapshot, and repository before changing code."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/README.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The course index: what to try in your first hour and the reading order."
+    },
+    {
+     "path": "astraupskill/01-CODEBASE-MAP.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "One table row per file, with the line ranges to read first."
+    }
+   ]
+  },
+  {
+   "id": "r02-accepted-state",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: candidate state, accepted state, and the file",
+   "body": "Three copies of \"the tasks\" exist at once: the file on disk, the repository's remembered bytes from its last load or save (the **baseline**), and the manager's accepted **snapshot** in memory. Every mutation builds a fourth, short-lived one: a **candidate** snapshot. Most of this course is about when one copy is allowed to replace another.\n\nRead `TaskManager.commit` and `TaskRepository.save` side by side and answer from the code:\n\n- In `commit`, which line runs first: the call to the repository, or the assignment to `snapshot`? What happens to the assignment if the call throws?\n- In `save`, list every check in order, and find the line where the baseline is compared with the current bytes.\n- Where is the temporary file written, flushed and moved, and what happens to it in `finally`?\n- What exactly does `reload` replace, and is it ever called without the user asking?\n\nThen do Trace B from 07-TRACE-LAB.md with two terminals and write down what each session prints and lists.",
+   "excerpts": [
+    {
+     "path": "astraupskill/07-TRACE-LAB.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "This lab is designed to make the persistence contract visible before you map it onto an HTTP request or browser form."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/todo/service/TaskManager.java",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "commit, the mutations, reload and search; 70 lines in all."
+    },
+    {
+     "path": "astraupskill/07-TRACE-LAB.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Three traces: an accepted edit, a stale session and a failed save."
+    }
+   ]
+  },
+  {
+   "id": "r03-strict-values",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: strict values, strict files and exact menu input",
+   "body": "This version refuses to guess. A `Task` validates itself in its constructor, a `TaskSnapshot` validates the whole set, and the file decoder checks types instead of coercing them.\n\nQuestions to answer from the code:\n\n- In `Task`, which rules does the constructor enforce for title, description, id, version and the completion timestamp? Which methods create a new version, and under exactly what conditions?\n- In `TaskSnapshot`, what is `nextId` checked against? Then trace where `addTask` gets the id for a new task, and follow that value through `commit`, `deleteTask`, `encode` and `decode`.\n- The old key=value format can still be read. Find the method that reads it, and note how it decides the next id.\n- In `App` and `search`, find how each typed reply is compared: the menu choice, the delete confirmation and the search status. Note the method each comparison uses and what happens to a reply that does not match.\n- Find what `App.line` does when input has run out, and which handler deals with it.",
+   "excerpts": [
+    {
+     "path": "astraupskill/02-CONCEPTS.md",
+     "lineStart": 11,
+     "lineEnd": 11,
+     "quote": "These rules should hold for newly entered tasks and loaded data alike."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/todo/model/Task.java",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The immutable task value and its validation."
+    },
+    {
+     "path": "src/todo/repository/TaskSnapshot.java",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The whole-workspace record and its invariants."
+    }
+   ]
+  },
+  {
+   "id": "x-deleted-highest-id",
+   "target": "seed:quests:j1/quiz/33e938d9afb52a6f",
+   "phase": "after",
+   "title": "Why a deleted highest id is not handed out again",
+   "body": "The next id is not derived from the tasks. It is a separate **watermark**, `nextId`, stored in the snapshot and written by `encode` on the header line after the revision. `addTask` uses it and commits `nextId + 1`; `deleteTask` commits the unchanged `nextId`. After A and B the watermark is 3, deleting B leaves it at 3, and after a restart C gets **id 3**. `TaskSnapshot` also refuses any task id at or above the watermark.\n\n- *Highest surviving id plus one*: that is the original starter's rule, which this version replaced.\n- *Restart from 1*: the watermark is loaded from the file.\n- *A free list*: no such structure exists; ids are simply never reused.",
+   "excerpts": [
+    {
+     "path": "src/todo/service/TaskManager.java",
+     "lineStart": 37,
+     "lineEnd": 37,
+     "quote": "var tasks = new ArrayList<>(snapshot.tasks()); tasks.add(task); commit(tasks, snapshot.nextId() + 1); return task;"
+    },
+    {
+     "path": "src/todo/repository/TaskRepository.java",
+     "lineStart": 85,
+     "lineEnd": 85,
+     "quote": "StringBuilder out = new StringBuilder(\"TODOLIST1\\n\").append(snapshot.revision()).append('\\t').append(snapshot.nextId()).append('\\n');"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-legacy-next-id",
+   "target": "seed:quests:j1/quiz/0ce5854404d379f5",
+   "phase": "after",
+   "title": "How a legacy file gets its first watermark",
+   "body": "The original key=value format has no header, so there is no stored watermark. When `decode` sees a file that does not start with `TODOLIST1`, it calls `legacy`, which parses every record strictly and then computes `next` as the highest id plus one. With ids 2 and 5 that is **6**, and the first add uses it. The save that follows writes a `TODOLIST1` file (after preserving the original bytes as a backup), and from then on the watermark is stored.\n\n- *First gap (3)*: no code searches for gaps.\n- *A fresh count from 1*: the snapshot must have `nextId` above every loaded id.\n- *Count plus one (3)*: the count of tasks is not used.",
+   "excerpts": [
+    {
+     "path": "src/todo/repository/TaskRepository.java",
+     "lineStart": 129,
+     "lineEnd": 130,
+     "quote": "long next = tasks.stream().mapToLong(Task::getId).max().orElse(0) + 1; return new TaskSnapshot(0, next, tasks);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-missing-file-no-write",
+   "target": "seed:quests:j1/quiz/569ca0bdc9c065b1",
+   "phase": "after",
+   "title": "Why a missing file is not created by listing or exiting",
+   "body": "`bytes()` returns `null` when the file does not exist, and `load` turns that into `TaskSnapshot.empty()` with a `null` baseline; nothing is written. The only code that writes is `save`, called from `commit`, which only mutations call. Listing goes through `search`, and choosing 5 just breaks out of the loop. So **nothing is on disk** until the first accepted change. The README states that listing and exiting do not rewrite data.\n\n- *Written when the session ends*: there is no save on exit in this version.\n- *Written on load*: `load` only reads.\n- *A lock file*: the `.lock` sibling is created inside `save`, which never ran.",
+   "excerpts": [
+    {
+     "path": "src/todo/repository/TaskRepository.java",
+     "lineStart": 27,
+     "lineEnd": 27,
+     "quote": "if (!Files.exists(filePath)) return null;"
+    },
+    {
+     "path": "README.md",
+     "lineStart": 20,
+     "lineEnd": 20,
+     "quote": "Listing, exiting, and an incomplete command at EOF do not rewrite the data."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-delete-confirmation",
+   "target": "seed:quests:j1/quiz/a5b6aba3265ab814",
+   "phase": "after",
+   "title": "Why lowercase delete cancels the deletion",
+   "body": "After selecting the task, option 4 asks for confirmation and compares the reply with `equals(\"DELETE\")`. `equals` is case-sensitive, so `delete` does not match and the `else` branch prints **\"Deletion cancelled.\"** `deleteTask` is never called, so the file and the accepted snapshot are untouched.\n\n- *Deletes anyway*: there is no `equalsIgnoreCase` here; the exact word is the safety catch.\n- *Asks again*: the confirmation is asked once per command.\n- *\"Change not accepted:\"*: cancelling is a normal outcome, not an exception.",
+   "excerpts": [
+    {
+     "path": "src/todo/App.java",
+     "lineStart": 31,
+     "lineEnd": 31,
+     "quote": "if (line(\"Delete task \" + t.getId() + \" permanently? Type DELETE: \").equals(\"DELETE\")) {"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-input-ends-mid-add",
+   "target": "seed:quests:j1/quiz/57956419ad8700c6",
+   "phase": "after",
+   "title": "Why a half-entered task is never saved",
+   "body": "Option 1 calls `manager.addTask(line(\"Title: \"), line(\"Description (optional): \"))`. Both arguments are read before `addTask` runs. When input ends at the description prompt, `line` sees `!scanner.hasNextLine()` and throws `NoSuchElementException`, so `addTask` is never called. `run()` catches it outside the loop and prints **\"Input ended; incomplete command was not applied.\"**, then the `finally` block closes the scanner. No save happens, so the file is byte-for-byte unchanged.\n\n- *Added with an empty description*: the description was never read.\n- *A stack trace*: the exception is caught in `run()`.\n- *Saved on exit*: this version has no save on exit; every save comes from an accepted mutation.",
+   "excerpts": [
+    {
+     "path": "src/todo/App.java",
+     "lineStart": 42,
+     "lineEnd": 42,
+     "quote": "if (!scanner.hasNextLine()) throw new NoSuchElementException();"
+    },
+    {
+     "path": "src/todo/App.java",
+     "lineStart": 39,
+     "lineEnd": 39,
+     "quote": "} catch (NoSuchElementException e) { System.out.println(\"Input ended; incomplete command was not applied.\"); }"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-complete-twice",
+   "target": "seed:quests:j1/quiz/706b8232fa20c985",
+   "phase": "after",
+   "title": "Why completing a done task saves nothing",
+   "body": "`Task.withCompletion` starts with `if (value == completed) return this;`. Asking a completed task to be completed returns the very same object. `setCompleted` then checks `replacement == old` and returns without calling `replace`, so there is no new version, no new revision and no save. App prints **\"Task state accepted.\"** regardless, because the request did not fail; the state it asked for already holds.\n\n- *\"Change not accepted:\"*: nothing throws on this path.\n- *Version 3 with a new timestamp*: the early `return this` prevents a new `Task`.\n- *Toggles back to open*: option 3 always asks for completed; reopening is option 7.",
+   "excerpts": [
+    {
+     "path": "src/todo/model/Task.java",
+     "lineStart": 46,
+     "lineEnd": 46,
+     "quote": "if (value == completed) return this;"
+    },
+    {
+     "path": "src/todo/service/TaskManager.java",
+     "lineStart": 54,
+     "lineEnd": 54,
+     "quote": "return replacement == old ? old : replace(replacement);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-reopen-version",
+   "target": "seed:quests:j1/quiz/15a3e1d505f0459c",
+   "phase": "after",
+   "title": "How versions add up across edit, complete and reopen",
+   "body": "A new task is version 1. `edit` and every real `withCompletion` change build a new `Task` with `nextVersion()`, which is the old version plus one. Edit gives 2, complete gives 3, reopen gives 4. Reopening calls `withCompletion(false, ...)`, which passes `null` as the completion time, and the display adds a Completed line only when the task is completed. The list shows **[ ] ID 1 / v4** with no Completed line.\n\n- *v2*: state changes are versioned exactly like edits.\n- *[X]*: option 7 asks for `completed = false`.\n- *Old Completed time kept*: the constructor would reject an open task with a completion time anyway.",
+   "excerpts": [
+    {
+     "path": "src/todo/model/Task.java",
+     "lineStart": 47,
+     "lineEnd": 47,
+     "quote": "return new Task(id, nextVersion(), title, description, value, createdAt, value ? at : null);"
+    },
+    {
+     "path": "src/todo/service/TaskManager.java",
+     "lineStart": 67,
+     "lineEnd": 67,
+     "quote": "+ \"\\n    Created: \" + t.getCreatedAt() + (t.isCompleted() ? \"\\n    Completed: \" + t.getCompletedAt() : \"\")"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-blank-title-edit",
+   "target": "seed:quests:j1/quiz/abc483356f152605",
+   "phase": "after",
+   "title": "Why a blank title stops the whole edit",
+   "body": "`editTask` calls `expected(id, version).edit(title, description)`. `edit` builds a new `Task`, and its constructor runs `text(title, 1, 160, \"Title\")`. An empty title is shorter than 1 character, so it throws `IllegalArgumentException` before `replace` or `commit` run. App's catch prints **\"Change not accepted: Title must contain 1..160 characters without controls.\"** Nothing is saved.\n\n- *Title kept, description cleared*: a blank title is not \"keep the old one\"; it is invalid input, and the whole edit is one value.\n- *Both cleared and saved*: validation happens before saving.\n- *Skipped as unchanged*: `edit` always builds a new value; there is no \"no change\" check.",
+   "excerpts": [
+    {
+     "path": "src/todo/model/Task.java",
+     "lineStart": 21,
+     "lineEnd": 21,
+     "quote": "this.title = text(title, 1, 160, \"Title\");"
+    },
+    {
+     "path": "src/todo/model/Task.java",
+     "lineStart": 34,
+     "lineEnd": 35,
+     "quote": "if (result.length() < min || result.length() > max || result.chars().anyMatch(Character::isISOControl)) throw new IllegalArgumentException(label + \" must contain \" + min + \"..\" + max + \" characters without controls.\");"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-failed-replace",
+   "target": "seed:quests:j1/quiz/66f2f012a3f273a2",
+   "phase": "after",
+   "title": "What a failed atomic move leaves behind",
+   "body": "`commit` calls `repository.save(candidate)` and only on the next statement assigns `snapshot = candidate`. Inside `save`, the candidate is written to a temporary sibling and moved over the target; the repository's baseline and current snapshot are updated only after the move succeeds, and `finally` deletes the temporary file. If the move throws, the target was never replaced and the exception skips both assignments. The file keeps its **old bytes** and the manager still lists **only the previously accepted tasks**. The unit test overrides `replaceAtomically` to throw and checks both.\n\n- *Manager shows the new task*: the assignment comes after the save call.\n- *A partly written file*: only the temporary file was written.\n- *New file, old memory*: the move is what failed.",
+   "excerpts": [
+    {
+     "path": "src/todo/service/TaskManager.java",
+     "lineStart": 32,
+     "lineEnd": 32,
+     "quote": "repository.save(candidate); snapshot = candidate;"
+    },
+    {
+     "path": "src/todo/repository/TaskRepository.java",
+     "lineStart": 64,
+     "lineEnd": 66,
+     "quote": "replaceAtomically(temporary, filePath); baseline = encoded; current = candidate; } finally { Files.deleteIfExists(temporary); }"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-stale-session-list",
+   "target": "seed:quests:j1/quiz/8c3827009c868027",
+   "phase": "after",
+   "title": "Why the refused session still shows its old list",
+   "body": "Session B loaded the empty file, so its snapshot is empty. Its add builds a candidate and calls `save`, which throws \"File changed in another session...\" because the file no longer matches B's baseline. The throw happens before `snapshot = candidate`, and nothing reloads on B's behalf. B's list therefore comes from its old, empty snapshot: **\"No matching tasks.\"**\n\n- *A's task*: B never re-read the file; only option 9 does that.\n- *Both, with B's as a draft*: the course states rejected input is not kept.\n- *B's own task*: it was refused before becoming accepted state.",
+   "excerpts": [
+    {
+     "path": "src/todo/service/TaskManager.java",
+     "lineStart": 32,
+     "lineEnd": 32,
+     "quote": "repository.save(candidate); snapshot = candidate;"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astraupskill/07-TRACE-LAB.md",
+     "lineStart": 30,
+     "lineEnd": 34,
+     "why": "Trace B asks you to explain exactly this listing."
+    }
+   ]
+  },
+  {
+   "id": "x-reload-then-retry",
+   "target": "seed:quests:j1/quiz/6bbe1c081c91fc2c",
+   "phase": "after",
+   "title": "Why the retry after Reload is accepted",
+   "body": "Option 9 calls `manager.reload()`, which calls `repository.load()`: the baseline becomes the current file bytes and the snapshot becomes A's accepted state, including A's task and a watermark of 2. The re-entered add builds revision 2 with id 2 on top of that. In `save` the baseline now equals the file, so the write goes through: **\"Task 2 added and saved.\"** and both tasks are listed.\n\n- *Refused until A closes*: an open session does not block others; the lock is only held for the length of a save.\n- *Accepted as task 1, replacing A's*: the candidate is built from the reloaded snapshot, which already holds task 1.\n- *Only B lists it*: it is on disk; A would see it after its own reload.",
+   "excerpts": [
+    {
+     "path": "src/todo/service/TaskManager.java",
+     "lineStart": 23,
+     "lineEnd": 23,
+     "quote": "public synchronized void reload() throws IOException { snapshot = repository.load(); }"
+    },
+    {
+     "path": "src/todo/App.java",
+     "lineStart": 34,
+     "lineEnd": 34,
+     "quote": "case \"9\" -> { manager.reload(); System.out.println(\"Current file loaded. Review it before repeating a rejected change.\"); }"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-search-status-case",
+   "target": "seed:quests:j1/quiz/6d71958a79f9cd47",
+   "phase": "after",
+   "title": "Why Done is not a valid status",
+   "body": "`search` checks the status with `List.of(\"all\", \"open\", \"done\").contains(status)`. `contains` uses `equals`, which is case-sensitive, so `Done` is not in the list and the method throws `IllegalArgumentException(\"Invalid search or status.\")`. The menu catch prints **\"Change not accepted: Invalid search or status.\"** The search text is lower-cased with `Locale.ROOT`, but the status is not.\n\n- *Lists completed tasks*: that needs exactly `done`.\n- *Falls back to all*: an unknown status throws; there is no default.\n- *Asks again*: each prompt is read once per command.",
+   "excerpts": [
+    {
+     "path": "src/todo/service/TaskManager.java",
+     "lineStart": 60,
+     "lineEnd": 60,
+     "quote": "if (query == null || query.length() > 160 || !List.of(\"all\", \"open\", \"done\").contains(status)) throw new IllegalArgumentException(\"Invalid search or status.\");"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-crlf-file",
+   "target": "seed:quests:j1/quiz/298119c1def4b09a",
+   "phase": "after",
+   "title": "Why a CRLF copy of the file stops startup",
+   "body": "`decode` decides the format from the first bytes: only text that starts with `TODOLIST1` followed by a bare line feed takes the snapshot branch. An editor that converts line endings to CRLF puts a carriage return before that line feed, so the file is handed to `legacy`. The legacy parser splits the lines and rejects `TODOLIST1` because it is not a `key=value` field. `main` catches the `IOException`, prints **\"Startup stopped; existing data was not replaced.\"** followed by the legacy-field message, and exits with code 1. Nothing is written.\n\n- *CR stripped, tasks open*: no code removes carriage returns before the format check.\n- *\"Truncated snapshot.\"*: that check belongs to the TODOLIST1 branch, which this file never reaches.\n- *Starts empty and saves a fresh file*: a failed load stops the program; only a missing file starts empty.\n\nThe data is safe, but the message points at the wrong format. A better fix detects the CRLF header before the legacy fallback and names line endings in the error.",
+   "excerpts": [
+    {
+     "path": "src/todo/repository/TaskRepository.java",
+     "lineStart": 126,
+     "lineEnd": 126,
+     "quote": "int split = line.indexOf('='); if (split < 1 || !keys.contains(line.substring(0, split))"
+    },
+    {
+     "path": "src/todo/App.java",
+     "lineStart": 17,
+     "lineEnd": 17,
+     "quote": "System.err.println(\"Startup stopped; existing data was not replaced. \" + e.getMessage()); System.exit(1);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-oversized-id",
+   "target": "seed:quests:j1/quiz/faab8ac0d032b987",
+   "phase": "after",
+   "title": "Why an eleven-digit id prints a raw Java message",
+   "body": "`selected` checks the reply with `raw.matches(\"[1-9][0-9]*\")`. The pattern accepts any number of digits, so `99999999999` passes and goes to `Integer.parseInt`, which throws `NumberFormatException` because the value does not fit in an `int`. `NumberFormatException` extends `IllegalArgumentException`, so the menu's `catch (IOException | IllegalArgumentException | IllegalStateException e)` catches it and prints the raw message: **Change not accepted: For input string: \"99999999999\"**. It is handled, but by accident.\n\n- *\"Enter a positive task id.\"*: that is thrown only when the pattern fails, and eleven digits match it.\n- *\"Task not found.\"*: the lookup never runs, because parsing fails first.\n- *A stack trace*: a catch for a superclass also catches its subclasses.\n\nBounding the pattern, or catching the parse error inside `selected`, would give the user a friendly message instead.",
+   "excerpts": [
+    {
+     "path": "src/todo/App.java",
+     "lineStart": 43,
+     "lineEnd": 43,
+     "quote": "if (!raw.matches(\"[1-9][0-9]*\")) throw new IllegalArgumentException(\"Enter a positive task id.\");"
+    },
+    {
+     "path": "src/todo/App.java",
+     "lineStart": 37,
+     "lineEnd": 37,
+     "quote": "} catch (IOException | IllegalArgumentException | IllegalStateException e) { System.out.println(\"Change not accepted: \" + e.getMessage()); }"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-empty-file-backup",
+   "target": "seed:quests:j1/quiz/6d7fc56e94979b22",
+   "phase": "after",
+   "title": "Why an empty file leaves an empty legacy backup",
+   "body": "The file exists, so `bytes()` returns an empty array, not `null`. `decode` sends it to `legacy`, which returns an empty snapshot for empty text, so the load succeeds. On the first save, the check `baseline != null && !decodeUtf8(baseline).startsWith(...)` sees a non-null baseline that is not a TODOLIST1 file and preserves it: it writes those 0 bytes to `<file>.legacy-backup`, then replaces the data file with the new snapshot. The result is **a 0-byte .legacy-backup** beside the file, plus the `.lock` file.\n\n- *No backup for an empty file*: the code tests for `null`, not for zero length.\n- *A copy of the new snapshot*: the backup is written from `baseline`, the old bytes.\n- *Add refused*: empty text is accepted as an empty legacy file.\n\nThat empty backup later blocks a real legacy conversion to the same path with \"A different legacy backup exists\".",
+   "excerpts": [
+    {
+     "path": "src/todo/repository/TaskRepository.java",
+     "lineStart": 121,
+     "lineEnd": 121,
+     "quote": "if (text.isEmpty()) return TaskSnapshot.empty();"
+    },
+    {
+     "path": "src/todo/repository/TaskRepository.java",
+     "lineStart": 52,
+     "lineEnd": 53,
+     "quote": "Path backup = filePath.resolveSibling(filePath.getFileName() + \".legacy-backup\"); try { Files.write(backup, baseline, CREATE_NEW, WRITE); }"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-version-check-cli",
+   "target": "seed:quests:j1/quiz/1c39148b2ff62364",
+   "phase": "after",
+   "title": "Why the version check never fires inside the CLI",
+   "body": "`editTask` calls `expected(id, version)`, which compares the version passed in with the task in this manager's snapshot. Option 6 got that version from `selected()`, which read the same snapshot a moment earlier, in the same command, on one thread. The two always match, so **the check cannot fail from the menu**.\n\n- *Another terminal saved an edit*: that save does not change this session's snapshot, so the version still matches; the stale write is caught later in `save`, by the baseline comparison.\n- *Completed or reopened earlier*: those commits update the snapshot, and `selected()` then reads the new version.\n- *Reloaded with option 9*: reload replaces the snapshot before the next command reads from it.\n\nThe version parameter matters for a client that holds a version across time, such as a browser form. The unit tests exercise it by calling the service directly.",
+   "excerpts": [
+    {
+     "path": "src/todo/service/TaskManager.java",
+     "lineStart": 41,
+     "lineEnd": 41,
+     "quote": "if (task.getVersion() != version) throw new IllegalStateException(\"Task version changed. Reload and review before retrying.\");"
+    },
+    {
+     "path": "astraupskill/03-WORKED-CHANGE.md",
+     "lineStart": 29,
+     "lineEnd": 29,
+     "quote": "Selection and save happen within one command on one thread, so nothing in this process can change the task in between"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-local-locks",
+   "target": "seed:quests:j1/quiz/90aea5d83ca8bd1a",
+   "phase": "after",
+   "title": "Why save takes a JVM lock before the file lock",
+   "body": "A `FileChannel` lock is held on behalf of the whole JVM. If code in the same JVM asks for a second lock on an overlapping region, `lock()` does not wait: it throws `OverlappingFileLockException`. Two `TaskManager`s in one process, as in the unit tests, could reach `channel.lock()` at the same time, so `save` first synchronizes on one shared object per lock path from `LOCAL_LOCKS`. Same-JVM callers queue there, and each one still takes the file lock, which is what coordinates separate processes. So **a second lock() in one JVM would throw instead of waiting**.\n\n- *Skip the file lock for speed*: every save still calls `channel.lock()` inside the synchronized block.\n- *Stops other processes writing*: `synchronized` only works inside one JVM, and the file lock is cooperative.\n- *lock() needs a monitor first*: `FileChannel.lock()` works across processes on its own; the monitor only orders threads in this JVM.",
+   "excerpts": [
+    {
+     "path": "src/todo/repository/TaskRepository.java",
+     "lineStart": 18,
+     "lineEnd": 18,
+     "quote": "private static final Map<Path, Object> LOCAL_LOCKS = new ConcurrentHashMap<>();"
+    },
+    {
+     "path": "src/todo/repository/TaskRepository.java",
+     "lineStart": 47,
+     "lineEnd": 47,
+     "quote": "synchronized (LOCAL_LOCKS.computeIfAbsent(lockPath, ignored -> new Object())) {"
+    }
+   ],
+   "readMore": []
+  }
+ ]
+}
