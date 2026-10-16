@@ -37,7 +37,8 @@ function main(): number {
       );
     }
   }
-  console.log(`  assessed ${r.assessed}: seeded ${r.seeded} quests, skip-absent ${r.skipAbsent}, no V1 track ${r.noTrack.length}, java beyond placeholder ${r.javaBeyondPlaceholder.length}`);
+  console.log(`  assessed ${r.assessed}: seeded ${r.seeded} quests, skip-absent ${r.skipAbsent}, no V1 track ${r.noTrack.length}, promoted to study ${r.promotedToStudy.length}`);
+  console.log(`  promoted to study (${r.promotedToStudy.length}): ${r.promotedToStudy.map((p) => p.repo).join(', ') || '(none)'}`);
   console.log(`  no-track exclusions (${r.noTrack.length}): ${r.noTrack.map((x) => `${x.repo}[${x.stack}]`).join(', ')}`);
   console.log(`  anchor track overrides: ${r.anchorTrackOverrides.map((o) => `${o.repo} ${o.stack}->${o.track}`).join(', ') || '(none)'}`);
   for (const f of r.families) {

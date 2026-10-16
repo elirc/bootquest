@@ -62,6 +62,7 @@ const CAMPAIGN_DIR = join(REPO, 'content', 'campaign');
 const campaignManifest = JSON.parse(readFileSync(join(CAMPAIGN_DIR, 'manifest.json'), 'utf8'));
 const campaignUnits = campaignManifest.tracks.reduce((n, t) => n + t.counts.units, 0);
 const jsCampaign = campaignManifest.tracks.find((t) => t.track === 'js');
+const javaCampaign = campaignManifest.tracks.find((t) => t.track === 'java');
 // W7: the stamped seed packs the real entrypoint loads by default, counted independently of the server
 const SEED_DIR = join(REPO, 'content', 'seed');
 const seedItems = ['explainback', 'patches', 'variants'].flatMap((g) =>
@@ -400,8 +401,10 @@ async function main() {
       const cj = await api(base, 'GET', '/api/tracks/js/campaign');
       const cjQuests = (cj.json?.acts ?? []).reduce((n, a) => n + a.quests.length, 0);
       const cjava = await api(base, 'GET', '/api/tracks/java/campaign');
+      const cjavaQuests = (cjava.json?.acts ?? []).flatMap((a) => a.quests);
       step(
-        `campaign: js ${jsCampaign.counts.acts} acts / ${jsCampaign.counts.quests} quests in rank order, act 1 open, act 2 locked; java placeholder locked + inert`,
+        `campaign: js ${jsCampaign.counts.acts} acts / ${jsCampaign.counts.quests} quests in rank order, act 1 open, act 2 locked; ` +
+          `java ${javaCampaign.counts.acts} acts / ${javaCampaign.counts.quests} core study quests, act 1 open, act 2 locked`,
         cj.status === 200 &&
           cj.json.acts.length === jsCampaign.counts.acts &&
           cjQuests === jsCampaign.counts.quests &&
@@ -409,10 +412,14 @@ async function main() {
           cj.json.acts[1].unlocked === false &&
           cj.json.acts.every((a) => a.quests.every((q, i, qs) => i === 0 || qs[i - 1].rank < q.rank)) &&
           cjava.status === 200 &&
-          cjava.json.acts.length === 1 &&
-          cjava.json.acts[0].unlocked === false &&
-          cjava.json.acts[0].quests.every((q) => q.state === 'locked' && q.unitId === undefined),
-        `js acts ${cj.json?.acts?.length} quests ${cjQuests}`,
+          cjava.json.track.locked === false &&
+          cjava.json.acts.length === javaCampaign.counts.acts &&
+          cjavaQuests.length === javaCampaign.counts.quests &&
+          cjava.json.acts[0].unlocked === true &&
+          cjava.json.acts[1].unlocked === false &&
+          cjavaQuests.every((q) => q.kind === 'study-quest' && q.core && typeof q.unitId === 'number') &&
+          cjava.json.acts.every((a) => a.quests.every((q, i, qs) => i === 0 || qs[i - 1].rank < q.rank)),
+        `js acts ${cj.json?.acts?.length} quests ${cjQuests}; java acts ${cjava.json?.acts?.length} quests ${cjavaQuests.length}`,
       );
       const slateNow = d.json?.slate?.items?.map((i) => i.slot) ?? [];
       const readingStep = cj.json?.acts?.[0]?.quests?.find((q) => q.kind === 'reading' && q.state === 'available');
@@ -522,11 +529,11 @@ async function main() {
       const tr = await api(base, 'GET', '/api/tracks');
       const csTrack = tr.json?.tracks?.find((t) => t.id === 'csharp');
       step(
-        'tracks: js, csharp, java, agentic in order; csharp unlocked, java still locked',
+        'tracks: js, csharp, java, agentic in order; csharp and java unlocked (java since migration 011)',
         tr.status === 200 &&
           tr.json.tracks.map((t) => t.id).join() === 'js,csharp,java,agentic' &&
           csTrack?.locked === false &&
-          tr.json.tracks.find((t) => t.id === 'java')?.locked === true,
+          tr.json.tracks.find((t) => t.id === 'java')?.locked === false,
         JSON.stringify(tr.json?.tracks ?? null),
       );
       const ctu = await api(base, 'GET', '/api/tracks/csharp/units');

@@ -118,7 +118,16 @@ async function main() {
     open.push(A);
     const js = A.stats.tracks.find((t) => t.track === 'js');
     const cs = A.stats.tracks.find((t) => t.track === 'csharp');
-    step('loader: JS 143 + C# 48 study-quest gates, loaded === built; quests without a pack stay content-pending; ww6 matches no quest', js.built === 143 && js.loaded === 143 && cs.built === 48 && cs.loaded === 48 && A.stats.unmatchedPacks.join() === 'ww6', `js ${js.loaded}/${js.built} (${js.pending} pending), csharp ${cs.loaded}/${cs.built} (${cs.pending} pending), unmatched ${A.stats.unmatchedPacks.join(',')}`);
+    // Java: 12 core study quests (content/campaign/java.json); every one stays content-pending until its
+    // quest pack merges, so the java gate count is reported (built/loaded/pending) and only its
+    // consistency is asserted here; the integration sets the final numbers.
+    const javaStudy = JSON.parse(readFileSync(join(CAMPAIGN, 'manifest.json'), 'utf8')).tracks.find((t) => t.track === 'java').counts.studyQuests;
+    const jv = A.stats.tracks.find((t) => t.track === 'java') ?? { built: 0, loaded: 0, pending: 0 };
+    step(
+      `loader: JS 143 + C# 48 study-quest gates, loaded === built; Java ${jv.loaded}/${javaStudy} gated (rest content-pending); ww6 matches no quest`,
+      js.built === 143 && js.loaded === 143 && cs.built === 48 && cs.loaded === 48 && jv.loaded === jv.built && jv.built + jv.pending === javaStudy && A.stats.unmatchedPacks.join() === 'ww6',
+      `js ${js.loaded}/${js.built} (${js.pending} pending), csharp ${cs.loaded}/${cs.built} (${cs.pending} pending), java ${jv.loaded}/${jv.built} (${jv.pending} pending), unmatched ${A.stats.unmatchedPacks.join(',')}`,
+    );
     let camp = (await A.api('GET', '/tracks/js/campaign')).json;
     const act1 = camp.acts[0];
     const playable = act1.quests.filter((q) => q.kind === 'study-quest' && q.state === 'available');

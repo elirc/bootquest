@@ -10,7 +10,8 @@ import { campaignSeederFingerprint } from '../src/store/campaign-fingerprint.ts'
  *   js     act 1: study A (rank 1), reading R1 (2), reading R2 (3)
  *          act 2: study B (4), reading R3 (5)      [unlock 80% of act 1 core + level 2]
  *   csharp act 1: study C (6), reading CR (7)
- *   java   act 1 (static lock): inert study J (8)
+ *   java   act 1 (static lock): inert study J (8) — synthetic; the shipped Java campaign is
+ *          unlocked, this act keeps the static-lock path (still supported by the schema) under test
  */
 
 const sha = (s: string) => createHash('sha256').update(s).digest('hex');
@@ -106,7 +107,7 @@ export function writeCampaignFixture(dir: string, tracks: FixtureTracks = defaul
       assessed: 8,
       skipAbsent: 0,
       noTrack: [],
-      javaBeyondPlaceholder: [],
+      promotedToStudy: [],
       families: [],
       twinPairs: [],
       anchorTrackOverrides: [],

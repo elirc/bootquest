@@ -147,10 +147,14 @@ function campaignLinks(db: Db): Map<string, CampaignLink> {
   return out;
 }
 
-/** track for an ordinary explain-back set: its repo's campaign track; else a C#-looking repo name -> csharp, else js. */
+/**
+ * track for an ordinary explain-back set: its repo's campaign track; else a Java-looking repo
+ * name (j<N>, *java*) -> java, a C#-looking one -> csharp, else js.
+ */
 function trackForRepo(repo: string, links: Map<string, CampaignLink>): TrackId {
   const l = links.get(repo);
-  if (l && l.track !== 'java' && l.track !== 'agentic') return l.track;
+  if (l && l.track !== 'agentic') return l.track;
+  if (/^j\d+$|java(?!script)/i.test(repo)) return 'java';
   return /^(net|dotnet|csharp|cs)|-net$/.test(repo) ? 'csharp' : 'js';
 }
 

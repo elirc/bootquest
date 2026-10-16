@@ -87,20 +87,28 @@ describe('JSON-only errors', () => {
 describe('tracks', () => {
   const ctx = useApi();
 
-  it('lists all four tracks with Java locked', async () => {
+  it('lists all four tracks, all unlocked (Java since migration 011)', async () => {
     const res = await request(ctx.app).get('/api/tracks');
     expect(res.status).toBe(200);
     const body = TracksResponse.parse(res.body);
     expect(body.tracks.map((t) => [t.id, t.locked])).toEqual([
       ['js', false],
       ['csharp', false],
-      ['java', true],
+      ['java', false],
       ['agentic', false],
     ]);
     expect(body.tracks.find((t) => t.id === 'js')!.unitCount).toBe(5);
+    // the lock flag is still served from the track row
+    ctx.db.run(`UPDATE track SET locked = 1 WHERE id = 'java'`);
+    const locked = TracksResponse.parse((await request(ctx.app).get('/api/tracks')).body);
+    expect(locked.tracks.find((t) => t.id === 'java')!.locked).toBe(true);
   });
 
-  it('track units carry lock states: Java locked, prerequisites gate successors', async () => {
+  it('track units carry lock states: a locked track locks its units, prerequisites gate successors', async () => {
+    const open = TrackUnitsResponse.parse((await request(ctx.app).get('/api/tracks/java/units')).body);
+    expect(open.units.length).toBe(1);
+    expect(open.units.every((u) => u.state === 'available')).toBe(true); // java ships unlocked (011)
+    ctx.db.run(`UPDATE track SET locked = 1 WHERE id = 'java'`); // the lock mechanism under test (java ships unlocked since 011)
     const java = TrackUnitsResponse.parse((await request(ctx.app).get('/api/tracks/java/units')).body);
     expect(java.units.length).toBe(1);
     expect(java.units.every((u) => u.state === 'locked')).toBe(true);
@@ -121,6 +129,7 @@ describe('tracks', () => {
   });
 
   it('a locked track refuses submit and run', async () => {
+    ctx.db.run(`UPDATE track SET locked = 1 WHERE id = 'java'`); // the lock mechanism under test (java ships unlocked since 011)
     const id = ctx.id('fixture:java-quiz');
     expectApiError(await request(ctx.app).post(`/api/units/${id}/submit`).send({ answer: 0 }), 403, 'TRACK_LOCKED');
     expectApiError(await request(ctx.app).post(`/api/units/${id}/run`).send({ answer: 0 }), 403, 'TRACK_LOCKED');
@@ -324,6 +333,7 @@ describe('POST /api/units/:id/self-attest (reading units only)', () => {
   });
 
   it('is refused on non-reading units, locked tracks, unknown units, and with any body/query', async () => {
+    ctx.db.run(`UPDATE track SET locked = 1 WHERE id = 'java'`); // the lock mechanism under test (java ships unlocked since 011)
     const before = ledgerCounts(ctx.db);
     expectApiError(await request(ctx.app).post(`/api/units/${ctx.id('fixture:drill-add')}/self-attest`).send(), 409, 'WRONG_UNIT_KIND');
     expectApiError(await request(ctx.app).post(`/api/units/${ctx.id('fixture:java-quiz')}/self-attest`).send(), 403, 'TRACK_LOCKED');
@@ -454,6 +464,7 @@ describe('written units: answer first (immutable), THEN the model answer (F9)', 
   });
 
   it('B4: a written unit on a locked track refuses the answer and the model answer (even with a raw answer row on file)', async () => {
+    ctx.db.run(`UPDATE track SET locked = 1 WHERE id = 'java'`); // the lock mechanism under test (java ships unlocked since 011)
     const locked = ctx.db.get<{ id: string }>('SELECT id FROM track WHERE locked = 1 LIMIT 1');
     expect(locked).toBeDefined();
     const id = insertUnit(ctx.db, { key: 'fixture:written-locked', track: locked!.id as 'java', kind: 'written', title: 'locked written', competencies: ['code-reading'] }, ctx.clock);
@@ -622,8 +633,8 @@ describe('GET /api/dashboard', () => {
     expect(d.competencies.find((c) => c.id === 'communication')!.lastEvidence).toBeNull();
     expect(d.reviewQueue.due).toBe(1);
     // no campaign quests are seeded: the campaign slot is absent rather than impossible
-    expect(d.slate.items.map((i) => i.slot)).toEqual(['drill:js', 'drill:csharp', 'review']);
-    expect(d.nextUp.map((n) => n.trackId)).toEqual(['js', 'csharp', 'agentic']); // Java locked -> absent
+    expect(d.slate.items.map((i) => i.slot)).toEqual(['drill:js', 'drill:csharp', 'drill:java', 'review']);
+    expect(d.nextUp.map((n) => n.trackId)).toEqual(['js', 'csharp', 'java', 'agentic']); // every unlocked track
     expect(d.nextUp.find((n) => n.trackId === 'js')!.unit!.key).toBe('fixture:quiz-typeof');
     expect(d.streak).toMatchObject({ current: 0, tokens: 0, todayComplete: false });
   });
@@ -640,7 +651,7 @@ describe('GET /api/dashboard', () => {
 
   it('a full drill + review day (no campaign seeded) is a slate day: streak 1 the next day', async () => {
     const card = addReviewItem(ctx.db, { cardKey: 'card:streak' }, ctx.clock);
-    for (const track of ['js', 'csharp']) {
+    for (const track of ['js', 'csharp', 'java']) {
       for (let i = 0; i < 5; i++) {
         const id = insertUnit(
           ctx.db,

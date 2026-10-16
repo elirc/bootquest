@@ -18,7 +18,7 @@ export const TRACK_SHORT: Record<TrackId, string> = { js: 'JS', csharp: 'C#', ag
 export const TRACK_PLACEHOLDER: readonly { id: TrackId; name: string; locked: boolean }[] = [
   { id: 'js', name: 'JS/TS + React', locked: false },
   { id: 'csharp', name: 'C#/.NET', locked: false },
-  { id: 'java', name: 'Java', locked: true },
+  { id: 'java', name: 'Java', locked: false },
   { id: 'agentic', name: 'Agentic engineering', locked: false },
 ];
 

@@ -62,8 +62,8 @@ describe('fixture contract (server shapes: numeric ids, epoch ms, server enums)'
     for (const s of items) expect(typeof s.done).toBe('boolean');
   });
 
-  it('tracks are wrapped in {tracks}; java is locked; unit ids are positive integers', () => {
-    expect(fixtures.tracks.tracks.find((t) => t.id === 'java')?.locked).toBe(true);
+  it('tracks are wrapped in {tracks}; every track ships unlocked (java since 011); unit ids are positive integers', () => {
+    expect(fixtures.tracks.tracks.every((t) => !t.locked)).toBe(true);
     for (const u of Object.values(fixtures.units).flat()) {
       expect(Number.isInteger(u.id) && u.id > 0).toBe(true);
       expect(['locked', 'available', 'done']).toContain(u.state);

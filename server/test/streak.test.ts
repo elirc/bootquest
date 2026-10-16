@@ -21,6 +21,7 @@ function passNewDrills(db: Db, clock: () => Date, track: string, n = 5): number[
 function completeToday(db: Db, clock: () => Date) {
   passNewDrills(db, clock, 'js');
   passNewDrills(db, clock, 'csharp');
+  passNewDrills(db, clock, 'java');
   return composeSlate(db, clock);
 }
 
@@ -33,10 +34,14 @@ describe('daily slate composition', () => {
 
   it('with no campaign quests seeded: one 5-drill set per active track + review clear (no campaign slot)', () => {
     const slate = composeSlate(ctx.db, ctx.clock);
-    expect(slate.items.map((i) => i.slot)).toEqual(['drill:js', 'drill:csharp', 'review']);
+    expect(slate.items.map((i) => i.slot)).toEqual(['drill:js', 'drill:csharp', 'drill:java', 'review']);
     expect(slate.items.filter((i) => i.kind === 'drill-set').every((i) => 'size' in i && i.size === 5)).toBe(true);
-    // java is locked and agentic has no drill bank: neither contributes a drill set
-    expect(slate.items.some((i) => i.slot === 'drill:java' || i.slot === 'drill:agentic')).toBe(false);
+    // java is unlocked with slate_drills (011, like csharp); agentic has no drill bank
+    expect(slate.items.some((i) => i.slot === 'drill:agentic')).toBe(false);
+    // a LOCKED track never contributes a drill set
+    ctx.db.run(`UPDATE track SET locked = 1 WHERE id = 'java'`);
+    expect(composeSlate(ctx.db, ctx.clock).items.map((i) => i.slot)).toEqual(['drill:js', 'drill:csharp', 'review']);
+    ctx.db.run(`UPDATE track SET locked = 0 WHERE id = 'java'`);
     expect(composeSlate(ctx.db, ctx.clock).items).toEqual(slate.items); // idempotent
   });
 
@@ -44,7 +49,7 @@ describe('daily slate composition', () => {
     const unitId = makeUnit(ctx.db, ctx.clock, { kind: 'guided-project' });
     const act = ctx.db.run(`INSERT INTO campaign_act (track_id, act_no, title) VALUES ('js', 1, 'Act 1')`).lastInsertRowid;
     ctx.db.run(`INSERT INTO quest (act_id, unit_id, repo, index_rank, verdict) VALUES (?, ?, 'elirc/x', 1, 'study')`, act, unitId);
-    expect(composeSlate(ctx.db, ctx.clock).items.map((i) => i.slot)).toEqual(['drill:js', 'drill:csharp', 'campaign', 'review']);
+    expect(composeSlate(ctx.db, ctx.clock).items.map((i) => i.slot)).toEqual(['drill:js', 'drill:csharp', 'drill:java', 'campaign', 'review']);
     expect(slot(ctx.db, ctx.clock, 'campaign')!.done).toBe(false);
     submit(ctx.db, ctx.clock, unitId, { pass: false });
     expect(slot(ctx.db, ctx.clock, 'campaign')!.done).toBe(false);

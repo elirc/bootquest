@@ -128,8 +128,8 @@ describe('campaign skill tree: locked content is never revealed', () => {
     expect(calls).not.toContain('getUnit');
   });
 
-  it('Java renders greyed with inert locked nodes', async () => {
-    const { user } = await openTree('/campaign/java');
+  it('a locked track (Java locked in-test) renders greyed with inert locked nodes', async () => {
+    const { user } = await openTree('/campaign/java', createMockApi({ lockedTracks: ['java'] }));
     expect(screen.getByRole('note')).toHaveTextContent('Java is locked.');
     expect(document.querySelector('.skilltree')).toHaveClass('skilltree-locked');
     const gate = node('a:9')!;
