@@ -523,10 +523,10 @@
    "provenance": {
     "repo": "zz1",
     "sha": "a561c1b62f7d7ff9b445c7c15700f10b312d7a0f",
-    "path": "docs/architecture/auth-and-tenant-isolation.md",
+    "path": "src/lib/middleware/withTenantGuard.ts",
     "lines": {
-     "start": 26,
-     "end": 26
+     "start": 21,
+     "end": 22
     }
    },
    "citations": [],
@@ -535,20 +535,14 @@
    "pack": "zz1",
    "target": "seed:quests:zz1/quiz/6ab376eecd27d176",
    "phase": "after",
-   "title": "When a disabled rep with a valid token is blocked",
-   "body": "The key is right: on their very next request, because every request reloads the membership. The JWT only carries the user id and the active membership id. On each request, `getOptionalSession` loads that membership from the database, with its **current** status, and the tenant guard then rejects any membership that is not ACTIVE with 403 `inactive_membership`. The token stays valid for its seven days, but it no longer gets the rep anywhere.\n\nWhy the others are wrong:\n- \"A revocation list drops the token\": no such list exists; the token is still valid, the membership is not.\n- \"Only when the JWT expires\": the membership's status is never read from the token.\n- \"Never for read routes\": CRM read routes call `requireOrgRequest` too. The guide's warning is only for a *future* route that skips it.",
+   "title": "The organization's status is a separate gate",
+   "body": "**Key: 403 organization_unavailable from the tenant guard.**\n\nThe session reloads the membership, including `organization.status`. `requireOrgRequest` first checks `membership.status` (ACTIVE, so it passes), then `if (![\"ACTIVE\", \"TRIALING\"].includes(orgCtx.membership.organizationStatus))`, which fails for SUSPENDED and throws `forbiddenError(\"organization_unavailable\", ...)`.\n\nWhy the others are wrong:\n- *200*: an active membership is not enough when the organization is unavailable.\n- *inactive_membership*: the membership row is unchanged and still ACTIVE.\n- *401 invalid_session*: the JWT itself is still valid.",
    "excerpts": [
     {
-     "path": "docs/architecture/auth-and-tenant-isolation.md",
-     "lineStart": 26,
-     "lineEnd": 26,
-     "quote": "Because the membership is reloaded on every request, demoting or disabling someone takes effect on their next request even though their JWT is still valid for up to seven days."
-    },
-    {
      "path": "src/lib/middleware/withTenantGuard.ts",
-     "lineStart": 17,
-     "lineEnd": 19,
-     "quote": "throw forbiddenError(\"inactive_membership\", \"Your membership is not active for this organization.\");"
+     "lineStart": 21,
+     "lineEnd": 22,
+     "quote": "if (![\"ACTIVE\", \"TRIALING\"].includes(orgCtx.membership.organizationStatus)) { throw forbiddenError(\"organization_unavailable\", \"This organization is not currently active.\");"
     }
    ],
    "readMore": []
@@ -595,8 +589,8 @@
     "sha": "a561c1b62f7d7ff9b445c7c15700f10b312d7a0f",
     "path": "src/lib/db/tenantContext.ts",
     "lines": {
-     "start": 25,
-     "end": 28
+     "start": 13,
+     "end": 14
     }
    },
    "citations": [],
@@ -605,33 +599,34 @@
    "pack": "zz1",
    "target": "seed:quests:zz1/quiz/7ce569b5f5b69c29",
    "phase": "after",
-   "title": "Why withTenantScope always ends up with the caller's tenant",
-   "body": "The key is right: `\"A\"`. `withTenantScope` returns `{ ...where, organizationId: ctx.tenantId }`. In an object literal, when the same key appears twice, the **later** one wins. The caller's `where` is spread first, including its `organizationId: \"B\"`, and then `organizationId` is written again with the context's tenant, `\"A\"`. So callers cannot widen or redirect the scope, by accident or on purpose.\n\nWhy the others are wrong:\n- \"B, the caller's filter is spread last\": the spread comes first, not last.\n- \"Throws cross_tenant_access\": that error lives in the separate `assertSameTenant`, which this function never calls.\n- \"Both, combined into an OR\": a plain object cannot hold two values for one key; nothing builds an OR.",
+   "title": "A vanished membership leaves no tenant",
+   "body": "**Key: 403 tenant_scope_required, because there is no organization context.**\n\nWhen the JWT carries `activeMembershipId`, `getOptionalSession` loads memberships with `where: { id: payload.activeMembershipId }` only. The row is gone, so `user.memberships[0]` is undefined and the session's `membership` is `null`; `requireAuthenticatedRequest` then sets `tenantId` to `null`. The leads route calls `requireOrgRequest`, whose first step `requireTenantContext` throws `forbiddenError(\"tenant_scope_required\", ...)`.\n\nWhy the others are wrong:\n- *401 invalid_session*: the JWT verifies; only the membership lookup comes back empty.\n- *falls back*: the fallback query runs only when the JWT has no `activeMembershipId`.\n- *404*: nothing in this path throws not found.",
    "excerpts": [
     {
      "path": "src/lib/db/tenantContext.ts",
-     "lineStart": 25,
-     "lineEnd": 28,
-     "quote": "return { ...(where ?? ({} as T)), organizationId: ctx.tenantId };"
-    },
-    {
-     "path": "docs/architecture/auth-and-tenant-isolation.md",
-     "lineStart": 70,
-     "lineEnd": 70,
-     "quote": "Because the tenant key is written *last*, a caller-supplied `organizationId` inside `where` is overwritten, not merged."
+     "lineStart": 13,
+     "lineEnd": 14,
+     "quote": "if (!ctx.tenantId || !ctx.session.membership) { throw forbiddenError(\"tenant_scope_required\", \"This request requires an active organization context.\");"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "src/lib/auth/session.ts",
+     "lineStart": 75,
+     "lineEnd": 92,
+     "why": "How the membership is chosen for the session."
+    }
+   ]
   },
   {
    "key": "seed:notes:zz1/note/b6ae73dfece69101",
    "provenance": {
     "repo": "zz1",
     "sha": "a561c1b62f7d7ff9b445c7c15700f10b312d7a0f",
-    "path": "src/app/api/org/invitations/route.ts",
+    "path": "src/app/api/org/users/[membershipId]/route.ts",
     "lines": {
-     "start": 28,
-     "end": 29
+     "start": 18,
+     "end": 18
     }
    },
    "citations": [],
@@ -640,29 +635,24 @@
    "pack": "zz1",
    "target": "seed:quests:zz1/quiz/488428546ebb1f88",
    "phase": "after",
-   "title": "Why an invalid body from a rep gets 403, not 422",
-   "body": "The key is right: 403 `permission_denied`, because the guard runs before the body is parsed. In the POST handler, line 28 calls `requireOrgRequest(baseCtx, ORG_PERMISSIONS.ORG_USERS_WRITE)`, and only line 29 parses the body with `createInvitationSchema`. A `SALES_REP` lacks `org.users.write`, so the guard's permission check throws 403 and the parse never runs. The request-lifecycle guide has this exact exercise: predict 403, not 422.\n\nWhy the others are wrong:\n- \"201, reps may invite\": the role map gives `org.users.write` only to organization admins.\n- \"422 validation_error first\": validation is after the guard in the code.\n- \"400 bad_request for an empty body\": `{}` is valid JSON; and the request never gets that far.",
+   "title": "Managers read users but cannot change them",
+   "body": "**Key: the list loads, but the PATCH gets 403 permission_denied.**\n\n`GET /api/org/users` asks for `ORG_PERMISSIONS.ORG_USERS_READ`, and `PATCH /api/org/users/[membershipId]` asks for `ORG_PERMISSIONS.ORG_USERS_WRITE`. The SALES_MANAGER list in `policy.ts` starts with `ORG_USERS_READ` and has no `ORG_USERS_WRITE`, so `assertOrgPermission` passes the first and throws `permission_denied` for the second.\n\nWhy the others are wrong:\n- *Both succeed*: write is a separate permission.\n- *Both 403*: managers hold the read permission.\n- *The reverse*: the read route is the one managers may use.",
    "excerpts": [
     {
-     "path": "src/app/api/org/invitations/route.ts",
-     "lineStart": 28,
-     "lineEnd": 29,
-     "quote": "const ctx = requireOrgRequest(baseCtx, ORG_PERMISSIONS.ORG_USERS_WRITE); const input = createInvitationSchema.parse(await request.json());"
-    },
-    {
-     "path": "docs/architecture/request-lifecycle.md",
-     "lineStart": 84,
-     "lineEnd": 84,
-     "quote": "Predict 403 (not 422) from `route.ts:28-29`, then confirm."
-    },
-    {
-     "path": "src/lib/middleware/withTenantGuard.ts",
-     "lineStart": 25,
-     "lineEnd": 27,
-     "quote": "if (permission) { assertOrgPermission(orgCtx, permission); }"
+     "path": "src/app/api/org/users/[membershipId]/route.ts",
+     "lineStart": 18,
+     "lineEnd": 18,
+     "quote": "const ctx = requireOrgRequest(baseCtx, ORG_PERMISSIONS.ORG_USERS_WRITE);"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "src/lib/permissions/policy.ts",
+     "lineStart": 41,
+     "lineEnd": 59,
+     "why": "The SALES_MANAGER permission list."
+    }
+   ]
   },
   {
    "key": "seed:notes:zz1/note/ca4f373104bb6f79",
@@ -831,8 +821,8 @@
     "sha": "a561c1b62f7d7ff9b445c7c15700f10b312d7a0f",
     "path": "src/lib/auth/session.ts",
     "lines": {
-     "start": 55,
-     "end": 56
+     "start": 95,
+     "end": 96
     }
    },
    "citations": [],
@@ -841,29 +831,24 @@
    "pack": "zz1",
    "target": "seed:quests:zz1/quiz/778a4c41a91c0fe9",
    "phase": "after",
-   "title": "What no cookie and a garbage cookie each return",
-   "body": "The key is right: 401 `auth_required` for the first, then 401 `invalid_session` for the second. With no cookie, `getOptionalSession` finds no token and returns `null`: \"no session\" is not an error at that layer. The caller, `requireAuthenticatedRequest`, then throws `auth_required`. With `atlas_session=garbage`, a token exists, so `jwtVerify` runs and fails, and the `catch` throws `invalid_session` before any `null` could be returned. The guide calls this an asymmetry: missing means \"no session\", bad means \"error\".\n\nWhy the others are wrong:\n- \"200 with an anonymous session\": `/api/org/me` requires a session.\n- \"invalid_session for both\": a missing cookie never reaches verification.\n- \"auth_required for both\": a bad token throws its own error inside the session code.",
+   "title": "A disabled user is stopped while the session loads",
+   "body": "**Key: 401 user_inactive, raised while the session is being loaded.**\n\n`getOptionalSession` verifies the JWT and then reloads the user from the database. Its check `if (!user || user.status !== UserStatus.ACTIVE)` throws `unauthorizedError(\"user_inactive\", ...)`. So `requireAuthenticatedRequest` never receives a session for a disabled user, and its own `user_disabled` branch is not reached on this path.\n\nWhy the others are wrong:\n- *user_disabled*: that check runs after the session loads, which already threw.\n- *inactive_membership*: the tenant guard is never reached.\n- *200*: the JWT is only the key to reload the user; the database decides.",
    "excerpts": [
     {
      "path": "src/lib/auth/session.ts",
-     "lineStart": 55,
-     "lineEnd": 56,
-     "quote": "if (!token) { return null;"
-    },
-    {
-     "path": "src/lib/auth/session.ts",
-     "lineStart": 61,
-     "lineEnd": 68,
-     "quote": "const verified = await jwtVerify(token, getSessionSecret());"
-    },
-    {
-     "path": "docs/architecture/auth-and-tenant-isolation.md",
-     "lineStart": 20,
-     "lineEnd": 20,
-     "quote": "Note the asymmetry: a *missing* cookie is \"no session\", a *bad* cookie is an error."
+     "lineStart": 95,
+     "lineEnd": 96,
+     "quote": "if (!user || user.status !== UserStatus.ACTIVE) { throw unauthorizedError(\"user_inactive\", \"This user is not active.\");"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "src/lib/middleware/withAuth.ts",
+     "lineStart": 17,
+     "lineEnd": 27,
+     "why": "The checks in requireAuthenticatedRequest."
+    }
+   ]
   },
   {
    "key": "seed:notes:zz1/note/fb2f18f822ef0f28",
@@ -911,10 +896,10 @@
    "provenance": {
     "repo": "zz1",
     "sha": "a561c1b62f7d7ff9b445c7c15700f10b312d7a0f",
-    "path": "docs/architecture/auth-and-tenant-isolation.md",
+    "path": "src/app/api/activities/route.ts",
     "lines": {
-     "start": 93,
-     "end": 93
+     "start": 27,
+     "end": 27
     }
    },
    "citations": [],
@@ -923,29 +908,24 @@
    "pack": "zz1",
    "target": "seed:quests:zz1/quiz/e35eb4a4f12b0a9c",
    "phase": "after",
-   "title": "What happens with another organization's leadId today",
-   "body": "The key is right: the activity is created in your organization and attached to their lead, because only the primary row is scoped. `createActivity` hands `leadId: input.leadId` straight to `activityRepository.create`, which sets the new activity's `organizationId` to yours. Nobody loads the lead through a scoped lookup, and the database only checks that a lead with that id exists somewhere. Finding 2 describes exactly this.\n\nWhy the others are wrong:\n- \"403 from assertSameTenant\": that function exists but is never called; the guide calls it unused.\n- \"404 from a scoped lead lookup\": there is no lookup; that is the fix proposed in exercise 4.\n- \"The foreign key is dropped\": the id is stored as sent.",
+   "title": "Reading activities is not writing them",
+   "body": "**Key: 403 permission_denied, because READ_ONLY lacks activities.write.**\n\nThe POST handler builds the base context and calls `requireOrgRequest(baseCtx, ORG_PERMISSIONS.ACTIVITIES_WRITE)`. The membership and organization checks pass. `assertOrgPermission` then looks the role up: READ_ONLY has `activities.read` but no `activities.write`, so it throws `forbiddenError(\"permission_denied\", ...)` before the body is parsed.\n\nWhy the others are wrong:\n- *201*: read permission does not imply write.\n- *inactive_membership*: the membership status is ACTIVE; the role is what is limited.\n- *404*: the request never reaches the service.",
    "excerpts": [
     {
-     "path": "docs/architecture/auth-and-tenant-isolation.md",
-     "lineStart": 93,
-     "lineEnd": 93,
-     "quote": "The unused `assertSameTenant()` (`tenantContext.ts:31-36`) is the intended fix."
-    },
-    {
-     "path": "src/lib/db/tenantContext.ts",
-     "lineStart": 31,
-     "lineEnd": 34,
-     "quote": "if (ctx.tenantId !== organizationId) {"
-    },
-    {
-     "path": "docs/architecture/auth-and-tenant-isolation.md",
-     "lineStart": 93,
-     "lineEnd": 93,
-     "quote": "the schema only requires that the lead exists"
+     "path": "src/app/api/activities/route.ts",
+     "lineStart": 27,
+     "lineEnd": 27,
+     "quote": "const ctx = requireOrgRequest(baseCtx, ORG_PERMISSIONS.ACTIVITIES_WRITE);"
     }
    ],
-   "readMore": []
+   "readMore": [
+    {
+     "path": "src/lib/permissions/policy.ts",
+     "lineStart": 77,
+     "lineEnd": 85,
+     "why": "The READ_ONLY permission list."
+    }
+   ]
   }
  ]
 }
