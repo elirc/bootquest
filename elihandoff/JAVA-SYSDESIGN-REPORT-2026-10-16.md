@@ -104,7 +104,7 @@ It contains no answers.
 | `npm run seed:validate -- --source javabootcamp` | 104/104 validated, 0 quarantined, 20 journaled passes re-executed with 0 mismatches (284 s) |
 | `npm run typecheck` | clean |
 | `npm test` | shared 87, server 548, cli 20, client 221, 103, tools/seed: all passed |
-| `npm run test:java` | passed |
+| `npm run test:java` | 23/23 |
 | `npm run smoke:api` | 69/69 (the Java section lists all 104 javabootcamp drills plus the j5/j7 explain-backs) |
 | `npm run demo:campaign` | 25/25 |
 | `npm run demo:promotion` | 38/38 |
