@@ -104,8 +104,8 @@ A stamp goes stale when you edit a grader or validator, or upgrade node, esbuild
 
 Java is unlocked (migration 011) and plays like C#:
 
-- **Drills:** the `javabootcamp` pack (`content/packs/javabootcamp/`, 64 `drill-java`
-  units in 8 modules) is imported from the private repo `elirc/javabootcamp` at a pinned
+- **Drills:** the `javabootcamp` pack (`content/packs/javabootcamp/`, 104 `drill-java`
+  units in 13 modules: fundamentals 01-08 and the System Design section 09-13) is imported from the private repo `elirc/javabootcamp` at a pinned
   sha (`npm run seed:import:javabootcamp`) and stamped by
   `npm run seed:validate -- --source javabootcamp`. The Java runner
   (`server/src/runners/java/`) compiles each attempt with `javac --release 17` against the

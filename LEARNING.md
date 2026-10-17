@@ -787,6 +787,14 @@ what ships until the owner picks an option.
 - **Final numbers.** javabootcamp: 64 exercises in 8 modules (882 tests), 64/64 validated at
   `0ec7155`. 12 Java quest packs: 152 quizzes, 40 flashcards, 36 readings, 152 explanations, plus
   explain-back sets for j5 and j7. Quest packs in total: 204.
+- **System Design section (java-sysdesign, 2026-10-16).** javabootcamp modules 09-13 (caching, rate
+  limits and resilience, partitioning and ids, messaging and events, storage and consistency): 40
+  more exercises, so 104 in 13 modules (338 new tests; full Verify 1,562 checks green), 104/104 validated at `faf5d9d`. Three writers,
+  three cross-author reviewers. 0 wrong reference solutions, but 17 exercises had tests a plausible
+  wrong solution passed (all strengthened), and 11 claims about real systems were wrong (nginx's
+  limiter, Polly half-open, Stripe/422, RabbitMQ `*`, Kafka idempotent producer, LSM write
+  amplification, WAL without fsync...). Lesson: writer-run mutation testing is not enough; the
+  reviewer's *new* wrong variants found what the writer's did not.
 - **Review still pays.** Every Java pack and the bootcamp were reviewed by a second author: 0 of 147
   hand keys were wrong (every key was checked by running the code), but the bootcamp review found
   two wrong reference solutions whose tests were too weak to notice (02/08 retry, 05/05 best
