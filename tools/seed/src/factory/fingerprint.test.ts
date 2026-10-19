@@ -36,7 +36,9 @@ const COMMON = [
   `${F}/cite.ts`,
   `${F}/exclusions.ts`,
   `${F}/fingerprint.ts`,
+  `${F}/guards.ts`, // stamp-path guards: blind-pass, quiz-balance, lint, leaks, secret scan
   `${F}/harness/harness.ts`,
+  `${F}/leak.ts`, // shared token rules (noteLeaks + eb-leak)
   `${F}/pack.ts`,
   `${F}/pins.ts`, // git-tree pin verification (checkout.ts)
   `${F}/quests/validate.ts`, // checkProvenance: every generator
