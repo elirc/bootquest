@@ -16,7 +16,6 @@ const FRIENDLY: Partial<Record<ClientErrorCode, string>> = {
   NOT_ANSWERED: 'Record your own answer first — the key is shown only after.',
   ALREADY_ANSWERED: 'Your answer is already recorded and cannot be edited.',
   ALREADY_SCORED: 'This answer is already self-scored.',
-  SCORE_WINDOW_CLOSED: 'The self-score window (same sitting, 24h) has closed for this answer.',
   CONTENT_PENDING: 'The seeded content for this unit is not loaded yet.',
   NOT_VERIFIED: 'This needs a verified, passing submit first.',
   UNTOUCHED_TEMPLATE: 'That is the unchanged starter template. Write your answer into it before storing it.',
