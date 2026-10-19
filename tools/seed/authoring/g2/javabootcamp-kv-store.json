@@ -1,0 +1,38 @@
+{
+ "lines": { "start": 14, "end": 101 },
+ "questions": [
+  {
+   "prompt": "DESIGN IT — Dynamo-style key-value store (javabootcamp System Design, guide astraupskill/03-SYSTEM-DESIGN.md §4.6; blocks from modules 09, 11 and 13). Requirements: get(key) and put(key, value) at very high volume, millisecond latency, always writable even during network partitions, data on several machines so a node loss loses nothing. Write your design before you look: sizing, data model, placement and replication, the per-node storage engine, conflicts and consistency, and the trade-off you would defend. Then tick the checkpoints you covered and add up the weights (suggested pass: 70 % with every [w3] hit).",
+   "keyPoints": [
+    { "text": "[w2] Sizing from the reference numbers: one in-memory node handles on the order of 100,000 simple operations a second, so the node count comes from peak operations and data size, not from guesswork.", "cite": { "path": "astraupskill/03-SYSTEM-DESIGN.md", "lineStart": 87, "lineEnd": 89 } },
+    { "text": "[w1] Only get/put by key, no range scans: hashing fits, because it spreads load and the range queries it would scatter are not required.", "cite": { "path": "astraupskill/03-SYSTEM-DESIGN.md", "lineStart": 180, "lineEnd": 183 } },
+    { "text": "[w3] Placement on a consistent-hash ring with virtual nodes (many points per node) so arcs even out; a key's N replicas are the next N distinct nodes.", "quote": "Give every node 100-256 points and the arcs average out" },
+    { "text": "[w3] Replication with quorums: when R + W > N every read set overlaps every write set, so a read reaches at least one replica with the latest write.", "quote": "If `R + W > N`, every read set overlaps every write set" },
+    { "text": "[w2] Each node is a write-ahead log in front of an LSM tree, with a Bloom filter per sorted run so a lookup for a missing key skips nearly every disk read.", "quote": "keep one per file so a lookup for a missing key skips nearly every disk read" },
+    { "text": "[w3] 'Always writable' means a sloppy quorum with hinted handoff: other nodes accept writes for unreachable home replicas and hand them back later, which is exactly when concurrent versions appear.", "cite": { "path": "astraupskill/03-SYSTEM-DESIGN.md", "lineStart": 437, "lineEnd": 439 } },
+    { "text": "[w2] Concurrent writes are detected with vector clocks and returned as siblings, or merged with CRDTs or last-writer-wins; hot keys get a cache.", "cite": { "path": "astraupskill/03-SYSTEM-DESIGN.md", "lineStart": 442, "lineEnd": 444 } },
+    { "text": "[w3] N, R, W chosen out loud: N=3, W=2, R=2 is the classic balance; W=1 is fast and can lose the newest write if that node dies; R=1 is fast and possibly stale.", "cite": { "path": "astraupskill/03-SYSTEM-DESIGN.md", "lineStart": 447, "lineEnd": 449 } }
+   ]
+  },
+  {
+   "prompt": "PRE-MORTEM — the same store at 10x the data and traffic (nodes being added), with a node lost, or with the network partitioned. What breaks first, and what in your design already prevents it?",
+   "keyPoints": [
+    { "text": "[w3] A delete without a tombstone (on disk and across replicas) lets a replica that missed it resurrect the value during repair.", "cite": { "path": "astraupskill/03-SYSTEM-DESIGN.md", "lineStart": 453, "lineEnd": 455 } },
+    { "text": "[w3] Growing the cluster under mod-N placement would copy most of the data at once; the ring moves only the new node's share.", "quote": "shards moves about 80% of the data" },
+    { "text": "[w2] Without virtual nodes a departing node dumps its whole load on one neighbour; with them the load spreads over everyone.", "quote": "leaves, its load spreads over everyone instead of one neighbour" },
+    { "text": "[w2] Last-writer-wins under drifting clocks silently drops one of two concurrent writes.", "cite": { "path": "bootcamp/13-storage-and-consistency/README.md", "lineStart": 91, "lineEnd": 93 } },
+    { "text": "[w1] No single coordinator to lose: any node can coordinate a request, and each key lives on N distinct nodes, so one node loss loses no data.", "cite": { "path": "astraupskill/03-SYSTEM-DESIGN.md", "lineStart": 427, "lineEnd": 428 } }
+   ]
+  },
+  {
+   "prompt": "TRADE-OFF HANDBACK — defend your key-value-store choices against the alternatives the guide names. For each, say what you bought, what it cost, and which requirement put you on that side.",
+   "keyPoints": [
+    { "text": "[w3] Placement table: hash mod N moves almost every key when a node joins; consistent hashing and rendezvous move about 1/(N+1); range partitioning splits one range at a time.", "cite": { "path": "astraupskill/03-SYSTEM-DESIGN.md", "lineStart": 173, "lineEnd": 178 } },
+    { "text": "[w3] LWW vs siblings vs CRDTs: last-writer-wins is simple and loses concurrent writes silently, siblings keep them and push the merge to the application, CRDTs merge automatically where the data type fits.", "cite": { "path": "astraupskill/03-SYSTEM-DESIGN.md", "lineStart": 450, "lineEnd": 452 } },
+    { "text": "[w2] Strong consistency would need a leader per partition with leases and a consensus log, and gives up writes on the minority side, against the always-writable requirement.", "cite": { "path": "astraupskill/03-SYSTEM-DESIGN.md", "lineStart": 456, "lineEnd": 458 } },
+    { "text": "[w2] LSM over B-tree for the node engine: built for write-heavy loads; the price is reads checking several runs and data rewritten by compaction.", "cite": { "path": "bootcamp/13-storage-and-consistency/README.md", "lineStart": 54, "lineEnd": 59 } },
+    { "text": "[w1] PACELC: even without a partition, every request trades latency against consistency by how many replicas it waits for.", "cite": { "path": "astraupskill/03-SYSTEM-DESIGN.md", "lineStart": 476, "lineEnd": 478 } }
+   ]
+  }
+ ]
+}

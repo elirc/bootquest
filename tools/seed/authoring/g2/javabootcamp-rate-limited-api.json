@@ -1,0 +1,37 @@
+{
+ "lines": { "start": 14, "end": 105 },
+ "questions": [
+  {
+   "prompt": "DESIGN IT — rate-limited public API (javabootcamp System Design, guide astraupskill/03-SYSTEM-DESIGN.md §4.2; blocks from modules 10 and 11). Requirements: each API key gets about 100 requests a minute with short bursts allowed; the limit holds across many API servers; clients get a clear 429 with a retry hint; the limiter must not become the outage. Write your design before you look: sizing, the state you keep and where, partitioning, the failure handling around the handler's dependencies, and the trade-off you would defend. Then tick the checkpoints you covered and add up the weights (suggested pass: 70 % with every [w3] hit).",
+   "keyPoints": [
+    { "text": "[w2] Sizing with Little's law: in-flight requests = throughput x latency, which sets threads, connections and permits; at 2,000 req/s and 50 ms that is ~100 in flight, and a dependency slowing to 5 s would need 10,000 slots.", "cite": { "path": "astraupskill/03-SYSTEM-DESIGN.md", "lineStart": 111, "lineEnd": 119 } },
+    { "text": "[w3] Algorithm: a token bucket per API key, because its two numbers (capacity = burst, refill = average rate) state the requirement '100 a minute, short bursts fine' directly.", "quote": "The token bucket is the usual default because its two numbers say what people actually mean" },
+    { "text": "[w3] Limiter state lives in a shared counter store partitioned by API key, so a hot customer lands on one shard and every server agrees on the count.", "cite": { "path": "astraupskill/03-SYSTEM-DESIGN.md", "lineStart": 280, "lineEnd": 282 } },
+    { "text": "[w2] Refusal contract: 429 Too Many Requests carrying a Retry-After value, so a refused client knows when to come back.", "quote": "When you refuse, say when to come back" },
+    { "text": "[w2] Data model for safe retries: an Idempotency-Key header mapped to the stored response, replayed on a repeat so a retry after a timeout does not repeat the side effect.", "quote": "the server stores the *response* under it and replays it for repeats" },
+    { "text": "[w3] Failure mode decided: if the counter store is down, rejecting everything turns a limiter outage into a total outage, so the limiter fails open (allow, log loudly) and the API protects itself with bulkheads.", "cite": { "path": "astraupskill/03-SYSTEM-DESIGN.md", "lineStart": 297, "lineEnd": 299 } },
+    { "text": "[w2] Every dependency the handler calls is wrapped in a circuit breaker, a bulkhead and a deadline.", "cite": { "path": "astraupskill/03-SYSTEM-DESIGN.md", "lineStart": 283, "lineEnd": 285 } }
+   ]
+  },
+  {
+   "prompt": "PRE-MORTEM — the same API at 10x the traffic, or with the counter store or a downstream dependency slow or down. What breaks first, and what in your design already prevents it?",
+   "keyPoints": [
+    { "text": "[w3] The single shared store that holds every rate limit is the hidden single point of failure; say what the API does when it dies.", "cite": { "path": "astraupskill/03-SYSTEM-DESIGN.md", "lineStart": 584, "lineEnd": 586 } },
+    { "text": "[w3] A slow dependency eats every thread unless each dependency has its own fixed permits and a bounded queue (a bulkhead).", "quote": "so one slow dependency can exhaust only its own compartment" },
+    { "text": "[w2] Clients that failed at the same moment retry at the same moment; without jitter the load returns in synchronised waves.", "quote": "Without jitter the outage comes back in synchronised waves" },
+    { "text": "[w2] Retries multiply load during an outage: cap the attempts per request and keep a fleet-wide retry budget as a fraction of live traffic.", "quote": "stops them amplifying an outage" },
+    { "text": "[w2] An open breaker turns a long timeout into an immediate refusal, freeing the caller's threads and giving the dependency room to recover.", "quote": "The breaker turns a 30-second timeout into a 0-millisecond refusal" }
+   ]
+  },
+  {
+   "prompt": "TRADE-OFF HANDBACK — defend your rate-limiter choices against the alternatives the guide names. For each, say what you bought, what it cost, and which requirement put you on that side.",
+   "keyPoints": [
+    { "text": "[w3] Token bucket vs windows: a fixed window is cheap but allows up to double the limit across a boundary, a sliding log is exact but stores every timestamp, a sliding-window counter approximates cheaply.", "cite": { "path": "astraupskill/03-SYSTEM-DESIGN.md", "lineStart": 287, "lineEnd": 291 } },
+    { "text": "[w3] Local vs global counting: per-server memory is fast and free but lets a client get N times the limit across N servers; a shared store is accurate but adds a hop; the middle is local buckets with a share of the global rate, synced periodically.", "cite": { "path": "astraupskill/03-SYSTEM-DESIGN.md", "lineStart": 292, "lineEnd": 296 } },
+    { "text": "[w2] Layer order is chosen on purpose: outbound deadline, retry with backoff, circuit breaker, bulkhead, call (each retry passes the breaker and fails fast once it opens; libraries differ); server side rate limit, then idempotency check, then work.", "cite": { "path": "astraupskill/03-SYSTEM-DESIGN.md", "lineStart": 162, "lineEnd": 167 } },
+    { "text": "[w2] Degrade instead of failing: when a breaker trips, a cache can serve stale data rather than an error.", "quote": "are often the first thing to fail open when a breaker trips" },
+    { "text": "[w1] Time across machines is not trusted: budgets and expiries are not compared against another machine's wall clock.", "cite": { "path": "astraupskill/03-SYSTEM-DESIGN.md", "lineStart": 581, "lineEnd": 583 } }
+   ]
+  }
+ ]
+}
