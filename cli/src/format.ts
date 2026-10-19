@@ -1,6 +1,6 @@
 import type { CanonicalRunResult, DashboardResponse, SubmitResponse, UnitDetailResponse } from '@bootquest/shared/api';
 import type { SeedQueueResponse, SyncReport } from '@bootquest/shared/sync';
-import { ApiError, BadResponseError, ServerUnreachableError, UsageError } from './client.ts';
+import { ApiError, BadResponseError, ServerTimeoutError, ServerUnreachableError, UsageError } from './client.ts';
 import { ConfigError } from './config.ts';
 
 /** Plain text (no ANSI): output is meant to be readable in any terminal and greppable by scripts. */
@@ -241,6 +241,16 @@ export function formatError(err: unknown): string {
     return [
       `Cannot reach the BootQuest server at ${err.server} (${err.reason}).`,
       'Start it from the BootQuest repo with `npm run serve`, or point the CLI elsewhere with --server <url> / BOOTQUEST_SERVER.',
+    ].join('\n');
+  }
+  if (err instanceof ServerTimeoutError) {
+    // the request was sent: the server is up but has not answered — it may still be working on it
+    const what = err.path.endsWith('/submit') ? 'grading' : 'working on it';
+    return [
+      `No answer from the BootQuest server at ${err.server} within ${err.seconds}s (${err.method} ${err.path}).`,
+      err.recorded
+        ? `The server may still be ${what} and may still record it: run \`bootquest status\` before retrying, so a retry does not record it twice.`
+        : `The server may still be ${what}; nothing is recorded by this request, so it is safe to retry.`,
     ].join('\n');
   }
   if (err instanceof ApiError) {

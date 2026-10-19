@@ -1,6 +1,6 @@
 import { XP_ZERO_REASONS } from '@bootquest/shared';
 import { describe, expect, it } from 'vitest';
-import { ApiError, BadResponseError, ServerUnreachableError, UsageError } from '../src/client.ts';
+import { ApiClient, ApiError, BadResponseError, DEFAULT_TIMEOUT_MS, type FetchLike, GRADE_TIMEOUT_MS, ServerTimeoutError, ServerUnreachableError, UsageError } from '../src/client.ts';
 import { ConfigError } from '../src/config.ts';
 import { describeValue, formatDashboard, formatError, formatFailures, formatRun, formatSubmit, formatXp, XP_ZERO_EXPLANATIONS } from '../src/format.ts';
 import { dashboard, drillDetail, submitResp } from './helpers.ts';
@@ -103,5 +103,53 @@ describe('formatError', () => {
     expect(formatError(new UsageError('use it right'))).toBe('use it right');
     expect(formatError(new BadResponseError('not json'))).toBe('not json');
     expect(formatError(new Error('weird'))).toBe('Unexpected error: weird');
+  });
+});
+
+describe('timeouts are not "cannot reach the server"', () => {
+  const timeoutErr = () => Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' });
+  const refused = () => Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } });
+  const failing = (mk: () => Error): FetchLike => async () => {
+    throw mk();
+  };
+  const body = { code: 'x' } as never;
+
+  it('submit waits GRADE_TIMEOUT_MS (15 min) and a timeout says the server may still be grading -> run status first', async () => {
+    expect(GRADE_TIMEOUT_MS).toBe(15 * 60_000);
+    const c = new ApiClient('http://h:1', failing(timeoutErr));
+    const err = await c.submit(21, body).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ServerTimeoutError);
+    expect(err).not.toBeInstanceOf(ServerUnreachableError);
+    expect(err).toMatchObject({ seconds: 900, recorded: true, method: 'POST', path: '/api/units/21/submit' });
+    const text = formatError(err);
+    expect(text).toMatch(/^No answer from the BootQuest server at http:\/\/h:1 within 900s \(POST \/api\/units\/21\/submit\)\./);
+    expect(text).toMatch(/may still be grading.*run `bootquest status` before retrying/);
+    expect(text).not.toMatch(/Cannot reach/);
+  });
+
+  it('run gets the long grade timeout too but records nothing; GETs keep the 120s default', async () => {
+    const c = new ApiClient('http://h:1', failing(timeoutErr));
+    const run = await c.run(21, body).catch((e: unknown) => e);
+    expect(run).toMatchObject({ seconds: 900, recorded: false });
+    expect(formatError(run)).toMatch(/nothing is recorded by this request, so it is safe to retry/);
+    expect(await c.dashboard().catch((e: unknown) => e)).toMatchObject({ seconds: DEFAULT_TIMEOUT_MS / 1000, recorded: false, method: 'GET' });
+  });
+
+  it('a real AbortSignal deadline maps to ServerTimeoutError (headers or body)', async () => {
+    const hang: FetchLike = (_url, init) =>
+      new Promise((_res, rej) => init.signal?.addEventListener('abort', () => rej(init.signal!.reason as Error)));
+    expect(await new ApiClient('http://h:1', hang, 30).health().catch((e: unknown) => e)).toBeInstanceOf(ServerTimeoutError);
+    const slowBody: FetchLike = async (_url, init) => ({
+      status: 200,
+      ok: true,
+      text: () => new Promise((_res, rej) => init.signal?.addEventListener('abort', () => rej(init.signal!.reason as Error))),
+    });
+    expect(await new ApiClient('http://h:1', slowBody, 30).health().catch((e: unknown) => e)).toBeInstanceOf(ServerTimeoutError);
+  });
+
+  it('connection refused keeps the "cannot reach" message (start the server)', async () => {
+    const err = await new ApiClient('http://h:1', failing(refused)).submit(21, body).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ServerUnreachableError);
+    expect(formatError(err)).toMatch(/^Cannot reach the BootQuest server at http:\/\/h:1 \(ECONNREFUSED\)\.\nStart it/);
   });
 });
