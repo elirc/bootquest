@@ -1,0 +1,153 @@
+{
+ "name": "campusops-katas",
+ "katas": [
+  {
+   "id": "reservation-check-outside-commit",
+   "title": "Parts store: shorten the lock — validate and build the reservation outside it, lock only the two writes",
+   "findingRef": "campusops Sprint 14 bug harvest, item 1 (docs/quality/BUG-HARVEST.md:5)",
+   "provenance": {
+    "path": "docs/quality/BUG-HARVEST.md",
+    "lines": {
+     "start": 5,
+     "end": 5
+    }
+   },
+   "diff": "diff --git a/src/CampusOps.Infrastructure/Inventory/InMemoryPartsStores.cs b/src/CampusOps.Infrastructure/Inventory/InMemoryPartsStores.cs\n--- a/src/CampusOps.Infrastructure/Inventory/InMemoryPartsStores.cs\n+++ b/src/CampusOps.Infrastructure/Inventory/InMemoryPartsStores.cs\n@@ -41,6 +41,7 @@\n \r\n     public Task<PartReservation?> ReserveForWorkOrderAsync(Guid workOrderId, Guid partId, int quantity, DateTimeOffset at, CancellationToken token)\r\n     {\r\n+        Part? current;\r\n         lock (_gate)\r\n         {\r\n             // Cancellation is honored before commit, never reported after mutation.\r\n@@ -48,17 +49,20 @@\n             if (workOrderId == Guid.Empty || partId == Guid.Empty)\r\n                 throw new DomainException(\"part.reservation_identity_required\", \"Work order and part IDs are required.\");\r\n             if (quantity <= 0) throw new DomainException(\"part.quantity_invalid\", \"Quantity must be positive.\");\r\n-            if (!_parts.TryGetValue(partId, out var current) || quantity > current.Available)\r\n+            if (!_parts.TryGetValue(partId, out current) || quantity > current.Available)\r\n                 return Task.FromResult<PartReservation?>(null);\r\n+        }\r\n \r\n-            var updated = current.Snapshot();\r\n-            updated.Reserve(quantity);\r\n-            var reservation = new PartReservation(Guid.NewGuid(), workOrderId, partId, quantity, at.ToUniversalTime());\r\n-            // Prepare and validate first. No await, callback or external store between writes.\r\n+        // Build the new state outside the gate so the lock is held only for the two writes.\r\n+        var updated = current.Snapshot();\r\n+        updated.Reserve(quantity);\r\n+        var reservation = new PartReservation(Guid.NewGuid(), workOrderId, partId, quantity, at.ToUniversalTime());\r\n+        lock (_gate)\r\n+        {\r\n             _reservations.Add(reservation.Id, reservation);\r\n             _parts[partId] = updated;\r\n-            return Task.FromResult<PartReservation?>(reservation);\r\n         }\r\n+        return Task.FromResult<PartReservation?>(reservation);\r\n     }\r\n \r\n     public Task<IReadOnlyCollection<PartReservation>> ListForWorkOrderAsync(Guid id, CancellationToken token)\r\ndiff --git a/bootquest-kata/PartReservation.Testable.cs b/bootquest-kata/PartReservation.Testable.cs\n--- a/bootquest-kata/PartReservation.Testable.cs\n+++ b/bootquest-kata/PartReservation.Testable.cs\n@@ -123,6 +123,7 @@\n \n     public Task<PartReservation?> ReserveForWorkOrderAsync(Guid workOrderId, Guid partId, int quantity, DateTimeOffset at, CancellationToken token)\n     {\n+        Part? current;\n         lock (_gate)\n         {\n             // Cancellation is honored before commit, never reported after mutation.\n@@ -130,17 +131,20 @@\n             if (workOrderId == Guid.Empty || partId == Guid.Empty)\n                 throw new DomainException(\"part.reservation_identity_required\", \"Work order and part IDs are required.\");\n             if (quantity <= 0) throw new DomainException(\"part.quantity_invalid\", \"Quantity must be positive.\");\n-            if (!_parts.TryGetValue(partId, out var current) || quantity > current.Available)\n+            if (!_parts.TryGetValue(partId, out current) || quantity > current.Available)\n                 return Task.FromResult<PartReservation?>(null);\n+        }\n \n-            var updated = current.Snapshot();\n-            updated.Reserve(quantity);\n-            var reservation = new PartReservation(Guid.NewGuid(), workOrderId, partId, quantity, at.ToUniversalTime());\n-            // Prepare and validate first. No await, callback or external store between writes.\n+        // Build the new state outside the gate so the lock is held only for the two writes.\n+        var updated = current.Snapshot();\n+        updated.Reserve(quantity);\n+        var reservation = new PartReservation(Guid.NewGuid(), workOrderId, partId, quantity, at.ToUniversalTime());\n+        lock (_gate)\n+        {\n             _reservations.Add(reservation.Id, reservation);\n             _parts[partId] = updated;\n-            return Task.FromResult<PartReservation?>(reservation);\n         }\n+        return Task.FromResult<PartReservation?>(reservation);\n     }\n \n     public Task<IReadOnlyCollection<PartReservation>> ListForWorkOrderAsync(Guid id, CancellationToken token)\n",
+   "contextFiles": [
+    {
+     "path": "src/CampusOps.Infrastructure/Inventory/InMemoryPartsStores.cs",
+     "origin": {
+      "kind": "verbatim",
+      "repoPath": "src/CampusOps.Infrastructure/Inventory/InMemoryPartsStores.cs"
+     }
+    },
+    {
+     "path": "bootquest-kata/PartReservation.Testable.cs",
+     "content": "// BootQuest kata module: a TESTABLE, self-contained adaptation (not a repo file) of campusops @ fc19ad4:\n//   src/CampusOps.Core/Common/DomainException.cs,\n//   src/CampusOps.Core/Inventory/Part.cs:1-80 (Part, PartReservation, IPartStore, IPartReservationStore) and\n//   src/CampusOps.Infrastructure/Inventory/InMemoryPartsStores.cs (InMemoryPartStore).\n// Copied VERBATIM into one namespace; PartsService (needs the work-order store and clock) is left out.\nnamespace CampusOps.Kata;\n\npublic sealed class DomainException(string code, string message) : Exception(message)\n{\n    public string Code { get; } = code;\n}\n\npublic sealed class Part\n{\n    public Part(Guid id, string sku, string name, int onHand)\n    {\n        if (id == Guid.Empty || string.IsNullOrWhiteSpace(sku) || string.IsNullOrWhiteSpace(name))\n            throw new DomainException(\"part.details_required\", \"Part ID, SKU, and name are required.\");\n        if (onHand < 0) throw new DomainException(\"part.quantity_invalid\", \"Quantity cannot be negative.\");\n        Id = id;\n        Sku = sku.Trim().ToUpperInvariant();\n        Name = name.Trim();\n        OnHand = onHand;\n    }\n\n    public Guid Id { get; }\n    public string Sku { get; }\n    public string Name { get; }\n    public int OnHand { get; private set; }\n    public int Reserved { get; private set; }\n    public int Available => OnHand - Reserved;\n\n    public void Receive(int quantity)\n    {\n        Positive(quantity);\n        if (quantity > int.MaxValue - OnHand)\n            throw new DomainException(\"part.quantity_overflow\", \"Received quantity exceeds supported stock capacity.\");\n        OnHand += quantity;\n    }\n\n    public void Reserve(int quantity)\n    {\n        Positive(quantity);\n        if (quantity > Available) throw new DomainException(\"part.stock_insufficient\", \"Not enough available stock.\");\n        Reserved += quantity;\n    }\n\n    public void Release(int quantity)\n    {\n        Positive(quantity);\n        if (quantity > Reserved) throw new DomainException(\"part.release_invalid\", \"Cannot release more than reserved.\");\n        Reserved -= quantity;\n    }\n\n    public void Consume(int quantity)\n    {\n        Positive(quantity);\n        if (quantity > Reserved) throw new DomainException(\"part.consume_invalid\", \"Parts must be reserved before consumption.\");\n        Reserved -= quantity;\n        OnHand -= quantity;\n    }\n\n    // All fields are values or immutable strings; callers receive detached state.\n    public Part Snapshot() => (Part)MemberwiseClone();\n\n    private static void Positive(int quantity)\n    {\n        if (quantity <= 0) throw new DomainException(\"part.quantity_invalid\", \"Quantity must be positive.\");\n    }\n}\n\npublic sealed record PartReservation(Guid Id, Guid WorkOrderId, Guid PartId, int Quantity, DateTimeOffset ReservedAt);\n\npublic interface IPartStore\n{\n    Task AddAsync(Part part, CancellationToken token);\n    Task<Part?> GetAsync(Guid id, CancellationToken token);\n    Task<IReadOnlyCollection<Part>> ListAsync(CancellationToken token);\n    // Stock and the reservation record are one commit, or neither is changed.\n    Task<PartReservation?> ReserveForWorkOrderAsync(Guid workOrderId, Guid partId, int quantity, DateTimeOffset at, CancellationToken token);\n}\n\npublic interface IPartReservationStore\n{\n    Task<IReadOnlyCollection<PartReservation>> ListForWorkOrderAsync(Guid id, CancellationToken token);\n}\n\n// Both interfaces must resolve to this SAME singleton instance (see Program.cs).\npublic sealed class InMemoryPartStore : IPartStore, IPartReservationStore\n{\n    private readonly object _gate = new();\n    private readonly Dictionary<Guid, Part> _parts = new();\n    private readonly Dictionary<Guid, PartReservation> _reservations = new();\n\n    public Task AddAsync(Part part, CancellationToken token)\n    {\n        lock (_gate)\n        {\n            token.ThrowIfCancellationRequested();\n            if (!_parts.TryAdd(part.Id, part.Snapshot()))\n                throw new DomainException(\"part.already_exists\", \"A part with this ID already exists.\");\n        }\n        return Task.CompletedTask;\n    }\n\n    public Task<Part?> GetAsync(Guid id, CancellationToken token)\n    {\n        lock (_gate)\n        {\n            token.ThrowIfCancellationRequested();\n            return Task.FromResult(_parts.TryGetValue(id, out var part) ? part.Snapshot() : null);\n        }\n    }\n\n    public Task<IReadOnlyCollection<Part>> ListAsync(CancellationToken token)\n    {\n        lock (_gate)\n        {\n            token.ThrowIfCancellationRequested();\n            return Task.FromResult<IReadOnlyCollection<Part>>(_parts.Values.OrderBy(x => x.Sku).Select(x => x.Snapshot()).ToArray());\n        }\n    }\n\n    public Task<PartReservation?> ReserveForWorkOrderAsync(Guid workOrderId, Guid partId, int quantity, DateTimeOffset at, CancellationToken token)\n    {\n        lock (_gate)\n        {\n            // Cancellation is honored before commit, never reported after mutation.\n            token.ThrowIfCancellationRequested();\n            if (workOrderId == Guid.Empty || partId == Guid.Empty)\n                throw new DomainException(\"part.reservation_identity_required\", \"Work order and part IDs are required.\");\n            if (quantity <= 0) throw new DomainException(\"part.quantity_invalid\", \"Quantity must be positive.\");\n            if (!_parts.TryGetValue(partId, out var current) || quantity > current.Available)\n                return Task.FromResult<PartReservation?>(null);\n\n            var updated = current.Snapshot();\n            updated.Reserve(quantity);\n            var reservation = new PartReservation(Guid.NewGuid(), workOrderId, partId, quantity, at.ToUniversalTime());\n            // Prepare and validate first. No await, callback or external store between writes.\n            _reservations.Add(reservation.Id, reservation);\n            _parts[partId] = updated;\n            return Task.FromResult<PartReservation?>(reservation);\n        }\n    }\n\n    public Task<IReadOnlyCollection<PartReservation>> ListForWorkOrderAsync(Guid id, CancellationToken token)\n    {\n        lock (_gate)\n        {\n            token.ThrowIfCancellationRequested();\n            return Task.FromResult<IReadOnlyCollection<PartReservation>>(_reservations.Values\n                .Where(x => x.WorkOrderId == id).OrderBy(x => x.ReservedAt).ThenBy(x => x.Id).ToArray());\n        }\n    }\n}\n",
+     "origin": {
+      "kind": "adapted",
+      "repoPath": "src/CampusOps.Infrastructure/Inventory/InMemoryPartsStores.cs"
+     }
+    }
+   ],
+   "seededDefectKey": [
+    {
+     "scenario": "Two technicians reserve the last filter for different work orders at the same moment.",
+     "evidence": {
+      "path": "src/CampusOps.Infrastructure/Inventory/InMemoryPartsStores.cs",
+      "lineStart": 56,
+      "lineEnd": 56,
+      "in": "patched"
+     },
+     "consequence": "Both callers pass the availability check in the first lock section against the same snapshot, both build \"Reserved = 1\", and both commit in the second: two reservation records and two success responses for one unit, while the stored part shows a single reservation (last writer wins). Stock and history no longer agree."
+    },
+    {
+     "scenario": "The port's contract that the patch breaks.",
+     "evidence": {
+      "path": "src/CampusOps.Core/Inventory/Part.cs",
+      "lineStart": 72,
+      "lineEnd": 72,
+      "in": "repo"
+     },
+     "consequence": "Check, prepare and commit must be one critical section; splitting the lock keeps each write atomic but not the compare-and-change."
+    },
+    {
+     "scenario": "The repo already shipped this fix.",
+     "evidence": {
+      "path": "docs/quality/BUG-HARVEST.md",
+      "lineStart": 5,
+      "lineEnd": 5,
+      "in": "repo"
+     },
+     "consequence": "The patch re-opens Sprint 14's first counterexample; the original single lock block (no await or callback between read and writes) is the repair."
+    }
+   ],
+   "test": {
+    "module": "bootquest-kata/PartReservation.Testable.cs",
+    "check": {
+     "type": "drill-cs",
+     "shape": "xunit",
+     "files": {
+      "tests": "using CampusOps.Kata;\n\n// Ported from tests/CampusOps.Infrastructure.Tests/Inventory/ConcurrentReservationTests.cs. The race test runs many\n// short rounds of real threads, each competing for the LAST unit in stock. Every contender is already running\n// (yield-spinning on one flag) before any is released, so their calls overlap; a kernel-event gate wakes them\n// one by one and lets most rounds serialize. Rounds are capped by count AND wall time (runner timeout).\npublic sealed class PartReservationTests\n{\n    [Fact(DisplayName = \"competing reservations for the last unit: exactly one caller wins and stock matches history (docs/quality/BUG-HARVEST.md:5)\")]\n    public async Task CompetingReservations_NeverOversell()\n    {\n        const int Rounds = 300;\n        const int Contenders = 4;\n        var deadline = Environment.TickCount64 + 20_000;\n        for (var round = 0; round < Rounds && Environment.TickCount64 < deadline; round++)\n        {\n            var store = new InMemoryPartStore();\n            var part = new Part(Guid.NewGuid(), \"FLT-9\", \"Filter\", 1);\n            await store.AddAsync(part, default);\n            var workOrderId = Guid.NewGuid();\n            var results = new PartReservation?[Contenders];\n            var ready = 0;\n            var go = 0;\n            var threads = Enumerable.Range(0, Contenders).Select(i => new Thread(() =>\n            {\n                Interlocked.Increment(ref ready);\n                while (Volatile.Read(ref go) == 0) Thread.Yield();\n                results[i] = store.ReserveForWorkOrderAsync(workOrderId, part.Id, 1, DateTimeOffset.UnixEpoch, default).GetAwaiter().GetResult();\n            })).ToArray();\n            foreach (var thread in threads) thread.Start();\n            while (Volatile.Read(ref ready) < Contenders) Thread.Yield();\n            Volatile.Write(ref go, 1);\n            foreach (var thread in threads) Assert.True(thread.Join(TimeSpan.FromSeconds(10)), $\"round {round}: a reservation thread did not finish\");\n\n            var stored = (await store.GetAsync(part.Id, default))!;\n            var history = await store.ListForWorkOrderAsync(workOrderId, default);\n            var winners = results.Count(r => r is not null);\n            Assert.True(winners == 1, $\"round {round}: {winners} callers were told they reserved the single unit in stock\");\n            Assert.Equal(history.Sum(x => x.Quantity), stored.Reserved);\n            Assert.Equal(0, stored.Available);\n        }\n    }\n\n    [Fact(DisplayName = \"a cancelled reservation changes neither stock nor history\")]\n    public async Task CancelledReservationChangesNeitherStockNorHistory()\n    {\n        var store = new InMemoryPartStore();\n        var part = new Part(Guid.NewGuid(), \"F\", \"Filter\", 5);\n        var order = Guid.NewGuid();\n        await store.AddAsync(part, default);\n        using var cancellation = new CancellationTokenSource();\n        cancellation.Cancel();\n\n        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => store.ReserveForWorkOrderAsync(order, part.Id, 2, DateTimeOffset.UtcNow, cancellation.Token));\n        Assert.Equal(5, (await store.GetAsync(part.Id, default))!.Available);\n        Assert.Empty(await store.ListForWorkOrderAsync(order, default));\n    }\n\n    [Fact(DisplayName = \"insufficient stock returns null and appends no history\")]\n    public async Task InsufficientStockDoesNotAppendHistory()\n    {\n        var store = new InMemoryPartStore();\n        var part = new Part(Guid.NewGuid(), \"F\", \"Filter\", 1);\n        var order = Guid.NewGuid();\n        await store.AddAsync(part, default);\n\n        Assert.Null(await store.ReserveForWorkOrderAsync(order, part.Id, 2, DateTimeOffset.UtcNow, default));\n        Assert.Equal(1, (await store.GetAsync(part.Id, default))!.Available);\n        Assert.Empty(await store.ListForWorkOrderAsync(order, default));\n    }\n\n    [Fact(DisplayName = \"a successful reservation commits stock and history together; the caller's object is not the stored aggregate\")]\n    public async Task ReservationCommitsStockAndHistory()\n    {\n        var store = new InMemoryPartStore();\n        var part = new Part(Guid.NewGuid(), \"F\", \"Filter\", 5);\n        var order = Guid.NewGuid();\n        await store.AddAsync(part, default);\n\n        var reservation = await store.ReserveForWorkOrderAsync(order, part.Id, 2, DateTimeOffset.UtcNow, default);\n\n        Assert.NotNull(reservation);\n        Assert.Equal(3, (await store.GetAsync(part.Id, default))!.Available);\n        Assert.Equal(2, Assert.Single(await store.ListForWorkOrderAsync(order, default)).Quantity);\n        Assert.Equal(5, part.Available);\n    }\n}\n",
+      "tail": ""
+     },
+     "timeoutMs": 60000
+    }
+   }
+  },
+  {
+   "id": "sla-escalate-while-paused",
+   "title": "SLA sweep: escalate overdue work orders even while their clock is paused, so stalled jobs still surface",
+   "findingRef": "campusops Sprint 10 SLA clocks (docs/sprints/sprint-10.md:3)",
+   "provenance": {
+    "path": "docs/sprints/sprint-10.md",
+    "lines": {
+     "start": 3,
+     "end": 3
+    }
+   },
+   "diff": "diff --git a/src/CampusOps.Core/ServiceLevels/ServiceLevel.cs b/src/CampusOps.Core/ServiceLevels/ServiceLevel.cs\n--- a/src/CampusOps.Core/ServiceLevels/ServiceLevel.cs\n+++ b/src/CampusOps.Core/ServiceLevels/ServiceLevel.cs\n@@ -15,7 +15,7 @@\n     public bool IsPaused => _pausedAt is not null;\r\n     public void Pause(DateTimeOffset at) { if (IsPaused) throw new DomainException(\"sla.already_paused\", \"SLA is already paused.\"); _pausedAt = at.ToUniversalTime(); }\r\n     public void Resume(DateTimeOffset at) { if (_pausedAt is null) throw new DomainException(\"sla.not_paused\", \"SLA is not paused.\"); DueAt += at.ToUniversalTime() - _pausedAt.Value; _pausedAt = null; }\r\n-    public bool EscalateIfOverdue(DateTimeOffset now) { if (IsPaused || EscalatedAt is not null || now.ToUniversalTime() <= DueAt) return false; EscalatedAt = now.ToUniversalTime(); return true; }\r\n+    public bool EscalateIfOverdue(DateTimeOffset now) { if (EscalatedAt is not null || now.ToUniversalTime() <= DueAt) return false; EscalatedAt = now.ToUniversalTime(); return true; }\r\n }\r\n public interface IServiceLevelStore { Task AddAsync(WorkOrderServiceLevel item, CancellationToken token); Task<IReadOnlyCollection<WorkOrderServiceLevel>> ListAsync(CancellationToken token); }\r\n public sealed class ServiceLevelService(IServiceLevelStore store, IClock clock)\r\ndiff --git a/bootquest-kata/ServiceLevel.Testable.cs b/bootquest-kata/ServiceLevel.Testable.cs\n--- a/bootquest-kata/ServiceLevel.Testable.cs\n+++ b/bootquest-kata/ServiceLevel.Testable.cs\n@@ -28,7 +28,7 @@\n     public bool IsPaused => _pausedAt is not null;\n     public void Pause(DateTimeOffset at) { if (IsPaused) throw new DomainException(\"sla.already_paused\", \"SLA is already paused.\"); _pausedAt = at.ToUniversalTime(); }\n     public void Resume(DateTimeOffset at) { if (_pausedAt is null) throw new DomainException(\"sla.not_paused\", \"SLA is not paused.\"); DueAt += at.ToUniversalTime() - _pausedAt.Value; _pausedAt = null; }\n-    public bool EscalateIfOverdue(DateTimeOffset now) { if (IsPaused || EscalatedAt is not null || now.ToUniversalTime() <= DueAt) return false; EscalatedAt = now.ToUniversalTime(); return true; }\n+    public bool EscalateIfOverdue(DateTimeOffset now) { if (EscalatedAt is not null || now.ToUniversalTime() <= DueAt) return false; EscalatedAt = now.ToUniversalTime(); return true; }\n }\n public interface IServiceLevelStore { Task AddAsync(WorkOrderServiceLevel item, CancellationToken token); Task<IReadOnlyCollection<WorkOrderServiceLevel>> ListAsync(CancellationToken token); }\n public sealed class ServiceLevelService(IServiceLevelStore store, IClock clock)\n",
+   "contextFiles": [
+    {
+     "path": "src/CampusOps.Core/ServiceLevels/ServiceLevel.cs",
+     "origin": {
+      "kind": "verbatim",
+      "repoPath": "src/CampusOps.Core/ServiceLevels/ServiceLevel.cs"
+     }
+    },
+    {
+     "path": "bootquest-kata/ServiceLevel.Testable.cs",
+     "content": "// BootQuest kata module: a TESTABLE, self-contained adaptation (not a repo file) of campusops @ fc19ad4:\n//   src/CampusOps.Core/Common/DomainException.cs, src/CampusOps.Core/Common/Time.cs (IClock),\n//   src/CampusOps.Core/Requests/MaintenanceRequest.cs:5 (RequestPriority) and\n//   src/CampusOps.Core/ServiceLevels/ServiceLevel.cs.\n// Copied VERBATIM into one namespace so the SLA rules compile on their own.\nnamespace CampusOps.Kata;\n\npublic sealed class DomainException(string code, string message) : Exception(message)\n{\n    public string Code { get; } = code;\n}\n\npublic interface IClock { DateTimeOffset UtcNow { get; } }\npublic sealed class SystemClock : IClock { public DateTimeOffset UtcNow => DateTimeOffset.UtcNow; }\n\npublic enum RequestPriority { Low, Normal, High, Emergency }\n\npublic sealed class ServiceLevelPolicy(IReadOnlyDictionary<RequestPriority, TimeSpan> targets)\n{\n    public DateTimeOffset DueAt(RequestPriority priority, DateTimeOffset openedAt) => openedAt.ToUniversalTime() + (targets.TryGetValue(priority, out var target) ? target : throw new DomainException(\"sla.target_missing\", $\"No SLA target for {priority}.\"));\n}\npublic sealed class WorkOrderServiceLevel(Guid workOrderId, DateTimeOffset dueAt)\n{\n    private DateTimeOffset? _pausedAt;\n    public Guid WorkOrderId { get; } = workOrderId;\n    public DateTimeOffset DueAt { get; private set; } = dueAt.ToUniversalTime();\n    public DateTimeOffset? EscalatedAt { get; private set; }\n    public bool IsPaused => _pausedAt is not null;\n    public void Pause(DateTimeOffset at) { if (IsPaused) throw new DomainException(\"sla.already_paused\", \"SLA is already paused.\"); _pausedAt = at.ToUniversalTime(); }\n    public void Resume(DateTimeOffset at) { if (_pausedAt is null) throw new DomainException(\"sla.not_paused\", \"SLA is not paused.\"); DueAt += at.ToUniversalTime() - _pausedAt.Value; _pausedAt = null; }\n    public bool EscalateIfOverdue(DateTimeOffset now) { if (IsPaused || EscalatedAt is not null || now.ToUniversalTime() <= DueAt) return false; EscalatedAt = now.ToUniversalTime(); return true; }\n}\npublic interface IServiceLevelStore { Task AddAsync(WorkOrderServiceLevel item, CancellationToken token); Task<IReadOnlyCollection<WorkOrderServiceLevel>> ListAsync(CancellationToken token); }\npublic sealed class ServiceLevelService(IServiceLevelStore store, IClock clock)\n{\n    public async Task<int> EscalateOverdueAsync(CancellationToken token) { var count = 0; foreach (var item in await store.ListAsync(token)) if (item.EscalateIfOverdue(clock.UtcNow)) count++; return count; }\n}\n",
+     "origin": {
+      "kind": "adapted",
+      "repoPath": "src/CampusOps.Core/ServiceLevels/ServiceLevel.cs"
+     }
+    }
+   ],
+   "seededDefectKey": [
+    {
+     "scenario": "A work order is paused at 10:30 (waiting on a part) with an 11:00 deadline; the escalation sweep runs at 11:30.",
+     "evidence": {
+      "path": "src/CampusOps.Core/ServiceLevels/ServiceLevel.cs",
+      "lineStart": 18,
+      "lineEnd": 18,
+      "in": "patched"
+     },
+     "consequence": "Paused time now counts toward the breach: the order is escalated while its clock is stopped. Resume later moves DueAt to 12:30, but EscalatedAt is already set and never cleared, so the record stays \"escalated\" for a deadline it has not missed."
+    },
+    {
+     "scenario": "What a pause is supposed to mean.",
+     "evidence": {
+      "path": "docs/sprints/sprint-10.md",
+      "lineStart": 3,
+      "lineEnd": 3,
+      "in": "repo"
+     },
+     "consequence": "Resume adds the paused span to DueAt precisely because paused time is not service time; escalating during the pause contradicts the same object's arithmetic."
+    },
+    {
+     "scenario": "The shipped regression.",
+     "evidence": {
+      "path": "tests/CampusOps.Core.Tests/ServiceLevels/ServiceLevelTests.cs",
+      "lineStart": 8,
+      "lineEnd": 8,
+      "in": "repo"
+     },
+     "consequence": "The repo test asserts that a paused clock 2 hours past due does NOT escalate; the patch makes it fail."
+    }
+   ],
+   "test": {
+    "module": "bootquest-kata/ServiceLevel.Testable.cs",
+    "check": {
+     "type": "drill-cs",
+     "shape": "xunit",
+     "files": {
+      "tests": "using CampusOps.Kata;\n\n// Ported from tests/CampusOps.Core.Tests/ServiceLevels/ServiceLevelTests.cs with fixed instants\n// (astraupskill/advanced/extended-course/12-service-level-time-and-pause-accounting.md: deadline 11:00, pause 10:30, resume 12:00 -> 12:30).\npublic sealed class ServiceLevelTests\n{\n    private static readonly DateTimeOffset Day = new(2026, 9, 1, 0, 0, 0, TimeSpan.Zero);\n    private static DateTimeOffset At(int hour, int minute = 0) => Day.AddHours(hour).AddMinutes(minute);\n\n    private sealed class FixedClock(DateTimeOffset now) : IClock { public DateTimeOffset UtcNow { get; } = now; }\n\n    private sealed class Store(params WorkOrderServiceLevel[] items) : IServiceLevelStore\n    {\n        public Task AddAsync(WorkOrderServiceLevel item, CancellationToken token) => Task.CompletedTask;\n        public Task<IReadOnlyCollection<WorkOrderServiceLevel>> ListAsync(CancellationToken token) => Task.FromResult<IReadOnlyCollection<WorkOrderServiceLevel>>(items);\n    }\n\n    [Fact(DisplayName = \"paused time extends the due date and a paused clock never escalates\")]\n    public void PausedTime_ExtendsDueDateAndPreventsEscalation()\n    {\n        var sla = new WorkOrderServiceLevel(Guid.NewGuid(), At(11));\n        sla.Pause(At(10, 30));\n\n        Assert.False(sla.EscalateIfOverdue(At(13)));\n        Assert.Null(sla.EscalatedAt);\n\n        sla.Resume(At(12));\n        Assert.Equal(At(12, 30), sla.DueAt);\n    }\n\n    [Fact(DisplayName = \"after resume the EXTENDED deadline governs: not overdue at 12:15, escalated once after 12:30\")]\n    public void AfterResume_ExtendedDeadlineGoverns()\n    {\n        var sla = new WorkOrderServiceLevel(Guid.NewGuid(), At(11));\n        sla.Pause(At(10, 30));\n        Assert.False(sla.EscalateIfOverdue(At(11, 30)));\n        sla.Resume(At(12));\n\n        Assert.False(sla.EscalateIfOverdue(At(12, 15)));\n        Assert.True(sla.EscalateIfOverdue(At(12, 31)));\n        Assert.Equal(At(12, 31), sla.EscalatedAt);\n        Assert.False(sla.EscalateIfOverdue(At(13)));\n    }\n\n    [Fact(DisplayName = \"the deadline instant itself is not overdue\")]\n    public void DeadlineEquality_IsNotOverdue()\n    {\n        var sla = new WorkOrderServiceLevel(Guid.NewGuid(), At(11));\n\n        Assert.False(sla.EscalateIfOverdue(At(11)));\n        Assert.True(sla.EscalateIfOverdue(At(11).AddTicks(1)));\n    }\n\n    [Fact(DisplayName = \"the sweep escalates only running, overdue clocks\")]\n    public async Task Sweep_SkipsPausedAndOnTimeClocks()\n    {\n        var overdue = new WorkOrderServiceLevel(Guid.NewGuid(), At(9));\n        var paused = new WorkOrderServiceLevel(Guid.NewGuid(), At(9));\n        paused.Pause(At(8));\n        var onTime = new WorkOrderServiceLevel(Guid.NewGuid(), At(15));\n        var service = new ServiceLevelService(new Store(overdue, paused, onTime), new FixedClock(At(10)));\n\n        Assert.Equal(1, await service.EscalateOverdueAsync(default));\n        Assert.NotNull(overdue.EscalatedAt);\n        Assert.Null(paused.EscalatedAt);\n    }\n}\n",
+      "tail": ""
+     },
+     "timeoutMs": 30000
+    }
+   }
+  }
+ ]
+}

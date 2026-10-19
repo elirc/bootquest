@@ -1,0 +1,177 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "patches",
+ "name": "ww18-katas",
+ "items": [
+  {
+   "key": "seed:patches:ww18/patch-kata/5e9ca5b649066447",
+   "provenance": {
+    "repo": "ww18",
+    "sha": "d032dc72c858b75d920b7605ec0ebbafcd7e1758",
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "lines": {
+     "start": 32,
+     "end": 32
+    }
+   },
+   "citations": [],
+   "kind": "patch-kata",
+   "title": "Price rules: treat maxQuantity as an exclusive upper bound so adjacent bands never both match",
+   "diff": "diff --git a/src/domain/quote-policy.mjs b/src/domain/quote-policy.mjs\n--- a/src/domain/quote-policy.mjs\n+++ b/src/domain/quote-policy.mjs\n@@ -23,7 +23,7 @@\n function findApplicableRule(product, quantity) {\n   return (\n     product.priceRules.find(\n-      (rule) => quantity >= rule.minQuantity && quantity <= rule.maxQuantity\n+      (rule) => quantity >= rule.minQuantity && quantity < rule.maxQuantity\n     ) ?? null\n   );\n }\n",
+   "contextFiles": [
+    {
+     "path": "src/domain/quote-policy.mjs",
+     "content": "// Adapted from ww18 src/domain/quote-policy.ts @ d032dc7 (findApplicableRule, evaluateQuoteDraft, ensureQuoteTransition — VERBATIM\n// apart from TypeScript annotations), src/lib/money.ts (calculatePercentDiscount, sumMoney) and src/lib/errors.ts (AppError).\n// Products and price rules are plain objects shaped like the Prisma Product / PriceRule rows.\nexport class AppError extends Error {\n  constructor(statusCode, message) {\n    super(message);\n    this.statusCode = statusCode;\n  }\n}\n\nexport function calculatePercentDiscount(listPriceCents, unitPriceCents) {\n  if (listPriceCents === 0) {\n    return 0;\n  }\n\n  return Math.round(((listPriceCents - unitPriceCents) / listPriceCents) * 100);\n}\n\nexport function sumMoney(values) {\n  return values.reduce((total, value) => total + value, 0);\n}\n\nfunction findApplicableRule(product, quantity) {\n  return (\n    product.priceRules.find(\n      (rule) => quantity >= rule.minQuantity && quantity <= rule.maxQuantity\n    ) ?? null\n  );\n}\n\nexport function evaluateQuoteDraft(\n  products,\n  draftLines,\n  contractTermMonths\n) {\n  const lines = draftLines.map((line) => {\n    const product = products.find((candidate) => candidate.id === line.productId);\n\n    if (!product) {\n      throw new AppError(404, `Product ${line.productId} was not found in the active tenant.`);\n    }\n\n    const rule = findApplicableRule(product, line.quantity);\n    const discountPct = calculatePercentDiscount(product.basePriceCents, line.unitPriceCents);\n\n    if (rule && line.unitPriceCents < rule.floorPriceCents) {\n      throw new AppError(422, `Line for ${product.sku} falls below the configured floor price.`);\n    }\n\n    return {\n      ...line,\n      pricingRuleId: rule?.id ?? null,\n      listPriceCents: product.basePriceCents,\n      discountPct\n    };\n  });\n\n  const subtotalCents = sumMoney(lines.map((line) => line.listPriceCents * line.quantity));\n  const totalCents = sumMoney(lines.map((line) => line.unitPriceCents * line.quantity));\n  const discountCents = subtotalCents - totalCents;\n  const reasons = new Set();\n\n  for (const line of lines) {\n    const product = products.find((candidate) => candidate.id === line.productId);\n    const rule = product.priceRules.find((candidate) => candidate.id === line.pricingRuleId) ?? null;\n\n    if (line.discountPct > product.dealDeskDiscountPct) {\n      reasons.add(`${product.sku} exceeds the deal desk discount threshold.`);\n    }\n\n    if (line.discountPct > product.autoApprovalDiscountPct) {\n      reasons.add(`${product.sku} requires finance approval for discounting.`);\n    }\n\n    if (rule && !((rule.allowedTermMonths).includes(contractTermMonths))) {\n      reasons.add(`${product.sku} uses a non-standard contract term.`);\n    }\n  }\n\n  const reasonList = Array.from(reasons);\n\n  return {\n    lines,\n    subtotalCents,\n    discountCents,\n    totalCents,\n    requiresDealDesk: reasonList.some((reason) => reason.includes(\"deal desk\")),\n    requiresFinanceApproval: reasonList.some(\n      (reason) => reason.includes(\"finance approval\") || reason.includes(\"deal desk\")\n    ),\n    requiresLegalApproval: reasonList.some((reason) => reason.includes(\"non-standard contract term\")),\n    reasons: reasonList\n  };\n}\n\nconst allowedTransitions = {\n  DRAFT: [\"PENDING_DEAL_DESK\", \"PENDING_APPROVAL\", \"APPROVED\", \"REJECTED\"],\n  PENDING_DEAL_DESK: [\"PENDING_APPROVAL\", \"REJECTED\"],\n  PENDING_APPROVAL: [\"APPROVED\", \"REJECTED\"],\n  APPROVED: [\"CONVERTED_TO_ORDER\"],\n  REJECTED: [],\n  CONVERTED_TO_ORDER: []\n};\n\nexport function ensureQuoteTransition(current, next) {\n  if (!allowedTransitions[current].includes(next)) {\n    throw new AppError(409, `Quote cannot move from ${current} to ${next}.`);\n  }\n}\n",
+     "origin": {
+      "kind": "adapted",
+      "repoPath": "src/domain/quote-policy.ts"
+     }
+    }
+   ],
+   "seededDefectKey": [
+    {
+     "scenario": "The seeded rule covers 1-99 seats (prisma/seed.ts:103-104); a rep quotes exactly 99 seats at a deep discount.",
+     "evidence": {
+      "path": "src/domain/quote-policy.mjs",
+      "lineStart": 26,
+      "lineEnd": 26,
+      "in": "patched"
+     },
+     "consequence": "Quantity == maxQuantity now matches no rule, and a line without a rule skips BOTH the floor check and the contract-term check (finding 1): the top-of-band quantity — the biggest deal in the band — can be priced at any amount on any term with no 422 and no legal flag."
+    },
+    {
+     "scenario": "What \"no rule\" means downstream.",
+     "evidence": {
+      "path": "src/domain/quote-policy.ts",
+      "lineStart": 67,
+      "lineEnd": 67,
+      "in": "repo"
+     },
+     "consequence": "Every protection is gated on `rule &&`; an off-by-one in rule selection is therefore a pricing-guard bypass, not just a wrong lookup."
+    },
+    {
+     "scenario": "How bands are defined.",
+     "evidence": {
+      "path": "src/lib/validation/catalog-schemas.ts",
+      "lineStart": 34,
+      "lineEnd": 34,
+      "in": "repo"
+     },
+     "consequence": "The catalog accepts minQuantity == maxQuantity (a single-quantity band), which an exclusive upper bound makes unmatchable; bands are inclusive at both ends by contract."
+    }
+   ],
+   "test": {
+    "module": "src/domain/quote-policy.mjs",
+    "check": {
+     "type": "drill-js",
+     "language": "js",
+     "tests": [
+      {
+       "name": "at the band maximum (quantity 10 of 1-10) the floor still applies: 5999 is refused with 422",
+       "code": "const product = { id: 'p1', sku: 'SKU-1', basePriceCents: 10000, dealDeskDiscountPct: 20, autoApprovalDiscountPct: 10, priceRules: [{ id: 'r1', minQuantity: 1, maxQuantity: 10, floorPriceCents: 6000, allowedTermMonths: [12] }] }; const line = (price, quantity = 2) => ({ productId: 'p1', quantity, unitPriceCents: price }); assert.throws(() => mod.evaluateQuoteDraft([product], [line(5999, 10)], 12), (e) => e.statusCode === 422);"
+      },
+      {
+       "name": "at the band maximum the rule is selected and its term check runs (24 months -> legal)",
+       "code": "const product = { id: 'p1', sku: 'SKU-1', basePriceCents: 10000, dealDeskDiscountPct: 20, autoApprovalDiscountPct: 10, priceRules: [{ id: 'r1', minQuantity: 1, maxQuantity: 10, floorPriceCents: 6000, allowedTermMonths: [12] }] }; const line = (price, quantity = 2) => ({ productId: 'p1', quantity, unitPriceCents: price }); const d = mod.evaluateQuoteDraft([product], [line(9000, 10)], 24); assert.equal(d.lines[0].pricingRuleId, 'r1'); assert.equal(d.requiresLegalApproval, true);"
+      },
+      {
+       "name": "both band endpoints are inclusive (quantity 1 and 10 select r1); outside the band no rule applies",
+       "code": "const product = { id: 'p1', sku: 'SKU-1', basePriceCents: 10000, dealDeskDiscountPct: 20, autoApprovalDiscountPct: 10, priceRules: [{ id: 'r1', minQuantity: 1, maxQuantity: 10, floorPriceCents: 6000, allowedTermMonths: [12] }] }; const line = (price, quantity = 2) => ({ productId: 'p1', quantity, unitPriceCents: price }); assert.equal(mod.evaluateQuoteDraft([product], [line(9000, 1)], 12).lines[0].pricingRuleId, 'r1'); assert.equal(mod.evaluateQuoteDraft([product], [line(9000, 10)], 12).lines[0].pricingRuleId, 'r1'); assert.equal(mod.evaluateQuoteDraft([product], [line(9000, 11)], 12).lines[0].pricingRuleId, null);"
+      },
+      {
+       "name": "adjacent inclusive bands (1-10, 11-50) each own their endpoints",
+       "code": "const product = { id: 'p1', sku: 'SKU-1', basePriceCents: 10000, dealDeskDiscountPct: 20, autoApprovalDiscountPct: 10, priceRules: [{ id: 'small', minQuantity: 1, maxQuantity: 10, floorPriceCents: 6000, allowedTermMonths: [12] }, { id: 'large', minQuantity: 11, maxQuantity: 50, floorPriceCents: 5000, allowedTermMonths: [12, 24] }] }; const pick = (q) => mod.evaluateQuoteDraft([product], [{ productId: 'p1', quantity: q, unitPriceCents: 9000 }], 12).lines[0].pricingRuleId; assert.deepEqual([pick(10), pick(11), pick(50)], ['small', 'large', 'large']);"
+      }
+     ],
+     "timeoutMs": 8000
+    }
+   },
+   "findingRef": "ww18 senior review finding 1 (astraupskill/06-SOLUTIONS-AND-REVIEW.md:30) and rubric item 1 \"Endpoint comparisons are inclusive\""
+  },
+  {
+   "key": "seed:patches:ww18/patch-kata/9f0c5a2afb46d1a2",
+   "provenance": {
+    "repo": "ww18",
+    "sha": "d032dc72c858b75d920b7605ec0ebbafcd7e1758",
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "lines": {
+     "start": 7,
+     "end": 7
+    }
+   },
+   "citations": [],
+   "kind": "patch-kata",
+   "title": "Quote pricing: refuse a line priced at the floor too — the floor is the minimum margin we never sell AT",
+   "diff": "diff --git a/src/domain/quote-policy.mjs b/src/domain/quote-policy.mjs\n--- a/src/domain/quote-policy.mjs\n+++ b/src/domain/quote-policy.mjs\n@@ -43,7 +43,7 @@\n     const rule = findApplicableRule(product, line.quantity);\n     const discountPct = calculatePercentDiscount(product.basePriceCents, line.unitPriceCents);\n \n-    if (rule && line.unitPriceCents < rule.floorPriceCents) {\n+    if (rule && line.unitPriceCents <= rule.floorPriceCents) {\n       throw new AppError(422, `Line for ${product.sku} falls below the configured floor price.`);\n     }\n \n",
+   "contextFiles": [
+    {
+     "path": "src/domain/quote-policy.mjs",
+     "content": "// Adapted from ww18 src/domain/quote-policy.ts @ d032dc7 (findApplicableRule, evaluateQuoteDraft, ensureQuoteTransition — VERBATIM\n// apart from TypeScript annotations), src/lib/money.ts (calculatePercentDiscount, sumMoney) and src/lib/errors.ts (AppError).\n// Products and price rules are plain objects shaped like the Prisma Product / PriceRule rows.\nexport class AppError extends Error {\n  constructor(statusCode, message) {\n    super(message);\n    this.statusCode = statusCode;\n  }\n}\n\nexport function calculatePercentDiscount(listPriceCents, unitPriceCents) {\n  if (listPriceCents === 0) {\n    return 0;\n  }\n\n  return Math.round(((listPriceCents - unitPriceCents) / listPriceCents) * 100);\n}\n\nexport function sumMoney(values) {\n  return values.reduce((total, value) => total + value, 0);\n}\n\nfunction findApplicableRule(product, quantity) {\n  return (\n    product.priceRules.find(\n      (rule) => quantity >= rule.minQuantity && quantity <= rule.maxQuantity\n    ) ?? null\n  );\n}\n\nexport function evaluateQuoteDraft(\n  products,\n  draftLines,\n  contractTermMonths\n) {\n  const lines = draftLines.map((line) => {\n    const product = products.find((candidate) => candidate.id === line.productId);\n\n    if (!product) {\n      throw new AppError(404, `Product ${line.productId} was not found in the active tenant.`);\n    }\n\n    const rule = findApplicableRule(product, line.quantity);\n    const discountPct = calculatePercentDiscount(product.basePriceCents, line.unitPriceCents);\n\n    if (rule && line.unitPriceCents < rule.floorPriceCents) {\n      throw new AppError(422, `Line for ${product.sku} falls below the configured floor price.`);\n    }\n\n    return {\n      ...line,\n      pricingRuleId: rule?.id ?? null,\n      listPriceCents: product.basePriceCents,\n      discountPct\n    };\n  });\n\n  const subtotalCents = sumMoney(lines.map((line) => line.listPriceCents * line.quantity));\n  const totalCents = sumMoney(lines.map((line) => line.unitPriceCents * line.quantity));\n  const discountCents = subtotalCents - totalCents;\n  const reasons = new Set();\n\n  for (const line of lines) {\n    const product = products.find((candidate) => candidate.id === line.productId);\n    const rule = product.priceRules.find((candidate) => candidate.id === line.pricingRuleId) ?? null;\n\n    if (line.discountPct > product.dealDeskDiscountPct) {\n      reasons.add(`${product.sku} exceeds the deal desk discount threshold.`);\n    }\n\n    if (line.discountPct > product.autoApprovalDiscountPct) {\n      reasons.add(`${product.sku} requires finance approval for discounting.`);\n    }\n\n    if (rule && !((rule.allowedTermMonths).includes(contractTermMonths))) {\n      reasons.add(`${product.sku} uses a non-standard contract term.`);\n    }\n  }\n\n  const reasonList = Array.from(reasons);\n\n  return {\n    lines,\n    subtotalCents,\n    discountCents,\n    totalCents,\n    requiresDealDesk: reasonList.some((reason) => reason.includes(\"deal desk\")),\n    requiresFinanceApproval: reasonList.some(\n      (reason) => reason.includes(\"finance approval\") || reason.includes(\"deal desk\")\n    ),\n    requiresLegalApproval: reasonList.some((reason) => reason.includes(\"non-standard contract term\")),\n    reasons: reasonList\n  };\n}\n\nconst allowedTransitions = {\n  DRAFT: [\"PENDING_DEAL_DESK\", \"PENDING_APPROVAL\", \"APPROVED\", \"REJECTED\"],\n  PENDING_DEAL_DESK: [\"PENDING_APPROVAL\", \"REJECTED\"],\n  PENDING_APPROVAL: [\"APPROVED\", \"REJECTED\"],\n  APPROVED: [\"CONVERTED_TO_ORDER\"],\n  REJECTED: [],\n  CONVERTED_TO_ORDER: []\n};\n\nexport function ensureQuoteTransition(current, next) {\n  if (!allowedTransitions[current].includes(next)) {\n    throw new AppError(409, `Quote cannot move from ${current} to ${next}.`);\n  }\n}\n",
+     "origin": {
+      "kind": "adapted",
+      "repoPath": "src/domain/quote-policy.ts"
+     }
+    }
+   ],
+   "seededDefectKey": [
+    {
+     "scenario": "A rep quotes exactly the configured floor price (e.g. 6,000 cents against a 6,000 floor) — the lowest price the pricing team approved.",
+     "evidence": {
+      "path": "src/domain/quote-policy.mjs",
+      "lineStart": 46,
+      "lineEnd": 46,
+      "in": "patched"
+     },
+     "consequence": "The approved minimum is now itself refused with 422, so the configured floor silently moves up by one cent and every quote at the floor fails; the floor no longer means what the PriceRule row says."
+    },
+    {
+     "scenario": "The contract the repo pins.",
+     "evidence": {
+      "path": "tests/quote-transition-policy.test.mjs",
+      "lineStart": 21,
+      "lineEnd": 21,
+      "in": "repo"
+     },
+     "consequence": "The shipped test asserts line(6000) against floorPriceCents 6000 does not throw; the patch breaks it."
+    },
+    {
+     "scenario": "The review rubric.",
+     "evidence": {
+      "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+      "lineStart": 18,
+      "lineEnd": 18,
+      "in": "repo"
+     },
+     "consequence": "Floor = lowest permitted price; only prices strictly below it are violations."
+    }
+   ],
+   "test": {
+    "module": "src/domain/quote-policy.mjs",
+    "check": {
+     "type": "drill-js",
+     "language": "js",
+     "tests": [
+      {
+       "name": "a line priced EXACTLY at the floor is permitted; one cent below is refused with 422 (ported from tests/quote-transition-policy.test.mjs)",
+       "code": "const product = { id: 'p1', sku: 'SKU-1', basePriceCents: 10000, dealDeskDiscountPct: 20, autoApprovalDiscountPct: 10, priceRules: [{ id: 'r1', minQuantity: 1, maxQuantity: 10, floorPriceCents: 6000, allowedTermMonths: [12] }] }; const line = (price, quantity = 2) => ({ productId: 'p1', quantity, unitPriceCents: price }); assert.doesNotThrow(() => mod.evaluateQuoteDraft([product], [line(6000)], 12)); assert.throws(() => mod.evaluateQuoteDraft([product], [line(5999)], 12), (e) => e.statusCode === 422);"
+      },
+      {
+       "name": "an at-floor line is priced and routed like any other (40% off -> deal desk + finance)",
+       "code": "const product = { id: 'p1', sku: 'SKU-1', basePriceCents: 10000, dealDeskDiscountPct: 20, autoApprovalDiscountPct: 10, priceRules: [{ id: 'r1', minQuantity: 1, maxQuantity: 10, floorPriceCents: 6000, allowedTermMonths: [12] }] }; const line = (price, quantity = 2) => ({ productId: 'p1', quantity, unitPriceCents: price }); const d = mod.evaluateQuoteDraft([product], [line(6000)], 12); assert.equal(d.totalCents, 12000); assert.equal(d.lines[0].discountPct, 40); assert.equal(d.requiresDealDesk, true); assert.equal(d.requiresFinanceApproval, true);"
+      },
+      {
+       "name": "exact thresholds use strict greater-than routing (ported)",
+       "code": "const product = { id: 'p1', sku: 'SKU-1', basePriceCents: 10000, dealDeskDiscountPct: 20, autoApprovalDiscountPct: 10, priceRules: [{ id: 'r1', minQuantity: 1, maxQuantity: 10, floorPriceCents: 6000, allowedTermMonths: [12] }] }; const line = (price, quantity = 2) => ({ productId: 'p1', quantity, unitPriceCents: price }); const exactFinance = mod.evaluateQuoteDraft([product], [line(9000)], 12); assert.equal(exactFinance.requiresFinanceApproval, false); const exactDesk = mod.evaluateQuoteDraft([product], [line(8000)], 12); assert.equal(exactDesk.requiresDealDesk, false); assert.equal(exactDesk.requiresFinanceApproval, true);"
+      },
+      {
+       "name": "unknown product is a 404 before any totals (ported)",
+       "code": "const product = { id: 'p1', sku: 'SKU-1', basePriceCents: 10000, dealDeskDiscountPct: 20, autoApprovalDiscountPct: 10, priceRules: [{ id: 'r1', minQuantity: 1, maxQuantity: 10, floorPriceCents: 6000, allowedTermMonths: [12] }] }; const line = (price, quantity = 2) => ({ productId: 'p1', quantity, unitPriceCents: price }); assert.throws(() => mod.evaluateQuoteDraft([], [line(9000)], 12), (e) => e.statusCode === 404);"
+      }
+     ],
+     "timeoutMs": 8000
+    }
+   },
+   "findingRef": "ww18 review rubric item 2 \"The floor comparison is strict\" (astraupskill/06-SOLUTIONS-AND-REVIEW.md:18)"
+  }
+ ]
+}

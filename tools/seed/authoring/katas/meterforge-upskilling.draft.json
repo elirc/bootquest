@@ -1,0 +1,227 @@
+{
+ "name": "meterforge-upskilling-katas",
+ "katas": [
+  {
+   "id": "price-end-date-inclusive",
+   "title": "Pricing: make a price version's end date inclusive so its last day is still billed at that price",
+   "findingRef": "meterforge-upskilling sprint 3 effective-dated pricing (docs/sprints/sprint-03.md:3)",
+   "provenance": {
+    "path": "docs/sprints/sprint-03.md",
+    "lines": {
+     "start": 3,
+     "end": 5
+    }
+   },
+   "diff": "diff --git a/src/MeterForge.Domain/Pricing/PriceVersion.cs b/src/MeterForge.Domain/Pricing/PriceVersion.cs\n--- a/src/MeterForge.Domain/Pricing/PriceVersion.cs\n+++ b/src/MeterForge.Domain/Pricing/PriceVersion.cs\n@@ -21,7 +21,7 @@\n     public DateOnly ValidFrom { get; }\n     public DateOnly? ValidTo { get; }\n \n-    public bool AppliesOn(DateOnly date) => date >= ValidFrom && (ValidTo is null || date < ValidTo);\n+    public bool AppliesOn(DateOnly date) => date >= ValidFrom && (ValidTo is null || date <= ValidTo);\n }\n \n public static class PriceSelector\ndiff --git a/bootquest-kata/PriceSelection.Testable.cs b/bootquest-kata/PriceSelection.Testable.cs\n--- a/bootquest-kata/PriceSelection.Testable.cs\n+++ b/bootquest-kata/PriceSelection.Testable.cs\n@@ -61,7 +61,7 @@\n     public DateOnly ValidFrom { get; }\n     public DateOnly? ValidTo { get; }\n \n-    public bool AppliesOn(DateOnly date) => date >= ValidFrom && (ValidTo is null || date < ValidTo);\n+    public bool AppliesOn(DateOnly date) => date >= ValidFrom && (ValidTo is null || date <= ValidTo);\n }\n \n public static class PriceSelector\n",
+   "contextFiles": [
+    {
+     "path": "src/MeterForge.Domain/Pricing/PriceVersion.cs",
+     "origin": {
+      "kind": "verbatim",
+      "repoPath": "src/MeterForge.Domain/Pricing/PriceVersion.cs"
+     }
+    },
+    {
+     "path": "bootquest-kata/PriceSelection.Testable.cs",
+     "content": "// BootQuest kata module: a TESTABLE, self-contained adaptation (not a repo file) of meterforge-upskilling @ c71962c:\n//   src/MeterForge.Domain/Common/BusinessRuleException.cs, src/MeterForge.Domain/Common/Money.cs,\n//   src/MeterForge.Domain/Pricing/PriceVersion.cs (PriceVersion + PriceSelector).\n// The listed files are copied VERBATIM into one namespace so the rule compiles on its own.\nnamespace MeterForge.Kata;\n\npublic sealed class BusinessRuleException(string code, string message) : Exception(message)\n{\n    public string Code { get; } = code;\n}\n\npublic readonly record struct Money\n{\n    public Money(decimal amount, string currency)\n    {\n        if (string.IsNullOrWhiteSpace(currency) || currency.Trim().Length != 3)\n        {\n            throw new BusinessRuleException(\"money.currency_invalid\", \"Currency must be a three-letter code.\");\n        }\n\n        if (decimal.Round(amount, 2, MidpointRounding.ToEven) != amount)\n        {\n            throw new BusinessRuleException(\"money.precision_invalid\", \"Money supports at most two decimal places.\");\n        }\n\n        Amount = amount;\n        Currency = currency.Trim().ToUpperInvariant();\n    }\n\n    public decimal Amount { get; }\n\n    public string Currency { get; }\n\n    public static Money operator +(Money left, Money right)\n    {\n        if (left.Currency != right.Currency)\n        {\n            throw new BusinessRuleException(\"money.currency_mismatch\", \"Unlike currencies cannot be added.\");\n        }\n\n        return new Money(left.Amount + right.Amount, left.Currency);\n    }\n}\n\npublic sealed record PriceVersion\n{\n    public PriceVersion(Guid id, Guid productId, Money unitPrice, DateOnly validFrom, DateOnly? validTo)\n    {\n        if (id == Guid.Empty || productId == Guid.Empty) throw new BusinessRuleException(\"price.identity_required\", \"Price and product IDs are required.\");\n        if (validTo <= validFrom) throw new BusinessRuleException(\"price.range_invalid\", \"Price end must be after its start.\");\n        Id = id;\n        ProductId = productId;\n        UnitPrice = unitPrice;\n        ValidFrom = validFrom;\n        ValidTo = validTo;\n    }\n\n    public Guid Id { get; }\n    public Guid ProductId { get; }\n    public Money UnitPrice { get; }\n    public DateOnly ValidFrom { get; }\n    public DateOnly? ValidTo { get; }\n\n    public bool AppliesOn(DateOnly date) => date >= ValidFrom && (ValidTo is null || date < ValidTo);\n}\n\npublic static class PriceSelector\n{\n    public static PriceVersion Select(IReadOnlyCollection<PriceVersion> versions, Guid productId, DateOnly date)\n    {\n        var matches = versions.Where(version => version.ProductId == productId && version.AppliesOn(date)).ToArray();\n        return matches.Length switch\n        {\n            1 => matches[0],\n            0 => throw new BusinessRuleException(\"price.not_found\", \"No price applies on the requested date.\"),\n            _ => throw new BusinessRuleException(\"price.overlap\", \"Multiple prices apply on the requested date.\"),\n        };\n    }\n}\n",
+     "origin": {
+      "kind": "adapted",
+      "repoPath": "src/MeterForge.Domain/Pricing/PriceVersion.cs"
+     }
+    }
+   ],
+   "seededDefectKey": [
+    {
+     "scenario": "A price change takes effect on 1 July: the old version is [Jan 1, Jul 1), the new one [Jul 1, open). Usage is billed for 1 July.",
+     "evidence": {
+      "path": "src/MeterForge.Domain/Pricing/PriceVersion.cs",
+      "lineStart": 24,
+      "lineEnd": 24,
+      "in": "patched"
+     },
+     "consequence": "Both versions now apply on the changeover date, so PriceSelector.Select throws price.overlap and every invoice touching that day fails to price; the one-character change breaks the composition of adjacent versions."
+    },
+    {
+     "scenario": "Where adjacent versions are resolved.",
+     "evidence": {
+      "path": "src/MeterForge.Domain/Pricing/PriceVersion.cs",
+      "lineStart": 36,
+      "lineEnd": 36,
+      "in": "repo"
+     },
+     "consequence": "Selection deliberately refuses to guess between two matches, so an inclusive end turns every changeover date into an ambiguity error instead of a price."
+    },
+    {
+     "scenario": "The contract the repo pins.",
+     "evidence": {
+      "path": "tests/MeterForge.Domain.Tests/Pricing/PriceVersionTests.cs",
+      "lineStart": 9,
+      "lineEnd": 9,
+      "in": "repo"
+     },
+     "consequence": "The shipped regression requires the boundary date to select the new version only; the sprint notes even name this exact one-character bug as the exercise."
+    }
+   ],
+   "test": {
+    "module": "bootquest-kata/PriceSelection.Testable.cs",
+    "check": {
+     "type": "drill-cs",
+     "shape": "xunit",
+     "files": {
+      "tests": "using MeterForge.Kata;\n\n// Ported from tests/MeterForge.Domain.Tests/Pricing/PriceVersionTests.cs, plus the edges of a one-day version.\npublic sealed class PriceSelectionTests\n{\n    private static readonly Guid ProductId = Guid.NewGuid();\n\n    private static PriceVersion Version(decimal amount, DateOnly from, DateOnly? to) =>\n        new(Guid.NewGuid(), ProductId, new Money(amount, \"USD\"), from, to);\n\n    [Fact(DisplayName = \"on the changeover date only the NEW price applies (half-open [from, to), docs/sprints/sprint-03.md:3)\")]\n    public void Select_AdjacentBoundary_ChoosesNewVersionOnly()\n    {\n        var boundary = new DateOnly(2026, 7, 1);\n        var oldPrice = Version(10m, new DateOnly(2026, 1, 1), boundary);\n        var newPrice = Version(12m, boundary, null);\n\n        var selected = PriceSelector.Select([oldPrice, newPrice], ProductId, boundary);\n\n        Assert.Equal(newPrice.Id, selected.Id);\n    }\n\n    [Fact(DisplayName = \"the day before the changeover still bills the old price\")]\n    public void Select_DayBeforeBoundary_ChoosesOldVersion()\n    {\n        var boundary = new DateOnly(2026, 7, 1);\n        var oldPrice = Version(10m, new DateOnly(2026, 1, 1), boundary);\n        var newPrice = Version(12m, boundary, null);\n\n        Assert.Equal(oldPrice.Id, PriceSelector.Select([oldPrice, newPrice], ProductId, boundary.AddDays(-1)).Id);\n    }\n\n    [Fact(DisplayName = \"a one-day version [d, d+1) applies on d and NOT on d+1\")]\n    public void OneDayVersion_DoesNotApplyOnItsEndDate()\n    {\n        var day = new DateOnly(2026, 3, 14);\n        var promo = Version(1m, day, day.AddDays(1));\n\n        Assert.True(promo.AppliesOn(day));\n        Assert.False(promo.AppliesOn(day.AddDays(1)));\n    }\n\n    [Fact(DisplayName = \"genuinely overlapping versions are rejected as ambiguous (price.overlap)\")]\n    public void Select_OverlappingVersions_RejectsAmbiguity()\n    {\n        var versions = new[]\n        {\n            Version(10m, new DateOnly(2026, 1, 1), null),\n            Version(12m, new DateOnly(2026, 2, 1), null),\n        };\n\n        var error = Assert.Throws<BusinessRuleException>(() => PriceSelector.Select(versions, ProductId, new DateOnly(2026, 3, 1)));\n\n        Assert.Equal(\"price.overlap\", error.Code);\n    }\n\n    [Fact(DisplayName = \"a version must end after it starts (price.range_invalid)\")]\n    public void Version_EndingOnItsStart_IsRejected()\n    {\n        var day = new DateOnly(2026, 3, 14);\n\n        Assert.Equal(\"price.range_invalid\", Assert.Throws<BusinessRuleException>(() => Version(1m, day, day)).Code);\n    }\n}\n",
+      "tail": ""
+     },
+     "timeoutMs": 30000
+    }
+   }
+  },
+  {
+   "id": "tier-boundary-unit-twice",
+   "title": "Tiered rating: rewrite the tier walk with inclusive \"first unit / last unit\" ranges",
+   "findingRef": "meterforge-upskilling flaw harvest, Sprint 5 row (docs/quality/FLAW-HARVEST.md:8)",
+   "provenance": {
+    "path": "docs/quality/FLAW-HARVEST.md",
+    "lines": {
+     "start": 8,
+     "end": 8
+    }
+   },
+   "diff": "diff --git a/src/MeterForge.Domain/Rating/TieredRating.cs b/src/MeterForge.Domain/Rating/TieredRating.cs\n--- a/src/MeterForge.Domain/Rating/TieredRating.cs\n+++ b/src/MeterForge.Domain/Rating/TieredRating.cs\n@@ -21,13 +21,14 @@\n             throw new BusinessRuleException(\"rating.currency_mismatch\", \"All tiers must use one currency.\");\n \n         var rated = new List<RatedTier>();\n-        decimal previousLimit = 0;\n+        // Tiers are inclusive unit ranges (\"1-100\", \"101+\"): track the first unit each tier prices.\n+        decimal firstUnit = 1;\n         decimal total = 0;\n         foreach (var tier in ordered)\n         {\n-            if (quantity <= previousLimit) break;\n-            var upper = tier.UpTo ?? quantity;\n-            var units = Math.Min(quantity, upper) - previousLimit;\n+            if (quantity < firstUnit) break;\n+            var lastUnit = Math.Min(quantity, tier.UpTo ?? quantity);\n+            var units = lastUnit - firstUnit + 1;\n             if (units > 0)\n             {\n                 var amount = decimal.Round(units * tier.UnitPrice.Amount, 2, MidpointRounding.ToEven);\n@@ -36,7 +37,7 @@\n                 total += amount;\n             }\n \n-            previousLimit = upper;\n+            firstUnit = lastUnit;\n         }\n \n         return new RatingResult(quantity, rated, new Money(decimal.Round(total, 2, MidpointRounding.ToEven), currency));\ndiff --git a/bootquest-kata/TieredRating.Testable.cs b/bootquest-kata/TieredRating.Testable.cs\n--- a/bootquest-kata/TieredRating.Testable.cs\n+++ b/bootquest-kata/TieredRating.Testable.cs\n@@ -61,13 +61,14 @@\n             throw new BusinessRuleException(\"rating.currency_mismatch\", \"All tiers must use one currency.\");\n \n         var rated = new List<RatedTier>();\n-        decimal previousLimit = 0;\n+        // Tiers are inclusive unit ranges (\"1-100\", \"101+\"): track the first unit each tier prices.\n+        decimal firstUnit = 1;\n         decimal total = 0;\n         foreach (var tier in ordered)\n         {\n-            if (quantity <= previousLimit) break;\n-            var upper = tier.UpTo ?? quantity;\n-            var units = Math.Min(quantity, upper) - previousLimit;\n+            if (quantity < firstUnit) break;\n+            var lastUnit = Math.Min(quantity, tier.UpTo ?? quantity);\n+            var units = lastUnit - firstUnit + 1;\n             if (units > 0)\n             {\n                 var amount = decimal.Round(units * tier.UnitPrice.Amount, 2, MidpointRounding.ToEven);\n@@ -76,7 +77,7 @@\n                 total += amount;\n             }\n \n-            previousLimit = upper;\n+            firstUnit = lastUnit;\n         }\n \n         return new RatingResult(quantity, rated, new Money(decimal.Round(total, 2, MidpointRounding.ToEven), currency));\n",
+   "contextFiles": [
+    {
+     "path": "src/MeterForge.Domain/Rating/TieredRating.cs",
+     "origin": {
+      "kind": "verbatim",
+      "repoPath": "src/MeterForge.Domain/Rating/TieredRating.cs"
+     }
+    },
+    {
+     "path": "bootquest-kata/TieredRating.Testable.cs",
+     "content": "// BootQuest kata module: a TESTABLE, self-contained adaptation (not a repo file) of meterforge-upskilling @ c71962c:\n//   src/MeterForge.Domain/Common/BusinessRuleException.cs, src/MeterForge.Domain/Common/Money.cs,\n//   src/MeterForge.Domain/Rating/TieredRating.cs (TieredRater).\n// The listed files are copied VERBATIM into one namespace so the rule compiles on its own.\nnamespace MeterForge.Kata;\n\npublic sealed class BusinessRuleException(string code, string message) : Exception(message)\n{\n    public string Code { get; } = code;\n}\n\npublic readonly record struct Money\n{\n    public Money(decimal amount, string currency)\n    {\n        if (string.IsNullOrWhiteSpace(currency) || currency.Trim().Length != 3)\n        {\n            throw new BusinessRuleException(\"money.currency_invalid\", \"Currency must be a three-letter code.\");\n        }\n\n        if (decimal.Round(amount, 2, MidpointRounding.ToEven) != amount)\n        {\n            throw new BusinessRuleException(\"money.precision_invalid\", \"Money supports at most two decimal places.\");\n        }\n\n        Amount = amount;\n        Currency = currency.Trim().ToUpperInvariant();\n    }\n\n    public decimal Amount { get; }\n\n    public string Currency { get; }\n\n    public static Money operator +(Money left, Money right)\n    {\n        if (left.Currency != right.Currency)\n        {\n            throw new BusinessRuleException(\"money.currency_mismatch\", \"Unlike currencies cannot be added.\");\n        }\n\n        return new Money(left.Amount + right.Amount, left.Currency);\n    }\n}\n\npublic sealed record UsageTier(decimal? UpTo, Money UnitPrice);\n\npublic sealed record RatedTier(decimal Units, Money UnitPrice, Money Charge);\n\npublic sealed record RatingResult(decimal Quantity, IReadOnlyCollection<RatedTier> Tiers, Money Total);\n\npublic static class TieredRater\n{\n    public static RatingResult Rate(decimal quantity, IReadOnlyCollection<UsageTier> tiers)\n    {\n        if (quantity < 0) throw new BusinessRuleException(\"rating.quantity_invalid\", \"Quantity cannot be negative.\");\n        if (tiers.Count == 0) throw new BusinessRuleException(\"rating.tiers_required\", \"At least one tier is required.\");\n\n        var ordered = tiers.OrderBy(tier => tier.UpTo ?? decimal.MaxValue).ToArray();\n        var currency = ordered[0].UnitPrice.Currency;\n        if (ordered.Any(tier => tier.UnitPrice.Currency != currency))\n            throw new BusinessRuleException(\"rating.currency_mismatch\", \"All tiers must use one currency.\");\n\n        var rated = new List<RatedTier>();\n        decimal previousLimit = 0;\n        decimal total = 0;\n        foreach (var tier in ordered)\n        {\n            if (quantity <= previousLimit) break;\n            var upper = tier.UpTo ?? quantity;\n            var units = Math.Min(quantity, upper) - previousLimit;\n            if (units > 0)\n            {\n                var amount = decimal.Round(units * tier.UnitPrice.Amount, 2, MidpointRounding.ToEven);\n                var charge = new Money(amount, currency);\n                rated.Add(new RatedTier(units, tier.UnitPrice, charge));\n                total += amount;\n            }\n\n            previousLimit = upper;\n        }\n\n        return new RatingResult(quantity, rated, new Money(decimal.Round(total, 2, MidpointRounding.ToEven), currency));\n    }\n}\n",
+     "origin": {
+      "kind": "adapted",
+      "repoPath": "src/MeterForge.Domain/Rating/TieredRating.cs"
+     }
+    }
+   ],
+   "seededDefectKey": [
+    {
+     "scenario": "A tenant uses 150 units on tiers 100 @ $1 and remainder @ $0.50.",
+     "evidence": {
+      "path": "src/MeterForge.Domain/Rating/TieredRating.cs",
+      "lineStart": 40,
+      "lineEnd": 40,
+      "in": "patched"
+     },
+     "consequence": "The next tier starts AT the previous tier's last unit instead of one past it, so the last unit each tier prices is priced again by the next: 150 units = 100 + 51 = $125.50 instead of $125. Any quantity that ends inside a tier with a tier after it gets a phantom 1-unit charge there (50 units bill $50.50, 100 units $100.50)."
+    },
+    {
+     "scenario": "The inclusive arithmetic also changes non-boundary inputs.",
+     "evidence": {
+      "path": "src/MeterForge.Domain/Rating/TieredRating.cs",
+      "lineStart": 29,
+      "lineEnd": 29,
+      "in": "patched"
+     },
+     "consequence": "Rating takes decimal quantities; anything below one unit (e.g. 0.5) now breaks out before the first tier and is rated at $0."
+    },
+    {
+     "scenario": "The repo already paid for this bug once.",
+     "evidence": {
+      "path": "docs/quality/FLAW-HARVEST.md",
+      "lineStart": 8,
+      "lineEnd": 8,
+      "in": "repo"
+     },
+     "consequence": "The repair was to keep non-overlapping (previousLimit, upper] intervals; the patch re-introduces the overlapping fencepost."
+    }
+   ],
+   "test": {
+    "module": "bootquest-kata/TieredRating.Testable.cs",
+    "check": {
+     "type": "drill-cs",
+     "shape": "xunit",
+     "files": {
+      "tests": "using MeterForge.Kata;\n\n// Ported from tests/MeterForge.Domain.Tests/Rating/TieredRaterTests.cs (incl. the docs/quality/FLAW-HARVEST.md\n// Sprint 5 regression: 150 units across 100/$1 and remainder/$0.50 total exactly $125) plus unit conservation.\npublic sealed class TieredRaterTests\n{\n    private static readonly UsageTier[] TwoTiers =\n    [\n        new UsageTier(100, new Money(1m, \"USD\")),\n        new UsageTier(null, new Money(0.50m, \"USD\")),\n    ];\n\n    [Fact(DisplayName = \"50 units inside the first tier cost 50 and touch one tier\")]\n    public void Rate_QuantityWithinFirstTier_ChargesUnitsAtFirstPrice()\n    {\n        var result = TieredRater.Rate(50, TwoTiers);\n\n        Assert.Equal(50m, result.Total.Amount);\n        Assert.Single(result.Tiers);\n    }\n\n    [Fact(DisplayName = \"150 units across 100/$1 + remainder/$0.50 total exactly $125 (FLAW-HARVEST Sprint 5)\")]\n    public void Rate_QuantityCrossingBoundary_ChargesEachUnitOnce()\n    {\n        var result = TieredRater.Rate(150, TwoTiers);\n\n        Assert.Equal(125m, result.Total.Amount);\n        Assert.Equal(50m, result.Tiers.Last().Units);\n    }\n\n    [Fact(DisplayName = \"exactly 100 units fill the first tier and never reach the second\")]\n    public void Rate_QuantityAtBoundary_StaysInFirstTier()\n    {\n        var result = TieredRater.Rate(100, TwoTiers);\n\n        Assert.Equal(100m, result.Total.Amount);\n        Assert.Single(result.Tiers);\n    }\n\n    [Fact(DisplayName = \"units are conserved: tier units sum to the rated quantity (250 over three tiers = $162.50)\")]\n    public void Rate_ThreeTiers_ConservesUnits()\n    {\n        var result = TieredRater.Rate(250, [\n            new UsageTier(100, new Money(1m, \"USD\")),\n            new UsageTier(200, new Money(0.50m, \"USD\")),\n            new UsageTier(null, new Money(0.25m, \"USD\")),\n        ]);\n\n        Assert.Equal(250m, result.Tiers.Sum(t => t.Units));\n        Assert.Equal(162.50m, result.Total.Amount);\n    }\n\n    [Fact(DisplayName = \"mixed tier currencies are rejected (rating.currency_mismatch)\")]\n    public void Rate_MixedCurrencies_RejectsRule()\n    {\n        var error = Assert.Throws<BusinessRuleException>(() => TieredRater.Rate(10, [\n            new UsageTier(100, new Money(1m, \"USD\")),\n            new UsageTier(null, new Money(1m, \"EUR\")),\n        ]));\n\n        Assert.Equal(\"rating.currency_mismatch\", error.Code);\n    }\n}\n",
+      "tail": ""
+     },
+     "timeoutMs": 30000
+    }
+   }
+  },
+  {
+   "id": "payment-retry-new-provider-key",
+   "title": "Payments: give each retry attempt its own provider idempotency key",
+   "findingRef": "meterforge-upskilling flaw harvest, Sprint 10 row (docs/quality/FLAW-HARVEST.md:11) and the duplicate-payment incident drill (docs/operations/INCIDENT-DRILL.md:3)",
+   "provenance": {
+    "path": "docs/operations/INCIDENT-DRILL.md",
+    "lines": {
+     "start": 3,
+     "end": 7
+    }
+   },
+   "diff": "diff --git a/src/MeterForge.Domain/Payments/PaymentAttempt.cs b/src/MeterForge.Domain/Payments/PaymentAttempt.cs\n--- a/src/MeterForge.Domain/Payments/PaymentAttempt.cs\n+++ b/src/MeterForge.Domain/Payments/PaymentAttempt.cs\n@@ -42,6 +42,8 @@\n     {\n         if (Status != PaymentStatus.Failed) throw new BusinessRuleException(\"payment.retry_invalid\", \"Only a failed payment can retry.\");\n         AttemptNumber++;\n+        // New attempt, new provider key: otherwise the provider replays its stored answer for the failed attempt.\n+        ProviderIdempotencyKey = $\"{ProviderIdempotencyKey}:attempt-{AttemptNumber}\";\n         Status = PaymentStatus.Pending;\n     }\n }\ndiff --git a/bootquest-kata/PaymentRetry.Testable.cs b/bootquest-kata/PaymentRetry.Testable.cs\n--- a/bootquest-kata/PaymentRetry.Testable.cs\n+++ b/bootquest-kata/PaymentRetry.Testable.cs\n@@ -83,6 +83,8 @@\n     {\n         if (Status != PaymentStatus.Failed) throw new BusinessRuleException(\"payment.retry_invalid\", \"Only a failed payment can retry.\");\n         AttemptNumber++;\n+        // New attempt, new provider key: otherwise the provider replays its stored answer for the failed attempt.\n+        ProviderIdempotencyKey = $\"{ProviderIdempotencyKey}:attempt-{AttemptNumber}\";\n         Status = PaymentStatus.Pending;\n     }\n }\n",
+   "contextFiles": [
+    {
+     "path": "src/MeterForge.Domain/Payments/PaymentAttempt.cs",
+     "origin": {
+      "kind": "verbatim",
+      "repoPath": "src/MeterForge.Domain/Payments/PaymentAttempt.cs"
+     }
+    },
+    {
+     "path": "bootquest-kata/PaymentRetry.Testable.cs",
+     "content": "// BootQuest kata module: a TESTABLE, self-contained adaptation (not a repo file) of meterforge-upskilling @ c71962c:\n//   src/MeterForge.Domain/Common/BusinessRuleException.cs, src/MeterForge.Domain/Common/Money.cs,\n//   src/MeterForge.Domain/Payments/PaymentAttempt.cs and\n//   src/MeterForge.Application/Payments/PaymentService.cs (IPaymentProvider + PaymentService).\n// The listed files are copied VERBATIM into one namespace so the rule compiles on its own.\nnamespace MeterForge.Kata;\n\npublic sealed class BusinessRuleException(string code, string message) : Exception(message)\n{\n    public string Code { get; } = code;\n}\n\npublic readonly record struct Money\n{\n    public Money(decimal amount, string currency)\n    {\n        if (string.IsNullOrWhiteSpace(currency) || currency.Trim().Length != 3)\n        {\n            throw new BusinessRuleException(\"money.currency_invalid\", \"Currency must be a three-letter code.\");\n        }\n\n        if (decimal.Round(amount, 2, MidpointRounding.ToEven) != amount)\n        {\n            throw new BusinessRuleException(\"money.precision_invalid\", \"Money supports at most two decimal places.\");\n        }\n\n        Amount = amount;\n        Currency = currency.Trim().ToUpperInvariant();\n    }\n\n    public decimal Amount { get; }\n\n    public string Currency { get; }\n\n    public static Money operator +(Money left, Money right)\n    {\n        if (left.Currency != right.Currency)\n        {\n            throw new BusinessRuleException(\"money.currency_mismatch\", \"Unlike currencies cannot be added.\");\n        }\n\n        return new Money(left.Amount + right.Amount, left.Currency);\n    }\n}\n\npublic enum PaymentStatus { Pending, Succeeded, Failed }\n\npublic sealed class PaymentAttempt\n{\n    public PaymentAttempt(Guid id, string tenantId, Guid invoiceId, Money amount, string providerIdempotencyKey)\n    {\n        if (id == Guid.Empty || invoiceId == Guid.Empty) throw new BusinessRuleException(\"payment.identity_required\", \"Payment and invoice IDs are required.\");\n        if (amount.Amount <= 0) throw new BusinessRuleException(\"payment.amount_invalid\", \"Payment amount must be positive.\");\n        if (string.IsNullOrWhiteSpace(tenantId) || string.IsNullOrWhiteSpace(providerIdempotencyKey))\n            throw new BusinessRuleException(\"payment.evidence_required\", \"Tenant and provider idempotency key are required.\");\n        Id = id;\n        TenantId = tenantId;\n        InvoiceId = invoiceId;\n        Amount = amount;\n        ProviderIdempotencyKey = providerIdempotencyKey;\n    }\n\n    public Guid Id { get; }\n    public string TenantId { get; }\n    public Guid InvoiceId { get; }\n    public Money Amount { get; }\n    public string ProviderIdempotencyKey { get; private set; }\n    public PaymentStatus Status { get; private set; }\n    public int AttemptNumber { get; private set; } = 1;\n    public string? ProviderReference { get; private set; }\n\n    public void Succeed(string providerReference)\n    {\n        if (Status != PaymentStatus.Pending || string.IsNullOrWhiteSpace(providerReference))\n            throw new BusinessRuleException(\"payment.succeed_invalid\", \"Only a pending payment with provider evidence can succeed.\");\n        ProviderReference = providerReference;\n        Status = PaymentStatus.Succeeded;\n    }\n\n    public void Fail() => Status = PaymentStatus.Failed;\n\n    public void Retry()\n    {\n        if (Status != PaymentStatus.Failed) throw new BusinessRuleException(\"payment.retry_invalid\", \"Only a failed payment can retry.\");\n        AttemptNumber++;\n        Status = PaymentStatus.Pending;\n    }\n}\n\npublic sealed record ProviderChargeRequest(string IdempotencyKey, Money Amount, Guid InvoiceId);\npublic sealed record ProviderChargeResult(bool Succeeded, string? ProviderReference);\n\npublic interface IPaymentProvider\n{\n    Task<ProviderChargeResult> ChargeAsync(ProviderChargeRequest request, CancellationToken cancellationToken);\n}\n\npublic sealed class PaymentService(IPaymentProvider provider)\n{\n    public async Task<PaymentAttempt> CollectAsync(string tenantId, Guid invoiceId, Money amount, string idempotencyKey, CancellationToken cancellationToken)\n    {\n        var attempt = new PaymentAttempt(Guid.NewGuid(), tenantId, invoiceId, amount, idempotencyKey);\n        await SendAsync(attempt, cancellationToken).ConfigureAwait(false);\n        return attempt;\n    }\n\n    public async Task RetryAsync(PaymentAttempt attempt, CancellationToken cancellationToken)\n    {\n        attempt.Retry();\n        await SendAsync(attempt, cancellationToken).ConfigureAwait(false);\n    }\n\n    private async Task SendAsync(PaymentAttempt attempt, CancellationToken cancellationToken)\n    {\n        var result = await provider.ChargeAsync(new ProviderChargeRequest(\n            attempt.ProviderIdempotencyKey, attempt.Amount, attempt.InvoiceId), cancellationToken).ConfigureAwait(false);\n        if (result.Succeeded) attempt.Succeed(result.ProviderReference!); else attempt.Fail();\n    }\n}\n",
+     "origin": {
+      "kind": "adapted",
+      "repoPath": "src/MeterForge.Domain/Payments/PaymentAttempt.cs"
+     }
+    }
+   ],
+   "seededDefectKey": [
+    {
+     "scenario": "The provider commits the charge but the response is lost; the attempt is marked Failed and an operator (or job) retries it.",
+     "evidence": {
+      "path": "src/MeterForge.Domain/Payments/PaymentAttempt.cs",
+      "lineStart": 46,
+      "lineEnd": 46,
+      "in": "patched"
+     },
+     "consequence": "The retry reaches the provider under a key it has never seen, so it is a NEW charge rather than a replay: the customer is collected twice for one internal payment."
+    },
+    {
+     "scenario": "Why \"failed\" is not proof of non-execution.",
+     "evidence": {
+      "path": "docs/sprints/sprint-10.md",
+      "lineStart": 5,
+      "lineEnd": 5,
+      "in": "repo"
+     },
+     "consequence": "Retry design must preserve the logical payment identity and reconcile provider state; a per-attempt key throws that identity away."
+    },
+    {
+     "scenario": "The shape of the type already says so.",
+     "evidence": {
+      "path": "src/MeterForge.Domain/Payments/PaymentAttempt.cs",
+      "lineStart": 28,
+      "lineEnd": 28,
+      "in": "repo"
+     },
+     "consequence": "Attempt number is the per-try counter; the key is the stable logical identity the provider deduplicates on (FLAW-HARVEST Sprint 10 repair: \"preserve the logical payment key and increment attempt only\")."
+    }
+   ],
+   "test": {
+    "module": "bootquest-kata/PaymentRetry.Testable.cs",
+    "check": {
+     "type": "drill-cs",
+     "shape": "xunit",
+     "files": {
+      "tests": "using MeterForge.Kata;\n\n// Ported from tests/MeterForge.Domain.Tests/Payments/PaymentAttemptTests.cs, plus the ambiguous-timeout drill of\n// docs/operations/INCIDENT-DRILL.md:3 played against a provider that deduplicates by idempotency key.\npublic sealed class PaymentRetryTests\n{\n    /// <summary>Commits every NEW key exactly once; the first response is \"lost\", so the caller records a failure.</summary>\n    private sealed class LossyProvider : IPaymentProvider\n    {\n        public readonly List<string> SeenKeys = [];\n        public readonly HashSet<string> Charges = [];\n\n        public Task<ProviderChargeResult> ChargeAsync(ProviderChargeRequest request, CancellationToken cancellationToken)\n        {\n            SeenKeys.Add(request.IdempotencyKey);\n            Charges.Add(request.IdempotencyKey); // a repeated key is a replay, not a second charge\n            return Task.FromResult(SeenKeys.Count == 1\n                ? new ProviderChargeResult(false, null)\n                : new ProviderChargeResult(true, \"ch_\" + request.IdempotencyKey));\n        }\n    }\n\n    [Fact(DisplayName = \"retry keeps the logical provider key and only advances the attempt number (FLAW-HARVEST Sprint 10)\")]\n    public void Retry_FailedAttempt_ReturnsToPendingAndIncrementsAttempt()\n    {\n        var payment = new PaymentAttempt(Guid.NewGuid(), \"tenant-a\", Guid.NewGuid(), new Money(10m, \"USD\"), \"key-1\");\n        var logicalKey = payment.ProviderIdempotencyKey;\n        payment.Fail();\n        payment.Retry();\n\n        Assert.Equal(PaymentStatus.Pending, payment.Status);\n        Assert.Equal(2, payment.AttemptNumber);\n        Assert.Equal(logicalKey, payment.ProviderIdempotencyKey);\n    }\n\n    [Fact(DisplayName = \"a charge whose response was lost and is then retried is collected ONCE at the provider\")]\n    public async Task LostResponse_ThenRetry_ChargesOnce()\n    {\n        var provider = new LossyProvider();\n        var service = new PaymentService(provider);\n\n        var attempt = await service.CollectAsync(\"tenant-a\", Guid.NewGuid(), new Money(25m, \"USD\"), \"inv-42-pay\", CancellationToken.None);\n        Assert.Equal(PaymentStatus.Failed, attempt.Status);\n\n        await service.RetryAsync(attempt, CancellationToken.None);\n\n        Assert.Equal(PaymentStatus.Succeeded, attempt.Status);\n        Assert.Equal(new[] { \"inv-42-pay\", \"inv-42-pay\" }, provider.SeenKeys);\n        Assert.Single(provider.Charges);\n    }\n\n    [Fact(DisplayName = \"only a failed payment can retry (payment.retry_invalid)\")]\n    public void Retry_PendingAttempt_IsRejected()\n    {\n        var payment = new PaymentAttempt(Guid.NewGuid(), \"tenant-a\", Guid.NewGuid(), new Money(10m, \"USD\"), \"key-1\");\n\n        Assert.Equal(\"payment.retry_invalid\", Assert.Throws<BusinessRuleException>(payment.Retry).Code);\n    }\n\n    [Fact(DisplayName = \"success records the provider evidence\")]\n    public void Succeed_RecordsProviderEvidence()\n    {\n        var payment = new PaymentAttempt(Guid.NewGuid(), \"tenant-a\", Guid.NewGuid(), new Money(10m, \"USD\"), \"key-1\");\n        payment.Succeed(\"provider-1\");\n\n        Assert.Equal(\"provider-1\", payment.ProviderReference);\n    }\n}\n",
+      "tail": ""
+     },
+     "timeoutMs": 30000
+    }
+   }
+  }
+ ]
+}

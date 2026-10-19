@@ -1,0 +1,154 @@
+{
+ "name": "w22-katas",
+ "checkout": ".cache/checkouts/w22@a0d6e0d96e72867c149937f1ad5bb66d1f254b8e",
+ "katas": [
+  {
+   "id": "refund-cap-ignores-prior-refunds",
+   "title": "Refunds: validate against the captured amount, as assertRefundAllowed's parameter name says",
+   "difficulty": "easy",
+   "findingRef": "w22 refund amount safety (src/lib/domain/paymentStateMachine.ts:59 senior note; astraupskill/06-SOLUTIONS-AND-REVIEW.md Level 1)",
+   "provenance": {
+    "path": "src/lib/domain/paymentStateMachine.ts",
+    "find": "  // ⚠️ SENIOR NOTE: refund validation needs the captured amount, not just current status, or repeated partial refunds can exceed the original charge."
+   },
+   "contextFiles": [
+    {
+     "path": "src/services/refundService.mjs",
+     "repoPath": "src/services/refundService.ts",
+     "kind": "adapted",
+     "content": "// Adapted from w22 src/services/refundService.ts @ a0d6e0d (createRefundForPayment, lines 18-101: the transaction body is VERBATIM),\n// src/lib/domain/paymentStateMachine.ts:52-63 (assertRefundAllowed, verbatim minus type annotations) and src/lib/errors.ts (RouteError).\n// Prisma and the repositories become an in-memory store with the same call shapes (refundRepository.ts,\n// paymentRepository.ts, paymentEventRepository.ts); the store is passed in as `prisma` instead of imported.\n// The repo's \"SENIOR NOTE\" review annotations are left out of both copied bodies.\nexport class RouteError extends Error {\n  constructor(status, code, message, details) {\n    super(message);\n    this.status = status;\n    this.code = code;\n    this.details = details;\n  }\n}\n\nconst RefundStatus = { PENDING: \"PENDING\", SUCCEEDED: \"SUCCEEDED\", FAILED: \"FAILED\" };\n\nexport function assertRefundAllowed(\n  currentStatus,\n  refundAmountMinor,\n  capturedAmountMinor,\n) {\n  if (currentStatus !== \"SUCCEEDED\") {\n    throw new RouteError(409, \"PAYMENT_NOT_REFUNDABLE\", \"Only succeeded payments can be refunded.\");\n  }\n\n  if (refundAmountMinor > capturedAmountMinor) {\n    throw new RouteError(409, \"REFUND_AMOUNT_EXCEEDS_CAPTURE\", \"Refund amount exceeds the captured payment amount.\");\n  }\n}\n\n/** In-memory stand-in for the Prisma client: $transaction hands the callback this same store as `tx`. */\nexport function createStore({ payments = [], refunds = [] } = {}) {\n  return {\n    payments,\n    refunds,\n    events: [],\n    async $transaction(fn) {\n      return fn(this);\n    },\n  };\n}\n\n// repository stand-ins (same arguments as the real repositories, client last)\nasync function findPaymentById(id, db) {\n  // like prisma.payment.findUnique: a fresh object, not a live reference to the stored row\n  const payment = db.payments.find((candidate) => candidate.id === id);\n  return payment ? { ...payment } : null;\n}\nasync function sumSuccessfulRefundsForPayment(paymentId, db) {\n  return db.refunds.filter((r) => r.paymentId === paymentId && r.status === RefundStatus.SUCCEEDED).reduce((sum, r) => sum + r.amountMinor, 0);\n}\nasync function createRefund(input, db) {\n  const refund = { id: `refund-${db.refunds.length + 1}`, ...input, status: RefundStatus.PENDING };\n  db.refunds.push(refund);\n  return refund;\n}\nasync function transitionRefundStatus(refundId, status, providerRefundId, db) {\n  const refund = db.refunds.find((r) => r.id === refundId);\n  Object.assign(refund, { status, providerRefundId });\n  return refund;\n}\nasync function transitionPaymentStatus(input, db) {\n  const payment = db.payments.find((p) => p.id === input.paymentId);\n  Object.assign(payment, { status: input.nextStatus, lastKnownProvider: input.providerStatus });\n  return payment;\n}\nasync function createPaymentEvent(input, db) {\n  db.events.push(input);\n  return input;\n}\n\nexport async function createRefundForPayment(input, prisma) {\n  return prisma.$transaction(async (tx) => {\n    // Read the payment and successful refund total on the same transaction\n    // client as the write. This keeps the allowance check with the mutation.\n    const payment = await findPaymentById(input.paymentId, tx);\n    if (!payment) {\n      throw new RouteError(404, \"PAYMENT_NOT_FOUND\", \"Payment not found.\");\n    }\n    const refundedAmount = await sumSuccessfulRefundsForPayment(payment.id, tx);\n    const remainingRefundableAmount = payment.amountMinor - refundedAmount;\n    assertRefundAllowed(payment.status, input.amountMinor, remainingRefundableAmount);\n\n    const refund = await createRefund(\n      {\n        paymentId: payment.id,\n        amountMinor: input.amountMinor,\n        reason: input.reason,\n        createdByUserId: input.session.userId,\n      },\n      tx,\n    );\n\n    await createPaymentEvent(\n      {\n        paymentId: payment.id,\n        actorUserId: input.session.userId,\n        actorLabel: input.session.email,\n        type: \"REFUND_REQUESTED\",\n        payload: {\n          refundId: refund.id,\n          amountMinor: refund.amountMinor,\n          reason: refund.reason,\n        },\n      },\n      tx,\n    );\n\n    const providerRefundId = `prov_ref_${crypto.randomUUID()}`;\n    await transitionRefundStatus(refund.id, RefundStatus.SUCCEEDED, providerRefundId, tx);\n\n    const fullyRefunded = refundedAmount + refund.amountMinor === payment.amountMinor;\n\n    if (fullyRefunded) {\n      await transitionPaymentStatus(\n        {\n          paymentId: payment.id,\n          nextStatus: \"REFUNDED\",\n          providerStatus: \"REFUNDED\",\n        },\n        tx,\n      );\n    }\n\n    await createPaymentEvent(\n      {\n        paymentId: payment.id,\n        actorUserId: input.session.userId,\n        actorLabel: input.session.email,\n        type: \"REFUND_SUCCEEDED\",\n        payload: {\n          refundId: refund.id,\n          providerRefundId,\n          fullyRefunded,\n        },\n      },\n      tx,\n    );\n\n    return {\n      refundId: refund.id,\n      paymentId: payment.id,\n      refundStatus: \"SUCCEEDED\",\n      paymentStatus: fullyRefunded ? \"REFUNDED\" : payment.status,\n      providerRefundId,\n    };\n  });\n}\n"
+    }
+   ],
+   "edits": [
+    {
+     "path": "src/services/refundService.mjs",
+     "find": "    const refundedAmount = await sumSuccessfulRefundsForPayment(payment.id, tx);\n    const remainingRefundableAmount = payment.amountMinor - refundedAmount;\n    assertRefundAllowed(payment.status, input.amountMinor, remainingRefundableAmount);\n",
+     "replace": "    const refundedAmount = await sumSuccessfulRefundsForPayment(payment.id, tx);\n    assertRefundAllowed(payment.status, input.amountMinor, payment.amountMinor);\n"
+    }
+   ],
+   "defects": [
+    {
+     "scenario": "A 100.00 payment already has a 60.00 refund; support issues another 60.00.",
+     "in": "patched",
+     "path": "src/services/refundService.mjs",
+     "find": "    assertRefundAllowed(payment.status, input.amountMinor, payment.amountMinor);",
+     "consequence": "Each refund is checked against the ORIGINAL charge, never against what is left, so 60 + 60 = 120 is refunded on a 100 payment. And because 120 !== 100 the full-refund branch never fires: the payment stays SUCCEEDED while more than its value has gone back out."
+    },
+    {
+     "scenario": "Where the remaining amount came from.",
+     "in": "repo",
+     "path": "src/repositories/refundRepository.ts",
+     "find": "export async function sumSuccessfulRefundsForPayment(paymentId: string, db: DatabaseClient = prisma) {",
+     "consequence": "The prior SUCCEEDED refunds are still summed (refundedAmount), but the patch no longer subtracts them before the cap — the aggregation is computed and then ignored by the policy check."
+    },
+    {
+     "scenario": "The service's own warning.",
+     "in": "repo",
+     "path": "src/services/refundService.ts",
+     "find": " * One thing a junior engineer would likely get wrong when writing something similar: allow a refund as long as the payment succeeded once, ignoring prior partial refunds.",
+     "consequence": "The parameter is named capturedAmountMinor, but the caller must pass the REMAINING capturable amount; trusting the name over the call site re-creates the documented mistake."
+    }
+   ],
+   "test": {
+    "module": "src/services/refundService.mjs",
+    "check": {
+     "type": "drill-js",
+     "language": "js",
+     "timeoutMs": 8000,
+     "tests": [
+      {
+       "name": "refunded 60 of 100, request 41 -> 409 REFUND_AMOUNT_EXCEEDS_CAPTURE, nothing written (astraupskill/06-SOLUTIONS-AND-REVIEW.md Level 1 #2)",
+       "code": "const store = mod.createStore({ payments: [{ id: 'pay-1', amountMinor: 100, status: 'SUCCEEDED' }], refunds: [{ id: 'old-1', paymentId: 'pay-1', amountMinor: 60, status: 'SUCCEEDED' }] }); const refund = (amountMinor) => mod.createRefundForPayment({ paymentId: 'pay-1', amountMinor, reason: 'customer request', session: { userId: 'u1', email: 'u@example.test' } }, store); const refundedTotal = () => store.refunds.filter((r) => r.status === 'SUCCEEDED').reduce((s, r) => s + r.amountMinor, 0); await assert.rejects(refund(41), (e) => e.status === 409 && e.code === 'REFUND_AMOUNT_EXCEEDS_CAPTURE'); assert.equal(refundedTotal(), 60); assert.equal(store.payments[0].status, 'SUCCEEDED');"
+      },
+      {
+       "name": "two 60-unit refunds on a 100 payment: the second is refused, total refunded never exceeds the charge",
+       "code": "const store = mod.createStore({ payments: [{ id: 'pay-1', amountMinor: 100, status: 'SUCCEEDED' }], refunds: [] }); const refund = (amountMinor) => mod.createRefundForPayment({ paymentId: 'pay-1', amountMinor, reason: 'customer request', session: { userId: 'u1', email: 'u@example.test' } }, store); const refundedTotal = () => store.refunds.filter((r) => r.status === 'SUCCEEDED').reduce((s, r) => s + r.amountMinor, 0); await refund(60); await assert.rejects(refund(60), (e) => e.code === 'REFUND_AMOUNT_EXCEEDS_CAPTURE'); assert.equal(refundedTotal(), 60);"
+      },
+      {
+       "name": "refunded 60, request 40 -> allowed and the payment becomes REFUNDED (Level 1 #1)",
+       "code": "const store = mod.createStore({ payments: [{ id: 'pay-1', amountMinor: 100, status: 'SUCCEEDED' }], refunds: [{ id: 'old-1', paymentId: 'pay-1', amountMinor: 60, status: 'SUCCEEDED' }] }); const refund = (amountMinor) => mod.createRefundForPayment({ paymentId: 'pay-1', amountMinor, reason: 'customer request', session: { userId: 'u1', email: 'u@example.test' } }, store); const refundedTotal = () => store.refunds.filter((r) => r.status === 'SUCCEEDED').reduce((s, r) => s + r.amountMinor, 0); const result = await refund(40); assert.equal(result.paymentStatus, 'REFUNDED'); assert.equal(store.payments[0].status, 'REFUNDED'); assert.equal(refundedTotal(), 100);"
+      },
+      {
+       "name": "a FAILED payment is not refundable (ported from tests/runtime-refund-scope.test.mjs)",
+       "code": "const store = mod.createStore({ payments: [{ id: 'pay-1', amountMinor: 100, status: 'FAILED' }], refunds: [] }); const refund = (amountMinor) => mod.createRefundForPayment({ paymentId: 'pay-1', amountMinor, reason: 'customer request', session: { userId: 'u1', email: 'u@example.test' } }, store); const refundedTotal = () => store.refunds.filter((r) => r.status === 'SUCCEEDED').reduce((s, r) => s + r.amountMinor, 0); await assert.rejects(refund(10), (e) => e.status === 409 && e.code === 'PAYMENT_NOT_REFUNDABLE'); assert.equal(store.refunds.length, 0);"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "partial-refund-flips-refunded",
+   "title": "Refunds: simplify — any successful refund moves the payment to REFUNDED",
+   "difficulty": "medium",
+   "findingRef": "w22 refund service partial-refund note (src/services/refundService.ts:77) and Level 1 outcomes (astraupskill/06-SOLUTIONS-AND-REVIEW.md:9)",
+   "provenance": {
+    "path": "src/services/refundService.ts",
+    "find": "    // ⚠️ SENIOR NOTE: partial refunds should not blindly flip the payment to REFUNDED or downstream reporting will understate captured revenue."
+   },
+   "contextFiles": [
+    {
+     "path": "src/services/refundService.mjs",
+     "repoPath": "src/services/refundService.ts",
+     "kind": "adapted",
+     "content": "// Adapted from w22 src/services/refundService.ts @ a0d6e0d (createRefundForPayment, lines 18-101: the transaction body is VERBATIM),\n// src/lib/domain/paymentStateMachine.ts:52-63 (assertRefundAllowed, verbatim minus type annotations) and src/lib/errors.ts (RouteError).\n// Prisma and the repositories become an in-memory store with the same call shapes (refundRepository.ts,\n// paymentRepository.ts, paymentEventRepository.ts); the store is passed in as `prisma` instead of imported.\n// The repo's \"SENIOR NOTE\" review annotations are left out of both copied bodies.\nexport class RouteError extends Error {\n  constructor(status, code, message, details) {\n    super(message);\n    this.status = status;\n    this.code = code;\n    this.details = details;\n  }\n}\n\nconst RefundStatus = { PENDING: \"PENDING\", SUCCEEDED: \"SUCCEEDED\", FAILED: \"FAILED\" };\n\nexport function assertRefundAllowed(\n  currentStatus,\n  refundAmountMinor,\n  capturedAmountMinor,\n) {\n  if (currentStatus !== \"SUCCEEDED\") {\n    throw new RouteError(409, \"PAYMENT_NOT_REFUNDABLE\", \"Only succeeded payments can be refunded.\");\n  }\n\n  if (refundAmountMinor > capturedAmountMinor) {\n    throw new RouteError(409, \"REFUND_AMOUNT_EXCEEDS_CAPTURE\", \"Refund amount exceeds the captured payment amount.\");\n  }\n}\n\n/** In-memory stand-in for the Prisma client: $transaction hands the callback this same store as `tx`. */\nexport function createStore({ payments = [], refunds = [] } = {}) {\n  return {\n    payments,\n    refunds,\n    events: [],\n    async $transaction(fn) {\n      return fn(this);\n    },\n  };\n}\n\n// repository stand-ins (same arguments as the real repositories, client last)\nasync function findPaymentById(id, db) {\n  // like prisma.payment.findUnique: a fresh object, not a live reference to the stored row\n  const payment = db.payments.find((candidate) => candidate.id === id);\n  return payment ? { ...payment } : null;\n}\nasync function sumSuccessfulRefundsForPayment(paymentId, db) {\n  return db.refunds.filter((r) => r.paymentId === paymentId && r.status === RefundStatus.SUCCEEDED).reduce((sum, r) => sum + r.amountMinor, 0);\n}\nasync function createRefund(input, db) {\n  const refund = { id: `refund-${db.refunds.length + 1}`, ...input, status: RefundStatus.PENDING };\n  db.refunds.push(refund);\n  return refund;\n}\nasync function transitionRefundStatus(refundId, status, providerRefundId, db) {\n  const refund = db.refunds.find((r) => r.id === refundId);\n  Object.assign(refund, { status, providerRefundId });\n  return refund;\n}\nasync function transitionPaymentStatus(input, db) {\n  const payment = db.payments.find((p) => p.id === input.paymentId);\n  Object.assign(payment, { status: input.nextStatus, lastKnownProvider: input.providerStatus });\n  return payment;\n}\nasync function createPaymentEvent(input, db) {\n  db.events.push(input);\n  return input;\n}\n\nexport async function createRefundForPayment(input, prisma) {\n  return prisma.$transaction(async (tx) => {\n    // Read the payment and successful refund total on the same transaction\n    // client as the write. This keeps the allowance check with the mutation.\n    const payment = await findPaymentById(input.paymentId, tx);\n    if (!payment) {\n      throw new RouteError(404, \"PAYMENT_NOT_FOUND\", \"Payment not found.\");\n    }\n    const refundedAmount = await sumSuccessfulRefundsForPayment(payment.id, tx);\n    const remainingRefundableAmount = payment.amountMinor - refundedAmount;\n    assertRefundAllowed(payment.status, input.amountMinor, remainingRefundableAmount);\n\n    const refund = await createRefund(\n      {\n        paymentId: payment.id,\n        amountMinor: input.amountMinor,\n        reason: input.reason,\n        createdByUserId: input.session.userId,\n      },\n      tx,\n    );\n\n    await createPaymentEvent(\n      {\n        paymentId: payment.id,\n        actorUserId: input.session.userId,\n        actorLabel: input.session.email,\n        type: \"REFUND_REQUESTED\",\n        payload: {\n          refundId: refund.id,\n          amountMinor: refund.amountMinor,\n          reason: refund.reason,\n        },\n      },\n      tx,\n    );\n\n    const providerRefundId = `prov_ref_${crypto.randomUUID()}`;\n    await transitionRefundStatus(refund.id, RefundStatus.SUCCEEDED, providerRefundId, tx);\n\n    const fullyRefunded = refundedAmount + refund.amountMinor === payment.amountMinor;\n\n    if (fullyRefunded) {\n      await transitionPaymentStatus(\n        {\n          paymentId: payment.id,\n          nextStatus: \"REFUNDED\",\n          providerStatus: \"REFUNDED\",\n        },\n        tx,\n      );\n    }\n\n    await createPaymentEvent(\n      {\n        paymentId: payment.id,\n        actorUserId: input.session.userId,\n        actorLabel: input.session.email,\n        type: \"REFUND_SUCCEEDED\",\n        payload: {\n          refundId: refund.id,\n          providerRefundId,\n          fullyRefunded,\n        },\n      },\n      tx,\n    );\n\n    return {\n      refundId: refund.id,\n      paymentId: payment.id,\n      refundStatus: \"SUCCEEDED\",\n      paymentStatus: fullyRefunded ? \"REFUNDED\" : payment.status,\n      providerRefundId,\n    };\n  });\n}\n"
+    }
+   ],
+   "edits": [
+    {
+     "path": "src/services/refundService.mjs",
+     "find": "    if (fullyRefunded) {\n      await transitionPaymentStatus(\n        {\n          paymentId: payment.id,\n          nextStatus: \"REFUNDED\",\n          providerStatus: \"REFUNDED\",\n        },\n        tx,\n      );\n    }\n",
+     "replace": "    // A refund has gone through, so the payment is now refunded.\n    await transitionPaymentStatus(\n      {\n        paymentId: payment.id,\n        nextStatus: \"REFUNDED\",\n        providerStatus: \"REFUNDED\",\n      },\n      tx,\n    );\n"
+    }
+   ],
+   "defects": [
+    {
+     "scenario": "A 100.00 payment gets a 40.00 goodwill refund; a week later the customer returns the rest and support refunds 60.00.",
+     "in": "patched",
+     "path": "src/services/refundService.mjs",
+     "find": "    // A refund has gone through, so the payment is now refunded.",
+     "consequence": "The first partial refund marks the payment REFUNDED, so the second, legitimate refund is rejected with PAYMENT_NOT_REFUNDABLE (only SUCCEEDED payments are refundable) and 60.00 can never be returned through the system; reporting also counts the 60.00 still captured as refunded."
+    },
+    {
+     "scenario": "The response now contradicts the database.",
+     "in": "patched",
+     "path": "src/services/refundService.mjs",
+     "find": "      paymentStatus: fullyRefunded ? \"REFUNDED\" : payment.status,",
+     "consequence": "The return value still reports SUCCEEDED for a partial refund while the stored payment says REFUNDED; the caller (and the UI) display a state that no longer exists."
+    },
+    {
+     "scenario": "The rule the refund policy depends on.",
+     "in": "repo",
+     "path": "src/lib/domain/paymentStateMachine.ts",
+     "find": "  if (currentStatus !== \"SUCCEEDED\") {",
+     "consequence": "Only a SUCCEEDED payment is refundable, so once a partial refund flips the status to REFUNDED the payment is closed to the rest of its refundable balance."
+    }
+   ],
+   "test": {
+    "module": "src/services/refundService.mjs",
+    "check": {
+     "type": "drill-js",
+     "language": "js",
+     "timeoutMs": 8000,
+     "tests": [
+      {
+       "name": "refunded 10, request 40 -> allowed and the payment STAYS SUCCEEDED (Level 1 #3; tests/runtime-refund-scope.test.mjs \"partial refund keeps payment succeeded\")",
+       "code": "const store = mod.createStore({ payments: [{ id: 'pay-1', amountMinor: 100, status: 'SUCCEEDED' }], refunds: [{ id: 'old-1', paymentId: 'pay-1', amountMinor: 10, status: 'SUCCEEDED' }] }); const refund = (amountMinor) => mod.createRefundForPayment({ paymentId: 'pay-1', amountMinor, reason: 'customer request', session: { userId: 'u1', email: 'u@example.test' } }, store); const refundedTotal = () => store.refunds.filter((r) => r.status === 'SUCCEEDED').reduce((s, r) => s + r.amountMinor, 0); const result = await refund(40); assert.equal(result.paymentStatus, 'SUCCEEDED'); assert.equal(store.payments[0].status, 'SUCCEEDED');"
+      },
+      {
+       "name": "two partial refunds (40 then 60) both succeed; only the second, completing one flips the payment to REFUNDED",
+       "code": "const store = mod.createStore({ payments: [{ id: 'pay-1', amountMinor: 100, status: 'SUCCEEDED' }], refunds: [] }); const refund = (amountMinor) => mod.createRefundForPayment({ paymentId: 'pay-1', amountMinor, reason: 'customer request', session: { userId: 'u1', email: 'u@example.test' } }, store); const refundedTotal = () => store.refunds.filter((r) => r.status === 'SUCCEEDED').reduce((s, r) => s + r.amountMinor, 0); await refund(40); assert.equal(store.payments[0].status, 'SUCCEEDED'); const second = await refund(60); assert.equal(second.paymentStatus, 'REFUNDED'); assert.equal(store.payments[0].status, 'REFUNDED'); assert.equal(refundedTotal(), 100);"
+      },
+      {
+       "name": "the returned paymentStatus agrees with the stored payment after a partial refund",
+       "code": "const store = mod.createStore({ payments: [{ id: 'pay-1', amountMinor: 100, status: 'SUCCEEDED' }], refunds: [] }); const refund = (amountMinor) => mod.createRefundForPayment({ paymentId: 'pay-1', amountMinor, reason: 'customer request', session: { userId: 'u1', email: 'u@example.test' } }, store); const refundedTotal = () => store.refunds.filter((r) => r.status === 'SUCCEEDED').reduce((s, r) => s + r.amountMinor, 0); const result = await refund(25); assert.equal(result.paymentStatus, store.payments[0].status);"
+      },
+      {
+       "name": "refunded 60, request 41 is still refused (Level 1 #2)",
+       "code": "const store = mod.createStore({ payments: [{ id: 'pay-1', amountMinor: 100, status: 'SUCCEEDED' }], refunds: [{ id: 'old-1', paymentId: 'pay-1', amountMinor: 60, status: 'SUCCEEDED' }] }); const refund = (amountMinor) => mod.createRefundForPayment({ paymentId: 'pay-1', amountMinor, reason: 'customer request', session: { userId: 'u1', email: 'u@example.test' } }, store); const refundedTotal = () => store.refunds.filter((r) => r.status === 'SUCCEEDED').reduce((s, r) => s + r.amountMinor, 0); await assert.rejects(refund(41), (e) => e.code === 'REFUND_AMOUNT_EXCEEDS_CAPTURE');"
+      }
+     ]
+    }
+   }
+  }
+ ]
+}
