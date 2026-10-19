@@ -4,7 +4,21 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { PROJECT_UNIT_KINDS } from '@bootquest/shared';
 import { MUTATE_TIMEOUT_MS } from '@bootquest/shared/mutation';
-import { JS_REPORT, mutateProject, NET_OUTPUT, PROJECT_KINDS, type ToolRun, type ToolRunner } from '../src/mutate.ts';
+import {
+  JS_REPORT,
+  mutateProject,
+  NET_OUTPUT,
+  newTreeState,
+  observeSnapshot,
+  parseSnapshot,
+  PROJECT_KINDS,
+  selectLeftovers,
+  trackDotnetDescendants,
+  type ProcessTracker,
+  type ProcInfo,
+  type ToolRun,
+  type ToolRunner,
+} from '../src/mutate.ts';
 import { runCli } from '../src/program.ts';
 import { captureIo, drillDetail, fakeFetch, httpDetail } from './helpers.ts';
 
@@ -126,23 +140,28 @@ describe('bootquest mutate', () => {
     const cs = { ...httpDetail(), unit: { ...httpDetail().unit, trackId: 'csharp' as const } };
     const runs: ToolRun[] = [];
     const reaped: number[] = [];
+    const attached: number[] = [];
     const run: ToolRunner = async (r) => {
       runs.push(r);
+      r.onSpawn?.(4242);
       mkdirSync(join(r.cwd, NET_OUTPUT, 'reports'), { recursive: true });
       writeFileSync(join(r.cwd, NET_OUTPUT, 'reports', 'mutation-report.json'), JSON.stringify(report(false)));
       return { exitCode: 0, timedOut: false, durationMs: 5000 };
     };
+    const tracker = (leftovers: string[]) => (t: number): ProcessTracker => ({
+      attach: (pid) => attached.push(pid),
+      reap: async () => (reaped.push(t), leftovers),
+    });
     const o = await mutateProject(cs, dir, {
       run,
       onOutput: () => {},
       env: { VITEST: '1', PATH: 'x' },
       dotnetStrykerExe: 'C:/fake/dotnet-stryker.exe',
-      reap: async (t) => {
-        reaped.push(t);
-        return ['123 VBCSCompiler.exe'];
-      },
+      tracker: tracker(['123 VBCSCompiler.exe']),
       now: () => 42,
     });
+    // the tracker is handed the pid of the Stryker process the CLI spawned (its tree is all it may reap)
+    expect(attached).toEqual([4242]);
     expect(o.tool).toBe('stryker-net');
     expect(o.toolVersion).toBe('5.0.0');
     expect(o.verdict.pass).toBe(true);
@@ -156,11 +175,73 @@ describe('bootquest mutate', () => {
     const boom: ToolRunner = async () => {
       throw new Error('spawn failed');
     };
-    await expect(mutateProject(cs, dir, { run: boom, onOutput: () => {}, env: {}, dotnetStrykerExe: 'x', reap: async (t) => (reaped.push(t), []), now: () => 7 })).rejects.toThrow(
+    await expect(mutateProject(cs, dir, { run: boom, onOutput: () => {}, env: {}, dotnetStrykerExe: 'x', tracker: tracker([]), now: () => 7 })).rejects.toThrow(
       'spawn failed',
     );
     expect(reaped).toEqual([42, 7]);
     expect(existsSync(join(dir, NET_OUTPUT))).toBe(false); // the previous run's output was cleared first
     expect(readFileSync(join(dir, '.bootquest.json'), 'utf8')).toContain('21');
+  });
+});
+
+describe('C# leftover reaper: only the spawned Stryker tree, never by name', () => {
+  const P = (pid: number, ppid: number, createdMs: number, name: string): ProcInfo => ({ pid, ppid, createdMs, name });
+  // run started at 1000; Stryker.NET root = pid 100
+  const root = P(100, 50, 1010, 'dotnet-stryker.exe');
+  const vstest = P(101, 100, 1100, 'dotnet.exe');
+  const testhost = P(102, 101, 1200, 'testhost.exe');
+  const compiler = P(103, 100, 1300, 'VBCSCompiler.exe');
+  // a server-side C# grade and an IDE test run, started DURING the mutate run
+  const serverTesthost = P(200, 60, 1150, 'testhost.exe');
+  const ideCompiler = P(201, 61, 1160, 'VBCSCompiler.exe');
+  // after vstest (101) exited, a stranger reused its pid and spawned its own testhost
+  const stranger = P(101, 70, 5000, 'node.exe');
+  const strangersChild = P(300, 101, 5100, 'testhost.exe');
+
+  it('parseSnapshot reads `pid ppid createdMs name` lines (CRLF, spaces in names, junk skipped)', () => {
+    expect(parseSnapshot('100 50 1010 dotnet-stryker.exe\r\n\r\nWARNING: x\r\n7 4 99 Some App.exe\r\n')).toEqual([root, P(7, 4, 99, 'Some App.exe')]);
+  });
+
+  it('kills orphaned descendants (dead intermediates included) but NOT same-named strangers or pid-reuse children', () => {
+    const s = newTreeState(100, 998);
+    observeSnapshot(s, [root, vstest, testhost, serverTesthost, ideCompiler]);
+    observeSnapshot(s, [root, testhost, compiler, serverTesthost, ideCompiler]);
+    // final: root + vstest gone; pid 101 reused by a stranger
+    const final = [testhost, compiler, serverTesthost, ideCompiler, stranger, strangersChild];
+    expect(selectLeftovers(s, final, 1).map((p) => p.pid).sort()).toEqual([102, 103]);
+  });
+
+  it('with only the final snapshot, direct orphans of the dead root are still found; unrelated processes never are', () => {
+    const s = newTreeState(100, 998);
+    expect(selectLeftovers(s, [testhost, compiler, serverTesthost, ideCompiler], 1).map((p) => p.pid)).toEqual([103]);
+  });
+
+  it('a child born before its supposed parent is not attributed to it; the CLI itself is never selected', () => {
+    const s = newTreeState(100, 998);
+    observeSnapshot(s, [root]);
+    expect(selectLeftovers(s, [root, P(400, 100, 900, 'old.exe'), P(401, 100, 1500, 'self.exe')], 401).map((p) => p.pid)).toEqual([100]);
+  });
+
+  it('a tracker that never saw a spawn reaps nothing and runs nothing (no system-wide sweep)', async () => {
+    const calls: ToolRun[] = [];
+    const t = trackDotnetDescendants(1000, async (r) => (calls.push(r), { exitCode: 0, timedOut: false, durationMs: 0 }));
+    expect(await t.reap()).toEqual([]);
+    expect(calls).toEqual([]);
+  });
+
+  it.runIf(process.platform === 'win32')('reap(): final snapshot -> taskkill only the verified tree members', async () => {
+    const calls: ToolRun[] = [];
+    const run: ToolRunner = async (r, onOutput) => {
+      calls.push(r);
+      if (r.command === 'powershell.exe') {
+        onOutput([P(1003, 1001, 1300, 'VBCSCompiler.exe'), serverTesthost, ideCompiler].map((p) => `${p.pid} ${p.ppid} ${p.createdMs} ${p.name}`).join('\r\n'));
+      }
+      return { exitCode: 0, timedOut: false, durationMs: 0 };
+    };
+    const t = trackDotnetDescendants(1000, run);
+    // odd pid: Windows pids are multiples of 4, so it is never alive and the real watcher loop exits at once
+    t.attach(1001);
+    expect(await t.reap()).toEqual(['1003 VBCSCompiler.exe']);
+    expect(calls.map((c) => [c.command, ...c.args.filter((a) => a.startsWith('/') || /^\d+$/.test(a))])).toEqual([['powershell.exe'], ['taskkill', '/T', '/F', '/PID', '1003']]);
   });
 });

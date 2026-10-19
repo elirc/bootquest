@@ -23,6 +23,13 @@ import type { SeedQueueResponse, SyncReport } from '@bootquest/shared/sync';
 
 export const DEFAULT_SERVER = 'http://127.0.0.1:4178';
 export const DEFAULT_TIMEOUT_MS = 120_000;
+/**
+ * POST /run and /submit grade on the server, and some checks are legitimately slow
+ * (a repo check: up to 50 predicates x a 15s-default git/gh timeout each, plus gh
+ * calls). Giving up early does NOT stop the server: a submit would still be recorded
+ * and a retry would duplicate it — so wait far longer than any normal grade.
+ */
+export const GRADE_TIMEOUT_MS = 15 * 60_000;
 
 export interface HealthResponse {
   ok: true;
@@ -61,7 +68,30 @@ export class ApiError extends Error {
   }
 }
 
-/** Nothing answered at the server URL (refused, DNS, reset) or it timed out. */
+/**
+ * The request reached the server (or may have) but no answer came in time. NOT
+ * "unreachable": the server may still be working on it — for a recorded write
+ * (submit) it may still record the attempt.
+ */
+export class ServerTimeoutError extends Error {
+  readonly server: string;
+  readonly method: string;
+  readonly path: string;
+  readonly seconds: number;
+  /** the request records something server-side (submit, mutation, sync) */
+  readonly recorded: boolean;
+  constructor(server: string, method: string, path: string, seconds: number, recorded: boolean) {
+    super(`no answer from the BootQuest server at ${server} within ${seconds}s for ${method} ${path}`);
+    this.name = 'ServerTimeoutError';
+    this.server = server;
+    this.method = method;
+    this.path = path;
+    this.seconds = seconds;
+    this.recorded = recorded;
+  }
+}
+
+/** Nothing answered at the server URL (refused, DNS, reset). Timeouts are ServerTimeoutError. */
 export class ServerUnreachableError extends Error {
   readonly server: string;
   readonly reason: string;
@@ -117,6 +147,11 @@ function errnoOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+function isTimeout(err: unknown): boolean {
+  const name = (err as { name?: string })?.name;
+  return name === 'TimeoutError' || name === 'AbortError';
+}
+
 export class ApiClient {
   readonly server: string;
   private readonly fetchImpl: FetchLike;
@@ -128,24 +163,33 @@ export class ApiClient {
     this.timeoutMs = timeoutMs;
   }
 
-  async request<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
+  /**
+   * `opts.timeoutMs` overrides the client's timeout (never shortens it below it);
+   * `opts.recorded` marks a write the server records, for the timeout message.
+   */
+  async request<T>(method: 'GET' | 'POST', path: string, body?: unknown, opts: { timeoutMs?: number; recorded?: boolean } = {}): Promise<T> {
     const url = `${this.server}/api${path}`;
+    const timeoutMs = Math.max(this.timeoutMs, opts.timeoutMs ?? 0);
     let res: Awaited<ReturnType<FetchLike>>;
     try {
       res = await this.fetchImpl(url, {
         method,
         headers: { accept: 'application/json', ...(body !== undefined ? { 'content-type': 'application/json' } : {}) },
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-        signal: AbortSignal.timeout(this.timeoutMs),
+        signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (err) {
-      const name = (err as { name?: string })?.name;
-      if (name === 'TimeoutError' || name === 'AbortError') {
-        throw new ServerUnreachableError(this.server, `no answer within ${Math.round(this.timeoutMs / 1000)}s`);
-      }
+      if (isTimeout(err)) throw new ServerTimeoutError(this.server, method, `/api${path}`, Math.round(timeoutMs / 1000), opts.recorded ?? false);
       throw new ServerUnreachableError(this.server, errnoOf(err));
     }
-    const text = await res.text();
+    let text: string;
+    try {
+      text = await res.text();
+    } catch (err) {
+      // the deadline can also fire while the body streams in
+      if (isTimeout(err)) throw new ServerTimeoutError(this.server, method, `/api${path}`, Math.round(timeoutMs / 1000), opts.recorded ?? false);
+      throw new ServerUnreachableError(this.server, errnoOf(err));
+    }
     let parsed: unknown;
     try {
       parsed = JSON.parse(text);
@@ -185,18 +229,18 @@ export class ApiClient {
     return this.request('GET', `/units/by-key/${encodeURIComponent(key)}`);
   }
   run(id: number, body: SubmissionBodyInput): Promise<RunResponse> {
-    return this.request('POST', `/units/${id}/run`, body);
+    return this.request('POST', `/units/${id}/run`, body, { timeoutMs: GRADE_TIMEOUT_MS });
   }
   submit(id: number, body: SubmissionBodyInput): Promise<SubmitResponse> {
-    return this.request('POST', `/units/${id}/submit`, body);
+    return this.request('POST', `/units/${id}/submit`, body, { timeoutMs: GRADE_TIMEOUT_MS, recorded: true });
   }
   /** W6: the mutation-gate marker (counts only; the server re-evaluates and records the evidence) */
   mutation(id: number, body: MutationMarkerBody): Promise<MutationMarkerResponse> {
-    return this.request('POST', `/units/${id}/mutation`, body);
+    return this.request('POST', `/units/${id}/mutation`, body, { recorded: true });
   }
   /** W4: the server runs the GitHub sync job (it owns the DB: single writer) */
   sync(repos?: string[]): Promise<SyncReport> {
-    return this.request('POST', '/sync', repos && repos.length ? { repos } : {});
+    return this.request('POST', '/sync', repos && repos.length ? { repos } : {}, { recorded: true });
   }
   seedQueue(limit = 20): Promise<SeedQueueResponse> {
     return this.request('GET', `/sync/queue?limit=${limit}`);
