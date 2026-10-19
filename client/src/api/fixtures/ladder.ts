@@ -53,8 +53,39 @@ export const explainBackFixtures: Record<string, ExplainBackFixture> = {
     ],
     retest: null,
   },
+  // leg (b) of the program unit 303 (see gatedLadderUnits): locked until 303 has a solo pass
+  '304': {
+    competencies: ['agentic-engineering'],
+    questions: [
+      { prompt: 'When does your loop stop, and why is that condition safe?', keyPoints: [{ text: 'It stops on a final answer (no tool calls) or at a step cap.', quote: null, cite: null }] },
+      { prompt: 'How does a tool result get back to the model?', keyPoints: [{ text: 'Appended as a tool-result message tied to the call id.', quote: null, cite: null }] },
+      { prompt: 'What happens when a tool throws?', keyPoints: [{ text: 'The error is returned as the tool result, not thrown out of the loop.', quote: null, cite: null }] },
+    ],
+    retest: null,
+  },
 };
 
+/**
+ * Ladder dead end #2 (mock parity): an explain-back that is promotion leg (b) of a project unit.
+ * Unit 304 lists the program unit 303 as its prerequisite, so - by the server's rule
+ * (artifactsAwaitingSoloPass) - answering 304 is refused (409 ARTIFACT_REQUIRED) and its detail
+ * carries artifactRequired until 303 has a solo, verified, unrevealed pass. Agentic track, so the
+ * JS / C# fixture counts the other pages assert stay as they were.
+ */
+export const GATED_ARTIFACT_ID = 303;
+export const GATED_EXPLAIN_BACK_ID = 304;
+export const gatedLadderUnits: UnitSummary[] = [
+  { id: GATED_ARTIFACT_ID, key: 'agentic/harness-u01', trackId: 'agentic', kind: 'program-unit', title: 'Agent harness U01: the tool-call loop', difficulty: 3, state: 'available', revealed: false, prerequisites: [301] },
+  { id: GATED_EXPLAIN_BACK_ID, key: 'agentic/explain-harness', trackId: 'agentic', kind: 'explain-back', title: 'Explain-back: the tool-call loop', difficulty: 2, state: 'available', revealed: false, prerequisites: [GATED_ARTIFACT_ID] },
+];
+/** The artifact's check: any change from the starter passes (the mock's generic drill rule). */
+export const gatedArtifactFixture = {
+  competencies: ['agentic-engineering'] as CompetencyId[],
+  instructions: 'Implement runLoop(model, tools): call the model, run each requested tool, feed the results back, stop on a final answer.',
+  starter: 'export async function runLoop(model, tools) {\n  // TODO\n}\n',
+  /** PRIVATE: released by reveal only (a revealed artifact can never be leg (a), so it stops gating) */
+  solution: 'export async function runLoop(model, tools) {\n  for (let step = 0; step < 8; step++) {\n    const reply = await model.next();\n    if (!reply.toolCalls.length) return reply.text;\n    for (const c of reply.toolCalls) model.push({ id: c.id, result: await tools[c.name](c.args) });\n  }\n}\n',
+};
 export const kataFixtures: Record<string, KataFixture> = {
   '109': {
     competencies: ['code-reading', 'agentic-engineering'],

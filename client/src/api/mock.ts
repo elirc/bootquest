@@ -8,6 +8,11 @@
 //  - submit bodies are strict: exactly one of code/answer + boolean selfAssisted (anything else -> 400 VALIDATION)
 //  - written units (B4): POST /answer stores the answer immutably (no XP); GET /model-answer is
 //    403 NOT_ANSWERED until then; the detail's rubric is null until answered (it can quote the key)
+//  - explain-back / kata answers are per item VERSION: reseedItem(unitId) (mock-only) stands in for
+//    a re-seed; the old answer is then superseded (answered reads false, NOT_ANSWERED names it) and
+//    the new version takes one fresh answer - no row changes, like the server
+//  - an explain-back that is leg (b) of a project unit refuses an answer (409 ARTIFACT_REQUIRED)
+//    and lists the artifact in detail.explainBack.artifactRequired until it has a solo verified pass
 // State lives per instance, so tests can make a fresh one.
 
 import competenciesJson from './fixtures/competencies.json';
@@ -18,7 +23,19 @@ import tracksJson from './fixtures/tracks.json';
 import unitDetailsJson from './fixtures/unit-details.json';
 import unitsJson from './fixtures/units.json';
 import { notesFixtures, type NoteFixture } from './fixtures/notes';
-import { campaignFixtures, emptyPromotion, lockedCampaignFixtures, evidenceFixtures, explainBackFixtures, kataFixtures, promotionFixtures, studyQuestFixtures } from './fixtures/ladder';
+import {
+  campaignFixtures,
+  emptyPromotion,
+  lockedCampaignFixtures,
+  evidenceFixtures,
+  explainBackFixtures,
+  gatedArtifactFixture,
+  gatedLadderUnits,
+  GATED_ARTIFACT_ID,
+  kataFixtures,
+  promotionFixtures,
+  studyQuestFixtures,
+} from './fixtures/ladder';
 import { writtenFixtures } from './fixtures/written';
 import {
   ApiError,
@@ -53,6 +70,7 @@ import {
   type XpStatsResponse,
 } from './types';
 import type { XpByTrack } from '@bootquest/shared/api';
+import { G1_MIN_DEFECTS, G1_TARGET_RATE, PROMOTION_MIN_COVERAGE } from '@bootquest/shared/thresholds';
 
 /** Private, fixture-only grading material. Never crosses the API boundary. */
 interface PrivateFixture {
@@ -192,9 +210,32 @@ function fixtureHistory(): GradedRow[] {
   return rows;
 }
 
-export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
+/** shared/src/enums.ts PROJECT_UNIT_KINDS (restated: the client imports no runtime code from shared's index) */
+const PROJECT_UNIT_KINDS: ReadonlySet<UnitSummary['kind']> = new Set<UnitSummary['kind']>(['guided-project', 'http-lab', 'repo-task', 'program-unit']);
+
+/** One recorded explain-back / kata answer, stamped with the item VERSION it answered (the server's itemSha). */
+interface StoredAnswer<T> {
+  attemptId: number;
+  at: number;
+  version: number;
+  body: T;
+}
+
+/** The mock API plus a dev/test-only hook the HTTP client does not have. */
+export type MockApi = BootQuestApi & {
+  /**
+   * Stand-in for re-seeding an explain-back / kata item under the same key: bumps the item's
+   * version, so the earlier answer is SUPERSEDED (never keyed against the new version) and the
+   * unit takes one fresh answer. Mock only; nothing in the app calls it.
+   */
+  reseedItem(unitId: number): void;
+};
+
+export function createMockApi(opts: MockApiOptions = {}): MockApi {
   const latency = opts.latencyMs ?? 0;
   const units = clone(fx.units);
+  // ladder dead end #2: the gated explain-back and its artifact (agentic track)
+  for (const u of gatedLadderUnits) units[u.trackId] = [...(units[u.trackId] ?? []), clone(u)];
   // W8: the study-quest fixture units (csharp borrowbox quest)
   for (const sq of Object.values(studyQuestFixtures)) units[sq.unit.trackId] = [...(units[sq.unit.trackId] ?? []), clone(sq.unit)];
   // B4: the written-unit fixtures (answer first, then the model answer)
@@ -205,14 +246,19 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
   // "Learn more": units with a graded study-quiz submit, and code units with a verified pass
   const studyAnswered = new Set<number>();
   const passedUnits = new Set<number>();
+  // a SOLO verified pass (the artifact predicate of ARTIFACT_REQUIRED)
+  const soloPassedUnits = new Set<number>();
   const graded = new Set<number>();
   const awarded = new Set<number>();
   const revealed = new Map<number, number>(); // unitId -> reveal attemptId
   const attested = new Set<number>();
   let nextId = 5000;
-  // W6 answer-first state: unitId -> recorded answer attempt; attemptId -> self-score
-  const ebAnswers = new Map<number, { attemptId: number; answers: string[]; at: number }>();
-  const kataAnswers = new Map<number, { attemptId: number; findings: KataFinding[]; at: number }>();
+  // W6 answer-first state: unitId -> every recorded answer (append-only, oldest first); attemptId -> self-score
+  const ebAnswers = new Map<number, StoredAnswer<string[]>[]>();
+  const kataAnswers = new Map<number, StoredAnswer<KataFinding[]>[]>();
+  // item version per unit (1 until reseedItem): an answer counts only for the version it answered
+  const itemVersion = new Map<number, number>();
+  const versionOf = (unitId: number) => itemVersion.get(unitId) ?? 1;
   const scores = new Map<number, { score: number; evidenceIds: number[]; at: number }>();
   const kataXpPaid = new Set<number>();
   const ebXpPaid = new Set<number>();
@@ -290,9 +336,19 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
       return {
         code: null,
         competencies: eb.competencies,
-        check: { id: 9000 + u.id, threshold: null, spec: { type: 'explain-back', questionSetKey: `seed:explain-back:mock-${u.id}`, questionCount: 3, minCoverage: 0.8 } },
+        check: { id: 9000 + u.id, threshold: null, spec: { type: 'explain-back', questionSetKey: `seed:explain-back:mock-${u.id}`, questionCount: 3, minCoverage: PROMOTION_MIN_COVERAGE } },
         starter: null,
         private: {},
+      };
+    }
+    if (u.id === GATED_ARTIFACT_ID) {
+      return {
+        code: 'AG-H-01',
+        competencies: gatedArtifactFixture.competencies,
+        instructions: gatedArtifactFixture.instructions,
+        check: { id: 9000 + u.id, threshold: null, spec: { type: 'drill-js', language: 'js', tests: [{ name: 'stops on a final answer' }, { name: 'feeds tool results back' }], timeoutMs: 5000 } },
+        starter: gatedArtifactFixture.starter,
+        private: { solution: { kind: 'code', code: gatedArtifactFixture.solution } },
       };
     }
     if (u.kind === 'patch-kata') {
@@ -496,6 +552,43 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
     }));
   const kataDefects = (unitId: number) => kataFixtures[String(unitId)]!.defects.map((d, i) => ({ id: `d${i + 1}`, ...d }));
 
+  // ---- answers per item VERSION (server ladder-service currentAnswer / notAnswered / alreadyAnswered)
+  type AnswerKind = 'explainBack' | 'kata';
+  const ITEM: Record<AnswerKind, { key: (id: number) => string; noun: string; what: string; path: string }> = {
+    explainBack: { key: (id) => `seed:explain-back:mock-${id}`, noun: 'answer', what: 'answers', path: 'explain-back/answers' },
+    kata: { key: (id) => `seed:patch-kata:mock-${id}`, noun: 'findings', what: 'findings', path: 'kata/findings' },
+  };
+  /** The answer OF RECORD for the item as now loaded: the first one stamped with its current version. */
+  const currentAnswer = <T>(store: Map<number, StoredAnswer<T>[]>, unitId: number): StoredAnswer<T> | undefined =>
+    (store.get(unitId) ?? []).find((a) => a.version === versionOf(unitId));
+  const recordAnswer = <T>(store: Map<number, StoredAnswer<T>[]>, unitId: number, a: StoredAnswer<T>) => store.set(unitId, [...(store.get(unitId) ?? []), a]);
+  /** 403 NOT_ANSWERED for the loaded version, naming any superseded earlier-version answer. */
+  function notAnswered<T>(store: Map<number, StoredAnswer<T>[]>, unitId: number, kind: AnswerKind): ApiError {
+    const it = ITEM[kind];
+    const old = (store.get(unitId) ?? []).filter((a) => a.version !== versionOf(unitId)).map((a) => `#${a.attemptId}`);
+    const superseded = old.length
+      ? `your earlier ${it.noun} ${old.join(', ')} answered an earlier version of ${it.key(unitId)} (re-seeded since) and ${old.length === 1 ? 'is' : 'are'} superseded; `
+      : '';
+    return err(403, 'NOT_ANSWERED', `unit ${unitId}: ${superseded}record your ${it.what} first (POST /api/units/${unitId}/${it.path}) — the key is shown only after`);
+  }
+  const alreadyAnswered = (unitId: number, prior: { attemptId: number }, kind: AnswerKind) =>
+    err(403, 'ALREADY_ANSWERED', `unit ${unitId}: your ${kind === 'kata' ? 'findings' : 'explain-back answer'} #${prior.attemptId} ${kind === 'kata' ? 'are' : 'is'} recorded and immutable; open the key instead`);
+
+  /**
+   * Ladder dead end #2 (server engines/ladder.ts artifactsAwaitingSoloPass): the explain-back's
+   * project-kind prerequisites that have a check, were never revealed, and still lack a SOLO
+   * verified pass. Non-empty = the once-only answer is refused (409 ARTIFACT_REQUIRED).
+   */
+  function artifactsAwaitingSoloPass(unitId: number): { unitId: number; title: string }[] {
+    const u = findUnit(unitId);
+    if (!u || u.kind !== 'explain-back') return [];
+    return u.prerequisites
+      .map((id) => findUnit(id))
+      .filter((p): p is UnitSummary => p !== null && PROJECT_UNIT_KINDS.has(p.kind) && detail(p).check !== null && !revealed.has(p.id) && !soloPassedUnits.has(p.id))
+      .sort((a, b) => a.id - b.id)
+      .map((p) => ({ unitId: p.id, title: p.title }));
+  }
+
   return {
     getHealth: () => wrap(() => ({ ok: true as const, version: 'mock', counts: { units: allUnits().length, checks: Object.values(fx.details).filter((d) => d.check).length } })),
 
@@ -534,11 +627,18 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
         // PUBLIC halves only: questions; diff + context (never key points or defect keys)
         if (d.check?.spec.type === 'explain-back') {
           const eb = explainBackFixtures[String(id)];
-          out.explainBack = eb ? { questions: eb.questions.map((q) => ({ prompt: q.prompt })), minCoveragePct: 80, answered: ebAnswers.has(id) } : null;
+          out.explainBack = eb
+            ? {
+                questions: eb.questions.map((q) => ({ prompt: q.prompt })),
+                minCoveragePct: PROMOTION_MIN_COVERAGE * 100,
+                answered: currentAnswer(ebAnswers, id) !== undefined,
+                artifactRequired: artifactsAwaitingSoloPass(id),
+              }
+            : null;
         }
         if (d.check?.spec.type === 'patch-kata') {
           const k = kataFixtures[String(id)];
-          out.kata = k ? { title: k.title, diff: k.diff, contextFiles: k.contextFiles, answered: kataAnswers.has(id) } : null;
+          out.kata = k ? { title: k.title, diff: k.diff, contextFiles: k.contextFiles, answered: currentAnswer(kataAnswers, id) !== undefined } : null;
         }
         // W8: reading list + questions with choices only (the keys stay in the fixture)
         if (d.check?.spec.type === 'study-quiz') out.studyQuest = studyQuestFixtures[String(id)]?.public ?? null;
@@ -580,6 +680,7 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
           }
           u.state = 'done';
           passedUnits.add(id);
+          if (mode === 'solo') soloPassedUnits.add(id);
         }
         const attemptId = nextId++;
         recordGraded(u, spec!.type, attemptId, mode, result.pass);
@@ -695,26 +796,38 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
         ) {
           throw err(400, 'VALIDATION', `send exactly ${eb.questions.length} non-empty answers`);
         }
-        const prior = ebAnswers.get(id);
-        if (prior) throw err(403, 'ALREADY_ANSWERED', `answer #${prior.attemptId} is recorded and immutable`);
-        const attemptId = recordAttempt(u, { explainBack: { answers: body.answers } }, body.selfAssisted);
-        ebAnswers.set(id, { attemptId, answers: [...body.answers], at: NOW });
+        // one answer per item VERSION (a superseded earlier-version answer leaves room for one fresh answer)
+        const prior = currentAnswer(ebAnswers, id);
+        if (prior) throw alreadyAnswered(id, prior, 'explainBack');
+        // dead end #2: an answer before the linked artifact's solo pass would burn leg (b) for good
+        const pending = artifactsAwaitingSoloPass(id);
+        if (pending.length > 0) {
+          throw err(
+            409,
+            'ARTIFACT_REQUIRED',
+            `unit ${id}: this explain-back is promotion leg (b) of ${pending.map((p) => `unit ${p.unitId} "${p.title}"`).join(', ')}; ` +
+              `pass ${pending.length === 1 ? 'that unit' : 'those units'} solo first (verified submit), then answer — ` +
+              'an answer recorded before the artifact can never count, and the set can only be answered once',
+          );
+        }
+        const attemptId = recordAttempt(u, { explainBack: { questionSetKey: ITEM.explainBack.key(id), answers: body.answers } }, body.selfAssisted);
+        recordAnswer(ebAnswers, id, { attemptId, at: NOW, version: versionOf(id), body: [...body.answers] });
         return { attemptId, mode: attempts.get(attemptId)!.mode, outcome: 'submitted' as const };
       }),
 
     getExplainBackKey: (id) =>
       wrap(() => {
         requireType(id, 'explain-back');
-        const a = ebAnswers.get(id);
-        if (!a) throw err(403, 'NOT_ANSWERED', 'record your answers first');
-        return { attemptId: a.attemptId, answeredAt: a.at, answers: a.answers, questions: ebKeyPoints(id), scored: scores.get(a.attemptId) ?? null };
+        const a = currentAnswer(ebAnswers, id);
+        if (!a) throw notAnswered(ebAnswers, id, 'explainBack');
+        return { attemptId: a.attemptId, answeredAt: a.at, answers: a.body, questions: ebKeyPoints(id), scored: scores.get(a.attemptId) ?? null };
       }),
 
     selfScoreExplainBack: (id, body) =>
       wrap(() => {
         const { u } = requireType(id, 'explain-back');
-        const a = ebAnswers.get(id);
-        if (!a) throw err(403, 'NOT_ANSWERED', 'record your answers first');
+        const a = currentAnswer(ebAnswers, id);
+        if (!a) throw notAnswered(ebAnswers, id, 'explainBack');
         if (scores.has(a.attemptId)) throw err(409, 'ALREADY_SCORED', 'already self-scored');
         const eb = explainBackFixtures[String(id)]!;
         const ids = ebKeyPoints(id).flatMap((q) => q.keyPoints.map((k) => k.id));
@@ -722,7 +835,7 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
         const missed = ids.filter((k) => body.perKeyPoint[k] === 'missed');
         const covered = ids.length - missed.length;
         const coverage = covered / ids.length;
-        const passed = coverage >= 0.8;
+        const passed = coverage >= PROMOTION_MIN_COVERAGE;
         const evidenceIds = fileEvidence(u, a.attemptId, 'explain-back', coverage, `${covered}/${ids.length} key points covered`, eb.competencies);
         scores.set(a.attemptId, { score: coverage, evidenceIds, at: NOW });
         let xp: { id: number; amount: number; reason: null | 'already-awarded' } | null = null;
@@ -734,7 +847,7 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
           passed && eb.retest
             ? [{ reviewItemId: nextId++, unitId: eb.retest.unitId, title: eb.retest.title, dueAt: NOW + 2 * DAY_MS, artifactUnitId: eb.retest.artifactUnitId }]
             : [];
-        return { attemptId: a.attemptId, covered, total: ids.length, coverage, minCoveragePct: 80, passed, missed, evidenceIds, xp, retests, promotions: [] };
+        return { attemptId: a.attemptId, covered, total: ids.length, coverage, minCoveragePct: PROMOTION_MIN_COVERAGE * 100, passed, missed, evidenceIds, xp, retests, promotions: [] };
       }),
 
     submitKataFindings: (id, body) =>
@@ -748,26 +861,26 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
             throw err(400, 'VALIDATION', 'scenario, evidence and consequence are all required');
           }
         }
-        const prior = kataAnswers.get(id);
-        if (prior) throw err(403, 'ALREADY_ANSWERED', `findings #${prior.attemptId} are recorded and immutable`);
-        const attemptId = recordAttempt(u, { kata: { findings: body.findings } }, body.selfAssisted);
-        kataAnswers.set(id, { attemptId, findings: clone(body.findings), at: NOW });
+        const prior = currentAnswer(kataAnswers, id);
+        if (prior) throw alreadyAnswered(id, prior, 'kata');
+        const attemptId = recordAttempt(u, { kata: { kataKey: ITEM.kata.key(id), findings: body.findings } }, body.selfAssisted);
+        recordAnswer(kataAnswers, id, { attemptId, at: NOW, version: versionOf(id), body: clone(body.findings) });
         return { attemptId, mode: attempts.get(attemptId)!.mode, outcome: 'submitted' as const };
       }),
 
     getKataKey: (id) =>
       wrap(() => {
         requireType(id, 'patch-kata');
-        const a = kataAnswers.get(id);
-        if (!a) throw err(403, 'NOT_ANSWERED', 'record your findings first');
-        return { attemptId: a.attemptId, answeredAt: a.at, findings: a.findings, defects: kataDefects(id), scored: scores.get(a.attemptId) ?? null };
+        const a = currentAnswer(kataAnswers, id);
+        if (!a) throw notAnswered(kataAnswers, id, 'kata');
+        return { attemptId: a.attemptId, answeredAt: a.at, findings: a.body, defects: kataDefects(id), scored: scores.get(a.attemptId) ?? null };
       }),
 
     selfScoreKata: (id, body) =>
       wrap(() => {
         const { u } = requireType(id, 'patch-kata');
-        const a = kataAnswers.get(id);
-        if (!a) throw err(403, 'NOT_ANSWERED', 'record your findings first');
+        const a = currentAnswer(kataAnswers, id);
+        if (!a) throw notAnswered(kataAnswers, id, 'kata');
         if (scores.has(a.attemptId)) throw err(409, 'ALREADY_SCORED', 'already self-scored');
         const ids = kataDefects(id).map((d) => d.id);
         exactMarks(ids, body.perDefect);
@@ -820,18 +933,21 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
         let total = 0;
         let katas = 0;
         let assistedCount = 0;
-        for (const [unitId, a] of kataAnswers) {
-          const sc = scores.get(a.attemptId);
-          if (!sc) continue;
-          // W7 (audit #2): only SOLO answers count toward G1
-          if (attempts.get(a.attemptId)?.mode !== 'solo') {
-            assistedCount += 1;
-            continue;
+        // every scored answer counts, superseded ones included (their evidence stands, like the server's)
+        for (const [unitId, list] of kataAnswers) {
+          for (const a of list) {
+            const sc = scores.get(a.attemptId);
+            if (!sc) continue;
+            // W7 (audit #2): only SOLO answers count toward G1
+            if (attempts.get(a.attemptId)?.mode !== 'solo') {
+              assistedCount += 1;
+              continue;
+            }
+            const n = kataFixtures[String(unitId)]!.defects.length;
+            katas += 1;
+            total += n;
+            caught += Math.round(sc.score * n);
           }
-          const n = kataFixtures[String(unitId)]!.defects.length;
-          katas += 1;
-          total += n;
-          caught += Math.round(sc.score * n);
         }
         const catchRate = total === 0 ? null : caught / total;
         return {
@@ -841,10 +957,10 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
           defectsTotal: total,
           catchRate,
           gate: {
-            targetRate: 0.8,
-            minDefects: 10,
-            met: catchRate !== null && total >= 10 && catchRate >= 0.8,
-            rule: 'G1: catch >= 8/10 seeded defects (scenario + evidence + consequence) across at least 10 seeded defects',
+            targetRate: G1_TARGET_RATE,
+            minDefects: G1_MIN_DEFECTS,
+            met: catchRate !== null && total >= G1_MIN_DEFECTS && catchRate >= G1_TARGET_RATE,
+            rule: `G1: catch >= ${G1_TARGET_RATE * 10}/10 seeded defects (scenario + evidence + consequence) across at least ${G1_MIN_DEFECTS} seeded defects`,
           },
         };
       }),
@@ -993,6 +1109,10 @@ export function createMockApi(opts: MockApiOptions = {}): BootQuestApi {
       wrap((): RefContentResponse => {
         throw err(404, 'NOT_FOUND', `content ref ${refId} not found`);
       }),
+
+    reseedItem: (unitId) => {
+      itemVersion.set(unitId, versionOf(unitId) + 1);
+    },
   };
 }
 
