@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useApi } from '../api/context';
 import { errorText } from '../api/errors';
@@ -6,10 +6,8 @@ import {
   ApiError,
   isApiError,
   type CanonicalRunResult,
-  type CompetencyId,
   type PublicCheck,
   type RatingChangeDto,
-  type RevealResponse,
   type RunFailure,
   type RunVerdict,
   type SelfAttestResponse,
@@ -17,7 +15,6 @@ import {
   type SubmitResponse,
   type TrackId,
   type UnitDetail,
-  type UnitKind,
 } from '../api/types';
 import { Icon } from '../components/Icon';
 import { Chip, Kbd, LoadState, PageHeader } from '../components/ui';
@@ -32,8 +29,8 @@ import { ExplainBackPane, KataPane } from './LadderPanes';
 import { StudyQuestPane } from './StudyQuestPane';
 import { LearnMoreButton } from '../components/LearnMore';
 import { WrittenPane } from './WrittenPane';
-
-type Solution = RevealResponse['solution'];
+import { CodeEditor } from './Player/Editor';
+import { RevealPanel, promotionLeg, type Solution } from './Player/RevealFlow';
 
 const ID_RE = /^[1-9]\d{0,14}$/;
 
@@ -332,149 +329,6 @@ function RefList({ refs }: { refs: Ref[] }) {
   );
 }
 
-/** Project unit kinds: a solo pass on one is promotion leg (a), the artifact (shared PROJECT_UNIT_KINDS). */
-const PROJECT_KINDS: readonly UnitKind[] = ['guided-project', 'http-lab', 'repo-task', 'program-unit'];
-
-type PromotionLeg = 'artifact' | 'retest';
-
-/**
- * The three-leg promotion leg a submit on this unit writes evidence for, from what the unit
- * detail carries (the server's submitEvidenceKind: a project unit's submit is the artifact leg,
- * a changed-example retest's is the retest leg). A reveal makes every later attempt guided, and
- * a guided attempt never counts as a leg, so a reveal here forfeits that leg for good. A retest
- * already in practice mode (its artifact was revealed) has no leg left to lose. No competency =
- * no evidence = no promotion.
- */
-function promotionLeg(detail: UnitDetail): PromotionLeg | null {
-  const { unit } = detail;
-  if (unit.competencies.length === 0) return null;
-  if (PROJECT_KINDS.includes(unit.kind)) return 'artifact';
-  if (unit.kind === 'retest' && unit.variationOfUnitId !== null && detail.retestGate?.reason !== 'practice') return 'retest';
-  return null;
-}
-
-const listLabels = (cs: CompetencyId[]): string => {
-  const names = cs.map(competencyLabel);
-  return names.length <= 1 ? (names[0] ?? '') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
-};
-
-function RevealPanel({
-  unitId,
-  leg,
-  competencies,
-  revealed,
-  solution,
-  onRevealed,
-}: {
-  unitId: number;
-  leg: PromotionLeg | null;
-  competencies: CompetencyId[];
-  revealed: boolean;
-  solution: Solution | null;
-  onRevealed: (s: Solution) => void;
-}) {
-  const api = useApi();
-  const [confirming, setConfirming] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [variationUnitId, setVariationUnitId] = useState<number | null>(null);
-
-  const act = async (kind: 'reveal' | 'fetch') => {
-    setBusy(true);
-    setError(null);
-    try {
-      // The solution only ever arrives AFTER the server has written the reveal row.
-      const r = kind === 'reveal' ? await api.revealUnit(unitId) : await api.getSolution(unitId);
-      onRevealed(r.solution);
-      setVariationUnitId(r.variationUnitId);
-      setConfirming(false);
-    } catch (e) {
-      setError(errorText(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const names = listLabels(competencies);
-  return (
-    <div className="reveal-box">
-      {!revealed ? (
-        <button type="button" className="btn btn-sm" onClick={() => setConfirming(true)} disabled={busy}>
-          <Icon name="warn" size={14} /> Reveal solution
-        </button>
-      ) : !solution ? (
-        <button type="button" className="btn btn-sm" onClick={() => void act('fetch')} disabled={busy}>
-          Show revealed solution
-        </button>
-      ) : (
-        <SolutionView solution={solution} />
-      )}
-      {solution && variationUnitId !== null && (
-        // reveal schedules the unit's pre-seeded changed example as practice (README: honesty model)
-        <p className="small" data-testid="variation-link">
-          A changed version of this exercise is waiting as practice:{' '}
-          <Link to={`/play/${variationUnitId}`}>practice the changed example</Link>.
-        </p>
-      )}
-      {confirming && (
-        <div
-          className="confirm"
-          role="alertdialog"
-          onKeyDown={(e) => e.key === 'Escape' && !busy && setConfirming(false)}
-          aria-labelledby="reveal-title"
-          aria-describedby={leg ? 'reveal-desc reveal-leg' : 'reveal-desc'}
-        >
-          <h3 id="reveal-title">Reveal the solution?</h3>
-          <p id="reveal-desc">
-            This exercise will be worth <strong>0 XP forever</strong>. Later submits still record, as guided attempts.
-          </p>
-          {leg === 'artifact' && (
-            <p id="reveal-leg" data-testid="reveal-leg">
-              It is also a <strong>promotion artifact</strong> for {names}. A revealed artifact can never count as the solo artifact leg, so{' '}
-              <strong>this unit can never promote {competencies.length === 1 ? 'it' : 'them'}</strong> and its changed-example retest becomes
-              practice only. This cannot be undone.
-            </p>
-          )}
-          {leg === 'retest' && (
-            <p id="reveal-leg" data-testid="reveal-leg">
-              It is also the <strong>changed-example retest</strong> leg of a promotion for {names}. Once revealed, its attempts are guided and{' '}
-              <strong>can never complete that promotion</strong>. This cannot be undone.
-            </p>
-          )}
-          <div className="toolbar">
-            <button type="button" className="btn" autoFocus onClick={() => setConfirming(false)} disabled={busy}>
-              Cancel
-            </button>
-            <button type="button" className="btn btn-primary" onClick={() => void act('reveal')} disabled={busy}>
-              {leg ? 'Reveal (0 XP forever, promotion leg forfeited)' : 'Reveal (0 XP forever)'}
-            </button>
-          </div>
-        </div>
-      )}
-      {error && (
-        <p className="error-text" role="alert">
-          {error}
-        </p>
-      )}
-    </div>
-  );
-}
-
-function SolutionView({ solution }: { solution: Solution }) {
-  return (
-    <div className="solution" data-testid="solution">
-      <h3 className="small">Reference solution (revealed)</h3>
-      {solution.kind === 'code' && <pre className="code-block">{solution.code}</pre>}
-      {solution.kind === 'output' && <pre className="code-block">{solution.expected}</pre>}
-      {solution.kind === 'answer' && (
-        <p>
-          Answer: <InlineProse text={solution.choice ?? String(solution.answer)} />
-        </p>
-      )}
-    </div>
-  );
-}
-
 // ---------------------------------------------------------------- shared submit bits
 
 function HelpCheckbox({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
@@ -752,123 +606,6 @@ function CodePane({ detail, spec }: { detail: UnitDetail; spec: PublicCheck }) {
       </div>
       <Results outcome={outcome} error={error} busy={busy !== null} unit={detail.unit} />
     </section>
-  );
-}
-
-type Edit = { value: string; start: number; end: number };
-
-/** Line-start offsets of every line the selection [start, end) touches. */
-function selectedLineStarts(v: string, start: number, end: number): number[] {
-  const first = v.lastIndexOf('\n', start - 1) + 1;
-  // a selection ending right after a newline does not include the next line
-  const last = end > start && v[end - 1] === '\n' ? end - 1 : end;
-  const starts = [first];
-  for (let i = v.indexOf('\n', first); i !== -1 && i < last; i = v.indexOf('\n', i + 1)) starts.push(i + 1);
-  return starts;
-}
-
-/** Tab: a caret or a one-line selection inserts one indent; a multi-line selection indents every line. */
-function indentText(v: string, start: number, end: number, unit: string): Edit {
-  if (!v.slice(start, end).includes('\n')) {
-    return { value: v.slice(0, start) + unit + v.slice(end), start: start + unit.length, end: start + unit.length };
-  }
-  const starts = selectedLineStarts(v, start, end);
-  let out = v;
-  for (const s of [...starts].reverse()) out = out.slice(0, s) + unit + out.slice(s);
-  return { value: out, start: start + unit.length, end: end + unit.length * starts.length };
-}
-
-/** Shift+Tab: remove up to one indent (spaces, or one tab) from the start of every touched line. */
-function outdentText(v: string, start: number, end: number, unit: string): Edit {
-  const starts = selectedLineStarts(v, start, end);
-  let out = v;
-  let newStart = start;
-  let newEnd = end;
-  for (const s of [...starts].reverse()) {
-    const lead = out.slice(s, s + unit.length);
-    const n = lead.startsWith('\t') ? 1 : lead.length - lead.trimStart().length;
-    if (n === 0) continue;
-    out = out.slice(0, s) + out.slice(s + n);
-    // shift the selection ends that sit after the removed characters
-    if (start > s) newStart -= Math.min(n, start - s);
-    if (end > s) newEnd -= Math.min(n, end - s);
-  }
-  return { value: out, start: newStart, end: newEnd };
-}
-
-/** Indent unit per language: 4 spaces for C# / Java (their conventions), 2 for JS / TS and the rest. */
-const indentFor = (language: string) => (/^(c#|java)$/i.test(language.trim()) ? '    ' : '  ');
-
-/**
- * The code editor: a plain textarea with a line gutter. Tab / Shift+Tab indent and outdent like a
- * code editor; to keep the keyboard path out of the editor (WCAG 2.1.2, no keyboard trap) Escape
- * arms the next Tab to move focus as usual (the CodeMirror convention), as the hint above says.
- */
-function CodeEditor({ value, onChange, language, describedBy }: { value: string; onChange: (v: string) => void; language: string; describedBy?: string }) {
-  const lines = Math.max(value.split('\n').length, 12);
-  const gutter = useRef<HTMLDivElement>(null);
-  const text = useRef<HTMLTextAreaElement>(null);
-  const escaped = useRef(false);
-  const pendingSelection = useRef<[number, number] | null>(null);
-  const unit = indentFor(language);
-
-  // a programmatic edit replaces the value: put the caret / selection where the edit says
-  useLayoutEffect(() => {
-    const sel = pendingSelection.current;
-    if (sel && text.current) {
-      text.current.setSelectionRange(sel[0], sel[1]);
-      pendingSelection.current = null;
-    }
-  }, [value]);
-
-  const onKeyDown = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Escape') {
-      escaped.current = true;
-      return;
-    }
-    if (e.key !== 'Tab') {
-      if (e.key !== 'Shift') escaped.current = false;
-      return;
-    }
-    if (e.ctrlKey || e.metaKey || e.altKey || escaped.current) {
-      escaped.current = false; // Esc then Tab (or a modified Tab): the browser moves focus
-      return;
-    }
-    e.preventDefault();
-    const el = e.currentTarget;
-    const edit = (e.shiftKey ? outdentText : indentText)(el.value, el.selectionStart, el.selectionEnd, unit);
-    if (edit.value === el.value) return;
-    pendingSelection.current = [edit.start, edit.end];
-    onChange(edit.value);
-  };
-
-  return (
-    <div className="editor">
-      <div className="editor-gutter" ref={gutter} aria-hidden="true">
-        {Array.from({ length: lines }, (_, i) => (
-          <span key={i}>{i + 1}</span>
-        ))}
-      </div>
-      <textarea
-        ref={text}
-        className="editor-text"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        onKeyDown={onKeyDown}
-        onBlur={() => {
-          escaped.current = false;
-        }}
-        onScroll={(e) => {
-          if (gutter.current) gutter.current.scrollTop = e.currentTarget.scrollTop;
-        }}
-        spellCheck={false}
-        autoCapitalize="off"
-        autoCorrect="off"
-        aria-label={`Code editor (${language})`}
-        aria-describedby={describedBy}
-        rows={lines}
-      />
-    </div>
   );
 }
 
