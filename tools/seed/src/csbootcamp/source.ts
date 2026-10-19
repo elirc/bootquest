@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
@@ -9,7 +9,9 @@ import { join } from 'node:path';
  * shallow single-commit fetch, `core.autocrlf=false` so the working tree holds the
  * upstream LF bytes (LEARNING P2: copy LF files, not autocrlf-converted ones).
  * Every git call uses `git -C <dir>` (never cd). A cached checkout is reused only
- * when HEAD is the pinned sha and the tree is clean; anything else is re-fetched.
+ * when HEAD is the pinned sha and the tree is clean; otherwise the dir is re-fetched,
+ * but only if it is absent, empty, or carries CACHE_MARKER (made by this tool) —
+ * a user-supplied --cache that names anything else is refused, never deleted.
  *
  * Layout read (bootcamp/_lib/FORMAT.md): bootcamp/NN-topic/{README.md,
  * exercises/NN-name.cs, solutions/NN-name.cs}; files starting with `_` ignored.
@@ -27,8 +29,20 @@ export class SourceError extends Error {
   }
 }
 
+/**
+ * Ownership marker: ensureCheckout writes it into every cache dir it CREATES and
+ * deletes a directory only when the marker is there. `--cache` is user-supplied
+ * (a mix-up with a real working copy must never wipe it, .git and all).
+ */
+export const CACHE_MARKER = '.bootquest-cache';
+
+/**
+ * Every call pins `core.autocrlf=false` on the command line: a system/global
+ * `autocrlf=true` (this machine's default) must neither convert the checkout's
+ * bytes nor make our own checkout look dirty on a re-run.
+ */
 function git(dir: string, args: string[], timeoutMs = 120_000): string {
-  return execFileSync('git', ['-C', dir, ...args], {
+  return execFileSync('git', ['-c', 'core.autocrlf=false', '-C', dir, ...args], {
     encoding: 'utf8',
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -51,21 +65,66 @@ export interface CheckoutInfo {
   fetched: boolean;
 }
 
-/** Ensure `dir` is a clean LF checkout of `sha` (fetching it if needed). */
+/** true when `dir` carries the marker ensureCheckout writes into directories it created. */
+export function isOwnedCache(dir: string): boolean {
+  try {
+    return lstatSync(join(dir, CACHE_MARKER)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * What ensureCheckout may do with an existing `dir` that is not a reusable checkout:
+ * 'create' (absent or empty: nothing to delete), 'replace' (ours: marker present),
+ * or 'refuse' (anything else: never deleted).
+ */
+export function cacheDisposition(dir: string): 'create' | 'replace' | 'refuse' {
+  let st;
+  try {
+    st = lstatSync(dir);
+  } catch {
+    return 'create';
+  }
+  if (!st.isDirectory()) return 'refuse';
+  if (readdirSync(dir).length === 0) return 'create';
+  return isOwnedCache(dir) ? 'replace' : 'refuse';
+}
+
+/**
+ * Ensure `dir` is a clean LF checkout of `sha` (fetching it if needed). A clean
+ * checkout at `sha` is reused read-only whoever made it; otherwise `dir` is
+ * deleted and re-fetched ONLY if this tool created it (CACHE_MARKER) — a foreign
+ * non-empty directory is refused with a SourceError and left untouched.
+ */
 export function ensureCheckout(dir: string, sha: string = CSBOOTCAMP_SHA, url: string = CSBOOTCAMP_URL): CheckoutInfo {
   if (existsSync(join(dir, '.git')) && headOf(dir) === sha) {
     let clean = false;
     try {
-      clean = git(dir, ['config', '--get', 'core.autocrlf']) === 'false' && git(dir, ['status', '--porcelain']) === '';
+      // --local: the checkout itself must have been made LF (the -c override would always say false)
+      clean = git(dir, ['config', '--local', '--get', 'core.autocrlf']) === 'false' && git(dir, ['status', '--porcelain']) === '';
     } catch {
       clean = false;
     }
     if (clean) return { dir, sha, fetched: false };
   }
-  rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  const disposition = cacheDisposition(dir);
+  if (disposition === 'refuse') {
+    throw new SourceError(
+      `refusing to delete ${dir}: it is not a cache directory this tool created (no ${CACHE_MARKER} marker) and not a clean ` +
+        `core.autocrlf=false checkout of ${sha}. Point --cache at a new or empty directory ` +
+        `(or delete this one yourself if it really is a disposable old cache).`,
+    );
+  }
+  if (disposition === 'replace') rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   mkdirSync(dir, { recursive: true });
+  // marker first: a fetch that dies half-way still leaves a directory we may replace
+  writeFileSync(join(dir, CACHE_MARKER), `BootQuest source cache (ensureCheckout) for ${url}\nSafe to delete; the importer re-fetches it.\n`);
   git(dir, ['init', '--quiet']);
   git(dir, ['config', 'core.autocrlf', 'false']);
+  // the marker is untracked: keep it out of `git status` so the cache counts as clean on re-runs
+  mkdirSync(join(dir, '.git', 'info'), { recursive: true });
+  appendFileSync(join(dir, '.git', 'info', 'exclude'), `\n/${CACHE_MARKER}\n`);
   git(dir, ['remote', 'add', 'origin', url]);
   git(dir, ['fetch', '--quiet', '--depth', '1', 'origin', sha], 300_000);
   git(dir, ['checkout', '--quiet', '--detach', 'FETCH_HEAD']);
