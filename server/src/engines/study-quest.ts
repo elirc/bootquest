@@ -68,6 +68,9 @@ function enqueue(db: Db, unitId: number, cardKeys: readonly string[], kind: 'qui
   let alreadyQueued = 0;
   for (const cardKey of cardKeys) {
     if (db.get('SELECT 1 AS x FROM review_item WHERE card_key = ?', cardKey)) {
+      // the item is being graded / enrolled, so it exists again: a card retired by an earlier
+      // re-seed (store/review-cards.ts) is live again, with its FSRS schedule intact
+      db.run('UPDATE review_item SET retired_at = NULL WHERE card_key = ? AND retired_at IS NOT NULL', cardKey);
       alreadyQueued++;
       continue;
     }

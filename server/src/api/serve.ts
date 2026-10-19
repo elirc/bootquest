@@ -19,7 +19,8 @@ import { createNodeTestFileRunner } from './runner-node-test-file.ts';
 import { removeWorkParent } from '../runners/node-test-file/index.ts';
 import { createSyncService, resolveSyncPaths, type SyncService } from '../sync/service.ts';
 import { defaultSeedItemDirs, loadSeedItemStoreWithStats, type SeedPackStat } from '../store/seed-items.ts';
-import { DEFAULT_AUTHORED_UNITS, ladderContentEntries, loadLadderIntoDb, readAuthoredUnits, readKataDifficulty, type LadderLoadStats } from '../store/ladder.ts';
+import { DEFAULT_AUTHORED_UNITS, ladderContentEntries, loadLadderIntoDb, readAuthoredUnits, readKataDifficulty, type LadderInputs, type LadderLoadStats } from '../store/ladder.ts';
+import { reconcileSeededReviewCards, type ReviewCardReconcileStats } from '../store/review-cards.ts';
 import { loadStudyQuestsIntoDb, type StudyQuestLoadStats } from '../store/study-quests.ts';
 
 /**
@@ -145,6 +146,27 @@ export interface RunningServer {
   ladder: LadderLoadStats;
   /** W8: study-quest gates derived from the stamped seed:quests packs (loaded === built per track asserted) */
   studyQuests: StudyQuestLoadStats;
+  /** seeded review cards retired / restored against the loaded seed items (store/review-cards.ts) */
+  reviewCards: ReviewCardReconcileStats;
+}
+
+/**
+ * The startup's seed-derived DB loads, in order, all under THE re-seed policy
+ * (store/check-policy.ts): ladder units (W7), campaign study-quest gates (W8), then the seeded
+ * review cards. Exported so a test can replay exactly this startup step on a DB with history
+ * after a re-seed (a re-seed never refuses to start and never needs a DB reset).
+ */
+export function loadSeedDerivedContent(
+  db: Db,
+  ladderInputs: LadderInputs,
+  clock: Clock,
+): { ladder: LadderLoadStats; studyQuests: StudyQuestLoadStats; reviewCards: ReviewCardReconcileStats } {
+  const ladder = loadLadderIntoDb(db, ladderInputs, clock);
+  // W8: campaign study quests whose repo has a stamped quest pack get their quiz gate (others stay pending)
+  const studyQuests = loadStudyQuestsIntoDb(db, ladderInputs.seedItems, clock);
+  // a re-seed that removed a card's source item retires the card (no text, never due, never blocks the slate)
+  const reviewCards = reconcileSeededReviewCards(db, ladderInputs.seedItems, clock);
+  return { ladder, studyQuests, reviewCards };
 }
 
 function splitList(raw: string | undefined): string[] {
@@ -235,9 +257,7 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
       for (const [k, v] of readKataDifficulty(d)) kataDifficulty.set(k, v);
     }
     const ladderInputs = { seedItems, authored, kataDifficulty };
-    const ladder = loadLadderIntoDb(db, ladderInputs, clock);
-    // W8: campaign study quests whose repo has a stamped quest pack get their quiz gate (others stay pending)
-    const studyQuests = loadStudyQuestsIntoDb(db, seedItems, clock);
+    const { ladder, studyQuests, reviewCards } = loadSeedDerivedContent(db, ladderInputs, clock);
     sources.push(ladderContentEntries(seedItems));
     if (authored) sources.push(new Map(Object.entries(authored.content)));
     const content = combineContentStores(sources);
@@ -298,7 +318,7 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
       });
       return closing;
     };
-    return { server, db, port, host, close, backup: backupKept, packs: packStats, campaign, csharpScratch: csharp?.appDataDir ?? null, javaScratch: java?.appDataDir ?? null, seedPacks, ladder, studyQuests };
+    return { server, db, port, host, close, backup: backupKept, packs: packStats, campaign, csharpScratch: csharp?.appDataDir ?? null, javaScratch: java?.appDataDir ?? null, seedPacks, ladder, studyQuests, reviewCards };
   } catch (err) {
     db.close();
     throw err;
@@ -310,12 +330,13 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
  * tracks, seed packs, ladder families, authored units). Every count printed here was already
  * asserted loaded === built by its loader (a mismatch refuses to start before this prints).
  */
-export function startupSummary(running: Pick<RunningServer, 'packs' | 'campaign' | 'seedPacks' | 'ladder'> & Partial<Pick<RunningServer, 'studyQuests'>>): string[] {
+export function startupSummary(running: Pick<RunningServer, 'packs' | 'campaign' | 'seedPacks' | 'ladder'> & Partial<Pick<RunningServer, 'studyQuests' | 'reviewCards'>>): string[] {
   const out: string[] = [];
   for (const p of running.packs) {
     out.push(
       `[bootquest] pack ${p.source}: ${p.courses.length} course(s), loaded ${p.loaded} === built ${p.built} ` +
-        `(inserted ${p.inserted}, updated ${p.updated}, unchanged ${p.unchanged}, quarantined ${p.withheld}, retired now ${p.retired})`,
+        `(inserted ${p.inserted}, updated ${p.updated}, unchanged ${p.unchanged}, quarantined ${p.withheld}, retired now ${p.retired}` +
+        `${p.checksReplaced ? `, re-seeded checks retired-and-replaced ${p.checksReplaced}` : ''})`,
     );
   }
   for (const t of running.campaign?.tracks ?? []) {
@@ -341,6 +362,11 @@ export function startupSummary(running: Pick<RunningServer, 'packs' | 'campaign'
     }
     if (sq.unmatchedPacks.length) out.push(`[bootquest] study quests: quest pack(s) matching no campaign study quest (served as standalone ladder study units): ${sq.unmatchedPacks.join(', ')}`);
     for (const o of sq.orphaned) out.push(`[bootquest] study quests: ${o} lost its quest pack after attempts were recorded (gate kept for history, quest content-pending)`);
+    for (const r of sq.replaced) out.push(`[bootquest] study quests: ${r} was re-seeded after attempts were recorded (old gate retired for history, new live gate inserted)`);
+  }
+  const rc = running.reviewCards;
+  if (rc && (rc.retired.length || rc.restored.length)) {
+    out.push(`[bootquest] review cards: ${rc.retired.length} seeded card(s) retired (source item removed by a re-seed), ${rc.restored.length} restored (item back)`);
   }
   return out;
 }

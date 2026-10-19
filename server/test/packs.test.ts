@@ -35,6 +35,8 @@ interface SynthUnit {
   type: 'quiz' | 'written';
   prerequisites?: string[];
   variationOf?: string;
+  /** a quiz's keyed choice frame (default answerKey 1 of a, b, c); a re-seed changes it */
+  quiz?: { answerKey: number; choices: string[] };
 }
 
 const keyOf = (course: string, slug: string) => `synth/${course}/m/l/${slug}`;
@@ -59,7 +61,7 @@ function synthCourse(course: string, units: SynthUnit[]) {
         ...(u.variationOf ? { variationOf: keyOf(course, u.variationOf) } : {}),
         checks:
           u.type === 'quiz'
-            ? [{ spec: { type: 'quiz', itemKey: keyOf(course, u.slug), grading: 'choice', answerKey: 1, choices: ['a', 'b', 'c'] } }]
+            ? [{ spec: { type: 'quiz', itemKey: keyOf(course, u.slug), grading: 'choice', answerKey: u.quiz?.answerKey ?? 1, choices: u.quiz?.choices ?? ['a', 'b', 'c'] } }]
             : [],
       },
       origin: { id: `${course}/m/l/${u.slug}`, type: u.type, module: 'm', lesson: 'l', position: i, skills: [] },
@@ -109,7 +111,7 @@ describe('migration 004 (written unit kind, FK-off table rebuild)', () => {
       const before = db.get('SELECT * FROM unit WHERE id = ?', unitId);
 
       // 007 (W5b campaign) and 008 (W6 ladder rebuilds) also apply here; the enumeration was stale since W5b
-      expect(migrate(db)).toEqual([4, 5, 6, 7, 8, 9, 10, 11]);
+      expect(migrate(db)).toEqual([4, 5, 6, 7, 8, 9, 10, 11, 12]);
       // 005 only adds the nullable retired_at column (live by default)
       expect(db.get('SELECT * FROM unit WHERE id = ?', unitId)).toEqual({ ...(before as object), retired_at: null });
       expect(db.get<{ unit_id: number }>('SELECT unit_id FROM attempt WHERE id = ?', attempt.id)!.unit_id).toBe(unitId);
@@ -153,9 +155,10 @@ describe('migration 008 (W6: evidence + review_item rebuilds)', () => {
       const evBefore = db.all('SELECT * FROM evidence ORDER BY id');
       const riBefore = db.all('SELECT * FROM review_item ORDER BY id');
 
-      expect(migrate(db)).toEqual([8, 9, 10, 11]);
+      expect(migrate(db)).toEqual([8, 9, 10, 11, 12]);
       expect(db.all('SELECT * FROM evidence ORDER BY id')).toEqual(evBefore);
-      expect(db.all('SELECT * FROM review_item ORDER BY id')).toEqual(riBefore);
+      // 012 only adds the nullable review_item.retired_at (live by default)
+      expect(db.all('SELECT * FROM review_item ORDER BY id')).toEqual(riBefore.map((r) => ({ ...(r as object), retired_at: null })));
       expect(db.all('PRAGMA foreign_key_check')).toEqual([]);
       const triggers = db.all<{ name: string }>(`SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name`).map((t) => t.name);
       for (const t of ['evidence_no_update', 'evidence_no_delete', 'evidence_no_replace', 'evidence_rating_change_consistent', 'competency_rating_guarded_update']) {
@@ -192,8 +195,9 @@ describe('migration 010 (drill-java check type, FK-off "check" rebuild)', () => 
       const checksBefore = db.all('SELECT * FROM "check" ORDER BY id');
       const runsBefore = db.all('SELECT * FROM run ORDER BY id');
 
-      expect(migrate(db)).toEqual([10, 11]);
-      expect(db.all('SELECT * FROM "check" ORDER BY id')).toEqual(checksBefore);
+      expect(migrate(db)).toEqual([10, 11, 12]);
+      // 012 only adds the nullable "check".retired_at (live by default)
+      expect(db.all('SELECT * FROM "check" ORDER BY id')).toEqual(checksBefore.map((c) => ({ ...(c as object), retired_at: null })));
       expect(db.all('SELECT * FROM run ORDER BY id')).toEqual(runsBefore);
       expect(db.get<{ check_id: number }>('SELECT check_id FROM attempt WHERE id = ?', attempt.id)!.check_id).toBe((checksBefore[0] as { id: number }).id);
       expect(db.all('PRAGMA foreign_key_check')).toEqual([]);
@@ -303,6 +307,66 @@ describe('pack loader', () => {
     rmSync(dir, { recursive: true, force: true });
     writeSynthPack(dir, [{ slug: 'a', type: 'written' }]);
     expect(() => loadPackIntoDb(tmp.db, read(dir), clock)).toThrow(/changed kind/);
+  });
+
+  it('re-seed policy (store/check-policy.ts): a changed check is updated in place while unreferenced, RETIRED-AND-REPLACED once attempts reference it; old attempts keep their original frame', async () => {
+    writeSynthPack(dir, [{ slug: 'a', type: 'quiz' }, { slug: 'b', type: 'quiz' }]);
+    const first = read(dir);
+    loadPackIntoDb(tmp.db, first, clock);
+    const id = (s: string) => tmp.db.get<{ id: number }>('SELECT id FROM unit WHERE key = ?', keyOf('c1', s))!.id;
+    const checksOf = (s: string) =>
+      tmp.db.all<{ id: number; spec: string; retired_at: number | null }>('SELECT id, spec, retired_at FROM "check" WHERE unit_id = ? ORDER BY id', id(s));
+    const [aOld] = checksOf('a');
+    const [bOld] = checksOf('b');
+    // the learner answers a (keyed stored choice 1 = 'b'), b is never attempted
+    const app1 = createApp({ db: tmp.db, clock, runners: defaultRunners(), content: entriesContentStore(packContentEntries(first)) });
+    const sub1 = await request(app1).post(`/api/units/${id('a')}/submit`).send({ answer: await servedQuizAnswer(app1, tmp.db, id('a'), 1) });
+    expect(sub1.body.verdict).toBe('pass');
+    const attemptId = sub1.body.attempt.id as number;
+    expect(tmp.db.get<{ c: number }>('SELECT check_id AS c FROM attempt WHERE id = ?', attemptId)!.c).toBe(aOld!.id);
+
+    // a content wave re-seeds both quizzes: new choices, new key position
+    rmSync(dir, { recursive: true, force: true });
+    const reseed = { answerKey: 0, choices: ['x', 'y', 'z'] };
+    writeSynthPack(dir, [{ slug: 'a', type: 'quiz', quiz: reseed }, { slug: 'b', type: 'quiz', quiz: reseed }]);
+    const second = read(dir);
+    const stats = loadPackIntoDb(tmp.db, second, clock); // never a refusal, never a DB reset
+    expect(stats).toMatchObject({ built: 2, loaded: 2, checks: 2, updated: 2, checksReplaced: 1 });
+
+    // a: the referenced check is retired with its ORIGINAL frame; the attempt still points at it
+    const a = checksOf('a');
+    expect(a).toHaveLength(2);
+    expect(a[0]).toEqual({ id: aOld!.id, spec: aOld!.spec, retired_at: clock().getTime() });
+    expect(JSON.parse(a[0]!.spec)).toMatchObject({ answerKey: 1, choices: ['a', 'b', 'c'] });
+    expect(JSON.parse(a[1]!.spec)).toMatchObject({ answerKey: 0, choices: ['x', 'y', 'z'] });
+    expect(a[1]!.retired_at).toBeNull();
+    expect(tmp.db.get<{ c: number }>('SELECT check_id AS c FROM attempt WHERE id = ?', attemptId)!.c).toBe(aOld!.id);
+    expect(tmp.db.all('SELECT check_id FROM run WHERE attempt_id = ?', attemptId)).toEqual([{ check_id: aOld!.id }]);
+    // b: unreferenced -> updated in place (same row, nothing retired)
+    const b = checksOf('b');
+    expect(b).toHaveLength(1);
+    expect(b[0]!.id).toBe(bOld!.id);
+    expect(JSON.parse(b[0]!.spec)).toMatchObject({ answerKey: 0, choices: ['x', 'y', 'z'] });
+
+    // SQL backstop: a referenced check's frame cannot be rewritten in place
+    expect(() => tmp.db.run('UPDATE "check" SET spec = ? WHERE id = ?', a[1]!.spec, aOld!.id)).toThrow(/frozen/);
+    expect(() => tmp.db.run('UPDATE "check" SET threshold = 0.5 WHERE id = ?', aOld!.id)).toThrow(/frozen/);
+
+    // the live unit serves the NEW frame and grades against it; new attempts bind to the new check
+    const app2 = createApp({ db: tmp.db, clock, runners: defaultRunners(), content: entriesContentStore(packContentEntries(second)) });
+    const detail = (await request(app2).get(`/api/units/${id('a')}`)).body as { check: { spec: { choices: string[] } } };
+    expect([...detail.check.spec.choices].sort()).toEqual(['x', 'y', 'z']);
+    const sub2 = await request(app2).post(`/api/units/${id('a')}/submit`).send({ answer: await servedQuizAnswer(app2, tmp.db, id('a'), 0) });
+    expect(sub2.body.verdict).toBe('pass');
+    expect(tmp.db.get<{ c: number }>('SELECT check_id AS c FROM attempt WHERE id = ?', sub2.body.attempt.id)!.c).toBe(a[1]!.id);
+    // the old attempt still reads back as recorded
+    const old = await request(app2).get(`/api/attempts/${attemptId}`);
+    expect([old.status, old.body.outcome]).toEqual([200, 'pass']);
+    expect((await request(app2).get('/api/health')).body.counts).toEqual({ units: 2, checks: 2 });
+
+    // a further load is a no-op
+    expect(loadPackIntoDb(tmp.db, read(dir), clock)).toMatchObject({ unchanged: 2, updated: 0, checksReplaced: 0 });
+    expect(checksOf('a')).toHaveLength(2);
   });
 
   it('withholds quarantined units: never loaded, no content served, built shrinks accordingly', () => {

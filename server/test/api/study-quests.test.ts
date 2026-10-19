@@ -23,7 +23,8 @@ import { ledgerCounts } from '../../src/store/queries.ts';
 import { loadSeedItemStore, mapSeedItemStore, readSeedPackItems, SeedItemLoadError, type SeedItemStore } from '../../src/store/seed-items.ts';
 import { loadStudyQuestsIntoDb, StudyQuestLoadError } from '../../src/store/study-quests.ts';
 import { assertUniqueSeedItemRefs, ladderUnits, LadderLoadError, loadLadderIntoDb, studyUnitKey } from '../../src/store/ladder.ts';
-import { insertUnit } from '../../src/store/content.ts';
+import { insertCheck, insertUnit } from '../../src/store/content.ts';
+import { loadSeedDerivedContent } from '../../src/api/serve.ts';
 import { defaultFixtureTracks, quest, writeCampaignFixture, type FixtureTracks } from '../campaign-fixture.ts';
 import { localNoon, makeTempDb, type TempDb } from '../helpers.ts';
 
@@ -153,14 +154,50 @@ describe('study-quest loader (store/study-quests.ts)', { timeout: 60_000 }, () =
     expect(ctx.tmp.db.get('SELECT 1 AS x FROM "check" WHERE unit_id = ?', unitOf(ctx, 'grok-js'))).toBeDefined();
   });
 
-  it('a re-seeded gate updates in place while unattempted, and REFUSES once attempts reference it', async () => {
+  it('a re-seeded gate updates in place while unattempted; once attempts reference it the old gate is RETIRED (original item keys kept) and a new live gate replaces it — never a refusal', async () => {
     const quizzes = packQuizzes('grok-js');
+    const allKeys = quizzes.map((q) => q.key);
     const reseeded = mapSeedItemStore(quizzes.slice(1)); // as if the pack lost its first item
+    const id = unitOf(ctx, 'grok-js');
+    const gates = () =>
+      ctx.tmp.db
+        .all<{ id: number; spec: string; retired_at: number | null }>(`SELECT id, spec, retired_at FROM "check" WHERE unit_id = ? ORDER BY id`, id)
+        .map((g) => ({ id: g.id, itemKeys: (JSON.parse(g.spec) as { itemKeys: string[] }).itemKeys, retired: g.retired_at !== null }));
+    const g0 = gates()[0]!.id;
     expect(loadStudyQuestsIntoDb(ctx.tmp.db, reseeded, ctx.clock).updated).toBe(1);
+    expect(gates()).toEqual([{ id: g0, itemKeys: allKeys.slice(1), retired: false }]); // unattempted: in place
     loadStudyQuestsIntoDb(ctx.tmp.db, store, ctx.clock);
-    expect((await submit(ctx, unitOf(ctx, 'grok-js'), { answers: await served(ctx, unitOf(ctx, 'grok-js'), 'grok-js', keysOf('grok-js')) })).status).toBe(200);
+    const sub = await submit(ctx, id, { answers: await served(ctx, id, 'grok-js', keysOf('grok-js')) });
+    expect([sub.status, sub.body.verdict]).toEqual([200, 'pass']);
+    const attemptId = (sub.body as { attempt: { id: number } }).attempt.id;
+
+    // the pack is re-seeded after the attempt: retire-and-replace (loaded === built still asserted inside)
+    const s = loadStudyQuestsIntoDb(ctx.tmp.db, reseeded, ctx.clock);
+    expect(s.replaced).toEqual(['campaign/js/grok-js']);
+    expect(s.updated).toBe(0);
+    expect(s.tracks.find((t) => t.track === 'js')).toMatchObject({ built: 1, loaded: 1 });
+    const after = gates();
+    expect(after).toHaveLength(2);
+    expect(after[0]).toEqual({ id: g0, itemKeys: allKeys, retired: true }); // the attempt's original frame
+    expect(after[1]).toMatchObject({ itemKeys: allKeys.slice(1), retired: false });
+    expect(ctx.tmp.db.get<{ c: number }>('SELECT check_id AS c FROM attempt WHERE id = ?', attemptId)!.c).toBe(g0);
+    // idempotent
+    expect(loadStudyQuestsIntoDb(ctx.tmp.db, reseeded, ctx.clock)).toMatchObject({ replaced: [], updated: 0, inserted: 0 });
+    expect(gates()).toHaveLength(2);
+
+    // the server on the re-seeded content plays the NEW live gate; the quest passed under the old one stays done
+    ctx.app = createApp({ db: ctx.tmp.db, clock: ctx.clock, runners: defaultRunners(), seedItems: reseeded });
+    const d = UnitDetailResponse.parse((await request(ctx.app).get(`/api/units/${id}`)).body);
+    expect(d.studyQuest!.questions.map((q) => q.itemKey)).toEqual(allKeys.slice(1));
+    const camp = CampaignResponse.parse((await request(ctx.app).get('/api/tracks/js/campaign')).body);
+    expect(camp.acts[0]!.quests[0]).toMatchObject({ repo: 'grok-js', state: 'done' });
+    const again = await submit(ctx, id, { answers: await served(ctx, id, 'grok-js', keysOf('grok-js').slice(1)) });
+    expect([again.status, again.body.verdict]).toEqual([200, 'pass']);
+    expect(ctx.tmp.db.get<{ c: number }>('SELECT check_id AS c FROM attempt WHERE id = ?', (again.body as { attempt: { id: number } }).attempt.id)!.c).toBe(after[1]!.id);
+    // a second live gate on the unit is still refused (one LIVE gate per unit)
+    insertCheck(ctx.tmp.db, id, { type: 'study-quiz', itemKeys: allKeys.slice(1), passPct: 0.8 }, ctx.clock, { threshold: 0.8 });
     expect(() => loadStudyQuestsIntoDb(ctx.tmp.db, reseeded, ctx.clock)).toThrow(StudyQuestLoadError);
-    expect(() => loadStudyQuestsIntoDb(ctx.tmp.db, reseeded, ctx.clock)).toThrow(/re-seeded/);
+    expect(() => loadStudyQuestsIntoDb(ctx.tmp.db, reseeded, ctx.clock)).toThrow(/2 live study-quiz checks/);
   });
 
   it('stamp discipline: a quest pack edited after validation is refused by the seed loader', () => {
@@ -170,6 +207,73 @@ describe('study-quest loader (store/study-quests.ts)', { timeout: 60_000 }, () =
     writeFileSync(join(dir, 'items.json'), readFileSync(join(dir, 'items.json'), 'utf8').replace('"prompt": "', '"prompt": "EDITED '));
     expect(() => readSeedPackItems(dir)).toThrow(SeedItemLoadError);
     expect(() => loadSeedItemStore([dir])).toThrow(/sha256|stamp/);
+  });
+});
+
+// ---------------------------------------------------------------- re-seed on a DB with history (startup)
+
+describe('re-seed on a DB with history: the startup loads (serve.ts loadSeedDerivedContent) retire, never refuse', { timeout: 120_000 }, () => {
+  const ctx = useStudyApi();
+  const flashKeys = (repo: string) =>
+    (JSON.parse(readFileSync(join(QUESTS, repo, 'items.json'), 'utf8')) as { items: { kind: string; key: string }[] }).items.filter((i) => i.kind === 'flashcard').map((i) => i.key);
+  /** the real stamped packs minus the removed item keys: what a content wave that dropped them would load */
+  const reseededStore = (drop: ReadonlySet<string>) =>
+    mapSeedItemStore(PACKS.flatMap((p) => readSeedPackItems(join(QUESTS, p))).filter((i) => !drop.has((i as { key: string }).key)));
+  const queue = async () => ReviewQueueResponse.parse((await request(ctx.app).get('/api/reviews/queue')).body);
+  const reviewSlot = async () => DashboardResponse.parse((await request(ctx.app).get('/api/dashboard')).body).slate.items.find((i) => i.slot === 'review')!;
+
+  it('server startup survives an item-key re-seed; old attempts keep their frame; orphaned cards neither show nor block the slate; a restored item revives its card', async () => {
+    const id = unitOf(ctx, 'grok-js');
+    const q0 = packQuizzes('grok-js')[0]!.key;
+    const f0 = flashKeys('grok-js')[0]!;
+    // history: a failed submit (3 misses -> 3 quiz-miss cards), then a pass (flashcards enrolled)
+    expect((await submit(ctx, id, { answers: await served(ctx, id, 'grok-js', withWrong('grok-js', 3)) })).body.verdict).toBe('fail');
+    const pass = await submit(ctx, id, { answers: await served(ctx, id, 'grok-js', withWrong('grok-js', 2)) });
+    expect(pass.body.verdict).toBe('pass');
+    const oldGate = ctx.tmp.db.get<{ id: number; spec: string }>('SELECT id, spec FROM "check" WHERE unit_id = ?', id)!;
+    const cards = ctx.tmp.db.all<{ k: string }>('SELECT card_key AS k FROM review_item ORDER BY id').map((r) => r.k);
+    expect(cards).toContain(`quiz-miss:${q0}`);
+    expect(cards).toContain(`flashcard:${f0}`);
+    ctx.clock.advance(DAY_MS);
+    const dueBefore = (await queue()).count;
+    expect(dueBefore).toBe(cards.length);
+
+    // a content wave removes grok-js's first quiz and first flashcard; the server restarts on the same DB
+    const reseeded = reseededStore(new Set([q0, f0]));
+    const r = loadSeedDerivedContent(ctx.tmp.db, { seedItems: reseeded, authored: null }, ctx.clock); // the startup step: no throw
+    expect(r.studyQuests.replaced).toEqual(['campaign/js/grok-js']);
+    expect(r.reviewCards.retired).toEqual([`quiz-miss:${q0}`, `flashcard:${f0}`]);
+    expect(r.reviewCards.restored).toEqual([]);
+    ctx.app = createApp({ db: ctx.tmp.db, clock: ctx.clock, runners: defaultRunners(), seedItems: reseeded });
+
+    // old attempts still point at the retired gate, whose item keys are exactly what they answered
+    const attemptChecks = ctx.tmp.db.all<{ c: number }>('SELECT DISTINCT check_id AS c FROM attempt WHERE unit_id = ?', id).map((x) => x.c);
+    expect(attemptChecks).toEqual([oldGate.id]);
+    expect(ctx.tmp.db.get<{ spec: string; retired_at: number }>('SELECT spec, retired_at FROM "check" WHERE id = ?', oldGate.id)).toEqual({ spec: oldGate.spec, retired_at: ctx.clock().getTime() });
+    expect((JSON.parse(oldGate.spec) as { itemKeys: string[] }).itemKeys).toContain(q0);
+
+    // orphaned cards: not in the queue, not counted, not gradable; every queued card has text
+    const q = await queue();
+    expect(q.count).toBe(dueBefore - 2);
+    expect(q.items.map((i) => i.cardKey)).not.toContain(`quiz-miss:${q0}`);
+    expect(q.items.map((i) => i.cardKey)).not.toContain(`flashcard:${f0}`);
+    expect(q.items.every((i) => i.card !== undefined)).toBe(true);
+    const orphanId = ctx.tmp.db.get<{ id: number }>('SELECT id FROM review_item WHERE card_key = ?', `quiz-miss:${q0}`)!.id;
+    expect((await request(ctx.app).post(`/api/reviews/${orphanId}/grade`).send({ grade: 'good' })).status).toBe(404);
+    // ... and they do not hold the slate's review-clear slot shut: clearing the LIVE cards ticks it
+    expect((await reviewSlot()).done).toBe(false);
+    for (const it of q.items) expect((await request(ctx.app).post(`/api/reviews/${it.id}/grade`).send({ grade: 'good' })).status).toBe(200);
+    expect((await queue()).count).toBe(0);
+    expect((await reviewSlot()).done).toBe(true);
+    // append-only safe: the retired rows are still there (FSRS state intact), nothing was deleted
+    expect(ctx.tmp.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM review_item')!.n).toBe(cards.length);
+
+    // the items come back in a later wave: the cards are live again with their schedule (due, text resolvable)
+    const back = loadSeedDerivedContent(ctx.tmp.db, { seedItems: store, authored: null }, ctx.clock);
+    expect(back.reviewCards.restored).toEqual([`quiz-miss:${q0}`, `flashcard:${f0}`]);
+    expect(back.studyQuests.updated).toBe(1); // the replacement gate was never attempted: back in place
+    ctx.app = createApp({ db: ctx.tmp.db, clock: ctx.clock, runners: defaultRunners(), seedItems: store });
+    expect((await queue()).items.map((i) => i.cardKey).sort()).toEqual([`flashcard:${f0}`, `quiz-miss:${q0}`]);
   });
 });
 

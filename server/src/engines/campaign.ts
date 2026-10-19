@@ -198,7 +198,7 @@ function buildCampaignState(db: Db, trackIds: readonly string[] | undefined, lev
     `SELECT q.id, q.act_id AS actId, q.key, q.quest_kind AS questKind, q.title, q.repo, q.index_rank AS rank, q.ordinal,
             q.unit_id AS unitId, q.core, q.content_pending AS contentPending, q.twin_repo AS twinRepo, q.verdict,
             u.kind AS unitKind, (u.id IS NOT NULL AND u.retired_at IS NULL) AS unitLive,
-            (SELECT COUNT(*) FROM "check" c WHERE c.unit_id = q.unit_id) AS checks
+            (SELECT COUNT(*) FROM "check" c WHERE c.unit_id = q.unit_id AND c.retired_at IS NULL) AS checks
        FROM quest q LEFT JOIN unit u ON u.id = q.unit_id
       ${trackIds === undefined ? '' : `WHERE q.act_id IN (${acts.map(() => '?').join(', ')})`}
       ORDER BY q.act_id, COALESCE(q.ordinal, q.index_rank), q.index_rank, q.id`,

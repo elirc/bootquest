@@ -60,10 +60,13 @@ export function unitPrerequisites(db: Db, unitId: number): number[] {
     .map((r) => r.p);
 }
 
-/** The unit's primary check (lowest id), spec re-validated on the way out of the DB. */
+/**
+ * The unit's primary check (lowest-id LIVE check), spec re-validated on the way out of the DB.
+ * Retired checks (store/check-policy.ts) are history only: reachable via attempt.check_id.
+ */
 export function primaryCheck(db: Db, unitId: number): CheckRecord | undefined {
   const row = db.get<{ id: number; unitId: number; threshold: number | null; spec: string }>(
-    'SELECT id, unit_id AS unitId, threshold, spec FROM "check" WHERE unit_id = ? ORDER BY id LIMIT 1',
+    'SELECT id, unit_id AS unitId, threshold, spec FROM "check" WHERE unit_id = ? AND retired_at IS NULL ORDER BY id LIMIT 1',
     unitId,
   );
   if (!row) return undefined;
@@ -130,7 +133,7 @@ export function prerequisiteMap(db: Db): Map<number, number[]> {
 /** Live content counts (retired units and their checks are withdrawn, so not counted). */
 export function contentCounts(db: Db): { units: number; checks: number } {
   const units = db.get<{ n: number }>('SELECT COUNT(*) AS n FROM unit WHERE retired_at IS NULL')?.n ?? 0;
-  const checks = db.get<{ n: number }>('SELECT COUNT(*) AS n FROM "check" c JOIN unit u ON u.id = c.unit_id WHERE u.retired_at IS NULL')?.n ?? 0;
+  const checks = db.get<{ n: number }>('SELECT COUNT(*) AS n FROM "check" c JOIN unit u ON u.id = c.unit_id WHERE u.retired_at IS NULL AND c.retired_at IS NULL')?.n ?? 0;
   return { units, checks };
 }
 
@@ -179,14 +182,15 @@ export interface ReviewQueueRow {
 export function reviewQueue(db: Db, atMs: number, limit: number): ReviewQueueRow[] {
   return db.all<ReviewQueueRow>(
     `SELECT id, card_key AS cardKey, kind, unit_id AS unitId, competency_id AS competencyId, due_at AS dueAt
-       FROM review_item WHERE due_at <= ? AND kind <> 'retest' ORDER BY due_at, id LIMIT ?`,
+       FROM review_item WHERE due_at <= ? AND kind <> 'retest' AND retired_at IS NULL ORDER BY due_at, id LIMIT ?`,
     atMs,
     limit,
   );
 }
 
+/** A live review item (a retired seeded card, store/review-cards.ts, is not found: 404, never graded). */
 export function reviewItemExists(db: Db, id: number): boolean {
-  return db.get('SELECT 1 AS x FROM review_item WHERE id = ?', id) !== undefined;
+  return db.get('SELECT 1 AS x FROM review_item WHERE id = ? AND retired_at IS NULL', id) !== undefined;
 }
 
 /** Row counts of the honesty ledger (tests + smoke use this to prove run writes nothing). */

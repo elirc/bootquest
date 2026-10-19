@@ -31,6 +31,8 @@ export interface ReviewItemRow {
   due_at: number;
   created_at: number;
   updated_at: number;
+  /** a seeded card whose source item a re-seed removed (store/review-cards.ts); NULL = live */
+  retired_at: number | null;
 }
 
 /** ts-fsrs Card <-> JSON (Dates as epoch ms). */
@@ -95,12 +97,19 @@ export function getReviewItem(db: Db, id: number): ReviewItemRow {
   return row;
 }
 
+/**
+ * A review_item row that can be reviewed: not a retest schedule, and not RETIRED (a seeded card
+ * whose source item a re-seed removed: store/review-cards.ts). Every due count, queue and the
+ * slate's review-clear slot use this predicate (alias-free: `ri.` prefix it where needed).
+ */
+export const REVIEWABLE_SQL = `kind <> 'retest' AND retired_at IS NULL`;
+
 export function dueItems(db: Db, now: Clock): ReviewItemRow[] {
-  return db.all<ReviewItemRow>(`SELECT * FROM review_item WHERE due_at <= ? AND kind <> 'retest' ORDER BY due_at, id`, nowMs(now));
+  return db.all<ReviewItemRow>(`SELECT * FROM review_item WHERE due_at <= ? AND ${REVIEWABLE_SQL} ORDER BY due_at, id`, nowMs(now));
 }
 
 export function dueCount(db: Db, now: Clock): number {
-  return db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM review_item WHERE due_at <= ? AND kind <> 'retest'`, nowMs(now))?.n ?? 0;
+  return db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM review_item WHERE due_at <= ? AND ${REVIEWABLE_SQL}`, nowMs(now))?.n ?? 0;
 }
 
 export interface ReviewOutcome {
@@ -134,6 +143,9 @@ export function review(db: Db, itemId: number, grade: ReviewGrade, now: Clock, o
     const item = getReviewItem(db, itemId);
     if (item.kind === 'retest') {
       throw new HonestyRuleError('WRONG_UNIT_KIND', `review item ${itemId} is a scheduled changed-example retest: submit its unit, it is not graded by recall`);
+    }
+    if (item.retired_at !== null) {
+      throw new HonestyRuleError('STALE', `review item ${itemId} was retired: its source item left the seed content in a re-seed`);
     }
     if (item.due_at > t) throw new HonestyRuleError('NOT_DUE', `review item ${itemId} is not due until ${new Date(item.due_at).toISOString()}`);
     const before = deserializeCard(item.fsrs_state);

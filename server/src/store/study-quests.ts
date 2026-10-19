@@ -1,6 +1,8 @@
 import type { CheckSpecInput, TrackId } from '@bootquest/shared';
 import type { Db } from '../db/database.ts';
-import { nowMs, type Clock } from '../engines/clock.ts';
+import type { Clock } from '../engines/clock.ts';
+import { checkReferenced, LIVE_CHECK_SQL, liveChecks, reconcileCheck, sameCheckSpec, type LiveCheckRow } from './check-policy.ts';
+import { insertCheck } from './content.ts';
 import type { QuestPackItems, SeedItemStore } from './seed-items.ts';
 
 /**
@@ -19,9 +21,11 @@ import type { QuestPackItems, SeedItemStore } from './seed-items.ts';
  *     (otherwise it is kept for history and the quest is flagged pending again);
  *   - a pack whose repo is not a campaign study quest is reported (unmatched), never invented
  *     into a quest; the ladder (store/ladder.ts) serves it as a standalone study unit instead.
- * Idempotent upsert; a changed quiz gate (re-seeded item keys) updates in place while no attempt
- * references the check, and REFUSES startup once attempts do (a pass must stay bound to the gate
- * it passed). loaded === built is asserted per track.
+ * Idempotent upsert under THE re-seed policy (store/check-policy.ts): a changed quiz gate
+ * (re-seeded item keys) updates in place while no attempt references it; once attempts do, the
+ * old gate is RETIRED (kept, with its original item keys, for the attempts that reference it) and
+ * a fresh live gate is inserted on the same unit — never a refusal to start, never a DB reset.
+ * One LIVE gate per unit; loaded === built is asserted per track.
  */
 
 export class StudyQuestLoadError extends Error {
@@ -54,6 +58,8 @@ export interface StudyQuestLoadStats {
   inserted: number;
   /** quests whose gate changed in place (no attempts yet) */
   updated: number;
+  /** quests whose re-seeded gate was retired (attempts reference it) and replaced by a new live gate */
+  replaced: string[];
   /** gates removed because their pack left (no attempts) */
   removed: number;
   /** gates kept for history because their pack left after attempts were recorded */
@@ -86,27 +92,14 @@ export function studyQuizSpecFor(pack: QuestPackItems): CheckSpecInput | null {
   return { type: 'study-quiz', itemKeys: pack.quizzes.map((q) => q.key), passPct: STUDY_QUIZ_PASS_PCT };
 }
 
-interface GateRow {
-  id: number;
-  spec: string;
-}
-
-function studyGates(db: Db, unitId: number): GateRow[] {
-  return db.all<GateRow>(`SELECT id, spec FROM "check" WHERE unit_id = ? AND type = 'study-quiz' ORDER BY id`, unitId);
-}
-
-const referenced = (db: Db, checkId: number): boolean =>
-  db.get('SELECT 1 AS x FROM attempt WHERE check_id = ? UNION ALL SELECT 1 AS x FROM run WHERE check_id = ? LIMIT 1', checkId, checkId) !== undefined;
-
-const sameItems = (spec: string, want: CheckSpecInput): boolean =>
-  JSON.stringify((JSON.parse(spec) as { itemKeys?: unknown }).itemKeys) === JSON.stringify((want as { itemKeys: string[] }).itemKeys);
+/** the unit's LIVE study-quiz gates (retired gates are history: attempts keep pointing at them) */
+const studyGates = (db: Db, unitId: number): LiveCheckRow[] => liveChecks(db, unitId, 'study-quiz');
 
 export function loadStudyQuestsIntoDb(db: Db, store: SeedItemStore, clock: Clock): StudyQuestLoadStats {
-  const t = nowMs(clock);
   const packs = store.questPacks();
   return db.tx(() => {
     const rows = studyQuests(db);
-    const stats: StudyQuestLoadStats = { tracks: [], packs: packs.size, unmatchedPacks: [], inserted: 0, updated: 0, removed: 0, orphaned: [] };
+    const stats: StudyQuestLoadStats = { tracks: [], packs: packs.size, unmatchedPacks: [], inserted: 0, updated: 0, replaced: [], removed: 0, orphaned: [] };
     const byTrack = new Map<TrackId, StudyQuestTrackStats>();
     const tstats = (track: TrackId) => {
       let s = byTrack.get(track);
@@ -124,16 +117,16 @@ export function loadStudyQuestsIntoDb(db: Db, store: SeedItemStore, clock: Clock
       const pack = packs.get(q.repo);
       const want = pack ? studyQuizSpecFor(pack) : null;
       const gates = studyGates(db, q.unitId);
-      const other = db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM "check" WHERE unit_id = ? AND type <> 'study-quiz'`, q.unitId)!.n;
+      const other = db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM "check" WHERE unit_id = ? AND type <> 'study-quiz' AND ${LIVE_CHECK_SQL}`, q.unitId)!.n;
       if (other > 0) throw new StudyQuestLoadError(`study quest ${q.questKey}: its unit carries a non-study-quiz check; refusing`);
-      if (gates.length > 1) throw new StudyQuestLoadError(`study quest ${q.questKey}: ${gates.length} study-quiz checks on one unit; refusing`);
+      if (gates.length > 1) throw new StudyQuestLoadError(`study quest ${q.questKey}: ${gates.length} live study-quiz checks on one unit; refusing`);
 
       if (!want) {
         // honest: no pack (or a pack without quiz items) -> no gate, content pending
         ts.pending++;
         const g = gates[0];
         if (g) {
-          if (referenced(db, g.id)) {
+          if (checkReferenced(db, g.id)) {
             stats.orphaned.push(q.questKey);
           } else {
             db.run('DELETE FROM "check" WHERE id = ?', g.id);
@@ -150,23 +143,13 @@ export function loadStudyQuestsIntoDb(db: Db, store: SeedItemStore, clock: Clock
       if (!q.unitLive) throw new StudyQuestLoadError(`study quest ${q.questKey}: its unit is retired`);
       const g = gates[0];
       if (!g) {
-        db.run(
-          `INSERT INTO "check" (unit_id, type, spec, threshold, inverted, timeout_ms, content_ref_id, created_at) VALUES (?, 'study-quiz', ?, ?, 0, NULL, NULL, ?)`,
-          q.unitId,
-          JSON.stringify(want),
-          STUDY_QUIZ_PASS_PCT,
-          t,
-        );
+        insertCheck(db, q.unitId, want, clock, { threshold: STUDY_QUIZ_PASS_PCT });
         stats.inserted++;
-      } else if (!sameItems(g.spec, want)) {
-        if (referenced(db, g.id)) {
-          throw new StudyQuestLoadError(
-            `study quest ${q.questKey}: its quest pack was re-seeded (quiz item keys changed) but attempts are recorded against the current gate; ` +
-              'refusing to rebind them silently (restore the pack, or reset the DB)',
-          );
-        }
-        db.run('UPDATE "check" SET spec = ?, threshold = ? WHERE id = ?', JSON.stringify(want), STUDY_QUIZ_PASS_PCT, g.id);
-        stats.updated++;
+      } else {
+        // re-seeded item keys: in place while unattempted; retire-and-replace once attempts reference it
+        const r = reconcileCheck(db, q.unitId, g, { spec: want, threshold: STUDY_QUIZ_PASS_PCT }, clock);
+        if (r.outcome === 'updated') stats.updated++;
+        else if (r.outcome === 'replaced') stats.replaced.push(q.questKey);
       }
       db.run('INSERT OR IGNORE INTO unit_competency (unit_id, competency_id) VALUES (?, ?)', q.unitId, STUDY_COMPETENCY);
       db.run('UPDATE quest SET content_pending = 0 WHERE id = ?', q.questId);
@@ -179,7 +162,7 @@ export function loadStudyQuestsIntoDb(db: Db, store: SeedItemStore, clock: Clock
       if (!want) continue;
       const g = studyGates(db, q.unitId);
       const pending = db.get<{ p: number }>('SELECT content_pending AS p FROM quest WHERE id = ?', q.questId)!.p;
-      if (g.length === 1 && sameItems(g[0]!.spec, want) && pending === 0) tstats(q.track).loaded++;
+      if (g.length === 1 && sameCheckSpec(g[0]!.spec, want) && g[0]!.threshold === STUDY_QUIZ_PASS_PCT && pending === 0) tstats(q.track).loaded++;
     }
     stats.tracks = [...byTrack.values()];
     const bad = stats.tracks.filter((s) => s.loaded !== s.built);
