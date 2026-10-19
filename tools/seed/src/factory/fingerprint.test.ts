@@ -24,7 +24,7 @@ import { REPO_ROOT } from './report.ts';
  * no grader dragged into a pack that never runs it), then update the lists here IN THE SAME
  * COMMIT: every seed stamp of the affected generators goes stale (seed:check -- --restamp).
  */
-const SHARED = ['api', 'campaign', 'check', 'enums', 'index', 'mutation', 'pack', 'schemas', 'seed-pack', 'sync'].map((f) => `shared/src/${f}.ts`);
+const SHARED = ['api', 'campaign', 'check', 'enums', 'index', 'mutation', 'pack', 'schemas', 'seed-pack', 'sync', 'thresholds'].map((f) => `shared/src/${f}.ts`);
 const F = 'tools/seed/src/factory';
 const COMMON = [
   'server/src/api/runners.ts', // gradeDeterministic (quests/validate.ts)
@@ -38,9 +38,11 @@ const COMMON = [
   `${F}/fingerprint.ts`,
   `${F}/harness/harness.ts`,
   `${F}/pack.ts`,
+  `${F}/pins.ts`, // git-tree pin verification (checkout.ts)
   `${F}/quests/validate.ts`, // checkProvenance: every generator
   `${F}/report.ts`,
   `${F}/util.ts`,
+  'tools/seed/src/validate/verdicts.ts', // NOT_A_VERDICT (harness.ts)
 ];
 const PINNED: Record<SeedGenerator, string[]> = {
   quests: [...COMMON, 'tools/seed/src/citations/parse.ts', `${F}/quests/cli.ts`, `${F}/quests/generate.ts`, `${F}/quests/parse.ts`, `${F}/quests/run.ts`],
@@ -53,12 +55,14 @@ const PINNED_RUNNERS: Record<SeedRunner, string[]> = {
   'drill-js': ['server/src/api/runners.ts', 'server/src/runners/js/grade-core.mjs', 'server/src/runners/js/index.ts'],
   'drill-cs': [
     'server/src/api/runner-csharp.ts',
+    'server/src/runners/csharp/BqLaunch.cs',
     'server/src/runners/csharp/csbootcamp-split.ts',
     'server/src/runners/csharp/fixtures/csbootcamp/_lib/Check/Check.cs',
     'server/src/runners/csharp/fixtures/jstrain-csbootcamp/_lib/Check/Check.cs',
     'server/src/runners/csharp/fixtures/jstrain-csbootcamp/_lib/Check/Spy.cs',
     'server/src/runners/csharp/index.ts',
     'server/src/runners/csharp/scratch.ts',
+    'server/src/runners/result-channel.ts',
     'server/src/runners/self-run/compose.ts',
   ],
   'drill-java': [
@@ -68,6 +72,7 @@ const PINNED_RUNNERS: Record<SeedRunner, string[]> = {
     'server/src/runners/java/fixtures/javabootcamp/_lib/check/bootcamp/Check.java',
     'server/src/runners/java/index.ts',
     'server/src/runners/java/split.ts',
+    'server/src/runners/result-channel.ts',
   ],
 };
 /** factory sources deliberately outside every closure: argument parsing / demo drivers that validate nothing */

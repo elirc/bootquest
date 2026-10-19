@@ -31,7 +31,7 @@ import { createDrillCsRunner } from '@bootquest/server/runner-csharp';
 import { createDrillJavaRunner } from '@bootquest/server/runner-java';
 import { drillJsRunner, type Runner } from '@bootquest/server/runners';
 import { REPO_ROOT } from '../report.ts';
-import { NOT_A_VERDICT } from '../../validate/validate.ts';
+import { NOT_A_VERDICT } from '../../validate/verdicts.ts';
 
 export type HarnessRunner = (check: SeedRunnableCheck, code: string) => Promise<CanonicalRunResult>;
 

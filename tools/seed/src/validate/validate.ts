@@ -102,31 +102,9 @@ export async function shutdownValidatorRunners(): Promise<void> {
   if (r) await r.shutdown();
 }
 
-/**
- * Failure names that mean "the code never got a test verdict" — THE one set, shared by the
- * import gate (drill-cs and drill-java starters here and in validate-java.ts) and the seed
- * factory harness (factory/harness/harness.ts re-exports it). A starter that "fails" only
- * this way proves nothing: no test ever ran.
- *   drill-js / self-run:  code loads without errors, code runs, finishes in time, TypeScript compiles, grader results
- *   drill-cs:             (compile), (timeout), (program) (crash / no nonce-checked result),
- *                         (format), (runner) (xunit run produced no TRX), (scaffolding) (frozen section edited),
- *                         (incomplete) (the harness reported before every literal test ran)
- *   drill-java:           (compile), (timeout), (program), (format), (incomplete)
- */
-export const NOT_A_VERDICT: ReadonlySet<string> = new Set([
-  'code loads without errors',
-  'code runs',
-  'finishes in time',
-  'TypeScript compiles',
-  'grader results',
-  '(compile)',
-  '(timeout)',
-  '(program)',
-  '(format)',
-  '(runner)',
-  '(scaffolding)',
-  '(incomplete)',
-]);
+// THE one not-a-verdict set; defined in verdicts.ts (a leaf module) so the factory harness
+// can share it without pulling this file's server-grader imports into the seed fingerprint.
+export { NOT_A_VERDICT } from './verdicts.ts';
 
 export function exerciseHash(pu: PackUnit, content: UnitContentEntry, fingerprint: string): string {
   return createHash('sha256').update(JSON.stringify({ u: pu, c: content, g: fingerprint })).digest('hex');
