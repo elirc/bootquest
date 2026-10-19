@@ -152,7 +152,14 @@ Content is not in the DB, so the next `npm run serve` loads all of it again. Exi
   findings {scenario, evidence, consequence}) as an immutable attempt **before** the
   server will release the key points or seeded-defect key (403 NOT_ANSWERED until then).
   This is enforced per question set or kata item, across units. You then self-score per
-  key point or defect. The server computes coverage or catch rate from your marks.
+  key point or defect, with no deadline (every leg times on the answer row, not the score).
+  The server computes coverage or catch rate from your marks. An explain-back that is leg (b)
+  of a project unit refuses an answer (409 ARTIFACT_REQUIRED) until that project has a solo,
+  run-verified pass, so the once-only answer cannot be burned early. When an item is re-seeded
+  under the same key, an answer to the old version is superseded (derived from its stored item
+  hash; no row changes): it is never keyed against the new content, and the new version takes
+  one fresh answer. An answer left on a retired unit is self-scored from the live unit that
+  carries the same item.
 - **Learn more never answers for you.** The `i` / "Learn more" drawer (`GET /units/:id/notes`)
   is read-only. Readings are served before you answer. `seed:notes` proved that none of them
   contains, or closely matches, a keyed answer of its quest pack. A quiz's explanation is released

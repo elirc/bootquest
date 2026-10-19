@@ -66,8 +66,6 @@ export const API_ERROR_CODES = [
   'NOT_VERIFIED',
   /** W6 mutation gate: a file is under the per-file floor or the total under the break */
   'MUTATION_BELOW_THRESHOLD',
-  /** W7: the seed item this answer was recorded against has been re-seeded since (stored item hash differs) */
-  'CONTENT_CHANGED',
   /** W7: a changed-example retest unit is closed until one of its schedules is due (no free pre-solving runs) */
   'RETEST_NOT_OPEN',
   /** W11: a written answer identical to the unit's starter template (nothing written; it would be stored immutably) */

@@ -694,13 +694,16 @@ what ships until the owner picks an option.
     XP table of the spec.
 - **F11: six V1 katas changed in place under the same item key** (`content/seed/patches/
   {netcalendy,netgum,netslack,netzen,relay-app,tracer-net}-katas`).
-  - *Current:* diff, context and test changed (meaning unchanged; netgum also got a corrected
-    line citation); answers recorded earlier are refused with 409 CONTENT_CHANGED by the stored
-    item hash (W7), so nothing is silently re-labelled.
-  - *Risk:* a learner who answered the old version cannot see its key any more and cannot
-    re-answer the same key; the ladder avoids this for study units by versioning keys.
-  - *Option A:* accept with this note (meaning unchanged; the CONTENT_CHANGED refusal is the
-    honest outcome).
+  - *Current (fix/ladder-deadends):* diff, context and test changed (meaning unchanged; netgum
+    also got a corrected line citation). An answer recorded against the old version is
+    SUPERSEDED (derived from the stored item hash, no row is changed): it is never keyed or
+    scored against the new content, so nothing is silently re-labelled, and the new version takes
+    ONE fresh answer. G1 counts each kata key once (its earliest scored answer). XP stays pays-once
+    per (unit, kind). The old 409 CONTENT_CHANGED dead end is retired.
+  - *Risk (before the fix):* a learner who answered the old version could not see its key any
+    more and could not re-answer the same key; the ladder avoids this for study units by
+    versioning keys.
+  - *Option A:* accept with this note (meaning unchanged; supersession is the honest outcome).
   - *Option B:* version kata keys whenever a learner-visible diff changes (new key, old one
     retired), so old answers keep their key and the new item is answerable.
 
