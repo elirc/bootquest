@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { PackManifest } from '@bootquest/shared';
 import type { UnitContentEntry } from '@bootquest/shared/api';
 import { openDb, resolveDbPath, type Db } from '../db/database.ts';
+import { backupBeforeStart, type BackupResult } from '../db/backup.ts';
 import type { Clock } from '../engines/clock.ts';
 import { loadCampaignIntoDb, readCampaign, type CampaignLoadStats } from '../store/campaign.ts';
 import { ALLOW_UNSTAMPED_ENV, loadPackIntoDb, packContentEntries, PackLoadError, readPack, type LoadStats } from '../store/packs.ts';
@@ -25,6 +26,9 @@ import { loadStudyQuestsIntoDb, type StudyQuestLoadStats } from '../store/study-
  * Real entrypoint: `node --import tsx server/src/api/serve.ts`
  *   BOOTQUEST_DB            (required) the one DB file — there is no default
  *   BOOTQUEST_PORT          (optional) default 4178
+ *   BOOTQUEST_NO_BACKUP     (optional) '1' skips the pre-migration snapshot of an existing DB
+ *                           (<db dir>/backups/bootquest-<UTC>.db, newest 7 kept; db/backup.ts).
+ *                           Without it, a failed snapshot REFUSES TO START.
  *   BOOTQUEST_UNIT_CONTENT  (optional) JSON {unitKey: UnitContentEntry} from content/
  *   BOOTQUEST_PACKS         (optional) comma-separated pack dirs (each with manifest.json)
  *                           loaded at startup; when serve.ts is run directly and this is
@@ -125,6 +129,8 @@ export interface RunningServer {
   port: number;
   host: string;
   close(): Promise<void>;
+  /** the pre-migration DB snapshot made (or skipped) at this startup */
+  backup: BackupResult;
   /** one entry per loaded pack (loaded === built already asserted) */
   packs: LoadStats[];
   /** campaign load stats (null when no campaign dir was configured) */
@@ -180,6 +186,8 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
   const port = resolvePort(env);
   await assertPortFree(port, host); // before touching the DB
 
+  // BEFORE openDb migrates: snapshot the existing DB (fail-closed; BOOTQUEST_NO_BACKUP=1 skips it)
+  const backup = backupBeforeStart(dbPath, { env, now: (opts.clock ?? systemClock)() });
   const db = openDb({ path: dbPath, env: {} });
   let csharp: DrillCsRunner | null = null;
   let java: DrillJavaRunner | null = null;
@@ -271,7 +279,7 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
       });
       return closing;
     };
-    return { server, db, port, host, close, packs: packStats, campaign, csharpScratch: csharp?.appDataDir ?? null, javaScratch: java?.appDataDir ?? null, seedPacks, ladder, studyQuests };
+    return { server, db, port, host, close, backup, packs: packStats, campaign, csharpScratch: csharp?.appDataDir ?? null, javaScratch: java?.appDataDir ?? null, seedPacks, ladder, studyQuests };
   } catch (err) {
     db.close();
     throw err;
@@ -318,6 +326,16 @@ export function startupSummary(running: Pick<RunningServer, 'packs' | 'campaign'
   return out;
 }
 
+/** The startup backup line(s): created (+ pruned count) / skipped, then any warning. */
+export function backupSummary(b: BackupResult): string[] {
+  const out =
+    b.status === 'created'
+      ? [`[bootquest] backup: ${b.path}${b.pruned.length ? ` (pruned ${b.pruned.length} older)` : ''}`]
+      : [`[bootquest] backup: skipped (${b.reason === 'new-db' ? 'new, empty DB: nothing to back up' : 'disabled'})`];
+  for (const w of b.warnings) out.push(`[bootquest] WARNING: ${w}`);
+  return out;
+}
+
 /** Graceful shutdown on SIGINT/SIGTERM: stop accepting, close the DB, then exit 0. */
 export function installShutdown(
   running: Pick<RunningServer, 'close'>,
@@ -348,6 +366,7 @@ if (invokedDirectly) {
   startServer({ env })
     .then((running) => {
       installShutdown(running);
+      for (const line of backupSummary(running.backup)) console.log(line);
       for (const line of startupSummary(running)) console.log(line);
       console.log(`[bootquest] API listening on http://${running.host}:${running.port} (db: ${running.db.path})`);
     })

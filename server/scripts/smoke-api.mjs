@@ -25,7 +25,8 @@
 // refuses to start), a busy-port refusal (second server on the same port) and the
 // reset guards (no BOOTQUEST_DB / no --yes-really / server running -> refused).
 // Security fixes add: the local-only lockdown on the real entrypoint (body-less / text/plain
-// reveal 415, foreign Origin 403, rebound Host 403, nothing written).
+// reveal 415, foreign Origin 403, rebound Host 403, nothing written) and the pre-migration
+// startup backup of the seeded DB.
 // Exit 0 only if every step holds.
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -333,6 +334,14 @@ async function main() {
       console.log(serverOut);
       return false;
     }
+
+    // the seeded DB existed before boot: the entrypoint snapshotted it BEFORE migrating (db/backup.ts)
+    const backups = existsSync(join(dir, 'backups')) ? readdirSync(join(dir, 'backups')) : [];
+    step(
+      'startup backup: the existing DB was snapshotted to <db dir>/backups/ before migrations',
+      backups.length === 1 && /^bootquest-\d{8}T\d{6}\.\d{3}Z\.db$/.test(backups[0]) && statSync(join(dir, 'backups', backups[0])).size > 0,
+      backups.join(',') || 'none',
+    );
 
     const reader = new Db(dbPath); // read connection for ledger verification (WAL)
     const counts = () => ledgerCounts(reader);
