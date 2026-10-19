@@ -284,6 +284,50 @@ describe('W4 API: POST /sync, GET /sync/queue, GET /refs/:id/content, node-test-
     expect(calls.downloadTarball).toBe(1);
   });
 
+  it('afterSync throws AFTER the sync committed: 500 SYNC_RELINK_FAILED says so (never a bare INTERNAL); the API stays usable', async () => {
+    let calls = 0;
+    const errors: unknown[][] = [];
+    const origError = console.error;
+    console.error = (...a: unknown[]) => void errors.push(a);
+    try {
+      const broken = createApp({
+        db: tmp.db,
+        clock,
+        sync: fx.svc,
+        afterSync: () => {
+          calls++;
+          throw new Error('ladder loaded !== built: katas 3 vs 4');
+        },
+        syncRecoveryHint: 'restore /x/backups/bootquest-1.db',
+      });
+      const r = await request(broken).post('/api/sync').send({});
+      expect(r.status).toBe(500);
+      const env = r.body as { error: { code: string; message: string } };
+      expect(env.error.code).toBe('SYNC_RELINK_FAILED');
+      const syncId = tmp.db.get<{ id: number }>('SELECT MAX(id) AS id FROM sync_run')!.id;
+      expect(env.error.message).toMatch(new RegExp(`^sync ${syncId} COMMITTED \\(${SIGNALPOST}@${PINNED_SHA.slice(0, 12)}\\)`));
+      expect(env.error.message).toContain('ladder loaded !== built: katas 3 vs 4');
+      expect(env.error.message).toMatch(/will likely REFUSE to start/);
+      expect(env.error.message).toContain('restore /x/backups/bootquest-1.db');
+      // logged loudly, with the same message
+      expect(errors.some((a) => String(a[0]).includes('SYNC_RELINK_FAILED') || String(a[0]).includes(`sync ${syncId} COMMITTED`))).toBe(true);
+      // the sync really committed: its units are served
+      const units = (await request(broken).get('/api/tracks/js/units')).body as { units: { key: string }[] };
+      expect(units.units.some((u) => u.key === `gh:${SIGNALPOST}:U01`)).toBe(true);
+      // sane state: the in-flight flag was released (a second sync is not 409), health answers
+      const again = await request(broken).post('/api/sync').send({});
+      expect(again.status).toBe(500);
+      expect(again.body.error.code).toBe('SYNC_RELINK_FAILED');
+      expect(calls).toBe(2);
+      expect((await request(broken).get('/api/health')).status).toBe(200);
+      // a sync that FAILED before committing is still the plain path (config error -> 400), afterSync never runs
+      expect((await request(broken).post('/api/sync').send({ repos: ['elirc/unknown'] })).status).toBe(400);
+      expect(calls).toBe(2);
+    } finally {
+      console.error = origError;
+    }
+  });
+
   it('POST /sync without a configured sync service is 501; bad bodies are 400', async () => {
     const bare = createApp({ db: tmp.db, clock });
     const r = await request(bare).post('/api/sync').send({});

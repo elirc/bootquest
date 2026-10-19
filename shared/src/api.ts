@@ -76,6 +76,11 @@ export const API_ERROR_CODES = [
   'ORIGIN_NOT_ALLOWED',
   /** 415: a non-GET request without `Content-Type: application/json` (CSRF "simple request" guard), nothing ran */
   'UNSUPPORTED_MEDIA_TYPE',
+  /**
+   * 500 on POST /sync: the sync itself COMMITTED (its data is saved), but re-linking the ladder
+   * units afterwards failed and was rolled back; the server keeps serving the pre-sync ladder
+   */
+  'SYNC_RELINK_FAILED',
   'INTERNAL',
 ] as const;
 export const ApiErrorCode = z.enum(API_ERROR_CODES);

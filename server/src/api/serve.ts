@@ -253,7 +253,24 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
         ...(java ? { 'drill-java': java.runner } : {}),
       };
     // a sync can register new project units (signalpost U01...): re-link explain-backs + create pending retests
-    const app = createApp({ db, clock, content, runners, sync, seedItems, afterSync: () => void loadLadderIntoDb(db, ladderInputs, clock) });
+    // loadLadderIntoDb is one transaction: when it throws after a committed sync, nothing of it sticks
+    const app = createApp({
+      db,
+      clock,
+      content,
+      runners,
+      sync,
+      seedItems,
+      afterSync: () => void loadLadderIntoDb(db, ladderInputs, clock),
+      ...(backup.path
+        ? {
+            syncRecoveryHint:
+              `to undo the sync instead, stop the server and restore ${backup.path} over ${db.path} ` +
+              '(delete its -wal and -shm files first; this is the snapshot taken when this server started, ' +
+              'so restoring it also drops everything recorded since then)',
+          }
+        : {}),
+    });
 
     const server = await new Promise<Server>((ok, fail) => {
       const s = app.listen(port, host);

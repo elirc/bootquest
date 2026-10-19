@@ -107,8 +107,34 @@ export interface AppOptions {
   sync?: SyncService | null;
   /** W6 seed items: explain-back question sets + patch katas (absent = every such unit is content-pending) */
   seedItems?: SeedItemStore;
-  /** W7: runs after every successful sync (serve.ts re-links ladder units: new program units become artifacts) */
+  /**
+   * W7: runs after every successful sync (serve.ts re-links ladder units: new program units become artifacts).
+   * It must be transactional (all-or-nothing): when it throws, the sync stays committed, the error
+   * is logged and POST /sync answers 500 SYNC_RELINK_FAILED (never a bare INTERNAL).
+   */
   afterSync?: () => void;
+  /** appended to a SYNC_RELINK_FAILED message: how to get back to the pre-sync DB (serve.ts: the startup backup) */
+  syncRecoveryHint?: string;
+}
+
+/**
+ * POST /sync committed, then the post-sync step failed (and rolled back): log it loudly and
+ * build the 500 SYNC_RELINK_FAILED answer that says what happened and what to do.
+ */
+function syncRelinkFailed(report: { syncId: number; repos: { repo: string; sha: string | null; error: string | null }[] }, err: unknown, hint: string | undefined): HttpError {
+  const cause = err instanceof Error ? err.message : String(err);
+  const synced = report.repos.map((r) => `${r.repo}@${r.sha ? r.sha.slice(0, 12) : 'none'}${r.error ? ' (error)' : ''}`).join(', ') || 'no repos';
+  const message =
+    `sync ${report.syncId} COMMITTED (${synced}): its refs, units and seed queue are saved. ` +
+    `Re-linking the ladder units afterwards FAILED and was rolled back: ${cause}. ` +
+    'This server keeps serving the pre-sync ladder (re-running sync will not fix this). ' +
+    'The next server start re-runs the same ladder load and will likely REFUSE to start until the cause is fixed ' +
+    '(fix the content/seed item it names, then restart)' +
+    (hint ? `; ${hint}` : '') +
+    '.';
+  console.error(`[bootquest api] POST /sync: ${message}`);
+  if (err instanceof Error && err.stack) console.error(err.stack);
+  return new HttpError(500, 'SYNC_RELINK_FAILED', message);
 }
 
 /**
@@ -371,7 +397,13 @@ export function createApp(opts: AppOptions): Express {
     syncInFlight = true;
     try {
       const report = await deps.sync.run(deps.db, deps.clock, body.repos ? { repos: body.repos } : {});
-      opts.afterSync?.();
+      // the sync has COMMITTED here. A failing post-sync step must say so, never pose as a plain 500:
+      // a retry is not an undo, and the same failure will likely refuse the next startup.
+      try {
+        opts.afterSync?.();
+      } catch (afterErr) {
+        throw syncRelinkFailed(report, afterErr, opts.syncRecoveryHint);
+      }
       sendJson(res, 200, report);
     } catch (err) {
       if (err instanceof SyncConfigError) throw new HttpError(400, 'VALIDATION', err.message, [{ path: 'body.repos', message: err.message }]);
