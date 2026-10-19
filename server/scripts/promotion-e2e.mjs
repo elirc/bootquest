@@ -131,6 +131,15 @@ async function main() {
     const ebUnit = await api('GET', `/units/${id('explain-api')}`);
     const leaks = ebItem.questions.flatMap((q) => q.keyPoints).filter((kp) => ebUnit.text.includes(kp.text));
     step('GET explain-back unit serves the 3 questions and NO key point', ebUnit.status === 200 && ebUnit.json.explainBack.questions.length === 3 && leaks.length === 0 && !/keyPoints/.test(ebUnit.text));
+    // ladder dead end #2: answering BEFORE the artifact would burn leg (b) for good -> refused, nothing written
+    const earlyCounts = ledgerCounts(db);
+    const earlyAns = await api('POST', `/units/${id('explain-api')}/explain-back/answers`, { answers: ['early', 'early', 'early'] });
+    step(
+      'explain-back answer BEFORE the artifact passes solo -> 409 ARTIFACT_REQUIRED naming the project unit; nothing recorded (the set is not burned)',
+      earlyAns.status === 409 && earlyAns.json.error.code === 'ARTIFACT_REQUIRED' && earlyAns.json.error.message.includes(`unit ${id('project-api')}`) &&
+        ebUnit.json.explainBack.artifactRequired?.[0]?.unitId === id('project-api') && JSON.stringify(ledgerCounts(db)) === JSON.stringify(earlyCounts),
+      earlyAns.json?.error?.message,
+    );
 
     const artAt = clock().getTime();
     const art = await api('POST', `/units/${id('project-api')}/submit`, { port: learnerPort });

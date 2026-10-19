@@ -20,7 +20,7 @@ import {
 import type { Db } from '../db/database.ts';
 import { HonestyRuleError, recordAttempt, type AttemptRow } from '../engines/attempts.ts';
 import { PROMOTION_MIN_COVERAGE, promoteIfEligible, recordEvidence } from '../engines/evidence.ts';
-import { MutationGateError, openRetests, promotionProgress, recordMutationEvidence, scheduleRetests } from '../engines/ladder.ts';
+import { artifactsAwaitingSoloPass, MutationGateError, openRetests, promotionProgress, recordMutationEvidence, scheduleRetests } from '../engines/ladder.ts';
 import { closeElapsedDays, composeSlate } from '../engines/streak.ts';
 import { awardXp } from '../engines/xp.ts';
 import { competencyTable, getTrack, getUnit, primaryCheck, unitCompetencies, type CheckRecord, type UnitRecord } from '../store/queries.ts';
@@ -35,10 +35,13 @@ import type { Clock } from '../engines/clock.ts';
  * §5 mutation gate, §6.2 promotion, §8 G1). The CONTRACT (immutable answer first):
  *   1. GET /units/:id serves the PUBLIC half only (questions; diff + context);
  *   2. POST .../answers | .../findings writes the learner's answer as an
- *      append-only attempt (mode/assistance derived; a second answer is 403);
+ *      append-only attempt (mode/assistance derived; a second answer to the same item
+ *      version is 403; an explain-back that is leg (b) of an artifact is 409 until that
+ *      artifact has a solo pass; a re-seeded item version takes one fresh answer);
  *   3. only AFTER that row exists does GET .../key release the private half;
  *   4. POST .../self-score files the self-assessment as EVIDENCE on that attempt
- *      (assessor self, same-sitting window), never as an edit of the answer.
+ *      (assessor self; no filing window — legs time on the answer row), never as an
+ *      edit of the answer.
  * Every rule the engines own (coverage threshold, legs, XP verification,
  * windows) stays in the engines; this layer orchestrates and maps errors.
  */
@@ -83,8 +86,8 @@ function honest<T>(fn: () => T): T {
     }
     if (err instanceof HonestyRuleError) {
       switch (err.code) {
-        case 'STALE':
-          throw new HttpError(409, 'SCORE_WINDOW_CLOSED', err.message);
+        // ('STALE' — evidence predating its attempt — cannot happen on a self-score since the
+        // 24h window was retired; it stays an unmapped 500, an invariant breach, not a 4xx)
         case 'NOT_VERIFIED':
         case 'MISMATCH':
           throw new HttpError(409, 'NOT_VERIFIED', err.message);
@@ -102,11 +105,12 @@ function honest<T>(fn: () => T): T {
 
 type AnswerMarker = 'explainBack' | 'kata';
 const ITEM_KEY_PATH: Readonly<Record<AnswerMarker, string>> = { explainBack: '$.explainBack.questionSetKey', kata: '$.kata.kataKey' };
+const ITEM_SHA_PATH: Readonly<Record<AnswerMarker, string>> = { explainBack: '$.explainBack.itemSha', kata: '$.kata.itemSha' };
+type SeedAnswerItem = SeedExplainBackItem | SeedPatchKataItem;
 
 /**
- * The learner's FIRST (and only) recorded answer to this SEED ITEM - across ALL units
- * (W7, audit #3): answer-before-key is enforced per question set / kata, not per unit, so
- * reading item S's key through unit A can never precede a "fresh" answer to S on unit B.
+ * The learner's FIRST recorded answer to this SEED ITEM KEY in any version - across ALL units
+ * (W7, audit #3). Only used where the item itself is not loaded (content pending).
  */
 function firstAnswer(db: Db, marker: AnswerMarker, itemKey: string): AttemptRow | undefined {
   return db.get<AttemptRow>(
@@ -114,6 +118,55 @@ function firstAnswer(db: Db, marker: AnswerMarker, itemKey: string): AttemptRow 
       ORDER BY id LIMIT 1`,
     itemKey,
   );
+}
+
+/**
+ * The learner's answer OF RECORD to the seed item AS NOW LOADED - across ALL units (W7, audit
+ * #3: answer-before-key is per question set / kata, never per unit, so reading S's key through
+ * unit A can never precede a "fresh" answer to S on unit B): the FIRST submitted answer whose
+ * stored item hash is the loaded item's hash. Answers recorded before W7 carry no hash and stay
+ * the answer of record, as before.
+ *
+ * Ladder dead end #3 (campaign2-review F11): an answer whose stored hash DIFFERS was recorded
+ * against an earlier version of the item (a re-seed under the same key). It is SUPERSEDED -
+ * derived from the immutable rows, never written: no attempt is updated, the old row, its
+ * evidence and its XP stay exactly as they were. Its key no longer matches (key-point / defect
+ * ids are positional, audit #8), so it is never keyed or scored against the new content; instead
+ * the new version takes ONE fresh answer of its own (this predicate finds it from then on). The
+ * learner cannot force a hash change - only a re-seed of the stamped pack makes one - so this is
+ * no re-answer loop. (Were an old version re-loaded, its own first answer is its record again.)
+ */
+function currentAnswer(db: Db, marker: AnswerMarker, item: SeedAnswerItem): AttemptRow | undefined {
+  return db.get<AttemptRow>(
+    `SELECT * FROM attempt WHERE outcome = 'submitted' AND json_extract(answer, '${ITEM_KEY_PATH[marker]}') = ?
+        AND (json_extract(answer, '${ITEM_SHA_PATH[marker]}') IS NULL OR json_extract(answer, '${ITEM_SHA_PATH[marker]}') = ?)
+      ORDER BY id LIMIT 1`,
+    item.key,
+    seedItemHash(item),
+  );
+}
+
+/** Answers to this item key recorded against an EARLIER version (superseded, see currentAnswer). */
+function supersededAnswerIds(db: Db, marker: AnswerMarker, item: SeedAnswerItem): number[] {
+  return db
+    .all<{ id: number }>(
+      `SELECT id FROM attempt WHERE outcome = 'submitted' AND json_extract(answer, '${ITEM_KEY_PATH[marker]}') = ?
+          AND json_extract(answer, '${ITEM_SHA_PATH[marker]}') IS NOT NULL AND json_extract(answer, '${ITEM_SHA_PATH[marker]}') <> ?
+        ORDER BY id`,
+      item.key,
+      seedItemHash(item),
+    )
+    .map((r) => r.id);
+}
+
+/** 403 NOT_ANSWERED for the loaded version, naming any superseded earlier answer. */
+function notAnswered(db: Db, marker: AnswerMarker, item: SeedAnswerItem, unit: UnitRecord, what: string): HttpError {
+  const old = supersededAnswerIds(db, marker, item);
+  const path = marker === 'explainBack' ? 'explain-back/answers' : 'kata/findings';
+  const superseded = old.length
+    ? `your earlier ${marker === 'explainBack' ? 'answer' : 'findings'} ${old.map((id) => `#${id}`).join(', ')} answered an earlier version of ${item.key} (re-seeded since) and ${old.length === 1 ? 'is' : 'are'} superseded; `
+    : '';
+  return new HttpError(403, 'NOT_ANSWERED', `unit ${unit.id}: ${superseded}record your ${what} first (POST /api/units/${unit.id}/${path}) — the key is shown only after`);
 }
 
 interface StoredAnswer {
@@ -124,25 +177,34 @@ interface StoredAnswer {
 const storedAnswer = (a: AttemptRow): StoredAnswer => JSON.parse(a.answer ?? '{}') as StoredAnswer;
 
 /**
- * W7 (audit #8): the key / self-score of an answer is the key of the item AS ANSWERED. Ids
- * are positional, so a re-seeded item would silently re-label them: refuse instead.
- * (Answers recorded before W7 carry no hash and are accepted as before.)
+ * The answer must live on THIS unit for a self-score (evidence binds the answer's unit and its
+ * competencies) - unless that unit was RETIRED (a re-seed / re-link moved the item to a new live
+ * unit; retired units 404 everywhere): the stranded answer is then self-scored from the live unit
+ * that carries the same item (ladder dead end #3). The evidence still binds the answer's own
+ * attempt / unit, so nothing is re-labelled.
  */
-function assertSameContent(stored: string | undefined, item: SeedExplainBackItem | SeedPatchKataItem, attemptId: number): void {
-  if (stored !== undefined && stored !== seedItemHash(item)) {
-    throw new HttpError(
-      409,
-      'CONTENT_CHANGED',
-      `answer #${attemptId} was recorded against an earlier version of ${item.key}; the loaded item was re-seeded since, so its key no longer matches your answer`,
-    );
-  }
+function assertAnsweredHere(db: Db, unit: UnitRecord, attempt: AttemptRow): void {
+  if (attempt.unit_id === unit.id || getUnit(db, attempt.unit_id) === undefined) return;
+  throw new HttpError(403, 'ALREADY_ANSWERED', `this item was answered on unit ${attempt.unit_id} (answer #${attempt.id}); self-score it there`);
 }
 
-/** The answer must live on THIS unit for a self-score (evidence binds the unit's competencies). */
-function assertAnsweredHere(unit: UnitRecord, attempt: AttemptRow): void {
-  if (attempt.unit_id !== unit.id) {
-    throw new HttpError(403, 'ALREADY_ANSWERED', `this item was answered on unit ${attempt.unit_id} (answer #${attempt.id}); self-score it there`);
+/** ALREADY_ANSWERED for a second answer to the same item version. */
+function alreadyAnswered(db: Db, prior: AttemptRow, unit: UnitRecord, item: SeedAnswerItem, noun: string): HttpError {
+  if (prior.unit_id === unit.id) {
+    return new HttpError(403, 'ALREADY_ANSWERED', `unit ${unit.id}: your ${noun} #${prior.id} ${noun === 'findings' ? 'are' : 'is'} recorded and immutable; open the key instead`);
   }
+  if (getUnit(db, prior.unit_id) === undefined) {
+    return new HttpError(
+      403,
+      'ALREADY_ANSWERED',
+      `${item.key} was already answered on unit ${prior.unit_id} (${noun} #${prior.id}), since retired; open its key and self-score it here on unit ${unit.id}`,
+    );
+  }
+  return new HttpError(
+    403,
+    'ALREADY_ANSWERED',
+    `${item.key} was already answered on unit ${prior.unit_id} (${noun} #${prior.id}); its key may have been read, so it cannot be answered again`,
+  );
 }
 
 function scoredOn(db: Db, attemptId: number, kind: 'explain-back' | 'kata'): { score: number; evidenceIds: number[]; at: number } | null {
@@ -162,9 +224,10 @@ function promoteAll(db: Db, competencies: readonly CompetencyId[], clock: Clock)
   });
 }
 
-function requireCompetencies(db: Db, unit: UnitRecord): CompetencyId[] {
-  const cs = unitCompetencies(db, unit.id);
-  if (cs.length === 0) throw new HttpError(409, 'CONTENT_PENDING', `unit ${unit.id} declares no competency, so a self-score has nothing to evidence`);
+/** The competencies of the unit the ANSWER lives on (evidence binds that unit). */
+function requireCompetencies(db: Db, unitId: number): CompetencyId[] {
+  const cs = unitCompetencies(db, unitId);
+  if (cs.length === 0) throw new HttpError(409, 'CONTENT_PENDING', `unit ${unitId} declares no competency, so a self-score has nothing to evidence`);
   return cs;
 }
 
@@ -200,13 +263,16 @@ export function effectiveMinCoverage(spec: CheckSpec): number {
 }
 
 /** Public half for GET /units/:id (null = content pending). */
-export function explainBackPublicFor(seedItems: SeedItemStore, spec: CheckSpec, db?: Db) {
+export function explainBackPublicFor(seedItems: SeedItemStore, spec: CheckSpec, db?: Db, unitId?: number) {
   if (spec.type !== 'explain-back') return undefined;
   const item = seedItems.explainBack(spec.questionSetKey);
   if (!item) return null;
   const pub = { questions: explainBackQuestions(item), minCoveragePct: pct(effectiveMinCoverage(spec)) };
-  // W9 (ui-audit #10): same predicate as GET .../explain-back/key (the item's first answer row)
-  return db ? { ...pub, answered: firstAnswer(db, 'explainBack', spec.questionSetKey) !== undefined } : pub;
+  if (!db) return pub;
+  // W9 (ui-audit #10): same predicate as GET .../explain-back/key (the loaded version's answer of record)
+  const answered = { ...pub, answered: currentAnswer(db, 'explainBack', item) !== undefined };
+  // dead end #2: the same predicate POST .../answers enforces (409 ARTIFACT_REQUIRED)
+  return unitId === undefined ? answered : { ...answered, artifactRequired: artifactsAwaitingSoloPass(db, unitId) };
 }
 
 export function kataPublicFor(seedItems: SeedItemStore, spec: CheckSpec, db?: Db) {
@@ -214,7 +280,7 @@ export function kataPublicFor(seedItems: SeedItemStore, spec: CheckSpec, db?: Db
   const item = seedItems.kata(spec.kataKey);
   if (!item) return null;
   // W9 (ui-audit #10): same predicate as GET .../kata/key
-  return db ? { ...kataPublic(item), answered: firstAnswer(db, 'kata', spec.kataKey) !== undefined } : kataPublic(item);
+  return db ? { ...kataPublic(item), answered: currentAnswer(db, 'kata', item) !== undefined } : kataPublic(item);
 }
 
 /** POST /units/:id/explain-back/answers — the immutable answer, BEFORE any key point is readable. */
@@ -229,14 +295,18 @@ export function answerExplainBack(deps: LadderDeps, unitId: number, body: Explai
     ]);
   }
   return db.tx(() => {
-    const prior = firstAnswer(db, 'explainBack', item.key);
-    if (prior) {
+    // one answer per question set VERSION (a superseded earlier-version answer leaves room for one fresh answer)
+    const prior = currentAnswer(db, 'explainBack', item);
+    if (prior) throw alreadyAnswered(db, prior, unit, item, 'explain-back answer');
+    // dead end #2: an answer before the linked artifact's solo pass would burn leg (b) for good
+    const pending = artifactsAwaitingSoloPass(db, unit.id);
+    if (pending.length > 0) {
       throw new HttpError(
-        403,
-        'ALREADY_ANSWERED',
-        prior.unit_id === unit.id
-          ? `unit ${unit.id}: your explain-back answer #${prior.id} is recorded and immutable; open its key instead`
-          : `question set ${item.key} was already answered on unit ${prior.unit_id} (answer #${prior.id}); its key may have been read, so it cannot be answered again`,
+        409,
+        'ARTIFACT_REQUIRED',
+        `unit ${unit.id}: this explain-back is promotion leg (b) of ${pending.map((p) => `unit ${p.unitId} "${p.title}"`).join(', ')}; ` +
+          `pass ${pending.length === 1 ? 'that unit' : 'those units'} solo first (verified submit), then answer — ` +
+          'an answer recorded before the artifact can never count, and the set can only be answered once',
       );
     }
     const attempt = recordAttempt(
@@ -258,21 +328,24 @@ export function getExplainBackKey(deps: LadderDeps, unitId: number): ExplainBack
   const { db } = deps;
   const unit = requireUnit(db, unitId);
   const check = requireCheckType(db, unit, 'explain-back', 'the explain-back key');
-  const attempt = firstAnswer(db, 'explainBack', check.spec.questionSetKey);
-  if (!attempt) {
-    throw new HttpError(403, 'NOT_ANSWERED', `unit ${unit.id}: record your answers first (POST /api/units/${unit.id}/explain-back/answers) — the key is shown only after`);
-  }
   const item = deps.seedItems.explainBack(check.spec.questionSetKey);
-  if (!item) throw new HttpError(409, 'CONTENT_PENDING', `question set ${check.spec.questionSetKey} is not loaded on this server`);
+  if (!item) {
+    if (!firstAnswer(db, 'explainBack', check.spec.questionSetKey)) {
+      throw new HttpError(403, 'NOT_ANSWERED', `unit ${unit.id}: record your answers first (POST /api/units/${unit.id}/explain-back/answers) — the key is shown only after`);
+    }
+    throw new HttpError(409, 'CONTENT_PENDING', `question set ${check.spec.questionSetKey} is not loaded on this server`);
+  }
+  // the key of the item AS ANSWERED only: the answer of record matches the loaded hash by construction (audit #8)
+  const attempt = currentAnswer(db, 'explainBack', item);
+  if (!attempt) throw notAnswered(db, 'explainBack', item, unit, 'answers');
   const stored = storedAnswer(attempt);
-  assertSameContent(stored.explainBack?.itemSha, item, attempt.id);
   const answers = Array.isArray(stored.explainBack?.answers) ? stored.explainBack.answers.map(String) : [];
   return { attemptId: attempt.id, answeredAt: attempt.created_at, answers, questions: explainBackKey(item), scored: scoredOn(db, attempt.id, 'explain-back') };
 }
 
 /**
  * POST /units/:id/explain-back/self-score — per-key-point covered|missed -> coverage,
- * filed as explain-back evidence (assessor self, engine window); >= 80% pays 20 XP once
+ * filed as explain-back evidence (assessor self, no filing window); >= 80% pays 20 XP once
  * and schedules the changed-example retest (>= 2 days out); then the promotion rule runs.
  */
 export function selfScoreExplainBack(deps: LadderDeps, unitId: number, body: { perKeyPoint: Record<string, 'covered' | 'missed'> }): ExplainBackScoreResponse {
@@ -280,11 +353,10 @@ export function selfScoreExplainBack(deps: LadderDeps, unitId: number, body: { p
   const unit = requireUnit(db, unitId);
   assertOpen(db, unit);
   const { check, item } = requireExplainBack(deps, unit, 'explain-back self-score');
-  const attempt = firstAnswer(db, 'explainBack', item.key);
-  if (!attempt) throw new HttpError(403, 'NOT_ANSWERED', `unit ${unit.id}: record your answers before self-scoring`);
-  assertAnsweredHere(unit, attempt);
-  assertSameContent(storedAnswer(attempt).explainBack?.itemSha, item, attempt.id);
-  const competencies = requireCompetencies(db, unit);
+  const attempt = currentAnswer(db, 'explainBack', item);
+  if (!attempt) throw notAnswered(db, 'explainBack', item, unit, 'answers');
+  assertAnsweredHere(db, unit, attempt);
+  const competencies = requireCompetencies(db, attempt.unit_id);
   const ids = explainBackKey(item).flatMap((q) => q.keyPoints.map((k) => k.id));
   assertExactMarks(ids, body.perKeyPoint, 'perKeyPoint');
   const missed = ids.filter((id) => body.perKeyPoint[id] === 'missed');
@@ -351,16 +423,8 @@ export function submitKataFindings(deps: LadderDeps, unitId: number, body: KataF
   assertOpen(db, unit);
   const { check, item } = requireKata(deps, unit, 'kata findings');
   return db.tx(() => {
-    const prior = firstAnswer(db, 'kata', item.key);
-    if (prior) {
-      throw new HttpError(
-        403,
-        'ALREADY_ANSWERED',
-        prior.unit_id === unit.id
-          ? `unit ${unit.id}: your findings #${prior.id} are recorded and immutable; open the key instead`
-          : `kata ${item.key} was already answered on unit ${prior.unit_id} (findings #${prior.id}); it cannot be answered again`,
-      );
-    }
+    const prior = currentAnswer(db, 'kata', item);
+    if (prior) throw alreadyAnswered(db, prior, unit, item, 'findings');
     const attempt = recordAttempt(
       db,
       {
@@ -380,14 +444,16 @@ export function getKataKey(deps: LadderDeps, unitId: number): KataKeyResponse {
   const { db } = deps;
   const unit = requireUnit(db, unitId);
   const check = requireCheckType(db, unit, 'patch-kata', 'the kata key');
-  const attempt = firstAnswer(db, 'kata', check.spec.kataKey);
-  if (!attempt) {
-    throw new HttpError(403, 'NOT_ANSWERED', `unit ${unit.id}: record your findings first (POST /api/units/${unit.id}/kata/findings) — the seeded-defect key is shown only after`);
-  }
   const item = deps.seedItems.kata(check.spec.kataKey);
-  if (!item) throw new HttpError(409, 'CONTENT_PENDING', `kata ${check.spec.kataKey} is not loaded on this server`);
+  if (!item) {
+    if (!firstAnswer(db, 'kata', check.spec.kataKey)) {
+      throw new HttpError(403, 'NOT_ANSWERED', `unit ${unit.id}: record your findings first (POST /api/units/${unit.id}/kata/findings) — the seeded-defect key is shown only after`);
+    }
+    throw new HttpError(409, 'CONTENT_PENDING', `kata ${check.spec.kataKey} is not loaded on this server`);
+  }
+  const attempt = currentAnswer(db, 'kata', item);
+  if (!attempt) throw notAnswered(db, 'kata', item, unit, 'findings');
   const stored = storedAnswer(attempt);
-  assertSameContent(stored.kata?.itemSha, item, attempt.id);
   return { attemptId: attempt.id, answeredAt: attempt.created_at, findings: stored.kata?.findings ?? [], defects: kataKey(item), scored: scoredOn(db, attempt.id, 'kata') };
 }
 
@@ -397,11 +463,10 @@ export function selfScoreKata(deps: LadderDeps, unitId: number, body: { perDefec
   const unit = requireUnit(db, unitId);
   assertOpen(db, unit);
   const { item } = requireKata(deps, unit, 'kata self-score');
-  const attempt = firstAnswer(db, 'kata', item.key);
-  if (!attempt) throw new HttpError(403, 'NOT_ANSWERED', `unit ${unit.id}: record your findings before self-scoring`);
-  assertAnsweredHere(unit, attempt);
-  assertSameContent(storedAnswer(attempt).kata?.itemSha, item, attempt.id);
-  const competencies = requireCompetencies(db, unit);
+  const attempt = currentAnswer(db, 'kata', item);
+  if (!attempt) throw notAnswered(db, 'kata', item, unit, 'findings');
+  assertAnsweredHere(db, unit, attempt);
+  const competencies = requireCompetencies(db, attempt.unit_id);
   const ids = kataKey(item).map((d) => d.id);
   assertExactMarks(ids, body.perDefect, 'perDefect');
   const missed = ids.filter((id) => body.perDefect[id] === 'missed');
@@ -445,7 +510,8 @@ export function selfScoreKata(deps: LadderDeps, unitId: number, body: { perDefec
  * GET /stats/katas - the G1 aggregate: seeded defects caught across every scored SOLO kata.
  * W7 (audit #2): self-flagged assisted and reveal-guided answers never count toward the
  * core-skill gate; they are reported separately as assistedCount. W7 (audit #8): the
- * defect total is the count stored WITH the answer (as answered), not the current key.
+ * defect total is the count stored WITH the answer (as answered), not the current key; each
+ * kata key counts once (its earliest scored answer), whatever re-seeds followed.
  */
 export function kataStats(deps: LadderDeps): KataStatsResponse {
   const { db } = deps;
@@ -459,7 +525,16 @@ export function kataStats(deps: LadderDeps): KataStatsResponse {
   let total = 0;
   let katas = 0;
   let assistedCount = 0;
+  // dead end #3: a re-seeded kata takes one fresh answer, but G1 counts each kata ONCE - its
+  // earliest scored answer, as answered. A later version scored after the earlier key was read
+  // is not blind, and counting both would let a re-seed rewrite the G1 history (audit #8).
+  const counted = new Set<string>();
   for (const r of rows) {
+    const kataKey = (JSON.parse(r.answer ?? '{}') as StoredAnswer).kata?.kataKey;
+    if (kataKey !== undefined) {
+      if (counted.has(kataKey)) continue;
+      counted.add(kataKey);
+    }
     if (r.mode !== 'solo' || r.assisted) {
       assistedCount += 1;
       continue;

@@ -185,9 +185,10 @@ function canonical(v: unknown): string {
 
 /**
  * W7 (audit #8): the content hash of one seed item. An answer attempt stores the hash of the
- * item it was answered against; key / self-score refuse (409 CONTENT_CHANGED) once the loaded
- * item differs, so a re-seed can never silently re-label key-point / defect ids (which are
- * positional) or rewrite past G1 totals.
+ * item it was answered against; once the loaded item differs, that answer is SUPERSEDED (derived,
+ * ladder-service currentAnswer): it is never keyed or scored against the new content, so a re-seed
+ * can never silently re-label key-point / defect ids (which are positional) or rewrite past G1
+ * totals, and the new version takes one fresh answer of its own.
  */
 export function seedItemHash(item: ExplainBackItem | PatchKataItem): string {
   return sha256(canonical(item));

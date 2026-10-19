@@ -25,13 +25,13 @@ import { createApp } from '../../src/api/app.ts';
 import type { Runner } from '../../src/api/runners.ts';
 import { DAY_MS, fixedClock } from '../../src/engines/clock.ts';
 import { getRating } from '../../src/engines/evidence.ts';
-import { revealSolution } from '../../src/engines/attempts.ts';
+import { recordAttempt, revealSolution } from '../../src/engines/attempts.ts';
 import { retestGate } from '../../src/engines/ladder.ts';
 import { assertUniqueSeedItemRefs } from '../../src/store/ladder.ts';
 import { insertUnit } from '../../src/store/content.ts';
 import { mapContentStore } from '../../src/api/content-store.ts';
-import { ledgerCounts } from '../../src/store/queries.ts';
-import { loadSeedItemStore, mapSeedItemStore, SeedItemLoadError } from '../../src/store/seed-items.ts';
+import { ledgerCounts, primaryCheck } from '../../src/store/queries.ts';
+import { loadSeedItemStore, mapSeedItemStore, SeedItemLoadError, seedItemHash } from '../../src/store/seed-items.ts';
 import { localNoon, makeTempDb, type TempDb } from '../helpers.ts';
 import fixture from '../fixtures/ladder-fixture.json' with { type: 'json' };
 
@@ -91,6 +91,13 @@ function expectError(res: request.Response, status: number, code: string): void 
   expect(ApiErrorBody.parse(res.body).error.code).toBe(code);
 }
 
+/** leg (a) first: explain-api / explain-low refuse answers (409 ARTIFACT_REQUIRED) until their project passes solo */
+async function passArtifact(ctx: Ctx, key = 'fixture:ladder/project-api'): Promise<void> {
+  const res = await request(ctx.app).post(`/api/units/${ctx.id(key)}/submit`).send({ port: GOOD_PORT });
+  expect(res.status, res.text).toBe(200);
+  expect(res.body.verdict).toBe('pass');
+}
+
 const ANSWERS = ['the permission test guards read-only roles', 'the state machine test guards transitions', 'tenant isolation is tested per repository'];
 const marks = (coveredCount: number) => Object.fromEntries(KEY_POINT_IDS.map((id, i) => [id, i < coveredCount ? 'covered' : 'missed']));
 
@@ -119,6 +126,7 @@ describe('explain-back: immutable answer first, then the key, then the self-scor
     expectError(await request(ctx.app).get(`/api/units/${id}/explain-back/key`), 403, 'NOT_ANSWERED');
     expectError(await request(ctx.app).post(`/api/units/${id}/explain-back/self-score`).send({ perKeyPoint: marks(16) }), 403, 'NOT_ANSWERED');
 
+    await passArtifact(ctx);
     const before = ledgerCounts(ctx.tmp.db);
     const ans = await request(ctx.app).post(`/api/units/${id}/explain-back/answers`).send({ answers: ANSWERS });
     expect(ans.status, ans.text).toBe(200);
@@ -144,6 +152,7 @@ describe('explain-back: immutable answer first, then the key, then the self-scor
     expectError(await request(ctx.app).post(url).send({ answers: [...ANSWERS.slice(0, 2), '   '] }), 400, 'VALIDATION');
     expectError(await request(ctx.app).post(url).send({ answers: ANSWERS, assistance: 'none' }), 400, 'VALIDATION');
     expectError(await request(ctx.app).post(url).send({ answers: ANSWERS, score: 1 }), 400, 'VALIDATION');
+    await passArtifact(ctx);
     await request(ctx.app).post(url).send({ answers: ANSWERS }).expect(200);
     const score = `/api/units/${id}/explain-back/self-score`;
     const partial = marks(16);
@@ -203,19 +212,42 @@ describe('explain-back: immutable answer first, then the key, then the self-scor
     expect(comp.retests).toEqual([]);
   });
 
-  it('the self-score must be filed in the same sitting (24h window) -> 409 SCORE_WINDOW_CLOSED', async () => {
+  it('dead end #1 (no self-score window): scored 30 days after the answer -> evidence, 20 XP once, leg (b); the retest anchors on the ANSWER time and the chain promotes', async () => {
     const id = ctx.id('fixture:ladder/explain-api');
-    await request(ctx.app).post(`/api/units/${id}/explain-back/answers`).send({ answers: ANSWERS }).expect(200);
-    ctx.clock.advance(DAY_MS + 1);
-    expectError(await request(ctx.app).post(`/api/units/${id}/explain-back/self-score`).send({ perKeyPoint: marks(16) }), 409, 'SCORE_WINDOW_CLOSED');
+    const retest = ctx.id('fixture:ladder/project-api-retest');
+    await request(ctx.app).post(`/api/units/${ctx.id('fixture:ladder/project-api')}/submit`).send({ port: GOOD_PORT }).expect(200);
+    ctx.clock.advance(60_000);
+    const ans = await request(ctx.app).post(`/api/units/${id}/explain-back/answers`).send({ answers: ANSWERS }).expect(200);
+    const answeredAt = ctx.clock().getTime();
+    ctx.clock.advance(30 * DAY_MS); // the old 24h window would have voided this item for good (409, no XP, no leg)
+    const res = await request(ctx.app).post(`/api/units/${id}/explain-back/self-score`).send({ perKeyPoint: marks(14) });
+    expect(res.status, res.text).toBe(200);
+    const body = ExplainBackScoreResponse.parse(res.body);
+    expect(body).toMatchObject({ attemptId: ans.body.attemptId, passed: true, xp: { amount: 20, reason: null } });
+    // timing is on the immutable answer row, never on when the score was filed
+    expect(body.retests[0]!.dueAt).toBe(answeredAt + 2 * DAY_MS);
+    const ev = ctx.tmp.db.get<{ created_at: number }>('SELECT created_at FROM evidence WHERE id = ?', body.evidenceIds[0]!)!;
+    expect(ev.created_at).toBe(answeredAt + 30 * DAY_MS);
+    const row = CompetenciesResponse.parse((await request(ctx.app).get('/api/competencies')).body).competencies.find((c) => c.id === 'data-http')!;
+    expect(row.promotion).toMatchObject({ artifact: { state: 'done' }, explainBack: { state: 'done' }, retest: { state: 'scheduled', unitId: retest } });
+    // still once per answer
+    expectError(await request(ctx.app).post(`/api/units/${id}/explain-back/self-score`).send({ perKeyPoint: marks(16) }), 409, 'ALREADY_SCORED');
+    // the schedule is already due (>= 2 days after the answer), so the late-scored chain completes now
+    expect(retestGate(ctx.tmp.db, retest, ctx.clock)).toEqual({ open: true, reason: 'due', opensAt: null });
+    const rt = SubmitResponse.parse((await request(ctx.app).post(`/api/units/${retest}/submit`).send({ code: fixture.solutions.retest })).body);
+    expect(rt.promotions).toEqual([expect.objectContaining({ competency: 'data-http', from: 1, to: 2 })]);
   });
 
-  it('W7 audit #12a: exactly 24h after the answer the window is still open (the engine refuses only > 24h)', async () => {
-    const id = ctx.id('fixture:ladder/explain-api');
-    await request(ctx.app).post(`/api/units/${id}/explain-back/answers`).send({ answers: ANSWERS }).expect(200);
-    ctx.clock.advance(DAY_MS);
-    const res = await request(ctx.app).post(`/api/units/${id}/explain-back/self-score`).send({ perKeyPoint: marks(16) });
-    expect(res.status, res.text).toBe(200);
+  it('dead end #1 (no self-score window): a kata self-scored a week late still files its catch rate and pays 15 XP once', async () => {
+    const k1 = ctx.id('fixture:ladder/kata-1');
+    const f = await request(ctx.app)
+      .post(`/api/units/${k1}/kata/findings`)
+      .send({ findings: [{ scenario: 'two rules, one matches', evidence: 'allocationSummary.mjs:17', consequence: 'coverage is overstated' }] })
+      .expect(200);
+    ctx.clock.advance(7 * DAY_MS);
+    const s = KataScoreResponse.parse((await request(ctx.app).post(`/api/units/${k1}/kata/self-score`).send({ perDefect: { d1: 'caught' } })).body);
+    expect(s).toMatchObject({ attemptId: f.body.attemptId, caught: 1, total: 1, xp: { amount: 15 } });
+    expectError(await request(ctx.app).post(`/api/units/${k1}/kata/self-score`).send({ perDefect: { d1: 'caught' } }), 409, 'ALREADY_SCORED');
   });
 
   it('W7 audit #12e: a unit stricter than the floor (minCoverage 0.9) shows AND enforces 90%; a laxer one is floored at 80%', async () => {
@@ -253,6 +285,7 @@ describe('explain-back: immutable answer first, then the key, then the self-scor
     );
     const a = ctx.id('fixture:ladder/explain-api');
     expect(() => assertUniqueSeedItemRefs(ctx.tmp.db)).toThrow(/more than one live unit/);
+    await passArtifact(ctx);
     const ans = await request(ctx.app).post(`/api/units/${a}/explain-back/answers`).send({ answers: ANSWERS });
     expect(ans.status).toBe(200);
     await request(ctx.app).get(`/api/units/${a}/explain-back/key`).expect(200); // the key of S is now seen
@@ -265,14 +298,135 @@ describe('explain-back: immutable answer first, then the key, then the self-scor
     expectError(await request(ctx.app).post(`/api/units/${twin}/explain-back/self-score`).send({ perKeyPoint: marks(16) }), 403, 'ALREADY_ANSWERED');
   });
 
-  it('W7 audit #8: a re-seeded item (same key, changed content) refuses the old answer\'s key / self-score with 409 CONTENT_CHANGED', async () => {
+  it('dead end #3 (F11 shape): a re-seeded set (same key, changed content) SUPERSEDES the unscored old answer: never keyed / scored against the new content, ONE fresh answer, which pays', async () => {
     const id = ctx.id('fixture:ladder/explain-api');
-    await request(ctx.app).post(`/api/units/${id}/explain-back/answers`).send({ answers: ANSWERS }).expect(200);
+    await passArtifact(ctx);
+    const old = await request(ctx.app).post(`/api/units/${id}/explain-back/answers`).send({ answers: ANSWERS }).expect(200);
+    const oldRow = ctx.tmp.db.get('SELECT * FROM attempt WHERE id = ?', old.body.attemptId);
     const changed = { ...EB, questions: EB.questions.map((q, i) => (i === 0 ? { ...q, keyPoints: q.keyPoints.slice(1) } : q)) };
+    const changedIds = changed.questions.flatMap((q, qi) => q.keyPoints.map((_, ki) => `q${qi + 1}k${ki + 1}`));
     const app = createApp({ db: ctx.tmp.db, clock: ctx.clock, runners: {}, seedItems: mapSeedItemStore([changed, ...KATAS]) });
-    expectError(await request(app).get(`/api/units/${id}/explain-back/key`), 409, 'CONTENT_CHANGED');
-    expectError(await request(app).post(`/api/units/${id}/explain-back/self-score`).send({ perKeyPoint: marks(15) }), 409, 'CONTENT_CHANGED');
-    await request(ctx.app).get(`/api/units/${id}/explain-back/key`).expect(200); // the original content still serves its key
+
+    // the old answer is superseded: the new version is unanswered (was: 409 CONTENT_CHANGED on key AND self-score, forever)
+    expect(UnitDetailResponse.parse((await request(app).get(`/api/units/${id}`)).body).explainBack?.answered).toBe(false);
+    const k0 = await request(app).get(`/api/units/${id}/explain-back/key`);
+    expectError(k0, 403, 'NOT_ANSWERED');
+    expect(k0.body.error.message).toContain(`#${old.body.attemptId} answered an earlier version`);
+    expectError(await request(app).post(`/api/units/${id}/explain-back/self-score`).send({ perKeyPoint: Object.fromEntries(changedIds.map((k) => [k, 'covered'])) }), 403, 'NOT_ANSWERED');
+
+    // ONE fresh answer against the new content, still answer-before-key
+    ctx.clock.advance(60_000);
+    const fresh = await request(app).post(`/api/units/${id}/explain-back/answers`).send({ answers: ANSWERS.map((a) => `v2: ${a}`) });
+    expect(fresh.status, fresh.text).toBe(200);
+    expect(fresh.body.attemptId).not.toBe(old.body.attemptId);
+    expectError(await request(app).post(`/api/units/${id}/explain-back/answers`).send({ answers: ANSWERS }), 403, 'ALREADY_ANSWERED');
+    // supersession is DERIVED: the old row is byte-identical and still append-only
+    expect(ctx.tmp.db.get('SELECT * FROM attempt WHERE id = ?', old.body.attemptId)).toEqual(oldRow);
+    expect(() => ctx.tmp.db.run('UPDATE attempt SET answer = NULL WHERE id = ?', old.body.attemptId)).toThrow(/append-only/);
+
+    const key = ExplainBackKeyResponse.parse((await request(app).get(`/api/units/${id}/explain-back/key`)).body);
+    expect(key.attemptId).toBe(fresh.body.attemptId);
+    expect(key.answers[0]).toMatch(/^v2: /);
+    expect(key.questions.flatMap((q) => q.keyPoints.map((p) => p.id))).toEqual(changedIds);
+    const sc = ExplainBackScoreResponse.parse((await request(app).post(`/api/units/${id}/explain-back/self-score`).send({ perKeyPoint: Object.fromEntries(changedIds.map((k) => [k, 'covered'])) })).body);
+    // XP: the old version was never scored, so this unit never paid explain-back XP -> the fresh answer pays (see the pays-once test)
+    expect(sc).toMatchObject({ attemptId: fresh.body.attemptId, passed: true, xp: { amount: 20, reason: null } });
+    expect(sc.retests).toHaveLength(1);
+    // the ORIGINAL content still serves its own answer's key (each version's answer of record is its first)
+    expect(ExplainBackKeyResponse.parse((await request(ctx.app).get(`/api/units/${id}/explain-back/key`)).body).attemptId).toBe(old.body.attemptId);
+  });
+
+  it('dead end #3 + pays-once: when the earlier version already PAID on this unit, the fresh answer files evidence but pays 0 — xp_event_pays_once (unit, kind) is untouched', async () => {
+    // Reasoning: the partial unique index xp_event_pays_once is ON xp_event(unit_id, kind) WHERE amount > 0 -
+    // one paying explain-back award per UNIT, not per answer. It is an honesty guard, so it is not widened.
+    // A fresh answer to a re-seeded set therefore pays 20 only when its unit never paid explain-back XP (the
+    // stranded F11 case: the old answer could never be scored, so it never paid), and 0 'already-awarded'
+    // otherwise. No farming loop either way: only a re-seed of the stamped pack changes the item hash (the
+    // learner cannot force one through the app), and each hash takes exactly one fresh answer.
+    const id = ctx.id('fixture:ladder/explain-api');
+    await passArtifact(ctx);
+    await request(ctx.app).post(`/api/units/${id}/explain-back/answers`).send({ answers: ANSWERS }).expect(200);
+    const v1 = ExplainBackScoreResponse.parse((await request(ctx.app).post(`/api/units/${id}/explain-back/self-score`).send({ perKeyPoint: marks(16) })).body);
+    expect(v1.xp).toMatchObject({ amount: 20 });
+    const changed = { ...EB, questions: EB.questions.map((q, i) => (i === 0 ? { ...q, keyPoints: q.keyPoints.slice(1) } : q)) };
+    const changedIds = changed.questions.flatMap((q, qi) => q.keyPoints.map((_, ki) => `q${qi + 1}k${ki + 1}`));
+    const app = createApp({ db: ctx.tmp.db, clock: ctx.clock, runners: {}, seedItems: mapSeedItemStore([changed, ...KATAS]) });
+    await request(app).post(`/api/units/${id}/explain-back/answers`).send({ answers: ANSWERS }).expect(200);
+    await request(app).get(`/api/units/${id}/explain-back/key`).expect(200);
+    const v2 = ExplainBackScoreResponse.parse((await request(app).post(`/api/units/${id}/explain-back/self-score`).send({ perKeyPoint: Object.fromEntries(changedIds.map((k) => [k, 'covered'])) })).body);
+    expect(v2.evidenceIds.length).toBeGreaterThan(0);
+    expect(v2.xp).toMatchObject({ amount: 0, reason: 'already-awarded' });
+    expect(ctx.tmp.db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM xp_event WHERE unit_id = ? AND kind = 'explain-back' AND amount > 0`, id)!.n).toBe(1);
+    expect(() =>
+      ctx.tmp.db.run(`INSERT INTO xp_event (kind, amount, reason, unit_id, attempt_id, track_id, day, created_at) VALUES ('explain-back', 20, NULL, ?, ?, 'js', '2026-10-01', 0)`, id, v2.attemptId),
+    ).toThrow(/UNIQUE/);
+  });
+
+  it('dead end #3: an answer stranded on a RETIRED unit is keyed and self-scored from the live unit carrying the same item (explain-back and kata)', async () => {
+    const a = ctx.id('fixture:ladder/explain-api');
+    await passArtifact(ctx);
+    const ans = await request(ctx.app).post(`/api/units/${a}/explain-back/answers`).send({ answers: ANSWERS }).expect(200);
+    const k1 = ctx.id('fixture:ladder/kata-1');
+    const FINDING = { scenario: 'two rules, one matches', evidence: 'allocationSummary.mjs:17', consequence: 'coverage is overstated' };
+    const findings = await request(ctx.app).post(`/api/units/${k1}/kata/findings`).send({ findings: [FINDING] }).expect(200);
+    // a re-seed / re-link moves both items to new unit keys: the old units retire (they 404 everywhere)
+    ctx.tmp.db.run('UPDATE unit SET retired_at = ? WHERE id IN (?, ?)', ctx.clock().getTime(), a, k1);
+    const liveEb = insertUnit(
+      ctx.tmp.db,
+      {
+        key: 'fixture:ladder/explain-api-v2',
+        track: 'js',
+        kind: 'explain-back',
+        title: '[fixture] explain-api moved',
+        competencies: ['data-http'],
+        prerequisites: ['fixture:ladder/project-api'],
+        checks: [{ spec: { type: 'explain-back', questionSetKey: EB.key } }],
+      },
+      ctx.clock,
+    );
+    const kataSpec1 = fixture.units.find((u) => u.key === 'fixture:ladder/kata-1')!.checks[0]!.spec;
+    const liveKata = insertUnit(
+      ctx.tmp.db,
+      { key: 'fixture:ladder/kata-1-v2', track: 'agentic', kind: 'patch-kata', title: '[fixture] kata moved', competencies: ['code-reading'], checks: [{ spec: kataSpec1 }] },
+      ctx.clock,
+    );
+    expect(() => assertUniqueSeedItemRefs(ctx.tmp.db)).not.toThrow(); // one LIVE unit per item
+    expectError(await request(ctx.app).get(`/api/units/${a}`), 404, 'NOT_FOUND');
+
+    // explain-back: still answered (the set's key may have been read), re-answer refused with a pointer here
+    expect(UnitDetailResponse.parse((await request(ctx.app).get(`/api/units/${liveEb}`)).body).explainBack?.answered).toBe(true);
+    const re = await request(ctx.app).post(`/api/units/${liveEb}/explain-back/answers`).send({ answers: ANSWERS });
+    expectError(re, 403, 'ALREADY_ANSWERED');
+    expect(re.body.error.message).toMatch(/since retired; open its key and self-score it here/);
+    expect(ExplainBackKeyResponse.parse((await request(ctx.app).get(`/api/units/${liveEb}/explain-back/key`)).body).attemptId).toBe(ans.body.attemptId);
+    // was: 403 "self-score it there" while "there" 404s - a permanent dead end
+    const sc = ExplainBackScoreResponse.parse((await request(ctx.app).post(`/api/units/${liveEb}/explain-back/self-score`).send({ perKeyPoint: marks(16) })).body);
+    expect(sc).toMatchObject({ attemptId: ans.body.attemptId, passed: true, xp: { amount: 20 } });
+    expect(sc.retests).toHaveLength(1);
+    // the evidence binds the ANSWER's own attempt and unit: nothing re-labelled
+    const ev = ctx.tmp.db.get<{ attempt_id: number; unit_id: number }>('SELECT attempt_id, unit_id FROM evidence WHERE id = ?', sc.evidenceIds[0]!)!;
+    expect(ev).toEqual({ attempt_id: ans.body.attemptId, unit_id: a });
+    const row = CompetenciesResponse.parse((await request(ctx.app).get('/api/competencies')).body).competencies.find((c) => c.id === 'data-http')!;
+    expect(row.promotion.explainBack.state).toBe('done');
+    expectError(await request(ctx.app).post(`/api/units/${liveEb}/explain-back/self-score`).send({ perKeyPoint: marks(16) }), 409, 'ALREADY_SCORED');
+
+    // kata: same path
+    expect(KataKeyResponse.parse((await request(ctx.app).get(`/api/units/${liveKata}/kata/key`)).body).attemptId).toBe(findings.body.attemptId);
+    const ks = KataScoreResponse.parse((await request(ctx.app).post(`/api/units/${liveKata}/kata/self-score`).send({ perDefect: { d1: 'caught' } })).body);
+    expect(ks).toMatchObject({ attemptId: findings.body.attemptId, caught: 1, xp: { amount: 15 } });
+  });
+
+  it('a LIVE twin still cannot self-score another live unit\'s answer (the retired carve-out is retired-only)', async () => {
+    const twin = insertUnit(
+      ctx.tmp.db,
+      { key: 'fixture:ladder/explain-twin2', track: 'js', kind: 'explain-back', title: '[fixture] twin2', competencies: ['data-http'], checks: [{ spec: { type: 'explain-back', questionSetKey: EB.key } }] },
+      ctx.clock,
+    );
+    await passArtifact(ctx);
+    await request(ctx.app).post(`/api/units/${ctx.id('fixture:ladder/explain-api')}/explain-back/answers`).send({ answers: ANSWERS }).expect(200);
+    const res = await request(ctx.app).post(`/api/units/${twin}/explain-back/self-score`).send({ perKeyPoint: marks(16) });
+    expectError(res, 403, 'ALREADY_ANSWERED');
+    expect(res.body.error.message).toMatch(/self-score it there/);
   });
 
   it('explain-back / kata units are never run or submitted through /run or /submit', async () => {
@@ -447,6 +601,100 @@ describe('the promotion cycle through the HTTP API (artifact -> explain-back -> 
   });
 });
 
+describe('dead end #2: an explain-back that is leg (b) of an artifact refuses answers until that artifact passes solo', () => {
+  const ctx = useLadder();
+  const PROJECT_TITLE = '[fixture] Health endpoint project';
+
+  it('before any solo pass: 409 ARTIFACT_REQUIRED naming the project unit, nothing recorded; failed / assisted passes do not count; a solo pass opens it', async () => {
+    const eb = ctx.id('fixture:ladder/explain-api');
+    const project = ctx.id('fixture:ladder/project-api');
+    const detail = async () => UnitDetailResponse.parse((await request(ctx.app).get(`/api/units/${eb}`)).body).explainBack;
+    expect(await detail()).toMatchObject({ answered: false, artifactRequired: [{ unitId: project, title: PROJECT_TITLE }] });
+
+    const before = ledgerCounts(ctx.tmp.db);
+    const res = await request(ctx.app).post(`/api/units/${eb}/explain-back/answers`).send({ answers: ANSWERS });
+    expectError(res, 409, 'ARTIFACT_REQUIRED');
+    expect(res.body.error.message).toContain(`unit ${project} "${PROJECT_TITLE}"`);
+    expect(ledgerCounts(ctx.tmp.db)).toEqual(before); // refused before anything is written: the set is NOT burned
+
+    // a failed submit and a self-flagged assisted pass are not leg (a): still refused
+    await request(ctx.app).post(`/api/units/${project}/submit`).send({ port: 1 }).expect(200);
+    await request(ctx.app).post(`/api/units/${project}/submit`).send({ port: GOOD_PORT, selfAssisted: true }).expect(200);
+    expectError(await request(ctx.app).post(`/api/units/${eb}/explain-back/answers`).send({ answers: ANSWERS }), 409, 'ARTIFACT_REQUIRED');
+    expectError(await request(ctx.app).get(`/api/units/${eb}/explain-back/key`), 403, 'NOT_ANSWERED'); // answer-first still holds
+
+    await passArtifact(ctx);
+    expect(await detail()).toMatchObject({ answered: false, artifactRequired: [] });
+    ctx.clock.advance(60_000);
+    const answeredAt = ctx.clock().getTime();
+    await request(ctx.app).post(`/api/units/${eb}/explain-back/answers`).send({ answers: ANSWERS }).expect(200);
+    const sc = ExplainBackScoreResponse.parse((await request(ctx.app).post(`/api/units/${eb}/explain-back/self-score`).send({ perKeyPoint: marks(14) })).body);
+    expect(sc.retests).toEqual([expect.objectContaining({ artifactUnitId: project, dueAt: answeredAt + 2 * DAY_MS })]);
+  });
+
+  it('standalone explain-backs stay answerable: no prerequisite (G2 / design-set / quest-linked shape) or a non-project prerequisite is never gated', async () => {
+    const solo = insertUnit(
+      ctx.tmp.db,
+      { key: 'fixture:ladder/explain-standalone', track: 'js', kind: 'explain-back', title: '[fixture] design it', competencies: ['language-fluency'], checks: [{ spec: { type: 'explain-back', questionSetKey: 'seed:explainback:standalone-copy' } }] },
+      ctx.clock,
+    );
+    const drillLinked = insertUnit(
+      ctx.tmp.db,
+      {
+        key: 'fixture:ladder/explain-drill-linked',
+        track: 'js',
+        kind: 'explain-back',
+        title: '[fixture] drill-linked',
+        competencies: ['language-fluency'],
+        prerequisites: ['fixture:ladder/drill'],
+        checks: [{ spec: { type: 'explain-back', questionSetKey: 'seed:explainback:drill-copy' } }],
+      },
+      ctx.clock,
+    );
+    const app = createApp({
+      db: ctx.tmp.db,
+      clock: ctx.clock,
+      runners: {},
+      seedItems: mapSeedItemStore([...fixture.seedItems, { ...EB, key: 'seed:explainback:standalone-copy' }, { ...EB, key: 'seed:explainback:drill-copy' }]),
+    });
+    for (const u of [solo, drillLinked]) {
+      expect(UnitDetailResponse.parse((await request(app).get(`/api/units/${u}`)).body).explainBack?.artifactRequired).toEqual([]);
+      await request(app).post(`/api/units/${u}/explain-back/answers`).send({ answers: ANSWERS }).expect(200);
+      const sc = ExplainBackScoreResponse.parse((await request(app).post(`/api/units/${u}/explain-back/self-score`).send({ perKeyPoint: marks(16) })).body);
+      expect(sc).toMatchObject({ passed: true, xp: { amount: 20 }, retests: [] });
+    }
+  });
+
+  it('a prerequisite that can never pass solo is not waited on (no new dead end): a revealed or a retired artifact unit', async () => {
+    const eb = ctx.id('fixture:ladder/explain-api');
+    const low = ctx.id('fixture:ladder/explain-low');
+    revealSolution(ctx.tmp.db, ctx.id('fixture:ladder/project-api'), ctx.clock); // every later attempt on it is guided
+    ctx.tmp.db.run('UPDATE unit SET retired_at = ? WHERE id = ?', ctx.clock().getTime(), ctx.id('fixture:ladder/project-low'));
+    for (const u of [eb, low]) {
+      expect(UnitDetailResponse.parse((await request(ctx.app).get(`/api/units/${u}`)).body).explainBack?.artifactRequired).toEqual([]);
+      await request(ctx.app).post(`/api/units/${u}/explain-back/answers`).send({ answers: ANSWERS }).expect(200);
+    }
+    // ...and with no solo pass behind the answer, a passing self-score schedules NO (pointless) retest
+    const sc = ExplainBackScoreResponse.parse((await request(ctx.app).post(`/api/units/${eb}/explain-back/self-score`).send({ perKeyPoint: marks(16) })).body);
+    expect(sc).toMatchObject({ passed: true, retests: [] });
+  });
+
+  it('a LEGACY answer recorded before the artifact pass (pre-fix) schedules no retest: no solo pass at/before the answer can pair with it', async () => {
+    const eb = ctx.id('fixture:ladder/explain-api');
+    // the engine path, as the server did before this gate existed
+    recordAttempt(
+      ctx.tmp.db,
+      { unitId: eb, checkId: primaryCheck(ctx.tmp.db, eb)!.id, selfAssisted: false, answer: { explainBack: { questionSetKey: EB.key, itemSha: seedItemHash(EB), answers: ANSWERS } } },
+      ctx.clock,
+    );
+    ctx.clock.advance(60_000);
+    await passArtifact(ctx); // the pass comes AFTER the answer
+    const sc = ExplainBackScoreResponse.parse((await request(ctx.app).post(`/api/units/${eb}/explain-back/self-score`).send({ perKeyPoint: marks(16) })).body);
+    expect(sc).toMatchObject({ passed: true, xp: { amount: 20 }, retests: [] });
+    expect(CompetenciesResponse.parse((await request(ctx.app).get('/api/competencies')).body).retests).toEqual([]);
+  });
+});
+
 describe('patch-review kata: findings first, then the seeded-defect key, then the catch rate', () => {
   const ctx = useLadder();
   const FINDING = { scenario: 'a tenant with two rules where one matches', evidence: 'allocationSummary.mjs:17 uses rules.length', consequence: 'the summary overstates coverage' };
@@ -511,7 +759,17 @@ describe('patch-review kata: findings first, then the seeded-defect key, then th
     const grown = { ...KATAS[1]!, seededDefectKey: [...KATAS[1]!.seededDefectKey, KATAS[1]!.seededDefectKey[0]!] };
     const app2 = createApp({ db: ctx.tmp.db, clock: ctx.clock, runners: {}, seedItems: mapSeedItemStore([EB, KATAS[0]!, grown]) });
     expect(KataStatsResponse.parse((await request(app2).get('/api/stats/katas')).body)).toMatchObject({ katasScored: 2, defectsCaught: 2, defectsTotal: 3 });
-    expectError(await request(app2).get(`/api/units/${k2}/kata/key`), 409, 'CONTENT_CHANGED');
+    // dead end #3: the earlier findings are superseded (not keyed against the grown key); G1 still counts each kata once
+    expectError(await request(app2).get(`/api/units/${k2}/kata/key`), 403, 'NOT_ANSWERED');
+    const FRESH = { scenario: 'v2: a tenant with two rules', evidence: 'allocationSummary.mjs:17', consequence: 'v2: coverage overstated' };
+    await request(app2).post(`/api/units/${k2}/kata/findings`).send({ findings: [FRESH] }).expect(200);
+    expectError(await request(app2).post(`/api/units/${k2}/kata/findings`).send({ findings: [FRESH] }), 403, 'ALREADY_ANSWERED');
+    const gk = KataKeyResponse.parse((await request(app2).get(`/api/units/${k2}/kata/key`)).body);
+    expect(gk.defects).toHaveLength(3);
+    const gs = KataScoreResponse.parse((await request(app2).post(`/api/units/${k2}/kata/self-score`).send({ perDefect: { d1: 'caught', d2: 'caught', d3: 'caught' } })).body);
+    expect(gs).toMatchObject({ caught: 3, total: 3, xp: { amount: 0, reason: 'already-awarded' } }); // this unit paid on v1
+    // the v2 score is filed (evidence), but G1 keeps the earliest scored answer per kata: history unchanged
+    expect(KataStatsResponse.parse((await request(app2).get('/api/stats/katas')).body)).toMatchObject({ katasScored: 2, defectsCaught: 2, defectsTotal: 3 });
   });
 
   it('W7 audit #2: a self-flagged ASSISTED kata never counts toward G1 — reported as assistedCount, gate untouched', async () => {
