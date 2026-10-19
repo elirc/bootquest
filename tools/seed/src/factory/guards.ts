@@ -25,7 +25,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { SeedExplainBackItem, SeedGenerator, SeedItem, SeedQuizItem } from '@bootquest/shared';
 import type { Exclusions } from './exclusions.ts';
-import { leakMatch, type LeakMatchOptions } from './leak.ts';
+import { leakMatchPrepared, prepareLeakKey, prepareLeakText, type LeakMatchOptions, type LeakText } from './leak.ts';
 
 // =====================================================================================
 // blind-pass (moved from ops/blind-pass.test.ts; that suite now calls these)
@@ -440,13 +440,14 @@ export interface ExplainBackLeak {
 
 export function explainBackKeyLeaks(item: SeedExplainBackItem, quizzes: readonly KeyedQuiz[]): ExplainBackLeak[] {
   const out: ExplainBackLeak[] = [];
+  const keys = quizzes.map((z) => prepareLeakKey(z.answer));
   item.questions.forEach((q, qi) =>
     q.keyPoints.forEach((kp, ki) => {
-      const fields: Array<[string, string]> = [[`q${qi + 1}.kp${ki + 1}`, kp.text]];
-      if (kp.quote !== undefined) fields.push([`q${qi + 1}.kp${ki + 1}.quote`, kp.quote]);
-      for (const z of quizzes) {
-        for (const [where, text] of fields) {
-          const m = leakMatch(text, z.answer, EB_LEAK_JACCARD, EB_LEAK_OPTIONS);
+      const fields: Array<[string, string, LeakText]> = [[`q${qi + 1}.kp${ki + 1}`, kp.text, prepareLeakText(kp.text)]];
+      if (kp.quote !== undefined) fields.push([`q${qi + 1}.kp${ki + 1}.quote`, kp.quote, prepareLeakText(kp.quote)]);
+      for (const [zi, z] of quizzes.entries()) {
+        for (const [where, text, prepared] of fields) {
+          const m = leakMatchPrepared(prepared, keys[zi]!, EB_LEAK_JACCARD, EB_LEAK_OPTIONS);
           if (m) {
             out.push({ item: item.key, where, pack: z.pack, quiz: z.key, kind: m.kind, score: m.score, text, answer: z.answer });
             break;
@@ -500,25 +501,37 @@ export function explainBackLeakProblems(pack: string, leaks: readonly ExplainBac
   ];
 }
 
-/** The keyed answers of every quest pack under <seedDir>/quests whose manifest source.repo is `repo`. */
-export function sameRepoKeyedQuizzes(seedDir: string, repo: string): KeyedQuiz[] {
+/**
+ * repo -> keyed answers of every quest pack under <seedDir>/quests (one parse of the estate; seed:check
+ * and seed:lint:leaks build it once per run and judge every explain-back pack against it).
+ */
+export function keyedQuizIndex(seedDir: string): Map<string, KeyedQuiz[]> {
   const dir = join(seedDir, 'quests');
-  if (!existsSync(dir)) return [];
-  const out: KeyedQuiz[] = [];
-  for (const name of readdirSync(dir).sort()) {
-    const pd = join(dir, name);
-    if (!statSync(pd).isDirectory() || !existsSync(join(pd, 'manifest.json')) || !existsSync(join(pd, 'items.json'))) continue;
-    const m = JSON.parse(readFileSync(join(pd, 'manifest.json'), 'utf8')) as { source?: { repo?: string } };
-    if (m.source?.repo !== repo) continue;
+  if (!existsSync(dir)) return new Map();
+  const packs = readdirSync(dir)
+    .sort()
+    .map((name) => ({ name, pd: join(dir, name) }))
+    .filter(({ pd }) => statSync(pd).isDirectory() && existsSync(join(pd, 'manifest.json')) && existsSync(join(pd, 'items.json')));
+  const byRepo = new Map<string, KeyedQuiz[]>();
+  for (const { name, pd } of packs) {
+    const repo = (JSON.parse(readFileSync(join(pd, 'manifest.json'), 'utf8')) as { source?: { repo?: string } }).source?.repo;
+    if (!repo) continue;
     const items = (JSON.parse(readFileSync(join(pd, 'items.json'), 'utf8')) as { items?: SeedItem[] }).items ?? [];
+    const out = byRepo.get(repo) ?? [];
     for (const q of items) {
       if (q.kind !== 'quiz') continue;
       const choices = q.check.choices ?? q.choices.map((c) => c.text);
       const answer = typeof q.check.answerKey === 'number' ? choices[q.check.answerKey] : q.check.answerKey;
       if (answer) out.push({ pack: name, key: q.key, answer });
     }
+    byRepo.set(repo, out);
   }
-  return out;
+  return byRepo;
+}
+
+/** The keyed answers of every quest pack under <seedDir>/quests whose manifest source.repo is `repo`. */
+export function sameRepoKeyedQuizzes(seedDir: string, repo: string): KeyedQuiz[] {
+  return keyedQuizIndex(seedDir).get(repo) ?? [];
 }
 
 // =====================================================================================
@@ -538,6 +551,8 @@ export interface PackGuardInput {
    * against (the explain-back leak guard then has nothing to check).
    */
   seedRoot: string | null;
+  /** a prebuilt keyedQuizIndex(seedRoot) (seed:check builds one per run); default: built here */
+  questIndex?: ReadonlyMap<string, readonly KeyedQuiz[]>;
 }
 
 /** Every guard failure of one pack, each prefixed with the guard's name. Empty = the guards vouch for it. */
@@ -553,7 +568,7 @@ export function packGuardProblems(p: PackGuardInput): string[] {
     if (el) out.push(el);
   }
   if (p.generator === 'explainback') {
-    const quizzes = p.seedRoot !== null ? sameRepoKeyedQuizzes(p.seedRoot, p.repo) : [];
+    const quizzes = p.questIndex?.get(p.repo) ?? (p.seedRoot !== null && !p.questIndex ? sameRepoKeyedQuizzes(p.seedRoot, p.repo) : []);
     const leaks = p.items.flatMap((it) => (it.kind === 'explain-back' ? explainBackKeyLeaks(it, quizzes) : []));
     out.push(...explainBackLeakProblems(p.name, leaks));
   }

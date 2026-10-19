@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import type { SeedItem } from '@bootquest/shared';
 import { findPacks } from '../factory/check/check.ts';
-import { EB_LEAK_EXEMPT, explainBackKeyLeaks, explainBackLeakId, formatExplainBackLeak, sameRepoKeyedQuizzes, type ExplainBackLeak } from '../factory/guards.ts';
+import { EB_LEAK_EXEMPT, explainBackKeyLeaks, explainBackLeakId, formatExplainBackLeak, keyedQuizIndex, type ExplainBackLeak } from '../factory/guards.ts';
 
 export interface LeakLintRow {
   pack: string;
@@ -24,12 +24,11 @@ export interface LeakLintReport {
 export function leakLintReport(seedDir: string, exempt: Readonly<Record<string, readonly string[]>> = EB_LEAK_EXEMPT): LeakLintReport {
   const packs = findPacks(seedDir).filter((d) => basename(join(d, '..')) === 'explainback');
   const rows: LeakLintRow[] = [];
-  const cache = new Map<string, ReturnType<typeof sameRepoKeyedQuizzes>>();
+  const index = keyedQuizIndex(seedDir);
   for (const dir of packs) {
     const m = JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf8')) as { name: string; source: { repo: string } };
     const items = (JSON.parse(readFileSync(join(dir, 'items.json'), 'utf8')) as { items: SeedItem[] }).items;
-    if (!cache.has(m.source.repo)) cache.set(m.source.repo, sameRepoKeyedQuizzes(seedDir, m.source.repo));
-    const quizzes = cache.get(m.source.repo)!;
+    const quizzes = index.get(m.source.repo) ?? [];
     const allowed = new Set(exempt[m.name] ?? []);
     const leaks = items.flatMap((it) => (it.kind === 'explain-back' ? explainBackKeyLeaks(it, quizzes) : [])).map((l) => ({ ...l, id: explainBackLeakId(l), exempt: allowed.has(explainBackLeakId(l)) }));
     const stale = [...allowed].filter((id) => !leaks.some((l) => l.id === id));
