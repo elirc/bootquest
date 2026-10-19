@@ -160,10 +160,12 @@ describe('seed:pins', () => {
       });
     put(seed, 'quests/demo/manifest.json', manifest('demo', { 'README.md': t.get('README.md')!.id }));
     put(seed, 'notes/demo/manifest.json', manifest('demo', { 'README.md': gitBlobSha1(Buffer.from(crlfify('# Demo\n\nLF in git.\n'))) }));
-    put(seed, 'quests/other/manifest.json', manifest('other', {}));
+    put(seed, 'quests/other/manifest.json', manifest('other', { 'README.md': t.get('README.md')!.id }));
+    put(seed, 'variants/nothing-pinned/manifest.json', manifest('selfboot', {}));
     const log: string[] = [];
     const r = runPins({ seedDir: seed, roots, log: (l) => log.push(l) });
-    expect([r.ok, r.mismatch, r.uncheckable]).toEqual([1, 1, 1]);
+    // ok: quests/demo + the 0-blob variants pack (nothing pinned needs no mirror)
+    expect([r.ok, r.mismatch, r.uncheckable]).toEqual([2, 1, 1]);
     expect(log.join('\n')).toMatch(/^MISMATCH {4}notes\/demo .*\n {14}README\.md: manifest [0-9a-f]{12} != git [0-9a-f]{12}$/m);
     expect(runPins({ seedDir: seed, roots, repos: ['other'] }).packs.map((p) => p.status)).toEqual(['uncheckable']);
   });

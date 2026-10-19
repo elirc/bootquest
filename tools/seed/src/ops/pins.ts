@@ -51,12 +51,17 @@ export function runPins(o: PinsOptions): PinsSummary {
       continue;
     }
     if (only && !only.has(m.source.repo)) continue;
+    // nothing pinned (e.g. a variants pack made without --checkout): nothing to check, no mirror needed
+    if (Object.keys(m.blobs).length === 0) {
+      packs.push({ pack, repo: m.source.repo, sha: m.source.sha, pin: m.source.pin, status: 'ok', problems: [], checked: 0, mirror: null });
+      continue;
+    }
     packs.push({ pack, repo: m.source.repo, sha: m.source.sha, pin: m.source.pin, ...verifyManifestBlobs(m.source.repo, m.source.sha, m.blobs, o.roots) });
   }
   const pad = (s: string, n: number) => s.padEnd(n);
   for (const p of packs) {
     const at = `${p.repo}@${p.sha.slice(0, 12)}`;
-    if (p.status === 'ok') o.log?.(`${pad('OK', 12)}${p.pack}  ${at}  ${p.checked} blob(s) == git (pin ${p.pin})`);
+    if (p.status === 'ok') o.log?.(`${pad('OK', 12)}${p.pack}  ${at}  ${p.checked ? `${p.checked} blob(s) == git` : 'nothing pinned (0 blobs)'} (pin ${p.pin})`);
     else if (p.status === 'uncheckable') o.log?.(`${pad('UNCHECKABLE', 12)}${p.pack}  ${at}  ${p.problems[0]}`);
     else {
       o.log?.(`${pad('MISMATCH', 12)}${p.pack}  ${at}  ${p.problems.length}/${p.checked} recorded blob(s) are not git's (pin ${p.pin})`);
