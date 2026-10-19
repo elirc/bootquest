@@ -45,7 +45,7 @@ function StudyQuest({ detail, sq }: { detail: UnitDetail; sq: StudyQuestPublic }
   // "Learn more": which items have a reading, and (after an answer) which have a released explanation
   const [notes, setNotes] = useState<UnitNotesResponse | null>(null);
   const loadNotes = useCallback(() => {
-    api.getUnitNotes?.(unitId)?.then(setNotes, () => setNotes(null));
+    api.getUnitNotes(unitId).then(setNotes, () => setNotes(null));
   }, [api, unitId]);
   useEffect(loadNotes, [loadNotes]);
   const hasNotes = (itemKey: string) =>

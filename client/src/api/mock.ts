@@ -413,6 +413,13 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
     return { code: b.code as string | undefined, answer: b.answer as string | number | undefined, answers: b.answers as number[] | undefined, selfAssisted: b.selfAssisted === true };
   }
 
+  /** What the server's attempt row stores as the submission (service.ts recordedAnswer: exactly one shape was sent). */
+  function recordedAnswer(b: { code?: string; answer?: string | number; answers?: number[] }): Record<string, unknown> {
+    if (b.code !== undefined) return { code: b.code };
+    if (b.answers !== undefined) return { answers: b.answers };
+    return { answer: b.answer };
+  }
+
   const xpFor = (u: UnitSummary, spec: PublicCheck): number =>
     spec.type === 'quiz' ? 2 : spec.type === 'predict-output' ? 4 : 10 * (u.difficulty ?? 1);
 
@@ -665,7 +672,23 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
       wrap(() => {
         const { u, d, spec } = guard(id, { needCheck: true });
         const body = validateSubmission(submission);
-        if (spec!.type === 'study-quiz') return studySubmit(u, body);
+        // like the server: the attempt row keeps the learner's own submission, served back by GET /attempts/:id
+        const keep = (r: SubmitResponse): SubmitResponse => {
+          attempts.set(r.attempt.id, {
+            id: r.attempt.id,
+            unitId: u.id,
+            unitTitle: u.title,
+            unitKind: u.kind,
+            mode: r.attempt.mode,
+            outcome: r.attempt.outcome,
+            answer: recordedAnswer(body),
+            createdAt: NOW,
+            runs: [{ id: r.runId, verdict: r.verdict, durationMs: r.result.durationMs, createdAt: NOW }],
+            evidenceIds: r.evidenceIds,
+          });
+          return r;
+        };
+        if (spec!.type === 'study-quiz') return keep(studySubmit(u, body));
         if (body.answers !== undefined) throw err(400, 'VALIDATION', '`answers` is for study-quiz units');
         const result = grade(d, spec!, body);
         const wasRevealed = revealed.has(id);
@@ -684,14 +707,14 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
         }
         const attemptId = nextId++;
         recordGraded(u, spec!.type, attemptId, mode, result.pass);
-        return {
+        return keep({
           result,
           verdict: result.pass ? ('pass' as const) : ('fail' as const),
           attempt: { id: attemptId, mode, outcome: result.pass ? 'pass' : 'fail' },
           runId: nextId++,
           xp,
           evidenceIds: result.pass ? [nextId++] : [],
-        };
+        });
       }),
 
     revealUnit: (id) =>

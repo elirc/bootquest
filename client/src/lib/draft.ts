@@ -19,26 +19,36 @@ function storage(): Storage | null {
   }
 }
 
-/** A small value stored under `bq:<key>` (null when absent, unreadable or storage is unavailable). */
-export function storedGet(key: string): string | null {
+/** The raw value under a FULL storage key (null when absent, unreadable or storage is unavailable). */
+function rawGet(fullKey: string): string | null {
   try {
-    return storage()?.getItem(PREFIX + key) ?? null;
+    return storage()?.getItem(fullKey) ?? null;
   } catch {
     return null;
   }
 }
 
-/** Store (or, with null, remove) a small value under `bq:<key>`; false when storage refused it. */
-export function storedSet(key: string, value: string | null): boolean {
+/** Store (or, with null, remove) a raw value under a FULL storage key; false when storage refused it. */
+function rawSet(fullKey: string, value: string | null): boolean {
   try {
     const s = storage();
     if (!s) return false;
-    if (value === null) s.removeItem(PREFIX + key);
-    else s.setItem(PREFIX + key, value);
+    if (value === null) s.removeItem(fullKey);
+    else s.setItem(fullKey, value);
     return true;
   } catch {
     return false;
   }
+}
+
+/** A small value stored under `bq:<key>` (null when absent, unreadable or storage is unavailable). */
+export function storedGet(key: string): string | null {
+  return rawGet(PREFIX + key);
+}
+
+/** Store (or, with null, remove) a small value under `bq:<key>`; false when storage refused it. */
+export function storedSet(key: string, value: string | null): boolean {
+  return rawSet(PREFIX + key, value);
 }
 
 /** Short, stable FNV-1a hash of the parts (a content fingerprint for draft keys, not security). */
@@ -158,7 +168,63 @@ export function useDraft(key: string, initial: string, opts: { family?: string }
   return { value: current.value, setValue, restored: current.restored, discardedStale: current.discardedStale, persisted: current.persisted, clear };
 }
 
+export interface JsonDraft<T> {
+  value: T;
+  /** replace the value, or derive it from the previous one */
+  set: (next: T | ((prev: T) => T)) => void;
+  /** the value on mount came from a stored (valid, non-empty) draft */
+  restored: boolean;
+  /** back to `empty` (which removes the stored entry) */
+  clear: () => void;
+}
+
+export interface JsonDraftOptions<T> {
+  /** validate a stored value; null rejects it (wrong shape, another item's draft) */
+  parse: (raw: unknown) => T | null;
+  /** an empty value is never stored (writing one removes the entry). Pass a STABLE function. */
+  isEmpty: (v: T) => boolean;
+}
+
+/**
+ * A structured draft (any JSON value: several answers, a findings table, a help flag) mirrored
+ * to localStorage as plain JSON under `storageKey`, a FULL storage key (not prefixed with `bq:`
+ * here, so callers own their key format: the ladder panes keep `bq:ladder-draft:{eb|kata}:<unit>:<hash>`).
+ * A null key stores nothing. A valid, non-empty stored draft is restored on mount; every change
+ * is written after render; an empty value removes the entry. Unlike useDraft (one string, keyed
+ * by content family), the key is read once on mount: a caller whose key can change remounts.
+ */
+export function useJsonDraft<T>(storageKey: string | null, empty: T, { parse, isEmpty }: JsonDraftOptions<T>): JsonDraft<T> {
+  const [state, setState] = useState<{ value: T; restored: boolean }>(() => {
+    let v: T | null = null;
+    if (storageKey !== null) {
+      const raw = rawGet(storageKey);
+      try {
+        v = raw === null ? null : parse(JSON.parse(raw) as unknown);
+      } catch {
+        v = null; // unreadable draft: a draft is a convenience, never the record
+      }
+    }
+    return v !== null && !isEmpty(v) ? { value: v, restored: true } : { value: empty, restored: false };
+  });
+  const { value } = state;
+  useEffect(() => {
+    // quota / private mode: rawSet swallows the failure (the draft is a convenience, never the record)
+    if (storageKey !== null) rawSet(storageKey, isEmpty(value) ? null : JSON.stringify(value));
+  }, [storageKey, value, isEmpty]);
+  const set = (next: T | ((prev: T) => T)) =>
+    setState((s) => ({ ...s, value: typeof next === 'function' ? (next as (prev: T) => T)(s.value) : next }));
+  const clear = () => setState({ value: empty, restored: false });
+  return { value, set, clear, restored: state.restored };
+}
+
 export const LEAVE_MESSAGE = 'Your code changes are not saved anywhere (this browser is not storing drafts). Leave this page and lose them?';
+
+export interface DirtyGuardOptions {
+  /** the in-app confirm text (default LEAVE_MESSAGE) */
+  message?: string;
+  /** also confirm in-app navigations (default true) */
+  inApp?: boolean;
+}
 
 /**
  * While `dirty`, leaving loses work: a reload / tab close asks via `beforeunload`, and an in-app
@@ -166,8 +232,13 @@ export const LEAVE_MESSAGE = 'Your code changes are not saved anywhere (this bro
  * <BrowserRouter> (no data router, so no useBlocker): the in-app half wraps the router's navigator
  * push/replace for as long as the guard is armed and restores them afterwards. Browser
  * back/forward (popstate) cannot be cancelled this way; beforeunload does not cover it either.
+ *
+ * `inApp: false` arms only the tab close / reload half (the ladder panes: their drafts are in
+ * storage, so an in-app navigation loses nothing; a closing tab still asks while one is dirty).
+ * A string second argument is the message (the original signature).
  */
-export function useDirtyGuard(dirty: boolean, message: string = LEAVE_MESSAGE): void {
+export function useDirtyGuard(dirty: boolean, opts: string | DirtyGuardOptions = {}): void {
+  const { message = LEAVE_MESSAGE, inApp = true } = typeof opts === 'string' ? { message: opts } : opts;
   useEffect(() => {
     if (!dirty) return;
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
@@ -184,7 +255,7 @@ export function useDirtyGuard(dirty: boolean, message: string = LEAVE_MESSAGE): 
     | { push: (...args: unknown[]) => void; replace: (...args: unknown[]) => void }
     | undefined;
   useEffect(() => {
-    if (!dirty || !nav) return;
+    if (!dirty || !inApp || !nav) return;
     const { push, replace } = nav;
     const ask = (): boolean => {
       try {
@@ -203,5 +274,5 @@ export function useDirtyGuard(dirty: boolean, message: string = LEAVE_MESSAGE): 
       nav.push = push;
       nav.replace = replace;
     };
-  }, [dirty, nav, message]);
+  }, [dirty, inApp, nav, message]);
 }

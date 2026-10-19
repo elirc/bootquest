@@ -183,4 +183,10 @@ describe('http client: JSON error envelope', () => {
     expect(errorText(new ApiError(409, 'ALREADY_ATTESTED', 'x'))).toMatch(/Already marked as read/);
     expect(errorText(new ApiError(500, 'INTERNAL', 'boom'))).toBe('boom (INTERNAL)');
   });
+
+  it('errorText shows the server text for ALREADY_ANSWERED (it says where to self-score); friendly text if it is empty', () => {
+    const msg = 'this item was answered on unit 7 (answer #41); self-score it there';
+    expect(errorText(new ApiError(403, 'ALREADY_ANSWERED', msg))).toBe(`${msg} (ALREADY_ANSWERED)`);
+    expect(errorText(new ApiError(403, 'ALREADY_ANSWERED', ''))).toBe('Your answer is already recorded and cannot be edited. (ALREADY_ANSWERED)');
+  });
 });

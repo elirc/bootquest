@@ -31,9 +31,17 @@ const FRIENDLY: Partial<Record<ClientErrorCode, string>> = {
   NETWORK: 'Could not reach the BootQuest server.',
 };
 
+/**
+ * Codes whose SERVER message is the more useful line, shown in place of the friendly text when
+ * present: ALREADY_ANSWERED names the stored answer and, for a retired unit's stranded answer,
+ * the unit to self-score it on.
+ */
+const SERVER_TEXT_FIRST: ReadonlySet<ClientErrorCode> = new Set<ClientErrorCode>(['ALREADY_ANSWERED']);
+
 /** One line for an error banner: friendly text for known codes, the server message otherwise. */
 export function errorText(e: unknown): string {
   if (e instanceof ApiError) {
+    if (SERVER_TEXT_FIRST.has(e.code) && e.message.trim() !== '') return `${e.message} (${e.code})`;
     const friendly = FRIENDLY[e.code];
     return friendly ? `${friendly} (${e.code})` : `${e.message} (${e.code})`;
   }

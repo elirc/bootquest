@@ -27,7 +27,7 @@ import { enterActsOnFocus, shortcutBlocked } from '../lib/shortcuts';
 import { useAsync } from '../lib/useAsync';
 import { useTracksRefresh } from '../lib/tracks';
 import { InlineProse, Prose, ProseBlocks, splitPrompt } from '../lib/prose';
-import { TRACK_LABEL, campaignSourceOf, languageOf, readingTitle, unitProse } from '../lib/view';
+import { TRACK_LABEL, campaignSourceOf, competencyLabel, languageOf, readingTitle, unitProse } from '../lib/view';
 import { ExplainBackPane, KataPane } from './LadderPanes';
 import { StudyQuestPane } from './StudyQuestPane';
 import { LearnMoreButton } from '../components/LearnMore';
@@ -353,17 +353,6 @@ function promotionLeg(detail: UnitDetail): PromotionLeg | null {
   return null;
 }
 
-/** Display names for competency ids (fallback: the id itself). */
-const COMPETENCY_LABEL: Partial<Record<CompetencyId, string>> = {
-  'language-fluency': 'Language fluency',
-  'feature-delivery': 'Feature delivery',
-  'data-http': 'Data & HTTP',
-  'testing-verification': 'Testing & verification',
-  'agentic-engineering': 'Agentic engineering',
-  'code-reading': 'Code reading & maintenance',
-  communication: 'Communication',
-};
-const competencyLabel = (c: CompetencyId): string => COMPETENCY_LABEL[c] ?? c;
 const listLabels = (cs: CompetencyId[]): string => {
   const names = cs.map(competencyLabel);
   return names.length <= 1 ? (names[0] ?? '') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;

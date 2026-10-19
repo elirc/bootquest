@@ -29,6 +29,7 @@ import {
 } from '../api/types';
 import { Icon } from '../components/Icon';
 import { Chip } from '../components/ui';
+import { contentHash, useDirtyGuard, useJsonDraft } from '../lib/draft';
 import { fmtWhen } from '../lib/format';
 import { InlineProse } from '../lib/prose';
 import { useTracksRefresh } from '../lib/tracks';
@@ -41,14 +42,13 @@ const ARTIFACT_REQUIRED_TEXT =
   'Pass the linked project unit solo first: this explain-back is its promotion leg (b), and the set takes one answer only, so an answer stored now could never count. Your draft is kept.';
 
 /**
- * errorText plus the ladder codes whose SERVER text is the useful part: ALREADY_ANSWERED names the
- * stored answer and where to self-score it (a retired unit's stranded answer is scored here), and a
- * NOT_ANSWERED that names a superseded answer explains the re-seed. ARTIFACT_REQUIRED gets the
- * friendly line (api/errors.ts has no entry for it yet).
+ * errorText plus the ladder-specific lines: a NOT_ANSWERED that names a superseded answer explains
+ * the re-seed (server text), and ARTIFACT_REQUIRED gets the pane's longer line (it says the draft
+ * is kept). ALREADY_ANSWERED needs nothing here: errorText itself shows the server's text for it
+ * (it names the stored answer and where to self-score it).
  */
 function ladderErrorText(e: unknown): string {
   if (isApiError(e, 'ARTIFACT_REQUIRED')) return `${ARTIFACT_REQUIRED_TEXT} (ARTIFACT_REQUIRED)`;
-  if (isApiError(e, 'ALREADY_ANSWERED')) return `${e.message} (ALREADY_ANSWERED)`;
   if (isApiError(e, 'NOT_ANSWERED') && /superseded/.test(e.message)) return `${e.message} (NOT_ANSWERED)`;
   return errorText(e);
 }
@@ -71,75 +71,22 @@ function ErrorLine({ error }: { error: string | null }) {
 }
 
 // ---------------------------------------------------------------- drafts
-// TODO(unify): lib/draft.ts — minimal local useDraft / useDirtyGuard; the shared hooks replace these.
+// The hooks are lib/draft.ts (useJsonDraft + useDirtyGuard); only the key format lives here.
 
 const DRAFT_PREFIX = 'bq:ladder-draft:';
 
-/** FNV-1a (32-bit, hex) of the item's public content: a re-seeded item gets a fresh draft slot. */
-function contentHash(text: string): string {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < text.length; i++) {
-    h ^= text.charCodeAt(i);
-    h = Math.imul(h, 0x01000193);
-  }
-  return (h >>> 0).toString(16).padStart(8, '0');
-}
-
-/** localStorage key of the unsent draft for one item version. */
+/**
+ * localStorage key (full, as stored) of the unsent draft for one item version. The hash is
+ * lib/draft's FNV-1a of the item's public content, so a re-seeded item gets a fresh draft slot.
+ * The format is stable: drafts already in a browser must keep restoring.
+ */
 export const ladderDraftKey = (kind: 'eb' | 'kata', unitId: number, content: string): string => `${DRAFT_PREFIX}${kind}:${unitId}:${contentHash(content)}`;
 export const ebDraftKey = (unitId: number, pub: Pick<ExplainBackPublic, 'questions'>): string =>
   ladderDraftKey('eb', unitId, pub.questions.map((q) => q.prompt).join('\u0000'));
 export const kataDraftKey = (unitId: number, diff: string): string => ladderDraftKey('kata', unitId, diff);
 
-function readDraft(key: string): unknown {
-  try {
-    const raw = window.localStorage.getItem(key);
-    return raw === null ? null : (JSON.parse(raw) as unknown);
-  } catch {
-    return null; // unreadable / blocked storage: a draft is a convenience, never the record
-  }
-}
-
-function writeDraft(key: string, value: unknown): void {
-  try {
-    if (value === null) window.localStorage.removeItem(key);
-    else window.localStorage.setItem(key, JSON.stringify(value));
-  } catch {
-    // quota / private mode: the draft is a convenience, never the record
-  }
-}
-
-/**
- * A value mirrored to localStorage under `key` (null key = nothing stored). Restores a valid,
- * non-empty draft on mount; an empty value removes the entry; `clear()` resets to `empty`.
- */
-function useDraft<T>(key: string | null, empty: T, parse: (raw: unknown) => T | null, isEmpty: (v: T) => boolean) {
-  const [state, setState] = useState<{ value: T; restored: boolean }>(() => {
-    const v = key === null ? null : parse(readDraft(key));
-    return v !== null && !isEmpty(v) ? { value: v, restored: true } : { value: empty, restored: false };
-  });
-  const { value } = state;
-  useEffect(() => {
-    if (key !== null) writeDraft(key, isEmpty(value) ? null : value);
-  }, [key, value, isEmpty]);
-  const set = (next: T | ((prev: T) => T)) =>
-    setState((s) => ({ ...s, value: typeof next === 'function' ? (next as (prev: T) => T)(s.value) : next }));
-  const clear = () => setState({ value: empty, restored: false });
-  return { value, set, clear, restored: state.restored };
-}
-
-/** Ask before a tab close / reload while `dirty` (the browser shows its own generic prompt). */
-function useDirtyGuard(dirty: boolean): void {
-  useEffect(() => {
-    if (!dirty) return;
-    const onBeforeUnload = (e: BeforeUnloadEvent) => {
-      e.preventDefault();
-      e.returnValue = ''; // older browsers need it set
-    };
-    window.addEventListener('beforeunload', onBeforeUnload);
-    return () => window.removeEventListener('beforeunload', onBeforeUnload);
-  }, [dirty]);
-}
+/** Ask before a tab close / reload while `dirty` (the draft is in storage: in-app navigation loses nothing). */
+const useLadderDirtyGuard = (dirty: boolean): void => useDirtyGuard(dirty, { inApp: false });
 
 function DraftNote({ restored }: { restored: boolean }) {
   return (
@@ -348,17 +295,15 @@ export function ExplainBackPane({ detail }: { detail: UnitDetail }) {
   const pub = detail.explainBack ?? null;
   const ks = useExistingKey<ExplainBackKeyResponse>(() => api.getExplainBackKey(id), pub?.answered);
   const n = pub?.questions.length ?? 0;
-  const draft = useDraft<EbDraft>(
-    pub ? ebDraftKey(id, pub) : null,
-    { answers: Array.from({ length: n }, () => ''), assisted: false },
-    (raw) => {
+  const draft = useJsonDraft<EbDraft>(pub ? ebDraftKey(id, pub) : null, { answers: Array.from({ length: n }, () => ''), assisted: false }, {
+    parse: (raw) => {
       const d = raw as Partial<EbDraft> | null;
       return d && Array.isArray(d.answers) && d.answers.length === n && d.answers.every((a) => typeof a === 'string')
         ? { answers: d.answers, assisted: d.assisted === true }
         : null;
     },
-    ebDraftEmpty,
-  );
+    isEmpty: ebDraftEmpty,
+  });
   const [stored, setStored] = useState(pub?.answered === true);
   const [lockOverride, setLockOverride] = useState<ArtifactRef[] | null>(null);
   const [confirming, setConfirming] = useState(false);
@@ -371,7 +316,7 @@ export function ExplainBackPane({ detail }: { detail: UnitDetail }) {
     if (ks.key) draft.clear();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ks.key]);
-  useDirtyGuard(ks.phase === 'answering' && !ebDraftEmpty(draft.value));
+  useLadderDirtyGuard(ks.phase === 'answering' && !ebDraftEmpty(draft.value));
 
   if (!pub) {
     return (
@@ -720,7 +665,7 @@ export function KataPane({ detail }: { detail: UnitDetail }) {
   const kata = detail.kata ?? null;
   const ks = useExistingKey<KataKeyResponse>(() => api.getKataKey(id), kata?.answered);
   const [wrap, setWrap] = useState(false);
-  const draft = useDraft<KataDraft>(kata ? kataDraftKey(id, kata.diff) : null, { rows: [{ ...EMPTY_FINDING }], assisted: false }, parseKataDraft, kataDraftEmpty);
+  const draft = useJsonDraft<KataDraft>(kata ? kataDraftKey(id, kata.diff) : null, { rows: [{ ...EMPTY_FINDING }], assisted: false }, { parse: parseKataDraft, isEmpty: kataDraftEmpty });
   const [stored, setStored] = useState(kata?.answered === true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -730,7 +675,7 @@ export function KataPane({ detail }: { detail: UnitDetail }) {
     if (ks.key) draft.clear();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ks.key]);
-  useDirtyGuard(ks.phase === 'answering' && !kataDraftEmpty(draft.value));
+  useLadderDirtyGuard(ks.phase === 'answering' && !kataDraftEmpty(draft.value));
 
   if (!kata) {
     return (

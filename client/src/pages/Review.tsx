@@ -8,7 +8,8 @@ import { useDueReport } from '../components/AppShell';
 import { Icon } from '../components/Icon';
 import { Chip, Kbd, LoadState, PageHeader, ProgressBar } from '../components/ui';
 import { LearnMoreButton } from '../components/LearnMore';
-import { hasModifier, isEditableTarget, useKeydown } from '../lib/keys';
+import { useKeydown } from '../lib/keys';
+import { bareKeyBlocked } from '../lib/shortcuts';
 import { useAsync } from '../lib/useAsync';
 import { COMPETENCY_LABEL } from '../lib/view';
 
@@ -19,23 +20,12 @@ export const GRADES: { grade: ReviewGrade; key: string; label: string; hint: str
   { grade: 'easy', key: '4', label: 'Easy', hint: 'instant' },
 ];
 
-// TODO(unify): Player grows the same shortcut gating in parallel (fix/client-player); fold both
-// into lib/keys once they land. Kept local and small on purpose.
-const OVERLAY_OPEN = '[role="dialog"], [aria-modal="true"], dialog[open]';
-/** Controls a focused Space / Enter belongs to (native activation wins over the page shortcut). */
-const ACTIVATES = 'a[href], button, summary, select, input, textarea, [contenteditable="true"], [role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="switch"], [role="tab"], [role="menuitem"], [role="option"]';
-/** Widgets that may consume digit keys themselves. */
-const TAKES_DIGITS = '[role="radiogroup"], [role="listbox"], [role="menu"], [role="tablist"], [role="slider"], [role="spinbutton"], [role="grid"]';
-
-/** True when a Review shortcut must NOT fire for this key event. */
-export function reviewKeyBlocked(e: KeyboardEvent): boolean {
-  if (e.defaultPrevented || e.repeat || hasModifier(e) || isEditableTarget(e.target)) return true;
-  if (document.querySelector(OVERLAY_OPEN)) return true; // a dialog / drawer owns the keyboard
-  const el = e.target instanceof Element && e.target !== document.body ? e.target : null;
-  if (!el) return false;
-  if (e.key === ' ' || e.key === 'Enter') return el.closest(ACTIVATES) !== null;
-  return el.closest(TAKES_DIGITS) !== null;
-}
+/**
+ * True when a Review shortcut (Space / Enter to flip, 1-4 to grade) must NOT fire for this key
+ * event: the shared bare-key gate (lib/shortcuts.ts) — a dialog in front, a repeat or handled
+ * key, a chord or typing, a focused control that owns Space / Enter, or a widget that takes digits.
+ */
+export const reviewKeyBlocked = (e: KeyboardEvent): boolean => bareKeyBlocked(e);
 
 /** the quest item a seeded card is about ('quiz-miss:<key>' / 'flashcard:<key>'), else null */
 export function seededItemKey(cardKey: string): string | null {

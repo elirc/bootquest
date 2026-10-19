@@ -39,6 +39,9 @@ export const COMPETENCY_LABEL: Record<CompetencyId, string> = {
 
 export const isCompetencyId = (v: string | null | undefined): v is CompetencyId => (COMPETENCY_IDS as readonly string[]).includes(v ?? '');
 
+/** The display name of a competency id; an id this client does not know yet shows as itself. */
+export const competencyLabel = (c: CompetencyId): string => (COMPETENCY_LABEL as Partial<Record<string, string>>)[c] ?? c;
+
 /**
  * Tracks whose daily slate carries a drill set (track.slate_drills = 1: migrations 002 + 011).
  * Presentation only: an unlocked one MISSING from today's slate was dropped by the server

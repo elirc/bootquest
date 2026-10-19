@@ -170,3 +170,15 @@ describe('mock semantics = server semantics', () => {
     expect((await api.getDashboard()).competencies[0]!.rating).toBe(3);
   });
 });
+
+describe('submit attempts are readable back (GET /attempts/:id, like the server)', () => {
+  it('a code submit stores its { code }; a quiz submit its { answer }', async () => {
+    const api = createMockApi();
+    const s = await api.submitUnit(DRILL, { code: PASSING, selfAssisted: false });
+    const a = await api.getAttempt(s.attempt.id);
+    expect(a).toMatchObject({ id: s.attempt.id, unitId: DRILL, mode: s.attempt.mode, outcome: s.attempt.outcome, answer: { code: PASSING }, evidenceIds: s.evidenceIds });
+    expect(a.runs).toEqual([expect.objectContaining({ id: s.runId, verdict: s.verdict })]);
+    const q = await api.submitUnit(QUIZ, { answer: 0, selfAssisted: false });
+    expect((await api.getAttempt(q.attempt.id)).answer).toEqual({ answer: 0 });
+  });
+});

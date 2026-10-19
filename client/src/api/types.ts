@@ -200,7 +200,7 @@ export interface BootQuestApi {
   getDashboard(): Promise<Dashboard>;
   /** GET /api/tracks */
   getTracks(): Promise<TracksResponse>;
-  /** GET /api/tracks/:id/units — the campaign page derives its view from this (no /campaign route). */
+  /** GET /api/tracks/:id/units — the track's units (the campaign map itself is getCampaign). */
   getTrackUnits(trackId: TrackId): Promise<TrackUnitsResponse>;
   /** GET /api/units/:id */
   getUnit(unitId: number): Promise<UnitDetail>;
