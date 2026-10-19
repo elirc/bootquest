@@ -245,7 +245,8 @@ describe('committed notes packs (content/seed/notes/*)', () => {
   });
 
   it.each(packs)('%s: every before note is free of every keyed answer of its quest pack', (name) => {
-    const pack = loadSeedPack(join(root, name));
+    // a content check, not a stamp check (seed:check owns that): a stale seed fingerprint must not mask a leak
+    const pack = loadSeedPack(join(root, name), { allowStaleFingerprint: true });
     const q = loadQuestPackView(join(DEFAULT_SEED_DIR, 'quests', name));
     const before = (pack.items as SeedNoteItem[]).filter((n) => n.phase === 'before');
     expect(before.length).toBeGreaterThanOrEqual(2);

@@ -26,7 +26,7 @@ import {
   type SeedSkip,
 } from '@bootquest/shared';
 import type { Checkout } from './checkout.ts';
-import { seedFingerprint, seedToolchain } from './fingerprint.ts';
+import { packRunners, seedFingerprint, seedToolchain, type SeedRunner } from './fingerprint.ts';
 import { sha256, stableJson } from './util.ts';
 
 export interface Rejection {
@@ -148,12 +148,14 @@ export function writeSeedPack(o: WriteSeedPackOptions): WriteSeedPackResult {
   if (accepted.length === 0) unstampedBecause.push('no accepted items');
   for (const b of o.blockers ?? []) unstampedBecause.push(b);
   if (unstampedBecause.length === 0) {
+    // bound to the graders the shipped + held items execute (seed:check re-validates both)
+    const runners = packRunners([...accepted, ...review.map((r) => r.item)]);
     const stamp = SeedValidationStamp.parse({
       format: SEED_PACK_FORMAT,
       source,
       fingerprintKind: `seed:${o.generator}`,
-      fingerprint: seedFingerprint(o.generator),
-      toolchain: seedToolchain(o.generator),
+      fingerprint: seedFingerprint(o.generator, runners),
+      toolchain: seedToolchain(o.generator, runners),
       manifestSha256: sha256(manifestBytes),
       itemsSha256: sha256(itemsBytes),
       counts,
@@ -180,6 +182,8 @@ export interface LoadedSeedPack {
    * full re-validation of every item under the current validators.
    */
   staleFingerprint: boolean;
+  /** the runner types the shipped + review-held items execute: the graders the fingerprint binds */
+  runners: SeedRunner[];
 }
 
 /** Read + structurally verify a seed pack (bytes, schema, counts, stamp binding). Throws on any mismatch. */
@@ -211,6 +215,7 @@ export function loadSeedPack(dir: string, opts: { requireStamp?: boolean; allowS
   }
   const quarantineKeys = q.entries.map((e) => e.key).sort();
   const reviewKeys = rq.entries.map((e) => e.key).sort();
+  const runners = packRunners([...itemsFile.items, ...rq.entries.map((e) => e.item)]);
 
   let stamp: SeedValidationStamp | null = null;
   let staleFingerprint = false;
@@ -222,7 +227,7 @@ export function loadSeedPack(dir: string, opts: { requireStamp?: boolean; allowS
     if (stamp.manifestSha256 !== sha256(manifestBytes)) why.push('manifest bytes changed since stamping');
     if (stamp.itemsSha256 !== sha256(itemsBytes)) why.push('items bytes changed since stamping');
     if (stamp.fingerprintKind !== `seed:${manifest.generator}`) why.push(`stamp kind ${stamp.fingerprintKind}`);
-    const fp = seedFingerprint(manifest.generator);
+    const fp = seedFingerprint(manifest.generator, runners);
     if (stamp.fingerprint !== fp && opts.allowStaleFingerprint) staleFingerprint = true;
     else if (stamp.fingerprint !== fp) why.push(`seed fingerprint ${stamp.fingerprint.slice(0, 12)} != current ${fp.slice(0, 12)} (validator/generator/registry/toolchain changed: re-seed)`);
     if (JSON.stringify(stamp.quarantinedKeys) !== JSON.stringify(quarantineKeys)) why.push('quarantine.json does not match the stamp');
@@ -231,7 +236,7 @@ export function loadSeedPack(dir: string, opts: { requireStamp?: boolean; allowS
   } else if (opts.requireStamp) {
     throw new Error(`${dir}: no validation.json stamp — the generator's validator has not vouched for this pack`);
   }
-  return { dir, manifest, items: itemsFile.items, stamp, quarantineKeys, reviewKeys, staleFingerprint };
+  return { dir, manifest, items: itemsFile.items, stamp, quarantineKeys, reviewKeys, staleFingerprint, runners };
 }
 
 /**
@@ -249,8 +254,8 @@ export function restampSeedPack(pack: LoadedSeedPack, executions: number): SeedV
     format: SEED_PACK_FORMAT,
     source: `${m.generator}/${m.name}`,
     fingerprintKind: `seed:${m.generator}`,
-    fingerprint: seedFingerprint(m.generator),
-    toolchain: seedToolchain(m.generator),
+    fingerprint: seedFingerprint(m.generator, pack.runners),
+    toolchain: seedToolchain(m.generator, pack.runners),
     manifestSha256: sha256(manifestBytes),
     itemsSha256: sha256(itemsBytes),
     counts: m.counts,

@@ -43,6 +43,9 @@ describe('seed:patches', () => {
     const tested = items.find((i) => i.test)!;
     expect(tested.seededDefectKey.map((d) => d.evidence.in)).toEqual(['patched', 'repo']);
     expect(r.outcome!.executions).toBe(2); // clean context passes + defective version fails, really executed
+    // per-pack grader binding: a drill-js-only pack binds the JS toolchain, never .NET / the JDK
+    const stamp = JSON.parse(readFileSync(join(out('good'), 'validation.json'), 'utf8')) as { toolchain: Record<string, string> };
+    expect(Object.keys(stamp.toolchain).sort()).toEqual(['esbuild', 'node']);
   }, 120_000);
 
   const planted: Array<[string, RegExp]> = [
@@ -205,6 +208,9 @@ describe('seed:patches', () => {
       const items = loadSeedPack(out('java-good'), { requireStamp: true }).items as SeedPatchKataItem[];
       expect(items).toHaveLength(1);
       expect(items[0]!.test!.check.type).toBe('drill-java');
+      // per-pack grader binding: a drill-java pack binds the JDK, not esbuild / .NET
+      const stamp = JSON.parse(readFileSync(join(out('java-good'), 'validation.json'), 'utf8')) as { toolchain: Record<string, string> };
+      expect(Object.keys(stamp.toolchain).sort()).toEqual(['jdk', 'node']);
     }, 300_000);
 
     it('REJECTS a defective version that only "fails" as a TODO stub (todo is not a failed assertion; real runner)', async () => {
