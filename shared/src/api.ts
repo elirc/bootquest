@@ -896,9 +896,9 @@ export const KataScoreResponse = z
   .strict();
 export type KataScoreResponse = z.infer<typeof KataScoreResponse>;
 
-/** G1 (spec §8): catch >= 8/10 seeded defects across the kata bank. */
-export const G1_TARGET_RATE = 0.8;
-export const G1_MIN_DEFECTS = 10;
+// G1 (spec §8) and the promotion coverage floor live in the zod-free thresholds module, so the
+// client can import the numbers at runtime without bundling the schema layer.
+export { G1_MIN_DEFECTS, G1_TARGET_RATE, PROMOTION_MIN_COVERAGE } from './thresholds.ts';
 export const KataStatsResponse = z
   .object({
     katasScored: z.number(),
