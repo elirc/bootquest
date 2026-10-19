@@ -36,7 +36,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 function Shell({ children }: { children: ReactNode }) {
   const api = useApi();
   const navigate = useNavigate();
-  const { pathname } = useLocation();
+  const { pathname, hash } = useLocation();
   const [helpOpen, setHelpOpen] = useState(false);
   const [pendingG, setPendingG] = useState(false);
   const gAt = useRef(0);
@@ -84,7 +84,9 @@ function Shell({ children }: { children: ReactNode }) {
     }
     const h = document.querySelector<HTMLElement>('[data-page-title]');
     h?.focus({ preventScroll: true });
-    document.querySelector('.main')?.scrollTo?.({ top: 0 });
+    // fix/client-dash: a `#fragment` link hands the scroll to the page (Stats scrolls to its evidence row)
+    if (!hash) document.querySelector('.main')?.scrollTo?.({ top: 0 });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pathname]);
 
   return (

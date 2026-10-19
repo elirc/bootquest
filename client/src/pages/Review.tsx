@@ -3,13 +3,14 @@ import { useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useApi } from '../api/context';
 import { errorText } from '../api/errors';
-import { isApiError, type ReviewGrade, type ReviewQueueItem } from '../api/types';
+import { isApiError, type GradeResponse, type ReviewGrade, type ReviewQueueItem } from '../api/types';
 import { useDueReport } from '../components/AppShell';
 import { Icon } from '../components/Icon';
 import { Chip, Kbd, LoadState, PageHeader, ProgressBar } from '../components/ui';
 import { LearnMoreButton } from '../components/LearnMore';
 import { hasModifier, isEditableTarget, useKeydown } from '../lib/keys';
 import { useAsync } from '../lib/useAsync';
+import { COMPETENCY_LABEL } from '../lib/view';
 
 export const GRADES: { grade: ReviewGrade; key: string; label: string; hint: string }[] = [
   { grade: 'again', key: '1', label: 'Again', hint: 'forgot' },
@@ -17,6 +18,24 @@ export const GRADES: { grade: ReviewGrade; key: string; label: string; hint: str
   { grade: 'good', key: '3', label: 'Good', hint: 'recalled' },
   { grade: 'easy', key: '4', label: 'Easy', hint: 'instant' },
 ];
+
+// TODO(unify): Player grows the same shortcut gating in parallel (fix/client-player); fold both
+// into lib/keys once they land. Kept local and small on purpose.
+const OVERLAY_OPEN = '[role="dialog"], [aria-modal="true"], dialog[open]';
+/** Controls a focused Space / Enter belongs to (native activation wins over the page shortcut). */
+const ACTIVATES = 'a[href], button, summary, select, input, textarea, [contenteditable="true"], [role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="switch"], [role="tab"], [role="menuitem"], [role="option"]';
+/** Widgets that may consume digit keys themselves. */
+const TAKES_DIGITS = '[role="radiogroup"], [role="listbox"], [role="menu"], [role="tablist"], [role="slider"], [role="spinbutton"], [role="grid"]';
+
+/** True when a Review shortcut must NOT fire for this key event. */
+export function reviewKeyBlocked(e: KeyboardEvent): boolean {
+  if (e.defaultPrevented || e.repeat || hasModifier(e) || isEditableTarget(e.target)) return true;
+  if (document.querySelector(OVERLAY_OPEN)) return true; // a dialog / drawer owns the keyboard
+  const el = e.target instanceof Element && e.target !== document.body ? e.target : null;
+  if (!el) return false;
+  if (e.key === ' ' || e.key === 'Enter') return el.closest(ACTIVATES) !== null;
+  return el.closest(TAKES_DIGITS) !== null;
+}
 
 /** the quest item a seeded card is about ('quiz-miss:<key>' / 'flashcard:<key>'), else null */
 export function seededItemKey(cardKey: string): string | null {
@@ -42,6 +61,8 @@ function Session({ cards }: { cards: ReviewQueueItem[] }) {
   const [xp, setXp] = useState(0);
   const [tally, setTally] = useState<Record<ReviewGrade, number>>({ again: 0, hard: 0, good: 0, easy: 0 });
   const [error, setError] = useState<string | null>(null);
+  // fix/client-dash: a lapse on a Review-state card can demote its competency; say so, loudly
+  const [demotions, setDemotions] = useState<Demotion[]>([]);
   const busy = useRef(false);
   const reportDue = useDueReport();
   const card = cards[index];
@@ -52,6 +73,8 @@ function Session({ cards }: { cards: ReviewQueueItem[] }) {
     try {
       const r = await api.gradeReview(card.id, g);
       reportDue(r.remainingDue); // W11: the nav badge counts down live
+      const dem = r.demotion;
+      if (dem) setDemotions((ds) => [dem, ...ds]);
       setXp((x) => x + r.xp.amount);
       setTally((t) => ({ ...t, [g]: t[g] + 1 }));
       setRevealed(false);
@@ -70,7 +93,7 @@ function Session({ cards }: { cards: ReviewQueueItem[] }) {
   };
 
   useKeydown((e) => {
-    if (!card || hasModifier(e) || isEditableTarget(e.target)) return;
+    if (!card || reviewKeyBlocked(e)) return;
     if (!revealed && (e.key === ' ' || e.key === 'Enter')) {
       e.preventDefault();
       setRevealed(true);
@@ -85,23 +108,27 @@ function Session({ cards }: { cards: ReviewQueueItem[] }) {
 
   if (cards.length === 0 || !card) {
     return (
-      <div className="panel review-done" role="status">
-        <Icon name="check" size={24} />
-        <h2>{cards.length === 0 ? 'Nothing due' : 'Queue cleared'}</h2>
-        {cards.length > 0 && (
-          <p>
-            {cards.length} cards · +{xp} XP · {GRADES.map((g) => `${g.label} ${tally[g.grade]}`).join(' · ')}
-          </p>
-        )}
-        <Link to="/" className="btn">
-          Back to dashboard
-        </Link>
+      <div className="review">
+        <Demotions items={demotions} />
+        <div className="panel review-done" role="status">
+          <Icon name="check" size={24} />
+          <h2>{cards.length === 0 ? 'Nothing due' : 'Queue cleared'}</h2>
+          {cards.length > 0 && (
+            <p>
+              {cards.length} cards · +{xp} XP · {GRADES.map((g) => `${g.label} ${tally[g.grade]}`).join(' · ')}
+            </p>
+          )}
+          <Link to="/" className="btn">
+            Back to dashboard
+          </Link>
+        </div>
       </div>
     );
   }
 
   return (
     <div className="review">
+      <Demotions items={demotions} />
       <div className="review-progress">
         <span>
           Card <strong>{index + 1}</strong> of {cards.length}
@@ -169,6 +196,34 @@ function Session({ cards }: { cards: ReviewQueueItem[] }) {
           {error}
         </p>
       )}
+    </div>
+  );
+}
+
+type Demotion = NonNullable<GradeResponse['demotion']>;
+
+/**
+ * fix/client-dash: GradeResponse.demotion rendered (it used to pass without a word). The server
+ * already wrote the demotion evidence; this names the competency, the notch it lost and links the row.
+ */
+function Demotions({ items }: { items: Demotion[] }) {
+  if (items.length === 0) return null;
+  return (
+    <div className="demotion" role="alert" data-testid="demotion">
+      <Icon name="warn" size={18} />
+      <div>
+        <ul className="demotion-list">
+          {items.map((d) => (
+            <li key={d.evidenceId}>
+              <strong>
+                {COMPETENCY_LABEL[d.competency]} demoted: {d.from} → {d.to}
+              </strong>{' '}
+              <Link to={`/stats?competency=${d.competency}#evidence-${d.evidenceId}`}>evidence #{d.evidenceId}</Link>
+            </li>
+          ))}
+        </ul>
+        <p className="muted small">A lapse (Again) on a review card this competency already knew drops it one notch. Win it back with the three promotion legs.</p>
+      </div>
     </div>
   );
 }

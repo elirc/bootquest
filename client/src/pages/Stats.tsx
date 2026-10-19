@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { useLocation, useSearchParams } from 'react-router-dom';
 import { useApi } from '../api/context';
 import { errorText } from '../api/errors';
 import type {
@@ -19,18 +19,10 @@ import { fmtRate, longDate, monthStarts, shortDate, weekdayLabel } from '../lib/
 import { fmtInt, fmtStamp } from '../lib/format';
 import { buildHeatGrid } from '../lib/heatmap';
 import { useAsync, type AsyncState } from '../lib/useAsync';
-import { progressLabel, progressTitle, TRACK_LABEL } from '../lib/view';
+import { COMPETENCY_IDS, COMPETENCY_LABEL, isCompetencyId, progressLabel, progressTitle, TRACK_LABEL } from '../lib/view';
 
-const COMPETENCIES: { id: CompetencyId; label: string }[] = [
-  { id: 'language-fluency', label: 'Language fluency' },
-  { id: 'feature-delivery', label: 'Feature delivery' },
-  { id: 'data-http', label: 'Data & HTTP' },
-  { id: 'testing-verification', label: 'Testing & verification' },
-  { id: 'agentic-engineering', label: 'Agentic engineering' },
-  { id: 'code-reading', label: 'Code reading & maintenance' },
-  { id: 'communication', label: 'Communication' },
-];
-const isCompetency = (v: string | null): v is CompetencyId => COMPETENCIES.some((c) => c.id === v);
+// fix/client-dash: the competency list comes from lib/view (held to shared/src/enums.ts), not a re-list here
+const COMPETENCIES: { id: CompetencyId; label: string }[] = COMPETENCY_IDS.map((id) => ({ id, label: COMPETENCY_LABEL[id] }));
 
 /** One panel's request state, loaded by the page (release, UI-FINAL CLS leftover). */
 type Loaded<T> = AsyncState<T> & { reload: () => void };
@@ -456,8 +448,22 @@ function EvidenceBrowser() {
   const api = useApi();
   const [params, setParams] = useSearchParams();
   const raw = params.get('competency');
-  const competency = isCompetency(raw) ? raw : undefined;
+  const competency = isCompetencyId(raw) ? raw : undefined;
   const q = useAsync(() => api.listEvidence(competency ? { competency } : {}), [api, competency]);
+  // fix/client-dash: `#evidence-<id>` (the dashboard's last-evidence link, a demotion notice)
+  // scrolls to that row and marks it. The browser cannot do it: the row renders after the list loads.
+  const { hash } = useLocation();
+  const hashId = /^#evidence-(\d+)$/.exec(hash)?.[1];
+  const targetId = hashId !== undefined ? Number(hashId) : null;
+  const rows = q.status === 'ready' ? q.data.items : null;
+  const targetFound = targetId !== null && rows !== null && rows.some((e) => e.id === targetId);
+  useEffect(() => {
+    if (!targetFound) return;
+    const el = document.getElementById(`evidence-${targetId}`);
+    if (!el) return;
+    el.focus({ preventScroll: true });
+    el.scrollIntoView?.({ block: 'center' });
+  }, [targetFound, targetId]);
 
   return (
     <Panel
@@ -498,9 +504,14 @@ function EvidenceBrowser() {
             <p className="muted small">
               {q.data.items.length} of {q.data.total} row(s), newest first. Evidence is append-only.
             </p>
+            {targetId !== null && !targetFound && (
+              <p className="muted small" data-testid="evidence-target-missing">
+                Evidence #{targetId} is not in this list{competency ? ' (it is filtered by competency)' : ''}.
+              </p>
+            )}
             <ol className="evidence-list" data-testid="evidence-list">
               {q.data.items.map((e) => (
-                <EvidenceItem key={e.id} e={e} />
+                <EvidenceItem key={e.id} e={e} hit={e.id === targetId} />
               ))}
             </ol>
           </>
@@ -510,7 +521,7 @@ function EvidenceBrowser() {
   );
 }
 
-function EvidenceItem({ e }: { e: EvidenceRowDto }) {
+function EvidenceItem({ e, hit }: { e: EvidenceRowDto; hit: boolean }) {
   const api = useApi();
   const [open, setOpen] = useState(false);
   const [attempt, setAttempt] = useState<AttemptDetailResponse | null>(null);
@@ -520,6 +531,8 @@ function EvidenceItem({ e }: { e: EvidenceRowDto }) {
     if (open) return setOpen(false);
     setOpen(true);
     if (attempt || e.attemptId === null) return;
+    // fix/client-dash: every open is a fresh try; a failed load no longer sticks to later opens
+    setError(null);
     try {
       setAttempt(await api.getAttempt(e.attemptId));
     } catch (err) {
@@ -529,7 +542,12 @@ function EvidenceItem({ e }: { e: EvidenceRowDto }) {
 
   const value = e.score !== null ? `score ${Math.round(e.score * 1000) / 10}%` : e.rating !== null ? `rating ${e.rating}` : null;
   return (
-    <li id={`evidence-${e.id}`} className="evidence-row" data-competency={e.competency}>
+    <li
+      id={`evidence-${e.id}`}
+      className={`evidence-row${hit ? ' evidence-row-hit' : ''}`}
+      data-competency={e.competency}
+      {...(hit ? { 'data-highlight': 'true', tabIndex: -1 } : {})}
+    >
       <div className="evidence-head">
         <code>#{e.id}</code>
         <Chip>{e.kind}</Chip>
