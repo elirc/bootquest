@@ -523,6 +523,40 @@ step.
   - borrowbox `02-CONCEPTS.md:50` says `lock(_gate)`, but the code is `lock(item)`;
   - csharp-tut `10-linq.md:231`: the comment says "2 4", the actual output is "24";
   - dotnet-snapshot snapshot-12 `queryDtos.ts:17`: the NaN page case is not in NOTES.
+- **Upstream bugs and guide errors found by the 2026-10-19 growth wave** (fix in the source
+  repos; mirrors never edited; no shipped key point rests on any of them):
+  - master7 `astraupskill/02-CONCEPTS.md:59`: the table's "original bug" row ("take 25, then
+    filter") contradicts its own snapshot (`services-before.ts.txt:61` never filters) and
+    `06-SOLUTIONS-AND-REVIEW.md:17-18`; the app's quiz stem was reworded (re-seeded), the guide
+    row is still wrong upstream;
+  - organized-build-crmpyjs `backend/src/app.ts:53`: the error handler takes 3 parameters, so
+    Express 4 never invokes it (quiz 81e21dd5's structured-INVALID_CREDENTIALS premise is false
+    at this pin);
+  - netslack: the anonymous `/dev-token` endpoint is mapped unconditionally (Program.cs:76),
+    outside the Development-only block;
+  - organized-build-jira `BuildJiraStore.cs:208-316`: ApplyPatch writes fields as it validates,
+    so a failed later field leaves earlier changes on the in-memory issue; `Save` (:453-456) is
+    a plain WriteAllText with no temp-file rename;
+  - organized-dotnet-hris: `client/src` is missing App.tsx/demoData.ts/types.ts though the
+    guides cite them; 05-key-flows.md:12 says demo fallback happens "on fetch failure" but it
+    also fires on any non-OK response (api.ts:20-31);
+  - meterforge-upskilling: `PaymentAttempt.Fail()` has no state guard (a Succeeded attempt can
+    be Failed then Retried); campusops: WebhookDelivery.MarkSucceeded/MarkFailed lack
+    terminal-state guards and SLA Resume accepts a time before the pause (its own chapters 12
+    and 14 note both);
+  - 3buildanalytics `fabledocs/01-app-overview.md` is stale against the pin (Redis limiter,
+    4-role metric filter, refresh-token reuse detection all missing from it);
+    organized-anti-helpdesk and organized-anti-emponb `docsclaude/**` guides quote snippets
+    that do not match the code (validate vs validateRequest, controller method names) and
+    overstate (groupBy "single clustered scan", Prisma include "single JOIN query");
+  - eShopOnWeb (nettodo) `02-framework-mental-models.md`: open-generic repository claim ignores
+    `IAggregateRoot`; DbContext registration cite and exception-middleware-first claim are off;
+  - Java repos: cli-to-do-manager docs claim id stability across restarts the code does not
+    keep (TaskManager.java:96-106); library-book-tracker 00-codebase-map.md:274 misplaces the
+    overdue rule (it is Book.isOverdue, Book.java:74); bank-account-simulator README:246-247
+    lists checks in the wrong order (BankService.java:97-102); organized-experiment-src
+    README:117 overclaims the Expense constructor; j4 08-PORT-TO-THE-WEB.md:5 says "durably
+    replaced" but nothing fsyncs.
 
 ### Factory backlog
 
@@ -579,3 +613,31 @@ resolved); quiz variety `concept` and flashcard shape `hand-authored`;
 - **OPEN: upstream bugs found in source repos (owner):** organized-build-analytics `metricVisibility.middleware.ts:8` assigns `request.query.refresh = undefined`, which Express 5 (5.2.1 pinned) silently discards (`req.query` is a re-parsing getter), so non-admins can bypass the KPI cache; the guides claim the protection works. organized-experiment-idempotent-payments-lab `src/lib/auth/guards.ts:10` imports `RouteError` from `../api/route-helpers`, which does not export it, so `instanceof RouteError` at :48 (`requirePagePermission`) tests against undefined and a CUSTOMER visiting /admin likely gets a TypeError instead of the redirect to "/". netgum re-checks stock on its own tracked aggregate after the gateway await, so concurrent checkouts can oversell (its 03-WORKED-CHANGE.md:43 says otherwise; 02-CONCEPTS.md:27 is right).
 - **OPEN: upstream guide errors found by the notes wave (fix in the source repos):** ankijs risk-register.md:5 (describes the old shallow import guard); jstrain2.2 guide 02 uses the no-dot rule for a DOM listener in places; organized-build-subbox 05-key-flows.md:104 (payment recovers on the second retry, not the third); jobtrack 03-WORKED-CHANGE.md:92 (2026-02-30 rolls to 03-02); netcleanarch 03-validation-auth-and-permissions.md:32 (role attributes OR, not AND); ww19 02-CONCEPTS.md:14 and 06:31 (schema.prisma:157, not :186); zz8 02-CONCEPTS.md:9 (404, not a conflict); agora value-objects.md (SavedPercent is int); atlas flaw-ledger (the ambient-time ban covers Now/UtcNow only); tracer-net ADR 0010 (timestamp ordering example); jsdrillv2 chapter 04:137-139 (stubs, not real setTimeout); organized-anti-emponb 04-derived-data-and-caching.md:51 (no transaction on the direct path).
 - **OPEN, minor (notes wave reviews):** add a validator check for absolute words (only/always/never/every) in `after` notes, since three false explanation claims were overstatements; a lint for absurd throwaway distractors (e.g. "IProductRepository is sealed"); the generator collapses double spaces inside backticks (gitjira goal-checks quote `grep -c "^ it("`); campusops q9 distractor 1 is arguably also not caught; trainjs 06c0aaa269a001fb says a timer id "cannot be awaited" (it can; it resolves at once); netzen d07dffb3dc0a457a could not be reproduced and was left; applybot r03 still quotes the RESULT-line format (mild hint for cf2817c1e52d09c4).
+- **Growth wave — DONE (2026-10-19):** drill-java in the factory harness (variants and patch
+  katas can carry Java tests; planted cases VJ+/PJ+/V6; a run whose only failures are todo /
+  not-executed is NOT a wrong-solution verdict — that hole let a TODO stub pass the filter and
+  was closed for every runner type). Content: 14 JS act-3 explain-back sets, 23 C#/Java sets
+  (every Java campaign quest now has one), 7 javabootcamp system-design rubric packs (6
+  standalone DESIGN IT sets on the java track + 1 real G2), kata waves (8 Java + 11 C#/JS):
+  52 katas, 50 tested. Every branch had a fresh-context cross-author review; all fixes went
+  through drafts/specs + re-seed. EB review rule reaffirmed and extended: leak-check key points
+  against the SAME-LINEAGE repos' quest packs too (j3 leaked bank-account-simulator README quiz
+  keys), and against the pack's own quiz keys.
+- **OPEN (growth wave, factory):** authoring tools `kata-proof.ts`, `kata-index.mjs` and
+  `katagen.mjs` resolve paths against the CURRENT DIRECTORY (`npm --prefix` does not chdir) —
+  run them chdir'd into the target tree or they silently read another checkout's packs; the
+  factory never verifies a kata's adapted `*.Testable.java` copy against its repo file (only
+  verbatim context files are compared; the growth-wave reviewer checked the 8 Java katas by
+  hand); two factory processes in one worktree share `.cache/factory-java` (and -csharp) with no
+  cross-process lock; the Java fingerprint binds `javac -version` but execution uses `java`
+  from PATH (a mixed-JDK PATH is not caught; same gap as the server grader).
+- **OPEN (growth wave, accepted kata/quiz overlap):** in six katas the defect IS a quest
+  quiz's deciding fact and the public diff shows it before answering: w22 refund-cap vs cd4e,
+  w22 partial-refund vs a393, meterforge payment-retry vs 4a6d/0bee, nethris pto vs 3e1b, ww18
+  band-max vs da83/c590. Rewording cannot help (the diff itself tells); accepted because one
+  narrowed quiz cannot clear a 12-quiz 80% gate, and the blind-pass guard is unaffected. The
+  alternative is dropping or re-theming those katas — owner's call. Also left to the owner:
+  gitvg-astra flashcard f01-favorites-acceptance's back overlaps its new explain-back set's
+  Q0 key points (suggested trim of the back's last sentence); the six DESIGN IT explain-back
+  units carry the `language-fluency` competency (ladder.ts default), which fits system design
+  poorly — a design competency or an explicit mapping is a server change.

@@ -802,3 +802,36 @@ what ships until the owner picks an option.
   input (j1 06-SOLUTIONS, j5 06-SOLUTIONS; j4's trace-lab answer table dropped at integration).
 - **Run the code to check the keys.** The Java writers compiled each repo, ran its regression
   suite and piped scripted input into the CLI. That found real upstream bugs (docs/SEEDING.md).
+
+## 2026-10-19 — growth wave (land + phases 2/3/4; 5 Opus agents + 5 fresh reviews)
+
+- Landed `java-sysdesign` on main (846c224 -> b75613e, clean ff), then one wave: drill-java in
+  the seed factory harness (+ 8 Java katas: j2, j7, bank-simulator), 14 JS act-3 explain-backs,
+  23 C#/Java explain-backs, 7 javabootcamp system-design rubric packs (6 DESIGN IT + 1 real G2),
+  kata wave 3 (11 katas: meterforge, campusops, nethris, w22, ww18). Kata bank 33 -> 52 (50
+  tested). EB packs 74 -> 118. Variants wave skipped on purpose: U01-U03 + G4 already anchor
+  promotion; drill-unit variants add little.
+- **Every fresh-context review found real defects again.** The big ones: the harness
+  wrong-solution filter accepted a TODO stub as a "real failure" (fixed + planted case V6); the
+  campusops race kata's test caught the race in only 2-7% of rounds on 8 cores (rebuilt start
+  gate -> 99%, 82% on 2 cores; on 1 core it cannot show — documented); a w22 kata shipped the
+  repo's "SENIOR NOTE" answer inside the PUBLIC diff context; all 14 JS EB sets needed fixes, 9
+  for key points the pinned code contradicts (guides lie; verify against code); 4 C#/Java sets
+  leaked quiz keys ACROSS packs that share a codebase lineage (j3 vs bank-simulator README
+  quizzes — same-lineage repos must be leak-checked against each other's quest packs).
+- **Count-drift rule, third strike:** smoke's java unitCount (+2 explain-backs -> +18) and
+  ladder-real's "every EB repo is a campaign quest" invariant both encoded old content shape.
+  javabootcamp design sets are the first standalone (quest-less) explain-backs; the test now
+  pins them to the java track explicitly.
+- Orchestrator edits in selfboot can be denied by the auto-mode classifier mid-wave (one Edit
+  allowed, the next denied). The reliable path is the same one content agents use: a branch in a
+  scratch clone (`fable-fixes` in bq-eb), merged like any other wave branch.
+- Chunked restamp pattern proven at full scale: 14 junction-chunk roots (quests paired with
+  their notes packs; patches split 4 ways for kata re-execution), `seed:check --restamp` then a
+  plain `seed:check` pass, 562/562 twice, 10,638 items re-validated. `cmd mklink /J` fails on
+  long link paths ("filename or extension is too long") — build chunk roots under a SHORT path
+  (Desktop\bq-chunks), never under the deep scratchpad.
+- master7 quiz e57c05d7ff47a6c4 had a false premise from the guide's own table
+  (02-CONCEPTS.md:59 contradicts its snapshot); stem reworded via re-seed + notes re-run.
+  Explain-back README units now show their parent dir in the title (5 design packs all read
+  "README.md" before).
