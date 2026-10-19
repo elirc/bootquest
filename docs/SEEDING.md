@@ -455,10 +455,25 @@ warnings.
   JDK, the server refuses to start with that pack until a fresh full `seed:validate`
   re-stamps it.
 - **Seed packs** (`content/seed/**/validation.json`) are bound to a **seed fingerprint**
-  per generator. It covers `shared/src/seed-pack.ts`, the exclusion registry, the
-  citation resolver, the shared factory files, the generator's own sources and, for
-  `variants` and `patches`, the JS grader and its toolchain. Editing a validator changes
-  what "validated" means, so every stamp it produced becomes stale.
+  per generator AND per pack (`tools/seed/src/factory/fingerprint.ts`):
+  - the generator's full **import closure**, derived by walking the value imports from
+    `factory/<generator>/cli.ts`, the `seed:check` gate (`factory/check/check.ts`, whose
+    edges into other generators' folders are declared in `CHECK_DISPATCH`) and
+    `shared/src/seed-pack.ts` / `check.ts` / `pack.ts`, across `tools/seed/src` and
+    `shared/src`. That picks up everything the generator runs: `quests/validate.ts`
+    (`checkProvenance`), `quests/parse.ts`, the citation resolver, the shared barrel, and
+    so on. Each `@bootquest/server/*` import must be declared in `SERVER_EDGES`:
+    `api/runners.ts` (`gradeDeterministic`) is bound by bytes, and the C#/Java adapters
+    are bound per pack. External packages (zod) are bound by installed version, plus the
+    exclusion registry. An unresolvable or undeclared import throws, and
+    `fingerprint.test.ts` pins the resolved file set;
+  - only the **graders the pack's items execute** (the runner types of its shipped and
+    review-held variant checks and kata tests): the server's grader file list for that kind
+    plus its toolchain. `drill-js` adds esbuild, `drill-cs` adds the .NET SDK and ref pack,
+    `drill-java` adds the JDK. A mixed pack binds the union. A pack with no runnable check
+    binds no grader. So a .NET update stales only the `drill-cs` kata packs.
+  Editing any bound file changes what "validated" means, so every stamp bound to it becomes
+  stale.
 - **Restamp** (`npm run seed:check -- --restamp`) handles packs whose ONLY problem is a
   stale fingerprint or toolchain. It re-validates every shipped item under the current
   validators: each must come back `accept` and byte-identical, pins must hold, and review
