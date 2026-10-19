@@ -617,15 +617,20 @@ async function main() {
       const jvTu = await api(base, 'GET', '/api/tracks/java/units');
       const javaListed = (jvTu.json?.units ?? []).filter((x) => x.key.startsWith('javabootcamp/'));
       const javaTrack = tr.json?.tracks?.find((t) => t.id === 'java');
-      // the rest of the java track: the j5 + j7 explain-back ladder units (Java campaign repos)
+      // the rest of the java track: 18 explain-back ladder units — one per Java campaign repo
+      // (j1-j5, j7, the six organized-experiment repos) plus the six standalone javabootcamp
+      // system-design rubric sets (javabootcamp has no campaign quest, so they link to none)
       const javaOther = (jvTu.json?.units ?? []).filter((x) => !x.key.startsWith('javabootcamp/'));
+      const javaEbRepo = /^ladder\/explain-back\/(j[123457]|javabootcamp|organized-experiment-[a-z0-9-]+(?:\.[a-z0-9.-]+)?)\//;
+      const javaJbSets = javaOther.filter((x) => x.key.startsWith('ladder/explain-back/javabootcamp/'));
       step(
-        `java track lists all ${javaManifest.totals.total} javabootcamp drills in pack order + the j5/j7 explain-backs (java unitCount = pack + 2, 0 done)`,
+        `java track lists all ${javaManifest.totals.total} javabootcamp drills in pack order + the 18 explain-backs incl. 6 javabootcamp design sets (java unitCount = pack + 18, 0 done)`,
         jvTu.status === 200 &&
           javaListed.length === javaManifest.totals.total &&
           javaListed.map((x) => x.key).join('\n') === javaCourses.flatMap((c) => c.units.map((u) => u.unit.key)).join('\n') &&
-          javaOther.length === 2 && javaOther.every((x) => /explain-back\/(j5|j7)\//.test(x.key)) &&
-          javaTrack?.unitCount === javaManifest.totals.total + 2 && javaTrack.doneCount === 0,
+          javaOther.length === 18 && javaOther.every((x) => javaEbRepo.test(x.key)) &&
+          javaJbSets.length === 6 &&
+          javaTrack?.unitCount === javaManifest.totals.total + 18 && javaTrack.doneCount === 0,
         `listed ${javaListed.length} + ${javaOther.map((x) => x.key).join(', ')}; java unitCount ${javaTrack?.unitCount}`,
       );
       const javaId = javaListed.find((x) => x.key === JAVA_KEY)?.id;
