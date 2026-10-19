@@ -22,8 +22,9 @@ import type { UnitDetailResponse } from '@bootquest/shared/api';
  *   - JS track  -> Stryker 10 (+ vitest runner, pinned 10.0.0 in cli/package.json),
  *                  `--incremental` so reruns only redo what changed;
  *   - C# track  -> Stryker.NET (dotnet-stryker 5.0.0, a repo-local --tool-path install
- *                  under .cache/tools), UseSharedCompilation=false, and any
- *                  VBCSCompiler / testhost left behind is killed after the run;
+ *                  under .cache/tools), UseSharedCompilation=false, and whatever
+ *                  of the spawned Stryker.NET process tree outlives the run
+ *                  (VBCSCompiler, testhost, ...) is killed — never by name system-wide;
  *   - hard 15-minute wall clock (the whole process tree is killed on expiry);
  *   - the JSON report is parsed (never the console), the per-file floor (check
  *     threshold, default 40%) AND the overall break (60%) are checked locally,
@@ -47,6 +48,8 @@ export interface ToolRun {
   cwd: string;
   env: Record<string, string | undefined>;
   timeoutMs: number;
+  /** called with the spawned process's pid (the C# leftover reaper tracks its tree from it) */
+  onSpawn?: (pid: number) => void;
 }
 
 export interface ToolResult {
@@ -89,6 +92,13 @@ export const spawnTool: ToolRunner = (run, onOutput) =>
       windowsHide: true,
       detached: process.platform !== 'win32',
     });
+    if (child.pid !== undefined && run.onSpawn) {
+      try {
+        run.onSpawn(child.pid);
+      } catch {
+        /* tracking is best-effort; never break the run */
+      }
+    }
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
@@ -209,19 +219,173 @@ export function findNetReport(projectDir: string, sinceMs: number): string | nul
   return candidates[0] ?? null;
 }
 
-/** Kill compiler-server / testhost processes a .NET run left behind (only ones started at/after the run). */
-export async function reapDotnetLeftovers(sinceMs: number, run: ToolRunner = spawnTool): Promise<string[]> {
-  if (process.platform !== 'win32') return [];
-  const since = new Date(sinceMs - 5_000).toISOString();
-  const script =
-    `$since = [datetime]::Parse('${since}').ToUniversalTime(); ` +
-    `Get-CimInstance Win32_Process | Where-Object { ($_.Name -eq 'VBCSCompiler.exe' -or $_.Name -like 'testhost*.exe') -and $_.CreationDate.ToUniversalTime() -ge $since } | ` +
-    `ForEach-Object { taskkill /T /F /PID $_.ProcessId | Out-Null; "$($_.ProcessId) $($_.Name)" }`;
-  let out = '';
-  await run({ command: 'powershell.exe', args: ['-NoProfile', '-NonInteractive', '-Command', script], cwd: process.cwd(), env: process.env, timeoutMs: 60_000 }, (s) => {
-    out += s;
-  });
-  return out.split(/\r?\n/).filter((l) => l.trim());
+/*
+ * Leftover reaping (C#): ONLY processes descended from the Stryker.NET process this
+ * CLI spawned — never by name system-wide (that killed a server-side C# grade or an
+ * IDE test run that happened to start a testhost/VBCSCompiler meanwhile).
+ *
+ * Windows does not re-parent orphans: a leftover's ParentProcessId still names its
+ * (possibly dead) parent. So while Stryker runs, a watcher samples the process table
+ * (pid, ppid, creation time) and the pure observeSnapshot() grows the descendant set
+ * from the root pid; intermediates that later exit (dotnet test, csc) stay in the set,
+ * so their orphans are still recognised. Identity is pid@creationTime, and a child is
+ * attributed to a parent only if it was created after that parent and before any
+ * stranger that reused the parent's pid. After the run, a final snapshot picks the
+ * still-alive members and only those are killed. Limitation (deliberately conservative):
+ * an intermediate that lives shorter than one sample (~2s; the first takes a cold
+ * PowerShell start) is never seen, so ITS orphans are left alone rather than guessed at.
+ */
+
+/** One row of a process-table snapshot. */
+export interface ProcInfo {
+  pid: number;
+  ppid: number;
+  /** creation time, epoch ms */
+  createdMs: number;
+  name: string;
+}
+
+export interface TreeState {
+  rootPid: number;
+  /** the root was spawned at/after this (its creation time until first seen) */
+  notBeforeMs: number;
+  rootSeen: boolean;
+  members: Map<string, ProcInfo>;
+}
+
+const procKey = (p: ProcInfo): string => `${p.pid}@${p.createdMs}`;
+
+export function newTreeState(rootPid: number, notBeforeMs: number): TreeState {
+  const seed: ProcInfo = { pid: rootPid, ppid: -1, createdMs: notBeforeMs, name: '(root)' };
+  return { rootPid, notBeforeMs, rootSeen: false, members: new Map([[procKey(seed), seed]]) };
+}
+
+/** Parse `pid ppid createdMs name` lines (the PowerShell snapshot format); junk lines are skipped. */
+export function parseSnapshot(text: string): ProcInfo[] {
+  const out: ProcInfo[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    const m = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.+?)\s*$/.exec(line);
+    if (m) out.push({ pid: Number(m[1]), ppid: Number(m[2]), createdMs: Number(m[3]), name: m[4]! });
+  }
+  return out;
+}
+
+function childOfMember(p: ProcInfo, state: TreeState, live: Map<number, ProcInfo>): boolean {
+  const holder = live.get(p.ppid);
+  for (const k of state.members.values()) {
+    if (k.pid !== p.ppid || p.createdMs < k.createdMs) continue;
+    // the parent pid now belongs to a stranger born after k: p is the stranger's child if born after it
+    if (holder && !state.members.has(procKey(holder)) && holder.createdMs >= k.createdMs && p.createdMs >= holder.createdMs) continue;
+    return true;
+  }
+  return false;
+}
+
+/** Grow the descendant set from one snapshot (pure apart from mutating `state`). */
+export function observeSnapshot(state: TreeState, snapshot: readonly ProcInfo[]): void {
+  if (!state.rootSeen) {
+    const root = snapshot.find((p) => p.pid === state.rootPid && p.createdMs >= state.notBeforeMs);
+    if (root) {
+      state.members.clear();
+      state.members.set(procKey(root), root);
+      state.rootSeen = true;
+    }
+  }
+  const live = new Map(snapshot.map((p) => [p.pid, p]));
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const p of snapshot) {
+      if (state.members.has(procKey(p)) || p.pid === p.ppid) continue;
+      if (childOfMember(p, state, live)) {
+        state.members.set(procKey(p), p);
+        grew = true;
+      }
+    }
+  }
+}
+
+/** Members of the tree still alive in `snapshot` (same pid AND creation time), excluding `selfPid`. */
+export function selectLeftovers(state: TreeState, snapshot: readonly ProcInfo[], selfPid: number = process.pid): ProcInfo[] {
+  observeSnapshot(state, snapshot);
+  return snapshot.filter((p) => p.pid !== selfPid && state.members.has(procKey(p)));
+}
+
+/** PowerShell: print processes created at/after $since as `pid ppid createdMs name`. */
+function snapScript(sinceMs: number): string {
+  return (
+    `$since = ${Math.floor(sinceMs)}; ` +
+    `function Snap { Get-CimInstance -ClassName Win32_Process | ForEach-Object { if ($_.CreationDate) { ` +
+    `$c = ([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds(); ` +
+    `if ($c -ge $since) { "$($_.ProcessId) $($_.ParentProcessId) $c $($_.Name)" } } } }; `
+  );
+}
+
+/** Watches one spawned tool's process tree; reap() kills what is left of it. */
+export interface ProcessTracker {
+  /** the spawned tool's pid (ToolRun.onSpawn) */
+  attach(pid: number): void;
+  /** final snapshot, kill the tree's surviving members, stop watching; returns "pid name" lines */
+  reap(): Promise<string[]>;
+}
+
+const NOOP_TRACKER: ProcessTracker = { attach: () => {}, reap: async () => [] };
+
+/** Default tracker: Windows only (elsewhere the detached process group is tree-killed already). */
+export function trackDotnetDescendants(sinceMs: number, run: ToolRunner = spawnTool): ProcessTracker {
+  if (process.platform !== 'win32') return NOOP_TRACKER;
+  const notBefore = sinceMs - 2_000;
+  let state: TreeState | null = null;
+  let watcher: ReturnType<typeof spawn> | null = null;
+  let buf = '';
+  // complete snapshots end with a `--` line; a trailing partial one is never parsed
+  const flush = () => {
+    const parts = buf.split(/^--\s*$/m);
+    buf = parts.pop()!;
+    for (const block of parts) if (state) observeSnapshot(state, parseSnapshot(block));  };
+  return {
+    attach(pid) {
+      state = newTreeState(pid, notBefore);
+      const loop =
+        snapScript(notBefore) +
+        `while ((Get-Process -Id ${pid} -ErrorAction SilentlyContinue) -and (Get-Process -Id ${process.pid} -ErrorAction SilentlyContinue)) ` +
+        `{ Snap; '--'; [Console]::Out.Flush(); Start-Sleep -Milliseconds 1500 }`;
+      try {
+        watcher = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', loop], { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
+        watcher.stdout?.on('data', (b: Buffer) => {
+          buf += b.toString('utf8');
+          flush();
+        });
+        watcher.once('error', () => {
+          watcher = null;
+        });
+      } catch {
+        watcher = null; // the final snapshot still catches direct orphans of the root
+      }
+    },
+    async reap() {
+      if (watcher) {
+        try {
+          watcher.kill();
+        } catch {
+          /* already gone */
+        }
+      }
+      if (!state) return []; // never spawned: nothing of ours can exist
+      flush();
+      const tree: TreeState = state;
+      let out = '';
+      await run({ command: 'powershell.exe', args: ['-NoProfile', '-NonInteractive', '-Command', `${snapScript(notBefore)}Snap`], cwd: process.cwd(), env: process.env, timeoutMs: 60_000 }, (s) => {
+        out += s;
+      });
+      const leftovers = selectLeftovers(tree, parseSnapshot(out));
+      for (const p of leftovers) {
+        // verified member of OUR tree (pid@creationTime from a snapshot taken just now)
+        await run({ command: 'taskkill', args: ['/T', '/F', '/PID', String(p.pid)], cwd: process.cwd(), env: process.env, timeoutMs: 30_000 }, () => {});
+      }
+      return leftovers.map((p) => `${p.pid} ${p.name}`);
+    },
+  };
 }
 
 export interface MutateOutcome {
@@ -241,7 +405,8 @@ export interface MutateDeps {
   timeoutMs?: number;
   /** test seam: where dotnet-stryker lives (default: ensureDotnetStryker) */
   dotnetStrykerExe?: string;
-  reap?: (sinceMs: number) => Promise<string[]>;
+  /** test seam: the C# leftover tracker (default: trackDotnetDescendants — the spawned tree only) */
+  tracker?: (sinceMs: number) => ProcessTracker;
   now?: () => number;
 }
 
@@ -276,10 +441,11 @@ export async function mutateProject(detail: UnitDetailResponse, projectDir: stri
     const exe = deps.dotnetStrykerExe ?? (await ensureDotnetStryker(deps.run, deps.onOutput));
     rmSync(join(projectDir, NET_OUTPUT), { recursive: true, force: true });
     const started = now();
+    const tracker = (deps.tracker ?? ((t: number) => trackDotnetDescendants(t)))(started);
     try {
-      result = await deps.run(strykerNetRun(projectDir, exe, deps.env, timeoutMs), deps.onOutput);
+      result = await deps.run({ ...strykerNetRun(projectDir, exe, deps.env, timeoutMs), onSpawn: (pid) => tracker.attach(pid) }, deps.onOutput);
     } finally {
-      reaped = await (deps.reap ?? ((t: number) => reapDotnetLeftovers(t)))(started);
+      reaped = await tracker.reap();
     }
     reportPath = findNetReport(projectDir, started);
   } else {
