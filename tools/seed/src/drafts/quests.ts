@@ -19,7 +19,7 @@ import { z } from 'zod';
 import type { SeedCitation, SeedFlashcardItem, SeedItem, SeedQuizItem } from '@bootquest/shared';
 import { CheckoutError, openCheckout, type Checkout } from '../factory/checkout.ts';
 import { Exclusions, UnregisteredSecretError } from '../factory/exclusions.ts';
-import { emptyOutcome, writeSeedPack } from '../factory/pack.ts';
+import { emptyOutcome, SeedPackReplaceError, writeSeedPack } from '../factory/pack.ts';
 import { bucket, DEFAULT_SEED_DIR, refusal, summarize, type RunReport } from '../factory/report.ts';
 import { generateQuestCandidates } from '../factory/quests/generate.ts';
 import { validateQuestItem } from '../factory/quests/validate.ts';
@@ -75,6 +75,12 @@ export const QuestDrafts = z
 export type QuestDrafts = z.infer<typeof QuestDrafts>;
 type DraftItem = QuestDrafts['items'][number];
 
+/**
+ * A draft cite is a file:line range the author verified the item against, NOT text of the guide, so
+ * it has no guide line: sourceLine is pinned to source.lines.start BY CONVENTION. The validator knows
+ * (validate.ts isHandDraftItem): it asserts the convention instead of running the parser citations'
+ * "inside the item's source lines" range rule, which could never fail on a pinned value.
+ */
 const citation = (c: z.infer<typeof Cite>, sourceLine: number): SeedCitation => ({
   raw: `${c.path}:${c.lineStart}${c.lineEnd !== c.lineStart ? `-${c.lineEnd}` : ''}`,
   path: c.path,
@@ -105,6 +111,10 @@ export function buildDraftItem(co: Checkout, d: DraftItem): SeedItem {
     };
     return fc;
   }
+  // The key's evidence is the files it cites; the distractors are invented wrong answers with no
+  // source item behind them, so their evidence is empty ON PURPOSE. The multi-keyable rule (shared
+  // evidence) therefore does not apply to a hand concept quiz, and validate.ts says so explicitly
+  // (singleKeyedProblems: "key only" is accepted for concept quizzes and nothing else).
   const files = [...new Set(d.cites.map((c) => c.path))].sort();
   const answer = { text: d.answer, evidence: files };
   const choices = hashOrder([answer, ...d.distractors.map((t) => ({ text: t, evidence: [] as string[] }))], `${key}:order`, (c) => c.text);
@@ -128,6 +138,8 @@ export interface QuestDraftOptions {
   out?: string;
   exclusionsPath?: string;
   allowQuarantine?: boolean;
+  /** replace a pack built from another source (generator-only / another draft); see pack.ts replaceRefusal */
+  forceReplace?: boolean;
 }
 
 export function runQuestsWithDrafts(o: QuestDraftOptions): RunReport {
@@ -196,10 +208,24 @@ export function runQuestsWithDrafts(o: QuestDraftOptions): RunReport {
       outcome.rejected.push({ key: item.key, reason: `hand-authored ${d.kind} ${d.id} carries no citation (every hand item must cite file:lines it was verified against)` });
       continue;
     }
+    // a hand item's cites have no guide line and its distractors no evidence (see buildDraftItem); the
+    // validator recognises a hand item by variety 'concept' / shape 'hand-authored' and applies the
+    // hand rules. Any other variety / shape would make it look like parser output whose range and
+    // multi-keyable checks then pass vacuously on the conventions, so it is refused.
+    if ((d.kind === 'quiz' && d.variety !== undefined && d.variety !== 'concept') || (d.kind === 'flashcard' && d.shape !== undefined && d.shape !== 'hand-authored')) {
+      outcome.rejected.push({ key: item.key, reason: `hand-authored ${d.kind} ${d.id} declares ${d.kind === 'quiz' ? `variety ${d.variety}` : `shape ${d.shape}`}; a hand item is a 'concept' quiz or a 'hand-authored' flashcard (its cites carry no guide line, so the parser-item checks would be vacuous)` });
+      continue;
+    }
     bucket(outcome, item.key, validateQuestItem(co, ex, item));
   }
   const outDir = o.out ?? join(DEFAULT_SEED_DIR, 'quests', co.repo);
   const inputs = [...guides.filter((g) => !cand.excludedGuides.some((s) => s.subject === g)), `draft:${basename(o.draft)}`];
-  const write = writeSeedPack({ dir: outDir, generator: 'quests', name: co.repo, checkout: co, inputs, outcome, allowQuarantine: o.allowQuarantine ?? false });
+  let write;
+  try {
+    write = writeSeedPack({ dir: outDir, generator: 'quests', name: co.repo, checkout: co, inputs, outcome, allowQuarantine: o.allowQuarantine ?? false, exclusions: ex, forceReplace: o.forceReplace === true });
+  } catch (err) {
+    if (err instanceof SeedPackReplaceError) return refusal('quests', head, err.message);
+    throw err;
+  }
   return summarize('quests', head, outcome, write, outDir, o.allowQuarantine ?? false);
 }

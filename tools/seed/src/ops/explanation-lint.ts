@@ -9,17 +9,15 @@
 // agents own those and remove the entry when they fix the draft and re-seed). An exempt pack that
 // no longer has an artifact explanation FAILS the lint too, so the list can only shrink.
 //
-// Deliberately OUTSIDE the fingerprinted factory: it only READS items.json and changes nothing.
+// The RULE (patterns, exemptions, isArtifactExplanation) lives in the fingerprinted factory
+// (factory/guards.ts) since 2026-10-19: writeSeedPack and seed:check run it per quest pack, so a
+// re-seeded pack with an artifact explanation is never stamped. This module keeps the estate-wide
+// REPORT for `seed:lint:answers`; it only READS items.json and changes nothing.
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { ARTIFACT_EXPLANATION_PATTERNS, artifactExplanationKeys, EXPLANATION_LINT_EXEMPT, isArtifactExplanation } from '../factory/guards.ts';
 
-/** The F5 shape (`^\d+ \(.*item\)$`), its two sibling label leaks, and a bare finding number ("3"; release review). */
-export const ARTIFACT_EXPLANATION_PATTERNS: readonly RegExp[] = [/^\d+ \(.*item\)$/, /^- \(.*item\)$/, /^goal \d+$/i, /^\d+$/];
-
-/** quest pack name -> why it is exempt for now. Empty: no hand draft carries an artifact explanation. */
-export const EXPLANATION_LINT_EXEMPT: Readonly<Record<string, string>> = {};
-
-export const isArtifactExplanation = (s: string | undefined): boolean => ARTIFACT_EXPLANATION_PATTERNS.some((re) => re.test((s ?? '').trim()));
+export { ARTIFACT_EXPLANATION_PATTERNS, EXPLANATION_LINT_EXEMPT, isArtifactExplanation };
 
 export interface ExplanationLintRow {
   pack: string;
@@ -48,7 +46,7 @@ export function explanationLintReport(seedDir: string, exempt: Readonly<Record<s
     : [];
   const rows: ExplanationLintRow[] = names.map((pack) => {
     const doc = JSON.parse(readFileSync(join(dir, pack, 'items.json'), 'utf8')) as { items?: { kind?: string; key?: string; explanation?: string }[] };
-    const keys = (doc.items ?? []).filter((i) => i.kind === 'quiz' && isArtifactExplanation(i.explanation)).map((i) => i.key ?? '?');
+    const keys = artifactExplanationKeys(doc.items ?? []);
     return { pack, keys, exempt: Object.hasOwn(exempt, pack) };
   });
   return {

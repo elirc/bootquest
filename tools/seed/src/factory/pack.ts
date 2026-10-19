@@ -11,7 +11,7 @@
  *     the quarantine + review keys.
  */
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import {
   PACK_FORMAT,
   SEED_PACK_FORMAT,
@@ -26,7 +26,9 @@ import {
   type SeedSkip,
 } from '@bootquest/shared';
 import type { Checkout } from './checkout.ts';
+import { Exclusions } from './exclusions.ts';
 import { seedFingerprint, seedToolchain } from './fingerprint.ts';
+import { packGuardProblems } from './guards.ts';
 import { sha256, stableJson } from './util.ts';
 
 export interface Rejection {
@@ -73,6 +75,58 @@ export interface WriteSeedPackOptions {
   allowQuarantine?: boolean;
   /** pack-level validator failures (seed:notes coverage): any entry means NO stamp */
   blockers?: string[];
+  /**
+   * the registry whose secretPatterns the pack-level secret scan uses (guards.ts); default: the
+   * committed tools/seed/exclusions.json
+   */
+  exclusions?: Exclusions;
+  /**
+   * the seed root the pack-level guards compare against (explain-back key points vs same-repo
+   * quest packs); default: two levels above `dir` (content/seed for content/seed/<gen>/<name>)
+   */
+  guardSeedRoot?: string | null;
+  /**
+   * replace a pack whose manifest records a DIFFERENT generator or draft source (`draft:*` inputs)
+   * than this run (the --force-replace escape hatch; see replaceRefusal)
+   */
+  forceReplace?: boolean;
+}
+
+/**
+ * Three writers target content/seed/quests/<repo> (seed:quests, seed:quests:drafts,
+ * quests-authored.ts) and others share their generator's dir: running the plain generator over a
+ * drafts-built repo would silently replace every hand item. A pack on disk whose manifest names a
+ * different generator, pack name or set of `draft:*` inputs (generator-only / drafts / authored, and
+ * WHICH draft) is only replaced with forceReplace.
+ */
+export class SeedPackReplaceError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SeedPackReplaceError';
+  }
+}
+
+const draftInputs = (inputs: readonly string[]): string[] => inputs.filter((i) => i.startsWith('draft:')).sort();
+
+/** Why writing (generator, name, inputs) into `dir` would replace a pack of another source; null = same source or no pack. */
+export function replaceRefusal(dir: string, generator: SeedGenerator, name: string, inputs: readonly string[]): string | null {
+  const mp = join(dir, 'manifest.json');
+  if (!existsSync(mp)) return null;
+  let old: { generator?: unknown; name?: unknown; source?: { inputs?: unknown } };
+  try {
+    old = JSON.parse(readFileSync(mp, 'utf8')) as typeof old;
+  } catch {
+    return `${mp} is not readable JSON; refusing to overwrite a pack whose source cannot be established`;
+  }
+  const oldInputs = Array.isArray(old.source?.inputs) ? (old.source.inputs as unknown[]).filter((x): x is string => typeof x === 'string') : [];
+  const kind = (d: string[]) => (d.length === 0 ? 'generator-only (no draft)' : d.join(', '));
+  const why: string[] = [];
+  if (old.generator !== generator) why.push(`it was written by seed:${String(old.generator)}, this run is seed:${generator}`);
+  if (old.name !== name) why.push(`it is pack ${String(old.name)}, this run writes ${name}`);
+  const a = draftInputs(oldInputs);
+  const b = draftInputs(inputs);
+  if (JSON.stringify(a) !== JSON.stringify(b)) why.push(`its source is ${kind(a)}, this run's is ${kind(b)}`);
+  return why.length ? `refusing to replace ${dir}: ${why.join('; ')} — re-run the writer that built it, or pass --force-replace to discard its items` : null;
 }
 
 export interface WriteSeedPackResult {
@@ -85,6 +139,10 @@ export interface WriteSeedPackResult {
 const byKey = <T extends { key: string }>(a: T, b: T): number => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
 
 export function writeSeedPack(o: WriteSeedPackOptions): WriteSeedPackResult {
+  if (!o.forceReplace) {
+    const refusal = replaceRefusal(o.dir, o.generator, o.name, o.inputs);
+    if (refusal) throw new SeedPackReplaceError(refusal);
+  }
   mkdirSync(o.dir, { recursive: true });
   const stampPath = join(o.dir, 'validation.json');
   rmSync(stampPath, { force: true });
@@ -147,6 +205,17 @@ export function writeSeedPack(o: WriteSeedPackOptions): WriteSeedPackResult {
   if (rejected.length > 0 && !o.allowQuarantine) unstampedBecause.push(`${rejected.length} candidate(s) quarantined (pass --allow-quarantine to stamp with them withheld)`);
   if (accepted.length === 0) unstampedBecause.push('no accepted items');
   for (const b of o.blockers ?? []) unstampedBecause.push(b);
+  // the pack-level answer-tell / leak / secret guards (guards.ts): the same checks seed:check runs
+  for (const g of packGuardProblems({
+    generator: o.generator,
+    name: o.name,
+    repo: o.checkout.repo,
+    items: accepted,
+    ex: o.exclusions ?? Exclusions.load(),
+    seedRoot: o.guardSeedRoot === undefined ? resolve(o.dir, '..', '..') : o.guardSeedRoot,
+  })) {
+    unstampedBecause.push(`guard ${g}`);
+  }
   if (unstampedBecause.length === 0) {
     const stamp = SeedValidationStamp.parse({
       format: SEED_PACK_FORMAT,

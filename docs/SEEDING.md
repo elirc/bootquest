@@ -185,6 +185,18 @@ Other options:
 - `--exclude-dir a,b`
 - `--allow-quarantine`: stamp even when some candidates were quarantined. Exit 0 means
   stamped with nothing quarantined.
+- `--force-replace`: three writers target `content/seed/quests/<repo>/` (`seed:quests`,
+  `seed:quests:drafts`, `quests-authored.ts`). A writer REFUSES to replace a pack whose manifest
+  records a different generator or `draft:*` source (generator-only / a drafts file / an
+  `.authored.json` file, and which one), because the plain generator over a drafts-built repo would
+  silently drop every hand item. Every generator CLI takes `--force-replace` to discard the old pack
+  deliberately.
+
+Hand items (`seed:quests:drafts`) are `concept` quizzes and `hand-authored` flashcards; a draft
+that declares another variety / shape is quarantined. Their cites carry no guide line (the
+validator asserts `sourceLine = source.lines.start` instead of the parser range rule) and their
+distractors no evidence (the multi-keyable rule explicitly does not apply to key-only evidence on a
+concept quiz; evidence on some distractors only is refused).
 
 Validator: every cited `path/file:line` resolves at the pinned sha (root-relative,
 md-relative, or an unambiguous suffix; line within the file length). Quizzes are
@@ -194,7 +206,10 @@ single-keyed. Excluded files are dropped and counted.
 
 Each set is 3 questions with 5 to 8 key points each, and every key point quotes the
 unit source (a whitespace-normalized substring of at least 12 chars) or cites a
-resolvable `file:line`.
+resolvable `file:line`. A cite is stored at its RESOLVED repo-root path (a guide-relative or
+suffix cite as drafted is rewritten; an unresolvable or directory cite is refused), so the path the
+client shows exists at the sha. The quote rule still reads the whole unit file, not just
+`provenance.lines` (scoping it would reject 18 shipped key points in 9 packs today).
 
 ```sh
 # LLM-authored draft (the normal path)
@@ -304,11 +319,13 @@ Validator (every rule, deterministic):
   an `after` note must target a quiz, and exactly one `after` note per quiz;
 - title 8-90 chars; body 60-300 words (`after`: 60-250), markdown with no HTML and no images;
 - 1-4 excerpts, each a repo-root path at the pinned sha with `lineStart <= lineEnd` inside the file
-  and a quote (>= 20 chars) found verbatim in those lines after collapsing whitespace runs;
+  and a quote (>= 20 chars) found verbatim in those lines after collapsing whitespace runs, at token
+  boundaries (a quote cut mid-word, "MAX = 3" for "MAX = 30", does not match);
 - 0-4 `readMore`: the path exists, the optional line range is in range, `why` is 8-200 chars;
 - nothing cites, points at or names an excluded file; no secret pattern anywhere in the draft;
 - `before` notes may not leak ANY keyed answer of the pack: no normalized token-boundary substring
-  of a keyed answer in the title, body or excerpt quotes; token-Jaccard < 0.5 against every
+  of a keyed answer in the title, body, excerpt quotes or readMore `why` (shown before answering);
+  token-Jaccard < 0.5 against every
   sentence and every answer-sized window; no excerpt / readMore range overlapping the keyed
   `file:line` of a finding-location quiz;
 - coverage (pack level, blocks the stamp): 2-4 accepted `before` notes targeting `pack`, and one
@@ -352,9 +369,20 @@ npm run seed:check -- --restamp     # see section 6
 - the source pin (blob hashes);
 - every shipped item, re-run through its validator, must come back `accept` and
   byte-identical (variants and patches are re-executed);
-- every review-queue item must still be held.
+- every review-queue item must still be held;
+- the **pack-level guards** (`tools/seed/src/factory/guards.ts`), which every generator also
+  runs before it stamps (a failure is printed as `STAMP none: guard ...`):
+  - quest packs: **blind-pass** (no blind strategy clears the 80% gate with p > 0.02),
+    **quiz-balance** over ALL the pack's quizzes (longest / shortest / median-ratio / rank /
+    format / slots; packs with >= 10 quizzes; `QUIZ_BALANCE_EXEMPT` lists today's failures and
+    may only shrink) and **explanation-lint** (no generator-label explanation);
+  - explain-back packs: no key point (text or quote) restates a keyed answer of a quest pack of
+    the same source repo (the notes token rules, token-Jaccard >= 0.5; `EB_LEAK_EXEMPT` lists
+    today's leaks and may only shrink; `npm run seed:lint:leaks` lists every leak);
+  - every pack: a **secret scan** of every shipped string with the registry's `secretPatterns`.
 
-It exits 0 only when every pack passes.
+It exits 0 only when every pack passes. A guard failure is a `PROBLEM guard ...` line, and
+`--restamp` never restamps a pack with one.
 
 ### Planted-bad proof: `seed:demo:planted`
 
@@ -383,7 +411,9 @@ node tools/seed/authoring/kata-index.mjs
 node --import tsx tools/seed/authoring/kata-proof.ts content/seed/patches
 # seed:quests generator + hand-authored quizzes (C# quest packs); stored choice order is hash-seeded from
 # the item key (the draft's `answer` index only names WHICH choice is keyed). --checkouts <dir> (or
-# BOOTQUEST_CHECKOUTS) reads <dir>/<repo>@<sha> instead of the draft's own `checkout` path
+# BOOTQUEST_CHECKOUTS) reads <dir>/<repo>@<sha> instead of the draft's own `checkout` path. The draft
+# is Zod-validated (strict) and secret-scanned first; per-choice `evidence` is all-or-none;
+# --force-replace overwrites a pack another writer built
 node --import tsx tools/seed/authoring/quests-authored.ts tools/seed/authoring/quests/borrowbox.authored.json
 ```
 

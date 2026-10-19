@@ -1,4 +1,4 @@
-// npm run seed:notes -- <checkout> --draft content/seed-drafts/notes/<pack>.json [--quests <dir>] [--out <dir>] [--allow-quarantine]
+// npm run seed:notes -- <checkout> --draft content/seed-drafts/notes/<pack>.json [--quests <dir>] [--out <dir>] [--allow-quarantine] [--force-replace]
 // "Learn more" notes for one quest pack (contract bootquest-notes-draft@1): before-notes
 // (readings, never leak a keyed answer) and after-notes (one explanation per quiz, released
 // only after an answer). Every excerpt quotes its lines verbatim at the pinned sha.
@@ -18,5 +18,6 @@ finish('seed:notes', () => {
     ...(opts.has('out') ? { out: opts.get('out')! } : {}),
     ...(opts.has('exclusions') ? { exclusionsPath: opts.get('exclusions')! } : {}),
     ...(flags.has('allow-quarantine') ? { allowQuarantine: true } : {}),
+    ...(flags.has('force-replace') ? { forceReplace: true } : {}),
   });
 });

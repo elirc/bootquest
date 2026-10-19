@@ -101,12 +101,30 @@ export function singleKeyedProblems(q: SeedQuizItem): string[] {
       if (nearDuplicate(c.choices[i]!, c.choices[j]!)) why.push(`ambiguous: choices ${i} and ${j} are (near-)duplicates`);
     }
   }
-  const keyEv = new Set(q.choices[c.answerKey]!.evidence);
-  q.choices.forEach((ch, i) => {
-    if (i === c.answerKey) return;
-    const shared = ch.evidence.filter((e) => keyEv.has(e));
-    if (shared.length) why.push(`multi-keyable: choice ${i} shares evidence with the key (${shared.slice(0, 3).join(', ')})`);
-  });
+  // multi-keyable (a distractor backed by the key's evidence) needs evidence on EVERY choice, so its
+  // applicability is decided explicitly, never by an empty array silently passing:
+  //   - every choice carries evidence (generator goal-check / finding-location quizzes, authored
+  //     quizzes whose author gave per-choice evidence): the rule APPLIES;
+  //   - a hand-authored CONCEPT quiz (seed:quests:drafts) with evidence on the KEY ONLY: the key
+  //     carries the cited files, the distractors are invented wrong answers with no source item
+  //     behind them, so there is nothing to share — the rule does NOT apply (its single-key
+  //     protections are the near-duplicate rule, the grader, and the pack-level blind-pass /
+  //     quiz-balance guards);
+  //   - no choice carries evidence (an authored quiz whose author gave none): the rule does NOT apply;
+  //   - anything else (evidence on some distractors but not all) is refused: it would judge the rule
+  //     on part of the choices and pass the rest by default.
+  const withEv = q.choices.map((ch, i) => (ch.evidence.length > 0 ? i : -1)).filter((i) => i >= 0);
+  const keyOnly = withEv.length === 1 && withEv[0] === c.answerKey;
+  if (withEv.length === q.choices.length) {
+    const keyEv = new Set(q.choices[c.answerKey]!.evidence);
+    q.choices.forEach((ch, i) => {
+      if (i === c.answerKey) return;
+      const shared = ch.evidence.filter((e) => keyEv.has(e));
+      if (shared.length) why.push(`multi-keyable: choice ${i} shares evidence with the key (${shared.slice(0, 3).join(', ')})`);
+    });
+  } else if (withEv.length > 0 && !(keyOnly && q.variety === 'concept')) {
+    why.push(`multi-keyable cannot be judged: ${withEv.length}/${q.choices.length} choices carry evidence (a quiz needs evidence on every choice, on none, or — a hand concept quiz — on the key only)`);
+  }
   if (!gradeDeterministic(c, { answer: c.answerKey })?.pass) why.push('the answer key does not pass the quiz grader');
   const alsoPass = c.choices.map((_, i) => i).filter((i) => i !== c.answerKey && gradeDeterministic(c, { answer: i })?.pass);
   if (alsoPass.length) why.push(`choices ${alsoPass.join(',')} also pass the grader (not single-keyed)`);
@@ -119,6 +137,13 @@ export function singleKeyedProblems(q: SeedQuizItem): string[] {
   }
   return why;
 }
+
+/**
+ * A seed:quests:drafts HAND item: a 'concept' quiz or a 'hand-authored' flashcard (the drafts path
+ * refuses any other variety / shape on a hand item, and neither the guide parser nor
+ * quests-authored.ts emits these two). Its citations carry no guide line (see validateQuestItem).
+ */
+export const isHandDraftItem = (item: SeedItem): boolean => (item.kind === 'quiz' && item.variety === 'concept') || (item.kind === 'flashcard' && item.shape === 'hand-authored');
 
 export function validateQuestItem(co: Checkout, ex: Exclusions, candidate: unknown): ItemVerdict {
   const parsed = SeedItem.safeParse(candidate);
@@ -140,8 +165,19 @@ export function validateQuestItem(co: Checkout, ex: Exclusions, candidate: unkno
   const reasons: string[] = [];
   if (prov.error) reasons.push(prov.error);
   reasons.push(...cc.errors);
+  // sourceLine is the GUIDE line a citation was written on. Parser citations (generator items,
+  // quests-authored items) carry the real line, so "outside the item's source lines" is a real check.
+  // A seed:quests:drafts HAND item's cites are file:line ranges its author verified against, not text
+  // of the guide: they have no guide line, and buildDraftItem pins sourceLine to source.lines.start by
+  // convention. For those the range rule does NOT apply; instead the convention itself is asserted, so
+  // a hand item can never smuggle in a citation that claims a guide location it does not have.
+  const hand = isHandDraftItem(item);
   for (const c of item.citations) {
-    if (c.sourceLine < item.provenance.lines.start || c.sourceLine > item.provenance.lines.end) reasons.push(`citation \`${c.raw}\` (line ${c.sourceLine}) lies outside the item's source lines`);
+    if (hand) {
+      if (c.sourceLine !== item.provenance.lines.start) reasons.push(`hand-authored citation \`${c.raw}\` claims guide line ${c.sourceLine}; a draft cite has no guide line (sourceLine must be source.lines.start ${item.provenance.lines.start})`);
+    } else if (c.sourceLine < item.provenance.lines.start || c.sourceLine > item.provenance.lines.end) {
+      reasons.push(`citation \`${c.raw}\` (line ${c.sourceLine}) lies outside the item's source lines`);
+    }
   }
   if (item.kind === 'quiz') reasons.push(...singleKeyedProblems(item));
   if (item.kind === 'flashcard') {

@@ -31,6 +31,28 @@ describe('seed:explainback', () => {
     expect(item.provenance).toEqual({ repo: 'ww6', sha: WW6, path: UNIT, lines: { start: 1, end: 56 } });
   });
 
+  it('stores every cite at its RESOLVED repo-root path; an unresolvable or directory cite is refused', () => {
+    const co = openCheckout({ root: join(FX, 'ww6'), sha: WW6, repo: 'ww6' });
+    const ex = Exclusions.load();
+    const text = readFileSync(join(FX, 'ww6', UNIT), 'utf8');
+    const draft = JSON.parse(readFileSync(join(D, 'explainback-ww6-testing-rationale.json'), 'utf8')) as { questions: Array<{ prompt: string; keyPoints: Array<{ text: string; quote?: string; cite?: { path: string; lineStart: number; lineEnd: number } }> }>; lines: { start: number; end: number } };
+    const withCite = (path: string) => {
+      const d = structuredClone(draft);
+      d.questions[1]!.keyPoints[4]!.cite = { path, lineStart: 102, lineEnd: 113 };
+      return buildExplainBackItem(co, UNIT, d.questions, d.lines, 'draft');
+    };
+    // a unique-suffix cite (as an author would write it) ships at the path the client can open
+    const v = validateExplainBack(co, ex, text, withCite('services/allocationRunService.ts'));
+    expect(v.verdict).toBe('accept');
+    const item = (v as { item: SeedExplainBackItem }).item;
+    expect(item.questions[1]!.keyPoints[4]!.cite).toEqual({ path: 'src/services/allocationRunService.ts', lineStart: 102, lineEnd: 113 });
+    // idempotent: the stored (resolved) item re-validates byte-identically (what seed:check compares)
+    expect(validateExplainBack(co, ex, text, item)).toEqual({ verdict: 'accept', item });
+    const missing = validateExplainBack(co, ex, text, withCite('src/services/nope.ts'));
+    expect(missing).toMatchObject({ verdict: 'reject' });
+    expect((missing as { reason: string }).reason).toMatch(/q2\.kp5 cite src\/services\/nope\.ts:102-113 -> missing-file/);
+  });
+
   it('the deterministic scaffold (no draft) quotes the source verbatim and is identical on a rerun', () => {
     const a = run(null, 'scaf-a');
     const b = run(null, 'scaf-b');

@@ -32,6 +32,8 @@ export interface ExplainBackOptions {
   draft?: string;
   out?: string;
   exclusionsPath?: string;
+  /** replace a pack built from another source (scaffold vs another draft); see pack.ts replaceRefusal */
+  forceReplace?: boolean;
 }
 
 export function runExplainBack(o: ExplainBackOptions): RunReport {
@@ -83,6 +85,6 @@ export function runExplainBack(o: ExplainBackOptions): RunReport {
   bucket(outcome, item.key, validateExplainBack(co, ex, text, item));
   const name = `${co.repo}--${unit.replace(/[^A-Za-z0-9._-]+/g, '-')}`;
   const outDir = o.out ?? join(DEFAULT_SEED_DIR, 'explainback', name);
-  const write = writeSeedPack({ dir: outDir, generator: 'explainback', name, checkout: co, inputs: [unit, ...(o.draft ? [`draft:${o.draft.replace(/\\/g, '/').split('/').pop()}`] : [])], outcome });
+  const write = writeSeedPack({ dir: outDir, generator: 'explainback', name, checkout: co, inputs: [unit, ...(o.draft ? [`draft:${o.draft.replace(/\\/g, '/').split('/').pop()}`] : [])], outcome, exclusions: ex, forceReplace: o.forceReplace === true });
   return summarize('explainback', head, outcome, write, outDir, false);
 }

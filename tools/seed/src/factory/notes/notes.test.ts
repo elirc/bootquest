@@ -153,6 +153,11 @@ describe('validateNote rules', () => {
     expect(reason(verdict({ excerpts: [] }))).toContain('schema');
     expect(reason(verdict({ excerpts: [e, e, e, e, e] }))).toContain('5 excerpts (needs 1-4)');
     expect(reason(verdict({ excerpts: [{ ...e, quote: 'read-only roles' }] }))).toContain('quote is 15 chars (needs >= 20)');
+    // token boundaries: a quote cut mid-word is not "verbatim" ("MAX = 3" must not stand for "MAX = 30")
+    const lastWord = [...e.quote.matchAll(/\w{5,}/g)].at(-1)!;
+    const midWord = e.quote.slice(0, lastWord.index + 3);
+    expect(midWord.length).toBeGreaterThanOrEqual(20);
+    expect(reason(verdict({ excerpts: [{ ...e, quote: midWord }] }))).toContain('quote is not verbatim in those lines (whitespace-normalized, at token boundaries)');
     const rm = { path: 'docs/learning/testing-rationale.md', lineStart: null, lineEnd: null, why: 'Background reading.' };
     expect(reason(verdict({ readMore: [rm, rm, rm, rm, rm] }))).toContain('5 readMore entries (max 4)');
     expect(reason(verdict({ readMore: [{ ...rm, why: 'short' }] }))).toContain('why is 5 chars (needs 8-200)');
@@ -223,6 +228,13 @@ describe('noteLeaks (before notes never give a keyed answer away)', () => {
     const q = quiz('The first image');
     expect(noteLeaks(subj('nothing here', { title: 'It is the first image' }), [q])[0]).toContain('title contains');
     expect(noteLeaks(subj('nothing here', { excerpts: [{ path: 'x.ts', lineStart: 1, lineEnd: 1, quote: 'falls back to the first image' }] }), [q])[0]).toContain('excerpt 1 contains');
+  });
+
+  it('checks every readMore `why` (shown with the link before the learner answers)', () => {
+    const q = quiz('The first image');
+    const rm = (why: string) => [{ path: 'README.md', lineStart: null, lineEnd: null, why }];
+    expect(noteLeaks(subj('nothing here', { readMore: rm('Read this: it explains why the view uses the first image.') }), [q])[0]).toContain('readMore 1 why contains the keyed answer');
+    expect(noteLeaks(subj('nothing here', { readMore: rm('The course overview and how the sprints are organised.') }), [q])).toEqual([]);
   });
 
   it('a finding-location key: an excerpt or readMore range overlapping the keyed lines points at the answer', () => {

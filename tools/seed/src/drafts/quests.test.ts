@@ -90,15 +90,37 @@ describe('seed:quests:drafts (hand-authored items through the seed:quests valida
     expect(sec.refused).toMatch(/aws-access-key/);
   });
 
-  it('an explicit draft variety/shape is carried onto the shipped item (defaults: concept / hand-authored)', () => {
+  it('a hand item is a concept quiz / hand-authored flashcard: an explicit parser variety/shape is quarantined (its checks would be vacuous)', () => {
     const outDir = join(tmp, 'labels');
-    const r = runQuestsWithDrafts({ root: join(FX, 'ww6'), draft: draft('labels', [{ ...good, variety: 'goal-check' }, { ...card, shape: 'r-heading' }]), out: outDir });
+    const r = runQuestsWithDrafts({ root: join(FX, 'ww6'), draft: draft('labels', [{ ...good, variety: 'concept' }, { ...card, shape: 'hand-authored' }]), out: outDir });
     expect(r.lines.join('\n')).toMatch(/RESULT OK/);
     const items = SeedItemsFile.parse(JSON.parse(readFileSync(join(outDir, 'items.json'), 'utf8'))).items;
-    expect(items.find((i) => i.kind === 'quiz' && i.prompt === good.prompt)).toMatchObject({ variety: 'goal-check' });
-    expect(items.find((i) => i.kind === 'flashcard' && i.label === 'f01')).toMatchObject({ shape: 'r-heading' });
+    expect(items.find((i) => i.kind === 'quiz' && i.prompt === good.prompt)).toMatchObject({ variety: 'concept' });
+    expect(items.find((i) => i.kind === 'flashcard' && i.label === 'f01')).toMatchObject({ shape: 'hand-authored' });
+    // a draft cite has no guide line and a hand distractor no evidence: dressed as parser output, the
+    // range and multi-keyable rules would pass on those conventions alone
+    const parserLike = runQuestsWithDrafts({ root: join(FX, 'ww6'), draft: draft('parserlike', [{ ...good, variety: 'goal-check' }, { ...card, shape: 'r-heading' }]), out: join(tmp, 'labels-parser') });
+    const text = parserLike.lines.join('\n');
+    expect(text).toMatch(/QUARANTINED .*declares variety goal-check; a hand item is a 'concept' quiz/);
+    expect(text).toMatch(/QUARANTINED .*declares shape r-heading/);
+    expect(text).toMatch(/RESULT FAIL/);
     const bad = runQuestsWithDrafts({ root: join(FX, 'ww6'), draft: draft('badlabel', [{ ...good, variety: 'trivia' }]), out: join(tmp, 'labels-bad') });
     expect(bad.refused).toMatch(/malformed/);
+  });
+
+  it('never replaces a pack another writer / draft built, unless forceReplace', () => {
+    const out = join(tmp, 'replace');
+    expect(runQuestsWithDrafts({ root: join(FX, 'ww6'), draft: draft('first', [good, card]), out }).lines.join('\n')).toMatch(/RESULT OK/);
+    // same draft again: allowed (a re-seed)
+    expect(runQuestsWithDrafts({ root: join(FX, 'ww6'), draft: draft('first', [good, card]), out }).refused).toBeNull();
+    // another draft over the same dir: refused, nothing rewritten
+    const before = readFileSync(join(out, 'items.json'), 'utf8');
+    const other = runQuestsWithDrafts({ root: join(FX, 'ww6'), draft: draft('second', [good]), out });
+    expect(other.refused).toMatch(/refusing to replace .*its source is draft:first\.json, this run's is draft:second\.json.*--force-replace/);
+    expect(readFileSync(join(out, 'items.json'), 'utf8')).toBe(before);
+    const forced = runQuestsWithDrafts({ root: join(FX, 'ww6'), draft: draft('second', [good]), out, forceReplace: true });
+    expect(forced.refused).toBeNull();
+    expect(loadSeedPack(out, { requireStamp: true }).manifest.source.inputs).toContain('draft:second.json');
   });
 
   it('refuses a non-markdown guide; a guide pruned from the suffix index is still found (fullIndex)', () => {

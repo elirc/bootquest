@@ -2,7 +2,7 @@
 import { join } from 'node:path';
 import { CheckoutError, openCheckout } from '../checkout.ts';
 import { Exclusions, UnregisteredSecretError } from '../exclusions.ts';
-import { emptyOutcome, writeSeedPack } from '../pack.ts';
+import { emptyOutcome, SeedPackReplaceError, writeSeedPack } from '../pack.ts';
 import { bucket, DEFAULT_SEED_DIR, refusal, summarize, type RunReport } from '../report.ts';
 import { discoverGuides, generateQuestCandidates } from './generate.ts';
 import { validateQuestItem } from './validate.ts';
@@ -17,6 +17,8 @@ export interface QuestsOptions {
   excludeDirs?: string[];
   allowQuarantine?: boolean;
   exclusionsPath?: string;
+  /** replace a pack built from another source (a drafts / authored pack); see pack.ts replaceRefusal */
+  forceReplace?: boolean;
 }
 
 export function runQuests(o: QuestsOptions): RunReport {
@@ -67,6 +69,13 @@ export function runQuests(o: QuestsOptions): RunReport {
     for (const item of g.items) bucket(outcome, item.key, validateQuestItem(co, ex, item));
   }
   const outDir = o.out ?? join(DEFAULT_SEED_DIR, 'quests', co.repo);
-  const write = writeSeedPack({ dir: outDir, generator: 'quests', name: co.repo, checkout: co, inputs: guides.filter((g) => !cand.excludedGuides.some((s) => s.subject === g)), outcome, allowQuarantine: o.allowQuarantine ?? false });
+  let write;
+  try {
+    write = writeSeedPack({ dir: outDir, generator: 'quests', name: co.repo, checkout: co, inputs: guides.filter((g) => !cand.excludedGuides.some((s) => s.subject === g)), outcome, allowQuarantine: o.allowQuarantine ?? false, exclusions: ex, forceReplace: o.forceReplace === true });
+  } catch (err) {
+    // a drafts- or authored-built pack lives in the same dir: never silently replace its hand items
+    if (err instanceof SeedPackReplaceError) return refusal('quests', head, err.message);
+    throw err;
+  }
   return summarize('quests', head, outcome, write, outDir, o.allowQuarantine ?? false);
 }

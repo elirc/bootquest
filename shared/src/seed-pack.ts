@@ -160,7 +160,11 @@ export const SeedKeyPoint = z
     text: z.string().min(1),
     /** a substring of the source (whitespace-normalized) */
     quote: z.string().min(1).optional(),
-    /** or a resolvable file:line in the source repo at the pinned sha */
+    /**
+     * or a resolvable file:line in the source repo at the pinned sha; seed:explainback stores the
+     * RESOLVED repo-root path (a guide-relative / suffix cite as drafted is rewritten), so the path
+     * a client renders always exists at the sha
+     */
     cite: z
       .object({ path: repoRel, lineStart: z.number().int().positive(), lineEnd: z.number().int().positive() })
       .strict()
