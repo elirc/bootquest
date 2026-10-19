@@ -128,7 +128,8 @@ describe('dashboard promotion legs', () => {
     const dh = table.querySelector('[data-competency="data-http"]')!;
     expect(dh.querySelector('[data-leg="explain"]')).toHaveAttribute('data-state', 'failed');
     expect(dh.querySelector('[data-leg="explain"] .chip')).toHaveClass('chip-danger');
-    expect(within(lf as HTMLElement).getByRole('link')).toHaveAttribute('href', '/stats?competency=language-fluency#evidence-412');
+    // fix/client-dash: the artifact / retest leg chips are links too now; this is the evidence one
+    expect(within(lf as HTMLElement).getByRole('link', { name: /#412/ })).toHaveAttribute('href', '/stats?competency=language-fluency#evidence-412');
 
     const base = createMockApi();
     const old: BootQuestApi = {

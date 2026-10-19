@@ -1,11 +1,50 @@
 // Client-only display helpers over the server contract. Nothing here computes a number the
 // server owns (XP, level, streak); these are labels and presentation constants only.
 
-import type { PublicCheck, TrackId, TrackProgress, UnitDetail } from '../api/types';
+import type { CompetencyId, PublicCheck, TrackId, TrackProgress, UnitDetail } from '../api/types';
+// TYPE-only on purpose: shared/src/enums.ts builds zod enums at module load, and a value import
+// would put zod (~55 kB) in the bundle (vite.config: the client imports only TYPES from shared).
+import type { COMPETENCY_IDS as SHARED_COMPETENCY_IDS, TRACK_IDS as SHARED_TRACK_IDS } from '../../../shared/src/enums.ts';
+import { localDayKey } from './format';
 import { proseChunks } from './prose';
 
-/** Every TrackId, in sidebar order. `satisfies` + the exhaustive record below keep it in sync. */
-export const TRACK_IDS = ['js', 'csharp', 'agentic', 'java'] as const satisfies readonly TrackId[];
+/**
+ * Every TrackId in the server's order (shared/src/enums.ts TRACK_IDS = track.sort_order).
+ * `satisfies typeof` the shared tuple: a reorder, rename, addition or removal there fails the
+ * typecheck here, so this can never drift (fix/client-dash: it had agentic before java).
+ */
+export const TRACK_IDS = ['js', 'csharp', 'java', 'agentic'] as const satisfies typeof SHARED_TRACK_IDS;
+
+/** Every CompetencyId in the server's order; held to shared/src/enums.ts COMPETENCY_IDS the same way. */
+export const COMPETENCY_IDS = [
+  'language-fluency',
+  'feature-delivery',
+  'data-http',
+  'testing-verification',
+  'agentic-engineering',
+  'code-reading',
+  'communication',
+] as const satisfies typeof SHARED_COMPETENCY_IDS;
+
+/** Display names (exhaustive over CompetencyId); the dashboard rows carry the server's own `name`. */
+export const COMPETENCY_LABEL: Record<CompetencyId, string> = {
+  'language-fluency': 'Language fluency',
+  'feature-delivery': 'Feature delivery',
+  'data-http': 'Data & HTTP',
+  'testing-verification': 'Testing & verification',
+  'agentic-engineering': 'Agentic engineering',
+  'code-reading': 'Code reading & maintenance',
+  communication: 'Communication',
+};
+
+export const isCompetencyId = (v: string | null | undefined): v is CompetencyId => (COMPETENCY_IDS as readonly string[]).includes(v ?? '');
+
+/**
+ * Tracks whose daily slate carries a drill set (track.slate_drills = 1: migrations 002 + 011).
+ * Presentation only: an unlocked one MISSING from today's slate was dropped by the server
+ * because it has no unpassed drill left (engines/streak.ts "Drill-slot size").
+ */
+export const SLATE_DRILL_TRACKS: readonly TrackId[] = ['js', 'csharp', 'java'];
 
 export const TRACK_LABEL: Record<TrackId, string> = { js: 'JS/TS', csharp: 'C#/.NET', agentic: 'Agentic', java: 'Java' };
 /** Short badge text (W-13b: the server has no `short`; this is presentation only). */
@@ -31,11 +70,7 @@ export const isTrackId = (v: string | undefined): v is TrackId => (TRACK_IDS as 
 export const FREEZE_TOKENS_MAX = 2;
 
 /** 'YYYY-MM-DD' of an epoch-ms timestamp in the owner's local day (the server's day basis). */
-export function dayOfMs(ms: number): string {
-  const d = new Date(ms);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
+export const dayOfMs = localDayKey;
 
 const LANGUAGE_LABEL: Record<string, string> = { js: 'JavaScript', ts: 'TypeScript', sql: 'SQL', cs: 'C#' };
 
