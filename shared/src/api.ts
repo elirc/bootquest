@@ -54,6 +54,12 @@ export const API_ERROR_CODES = [
   'ALREADY_ANSWERED',
   /** W6 explain-back / kata: this answer attempt already carries its self-score evidence */
   'ALREADY_SCORED',
+  /**
+   * An explain-back whose promotion leg (b) is linked to an artifact (project) unit refuses an
+   * answer until that unit has a verified SOLO pass: an earlier answer would burn leg (b) for
+   * good (answers are once per question set and must come at/after the artifact attempt)
+   */
+  'ARTIFACT_REQUIRED',
   /** W6: the unit's seeded content (question set / kata) is not loaded on this server */
   'CONTENT_PENDING',
   /** W6: the action needs a verified (passing, run-backed) attempt that does not exist */
@@ -459,6 +465,12 @@ export const ExplainBackPublic = z
      * eating an expected 403; absent on older servers (the client then probes as before).
      */
     answered: z.boolean().optional(),
+    /**
+     * The artifact (project) units this set's promotion leg (b) is linked to that still lack a
+     * verified SOLO pass. Non-empty = POST .../answers is refused (409 ARTIFACT_REQUIRED) until
+     * each is passed solo. Empty for standalone sets; absent on older servers.
+     */
+    artifactRequired: z.array(z.object({ unitId: z.number(), title: z.string() }).strict()).optional(),
   })
   .strict();
 export type ExplainBackPublic = z.infer<typeof ExplainBackPublic>;

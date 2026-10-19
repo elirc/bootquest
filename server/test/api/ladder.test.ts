@@ -25,13 +25,13 @@ import { createApp } from '../../src/api/app.ts';
 import type { Runner } from '../../src/api/runners.ts';
 import { DAY_MS, fixedClock } from '../../src/engines/clock.ts';
 import { getRating } from '../../src/engines/evidence.ts';
-import { revealSolution } from '../../src/engines/attempts.ts';
+import { recordAttempt, revealSolution } from '../../src/engines/attempts.ts';
 import { retestGate } from '../../src/engines/ladder.ts';
 import { assertUniqueSeedItemRefs } from '../../src/store/ladder.ts';
 import { insertUnit } from '../../src/store/content.ts';
 import { mapContentStore } from '../../src/api/content-store.ts';
-import { ledgerCounts } from '../../src/store/queries.ts';
-import { loadSeedItemStore, mapSeedItemStore, SeedItemLoadError } from '../../src/store/seed-items.ts';
+import { ledgerCounts, primaryCheck } from '../../src/store/queries.ts';
+import { loadSeedItemStore, mapSeedItemStore, SeedItemLoadError, seedItemHash } from '../../src/store/seed-items.ts';
 import { localNoon, makeTempDb, type TempDb } from '../helpers.ts';
 import fixture from '../fixtures/ladder-fixture.json' with { type: 'json' };
 
@@ -91,6 +91,13 @@ function expectError(res: request.Response, status: number, code: string): void 
   expect(ApiErrorBody.parse(res.body).error.code).toBe(code);
 }
 
+/** leg (a) first: explain-api / explain-low refuse answers (409 ARTIFACT_REQUIRED) until their project passes solo */
+async function passArtifact(ctx: Ctx, key = 'fixture:ladder/project-api'): Promise<void> {
+  const res = await request(ctx.app).post(`/api/units/${ctx.id(key)}/submit`).send({ port: GOOD_PORT });
+  expect(res.status, res.text).toBe(200);
+  expect(res.body.verdict).toBe('pass');
+}
+
 const ANSWERS = ['the permission test guards read-only roles', 'the state machine test guards transitions', 'tenant isolation is tested per repository'];
 const marks = (coveredCount: number) => Object.fromEntries(KEY_POINT_IDS.map((id, i) => [id, i < coveredCount ? 'covered' : 'missed']));
 
@@ -119,6 +126,7 @@ describe('explain-back: immutable answer first, then the key, then the self-scor
     expectError(await request(ctx.app).get(`/api/units/${id}/explain-back/key`), 403, 'NOT_ANSWERED');
     expectError(await request(ctx.app).post(`/api/units/${id}/explain-back/self-score`).send({ perKeyPoint: marks(16) }), 403, 'NOT_ANSWERED');
 
+    await passArtifact(ctx);
     const before = ledgerCounts(ctx.tmp.db);
     const ans = await request(ctx.app).post(`/api/units/${id}/explain-back/answers`).send({ answers: ANSWERS });
     expect(ans.status, ans.text).toBe(200);
@@ -144,6 +152,7 @@ describe('explain-back: immutable answer first, then the key, then the self-scor
     expectError(await request(ctx.app).post(url).send({ answers: [...ANSWERS.slice(0, 2), '   '] }), 400, 'VALIDATION');
     expectError(await request(ctx.app).post(url).send({ answers: ANSWERS, assistance: 'none' }), 400, 'VALIDATION');
     expectError(await request(ctx.app).post(url).send({ answers: ANSWERS, score: 1 }), 400, 'VALIDATION');
+    await passArtifact(ctx);
     await request(ctx.app).post(url).send({ answers: ANSWERS }).expect(200);
     const score = `/api/units/${id}/explain-back/self-score`;
     const partial = marks(16);
@@ -276,6 +285,7 @@ describe('explain-back: immutable answer first, then the key, then the self-scor
     );
     const a = ctx.id('fixture:ladder/explain-api');
     expect(() => assertUniqueSeedItemRefs(ctx.tmp.db)).toThrow(/more than one live unit/);
+    await passArtifact(ctx);
     const ans = await request(ctx.app).post(`/api/units/${a}/explain-back/answers`).send({ answers: ANSWERS });
     expect(ans.status).toBe(200);
     await request(ctx.app).get(`/api/units/${a}/explain-back/key`).expect(200); // the key of S is now seen
@@ -290,8 +300,9 @@ describe('explain-back: immutable answer first, then the key, then the self-scor
 
   it('W7 audit #8: a re-seeded item (same key, changed content) refuses the old answer\'s key / self-score with 409 CONTENT_CHANGED', async () => {
     const id = ctx.id('fixture:ladder/explain-api');
+    await passArtifact(ctx);
     await request(ctx.app).post(`/api/units/${id}/explain-back/answers`).send({ answers: ANSWERS }).expect(200);
-    const changed = { ...EB, questions: EB.questions.map((q, i) => (i === 0 ? { ...q, keyPoints: q.keyPoints.slice(1) } : q)) };
+    const changed ={ ...EB, questions: EB.questions.map((q, i) => (i === 0 ? { ...q, keyPoints: q.keyPoints.slice(1) } : q)) };
     const app = createApp({ db: ctx.tmp.db, clock: ctx.clock, runners: {}, seedItems: mapSeedItemStore([changed, ...KATAS]) });
     expectError(await request(app).get(`/api/units/${id}/explain-back/key`), 409, 'CONTENT_CHANGED');
     expectError(await request(app).post(`/api/units/${id}/explain-back/self-score`).send({ perKeyPoint: marks(15) }), 409, 'CONTENT_CHANGED');
@@ -467,6 +478,100 @@ describe('the promotion cycle through the HTTP API (artifact -> explain-back -> 
     expect(res.attempt.mode).toBe('assisted');
     const comp = CompetenciesResponse.parse((await request(ctx.app).get('/api/competencies')).body);
     expect(comp.competencies.find((c) => c.id === 'data-http')!.promotion.artifact.state).toBe('pending');
+  });
+});
+
+describe('dead end #2: an explain-back that is leg (b) of an artifact refuses answers until that artifact passes solo', () => {
+  const ctx = useLadder();
+  const PROJECT_TITLE = '[fixture] Health endpoint project';
+
+  it('before any solo pass: 409 ARTIFACT_REQUIRED naming the project unit, nothing recorded; failed / assisted passes do not count; a solo pass opens it', async () => {
+    const eb = ctx.id('fixture:ladder/explain-api');
+    const project = ctx.id('fixture:ladder/project-api');
+    const detail = async () => UnitDetailResponse.parse((await request(ctx.app).get(`/api/units/${eb}`)).body).explainBack;
+    expect(await detail()).toMatchObject({ answered: false, artifactRequired: [{ unitId: project, title: PROJECT_TITLE }] });
+
+    const before = ledgerCounts(ctx.tmp.db);
+    const res = await request(ctx.app).post(`/api/units/${eb}/explain-back/answers`).send({ answers: ANSWERS });
+    expectError(res, 409, 'ARTIFACT_REQUIRED');
+    expect(res.body.error.message).toContain(`unit ${project} "${PROJECT_TITLE}"`);
+    expect(ledgerCounts(ctx.tmp.db)).toEqual(before); // refused before anything is written: the set is NOT burned
+
+    // a failed submit and a self-flagged assisted pass are not leg (a): still refused
+    await request(ctx.app).post(`/api/units/${project}/submit`).send({ port: 1 }).expect(200);
+    await request(ctx.app).post(`/api/units/${project}/submit`).send({ port: GOOD_PORT, selfAssisted: true }).expect(200);
+    expectError(await request(ctx.app).post(`/api/units/${eb}/explain-back/answers`).send({ answers: ANSWERS }), 409, 'ARTIFACT_REQUIRED');
+    expectError(await request(ctx.app).get(`/api/units/${eb}/explain-back/key`), 403, 'NOT_ANSWERED'); // answer-first still holds
+
+    await passArtifact(ctx);
+    expect(await detail()).toMatchObject({ answered: false, artifactRequired: [] });
+    ctx.clock.advance(60_000);
+    const answeredAt = ctx.clock().getTime();
+    await request(ctx.app).post(`/api/units/${eb}/explain-back/answers`).send({ answers: ANSWERS }).expect(200);
+    const sc = ExplainBackScoreResponse.parse((await request(ctx.app).post(`/api/units/${eb}/explain-back/self-score`).send({ perKeyPoint: marks(14) })).body);
+    expect(sc.retests).toEqual([expect.objectContaining({ artifactUnitId: project, dueAt: answeredAt + 2 * DAY_MS })]);
+  });
+
+  it('standalone explain-backs stay answerable: no prerequisite (G2 / design-set / quest-linked shape) or a non-project prerequisite is never gated', async () => {
+    const solo = insertUnit(
+      ctx.tmp.db,
+      { key: 'fixture:ladder/explain-standalone', track: 'js', kind: 'explain-back', title: '[fixture] design it', competencies: ['language-fluency'], checks: [{ spec: { type: 'explain-back', questionSetKey: 'seed:explainback:standalone-copy' } }] },
+      ctx.clock,
+    );
+    const drillLinked = insertUnit(
+      ctx.tmp.db,
+      {
+        key: 'fixture:ladder/explain-drill-linked',
+        track: 'js',
+        kind: 'explain-back',
+        title: '[fixture] drill-linked',
+        competencies: ['language-fluency'],
+        prerequisites: ['fixture:ladder/drill'],
+        checks: [{ spec: { type: 'explain-back', questionSetKey: 'seed:explainback:drill-copy' } }],
+      },
+      ctx.clock,
+    );
+    const app = createApp({
+      db: ctx.tmp.db,
+      clock: ctx.clock,
+      runners: {},
+      seedItems: mapSeedItemStore([...fixture.seedItems, { ...EB, key: 'seed:explainback:standalone-copy' }, { ...EB, key: 'seed:explainback:drill-copy' }]),
+    });
+    for (const u of [solo, drillLinked]) {
+      expect(UnitDetailResponse.parse((await request(app).get(`/api/units/${u}`)).body).explainBack?.artifactRequired).toEqual([]);
+      await request(app).post(`/api/units/${u}/explain-back/answers`).send({ answers: ANSWERS }).expect(200);
+      const sc = ExplainBackScoreResponse.parse((await request(app).post(`/api/units/${u}/explain-back/self-score`).send({ perKeyPoint: marks(16) })).body);
+      expect(sc).toMatchObject({ passed: true, xp: { amount: 20 }, retests: [] });
+    }
+  });
+
+  it('a prerequisite that can never pass solo is not waited on (no new dead end): a revealed or a retired artifact unit', async () => {
+    const eb = ctx.id('fixture:ladder/explain-api');
+    const low = ctx.id('fixture:ladder/explain-low');
+    revealSolution(ctx.tmp.db, ctx.id('fixture:ladder/project-api'), ctx.clock); // every later attempt on it is guided
+    ctx.tmp.db.run('UPDATE unit SET retired_at = ? WHERE id = ?', ctx.clock().getTime(), ctx.id('fixture:ladder/project-low'));
+    for (const u of [eb, low]) {
+      expect(UnitDetailResponse.parse((await request(ctx.app).get(`/api/units/${u}`)).body).explainBack?.artifactRequired).toEqual([]);
+      await request(ctx.app).post(`/api/units/${u}/explain-back/answers`).send({ answers: ANSWERS }).expect(200);
+    }
+    // ...and with no solo pass behind the answer, a passing self-score schedules NO (pointless) retest
+    const sc = ExplainBackScoreResponse.parse((await request(ctx.app).post(`/api/units/${eb}/explain-back/self-score`).send({ perKeyPoint: marks(16) })).body);
+    expect(sc).toMatchObject({ passed: true, retests: [] });
+  });
+
+  it('a LEGACY answer recorded before the artifact pass (pre-fix) schedules no retest: no solo pass at/before the answer can pair with it', async () => {
+    const eb = ctx.id('fixture:ladder/explain-api');
+    // the engine path, as the server did before this gate existed
+    recordAttempt(
+      ctx.tmp.db,
+      { unitId: eb, checkId: primaryCheck(ctx.tmp.db, eb)!.id, selfAssisted: false, answer: { explainBack: { questionSetKey: EB.key, itemSha: seedItemHash(EB), answers: ANSWERS } } },
+      ctx.clock,
+    );
+    ctx.clock.advance(60_000);
+    await passArtifact(ctx); // the pass comes AFTER the answer
+    const sc = ExplainBackScoreResponse.parse((await request(ctx.app).post(`/api/units/${eb}/explain-back/self-score`).send({ perKeyPoint: marks(16) })).body);
+    expect(sc).toMatchObject({ passed: true, xp: { amount: 20 }, retests: [] });
+    expect(CompetenciesResponse.parse((await request(ctx.app).get('/api/competencies')).body).retests).toEqual([]);
   });
 });
 

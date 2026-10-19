@@ -20,7 +20,7 @@ import {
 import type { Db } from '../db/database.ts';
 import { HonestyRuleError, recordAttempt, type AttemptRow } from '../engines/attempts.ts';
 import { PROMOTION_MIN_COVERAGE, promoteIfEligible, recordEvidence } from '../engines/evidence.ts';
-import { MutationGateError, openRetests, promotionProgress, recordMutationEvidence, scheduleRetests } from '../engines/ladder.ts';
+import { artifactsAwaitingSoloPass, MutationGateError, openRetests, promotionProgress, recordMutationEvidence, scheduleRetests } from '../engines/ladder.ts';
 import { closeElapsedDays, composeSlate } from '../engines/streak.ts';
 import { awardXp } from '../engines/xp.ts';
 import { competencyTable, getTrack, getUnit, primaryCheck, unitCompetencies, type CheckRecord, type UnitRecord } from '../store/queries.ts';
@@ -201,13 +201,16 @@ export function effectiveMinCoverage(spec: CheckSpec): number {
 }
 
 /** Public half for GET /units/:id (null = content pending). */
-export function explainBackPublicFor(seedItems: SeedItemStore, spec: CheckSpec, db?: Db) {
+export function explainBackPublicFor(seedItems: SeedItemStore, spec: CheckSpec, db?: Db, unitId?: number) {
   if (spec.type !== 'explain-back') return undefined;
   const item = seedItems.explainBack(spec.questionSetKey);
   if (!item) return null;
   const pub = { questions: explainBackQuestions(item), minCoveragePct: pct(effectiveMinCoverage(spec)) };
+  if (!db) return pub;
   // W9 (ui-audit #10): same predicate as GET .../explain-back/key (the item's first answer row)
-  return db ? { ...pub, answered: firstAnswer(db, 'explainBack', spec.questionSetKey) !== undefined } : pub;
+  const answered = { ...pub, answered: firstAnswer(db, 'explainBack', spec.questionSetKey) !== undefined };
+  // dead end #2: the same predicate POST .../answers enforces (409 ARTIFACT_REQUIRED)
+  return unitId === undefined ? answered : { ...answered, artifactRequired: artifactsAwaitingSoloPass(db, unitId) };
 }
 
 export function kataPublicFor(seedItems: SeedItemStore, spec: CheckSpec, db?: Db) {
@@ -238,6 +241,17 @@ export function answerExplainBack(deps: LadderDeps, unitId: number, body: Explai
         prior.unit_id === unit.id
           ? `unit ${unit.id}: your explain-back answer #${prior.id} is recorded and immutable; open its key instead`
           : `question set ${item.key} was already answered on unit ${prior.unit_id} (answer #${prior.id}); its key may have been read, so it cannot be answered again`,
+      );
+    }
+    // dead end #2: an answer before the linked artifact's solo pass would burn leg (b) for good
+    const pending = artifactsAwaitingSoloPass(db, unit.id);
+    if (pending.length > 0) {
+      throw new HttpError(
+        409,
+        'ARTIFACT_REQUIRED',
+        `unit ${unit.id}: this explain-back is promotion leg (b) of ${pending.map((p) => `unit ${p.unitId} "${p.title}"`).join(', ')}; ` +
+          `pass ${pending.length === 1 ? 'that unit' : 'those units'} solo first (verified submit), then answer — ` +
+          'an answer recorded before the artifact can never count, and the set can only be answered once',
       );
     }
     const attempt = recordAttempt(

@@ -55,14 +55,6 @@ function unitKind(db: Db, unitId: number): string {
   return row.kind;
 }
 
-/** Latest verified, solo pass on a unit (the artifact a retest re-checks), or null. */
-export function latestSoloPassAt(db: Db, unitId: number): number | null {
-  return (
-    db.get<{ t: number | null }>(`SELECT MAX(a.created_at) AS t FROM attempt a WHERE a.unit_id = ? AND a.mode = 'solo' AND ${VERIFIED_PASS_SQL}`, unitId)
-      ?.t ?? null
-  );
-}
-
 /** Project units an explain-back unit explains: itself (when project-kind) or its project-kind prerequisites. */
 export function explainedArtifactUnits(db: Db, explainBackUnitId: number): number[] {
   if (PROJECT_KIND_SET.has(unitKind(db, explainBackUnitId))) return [explainBackUnitId];
@@ -75,11 +67,56 @@ export function explainedArtifactUnits(db: Db, explainBackUnitId: number): numbe
     .map((r) => r.id);
 }
 
+/** Latest verified, solo pass on a unit attempted at or before `t`, or null. */
+function latestSoloPassAtOrBefore(db: Db, unitId: number, t: number): number | null {
+  return (
+    db.get<{ t: number | null }>(
+      `SELECT MAX(a.created_at) AS t FROM attempt a WHERE a.unit_id = ? AND a.mode = 'solo' AND a.created_at <= ? AND ${VERIFIED_PASS_SQL}`,
+      unitId,
+      t,
+    )?.t ?? null
+  );
+}
+
+export interface PendingArtifact {
+  unitId: number;
+  title: string;
+}
+
+/**
+ * Ladder dead end #2 (w6-audit #5 scenario 1): the artifact units whose promotion leg (b) an
+ * answer on this explain-back unit WOULD anchor, but that have no verified solo pass yet. An
+ * answer now would burn leg (b) for good — the answer is once per question set and leg (b)
+ * needs it at/after the artifact attempt (evidence.ts) — so the answer is refused until this
+ * list is empty.
+ *
+ * Exactly the evaluator's linkage: only an 'explain-back'-kind unit links to its project-kind
+ * prerequisites. Standalone sets (no project prerequisite: G2 rubrics, the javabootcamp design
+ * sets, quest-linked sets with no artifact) are never gated. A prerequisite that can never be
+ * passed solo is not waited on (that would be a new dead end): a retired unit, a unit with no
+ * check, or a unit whose solution was revealed (every later attempt on it is guided).
+ */
+export function artifactsAwaitingSoloPass(db: Db, explainBackUnitId: number): PendingArtifact[] {
+  if (unitKind(db, explainBackUnitId) !== 'explain-back') return [];
+  return db.all<PendingArtifact>(
+    `SELECT u.id AS unitId, u.title AS title FROM unit_prerequisite p JOIN unit u ON u.id = p.prereq_unit_id
+      WHERE p.unit_id = ? AND u.kind IN (${PROJECT_KINDS_SQL}) AND u.retired_at IS NULL
+        AND EXISTS (SELECT 1 FROM "check" c WHERE c.unit_id = u.id)
+        AND NOT EXISTS (SELECT 1 FROM attempt r WHERE r.unit_id = u.id AND r.assistance_source = 'reveal')
+        AND NOT EXISTS (SELECT 1 FROM attempt a WHERE a.unit_id = u.id AND a.mode = 'solo' AND ${VERIFIED_PASS_SQL})
+      ORDER BY u.id`,
+    explainBackUnitId,
+  );
+}
+
 /**
  * Schedule the changed-example retest of every artifact unit this explain-back
  * explains (one review_item per artifact unit with a live seeded variation;
- * none seeded = graceful degrade, nothing scheduled). Due = later of the latest
- * solo artifact pass and the explain-back attempt, + 2 days.
+ * none seeded = graceful degrade, nothing scheduled). Only an artifact with a
+ * verified solo pass at/before the explain-back ANSWER can pair with it as
+ * leg (a) (leg (b) must come at/after the artifact attempt), so an artifact
+ * without one gets no schedule — a retest there could never complete a chain
+ * (w6-audit #5). Due = later of that pass and the explain-back answer, + 2 days.
  */
 export function scheduleRetests(db: Db, explainBackAttemptId: number, now: Clock): RetestSchedule[] {
   const t = nowMs(now);
@@ -89,7 +126,9 @@ export function scheduleRetests(db: Db, explainBackAttemptId: number, now: Clock
     for (const artifactUnitId of explainedArtifactUnits(db, eb.unit_id)) {
       const variation = findVariation(db, artifactUnitId);
       if (variation === null) continue;
-      const anchor = Math.max(latestSoloPassAt(db, artifactUnitId) ?? 0, eb.created_at);
+      const passAt = latestSoloPassAtOrBefore(db, artifactUnitId, eb.created_at);
+      if (passAt === null) continue;
+      const anchor = Math.max(passAt, eb.created_at);
       const dueAt = anchor + RETEST_MIN_DELAY_MS;
       const marker: RetestMarker = { retest: { artifactUnitId, explainBackAttemptId } };
       const { lastInsertRowid } = db.run(
