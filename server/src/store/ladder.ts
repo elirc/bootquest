@@ -128,6 +128,19 @@ function baseName(p: string): string {
   return p.split('/').pop() ?? p;
 }
 
+/**
+ * Display label for an explain-back unit's source file. A bare `README.md`
+ * tells the learner nothing when one repo ships several README-anchored sets
+ * (the javabootcamp design packs), so a README keeps its parent directory.
+ */
+export function unitLabel(p: string): string {
+  const base = baseName(p);
+  if (!/^readme\.md$/i.test(base)) return base;
+  const parts = p.split('/').filter(Boolean);
+  const parent = parts.length >= 2 ? parts[parts.length - 2]! : '';
+  return parent ? `${parent}/${base}` : base;
+}
+
 interface CampaignLink {
   questId: number;
   questKey: string;
@@ -167,7 +180,7 @@ function plan(items: SeedItemStore, links: Map<string, CampaignLink>, kataDiffic
       key: explainBackUnitKey(it),
       track: g2 ? 'agentic' : trackForRepo(it.provenance.repo, links),
       kind: 'explain-back',
-      title: g2 ? `G2 delegation brief: ${it.provenance.repo}` : `Explain back: ${it.provenance.repo} — ${baseName(it.provenance.path)}`,
+      title: g2 ? `G2 delegation brief: ${it.provenance.repo}` : `Explain back: ${it.provenance.repo} — ${unitLabel(it.provenance.path)}`,
       difficulty: null,
       repo: it.provenance.repo,
       competencies: g2 ? ['agentic-engineering', 'communication'] : ['language-fluency'],
