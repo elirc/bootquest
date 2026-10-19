@@ -1,0 +1,162 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "javabootcamp--bootcamp-09-caching-README.md",
+ "items": [
+  {
+   "key": "seed:explainback:javabootcamp/explain-back/8a81343b142a13dc",
+   "provenance": {
+    "repo": "javabootcamp",
+    "sha": "faf5d9df3a5b998025126f8aca72459b56ca52bb",
+    "path": "bootcamp/09-caching/README.md",
+    "lines": {
+     "start": 17,
+     "end": 96
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "DESIGN IT — URL shortener (javabootcamp System Design, guide astraupskill/03-SYSTEM-DESIGN.md §4.1; blocks from modules 09 and 11). Requirements: create a short code for a long URL, redirect a code to its URL fast, optional custom aliases and expiry; 100 million new links a month, read 100 times more often than written; a few seconds of staleness is acceptable. Write your design before you look: envelope numbers, data model and ids, partitioning, the cache layer, failure modes and consistency, and the one trade-off you would defend. Then tick the checkpoints you covered and add up the weights (suggested pass: 70 % with every [w3] hit).",
+     "keyPoints": [
+      {
+       "text": "[w3] Envelope: about 40 writes/s (peak ~100), about 4,000 reads/s (peak ~10,000), ~250 B a row, ~300 GB a year and ~1.5 TB after five years; so writes are trivial for one database and reads want a cache in front.",
+       "cite": {
+        "path": "astraupskill/03-SYSTEM-DESIGN.md",
+        "lineStart": 96,
+        "lineEnd": 109
+       }
+      },
+      {
+       "text": "[w2] Data model starts from the access pattern: one record per code (code, long URL, metadata, optional expiry), looked up by short code thousands of times a second and almost never written, which points at a key-value store plus a cache.",
+       "cite": {
+        "path": "astraupskill/03-SYSTEM-DESIGN.md",
+        "lineStart": 44,
+        "lineEnd": 47
+       }
+      },
+      {
+       "text": "[w3] Code scheme decided out loud: a counter in base62 is short and collision-free but guessable and needs coordination (snowflake-style ids or pre-allocated ranges remove that); random codes need a collision check; a hash of the URL dedupes but leaks that the URL was already shortened.",
+       "cite": {
+        "path": "astraupskill/03-SYSTEM-DESIGN.md",
+        "lineStart": 252,
+        "lineEnd": 257
+       }
+      },
+      {
+       "text": "[w2] Partitioning: the key-value store is partitioned by code with consistent hashing, and link creation is rate-limited per user or IP to stop abuse.",
+       "cite": {
+        "path": "astraupskill/03-SYSTEM-DESIGN.md",
+        "lineStart": 244,
+        "lineEnd": 249
+       }
+      },
+      {
+       "text": "[w3] Cache sized in hot LINKS, not reads (~4 million hot links x 250 B ≈ 1 GB, one cache node), with a TTL whose value is the written-down staleness bound.",
+       "cite": {
+        "path": "astraupskill/03-SYSTEM-DESIGN.md",
+        "lineStart": 102,
+        "lineEnd": 104
+       }
+      },
+      {
+       "text": "[w2] Unknown codes are cached on purpose as 'not found' with their own, shorter TTL, so probing random codes cannot hammer the store.",
+       "quote": "Cache the absence, with a shorter TTL, like DNS does with NXDOMAIN"
+      },
+      {
+       "text": "[w2] A viral link's expiry moment is protected: concurrent misses for one hot code collapse into a single reload that everyone waits on (single-flight), with a CDN absorbing the rest.",
+       "quote": "Collapse them into one load and let everyone wait on it"
+      },
+      {
+       "text": "[w1] 301 vs 302 is decided against click analytics (a permanent redirect is cached by browsers and never comes back), and clicks are counted from an asynchronous event, never on the redirect path.",
+       "cite": {
+        "path": "astraupskill/03-SYSTEM-DESIGN.md",
+        "lineStart": 258,
+        "lineEnd": 264
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "PRE-MORTEM — the same URL shortener at 10x the traffic (a billion new links a month), or with the cache tier or the id issuer down. What breaks first, and what in your design already prevents it?",
+     "keyPoints": [
+      {
+       "text": "[w3] A hot code's TTL runs out and hundreds of requests miss at once: a stampede onto one store partition, unless reloads are collapsed per key.",
+       "quote": "A hot key expires and 500 requests miss in the same millisecond"
+      },
+      {
+       "text": "[w3] Bots probing codes that do not exist: if the cache keeps only hits, every probe is a database read.",
+       "quote": "A cache that only remembers hits sends every \"user not found\" to the database"
+      },
+      {
+       "text": "[w2] Growing the cache tier with mod-N sharding turns the resize into a mass of misses, which is why cache clients use consistent hashing.",
+       "cite": {
+        "path": "bootcamp/11-partitioning-and-ids/README.md",
+        "lineStart": 149,
+        "lineEnd": 151
+       }
+      },
+      {
+       "text": "[w2] The one counter that issues ids is a single point of failure hiding in plain sight; name it and say what happens when it dies (snowflake-style ids need no coordinator).",
+       "cite": {
+        "path": "astraupskill/03-SYSTEM-DESIGN.md",
+        "lineStart": 584,
+        "lineEnd": 586
+       }
+      },
+      {
+       "text": "[w2] Cache tier down: cache-aside makes a cache failure survivable, but then the store takes the full redirect rate, so capacity or shedding must be planned for that case.",
+       "cite": {
+        "path": "astraupskill/03-SYSTEM-DESIGN.md",
+        "lineStart": 138,
+        "lineEnd": 138
+       }
+      },
+      {
+       "text": "[w1] Measure the hit rate: at 99 % the store sees 1 request in 100; a falling hit rate is the early warning before the store saturates.",
+       "quote": "A 99 % hit rate means the database sees 1 request in 100"
+      }
+     ]
+    },
+    {
+     "prompt": "TRADE-OFF HANDBACK — defend your URL-shortener choices against the alternatives the guide names. For each, say what you bought, what it cost, and which requirement put you on that side.",
+     "keyPoints": [
+      {
+       "text": "[w3] Cache-aside over write-through: links are almost never rewritten, so writing every new link into the cache would mostly cache entries nobody clicks, and every write would pay both stores.",
+       "quote": "caches values nobody reads"
+      },
+      {
+       "text": "[w3] Consistent hashing over hash mod N for the code-partitioned store: adding a node moves about 1/(N+1) of keys instead of almost every key.",
+       "cite": {
+        "path": "astraupskill/03-SYSTEM-DESIGN.md",
+        "lineStart": 173,
+        "lineEnd": 177
+       }
+      },
+      {
+       "text": "[w2] Eviction chosen for hot links: LRU follows recency but one big scan flushes it; LFU keeps a stable hot set but newcomers (a link going viral today) struggle while old fame lingers.",
+       "quote": "newcomers struggle; old fame lingers"
+      },
+      {
+       "text": "[w2] Eventual consistency is fine for redirects (seconds of staleness tolerated), but uniqueness is not: claiming a custom alias is a uniqueness rule like a username, which the table puts on the strong side, so two users can never both get the same alias.",
+       "cite": {
+        "path": "astraupskill/03-SYSTEM-DESIGN.md",
+        "lineStart": 467,
+        "lineEnd": 474
+       }
+      },
+      {
+       "text": "[w1] Prefer boring: ~40 writes/s fit one database; sharding is justified by the storage number, not by habit.",
+       "cite": {
+        "path": "astraupskill/03-SYSTEM-DESIGN.md",
+        "lineStart": 590,
+        "lineEnd": 592
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

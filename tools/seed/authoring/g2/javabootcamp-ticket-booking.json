@@ -1,0 +1,37 @@
+{
+ "lines": { "start": 15, "end": 131 },
+ "questions": [
+  {
+   "prompt": "DESIGN IT — ticket booking with holds (javabootcamp System Design, guide astraupskill/03-SYSTEM-DESIGN.md §4.4; blocks from modules 10, 12 and 13). Requirements: many people try to buy the same seats at the same moment; a seat is sold at most once; a user can hold seats for ten minutes while paying; unpaid holds expire; payment must not be charged twice. Write your design before you look: sizing, data model, partitioning, consistency and concurrency control, failure modes, and the trade-off you would defend. Then tick the checkpoints you covered and add up the weights (suggested pass: 70 % with every [w3] hit).",
+   "keyPoints": [
+    { "text": "[w2] Size the on-sale spike, not the average day: flash sales put a rate limit and a queue in front of the whole booking path.", "cite": { "path": "astraupskill/03-SYSTEM-DESIGN.md", "lineStart": 365, "lineEnd": 366 } },
+    { "text": "[w3] Data model: a seats store with a version per seat (or per section), and a hold recorded as seat -> (user, expiresAt).", "cite": { "path": "astraupskill/03-SYSTEM-DESIGN.md", "lineStart": 349, "lineEnd": 350 } },
+    { "text": "[w3] 'At most once per seat' is a compare-and-set on the seat's version: read it with its version and write back only if the version is unchanged, so of two buyers only the first write wins.", "quote": "read a row with its version, compute, write back only if the version has not changed" },
+    { "text": "[w2] The hold is a lease with an expiry on an injected clock, and its expiry is a delayed job.", "cite": { "path": "astraupskill/03-SYSTEM-DESIGN.md", "lineStart": 359, "lineEnd": 361 } },
+    { "text": "[w3] Payment is idempotent (Idempotency-Key), and booking across inventory and payment is a saga: hold, charge, confirm, and on failure release the hold and refund.", "cite": { "path": "astraupskill/03-SYSTEM-DESIGN.md", "lineStart": 361, "lineEnd": 364 } },
+    { "text": "[w1] Partitioning follows the access pattern: listing bookings by date suits range partitioning.", "cite": { "path": "astraupskill/03-SYSTEM-DESIGN.md", "lineStart": 547, "lineEnd": 547 } },
+    { "text": "[w3] Concurrency regime stated: optimistic locking shines when conflicts are rare, but at a popular on-sale every buyer conflicts on the same sections, where a short pessimistic lock or a single-writer queue per event can be better.", "cite": { "path": "astraupskill/03-SYSTEM-DESIGN.md", "lineStart": 369, "lineEnd": 373 } }
+   ]
+  },
+  {
+   "prompt": "PRE-MORTEM — the same booking system at 10x the on-sale traffic, or with the payment provider slow or down. What breaks first, and what in your design already prevents it?",
+   "keyPoints": [
+    { "text": "[w3] Under heavy contention optimistic retries waste work and pile up into a retry storm; that is the regime where a real lock or a queue wins.", "quote": "under heavy contention the retries waste work and a real lock is better" },
+    { "text": "[w3] The hold expires at the very moment payment confirms: both the confirm and the release must be conditional writes ('still held by this hold id'), or the expiry job frees a seat that was just sold.", "cite": { "path": "astraupskill/03-SYSTEM-DESIGN.md", "lineStart": 374, "lineEnd": 378 } },
+    { "text": "[w2] A slow provider makes clients retry 'pay': every retry needs a story for 'what if the first attempt actually succeeded?'.", "cite": { "path": "astraupskill/03-SYSTEM-DESIGN.md", "lineStart": 577, "lineEnd": 578 } },
+    { "text": "[w2] A paused holder does not know its lease has run out, so hold expiry cannot trust wall-clock time alone; leases need margins and fencing tokens.", "quote": "Because a paused leader does not know its lease ran out" },
+    { "text": "[w1] The refund (a compensation) can fail too: compensations are retried and must be idempotent, and a saga that runs out of retries must report itself stuck.", "cite": { "path": "bootcamp/12-messaging-and-events/README.md", "lineStart": 100, "lineEnd": 101 } }
+   ]
+  },
+  {
+   "prompt": "TRADE-OFF HANDBACK — defend your booking choices against the alternatives the guide names. For each, say what you bought, what it cost, and which requirement put you on that side.",
+   "keyPoints": [
+    { "text": "[w3] Saga, not two-phase commit with the payment provider: external providers do not join your transactions and 2PC blocks while the coordinator is unsure; the saga trades isolation (others briefly see 'held') for availability.", "cite": { "path": "astraupskill/03-SYSTEM-DESIGN.md", "lineStart": 379, "lineEnd": 382 } },
+    { "text": "[w2] Why 2PC blocks: a participant that voted YES keeps its locks until it learns the decision.", "quote": "a participant that voted YES holds its locks until it hears the decision" },
+    { "text": "[w2] Choosing pessimistic locks instead brings deadlocks and locks held by dead clients, so they need timeouts or leases.", "cite": { "path": "astraupskill/03-SYSTEM-DESIGN.md", "lineStart": 489, "lineEnd": 496 } },
+    { "text": "[w2] Seats are on the strong side of the consistency table (inventory, uniqueness): during a partition the minority side refuses rather than double-selling.", "cite": { "path": "astraupskill/03-SYSTEM-DESIGN.md", "lineStart": 467, "lineEnd": 474 } },
+    { "text": "[w1] Know the store's isolation level: snapshot isolation (MVCC) still allows write skew, where two transactions read the same rows and write different ones; only serializable rules it out, so the answer says which level the seats store runs at.", "quote": "write skew: two transactions read the same rows and write different ones" }
+   ]
+  }
+ ]
+}

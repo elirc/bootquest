@@ -1,0 +1,166 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "javabootcamp--bootcamp-12-messaging-and-events-README.md",
+ "items": [
+  {
+   "key": "seed:explainback:javabootcamp/explain-back/b59b122fae6ce4eb",
+   "provenance": {
+    "repo": "javabootcamp",
+    "sha": "faf5d9df3a5b998025126f8aca72459b56ca52bb",
+    "path": "bootcamp/12-messaging-and-events/README.md",
+    "lines": {
+     "start": 13,
+     "end": 101
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "DESIGN IT — feed and notifications fan-out (javabootcamp System Design, guide astraupskill/03-SYSTEM-DESIGN.md §4.3; blocks from modules 09, 11 and 12). Requirements: users follow others; a user's home feed shows recent posts from people they follow; followers get notified; feed reads far outnumber posts; a few seconds of delay is fine; celebrity accounts have millions of followers. Write your design before you look: sizing, data model and ids, partitioning, the cache layer, failure modes and consistency, and the trade-off you would defend. Then tick the checkpoints you covered and add up the weights (suggested pass: 70 % with every [w3] hit).",
+     "keyPoints": [
+      {
+       "text": "[w2] Sizing is driven by the read/write skew and the follower distribution: reads dominate, and one celebrity post multiplied by millions of followers is the number that shapes the write path.",
+       "cite": {
+        "path": "astraupskill/03-SYSTEM-DESIGN.md",
+        "lineStart": 306,
+        "lineEnd": 309
+       }
+      },
+      {
+       "text": "[w2] Posts carry a sortable, time-ordered id (snowflake-style), which gives feed order without a central clock.",
+       "cite": {
+        "path": "astraupskill/03-SYSTEM-DESIGN.md",
+        "lineStart": 332,
+        "lineEnd": 333
+       }
+      },
+      {
+       "text": "[w3] Saving the post and announcing it cannot drift apart: no dual write; the post and its event go through a transactional outbox and a relay.",
+       "quote": "\"Save the order, then publish OrderPlaced\" loses the event if the process dies in between"
+      },
+      {
+       "text": "[w3] One 'posted' topic with independent consumers (feed fan-out worker, notification worker, indexers), each at-least-once with dedupe because duplicates will arrive.",
+       "cite": {
+        "path": "astraupskill/03-SYSTEM-DESIGN.md",
+        "lineStart": 319,
+        "lineEnd": 322
+       }
+      },
+      {
+       "text": "[w2] Feeds are cached per-user lists, partitioned by user id.",
+       "cite": {
+        "path": "astraupskill/03-SYSTEM-DESIGN.md",
+        "lineStart": 323,
+        "lineEnd": 324
+       }
+      },
+      {
+       "text": "[w2] Failing notifications retry with backoff and land in a dead-letter queue after N attempts; consistency is eventual, since seconds of delay are acceptable.",
+       "quote": "after N attempts to a **dead-letter queue** for a human to inspect and redrive"
+      },
+      {
+       "text": "[w3] Fan-out decided: push to every follower makes reads trivial and celebrity writes enormous, pull makes reads expensive; the hybrid pushes for normal accounts, pulls for celebrities and merges at read time.",
+       "cite": {
+        "path": "astraupskill/03-SYSTEM-DESIGN.md",
+        "lineStart": 327,
+        "lineEnd": 331
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "PRE-MORTEM — the same feed at 10x the traffic (several celebrities posting at once), or with the push/email provider down. What breaks first, and what in your design already prevents it?",
+     "keyPoints": [
+      {
+       "text": "[w3] The fan-out queue spikes; an unbounded queue only postpones the failure to an out-of-memory crash, so it is bounded and producers are slowed (backpressure).",
+       "quote": "the outage just arrives later, as an OOM"
+      },
+      {
+       "text": "[w3] Redelivery is normal: a consumer cannot know whether its ack was lost, so the same post event arrives twice and must not double-insert feed entries or double-notify.",
+       "quote": "A network can't tell \"the consumer crashed before acking\" from \"the ack got lost\""
+      },
+      {
+       "text": "[w2] With the provider down, a message that always fails must not block the others: it moves to a dead-letter queue, and somebody owns reading that queue.",
+       "cite": {
+        "path": "astraupskill/03-SYSTEM-DESIGN.md",
+        "lineStart": 201,
+        "lineEnd": 201
+       }
+      },
+      {
+       "text": "[w2] Bulk fan-out must not delay 'your friend replied': priority scheduling, with the known catch that low priority can starve.",
+       "cite": {
+        "path": "astraupskill/03-SYSTEM-DESIGN.md",
+        "lineStart": 334,
+        "lineEnd": 337
+       }
+      },
+      {
+       "text": "[w2] Notification storms are batched and rate-limited per recipient ('someone and 40 others liked your post').",
+       "cite": {
+        "path": "astraupskill/03-SYSTEM-DESIGN.md",
+        "lineStart": 338,
+        "lineEnd": 339
+       }
+      },
+      {
+       "text": "[w1] Adding partitions to a live topic reshuffles keys and breaks per-key order, so partition count is planned ahead of the spike.",
+       "cite": {
+        "path": "bootcamp/11-partitioning-and-ids/README.md",
+        "lineStart": 154,
+        "lineEnd": 157
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "TRADE-OFF HANDBACK — defend your feed choices against the alternatives the guide names. For each, say what you bought, what it cost, and which requirement put you on that side.",
+     "keyPoints": [
+      {
+       "text": "[w3] Work placement table: fan-out on write buys fast reads at the price of write amplification; fan-out on read buys cheap writes at the price of slow reads; the read-heavy requirement plus celebrities decides the split.",
+       "cite": {
+        "path": "astraupskill/03-SYSTEM-DESIGN.md",
+        "lineStart": 484,
+        "lineEnd": 484
+       }
+      },
+      {
+       "text": "[w3] 'Exactly once' is not offered: at-least-once delivery plus idempotent processing is what looks exactly-once from outside, and the answer names where the dedupe state lives and how long it is kept.",
+       "cite": {
+        "path": "astraupskill/03-SYSTEM-DESIGN.md",
+        "lineStart": 206,
+        "lineEnd": 208
+       }
+      },
+      {
+       "text": "[w2] Outbox vs dual write: the outbox costs a relay process and at-least-once delivery, accepted because a lost or phantom 'posted' event is worse.",
+       "cite": {
+        "path": "astraupskill/03-SYSTEM-DESIGN.md",
+        "lineStart": 200,
+        "lineEnd": 200
+       }
+      },
+      {
+       "text": "[w2] Asynchronous over synchronous processing: a queue buys decoupling and resilience and costs immediacy, which the few-seconds tolerance allows.",
+       "cite": {
+        "path": "astraupskill/03-SYSTEM-DESIGN.md",
+        "lineStart": 485,
+        "lineEnd": 485
+       }
+      },
+      {
+       "text": "[w1] Feed read models as projections of an event log are rebuildable, at the cost of schema evolution and replay time.",
+       "cite": {
+        "path": "astraupskill/03-SYSTEM-DESIGN.md",
+        "lineStart": 202,
+        "lineEnd": 202
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}
