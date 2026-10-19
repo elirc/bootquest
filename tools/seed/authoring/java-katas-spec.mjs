@@ -41,6 +41,8 @@ function testsBlock(helpers, tests) {
   const body = tests.map(([name, code]) => `        bootcamp.Check.test(${JSON.stringify(name)}, () -> {\n${code.replace(/^/gm, '            ')}\n        });\n`).join('');
   return `// ${BAR} tests ${BAR}\n${helpers}class KataTest {\n    public static void main(String[] args) {\n${body}        System.exit(bootcamp.Check.report());\n    }\n}\n// ${BAR} end tests ${BAR}\n`;
 }
+// j2's storage tests write their library under the runner's working directory (the attempt dir, wiped
+// before every attempt), never the system temp dir: a seed:check / kata-proof run must not leak dirs.
 const check = (tests) => ({ type: 'drill-java', files: { tests, tail: '' }, className: 'KataTest', timeoutMs: 30000 });
 const bothEdits = (paths, find, replace) => paths.map((path) => ({ path, find, replace }));
 
@@ -60,7 +62,7 @@ const bothEdits = (paths, find, replace) => paths.map((path) => ({ path, find, r
   const MGR = 'src/librarytracker/service/LibraryManager.java';
   const FS = 'src/librarytracker/storage/FileStorage.java';
   const setup =
-    'java.nio.file.Path dir = java.nio.file.Files.createTempDirectory("bq-j2-kata-");\n' +
+    'java.nio.file.Path dir = java.nio.file.Files.createTempDirectory(java.nio.file.Path.of("").toAbsolutePath(), "bq-j2-kata-");\n' +
     'java.time.Clock clock = java.time.Clock.fixed(java.time.Instant.parse("2026-03-02T10:00:00Z"), java.time.ZoneOffset.UTC);\n' +
     'LibraryManager m = new LibraryManager(new FileStorage(dir), clock);\n';
   const katas = [
@@ -188,11 +190,11 @@ const bothEdits = (paths, find, replace) => paths.map((path) => ({ path, find, r
             [
               [
                 'a save whose atomic move failed can be retried and lands on disk',
-                'java.nio.file.Path dir = java.nio.file.Files.createTempDirectory("bq-j2-kata-");\nLibraryManager m = new LibraryManager(new FlakyStorage(dir, 1));\nbootcamp.Check.raises(java.io.IOException.class, () -> m.addBook("Dune", "Frank Herbert", null));\nm.addBook("Dune", "Frank Herbert", null);\nbootcamp.Check.eq(new FileStorage(dir).load().books().size(), 1);',
+                'java.nio.file.Path dir = java.nio.file.Files.createTempDirectory(java.nio.file.Path.of("").toAbsolutePath(), "bq-j2-kata-");\nLibraryManager m = new LibraryManager(new FlakyStorage(dir, 1));\nbootcamp.Check.raises(java.io.IOException.class, () -> m.addBook("Dune", "Frank Herbert", null));\nm.addBook("Dune", "Frank Herbert", null);\nbootcamp.Check.eq(new FileStorage(dir).load().books().size(), 1);',
               ],
               [
                 'a healthy save writes the snapshot',
-                'java.nio.file.Path dir = java.nio.file.Files.createTempDirectory("bq-j2-kata-");\nLibraryManager m = new LibraryManager(new FlakyStorage(dir, 0));\nm.addBook("Dune", "Frank Herbert", null);\nm.addBook("Emma", "Jane Austen", null);\nbootcamp.Check.eq(new FileStorage(dir).load().books().size(), 2);',
+                'java.nio.file.Path dir = java.nio.file.Files.createTempDirectory(java.nio.file.Path.of("").toAbsolutePath(), "bq-j2-kata-");\nLibraryManager m = new LibraryManager(new FlakyStorage(dir, 0));\nm.addBook("Dune", "Frank Herbert", null);\nm.addBook("Emma", "Jane Austen", null);\nbootcamp.Check.eq(new FileStorage(dir).load().books().size(), 2);',
               ],
             ],
           ),
