@@ -1,0 +1,42 @@
+{
+ "questions": [
+  {
+   "prompt": "How does BuildJiraStore.ApplyPatch interpret a PATCH /api/issues/{id} body? Explain the shape it requires, how it decides which fields to touch, how a JSON null is treated for nullable fields, the validation bounds for title, story points and rank, and what is left in the in-memory issue when an earlier field in the body is valid but a later one fails validation.",
+   "keyPoints": [
+    { "text": "The body must be a JSON object, otherwise it is a validation error.", "quote": "Request body must be a JSON object." },
+    { "text": "A field is only touched if the property is present in the body (TryGetProperty), so omitted fields stay as they are.", "quote": "body.TryGetProperty(\"title\", out var title)" },
+    { "text": "An explicit null clears a nullable field such as description, story points, assignee or due date.", "quote": "if (description.ValueKind == JsonValueKind.Null)" },
+    { "text": "A patched title must be 3 to 160 characters and not blank.", "quote": "if (string.IsNullOrWhiteSpace(value) || value.Length < 3 || value.Length > 160)" },
+    { "text": "Story points must be an integer from 0 to 100.", "quote": "storyPoints.TryGetInt32(out var value) && value is >= 0 and <= 100" },
+    { "text": "Rank must be a non-negative integer.", "quote": "Rank must be a non-negative integer." },
+    { "text": "Fields are assigned as they are validated, so a valid title is already written to the issue when a later status fails; UpdateIssue then returns the error without saving, but the changed title stays in the in-memory state that later reads see.", "cite": { "path": "apps/dotnet/BuildJira.Api/Services/BuildJiraStore.cs", "lineStart": 208, "lineEnd": 316 } }
+   ]
+  },
+  {
+   "prompt": "Walk through BuildJiraStore.CreateIssue: which inputs it validates and their bounds, what happens for an unknown project, how the new issue's key number and rank are chosen, which defaults it applies for status, type and priority, who becomes the reporter, and what audit event it records.",
+   "keyPoints": [
+    { "text": "Before taking the lock, create rejects an input title shorter than 3 or longer than 160 and a description over 4000 characters.", "quote": "input.Title.Length < 3 || input.Title.Length > 160" },
+    { "text": "Input story points outside 0 through 100 are rejected too.", "quote": "input.StoryPoints is < 0 or > 100" },
+    { "text": "An unknown project id gives PROJECT_NOT_FOUND.", "quote": "\"PROJECT_NOT_FOUND\", \"Project was not found.\"" },
+    { "text": "The key number is the highest numeric suffix among the project's issues plus one, formatted as PROJECTKEY-n.", "cite": { "path": "apps/dotnet/BuildJira.Api/Services/BuildJiraStore.cs", "lineStart": 134, "lineEnd": 144 } },
+    { "text": "The rank is the project's highest rank plus 10.", "quote": "Rank = projectIssues.Select(item => item.Rank).DefaultIfEmpty(0).Max() + 10" },
+    { "text": "A new issue starts in TODO, and type and priority default to TASK and MEDIUM.", "cite": { "path": "apps/dotnet/BuildJira.Api/Services/BuildJiraStore.cs", "lineStart": 148, "lineEnd": 150 } },
+    { "text": "The acting user becomes the reporter.", "quote": "ReporterId = actor.Id" },
+    { "text": "An issue.created audit event is recorded with the new key as metadata.", "quote": "Action = \"issue.created\"" }
+   ]
+  },
+  {
+   "prompt": "What does BuildJiraStore do at startup and when serving reads? Explain how the data-file path is resolved, how an existing, missing or blank file is handled, how GetBoard matches the project key and orders issues, which sprint it picks and who appears in the board's team, and why GetActor hands back a copy instead of the stored user.",
+   "keyPoints": [
+    { "text": "A relative data-file path is combined with the content root.", "quote": "Path.Combine(environment.ContentRootPath, options.Value.DataFile)" },
+    { "text": "A file with content is deserialized into the state, falling back to the seed if that yields null.", "quote": "return JsonSerializer.Deserialize<BuildJiraState>(json, JsonOptions) ?? SeedState();" },
+    { "text": "A missing or blank file is replaced by seeded demo data that is saved straight away.", "cite": { "path": "apps/dotnet/BuildJira.Api/Services/BuildJiraStore.cs", "lineStart": 447, "lineEnd": 450 } },
+    { "text": "The project key is matched case-insensitively.", "quote": "string.Equals(item.Key, key, StringComparison.OrdinalIgnoreCase)" },
+    { "text": "Board issues are ordered by status, then by rank.", "quote": ".OrderBy(issue => issue.Status) .ThenBy(issue => issue.Rank)" },
+    { "text": "The board shows the project's sprint with the latest start date.", "quote": ".OrderByDescending(item => item.StartsAt)" },
+    { "text": "The team is every user in the state, ordered by name, not just the project's people.", "cite": { "path": "apps/dotnet/BuildJira.Api/Services/BuildJiraStore.cs", "lineStart": 70, "lineEnd": 73 } },
+    { "text": "GetActor returns a JSON round-trip clone, so the caller cannot mutate the stored user.", "quote": "return actor is null ? null : Clone(actor);" }
+   ]
+  }
+ ]
+}
