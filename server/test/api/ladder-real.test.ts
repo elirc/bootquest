@@ -125,8 +125,14 @@ describe.skipIf(!HAVE_CHECKOUT)('W7 real ladder content end to end (temp DB, no 
     expect(l.units.filter((u) => u.family === 'study').map((u) => u.repo)).toEqual(['ww6']);
     expect(l.units.filter((u) => u.family === 'kata').every((u) => u.trackId === 'agentic')).toBe(true);
     expect(l.units.filter((u) => u.family === 'g2').every((u) => u.trackId === 'agentic')).toBe(true);
-    // every ordinary explain-back set's repo is a campaign quest -> linked for display
-    expect(l.units.filter((u) => u.family === 'explain-back').every((u) => u.quest !== null)).toBe(true);
+    // every ordinary explain-back set's repo is a campaign quest -> linked for display,
+    // except javabootcamp: the drill source has no campaign quest, so its six system-design
+    // rubric sets load as standalone java-track units (same precedent as the ww6 study unit)
+    const eb = l.units.filter((u) => u.family === 'explain-back');
+    expect(eb.filter((u) => u.repo !== 'javabootcamp').every((u) => u.quest !== null)).toBe(true);
+    const jb = eb.filter((u) => u.repo === 'javabootcamp');
+    expect(jb.length).toBe(6);
+    expect(jb.every((u) => u.trackId === 'java' && u.quest === null)).toBe(true);
   });
 
   it('a REAL explain-back set plays end to end: questions only -> immutable answer -> key -> self-score (20 XP)', async () => {
