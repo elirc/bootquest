@@ -14,6 +14,7 @@ import {
 import type { UnitContentEntry } from '@bootquest/shared/api';
 import type { Db } from '../db/database.ts';
 import { nowMs, type Clock } from '../engines/clock.ts';
+import { LIVE_CHECK_SQL, liveChecks, reconcileCheck } from './check-policy.ts';
 import { insertCheck } from './content.ts';
 import { graderFingerprint, graderKindForManifest, toolchainVersions, type GraderKind } from './grader-fingerprint.ts';
 
@@ -27,7 +28,9 @@ import { graderFingerprint, graderKindForManifest, toolchainVersions, type Grade
  *   2. upserts every non-quarantined unit into the DB, keyed by
  *      (source, stable key) — idempotent: a second load changes nothing;
  *      a quarantined unit already in the DB is RETIRED (retired_at), never
- *      deleted (attempt/XP history keeps its FK target) — W2b/F2;
+ *      deleted (attempt/XP history keeps its FK target) — W2b/F2; a re-seeded
+ *      check follows THE re-seed policy (store/check-policy.ts): updated in
+ *      place while unreferenced, retired-and-replaced once history references it;
  *   3. asserts loaded === built (live DB units + checks + content entries vs
  *      the manifest counts minus quarantine) and REFUSES TO START on a mismatch.
  * Per-unit content (instructions, starter, solution, ...) is served from
@@ -192,6 +195,8 @@ export interface LoadStats {
   withheld: number;
   /** quarantined units that were live in the DB and got retired by this load */
   retired: number;
+  /** re-seeded checks that attempts/runs referenced: retired (kept for history) and replaced by a new live check */
+  checksReplaced: number;
   /** built = manifest counts (selected courses) minus quarantine */
   built: number;
   /** loaded = DB units under the selected course prefixes (minus quarantine) */
@@ -242,7 +247,7 @@ interface UnitRow {
 }
 
 /** Upsert one unit row + its single check + competencies. Returns [id, 'inserted'|'updated'|'unchanged']. */
-function upsertUnit(db: Db, sourceId: number, course: string, pu: PackUnit, now: Clock): [number, 'inserted' | 'updated' | 'unchanged'] {
+function upsertUnit(db: Db, sourceId: number, course: string, pu: PackUnit, now: Clock, checksReplaced: { n: number }): [number, 'inserted' | 'updated' | 'unchanged'] {
   const u = pu.unit;
   const existing = db.get<UnitRow>(
     'SELECT id, source_id, track_id, kind, title, phase, difficulty, xp, retired_at FROM unit WHERE key = ?',
@@ -284,26 +289,23 @@ function upsertUnit(db: Db, sourceId: number, course: string, pu: PackUnit, now:
     }
   }
 
-  // single check (written units have none)
+  // single LIVE check (written units have none); a re-seeded check follows THE re-seed policy
+  // (store/check-policy.ts): in place while unreferenced, retired-and-replaced once attempts or runs
+  // reference it — so past attempts keep the exact spec (choices, key, threshold) they were graded by
   const want = u.checks[0];
-  const have = db.all<{ id: number; type: string; spec: string; threshold: number | null }>(
-    'SELECT id, type, spec, threshold FROM "check" WHERE unit_id = ? ORDER BY id',
-    id,
-  );
+  const have = liveChecks(db, id);
   if (want) {
     const spec = CheckSpec.parse(want.spec);
-    const json = JSON.stringify(spec);
     const first = have[0];
     if (!first) {
       insertCheck(db, id, spec, now, want.threshold === undefined ? {} : { threshold: want.threshold });
       changed = true;
     } else {
-      if (have.length > 1) throw new PackLoadError(`unit ${u.key} has ${have.length} checks in the DB; packs carry one`);
+      if (have.length > 1) throw new PackLoadError(`unit ${u.key} has ${have.length} live checks in the DB; packs carry one`);
       if (first.type !== spec.type) throw new PackLoadError(`unit ${u.key} check type changed ${first.type} -> ${spec.type}; refusing`);
-      if (first.spec !== json || first.threshold !== (want.threshold ?? null)) {
-        db.run('UPDATE "check" SET spec = ?, threshold = ? WHERE id = ?', json, want.threshold, first.id);
-        changed = true;
-      }
+      const r = reconcileCheck(db, id, first, { spec, threshold: want.threshold ?? null }, now);
+      if (r.outcome !== 'unchanged') changed = true;
+      if (r.outcome === 'replaced') checksReplaced.n++;
     }
   } else if (have.length > 0) {
     throw new PackLoadError(`unit ${u.key} has a check in the DB but none in the pack; refusing`);
@@ -356,12 +358,14 @@ export function loadPackIntoDb(db: Db, pack: LoadedPack, now: Clock): LoadStats 
       unchanged: 0,
       withheld: 0,
       retired: 0,
+      checksReplaced: 0,
       built: 0,
       loaded: 0,
       checks: 0,
       contentEntries: 0,
     };
     const ids = new Map<string, number>();
+    const replaced = { n: 0 };
     const shipped: { pu: PackUnit; id: number; what: 'inserted' | 'updated' | 'unchanged' }[] = [];
     for (const file of pack.courses) {
       for (const pu of file.units) {
@@ -376,7 +380,7 @@ export function loadPackIntoDb(db: Db, pack: LoadedPack, now: Clock): LoadStats 
           }
           continue;
         }
-        const [id, what] = upsertUnit(db, sourceId, file.course.id, pu, now);
+        const [id, what] = upsertUnit(db, sourceId, file.course.id, pu, now, replaced);
         ids.set(pu.unit.key, id);
         shipped.push({ pu, id, what });
       }
@@ -413,7 +417,7 @@ export function loadPackIntoDb(db: Db, pack: LoadedPack, now: Clock): LoadStats 
       const prefix = unitKeyPrefix(manifest.source, file.course.id);
       // live = not retired: a quarantined key can only be counted out by being retired, never by a filter
       const live = db.all<{ key: string; checks: number }>(
-        `SELECT u.key AS key, (SELECT COUNT(*) FROM "check" c WHERE c.unit_id = u.id) AS checks
+        `SELECT u.key AS key, (SELECT COUNT(*) FROM "check" c WHERE c.unit_id = u.id AND c.${LIVE_CHECK_SQL}) AS checks
            FROM unit u WHERE u.source_id = ? AND substr(u.key, 1, ?) = ? AND u.retired_at IS NULL`,
         sourceId,
         prefix.length,
@@ -436,6 +440,7 @@ export function loadPackIntoDb(db: Db, pack: LoadedPack, now: Clock): LoadStats 
       stats.loaded += loaded;
       stats.checks += checks;
     }
+    stats.checksReplaced = replaced.n;
     const content = packContentEntries(pack);
     stats.contentEntries = content.size;
     if (content.size !== stats.built) {

@@ -246,7 +246,7 @@ export function loadCampaignIntoDb(db: Db, c: LoadedCampaign, now: Clock): Campa
         a.quests.forEach((q, i) => {
           keep.add(q.key);
           const [unitId, unitChanged] = upsertQuestUnit(db, file.track, a.actNo, sourceId, q, now);
-          const gated = unitId !== null && db.get('SELECT 1 AS x FROM "check" WHERE unit_id = ? LIMIT 1', unitId) !== undefined;
+          const gated = unitId !== null && db.get('SELECT 1 AS x FROM "check" WHERE unit_id = ? AND retired_at IS NULL LIMIT 1', unitId) !== undefined;
           const want = questValues(q, actId, unitId, i + 1, gated);
           const have = db.get<Record<string, string | number | boolean | null> & { id: number }>(`SELECT id, ${QUEST_COLS.join(', ')} FROM quest WHERE key = ?`, q.key);
           if (!have) {

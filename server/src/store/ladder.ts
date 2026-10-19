@@ -331,7 +331,7 @@ function existing(db: Db, key: string): ExistingUnit | undefined {
 }
 
 function sameSpec(db: Db, unitId: number, spec: CheckSpecInput): boolean {
-  const row = db.get<{ spec: string }>('SELECT spec FROM "check" WHERE unit_id = ? ORDER BY id LIMIT 1', unitId);
+  const row = db.get<{ spec: string }>('SELECT spec FROM "check" WHERE unit_id = ? AND retired_at IS NULL ORDER BY id LIMIT 1', unitId);
   if (!row) return false;
   const have = JSON.parse(row.spec) as Record<string, unknown>;
   const want = spec as Record<string, unknown>;
@@ -402,7 +402,7 @@ export function assertUniqueSeedItemRefs(db: Db): void {
     `SELECT COALESCE(json_extract(c.spec, '$.questionSetKey'), json_extract(c.spec, '$.kataKey')) AS ref, COUNT(DISTINCT u.id) AS n,
             group_concat(u.key, ', ') AS keys
        FROM "check" c JOIN unit u ON u.id = c.unit_id
-      WHERE c.type IN ('explain-back', 'patch-kata') AND u.retired_at IS NULL
+      WHERE c.type IN ('explain-back', 'patch-kata') AND u.retired_at IS NULL AND c.retired_at IS NULL
       GROUP BY ref HAVING COUNT(DISTINCT u.id) > 1`,
   );
   // study-quiz gates reference their quiz items one by one (a miss enrols the item's KEY as a review
@@ -411,7 +411,7 @@ export function assertUniqueSeedItemRefs(db: Db): void {
   const quizDups = db.all<{ ref: string; n: number; keys: string }>(
     `SELECT j.value AS ref, COUNT(DISTINCT u.id) AS n, group_concat(DISTINCT u.key) AS keys
        FROM "check" c JOIN unit u ON u.id = c.unit_id, json_each(c.spec, '$.itemKeys') j
-      WHERE c.type = 'study-quiz' AND u.retired_at IS NULL
+      WHERE c.type = 'study-quiz' AND u.retired_at IS NULL AND c.retired_at IS NULL
       GROUP BY ref HAVING COUNT(DISTINCT u.id) > 1`,
   );
   const all = [...dups, ...quizDups];

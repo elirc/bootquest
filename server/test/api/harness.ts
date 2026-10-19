@@ -73,7 +73,7 @@ export function useApi(opts: { realRunners?: boolean } = {}): ApiCtx {
  * stored choice's TEXT in the served list from GET /units/:id, exactly as a learner would.
  */
 export async function servedQuizAnswer(app: Express, db: Db, unitId: number, storedIndex: number): Promise<number> {
-  const spec = JSON.parse(db.get<{ spec: string }>('SELECT spec FROM "check" WHERE unit_id = ?', unitId)!.spec) as { choices?: string[] };
+  const spec = JSON.parse(db.get<{ spec: string }>('SELECT spec FROM "check" WHERE unit_id = ? AND retired_at IS NULL', unitId)!.spec) as { choices?: string[] };
   const text = spec.choices?.[storedIndex];
   if (text === undefined) throw new Error(`unit ${unitId} has no stored choice ${storedIndex}`);
   const res = await request(app).get(`/api/units/${unitId}`);

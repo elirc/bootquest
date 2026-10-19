@@ -85,9 +85,12 @@ function requireUnitKind(db: Db, unitId: number): string {
 }
 
 function assertCheckOfUnit(db: Db, checkId: number, unitId: number): void {
-  const row = db.get<{ unit_id: number }>('SELECT unit_id FROM "check" WHERE id = ?', checkId);
+  // SELECT *: the migration tests build history on pre-012 schemas (no retired_at column = live)
+  const row = db.get<{ unit_id: number; retired_at?: number | null }>('SELECT * FROM "check" WHERE id = ?', checkId);
   if (!row) throw new Error(`check ${checkId} not found`);
   if (row.unit_id !== unitId) throw new HonestyRuleError('MISMATCH', `check ${checkId} does not belong to unit ${unitId}`);
+  // store/check-policy.ts: a retired check is history only; new attempts bind to the unit's live check
+  if (row.retired_at != null) throw new HonestyRuleError('MISMATCH', `check ${checkId} was retired by a re-seed; record against the unit's live check`);
 }
 
 function insertAttempt(

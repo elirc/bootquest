@@ -141,8 +141,10 @@ export function recordRun(db: Db, input: RecordRunInput, now: Clock): number {
   if (input.kind !== 'run') throw new Error('recordRun stores free runs only; submits go through recordSubmission()');
   const { result: r, verdict } = runVerdict(input.result);
   if (input.checkId !== undefined && input.unitId !== undefined) {
-    const owner = db.get<{ unit_id: number }>('SELECT unit_id FROM "check" WHERE id = ?', input.checkId);
+    // SELECT *: tests may record runs on pre-012 schemas (no retired_at column = live)
+    const owner = db.get<{ unit_id: number; retired_at?: number | null }>('SELECT * FROM "check" WHERE id = ?', input.checkId);
     if (owner?.unit_id !== input.unitId) throw new Error(`check ${input.checkId} does not belong to unit ${input.unitId}`);
+    if (owner.retired_at != null) throw new Error(`check ${input.checkId} was retired by a re-seed (store/check-policy.ts); runs bind to the live check`);
   }
   return db.run(
     `INSERT INTO run (kind, attempt_id, check_id, unit_id, verdict, passed, failed, todo, duration_ms, raw, created_at)

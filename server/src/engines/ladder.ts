@@ -294,7 +294,7 @@ export function recordMutationEvidence(
       }
     }
     const attempt = getAttempt(db, latest.id);
-    const threshold = db.get<{ threshold: number | null }>('SELECT threshold FROM "check" WHERE unit_id = ? ORDER BY id LIMIT 1', input.unitId)?.threshold;
+    const threshold = db.get<{ threshold: number | null }>('SELECT threshold FROM "check" WHERE unit_id = ? AND retired_at IS NULL ORDER BY id LIMIT 1', input.unitId)?.threshold;
     const verdict = evaluateMutation(input.files, { floorPct: floorPctFor(threshold) });
     if (!verdict.pass) throw new MutationGateError(verdict);
 

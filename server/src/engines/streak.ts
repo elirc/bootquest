@@ -140,7 +140,7 @@ export function dueAsOf(db: Db, T: number): number {
   return (
     db.get<{ n: number }>(
       `SELECT COUNT(*) AS n FROM review_item ri
-        WHERE ri.created_at <= ? AND ri.kind <> 'retest'
+        WHERE ri.created_at <= ? AND ri.kind <> 'retest' AND ri.retired_at IS NULL
           AND COALESCE((SELECT rl.prev_due_at FROM review_log rl
                          WHERE rl.review_item_id = ri.id AND rl.reviewed_at > ?
                          ORDER BY rl.reviewed_at, rl.id LIMIT 1), ri.due_at) <= ?`,

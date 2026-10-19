@@ -88,7 +88,7 @@ export function passRates({ db }: StatsDeps): PassRatesResponse {
 export function reviewStats({ db, clock }: StatsDeps): ReviewStatsResponse {
   const now = nowMs(clock);
   const t = dayKey(now);
-  const dueAts = db.all<{ dueAt: number }>(`SELECT due_at AS dueAt FROM review_item WHERE kind <> 'retest'`).map((r) => r.dueAt);
+  const dueAts = db.all<{ dueAt: number }>(`SELECT due_at AS dueAt FROM review_item WHERE kind <> 'retest' AND retired_at IS NULL`).map((r) => r.dueAt);
   const logs = db.all<{ rating: string; day: number }>(
     `SELECT l.rating, l.reviewed_at AS day FROM review_log l JOIN review_item i ON i.id = l.review_item_id WHERE i.kind <> 'retest'`,
   );
