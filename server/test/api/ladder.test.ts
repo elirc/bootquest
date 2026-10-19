@@ -203,19 +203,42 @@ describe('explain-back: immutable answer first, then the key, then the self-scor
     expect(comp.retests).toEqual([]);
   });
 
-  it('the self-score must be filed in the same sitting (24h window) -> 409 SCORE_WINDOW_CLOSED', async () => {
+  it('dead end #1 (no self-score window): scored 30 days after the answer -> evidence, 20 XP once, leg (b); the retest anchors on the ANSWER time and the chain promotes', async () => {
     const id = ctx.id('fixture:ladder/explain-api');
-    await request(ctx.app).post(`/api/units/${id}/explain-back/answers`).send({ answers: ANSWERS }).expect(200);
-    ctx.clock.advance(DAY_MS + 1);
-    expectError(await request(ctx.app).post(`/api/units/${id}/explain-back/self-score`).send({ perKeyPoint: marks(16) }), 409, 'SCORE_WINDOW_CLOSED');
+    const retest = ctx.id('fixture:ladder/project-api-retest');
+    await request(ctx.app).post(`/api/units/${ctx.id('fixture:ladder/project-api')}/submit`).send({ port: GOOD_PORT }).expect(200);
+    ctx.clock.advance(60_000);
+    const ans = await request(ctx.app).post(`/api/units/${id}/explain-back/answers`).send({ answers: ANSWERS }).expect(200);
+    const answeredAt = ctx.clock().getTime();
+    ctx.clock.advance(30 * DAY_MS); // the old 24h window would have voided this item for good (409, no XP, no leg)
+    const res = await request(ctx.app).post(`/api/units/${id}/explain-back/self-score`).send({ perKeyPoint: marks(14) });
+    expect(res.status, res.text).toBe(200);
+    const body = ExplainBackScoreResponse.parse(res.body);
+    expect(body).toMatchObject({ attemptId: ans.body.attemptId, passed: true, xp: { amount: 20, reason: null } });
+    // timing is on the immutable answer row, never on when the score was filed
+    expect(body.retests[0]!.dueAt).toBe(answeredAt + 2 * DAY_MS);
+    const ev = ctx.tmp.db.get<{ created_at: number }>('SELECT created_at FROM evidence WHERE id = ?', body.evidenceIds[0]!)!;
+    expect(ev.created_at).toBe(answeredAt + 30 * DAY_MS);
+    const row = CompetenciesResponse.parse((await request(ctx.app).get('/api/competencies')).body).competencies.find((c) => c.id === 'data-http')!;
+    expect(row.promotion).toMatchObject({ artifact: { state: 'done' }, explainBack: { state: 'done' }, retest: { state: 'scheduled', unitId: retest } });
+    // still once per answer
+    expectError(await request(ctx.app).post(`/api/units/${id}/explain-back/self-score`).send({ perKeyPoint: marks(16) }), 409, 'ALREADY_SCORED');
+    // the schedule is already due (>= 2 days after the answer), so the late-scored chain completes now
+    expect(retestGate(ctx.tmp.db, retest, ctx.clock)).toEqual({ open: true, reason: 'due', opensAt: null });
+    const rt = SubmitResponse.parse((await request(ctx.app).post(`/api/units/${retest}/submit`).send({ code: fixture.solutions.retest })).body);
+    expect(rt.promotions).toEqual([expect.objectContaining({ competency: 'data-http', from: 1, to: 2 })]);
   });
 
-  it('W7 audit #12a: exactly 24h after the answer the window is still open (the engine refuses only > 24h)', async () => {
-    const id = ctx.id('fixture:ladder/explain-api');
-    await request(ctx.app).post(`/api/units/${id}/explain-back/answers`).send({ answers: ANSWERS }).expect(200);
-    ctx.clock.advance(DAY_MS);
-    const res = await request(ctx.app).post(`/api/units/${id}/explain-back/self-score`).send({ perKeyPoint: marks(16) });
-    expect(res.status, res.text).toBe(200);
+  it('dead end #1 (no self-score window): a kata self-scored a week late still files its catch rate and pays 15 XP once', async () => {
+    const k1 = ctx.id('fixture:ladder/kata-1');
+    const f = await request(ctx.app)
+      .post(`/api/units/${k1}/kata/findings`)
+      .send({ findings: [{ scenario: 'two rules, one matches', evidence: 'allocationSummary.mjs:17', consequence: 'coverage is overstated' }] })
+      .expect(200);
+    ctx.clock.advance(7 * DAY_MS);
+    const s = KataScoreResponse.parse((await request(ctx.app).post(`/api/units/${k1}/kata/self-score`).send({ perDefect: { d1: 'caught' } })).body);
+    expect(s).toMatchObject({ attemptId: f.body.attemptId, caught: 1, total: 1, xp: { amount: 15 } });
+    expectError(await request(ctx.app).post(`/api/units/${k1}/kata/self-score`).send({ perDefect: { d1: 'caught' } }), 409, 'ALREADY_SCORED');
   });
 
   it('W7 audit #12e: a unit stricter than the floor (minCoverage 0.9) shows AND enforces 90%; a laxer one is floored at 80%', async () => {

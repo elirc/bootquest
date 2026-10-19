@@ -38,7 +38,8 @@ import type { Clock } from '../engines/clock.ts';
  *      append-only attempt (mode/assistance derived; a second answer is 403);
  *   3. only AFTER that row exists does GET .../key release the private half;
  *   4. POST .../self-score files the self-assessment as EVIDENCE on that attempt
- *      (assessor self, same-sitting window), never as an edit of the answer.
+ *      (assessor self; no filing window — legs time on the answer row), never as an
+ *      edit of the answer.
  * Every rule the engines own (coverage threshold, legs, XP verification,
  * windows) stays in the engines; this layer orchestrates and maps errors.
  */
@@ -83,8 +84,8 @@ function honest<T>(fn: () => T): T {
     }
     if (err instanceof HonestyRuleError) {
       switch (err.code) {
-        case 'STALE':
-          throw new HttpError(409, 'SCORE_WINDOW_CLOSED', err.message);
+        // ('STALE' — evidence predating its attempt — cannot happen on a self-score since the
+        // 24h window was retired; it stays an unmapped 500, an invariant breach, not a 4xx)
         case 'NOT_VERIFIED':
         case 'MISMATCH':
           throw new HttpError(409, 'NOT_VERIFIED', err.message);

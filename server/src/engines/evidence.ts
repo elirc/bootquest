@@ -26,8 +26,10 @@ import { DAY_MS, nowMs, type Clock } from './clock.ts';
  *       solo attempt on a 'retest' unit whose variation_of_unit_id chain
  *       reaches the artifact's unit, ATTEMPTED >= 48h after the later of the
  *       artifact and explain-back ATTEMPTS.
- * All timing is on attempt.created_at (server clock at submit), never on when
- * evidence was filed, and evidence must be filed promptly after its attempt.
+ * All timing is on attempt.created_at (server clock at submit / answer), never on
+ * when evidence was filed. Pipeline evidence must be filed with its submit (no
+ * back-fill); a self-score (explain-back / kata) may be filed any time after its
+ * immutable answer — the answer row, not the score, is what the legs time on.
  * A failed FSRS review of a Review-state card on a competency drops it one
  * notch (fsrs.ts -> demote).
  */
@@ -38,8 +40,12 @@ export const MIN_RATING = 1;
 export const MAX_RATING = 5;
 /** pipeline evidence is written in the submit transaction; anything later is a back-fill */
 export const PIPELINE_EVIDENCE_MAX_LAG_MS = 10 * 60 * 1000;
-/** self-scored evidence (explain-back / kata) is filed after the key is revealed, same sitting */
-export const SELF_SCORE_MAX_LAG_MS = DAY_MS;
+/*
+ * Self-scored evidence (explain-back / kata) has NO filing window (ladder dead ends #1): a
+ * 24h window used to void a missed item for good (no XP, no leg, no re-answer). Nothing is
+ * gained by lateness: the answer is immutable and stored before the key, every leg / retest
+ * times on the ANSWER attempt's created_at, and each answer is scored at most once.
+ */
 
 export interface EvidenceRow {
   id: number;
@@ -146,9 +152,6 @@ export function recordEvidence(db: Db, input: EvidenceInput, now: Clock): Eviden
         const a = attempt!;
         if (a.outcome !== 'submitted' || a.answer === null) {
           throw new HonestyRuleError('NOT_VERIFIED', `${e.kind} evidence needs the stored answer attempt (outcome 'submitted')`);
-        }
-        if (t - a.created_at > SELF_SCORE_MAX_LAG_MS) {
-          throw new HonestyRuleError('STALE', `${e.kind} score must be filed in the same sitting as the answer`);
         }
         if (e.kind === 'kata' && unitRow(db, a.unit_id).kind !== 'patch-kata') {
           throw new HonestyRuleError('WRONG_UNIT_KIND', 'kata evidence needs a patch-kata unit');

@@ -54,8 +54,6 @@ export const API_ERROR_CODES = [
   'ALREADY_ANSWERED',
   /** W6 explain-back / kata: this answer attempt already carries its self-score evidence */
   'ALREADY_SCORED',
-  /** W6: the self-score was filed outside the same-sitting window (24h after the answer) */
-  'SCORE_WINDOW_CLOSED',
   /** W6: the unit's seeded content (question set / kata) is not loaded on this server */
   'CONTENT_PENDING',
   /** W6: the action needs a verified (passing, run-backed) attempt that does not exist */
