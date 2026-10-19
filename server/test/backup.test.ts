@@ -4,7 +4,7 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { backupBeforeStart, BackupError, BACKUP_KEEP, backupDirOf, listBackups, NO_BACKUP_ENV } from '../src/db/backup.ts';
+import { backupBeforeStart, BackupError, BACKUP_KEEP, backupDirOf, listBackups, NO_BACKUP_ENV, pruneBackups } from '../src/db/backup.ts';
 import { backupSummary, startServer } from '../src/api/serve.ts';
 import { fixedClock } from '../src/engines/clock.ts';
 import { localNoon } from './helpers.ts';
@@ -78,8 +78,10 @@ describe('startup DB backup (db/backup.ts)', () => {
     for (const f of olds) writeFileSync(join(b, f), 'x');
     const strangers = ['bootquest-manual.db', 'bootquest-20200101T000000.000Z.db.keep', 'notes.txt', 'bootquest-20200101T000000Z.db', 'other-20200101T000000.000Z.db'];
     for (const f of strangers) writeFileSync(join(b, f), 'keep me');
-    const r = backupBeforeStart(path, { env: {}, now });
-    expect(r.status).toBe('created');
+    const made = backupBeforeStart(path, { env: {}, now });
+    expect(made.status).toBe('created');
+    expect(listBackups(b)).toHaveLength(10); // creating never prunes: retention is a separate step
+    const r = pruneBackups(made);
     const kept = listBackups(b);
     expect(kept).toHaveLength(BACKUP_KEEP);
     expect(kept.at(-1)).toBe('bootquest-20261019T083015.123Z.db');
@@ -87,6 +89,32 @@ describe('startup DB backup (db/backup.ts)', () => {
     expect(r.pruned).toHaveLength(3); // the first real one + the two oldest planted
     for (const f of strangers) expect(existsSync(join(b, f)), f).toBe(true);
     expect(backupSummary(r)).toEqual([`[bootquest] backup: ${r.path} (pruned 3 older)`]);
+    // the snapshot just made is never pruned, even when its (injected-clock) stamp sorts oldest
+    const past = pruneBackups(backupBeforeStart(path, { env: {}, now: new Date(Date.UTC(2020, 0, 1)) }));
+    expect(existsSync(past.path!)).toBe(true);
+    expect(listBackups(b)).toHaveLength(BACKUP_KEEP + 1);
+  });
+
+  it('a REFUSED startup snapshots but prunes nothing (failed restarts cannot rotate out the last good snapshot); a good start prunes', async () => {
+    const path = join(dir, 'bq.db');
+    legacyDb(path);
+    const b = join(dir, 'backups');
+    mkdirSync(b);
+    const olds = Array.from({ length: BACKUP_KEEP }, (_, i) => `bootquest-2026010${i + 1}T000000.000Z.db`);
+    for (const f of olds) writeFileSync(join(b, f), 'x');
+    // refused AFTER the backup step: a course id no pack provides
+    const port = await freePort();
+    await expect(startServer({ env: { BOOTQUEST_DB: path, BOOTQUEST_PORT: String(port), BOOTQUEST_PACK_COURSES: 'nope' } })).rejects.toThrow(/no loaded pack provides/);
+    expect(listBackups(b)).toHaveLength(BACKUP_KEEP + 1);
+    for (const f of olds) expect(existsSync(join(b, f)), f).toBe(true);
+    const running = await startServer({ env: { BOOTQUEST_DB: path, BOOTQUEST_PORT: String(port) } });
+    try {
+      expect(running.backup.status).toBe('created');
+      expect(running.backup.pruned).toHaveLength(2);
+      expect(listBackups(b)).toHaveLength(BACKUP_KEEP);
+    } finally {
+      await running.close();
+    }
   });
 
   it('FAIL-CLOSED: an impossible backup refuses with BackupError naming the escape hatch; nothing is written', () => {

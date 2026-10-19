@@ -6,7 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { PackManifest } from '@bootquest/shared';
 import type { UnitContentEntry } from '@bootquest/shared/api';
 import { openDb, resolveDbPath, type Db } from '../db/database.ts';
-import { backupBeforeStart, type BackupResult } from '../db/backup.ts';
+import { backupBeforeStart, pruneBackups, type BackupResult } from '../db/backup.ts';
 import type { Clock } from '../engines/clock.ts';
 import { loadCampaignIntoDb, readCampaign, type CampaignLoadStats } from '../store/campaign.ts';
 import { ALLOW_UNSTAMPED_ENV, loadPackIntoDb, packContentEntries, PackLoadError, readPack, type LoadStats } from '../store/packs.ts';
@@ -277,6 +277,8 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
       s.once('listening', () => ok(s));
       s.once('error', (err: NodeJS.ErrnoException) => fail(err.code === 'EADDRINUSE' ? new PortBusyError(port, host) : err));
     });
+    // retention only once the server is up: a refused start never rotates out the last good snapshot
+    const backupKept = pruneBackups(backup);
 
     let closing: Promise<void> | null = null;
     const close = (): Promise<void> => {
@@ -296,7 +298,7 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
       });
       return closing;
     };
-    return { server, db, port, host, close, backup, packs: packStats, campaign, csharpScratch: csharp?.appDataDir ?? null, javaScratch: java?.appDataDir ?? null, seedPacks, ladder, studyQuests };
+    return { server, db, port, host, close, backup: backupKept, packs: packStats, campaign, csharpScratch: csharp?.appDataDir ?? null, javaScratch: java?.appDataDir ?? null, seedPacks, ladder, studyQuests };
   } catch (err) {
     db.close();
     throw err;

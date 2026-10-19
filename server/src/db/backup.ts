@@ -15,8 +15,9 @@ const sqlite = require('node:sqlite') as typeof import('node:sqlite');
  *   committed WAL content, then re-opened and `PRAGMA quick_check`ed;
  * - skipped for a brand-new DB (no file, an empty file, or a file with no schema yet): there is
  *   nothing to lose;
- * - retention: the newest BACKUP_KEEP snapshots are kept; only files matching BACKUP_NAME_RE
- *   in that backups/ dir are ever deleted (a prune failure is a warning, never a refusal);
+ * - retention (pruneBackups, run only after a SUCCESSFUL start): the newest BACKUP_KEEP snapshots
+ *   are kept; only files matching BACKUP_NAME_RE in that backups/ dir are ever deleted (a prune
+ *   failure is a warning, never a refusal);
  * - FAIL-CLOSED: if the snapshot cannot be made or verified, the server refuses to start
  *   (BackupError) before any migration touches the DB. `BOOTQUEST_NO_BACKUP=1` skips the
  *   snapshot entirely (escape hatch: full disk, read-only dir, ...).
@@ -43,7 +44,6 @@ export interface BackupOptions {
   env: Record<string, string | undefined>;
   /** the injected clock's reading: names the snapshot */
   now: Date;
-  keep?: number;
 }
 
 export const backupStamp = (d: Date): string => d.toISOString().replace(/[-:]/g, '');
@@ -132,14 +132,29 @@ export function backupBeforeStart(dbPath: string, opts: BackupOptions): BackupRe
     refuse(`the pre-migration backup of ${abs} to ${target} failed`, err);
   }
 
-  // retention: keep the newest N of OUR snapshots; never touch anything else in the dir
-  const keep = opts.keep ?? BACKUP_KEEP;
-  const all = listBackups(dir);
+  return { status: 'created', path: target, pruned: [], warnings: [] };
+}
+
+/**
+ * Retention: keep the newest `keep` of OUR snapshots in the backups dir; never touch anything
+ * else there (only BACKUP_NAME_RE names) and never the snapshot just made. serve.ts calls it only
+ * once the server is up: a startup that REFUSES (stamp, ladder, port...) prunes nothing, so a run
+ * of failed restarts cannot rotate the last good snapshot out. It never throws: a failure is a warning.
+ */
+export function pruneBackups(result: BackupResult, keep: number = BACKUP_KEEP): BackupResult {
+  if (result.status !== 'created') return result;
+  const dir = dirname(result.path);
   const pruned: string[] = [];
-  const warnings: string[] = [];
+  const warnings = [...result.warnings];
+  let all: string[];
+  try {
+    all = listBackups(dir);
+  } catch (err) {
+    return { ...result, warnings: [...warnings, `could not list ${dir} to prune old backups: ${err instanceof Error ? err.message : String(err)}`] };
+  }
   for (const name of all.slice(0, Math.max(0, all.length - keep))) {
     const p = join(dir, name);
-    if (p === target) continue;
+    if (p === result.path) continue;
     try {
       rmSync(p);
       pruned.push(p);
@@ -147,5 +162,5 @@ export function backupBeforeStart(dbPath: string, opts: BackupOptions): BackupRe
       warnings.push(`could not prune old backup ${p}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
-  return { status: 'created', path: target, pruned, warnings };
+  return { ...result, pruned, warnings };
 }

@@ -89,9 +89,10 @@ serves without re-running anything. At startup the server:
 
 - **backs up the DB first**, before any migration: `VACUUM INTO`
   `<db dir>\backups\bootquest-<UTC time>.db`, verified with `PRAGMA quick_check`. The
-  newest 7 are kept; only files with that name pattern are ever deleted. A brand-new or
-  empty DB is skipped. If the backup fails, the server **refuses to start** and changes
-  nothing; `set BOOTQUEST_NO_BACKUP=1` starts it without one (e.g. on a full disk). To
+  newest 7 are kept, pruned only after a successful start so that failed restarts never
+  rotate out the last good snapshot; only files with that name pattern are ever deleted.
+  A brand-new or empty DB is skipped. If the backup fails, the server **refuses to
+  start** and changes nothing; `set BOOTQUEST_NO_BACKUP=1` starts it without one (e.g. on a full disk). To
   restore, stop the server and copy a snapshot over the DB file (delete its `-wal` and
   `-shm` side files);
 - loads every pack under `content/packs/`, the campaign map under `content/campaign/`
