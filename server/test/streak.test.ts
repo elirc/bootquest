@@ -1,12 +1,24 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import type { Db } from '../src/db/database.ts';
 import { revealSolution, selfAttestReading } from '../src/engines/attempts.ts';
 import { DAY_MS } from '../src/engines/clock.ts';
-import { addReviewItem, review } from '../src/engines/fsrs.ts';
+import { addReviewItem, dueItems, review } from '../src/engines/fsrs.ts';
 import * as streakEngine from '../src/engines/streak.ts';
-import { closeElapsedDays, composeSlate, getSlate, streakStatus } from '../src/engines/streak.ts';
+import { closeElapsedDays, composeSlate, drillUnitsRemaining, getSlate, streakStatus } from '../src/engines/streak.ts';
 import { awardXp } from '../src/engines/xp.ts';
-import { makeUnit, submit, useTempDb } from './helpers.ts';
+import { makeUnit, submit, unitKey, useTempDb } from './helpers.ts';
+
+const TRACKS = ['js', 'csharp', 'java'] as const;
+
+/** Seed `n` unpassed drill units on a track (content the learner has not reached yet). */
+function seedDrills(db: Db, clock: () => Date, track: string, n: number): number[] {
+  return Array.from({ length: n }, () => makeUnit(db, clock, { kind: 'drill', track }));
+}
+
+/** A drill bank deep enough that no track runs out during a test (the live content case). */
+function stockAllTracks(db: Db, clock: () => Date) {
+  for (const t of TRACKS) seedDrills(db, clock, t, 40);
+}
 
 /** Pass `n` brand-new drill units on a track today (first-ever passes). */
 function passNewDrills(db: Db, clock: () => Date, track: string, n = 5): number[] {
@@ -31,6 +43,7 @@ function slot(db: Db, clock: () => Date, name: string) {
 
 describe('daily slate composition', () => {
   const ctx = useTempDb();
+  beforeEach(() => stockAllTracks(ctx.db, ctx.clock));
 
   it('with no campaign quests seeded: one 5-drill set per active track + review clear (no campaign slot)', () => {
     const slate = composeSlate(ctx.db, ctx.clock);
@@ -64,6 +77,7 @@ describe('daily slate composition', () => {
 
 describe('slot completion is derived from the ledger', () => {
   const ctx = useTempDb();
+  beforeEach(() => stockAllTracks(ctx.db, ctx.clock));
 
   it('drill slot: 5 first-ever drill passes on the track today; 4 is not enough; failures do not count', () => {
     passNewDrills(ctx.db, ctx.clock, 'js', 4);
@@ -115,6 +129,7 @@ describe('slot completion is derived from the ledger', () => {
 
 describe('streak engine', () => {
   const ctx = useTempDb();
+  beforeEach(() => stockAllTracks(ctx.db, ctx.clock));
 
   it('a full drill + review day (no campaign seeded) earns a streak day', () => {
     const card = addReviewItem(ctx.db, { cardKey: 'c' }, ctx.clock);
@@ -224,5 +239,184 @@ describe('streak engine', () => {
     expect(closeElapsedDays(ctx.db, ctx.clock)).toHaveLength(0);
     expect(streakStatus(ctx.db, ctx.clock).current).toBe(1);
     expect(getSlate(ctx.db, '2026-10-01')!.items.every((i) => i.done)).toBe(true);
+  });
+});
+
+/** Review every due card, plus a fresh one, so the day has a review that leaves the queue empty. */
+function clearQueue(db: Db, clock: () => Date, tag: string) {
+  addReviewItem(db, { cardKey: `clear-${tag}` }, clock);
+  for (const item of dueItems(db, clock)) review(db, item.id, 'good', clock);
+}
+
+function drillSlot(db: Db, clock: () => Date, track: string) {
+  const s = composeSlate(db, clock).items.find((i) => i.slot === `drill:${track}`);
+  return s?.kind === 'drill-set' ? s : undefined;
+}
+
+describe('drill-slot exhaustion (fix/slate): a track that runs out of new drills never blocks the slate', () => {
+  const ctx = useTempDb();
+  /** csharp is the only drill track unless a test says otherwise */
+  const csharpOnly = () => ctx.db.run(`UPDATE track SET slate_drills = 0 WHERE id IN ('js', 'java')`);
+
+  it('the slot shrinks to what is left, then drops; every day it is shown it can be completed', () => {
+    csharpOnly();
+    const bank = seedDrills(ctx.db, ctx.clock, 'csharp', 12);
+    const days: Array<{ size: number | undefined; slots: string[] }> = [];
+    for (let d = 0; d < 4; d++) {
+      const slate = composeSlate(ctx.db, ctx.clock);
+      const size = drillSlot(ctx.db, ctx.clock, 'csharp')?.size;
+      days.push({ size, slots: slate.items.map((i) => i.slot) });
+      for (const id of bank.splice(0, size ?? 0)) submit(ctx.db, ctx.clock, id);
+      if (size !== undefined) expect(drillSlot(ctx.db, ctx.clock, 'csharp')!.done).toBe(true);
+      clearQueue(ctx.db, ctx.clock, `d${d}`);
+      expect(composeSlate(ctx.db, ctx.clock).items.every((i) => i.done)).toBe(true);
+      ctx.clock.advance(DAY_MS);
+    }
+    expect(days).toEqual([
+      { size: 5, slots: ['drill:csharp', 'review'] },
+      { size: 5, slots: ['drill:csharp', 'review'] },
+      { size: 2, slots: ['drill:csharp', 'review'] }, // 12 - 10: shrunk
+      { size: undefined, slots: ['review'] }, // exhausted: dropped
+    ]);
+    expect(streakStatus(ctx.db, ctx.clock)).toMatchObject({ current: 4, slateDaysBanked: 4 });
+    expect(['2026-10-01', '2026-10-02', '2026-10-03', '2026-10-04'].map((d) => getSlate(ctx.db, d)!.status)).toEqual(['slate', 'slate', 'slate', 'slate']);
+  });
+
+  it('boundaries: exactly 5 left -> 5; exactly 4 -> 4 (and 4 passes complete it); 0 -> no slot', () => {
+    csharpOnly();
+    expect(drillSlot(ctx.db, ctx.clock, 'csharp')).toBeUndefined(); // 0
+    const five = seedDrills(ctx.db, ctx.clock, 'csharp', 5);
+    expect(drillSlot(ctx.db, ctx.clock, 'csharp')!.size).toBe(5);
+    submit(ctx.db, ctx.clock, five[0]!);
+    ctx.clock.advance(DAY_MS);
+    expect(drillUnitsRemaining(ctx.db, 'csharp', '2026-10-02')).toBe(4);
+    const four = five.slice(1);
+    expect(drillSlot(ctx.db, ctx.clock, 'csharp')).toMatchObject({ size: 4, done: false });
+    // passing units TODAY does not shrink today's size (they were unpassed at day start)
+    submit(ctx.db, ctx.clock, four[0]!);
+    submit(ctx.db, ctx.clock, four[1]!);
+    expect(drillSlot(ctx.db, ctx.clock, 'csharp')).toMatchObject({ size: 4, done: false });
+    submit(ctx.db, ctx.clock, four[2]!);
+    submit(ctx.db, ctx.clock, four[3]!);
+    expect(drillSlot(ctx.db, ctx.clock, 'csharp')).toMatchObject({ size: 4, done: true });
+    ctx.clock.advance(DAY_MS);
+    expect(drillUnitsRemaining(ctx.db, 'csharp', '2026-10-03')).toBe(0);
+    expect(drillSlot(ctx.db, ctx.clock, 'csharp')).toBeUndefined();
+  });
+
+  it('a failed attempt keeps a unit in the bank; retired, revealed and revealed-chain variants leave it', () => {
+    csharpOnly();
+    const [failed, retired, revealed] = seedDrills(ctx.db, ctx.clock, 'csharp', 4) as [number, number, number, number];
+    makeUnit(ctx.db, ctx.clock, { kind: 'drill', track: 'csharp', variationOf: unitKey(ctx.db, revealed) }); // its variant
+    submit(ctx.db, ctx.clock, failed, { pass: false });
+    ctx.db.run('UPDATE unit SET retired_at = ? WHERE id = ?', ctx.clock().getTime(), retired);
+    revealSolution(ctx.db, revealed, ctx.clock);
+    // today: the reveal / retire happened DURING the day (retired is out now: not live; revealed still counts as of day start)
+    expect(drillUnitsRemaining(ctx.db, 'csharp', '2026-10-01')).toBe(4); // failed, revealed, plain, variant
+    ctx.clock.advance(DAY_MS);
+    expect(drillUnitsRemaining(ctx.db, 'csharp', '2026-10-02')).toBe(2); // failed, plain
+    expect(drillSlot(ctx.db, ctx.clock, 'csharp')!.size).toBe(2);
+  });
+
+  it('closed days do not move when content changes afterwards (stored row and re-derived path)', () => {
+    csharpOnly();
+    seedDrills(ctx.db, ctx.clock, 'csharp', 3).forEach((id) => submit(ctx.db, ctx.clock, id));
+    clearQueue(ctx.db, ctx.clock, 'd1');
+    expect(drillSlot(ctx.db, ctx.clock, 'csharp')).toMatchObject({ size: 3, done: true }); // row stored
+    const before = drillUnitsRemaining(ctx.db, 'csharp', '2026-10-01');
+    ctx.clock.advance(DAY_MS);
+    // the next day, BEFORE day 1 is closed: a re-seed adds 20 drills and retires one of day 1's
+    seedDrills(ctx.db, ctx.clock, 'csharp', 20);
+    ctx.db.run(`UPDATE unit SET retired_at = ? WHERE id = (SELECT MIN(id) FROM unit WHERE track_id = 'csharp')`, ctx.clock().getTime());
+    expect(drillUnitsRemaining(ctx.db, 'csharp', '2026-10-01')).toBe(before); // the re-derivation for day 1 is unchanged
+    expect(closeElapsedDays(ctx.db, ctx.clock).map((c) => c.status)).toEqual(['slate']);
+    expect(getSlate(ctx.db, '2026-10-01')!.items).toEqual([
+      { slot: 'drill:csharp', kind: 'drill-set', track: 'csharp', size: 3, done: true },
+      { slot: 'review', kind: 'review-clear', done: true },
+    ]);
+    expect(drillSlot(ctx.db, ctx.clock, 'csharp')!.size).toBe(5); // today sees the new content
+  });
+
+  it('a day with NO stored row re-derives the same slot list before and after a content change', () => {
+    csharpOnly();
+    seedDrills(ctx.db, ctx.clock, 'csharp', 2);
+    composeSlate(ctx.db, ctx.clock); // day 1 is stored (it starts the history)
+    ctx.clock.advance(2 * DAY_MS); // day 2: no compose, no stored row
+    expect(getSlate(ctx.db, '2026-10-02')).toBeUndefined();
+    const derive = () => drillUnitsRemaining(ctx.db, 'csharp', '2026-10-02');
+    expect(derive()).toBe(2);
+    seedDrills(ctx.db, ctx.clock, 'csharp', 20); // seeded on day 3: never reaches back
+    ctx.db.run(`UPDATE unit SET retired_at = ? WHERE id = (SELECT MIN(id) FROM unit WHERE track_id = 'csharp')`, ctx.clock().getTime());
+    expect(derive()).toBe(2);
+    expect(closeElapsedDays(ctx.db, ctx.clock).map((c) => c.status)).toEqual(['missed', 'missed']);
+    expect(getSlate(ctx.db, '2026-10-02')!.items).toEqual([
+      { slot: 'drill:csharp', kind: 'drill-set', track: 'csharp', size: 2, done: false },
+      { slot: 'review', kind: 'review-clear', done: true },
+    ]);
+  });
+
+  it('content seeded mid-day never un-does a drill set that is already done', () => {
+    csharpOnly();
+    seedDrills(ctx.db, ctx.clock, 'csharp', 3).forEach((id) => submit(ctx.db, ctx.clock, id));
+    expect(drillSlot(ctx.db, ctx.clock, 'csharp')).toMatchObject({ size: 3, done: true });
+    seedDrills(ctx.db, ctx.clock, 'csharp', 20);
+    expect(drillSlot(ctx.db, ctx.clock, 'csharp')).toMatchObject({ size: 3, done: true });
+    // an UNDONE set does pick up the new content (it asks for a full set again)
+    ctx.clock.advance(DAY_MS);
+    seedDrills(ctx.db, ctx.clock, 'java', 1);
+    ctx.db.run(`UPDATE track SET slate_drills = 1 WHERE id = 'java'`);
+    expect(drillSlot(ctx.db, ctx.clock, 'java')!.size).toBe(1);
+    seedDrills(ctx.db, ctx.clock, 'java', 9);
+    expect(drillSlot(ctx.db, ctx.clock, 'java')!.size).toBe(5);
+  });
+
+  it('after every track is exhausted, review-clearing days still earn the streak and freeze tokens', () => {
+    csharpOnly();
+    seedDrills(ctx.db, ctx.clock, 'csharp', 5).forEach((id) => submit(ctx.db, ctx.clock, id));
+    clearQueue(ctx.db, ctx.clock, 'd0');
+    expect(composeSlate(ctx.db, ctx.clock).items.every((i) => i.done)).toBe(true);
+    ctx.clock.advance(DAY_MS);
+    for (let d = 1; d < 7; d++) {
+      expect(composeSlate(ctx.db, ctx.clock).items.map((i) => i.slot)).toEqual(['review']);
+      clearQueue(ctx.db, ctx.clock, `d${d}`);
+      ctx.clock.advance(DAY_MS);
+    }
+    expect(streakStatus(ctx.db, ctx.clock)).toMatchObject({ current: 7, tokens: 1, slateDaysBanked: 0 });
+  });
+
+  it('a review-only slate does not complete itself on an idle day (empty queue, no review)', () => {
+    csharpOnly();
+    for (let d = 0; d < 7; d++) {
+      seedDrills(ctx.db, ctx.clock, 'csharp', 5).forEach((id) => submit(ctx.db, ctx.clock, id));
+      expect(composeSlate(ctx.db, ctx.clock).items.every((i) => i.done)).toBe(true); // no cards: the queue is empty
+      ctx.clock.advance(DAY_MS);
+    }
+    expect(streakStatus(ctx.db, ctx.clock)).toMatchObject({ current: 7, tokens: 1 });
+    // day 8: every drill passed, nothing ever due; the learner opens the app and does nothing
+    expect(composeSlate(ctx.db, ctx.clock).items).toEqual([{ slot: 'review', kind: 'review-clear', done: false }]);
+    expect(streakStatus(ctx.db, ctx.clock).todayComplete).toBe(false);
+    ctx.clock.advance(DAY_MS);
+    expect(closeElapsedDays(ctx.db, ctx.clock)).toEqual([{ day: '2026-10-08', status: 'frozen', xp: 0 }]);
+    expect(getSlate(ctx.db, '2026-10-08')!.items).toEqual([{ slot: 'review', kind: 'review-clear', done: false }]);
+  });
+
+  it('multi-track: an exhausted track drops out while the others keep their 5-drill sets', () => {
+    ctx.db.run(`UPDATE track SET slate_drills = 0 WHERE id = 'java'`);
+    seedDrills(ctx.db, ctx.clock, 'js', 3).forEach((id) => submit(ctx.db, ctx.clock, id)); // js: all 3 done today
+    seedDrills(ctx.db, ctx.clock, 'csharp', 40);
+    expect(composeSlate(ctx.db, ctx.clock).items.map((i) => [i.slot, i.kind === 'drill-set' ? i.size : null])).toEqual([
+      ['drill:js', 3],
+      ['drill:csharp', 5],
+      ['review', null],
+    ]);
+    const csharp = ctx.db.all<{ id: number }>(`SELECT id FROM unit WHERE track_id = 'csharp' ORDER BY id`).map((r) => r.id);
+    for (let d = 0; d < 7; d++) {
+      for (const id of csharp.splice(0, 5)) submit(ctx.db, ctx.clock, id);
+      const slots = composeSlate(ctx.db, ctx.clock).items;
+      expect(slots.some((i) => i.slot === 'drill:js')).toBe(d === 0); // js exhausted after day 1
+      expect(slots.every((i) => i.done)).toBe(true);
+      ctx.clock.advance(DAY_MS);
+    }
+    expect(streakStatus(ctx.db, ctx.clock)).toMatchObject({ current: 7, tokens: 1, slateDaysBanked: 0 });
   });
 });

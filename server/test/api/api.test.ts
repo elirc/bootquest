@@ -27,6 +27,15 @@ import { ledgerCounts } from '../../src/store/queries.ts';
 import { graduate, promoteTo } from '../helpers.ts';
 import { fixture, servedQuizAnswer, useApi } from './harness.ts';
 
+/** An unpassed drill unit (stub drill-js check) — a track with no drills left has no slate slot (fix/slate). */
+function seedDrill(ctx: { db: Parameters<typeof insertUnit>[0]; clock: Parameters<typeof insertUnit>[2] }, key: string, track: string): number {
+  return insertUnit(
+    ctx.db,
+    { key, track, kind: 'drill', title: key, difficulty: 1, checks: [{ spec: { type: 'drill-js', language: 'js', tests: [{ name: 't', code: 'x' }] } }] },
+    ctx.clock,
+  );
+}
+
 function expectApiError(res: request.Response, status: number, code: string): void {
   expect(res.status).toBe(status);
   expect(res.headers['content-type']).toMatch(/application\/json/);
@@ -287,6 +296,7 @@ describe('POST /api/units/:id/submit', () => {
   });
 
   it('five first-ever DRILL passes on a track tick its slate slot; five quiz passes do not', async () => {
+    const drills = Array.from({ length: 5 }, (_, i) => seedDrill(ctx, `slate:d${i}`, 'csharp'));
     for (let i = 0; i < 5; i++) {
       const id = insertUnit(
         ctx.db,
@@ -299,14 +309,7 @@ describe('POST /api/units/:id/submit', () => {
     let dash = DashboardResponse.parse((await request(ctx.app).get('/api/dashboard')).body);
     expect(dash.slate.items.find((i) => i.slot === 'drill:csharp')!.done).toBe(false);
 
-    for (let i = 0; i < 5; i++) {
-      const id = insertUnit(
-        ctx.db,
-        { key: `slate:d${i}`, track: 'csharp', kind: 'drill', title: `d${i}`, difficulty: 1, checks: [{ spec: { type: 'drill-js', language: 'js', tests: [{ name: 't', code: 'x' }] } }] },
-        ctx.clock,
-      );
-      await request(ctx.app).post(`/api/units/${id}/submit`).send({ code: 'a + b' });
-    }
+    for (const id of drills) await request(ctx.app).post(`/api/units/${id}/submit`).send({ code: 'a + b' });
     dash = DashboardResponse.parse((await request(ctx.app).get('/api/dashboard')).body);
     expect(dash.slate.items.find((i) => i.slot === 'drill:csharp')!.done).toBe(true);
     expect(dash.slate.items.find((i) => i.slot === 'drill:js')!.done).toBe(false);
@@ -616,6 +619,8 @@ describe('GET /api/dashboard', () => {
   const ctx = useApi();
 
   it('assembles streak, 120-day heatmap, XP/level, 7 competencies, slate, review count, next-up', async () => {
+    seedDrill(ctx, 'dash:cs', 'csharp');
+    seedDrill(ctx, 'dash:java', 'java');
     await request(ctx.app).post(`/api/units/${ctx.id('fixture:drill-add')}/submit`).send({ code: fixture.submissions.addRight });
     addReviewItem(ctx.db, { cardKey: 'card:dash' }, ctx.clock);
     const res = await request(ctx.app).get('/api/dashboard');
@@ -640,6 +645,7 @@ describe('GET /api/dashboard', () => {
   });
 
   it('streak and heatmap close elapsed days under the injected clock', async () => {
+    seedDrill(ctx, 'heat:cs', 'csharp'); // csharp still has an unpassed drill: its set is not done
     await request(ctx.app).post(`/api/units/${ctx.id('fixture:drill-add')}/submit`).send({ code: fixture.submissions.addRight });
     await request(ctx.app).post(`/api/units/${ctx.id('fixture:drill-mul')}/submit`).send({ code: 'export const mul = (a, b) => a * b;' });
     ctx.clock.advance(DAY_MS);
