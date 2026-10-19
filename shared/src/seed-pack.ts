@@ -403,8 +403,12 @@ export const SeedPackManifest = z
       .object({
         repo: z.string().min(1),
         sha,
-        /** git-head: the checkout's HEAD was read and matched; caller-asserted: a plain dir, pinned by blobs only */
-        pin: z.enum(['git-head', 'caller-asserted']),
+        /**
+         * git-head: the checkout's HEAD was read and matched; git-tree: a plain dir verified against a
+         * mirror's `git ls-tree` at the sha (every blob id below is git's own); caller-asserted: a plain
+         * dir with no mirror, pinned by blobs only (seed:pins: UNCHECKABLE until a mirror exists)
+         */
+        pin: z.enum(['git-head', 'git-tree', 'caller-asserted']),
         /** the source documents the generator read (guides / unit file / draft) */
         inputs: z.array(z.string().min(1)),
         /** index exclusions applied (bare names or repo-relative dirs) */

@@ -6,7 +6,9 @@
  *   2. stamp: present and still bound to the bytes, the quarantine + review keys
  *      and the CURRENT seed fingerprint (a validator/generator/registry change
  *      makes every stamp stale);
- *   3. pin: the source checkout's files still hash to the pinned blob ids;
+ *   3. pin: the source checkout's files still hash to the pinned blob ids and,
+ *      with a mirror (pin git-tree), the checkout is git's tree byte for byte and
+ *      every pinned id is git's own at the sha (seed:pins checks ids alone);
  *   4. content: every shipped item re-runs its generator's validator and must
  *      come back 'accept' and byte-identical (canonical JSON); every review item
  *      must still be held (never silently promoted); variants and patches are

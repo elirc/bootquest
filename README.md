@@ -113,7 +113,8 @@ A stamp goes stale when you edit a grader or validator, or upgrade node, esbuild
 - run `npm run seed:check -- --restamp` for seed packs.
 
 `seed:check` and its `--restamp` also need the source checkouts in
-`.cache/checkouts/` (SEEDING.md §2).
+`.cache/checkouts/`, made with `npm run seed:checkout` from the mirrors in
+`.cache/repos/` (SEEDING.md §2; never `git archive`, which autocrlf converts here).
 
 ### The Java track
 
@@ -220,6 +221,7 @@ Each gate is a real command that must exit 0. Run them in the foreground.
 | `npm run demo:promotion` | One full competency promotion cycle (artifact → explain-back → ≥2-day retest) plus the negative legs, over HTTP on a temp DB with an injected clock |
 | `npm run demo:m4` | Real GitHub sync of signalpost; U01 renders from the per-SHA cache; its real `u01.test.mjs` fails the starter and passes the solution; new-guide detection; fully offline re-run |
 | `npm run seed:check` | Every seed pack re-verified: stamp, pins, every shipped item re-validated (variants and katas re-executed) |
+| `npm run seed:pins` | Read-only: every seed manifest's blob ids == `git ls-tree -r <pinned sha>` in the repo mirror (OK / MISMATCH / UNCHECKABLE; `--strict` fails on missing mirrors) |
 | `npm run seed:validate -- --source <bootforge\|csbootcamp\|javabootcamp>` | The import gate: every imported reference solution executes green under BootQuest's runners (quarantine otherwise) |
 | `npm run seed:import:javabootcamp` | Re-imports the javabootcamp Java pack from `elirc/javabootcamp` at the pinned sha (then re-run `seed:validate -- --source javabootcamp`) |
 | `npm run test:csharp` | The warm C# runner suite (slow; its own gate) |
