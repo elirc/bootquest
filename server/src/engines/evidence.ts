@@ -1,4 +1,4 @@
-import { CompetencyId, EvidenceInput, PROJECT_UNIT_KINDS, type Assistance } from '@bootquest/shared';
+import { CompetencyId, EvidenceInput, PROJECT_UNIT_KINDS, PROMOTION_MIN_COVERAGE, type Assistance } from '@bootquest/shared';
 import type { Db } from '../db/database.ts';
 import { getAttempt, HonestyRuleError, isVerifiedPass, VERIFIED_PASS_SQL, type AttemptRow } from './attempts.ts';
 import { DAY_MS, nowMs, type Clock } from './clock.ts';
@@ -34,7 +34,8 @@ import { DAY_MS, nowMs, type Clock } from './clock.ts';
  * notch (fsrs.ts -> demote).
  */
 
-export const PROMOTION_MIN_COVERAGE = 0.8;
+// one definition, shared with the client's self-score preview (shared/src/thresholds.ts)
+export { PROMOTION_MIN_COVERAGE };
 export const RETEST_MIN_DELAY_MS = 2 * DAY_MS;
 export const MIN_RATING = 1;
 export const MAX_RATING = 5;

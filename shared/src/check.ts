@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { CheckType } from './enums.ts';
+import { PROMOTION_MIN_COVERAGE } from './thresholds.ts';
 
 /**
  * Check specs: a discriminated union over every check type in spec §4 plus the
@@ -316,7 +317,7 @@ export const ExplainBackCheck = z.object({
   type: z.literal('explain-back'),
   questionSetKey: z.string().min(1),
   questionCount: z.number().int().positive().default(3),
-  minCoverage: z.number().min(0).max(1).default(0.8),
+  minCoverage: z.number().min(0).max(1).default(PROMOTION_MIN_COVERAGE),
 });
 
 export const PatchKataCheck = z.object({

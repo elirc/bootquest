@@ -1,11 +1,19 @@
 import { screen, waitFor, within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { GATED_ARTIFACT_ID, GATED_EXPLAIN_BACK_ID } from '../api/fixtures/ladder';
 import { createMockApi } from '../api/mock';
-import type { BootQuestApi } from '../api/types';
+import { ApiError, type BootQuestApi } from '../api/types';
 import { renderApp } from '../test/render';
+import { ebDraftKey, kataDraftKey } from './LadderPanes';
 
 const EB = 105; // explain-back: closures (3 questions, 5 key points)
 const KATA = 109; // patch kata: ownership check (2 seeded defects)
+const GATED_EB = GATED_EXPLAIN_BACK_ID; // explain-back = promotion leg (b) of the program unit 303
+const ARTIFACT = GATED_ARTIFACT_ID;
+const ARTIFACT_TITLE = 'Agent harness U01: the tool-call loop';
+
+// drafts live in localStorage: every test starts from an empty browser
+beforeEach(() => window.localStorage.clear());
 const KEY_POINT_TEXT = 'A closure captures the variable binding, not a snapshot of its value.';
 const DEFECT_TEXT = 'User A requests /orders/<id of user B>.';
 
@@ -49,6 +57,7 @@ describe('explain-back player: immutable answer first, then the key, then the se
     expect(scoreBtn).toBeDisabled();
     await user.click(screen.getByRole('radio', { name: 'q3k1 missed' }));
     await user.click(scoreBtn);
+    await user.click(within(screen.getByRole('alertdialog', { name: 'File this self-score?' })).getByRole('button', { name: 'File self-score' }));
     expect(await screen.findByTestId('coverage-result')).toHaveTextContent('Coverage 80% (4/5)');
     expect(screen.getByTestId('coverage-result')).toHaveTextContent('+20 XP');
     expect(screen.getByTestId('retest-notice')).toHaveTextContent('Retest scheduled: Changed example: group records by key length opens');
@@ -64,6 +73,7 @@ describe('explain-back player: immutable answer first, then the key, then the se
     for (const id of ['q1k1', 'q1k2', 'q2k1']) await user.click(screen.getByRole('radio', { name: `${id} covered` }));
     for (const id of ['q2k2', 'q3k1']) await user.click(screen.getByRole('radio', { name: `${id} missed` }));
     await user.click(screen.getByRole('button', { name: /Submit self-score/ }));
+    await user.click(screen.getByRole('button', { name: 'File self-score' }));
     expect(await screen.findByTestId('coverage-result')).toHaveTextContent('Coverage 60% (3/5)');
     expect(screen.getByTestId('retest-notice')).toHaveTextContent('No retest scheduled');
   });
@@ -111,6 +121,7 @@ describe('patch-kata player', () => {
     await user.click(screen.getByRole('radio', { name: 'd1 caught' }));
     await user.click(screen.getByRole('radio', { name: 'd2 missed' }));
     await user.click(screen.getByRole('button', { name: /Submit catch score/ }));
+    await user.click(screen.getByRole('button', { name: 'File catch score' }));
     expect(await screen.findByTestId('catch-result')).toHaveTextContent('Caught 1/2 (50%)');
     expect(screen.getByTestId('catch-result')).toHaveTextContent('+15 XP');
   });
@@ -188,5 +199,368 @@ describe('stats: G1 catch rate + evidence browser', () => {
     renderApp(`/play/${KATA}`);
     await screen.findByText(/Review this patch like a PR/);
     expect(document.body.textContent).not.toMatch(/hides \d+ seeded defect/);
+  });
+});
+
+/** Store answers to EB 105 through the UI, landing on the key view. */
+async function answerEb(user: ReturnType<typeof renderApp>['user']) {
+  await screen.findByRole('textbox', { name: 'Answer 1' });
+  for (let i = 1; i <= 3; i++) await user.type(screen.getByRole('textbox', { name: `Answer ${i}` }), `a${i}`);
+  await user.click(screen.getByRole('button', { name: /Submit answers/ }));
+  await user.click(screen.getByRole('button', { name: /Store answers/ }));
+  await screen.findByText(KEY_POINT_TEXT);
+}
+
+describe('drafts: unsent answers survive a remount (per-browser, per item version)', () => {
+  it('explain-back answers + the help flag are restored after an unmount; storing the answer clears the draft', async () => {
+    const api = createMockApi();
+    const first = renderApp(`/play/${EB}`, api);
+    await first.user.type(await screen.findByRole('textbox', { name: 'Answer 1' }), 'binding, not value');
+    await first.user.type(screen.getByRole('textbox', { name: 'Answer 2' }), 'var is function scoped');
+    await first.user.click(screen.getByRole('checkbox', { name: 'I had help' }));
+    const key = ebDraftKey(EB, (await api.getUnit(EB)).explainBack!);
+    expect(JSON.parse(window.localStorage.getItem(key)!)).toEqual({ answers: ['binding, not value', 'var is function scoped', ''], assisted: true });
+    first.unmount();
+
+    const { user } = renderApp(`/play/${EB}`, api);
+    expect(await screen.findByRole('textbox', { name: 'Answer 1' })).toHaveValue('binding, not value');
+    expect(screen.getByRole('textbox', { name: 'Answer 2' })).toHaveValue('var is function scoped');
+    expect(screen.getByRole('checkbox', { name: 'I had help' })).toBeChecked();
+    expect(screen.getByTestId('draft-restored')).toHaveTextContent('Restored your unsent draft');
+
+    await user.type(screen.getByRole('textbox', { name: 'Answer 3' }), 'a counter factory');
+    await user.click(screen.getByRole('button', { name: /Submit answers/ }));
+    await user.click(screen.getByRole('button', { name: /Store answers/ }));
+    expect(await screen.findByText(KEY_POINT_TEXT)).toBeInTheDocument();
+    expect(window.localStorage.getItem(key)).toBeNull();
+    // the help flag travelled with the draft into the stored attempt
+    expect((await api.getAttempt((await api.getExplainBackKey(EB)).attemptId)).mode).toBe('assisted');
+  });
+
+  it('kata findings (several rows) are restored after an unmount and cleared once recorded', async () => {
+    const api = createMockApi();
+    const first = renderApp(`/play/${KATA}`, api);
+    await first.user.type(await screen.findByRole('textbox', { name: 'Finding 1 scenario' }), 'another user id');
+    await first.user.click(screen.getByRole('button', { name: 'Add finding' }));
+    await first.user.type(screen.getByRole('textbox', { name: 'Finding 2 evidence' }), 'src/orders.js:10');
+    first.unmount();
+
+    const { user } = renderApp(`/play/${KATA}`, api);
+    expect(await screen.findByRole('textbox', { name: 'Finding 1 scenario' })).toHaveValue('another user id');
+    expect(screen.getByRole('textbox', { name: 'Finding 2 evidence' })).toHaveValue('src/orders.js:10');
+    expect(screen.getByTestId('draft-restored')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Remove finding 2' }));
+    await user.type(screen.getByRole('textbox', { name: 'Finding 1 evidence' }), 'src/orders.js:11');
+    await user.type(screen.getByRole('textbox', { name: 'Finding 1 consequence' }), 'IDOR');
+    await user.click(screen.getByRole('button', { name: /Submit findings/ }));
+    expect(await screen.findByTestId('kata-key')).toBeInTheDocument();
+    expect(window.localStorage.getItem(kataDraftKey(KATA, (await api.getUnit(KATA)).kata!.diff))).toBeNull();
+  });
+
+  it('a dirty draft guards the tab close; an empty one does not; a re-seeded item gets its own draft slot', async () => {
+    const { user } = renderApp(`/play/${EB}`);
+    const unload = () => {
+      const ev = new Event('beforeunload', { cancelable: true });
+      window.dispatchEvent(ev);
+      return ev.defaultPrevented;
+    };
+    const box = await screen.findByRole('textbox', { name: 'Answer 1' });
+    expect(unload()).toBe(false);
+    await user.type(box, 'x');
+    expect(unload()).toBe(true);
+    await user.clear(box);
+    expect(unload()).toBe(false);
+    expect(ebDraftKey(EB, { questions: [{ prompt: 'v1' }] })).not.toBe(ebDraftKey(EB, { questions: [{ prompt: 'v2' }] }));
+  });
+});
+
+describe('self-score: live preview against the pass mark, then a confirm (permanent)', () => {
+  it('explain-back: the coverage preview follows every mark; Cancel files nothing; the confirm states permanence', async () => {
+    const { api, calls } = spyApi();
+    const { user } = renderApp(`/play/${EB}`, api);
+    await answerEb(user);
+    const preview = screen.getByTestId('score-preview');
+    expect(preview).toHaveTextContent('0/5 covered = 0% — below the 80% promotion gate (5 still unmarked)');
+    await user.click(screen.getByRole('radio', { name: 'q1k1 covered' }));
+    expect(preview).toHaveTextContent('1/5 covered = 20% — below the 80% promotion gate (4 still unmarked)');
+    for (const id of ['q1k2', 'q2k1', 'q2k2']) await user.click(screen.getByRole('radio', { name: `${id} covered` }));
+    await user.click(screen.getByRole('radio', { name: 'q3k1 missed' }));
+    expect(preview).toHaveTextContent('4/5 covered = 80% — meets the 80% promotion gate');
+    expect(preview).toHaveClass('is-pass');
+    // one misclick flips it below the gate, and the preview says so before anything is filed
+    await user.click(screen.getByRole('radio', { name: 'q2k2 missed' }));
+    expect(preview).toHaveTextContent('3/5 covered = 60% — below the 80% promotion gate');
+    expect(preview).toHaveClass('is-fail');
+
+    await user.click(screen.getByRole('button', { name: /Submit self-score/ }));
+    const dialog = screen.getByRole('alertdialog', { name: 'File this self-score?' });
+    expect(dialog).toHaveTextContent('3/5 covered = 60%: below the 80% promotion gate.');
+    expect(dialog).toHaveTextContent('FAIL for promotion leg (b)');
+    expect(dialog).toHaveTextContent('permanent');
+    expect(within(dialog).getByRole('button', { name: 'Cancel' })).toHaveFocus();
+    expect(screen.getByRole('radio', { name: 'q2k2 covered' })).toBeDisabled(); // marks frozen while confirming
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(calls).not.toContain('selfScoreExplainBack');
+
+    await user.click(screen.getByRole('radio', { name: 'q2k2 covered' }));
+    await user.click(screen.getByRole('button', { name: /Submit self-score/ }));
+    expect(screen.getByRole('alertdialog')).toHaveTextContent('meets the 80% promotion gate');
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(calls).not.toContain('selfScoreExplainBack');
+    await user.click(screen.getByRole('button', { name: /Submit self-score/ }));
+    await user.click(screen.getByRole('button', { name: 'File self-score' }));
+    expect(await screen.findByTestId('coverage-result')).toHaveTextContent('Coverage 80% (4/5)');
+  });
+
+  it('the preview uses the unit\'s own pass mark when it is stricter than the promotion floor', async () => {
+    const base = createMockApi();
+    const api: BootQuestApi = { ...base, getUnit: async (id) => { const d = await base.getUnit(id); return d.explainBack ? { ...d, explainBack: { ...d.explainBack, minCoveragePct: 90 } } : d; } };
+    const { user } = renderApp(`/play/${EB}`, api);
+    await answerEb(user);
+    for (const id of ['q1k1', 'q1k2', 'q2k1', 'q2k2']) await user.click(screen.getByRole('radio', { name: `${id} covered` }));
+    await user.click(screen.getByRole('radio', { name: 'q3k1 missed' }));
+    expect(screen.getByTestId('score-preview')).toHaveTextContent('4/5 covered = 80% — below the 90% promotion gate');
+  });
+
+  it('kata: the catch-rate preview is measured against the G1 target, and the score needs a confirm', async () => {
+    const { api, calls } = spyApi();
+    await api.submitKataFindings(KATA, { findings: [{ scenario: 's', evidence: 'e:1', consequence: 'c' }], selfAssisted: false });
+    const { user } = renderApp(`/play/${KATA}`, api);
+    await screen.findByTestId('kata-key');
+    const preview = screen.getByTestId('score-preview');
+    await user.click(screen.getByRole('radio', { name: 'd1 caught' }));
+    expect(preview).toHaveTextContent('1/2 caught = 50% — below the 80% G1 target (1 still unmarked)');
+    await user.click(screen.getByRole('radio', { name: 'd2 caught' }));
+    expect(preview).toHaveTextContent('2/2 caught = 100% — meets the 80% G1 target');
+    await user.click(screen.getByRole('button', { name: /Submit catch score/ }));
+    const dialog = screen.getByRole('alertdialog', { name: 'File this catch score?' });
+    expect(dialog).toHaveTextContent('permanent');
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(calls).not.toContain('selfScoreKata');
+    await user.click(screen.getByRole('button', { name: /Submit catch score/ }));
+    await user.click(screen.getByRole('button', { name: 'File catch score' }));
+    expect(await screen.findByTestId('catch-result')).toHaveTextContent('Caught 2/2 (100%)');
+    expect(screen.getByTestId('catch-result')).toHaveClass('verdict-pass');
+  });
+});
+
+describe('artifact lock: an explain-back that is leg (b) of an unpassed project is read-only', () => {
+  it('shows the questions read-only under a "Pass <artifact> solo first" banner that links to the artifact', async () => {
+    const { api, calls } = spyApi();
+    renderApp(`/play/${GATED_EB}`, api);
+    const banner = await screen.findByTestId('artifact-lock');
+    expect(banner).toHaveTextContent(`Pass ${ARTIFACT_TITLE} solo first.`);
+    expect(within(banner).getByRole('link', { name: ARTIFACT_TITLE })).toHaveAttribute('href', `/play/${ARTIFACT}`);
+    expect(screen.getByText('When does your loop stop, and why is that condition safe?')).toBeInTheDocument();
+    for (let i = 1; i <= 3; i++) expect(screen.getByRole('textbox', { name: `Answer ${i}` })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Submit answers/ })).toBeDisabled();
+    expect(screen.getByRole('checkbox', { name: 'I had help' })).toBeDisabled();
+    expect(calls).not.toContain('answerExplainBack');
+  });
+
+  it('a solo pass of the artifact opens the answer form', async () => {
+    const api = createMockApi();
+    await api.submitUnit(ARTIFACT, { code: 'export async function runLoop() { return 1; }', selfAssisted: false });
+    const { user } = renderApp(`/play/${GATED_EB}`, api);
+    const box = await screen.findByRole('textbox', { name: 'Answer 1' });
+    expect(screen.queryByTestId('artifact-lock')).not.toBeInTheDocument();
+    expect(box).toBeEnabled();
+    await user.type(box, 'x');
+    expect(box).toHaveValue('x');
+  });
+
+  it('a raced 409 ARTIFACT_REQUIRED turns into the same banner (re-read from the unit), and the draft is kept', async () => {
+    const base = createMockApi();
+    let served = 0;
+    // the page loaded while the artifact looked passed; the server refuses at answer time
+    const api: BootQuestApi = {
+      ...base,
+      getUnit: async (id) => {
+        const d = await base.getUnit(id);
+        return id === GATED_EB && served++ === 0 ? { ...d, explainBack: { ...d.explainBack!, artifactRequired: [] } } : d;
+      },
+    };
+    const { user } = renderApp(`/play/${GATED_EB}`, api);
+    await screen.findByRole('textbox', { name: 'Answer 1' });
+    for (let i = 1; i <= 3; i++) await user.type(screen.getByRole('textbox', { name: `Answer ${i}` }), `draft ${i}`);
+    await user.click(screen.getByRole('button', { name: /Submit answers/ }));
+    await user.click(screen.getByRole('button', { name: /Store answers/ }));
+    const banner = await screen.findByTestId('artifact-lock');
+    expect(banner).toHaveTextContent(`Pass ${ARTIFACT_TITLE} solo first.`);
+    expect(screen.getByRole('textbox', { name: 'Answer 1' })).toHaveValue('draft 1');
+    expect(screen.getByRole('textbox', { name: 'Answer 1' })).toBeDisabled();
+    await expect(base.getExplainBackKey(GATED_EB)).rejects.toMatchObject({ code: 'NOT_ANSWERED' });
+  });
+
+  it('without a fresh lock list the 409 still reads as the friendly message', async () => {
+    const base = createMockApi();
+    let served = 0;
+    const api: BootQuestApi = {
+      ...base,
+      getUnit: async (id) => {
+        if (id === GATED_EB && served++ > 0) throw new ApiError(0, 'NETWORK', 'offline');
+        const d = await base.getUnit(id);
+        return id === GATED_EB ? { ...d, explainBack: { ...d.explainBack!, artifactRequired: [] } } : d;
+      },
+    };
+    const { user } = renderApp(`/play/${GATED_EB}`, api);
+    await screen.findByRole('textbox', { name: 'Answer 1' });
+    for (let i = 1; i <= 3; i++) await user.type(screen.getByRole('textbox', { name: `Answer ${i}` }), `d${i}`);
+    await user.click(screen.getByRole('button', { name: /Submit answers/ }));
+    await user.click(screen.getByRole('button', { name: /Store answers/ }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Pass the linked project unit solo first');
+    expect(screen.getByRole('alert')).toHaveTextContent('(ARTIFACT_REQUIRED)');
+    expect(screen.getByRole('textbox', { name: 'Answer 1' })).toHaveValue('d1');
+  });
+});
+
+describe('answered, but the key will not load: Retry, never an empty answer form', () => {
+  it('explain-back: a failed key fetch on an answered unit shows Retry and no form; Retry opens the key', async () => {
+    const base = createMockApi();
+    await base.answerExplainBack(EB, { answers: ['a', 'b', 'c'], selfAssisted: false });
+    let fail = true;
+    const api: BootQuestApi = {
+      ...base,
+      getExplainBackKey: (id) => (fail ? Promise.reject(new ApiError(0, 'NETWORK', 'offline')) : base.getExplainBackKey(id)),
+    };
+    const { user } = renderApp(`/play/${EB}`, api);
+    const box = await screen.findByTestId('key-unavailable');
+    expect(box).toHaveTextContent('Your answers are recorded, but the key could not be loaded');
+    expect(box).toHaveTextContent('(NETWORK)');
+    expect(screen.queryByRole('textbox', { name: 'Answer 1' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Submit answers/ })).not.toBeInTheDocument();
+    fail = false;
+    await user.click(within(box).getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText(KEY_POINT_TEXT)).toBeInTheDocument();
+    expect(screen.queryByTestId('key-unavailable')).not.toBeInTheDocument();
+  });
+
+  it('kata: findings stored but the key request fails -> Retry state (not the form, not an error under a full form)', async () => {
+    const base = createMockApi();
+    let fail = true;
+    const api: BootQuestApi = { ...base, getKataKey: (id) => (fail ? Promise.reject(new ApiError(500, 'INTERNAL', 'boom')) : base.getKataKey(id)) };
+    const { user } = renderApp(`/play/${KATA}`, api);
+    await user.type(await screen.findByRole('textbox', { name: 'Finding 1 scenario' }), 's');
+    await user.type(screen.getByRole('textbox', { name: 'Finding 1 evidence' }), 'e:1');
+    await user.type(screen.getByRole('textbox', { name: 'Finding 1 consequence' }), 'c');
+    await user.click(screen.getByRole('button', { name: /Submit findings/ }));
+    const box = await screen.findByTestId('key-unavailable');
+    expect(box).toHaveTextContent('Your findings are recorded');
+    expect(screen.queryByRole('textbox', { name: 'Finding 1 scenario' })).not.toBeInTheDocument();
+    fail = false;
+    await user.click(within(box).getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByTestId('kata-key')).toHaveTextContent('Your findings (stored #');
+  });
+
+  it('a NOT_ANSWERED probe (older server, no `answered` flag) still means "answer now"', async () => {
+    const base = createMockApi();
+    const api: BootQuestApi = {
+      ...base,
+      getUnit: async (id) => {
+        const d = await base.getUnit(id);
+        if (!d.explainBack) return d;
+        const { answered: _a, ...old } = d.explainBack;
+        return { ...d, explainBack: old };
+      },
+    };
+    renderApp(`/play/${EB}`, api);
+    expect(await screen.findByRole('textbox', { name: 'Answer 1' })).toBeEnabled();
+    expect(screen.queryByTestId('key-unavailable')).not.toBeInTheDocument();
+  });
+});
+
+describe('re-seeded items: the old answer is superseded and the form reappears', () => {
+  it('a re-seed after the answer: the unit opens on a fresh form; the new version takes one fresh answer', async () => {
+    const api = createMockApi();
+    const first = await api.answerExplainBack(EB, { answers: ['old 1', 'old 2', 'old 3'], selfAssisted: false });
+    api.reseedItem(EB);
+    const { user } = renderApp(`/play/${EB}`, api);
+    expect(await screen.findByRole('textbox', { name: 'Answer 1' })).toHaveValue('');
+    await answerEbTyped(user);
+    const key = await api.getExplainBackKey(EB);
+    expect(key.attemptId).not.toBe(first.attemptId);
+    expect(screen.getByTestId('stored-answer-1')).toHaveTextContent('a1');
+  });
+
+  it('re-seeded while the key view is open: the self-score\'s NOT_ANSWERED reopens the form with the superseded note', async () => {
+    const api = createMockApi();
+    const { user } = renderApp(`/play/${EB}`, api);
+    await answerEb(user);
+    const old = await api.getExplainBackKey(EB);
+    api.reseedItem(EB);
+    for (const id of ['q1k1', 'q1k2', 'q2k1', 'q2k2', 'q3k1']) await user.click(screen.getByRole('radio', { name: `${id} covered` }));
+    await user.click(screen.getByRole('button', { name: /Submit self-score/ }));
+    await user.click(screen.getByRole('button', { name: 'File self-score' }));
+    const note = await screen.findByTestId('superseded-note');
+    expect(note).toHaveTextContent(`#${old.attemptId}`);
+    expect(note).toHaveTextContent('superseded');
+    expect(screen.getByRole('textbox', { name: 'Answer 1' })).toBeEnabled();
+  });
+});
+
+/** Fill and store EB 105 when the form is already on screen. */
+async function answerEbTyped(user: ReturnType<typeof renderApp>['user']) {
+  for (let i = 1; i <= 3; i++) await user.type(screen.getByRole('textbox', { name: `Answer ${i}` }), `a${i}`);
+  await user.click(screen.getByRole('button', { name: /Submit answers/ }));
+  await user.click(screen.getByRole('button', { name: /Store answers/ }));
+  await screen.findByText(KEY_POINT_TEXT);
+}
+
+describe('mock parity: the mock enforces the server\'s ladder rules', () => {
+  const codeOf = (p: Promise<unknown>) => p.then(() => 'resolved', (e: ApiError) => e.code);
+
+  it('ARTIFACT_REQUIRED: refused (409) with artifactRequired listed until a SOLO verified pass; assisted or revealed passes do not count', async () => {
+    const api = createMockApi();
+    const body = { answers: ['a', 'b', 'c'], selfAssisted: false };
+    expect((await api.getUnit(GATED_EB)).explainBack!.artifactRequired).toEqual([{ unitId: ARTIFACT, title: ARTIFACT_TITLE }]);
+    await expect(api.answerExplainBack(GATED_EB, body)).rejects.toMatchObject({ status: 409, code: 'ARTIFACT_REQUIRED' });
+    await expect(api.answerExplainBack(GATED_EB, body)).rejects.toThrow(/promotion leg \(b\) of unit 303/);
+    // an assisted pass is not the solo artifact
+    await api.submitUnit(ARTIFACT, { code: 'done', selfAssisted: true });
+    expect(await codeOf(api.answerExplainBack(GATED_EB, body))).toBe('ARTIFACT_REQUIRED');
+    await api.submitUnit(ARTIFACT, { code: 'done', selfAssisted: false });
+    expect((await api.getUnit(GATED_EB)).explainBack!.artifactRequired).toEqual([]);
+    await expect(api.answerExplainBack(GATED_EB, body)).resolves.toMatchObject({ outcome: 'submitted' });
+    // ALREADY_ANSWERED is checked first, like the server
+    expect(await codeOf(api.answerExplainBack(GATED_EB, body))).toBe('ALREADY_ANSWERED');
+
+    // a project-less explain-back is never gated
+    expect((await api.getUnit(EB)).explainBack!.artifactRequired).toEqual([]);
+  });
+
+  it('ARTIFACT_REQUIRED: a revealed artifact no longer gates (its leg (a) can never count)', async () => {
+    const api = createMockApi();
+    expect((await api.getUnit(GATED_EB)).explainBack!.artifactRequired).toHaveLength(1);
+    await api.revealUnit(ARTIFACT);
+    expect((await api.getUnit(GATED_EB)).explainBack!.artifactRequired).toEqual([]);
+    // and a guided pass after the reveal is no solo pass either way
+    await expect(api.submitUnit(ARTIFACT, { code: 'done', selfAssisted: false })).resolves.toMatchObject({ attempt: { mode: 'guided' } });
+  });
+
+  it('supersession: a re-seed makes `answered` false, NOT_ANSWERED names the old answer, one fresh answer is taken', async () => {
+    const api = createMockApi();
+    const body = { answers: ['a', 'b', 'c'], selfAssisted: false };
+    const old = await api.answerExplainBack(EB, body);
+    expect((await api.getUnit(EB)).explainBack!.answered).toBe(true);
+    api.reseedItem(EB);
+    expect((await api.getUnit(EB)).explainBack!.answered).toBe(false);
+    await expect(api.getExplainBackKey(EB)).rejects.toMatchObject({ code: 'NOT_ANSWERED', message: expect.stringContaining(`#${old.attemptId}`) });
+    await expect(api.getExplainBackKey(EB)).rejects.toThrow(/superseded/);
+    await expect(api.selfScoreExplainBack(EB, { perKeyPoint: {} })).rejects.toMatchObject({ code: 'NOT_ANSWERED' });
+    const fresh = await api.answerExplainBack(EB, { ...body, answers: ['x', 'y', 'z'] });
+    expect((await api.getExplainBackKey(EB)).answers).toEqual(['x', 'y', 'z']);
+    expect(fresh.attemptId).not.toBe(old.attemptId);
+    expect(await codeOf(api.answerExplainBack(EB, body))).toBe('ALREADY_ANSWERED');
+
+    // katas too
+    await api.submitKataFindings(KATA, { findings: [{ scenario: 's', evidence: 'e', consequence: 'c' }], selfAssisted: false });
+    api.reseedItem(KATA);
+    expect((await api.getUnit(KATA)).kata!.answered).toBe(false);
+    await expect(api.getKataKey(KATA)).rejects.toThrow(/superseded/);
+    await expect(api.submitKataFindings(KATA, { findings: [{ scenario: 's2', evidence: 'e2', consequence: 'c2' }], selfAssisted: false })).resolves.toMatchObject({
+      outcome: 'submitted',
+    });
+    expect((await api.getKataKey(KATA)).findings[0]!.scenario).toBe('s2');
   });
 });

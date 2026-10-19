@@ -8,11 +8,14 @@ import react from '@vitejs/plugin-react';
 // symlink would also resolve it). The client only ever imports TYPES from it, so no
 // shared/zod code ends up in the bundle.
 const sharedApi = fileURLToPath(new URL('../shared/src/api.ts', import.meta.url));
+// The one RUNTIME import: the pass-mark constants (a zod-free module, see its header), so the
+// self-score previews use the server's own numbers.
+const sharedThresholds = fileURLToPath(new URL('../shared/src/thresholds.ts', import.meta.url));
 
 export default defineConfig({
   plugins: [react()],
   resolve: {
-    alias: { '@bootquest/shared/api': sharedApi },
+    alias: { '@bootquest/shared/api': sharedApi, '@bootquest/shared/thresholds': sharedThresholds },
   },
   server: {
     port: 5173,
