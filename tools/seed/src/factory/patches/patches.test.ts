@@ -156,6 +156,13 @@ describe('seed:patches', () => {
     for (const name of ['(compile)', '(timeout)', '(program)', '(format)', '(incomplete)']) {
       expect(failsAsVerdict({ pass: false, output: '', failures: [{ name, message: 'x' }], durationMs: 0 }).ok).toBe(false);
     }
+    // a todo stub (drill-java / drill-cs) or a NotExecuted xunit test is a named entry but NOT a failed assertion
+    for (const message of ['not implemented yet (todo)', 'skipped / not executed']) {
+      const v = failsAsVerdict({ pass: false, output: '', failures: [{ name: 'boundary', message }], durationMs: 0 });
+      expect(v).toEqual({ ok: false, why: expect.stringMatching(/^fails only as todo \/ not executed \(boundary\)/) });
+    }
+    // ... but a real failure beside a todo still counts
+    expect(failsAsVerdict({ pass: false, output: '', failures: [{ name: 'a', message: 'not implemented yet (todo)' }, { name: 'b', message: 'values differ' }], durationMs: 0 }).ok).toBe(true);
   });
 
   // JDK 17 on PATH: the block compiles Java through the server's real Java runner; without a JDK it is
@@ -198,6 +205,22 @@ describe('seed:patches', () => {
       const items = loadSeedPack(out('java-good'), { requireStamp: true }).items as SeedPatchKataItem[];
       expect(items).toHaveLength(1);
       expect(items[0]!.test!.check.type).toBe('drill-java');
+    }, 300_000);
+
+    it('REJECTS a defective version that only "fails" as a TODO stub (todo is not a failed assertion; real runner)', async () => {
+      const stub = clean.replace('return Arrays.stream(rules).filter(r -> r > 0).count();', 'throw new UnsupportedOperationException("TODO");');
+      const stubDiff = `diff --git a/${MODULE} b/${MODULE}\n--- a/${MODULE}\n+++ b/${MODULE}\n@@ -3,3 +3,3 @@\n final class Summary {\n-${clean.split('\n')[3]}\n+${stub.split('\n')[3]}\n }\n`;
+      const draft = JSON.parse(readFileSync(file, 'utf8')) as { name: string; katas: Array<{ diff: string; id: string }> };
+      draft.name = 'java-todo';
+      draft.katas[0]!.id = 'todo-stub-java';
+      draft.katas[0]!.diff = stubDiff;
+      const f = join(tmp, 'java-todo.json');
+      writeFileSync(f, JSON.stringify(draft));
+      const before = managed.harness.executions; // the harness is shared by this block: count this run only
+      const r = await runPatches({ draft: f, checkout: join(FX, 'ww6'), sha: WW6, repo: 'ww6', out: out('java-todo'), harness: managed.harness });
+      expect(r.ok).toBe(false);
+      expect(managed.harness.executions - before).toBe(2); // really executed on both versions
+      expect(r.lines.join('\n')).toMatch(/the defective version fails only as todo \/ not executed \(zero-weight rules are not matched\)/);
     }, 300_000);
   });
 

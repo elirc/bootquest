@@ -147,10 +147,21 @@ export const describeFailures = (r: CanonicalRunResult): string =>
     .join(' | ')
     .slice(0, 400);
 
-/** A FAIL that counts: the code loaded and at least one named test failed. */
+/**
+ * Named entries that are not a failed assertion: a test that never ran its logic. drill-cs / drill-java
+ * report a `NotImplementedException` / `UnsupportedOperationException("TODO")` stub as todo
+ * ('not implemented yet (todo)'), the C# TRX path a NotExecuted test as 'skipped / not executed'.
+ * A wrong solution / defective version that "fails" only this way is the untouched starter: it
+ * proves nothing about whether the test tells right from wrong (review java-harness, E1).
+ */
+export const NOT_A_VERDICT_MESSAGE = new Set(['not implemented yet (todo)', 'skipped / not executed']);
+
+/** A FAIL that counts: the code loaded and at least one named test failed (a todo / skipped entry is not a failure). */
 export function failsAsVerdict(r: CanonicalRunResult): { ok: true } | { ok: false; why: string } {
   if (r.pass) return { ok: false, why: 'passes' };
-  const structured = r.failures.filter((f) => !NOT_A_VERDICT.has(f.name));
+  const named = r.failures.filter((f) => !NOT_A_VERDICT.has(f.name));
+  const structured = named.filter((f) => !NOT_A_VERDICT_MESSAGE.has(f.message));
+  if (named.length > 0 && structured.length === 0) return { ok: false, why: `fails only as todo / not executed (${named.map((f) => f.name).join(', ')}): an unimplemented stub, not a failed assertion` };
   if (structured.length === 0) return { ok: false, why: `fails only without a test verdict (${r.failures.map((f) => f.name).join(', ') || 'no failures reported'})` };
   return { ok: true };
 }

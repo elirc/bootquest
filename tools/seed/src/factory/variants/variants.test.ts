@@ -84,6 +84,18 @@ describe('seed:variants — the wrong-solution filter through the REAL drill-js 
     expect(r.ok).toBe(true);
   });
 
+  it('DISCARDS a wrong solution that only "fails" as a todo stub (the starter proves nothing about the test)', async () => {
+    // the Java / C# runners report an UnsupportedOperationException("TODO") / NotImplementedException stub as todo
+    const h = withRunner(defaultHarness(), 'drill-java', async (_spec, sub) => {
+      const ok = !(sub.code ?? '').includes('>=');
+      return { pass: ok, output: '', failures: ok ? [] : [{ name: 'boundary: a title exactly minLength long does not count', message: 'not implemented yet (todo)' }], durationMs: 1 };
+    });
+    const r = await runVariants({ draft: join(D, 'variants-java-signalpost-U01.json'), harness: h, out: out('java-todo') });
+    expect(r.ok).toBe(false);
+    expect(r.write!.manifest).toMatchObject({ quarantined: 1, counts: { total: 0 } });
+    expect(r.lines.join('\n')).toMatch(/wrong-solution filter: the wrong solution fails only as todo \/ not executed \(boundary: a title exactly minLength long does not count\)/);
+  });
+
   it('a provenance that does not hold at the pinned sha is refused', async () => {
     const r = await runVariants({ draft: join(D, 'variants-signalpost-U01.json'), checkout: join(FX, 'ww6'), out: out('wrongco') });
     expect(r.refused).toMatch(/provenance does not hold at the pinned sha/);
