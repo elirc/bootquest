@@ -7,12 +7,16 @@ import { spawnSync } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
+import { SEED_PACK_FORMAT, SeedPackManifest, SeedValidationStamp, type SeedItem, type SeedQuizItem } from '@bootquest/shared';
+import { seedFingerprint, seedToolchain } from '../fingerprint.ts';
 import { REPO_ROOT } from '../report.ts';
-import { FIXTURES as FX, plantAndie } from './plant.ts';
+import { sha256, stableJson } from '../util.ts';
+import { FIXTURES as FX, plantAndie, plantedToken } from './plant.ts';
 
 const D = join(FX, 'drafts');
 const WW6_SHA = '09751ceaee909a30e5c4b5ff5cdde99880b9a3e5';
 const CLI = (g: string) => join(REPO_ROOT, 'tools', 'seed', 'src', 'factory', g, 'cli.ts');
+const DRAFTS_CLI = join(REPO_ROOT, 'tools', 'seed', 'src', 'drafts', 'cli.ts');
 
 interface Case {
   id: string;
@@ -120,13 +124,137 @@ async function main(): Promise<number> {
     writeFileSync(stampPath, readFileSync(stampPath, 'utf8').replace(/"fingerprint": "[0-9a-f]{64}"/, `"fingerprint": "${'0'.repeat(64)}"`));
     check('K2', 'seed:check: stamp from another validator/fingerprint', forged, 'nonzero', ['stale/invalid stamp', 'seed fingerprint 000000000000', 'RESULT FAIL']);
 
-    const total = cases.length + 3;
+    // ---- the pack-level guards (factory/guards.ts) in the stamp path: generators refuse to stamp,
+    //      seed:check / --restamp refuse a pack that carries a tell even when its stamp is valid
+    const runCli = (cli: string, args: string[]) => {
+      const r = spawnSync(process.execPath, ['--import', 'tsx', cli, ...args], { cwd: REPO_ROOT, encoding: 'utf8', windowsHide: true, timeout: 180000 });
+      return { code: r.status ?? -1, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
+    };
+    let extra = 0;
+    const g = (id: string, what: string, cli: string, args: string[], exit: 'nonzero' | 0, expect: string[]) => {
+      extra++;
+      const r = runCli(cli, args);
+      record({ id, what, gen: 'guard', args, exit, expect }, r.code, r.out);
+    };
+    // G1: 80 hand quizzes whose key is always the longest, colon-led choice (a planted tell)
+    const tellDraft = join(tmp, 'tell.draft.json');
+    writeFileSync(tellDraft, JSON.stringify(plantedTellDraft()));
+    const tellRoot = join(tmp, 'seed-tell');
+    const tellPack = join(tellRoot, 'quests', 'ww6');
+    g('G1', 'quests:drafts: a draft whose key is always the longest, colon-led choice is written but NOT stamped (guard blind-pass + quiz-balance)', DRAFTS_CLI, [join(checkouts, `ww6@${WW6_SHA}`), '--draft', tellDraft, '--out', tellPack], 'nonzero', [
+      'STAMP none',
+      'guard blind-pass: strategy',
+      'guard quiz-balance longest: key strictly longest',
+      'RESULT FAIL',
+    ]);
+    // K3: the same pack with a valid stamp (as a pre-guard pipeline would have written it): seed:check FAILS it
+    stampAsIfPreGuard(tellPack, null);
+    g('K3', 'seed:check: a stamped quest pack with a blind-pass tell (stamp otherwise valid) is refused', CLI('check'), ['--dir', tellRoot, '--checkouts', checkouts], 'nonzero', ['PROBLEM guard blind-pass: strategy', 'PROBLEM guard quiz-balance', 'RESULT FAIL']);
+    // K4: ... and seed:check --restamp refuses to restamp it once its fingerprint is stale
+    stampAsIfPreGuard(tellPack, '0'.repeat(64));
+    g('K4', 'seed:check --restamp: a stale-fingerprint pack with a tell is NOT restamped', CLI('check'), ['--dir', tellRoot, '--checkouts', checkouts, '--restamp'], 'nonzero', ['PROBLEM guard blind-pass', 'stale seed fingerprint NOT restamped', '0 restamped', 'RESULT FAIL']);
+    // K5: a shipped string carrying a secret (bytes + stamp re-bound, as if stamped before the scan existed)
+    const secretRoot = join(tmp, 'seed-secret');
+    cpSync(join(seedDir, 'quests'), join(secretRoot, 'quests'), { recursive: true });
+    plantShippedSecret(join(secretRoot, 'quests', 'ww6'));
+    g('K5', 'seed:check: a stamped pack whose shipped text carries a secret pattern is refused', CLI('check'), ['--dir', secretRoot, '--checkouts', checkouts], 'nonzero', ['PROBLEM guard secret-scan:', 'shopify-token', 'RESULT FAIL']);
+    // G2: an explain-back key point that restates a keyed answer of the same-repo quest pack
+    const ebRoot = join(tmp, 'seed-eb');
+    cpSync(join(seedDir, 'quests'), join(ebRoot, 'quests'), { recursive: true });
+    const ebDraft = join(tmp, 'eb-leak.draft.json');
+    writeFileSync(ebDraft, JSON.stringify(plantedLeakyExplainBack(join(seedDir, 'quests', 'ww6'))));
+    g('G2', 'explainback: a key point restating a same-repo quiz key is written but NOT stamped (guard eb-leak)', CLI('explainback'), ['docs/learning/testing-rationale.md', '--checkout', join(checkouts, `ww6@${WW6_SHA}`), '--sha', WW6_SHA, '--repo', 'ww6', '--draft', ebDraft, '--out', join(ebRoot, 'explainback', 'ww6-leak')], 'nonzero', [
+      'STAMP none',
+      'guard eb-leak: q1.kp1 contains the keyed answer of quests/ww6 quiz',
+      'RESULT FAIL',
+    ]);
+    // G3: the plain generator over a drafts-built repo dir is refused (it would replace every hand item)
+    g('G3', 'quests: the generator over a pack seed:quests:drafts built is refused (no silent replace of hand items)', CLI('quests'), [join(checkouts, `ww6@${WW6_SHA}`), '--sha', WW6_SHA, '--guides', 'astraupskill/05-PRACTICE.md', '--out', tellPack], 'nonzero', [
+      'REFUSED refusing to replace',
+      'its source is draft:tell.draft.json, this run\'s is generator-only (no draft)',
+      '--force-replace',
+    ]);
+
+    const total = cases.length + 3 + extra;
     console.log(`[seed:demo:planted] ${total - failed}/${total} cases behaved as required`);
     console.log(`RESULT ${failed === 0 ? 'OK' : 'FAIL'}`);
     return failed === 0 ? 0 : 1;
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
+}
+
+const SRC = { path: 'src/services/allocationRunService.ts', lines: { start: 20, end: 33 } };
+const CITE = [{ path: 'src/services/allocationRunService.ts', lineStart: 20, lineEnd: 25 }];
+
+/**
+ * 80 hand quizzes, every key the longest choice and the only colon-led one. Next to the fixture
+ * guides' 18 generator quizzes, "pick the longest" alone clears the 80% gate (80 of 98 sure).
+ */
+function plantedTellDraft(): unknown {
+  const items = Array.from({ length: 80 }, (_, i) => ({
+    id: `tell-${String(i + 1).padStart(2, '0')}`,
+    kind: 'quiz',
+    source: SRC,
+    cites: CITE,
+    prompt: `Planted tell ${i + 1}: a worker asks for transition number ${i + 1} out of PENDING. What happens?`,
+    answer: `Refused ${i + 1}: assertValidRunTransition throws because only RUNNING and FAILED may follow PENDING`,
+    distractors: ['It is accepted', 'Nothing at all', 'A retry is queued'],
+    explanation: 'VALID_RUN_TRANSITIONS lists only RUNNING and FAILED after PENDING.',
+  }));
+  return { format: 'bootquest-quest-drafts@1', repo: 'ww6', sha: WW6_SHA, guides: ['astraupskill/05-PRACTICE.md', 'astraupskill/06-SOLUTIONS-AND-REVIEW.md'], items };
+}
+
+/**
+ * Write validation.json the way writeSeedPack does, WITHOUT the pack-level guards: what a pack stamped
+ * before the guards landed looks like (`fingerprint` null = the current one; else a stale one).
+ */
+function stampAsIfPreGuard(dir: string, fingerprint: string | null): void {
+  const manifestBytes = readFileSync(join(dir, 'manifest.json'), 'utf8');
+  const itemsBytes = readFileSync(join(dir, 'items.json'), 'utf8');
+  const m = SeedPackManifest.parse(JSON.parse(manifestBytes));
+  const q = JSON.parse(readFileSync(join(dir, 'quarantine.json'), 'utf8')) as { entries: { key: string }[] };
+  const rq = JSON.parse(readFileSync(join(dir, 'review-queue.json'), 'utf8')) as { entries: { key: string }[] };
+  const stamp = SeedValidationStamp.parse({
+    format: SEED_PACK_FORMAT,
+    source: `${m.generator}/${m.name}`,
+    fingerprintKind: `seed:${m.generator}`,
+    fingerprint: fingerprint ?? seedFingerprint(m.generator),
+    toolchain: seedToolchain(m.generator),
+    manifestSha256: sha256(manifestBytes),
+    itemsSha256: sha256(itemsBytes),
+    counts: m.counts,
+    quarantinedKeys: q.entries.map((e) => e.key).sort(),
+    reviewKeys: rq.entries.map((e) => e.key).sort(),
+    executions: 0,
+  });
+  writeFileSync(join(dir, 'validation.json'), stableJson(stamp));
+}
+
+/** Put a planted (runtime-assembled) token into one shipped explanation, re-bind manifest + stamp. */
+function plantShippedSecret(dir: string): void {
+  const items = JSON.parse(readFileSync(join(dir, 'items.json'), 'utf8')) as { items: Array<{ kind: string; explanation?: string }> };
+  const quiz = items.items.find((i) => i.kind === 'quiz')!;
+  quiz.explanation = `${quiz.explanation ?? ''} (debug token ${plantedToken()})`;
+  const itemsBytes = stableJson(items);
+  writeFileSync(join(dir, 'items.json'), itemsBytes);
+  const m = JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf8')) as { items: { sha256: string } };
+  m.items.sha256 = sha256(itemsBytes);
+  writeFileSync(join(dir, 'manifest.json'), stableJson(m));
+  stampAsIfPreGuard(dir, null);
+}
+
+/** The committed ww6 explain-back fixture with q1.kp1's text replaced by a keyed answer of the ww6 quest pack. */
+function plantedLeakyExplainBack(questPack: string): unknown {
+  const d = JSON.parse(readFileSync(join(D, 'explainback-ww6-testing-rationale.json'), 'utf8')) as { questions: Array<{ keyPoints: Array<{ text: string }> }> };
+  const items = (JSON.parse(readFileSync(join(questPack, 'items.json'), 'utf8')) as { items: SeedItem[] }).items;
+  const key = items
+    .filter((i): i is SeedQuizItem => i.kind === 'quiz')
+    .map((q) => q.check.choices![q.check.answerKey as number]!)
+    .find((a) => a.split(/\s+/).length >= 4);
+  if (!key) throw new Error('the ww6 quest pack has no keyed answer of >= 4 words to plant');
+  d.questions[0]!.keyPoints[0]!.text = `In short: ${key}`;
+  return d;
 }
 
 main().then(

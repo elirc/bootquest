@@ -8,11 +8,13 @@
  *     an 'after' note MUST target a quiz, and there is exactly ONE per quiz (coverage);
  *   - title 8-90 chars; body 60-300 words (after: 60-250), markdown, no HTML, no images;
  *   - 1-4 excerpts: repo-root path at the pinned sha, lineStart <= lineEnd within the file, a
- *     quote of >= 20 chars found verbatim in those lines after collapsing whitespace runs;
+ *     quote of >= 20 chars found verbatim in those lines after collapsing whitespace runs, at
+ *     token boundaries (a quote ending "MAX = 3" does not match "MAX = 30");
  *   - 0-4 readMore: the path exists at the sha, an optional line range in range, why 8-200 chars;
  *   - nothing cites, quotes or names an excluded file; no secret pattern anywhere;
  *   - 'before' notes never leak a keyed answer of ANY quiz in the pack: no normalized
- *     (token-boundary) substring of a keyed answer in title / body / excerpt quotes, token-
+ *     (token-boundary) substring of a keyed answer in title / body / excerpt quotes / readMore
+ *     `why` (shown with the link before answering), token-
  *     Jaccard < 0.5 against every sentence and every answer-sized window of them, and no
  *     excerpt / readMore range that overlaps a finding-location quiz's keyed file:line;
  *   - coverage (pack level, blocks the stamp): 2-4 accepted 'before' notes targeting 'pack' and
@@ -27,7 +29,8 @@ import { pinFile, readTracked, type Checkout } from '../checkout.ts';
 import type { Exclusions } from '../exclusions.ts';
 import { loadSeedPack } from '../pack.ts';
 import { checkProvenance, type ItemVerdict } from '../quests/validate.ts';
-import { normCompare, normWs, sha256, stableKey, tokenJaccard } from '../util.ts';
+import { includesAtBoundary, leakMatch, leakTokens } from '../leak.ts';
+import { normWs, sha256, stableKey } from '../util.ts';
 
 export const NOTE_ID = /^[a-z0-9][a-z0-9-]{2,63}$/;
 export const TITLE_MIN = 8;
@@ -93,16 +96,6 @@ export function keyedAnswer(q: SeedQuizItem): string {
   return typeof q.check.answerKey === 'number' ? (choices[q.check.answerKey] ?? String(q.check.answerKey)) : String(q.check.answerKey);
 }
 
-const tokens = (s: string): string[] => normCompare(s).split(' ').filter(Boolean);
-
-/** sentences / lines of a text (the units a leak is measured over) */
-function segments(text: string): string[] {
-  return text
-    .split(/\n+|(?<=[.!?;:])\s+/)
-    .map((s) => s.trim())
-    .filter((s) => tokens(s).length > 0);
-}
-
 /** finding-location keys: "path/file.ts:12" or "file.ts:12-14" */
 const LOCATION = /^([^\s:]+):(\d+)(?:-(\d+))?$/;
 
@@ -112,12 +105,15 @@ export interface LeakSubject {
   title: string;
   body: string;
   excerpts: readonly { path: string; lineStart: number; lineEnd: number; quote: string }[];
-  readMore: readonly { path: string; lineStart: number | null; lineEnd: number | null }[];
+  /** `why` is shown with the link BEFORE the learner answers (LearnMore.tsx), so it is judged like the body */
+  readMore: readonly { path: string; lineStart: number | null; lineEnd: number | null; why?: string }[];
 }
 
 /**
  * Every way a READING would give away a keyed answer of the pack (empty = safe to show
- * before answering). Shared by seed:notes, seed:check and the server's tests.
+ * before answering). Shared by seed:notes, seed:check and the server's tests. The token rules
+ * (normalized token-boundary containment; token-Jaccard over sentences and answer-sized
+ * windows) are factory/leak.ts leakMatch, which the explain-back key-point guard uses too.
  */
 export function noteLeaks(note: LeakSubject, quizzes: readonly SeedQuizItem[]): string[] {
   const why: string[] = [];
@@ -125,35 +121,23 @@ export function noteLeaks(note: LeakSubject, quizzes: readonly SeedQuizItem[]): 
     { name: 'title', text: note.title },
     { name: 'body', text: note.body },
     ...note.excerpts.map((e, i) => ({ name: `excerpt ${i + 1}`, text: e.quote })),
+    ...note.readMore.map((r, i) => ({ name: `readMore ${i + 1} why`, text: r.why ?? '' })),
   ];
   for (const q of quizzes) {
     const key = keyedAnswer(q);
-    const nk = tokens(key).join(' ');
-    if (!nk) continue;
+    if (leakTokens(key).length === 0) continue;
     const short = q.key.split('/').pop();
     let hit = false;
     for (const f of fields) {
-      if (hit) break;
-      if (` ${tokens(f.text).join(' ')} `.includes(` ${nk} `)) {
-        why.push(`${f.name} contains the keyed answer of quiz ${short} ("${key.slice(0, 60)}")`);
-        hit = true;
-        break;
-      }
-      const n = tokens(key).length;
-      for (const seg of segments(f.text)) {
-        const st = tokens(seg);
-        let worst = tokenJaccard(seg, key);
-        // answer-sized windows: a long sentence cannot hide a near-verbatim answer inside it
-        for (const w of [n, n + 2]) {
-          if (st.length <= w) continue;
-          for (let i = 0; i + w <= st.length; i++) worst = Math.max(worst, tokenJaccard(st.slice(i, i + w).join(' '), key));
-        }
-        if (worst >= LEAK_JACCARD) {
-          why.push(`${f.name} overlaps the keyed answer of quiz ${short} (token-Jaccard ${worst.toFixed(2)} >= ${LEAK_JACCARD}): "${seg.slice(0, 60)}"`);
-          hit = true;
-          break;
-        }
-      }
+      const m = leakMatch(f.text, key, LEAK_JACCARD);
+      if (!m) continue;
+      why.push(
+        m.kind === 'contains'
+          ? `${f.name} contains the keyed answer of quiz ${short} ("${key.slice(0, 60)}")`
+          : `${f.name} overlaps the keyed answer of quiz ${short} (token-Jaccard ${m.score.toFixed(2)} >= ${LEAK_JACCARD}): "${m.segment.slice(0, 60)}"`,
+      );
+      hit = true;
+      break;
     }
     if (hit) continue;
     const loc = LOCATION.exec(key.trim());
@@ -279,7 +263,8 @@ export function validateNote(co: Checkout, ex: Exclusions, quests: QuestPackView
     }
     const q = normWs(e.quote);
     if (q.length < QUOTE_MIN) why.push(`${tag}: quote is ${q.length} chars (needs >= ${QUOTE_MIN})`);
-    else if (!normWs(lines.slice(e.lineStart - 1, e.lineEnd).join('\n')).includes(q)) why.push(`${tag}: quote is not verbatim in those lines (whitespace-normalized): "${q.slice(0, 80)}"`);
+    // at token boundaries: a raw substring would let "MAX = 3" stand for "MAX = 30"
+    else if (!includesAtBoundary(normWs(lines.slice(e.lineStart - 1, e.lineEnd).join('\n')), q)) why.push(`${tag}: quote is not verbatim in those lines (whitespace-normalized, at token boundaries): "${q.slice(0, 80)}"`);
   });
   if (first && !why.some((w) => w.startsWith('excerpt 1 '))) {
     const prov = checkProvenance(co, ex, item.provenance);

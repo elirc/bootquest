@@ -21,6 +21,8 @@ export interface NotesOptions {
   exclusionsPath?: string;
   /** stamp even though some notes were quarantined (coverage must still hold) */
   allowQuarantine?: boolean;
+  /** replace a pack built from another draft; see pack.ts replaceRefusal */
+  forceReplace?: boolean;
 }
 
 export function runNotes(o: NotesOptions): RunReport {
@@ -96,6 +98,8 @@ export function runNotes(o: NotesOptions): RunReport {
     outcome,
     ...(o.allowQuarantine ? { allowQuarantine: true } : {}),
     blockers,
+    exclusions: ex,
+    forceReplace: o.forceReplace === true,
   });
   const report = summarize('notes', head, outcome, write, outDir, o.allowQuarantine === true);
   const at = report.lines.findIndex((l) => l.startsWith('COUNTS'));

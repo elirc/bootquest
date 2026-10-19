@@ -1,137 +1,31 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { SeedItem } from '@bootquest/shared';
 import { describe, expect, it } from 'vitest';
+import { BLIND_PASS_EXEMPT, blindPassProblem, blindQuizzes, MAX_BLIND_PASS, PASS_PCT, passProbability, worstBlindPass } from '../factory/guards.ts';
 
 /**
  * Blind-pass guard (release wave, after the campaign 2 content reviews).
  *
- * quiz-balance.test.ts caps per-draft SHARES (key longest <= 35%, ...). The release reviews
- * found tells it does not measure (the key has the most clause marks, the only comma or "and",
- * the only digit, ...), and each per-draft share cap is noisy at ~12 quizzes: with 17 such
- * strategies at 0.35, ~70 of 100 drafts would fail with RANDOM keys. So this guard asks the
- * question the honesty rule actually cares about, per STAMPED quest pack (drafted, authored or
- * generated, so the csharp campaign packs are covered too):
+ * quiz-balance caps per-draft SHARES (key longest <= 35%, ...). The release reviews found tells it
+ * does not measure (the key has the most clause marks, the only comma or "and", the only digit,
+ * ...), and each share cap is noisy at ~12 quizzes. So this guard asks the question the honesty
+ * rule actually cares about, per STAMPED quest pack (drafted, authored or generated): for every
+ * blind strategy, what is the exact probability that a learner who answers each quiz by that
+ * strategy alone clears the pack's 80% study-quest gate?
  *
- *   for every blind strategy, what is the exact probability that a learner who answers each
- *   quiz by that strategy alone (guessing uniformly among the choices it keeps) clears the
- *   pack's 80% study-quest gate?
- *
- * That probability must stay <= MAX_BLIND_PASS. Measured at introduction over the 107 stamped
- * packs: with the real keys 12 packs exceeded it; with the same choices and RANDOM keys (5 seeds)
- * at most 1 pack exceeded even 0.01, so a failure here is a real tell, not small-sample noise.
- * The served choice order is shuffled per database, so position is not a strategy here.
- *
- * EXEMPT: pack -> ceiling on its current worst probability. An exempt pack must still exceed
- * the cap (delete the entry once fixed) and must not get worse than its ceiling. Do NOT raise
- * MAX_BLIND_PASS or a ceiling to admit a pack; rewrite its choices.
+ * The math lives in factory/guards.ts (blindPassProblem): writeSeedPack refuses to stamp and
+ * seed:check / --restamp FAIL a pack that trips it. This suite proves the machinery and runs the
+ * same call over the committed estate. BLIND_PASS_EXEMPT (in guards.ts): pack -> ceiling.
  */
 const ROOT = join(import.meta.dirname, '..', '..', '..', '..');
 const QUESTS = join(ROOT, 'content', 'seed', 'quests');
 
-/** The study-quest gate (server/src/store/study-quests.ts: passPct 0.8; integer rule of meetsCorePct). */
-const PASS_PCT = 80;
-const MAX_BLIND_PASS = 0.02;
-
-const EXEMPT: Record<string, number> = {};
-
-type Strategy = (choices: readonly string[], key: number) => number;
-
-const words = (s: string): number => s.trim().split(/\s+/).length;
-const FEATURES: Record<string, (s: string) => boolean> = {
-  'colon-led': (s) => /^[^{[]{1,60}?:\s/.test(s),
-  'because/since': (s) => /\b(because|since)\b/i.test(s),
-  'absolute-word': (s) => /\b(always|never|only|all|every|none|no|any|must|cannot|entirely|completely|whole)\b/i.test(s),
-  semicolon: (s) => s.includes(';'),
-  comma: (s) => s.includes(','),
-  and: (s) => /\band\b/i.test(s),
-  negation: (s) => /\b(not|no|never|nothing|none|without)\b|n't\b/i.test(s),
-  digit: (s) => /\d/.test(s),
-  'starts It/They/The': (s) => /^(It|They|The)\b/.test(s),
-};
-
-/** Expected score of guessing uniformly among the choices `keep` keeps (all of them when it keeps none). */
-const pool = (choices: readonly string[], keep: (s: string) => boolean): number[] => {
-  const kept = choices.map((_, i) => i).filter((i) => keep(choices[i]!));
-  return kept.length > 0 ? kept : choices.map((_, i) => i);
-};
-const guess = (idx: number[], key: number): number => (idx.includes(key) ? 1 / idx.length : 0);
-/** Guess among the choices that maximise `metric`. */
-const maxBy = (metric: (s: string) => number): Strategy => (choices, key) => {
-  const v = choices.map(metric);
-  const top = Math.max(...v);
-  return guess(v.map((_, i) => i).filter((i) => v[i] === top), key);
-};
-
-const STRATEGIES: Record<string, Strategy> = {
-  'longest (chars)': maxBy((s) => s.length),
-  'shortest (chars)': maxBy((s) => -s.length),
-  'most words': maxBy(words),
-  'fewest words': maxBy((s) => -words(s)),
-  'most clause marks': maxBy((s) => (s.match(/[,:;]/g) ?? []).length),
-  'drop because/since, then prefer colon-led': (c, k) => {
-    const a = pool(c, (s) => !FEATURES['because/since']!(s));
-    const b = a.filter((i) => FEATURES['colon-led']!(c[i]!));
-    return guess(b.length > 0 ? b : a, k);
-  },
-  'drop because/since, then prefer comma': (c, k) => {
-    const a = pool(c, (s) => !FEATURES['because/since']!(s));
-    const b = a.filter((i) => FEATURES.comma!(c[i]!));
-    return guess(b.length > 0 ? b : a, k);
-  },
-  'prefer comma, then most words': (c, k) => {
-    const a = pool(c, FEATURES.comma!);
-    const top = Math.max(...a.map((i) => words(c[i]!)));
-    return guess(a.filter((i) => words(c[i]!) === top), k);
-  },
-};
-/** "Pick the choice at length rank r" (rank = 1 + choices strictly longer; ties share a rank). */
-for (const rank of [2, 3]) {
-  STRATEGIES[`length rank ${rank}`] = (c, k) => {
-    const rankOf = (x: number) => 1 + c.filter((s) => s.length > x).length;
-    return guess(c.map((_, i) => i).filter((i) => rankOf(c[i]!.length) === rank), k);
-  };
-}
-for (const [name, f] of Object.entries(FEATURES)) {
-  STRATEGIES[`prefer ${name}`] = (c, k) => guess(pool(c, f), k);
-  STRATEGIES[`eliminate ${name}`] = (c, k) => guess(pool(c, (s) => !f(s)), k);
-}
-
-/** Exact P(at least `need` correct) for independent per-quiz success probabilities. */
-const passProbability = (ps: readonly number[], pct = PASS_PCT): number => {
-  const n = ps.length;
-  let need = 0;
-  while (need * 100 < pct * n) need++;
-  let dp = [1];
-  for (const p of ps) {
-    const next = new Array<number>(dp.length + 1).fill(0);
-    dp.forEach((v, j) => {
-      next[j]! += v * (1 - p);
-      next[j + 1]! += v * p;
-    });
-    dp = next;
-  }
-  return dp.slice(need).reduce((a, b) => a + b, 0);
-};
-
-interface PackQuiz { kind: string; key: string; check?: { answerKey?: number; choices?: string[] } }
-const packQuizzes = (pack: string): Array<{ choices: string[]; key: number }> =>
-  (JSON.parse(readFileSync(join(QUESTS, pack, 'items.json'), 'utf8')) as { items: PackQuiz[] }).items
-    .filter((i) => i.kind === 'quiz' && Array.isArray(i.check?.choices) && typeof i.check?.answerKey === 'number')
-    .map((i) => ({ choices: i.check!.choices!, key: i.check!.answerKey! }));
-
-/** The pack's worst blind strategy and its probability of clearing the gate. */
-const worstBlindPass = (qs: ReadonlyArray<{ choices: readonly string[]; key: number }>): { strategy: string; p: number } => {
-  let worst = { strategy: 'none', p: 0 };
-  for (const [name, s] of Object.entries(STRATEGIES)) {
-    const p = passProbability(qs.map((q) => s(q.choices, q.key)));
-    if (p > worst.p) worst = { strategy: name, p };
-  }
-  return worst;
-};
+const packItems = (pack: string): SeedItem[] => (JSON.parse(readFileSync(join(QUESTS, pack, 'items.json'), 'utf8')) as { items: SeedItem[] }).items;
 
 const PACKS = readdirSync(QUESTS)
   .filter((d) => existsSync(join(QUESTS, d, 'items.json')))
-  .filter((d) => packQuizzes(d).length > 0)
+  .filter((d) => blindQuizzes(packItems(d)).length > 0)
   .sort();
 
 describe('blind-pass guard machinery', () => {
@@ -145,6 +39,7 @@ describe('blind-pass guard machinery', () => {
     const mk = (key: string, ds: string[]) => ({ choices: [key, ...ds], key: 0 });
     const clauses = Array.from({ length: 12 }, () => mk('It retries, then logs: done', ['It retries once', 'It logs nothing', 'It gives up']));
     expect(worstBlindPass(clauses).p).toBeGreaterThan(MAX_BLIND_PASS);
+    expect(blindPassProblem('planted', clauses)).toMatch(/^blind-pass: strategy ".+" clears the 80% gate with probability/);
     const rank2 = Array.from({ length: 12 }, () => mk('a medium answer', ['the longest answer of all', 'short', 'tiny']));
     expect(worstBlindPass(rank2)).toMatchObject({ p: 1 });
     const balanced = Array.from({ length: 12 }, (_, i) => {
@@ -152,10 +47,20 @@ describe('blind-pass guard machinery', () => {
       return { choices: c, key: i % 4 };
     });
     expect(worstBlindPass(balanced).p).toBeLessThan(MAX_BLIND_PASS);
+    expect(blindPassProblem('balanced', balanced)).toBeNull();
+  });
+
+  it('an exemption is policed: it must still fail, within its ceiling', () => {
+    const mk = (key: string, ds: string[]) => ({ choices: [key, ...ds], key: 0 });
+    const leaky = Array.from({ length: 12 }, () => mk('a medium answer', ['the longest answer of all', 'short', 'tiny']));
+    const balanced = Array.from({ length: 12 }, (_, i) => ({ choices: ['Alpha answer here', 'Beta answer here', 'Gamma answer here', 'Delta answer here'], key: i % 4 }));
+    expect(blindPassProblem('p', leaky, { p: 1 })).toBeNull();
+    expect(blindPassProblem('p', leaky, { p: 0.5 })).toMatch(/worse than its BLIND_PASS_EXEMPT ceiling/);
+    expect(blindPassProblem('p', balanced, { p: 0.5 })).toMatch(/delete its BLIND_PASS_EXEMPT entry/);
   });
 
   it('EXEMPT names only real packs with a ceiling in (MAX_BLIND_PASS, 1]', () => {
-    for (const [pack, ceiling] of Object.entries(EXEMPT)) {
+    for (const [pack, ceiling] of Object.entries(BLIND_PASS_EXEMPT)) {
       expect(PACKS, pack).toContain(pack);
       expect(ceiling, pack).toBeGreaterThan(MAX_BLIND_PASS);
       expect(ceiling, pack).toBeLessThanOrEqual(1);
@@ -166,16 +71,9 @@ describe('blind-pass guard machinery', () => {
 describe(`no blind strategy clears a stamped quest pack's ${PASS_PCT}% gate with probability > ${MAX_BLIND_PASS}`, () => {
   it('there are packs to judge', () => expect(PACKS.length).toBeGreaterThan(50));
   for (const pack of PACKS) {
-    const ceiling = EXEMPT[pack];
+    const ceiling = BLIND_PASS_EXEMPT[pack];
     it(ceiling === undefined ? pack : `${pack} (exempt, ceiling ${ceiling})`, () => {
-      const w = worstBlindPass(packQuizzes(pack));
-      const why = `${pack}: "${w.strategy}" clears the gate with probability ${w.p.toFixed(4)}`;
-      if (ceiling === undefined) {
-        expect(w.p, why).toBeLessThanOrEqual(MAX_BLIND_PASS);
-      } else {
-        expect(w.p, `${why}; it now passes, delete its EXEMPT entry`).toBeGreaterThan(MAX_BLIND_PASS);
-        expect(w.p, `${why}; worse than its ceiling`).toBeLessThanOrEqual(ceiling);
-      }
+      expect(blindPassProblem(pack, blindQuizzes(packItems(pack)))).toBeNull();
     });
   }
 });

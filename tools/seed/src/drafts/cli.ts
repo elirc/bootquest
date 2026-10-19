@@ -1,4 +1,5 @@
-// npm run seed:quests:drafts -- <repo-checkout-dir> --draft <content/seed-drafts/quests/<repo>.json> [--out <dir>] [--allow-quarantine]
+// npm run seed:quests:drafts -- <repo-checkout-dir> --draft <content/seed-drafts/quests/<repo>.json> [--out <dir>] [--allow-quarantine] [--force-replace]
+// --force-replace: overwrite a pack another writer / draft built (refused by default: pack.ts replaceRefusal)
 // seed:quests over the draft's guide list PLUS the draft's hand-authored quiz items /
 // flashcards, every candidate judged by the unchanged seed:quests validator, one pack
 // written to content/seed/quests/<repo>/ and stamped only when the validator vouched.
@@ -16,5 +17,6 @@ finish('seed:quests:drafts', () => {
     ...(opts.has('out') ? { out: opts.get('out')! } : {}),
     ...(opts.has('exclusions') ? { exclusionsPath: opts.get('exclusions')! } : {}),
     allowQuarantine: flags.has('allow-quarantine'),
+    forceReplace: flags.has('force-replace'),
   });
 });

@@ -9,7 +9,9 @@
  *   - exactly 3 questions, prompts pairwise distinct (not near-duplicates);
  *   - 5..8 key points per question;
  *   - every key point quotes the source (whitespace-normalized substring, >= 12 chars)
- *     or cites a file:line that resolves at the pinned sha (P4 resolver);
+ *     or cites a file:line that resolves at the pinned sha (P4 resolver: root-relative,
+ *     guide-relative, unique suffix); the accepted item stores the RESOLVED repo-root path
+ *     (an unresolvable or directory cite is refused, an excluded resolved file drops the set);
  *   - no duplicate / near-duplicate key points anywhere in the set;
  *   - a cite into an excluded file drops the set (counted).
  */
@@ -144,8 +146,15 @@ export function validateExplainBack(co: Checkout, ex: Exclusions, sourceText: st
       if (nearDuplicate(item.questions[i]!.prompt, item.questions[j]!.prompt)) why.push(`questions ${i + 1} and ${j + 1} are (near-)duplicates`);
     }
   }
+  // The quote rule matches against the WHOLE unit file, not just provenance.lines: scoping it to the
+  // provenance range was measured on 2026-10-19 and rejects 18 shipped key points in 9 packs (G2
+  // briefs whose rubric quotes the guide outside the brief's section, grok-js, trainjs), so it needs a
+  // content pass on those drafts first (widen `lines` or re-quote) before the rule can tighten.
   const src = normWs(sourceText);
   const all: Array<{ q: number; k: number; text: string }> = [];
+  // the shipped item stores every cite at its RESOLVED repo-root path (the schema's promise and what
+  // the client renders): a guide-relative or suffix cite as written would point nowhere when shown
+  const resolvedCites = new Map<string, string>();
   item.questions.forEach((q, qi) => {
     const n = q.keyPoints.length;
     if (n < MIN_POINTS || n > MAX_POINTS) why.push(`question ${qi + 1} has ${n} key points (needs ${MIN_POINTS}-${MAX_POINTS})`);
@@ -169,7 +178,16 @@ export function validateExplainBack(co: Checkout, ex: Exclusions, sourceText: st
         }
         const r = resolveAt(co, item.provenance.path, { path: kp.cite.path, lineStart: kp.cite.lineStart, lineEnd: kp.cite.lineEnd, form: 'path-line', raw: `${kp.cite.path}:${kp.cite.lineStart}-${kp.cite.lineEnd}`, source: { file: item.provenance.path, line: 1, column: 1 }, group: 0 });
         if (r.status === 'error') why.push(`${tag} cite ${kp.cite.path}:${kp.cite.lineStart}-${kp.cite.lineEnd} -> ${r.reason}: ${r.message}`);
-        else if (r.kind === 'file') pinFile(co, r.file);
+        else if (r.kind !== 'file') why.push(`${tag} cite ${kp.cite.path}:${kp.cite.lineStart}-${kp.cite.lineEnd} resolves to a directory (${r.file}), not a file`);
+        else {
+          const hitResolved = ex.path(co.repo, r.file);
+          if (hitResolved) {
+            why.push(`__drop__${tag} cites ${r.file}: ${hitResolved.reason}`);
+            return;
+          }
+          pinFile(co, r.file);
+          resolvedCites.set(`${qi}.${ki}`, r.file);
+        }
       }
     });
   });
@@ -181,5 +199,12 @@ export function validateExplainBack(co: Checkout, ex: Exclusions, sourceText: st
   const drop = why.find((w) => w.startsWith('__drop__'));
   if (drop) return { verdict: 'drop', reason: drop.slice('__drop__'.length) };
   if (why.length) return { verdict: 'reject', reason: why.join(' ; ') };
-  return { verdict: 'accept', item };
+  const bound: SeedExplainBackItem = {
+    ...item,
+    questions: item.questions.map((q, qi) => ({
+      ...q,
+      keyPoints: q.keyPoints.map((kp, ki) => (kp.cite ? { ...kp, cite: { ...kp.cite, path: resolvedCites.get(`${qi}.${ki}`)! } } : kp)),
+    })),
+  };
+  return { verdict: 'accept', item: bound };
 }

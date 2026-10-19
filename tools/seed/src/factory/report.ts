@@ -2,7 +2,7 @@
 import { resolve } from 'node:path';
 import type { SeedGenerator, SeedItem, SeedSkip } from '@bootquest/shared';
 import type { ItemVerdict } from './quests/validate.ts';
-import { countByKind, type SeedOutcome, type WriteSeedPackResult } from './pack.ts';
+import { countByKind, SeedPackReplaceError, type SeedOutcome, type WriteSeedPackResult } from './pack.ts';
 
 export const REPO_ROOT = resolve(import.meta.dirname, '..', '..', '..', '..');
 export const DEFAULT_SEED_DIR = resolve(REPO_ROOT, 'content', 'seed');
@@ -81,7 +81,11 @@ export function finish(name: string, run: () => Promise<RunReport> | RunReport):
         process.exit(r.ok ? 0 : 1);
       },
       (err: unknown) => {
-        console.error(`[${name}] CRASHED: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
+        if (err instanceof SeedPackReplaceError) {
+          // a refusal, not a crash: the dir holds a pack another writer / draft built (pass --force-replace)
+          console.log(`[${name}] REFUSED ${err.message}`);
+          console.log('RESULT FAIL');
+        } else console.error(`[${name}] CRASHED: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
         process.exit(1);
       },
     );

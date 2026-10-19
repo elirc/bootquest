@@ -1,4 +1,4 @@
-// npm run seed:patches -- <katas-draft.json> --checkout <dir> --sha <sha> [--repo <name>] [--out <dir>]
+// npm run seed:patches -- <katas-draft.json> --checkout <dir> --sha <sha> [--repo <name>] [--out <dir>] [--force-replace]
 // Defective-patch katas from real findings. Validator: defect key non-empty; every
 // evidence file:line resolves (repo at the pinned sha, or the patched context);
 // the diff applies cleanly (git apply --check in a temp dir); a provided test passes
@@ -10,7 +10,7 @@ import { finish, parseArgs } from '../report.ts';
 import { runPatches } from './run.ts';
 
 finish('seed:patches', async () => {
-  const { positional, opts } = parseArgs(process.argv.slice(2));
+  const { positional, opts, flags } = parseArgs(process.argv.slice(2));
   const draft = positional[0];
   const checkout = opts.get('checkout');
   const sha = opts.get('sha');
@@ -24,6 +24,7 @@ finish('seed:patches', async () => {
       ...(opts.has('repo') ? { repo: opts.get('repo')! } : {}),
       ...(opts.has('out') ? { out: opts.get('out')! } : {}),
       ...(opts.has('exclusions') ? { exclusionsPath: opts.get('exclusions')! } : {}),
+      forceReplace: flags.has('force-replace'),
     }),
   );
 });

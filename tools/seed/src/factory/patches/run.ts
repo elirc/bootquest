@@ -54,6 +54,8 @@ export interface PatchesOptions {
   out?: string;
   harness?: Harness;
   exclusionsPath?: string;
+  /** replace a pack built from another draft; see pack.ts replaceRefusal */
+  forceReplace?: boolean;
 }
 
 export async function runPatches(o: PatchesOptions): Promise<RunReport> {
@@ -126,6 +128,6 @@ export async function runPatches(o: PatchesOptions): Promise<RunReport> {
   }
   outcome.executions = h.executions;
   const outDir = o.out ?? join(DEFAULT_SEED_DIR, 'patches', draft.name);
-  const write = writeSeedPack({ dir: outDir, generator: 'patches', name: draft.name, checkout: co, inputs: [...new Set(draft.katas.map((k) => k.provenance.path))].concat(`draft:${o.draft.replace(/\\/g, '/').split('/').pop()}`), outcome });
+  const write = writeSeedPack({ dir: outDir, generator: 'patches', name: draft.name, checkout: co, inputs: [...new Set(draft.katas.map((k) => k.provenance.path))].concat(`draft:${o.draft.replace(/\\/g, '/').split('/').pop()}`), outcome, exclusions: ex, forceReplace: o.forceReplace === true });
   return summarize('patches', head, outcome, write, outDir, false);
 }

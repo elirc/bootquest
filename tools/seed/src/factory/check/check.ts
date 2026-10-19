@@ -12,7 +12,10 @@
  *   4. content: every shipped item re-runs its generator's validator and must
  *      come back 'accept' and byte-identical (canonical JSON); every review item
  *      must still be held (never silently promoted); variants and patches are
- *      re-EXECUTED through the real runner.
+ *      re-EXECUTED through the real runner;
+ *   5. guards (factory/guards.ts, the same calls writeSeedPack makes before stamping): blind-pass,
+ *      quiz-balance and explanation-lint for quest packs, the explain-back key-point leak check
+ *      against same-repo quest packs, and a secret scan over every shipped string.
  * A pack whose source checkout is unavailable FAILS (it cannot be re-verified).
  * Checkouts are found at <checkouts>/<repo>@<sha> (default .cache/checkouts,
  * overridable with --checkouts or BOOTQUEST_CHECKOUTS).
@@ -24,6 +27,7 @@ import { SeedReviewQueue } from '@bootquest/shared';
 import { openCheckout, verifyBlobs, type Checkout } from '../checkout.ts';
 import { validateExplainBack } from '../explainback/explainback.ts';
 import { Exclusions } from '../exclusions.ts';
+import { keyedQuizIndex, packGuardProblems, type KeyedQuiz } from '../guards.ts';
 import { defaultHarness, type Harness } from '../harness/harness.ts';
 import { loadSeedPack, restampSeedPack, type LoadedSeedPack } from '../pack.ts';
 import { BINDING_RE, loadQuestPackView, notesCoverageProblems, validateNote, type QuestPackView } from '../notes/notes.ts';
@@ -84,6 +88,8 @@ export interface CheckOptions {
    * hold is still held under the CURRENT validators. Any other problem: no restamp.
    */
   restamp?: boolean;
+  /** keyedQuizIndex(seedDir), built once by runCheck for the explain-back leak guard */
+  questIndex?: ReadonlyMap<string, readonly KeyedQuiz[]>;
 }
 
 export async function checkPack(dir: string, o: CheckOptions): Promise<PackCheck> {
@@ -99,6 +105,13 @@ export async function checkPack(dir: string, o: CheckOptions): Promise<PackCheck
   res.review = pack.reviewKeys.length;
   const m = pack.manifest;
   const ex = Exclusions.load(o.exclusionsPath);
+  // 5. the pack-level guards (factory/guards.ts) the generators also run before stamping: blind-pass,
+  //    quiz-balance and explanation-lint (quests), the explain-back key-point leak check, and a secret
+  //    scan over every shipped string. They need no checkout, so they run first; any failure FAILS
+  //    the pack, so --restamp refuses it too.
+  for (const g of packGuardProblems({ generator: m.generator, name: m.name, repo: m.source.repo, items: pack.items, ex, seedRoot: resolve(dir, '..', '..'), ...(o.questIndex ? { questIndex: o.questIndex } : {}) })) {
+    res.problems.push(`guard ${g}`);
+  }
   const coDir = join(o.checkouts ?? process.env.BOOTQUEST_CHECKOUTS ?? DEFAULT_CHECKOUTS, `${m.source.repo}@${m.source.sha}`);
   const needsCheckout = m.generator !== 'variants';
   let co: Checkout | null = null;
@@ -189,8 +202,9 @@ export async function checkPack(dir: string, o: CheckOptions): Promise<PackCheck
 
 export async function runCheck(o: CheckOptions): Promise<{ ok: boolean; packs: PackCheck[] }> {
   const packs: PackCheck[] = [];
+  const opts: CheckOptions = { ...o, questIndex: o.questIndex ?? keyedQuizIndex(o.seedDir) };
   for (const dir of findPacks(o.seedDir)) {
-    const r = await checkPack(dir, o);
+    const r = await checkPack(dir, opts);
     o.log?.(`${r.ok ? 'OK  ' : 'FAIL'} ${dir}: ${r.items} item(s) re-validated, ${r.review} held for review${r.executions ? `, ${r.executions} execution(s)` : ''}${r.restamped ? ' — RESTAMPED (stale fingerprint, clean re-validation)' : ''}`);
     for (const p of r.problems) o.log?.(`     PROBLEM ${p}`);
     packs.push(r);

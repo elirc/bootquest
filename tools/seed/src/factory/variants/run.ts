@@ -41,6 +41,8 @@ export interface VariantsOptions {
   out?: string;
   harness?: Harness;
   exclusionsPath?: string;
+  /** replace a pack built from another draft; see pack.ts replaceRefusal */
+  forceReplace?: boolean;
 }
 
 export async function runVariants(o: VariantsOptions): Promise<RunReport> {
@@ -99,6 +101,6 @@ export async function runVariants(o: VariantsOptions): Promise<RunReport> {
   outcome.executions = h.executions;
   const name = draft.unit.replace(/[^A-Za-z0-9._-]+/g, '-');
   const outDir = o.out ?? join(DEFAULT_SEED_DIR, 'variants', name);
-  const write = writeSeedPack({ dir: outDir, generator: 'variants', name, checkout: co, inputs: [p.path, `draft:${o.draft.replace(/\\/g, '/').split('/').pop()}`], outcome });
+  const write = writeSeedPack({ dir: outDir, generator: 'variants', name, checkout: co, inputs: [p.path, `draft:${o.draft.replace(/\\/g, '/').split('/').pop()}`], outcome, exclusions: ex, forceReplace: o.forceReplace === true });
   return summarize('variants', head, outcome, write, outDir, false);
 }
