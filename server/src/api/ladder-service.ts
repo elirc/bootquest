@@ -345,7 +345,7 @@ export function getExplainBackKey(deps: LadderDeps, unitId: number): ExplainBack
 
 /**
  * POST /units/:id/explain-back/self-score — per-key-point covered|missed -> coverage,
- * filed as explain-back evidence (assessor self, engine window); >= 80% pays 20 XP once
+ * filed as explain-back evidence (assessor self, no filing window); >= 80% pays 20 XP once
  * and schedules the changed-example retest (>= 2 days out); then the promotion rule runs.
  */
 export function selfScoreExplainBack(deps: LadderDeps, unitId: number, body: { perKeyPoint: Record<string, 'covered' | 'missed'> }): ExplainBackScoreResponse {
