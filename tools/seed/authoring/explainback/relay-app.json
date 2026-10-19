@@ -1,0 +1,39 @@
+{
+ "questions": [
+  {
+   "prompt": "What problem does Relay's flow export/import solve, and how does ADR-0007 make re-import idempotent? Explain the two requirements the context sets, how an export refers to dependencies and identifies the flow, how import decides between create and update and what enforces it in the database, what repeated imports of one document produce, and the identity rule externalId imposes.",
+   "keyPoints": [
+    { "text": "Re-running an import must not duplicate flows, and the export must not leak workspace-internal ids.", "quote": "must not create duplicate flows, and the export must not leak workspace-internal ids" },
+    { "text": "Export names dependencies by connector key and connection name, not id, and carries a stable externalId.", "quote": "not by id, and carries a stable `externalId`." },
+    { "text": "Import upserts by (WorkspaceId, ExternalId): no flow with that external id means create, an existing one means update.", "quote": "No existing flow with that external id" },
+    { "text": "A unique index on (WorkspaceId, ExternalId) backs the upsert.", "cite": { "path": "server/Relay.Infrastructure/Persistence/RelayDbContext.cs", "lineStart": 115, "lineEnd": 115 } },
+    { "text": "Re-import is idempotent: one document yields one flow, create then update, with no duplicated flows or steps.", "quote": "the same document yields one flow, `create` then `update`, with no duplicated flows or steps." },
+    { "text": "Documents are portable across workspaces because they name dependencies rather than ids.", "quote": "Documents are portable across workspaces because they name dependencies, not ids" },
+    { "text": "externalId is the identity contract: two different logical flows must not share one.", "quote": "two different logical flows must not share one." }
+   ]
+  },
+  {
+   "prompt": "Walk through what an import request checks before it writes. Who may import, which document problems become issues, how a dry run behaves and how its lack of side effects is proven, what a real import does with the same issues, and what state a newly created imported flow starts in.",
+   "keyPoints": [
+    { "text": "Import requires the workspace Admin role.", "cite": { "path": "server/Relay.Api/Controllers/FlowsController.cs", "lineStart": 257, "lineEnd": 258 } },
+    { "text": "A blank name, zero steps, or an unresolvable trigger or step connector each add an issue.", "cite": { "path": "server/Relay.Api/Controllers/FlowsController.cs", "lineStart": 268, "lineEnd": 282 } },
+    { "text": "?dryRun=true runs the full validation and reports the action without persisting.", "quote": "runs the full validation and reports the action" },
+    { "text": "Tests prove dry-run has no side effects by asserting the flow count and external-id presence are unchanged.", "quote": "verified by the tests asserting the flow count and external-id presence are unchanged." },
+    { "text": "An unresolvable connector is reported by dry-run and makes a real import return 400.", "quote": "an unresolvable connector is a validation issue" },
+    { "text": "A newly created imported flow starts disabled.", "cite": { "path": "server/Relay.Api/Controllers/FlowsController.cs", "lineStart": 311, "lineEnd": 311 } }
+   ]
+  },
+  {
+   "prompt": "What are ADR-0007's known gaps? Explain how connection resolution can silently bind to the wrong connection (with the Prod/Test example), how import validation is weaker than the editor's PUT for step config and for attempts/backoff, and what the update branch does not do with the flow's concurrency token and the consequence for an admin editing the same flow.",
+   "keyPoints": [
+    { "text": "Resolve first matches connector key plus connection name, then falls back to any connection of that connector.", "quote": "first matches connector key + connection name, then falls back to *any* connection of that connector." },
+    { "text": "So a document naming Prod Slack imports cleanly against Test Slack with no issue reported.", "quote": "A document naming \"Prod Slack\" imports cleanly against \"Test Slack\" and no issue is reported." },
+    { "text": "PUT runs ValidateGraphAsync; import does not.", "quote": "`PUT` runs `ValidateGraphAsync` (`:106`); import does not" },
+    { "text": "A step ConfigJson that violates the connector's schema is accepted; only a blank one is defaulted to {}.", "quote": "a step `ConfigJson` that violates the connector's schema is accepted" },
+    { "text": "Attempts and backoff are clamped rather than rejected.", "quote": "Attempts and backoff are clamped rather than rejected" },
+    { "text": "The update branch neither checks nor rotates the ConcurrencyToken.", "quote": "The update branch neither checks nor rotates `ConcurrencyToken`" },
+    { "text": "An import silently overwrites an admin's in-flight edit, and that admin's later PUT with the old token still succeeds.", "quote": "an import silently overwrites an admin's in-flight edit" }
+   ]
+  }
+ ]
+}
