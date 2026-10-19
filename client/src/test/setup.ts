@@ -7,4 +7,12 @@ import { afterEach } from 'vitest';
 // only delays a FAILING wait; no assertion is weakened and passing waits return immediately.
 configure({ asyncUtilTimeout: 5000 });
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  // the player keeps code drafts and last-attempt pointers in localStorage: no test sees another's
+  try {
+    window.localStorage.clear();
+  } catch {
+    /* no storage in this environment */
+  }
+});
