@@ -102,7 +102,31 @@ export async function shutdownValidatorRunners(): Promise<void> {
   if (r) await r.shutdown();
 }
 
-const CS_NOT_A_VERDICT = new Set(['(compile)', '(timeout)', '(program)', '(format)']);
+/**
+ * Failure names that mean "the code never got a test verdict" — THE one set, shared by the
+ * import gate (drill-cs and drill-java starters here and in validate-java.ts) and the seed
+ * factory harness (factory/harness/harness.ts re-exports it). A starter that "fails" only
+ * this way proves nothing: no test ever ran.
+ *   drill-js / self-run:  code loads without errors, code runs, finishes in time, TypeScript compiles, grader results
+ *   drill-cs:             (compile), (timeout), (program) (crash / no nonce-checked result),
+ *                         (format), (runner) (xunit run produced no TRX), (scaffolding) (frozen section edited),
+ *                         (incomplete) (the harness reported before every literal test ran)
+ *   drill-java:           (compile), (timeout), (program), (format), (incomplete)
+ */
+export const NOT_A_VERDICT: ReadonlySet<string> = new Set([
+  'code loads without errors',
+  'code runs',
+  'finishes in time',
+  'TypeScript compiles',
+  'grader results',
+  '(compile)',
+  '(timeout)',
+  '(program)',
+  '(format)',
+  '(runner)',
+  '(scaffolding)',
+  '(incomplete)',
+]);
 
 export function exerciseHash(pu: PackUnit, content: UnitContentEntry, fingerprint: string): string {
   return createHash('sha256').update(JSON.stringify({ u: pu, c: content, g: fingerprint })).digest('hex');
@@ -200,7 +224,7 @@ export const realValidator: UnitValidator = async (pu, content) => {
     const starter = await grade(content.starter);
     if (starter.pass) reasons.push('vacuous-check: the untouched starter passes its own tests (must fail)');
     else {
-      const broken = starter.failures.filter((f) => CS_NOT_A_VERDICT.has(f.name));
+      const broken = starter.failures.filter((f) => NOT_A_VERDICT.has(f.name));
       if (broken.length) reasons.push(`starter does not fail as a test verdict (${broken.map((f) => f.name).join(', ')}): ${starter.output.slice(0, 400)}`);
       else if (starter.failures.length === 0) reasons.push('starter fails without any structured failure');
     }

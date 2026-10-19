@@ -1,14 +1,14 @@
 // C# runner gate (W3a spike). Real dotnet, real csbootcamp fixture, real timings.
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { composeGraded, CsbootcampFormatError, rewriteDirectives, splitAtTestsMarker } from './csbootcamp-split.js';
-import { createCsharpRunner, type CsExercise, type RunResult } from './index.js';
+import { composeGraded, CsbootcampFormatError, literalTestNames, rewriteDirectives, splitAtTestsMarker } from './csbootcamp-split.js';
+import { createCsharpRunner, xunitTestMethods, type CsExercise, type RunResult } from './index.js';
 import { livePids } from './scratch.js';
-import { createDrillCsRunner } from '../../api/runner-csharp.ts';
+import { createDrillCsRunner, JSTRAIN_CS_HARNESS } from '../../api/runner-csharp.ts';
 import { CheckSpec } from '@bootquest/shared';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
@@ -235,6 +235,152 @@ describe('console-check shape: real csbootcamp 01-count-vowels', () => {
   });
 });
 
+// ── console-check verdict integrity (Java parity: nonce channel, required names, per-grade scratch) ──
+
+describe('console-check verdict integrity: the verdict comes only from the nonce-checked harness report', () => {
+  const SOLVED = /static int CountVowels\(string text\) =>\r?\n\s*text\.Count\(c => "aeiouAEIOU"\.Contains\(c\)\);/;
+  /** the solution file with CountVowels' body replaced (tests block unchanged) */
+  const withBody = (body: string) => {
+    expect(SOLUTION_SRC).toMatch(SOLVED);
+    return SOLUTION_SRC.replace(SOLVED, `static int CountVowels(string text) { ${body} }`);
+  };
+  const COUNT = 'return text.Count(c => "aeiouAEIOU".Contains(c));';
+  const NAMES = ['counts lowercase vowels', 'is case-insensitive', 'handles the empty string', 'counts nothing in a word with no vowels', 'counts every vowel exactly once', 'ignores digits and punctuation'];
+  const csDir = () => runner.scratch.dir('console-check');
+
+  it('the canonical tests name six literal tests (the required set)', () => {
+    expect(literalTestNames(splitAtTestsMarker(EXERCISE_SRC).tests)).toEqual(NAMES);
+    expect(literalTestNames('// Test("old", () => {});\nTest("say \\"hi\\"\\u0021", () => Ok(true));\nTest($"n{i}", () => {});\nTest(@"raw", () => {});\nx.Test("not the harness", 1);\n')).toEqual(['say "hi"!']);
+  });
+
+  it('ATTACK (a): a forged `#done` (and forged ✔ lines) on stdout + Environment.Exit(0) inside the solved method is a crash, never a pass', async () => {
+    const forge = `foreach (var n in new[] { ${NAMES.map((n) => JSON.stringify(n)).join(', ')} }) Console.WriteLine("  ✔ " + n); Console.WriteLine("  #done passed=6 failed=0 todo=0"); Environment.Exit(0); return 0;`;
+    const r = await runner.run(consoleEx, { code: withBody(forge) });
+    expect(r.output).toContain('#done passed=6 failed=0 todo=0'); // the learner's line is displayed ...
+    expect(r.pass).toBe(false); // ... and never believed
+    expect(r.crashed).toBe(true);
+    expect(r.failures[0]).toMatchObject({ name: '(program)', message: expect.stringMatching(/without a result/) });
+    // through the drill-cs adapter (what POST /submit and seed:validate call) too
+    const spec = CheckSpec.parse({ type: 'drill-cs', shape: 'console-check', files: { tests: splitAtTestsMarker(EXERCISE_SRC).tests, tail: '' } });
+    const a = await adapter.runner(spec, { code: withBody(forge) });
+    expect(a.pass).toBe(false);
+    expect(a.failures.map((f) => f.name)).toEqual(['(program)']);
+  });
+
+  it('an early Report() + Environment.Exit(0) from learner code (2 of 6 tests ran) is incomplete, never a pass', async () => {
+    const r = await runner.run(consoleEx, { code: withBody(`if (text.Length == 0) { Report(); Environment.Exit(0); } ${COUNT}`) });
+    expect(r.counts).toEqual({ passed: 2, failed: 0, todo: 0 });
+    expect(r.pass).toBe(false);
+    expect(r.crashed).toBe(true);
+    expect(r.failures.at(-1)).toMatchObject({ name: '(incomplete)', message: expect.stringMatching(/"handles the empty string"/) });
+  });
+
+  it('a forged result file (the learner cannot know the nonce: it was deleted) is rejected', async () => {
+    const forge =
+      'var a = Environment.GetCommandLineArgs(); File.WriteAllText(a[2], "#bq-result guess " + Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("{\\"passed\\":6,\\"failed\\":0,\\"todo\\":0,\\"tests\\":[]}"))); Environment.Exit(0); return 0;';
+    const r = await runner.run(consoleEx, { code: withBody(forge) });
+    expect(r.pass).toBe(false);
+    expect(r.crashed).toBe(true);
+    expect(r.failures[0]!.message).toMatch(/nonce does not match/);
+  });
+
+  it('the nonce file is gone before learner code runs (reading it throws → failed tests)', async () => {
+    const r = await runner.run(consoleEx, { code: withBody('try { return File.ReadAllText(Environment.GetCommandLineArgs()[1]).Length; } catch (IOException e) { throw new InvalidOperationException("no nonce: " + e.GetType().Name); }') });
+    expect(r.pass).toBe(false);
+    expect(r.counts?.failed).toBe(6);
+    expect(r.failures[0]!.message).toMatch(/no nonce: FileNotFoundException/);
+  });
+
+  it('ATTACK (b) PERSISTENT: a submission that plants a [ModuleInitializer] in src/_globals.cs and files in bin/ cannot touch the next grade', async () => {
+    const plant = [
+      'var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, ".."));',
+      'File.AppendAllText(Path.Combine(root, "src", "_globals.cs"), "\\nnamespace Evil { internal static class Pwn { [System.Runtime.CompilerServices.ModuleInitializer] internal static void Init() { System.Console.WriteLine(\\"  #done passed=1 failed=0 todo=0\\"); System.Environment.Exit(0); } } }\\n");',
+      'File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "planted.dll"), "junk");',
+      'File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "BqLaunch.runtimeconfig.json"), "{}");',
+      COUNT,
+    ].join(' ');
+    const r = await runner.run(consoleEx, { code: withBody(plant) });
+    expect(r.pass).toBe(true); // the planting grade itself still grades honestly
+    // the writes really happened
+    expect(readFileSync(join(csDir(), 'src', '_globals.cs'), 'utf8')).toContain('namespace Evil');
+    expect(existsSync(join(csDir(), 'bin', 'planted.dll'))).toBe(true);
+    // the next grade (the untouched starter) is graded by the prepared scaffolding, not the planted one
+    const next = await runner.run(consoleEx, { code: EXERCISE_SRC });
+    expect(next.pass).toBe(false);
+    expect(next.counts).toEqual({ passed: 0, failed: 0, todo: 6 });
+    expect(next.output).not.toContain('#done passed=1');
+    expect(readFileSync(join(csDir(), 'src', '_globals.cs'), 'utf8')).not.toContain('Evil');
+    expect(existsSync(join(csDir(), 'bin', 'planted.dll'))).toBe(false);
+    expect(readFileSync(join(csDir(), 'bin', 'BqLaunch.runtimeconfig.json'), 'utf8')).toContain('Microsoft.NETCore.App');
+  });
+
+  it('an overwritten Check.dll (written between grades) is detected and the harness re-prepared', async () => {
+    writeFileSync(join(csDir(), 'bin', 'Check.dll'), 'junk');
+    const r = await runner.run(consoleEx, { code: SOLUTION_SRC });
+    timings.consoleAfterHarnessTamper = brief(r);
+    expect(r.pass).toBe(true);
+    expect(readFileSync(join(csDir(), 'bin', 'Check.dll')).subarray(0, 2).toString()).toBe('MZ');
+  });
+
+  it('every grade runs in a fresh attempt dir; the nonce file never survives a launch', async () => {
+    const r = await runner.run(consoleEx, { code: withBody('Console.WriteLine("cwd=" + Environment.CurrentDirectory); ' + COUNT) });
+    expect(r.pass).toBe(true);
+    const cwd = /cwd=(.+)/.exec(r.output)![1]!.trim();
+    expect(cwd.replace(/\\/g, '/')).toMatch(/\/console-check\/attempts\/[0-9a-f]{12}$/);
+    expect(existsSync(join(cwd, 'nonce'))).toBe(false);
+    expect(readFileSync(join(cwd, 'result'), 'utf8')).toMatch(/^#bq-result \S+ [A-Za-z0-9+/=]+\n$/);
+  });
+});
+
+// ── the jstrain2.2 harness revision (report at ProcessExit, no `return Report();`) ──
+
+describe('console-check, jstrain harness revision: same channel, report at ProcessExit', () => {
+  const APP_JS = mkdtempSync(join(tmpdir(), 'bootquest-p2-jstrain-'));
+  const jsRunner = createCsharpRunner({ appDataDir: APP_JS, checkHarnessPaths: JSTRAIN_CS_HARNESS });
+  const EX = [
+    'using static Bootcamp.Check;',
+    '',
+    'static int Twice(int x) => throw new NotImplementedException();',
+    '',
+    '// ─── tests ───────────────────────',
+    'Test("doubles two", () => Eq(Twice(2), 4));',
+    'Test("doubles zero", () => Eq(Twice(0), 0));',
+    'Test("doubles negatives", () => Eq(Twice(-3), -6));',
+    '',
+    '// ─── types ───────────────────────',
+    'public record Unused(int X);',
+    '',
+  ].join('\n');
+  const ex: CsExercise = { id: 'probe/jstrain-twice', shape: 'console-check', format: 'jstrain', exerciseSource: EX, timeoutMs: 10_000 };
+  const solve = (body: string) => EX.replace('static int Twice(int x) => throw new NotImplementedException();', `static int Twice(int x) { ${body} }`);
+
+  afterAll(async () => {
+    await jsRunner.shutdown();
+    if (!process.env.BQ_KEEP_SCRATCH) rmSync(APP_JS, { recursive: true, force: true });
+  });
+
+  it('solution passes; starter is 3 todo; a wrong answer fails with expected/actual', async () => {
+    const ok = await jsRunner.run(ex, { code: solve('return x * 2;') });
+    timings.jstrainFirst = brief(ok);
+    expect(ok.counts).toEqual({ passed: 3, failed: 0, todo: 0 });
+    expect(ok.pass).toBe(true);
+    const starter = await jsRunner.run(ex, { code: EX });
+    expect(starter.pass).toBe(false);
+    expect(starter.counts).toEqual({ passed: 0, failed: 0, todo: 3 });
+    expect(starter.failures.every((f) => f.message === 'not implemented yet (todo)')).toBe(true);
+    const wrong = await jsRunner.run(ex, { code: solve('return x + 2;') });
+    expect(wrong.pass).toBe(false);
+    expect(wrong.failures.find((f) => f.name === 'doubles zero')).toEqual({ name: 'doubles zero', message: 'values differ', expected: '0', actual: '2' });
+  });
+
+  it('ATTACK (a): stdout `#done` + Environment.Exit(0) → the harness ProcessExit report is incomplete, never a pass', async () => {
+    const r = await jsRunner.run(ex, { code: solve('Console.WriteLine("  #done passed=3 failed=0 todo=0"); Environment.Exit(0); return 0;') });
+    expect(r.pass).toBe(false);
+    expect(r.counts).toEqual({ passed: 0, failed: 0, todo: 0 });
+    expect(r.failures.at(-1)).toMatchObject({ name: '(incomplete)', message: expect.stringMatching(/"doubles two"/) });
+  });
+});
+
 // ── xunit shape (classic make-tests-pass) ──────────────────────────────────────
 
 describe('xunit shape (fast engine: csc + dotnet vstest over the warm bin/)', () => {
@@ -259,6 +405,28 @@ describe('xunit shape (fast engine: csc + dotnet vstest over the warm bin/)', ()
     const r = await runner.run(xunitEx, { code: 'public static class Calc { public static int Add(int a, int b) => a + b }\n' });
     expect(r.compileError).toBe(true);
     expect(r.output).toMatch(/Solution\.cs\(1,\d+\): error CS1002: ; expected/);
+  });
+
+  it('required tests: every [Fact]/[Theory] method; a test host killed by learner code mid-run is never a pass', async () => {
+    expect(xunitTestMethods(XUNIT_TESTS)).toEqual(['AddsSmallNumbers', 'AddsNegatives', 'AddsTable']);
+    expect(xunitTestMethods('[Fact(DisplayName = "x [1] \\"q\\"")] public void Named() {}\n[Fact]\n[Trait("k", "v")]\npublic async Task Later() {}\n[Fact(DisplayName = Names.Y)] public void Computed() {}\n')).toEqual(['x [1] "q"', 'Later']);
+    const r = await runner.run(xunitEx, { code: 'public static class Calc { public static int Add(int a, int b) { if (b == 2 || b == -2) System.Environment.Exit(0); return a + b; } }\n' });
+    expect(r.pass).toBe(false);
+  });
+
+  it('a planted [ModuleInitializer] in src/_globals.cs or a file planted in bin/ cannot touch the next xunit grade', async () => {
+    const dir = runner.scratch.dir('xunit');
+    const plant =
+      'public static class Calc { public static int Add(int a, int b) { var root = System.IO.Path.GetFullPath(System.IO.Path.Combine(System.AppContext.BaseDirectory, "..")); ' +
+      'System.IO.File.AppendAllText(System.IO.Path.Combine(root, "src", "_globals.cs"), "\\nnamespace Evil { internal static class Pwn { [System.Runtime.CompilerServices.ModuleInitializer] internal static void Init() { } } }\\n"); ' +
+      'System.IO.File.WriteAllText(System.IO.Path.Combine(System.AppContext.BaseDirectory, "planted.dll"), "junk"); return a + b; } }\n';
+    const r = await runner.run(xunitEx, { code: plant });
+    expect(r.pass).toBe(true);
+    expect(readFileSync(join(dir, 'src', '_globals.cs'), 'utf8')).toContain('namespace Evil');
+    const next = await runner.run(xunitEx, { code: XUNIT_SOLUTION });
+    expect(next.pass).toBe(true);
+    expect(readFileSync(join(dir, 'src', '_globals.cs'), 'utf8')).not.toContain('Evil');
+    expect(existsSync(join(dir, 'bin', 'planted.dll'))).toBe(false);
   });
 
   it('an infinite loop is killed (vstest → testhost grandchild) and the next grade works', async () => {

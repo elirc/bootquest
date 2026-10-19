@@ -1,11 +1,11 @@
 import { join, resolve } from 'node:path';
 import type { CanonicalRunResult } from '@bootquest/shared/api';
 import { createDrillJavaRunner, type DrillJavaRunner } from '@bootquest/server/runner-java';
-import { realValidator, type UnitValidator, type UnitVerdict } from './validate.ts';
+import { NOT_A_VERDICT, realValidator, type UnitValidator, type UnitVerdict } from './validate.ts';
 
 /**
  * seed:validate for java-graded packs (javabootcamp, drill-java). Same import
- * gate as drill-cs in validate.ts (which stays byte-identical: it is hashed into
+ * gate as drill-cs in validate.ts (which changes only deliberately: it is hashed into
  * every grader fingerprint), as a separate UnitValidator the CLI passes when the
  * pack's grader kind is `java`:
  *   - the reference solution passes the Java runner (two strikes: a run that is
@@ -35,8 +35,8 @@ export async function shutdownJavaValidatorRunner(): Promise<void> {
   if (r) await r.shutdown();
 }
 
-/** Failure names that mean "the program did not produce a test verdict". */
-export const JAVA_NOT_A_VERDICT = new Set(['(compile)', '(timeout)', '(program)', '(format)', '(incomplete)']);
+/** Failure names that mean "the program did not produce a test verdict": the one shared set (validate.ts). */
+export const JAVA_NOT_A_VERDICT = NOT_A_VERDICT;
 
 const describeFailures = (r: CanonicalRunResult): string =>
   r.failures

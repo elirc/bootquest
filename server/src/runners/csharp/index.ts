@@ -1,9 +1,24 @@
 // C# runner — canonical interface (spec §5):
 //   run(exercise, submission) → { pass, output, failures[{name,message,expected?,actual?}], durationMs }
 // Compiler errors come back VERBATIM in `output` with pass=false.
+//
+// console-check verdicts (Java parity, see ../java/index.ts and ../result-channel.ts):
+// the graded program runs under BootQuest's launcher (BqLaunch.cs), which reads a fresh
+// random nonce from a file and DELETES it before Exercise.dll is loaded, then records
+// only the lines the Check harness itself prints (`✔ / ✘ / ☐`, `#done`) and on the
+// harness's report writes `#bq-result <nonce> <base64 json>` to a result file. The
+// verdict comes ONLY from that nonce-checked result; stdout is display and the exit
+// code is never trusted. No result (crash, early Environment.Exit, timeout) is never
+// a pass, nor is a result that misses a test the canonical tests block names
+// literally (an early Report() from learner code). The scratch project is re-verified
+// before every grade (scratch.ts), so no attempt can tamper with a later one.
+//
+// xunit verdicts come from the TRX that `dotnet vstest` (not learner code) writes;
+// every [Fact]/[Theory] method of the canonical tests must appear in it.
 
-import { composeGraded, composeGradedJstrain } from './csbootcamp-split.js';
+import { composeGraded, composeGradedJstrain, literalTestNames, splitAtTestsMarker, splitJstrainCs } from './csbootcamp-split.js';
 import { ScratchManager, type AttemptRaw, type Shape, type XunitEngine } from './scratch.js';
+import { failureFrom, missingTests, parseResultFile } from '../result-channel.ts';
 
 export interface Failure {
   name: string;
@@ -21,6 +36,8 @@ export interface RunResult {
   counts?: { passed: number; failed: number; todo: number };
   compileError?: boolean;
   timedOut?: boolean;
+  /** the program ended without a valid, nonce-checked, complete result (crash / early exit / forgery) */
+  crashed?: boolean;
   phases?: { compileMs: number; runMs: number };
 }
 
@@ -65,19 +82,24 @@ export function createCsharpRunner(opts: CsharpRunnerOptions) {
       await scratch.prepare(exercise.shape);
       const timeoutMs = exercise.timeoutMs ?? DEFAULT_TIMEOUT[exercise.shape];
       let raw: AttemptRaw;
+      let result: RunResult;
       if (exercise.shape === 'console-check') {
         let program: string;
+        let required: string[];
         try {
-          program = exercise.format === 'jstrain' ? composeGradedJstrain(submission.code, exercise.exerciseSource) : composeGraded(submission.code, exercise.exerciseSource);
+          const jstrain = exercise.format === 'jstrain';
+          program = jstrain ? composeGradedJstrain(submission.code, exercise.exerciseSource) : composeGraded(submission.code, exercise.exerciseSource);
+          required = literalTestNames((jstrain ? splitJstrainCs(exercise.exerciseSource) : splitAtTestsMarker(exercise.exerciseSource)).tests);
         } catch (e) {
           const msg = (e as Error).message;
           return { pass: false, output: msg, failures: [{ name: '(format)', message: msg }], durationMs: Date.now() - started };
         }
         raw = await scratch.attemptConsole(program, timeoutMs);
+        result = fromCheck(raw, timeoutMs, required);
       } else {
         raw = await scratch.attemptXunit(submission.code, exercise.tests, timeoutMs);
+        result = fromXunit(raw, timeoutMs, xunitTestMethods(exercise.tests));
       }
-      const result = exercise.shape === 'console-check' ? fromCheck(raw, timeoutMs) : fromXunit(raw, timeoutMs);
       result.durationMs = Date.now() - started;
       return result;
     });
@@ -113,56 +135,39 @@ function timeoutFailure(raw: AttemptRaw, timeoutMs: number): RunResult {
   };
 }
 
-// ── csbootcamp Check output ────────────────────────────────────────────────────
+// ── console-check: the nonce-checked result channel ──────────────────────────────
 
-export function parseCheckOutput(output: string): { failures: Failure[]; counts?: RunResult['counts']; passedNames: string[] } {
-  const lines = output.replace(/\r\n/g, '\n').split('\n');
-  const failures: Failure[] = [];
-  const passedNames: string[] = [];
-  let counts: RunResult['counts'];
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!;
-    let m: RegExpExecArray | null;
-    if ((m = /^\s*#done passed=(\d+) failed=(\d+) todo=(\d+)/.exec(line))) {
-      counts = { passed: +m[1]!, failed: +m[2]!, todo: +m[3]! };
-    } else if ((m = /^ {2}✔ (.+)$/.exec(line))) {
-      passedNames.push(m[1]!);
-    } else if ((m = /^ {2}☐ (.+?)(?: ·)? todo$/.exec(line))) {
-      // github csbootcamp prints `☐ name todo`, jstrain2.2's revision `☐ name · todo`
-      failures.push({ name: m[1]!, message: 'not implemented yet (todo)' });
-    } else if ((m = /^ {2}✘ (.+)$/.exec(line))) {
-      const detail: string[] = [];
-      while (i + 1 < lines.length && /^ {6}/.test(lines[i + 1]!)) detail.push(lines[++i]!.trim());
-      const f: Failure = { name: m[1]!, message: detail.filter((d) => !/^(expected|received):/.test(d)).join('\n') || 'failed' };
-      for (const d of detail) {
-        const e = /^expected: (.*)$/.exec(d);
-        const a = /^received: (.*)$/.exec(d);
-        if (e) f.expected = e[1];
-        if (a) f.actual = a[1];
-      }
-      failures.push(f);
-    }
-  }
-  return { failures, counts, passedNames };
-}
-
-function fromCheck(raw: AttemptRaw, timeoutMs: number): RunResult {
+function fromCheck(raw: AttemptRaw, timeoutMs: number, required: readonly string[]): RunResult {
   if (!raw.compile.ok) return compileFailure(raw);
   const run = raw.run!;
   if (run.timedOut) return timeoutFailure(raw, timeoutMs);
-  const { failures, counts } = parseCheckOutput(run.output);
-  if (!counts) {
-    failures.push({ name: '(program)', message: `crashed before Report(): exit code ${run.code}, no #done marker` });
-  }
-  const pass = !!counts && run.code === 0 && counts.passed > 0 && counts.failed === 0 && counts.todo === 0;
-  return {
-    pass,
-    output: run.output,
-    failures,
+  const phases = { compileMs: raw.compile.ms, runMs: run.ms };
+  const output = run.output;
+  const crash = (message: string): RunResult => ({
+    pass: false,
+    output,
+    failures: [{ name: '(program)', message }],
     durationMs: raw.totalMs,
-    counts,
-    phases: { compileMs: raw.compile.ms, runMs: run.ms },
-  };
+    crashed: true,
+    phases,
+  });
+  const channel = raw.channel!;
+  if (channel.nonceLeft) return crash(`the program never reached the BootQuest launcher (exit code ${run.code}); not graded`);
+  if (channel.result === undefined) {
+    return crash(`ended without a result from the harness report: crashed or exited early (exit code ${run.code}); never a pass`);
+  }
+  const parsed = parseResultFile(channel.result, channel.nonce);
+  if (!parsed.ok) return crash(parsed.reason);
+  const { payload } = parsed;
+  const failures: Failure[] = payload.tests.filter((t) => t.status !== 'pass').map(failureFrom);
+  const counts = { passed: payload.passed, failed: payload.failed, todo: payload.todo };
+  const missing = missingTests(payload, required);
+  if (missing.length) {
+    failures.push({ name: '(incomplete)', message: `the harness reported before every test ran; never ran: ${missing.map((n) => `"${n}"`).join(', ')}` });
+    return { pass: false, output, failures, durationMs: raw.totalMs, counts, crashed: true, phases };
+  }
+  const pass = counts.passed > 0 && counts.failed === 0 && counts.todo === 0;
+  return { pass, output, failures, durationMs: raw.totalMs, counts, phases };
 }
 
 // ── xunit TRX ──────────────────────────────────────────────────────────────────
@@ -178,8 +183,9 @@ function decodeXml(s: string): string {
     .replace(/&amp;/g, '&');
 }
 
-export function parseTrx(trx: string): { failures: Failure[]; counts: { passed: number; failed: number; todo: number } } {
+export function parseTrx(trx: string): { failures: Failure[]; counts: { passed: number; failed: number; todo: number }; names: string[] } {
   const failures: Failure[] = [];
+  const names: string[] = [];
   let passed = 0;
   let failed = 0;
   let todo = 0;
@@ -188,6 +194,7 @@ export function parseTrx(trx: string): { failures: Failure[]; counts: { passed: 
   while ((m = re.exec(trx))) {
     const attrs = m[1]!;
     const name = decodeXml(/\btestName="([^"]*)"/.exec(attrs)?.[1] ?? '?');
+    names.push(name);
     const outcome = /\boutcome="([^"]*)"/.exec(attrs)?.[1] ?? '';
     if (outcome === 'Passed') {
       passed++;
@@ -208,10 +215,39 @@ export function parseTrx(trx: string): { failures: Failure[]; counts: { passed: 
     if (a) f.actual = a[1]!.trim();
     failures.push(f);
   }
-  return { failures, counts: { passed, failed, todo } };
+  return { failures, counts: { passed, failed, todo }, names };
 }
 
-function fromXunit(raw: AttemptRaw, timeoutMs: number): RunResult {
+/**
+ * Test names of an xunit tests source: every method carrying [Fact] / [Theory] — its
+ * literal `DisplayName = "…"` when it has one (that replaces the method name in the
+ * TRX), else the method name. Each must show up in the TRX: a test host that died
+ * early (Environment.Exit in learner code) is an incomplete run, never a pass. A
+ * DisplayName that is not a plain literal is not required.
+ */
+export function xunitTestMethods(tests: string): string[] {
+  const out: string[] = [];
+  const code = tests.replace(/\r\n/g, '\n').replace(/^\s*\/\/.*$/gm, '');
+  const re = /\[\s*(?:Xunit\.)?(?:Fact|Theory)\b((?:[^\]\n"]|"(?:[^"\\\n]|\\.)*")*)\]((?:\s*\[[^\]\n]*\])*)\s*(?:(?:public|internal|protected|private|static|async|virtual|override|unsafe)\s+)*[\w.<>?,[\]]+\s+(\w+)\s*\(/g;
+  for (const m of code.matchAll(re)) {
+    const args = m[1] ?? '';
+    if (/\bDisplayName\b/.test(args)) {
+      const d = /\bDisplayName\s*=\s*"((?:[^"\\\n]|\\.)*)"\s*[,)]/.exec(args);
+      if (d) out.push(unescapeCsLiteral(d[1]!));
+      continue;
+    }
+    out.push(m[3]!);
+  }
+  return [...new Set(out)];
+}
+
+function unescapeCsLiteral(s: string): string {
+  return s.replace(/\\(u[0-9a-fA-F]{4}|.)/g, (_, e: string) =>
+    e[0] === 'u' ? String.fromCharCode(parseInt(e.slice(1), 16)) : (({ n: '\n', t: '\t', r: '\r', 0: '\0' } as Record<string, string>)[e] ?? e),
+  );
+}
+
+function fromXunit(raw: AttemptRaw, timeoutMs: number, required: readonly string[]): RunResult {
   if (!raw.compile.ok) return compileFailure(raw);
   const run = raw.run!;
   if (run.timedOut) return timeoutFailure(raw, timeoutMs);
@@ -224,7 +260,14 @@ function fromXunit(raw: AttemptRaw, timeoutMs: number): RunResult {
       phases: { compileMs: raw.compile.ms, runMs: run.ms },
     };
   }
-  const { failures, counts } = parseTrx(raw.trx);
+  const { failures, counts, names } = parseTrx(raw.trx);
+  // a method name shows up as `Class.Method` / `Ns.Class.Method(args)`; a DisplayName as itself / `Name(args)`
+  const ran = (test: string) => names.some((n) => n === test || n.endsWith(`.${test}`) || n.includes(`.${test}(`) || n.startsWith(`${test}(`));
+  const missing = required.filter((m) => !ran(m));
+  if (missing.length) {
+    failures.push({ name: '(incomplete)', message: `the test run ended before every test ran; never ran: ${missing.map((n) => `"${n}"`).join(', ')}` });
+    return { pass: false, output: run.output, failures, durationMs: raw.totalMs, counts, crashed: true, phases: { compileMs: raw.compile.ms, runMs: run.ms } };
+  }
   return {
     pass: run.code === 0 && counts.passed > 0 && counts.failed === 0 && counts.todo === 0,
     output: run.output,
