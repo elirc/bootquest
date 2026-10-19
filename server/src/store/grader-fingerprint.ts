@@ -19,7 +19,8 @@ import { jdkVersion } from '../runners/java/index.ts';
  *   js      BootForge-style drill-js / quiz / predict-output: grade-core + the
  *           JS adapter + the registry/deterministic graders; node + esbuild.
  *   csharp  drill-cs (csbootcamp): the C# runner sources + the Check harness it
- *           compiles + the drill-cs adapter; node + the .NET SDK and reference
+ *           compiles + BootQuest's launcher (BqLaunch.cs) + the nonce-checked
+ *           result-channel parser + the drill-cs adapter; node + the .NET SDK and reference
  *           pack versions. The JS grader is NOT part of it (and vice versa), so a
  *           JS grader edit does not invalidate the C# stamp.
  *   selfrun (W3c) jstrain self-run drills + its predict-output quiz items: the
@@ -28,8 +29,8 @@ import { jdkVersion } from '../runners/java/index.ts';
  *           snippet runner, the registry adapter / deterministic graders and
  *           grade-core's normalizeOutput (runners.ts, grade-core.mjs); node,
  *           esbuild, the repo-pinned TypeScript and tsx.
- *   java    drill-java (javabootcamp): the Java runner + split rules + the
- *           process helpers it imports from the C# scratch module + the
+ *   java    drill-java (javabootcamp): the Java runner + split rules + the shared
+ *           result-channel parser + the process helpers it imports from the C# scratch module + the
  *           javabootcamp harness it compiles (Check.java, BqMain.java) + the
  *           drill-java adapter + the Java validator; node + the JDK (`javac -version`).
  * The validator (validate.ts) is in all of them: it decides what "validated" means.
@@ -40,7 +41,8 @@ export const GRADER_KINDS: readonly GraderKind[] = ['js', 'csharp', 'selfrun', '
 
 const REPO = resolve(import.meta.dirname, '..', '..', '..');
 const VALIDATOR = join(REPO, 'tools', 'seed', 'src', 'validate', 'validate.ts');
-const CSHARP = join(REPO, 'server', 'src', 'runners', 'csharp');
+const RUNNERS = join(REPO, 'server', 'src', 'runners');
+const CSHARP = join(RUNNERS, 'csharp');
 const SELFRUN = join(REPO, 'server', 'src', 'runners', 'self-run');
 const JAVA = join(REPO, 'server', 'src', 'runners', 'java');
 
@@ -55,6 +57,9 @@ export const FINGERPRINT_FILES: Readonly<Record<GraderKind, readonly string[]>> 
     join(CSHARP, 'index.ts'),
     join(CSHARP, 'scratch.ts'),
     join(CSHARP, 'csbootcamp-split.ts'),
+    // BootQuest's console-check launcher (nonce + result channel) and the shared channel parser
+    join(CSHARP, 'BqLaunch.cs'),
+    join(RUNNERS, 'result-channel.ts'),
     join(CSHARP, 'fixtures', 'csbootcamp', '_lib', 'Check', 'Check.cs'),
     // W3c: jstrain2.2's embedded harness revision (drill-cs harness 'jstrain') + the frozen-scaffolding rule
     join(CSHARP, 'fixtures', 'jstrain-csbootcamp', '_lib', 'Check', 'Check.cs'),
@@ -78,6 +83,7 @@ export const FINGERPRINT_FILES: Readonly<Record<GraderKind, readonly string[]>> 
   java: [
     join(JAVA, 'index.ts'),
     join(JAVA, 'split.ts'),
+    join(RUNNERS, 'result-channel.ts'),
     join(CSHARP, 'scratch.ts'),
     join(JAVA, 'fixtures', 'javabootcamp', '_lib', 'check', 'bootcamp', 'Check.java'),
     join(JAVA, 'fixtures', 'javabootcamp', '_lib', 'check', 'bootcamp', 'BqMain.java'),

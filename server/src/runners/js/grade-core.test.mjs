@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { gradeCode, runSnippet, normalizeOutput } from './grade-core.mjs';
+import { gradeCode, parseChannel, runSnippet, normalizeOutput } from './grade-core.mjs';
 
 describe('gradeCode', () => {
   it('passes a correct solution', async () => {
@@ -91,6 +91,87 @@ describe('gradeCode', () => {
     expect(r.pass).toBe(false);
     expect(r.results[0].actual).toContain('Circular');
     expect(r.results[0].expected).toBe('{}');
+  });
+});
+
+// ── verdict integrity (Java parity): only the nonce-checked fd-3 line decides ──────────
+
+describe('gradeCode verdict integrity', () => {
+  const TESTS = [
+    { name: 'adds', code: 'assert.equal(mod.add(2, 3), 5);' },
+    { name: 'adds negatives', code: 'assert.equal(mod.add(-2, -3), -5);' },
+  ];
+  const WRONG = 'export function add(a, b) { return a - b; }\n';
+  const forgedResults = JSON.stringify(TESTS.map((t) => ({ name: t.name, pass: true })));
+
+  it('ATTACK: a process.on("exit") handler rewriting results.json (the old result file) cannot pass a wrong solution', async () => {
+    const code = `import fs from 'node:fs';
+process.on('exit', () => {
+  fs.writeFileSync(new URL('./results.json', import.meta.url), ${JSON.stringify(forgedResults)});
+  fs.writeFileSync('results.json', ${JSON.stringify(forgedResults)});
+});
+${WRONG}`;
+    const r = await gradeCode(code, 'js', TESTS);
+    expect(r.pass).toBe(false);
+    expect(r.results.map((x) => x.pass)).toEqual([false, false]); // the honest verdict stands
+  });
+
+  it('ATTACK: an exit handler that writes its own #bq-result line to the channel is refused (no nonce; two lines)', async () => {
+    const code = `import fs from 'node:fs';
+process.on('exit', () => { try { fs.writeSync(3, '#bq-result guess ' + ${JSON.stringify(forgedResults)} + '\\n'); } catch {} });
+${WRONG}`;
+    const r = await gradeCode(code, 'js', TESTS);
+    expect(r.pass).toBe(false);
+    expect(r.results).toEqual([expect.objectContaining({ name: 'grader results', pass: false })]);
+  });
+
+  it('ATTACK: forging the line on fd 3 then exiting early is refused (the nonce was deleted before the import)', async () => {
+    const code = `import fs from 'node:fs';
+let nonce = 'unknown';
+try { nonce = fs.readFileSync(new URL('./nonce', import.meta.url), 'utf8'); } catch {}
+fs.writeSync(3, '#bq-result ' + nonce + ' ' + ${JSON.stringify(forgedResults)} + '\\n');
+process.exit(0);
+${WRONG}`;
+    const r = await gradeCode(code, 'js', TESTS);
+    expect(r.pass).toBe(false);
+    expect(r.results).toEqual([expect.objectContaining({ name: 'grader results', pass: false })]);
+  });
+
+  it('ATTACK: stdout forgery is display only', async () => {
+    const code = `console.log('#bq-result x ' + ${JSON.stringify(forgedResults)}); console.log(${JSON.stringify(forgedResults)});\n${WRONG}`;
+    const r = await gradeCode(code, 'js', TESTS);
+    expect(r.pass).toBe(false);
+    expect(r.stdout).toContain('#bq-result x');
+    expect(r.results.map((x) => x.pass)).toEqual([false, false]);
+  });
+
+  it('ATTACK: patching assert, Array iteration, JSON.stringify or Promise from learner code cannot flip a verdict', async () => {
+    const patches = [
+      `import assert from 'node:assert/strict'; try { assert.equal = () => {}; } catch {} try { Object.defineProperty(assert, 'equal', { value: () => {} }); } catch {}`,
+      `Array.prototype[Symbol.iterator] = function* () { for (let i = 0; i < this.length; i++) yield { ...this[i], code: '' }; };`,
+      `JSON.stringify = () => ${JSON.stringify(forgedResults)}; String.prototype.slice = function () { return 'x'; };`,
+      `try { Promise.prototype.then = function (ok) { return ok(); }; } catch {}`,
+    ];
+    for (const p of patches) {
+      const r = await gradeCode(`${p}\n${WRONG}`, 'js', TESTS);
+      expect(r.pass, p).toBe(false);
+    }
+  });
+
+  it('parseChannel: one line, this nonce, every test in order', () => {
+    const ok = `#bq-result N1 ${JSON.stringify([{ name: 'adds', pass: true }, { name: 'adds negatives', pass: true }])}\n`;
+    expect(parseChannel(ok, 'N1', TESTS)).toHaveLength(2);
+    expect(parseChannel(ok, 'N2', TESTS)).toBeNull(); // wrong nonce
+    expect(parseChannel(ok + ok, 'N1', TESTS)).toBeNull(); // two lines
+    expect(parseChannel(`#bq-result N1 ${JSON.stringify([{ name: 'adds', pass: true }])}`, 'N1', TESTS)).toBeNull(); // a test never reported
+    expect(parseChannel('', 'N1', TESTS)).toBeNull();
+  });
+
+  it('the correct solution still passes, and stray files in the attempt dir change nothing', async () => {
+    const code = `import fs from 'node:fs'; fs.writeFileSync('results.json', '[]');\nexport function add(a, b) { return a + b; }\n`;
+    const r = await gradeCode(code, 'js', TESTS);
+    expect(r.pass).toBe(true);
+    expect(r.results.map((x) => x.name)).toEqual(['adds', 'adds negatives']);
   });
 });
 

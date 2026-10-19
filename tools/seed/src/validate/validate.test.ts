@@ -386,3 +386,16 @@ describe('W3a: a csharp (csbootcamp) pack is validated under the csharp grader k
     expect(entry!.hash).toBe(exerciseHash(pu, file.content[pu.unit.key]!, graderFingerprint('csharp')));
   });
 });
+
+describe('the NOT-a-test-verdict set is ONE constant (import gate = factory harness = java gate)', () => {
+  it('drill-cs starters that "fail" only by a runner error, edited scaffolding or an incomplete report are not test verdicts', async () => {
+    const { NOT_A_VERDICT } = await import('./validate.ts');
+    const { NOT_A_VERDICT: factory } = await import('../factory/harness/harness.ts');
+    const { JAVA_NOT_A_VERDICT } = await import('./validate-java.ts');
+    expect(factory).toBe(NOT_A_VERDICT);
+    expect(JAVA_NOT_A_VERDICT).toBe(NOT_A_VERDICT);
+    for (const name of ['(compile)', '(timeout)', '(program)', '(format)', '(runner)', '(scaffolding)', '(incomplete)', 'code runs', 'grader results']) {
+      expect(NOT_A_VERDICT.has(name), name).toBe(true);
+    }
+  });
+});

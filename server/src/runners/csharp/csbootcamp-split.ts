@@ -120,6 +120,28 @@ export function composeGradedJstrain(learnerSrc: string, exerciseSrc: string): s
   return rewriteDirectives(head + ex.tests + tail);
 }
 
+function unescapeCs(s: string): string {
+  return s.replace(/\\(u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8}|x[0-9a-fA-F]{1,4}|.)/g, (_, e: string) => {
+    if (e[0] === 'u' || e[0] === 'U' || (e[0] === 'x' && e.length > 1)) return String.fromCodePoint(parseInt(e.slice(1), 16));
+    return ({ n: '\n', t: '\t', r: '\r', 0: '\0', a: '\x07', b: '\b', f: '\f', v: '\v', e: '\x1b' } as Record<string, string>)[e] ?? e;
+  });
+}
+
+/**
+ * The test names a tests block registers with a plain string literal
+ * (`Test("name", ...)`, either harness revision). The runner requires every one of
+ * them in the harness's report, so a learner who reports early (`Report()` /
+ * `Environment.Exit` from inside their code, before the remaining tests ran) is an
+ * incomplete run, never a pass. Names built at run time (interpolation, loops,
+ * verbatim or raw literals) are not listed.
+ */
+export function literalTestNames(tests: string): string[] {
+  const names: string[] = [];
+  const code = normalize(tests).replace(/^\s*\/\/.*$/gm, ''); // whole-line comments register nothing
+  for (const m of code.matchAll(/(?<![\w.])(?:Check\.)?Test\(\s*"((?:[^"\\\n]|\\.)*)"\s*,/g)) names.push(unescapeCs(m[1]!));
+  return names;
+}
+
 /** True when the module follows the inverted ("ships red") contract. */
 export function isHuntModule(moduleDir: string): boolean {
   return /-debug|-hunts?$/.test(moduleDir);

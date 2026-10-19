@@ -31,6 +31,7 @@ import { createDrillCsRunner } from '@bootquest/server/runner-csharp';
 import { createDrillJavaRunner } from '@bootquest/server/runner-java';
 import { drillJsRunner, type Runner } from '@bootquest/server/runners';
 import { REPO_ROOT } from '../report.ts';
+import { NOT_A_VERDICT } from '../../validate/validate.ts';
 
 export type HarnessRunner = (check: SeedRunnableCheck, code: string) => Promise<CanonicalRunResult>;
 
@@ -102,23 +103,12 @@ export async function withFactoryHarness<T>(work: (h: Harness) => Promise<T>): P
   }
 }
 
-/** Failures that are not a test verdict (the code never got graded). */
-// drill-cs adds '(runner)' (the xunit run produced no TRX results) and '(scaffolding)' (frozen section edited);
-// drill-java adds '(incomplete)' (report() ran before every literal test did: an early exit, not a verdict)
-export const NOT_A_VERDICT = new Set([
-  'code loads without errors',
-  'code runs',
-  'finishes in time',
-  'TypeScript compiles',
-  'grader results',
-  '(compile)',
-  '(timeout)',
-  '(program)',
-  '(format)',
-  '(runner)',
-  '(scaffolding)',
-  '(incomplete)',
-]);
+/**
+ * Failures that are not a test verdict (the code never got graded). ONE set, defined by
+ * the import gate (validate.ts, hashed into every grader fingerprint) and re-exported
+ * here, so the factory and the import gate can never drift apart again.
+ */
+export { NOT_A_VERDICT };
 
 export type Execution =
   | { ok: true; result: CanonicalRunResult }
