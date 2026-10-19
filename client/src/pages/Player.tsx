@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useApi } from '../api/context';
 import { errorText } from '../api/errors';
@@ -6,18 +6,24 @@ import {
   ApiError,
   isApiError,
   type CanonicalRunResult,
+  type CompetencyId,
   type PublicCheck,
+  type RatingChangeDto,
   type RevealResponse,
   type RunFailure,
   type RunVerdict,
   type SelfAttestResponse,
   type Submission,
   type SubmitResponse,
+  type TrackId,
   type UnitDetail,
+  type UnitKind,
 } from '../api/types';
 import { Icon } from '../components/Icon';
 import { Chip, Kbd, LoadState, PageHeader } from '../components/ui';
+import { contentHash, storedGet, storedSet, useDirtyGuard, useDraft } from '../lib/draft';
 import { hasModifier, isEditableTarget, isMod, useKeydown } from '../lib/keys';
+import { enterActsOnFocus, shortcutBlocked } from '../lib/shortcuts';
 import { useAsync } from '../lib/useAsync';
 import { useTracksRefresh } from '../lib/tracks';
 import { InlineProse, Prose, ProseBlocks, splitPrompt } from '../lib/prose';
@@ -152,9 +158,12 @@ function Player({ detail }: { detail: UnitDetail }) {
               </span>
             </div>
           )}
-          {check && !isReading && !answerFirst && (
+          {/* a closed retest refuses reveal server-side (NOT_DUE / RETEST_NOT_OPEN): no dead confirm */}
+          {check && !isReading && !answerFirst && (revealed || !detail.retestGate || detail.retestGate.open) && (
             <RevealPanel
               unitId={unit.id}
+              leg={promotionLeg(detail)}
+              competencies={unit.competencies}
               revealed={revealed}
               solution={solution}
               onRevealed={(s) => {
@@ -323,13 +332,54 @@ function RefList({ refs }: { refs: Ref[] }) {
   );
 }
 
+/** Project unit kinds: a solo pass on one is promotion leg (a), the artifact (shared PROJECT_UNIT_KINDS). */
+const PROJECT_KINDS: readonly UnitKind[] = ['guided-project', 'http-lab', 'repo-task', 'program-unit'];
+
+type PromotionLeg = 'artifact' | 'retest';
+
+/**
+ * The three-leg promotion leg a submit on this unit writes evidence for, from what the unit
+ * detail carries (the server's submitEvidenceKind: a project unit's submit is the artifact leg,
+ * a changed-example retest's is the retest leg). A reveal makes every later attempt guided, and
+ * a guided attempt never counts as a leg, so a reveal here forfeits that leg for good. A retest
+ * already in practice mode (its artifact was revealed) has no leg left to lose. No competency =
+ * no evidence = no promotion.
+ */
+function promotionLeg(detail: UnitDetail): PromotionLeg | null {
+  const { unit } = detail;
+  if (unit.competencies.length === 0) return null;
+  if (PROJECT_KINDS.includes(unit.kind)) return 'artifact';
+  if (unit.kind === 'retest' && unit.variationOfUnitId !== null && detail.retestGate?.reason !== 'practice') return 'retest';
+  return null;
+}
+
+/** Display names for competency ids (fallback: the id itself). */
+const COMPETENCY_LABEL: Partial<Record<CompetencyId, string>> = {
+  'language-fluency': 'Language fluency',
+  'feature-delivery': 'Feature delivery',
+  'data-http': 'Data & HTTP',
+  'testing-verification': 'Testing & verification',
+  'agentic-engineering': 'Agentic engineering',
+  'code-reading': 'Code reading & maintenance',
+  communication: 'Communication',
+};
+const competencyLabel = (c: CompetencyId): string => COMPETENCY_LABEL[c] ?? c;
+const listLabels = (cs: CompetencyId[]): string => {
+  const names = cs.map(competencyLabel);
+  return names.length <= 1 ? (names[0] ?? '') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+};
+
 function RevealPanel({
   unitId,
+  leg,
+  competencies,
   revealed,
   solution,
   onRevealed,
 }: {
   unitId: number;
+  leg: PromotionLeg | null;
+  competencies: CompetencyId[];
   revealed: boolean;
   solution: Solution | null;
   onRevealed: (s: Solution) => void;
@@ -338,6 +388,7 @@ function RevealPanel({
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [variationUnitId, setVariationUnitId] = useState<number | null>(null);
 
   const act = async (kind: 'reveal' | 'fetch') => {
     setBusy(true);
@@ -346,6 +397,7 @@ function RevealPanel({
       // The solution only ever arrives AFTER the server has written the reveal row.
       const r = kind === 'reveal' ? await api.revealUnit(unitId) : await api.getSolution(unitId);
       onRevealed(r.solution);
+      setVariationUnitId(r.variationUnitId);
       setConfirming(false);
     } catch (e) {
       setError(errorText(e));
@@ -354,6 +406,7 @@ function RevealPanel({
     }
   };
 
+  const names = listLabels(competencies);
   return (
     <div className="reveal-box">
       {!revealed ? (
@@ -367,18 +420,44 @@ function RevealPanel({
       ) : (
         <SolutionView solution={solution} />
       )}
+      {solution && variationUnitId !== null && (
+        // reveal schedules the unit's pre-seeded changed example as practice (README: honesty model)
+        <p className="small" data-testid="variation-link">
+          A changed version of this exercise is waiting as practice:{' '}
+          <Link to={`/play/${variationUnitId}`}>practice the changed example</Link>.
+        </p>
+      )}
       {confirming && (
-        <div className="confirm" role="alertdialog" onKeyDown={(e) => e.key === 'Escape' && !busy && setConfirming(false)} aria-labelledby="reveal-title" aria-describedby="reveal-desc">
+        <div
+          className="confirm"
+          role="alertdialog"
+          onKeyDown={(e) => e.key === 'Escape' && !busy && setConfirming(false)}
+          aria-labelledby="reveal-title"
+          aria-describedby={leg ? 'reveal-desc reveal-leg' : 'reveal-desc'}
+        >
           <h3 id="reveal-title">Reveal the solution?</h3>
           <p id="reveal-desc">
             This exercise will be worth <strong>0 XP forever</strong>. Later submits still record, as guided attempts.
           </p>
+          {leg === 'artifact' && (
+            <p id="reveal-leg" data-testid="reveal-leg">
+              It is also a <strong>promotion artifact</strong> for {names}. A revealed artifact can never count as the solo artifact leg, so{' '}
+              <strong>this unit can never promote {competencies.length === 1 ? 'it' : 'them'}</strong> and its changed-example retest becomes
+              practice only. This cannot be undone.
+            </p>
+          )}
+          {leg === 'retest' && (
+            <p id="reveal-leg" data-testid="reveal-leg">
+              It is also the <strong>changed-example retest</strong> leg of a promotion for {names}. Once revealed, its attempts are guided and{' '}
+              <strong>can never complete that promotion</strong>. This cannot be undone.
+            </p>
+          )}
           <div className="toolbar">
             <button type="button" className="btn" autoFocus onClick={() => setConfirming(false)} disabled={busy}>
               Cancel
             </button>
             <button type="button" className="btn btn-primary" onClick={() => void act('reveal')} disabled={busy}>
-              Reveal (0 XP forever)
+              {leg ? 'Reveal (0 XP forever, promotion leg forfeited)' : 'Reveal (0 XP forever)'}
             </button>
           </div>
         </div>
@@ -432,6 +511,67 @@ function XpLine({ submit }: { submit: SubmitResponse }) {
   );
 }
 
+/**
+ * The ladder moments of a submit: competencies the server promoted (a passing artifact or
+ * retest can complete a three-leg chain). Old → new notch, with the evidence on Stats.
+ */
+function Promotions({ promotions }: { promotions: RatingChangeDto[] }) {
+  return (
+    <div className="verdict verdict-pass promotions" role="status" data-testid="promotions">
+      <Icon name="chart" />
+      <strong>{promotions.length === 1 ? 'Competency promoted' : `${promotions.length} competencies promoted`}</strong>
+      <ul className="promotion-list">
+        {promotions.map((p) => (
+          <li key={`${p.competency}-${p.evidenceId}`} data-testid={`promotion-${p.competency}`}>
+            <span className="promotion-name">{competencyLabel(p.competency)}</span>{' '}
+            <span className="promotion-notch" aria-label={`rating ${p.from} to ${p.to}`}>
+              {p.from} → {p.to}
+            </span>{' '}
+            <Link to={`/stats?competency=${encodeURIComponent(p.competency)}#evidence`}>See the evidence on Stats</Link>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/**
+ * After a verified pass: the next open unit on the same track, from the same server-derived
+ * "Next up" the dashboard shows (GET /dashboard nextUp; no extra endpoint). Read when the pass
+ * lands, so it already reflects this unit being done.
+ */
+function NextUnit({ unitId, trackId }: { unitId: number; trackId: TrackId }) {
+  const api = useApi();
+  const q = useAsync(() => api.getDashboard(), [api]);
+  if (q.status === 'loading') return null;
+  const next = q.status === 'ready' ? (q.data.nextUp.find((n) => n.trackId === trackId)?.unit ?? null) : null;
+  return (
+    <p className="next-unit" data-testid="next-unit">
+      {next && next.id !== unitId ? (
+        <Link to={`/play/${next.id}`} className="btn btn-sm">
+          Next unit: <InlineProse text={next.title} /> →
+        </Link>
+      ) : (
+        <>
+          <span className="muted">{q.status === 'error' ? 'Could not read what is next.' : 'Nothing else is open on this track right now.'}</span>{' '}
+          <Link to={`/campaign/${trackId}`}>Open the campaign map</Link>
+        </>
+      )}
+    </p>
+  );
+}
+
+/** What follows a recorded submit under its verdict: promotions, then (on a pass) the next unit. */
+function SubmitFollowUp({ submit, unit }: { submit: SubmitResponse; unit: UnitDetail['unit'] }) {
+  const promotions = submit.promotions ?? [];
+  return (
+    <>
+      {promotions.length > 0 && <Promotions promotions={promotions} />}
+      {submit.verdict === 'pass' && <NextUnit unitId={unit.id} trackId={unit.trackId} />}
+    </>
+  );
+}
+
 const VERDICT_TEXT: Record<RunVerdict, string> = {
   pass: 'All checks passed',
   fail: 'Checks failed',
@@ -447,16 +587,75 @@ const show = (v: unknown): string => (typeof v === 'string' ? v : JSON.stringify
 
 type Outcome = { kind: 'run'; result: CanonicalRunResult } | { kind: 'submit'; submit: SubmitResponse };
 
+/** localStorage key (under bq:) of the last attempt this browser recorded on a unit. */
+const lastAttemptKey = (unitId: number) => `last-attempt:v1:${unitId}`;
+const readLastAttempt = (unitId: number): number | null => {
+  const raw = storedGet(lastAttemptKey(unitId));
+  return raw !== null && /^[1-9]\d{0,14}$/.test(raw) ? Number(raw) : null;
+};
+
+/** The learner's own code from an attempt's stored submission ({ code } for code drills). */
+const attemptCode = (answer: unknown): string | null =>
+  typeof answer === 'object' && answer !== null && typeof (answer as { code?: unknown }).code === 'string' ? (answer as { code: string }).code : null;
+
 function CodePane({ detail, spec }: { detail: UnitDetail; spec: PublicCheck }) {
   const api = useApi();
   const id = detail.unit.id;
-  const [code, setCode] = useState(detail.starter ?? '');
+  const starter = detail.starter ?? '';
+  // Drafts are keyed by unit + content hash: a re-seed (new check row or starter) starts clean.
+  const family = `code:${id}:`;
+  const draft = useDraft(`${family}${contentHash(detail.check?.id, starter)}`, starter, { family });
+  const code = draft.value;
+  // the code that is safe without the draft: the starter, or what the last submit recorded
+  const [savedCode, setSavedCode] = useState(starter);
+  // the last attempt THIS browser recorded here (read once: offered on a revisit, not after a submit in place)
+  const [lastAttempt] = useState(() => readLastAttempt(id));
+  const [loadBusy, setLoadBusy] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [undo, setUndo] = useState<{ code: string; note: string } | null>(null);
   const [assisted, setAssisted] = useState(false);
   const [busy, setBusy] = useState<null | 'run' | 'submit'>(null);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [error, setError] = useState<string | null>(null);
   const language = languageOf(spec) ?? 'code';
   const refreshTracks = useTracksRefresh();
+
+  // Leaving only loses work when it exists nowhere else: storage refused the draft AND it differs
+  // from what is already safe (the starter or the last recorded submit).
+  useDirtyGuard(!draft.persisted && code !== savedCode);
+
+  // once the learner replaced the editor content (reset / load), "restored" is old news
+  const [replaced, setReplaced] = useState(false);
+  const replaceCode = (next: string, note: string) => {
+    setUndo({ code, note });
+    setReplaced(true);
+    draft.setValue(next);
+  };
+  const edit = (v: string) => {
+    setUndo(null); // typing after a reset / load: Undo would now also discard the new edits
+    draft.setValue(v);
+  };
+
+  const loadLastSubmitted = async () => {
+    if (lastAttempt === null || loadBusy) return;
+    setLoadBusy(true);
+    setLoadError(null);
+    try {
+      const a = await api.getAttempt(lastAttempt);
+      const submitted = a.unitId === id ? attemptCode(a.answer) : null;
+      if (submitted === null) setLoadError(`Attempt #${lastAttempt} has no stored code for this unit.`);
+      else {
+        replaceCode(submitted, `Loaded your code from attempt #${lastAttempt}.`);
+        setSavedCode(submitted);
+        setLoaded(true);
+      }
+    } catch (e) {
+      setLoadError(errorText(e));
+    } finally {
+      setLoadBusy(false);
+    }
+  };
 
   const go = async (kind: 'run' | 'submit') => {
     if (busy) return;
@@ -465,7 +664,11 @@ function CodePane({ detail, spec }: { detail: UnitDetail; spec: PublicCheck }) {
     try {
       if (kind === 'run') setOutcome({ kind, result: (await api.runUnit(id, { code })).result });
       else {
-        setOutcome({ kind, submit: await api.submitUnit(id, { code, selfAssisted: assisted }) });
+        const submit = await api.submitUnit(id, { code, selfAssisted: assisted });
+        setOutcome({ kind, submit });
+        storedSet(lastAttemptKey(id), String(submit.attempt.id));
+        setSavedCode(code); // recorded on the attempt now: nothing to lose
+        if (submit.verdict === 'pass') draft.clear(); // verified pass: the draft is done
         refreshTracks(); // W10: a recorded submit can change the track's done count
       }
     } catch (e) {
@@ -479,18 +682,72 @@ function CodePane({ detail, spec }: { detail: UnitDetail; spec: PublicCheck }) {
   };
 
   useKeydown((e) => {
-    if (!isMod(e) || e.key !== 'Enter') return;
+    if (!isMod(e) || e.key !== 'Enter' || shortcutBlocked(e)) return;
     e.preventDefault();
     void go(e.shiftKey ? 'submit' : 'run');
   });
 
+  const showRestored = draft.restored && !replaced;
+  const showBar = showRestored || draft.discardedStale || (lastAttempt !== null && !loaded) || undo !== null || loadError !== null || !draft.persisted;
   return (
     <section className="panel player-work" aria-label="Solution">
       <div className="editor-head">
         <span className="editor-lang">{language}</span>
-        <span className="muted">Editor stub — CodeMirror lands in W2</span>
+        <span className="muted" id={`editor-help-${id}`}>
+          <Kbd>Tab</Kbd> indents · <Kbd>Esc</Kbd> then <Kbd>Tab</Kbd> leaves the editor
+        </span>
       </div>
-      <EditorStub value={code} onChange={setCode} language={language} />
+      {showBar && (
+        <div className="draft-bar" data-testid="draft-bar" aria-live="polite">
+          {!draft.persisted && (
+            <p className="draft-warn" data-testid="draft-unsaved">
+              <Icon name="warn" size={14} /> This browser is not saving drafts (storage unavailable): your changes exist only in this tab until you submit.
+            </p>
+          )}
+          {draft.discardedStale && (
+            <p className="muted small" data-testid="draft-stale">
+              A draft saved for an earlier version of this exercise was discarded: the exercise was re-seeded since.
+            </p>
+          )}
+          {undo ? (
+            <p className="small" data-testid="draft-undo">
+              {undo.note}{' '}
+              <button
+                type="button"
+                className="linkish"
+                onClick={() => {
+                  draft.setValue(undo.code);
+                  setUndo(null);
+                }}
+              >
+                Undo
+              </button>
+            </p>
+          ) : (
+            showRestored && (
+              <p className="small" data-testid="draft-restored">
+                Restored your unsubmitted draft from this browser.{' '}
+                <button type="button" className="linkish" onClick={() => replaceCode(starter, 'Reset to the starter code.')}>
+                  Reset to starter
+                </button>
+              </p>
+            )
+          )}
+          {lastAttempt !== null && !loaded && (
+            <p className="small">
+              <button type="button" className="btn btn-sm" onClick={() => void loadLastSubmitted()} disabled={loadBusy}>
+                {loadBusy ? 'Loading…' : `Load my last submitted code (attempt #${lastAttempt})`}
+              </button>
+            </p>
+          )}
+          {loadError && (
+            <p className="error-text small" role="alert">
+              {loadError}
+            </p>
+          )}
+        </div>
+      )}
+      <CodeEditor value={code} onChange={edit} language={language} describedBy={`editor-help-${id}`} />
       <div className="toolbar">
         <HelpCheckbox checked={assisted} onChange={setAssisted} />
         <span className="toolbar-spacer" />
@@ -504,14 +761,98 @@ function CodePane({ detail, spec }: { detail: UnitDetail; spec: PublicCheck }) {
           <Kbd>Enter</Kbd>
         </button>
       </div>
-      <Results outcome={outcome} error={error} busy={busy !== null} />
+      <Results outcome={outcome} error={error} busy={busy !== null} unit={detail.unit} />
     </section>
   );
 }
 
-function EditorStub({ value, onChange, language }: { value: string; onChange: (v: string) => void; language: string }) {
+type Edit = { value: string; start: number; end: number };
+
+/** Line-start offsets of every line the selection [start, end) touches. */
+function selectedLineStarts(v: string, start: number, end: number): number[] {
+  const first = v.lastIndexOf('\n', start - 1) + 1;
+  // a selection ending right after a newline does not include the next line
+  const last = end > start && v[end - 1] === '\n' ? end - 1 : end;
+  const starts = [first];
+  for (let i = v.indexOf('\n', first); i !== -1 && i < last; i = v.indexOf('\n', i + 1)) starts.push(i + 1);
+  return starts;
+}
+
+/** Tab: a caret or a one-line selection inserts one indent; a multi-line selection indents every line. */
+function indentText(v: string, start: number, end: number, unit: string): Edit {
+  if (!v.slice(start, end).includes('\n')) {
+    return { value: v.slice(0, start) + unit + v.slice(end), start: start + unit.length, end: start + unit.length };
+  }
+  const starts = selectedLineStarts(v, start, end);
+  let out = v;
+  for (const s of [...starts].reverse()) out = out.slice(0, s) + unit + out.slice(s);
+  return { value: out, start: start + unit.length, end: end + unit.length * starts.length };
+}
+
+/** Shift+Tab: remove up to one indent (spaces, or one tab) from the start of every touched line. */
+function outdentText(v: string, start: number, end: number, unit: string): Edit {
+  const starts = selectedLineStarts(v, start, end);
+  let out = v;
+  let newStart = start;
+  let newEnd = end;
+  for (const s of [...starts].reverse()) {
+    const lead = out.slice(s, s + unit.length);
+    const n = lead.startsWith('\t') ? 1 : lead.length - lead.trimStart().length;
+    if (n === 0) continue;
+    out = out.slice(0, s) + out.slice(s + n);
+    // shift the selection ends that sit after the removed characters
+    if (start > s) newStart -= Math.min(n, start - s);
+    if (end > s) newEnd -= Math.min(n, end - s);
+  }
+  return { value: out, start: newStart, end: newEnd };
+}
+
+/** Indent unit per language: 4 spaces for C# / Java (their conventions), 2 for JS / TS and the rest. */
+const indentFor = (language: string) => (/^(c#|java)$/i.test(language.trim()) ? '    ' : '  ');
+
+/**
+ * The code editor: a plain textarea with a line gutter. Tab / Shift+Tab indent and outdent like a
+ * code editor; to keep the keyboard path out of the editor (WCAG 2.1.2, no keyboard trap) Escape
+ * arms the next Tab to move focus as usual (the CodeMirror convention), as the hint above says.
+ */
+function CodeEditor({ value, onChange, language, describedBy }: { value: string; onChange: (v: string) => void; language: string; describedBy?: string }) {
   const lines = Math.max(value.split('\n').length, 12);
   const gutter = useRef<HTMLDivElement>(null);
+  const text = useRef<HTMLTextAreaElement>(null);
+  const escaped = useRef(false);
+  const pendingSelection = useRef<[number, number] | null>(null);
+  const unit = indentFor(language);
+
+  // a programmatic edit replaces the value: put the caret / selection where the edit says
+  useLayoutEffect(() => {
+    const sel = pendingSelection.current;
+    if (sel && text.current) {
+      text.current.setSelectionRange(sel[0], sel[1]);
+      pendingSelection.current = null;
+    }
+  }, [value]);
+
+  const onKeyDown = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Escape') {
+      escaped.current = true;
+      return;
+    }
+    if (e.key !== 'Tab') {
+      if (e.key !== 'Shift') escaped.current = false;
+      return;
+    }
+    if (e.ctrlKey || e.metaKey || e.altKey || escaped.current) {
+      escaped.current = false; // Esc then Tab (or a modified Tab): the browser moves focus
+      return;
+    }
+    e.preventDefault();
+    const el = e.currentTarget;
+    const edit = (e.shiftKey ? outdentText : indentText)(el.value, el.selectionStart, el.selectionEnd, unit);
+    if (edit.value === el.value) return;
+    pendingSelection.current = [edit.start, edit.end];
+    onChange(edit.value);
+  };
+
   return (
     <div className="editor">
       <div className="editor-gutter" ref={gutter} aria-hidden="true">
@@ -520,9 +861,14 @@ function EditorStub({ value, onChange, language }: { value: string; onChange: (v
         ))}
       </div>
       <textarea
+        ref={text}
         className="editor-text"
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        onKeyDown={onKeyDown}
+        onBlur={() => {
+          escaped.current = false;
+        }}
         onScroll={(e) => {
           if (gutter.current) gutter.current.scrollTop = e.currentTarget.scrollTop;
         }}
@@ -530,13 +876,14 @@ function EditorStub({ value, onChange, language }: { value: string; onChange: (v
         autoCapitalize="off"
         autoCorrect="off"
         aria-label={`Code editor (${language})`}
+        aria-describedby={describedBy}
         rows={lines}
       />
     </div>
   );
 }
 
-function Results({ outcome, error, busy }: { outcome: Outcome | null; error: string | null; busy: boolean }) {
+function Results({ outcome, error, busy, unit }: { outcome: Outcome | null; error: string | null; busy: boolean; unit: UnitDetail['unit'] }) {
   const result = outcome ? (outcome.kind === 'run' ? outcome.result : outcome.submit.result) : null;
   const verdict: RunVerdict | null = outcome ? (outcome.kind === 'submit' ? outcome.submit.verdict : outcome.result.pass ? 'pass' : 'fail') : null;
   return (
@@ -562,6 +909,7 @@ function Results({ outcome, error, busy }: { outcome: Outcome | null; error: str
             </span>
             {outcome?.kind === 'submit' && <XpLine submit={outcome.submit} />}
           </div>
+          {outcome?.kind === 'submit' && <SubmitFollowUp submit={outcome.submit} unit={unit} />}
           {result.failures.length > 0 && (
             <ol className="tests">
               {result.failures.map((f, i) => (
@@ -692,6 +1040,7 @@ function QuizPane({
   const passed = submit?.result.pass === true;
   const [lastPick, setLastPick] = useState<number | null>(null);
   const firstRadio = useRef<HTMLInputElement>(null);
+  const answerInput = useRef<HTMLInputElement>(null);
   const revealedIndex = solution?.kind === 'answer' && typeof solution.answer === 'number' ? solution.answer : null;
 
   useEffect(() => firstRadio.current?.focus({ preventScroll: true }), []);
@@ -709,14 +1058,23 @@ function QuizPane({
   };
 
   useKeydown((e) => {
-    if (!byChoice || passed || hasModifier(e) || (isEditableTarget(e.target) && !(e.target instanceof HTMLInputElement))) return;
+    if (passed || hasModifier(e) || shortcutBlocked(e)) return;
+    if (e.key === 'Enter') {
+      // Enter on a focused button / link / checkbox is THAT control's Enter (Back to campaign,
+      // Learn more, "I had help"): never a recorded attempt. In a text field only the answer
+      // field itself submits.
+      if (enterActsOnFocus(e.target)) return;
+      if (isEditableTarget(e.target) && e.target !== answerInput.current) return;
+      if (byChoice ? choice === null : text.trim() === '') return;
+      e.preventDefault();
+      void go();
+      return;
+    }
+    if (!byChoice || isEditableTarget(e.target)) return;
     const n = Number(e.key);
     if (Number.isInteger(n) && n >= 1 && n <= choices.length) {
       e.preventDefault();
       setChoice(n - 1);
-    } else if (e.key === 'Enter' && choice !== null) {
-      e.preventDefault();
-      void go();
     }
   });
 
@@ -746,7 +1104,7 @@ function QuizPane({
       ) : (
         <label className="answer-field">
           <span className="sr-only">Your answer</span>
-          <input type="text" value={text} onChange={(e) => setText(e.target.value)} disabled={passed} aria-label="Your answer" />
+          <input ref={answerInput} type="text" value={text} onChange={(e) => setText(e.target.value)} disabled={passed} aria-label="Your answer" />
         </label>
       )}
       <div className="toolbar">
@@ -765,8 +1123,13 @@ function QuizPane({
         <AnswerVerdict
           submit={submit}
           error={error}
-          idle={byChoice ? `Pick an answer with 1–${choices.length}, then Enter. Every check is a recorded attempt.` : 'Type your answer, then check it.'}
+          idle={
+            byChoice
+              ? `Pick an answer with 1–${choices.length}, then Enter. Every check is a recorded attempt.`
+              : 'Type your answer, then press Enter to check it. Every check is a recorded attempt.'
+          }
         />
+        {submit && !error && <SubmitFollowUp submit={submit} unit={detail.unit} />}
       </div>
       <Link to={`/campaign/${detail.unit.trackId}`} className="muted small">
         Back to campaign
@@ -785,7 +1148,7 @@ function PredictPane({ detail, prompt }: { detail: UnitDetail; prompt: string | 
   };
 
   useKeydown((e) => {
-    if (!isMod(e) || !e.shiftKey || e.key !== 'Enter') return;
+    if (!isMod(e) || !e.shiftKey || e.key !== 'Enter' || shortcutBlocked(e)) return;
     e.preventDefault();
     go();
   });
@@ -815,6 +1178,7 @@ function PredictPane({ detail, prompt }: { detail: UnitDetail; prompt: string | 
       </div>
       <div className="results" aria-live="polite" data-testid="results">
         <AnswerVerdict submit={submit} error={error} idle="Predict the exact output, then submit. There is no free run for predict-output units." />
+        {submit && !error && <SubmitFollowUp submit={submit} unit={detail.unit} />}
       </div>
     </section>
   );
