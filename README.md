@@ -75,6 +75,13 @@ Commands:
 The server talks to `http://127.0.0.1:4178`; override it with `--server` or
 `BOOTQUEST_SERVER`.
 
+The API answers local callers only. It refuses (before any route runs) a `Host` that is
+not `127.0.0.1`, `localhost` or `[::1]` (403 `HOST_NOT_ALLOWED`: DNS rebinding), an
+`Origin` header that is not one of those (403 `ORIGIN_NOT_ALLOWED`; no Origin, as from
+the CLI, is fine), and any non-GET request without `Content-Type: application/json` (415
+`UNSUPPORTED_MEDIA_TYPE`: cross-site form or no-cors posts). Body-less actions such as
+reveal take a JSON `{}`.
+
 ### Startup checks and stamps
 
 All content packs are committed **with their validation stamps**, so a fresh clone

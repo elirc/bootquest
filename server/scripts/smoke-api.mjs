@@ -24,9 +24,12 @@
 // authored G3/G4 units, a stamp refusal (tampered seed pack -> the real entrypoint
 // refuses to start), a busy-port refusal (second server on the same port) and the
 // reset guards (no BOOTQUEST_DB / no --yes-really / server running -> refused).
+// Security fixes add: the local-only lockdown on the real entrypoint (body-less / text/plain
+// reveal 415, foreign Origin 403, rebound Host 403, nothing written).
 // Exit 0 only if every step holds.
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { request as httpRequest } from 'node:http';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -224,6 +227,28 @@ async function api(base, method, path, body) {
   return apiOnce(base, method, path, body);
 }
 
+/** A GET with an explicit Host header (fetch does not let a caller forge Host; node:http does). */
+function rawGet(port, path, headers) {
+  return new Promise((ok, fail) => {
+    const req = httpRequest({ host: '127.0.0.1', port, path, method: 'GET', headers }, (res) => {
+      let text = '';
+      res.setEncoding('utf8');
+      res.on('data', (d) => (text += d));
+      res.on('end', () => {
+        let json = null;
+        try {
+          json = JSON.parse(text);
+        } catch {
+          /* checked by the caller */
+        }
+        ok({ status: res.statusCode, text, json });
+      });
+    });
+    req.on('error', fail);
+    req.end();
+  });
+}
+
 async function apiOnce(base, method, path, body) {
   const res = await fetch(base + path, {
     method,
@@ -376,8 +401,33 @@ async function main() {
       const ok2 = await api(base, 'POST', `/api/units/${quizId}/submit`, { answer: quizRightServed });
       step('submit right again: 0 XP already-awarded', ok2.json?.xp?.amount === 0 && ok2.json.xp.reason === 'already-awarded', JSON.stringify(ok2.json?.xp));
 
-      // 7. reveal the drill: row first, then solution
-      const rv = await api(base, 'POST', `/api/units/${drillId}/reveal`);
+      // 6b. local-only lockdown (server/src/api/guard.ts): the cross-site CSRF shapes and a
+      // DNS-rebinding Host are refused BEFORE any route runs: the irreversible reveal writes nothing
+      const cx0 = counts();
+      const noCt = await fetch(`${base}/api/units/${drillId}/reveal`, { method: 'POST' });
+      const plain = await fetch(`${base}/api/units/${drillId}/reveal`, { method: 'POST', headers: { 'content-type': 'text/plain' }, body: '{}' });
+      const foreign = await fetch(`${base}/api/units/${drillId}/reveal`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: 'https://evil.example' },
+        body: '{}',
+      });
+      const rebound = await rawGet(port, `/api/units/${drillId}`, { host: `evil.example:${port}` });
+      const lockCodes = [
+        [noCt.status, (await noCt.json().catch(() => null))?.error?.code],
+        [plain.status, (await plain.json().catch(() => null))?.error?.code],
+        [foreign.status, (await foreign.json().catch(() => null))?.error?.code],
+        [rebound.status, rebound.json?.error?.code],
+      ];
+      step(
+        'lockdown: body-less / text/plain reveal 415, foreign Origin 403, rebound Host 403; no rows written',
+        JSON.stringify(lockCodes) ===
+          JSON.stringify([[415, 'UNSUPPORTED_MEDIA_TYPE'], [415, 'UNSUPPORTED_MEDIA_TYPE'], [403, 'ORIGIN_NOT_ALLOWED'], [403, 'HOST_NOT_ALLOWED']]) &&
+          JSON.stringify(counts()) === JSON.stringify(cx0),
+        JSON.stringify(lockCodes),
+      );
+
+      // 7. reveal the drill: row first, then solution (the legit shape: JSON {} as the client sends it)
+      const rv = await api(base, 'POST', `/api/units/${drillId}/reveal`, {});
       const revealRow = reader.get(`SELECT id, mode, outcome FROM attempt WHERE unit_id = ? AND outcome = 'revealed'`, drillId);
       step(
         'reveal: guided row written, solution returned',
@@ -438,7 +488,7 @@ async function main() {
       );
       const slateNow = d.json?.slate?.items?.map((i) => i.slot) ?? [];
       const readingStep = cj.json?.acts?.[0]?.quests?.find((q) => q.kind === 'reading' && q.state === 'available');
-      const att = readingStep ? await api(base, 'POST', `/api/units/${readingStep.unitId}/self-attest`) : null;
+      const att = readingStep ? await api(base, 'POST', `/api/units/${readingStep.unitId}/self-attest`, {}) : null;
       const dCamp = await api(base, 'GET', '/api/dashboard');
       step(
         'campaign slate slot: present, ticked by an act-1 reading self-attest (5 XP)',
@@ -446,7 +496,7 @@ async function main() {
         `slots ${slateNow.join(',')}; attest ${att?.status}`,
       );
       const lockedStep = cj.json?.acts?.[1]?.quests?.find((q) => q.kind === 'reading');
-      const la = lockedStep ? await api(base, 'POST', `/api/units/${lockedStep.unitId}/self-attest`) : null;
+      const la = lockedStep ? await api(base, 'POST', `/api/units/${lockedStep.unitId}/self-attest`, {}) : null;
       step('campaign: a locked act refuses its units (403 ACT_LOCKED)', la?.status === 403 && la.json?.error?.code === 'ACT_LOCKED', `status ${la?.status}`);
 
       // 10b. W2: real imported BootForge content, loaded by the server at startup

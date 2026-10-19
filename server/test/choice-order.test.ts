@@ -120,7 +120,7 @@ describe('single-question choice quiz units: served order end to end', () => {
       const keyAt = served.indexOf('alpha choice');
       expect(z.verdict === 'pass').toBe(keyAt === 0);
       expect(SubmitResponse.parse((await request(app).post(`/api/units/${id}/submit`).send({ answer: keyAt })).body).verdict).toBe('pass');
-      const rv = RevealResponse.parse((await request(app).post(`/api/units/${id}/reveal`).send()).body);
+      const rv = RevealResponse.parse((await request(app).post(`/api/units/${id}/reveal`).send({})).body);
       expect(rv.solution).toEqual({ kind: 'answer', answer: keyAt, choice: 'alpha choice' });
     }
     // expected 10 of 40; 28+ (70%) would mean the position bias leaked through

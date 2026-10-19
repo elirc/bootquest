@@ -201,7 +201,7 @@ describe('GET /api/units/:id/notes — code units', () => {
     const id = ids.get('fixture:drill-add')!;
     await request(app).post(`/api/units/${id}/submit`).send({ code: fixture.submissions.addWrong });
     expect(UnitNotesResponse.parse((await request(app).get(`/api/units/${id}/notes`)).body).explanation).toBeNull();
-    const rev = await request(app).post(`/api/units/${id}/reveal`).send();
+    const rev = await request(app).post(`/api/units/${id}/reveal`).send({});
     expect(rev.status).toBe(200);
     const body = UnitNotesResponse.parse((await request(app).get(`/api/units/${id}/notes`)).body);
     expect(body.explanation).toContain('EXPLANATION_MARKER');

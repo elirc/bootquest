@@ -70,6 +70,12 @@ export const API_ERROR_CODES = [
   'UNTOUCHED_TEMPLATE',
   /** F3: run/submit on a type-checked unit whose learner code carries @ts-nocheck / @ts-ignore / @ts-expect-error (nothing ran, nothing recorded) */
   'TYPECHECK_SUPPRESSED',
+  /** 403: the Host header is not a loopback name (127.0.0.1 / localhost / [::1]); DNS-rebinding guard, nothing ran */
+  'HOST_NOT_ALLOWED',
+  /** 403: an Origin header is present and is not a loopback origin (cross-site request guard), nothing ran */
+  'ORIGIN_NOT_ALLOWED',
+  /** 415: a non-GET request without `Content-Type: application/json` (CSRF "simple request" guard), nothing ran */
+  'UNSUPPORTED_MEDIA_TYPE',
   'INTERNAL',
 ] as const;
 export const ApiErrorCode = z.enum(API_ERROR_CODES);

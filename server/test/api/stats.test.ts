@@ -174,7 +174,7 @@ describe('GET /api/stats/* over real ledger writes', () => {
     await submit(ctx.app, a, { code: 'return a + b' }); // honest first-try pass
     await submit(ctx.app, g, { code: 'return 0' }); // honest fail
     ctx.clock.advance(1000);
-    expect((await request(ctx.app).post(`/api/units/${g}/reveal`).send()).status).toBe(200);
+    expect((await request(ctx.app).post(`/api/units/${g}/reveal`).send({})).status).toBe(200);
     ctx.clock.advance(1000);
     const sub = await submit(ctx.app, g, { code: 'return a + b' }); // copies the revealed answer
     expect(sub.status).toBe(200);
@@ -195,7 +195,7 @@ describe('GET /api/stats/* over real ledger writes', () => {
 
   it('xp: a day whose only ledger rows earned 0 XP does not start the all-time weeks', async () => {
     const g = drill(ctx, 'stats:g');
-    expect((await request(ctx.app).post(`/api/units/${g}/reveal`).send()).status).toBe(200);
+    expect((await request(ctx.app).post(`/api/units/${g}/reveal`).send({})).status).toBe(200);
     expect((await submit(ctx.app, g, { code: 'return a + b' })).status).toBe(200); // 0 XP, 'revealed'
     expect(ctx.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM xp_event WHERE amount = 0')!.n).toBeGreaterThan(0);
     const xp = await get(ctx.app, '/api/stats/xp', XpStatsResponse);

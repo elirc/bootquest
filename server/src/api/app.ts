@@ -48,6 +48,7 @@ import { dueCount } from '../engines/fsrs.ts';
 import { contentCounts, reviewQueue } from '../store/queries.ts';
 import { emptyContentStore, type UnitContentStore } from './content-store.ts';
 import { asyncRoute, errorBody, HttpError, sendJson, validate } from './http.ts';
+import { localOnlyGuard } from './guard.ts';
 import { getRefContent } from './service.ts';
 import { getUnitNotes } from './notes-service.ts';
 import { reviewCardText } from './study-service.ts';
@@ -131,6 +132,8 @@ export function createApp(opts: AppOptions): Express {
   const app = express();
   app.disable('x-powered-by');
   app.set('etag', false);
+  // FIRST: Host / Origin / Content-Type lockdown (DNS rebinding + cross-site simple requests; see guard.ts)
+  app.use(localOnlyGuard);
   app.use(express.json({ limit: JSON_BODY_LIMIT, strict: true }));
 
   const router = express.Router();

@@ -322,11 +322,11 @@ describe('POST /api/units/:id/self-attest (reading units only)', () => {
 
   it('pays 5 XP once, writes one solo attempt, then 409 ALREADY_ATTESTED', async () => {
     const id = readingUnit();
-    const first = SelfAttestResponse.parse((await request(ctx.app).post(`/api/units/${id}/self-attest`).send()).body);
+    const first = SelfAttestResponse.parse((await request(ctx.app).post(`/api/units/${id}/self-attest`).send({})).body);
     expect(first.xp).toMatchObject({ amount: 5, reason: null });
     expect(ctx.db.get('SELECT mode, outcome, check_id FROM attempt WHERE id = ?', first.attemptId)).toEqual({ mode: 'solo', outcome: 'pass', check_id: null });
     const before = ledgerCounts(ctx.db);
-    expectApiError(await request(ctx.app).post(`/api/units/${id}/self-attest`).send(), 409, 'ALREADY_ATTESTED');
+    expectApiError(await request(ctx.app).post(`/api/units/${id}/self-attest`).send({}), 409, 'ALREADY_ATTESTED');
     expect(ledgerCounts(ctx.db)).toEqual(before);
     const units = TrackUnitsResponse.parse((await request(ctx.app).get('/api/tracks/js/units')).body);
     expect(units.units.find((u) => u.id === id)!.state).toBe('done');
@@ -335,12 +335,12 @@ describe('POST /api/units/:id/self-attest (reading units only)', () => {
   it('is refused on non-reading units, locked tracks, unknown units, and with any body/query', async () => {
     ctx.db.run(`UPDATE track SET locked = 1 WHERE id = 'java'`); // the lock mechanism under test (java ships unlocked since 011)
     const before = ledgerCounts(ctx.db);
-    expectApiError(await request(ctx.app).post(`/api/units/${ctx.id('fixture:drill-add')}/self-attest`).send(), 409, 'WRONG_UNIT_KIND');
-    expectApiError(await request(ctx.app).post(`/api/units/${ctx.id('fixture:java-quiz')}/self-attest`).send(), 403, 'TRACK_LOCKED');
-    expectApiError(await request(ctx.app).post('/api/units/4242/self-attest').send(), 404, 'NOT_FOUND');
+    expectApiError(await request(ctx.app).post(`/api/units/${ctx.id('fixture:drill-add')}/self-attest`).send({}), 409, 'WRONG_UNIT_KIND');
+    expectApiError(await request(ctx.app).post(`/api/units/${ctx.id('fixture:java-quiz')}/self-attest`).send({}), 403, 'TRACK_LOCKED');
+    expectApiError(await request(ctx.app).post('/api/units/4242/self-attest').send({}), 404, 'NOT_FOUND');
     const id = readingUnit();
     expectApiError(await request(ctx.app).post(`/api/units/${id}/self-attest`).send({ xp: 50 }), 400, 'VALIDATION');
-    expectApiError(await request(ctx.app).post(`/api/units/${id}/self-attest?force=1`).send(), 400, 'VALIDATION');
+    expectApiError(await request(ctx.app).post(`/api/units/${id}/self-attest?force=1`).send({}), 400, 'VALIDATION');
     expect(ledgerCounts(ctx.db)).toEqual(before);
   });
 });
@@ -351,7 +351,7 @@ describe('POST /api/units/:id/reveal', () => {
   it('reveal writes the guided row, then returns the solution; a later correct submit earns 0 XP', async () => {
     const id = ctx.id('fixture:drill-add');
     expect(ledgerCounts(ctx.db).attempt).toBe(0);
-    const res = await request(ctx.app).post(`/api/units/${id}/reveal`).send();
+    const res = await request(ctx.app).post(`/api/units/${id}/reveal`).send({});
     expect(res.status).toBe(200);
     const body = RevealResponse.parse(res.body);
     expect(body.solution).toEqual({ kind: 'code', code: fixture.content['fixture:drill-add']!.solution });
@@ -362,7 +362,7 @@ describe('POST /api/units/:id/reveal', () => {
     expect(row).toEqual({ id: body.attemptId, mode: 'guided', outcome: 'revealed', assistance_source: 'reveal' });
 
     // idempotent + solution endpoint now open
-    const again = RevealResponse.parse((await request(ctx.app).post(`/api/units/${id}/reveal`).send()).body);
+    const again = RevealResponse.parse((await request(ctx.app).post(`/api/units/${id}/reveal`).send({})).body);
     expect(again.attemptId).toBe(body.attemptId);
     expect(RevealResponse.parse((await request(ctx.app).get(`/api/units/${id}/solution`)).body).solution).toEqual(body.solution);
 
@@ -379,13 +379,13 @@ describe('POST /api/units/:id/reveal', () => {
   it('quiz reveal returns the key (index in SERVED order + its text); no solution in the store -> 404 and NO row written', async () => {
     const id = ctx.id('fixture:quiz-typeof');
     const servedKey = await servedQuizAnswer(ctx.app, ctx.db, id, 1);
-    const quiz = RevealResponse.parse((await request(ctx.app).post(`/api/units/${id}/reveal`).send()).body);
+    const quiz = RevealResponse.parse((await request(ctx.app).post(`/api/units/${id}/reveal`).send({})).body);
     expect(quiz.solution).toEqual({ kind: 'answer', answer: servedKey, choice: '"object"' });
     const detail = UnitDetailResponse.parse((await request(ctx.app).get(`/api/units/${id}`)).body);
     expect((detail.check!.spec as { choices: string[] }).choices[servedKey]).toBe('"object"');
 
     const before = ledgerCounts(ctx.db);
-    expectApiError(await request(ctx.app).post(`/api/units/${ctx.id('fixture:drill-mul')}/reveal`).send(), 404, 'NO_SOLUTION');
+    expectApiError(await request(ctx.app).post(`/api/units/${ctx.id('fixture:drill-mul')}/reveal`).send({}), 404, 'NO_SOLUTION');
     expect(ledgerCounts(ctx.db)).toEqual(before);
   });
 
