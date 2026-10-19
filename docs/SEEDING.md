@@ -48,27 +48,39 @@ Generators and `seed:check` read source repos from plain checkouts pinned by sha
 and `seed:check` FAILS for every pack whose checkout is missing. A pack that cannot be
 re-verified is never assumed good.
 
-To create a checkout (Git Bash), reading HEAD of the GitHub repo:
+A checkout is always made from a **mirror**, `.cache/repos/<repo>` (a `--depth 1`
+clone that holds the pinned sha; an importer's `.cache/sources/<repo>` counts too):
 
 ```sh
+# Git Bash, from the app repo: mirror + the pinned sha, then the checkout
 gh repo clone elirc/<repo> .cache/repos/<repo> -- --depth 1 -q
-sha=$(git -C .cache/repos/<repo> rev-parse HEAD)
-mkdir -p ".cache/checkouts/<repo>@$sha"
-git -C .cache/repos/<repo> archive HEAD | tar -x -C ".cache/checkouts/<repo>@$sha"
+git -C .cache/repos/<repo> fetch --depth 1 origin <sha>      # when the sha is not HEAD
+npm run seed:checkout -- --repo <repo> --sha <40-hex sha>    # or add --fetch to do both steps above
 ```
 
-`.cache/tools/mkco.sh` is the same recipe. It is hard-wired to an old agent worktree
-path, so copy the commands rather than running it. To reproduce an existing pack, check
-out the sha recorded in that pack's `manifest.json` (`source.sha`):
+`seed:checkout` writes every blob byte-for-byte from `git cat-file` into a fresh temp
+dir that is then renamed into place. **Never use `git archive | tar` (or a working
+tree) for a checkout:** this machine's SYSTEM gitconfig sets `core.autocrlf=true`,
+`git archive` honours it, and every LF file comes out CRLF. The old recipe (and
+`.cache/tools/mkco.sh`) did exactly that, so packs recorded blob ids git never had.
+Extracting over an existing dir also left deleted files behind; the temp + rename
+makes that impossible.
 
-```sh
-git -C .cache/repos/<repo> fetch --depth 1 origin <sha>
-git -C .cache/repos/<repo> archive <sha> | tar -x -C ".cache/checkouts/<repo>@<sha>"
-```
+**The rule is byte identity with git's blob, not "no CR".** About 30 pinned repos
+commit CRLF files on purpose (j1/j2 guides, nopCommerce, eShop, ...): those keep their
+CRs; every other file has none.
 
-`git archive` writes LF bytes, and recorded blob hashes assume that. Do not copy a
-working tree that autocrlf has converted. `seed:check` accepts `--checkouts <dir>`, and
-`BOOTQUEST_CHECKOUTS` points every tool at another checkout root.
+**What enforces it.** `openCheckout` looks for the mirror next to
+`<cache>/checkouts/<repo>@<sha>` (or in `BOOTQUEST_REPOS`). With a mirror it opens the
+dir as pin `git-tree` only if the file set and every byte size equal
+`git ls-tree -r -l <sha>` (a wrong sha, a stale file or CRLF-converted bytes are
+refused), and every file a generator reads or cites must hash to git's blob id, so a
+pack can no longer record an id git does not have. A mirror that lacks the sha is
+refused (fetch it). With no mirror at all the dir stays `caller-asserted` (test
+fixtures). `npm run seed:pins` (read-only) checks every manifest's `blobs` against
+the mirror: OK / MISMATCH (per file) / UNCHECKABLE (no mirror); exit 1 on any
+mismatch, `--strict` also fails on UNCHECKABLE. `seed:check` accepts `--checkouts <dir>`,
+and `BOOTQUEST_CHECKOUTS` points every tool at another checkout root.
 
 **Java checkouts.** The 12 Java study-quest repos (the campaign's `content/campaign/java.json`
 names them, e.g. `organized-experiment-quiz-engine`, `j1`, `j7`) use the same
