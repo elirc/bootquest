@@ -8,6 +8,7 @@ import {
   EvidenceInput,
   ExerciseSpec,
   LessonSpec,
+  QuizCheck,
   RunnerResult,
   XpAwardInput,
   XpEvent,
@@ -60,6 +61,28 @@ describe('CheckSpec discriminated union', () => {
     expect(CheckSpec.parse(VALID['self-run'])).toMatchObject({ timeoutMs: 30000, tsc: false, fixtures: [] });
     expect(CheckSpec.parse(VALID['study-quiz'])).toMatchObject({ passPct: 0.8 });
     expect(CheckSpec.parse(VALID['explain-back'])).toMatchObject({ minCoverage: 0.8, questionCount: 3 });
+  });
+
+  it.each(Object.entries(VALID))('is strict: a misspelled key on a %s spec is an error, never silently stripped', (_type, spec) => {
+    const r = CheckSpec.safeParse({ ...(spec as object), timeoutMS: 5000 });
+    expect(r.success).toBe(false);
+    expect(r.success ? '' : r.error.issues.map((i) => i.message).join('; ')).toMatch(/Unrecognized key\(s\) in object: 'timeoutMS'/);
+  });
+
+  it('is strict where a typo used to change behaviour silently (keyTokens, harness, nested test objects)', () => {
+    expect(CheckSpec.safeParse({ ...(VALID['predict-output'] as object), keytokens: ['x'] }).success).toBe(false);
+    expect(CheckSpec.safeParse({ ...(VALID['drill-cs'] as object), harnes: 'jstrain' }).success).toBe(false);
+    expect(CheckSpec.safeParse({ type: 'drill-js', language: 'js', tests: [{ name: 't', code: 'x', inputs: 1 }] }).success).toBe(false);
+  });
+
+  it("QuizCheck invariant: grading 'choice' needs choices and a numeric answerKey inside them", () => {
+    expect(CheckSpec.safeParse({ type: 'quiz', itemKey: 'q', grading: 'choice', answerKey: 1 }).success).toBe(false);
+    expect(CheckSpec.safeParse({ type: 'quiz', itemKey: 'q', grading: 'choice', answerKey: 'b', choices: ['a', 'b'] }).success).toBe(false);
+    expect(CheckSpec.safeParse({ type: 'quiz', itemKey: 'q', grading: 'choice', answerKey: 2, choices: ['a', 'b'] }).success).toBe(false);
+    expect(QuizCheck.safeParse({ type: 'quiz', itemKey: 'q', grading: 'choice', answerKey: 1 }).success).toBe(false);
+    expect(QuizCheck.safeParse(VALID.quiz).success).toBe(true);
+    // exact / self grading keep their text keys
+    expect(CheckSpec.safeParse({ type: 'quiz', itemKey: 'q', grading: 'exact', answerKey: 'forty-two' }).success).toBe(true);
   });
 
   it('rejects unknown types, path escapes, and malformed specs', () => {

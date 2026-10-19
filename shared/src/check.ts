@@ -17,19 +17,29 @@ const relPath = z
   });
 const sha256 = z.string().regex(/^[0-9a-f]{64}$/);
 
-/** One BootForge-style test: AsyncFunction('mod','assert') body. */
-export const DrillTest = z.object({
-  name: z.string().min(1),
-  code: z.string().min(1),
-  input: z.unknown().optional(),
-});
+/*
+ * Every check object below is .strict(): an unknown key is a parse ERROR, never silently stripped.
+ * A misspelled `keyTokens` / `harness` / `timeoutMS` used to vanish on parse, skipping the
+ * import-gate answer-key cross-check or falling back to the wrong harness / default timeout.
+ */
 
-export const DrillJsCheck = z.object({
-  type: z.literal('drill-js'),
-  language: z.enum(['js', 'ts', 'sql']),
-  tests: z.array(DrillTest).min(1),
-  timeoutMs: timeoutMs.default(8000),
-});
+/** One BootForge-style test: AsyncFunction('mod','assert') body. */
+export const DrillTest = z
+  .object({
+    name: z.string().min(1),
+    code: z.string().min(1),
+    input: z.unknown().optional(),
+  })
+  .strict();
+
+export const DrillJsCheck = z
+  .object({
+    type: z.literal('drill-js'),
+    language: z.enum(['js', 'ts', 'sql']),
+    tests: z.array(DrillTest).min(1),
+    timeoutMs: timeoutMs.default(8000),
+  })
+  .strict();
 
 /**
  * C# drill graded by the warm C# runner (server/src/runners/csharp, W3a).
@@ -67,7 +77,7 @@ export const DrillCsCheck = z.object({
    */
   harness: z.enum(['csbootcamp', 'jstrain']).optional(),
   timeoutMs: timeoutMs.default(10000),
-});
+}).strict();
 
 /**
  * Java drill graded by the Java runner (server/src/runners/java; javabootcamp).
@@ -93,16 +103,34 @@ export const DrillJavaCheck = z.object({
     .regex(/^[A-Za-z_$][A-Za-z0-9_$]*$/)
     .default('Exercise'),
   timeoutMs: timeoutMs.default(10000),
-});
+}).strict();
 
-export const QuizCheck = z.object({
-  type: z.literal('quiz'),
-  itemKey: z.string().min(1),
-  grading: z.enum(['exact', 'choice', 'self']),
-  /** single-keyed answer (exact text or choice index) */
-  answerKey: z.union([z.string().min(1), z.number().int().nonnegative()]),
-  choices: z.array(z.string().min(1)).min(2).optional(),
-});
+/** The quiz object shape (strict). The CheckSpec union holds this; QuizCheck adds the invariant. */
+export const QuizCheckObject = z
+  .object({
+    type: z.literal('quiz'),
+    itemKey: z.string().min(1),
+    grading: z.enum(['exact', 'choice', 'self']),
+    /** single-keyed answer (exact text or choice index) */
+    answerKey: z.union([z.string().min(1), z.number().int().nonnegative()]),
+    choices: z.array(z.string().min(1)).min(2).optional(),
+  })
+  .strict();
+
+/**
+ * A choice-graded quiz needs its choices and a numeric answerKey inside them: without them the
+ * grader cannot key it (a string key on a choice quiz never matches a submitted index).
+ */
+function quizInvariant(q: z.infer<typeof QuizCheckObject>, ctx: z.RefinementCtx): void {
+  if (q.grading !== 'choice') return;
+  if (!q.choices) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "grading 'choice' requires choices", path: ['choices'] });
+  if (typeof q.answerKey !== 'number') ctx.addIssue({ code: z.ZodIssueCode.custom, message: "grading 'choice' requires a numeric answerKey (a choice index)", path: ['answerKey'] });
+  else if (q.choices && q.answerKey >= q.choices.length) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: `answerKey ${q.answerKey} is outside the ${q.choices.length} choices`, path: ['answerKey'] });
+  }
+}
+
+export const QuizCheck = QuizCheckObject.superRefine(quizInvariant);
 
 export const PredictOutputCheck = z.object({
   type: z.literal('predict-output'),
@@ -124,7 +152,7 @@ export const PredictOutputCheck = z.object({
    * output contradicts their own key are never shipped as gradable).
    */
   keyTokens: z.array(z.string().min(1)).min(1).optional(),
-});
+}).strict();
 
 export const GuidedStepCheck = z.object({
   type: z.literal('guided-step'),
@@ -132,7 +160,7 @@ export const GuidedStepCheck = z.object({
   testFile: relPath,
   runner: z.enum(['node-test', 'vitest', 'dotnet-test']),
   timeoutMs: timeoutMs.default(60000),
-});
+}).strict();
 
 /**
  * JSON-shape predicate (W3c) — a deliberately SMALL structural matcher, not a
@@ -310,25 +338,25 @@ export const StudyQuizCheck = z.object({
   itemKeys: z.array(z.string().min(1)).min(1),
   /** pass mark as a fraction; spec §4 = 0.8 */
   passPct: z.number().min(0).max(1).default(0.8),
-});
+}).strict();
 
 export const ExplainBackCheck = z.object({
   type: z.literal('explain-back'),
   questionSetKey: z.string().min(1),
   questionCount: z.number().int().positive().default(3),
   minCoverage: z.number().min(0).max(1).default(0.8),
-});
+}).strict();
 
 export const PatchKataCheck = z.object({
   type: z.literal('patch-kata'),
   kataKey: z.string().min(1),
   defectCount: z.number().int().positive(),
-});
+}).strict();
 
 export const ReviewCheck = z.object({
   type: z.literal('review'),
   cardKey: z.string().min(1),
-});
+}).strict();
 
 /** signalpost `node:test` check files; workspace mirrors repo layout. */
 export const NodeTestFileCheck = z.object({
@@ -356,7 +384,7 @@ export const NodeTestFileCheck = z.object({
   blobSha: z.string().regex(/^[0-9a-f]{40}$/).optional(), // git blob sha of the check file at `sha`
   expectedTests: z.array(z.string().min(1)).min(1).optional(), // top-level test names a pass must report ok
   moduleType: z.enum(['module', 'commonjs']).optional(), // workspace package.json `type` (mirrors the repo)
-});
+}).strict();
 
 /**
  * Frozen scaffolding of a self-run exercise (W3c): a learner-file section the
@@ -395,7 +423,7 @@ export const SelfRunCheck = z.object({
     })
     .strict()
     .optional(),
-});
+}).strict();
 
 export const VitestProjectCheck = z.object({
   type: z.literal('vitest-project'),
@@ -403,13 +431,14 @@ export const VitestProjectCheck = z.object({
   testFile: relPath,
   env: z.record(z.string()).optional(),
   timeoutMs: timeoutMs.default(60000),
-});
+}).strict();
 
-export const CheckSpec = z.discriminatedUnion('type', [
+/** The plain discriminated union (ZodObject options; CHECK_SPEC_TYPES reads them). */
+export const CheckSpecUnion = z.discriminatedUnion('type', [
   DrillJsCheck,
   DrillCsCheck,
   DrillJavaCheck,
-  QuizCheck,
+  QuizCheckObject,
   PredictOutputCheck,
   GuidedStepCheck,
   HttpCheck,
@@ -422,8 +451,12 @@ export const CheckSpec = z.discriminatedUnion('type', [
   SelfRunCheck,
   VitestProjectCheck,
 ]);
+/** Every check spec: the strict union plus the cross-field invariants (QuizCheck's choice rule). */
+export const CheckSpec = CheckSpecUnion.superRefine((s, ctx) => {
+  if (s.type === 'quiz') quizInvariant(s, ctx);
+});
 export type CheckSpec = z.infer<typeof CheckSpec>;
 export type CheckSpecInput = z.input<typeof CheckSpec>;
 
 /** Compile-time + runtime guard that the union covers exactly CheckType. */
-export const CHECK_SPEC_TYPES: readonly CheckType[] = CheckSpec.options.map((o) => o.shape.type.value);
+export const CHECK_SPEC_TYPES: readonly CheckType[] = CheckSpecUnion.options.map((o) => o.shape.type.value);
