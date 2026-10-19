@@ -15,7 +15,7 @@ const seedDir = resolve(opts.get('dir') ?? DEFAULT_SEED_DIR);
 const checkouts = resolve(opts.get('checkouts') ?? process.env.BOOTQUEST_CHECKOUTS ?? DEFAULT_CHECKOUTS);
 console.log(`[seed:check] seed packs under ${seedDir}; checkouts ${checkouts}`);
 const restamp = flags.has('restamp');
-// drill-js + drill-cs (kata tests on C# context files re-execute through the warm C# runner)
+// drill-js + drill-cs + drill-java (kata tests on C# / Java context files re-execute through the real runners)
 withFactoryHarness((harness) =>
   runCheck({ seedDir, checkouts, restamp, harness, ...(opts.has('exclusions') ? { exclusionsPath: opts.get('exclusions')! } : {}), log: (l) => console.log(l) }),
 ).then(

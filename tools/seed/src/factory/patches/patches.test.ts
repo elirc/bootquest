@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import type { SeedPatchKataItem } from '@bootquest/shared';
-import { factoryHarness, failsAsVerdict } from '../harness/harness.ts';
+import { FACTORY_JAVA_SCRATCH_ENV, factoryHarness, factoryJavaScratchDir, failsAsVerdict } from '../harness/harness.ts';
 import { loadSeedPack } from '../pack.ts';
 import { REPO_ROOT } from '../report.ts';
 import { applyInTemp, diffTargets, sliceLines } from './patches.ts';
@@ -14,6 +14,12 @@ import { runPatches } from './run.ts';
 const HAVE_DOTNET_SDK = (() => {
   const r = spawnSync('dotnet', ['--list-sdks'], { encoding: 'utf8', timeout: 30_000, windowsHide: true });
   return r.status === 0 && /\d+\.\d+/.test(r.stdout ?? '');
+})();
+
+/** a JDK on PATH (`javac -version` exits 0) */
+const HAVE_JDK = (() => {
+  const r = spawnSync('javac', ['-version'], { encoding: 'utf8', timeout: 30_000, windowsHide: true });
+  return r.status === 0 && /javac \d+/.test(`${r.stdout ?? ''}${r.stderr ?? ''}`);
 })();
 
 const FX = join(import.meta.dirname, '..', 'fixtures');
@@ -114,8 +120,8 @@ describe('seed:patches', () => {
     const runCs = (name: string, patchedLine: string) =>
       runPatches({ draft: draft(name, patchedLine), checkout: join(FX, 'ww6'), sha: WW6, repo: 'ww6', out: out(name), harness: managed.harness });
 
-    it('registers drill-js AND drill-cs', () => {
-      expect(Object.keys(managed.harness.runners).sort()).toEqual(['drill-cs', 'drill-js']);
+    it('registers drill-js, drill-cs AND drill-java', () => {
+      expect(Object.keys(managed.harness.runners).sort()).toEqual(['drill-cs', 'drill-java', 'drill-js']);
       // drill-cs non-verdicts: no TRX results / edited frozen scaffolding never count as a named-test failure
       for (const name of ['(compile)', '(timeout)', '(runner)', '(scaffolding)']) {
         expect(failsAsVerdict({ pass: false, output: '', failures: [{ name, message: 'x' }], durationMs: 0 }).ok).toBe(false);
@@ -134,6 +140,65 @@ describe('seed:patches', () => {
       expect(r.ok).toBe(false);
       expect(r.lines.join('\n')).toMatch(/the defective version fails only without a test verdict \(\(compile\)\)/);
     }, 600_000);
+  });
+
+  it('drill-java registration: own scratch dir (env override), lazy (no javac/java until the first execution)', async () => {
+    expect(factoryJavaScratchDir({})).toBe(join(REPO_ROOT, '.cache', 'factory-java'));
+    expect(factoryJavaScratchDir({ [FACTORY_JAVA_SCRATCH_ENV]: '  D:/elsewhere/java  ' })).toBe('D:/elsewhere/java');
+    // never the import gate's scratch (seed:validate: BOOTQUEST_JAVA_SCRATCH / .cache/seed-java)
+    expect(factoryJavaScratchDir({ BOOTQUEST_JAVA_SCRATCH: 'D:/gate' })).toBe(join(REPO_ROOT, '.cache', 'factory-java'));
+    const scratch = join(tmp, 'lazy-java');
+    const m = factoryHarness({ csScratch: join(tmp, 'lazy-cs'), javaScratch: scratch });
+    expect(Object.keys(m.harness.runners).sort()).toEqual(['drill-cs', 'drill-java', 'drill-js']);
+    await m.shutdown();
+    expect(existsSync(scratch)).toBe(false); // nothing compiled, nothing spawned
+    // drill-java non-verdicts: an early report() (incomplete run) or a crash never counts as a named-test failure
+    for (const name of ['(compile)', '(timeout)', '(program)', '(format)', '(incomplete)']) {
+      expect(failsAsVerdict({ pass: false, output: '', failures: [{ name, message: 'x' }], durationMs: 0 }).ok).toBe(false);
+    }
+  });
+
+  // JDK 17 on PATH: the block compiles Java through the server's real Java runner; without a JDK it is
+  // SKIPPED (reported as skipped, never silently passed). Two compiles + runs in all (a few seconds).
+  describe.skipIf(!HAVE_JDK)('drill-java kata tests run through the factory harness (Java runner, own scratch dir)', () => {
+    const managed = factoryHarness({ csScratch: join(REPO_ROOT, '.cache', 'factory-csharp-test'), javaScratch: join(REPO_ROOT, '.cache', 'factory-java-test') });
+    afterAll(() => managed.shutdown(), 120_000);
+    const MODULE = 'kata/Summary.Testable.java';
+    const clean = 'import java.util.Arrays;\n\nfinal class Summary {\n    static long matched(int[] rules) { return Arrays.stream(rules).filter(r -> r > 0).count(); }\n}\n';
+    const patched = clean.replace('r -> r > 0', 'r -> r >= 0');
+    const diff = `diff --git a/${MODULE} b/${MODULE}\n--- a/${MODULE}\n+++ b/${MODULE}\n@@ -3,3 +3,3 @@\n final class Summary {\n-${clean.split('\n')[3]}\n+${patched.split('\n')[3]}\n }\n`;
+    const tests =
+      '// ─── tests ───\nclass KataTest {\n    public static void main(String[] args) {\n' +
+      '        bootcamp.Check.test("zero-weight rules are not matched", () -> bootcamp.Check.eq(Summary.matched(new int[] { 0, 2 }), 1L));\n' +
+      '        System.exit(bootcamp.Check.report());\n    }\n}\n// ─── end tests ───\n';
+    const file = join(tmp, 'java-good.json');
+    writeFileSync(
+      file,
+      JSON.stringify({
+        name: 'java-good',
+        katas: [
+          {
+            id: 'zero-weight-counts-java',
+            title: 'Count zero-weight rules as matched (Java)',
+            provenance: { path: 'astraupskill/06-SOLUTIONS-AND-REVIEW.md', lines: { start: 30, end: 30 } },
+            diff,
+            contextFiles: [{ path: MODULE, content: clean, origin: { kind: 'adapted', repoPath: 'src/services/allocationEngineService.ts' } }],
+            seededDefectKey: [{ scenario: 'a rule with weight 0', evidence: { path: MODULE, lineStart: 4, lineEnd: 4, in: 'patched' }, consequence: 'it is counted as matched' }],
+            test: { module: MODULE, check: { type: 'drill-java', files: { tests, tail: '' }, className: 'KataTest', timeoutMs: 30_000 } },
+          },
+        ],
+      }),
+    );
+
+    it('clean context PASSES and the defective version FAILS a named Check test -> stamped (2 real executions)', async () => {
+      const r = await runPatches({ draft: file, checkout: join(FX, 'ww6'), sha: WW6, repo: 'ww6', out: out('java-good'), harness: managed.harness });
+      expect(r.lines.join('\n')).toContain('runners: drill-js, drill-cs, drill-java');
+      expect(r.lines.join('\n')).toContain('RESULT OK');
+      expect(r.outcome!.executions).toBe(2);
+      const items = loadSeedPack(out('java-good'), { requireStamp: true }).items as SeedPatchKataItem[];
+      expect(items).toHaveLength(1);
+      expect(items[0]!.test!.check.type).toBe('drill-java');
+    }, 300_000);
   });
 
   it('helpers: diff targets, line slicing that keeps each line terminator', () => {

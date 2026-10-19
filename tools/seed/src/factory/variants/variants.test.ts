@@ -63,6 +63,27 @@ describe('seed:variants — the wrong-solution filter through the REAL drill-js 
     expect(r.ok).toBe(true);
   });
 
+  it('drill-java without a registered runner is a discard reason, never a pass (no execution = no emission)', async () => {
+    // defaultHarness() registers drill-js only: the drill-java item is never executed and never emitted
+    const r = await runVariants({ draft: join(D, 'variants-java-signalpost-U01.json'), out: out('java-no-runner') });
+    expect(r.ok).toBe(false);
+    expect(r.write!.manifest).toMatchObject({ quarantined: 1, counts: { total: 0 } });
+    expect(r.lines.join('\n')).toMatch(/reference not executed: no runner registered for drill-java \(no execution = no emission\)/);
+  });
+
+  it('drill-java plugs into the same harness registry (a registered runner is actually invoked)', async () => {
+    const calls: string[] = [];
+    const h = withRunner(defaultHarness(), 'drill-java', async (spec, sub) => {
+      expect(spec.type).toBe('drill-java');
+      calls.push(sub.code ?? '');
+      const ok = !(sub.code ?? '').includes('>=');
+      return { pass: ok, output: '', failures: ok ? [] : [{ name: 'boundary: a title exactly minLength long does not count', message: 'values differ' }], durationMs: 1 };
+    });
+    const r = await runVariants({ draft: join(D, 'variants-java-signalpost-U01.json'), harness: h, out: out('java-injected') });
+    expect(calls).toHaveLength(2);
+    expect(r.ok).toBe(true);
+  });
+
   it('a provenance that does not hold at the pinned sha is refused', async () => {
     const r = await runVariants({ draft: join(D, 'variants-signalpost-U01.json'), checkout: join(FX, 'ww6'), out: out('wrongco') });
     expect(r.refused).toMatch(/provenance does not hold at the pinned sha/);

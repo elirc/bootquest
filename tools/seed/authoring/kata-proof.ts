@@ -3,7 +3,8 @@
 // For every shipped kata: re-applies the diff to its context with the factory's own
 // applyInTemp (git apply --check + apply in a ceiling-guarded temp dir) and, where the
 // kata carries a test, executes it through the factory harness (the server's real
-// drill-js grade adapter, or drill-cs through the warm C# runner in .cache/factory-csharp)
+// drill-js grade adapter, drill-cs through the warm C# runner in .cache/factory-csharp, or
+// drill-java through the Java runner in .cache/factory-java)
 // on the clean context and on the defective version.
 // Prints one verbatim block per kata; exit 1 if anything does not hold.
 import { readdirSync, readFileSync, rmSync, existsSync, statSync } from 'node:fs';

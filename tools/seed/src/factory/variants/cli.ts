@@ -3,7 +3,8 @@
 // wrong-solution filter under the REAL runner (drill-js grade adapter): the test
 // must PASS the reference and FAIL the deliberately wrong solution, else the
 // item is discarded with its reason. No execution = no emission. drill-cs items run
-// through the warm C# runner (.cache/factory-csharp), shut down before exit.
+// through the warm C# runner (.cache/factory-csharp), drill-java items through the
+// Java runner (.cache/factory-java); both are shut down before exit.
 import { withFactoryHarness } from '../harness/harness.ts';
 import { finish, parseArgs } from '../report.ts';
 import { runVariants } from './run.ts';

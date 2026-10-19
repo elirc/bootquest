@@ -2,16 +2,24 @@
  * Execution harness for the wrong-solution filter (seed:variants) and the
  * defective-version check (seed:patches). It executes through the REAL
  * runners — the server's drill-js grade adapter (the code path POST /submit
- * uses) and the server's drill-cs adapter over the warm C# runner
- * (createDrillCsRunner, @bootquest/server/runner-csharp) — never a
- * reimplementation. Registry keyed by check type.
+ * uses), the server's drill-cs adapter over the warm C# runner
+ * (createDrillCsRunner, @bootquest/server/runner-csharp) and the server's
+ * drill-java adapter over the Java runner (createDrillJavaRunner,
+ * @bootquest/server/runner-java) — never a reimplementation. Registry keyed by
+ * check type.
  *
- * factoryHarness() is what the CLIs use: drill-js + drill-cs. The C# runner is
- * lazy (no dotnet process until the first drill-cs execution) and keeps its warm
- * projects in its OWN scratch dir (.cache/factory-csharp, overridable with
+ * factoryHarness() is what the CLIs use: drill-js + drill-cs + drill-java. The C#
+ * runner is lazy (no dotnet process until the first drill-cs execution) and keeps
+ * its warm projects in its OWN scratch dir (.cache/factory-csharp, overridable with
  * BOOTQUEST_FACTORY_CS_SCRATCH) — never the import gate's .cache/seed-csharp, so
- * a factory run can never collide with a seed:validate sweep. Callers MUST await
- * shutdown() (stops the compiler server + any live dotnet child).
+ * a factory run can never collide with a seed:validate sweep. The Java runner is
+ * lazy the same way (no javac/java process until the first drill-java execution;
+ * the javabootcamp harness compiles then) and works in its OWN scratch dir
+ * (.cache/factory-java, overridable with BOOTQUEST_FACTORY_JAVA_SCRATCH) — never
+ * seed:validate's .cache/seed-java (BOOTQUEST_JAVA_SCRATCH). Callers MUST await
+ * shutdown(): it stops the C# compiler server + any live dotnet child and waits
+ * for an in-flight Java grade (the Java runner keeps nothing resident; a grade
+ * past its timeout has its whole process tree killed, `taskkill /T /F`).
  *
  * Rule: no execution = no emission. A check type with no registered runner is
  * a discard reason, never a pass.
@@ -20,6 +28,7 @@ import type { CanonicalRunResult } from '@bootquest/shared/api';
 import type { SeedRunnableCheck } from '@bootquest/shared';
 import { join } from 'node:path';
 import { createDrillCsRunner } from '@bootquest/server/runner-csharp';
+import { createDrillJavaRunner } from '@bootquest/server/runner-java';
 import { drillJsRunner, type Runner } from '@bootquest/server/runners';
 import { REPO_ROOT } from '../report.ts';
 
@@ -53,16 +62,34 @@ export function factoryCsScratchDir(env: Record<string, string | undefined> = pr
   return raw && raw.trim() ? raw.trim() : join(REPO_ROOT, '.cache', 'factory-csharp');
 }
 
+export const FACTORY_JAVA_SCRATCH_ENV = 'BOOTQUEST_FACTORY_JAVA_SCRATCH';
+
+/** The factory's Java scratch dir: BOOTQUEST_FACTORY_JAVA_SCRATCH, else <repo>/.cache/factory-java. */
+export function factoryJavaScratchDir(env: Record<string, string | undefined> = process.env): string {
+  const raw = env[FACTORY_JAVA_SCRATCH_ENV];
+  return raw && raw.trim() ? raw.trim() : join(REPO_ROOT, '.cache', 'factory-java');
+}
+
 export interface ManagedHarness {
   harness: Harness;
-  /** stop the C# runner's compiler server + live children (a no-op when no C# ran) */
+  /** stop the C# runner's compiler server + live children and drain the Java runner (no-ops when nothing ran) */
   shutdown(): Promise<void>;
 }
 
-/** drill-js + drill-cs through the server's real adapters (the CLIs' harness). */
-export function factoryHarness(opts: { csScratch?: string } = {}): ManagedHarness {
+/** drill-js + drill-cs + drill-java through the server's real adapters (the CLIs' harness). */
+export function factoryHarness(opts: { csScratch?: string; javaScratch?: string } = {}): ManagedHarness {
   const cs = createDrillCsRunner({ appDataDir: opts.csScratch ?? factoryCsScratchDir() });
-  return { harness: withRunner(defaultHarness(), 'drill-cs', cs.runner), shutdown: () => cs.shutdown() };
+  const java = createDrillJavaRunner({ appDataDir: opts.javaScratch ?? factoryJavaScratchDir() });
+  const harness = withRunner(withRunner(defaultHarness(), 'drill-cs', cs.runner), 'drill-java', java.runner);
+  return {
+    harness,
+    // both always run (a failing C# shutdown must not leave a Java grade in flight, and vice versa)
+    shutdown: async () => {
+      const results = await Promise.allSettled([cs.shutdown(), java.shutdown()]);
+      const failed = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
+      if (failed) throw failed.reason;
+    },
+  };
 }
 
 /** Run with a factoryHarness and ALWAYS shut it down (also when the work throws). */
@@ -76,7 +103,8 @@ export async function withFactoryHarness<T>(work: (h: Harness) => Promise<T>): P
 }
 
 /** Failures that are not a test verdict (the code never got graded). */
-// drill-cs adds '(runner)' (the xunit run produced no TRX results) and '(scaffolding)' (frozen section edited)
+// drill-cs adds '(runner)' (the xunit run produced no TRX results) and '(scaffolding)' (frozen section edited);
+// drill-java adds '(incomplete)' (report() ran before every literal test did: an early exit, not a verdict)
 export const NOT_A_VERDICT = new Set([
   'code loads without errors',
   'code runs',
@@ -89,6 +117,7 @@ export const NOT_A_VERDICT = new Set([
   '(format)',
   '(runner)',
   '(scaffolding)',
+  '(incomplete)',
 ]);
 
 export type Execution =

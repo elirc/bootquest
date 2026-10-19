@@ -4,8 +4,8 @@
  *
  * The wrong-solution filter (MANDATORY, spec-verbatim): the test must PASS the
  * reference and FAIL the wrong solution, executed by the REAL runner
- * (harness/harness.ts → the server's drill-js grade adapter; drill-cs plugs in
- * through the same registry). Otherwise the item is discarded with its reason.
+ * (harness/harness.ts → the server's drill-js grade adapter; drill-cs and
+ * drill-java plug in through the same registry). Otherwise the item is discarded with its reason.
  * No execution = no emission: a check type without a registered runner, a
  * runner crash, or a timeout is a discard, never a pass.
  * Also rejected: a wrong solution that only "fails" by not loading / crashing /

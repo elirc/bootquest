@@ -2,8 +2,9 @@
 // Defective-patch katas from real findings. Validator: defect key non-empty; every
 // evidence file:line resolves (repo at the pinned sha, or the patched context);
 // the diff applies cleanly (git apply --check in a temp dir); a provided test passes
-// on the context and fails on the defective version (real runner: drill-js, or drill-cs
-// through the warm C# runner in .cache/factory-csharp — shut down before exit).
+// on the context and fails on the defective version (real runner: drill-js, drill-cs
+// through the warm C# runner in .cache/factory-csharp, or drill-java through the Java
+// runner in .cache/factory-java — shut down before exit).
 import { withFactoryHarness } from '../harness/harness.ts';
 import { finish, parseArgs } from '../report.ts';
 import { runPatches } from './run.ts';

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { CheckSpec, DrillCsCheck, DrillJsCheck, QuizCheck } from './check.ts';
+import { CheckSpec, DrillCsCheck, DrillJavaCheck, DrillJsCheck, QuizCheck } from './check.ts';
 import { PACK_FORMAT, PackQuarantine } from './pack.ts';
 
 /**
@@ -176,8 +176,13 @@ export const SeedExplainBackItem = z
   })
   .strict();
 
-/** variant / kata test: a runner check (drill-js today; drill-cs plugs in through the harness registry) */
-export const SeedRunnableCheck = z.union([DrillJsCheck, DrillCsCheck]);
+/**
+ * variant / kata test: a runner check. Each type executes through the factory harness registry
+ * (tools/seed/src/factory/harness): drill-js (the server's JS grade adapter), drill-cs (the warm
+ * C# runner) and drill-java (the Java runner, javabootcamp harness). A type with no registered
+ * runner is a discard reason, never a pass.
+ */
+export const SeedRunnableCheck = z.union([DrillJsCheck, DrillCsCheck, DrillJavaCheck]);
 
 export const SeedVariantItem = z
   .object({
@@ -451,7 +456,7 @@ export const SeedValidationStamp = z
     fingerprintKind: z.string().regex(/^seed:(quests|explainback|variants|patches|notes)$/),
     fingerprint: z.string().regex(/^[0-9a-f]{64}$/),
     toolchain: z
-      .object({ node: z.string().min(1), esbuild: z.string().min(1).optional(), dotnetSdk: z.string().min(1).optional(), dotnetRef: z.string().min(1).optional() })
+      .object({ node: z.string().min(1), esbuild: z.string().min(1).optional(), dotnetSdk: z.string().min(1).optional(), dotnetRef: z.string().min(1).optional(), jdk: z.string().min(1).optional() })
       .strict(),
     manifestSha256: z.string().regex(/^[0-9a-f]{64}$/),
     itemsSha256: z.string().regex(/^[0-9a-f]{64}$/),
