@@ -472,23 +472,8 @@ export const formatExplainBackLeak = (l: ExplainBackLeak): string =>
  * lists every leak, exempt or not. Do NOT add an entry to admit a new leak; rewrite the key point.
  */
 export const EB_LEAK_EXEMPT: Readonly<Record<string, readonly string[]>> = {
-  // seeded 2026-10-19 from `npm run seed:lint:leaks -- --exempt-ids` when the guard landed (24 leaks, 16 packs)
-  '1jstrain2.2v2--upskilling-02-adrs-0015-an-early-correct-answer-is-practice.md': ['q3.kp4.quote 1jstrain2.2v2/36ae6a7a7878b78f', 'q3.kp5 1jstrain2.2v2/be8b43845c8d58e7'],
-  'andie--astraupskill-02-CONCEPTS.md': ['q1.kp6 andie/120129deb35bb493'],
-  'bootlocalopusv2--upskilling-journal-005-where-the-trust-boundary-actually-is.md': ['q1.kp1 bootlocalopusv2/d4cfc4e3f820e4e2', 'q2.kp2 bootlocalopusv2/6cf9d6ea69cf94a5', 'q3.kp4 bootlocalopusv2/449c4364587931e5'],
-  'campusops--astraupskill-02-CONCEPTS.md': ['q3.kp2.quote campusops/4255c5c1978976ea'],
-  'customer-feedback-board--astraupskill-02-CONCEPTS.md': ['q1.kp2 customer-feedback-board/8f65790f326569a5'],
-  'e12--astraupskill-02-CONCEPTS.md': ['q1.kp5 e12/dc944e600ed5850a', 'q2.kp5 e12/45436807fb616efe'],
-  'finance-dashboard--astraupskill-02-CONCEPTS.md': ['q2.kp6 finance-dashboard/0c23144ebee35c8a'],
-  'grok-build-hr--astraupskill-02-CONCEPTS.md': ['q2.kp5 grok-build-hr/f1dec2aecc7ab7e0'],
-  'master--astraupskill-02-CONCEPTS.md': ['q3.kp3.quote master/ae8a456b78c5c2ae'],
-  'meterforge--astraupskill-02-CONCEPTS.md': ['q1.kp1 meterforge/ad572324d84bf598', 'q2.kp6.quote meterforge/ed93c926413bc839', 'q3.kp4.quote meterforge/44e18fab0d92fa4a'],
-  'organized-experiment-library-book-tracker--docs-onboarding-00-codebase-map.md': ['q2.kp4 organized-experiment-library-book-tracker/a3e7ee3cd1ff48f4'],
-  'react--astraupskill-02-CONCEPTS.md': ['q1.kp3.quote react/9cce04b3ecacde52'],
-  'recipeview--astraupskill-02-CONCEPTS.md': ['q3.kp5 recipeview/f8d778c9cba12c72'],
-  'relay-upskilling--upskilling-course-CODE-TOUR.md': ['q2.kp3 relay-upskilling/3b216153cc57aa5e', 'q2.kp4 relay-upskilling/abee03ccf0f4f8be', 'q3.kp4 relay-upskilling/c1b9480f25a189df'],
-  'storefront--docs-concepts-money-in-minor-units.md': ['q3.kp4 storefront/4d8c6969963b5b6a'],
-  'ww35--astraupskill-02-CONCEPTS.md': ['q2.kp1 ww35/f1e62d22b5618bcf'],
+  // seeded 2026-10-19 with 24 leaks in 16 packs when the guard landed; emptied the same day by the
+  // fix/content-leaks content pass (each key point rewritten in its draft and the pack re-seeded).
 };
 
 /** A pack's explain-back leak problems, honouring (and policing) EB_LEAK_EXEMPT. */
