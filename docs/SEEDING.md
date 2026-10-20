@@ -709,11 +709,17 @@ resolved); quiz variety `concept` and flashcard shape `hand-authored`;
   q2.kp5+kp6 vs e1dcc20c (the prompt asks the mechanism that neutralises each forgery), q3.kp1+kp2
   vs 066d3c34 (the prompt asks how each escape was closed); campusops q3.kp3+kp4 vs 0861d1f9 (the
   prompt asks why atomic reservations are not retry-safe); grok-build-hr q2.kp4+kp5 vs f1dec2ae
-  (the prompt asks what each protection layer contributes). Residual, after rewording through the
+  (the prompt asks what each protection layer contributes); customer-feedback-board q2.kp3 vs
+  e6ace4d8 (the prompt asks why optimistic concurrency is needed although writes are serialized).
+  Residual, after rewording through the
   mechanism rather than the key: 1jstrain2.2v2 q3.kp5/kp6 (the minimum-gap and never-serve
   alternatives, restored for the prompt's "which alternatives were rejected and why") vs
   36ae6a7a/be8b4384; customer-feedback-board q1.kp2 (BEGIN IMMEDIATE as the lost-update guard) vs
   8f65790f; relay-upskilling q3.kp4 (why rows are marked uncertain before the POST) vs c1b9480f.
   Rewritten to a different fact instead: bootlocalopusv2 q1.kp4, campusops q3.kp5 (was the 401/403
   pair of a6fef2cb; now the caller-supplied demo headers), 1jstrain2.2v2 q3.kp2 (XP drop as a cost,
-  no longer its replay-from-log cause, d76989).
+  no longer its replay-from-log cause, d76989), ww35 q3.kp6 (was "every closed slot gets the same
+  blocked reason", quiz 0f6af4ff; now off-grid booking is accepted). Owner: e12 q1's prompt still
+  asks what happens when a token is revoked mid-session, but the reviewer's q1.kp5 replacement
+  dropped the only revocation point (quiz dc944e60 tests it), so the rubric no longer covers that
+  half of the prompt; reword the prompt (or retire the quiz) when e12 is next touched.
