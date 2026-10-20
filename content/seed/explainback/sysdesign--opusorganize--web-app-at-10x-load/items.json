@@ -1,0 +1,118 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "opusorganize--apprenticeship-curriculum-14-load-backpressure-timeouts.md",
+ "items": [
+  {
+   "key": "seed:explainback:opusorganize/explain-back/6cd899063d49d1b5",
+   "provenance": {
+    "repo": "opusorganize",
+    "sha": "6a6e84522bd58c88ccec72421a15b8dbef797602",
+    "path": "apprenticeship/curriculum/14-load-backpressure-timeouts.md",
+    "lines": {
+     "start": 5,
+     "end": 76
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "DESIGN IT — [senior] keeping a web app alive at 10x load (opusorganize, apprenticeship/curriculum/14). A ticketing app normally sees a steady trickle of buyers; a ticket drop sends 200 buyers at the same tier within seconds. Checkout calls a payment provider whose p50 is about 1.5 s, every route shares one database pool of 5 connections, door check-in and provider webhooks must keep working during the drop, and order expiry and QR generation run as jobs on a Redis-backed queue. Write your design before you look: who gets admitted and what a refusal looks like, the timeout on each hop, where retries live, how a slow dependency is kept from taking everything down, how the queue is operated, how the hot inventory row is handled, and how you would prove it under load. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "keyPoints": [
+      {
+       "text": "[w3] Admission is decided before any scarce resource is taken, with limits per identity and per route rather than one global limit that would also throttle webhooks and door scanners; refused callers get a 429 with Retry-After or a waiting room.",
+       "quote": "never one global limit that also blocks webhooks and scanners"
+      },
+      {
+       "text": "[w3] Every outbound call has an explicit timeout shorter than its caller's, because library defaults are wrong for a request path (Stripe SDK 80 s, Anthropic SDK 10 min, an ioredis client set to retry forever).",
+       "quote": "set shorter than the caller's timeout"
+      },
+      {
+       "text": "[w3] Retries happen for idempotent work only, with exponential backoff plus jitter and a small cap, at exactly one layer, because stacked layers multiply (SDK x app x queue = 18 attempts).",
+       "quote": "3 × 2 × 3 = 18 attempts"
+      },
+      {
+       "text": "[w3] The payment provider gets its own pool or concurrency limit (a bulkhead) and is called outside the database transaction, so slow payments cannot hold the connections check-in needs.",
+       "quote": "so slow Stripe calls can't eat the connections that check-in needs"
+      },
+      {
+       "text": "[w2] The hot tier row is decremented by one atomic conditional UPDATE guarded on remaining stock, the order number comes from a sequence instead of counting the table, and Serializable is avoided where it only produces retries.",
+       "quote": "avoid Serializable where it only yields retries"
+      },
+      {
+       "text": "[w2] An in-process admission cap sits below the pool size, and pool or serialization errors that still escape map to 503 with Retry-After as the safety net.",
+       "quote": "an in-process admission cap below the pool size"
+      },
+      {
+       "text": "[w2] The job queue runs with worker concurrency sized to throughput, an alert on how long the oldest job has waited, and a Redis eviction policy that never evicts queue keys.",
+       "quote": "never run BullMQ on a Redis with"
+      },
+      {
+       "text": "[w1] The load test is shaped like the real event (a spike, not a ramp), passes or fails on an SLO, warms up first, and compares only with a baseline taken on the same machine.",
+       "quote": "a real-shaped scenario (spike, not ramp)"
+      }
+     ]
+    },
+    {
+     "prompt": "PRE-MORTEM — drop day: the payment provider slows down, a PR 'fixes' the 500s by retrying 20 times with a fixed delay, Redis fills up, and a long generation job outlives its queue timeout. What breaks first, how does it show, and what in your design already prevents it?",
+     "keyPoints": [
+      {
+       "text": "[w3] A provider call made inside a database transaction holds a pool connection for the provider's whole latency, so pool-timeout errors appear on unrelated routes, check-in included; an error that names a shared resource instead of a route is the tell.",
+       "quote": "Look for errors that name a shared resource rather than a route"
+      },
+      {
+       "text": "[w3] Retrying conflicts without jitter makes each retry a fresh conflicting transaction: attempts per success climb with concurrency, callers queue for connections until the pool wait times out, and p95 went from 3.6 s to 14.3 s while most buyers still failed.",
+       "quote": "Attempts per success grow with concurrency"
+      },
+      {
+       "text": "[w2] The isolation level decides which error surfaces: at Serializable the version check aborts with an error the retry loop does not catch, so the designed optimistic-lock path never runs.",
+       "quote": "Isolation level changes the failure mode, not just the speed."
+      },
+      {
+       "text": "[w2] With an LRU eviction policy, Redis under memory pressure can evict the queue's own repeatable-job schedule, so expiry jobs silently stop running.",
+       "quote": "Redis eviction killed the expiry-job schedule"
+      },
+      {
+       "text": "[w3] A queue timeout does not stop the handler: the job is retried while the first run is still going, so the handler needs a cancellation signal plumbed in (4 runs, 2 at once, for one job).",
+       "quote": "the queue timeout is not a kill switch"
+      },
+      {
+       "text": "[w2] Layered retries also show up as money: the provider invoice ran about 4x the internal ledger, because retries were stacked and the ledger overwrote usage per attempt instead of summing it, so the extra attempts never showed internally.",
+       "quote": "The cost ledger hides retries."
+      },
+      {
+       "text": "[w1] A duplicate-checkout guard that checks then acts outside the transaction is a UX guard only; two tabs can race past it.",
+       "quote": "so it's a UX guard, not a correctness guard"
+      }
+     ]
+    },
+    {
+     "prompt": "TRADE-OFF HANDBACK — defend your choices against the alternatives the chapter names: refusing fast vs letting callers wait in a queue, one retry layer vs retries everywhere, Serializable-plus-retry vs a single conditional update, and one shared pool vs per-dependency bulkheads. For each, say what you bought, what it cost, and which requirement put you on that side.",
+     "keyPoints": [
+      {
+       "text": "[w3] The M1 fix (one conditional update, an admission cap, 503 with Retry-After) measured zero 5xx at both 40 and 200 buyers, but its 503s only arrived after the 5 s queue wait and missed the 1.5 s p95 target: every second a caller waits before being refused is latency on the refusal, so the wait bound has to fit the refusal budget.",
+       "quote": "the 503s arrived after the 5 s queue wait"
+      },
+      {
+       "text": "[w3] Retries at one layer is a written policy: the layer that owns retries is chosen and the others are configured not to retry, trading some inner-layer resilience for a known worst-case attempt count.",
+       "quote": "write the M4 policy that keeps retries at one layer"
+      },
+      {
+       "text": "[w2] Serializable plus retries turns contention into aborts and more load; a single conditional statement lets the database referee the stock in one round trip.",
+       "quote": "The M1 sealed answer recommends a single conditional"
+      },
+      {
+       "text": "[w3] A shared pool is simpler but lets the slowest dependency set everyone's latency; bulkheads cost capacity planning per dependency and buy a deliberate answer to which routes degrade first.",
+       "quote": "you can say which routes degrade first"
+      },
+      {
+       "text": "[w2] Alerting on queue length alone misses a stuck queue that is short; the age of the oldest job catches both a stalled worker and a backlog.",
+       "quote": "not just queue length"
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}
