@@ -1,0 +1,39 @@
+{
+ "lines": { "start": 3, "end": 109 },
+ "questions": [
+  {
+   "prompt": "DESIGN IT — [senior] a durable workflow engine that survives crashes and deploys (opusorganize, apprenticeship/curriculum/18). Customers build onboarding workflows in a visual builder and add or reorder steps whenever they like; a webhook starts a run; steps send an email, post to a chat channel and book a calendar slot through three vendors, and some runs wait days for a human approval. Node rotations SIGKILL pods mid-step and the queue redelivers stalled jobs; one heavy workflow emits 50k progress events per run. Write your design before you look: what is the source of truth and what the queue carries, how a resumed run knows what already happened, how each vendor call stays safe to repeat, how two workers on one run are kept apart, where waits live, how failure ends, and what keeps the run history fast. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+   "keyPoints": [
+    { "text": "[w3] The run row in Postgres is the truth: the webhook writes it first and the queue message carries only a pointer to it, so a redelivered or lost message never holds state that exists nowhere else.", "quote": "Postgres is the source of truth" },
+    { "text": "[w3] Each run pins the definition version it started on; resuming an in-flight run on the newest definition skips one side effect and repeats another once a step is inserted at the front, because positional step ids shift.", "quote": "In-flight runs resume on the version they started with" },
+    { "text": "[w3] The completed-step lookup happens on every delivery before any step executes, whether or not the queue thinks this is a retry.", "quote": "Read the checkpoint before every side effect." },
+    { "text": "[w3] A checkpoint only shrinks the danger to the one step in flight; closing it needs a dedupe key derived from run and step that is sent to the vendor along with the call itself.", "quote": "A checkpoint narrows the window to one in-flight step" },
+    { "text": "[w2] A worker renews its lease by heartbeat and stamps its writes with a fencing token, so a paused worker that wakes up late cannot overwrite the new owner's progress.", "quote": "its writes carry a fencing token so a zombie worker's late writes are rejected" },
+    { "text": "[w2] Multi-day waits are rows in the database with a due time and a sweeper that wakes them, not an in-process timer or a queue delay that dies with the pod.", "quote": "Durable timers live in the DB" },
+    { "text": "[w2] Retries are bounded and end in a terminal parked state with an alert, otherwise a failing run loops and grows history without limit (+3M rows in relay incident 004).", "quote": "must not loop forever; add DLQ/parking and an alert" },
+    { "text": "[w1] Run history is a performance budget: heartbeat events and large outputs are offloaded, compacted and paged, or the run page degrades (3.4 s at 50k events).", "quote": "History growth is a performance problem." }
+   ]
+  },
+  {
+   "prompt": "PRE-MORTEM — a node rotation SIGKILLs pods in the middle of steps, a teammate 'optimises' the resume path, a vendor answers with Retry-After while the worker is about to be rotated, and two processes end up resuming the same run. What breaks first, how does it show, and what in your design already prevents it?",
+   "keyPoints": [
+    { "text": "[w3] Killed after the vendor accepted the call but before the step's checkpoint committed: redelivery re-executes that step, and a vendor that receives no key (relay's chat connector) posts a second time.", "cite": { "path": "apprenticeship/curriculum/18-durable-execution.md", "lineStart": 58, "lineEnd": 62 } },
+    { "text": "[w3] Gating the checkpoint lookup on the queue's attempt counter skips it after a stall, because a stalled redelivery does not bump that counter; whether a run is resuming has to be derived from Postgres state.", "quote": "that counter is 0 on every delivery" },
+    { "text": "[w2] A Retry-After wait held as an in-process sleep is lost when the worker dies; only stall redelivery restarts the run from its checkpoint.", "quote": "the wait is lost; only stall redelivery restarts the run from its checkpoint" },
+    { "text": "[w2] A checkpoint that stores only a reference to output kept in process memory resumes in another process as an empty object, and later steps render against it.", "quote": "A durable checkpoint points at non-durable storage." },
+    { "text": "[w2] Two resumers that number events by counting rows compute the same sequence number, and a swallowed unique-constraint error silently drops events, so the history used for diagnosis cannot be trusted.", "quote": "The event log can drop events silently." },
+    { "text": "[w1] With no retry attempts configured on the message, a run that throws stays failed even though the code comment promises a retried delivery will resume it.", "quote": "a thrown run stays failed" }
+   ]
+  },
+  {
+   "prompt": "TRADE-OFF HANDBACK — defend your engine against the alternatives the chapter names: checkpoint-and-skip vs event-history replay, leases with fencing vs relying on the queue's own lock, a vendor's declared dedupe window vs a key you send, and keeping large outputs in the run table vs offloading them. For each, say what you bought, what it cost, and which requirement put you on that side.",
+   "keyPoints": [
+    { "text": "[w3] Checkpoint-and-skip is the simpler resume model, but it only works if step identity is stable: ids based on position collide as soon as someone edits the definition.", "quote": "positional step ids collide when a definition changes" },
+    { "text": "[w3] Event-history replay re-runs the workflow code against what was recorded, and the price is determinism: no clock reads, randomness or I/O outside activities.", "quote": "re-run workflow code against the recorded history" },
+    { "text": "[w3] A queue lock alone does not stop a worker that lost it from writing; a lease plus a fencing token makes the database reject the stale writer.", "quote": "Leases + fencing, not just queue locks." },
+    { "text": "[w2] A dedupe window the vendor declares but nothing enforces is not idempotency: either enforce it yourself or label the step honestly as able to repeat.", "quote": "Separately, enforce or honestly label" },
+    { "text": "[w2] Offloading large outputs keeps the run table small and fast, but the object store then has to be at least as durable as the checkpoint that points into it.", "quote": "offload, compact, and page" }
+   ]
+  }
+ ]
+}

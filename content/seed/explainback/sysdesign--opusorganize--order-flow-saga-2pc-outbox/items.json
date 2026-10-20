@@ -1,0 +1,118 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "opusorganize--apprenticeship-curriculum-16-sagas-vs-2pc-vs-outbox.md",
+ "items": [
+  {
+   "key": "seed:explainback:opusorganize/explain-back/41b1badd72e56fe8",
+   "provenance": {
+    "repo": "opusorganize",
+    "sha": "6a6e84522bd58c88ccec72421a15b8dbef797602",
+    "path": "apprenticeship/curriculum/16-sagas-vs-2pc-vs-outbox.md",
+    "lines": {
+     "start": 5,
+     "end": 74
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "DESIGN IT — [senior] a multi-service order flow: saga vs 2PC vs outbox (opusorganize, apprenticeship/curriculum/16). Checkout must reserve stock, authorize and capture a card payment through an external provider that cannot join a distributed transaction, then ship. Customers may cancel after authorization, some payments need a 3-D Secure confirmation, and the provider sometimes cannot say what happened. An orchestrator worker polls every 1.5 s and several replicas run at once. Write your design before you look: which consistency approach and why, the states an order moves through, what is persisted before and after each provider call, how each step is undone, how a stuck order gets noticed, and how many workers may drive one order. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "keyPoints": [
+      {
+       "text": "[w3] 2PC is ruled out by the payment provider itself: it cannot be a participant, and a coordinator would add blocking and a single point of failure; an outbox alone tells others about one service's change but does not run a multi-step flow, so this is an orchestrated saga.",
+       "quote": "it's unsupported by most modern stores and APIs (Stripe can't take part)"
+      },
+      {
+       "text": "[w3] Each step's effect and the saga's new state commit in one local transaction (with the outgoing event in the same unit of work); splitting them across two commits leaves a step done but unrecorded after a crash.",
+       "quote": "If they're split across two commits, a crash leaves a step done but unrecorded."
+      },
+      {
+       "text": "[w3] Intent is recorded before the provider is called (state 'authorizing' plus an attempt row), so a crash after the call leaves evidence the next scan reconciles.",
+       "quote": "A crash after the provider call leaves a recorded attempt that the next scan reconciles."
+      },
+      {
+       "text": "[w2] Undoing a step is a new business action run in reverse order (refund, release stock), not a database rollback, and some steps such as a sent email cannot be undone at all.",
+       "quote": "Compensation is a business action, not a rollback."
+      },
+      {
+       "text": "[w2] Forward steps and compensations are both safe to run twice, because the orchestrator will retry both.",
+       "quote": "both will be retried"
+      },
+      {
+       "text": "[w3] Every state that is not terminal has a timeout and a recovery scan behind it, plus an alert when an order sits in one longer than X.",
+       "quote": "Every non-terminal state needs a timeout and a recovery scan"
+      },
+      {
+       "text": "[w2] Only one worker drives a given order: it takes a per-order advisory-lock lease and other workers skip that order.",
+       "quote": "If another worker holds it, this one skips the order."
+      },
+      {
+       "text": "[w2] When the provider's answer is unknown, the order is marked unknown and its next attempt is pushed out with a growing delay stored on the row, a retry timer that survives restarts.",
+       "quote": "That's a durable retry timer."
+      }
+     ]
+    },
+    {
+     "prompt": "PRE-MORTEM — a customer cancels after authorization while a deploy restarts the worker, the provider integration starts returning a status string your code has never mapped, and the health panel shows 0 stuck payments throughout. What breaks, how does it show, and what in your design already prevents it?",
+     "keyPoints": [
+      {
+       "text": "[w3] Capture bookkeeping commits in one transaction and the cancellation compensation in a second; a crash between them leaves a captured order whose state is off the scan list, so the customer who cancelled is charged and shipped.",
+       "cite": {
+        "path": "apprenticeship/curriculum/16-sagas-vs-2pc-vs-outbox.md",
+        "lineStart": 49,
+        "lineEnd": 53
+       }
+      },
+      {
+       "text": "[w3] The repair is to commit the capture bookkeeping together with the compensation, or with a durable 'compensation pending' marker, and to add that marker to the states the scan selects.",
+       "quote": "give that marker a place in the scan list"
+      },
+      {
+       "text": "[w3] A stuck count based on exhausted retries reads 0 for an order that left the scan without failing; the honest metric is the age of the oldest order across every non-terminal state.",
+       "quote": "The metric measures the wrong thing."
+      },
+      {
+       "text": "[w2] An unmapped or renamed provider status silently moves orders out of the scan forever (attempts 0, no events): a test must map every provider status into the scan list or an explicit terminal state, with an alert on unknown states.",
+       "quote": "Contract values between steps need a test that every provider status maps into the scan list or into an explicit terminal state"
+      },
+      {
+       "text": "[w2] A compensation that itself fails is bounded: it goes to a human queue rather than retrying forever.",
+       "quote": "a compensation that itself fails goes to a human queue"
+      },
+      {
+       "text": "[w1] Releasing the lease with an unlock-all call frees every advisory lock on the session, which is harmless only while each connection holds a single lease.",
+       "quote": "It's harmless only while each connection holds exactly one lease."
+      }
+     ]
+    },
+    {
+     "prompt": "TRADE-OFF HANDBACK — defend your orchestrated saga against the alternatives the chapter's table names: 2PC, a bare outbox, and a choreographed saga, plus your choice of a polling recovery scan. For each, say what you bought, what it cost, and which requirement put you on that side.",
+     "keyPoints": [
+      {
+       "text": "[w3] 2PC would be the right tool only when every participant supports it and locks are held for a tiny time; its price is blocking and a coordinator whose failure stalls everyone.",
+       "quote": "the participants support it and hold times are tiny"
+      },
+      {
+       "text": "[w3] A choreographed saga suits a few loosely coupled steps, but the flow exists only as services reacting to events, so nobody can see it, debug it or change it safely; orchestration pays for a state machine to make every intermediate state a visible row.",
+       "quote": "the flow is invisible, and hard to debug and change"
+      },
+      {
+       "text": "[w2] The outbox still has a job inside the saga: state, history and the outgoing message commit together, but on its own it is a building block, not the workflow.",
+       "quote": "it's a building block, not a multi-step workflow"
+      },
+      {
+       "text": "[w3] A polling scan buys self-healing recovery after any crash, but its state list becomes the saga's contract: a state missing from it is silently treated as terminal.",
+       "quote": "Any state not on it is treated as terminal."
+      },
+      {
+       "text": "[w2] Running every saga transaction at Serializable buys the strictest isolation for the bookkeeping; the price is serialization, deadlock and unique-violation aborts, which the runner absorbs by rolling back and retrying up to 16 times with jitter.",
+       "quote": "rolls back and retries up to 16 times with a small jittered delay"
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

@@ -1,0 +1,126 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "opusorganize--apprenticeship-curriculum-07-zero-downtime-migrations.md",
+ "items": [
+  {
+   "key": "seed:explainback:opusorganize/explain-back/3ec5ce59c1f3af2f",
+   "provenance": {
+    "repo": "opusorganize",
+    "sha": "6a6e84522bd58c88ccec72421a15b8dbef797602",
+    "path": "apprenticeship/curriculum/07-zero-downtime-migrations.md",
+    "lines": {
+     "start": 3,
+     "end": 108
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "DESIGN IT — [senior] a zero-downtime schema change on a live product (opusorganize, apprenticeship/curriculum/07). The product wants to rename the issue field storyPoints to estimate on a 2.1M-row Issue table that takes about 400 writes/s at peak, and the same release adds an index on that table. Migrations run in a release phase on a throwaway machine before any new instance serves, at least 2 machines stay up through a rolling deploy, and browsers can keep running the previous SPA bundle after the API has moved on. Write your release plan before you look: what compatibility each release must hold, the lock every DDL statement takes, how the data moves across, what stale clients do mid-change, how you prove the old column is dead, and what a rollback looks like at each step. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "keyPoints": [
+      {
+       "text": "[w3] First ask whether the database name has to change at all: mapping the renamed model field onto the existing column makes the generated migration empty, so there is no SQL to make safe.",
+       "quote": "keep the column and map the field with Prisma"
+      },
+      {
+       "text": "[w3] The plan is a compatibility matrix (old binary against the new schema, new binary against the old schema) and every cell is green for every release, because a release-phase runner plus two live machines guarantees old code serves against the changed schema.",
+       "quote": "produce the compatibility matrix (old binary × new schema, new binary × old schema)"
+      },
+      {
+       "text": "[w2] Review the SQL the ORM emits, never the model diff: a rename comes out as a drop plus an add, which deletes the data during the release phase.",
+       "quote": "Always read the generated SQL"
+      },
+      {
+       "text": "[w3] Each DDL statement in the plan states its lock level against a budget: a plain index build stops INSERT/UPDATE/DELETE on the table for the whole build, and the brief tolerates about 1 s of blocking at 400 writes/s.",
+       "quote": "every DDL statement lists its lock level"
+      },
+      {
+       "text": "[w2] Copying 2.1M rows is a job that can die halfway: it must pick up where it stopped and be harmless when it re-processes rows it already copied, and it is paced so live writes keep their headroom.",
+       "quote": "throttled, resumable, idempotent"
+      },
+      {
+       "text": "[w2] Making the new column NOT NULL on a table this size is its own step that first needs a default or a validated CHECK constraint.",
+       "quote": "on a big table needs a default or a validated"
+      },
+      {
+       "text": "[w3] Stale SPA bundles keep PATCHing the old field name; a lenient request schema strips the unknown key and answers 200 while saving nothing, so the plan decides how the API treats the old key until those clients are gone.",
+       "quote": "returns 200 and saves nothing"
+      },
+      {
+       "text": "[w2] The contract step ships only with evidence: a query that proves nothing reads the old column any more.",
+       "quote": "the contract step has a query that proves nothing reads"
+      }
+     ]
+    },
+    {
+     "prompt": "PRE-MORTEM — the change ships and goes wrong: the release-phase migration runs while old machines still serve, the canary looks clean, a rollback is triggered, and CI was green the whole time. Walk the failure windows: what breaks, who notices first, and what in your plan already prevents it?",
+     "keyPoints": [
+      {
+       "text": "[w3] A destructive statement in the release phase loses data before any new code runs, and the old machines still selecting the dropped column return 5xx on the issue-list and sprint-report routes until the last old machine is replaced.",
+       "cite": {
+        "path": "apprenticeship/curriculum/07-zero-downtime-migrations.md",
+        "lineStart": 59,
+        "lineEnd": 60
+       }
+      },
+      {
+       "text": "[w3] A clean canary proves only the new-binary cell; a rollback runs the previous binary against the migrated schema, which is how atlas saw zero canary errors and then a 40% error rate after rolling back.",
+       "quote": "the rollback raised errors to 40%"
+      },
+      {
+       "text": "[w2] A runner that fails partway must be safe to run again, and it has to finish before any new pod starts serving.",
+       "quote": "must be safe to re-run"
+      },
+      {
+       "text": "[w3] Green CI is not evidence here: a test database built from scratch has no rows to lose and no old binary running against it, so the mismatch can never show up in tests.",
+       "quote": "A fresh database has no rows to lose and no old code running against it."
+      },
+      {
+       "text": "[w2] If production builds its schema with EnsureCreated, a new column never reaches an existing database at all; adopting real migrations needs a baseline that is recorded as applied, not run.",
+       "quote": "That call is a no-op when the database already exists."
+      },
+      {
+       "text": "[w2] Design documents are not evidence of practice: the repo's ADR describes expand/contract while its migration history did an in-place type change, so audit what the history actually ran.",
+       "quote": "the document and the history disagree"
+      },
+      {
+       "text": "[w1] Before relying on an online index build, check on a scratch database how the ORM's runner executes a multi-statement migration file.",
+       "quote": "verify on a scratch DB"
+      }
+     ]
+    },
+    {
+     "prompt": "TRADE-OFF HANDBACK — defend your plan against the alternatives the chapter itself names: mapping the field vs a real database rename, a one-shot in-place ALTER vs a multi-release sequence, strict vs lenient request validation during the change, and release-phase migrations vs schema-from-model at startup. For each, say what you bought, what it cost, and which requirement put you on that side.",
+     "keyPoints": [
+      {
+       "text": "[w3] A model-level mapping needs no SQL at all; a true database rename is only worth it if the column name itself must change, and then it becomes a multi-release project.",
+       "quote": "if the database name truly must change"
+      },
+      {
+       "text": "[w1] The cost of mapping: the naming inconsistency stays in the schema, and a later 'mapping-only' tidy-up PR is a rename in disguise (atlas INC-004).",
+       "quote": "That inconsistency is exactly what INC-004"
+      },
+      {
+       "text": "[w3] A one-shot in-place type change was harmless on an empty early database, but on a live Postgres table a type change such as double precision to text rewrites the table under an ACCESS EXCLUSIVE lock.",
+       "quote": "It was harmless on an empty early-sprint database."
+      },
+      {
+       "text": "[w2] Strict validation turns the silent loss into a loud 400, but it also rejects every client still on the previous bundle during the N-1 window; name which cost you accept.",
+       "quote": "the one-word Zod change that would have turned the silent loss into a loud 400"
+      },
+      {
+       "text": "[w3] Running migrations in a release phase buys one run before new instances serve and an aborted deploy on failure, but it also guarantees the old code meets the new schema, so every schema change must stay backward compatible.",
+       "quote": "made it worse, because it guaranteed old code would meet the new schema"
+      },
+      {
+       "text": "[w2] Schema-from-model at startup (EnsureCreated) looks simpler but never alters an existing database, and a test suite built on it with no migration step in CI (atlas) can never catch a migration that breaks the running binary.",
+       "quote": "can never see a migration-vs-old-binary mismatch"
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}
