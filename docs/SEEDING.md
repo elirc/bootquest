@@ -736,3 +736,68 @@ resolved); quiz variety `concept` and flashcard shape `hand-authored`;
   asks what happens when a token is revoked mid-session, but the reviewer's q1.kp5 replacement
   dropped the only revocation point (quiz dc944e60 tests it), so the rubric no longer covers that
   half of the prompt; reword the prompt (or retire the quiz) when e12 is next touched.
+- **OPEN (sysdesign wave, accepted explain-back/quiz overlap):** same doctrine as above — each
+  DESIGN IT prompt asks for exactly the fact a same-repo quiz or flashcard keys, so the rubric
+  keeps it; the token guard passes all of these and none goes in `EB_LEAK_EXEMPT`:
+  tracer q1.kp5 vs f04-session-cookie, q1.kp4+kp8 vs c4bacf21 (the prompt asks what the server
+  stores and what a request costs); dotnet-auth q2.kp2 vs 264e422a/f03 (family revocation — the
+  prompt names the exfiltrated refresh token), q2.kp3 vs f04 edge 3, q2.kp4 vs f04 edge 2,
+  q1.kp8 vs de17c21d (audience validation as a requirement), q1.kp7+q3.kp3 vs f02, q3.kp4 vs
+  5a7c727e; payments q1.kp2 vs f03/ca8d0ee0, q1.kp3 vs 74fd1ab4, q1.kp7 vs 4f28e0fc, q3.kp3 vs
+  bd1f7bad; campusops(webhooks set) q3.kp5 vs ee986536, q1.kp6+q3.kp2/kp3 vs 0861d1f9 (its own
+  line, separate from the old campusops set's), q1.kp3+q3.kp6 vs f03-browser-key-lifecycle;
+  grok-build-multitenant q1.kp3 vs f03-composite-fk, q1.kp4/kp5 vs f02-stale-update;
+  opusorganize saga q1.kp2+q3.kp3 vs 456fe5b5/f01, saga q1.kp7 vs 59462418, web-app q1.kp5 vs
+  f04, zero-downtime q1.kp5 vs 15853829/fa5e3705/f03 and q1.kp6 vs 73e9d258 (both worded at
+  design level; measured ≤0.30); temporal-lite q2.kp1 vs d2a8b1f9/f01, q1.kp1+q3.kp1 vs
+  53d1bb5e/f01, q1.kp3 vs 95d78a74, q1.kp4 vs f02, q1.kp5 vs c5061a36; relay q3.kp7 vs f01
+  (fail-fast), q1.kp3+q3.kp3 vs f01 (retry classes), q1.kp4+q3.kp3 vs f03, q2.kp5 vs
+  f02-breaker-states; bazaar q3.kp2(+kp3 by elimination) and q1.kp7 vs 007e83f2; pulse-net
+  q2.kp1 vs e24830d3. Two unprompted leaks found in review were REMOVED, not accepted
+  (dotnet-auth key-rotation grace vs fb361478; opusorganize web-app duplicate-checkout vs
+  a4286bb0).
+- **OPEN (sysdesign wave, owner decisions):** the `system-design` competency has no promotion
+  path: DESIGN IT units carry no artifact leg (a) and no prerequisites for leg (b), and nothing
+  else tags a unit `system-design` — migration 006's alias still maps 'system design judgment'
+  to feature-delivery. Options: remap that alias, attach a project artifact to the track, or
+  treat the competency as practice-only display. Also: `shared/src/sync.ts:268` still says
+  "seven ladder competencies" (comment only; the file is inside the seed fingerprint, so the
+  one-word fix is deferred to the next wave that already touches shared); retired javabootcamp
+  DESIGN IT units moved to sysdesign by 014 keep `language-fluency` in unit_competency
+  (hidden, loader re-derives only planned units).
+- **OPEN: upstream bugs and doc errors found by the sysdesign wave** (fix in the source repos;
+  mirrors never edited; no shipped key point rests on any of them):
+  - relay: docs promise zero-duplicate checkpoint-resume replay, but live replay creates a fresh
+    run id (`apps/api/src/routes/relays.ts:170-173`) and new `${runId}:${stepId}` vendor keys
+    (`apps/engine/src/idempotency.ts:20-31`), so bulk replay can double-send; `breaker.ts:26-34`
+    half-open admits every caller (ADR-0016 and quest flashcard f02 say one probe); CircuitBreaker
+    and isStuck are wired only in tests (no retriable-failed status, no DLQ code); `dedupeWindow`
+    is configured but never read, and no Idempotency-Key header is sent; `worker.ts:257,280`
+    comments overstate BullMQ behavior.
+  - bazaar: `ReservationService.release` flips the hold and returns stock in two separate port
+    calls (`apps/api/src/inventory.ts:58-62`); `hold` skips the positive-quantity guard that
+    `AtomicInventoryService.reserve` has (:41-42 vs :82-85); sprint-07 doc's SQL predicate
+    (`available>=1`) disagrees with the ADR's `on_hand - reserved >= $qty`.
+  - pulse-net: ADR line 80 suggests dedupe by event id but the capture contract has no event id;
+    the capture rate limit partitions on the `X-Api-Key` header only, so body-key callers share
+    an IP partition.
+  - temporal-lite: `completeTaskStep`/`failTaskStep` update by id with no leaseToken check
+    (`task-repository.ts:79-88`) — no fencing (latent while F1 means leases are never reclaimed).
+  - tracer: ADR-0003 "deleting the row ends the session immediately" holds for HTTP only (an
+    open WebSocket authenticates once at upgrade, `apps/api/src/ws.ts:138-147`); sprint-02 doc
+    calls the OAuth state "signed, single-use" but the code uses an unsigned random cookie value;
+    expired sessions are never purged.
+  - dotnet-auth: the refresh grant checks the client secret only when one is sent
+    (`OAuthService.cs:183-186`), so a confidential client's refresh token redeems without it.
+  - 3buildanalytics: `05-pattern-catalog.md:106-115` and the critique still describe the old
+    in-memory IP limiter; at the pin `rateLimit.middleware.ts` is Redis-backed (US-18 landed).
+  - grok-build-multitenant `dfableandopus/05-SYSTEM-DESIGN-FOLLOWUPS.md`: practice-task numbers
+    are wrong (outbox is Exercise 8 not 5; create idempotency is 6 not 3), the sibling repo path
+    uses a stale name, and line 59's keyset-pagination claim does not match the all-ascending
+    index (the `ordered` array mixes DESC/ASC).
+  - groktuts `system-design-deep-dives.md`: calls Postgres shared buffers a "query cache"
+    (:189); points at a `version`/`updatedAt` column that section 2's SQL does not define.
+  - opusorganize `07-zero-downtime-migrations.md:33` says INC-003 had 4 minutes of 5xx; its own
+    trace (:59-60) spans ~5.5 minutes.
+  - jsprojectlearn/groktuts quest packs are untouched by their new DESIGN IT sets (no shared
+    keyed facts found).
