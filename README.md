@@ -199,18 +199,27 @@ Content is not in the DB, so the next `npm run serve` loads all of it again. Exi
 - **G1 (patch review).** The kata bank gate is ≥80% of seeded defects caught across at
   least 10 defects, counting **solo, unassisted** katas only. Assisted katas are
   reported separately.
-- **Verdicts come from a nonce-checked channel, never stdout or the exit code.** drill-java,
-  drill-cs (console-check) and drill-js all work the same way. The grader writes a fresh
-  random nonce. The launcher (`BqMain`, `BqLaunch.cs`, the drill-js `runner.mjs`) reads it and
-  deletes it before any learner code is loaded. Only the harness's own report carries it:
-  a result file for Java and C#, file descriptor 3 for JS. A result with the wrong nonce
-  is refused, as is one that misses a test the canonical tests name. No result at all (a
-  crash or an early exit) is never a pass. C# scratch projects are re-verified before every
-  grade against hashes held in memory: the scaffolding is rewritten, planted files are
-  deleted, and a changed harness is rebuilt. So one attempt cannot tamper with a later one.
-  drill-cs xunit verdicts come from the TRX that `dotnet vstest` writes, and every
-  `[Fact]`/`[Theory]` must appear in it. Learner code that uses reflection or the debugger
-  inside the graded process is out of scope, as it is for Java.
+- **Most verdicts come from a nonce-checked channel, never stdout or the exit code.**
+  drill-java, drill-cs (console-check), drill-js and self-run (jstrain) work the same way.
+  The grader writes a fresh random nonce; BootQuest's own launcher code reads it and deletes
+  it before any learner code is loaded: `BqMain.java`, `BqLaunch.cs`, the runner script
+  grade-core.mjs generates into each drill-js attempt dir, and the preloaded `bq-check.mjs`
+  for self-run. Only that launcher writes the result: a result file for Java and C#, file
+  descriptor 3 for drill-js and self-run. A result with the wrong nonce is refused, as is one
+  that misses a test the canonical tests name. No result at all (a crash or an early exit) is
+  never a pass. For drill-cs console-check the launcher also records a test only when the
+  harness's `Test` was called by the canonical tests block itself (a per-grade wrapper, checked
+  on the stack), so learner code calling the public `Test`/`Report` API cannot forge a pass.
+  C# scratch projects are re-verified before every grade against hashes held in memory: the
+  scaffolding is rewritten, planted files are deleted, and a changed harness is rebuilt. So
+  one attempt cannot tamper with a later one. Two runners do NOT use a nonce: drill-cs xunit
+  verdicts come from the TRX that `dotnet vstest` writes (every `[Fact]`/`[Theory]` must
+  appear in it), and node-test-file parses the TAP that `node --test` prints. Out of scope
+  everywhere: learner code that uses reflection, the debugger or memory access inside the
+  graded process (the nonce lives in that process's memory once read), and learner code that
+  subverts the canonical tests in the language itself (shadowing an assertion helper,
+  objects whose equality always says yes): like hard-coding the expected answers, that passes
+  tests without doing the work, and no runner here detects it.
 - **What is NOT protected.** This is a single-user app over your own unsigned SQLite
   file. A fresh raw-SQL `INSERT` of a forged attempt, run and evidence into your own DB
   still succeeds. What is rejected is rewriting or laundering existing rows. A raw-SQL

@@ -67,7 +67,10 @@ it first.
 
 ## Days 4-5: habits
 
-- [ ] Daily slate: one drill set per track, one campaign step and an empty review queue.
+- [ ] Daily slate: at most one drill set per drill track (5 drills, or only what the track has
+  left: a track with no unpassed drills drops its slot), one campaign step when one can be
+  taken that day, and an empty review queue. A slate that is already complete gains no new
+  slot until tomorrow, even if content is seeded mid-day.
   - Good: the streak increments, and any day with 20+ XP counts as partial.
 - [ ] Two or three more katas, working towards G1 (≥80% across ≥10 seeded defects).
 - [ ] **One G2 delegation brief** (agentic track). Write the brief before opening the

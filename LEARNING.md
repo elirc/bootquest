@@ -838,3 +838,35 @@ what ships until the owner picks an option.
   (02-CONCEPTS.md:59 contradicts its snapshot); stem reworded via re-seed + notes re-run.
   Explain-back README units now show their parent dir in the title (5 design packs all read
   "README.md" before).
+
+## 2026-10-19 — server review fixes (fix/server-review): design calls kept, now written down
+
+- **Revealing every remaining drill drops the track's slot (deliberate).** drillUnitsRemaining
+  excludes units revealed before the day starts, so a learner who reveals the last unpassed
+  drills of a track takes that track off tomorrow's slate. That is their choice, not a dead slot:
+  a slot nothing can complete is the trap the shrink/drop rule exists to avoid.
+- **The C# console-check nonce lives in process memory (accepted).** The nonce file is gone
+  before learner code loads, but the launcher holds the nonce in a field; code that reflects
+  into the launcher (or a detached / lingering process of the same attempt) can read it and
+  write a result. Same-process and detached attacks are out of scope, as for Java. What the
+  runner does defend, without any secret: Test/Report are public and learner code shares
+  Exercise.dll, so the launcher records a test only when Check.Test was called directly by a
+  per-grade random-named wrapper around the canonical tests block, called directly by the
+  entry point (stack rule, BqLaunch.cs). Also out of scope, stated in index.ts and README:
+  in-language subversion of the canonical tests (shadowing `Eq` with a local function or a
+  `partial class Program` member, objects whose Equals always says yes). Like hard-coding the
+  expected answers, it passes the tests without the work; closing it needs signature pinning
+  or call qualification, an owner decision.
+- **Midnight multi-clock-read nit (accepted).** A request that straddles local midnight reads
+  the clock more than once (closeElapsedDays, composeSlate, the evidence row), so its writes can
+  land on two different days. Harmless: every day is re-derived from the append-only ledger when
+  it closes, and nothing is lost or double-counted.
+- **XP re-pay across retired + replaced study units (owner-open, F10).** xp_event_pays_once is
+  per (unit, kind). A re-seed that retires a unit and creates a new one (standalone study units,
+  re-keyed ladder units) lets the new unit pay its XP once more. Left open for the owner: the
+  amounts are small and a fix needs a per-item (not per-unit) pays-once key.
+- Re-seeded explain-back / kata items: the fresh answer to a new version is now recorded as
+  ASSISTED (assistance_source 'prior-key', migration 013), because key reads are not recorded
+  and the earlier answer unlocked the earlier key. It pays XP like any assisted answer, never
+  counts as promotion leg (b) or as a solo G1 kata, and G1 counts each kata by its earliest
+  ANSWER.
