@@ -71,9 +71,12 @@ async function main() {
     mkdirSync(co, { recursive: true });
     cpSync(join(FX, 'ww6'), co, { recursive: true });
     const seedDir = join(tmp, 'seed');
-    const eb = runExplainBack({ unit: 'docs/learning/testing-rationale.md', checkout: co, sha: WW6, draft: join(FX, 'drafts', 'explainback-ww6-testing-rationale.json'), out: join(seedDir, 'explainback', 'ww6-tr') });
+    // fixture checkout: no mirror exists, so the pin is caller-asserted; the trust gates (pack.ts)
+    // allow that only for fixtures, and the temp seed root has no quests pack for the leak guard
+    process.env.BOOTQUEST_SEED_ALLOW_UNVERIFIED_PIN = '1';
+    const eb = runExplainBack({ unit: 'docs/learning/testing-rationale.md', checkout: co, sha: WW6, draft: join(FX, 'drafts', 'explainback-ww6-testing-rationale.json'), out: join(seedDir, 'explainback', 'ww6-tr'), allowNoQuests: true });
     // W7: explain-low gets its OWN set (answer-before-key is per question set): the generator's deterministic scaffold
-    const eb2 = runExplainBack({ unit: 'docs/learning/testing-rationale.md', checkout: co, sha: WW6, out: join(seedDir, 'explainback', 'ww6-tr-scaffold') });
+    const eb2 = runExplainBack({ unit: 'docs/learning/testing-rationale.md', checkout: co, sha: WW6, out: join(seedDir, 'explainback', 'ww6-tr-scaffold'), allowNoQuests: true });
     const pk = await runPatches({ draft: join(FX, 'drafts', 'patches-ww6.json'), checkout: co, sha: WW6, out: join(seedDir, 'patches', 'ww6-katas') });
     step('seed:explainback (draft + scaffold) + seed:patches validators pass and stamp their packs', eb.ok && eb2.ok && pk.ok);
     const seedItems = loadSeedItemStore([join(seedDir, 'explainback', 'ww6-tr'), join(seedDir, 'explainback', 'ww6-tr-scaffold'), join(seedDir, 'patches', 'ww6-katas')]);
