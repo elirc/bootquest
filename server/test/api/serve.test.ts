@@ -167,6 +167,39 @@ describe('serve.ts: a sync that commits, then fails the ladder re-link (afterSyn
       await restored.close();
     }
   }, 120_000);
+
+  it('F7d: afterSync re-runs ALL the seed-derived startup loads (ladder, study-quest gates, seeded review cards), not only the ladder', async () => {
+    const dbPath = join(dir, 'bq.db');
+    const env = (port: number) => ({ BOOTQUEST_DB: dbPath, BOOTQUEST_PORT: String(port), BOOTQUEST_AUTHORED_UNITS: AUTHORED });
+    const ORPHAN = 'quiz-miss:seed:quiz:no-such-item-f7d';
+    // a "sync" whose commit leaves a seeded card with no source item: only the review-card step retires it
+    const sync = {
+      paths: {},
+      github: {},
+      cache: {},
+      run: async (db: Db): Promise<SyncReport> => {
+        const t = Date.now();
+        db.run(
+          `INSERT INTO review_item (card_key, kind, unit_id, content_ref_id, competency_id, fsrs_state, due_at, created_at, updated_at) VALUES (?, 'quiz-miss', NULL, NULL, NULL, '{}', ?, ?, ?)`,
+          ORPHAN,
+          t,
+          t,
+          t,
+        );
+        return { syncId: 42, offline: false, ok: true, repos: [] };
+      },
+    } as unknown as SyncService;
+    const port = await freePort();
+    const running = await startServer({ env: env(port), runners: {}, sync });
+    try {
+      const r = await fetch(`http://127.0.0.1:${port}/api/sync`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+      expect(r.status, await r.clone().text()).toBe(200);
+      // was: afterSync ran loadLadderIntoDb only, so the orphan stayed live (due, textless) until the next restart
+      expect(running.db.get<{ retired_at: number | null }>('SELECT retired_at FROM review_item WHERE card_key = ?', ORPHAN)!.retired_at).not.toBeNull();
+    } finally {
+      await running.close();
+    }
+  }, 120_000);
 });
 
 describe('real drill-js runner through the API', () => {

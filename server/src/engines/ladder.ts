@@ -94,19 +94,22 @@ export interface PendingArtifact {
  * prerequisites. Standalone sets (no project prerequisite: G2 rubrics, the javabootcamp design
  * sets, quest-linked sets with no artifact) are never gated. A prerequisite that can never be
  * passed solo is not waited on (that would be a new dead end): a retired unit, a unit with no
- * check, or a unit whose solution was revealed (every later attempt on it is guided).
+ * LIVE check (a re-seed retired its only check), or a unit whose solution was revealed on it
+ * OR anywhere up its variation_of chain (server review F6: deriveMode makes every later attempt
+ * on such a unit guided, exactly revealedInVariationChain).
  */
 export function artifactsAwaitingSoloPass(db: Db, explainBackUnitId: number): PendingArtifact[] {
   if (unitKind(db, explainBackUnitId) !== 'explain-back') return [];
-  return db.all<PendingArtifact>(
-    `SELECT u.id AS unitId, u.title AS title FROM unit_prerequisite p JOIN unit u ON u.id = p.prereq_unit_id
-      WHERE p.unit_id = ? AND u.kind IN (${PROJECT_KINDS_SQL}) AND u.retired_at IS NULL
-        AND EXISTS (SELECT 1 FROM "check" c WHERE c.unit_id = u.id)
-        AND NOT EXISTS (SELECT 1 FROM attempt r WHERE r.unit_id = u.id AND r.assistance_source = 'reveal')
-        AND NOT EXISTS (SELECT 1 FROM attempt a WHERE a.unit_id = u.id AND a.mode = 'solo' AND ${VERIFIED_PASS_SQL})
-      ORDER BY u.id`,
-    explainBackUnitId,
-  );
+  return db
+    .all<PendingArtifact>(
+      `SELECT u.id AS unitId, u.title AS title FROM unit_prerequisite p JOIN unit u ON u.id = p.prereq_unit_id
+        WHERE p.unit_id = ? AND u.kind IN (${PROJECT_KINDS_SQL}) AND u.retired_at IS NULL
+          AND EXISTS (SELECT 1 FROM "check" c WHERE c.unit_id = u.id AND c.retired_at IS NULL)
+          AND NOT EXISTS (SELECT 1 FROM attempt a WHERE a.unit_id = u.id AND a.mode = 'solo' AND ${VERIFIED_PASS_SQL})
+        ORDER BY u.id`,
+      explainBackUnitId,
+    )
+    .filter((p) => !revealedInVariationChain(db, p.unitId));
 }
 
 /**

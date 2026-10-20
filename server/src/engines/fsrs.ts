@@ -91,6 +91,24 @@ export function addReviewItem(db: Db, item: NewReviewItem, now: Clock): ReviewIt
   return getReviewItem(db, lastInsertRowid);
 }
 
+/**
+ * Server review F7b: make a RETIRED seeded card live again because its item is being graded /
+ * enrolled again (engines/study-quest.ts), never instantly due: a due time that went stale while
+ * the card was retired is moved to `dueFloor` (what a brand-new card for this event would get), in
+ * the row AND its FSRS state; a later due time and the FSRS memory (stability, difficulty, reps,
+ * lapses) are kept. A live card is left alone. Returns true when the card was revived.
+ */
+export function reviveRetiredCard(db: Db, cardKey: string, dueFloor: number, now: Clock): boolean {
+  const item = db.get<ReviewItemRow>('SELECT * FROM review_item WHERE card_key = ?', cardKey);
+  if (!item || item.retired_at === null) return false;
+  const t = nowMs(now);
+  const card = deserializeCard(item.fsrs_state);
+  const due = Math.max(item.due_at, dueFloor);
+  card.due = new Date(due);
+  db.run('UPDATE review_item SET retired_at = NULL, due_at = ?, fsrs_state = ?, updated_at = ? WHERE id = ?', due, serializeCard(card), t, item.id);
+  return true;
+}
+
 export function getReviewItem(db: Db, id: number): ReviewItemRow {
   const row = db.get<ReviewItemRow>('SELECT * FROM review_item WHERE id = ?', id);
   if (!row) throw new Error(`review_item ${id} not found`);

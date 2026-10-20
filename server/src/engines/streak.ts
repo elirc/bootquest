@@ -7,7 +7,7 @@ import { xpOnDay } from './xp.ts';
 /**
  * Daily slate + streak engine (spec §6.1).
  *
- * Slate composition: one drill set per active track (track.locked=0 AND
+ * Slate composition: at most one drill set per active track (track.locked=0 AND
  * track.slate_drills=1) that still has drills to give (see "Drill-slot size"),
  * one campaign step ONLY when a campaign step can actually be taken that day
  * (W5b: an actionable, not-yet-done quest in an UNLOCKED act —
@@ -30,7 +30,10 @@ import { xpOnDay } from './xp.ts';
  * attempt ledger (passes, reveals before day start), unit.created_at (< day end,
  * so drills seeded later never reach back) and unit.retired_at (retired after
  * the day ended still counts as live that day; the one lossy case is a unit
- * retired and then un-retired, whose retired_at is cleared).
+ * retired and then un-retired, whose retired_at is cleared). The review slot
+ * follows the same as-of rule (dueAsOf: review_item.retired_at after the moment
+ * judged = live then), with the same lossy case (a card retired, then restored
+ * when its item returns, store/review-cards.ts, reads as live throughout).
  *   Runner availability is deliberately NOT part of the rule. Whether a JDK or
  * the C# runner was installed on a past day is recorded nowhere, so a rule that
  * used it could not be re-derived for a closed day, and it would hand out free
@@ -47,8 +50,10 @@ import { xpOnDay } from './xp.ts';
  * of its drill / campaign / review-only slots can be done whatever list
  * slateStructure re-derives for it: its status is decided by XP alone, which
  * the slot list cannot change. While a day is open its row is refreshed, but a
- * drill set that is already done keeps its size (content seeded mid-day never
- * un-does it).
+ * drill set that is already done keeps its size, and a day whose slate is
+ * already COMPLETE never gains a new slot (server review F5: a track whose
+ * drills were exhausted getting content mid-day, or a campaign step becoming
+ * available, waits for tomorrow). Content seeded mid-day never un-does a day.
  *   Review-only slates: a slate with no drill set and no campaign step (every
  * track exhausted, nothing actionable in the campaign) would otherwise complete
  * on an idle day just because the queue happened to be empty. Its review slot
@@ -215,15 +220,20 @@ export function campaignStepDone(db: Db, from: number, to: number): boolean {
   );
 }
 
-/** Review items due as of moment T, rebuilt from review_log (reviews after T are undone). */
+/**
+ * Review items due as of moment T, rebuilt from review_log (reviews after T are undone).
+ * Retirement is judged AS OF T too (server review F4): a card retired after T was live at T,
+ * so retiring it later (a re-seed removed its item) never rewrites a past day's review-clear.
+ */
 export function dueAsOf(db: Db, T: number): number {
   return (
     db.get<{ n: number }>(
       `SELECT COUNT(*) AS n FROM review_item ri
-        WHERE ri.created_at <= ? AND ri.kind <> 'retest' AND ri.retired_at IS NULL
+        WHERE ri.created_at <= ? AND ri.kind <> 'retest' AND (ri.retired_at IS NULL OR ri.retired_at > ?)
           AND COALESCE((SELECT rl.prev_due_at FROM review_log rl
                          WHERE rl.review_item_id = ri.id AND rl.reviewed_at > ?
                          ORDER BY rl.reviewed_at, rl.id LIMIT 1), ri.due_at) <= ?`,
+      T,
       T,
       T,
       T,
@@ -268,7 +278,8 @@ export function deriveSlate(db: Db, day: string, items: readonly SlateItem[], at
  * and quests while the day is open, and every `done` flag is derived from the
  * ledger at `now`. Idempotent per day; done flags are persisted only as a
  * snapshot when the day is closed. A drill set that is already done keeps
- * its size on refresh, so content seeded mid-day never un-does it.
+ * its size on refresh, and a complete slate gains no new slot, so content
+ * seeded mid-day never un-does a set or the day (not-done slots may still grow).
  */
 export function composeSlate(db: Db, now: Clock): SlateRow {
   const t = nowMs(now);
@@ -284,7 +295,10 @@ export function composeSlate(db: Db, now: Clock): SlateRow {
     );
   } else if (existing.status === 'open') {
     const before = deriveSlate(db, day, existing.items, t);
-    const refreshed = structure.map((item): SlateItem => {
+    // F5: a day that is already complete never gains a slot (it would flip back to incomplete)
+    const complete = isSlateComplete(before);
+    const had = new Set(existing.items.map((i) => i.slot));
+    const refreshed = structure.filter((item) => !complete || had.has(item.slot)).map((item): SlateItem => {
       if (item.kind !== 'drill-set') return item;
       const prev = before.find((b) => b.slot === item.slot);
       return prev?.kind === 'drill-set' && prev.done && prev.size < item.size ? { ...item, size: prev.size } : item;

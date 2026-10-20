@@ -2,7 +2,7 @@ import type { SeedQuizItem } from '@bootquest/shared';
 import type { Db } from '../db/database.ts';
 import { DAY_MS, nowMs, type Clock } from './clock.ts';
 import { meetsCorePct } from './campaign.ts';
-import { addReviewItem } from './fsrs.ts';
+import { addReviewItem, reviveRetiredCard } from './fsrs.ts';
 
 /**
  * W8 study-quest quiz gate (spec §4 "Study quest": reading steps + pre-seeded quiz gate,
@@ -69,8 +69,9 @@ function enqueue(db: Db, unitId: number, cardKeys: readonly string[], kind: 'qui
   for (const cardKey of cardKeys) {
     if (db.get('SELECT 1 AS x FROM review_item WHERE card_key = ?', cardKey)) {
       // the item is being graded / enrolled, so it exists again: a card retired by an earlier
-      // re-seed (store/review-cards.ts) is live again, with its FSRS schedule intact
-      db.run('UPDATE review_item SET retired_at = NULL WHERE card_key = ? AND retired_at IS NOT NULL', cardKey);
+      // re-seed (store/review-cards.ts) is live again with its FSRS memory, but a due time that went
+      // stale while it was retired moves to `dueAt` like a new card's (F7b: never instantly due)
+      reviveRetiredCard(db, cardKey, dueAt, now);
       alreadyQueued++;
       continue;
     }

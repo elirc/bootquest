@@ -1,5 +1,5 @@
 import { deepStrictEqual } from 'node:assert/strict';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -46,14 +46,14 @@ describe('migrations', () => {
     const tmp = makeTempDb();
     try {
       const first = tmp.db.all<{ version: number }>('SELECT version FROM schema_version ORDER BY version');
-      expect(first.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+      expect(first.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
       tmp.db.close();
 
       const again = openDb({ path: tmp.path, env: {} });
       try {
         expect(migrate(again)).toEqual([]); // third pass, explicit
-        expect(schemaVersion(again)).toBe(12);
-        expect(again.get<{ n: number }>('SELECT COUNT(*) AS n FROM schema_version')!.n).toBe(12);
+        expect(schemaVersion(again)).toBe(13);
+        expect(again.get<{ n: number }>('SELECT COUNT(*) AS n FROM schema_version')!.n).toBe(13);
         // 009: exactly one choice-order secret, and re-opening never regenerates it
         expect(again.all<{ secret: string }>('SELECT secret FROM server_secret')).toHaveLength(1);
         expect(again.all<{ checksum: string }>('SELECT checksum FROM schema_version').every((r) => /^[0-9a-f]{64}$/.test(r.checksum))).toBe(true);
@@ -297,6 +297,49 @@ describe('schema constraints', () => {
         unitId,
       ),
     ).toThrow();
+    // 013: 'prior-key' is an ASSISTED source only
+    for (const bad of [`'solo', 0, 'prior-key'`, `'guided', 1, 'prior-key'`, `'assisted', 0, 'prior-key'`]) {
+      expect(() => ctx.db.run(`INSERT INTO attempt (unit_id, mode, assisted, assistance_source, outcome, created_at) VALUES (?, ${bad}, 'submitted', 0)`, unitId), bad).toThrow();
+    }
+    ctx.db.run(`INSERT INTO attempt (unit_id, mode, assisted, assistance_source, outcome, created_at) VALUES (?, 'assisted', 1, 'prior-key', 'submitted', 0)`, unitId);
+  });
+
+  it('migration 013 (prior-key) rebuilds attempt + evidence on a DB WITH history: rows, FKs, append-only triggers and the frozen-check trigger all survive', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bootquest-m013-'));
+    const migDir = join(dir, 'migrations');
+    const all = join(import.meta.dirname, '..', 'src', 'db', 'migrations');
+    try {
+      // a DB at schema 12 with history
+      mkdirSync(migDir);
+      for (const f of readdirSync(all).filter((f) => /^0(0\d|1[0-2])_/.test(f))) copyFileSync(join(all, f), join(migDir, f));
+      const db = new Db(join(dir, 'm.db'));
+      try {
+        migrate(db, migDir);
+        expect(schemaVersion(db)).toBe(12);
+        const clock = fixedClock(localNoon(2026, 10, 1));
+        const unitId = makeUnit(db, clock, { kind: 'drill', competencies: ['language-fluency'] });
+        const a = submit(db, clock, unitId);
+        const ev = recordEvidence(db, { competency: 'language-fluency', kind: 'submit', intention: 'i', observation: 'o', attemptId: a.id }, clock);
+        const before = {
+          attempt: db.all('SELECT * FROM attempt ORDER BY id'),
+          evidence: db.all('SELECT * FROM evidence ORDER BY id'),
+          run: db.all('SELECT * FROM run ORDER BY id'),
+        };
+        expect(() => db.run(`INSERT INTO attempt (unit_id, mode, assisted, assistance_source, outcome, created_at) VALUES (?, 'assisted', 1, 'prior-key', 'submitted', 0)`, unitId)).toThrow();
+        // now the real migration set (013 included)
+        expect(migrate(db)).toEqual([13]);
+        expect({ attempt: db.all('SELECT * FROM attempt ORDER BY id'), evidence: db.all('SELECT * FROM evidence ORDER BY id'), run: db.all('SELECT * FROM run ORDER BY id') }).toEqual(before);
+        expect(db.all('PRAGMA foreign_key_check')).toEqual([]);
+        expect(() => db.run('UPDATE attempt SET score = 0 WHERE id = ?', a.id)).toThrow(/append-only/);
+        expect(() => db.run('DELETE FROM evidence WHERE id = ?', ev.id)).toThrow(/append-only/);
+        expect(() => db.run(`UPDATE "check" SET spec = json_set(spec, '$.timeoutMs', 1) WHERE unit_id = ?`, unitId)).toThrow(/frozen/);
+        db.run(`INSERT INTO attempt (unit_id, mode, assisted, assistance_source, outcome, created_at) VALUES (?, 'assisted', 1, 'prior-key', 'submitted', 0)`, unitId);
+      } finally {
+        db.close();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
   });
 
   it('attempt.variation_unit_id is nullable', () => {

@@ -15,6 +15,7 @@ import {
 import { UnitContentEntry } from '@bootquest/shared/api';
 import type { Db } from '../db/database.ts';
 import { nowMs, type Clock } from '../engines/clock.ts';
+import { liveChecks, reconcileCheck } from './check-policy.ts';
 import { insertUnit } from './content.ts';
 import type { SeedItemStore } from './seed-items.ts';
 import { STUDY_COMPETENCY, STUDY_QUIZ_PASS_PCT, studyQuizSpecFor } from './study-quests.ts';
@@ -41,7 +42,10 @@ import { STUDY_COMPETENCY, STUDY_QUIZ_PASS_PCT, studyQuizSpecFor } from './study
  * ladder unit: the answer-first flows are self-contained, and acts 2+ stay locked until their
  * quiz gates are seeded.
  * Upsert by unit key, idempotent; a unit whose item left the seed packs is RETIRED (history
- * rows keep their FK target), never deleted; kind / track / check changes are refused.
+ * rows keep their FK target), never deleted; kind / track / check-type changes are refused; a
+ * changed check spec (a re-seeded item under the same key: question count, defect count, a
+ * variant's check) follows THE re-seed policy (store/check-policy.ts reconcileCheck): updated in
+ * place while unreferenced, retired-and-replaced once history references it — never a refusal.
  * loaded === built is asserted per family; duplicate seed-item references across live units
  * refuse startup (audit #3).
  */
@@ -330,12 +334,29 @@ function existing(db: Db, key: string): ExistingUnit | undefined {
   return db.get<ExistingUnit>('SELECT id, kind, track_id, title, difficulty, retired_at, source_id, variation_of_unit_id FROM unit WHERE key = ?', key);
 }
 
-function sameSpec(db: Db, unitId: number, spec: CheckSpecInput): boolean {
-  const row = db.get<{ spec: string }>('SELECT spec FROM "check" WHERE unit_id = ? AND retired_at IS NULL ORDER BY id LIMIT 1', unitId);
-  if (!row) return false;
-  const have = JSON.parse(row.spec) as Record<string, unknown>;
+function sameSpec(stored: string, spec: CheckSpecInput): boolean {
+  const have = JSON.parse(stored) as Record<string, unknown>;
   const want = spec as Record<string, unknown>;
   return Object.keys(want).every((k) => JSON.stringify(have[k]) === JSON.stringify(want[k]));
+}
+
+/**
+ * Bring a ladder / authored unit's ONE live check in line with the planned spec under THE re-seed
+ * policy (store/check-policy.ts, server review F3): unchanged -> nothing; unreferenced -> updated
+ * in place; referenced by attempts / runs -> RETIRED-AND-REPLACED (history keeps the frame it was
+ * graded in). A re-seed that changes a set's question count or a kata's defect count under the
+ * same item key therefore boots instead of refusing startup. Still refused (a kind-level decision,
+ * like the pack loader): a type change, and a unit that does not have exactly one live check.
+ * "Changed" keeps this loader's historical meaning (every planned key equal), so a stored spec
+ * written by an older writer with extra keys is not churned.
+ */
+function reconcileLadderCheck(db: Db, unitId: number, unitKey: string, want: CheckSpecInput, threshold: number | null, clock: Clock): void {
+  const live = liveChecks(db, unitId);
+  if (live.length !== 1) throw new LadderLoadError(`ladder unit ${unitKey} has ${live.length} live checks (want exactly 1); refusing`);
+  const current = live[0]!;
+  if (sameSpec(current.spec, want) && (threshold === null || current.threshold === threshold)) return;
+  if (current.type !== want.type) throw new LadderLoadError(`ladder unit ${unitKey}: its check changed type (${current.type} -> ${want.type}); refusing`);
+  reconcileCheck(db, unitId, current, { spec: want, threshold }, clock);
 }
 
 /** Insert or refresh one unit; returns [id, inserted]. */
@@ -365,7 +386,7 @@ function upsertUnit(db: Db, sourceId: number, u: Omit<PlannedUnit, 'family' | 'r
     if (have.kind !== u.kind || have.track_id !== u.track) {
       throw new LadderLoadError(`ladder unit ${u.key} changed kind/track (${have.kind}/${have.track_id} -> ${u.kind}/${u.track}); refusing (attempts reference it)`);
     }
-    if (!sameSpec(db, id, u.check)) throw new LadderLoadError(`ladder unit ${u.key}: its check changed; a re-seeded item gets a new key, so this is a hand edit — refusing`);
+    reconcileLadderCheck(db, id, u.key, u.check, u.threshold ?? null, clock);
     if ((u.variationOfId ?? null) !== have.variation_of_unit_id && have.variation_of_unit_id !== null) {
       throw new LadderLoadError(`retest ${u.key} would move to another artifact (${have.variation_of_unit_id} -> ${String(u.variationOfId)}); refusing`);
     }
@@ -517,7 +538,8 @@ export function loadLadderIntoDb(db: Db, inputs: LadderInputs, clock: Clock): La
         } else {
           if (have.source_id !== aSource) throw new LadderLoadError(`unit key ${u.key} already belongs to another source`);
           if (have.kind !== u.kind || have.track_id !== u.track) throw new LadderLoadError(`authored unit ${u.key} changed kind/track; refusing`);
-          for (const c of u.checks) if (!sameSpec(db, have.id, c.spec)) throw new LadderLoadError(`authored unit ${u.key}: its check changed — give the changed unit a new key`);
+          if (u.checks.length !== 1) throw new LadderLoadError(`authored unit ${u.key} declares ${u.checks.length} checks (want exactly 1); refusing`);
+          reconcileLadderCheck(db, have.id, u.key, u.checks[0]!.spec, u.checks[0]!.threshold ?? null, clock);
           db.run('UPDATE unit SET title = ?, difficulty = ?, target_level = ?, retired_at = NULL WHERE id = ?', u.title, u.difficulty ?? null, u.targetLevel ?? null, have.id);
         }
         aKeep.add(u.key);

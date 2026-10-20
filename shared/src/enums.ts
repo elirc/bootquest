@@ -79,7 +79,13 @@ export const ATTEMPT_MODES = ['solo', 'assisted', 'guided'] as const;
 export const AttemptMode = z.enum(ATTEMPT_MODES);
 export type AttemptMode = z.infer<typeof AttemptMode>;
 
-export const ASSISTANCE = ['none', 'self', 'reveal'] as const;
+/**
+ * Where an attempt's help came from: none (solo), self (honor-system flag), reveal
+ * (solution revealed, guided), prior-key (server review F2: a fresh answer to a
+ * re-seeded explain-back / kata item after the learner answered an earlier version,
+ * whose key that answer unlocked; mode 'assisted').
+ */
+export const ASSISTANCE = ['none', 'self', 'reveal', 'prior-key'] as const;
 export const Assistance = z.enum(ASSISTANCE);
 export type Assistance = z.infer<typeof Assistance>;
 

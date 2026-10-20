@@ -18,6 +18,11 @@ const sqlite = require('node:sqlite') as typeof import('node:sqlite');
  * - retention (pruneBackups, run only after a SUCCESSFUL start): the newest BACKUP_KEEP snapshots
  *   are kept; only files matching BACKUP_NAME_RE in that backups/ dir are ever deleted (a prune
  *   failure is a warning, never a refusal);
+ * - HARD CAP (server review F7a, applied at backup time, so also on starts that are refused
+ *   later): never more than BACKUP_HARD_CAP snapshots; the oldest beyond it are deleted. A run of
+ *   refused restarts therefore cannot fill the disk; it can rotate the oldest snapshot out only
+ *   after BACKUP_HARD_CAP of them, and every refused start's snapshot is itself a full copy of
+ *   the DB as it then was;
  * - FAIL-CLOSED: if the snapshot cannot be made or verified, the server refuses to start
  *   (BackupError) before any migration touches the DB. `BOOTQUEST_NO_BACKUP=1` skips the
  *   snapshot entirely (escape hatch: full disk, read-only dir, ...).
@@ -26,6 +31,8 @@ const sqlite = require('node:sqlite') as typeof import('node:sqlite');
 export const NO_BACKUP_ENV = 'BOOTQUEST_NO_BACKUP';
 export const BACKUP_DIR_NAME = 'backups';
 export const BACKUP_KEEP = 7;
+/** at most this many snapshots exist after any backup, even when every start since was refused */
+export const BACKUP_HARD_CAP = 20;
 /** the ONLY file names retention may delete */
 export const BACKUP_NAME_RE = /^bootquest-(\d{8}T\d{6}\.\d{3}Z)(?:-(\d+))?\.db$/;
 
@@ -132,14 +139,16 @@ export function backupBeforeStart(dbPath: string, opts: BackupOptions): BackupRe
     refuse(`the pre-migration backup of ${abs} to ${target} failed`, err);
   }
 
-  return { status: 'created', path: target, pruned: [], warnings: [] };
+  // F7a: the hard cap holds even if this start is refused later (retention to BACKUP_KEEP waits for a good start)
+  return pruneBackups({ status: 'created', path: target, pruned: [], warnings: [] }, BACKUP_HARD_CAP);
 }
 
 /**
  * Retention: keep the newest `keep` of OUR snapshots in the backups dir; never touch anything
- * else there (only BACKUP_NAME_RE names) and never the snapshot just made. serve.ts calls it only
- * once the server is up: a startup that REFUSES (stamp, ladder, port...) prunes nothing, so a run
- * of failed restarts cannot rotate the last good snapshot out. It never throws: a failure is a warning.
+ * else there (only BACKUP_NAME_RE names) and never the snapshot just made. serve.ts calls it with
+ * BACKUP_KEEP only once the server is up: a startup that REFUSES (stamp, ladder, port...) prunes
+ * only beyond BACKUP_HARD_CAP (backupBeforeStart), so a run of failed restarts cannot rotate the
+ * last good snapshot out before that many. It never throws: a failure is a warning.
  */
 export function pruneBackups(result: BackupResult, keep: number = BACKUP_KEEP): BackupResult {
   if (result.status !== 'created') return result;
@@ -162,5 +171,5 @@ export function pruneBackups(result: BackupResult, keep: number = BACKUP_KEEP): 
       warnings.push(`could not prune old backup ${p}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
-  return { ...result, pruned, warnings };
+  return { ...result, pruned: [...result.pruned, ...pruned], warnings };
 }

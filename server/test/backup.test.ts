@@ -4,7 +4,7 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { backupBeforeStart, BackupError, BACKUP_KEEP, backupDirOf, listBackups, NO_BACKUP_ENV, pruneBackups } from '../src/db/backup.ts';
+import { backupBeforeStart, BackupError, BACKUP_HARD_CAP, BACKUP_KEEP, backupDirOf, listBackups, NO_BACKUP_ENV, pruneBackups } from '../src/db/backup.ts';
 import { backupSummary, startServer } from '../src/api/serve.ts';
 import { fixedClock } from '../src/engines/clock.ts';
 import { localNoon } from './helpers.ts';
@@ -80,7 +80,7 @@ describe('startup DB backup (db/backup.ts)', () => {
     for (const f of strangers) writeFileSync(join(b, f), 'keep me');
     const made = backupBeforeStart(path, { env: {}, now });
     expect(made.status).toBe('created');
-    expect(listBackups(b)).toHaveLength(10); // creating never prunes: retention is a separate step
+    expect(listBackups(b)).toHaveLength(10); // creating prunes only beyond BACKUP_HARD_CAP: retention is a separate step
     const r = pruneBackups(made);
     const kept = listBackups(b);
     expect(kept).toHaveLength(BACKUP_KEEP);
@@ -93,6 +93,30 @@ describe('startup DB backup (db/backup.ts)', () => {
     const past = pruneBackups(backupBeforeStart(path, { env: {}, now: new Date(Date.UTC(2020, 0, 1)) }));
     expect(existsSync(past.path!)).toBe(true);
     expect(listBackups(b)).toHaveLength(BACKUP_KEEP + 1);
+  });
+
+  it(`F7a: snapshots never pile up past BACKUP_HARD_CAP (${BACKUP_HARD_CAP}) even when no start succeeds: the backup itself deletes the oldest beyond it`, () => {
+    const path = join(dir, 'bq.db');
+    legacyDb(path);
+    const b = join(dir, 'backups');
+    mkdirSync(b);
+    // 25 snapshots left by refused restarts (none ever pruned to BACKUP_KEEP)
+    const olds = Array.from({ length: 25 }, (_, i) => `bootquest-202601${String(i + 1).padStart(2, '0')}T000000.000Z.db`);
+    for (const f of olds) writeFileSync(join(b, f), 'x');
+    writeFileSync(join(b, 'notes.txt'), 'keep me');
+    const made = backupBeforeStart(path, { env: {}, now });
+    expect(made.status).toBe('created');
+    const kept = listBackups(b);
+    expect(kept).toHaveLength(BACKUP_HARD_CAP);
+    expect(kept).toEqual([...olds.slice(-(BACKUP_HARD_CAP - 1)), 'bootquest-20261019T083015.123Z.db']);
+    expect(made.pruned).toHaveLength(25 + 1 - BACKUP_HARD_CAP);
+    expect(existsSync(join(b, 'notes.txt'))).toBe(true);
+    // below the cap a backup deletes nothing (retention to BACKUP_KEEP still waits for a good start)
+    expect(BACKUP_KEEP).toBeLessThan(BACKUP_HARD_CAP);
+    // a good start then keeps BACKUP_KEEP, reporting both prunes
+    const r = pruneBackups(made);
+    expect(listBackups(b)).toHaveLength(BACKUP_KEEP);
+    expect(r.pruned).toHaveLength(25 + 1 - BACKUP_KEEP);
   });
 
   it('a REFUSED startup snapshots but prunes nothing (failed restarts cannot rotate out the last good snapshot); a good start prunes', async () => {

@@ -86,8 +86,11 @@ function honest<T>(fn: () => T): T {
     }
     if (err instanceof HonestyRuleError) {
       switch (err.code) {
-        // ('STALE' — evidence predating its attempt — cannot happen on a self-score since the
-        // 24h window was retired; it stays an unmapped 500, an invariant breach, not a 4xx)
+        // F7c: on a self-score 'STALE' can only mean evidence predating its answer attempt (no filing
+        // window since dead end #1): the server clock reads earlier than the answer row. Not an
+        // internal error: a 409 the client can explain; nothing was recorded (the tx rolled back).
+        case 'STALE':
+          throw new HttpError(409, 'EVIDENCE_PREDATES_ATTEMPT', `${err.message}: the server clock reads earlier than the recorded answer (was the clock moved back?); nothing was recorded`);
         case 'NOT_VERIFIED':
         case 'MISMATCH':
           throw new HttpError(409, 'NOT_VERIFIED', err.message);
@@ -132,9 +135,14 @@ function firstAnswer(db: Db, marker: AnswerMarker, itemKey: string): AttemptRow 
  * derived from the immutable rows, never written: no attempt is updated, the old row, its
  * evidence and its XP stay exactly as they were. Its key no longer matches (key-point / defect
  * ids are positional, audit #8), so it is never keyed or scored against the new content; instead
- * the new version takes ONE fresh answer of its own (this predicate finds it from then on). The
- * learner cannot force a hash change - only a re-seed of the stamped pack makes one - so this is
- * no re-answer loop. (Were an old version re-loaded, its own first answer is its record again.)
+ * the new version takes ONE fresh answer of its own (this predicate finds it from then on).
+ * A hash change is a re-seed of the stamped pack - which on this single-user install the learner
+ * runs themselves - so a re-seed must never reopen a BLIND answer: the earlier answer unlocked
+ * the earlier key (key reads are not recorded, so every superseded answer counts as exposure),
+ * and the fresh answer is recorded as ASSISTED (assistance 'prior-key', server review F2): it
+ * never satisfies promotion leg (b) and never counts as solo for G1 (kataStats also counts each
+ * kata key once, by its earliest ANSWER). (Were an old version re-loaded, its own first answer
+ * is its record again.)
  */
 function currentAnswer(db: Db, marker: AnswerMarker, item: SeedAnswerItem): AttemptRow | undefined {
   return db.get<AttemptRow>(
@@ -270,7 +278,12 @@ export function explainBackPublicFor(seedItems: SeedItemStore, spec: CheckSpec, 
   const pub = { questions: explainBackQuestions(item), minCoveragePct: pct(effectiveMinCoverage(spec)) };
   if (!db) return pub;
   // W9 (ui-audit #10): same predicate as GET .../explain-back/key (the loaded version's answer of record)
-  const answered = { ...pub, answered: currentAnswer(db, 'explainBack', item) !== undefined };
+  const answered = {
+    ...pub,
+    answered: currentAnswer(db, 'explainBack', item) !== undefined,
+    // F7e: structured form of the NOT_ANSWERED "superseded" prose
+    supersededAnswerIds: supersededAnswerIds(db, 'explainBack', item),
+  };
   // dead end #2: the same predicate POST .../answers enforces (409 ARTIFACT_REQUIRED)
   return unitId === undefined ? answered : { ...answered, artifactRequired: artifactsAwaitingSoloPass(db, unitId) };
 }
@@ -280,7 +293,9 @@ export function kataPublicFor(seedItems: SeedItemStore, spec: CheckSpec, db?: Db
   const item = seedItems.kata(spec.kataKey);
   if (!item) return null;
   // W9 (ui-audit #10): same predicate as GET .../kata/key
-  return db ? { ...kataPublic(item), answered: currentAnswer(db, 'kata', item) !== undefined } : kataPublic(item);
+  return db
+    ? { ...kataPublic(item), answered: currentAnswer(db, 'kata', item) !== undefined, supersededAnswerIds: supersededAnswerIds(db, 'kata', item) }
+    : kataPublic(item);
 }
 
 /** POST /units/:id/explain-back/answers — the immutable answer, BEFORE any key point is readable. */
@@ -318,6 +333,8 @@ export function answerExplainBack(deps: LadderDeps, unitId: number, body: Explai
         answer: { explainBack: { questionSetKey: item.key, itemSha: seedItemHash(item), answers: body.answers } },
       },
       clock,
+      // server review F2: an earlier version's answer unlocked its key; this one cannot be blind
+      { priorKey: supersededAnswerIds(db, 'explainBack', item).length > 0 },
     );
     return { attemptId: attempt.id, mode: attempt.mode, outcome: 'submitted' };
   });
@@ -435,6 +452,8 @@ export function submitKataFindings(deps: LadderDeps, unitId: number, body: KataF
         answer: { kata: { kataKey: item.key, itemSha: seedItemHash(item), defectCount: item.seededDefectKey.length, findings: body.findings } },
       },
       clock,
+      // server review F2: an earlier version's findings unlocked its key; these cannot be blind
+      { priorKey: supersededAnswerIds(db, 'kata', item).length > 0 },
     );
     return { attemptId: attempt.id, mode: attempt.mode, outcome: 'submitted' };
   });
@@ -511,7 +530,8 @@ export function selfScoreKata(deps: LadderDeps, unitId: number, body: { perDefec
  * W7 (audit #2): self-flagged assisted and reveal-guided answers never count toward the
  * core-skill gate; they are reported separately as assistedCount. W7 (audit #8): the
  * defect total is the count stored WITH the answer (as answered), not the current key; each
- * kata key counts once (its earliest scored answer), whatever re-seeds followed.
+ * kata key counts once - its earliest ANSWER, whatever re-seeds followed (an earliest answer
+ * that is not scored yet counts nothing yet; a later version never stands in for it).
  */
 export function kataStats(deps: LadderDeps): KataStatsResponse {
   const { db } = deps;
@@ -526,15 +546,20 @@ export function kataStats(deps: LadderDeps): KataStatsResponse {
   let katas = 0;
   let assistedCount = 0;
   // dead end #3: a re-seeded kata takes one fresh answer, but G1 counts each kata ONCE - its
-  // earliest scored answer, as answered. A later version scored after the earlier key was read
-  // is not blind, and counting both would let a re-seed rewrite the G1 history (audit #8).
-  const counted = new Set<string>();
+  // earliest ANSWER (server review F2: not its earliest SCORED one). A later version answered
+  // after the earlier answer unlocked the earlier key is not blind; letting it stand in for an
+  // unscored earlier answer, or counting both, would let a re-seed rewrite the G1 history.
+  const earliest = new Map<string, number>(
+    db
+      .all<{ k: string; id: number }>(
+        `SELECT json_extract(answer, '$.kata.kataKey') AS k, MIN(id) AS id FROM attempt
+          WHERE outcome = 'submitted' AND json_extract(answer, '$.kata.kataKey') IS NOT NULL GROUP BY k`,
+      )
+      .map((r) => [r.k, r.id]),
+  );
   for (const r of rows) {
     const kataKey = (JSON.parse(r.answer ?? '{}') as StoredAnswer).kata?.kataKey;
-    if (kataKey !== undefined) {
-      if (counted.has(kataKey)) continue;
-      counted.add(kataKey);
-    }
+    if (kataKey !== undefined && earliest.get(kataKey) !== r.attemptId) continue;
     if (r.mode !== 'solo' || r.assisted) {
       assistedCount += 1;
       continue;

@@ -55,6 +55,12 @@ export const API_ERROR_CODES = [
   /** W6 explain-back / kata: this answer attempt already carries its self-score evidence */
   'ALREADY_SCORED',
   /**
+   * 409 (server review F7c): evidence would predate the attempt it is filed on — the server clock
+   * now reads EARLIER than when the answer was recorded (the clock was moved back). Nothing is
+   * recorded; retry once the clock is past the answer time.
+   */
+  'EVIDENCE_PREDATES_ATTEMPT',
+  /**
    * An explain-back whose promotion leg (b) is linked to an artifact (project) unit refuses an
    * answer until that unit has a verified SOLO pass: an earlier answer would burn leg (b) for
    * good (answers are once per question set and must come at/after the artifact attempt)
@@ -480,6 +486,14 @@ export const ExplainBackPublic = z
      * each is passed solo. Empty for standalone sets; absent on older servers.
      */
     artifactRequired: z.array(z.object({ unitId: z.number(), title: z.string() }).strict()).optional(),
+    /**
+     * Server review F2/F7e: the learner's answers to an EARLIER version of this set (re-seeded
+     * since). They are superseded (never keyed or scored against the loaded version); the loaded
+     * version takes one fresh answer, recorded as assisted (assistance 'prior-key': the earlier
+     * answer unlocked the earlier key). Structured replacement for parsing NOT_ANSWERED prose;
+     * absent on older servers, [] when there are none.
+     */
+    supersededAnswerIds: z.array(z.number().int()).optional(),
   })
   .strict();
 export type ExplainBackPublic = z.infer<typeof ExplainBackPublic>;
@@ -493,6 +507,8 @@ export const KataPublic = z
     // count arrives with the key, after the findings are recorded
     /** W9 (ui-audit #10): findings already recorded (key readable) — see ExplainBackPublic.answered */
     answered: z.boolean().optional(),
+    /** findings recorded against an earlier version of this kata (re-seeded since) — see ExplainBackPublic.supersededAnswerIds */
+    supersededAnswerIds: z.array(z.number().int()).optional(),
   })
   .strict();
 export type KataPublic = z.infer<typeof KataPublic>;

@@ -272,8 +272,9 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
         ...defaultRunners({ ...(csharp ? { drillCs: csharp.runner } : {}), nodeTestFile: createNodeTestFileRunner(sync.cache) }),
         ...(java ? { 'drill-java': java.runner } : {}),
       };
-    // a sync can register new project units (signalpost U01...): re-link explain-backs + create pending retests
-    // loadLadderIntoDb is one transaction: when it throws after a committed sync, nothing of it sticks
+    // a sync can register new project units (signalpost U01...): re-link explain-backs + create pending retests.
+    // F7d: re-run ALL the seed-derived loads, exactly the startup step (ladder, study-quest gates, seeded review
+    // cards), as ONE transaction: when any of them throws after a committed sync, nothing of the re-link sticks
     const app = createApp({
       db,
       clock,
@@ -281,7 +282,7 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
       runners,
       sync,
       seedItems,
-      afterSync: () => void loadLadderIntoDb(db, ladderInputs, clock),
+      afterSync: () => void db.tx(() => loadSeedDerivedContent(db, ladderInputs, clock)),
       ...(backup.path
         ? {
             syncRecoveryHint:

@@ -400,6 +400,52 @@ describe('drill-slot exhaustion (fix/slate): a track that runs out of new drills
     expect(getSlate(ctx.db, '2026-10-08')!.items).toEqual([{ slot: 'review', kind: 'review-clear', done: false }]);
   });
 
+  it('F5: a new track slot appearing mid-day (an exhausted track gets content) is never ADDED to an already-complete open day', () => {
+    ctx.db.run(`UPDATE track SET slate_drills = 0 WHERE id = 'js'`); // csharp + java on the slate; java has no drills yet
+    seedDrills(ctx.db, ctx.clock, 'csharp', 3).forEach((id) => submit(ctx.db, ctx.clock, id));
+    clearQueue(ctx.db, ctx.clock, 'd1');
+    expect(composeSlate(ctx.db, ctx.clock).items.map((i) => [i.slot, i.done])).toEqual([
+      ['drill:csharp', true],
+      ['review', true],
+    ]);
+    expect(streakStatus(ctx.db, ctx.clock).todayComplete).toBe(true);
+    // a re-seed + restart mid-day gives java its first drills: java would now ask for a 5-drill set
+    seedDrills(ctx.db, ctx.clock, 'java', 8);
+    expect(drillUnitsRemaining(ctx.db, 'java', '2026-10-01')).toBe(5 + 3);
+    const slate = composeSlate(ctx.db, ctx.clock);
+    expect(slate.items.map((i) => i.slot)).toEqual(['drill:csharp', 'review']); // was: drill:java added, day flipped incomplete
+    expect(slate.items.every((i) => i.done)).toBe(true);
+    expect(streakStatus(ctx.db, ctx.clock).todayComplete).toBe(true);
+    ctx.clock.advance(DAY_MS);
+    expect(closeElapsedDays(ctx.db, ctx.clock).map((c) => c.status)).toEqual(['slate']);
+    // tomorrow the new content is on the slate
+    expect(drillSlot(ctx.db, ctx.clock, 'java')).toMatchObject({ size: 5, done: false });
+  });
+
+  it('F5: an INCOMPLETE open day still picks up a new slot (only complete days are frozen against additions)', () => {
+    ctx.db.run(`UPDATE track SET slate_drills = 0 WHERE id = 'js'`);
+    seedDrills(ctx.db, ctx.clock, 'csharp', 3);
+    expect(composeSlate(ctx.db, ctx.clock).items.map((i) => i.slot)).toEqual(['drill:csharp', 'review']);
+    seedDrills(ctx.db, ctx.clock, 'java', 2);
+    expect(composeSlate(ctx.db, ctx.clock).items.map((i) => i.slot)).toEqual(['drill:csharp', 'drill:java', 'review']);
+  });
+
+  it('F4: retiring a due card AFTER a day ended never rewrites that day: its review slot is judged with the card live (retired_at as of the day)', () => {
+    csharpOnly();
+    seedDrills(ctx.db, ctx.clock, 'csharp', 3).forEach((id) => submit(ctx.db, ctx.clock, id));
+    const card = addReviewItem(ctx.db, { cardKey: 'quiz-miss:seed:quiz:gone' }, ctx.clock); // due now, never reviewed today
+    expect(composeSlate(ctx.db, ctx.clock).items.find((i) => i.slot === 'review')!.done).toBe(false);
+    ctx.clock.advance(DAY_MS);
+    // the next day, BEFORE day 1 is closed: a re-seed removed the card's item and startup retires the card
+    ctx.db.run('UPDATE review_item SET retired_at = ? WHERE id = ?', ctx.clock().getTime(), card.id);
+    expect(streakEngine.dueAsOf(ctx.db, ctx.clock().getTime())).toBe(0); // gone from the live queue now ...
+    expect(closeElapsedDays(ctx.db, ctx.clock).map((c) => c.status)).not.toContain('slate'); // ... but day 1 had it due
+    expect(getSlate(ctx.db, '2026-10-01')!.items.find((i) => i.slot === 'review')!.done).toBe(false);
+    // and a card retired DURING a day stops counting from that moment on (today's queue is clear)
+    clearQueue(ctx.db, ctx.clock, 'd2');
+    expect(composeSlate(ctx.db, ctx.clock).items.find((i) => i.slot === 'review')!.done).toBe(true);
+  });
+
   it('multi-track: an exhausted track drops out while the others keep their 5-drill sets', () => {
     ctx.db.run(`UPDATE track SET slate_drills = 0 WHERE id = 'java'`);
     seedDrills(ctx.db, ctx.clock, 'js', 3).forEach((id) => submit(ctx.db, ctx.clock, id)); // js: all 3 done today
