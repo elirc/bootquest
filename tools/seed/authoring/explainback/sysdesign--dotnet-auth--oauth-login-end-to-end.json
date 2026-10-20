@@ -1,0 +1,43 @@
+{
+ "lines": { "start": 8, "end": 219 },
+ "questions": [
+  {
+   "prompt": "DESIGN IT — OAuth login end-to-end for a web app [mid] (dotnet-auth, docs2/03-oauth-from-the-code.md). Scenario: you run the identity provider behind \"NetLinear\": a single-page app with about 200,000 users, a confidential server-side admin app, and a nightly reporting job that calls the API with no user present. Access tokens should live about 15 minutes, users should stay signed in for up to 30 days without retyping a password, and the API must authorize by permission. Design the flows each client uses, the tokens and what the API checks, where every secret lives, and how the API verifies tokens, before you look. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+   "keyPoints": [
+    { "text": "[w3] One flow per kind of client, allowed per client: authorization code with PKCE for apps acting for a user (the SPA and the admin web app), client credentials for the nightly job (machine-to-machine, no user), and the refresh grant to extend a session without a new login.", "quote": "machine-to-machine, no user" },
+    { "text": "[w2] Clients configure themselves from one discovery document (/.well-known/openid-configuration) rather than hard-coded endpoint URLs.", "quote": "which is how off-the-shelf OAuth libraries configure themselves against any provider" },
+    { "text": "[w3] The authorize step is bound to the provider's own signed-in browser session, with its login and consent screens, so a caller can only obtain codes for themselves; taking the user's identity from a request parameter (the repo's user_id simplification) must not ship.", "quote": "you can only mint codes for yourself, after the provider's own login + consent UI" },
+    { "text": "[w2] The client owns CSRF on the redirect: it sends a random state and checks that the echoed value matches; the provider only reflects it.", "quote": "the provider just reflects it; the client must verify it matches what it sent" },
+    { "text": "[w3] The code-for-token exchange is a server-side checklist run in order: the client exists and may use this grant, a confidential client's secret is verified, and the code must belong to the client redeeming it, each check closing a named attack (wrong-client confused deputy, client impersonation, a code minted for client A redeemed by client B).", "quote": "code minted for client A redeemed by client B" },
+    { "text": "[w2] The API authorizes from the access token's permission claims: one policy per permission string, applied to endpoints as named policies.", "cite": { "path": "src/NetAuth0.Api/Program.cs", "lineStart": 65, "lineEnd": 71 } },
+    { "text": "[w3] Where client secrets live: the SPA is registered with no secret at all (its code ships to the browser, so PKCE carries the proof instead), while confidential clients get a generated secret stored BCrypt-hashed like a password.", "cite": { "path": "src/NetAuth0.Application/Admin/AdminService.cs", "lineStart": 35, "lineEnd": 38 } },
+    { "text": "[w2] Tokens are signed with an asymmetric key and carry a kid; the provider publishes only public key parameters, so each API verifies tokens locally with no call to the provider per request.", "quote": "resource servers verify locally, no call to the provider per request" }
+   ]
+  },
+  {
+   "prompt": "PRE-MORTEM — the same provider at 10x (about 2,000,000 users, mobile apps and several open tabs refreshing at once, a client library that retries on timeout), plus a named failure: malware exfiltrates a user's refresh token. What breaks first, and what in your design already handles it?",
+   "keyPoints": [
+    { "text": "[w3] A refresh token is a long-lived session (30 days by default), so each use retires the presented token and issues a child linked to it under one family id; that lineage is what lets a stolen copy be noticed at all.", "quote": "every use kills the presented token and issues a child" },
+    { "text": "[w2] Detection does not need attribution: a dead token reappearing means two parties hold it, and the server cannot tell attacker from victim, so the response must not depend on knowing which; it also writes an audit event worth alerting on.", "quote": "You can't tell whether it's the attacker or the victim presenting it" },
+    { "text": "[w3] Parallel traffic is what breaks single-use first: the checks run in memory and are saved later, so they hold only for requests that arrive one at a time; at 10x, guard the code and refresh rows with a row version or a conditional update so exactly one of two simultaneous redemptions commits.", "quote": "Replay detection assumes requests arrive one at a time." },
+    { "text": "[w2] Rotation must be one commit: the child is saved before the parent is marked rotated, with token issuance in between, so a crash leaves two live tokens in one family; write both in a single transaction.", "quote": "A crash in the middle leaves two live tokens in one family." },
+    { "text": "[w3] Revoking refresh tokens does not recall access tokens already issued: they are verified locally until they expire, so the short access-token lifetime is the real revocation latency (about one 15-minute window per rotation for an attacker).", "quote": "of API access per rotation" },
+    { "text": "[w2] Kill switches already exist at two levels: a UI session is a refresh-token family, \"log out that device\" revokes one family, and an admin force-logout revokes everything a user holds.", "quote": "Sessions in the UI are just refresh-token families" },
+    { "text": "[w2] Signing-key rotation without an outage: retire keys rather than delete them, and keep publishing retired public keys for a grace window longer than the longest-lived token they signed.", "quote": "The grace window must exceed the longest-lived token signed by" },
+    { "text": "[w1] The token endpoint is rate-limited per client IP (fixed window, 20 a minute, no queue); at 10x, many users behind one carrier or office NAT share that budget.", "cite": { "path": "src/NetAuth0.Api/Program.cs", "lineStart": 73, "lineEnd": 83 } }
+   ]
+  },
+  {
+   "prompt": "TRADE-OFF HANDBACK — defend your provider design against the alternatives the document raises: self-contained JWTs versus a per-request check with the provider, what the API verifies about a token beyond its signature, where the signing key lives, how strict redirect registration is, and how long refresh tokens live. For each, say what you bought, what it cost, and which requirement put you on that side.",
+   "keyPoints": [
+    { "text": "[w3] Self-contained JWTs buy verification without a provider round-trip on every request; the cost is that an issued token cannot be recalled before it expires, which is why access tokens stay short and refresh tokens rotate.", "quote": "That's what makes JWTs stateless" },
+    { "text": "[w3] Check what a token is for, not only that it is signed: an ID token has a sub and a valid signature, so an API that skips the token-type check accepts it as a bearer token on [Authorize]-only endpoints.", "quote": "so it is accepted as a bearer token on the" },
+    { "text": "[w3] The private signing key kept as plaintext PEM in the database means database read access is enough to forge any token for any tenant; a production design moves keys to a KMS or equivalent and audits key access and rotation.", "cite": { "path": "docs2/08-security-review-walkthrough.md", "lineStart": 42, "lineEnd": 42 } },
+    { "text": "[w2] Registering every redirect URI exactly costs flexibility (no wildcard for preview hosts), but prefix and wildcard matching is a well-known source of real OAuth vulnerabilities and RFC 9700 requires exact string matching.", "quote": "Prefix/wildcard matching is a well-known source of real OAuth vulnerabilities" },
+    { "text": "[w2] Refresh lifetime is a per-client setting (30 days by default, clamped to 1-365 at registration): longer means fewer logins and a longer window for a stolen token, which rotation exists to shorten.", "cite": { "path": "src/NetAuth0.Application/Admin/AdminService.cs", "lineStart": 38, "lineEnd": 38 } },
+    { "text": "[w2] A missing signing key is generated on first use: convenient for bootstrap, but it means issuing a token can write to the database.", "quote": "self-heals by generating one on first use" },
+    { "text": "[w1] Client authentication accepts HTTP Basic or form fields, as RFC 6749 section 2.3.1 allows, so standard client libraries work unchanged.", "quote": "Client authentication accepts both HTTP Basic and form fields" }
+   ]
+  }
+ ]
+}
