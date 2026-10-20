@@ -18,7 +18,7 @@
    "kind": "explain-back",
    "questions": [
     {
-     "prompt": "DESIGN IT — [mid] multi-tenant isolation for a B2B CRUD app (grok-build-multitenant, dfableandopus/05-SYSTEM-DESIGN-FOLLOWUPS.md). Scenario: a projects-and-tasks SaaS serves 2,000 customer organizations today and plans for 10,000; the largest tenant holds 400,000 projects; a user can belong to several organizations and picks one per request; three API instances sit behind a load balancer; members of one organization edit the same project at the same time. Write your design before you look: the tenancy model, where the tenant id is resolved and where it is enforced (request, service, repository, schema), how writes stay tenant-safe and conflict-safe, and how list reads stay predictable as tenants grow. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "prompt": "DESIGN IT — [mid] multi-tenant isolation for a B2B CRUD app (grok-build-multitenant, dfableandopus/05-SYSTEM-DESIGN-FOLLOWUPS.md). Scenario: a projects-and-tasks SaaS serves 2,000 customer organizations today and plans for 10,000; the largest tenant holds 400,000 projects; a user can belong to several organizations and picks one per request; three API instances sit behind a load balancer; members of one organization edit the same project at the same time; users search their projects by name; and clients retry a create when its response is lost. Write your design before you look: the tenancy model, where the tenant id is resolved and where it is enforced (request, service, repository, schema), how writes stay tenant-safe and conflict-safe, how a retried create avoids a duplicate, and how list reads and search stay predictable as tenants grow. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
      "keyPoints": [
       {
        "text": "[w3] One shared schema: every tenant-owned table carries the organization id and its indexes lead with it, so a query inside one tenant is an index range scan and adding tenants costs storage rather than query time.",
@@ -29,8 +29,13 @@
        "quote": "every where carries organizationId"
       },
       {
-       "text": "[w3] Put the tenant rule in the schema where you can: a composite key (id, organization) on the parent and a child foreign key that carries the organization id make cross-tenant references structurally impossible, whichever service writes next.",
-       "quote": "works the same at any scale"
+       "text": "[w3] Put the tenant rule in the schema where you can: a composite key (id, organization) on the parent and a child foreign key that carries the organization id make cross-tenant references structurally impossible, whichever service writes next, and the guarantee works the same at any scale.",
+       "quote": "Task FK (projectId, organizationId) -> Project(id, organizationId)",
+       "cite": {
+        "path": "backend/prisma/migrations/202609090001_tenant_workspace/migration.sql",
+        "lineStart": 113,
+        "lineEnd": 113
+       }
       },
       {
        "text": "[w3] Concurrent edits use a conditional write: update where id, organization and expected version all match, bump the version, and require exactly one changed row; the database evaluates the predicate, so three instances race exactly like one.",
@@ -74,7 +79,7 @@
        "quote": "so three instances mean three times the attempt budget"
       },
       {
-       "text": "[w2] The per-request membership lookup multiplies with instances and invites a cache; once cached, its TTL is how long a removed member keeps access, so the number is a written policy decision.",
+       "text": "[w2] Tenant and role are enforced from a membership read in the tenant-context middleware, and that read multiplies with instances and invites a cache; once cached, its TTL is how long a removed member keeps access, so the number is a written policy decision.",
        "quote": "the TTL becomes the revocation delay"
       },
       {
@@ -82,8 +87,8 @@
        "quote": "or a pooled connection carries the previous request's tenant"
       },
       {
-       "text": "[w2] Side effects outside the database cannot be rolled back by it, so notifications go through an outbox row written in the same transaction and a separate worker; delivery is at-least-once.",
-       "quote": "cannot roll back an email"
+       "text": "[w2] The million-project tenant is a noisy neighbour on the shared database: its deep pages and exact counts spend the I/O and connections that the other 9,999 tenants share, so one tenant's slow list becomes everyone's slow list. Bound per-tenant work (cheap reads, per-tenant request or concurrency limits) and keep the option of moving an outsized tenant to its own database, which is the problem database per tenant makes disappear.",
+       "quote": "makes noisy-neighbour problems disappear"
       },
       {
        "text": "[w1] The first alert to wire up is tenant-context refusals counted apart from capability refusals: the former is someone acting in an organization they do not belong to.",
