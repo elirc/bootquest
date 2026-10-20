@@ -386,11 +386,11 @@ npm run seed:check -- --restamp     # see section 6
   runs before it stamps (a failure is printed as `STAMP none: guard ...`):
   - quest packs: **blind-pass** (no blind strategy clears the 80% gate with p > 0.02),
     **quiz-balance** over ALL the pack's quizzes (longest / shortest / median-ratio / rank /
-    format / slots; packs with >= 10 quizzes; `QUIZ_BALANCE_EXEMPT` lists today's failures and
-    may only shrink) and **explanation-lint** (no generator-label explanation);
+    format / slots; packs with >= 10 quizzes; `QUIZ_BALANCE_EXEMPT` grandfathers failures, may only
+    shrink, and is empty since the 2026-10-19 content pass) and **explanation-lint** (no generator-label explanation);
   - explain-back packs: no key point (text or quote) restates a keyed answer of a quest pack of
-    the same source repo (the notes token rules, token-Jaccard >= 0.5; `EB_LEAK_EXEMPT` lists
-    today's leaks and may only shrink; `npm run seed:lint:leaks` lists every leak);
+    the same source repo (the notes token rules, token-Jaccard >= 0.5; `EB_LEAK_EXEMPT` grandfathers
+    leaks, may only shrink, and is empty since the 2026-10-19 content pass; `npm run seed:lint:leaks` lists every leak);
   - every pack: a **secret scan** of every shipped string with the registry's `secretPatterns`.
 
 It exits 0 only when every pack passes. A guard failure is a `PROBLEM guard ...` line, and

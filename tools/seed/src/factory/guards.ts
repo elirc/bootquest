@@ -219,21 +219,13 @@ export type BalanceGuard = (typeof BALANCE_GUARDS)[number];
  * the HAND quizzes of content/seed-drafts/quests drafts, so the six `quests-authored.ts` packs
  * (borrowbox, csbootcamp, csharp-interview, csharp-tut, ...) were never balance-checked at all, and
  * a drafts pack whose generator quizzes skew the mix (gitjira, nettrello, react, ...) passed on its
- * hand quizzes alone. Every entry below is a real finding for a content agent; blind-pass (the exact
- * gate probability) passes for all of them.
+ * hand quizzes alone. The ten packs seeded here (borrowbox, csbootcamp, csharp-interview,
+ * csharp-tut, gitjira, nettrello, organized-experiment-support-hub, organized-study-atlas-fulfillment,
+ * organized-study-support-desk-crm, react) were fixed the same day by the fix/content-leaks pass:
+ * their hand-authored DISTRACTORS were rewritten (length, rank parity, format frames; no keyed answer
+ * changed) and each pack re-seeded. Keep it empty.
  */
-export const QUIZ_BALANCE_EXEMPT: Readonly<Record<string, readonly BalanceGuard[]>> = {
-  borrowbox: ['longest', 'rank'],
-  csbootcamp: ['longest', 'format'],
-  'csharp-interview': ['longest', 'rank', 'format'],
-  'csharp-tut': ['longest', 'rank', 'format'],
-  gitjira: ['format'],
-  nettrello: ['longest'],
-  'organized-experiment-support-hub': ['longest'],
-  'organized-study-atlas-fulfillment': ['median-ratio'],
-  'organized-study-support-desk-crm': ['format'],
-  react: ['format'],
-};
+export const QUIZ_BALANCE_EXEMPT: Readonly<Record<string, readonly BalanceGuard[]>> = {};
 
 export interface BalanceQuiz {
   id: string;
