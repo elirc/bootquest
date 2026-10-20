@@ -1,0 +1,39 @@
+{
+ "lines": { "start": 1, "end": 90 },
+ "questions": [
+  {
+   "prompt": "DESIGN IT — [senior] an ingest pipeline that cannot lose events (pulse-net, docs/adr/0001-async-ingestion-durable-queue.md). Requirements: product-analytics SDKs on phones and browsers fire-and-forget about 5,000 events a second at peak, in requests of up to 1,000 events; capture must answer in under 50 ms whatever the pipeline costs; once capture answers success, no event may be lost even if the process crashes a millisecond later; an $identify must see the anonymous events sent before it; one malformed event must not stall anyone else's. Write your design before you look: what the success response promises, where events wait and in what order, how a worker finds and drains them, how failures are classified, and what operators watch. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+   "keyPoints": [
+    { "text": "[w3] Acknowledge only what is durable: capture validates shape, appends every event of the request to a queue table in one commit, and only then answers 202 queued, so success means stored, not processed.", "quote": "A crash after 202 loses nothing" },
+    { "text": "[w3] Arrival order is a column: an auto-increment sequence on the queue row is the processing order, and the worker drains strictly by it so an $identify sees the anonymous events enqueued before it.", "quote": "auto-increment `Seq` = arrival order" },
+    { "text": "[w3] Classify failures at drain time: rows that can never succeed (unparseable, invalid on re-validation, project gone) dead-letter at once with the reason, other failures get a bounded number of retries and then dead-letter with the error, so a poison row leaves the queue instead of blocking it.", "quote": "One poison event cannot wedge the queue (dead-letter path)" },
+    { "text": "[w2] The wake-up is only a doorbell with no data in it: the table stays authoritative and a periodic sweep backs up the signal, so nothing correctness-relevant lives in process memory.", "quote": "the table is the source of truth, so a missed signal only delays work until the worker's 1-second periodic sweep" },
+    { "text": "[w2] The worker drains in fixed-size batches in sequence order and keeps going until a pass moves nothing, so bursts pile up in the queue instead of in request latency.", "quote": "table in `Seq` order in batches of 200" },
+    { "text": "[w1] Isolate rows from each other: after a failed ingest the processor clears the change tracker so half-tracked entities cannot leak into the next row's save.", "quote": "or corrupt its neighbors (the processor clears the EF change tracker after a failed row)" },
+    { "text": "[w1] Health reports a database failure as 503 but only degrades, still answering 200, once the backlog passes 10,000 pending rows, so backlog alerts must key on queue depth and age rather than the health status code.", "cite": { "path": "src/Pulse.Api/Program.cs", "lineStart": 142, "lineEnd": 146 } }
+   ]
+  },
+  {
+   "prompt": "PRE-MORTEM — launch week: traffic is 10x, a deploy restarts the process in the middle of a drain, the person-merge path throws a transient lock error on 1% of $identify rows for ten minutes, and a customer reports inflated event counts. What breaks first, and what in your design decides each failure?",
+   "keyPoints": [
+    { "text": "[w3] The processed-row delete is a separate statement that runs after the ingest commits (dead letters likewise), so a restart mid-drain replays rows; wrap ingest + delete in one transaction or carry a unique dedupe key into the stored event.", "quote": "One transaction around ingest + delete, or deduplication by event id, would close this." },
+    { "text": "[w3] A transiently failing row is retried after later rows in its batch, so events that follow a failed $identify are attributed to the pre-merge person; stop the pass (or that person's stream) at the first transient failure to keep per-person order.", "quote": "a row that fails transiently is retried *after* later rows in its batch have been processed" },
+    { "text": "[w3] The no-loss promise starts at the 202: capture is rate-limited per write key in fixed one-minute windows with no queueing, so a burst gets 429s, and a fire-and-forget SDK that does not buffer and retry with backoff loses those events before they were ever durable.", "cite": { "path": "src/Pulse.Api/Program.cs", "lineStart": 73, "lineEnd": 91 } },
+    { "text": "[w2] A client resend after a timeout before the 202 enqueues a second row with a new sequence number, and the capture contract carries no client-minted event id, so deduplicating SDK resends server-side needs one added to the payload.", "cite": { "path": "src/Pulse.Api/Contracts/CaptureContracts.cs", "lineStart": 12, "lineEnd": 46 } },
+    { "text": "[w2] Retries have no backoff: a failing row is retried on the very next pass, so a ten-minute dependency blip spends the whole attempt budget in seconds and dead-letters events that would have succeeded later; give each row a next-attempt time.", "quote": "There is no backoff between attempts." },
+    { "text": "[w1] The ingestion metrics endpoint counts queue and dead-letter rows across every project with no auth: fine for a demo, an aggregate-activity leak between tenants in multi-tenant use.", "quote": "Metrics are global and unauthenticated." }
+   ]
+  },
+  {
+   "prompt": "TRADE-OFF HANDBACK — defend your ingestion choices against the alternatives the ADR names or implies. For each, say what you bought, what it cost, and which requirement put you on that side.",
+   "keyPoints": [
+    { "text": "[w3] Synchronous ingest vs queue-then-202: v1 ran person resolution and merges inside the request, so capture latency tracked pipeline cost and a transient failure left SDKs to re-send or drop; the queue buys one-insert latency, paid for with a second system (depth, dead letters, drain) to operate.", "quote": "capture latency scaled with pipeline cost" },
+    { "text": "[w3] One consumer vs competing consumers: a single worker keeps sequence order for free but caps throughput at one drain loop; competing consumers with row claiming would scale, but only with a partition rule (for example per person) that preserves the order $identify and $set rely on.", "quote": "the queue table would also support competing consumers with row claiming if it ever mattered" },
+    { "text": "[w3] Queue in the same database vs a separate broker: one SaveChanges makes the whole request durable before the doorbell rings and the 202 goes out, and it keeps ingest + delete within reach of one local transaction; a broker would scale out but would need a dedupe key to get the same effect.", "cite": { "path": "src/Pulse.Api/Endpoints/CaptureEndpoints.cs", "lineStart": 48, "lineEnd": 62 } },
+    { "text": "[w2] An in-memory channel that carried the events would be faster but would lose whatever it held on a crash; a payload-free wake-up can never be the reason an event disappears.", "cite": { "path": "src/Pulse.Infrastructure/Services/IngestionPipeline.cs", "lineStart": 8, "lineEnd": 13 } },
+    { "text": "[w2] Dead-letter vs retry-forever vs drop: dead letters keep the original payload and error per project for inspection, but the code exposes listing only, so a re-drive path after a fix is yours to build.", "cite": { "path": "src/Pulse.Api/Endpoints/IngestionEndpoints.cs", "lineStart": 30, "lineEnd": 55 } },
+    { "text": "[w1] Capture still checks payload shape synchronously, so an obviously broken request gets a validation error the SDK can see rather than turning into a silent dead letter later.", "cite": { "path": "src/Pulse.Api/Endpoints/CaptureEndpoints.cs", "lineStart": 42, "lineEnd": 46 } }
+   ]
+  }
+ ]
+}

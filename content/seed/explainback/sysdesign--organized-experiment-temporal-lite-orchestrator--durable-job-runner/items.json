@@ -1,0 +1,146 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "organized-experiment-temporal-lite-orchestrator--docs-learning-concepts-demonstrated.md",
+ "items": [
+  {
+   "key": "seed:explainback:organized-experiment-temporal-lite-orchestrator/explain-back/b3168960a0730ca2",
+   "provenance": {
+    "repo": "organized-experiment-temporal-lite-orchestrator",
+    "sha": "dd524de9c564191108dafcc572a2741f789b6842",
+    "path": "docs/learning/concepts-demonstrated.md",
+    "lines": {
+     "start": 38,
+     "end": 157
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "DESIGN IT — [senior] a durable job runner on Postgres (temporal-lite-orchestrator, docs/learning/concepts-demonstrated.md). Requirements: 8 worker processes share one Postgres and nothing else; peak about 50 tasks a second; a task calls an external API that can take up to 40 s; deploys SIGKILL workers mid-task several times a day; a step gets at most 3 attempts with exponential backoff; a client that retries 'start run' after a timeout must not get a second run; on-call must be able to explain every retry from the database alone. Write your design before you look: how a worker claims a task, what a lease means and who may take an expired one, where the idempotency records live and when they are written, the retry arithmetic, and what the audit trail records. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "keyPoints": [
+      {
+       "text": "[w3] The claim is a single statement: a CTE picks the oldest due AVAILABLE row with FOR UPDATE SKIP LOCKED and the UPDATE in the same statement stamps owner, token and expiry with RETURNING, so selection and ownership cannot be separated by another worker.",
+       "quote": "Because the select and the update are one statement, there is no window where two workers both think they own the same row."
+      },
+      {
+       "text": "[w3] The row lock ends with the claim statement; after that, ownership is only data (status, owner, token, expiry), so the design must say up front what an expired lease means and which path is allowed to take the row back.",
+       "quote": "The lock lasts only for that statement."
+      },
+      {
+       "text": "[w3] Side effects go through an idempotency record with a unique key per step run and action type, but it is written only after the effect returns, so a crash in that gap repeats the effect; say which side of that gap your design accepts.",
+       "quote": "If the process dies after the effect but before the insert, the effect runs again."
+      },
+      {
+       "text": "[w2] Retry arithmetic is explicit: the attempt counter is bumped before the handler runs and a failure retries while attempts < max, so a limit of 3 means three tries in total, of which two are retries.",
+       "quote": "Three total attempts, two retries."
+      },
+      {
+       "text": "[w2] Backoff doubles per attempt under a one-hour ceiling, and that ceiling quietly overrides a longer configured initial delay (24 h becomes 1 h), so the policy schema and the cap must be validated together.",
+       "quote": "but the cap silently shortens it to 1 h"
+      },
+      {
+       "text": "[w2] Run start is deduplicated by a client idempotency key backed by a unique index; two simultaneous starts race on that index, so the loser must be mapped to 'here is the winning run' rather than surfacing as a server error.",
+       "quote": "Concurrent duplicates: one wins, the other gets a 500 from the unique index"
+      },
+      {
+       "text": "[w2] Every run and step state change appends an execution event in the same transaction, which is the evidence on-call reads to explain why a run retried, paused, failed or completed.",
+       "quote": "accompany run/step state changes."
+      },
+      {
+       "text": "[w1] The state machine is a guard table checked before each write: a step may go FAILED to QUEUED for a retry, but a failed run is terminal with no run-level retry path.",
+       "quote": "once a run is `FAILED`, no code path can revive it."
+      }
+     ]
+    },
+    {
+     "prompt": "PRE-MORTEM — the runner has been live for three months. A deploy SIGKILLs 2 of the 8 workers mid-task, an approver double-clicks Approve and Reject within the same second, and the database blips between creating a run and scheduling its first step. What breaks, how would on-call notice, and what repair or rollback story does your design have for each?",
+     "keyPoints": [
+      {
+       "text": "[w3] Reclaim is the missing half of the lease: the claim predicate only matches AVAILABLE rows and no code reads leaseExpiresAt, so a killed worker's task has no path back into the queue and its run never finishes; add a reaper (or widen the claim) to take rows whose lease has passed.",
+       "cite": {
+        "path": "docs/architecture/README.md",
+        "lineStart": 64,
+        "lineEnd": 64
+       }
+      },
+      {
+       "text": "[w3] Fencing must come with reclaim: completion and failure update the task by id alone and never compare the lease token, so a slow worker that wakes after its row was re-leased would overwrite the new owner's result; guard those writes with the token.",
+       "cite": {
+        "path": "src/repositories/task-repository.ts",
+        "lineStart": 79,
+        "lineEnd": 88
+       }
+      },
+      {
+       "text": "[w3] Run creation and first-step scheduling commit in two separate transactions with no repair job, so a crash between them leaves a PENDING run that a retry with the same key simply hands back; schedule the first task in the same transaction (or build the repair sweep).",
+       "cite": {
+        "path": "docs/architecture/README.md",
+        "lineStart": 69,
+        "lineEnd": 69
+       }
+      },
+      {
+       "text": "[w2] Simultaneous approval decisions can both apply because the PENDING check is a read before the transaction and the resolve updates by id; make it a conditional update on status inside the transaction, since the same-status shortcut in the transition helpers cannot notice a competing writer.",
+       "quote": "a transition helper cannot detect \"someone else already did this\""
+      },
+      {
+       "text": "[w2] Detection: the TASK_LEASED event records the worker id and lease expiry, so an alert can join running steps to leases that are already past expiry and page before a customer asks why the run is frozen.",
+       "cite": {
+        "path": "src/services/workflow-engine-service.ts",
+        "lineStart": 409,
+        "lineEnd": 419
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "TRADE-OFF HANDBACK — defend your job-runner choices against the alternatives the repo itself names. For each, say what you bought, what it cost, and which requirement put you on that side.",
+     "keyPoints": [
+      {
+       "text": "[w3] SKIP LOCKED claim vs a findFirst-then-update claim: the two-step version lets two workers read the same AVAILABLE row before either writes, so both believe they own it; the single statement costs a raw SQL query but removes the race.",
+       "quote": "two workers can run the `findFirst` before either runs the `update`"
+      },
+      {
+       "text": "[w3] A status-only lease vs heartbeats and start-to-close timeouts: the repo bought simplicity and paid with no crash recovery; once reclaim exists, the 30 s default lease is shorter than a 40 s task, so long tasks need a heartbeat that extends the lease or healthy work gets taken away and run twice.",
+       "cite": {
+        "path": "src/services/worker-service.ts",
+        "lineStart": 69,
+        "lineEnd": 70
+       }
+      },
+      {
+       "text": "[w3] Mutable run and step rows plus an append-only audit log vs replaying an event history: rows are simple to query and reason about, but nothing rebuilds state from the events, so the log explains incidents and cannot recover from them.",
+       "cite": {
+        "path": "docs/architecture/README.md",
+        "lineStart": 48,
+        "lineEnd": 48
+       }
+      },
+      {
+       "text": "[w2] A local idempotency record vs keys honoured by the remote side: the local record only survives worker restarts on our side, so any truly external API also needs our key sent to it.",
+       "cite": {
+        "path": "src/services/worker-service.ts",
+        "lineStart": 44,
+        "lineEnd": 45
+       }
+      },
+      {
+       "text": "[w2] Delay expressed as availableAt in the claim's WHERE clause vs durable timers: polling makes backoff work with no timer service, while the run's nextWakeAt field is written and never read.",
+       "cite": {
+        "path": "docs/architecture/README.md",
+        "lineStart": 52,
+        "lineEnd": 52
+       }
+      },
+      {
+       "text": "[w1] Be honest about scope: replay, timers, heartbeats, cancellation and sagas are named and deliberately left out, so the design is a durable job queue with a state machine rather than a durable-execution engine.",
+       "quote": "Concepts the project name suggests but the code does not implement (replay, timers, heartbeats, cancellation, sagas or compensation)"
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}
