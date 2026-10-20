@@ -19,12 +19,14 @@ import { useApi } from '../api/context';
 import { errorText } from '../api/errors';
 import {
   isApiError,
+  type ApiError,
   type ExplainBackKeyResponse,
   type ExplainBackPublic,
   type ExplainBackScoreResponse,
   type KataFinding,
   type KataKeyResponse,
   type KataScoreResponse,
+  type TolerantSuperseded,
   type UnitDetail,
 } from '../api/types';
 import { Icon } from '../components/Icon';
@@ -33,6 +35,7 @@ import { contentHash, useDirtyGuard, useJsonDraft } from '../lib/draft';
 import { fmtWhen } from '../lib/format';
 import { InlineProse } from '../lib/prose';
 import { useTracksRefresh } from '../lib/tracks';
+import { competencyLabel } from '../lib/view';
 
 const fmtPct = (x: number) => `${Math.round(x * 1000) / 10}%`;
 
@@ -42,15 +45,39 @@ const ARTIFACT_REQUIRED_TEXT =
   'Pass the linked project unit solo first: this explain-back is its promotion leg (b), and the set takes one answer only, so an answer stored now could never count. Your draft is kept.';
 
 /**
- * errorText plus the ladder-specific lines: a NOT_ANSWERED that names a superseded answer explains
- * the re-seed (server text), and ARTIFACT_REQUIRED gets the pane's longer line (it says the draft
- * is kept). ALREADY_ANSWERED needs nothing here: errorText itself shows the server's text for it
- * (it names the stored answer and where to self-score it).
+ * errorText plus the ladder-specific line: ARTIFACT_REQUIRED gets the pane's longer line (it says
+ * the draft is kept). ALREADY_ANSWERED needs nothing here: errorText itself shows the server's text
+ * for it (it names the stored answer and where to self-score it). A NOT_ANSWERED never lands here:
+ * every path routes it to the superseded notice (supersededNotice).
  */
 function ladderErrorText(e: unknown): string {
   if (isApiError(e, 'ARTIFACT_REQUIRED')) return `${ARTIFACT_REQUIRED_TEXT} (ARTIFACT_REQUIRED)`;
-  if (isApiError(e, 'NOT_ANSWERED') && /superseded/.test(e.message)) return `${e.message} (NOT_ANSWERED)`;
   return errorText(e);
+}
+
+// ---------------------------------------------------------------- superseded (re-seeded) answers
+
+/** Earlier-version answers of the learner, superseded by a re-seed (ids; the server's text on an older server). */
+interface Superseded {
+  ids: number[];
+  text: string | null;
+}
+
+/** The structured `supersededAnswerIds` of a public half; undefined when the server does not send it. */
+const supersededIdsOf = (pub: object | null | undefined): number[] | undefined => {
+  const ids = (pub as TolerantSuperseded | null | undefined)?.supersededAnswerIds;
+  return Array.isArray(ids) ? ids : undefined;
+};
+
+/**
+ * The notice to show over a fresh answer form. The structured field wins when the server sends
+ * it; an older server only names the superseded answer inside its NOT_ANSWERED message, so that
+ * text is the fallback.
+ */
+function supersededNotice(ids: number[] | undefined, message: string | null): Superseded | null {
+  if (ids !== undefined) return ids.length > 0 ? { ids, text: null } : null;
+  if (message === null || !/superseded/.test(message)) return null;
+  return { ids: [...message.matchAll(/#(\d+)/g)].map((m) => Number(m[1])), text: message };
 }
 
 function HelpBox({ checked, onChange, disabled }: { checked: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
@@ -85,19 +112,32 @@ export const ebDraftKey = (unitId: number, pub: Pick<ExplainBackPublic, 'questio
   ladderDraftKey('eb', unitId, pub.questions.map((q) => q.prompt).join('\u0000'));
 export const kataDraftKey = (unitId: number, diff: string): string => ladderDraftKey('kata', unitId, diff);
 
-/** Ask before a tab close / reload while `dirty` (the draft is in storage: in-app navigation loses nothing). */
-const useLadderDirtyGuard = (dirty: boolean): void => useDirtyGuard(dirty, { inApp: false });
+const LADDER_LEAVE_MESSAGE = 'Your unsent answers are not saved anywhere (this browser is not storing drafts). Leave this page and lose them?';
 
-function DraftNote({ restored }: { restored: boolean }) {
+/**
+ * Leaving loses work only when it exists nowhere else: the draft is dirty AND storage refused it
+ * (private window, blocked site data, quota). A stored draft restores on the next visit, so then
+ * neither a reload nor an in-app navigation asks. Both halves are armed (tab close + in-app).
+ */
+const useLadderDirtyGuard = (dirty: boolean, persisted: boolean): void => useDirtyGuard(!persisted && dirty, LADDER_LEAVE_MESSAGE);
+
+function DraftNote({ restored, persisted }: { restored: boolean; persisted: boolean }) {
   return (
-    <p className="muted small draft-note" data-testid="draft-note">
-      {restored && (
-        <span data-testid="draft-restored">
-          <Icon name="info" size={14} /> Restored your unsent draft.
-        </span>
+    <>
+      {!persisted && (
+        <p className="draft-warn" data-testid="draft-unsaved">
+          <Icon name="warn" size={14} /> Draft not saved (this browser is not storing drafts): leaving this page will lose it.
+        </p>
       )}
-      <span>Unsent drafts are kept in this browser only; nothing is recorded until you submit.</span>
-    </p>
+      <p className="muted small draft-note" data-testid="draft-note">
+        {restored && (
+          <span data-testid="draft-restored">
+            <Icon name="info" size={14} /> Restored your unsent draft.
+          </span>
+        )}
+        <span>Unsent drafts are kept in this browser only; nothing is recorded until you submit.</span>
+      </p>
+    </>
   );
 }
 
@@ -112,12 +152,15 @@ type KeyPhase = 'checking' | 'answering' | 'loaded' | 'unavailable';
  * Any OTHER failure is `unavailable` (with Retry): an answered unit must never fall back to an
  * empty answer form, where the learner would retype everything only to hit ALREADY_ANSWERED.
  */
-function useExistingKey<T>(load: () => Promise<T>, answered: boolean | undefined) {
+function useExistingKey<T>(load: () => Promise<T>, answered: boolean | undefined, superseded: number[] | undefined) {
   const [key, setKeyState] = useState<T | null>(null);
   const [phase, setPhase] = useState<KeyPhase>(answered === false ? 'answering' : 'checking');
   const [error, setError] = useState<string | null>(null);
-  /** a NOT_ANSWERED that names a superseded (re-seeded) earlier answer */
-  const [notice, setNotice] = useState<string | null>(null);
+  /**
+   * earlier-version answers superseded by a re-seed: from the unit detail itself (so a fresh form
+   * never appears unexplained), or, on an older server, from a NOT_ANSWERED message
+   */
+  const [notice, setNotice] = useState<Superseded | null>(() => supersededNotice(superseded, null));
   const [tries, setTries] = useState(0);
   const loadRef = useRef(load);
   loadRef.current = load;
@@ -137,7 +180,7 @@ function useExistingKey<T>(load: () => Promise<T>, answered: boolean | undefined
         if (!live) return;
         if (isApiError(e, 'NOT_ANSWERED')) {
           // no answer for THIS item version (never answered, or the old one was superseded by a re-seed)
-          setNotice(/superseded/.test(e.message) ? e.message : null);
+          setNotice(supersededNotice(superseded, e.message));
           setPhase('answering');
         } else {
           setError(errorText(e));
@@ -168,12 +211,27 @@ function useExistingKey<T>(load: () => Promise<T>, answered: boolean | undefined
       setPhase('unavailable');
     },
     /** the server says this version is unanswered after all (a re-seed under our feet): answer again */
-    reopen: (message: string | null) => {
+    reopen: (next: Superseded | null) => {
       setKeyState(null);
-      setNotice(message);
+      setNotice(next);
       setPhase('answering');
     },
   };
+}
+
+/**
+ * A self-score answered NOT_ANSWERED: the item was re-seeded while its key view was open. Re-read
+ * the unit for the structured superseded ids (the detail held by the page predates the re-seed);
+ * the error's own text is the fallback for an older server or a failed re-read.
+ */
+async function staleNotice(e: ApiError, reread: () => Promise<object | null | undefined>): Promise<Superseded | null> {
+  let ids: number[] | undefined;
+  try {
+    ids = supersededIdsOf(await reread());
+  } catch {
+    ids = undefined;
+  }
+  return supersededNotice(ids, e.message);
 }
 
 function KeyUnavailable({ noun, stored, error, onRetry }: { noun: 'answers' | 'findings'; stored: boolean; error: string | null; onRetry: () => void }) {
@@ -193,12 +251,15 @@ function KeyUnavailable({ noun, stored, error, onRetry }: { noun: 'answers' | 'f
   );
 }
 
-function SupersededNote({ text }: { text: string | null }) {
-  if (!text) return null;
+function SupersededNote({ notice }: { notice: Superseded | null }) {
+  if (!notice) return null;
+  const { ids, text } = notice;
+  const which = ids.length === 0 ? 'your earlier answer' : `your earlier answer${ids.length === 1 ? '' : 's'} ${ids.map((n) => `#${n}`).join(', ')}`;
+  const pron = ids.length > 1 ? 'those answers are' : 'that answer is';
   return (
     <div className="verdict verdict-todo" data-testid="superseded-note">
-      <Icon name="info" /> This item was re-seeded since your earlier answer, so that answer is superseded (kept, never keyed against the new
-      version). Answer the new version below. <span className="muted">{text}</span>
+      <Icon name="info" /> This item was re-seeded since {which}, so {pron} superseded (kept, never keyed against the new version). Answer the
+      new version below.{text && <span className="muted"> {text}</span>}
     </div>
   );
 }
@@ -293,7 +354,7 @@ export function ExplainBackPane({ detail }: { detail: UnitDetail }) {
   const api = useApi();
   const id = detail.unit.id;
   const pub = detail.explainBack ?? null;
-  const ks = useExistingKey<ExplainBackKeyResponse>(() => api.getExplainBackKey(id), pub?.answered);
+  const ks = useExistingKey<ExplainBackKeyResponse>(() => api.getExplainBackKey(id), pub?.answered, supersededIdsOf(pub));
   const n = pub?.questions.length ?? 0;
   const draft = useJsonDraft<EbDraft>(pub ? ebDraftKey(id, pub) : null, { answers: Array.from({ length: n }, () => ''), assisted: false }, {
     parse: (raw) => {
@@ -316,7 +377,7 @@ export function ExplainBackPane({ detail }: { detail: UnitDetail }) {
     if (ks.key) draft.clear();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ks.key]);
-  useLadderDirtyGuard(ks.phase === 'answering' && !ebDraftEmpty(draft.value));
+  useLadderDirtyGuard(ks.phase === 'answering' && !ebDraftEmpty(draft.value), draft.persisted);
 
   if (!pub) {
     return (
@@ -376,7 +437,8 @@ export function ExplainBackPane({ detail }: { detail: UnitDetail }) {
     }
   };
 
-  if (ks.key) return <ExplainBackKeyView unitId={id} keyResp={ks.key} gatePct={pub.minCoveragePct ?? PROMOTION_MIN_COVERAGE * 100} onStale={ks.reopen} />;
+  const onStale = (e: ApiError) => void staleNotice(e, async () => (await api.getUnit(id)).explainBack).then(ks.reopen);
+  if (ks.key) return <ExplainBackKeyView unitId={id} keyResp={ks.key} gatePct={pub.minCoveragePct ?? PROMOTION_MIN_COVERAGE * 100} onStale={onStale} />;
 
   const ready = answers.length > 0 && answers.every((a) => a.trim() !== '');
   const frozen = busy || locked;
@@ -393,7 +455,7 @@ export function ExplainBackPane({ detail }: { detail: UnitDetail }) {
       {ks.phase === 'unavailable' && <KeyUnavailable noun="answers" stored={stored || pub.answered === true} error={ks.error} onRetry={ks.retry} />}
       {ks.phase === 'answering' && (
         <>
-          <SupersededNote text={ks.notice} />
+          <SupersededNote notice={ks.notice} />
           {locked && <ArtifactLock artifacts={artifacts} />}
           <ol className="eb-questions">
             {pub.questions.map((q, i) => (
@@ -425,7 +487,7 @@ export function ExplainBackPane({ detail }: { detail: UnitDetail }) {
               <Icon name={locked ? 'lock' : 'check'} /> Submit answers
             </button>
           </div>
-          {!locked && <DraftNote restored={draft.restored} />}
+          {!locked && <DraftNote restored={draft.restored} persisted={draft.persisted} />}
           {confirming && !locked && (
             <div className="confirm" role="alertdialog" onKeyDown={(e) => e.key === 'Escape' && !busy && setConfirming(false)} aria-labelledby="eb-confirm-title" aria-describedby="eb-confirm-desc">
               <h3 id="eb-confirm-title">Submit your answers?</h3>
@@ -459,7 +521,8 @@ function ExplainBackKeyView({
   keyResp: ExplainBackKeyResponse;
   /** the unit's own pass mark, percent (ExplainBackPublic.minCoveragePct) */
   gatePct: number;
-  onStale: (message: string | null) => void;
+  /** the self-score answered NOT_ANSWERED: the item was re-seeded since the key loaded */
+  onStale: (e: ApiError) => void;
 }) {
   const api = useApi();
   const allIds = keyResp.questions.flatMap((q) => q.keyPoints.map((k) => k.id));
@@ -484,7 +547,7 @@ function ExplainBackKeyView({
       refreshTracks(); // W10: a self-score completes the unit (track progress)
     } catch (e) {
       // re-seeded since the key loaded: this answer is superseded, the new version takes a fresh one
-      if (isApiError(e, 'NOT_ANSWERED')) onStale(/superseded/.test(e.message) ? e.message : null);
+      if (isApiError(e, 'NOT_ANSWERED')) onStale(e);
       else setError(ladderErrorText(e));
     } finally {
       setBusy(false);
@@ -562,7 +625,11 @@ function ExplainBackKeyView({
           id="eb-score-confirm"
           title="File this self-score?"
           summary={`${covered}/${allIds.length} covered = ${fmtPct(covered / allIds.length)}: ${passes ? 'meets' : 'below'} the ${gatePct}% promotion gate.`}
-          consequence={passes ? 'It counts as promotion leg (b) and schedules the changed-example retest.' : 'It files a FAIL for promotion leg (b): no XP and no retest.'}
+          consequence={
+            passes
+              ? 'It counts toward promotion leg (b) only when this set is linked to an artifact you passed solo and your answers were unassisted.'
+              : "It files a fail against this unit's gate: no XP and no retest."
+          }
           confirmLabel="File self-score"
           busy={busy}
           onCancel={() => setConfirming(false)}
@@ -609,7 +676,7 @@ function ExplainBackResult({ r }: { r: ExplainBackScoreResponse }) {
       )}
       {r.promotions.map((p) => (
         <div key={p.evidenceId} className="verdict verdict-pass">
-          <Icon name="bolt" /> Promoted {p.competency}: {p.from} → {p.to}
+          <Icon name="bolt" /> Promoted {competencyLabel(p.competency)}: {p.from} → {p.to}
         </div>
       ))}
     </>
@@ -663,7 +730,7 @@ export function KataPane({ detail }: { detail: UnitDetail }) {
   const api = useApi();
   const id = detail.unit.id;
   const kata = detail.kata ?? null;
-  const ks = useExistingKey<KataKeyResponse>(() => api.getKataKey(id), kata?.answered);
+  const ks = useExistingKey<KataKeyResponse>(() => api.getKataKey(id), kata?.answered, supersededIdsOf(kata));
   const [wrap, setWrap] = useState(false);
   const draft = useJsonDraft<KataDraft>(kata ? kataDraftKey(id, kata.diff) : null, { rows: [{ ...EMPTY_FINDING }], assisted: false }, { parse: parseKataDraft, isEmpty: kataDraftEmpty });
   const [stored, setStored] = useState(kata?.answered === true);
@@ -675,7 +742,7 @@ export function KataPane({ detail }: { detail: UnitDetail }) {
     if (ks.key) draft.clear();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ks.key]);
-  useLadderDirtyGuard(ks.phase === 'answering' && !kataDraftEmpty(draft.value));
+  useLadderDirtyGuard(ks.phase === 'answering' && !kataDraftEmpty(draft.value), draft.persisted);
 
   if (!kata) {
     return (
@@ -741,14 +808,14 @@ export function KataPane({ detail }: { detail: UnitDetail }) {
         </details>
       ))}
       {ks.key ? (
-        <KataKeyView unitId={id} keyResp={ks.key} onStale={ks.reopen} />
+        <KataKeyView unitId={id} keyResp={ks.key} onStale={(e) => void staleNotice(e, async () => (await api.getUnit(id)).kata).then(ks.reopen)} />
       ) : ks.phase === 'checking' ? (
         <p className="muted small">Checking for earlier findings…</p>
       ) : ks.phase === 'unavailable' ? (
         <KeyUnavailable noun="findings" stored={stored || kata.answered === true} error={ks.error} onRetry={ks.retry} />
       ) : (
         <>
-          <SupersededNote text={ks.notice} />
+          <SupersededNote notice={ks.notice} />
           <table className="table findings-table">
             <thead>
               <tr>
@@ -801,7 +868,7 @@ export function KataPane({ detail }: { detail: UnitDetail }) {
             </button>
           </div>
           <p className="muted small">Findings are stored immutably; the seeded-defect key is shown only after.</p>
-          <DraftNote restored={draft.restored} />
+          <DraftNote restored={draft.restored} persisted={draft.persisted} />
           <ErrorLine error={error} />
         </>
       )}
@@ -809,7 +876,7 @@ export function KataPane({ detail }: { detail: UnitDetail }) {
   );
 }
 
-function KataKeyView({ unitId, keyResp, onStale }: { unitId: number; keyResp: KataKeyResponse; onStale: (message: string | null) => void }) {
+function KataKeyView({ unitId, keyResp, onStale }: { unitId: number; keyResp: KataKeyResponse; onStale: (e: ApiError) => void }) {
   const api = useApi();
   const [marks, setMarks] = useState<Record<string, 'caught' | 'missed'>>({});
   const refreshTracks = useTracksRefresh();
@@ -831,7 +898,7 @@ function KataKeyView({ unitId, keyResp, onStale }: { unitId: number; keyResp: Ka
       setResult(await api.selfScoreKata(unitId, { perDefect: marks }));
       refreshTracks(); // W10: a self-score completes the unit (track progress)
     } catch (e) {
-      if (isApiError(e, 'NOT_ANSWERED')) onStale(/superseded/.test(e.message) ? e.message : null);
+      if (isApiError(e, 'NOT_ANSWERED')) onStale(e);
       else setError(ladderErrorText(e));
     } finally {
       setBusy(false);

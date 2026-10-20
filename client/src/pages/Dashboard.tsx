@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useApi } from '../api/context';
 import type {
@@ -27,13 +28,19 @@ export function DashboardPage() {
   // them by design). Requested alongside the dashboard and laid out once it SETTLES, so the
   // "Due now" panel never pushes the page down after first paint.
   const comp = useAsync(() => api.getCompetencies(), [api]);
+  // fix/client-review 4: only the FIRST paint waits for /competencies. Once the body is up it stays
+  // mounted while the Due-now panel reloads (its own Retry), so the rest of the page (and the slate
+  // target lookups it fires on mount) is not torn down and refetched.
+  const [painted, setPainted] = useState(false);
+  const showBody = q.status === 'ready' && (painted || comp.status !== 'loading');
+  if (showBody && !painted) setPainted(true);
   return (
     <>
       <PageHeader
         eyebrow={q.data ? new Date(`${q.data.today}T00:00:00Z`).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC' }) : ' '}
         title="Dashboard"
       />
-      {q.status === 'ready' && comp.status !== 'loading' ? <DashboardBody d={q.data} comp={comp} /> : <LoadState error={q.error} onRetry={q.reload} minHeight={720} />}
+      {showBody ? <DashboardBody d={q.data} comp={comp} /> : <LoadState error={q.error} onRetry={q.reload} minHeight={720} />}
     </>
   );
 }
@@ -187,7 +194,8 @@ function DueNowPanel({ q, retests }: { q: Loaded<CompetenciesResponse>; retests:
       aside={<span className="muted small">retests are not in the review queue</span>}
     >
       <div data-testid="due-now">
-        {q.status === 'error' ? (
+        {q.status !== 'ready' ? (
+          // an error (with Retry), or the reload that Retry started: never "No retests" while unknown
           <LoadState error={q.error} onRetry={q.reload} minHeight={64} />
         ) : sorted.length === 0 ? (
           <p className="muted small due-empty" data-testid="due-empty">
@@ -300,7 +308,9 @@ function Slate({ d }: { d: DashboardData }) {
   // while /tracks loads, the placeholder (all unlocked) stands in, so rows do not pop in later
   const trackRows: readonly { id: TrackId; locked: boolean }[] = tracks.data?.tracks ?? TRACK_PLACEHOLDER;
   const unlocked = (t: TrackId) => trackRows.some((r) => r.id === t && !r.locked);
-  const exhausted = SLATE_DRILL_TRACKS.filter((t) => unlocked(t) && !items.some((s) => slateTrack(s) === t));
+  // fix/client-review 7g: the list is a client-side guess (slate_drills is server config), so a
+  // missing row is stated neutrally, never as "track exhausted"
+  const noDrillSlot = SLATE_DRILL_TRACKS.filter((t) => unlocked(t) && !items.some((s) => slateTrack(s) === t));
   const noCampaign = !items.some((s) => s.kind === 'campaign-step');
   const reviewOnly = items.every((s) => s.kind === 'review-clear');
   return (
@@ -309,13 +319,13 @@ function Slate({ d }: { d: DashboardData }) {
         {items.map((s) => (
           <SlateRow key={s.slot} s={s} view={slateView(s, nextDrill, targets)} />
         ))}
-        {exhausted.map((t) => (
+        {noDrillSlot.map((t) => (
           <li key={`gone-${t}`} className="slate-row slate-gone" data-slot={`drill:${t}`} data-missing="true">
             <span className="slate-check slate-check-gone" aria-hidden="true">
               –
             </span>
             <span className="slate-label">
-              {TRACK_LABEL[t]} drills <span className="slate-why">track exhausted — no new drills</span>
+              {TRACK_LABEL[t]} drills <span className="slate-why">no drill slot on today&apos;s slate</span>
             </span>
           </li>
         ))}

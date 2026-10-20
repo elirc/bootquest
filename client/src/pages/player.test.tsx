@@ -109,6 +109,35 @@ describe('code drafts', () => {
     expect(screen.getByTestId('draft-undo')).toHaveTextContent(/Loaded your code from attempt #\d+/);
   });
 
+  it('the "Load my last submitted code" offer follows every submit (never names an older attempt)', async () => {
+    const { api } = recording();
+    const first = renderApp(`/play/${DRILL}`, api);
+    await first.user.click(await editorBox());
+    await first.user.keyboard('// one');
+    await first.user.click(screen.getByRole('button', { name: /Submit/ }));
+    await within(screen.getByTestId('results')).findByText('Checks failed');
+    const a1 = Number(/#(\d+)/.exec(screen.getByRole('button', { name: /Load my last submitted code/ }).textContent ?? '')![1]);
+    first.unmount();
+
+    const { user } = renderApp(`/play/${DRILL}`, api);
+    const editor = await editorBox();
+    expect(screen.getByRole('button', { name: `Load my last submitted code (attempt #${a1})` })).toBeInTheDocument();
+    await user.click(editor);
+    await user.keyboard('// two');
+    await user.click(screen.getByRole('button', { name: /Submit/ }));
+    await within(screen.getByTestId('results')).findByText('Checks failed');
+    const offer = screen.getByRole('button', { name: /Load my last submitted code/ });
+    const a2 = Number(/#(\d+)/.exec(offer.textContent ?? '')![1]);
+    expect(a2).toBeGreaterThan(a1);
+    // and it loads THAT attempt's code
+    await user.click(editor);
+    await user.keyboard('// three');
+    await user.click(offer);
+    await waitFor(() => expect(editor.value).toContain('// two'));
+    expect(editor.value).not.toContain('// three');
+    expect(screen.getByTestId('draft-undo')).toHaveTextContent(`Loaded your code from attempt #${a2}.`);
+  });
+
   it('dirty guard: with storage refusing drafts, unsaved edits arm beforeunload and an in-app navigation confirm', async () => {
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
       throw new Error('QuotaExceededError');
@@ -213,7 +242,12 @@ describe('the shared Enter gate', () => {
     await user.click(input);
     await user.keyboard('{Enter}'); // empty: nothing to check
     expect(calls).toHaveLength(0);
-    await user.type(input, 'A D C B{Enter}');
+    await user.type(input, 'A D C B');
+    // fix/client-review 7d: the Enter that commits an IME composition is not a check
+    fireEvent.keyDown(input, { key: 'Enter', isComposing: true });
+    await Promise.resolve();
+    expect(calls).toHaveLength(0);
+    await user.keyboard('{Enter}');
     expect(await screen.findByText('Correct')).toBeInTheDocument();
     expect(calls).toEqual([{ answer: 'A D C B', selfAssisted: false }]);
   });
@@ -290,6 +324,25 @@ describe('reveal on promotion-chain units', () => {
     expect(screen.queryByRole('button', { name: /Reveal solution/ })).not.toBeInTheDocument();
   });
 
+  // fix/client-review 6: the server withholds a closed retest's check (check: null); the page must
+  // not also claim "no browser check, completed outside the player" beside "opens <date>"
+  it('a closed retest with its check withheld is ONE closed-retest view, never the no-browser-check pane', async () => {
+    const closed = (gate: NonNullable<UnitDetail['retestGate']>) => (d: UnitDetail): UnitDetail => ({ ...asRetest(gate)(d), check: null, starter: null, instructions: null });
+    const first = renderApp(`/play/${DRILL}`, withUnit(DRILL, closed({ open: false, reason: 'not-due', opensAt: Date.now() + 86_400_000 })));
+    const view = await screen.findByTestId('retest-closed-view');
+    expect(within(view).getByRole('heading', { level: 2 })).toHaveTextContent('This retest is not open yet');
+    expect(within(view).getByTestId('retest-closed')).toHaveTextContent('This changed-example retest opens');
+    expect(within(view).getByRole('link', { name: 'Open the unit this is a changed example of' })).toHaveAttribute('href', '/play/101');
+    expect(document.body.textContent).not.toMatch(/completed outside the player|No written instructions/);
+    expect(screen.queryByRole('textbox', { name: /Code editor/ })).not.toBeInTheDocument();
+    first.unmount();
+
+    renderApp(`/play/${DRILL}`, withUnit(DRILL, closed({ open: false, reason: 'not-scheduled', opensAt: null })));
+    const unscheduled = await screen.findByTestId('retest-closed-view');
+    expect(within(unscheduled).getByRole('heading', { level: 2 })).toHaveTextContent('This retest is not scheduled');
+    expect(document.body.textContent).not.toMatch(/completed outside the player/);
+  });
+
   it('a plain drill keeps the plain copy; after the reveal its changed example is linked as practice', async () => {
     const base = createMockApi();
     const api: BootQuestApi = { ...base, revealUnit: async (id) => ({ ...(await base.revealUnit(id)), variationUnitId: 107 }) };
@@ -322,7 +375,8 @@ describe('after a submit', () => {
     expect(promos).toHaveTextContent('Competency promoted');
     const row = within(promos).getByTestId('promotion-language-fluency');
     expect(row).toHaveTextContent('Language fluency 2 → 3');
-    expect(within(row).getByRole('link', { name: 'See the evidence on Stats' })).toHaveAttribute('href', '/stats?competency=language-fluency#evidence');
+    // fix/client-review 1: the row's own evidence id (only `#evidence-<id>` scrolls + marks on Stats)
+    expect(within(row).getByRole('link', { name: 'See the evidence on Stats' })).toHaveAttribute('href', '/stats?competency=language-fluency#evidence-91');
   });
 
   it('a verified pass offers the next unit on the track (the dashboard\'s Next up); a failed submit does not', async () => {

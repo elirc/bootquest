@@ -84,6 +84,10 @@ function Player({ detail }: { detail: UnitDetail }) {
   const answerFirst = spec?.type === 'explain-back' || spec?.type === 'patch-kata' || spec?.type === 'study-quiz';
   // W9 (ui-audit #1): a locked campaign act serves no playable content at all
   if (detail.actGate?.locked) return <ActLocked detail={detail} />;
+  // fix/client-review 6: a closed retest withholds its check and task, so the regular two-pane
+  // player would contradict itself ("no browser check… completed outside the player" beside
+  // "opens <date>"). One closed-retest view instead.
+  if (detail.retestGate && !detail.retestGate.open) return <RetestClosedView detail={detail} gate={detail.retestGate} />;
   const promptOnRight = prose.prompt !== null && (spec?.type === 'quiz' || spec?.type === 'predict-output');
 
   return (
@@ -114,9 +118,7 @@ function Player({ detail }: { detail: UnitDetail }) {
           <h2 className="panel-title" id="ins-title">
             Instructions
           </h2>
-          {detail.retestGate && !detail.retestGate.open ? (
-            <RetestClosed gate={detail.retestGate} />
-          ) : isWritten ? (
+          {isWritten ? (
             <p className="muted" data-testid="written-ins">
               The question is in the answer pane. Write your answer first; the model answer and its rubric open only after your answer is stored.
             </p>
@@ -155,8 +157,8 @@ function Player({ detail }: { detail: UnitDetail }) {
               </span>
             </div>
           )}
-          {/* a closed retest refuses reveal server-side (NOT_DUE / RETEST_NOT_OPEN): no dead confirm */}
-          {check && !isReading && !answerFirst && (revealed || !detail.retestGate || detail.retestGate.open) && (
+          {/* a closed retest never reaches here (RetestClosedView): the server refuses its reveal */}
+          {check && !isReading && !answerFirst && (
             <RevealPanel
               unitId={unit.id}
               leg={promotionLeg(detail)}
@@ -210,6 +212,50 @@ function RetestClosed({ gate }: { gate: NonNullable<UnitDetail['retestGate']> })
           : 'This changed-example retest is not scheduled. Pass its project artifact solo, then that artifact\'s explain-back with at least 80% coverage; the retest opens two or more days later.'}
       </span>
     </div>
+  );
+}
+
+/**
+ * fix/client-review 6: a changed-example retest whose gate is closed. The server withholds its
+ * check, task and starter (and refuses run / submit / reveal), so this is the whole page: why it
+ * is closed, when it opens, and where to go meanwhile.
+ */
+function RetestClosedView({ detail, gate }: { detail: UnitDetail; gate: NonNullable<UnitDetail['retestGate']> }) {
+  const { unit } = detail;
+  const opens = gate.reason === 'not-due' && gate.opensAt !== null;
+  return (
+    <>
+      <PageHeader
+        eyebrow={
+          <nav aria-label="Breadcrumb" className="crumbs">
+            <span>{TRACK_LABEL[unit.trackId]}</span>
+            {unit.code && <span>{unit.code}</span>}
+          </nav>
+        }
+        title={unit.title}
+        actions={
+          <span className="chips">
+            <Chip>{unit.kind}</Chip>
+            <Chip>{opens ? 'not open yet' : 'not scheduled'}</Chip>
+          </span>
+        }
+      />
+      <section className="panel unit-locked" aria-labelledby="retest-closed-title" data-testid="retest-closed-view">
+        <h2 className="unit-locked-title" id="retest-closed-title">
+          <Icon name="lock" /> {opens ? 'This retest is not open yet' : 'This retest is not scheduled'}
+        </h2>
+        <RetestClosed gate={gate} />
+        <p>
+          {unit.variationOfUnitId !== null && (
+            <>
+              <Link to={`/play/${unit.variationOfUnitId}`}>Open the unit this is a changed example of</Link>
+              {' · '}
+            </>
+          )}
+          <Link to="/">Back to the dashboard</Link> (its Due now panel lists every scheduled retest)
+        </p>
+      </section>
+    </>
   );
 }
 
@@ -370,7 +416,7 @@ function Promotions({ promotions }: { promotions: RatingChangeDto[] }) {
             <span className="promotion-notch" aria-label={`rating ${p.from} to ${p.to}`}>
               {p.from} → {p.to}
             </span>{' '}
-            <Link to={`/stats?competency=${encodeURIComponent(p.competency)}#evidence`}>See the evidence on Stats</Link>
+            <Link to={`/stats?competency=${encodeURIComponent(p.competency)}#evidence-${p.evidenceId}`}>See the evidence on Stats</Link>
           </li>
         ))}
       </ul>
@@ -451,8 +497,9 @@ function CodePane({ detail, spec }: { detail: UnitDetail; spec: PublicCheck }) {
   const code = draft.value;
   // the code that is safe without the draft: the starter, or what the last submit recorded
   const [savedCode, setSavedCode] = useState(starter);
-  // the last attempt THIS browser recorded here (read once: offered on a revisit, not after a submit in place)
-  const [lastAttempt] = useState(() => readLastAttempt(id));
+  // the last attempt THIS browser recorded here: read on mount, then kept in step with every submit
+  // (fix/client-review 5: the offer never names an older attempt than the one just recorded)
+  const [lastAttempt, setLastAttempt] = useState(() => readLastAttempt(id));
   const [loadBusy, setLoadBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -510,6 +557,9 @@ function CodePane({ detail, spec }: { detail: UnitDetail; spec: PublicCheck }) {
         const submit = await api.submitUnit(id, { code, selfAssisted: assisted });
         setOutcome({ kind, submit });
         storedSet(lastAttemptKey(id), String(submit.attempt.id));
+        setLastAttempt(submit.attempt.id);
+        setLoaded(false); // a new attempt to offer (an earlier "loaded" referred to an older one)
+        setLoadError(null);
         setSavedCode(code); // recorded on the attempt now: nothing to lose
         if (submit.verdict === 'pass') draft.clear(); // verified pass: the draft is done
         refreshTracks(); // W10: a recorded submit can change the track's done count
@@ -786,6 +836,8 @@ function QuizPane({
   useKeydown((e) => {
     if (passed || hasModifier(e) || shortcutBlocked(e)) return;
     if (e.key === 'Enter') {
+      // an IME composition's Enter commits the composed text, never an answer (fix/client-review 7d)
+      if (e.isComposing) return;
       // Enter on a focused button / link / checkbox is THAT control's Enter (Back to campaign,
       // Learn more, "I had help"): never a recorded attempt. In a text field only the answer
       // field itself submits.
