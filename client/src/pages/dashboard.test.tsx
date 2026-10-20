@@ -144,6 +144,41 @@ describe('Due now (open retests)', () => {
     await second.user.click(within(due).getByRole('button', { name: 'Retry' }));
     expect(await within(second.container).findByTestId('due-empty')).toBeInTheDocument();
   });
+
+  it('the panel\'s Retry keeps the rest of the dashboard mounted (no blank page, no refetched slate targets)', async () => {
+    const base = createMockApi();
+    let fail = true;
+    let release: () => void = () => {};
+    let trackUnitCalls = 0;
+    const api: BootQuestApi = {
+      ...base,
+      getCompetencies: () =>
+        fail
+          ? Promise.reject(new ApiError(500, 'INTERNAL', 'boom'))
+          : new Promise((resolve, reject) => {
+              release = () => void base.getCompetencies().then(resolve, reject);
+            }),
+      getTrackUnits: (t) => {
+        trackUnitCalls++;
+        return base.getTrackUnits(t);
+      },
+    };
+    const { user, container } = renderApp('/', api);
+    const due = await within(container).findByTestId('due-now');
+    await waitFor(() => expect(within(slateRow('drill:js')!).getByRole('link')).toHaveAttribute('href', '/play/102'));
+    const table = within(container).getByRole('table');
+    const calls = trackUnitCalls;
+    fail = false;
+    await user.click(within(due).getByRole('button', { name: 'Retry' }));
+    // mid-reload: the page is still there (same nodes), and the panel does not claim "no retests"
+    expect(table).toBeInTheDocument();
+    expect(within(container).getByTestId('due-now')).toBe(due);
+    expect(within(due).queryByTestId('due-empty')).toBeNull();
+    act(() => release());
+    expect(await within(due).findByTestId('due-empty')).toBeInTheDocument();
+    expect(table).toBeInTheDocument();
+    expect(trackUnitCalls).toBe(calls);
+  });
 });
 
 describe('slate routing and variants', () => {
@@ -163,7 +198,7 @@ describe('slate routing and variants', () => {
     expect(slateRow('drill:js')).toHaveTextContent('JS/TS drill set (5 drills)');
   });
 
-  it('size 1 and 2 are pluralized; a missing track slot says the track is exhausted', async () => {
+  it('size 1 and 2 are pluralized; a missing track slot is stated neutrally (never "exhausted")', async () => {
     renderApp(
       '/',
       withSlate([
@@ -179,7 +214,9 @@ describe('slate routing and variants', () => {
     expect(slateRow('drill:csharp')).toHaveTextContent('C#/.NET drill set (2 drills)');
     const java = slateRow('drill:java')!;
     expect(java).toHaveAttribute('data-missing', 'true');
-    expect(java).toHaveTextContent('Java drills track exhausted — no new drills');
+    // fix/client-review 7g: a missing row may be slate_drills=0, not an exhausted track
+    expect(java).toHaveTextContent("Java drills no drill slot on today's slate");
+    expect(java).not.toHaveTextContent('exhausted');
     expect(within(java).queryByRole('link')).toBeNull();
     // the tile counts only the real slots
     expect(screen.getByRole('progressbar', { name: 'Slate items cleared' })).toHaveAttribute('aria-valuemax', '4');
@@ -310,8 +347,22 @@ describe('evidence deep link', () => {
   });
 
   it('an evidence id that is not in the list says so instead of failing silently', async () => {
-    renderApp('/stats?competency=language-fluency#evidence-409');
-    expect(await screen.findByTestId('evidence-target-missing')).toHaveTextContent('Evidence #409 is not in this list (it is filtered by competency).');
+    // fix/client-review 7e: the note is scrolled into view (it sits below the stats panels)
+    const scroll = vi.fn();
+    const proto = Element.prototype as unknown as { scrollIntoView?: unknown };
+    const had = Object.prototype.hasOwnProperty.call(proto, 'scrollIntoView');
+    const prev = proto.scrollIntoView;
+    proto.scrollIntoView = scroll;
+    try {
+      renderApp('/stats?competency=language-fluency#evidence-409');
+      const note = await screen.findByTestId('evidence-target-missing');
+      expect(note).toHaveTextContent('Evidence #409 is not in this list (it is filtered by competency).');
+      await waitFor(() => expect(scroll).toHaveBeenCalled());
+      expect(scroll.mock.contexts).toContain(note);
+    } finally {
+      if (had) proto.scrollIntoView = prev;
+      else delete proto.scrollIntoView;
+    }
   });
 
   it('a failed attempt load does not stick: the next open retries and shows the attempt', async () => {
@@ -339,10 +390,21 @@ describe('friendly error text for the new codes', () => {
     for (const code of ['HOST_NOT_ALLOWED', 'ORIGIN_NOT_ALLOWED', 'UNSUPPORTED_MEDIA_TYPE'] as const) {
       expect(errorText(new ApiError(403, code, 'raw server text'))).not.toContain('raw server text');
     }
-    const relink = errorText(new ApiError(500, 'SYNC_RELINK_FAILED', 'relink failed'));
+    // fix/client-review 7b: the server's message (cause, "next start may refuse", backup hint) wins
+    const serverMsg = 'sync 4 COMMITTED (a@123): Re-linking FAILED: boom. The next server start will likely REFUSE to start; restore data/backup.db';
+    expect(errorText(new ApiError(500, 'SYNC_RELINK_FAILED', serverMsg))).toBe(`${serverMsg} (SYNC_RELINK_FAILED)`);
+    // the fallback (empty server message) never advises a plain restart nor a re-sync
+    const relink = errorText(new ApiError(500, 'SYNC_RELINK_FAILED', ''));
     expect(relink).toContain('sync itself was saved');
     expect(relink).toContain('old ladder');
-    expect(relink).toContain('Restart the server');
+    expect(relink).toContain('next start may refuse');
+    expect(relink).not.toMatch(/Restart the server to load/);
     expect(relink).not.toMatch(/try (the sync )?again|retry/i);
+  });
+
+  it('RETEST_NOT_OPEN (a retest with no schedule) does not claim a schedule exists', () => {
+    const t = errorText(new ApiError(409, 'RETEST_NOT_OPEN', 'x'));
+    expect(t).toContain('not scheduled yet');
+    expect(t).not.toMatch(/when its schedule is due/);
   });
 });

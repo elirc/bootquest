@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { createMockApi } from '../api/mock';
 import { notesFixtures } from '../api/fixtures/notes';
@@ -141,6 +141,26 @@ describe('"Learn more" drawer', () => {
     await screen.findByRole('heading', { level: 1 });
     await user.keyboard('i');
     expect(await screen.findByTestId('learn-more-error')).toHaveTextContent('This unit is locked');
+  });
+
+  it('`i` goes through the shared shortcut gate: an open alertdialog or a held key never opens the drawer', async () => {
+    const { user } = renderApp('/play/102');
+    await screen.findByRole('textbox', { name: /Code editor/ });
+    // an inline confirm (role=alertdialog) is in front of the page
+    await user.click(screen.getByRole('button', { name: /Reveal solution/ }));
+    const confirm = screen.getByRole('alertdialog');
+    (document.activeElement as HTMLElement | null)?.blur();
+    fireEvent.keyDown(window, { key: 'i' });
+    expect(screen.queryByRole('dialog', { name: /Learn more/ })).not.toBeInTheDocument();
+    await user.click(within(confirm).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    (document.activeElement as HTMLElement | null)?.blur();
+    // auto-repeat of a held key
+    fireEvent.keyDown(window, { key: 'i', repeat: true });
+    expect(screen.queryByRole('dialog', { name: /Learn more/ })).not.toBeInTheDocument();
+    // a plain press still opens it
+    fireEvent.keyDown(window, { key: 'i' });
+    expect(await screen.findByRole('dialog', { name: /Learn more/ })).toBeInTheDocument();
   });
 
   it('renders the notes markdown subset: lists, bold, code, italics; never HTML', () => {

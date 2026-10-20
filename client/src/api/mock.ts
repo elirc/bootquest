@@ -42,6 +42,9 @@ import {
   type BootQuestApi,
   type CanonicalRunResult,
   type CompetencyId,
+  type ExplainBackPublic,
+  type KataPublic,
+  type TolerantSuperseded,
   type Dashboard,
   type GradeResponse,
   type HeatmapDay,
@@ -569,10 +572,13 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
   const currentAnswer = <T>(store: Map<number, StoredAnswer<T>[]>, unitId: number): StoredAnswer<T> | undefined =>
     (store.get(unitId) ?? []).find((a) => a.version === versionOf(unitId));
   const recordAnswer = <T>(store: Map<number, StoredAnswer<T>[]>, unitId: number, a: StoredAnswer<T>) => store.set(unitId, [...(store.get(unitId) ?? []), a]);
+  /** Answers recorded against an EARLIER version of the item (server ladder-service supersededAnswerIds). */
+  const supersededAnswerIds = <T>(store: Map<number, StoredAnswer<T>[]>, unitId: number): number[] =>
+    (store.get(unitId) ?? []).filter((a) => a.version !== versionOf(unitId)).map((a) => a.attemptId);
   /** 403 NOT_ANSWERED for the loaded version, naming any superseded earlier-version answer. */
   function notAnswered<T>(store: Map<number, StoredAnswer<T>[]>, unitId: number, kind: AnswerKind): ApiError {
     const it = ITEM[kind];
-    const old = (store.get(unitId) ?? []).filter((a) => a.version !== versionOf(unitId)).map((a) => `#${a.attemptId}`);
+    const old = supersededAnswerIds(store, unitId).map((n) => `#${n}`);
     const superseded = old.length
       ? `your earlier ${it.noun} ${old.join(', ')} answered an earlier version of ${it.key(unitId)} (re-seeded since) and ${old.length === 1 ? 'is' : 'are'} superseded; `
       : '';
@@ -634,18 +640,24 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
         // PUBLIC halves only: questions; diff + context (never key points or defect keys)
         if (d.check?.spec.type === 'explain-back') {
           const eb = explainBackFixtures[String(id)];
-          out.explainBack = eb
+          // fix/client-review: + supersededAnswerIds (the server's structured field, see TolerantSuperseded)
+          const pub: (ExplainBackPublic & TolerantSuperseded) | null = eb
             ? {
                 questions: eb.questions.map((q) => ({ prompt: q.prompt })),
                 minCoveragePct: PROMOTION_MIN_COVERAGE * 100,
                 answered: currentAnswer(ebAnswers, id) !== undefined,
                 artifactRequired: artifactsAwaitingSoloPass(id),
+                supersededAnswerIds: supersededAnswerIds(ebAnswers, id),
               }
             : null;
+          out.explainBack = pub;
         }
         if (d.check?.spec.type === 'patch-kata') {
           const k = kataFixtures[String(id)];
-          out.kata = k ? { title: k.title, diff: k.diff, contextFiles: k.contextFiles, answered: currentAnswer(kataAnswers, id) !== undefined } : null;
+          const pub: (KataPublic & TolerantSuperseded) | null = k
+            ? { title: k.title, diff: k.diff, contextFiles: k.contextFiles, answered: currentAnswer(kataAnswers, id) !== undefined, supersededAnswerIds: supersededAnswerIds(kataAnswers, id) }
+            : null;
+          out.kata = pub;
         }
         // W8: reading list + questions with choices only (the keys stay in the fixture)
         if (d.check?.spec.type === 'study-quiz') out.studyQuest = studyQuestFixtures[String(id)]?.public ?? null;

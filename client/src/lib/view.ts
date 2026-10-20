@@ -43,9 +43,10 @@ export const isCompetencyId = (v: string | null | undefined): v is CompetencyId 
 export const competencyLabel = (c: CompetencyId): string => (COMPETENCY_LABEL as Partial<Record<string, string>>)[c] ?? c;
 
 /**
- * Tracks whose daily slate carries a drill set (track.slate_drills = 1: migrations 002 + 011).
- * Presentation only: an unlocked one MISSING from today's slate was dropped by the server
- * because it has no unpassed drill left (engines/streak.ts "Drill-slot size").
+ * Tracks whose daily slate USUALLY carries a drill set (track.slate_drills = 1 as seeded:
+ * migrations 002 + 011). Presentation only, and a client-side guess: an unlocked one missing from
+ * today's slate may be out of drills OR have had slate_drills switched off, so the dashboard says
+ * neutrally that there is no drill slot today and never asserts why.
  */
 export const SLATE_DRILL_TRACKS: readonly TrackId[] = ['js', 'csharp', 'java'];
 

@@ -174,6 +174,11 @@ export interface JsonDraft<T> {
   set: (next: T | ((prev: T) => T)) => void;
   /** the value on mount came from a stored (valid, non-empty) draft */
   restored: boolean;
+  /**
+   * the current value is safe: stored, or empty (nothing to lose). False after storage refused a
+   * write (private window, blocked site data, quota): the work then exists only in this tab.
+   */
+  persisted: boolean;
   /** back to `empty` (which removes the stored entry) */
   clear: () => void;
 }
@@ -207,14 +212,19 @@ export function useJsonDraft<T>(storageKey: string | null, empty: T, { parse, is
     return v !== null && !isEmpty(v) ? { value: v, restored: true } : { value: empty, restored: false };
   });
   const { value } = state;
+  const [persisted, setPersisted] = useState(true);
   useEffect(() => {
-    // quota / private mode: rawSet swallows the failure (the draft is a convenience, never the record)
-    if (storageKey !== null) rawSet(storageKey, isEmpty(value) ? null : JSON.stringify(value));
+    if (storageKey === null) return;
+    // quota / private mode: the write fails without throwing; `persisted` reports it so the caller
+    // can guard the in-memory work (the draft is a convenience, never the record)
+    const nothing = isEmpty(value);
+    const ok = rawSet(storageKey, nothing ? null : JSON.stringify(value));
+    setPersisted(ok || nothing);
   }, [storageKey, value, isEmpty]);
   const set = (next: T | ((prev: T) => T)) =>
     setState((s) => ({ ...s, value: typeof next === 'function' ? (next as (prev: T) => T)(s.value) : next }));
   const clear = () => setState({ value: empty, restored: false });
-  return { value, set, clear, restored: state.restored };
+  return { value, set, clear, restored: state.restored, persisted };
 }
 
 export const LEAVE_MESSAGE = 'Your code changes are not saved anywhere (this browser is not storing drafts). Leave this page and lose them?';
@@ -233,9 +243,10 @@ export interface DirtyGuardOptions {
  * push/replace for as long as the guard is armed and restores them afterwards. Browser
  * back/forward (popstate) cannot be cancelled this way; beforeunload does not cover it either.
  *
- * `inApp: false` arms only the tab close / reload half (the ladder panes: their drafts are in
- * storage, so an in-app navigation loses nothing; a closing tab still asks while one is dirty).
- * A string second argument is the message (the original signature).
+ * Callers arm it only while the work is NOT persisted (storage refused the draft): a stored draft
+ * restores on the next visit, so neither a reload nor an in-app navigation loses it.
+ * `inApp: false` arms only the tab close / reload half. A string second argument is the message
+ * (the original signature).
  */
 export function useDirtyGuard(dirty: boolean, opts: string | DirtyGuardOptions = {}): void {
   const { message = LEAVE_MESSAGE, inApp = true } = typeof opts === 'string' ? { message: opts } : opts;

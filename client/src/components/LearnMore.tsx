@@ -2,7 +2,8 @@ import { Fragment, useCallback, useEffect, useId, useRef, useState, type Keyboar
 import { useApi } from '../api/context';
 import { errorText } from '../api/errors';
 import { isApiError, type NoteDto, type RefContentResponse, type UnitNotesResponse } from '../api/types';
-import { hasModifier, isEditableTarget, useKeydown } from '../lib/keys';
+import { useKeydown } from '../lib/keys';
+import { shortcutBlocked, typingOrChord } from '../lib/shortcuts';
 import { proseChunks, renderInline } from '../lib/prose';
 import { Icon } from './Icon';
 import { Kbd } from './ui';
@@ -416,8 +417,9 @@ export function LearnMoreButton({
   const [open, setOpen] = useState(false);
   useKeydown(
     (e) => {
-      if (open || e.key !== 'i' || hasModifier(e) || isEditableTarget(e.target)) return;
-      if (document.querySelector('[role="dialog"]')) return; // another dialog owns the keyboard
+      // fix/client-review 7a: the shared gate (any dialog / alertdialog / modal in front, a held
+      // key's auto-repeat, an already-handled event), plus typing or a chord
+      if (open || e.key !== 'i' || shortcutBlocked(e) || typingOrChord(e)) return;
       e.preventDefault();
       setOpen(true);
     },

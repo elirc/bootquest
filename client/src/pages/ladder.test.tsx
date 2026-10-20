@@ -1,5 +1,5 @@
 import { screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GATED_ARTIFACT_ID, GATED_EXPLAIN_BACK_ID } from '../api/fixtures/ladder';
 import { createMockApi } from '../api/mock';
 import { ApiError, type BootQuestApi } from '../api/types';
@@ -14,6 +14,7 @@ const ARTIFACT_TITLE = 'Agent harness U01: the tool-call loop';
 
 // drafts live in localStorage: every test starts from an empty browser
 beforeEach(() => window.localStorage.clear());
+afterEach(() => vi.restoreAllMocks());
 const KEY_POINT_TEXT = 'A closure captures the variable binding, not a snapshot of its value.';
 const DEFECT_TEXT = 'User A requests /orders/<id of user B>.';
 
@@ -258,22 +259,68 @@ describe('drafts: unsent answers survive a remount (per-browser, per item versio
     expect(window.localStorage.getItem(kataDraftKey(KATA, (await api.getUnit(KATA)).kata!.diff))).toBeNull();
   });
 
-  it('a dirty draft guards the tab close; an empty one does not; a re-seeded item gets its own draft slot', async () => {
-    const { user } = renderApp(`/play/${EB}`);
-    const unload = () => {
-      const ev = new Event('beforeunload', { cancelable: true });
-      window.dispatchEvent(ev);
-      return ev.defaultPrevented;
-    };
+  // fix/client-review 2: the guard protects work that exists ONLY in memory (storage refused the
+  // draft). A stored draft restores on the next visit, so then leaving asks nothing.
+  it('storage working: a dirty draft is stored, so neither a tab close nor an in-app navigation asks', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const { user, path } = renderApp(`/play/${EB}`);
     const box = await screen.findByRole('textbox', { name: 'Answer 1' });
-    expect(unload()).toBe(false);
     await user.type(box, 'x');
-    expect(unload()).toBe(true);
-    await user.clear(box);
     expect(unload()).toBe(false);
+    expect(screen.queryByTestId('draft-unsaved')).not.toBeInTheDocument();
+    await user.click(within(screen.getByRole('complementary', { name: 'Primary' })).getByRole('link', { name: /Dashboard/ }));
+    await waitFor(() => expect(path()).toBe('/'));
+    expect(confirm).not.toHaveBeenCalled();
     expect(ebDraftKey(EB, { questions: [{ prompt: 'v1' }] })).not.toBe(ebDraftKey(EB, { questions: [{ prompt: 'v2' }] }));
   });
+
+  it('storage refused: a dirty draft warns in the pane and guards both the tab close and an in-app navigation', async () => {
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('QuotaExceededError');
+    });
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const { user, path } = renderApp(`/play/${EB}`);
+    const box = await screen.findByRole('textbox', { name: 'Answer 1' });
+    expect(unload()).toBe(false); // nothing to lose yet
+    expect(screen.queryByTestId('draft-unsaved')).not.toBeInTheDocument();
+    await user.type(box, 'x');
+    expect(screen.getByTestId('draft-unsaved')).toHaveTextContent('leaving this page will lose it');
+    expect(unload()).toBe(true);
+
+    const dashboard = within(screen.getByRole('complementary', { name: 'Primary' })).getByRole('link', { name: /Dashboard/ });
+    await user.click(dashboard);
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(path()).toBe(`/play/${EB}`); // declined: still here, the answer intact
+    expect(box).toHaveValue('x');
+
+    await user.clear(box); // empty again: nothing to lose
+    expect(unload()).toBe(false);
+    expect(screen.queryByTestId('draft-unsaved')).not.toBeInTheDocument();
+    await user.click(dashboard);
+    await waitFor(() => expect(path()).toBe('/'));
+    expect(confirm).toHaveBeenCalledTimes(1);
+  });
+
+  it('storage refused on the kata pane: the same warning and in-app guard', async () => {
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('QuotaExceededError');
+    });
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const { user, path } = renderApp(`/play/${KATA}`);
+    await user.type(await screen.findByRole('textbox', { name: 'Finding 1 scenario' }), 'another user id');
+    expect(screen.getByTestId('draft-unsaved')).toBeInTheDocument();
+    expect(unload()).toBe(true);
+    await user.click(within(screen.getByRole('complementary', { name: 'Primary' })).getByRole('link', { name: /Dashboard/ }));
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(path()).toBe(`/play/${KATA}`);
+  });
 });
+
+function unload(): boolean {
+  const ev = new Event('beforeunload', { cancelable: true });
+  window.dispatchEvent(ev);
+  return ev.defaultPrevented;
+}
 
 describe('self-score: live preview against the pass mark, then a confirm (permanent)', () => {
   it('explain-back: the coverage preview follows every mark; Cancel files nothing; the confirm states permanence', async () => {
@@ -296,7 +343,9 @@ describe('self-score: live preview against the pass mark, then a confirm (perman
     await user.click(screen.getByRole('button', { name: /Submit self-score/ }));
     const dialog = screen.getByRole('alertdialog', { name: 'File this self-score?' });
     expect(dialog).toHaveTextContent('3/5 covered = 60%: below the 80% promotion gate.');
-    expect(dialog).toHaveTextContent('FAIL for promotion leg (b)');
+    // fix/client-review 3: the fail branch names this unit's gate only (its gate can sit above the leg's 80% bar)
+    expect(dialog).toHaveTextContent("It files a fail against this unit's gate: no XP and no retest.");
+    expect(dialog).not.toHaveTextContent('leg (b)');
     expect(dialog).toHaveTextContent('permanent');
     expect(within(dialog).getByRole('button', { name: 'Cancel' })).toHaveFocus();
     expect(screen.getByRole('radio', { name: 'q2k2 covered' })).toBeDisabled(); // marks frozen while confirming
@@ -306,6 +355,11 @@ describe('self-score: live preview against the pass mark, then a confirm (perman
     await user.click(screen.getByRole('radio', { name: 'q2k2 covered' }));
     await user.click(screen.getByRole('button', { name: /Submit self-score/ }));
     expect(screen.getByRole('alertdialog')).toHaveTextContent('meets the 80% promotion gate');
+    // the pass branch is hedged: assisted answers, standalone sets and unpassed artifacts never count
+    expect(screen.getByRole('alertdialog')).toHaveTextContent(
+      'It counts toward promotion leg (b) only when this set is linked to an artifact you passed solo and your answers were unassisted.',
+    );
+    expect(screen.getByRole('alertdialog')).not.toHaveTextContent('schedules the changed-example retest');
     await user.keyboard('{Escape}');
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
     expect(calls).not.toContain('selfScoreExplainBack');
@@ -478,6 +532,9 @@ describe('re-seeded items: the old answer is superseded and the form reappears',
     api.reseedItem(EB);
     const { user } = renderApp(`/play/${EB}`, api);
     expect(await screen.findByRole('textbox', { name: 'Answer 1' })).toHaveValue('');
+    // fix/client-review 7f: the detail's structured supersededAnswerIds explain the fresh form (no key probe needed)
+    const note = screen.getByTestId('superseded-note');
+    expect(note).toHaveTextContent(`re-seeded since your earlier answer #${first.attemptId}, so that answer is superseded`);
     await answerEbTyped(user);
     const key = await api.getExplainBackKey(EB);
     expect(key.attemptId).not.toBe(first.attemptId);
@@ -497,6 +554,58 @@ describe('re-seeded items: the old answer is superseded and the form reappears',
     expect(note).toHaveTextContent(`#${old.attemptId}`);
     expect(note).toHaveTextContent('superseded');
     expect(screen.getByRole('textbox', { name: 'Answer 1' })).toBeEnabled();
+  });
+
+  it('a kata re-seed: the detail names the superseded findings over the fresh table', async () => {
+    const api = createMockApi();
+    const first = await api.submitKataFindings(KATA, { findings: [{ scenario: 's', evidence: 'e', consequence: 'c' }], selfAssisted: false });
+    api.reseedItem(KATA);
+    renderApp(`/play/${KATA}`, api);
+    expect(await screen.findByRole('textbox', { name: 'Finding 1 scenario' })).toHaveValue('');
+    expect(screen.getByTestId('superseded-note')).toHaveTextContent(`#${first.attemptId}`);
+  });
+
+  it('no superseded answer: no note, and no note for an empty structured list either', async () => {
+    renderApp(`/play/${EB}`);
+    await screen.findByRole('textbox', { name: 'Answer 1' });
+    expect(screen.queryByTestId('superseded-note')).not.toBeInTheDocument();
+  });
+
+  it('an older server (no supersededAnswerIds): the NOT_ANSWERED message of the key probe is the fallback', async () => {
+    const base = createMockApi();
+    await base.answerExplainBack(EB, { answers: ['old 1', 'old 2', 'old 3'], selfAssisted: false });
+    base.reseedItem(EB);
+    const api: BootQuestApi = {
+      ...base,
+      getUnit: async (id) => {
+        const d = await base.getUnit(id);
+        const eb = d.explainBack;
+        if (!eb) return d;
+        // the pre-field wire shape: no structured ids, no `answered` flag (so the client probes the key)
+        return { ...d, explainBack: { questions: eb.questions, minCoveragePct: eb.minCoveragePct, artifactRequired: eb.artifactRequired } };
+      },
+    };
+    renderApp(`/play/${EB}`, api);
+    const note = await screen.findByTestId('superseded-note');
+    expect(note).toHaveTextContent('superseded');
+    expect(note).toHaveTextContent(/answered an earlier version/); // the server's own text, shown as-is
+  });
+});
+
+describe('explain-back result', () => {
+  it('a promotion names the competency by its label, never the raw id', async () => {
+    const base = createMockApi();
+    const api: BootQuestApi = {
+      ...base,
+      selfScoreExplainBack: async (id, body) => ({ ...(await base.selfScoreExplainBack(id, body)), promotions: [{ competency: 'language-fluency', from: 2, to: 3, evidenceId: 77 }] }),
+    };
+    const { user } = renderApp(`/play/${EB}`, api);
+    await answerEb(user);
+    for (const id of ['q1k1', 'q1k2', 'q2k1', 'q2k2', 'q3k1']) await user.click(screen.getByRole('radio', { name: `${id} covered` }));
+    await user.click(screen.getByRole('button', { name: /Submit self-score/ }));
+    await user.click(screen.getByRole('button', { name: 'File self-score' }));
+    expect(await screen.findByText(/Promoted Language fluency: 2 → 3/)).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('Promoted language-fluency');
   });
 });
 

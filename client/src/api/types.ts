@@ -170,6 +170,16 @@ export interface TolerantUnitProse {
   prompt?: string | null;
 }
 
+/**
+ * fix/client-review: the explain-back / kata public halves gain `supersededAnswerIds` (the
+ * learner's answers to an EARLIER version of the item, re-seeded since) in a parallel server
+ * change. Optional and tolerant: absent on older servers, where the client falls back to reading
+ * the NOT_ANSWERED message.
+ */
+export interface TolerantSuperseded {
+  supersededAnswerIds?: number[];
+}
+
 /** GET /api/units/:id as the client reads it: the canonical response plus tolerant prose. */
 export type UnitDetail = Omit<UnitDetailResponse, 'unit'> & { unit: UnitDetailResponse['unit'] & TolerantUnitProse };
 

@@ -20,23 +20,28 @@ const FRIENDLY: Partial<Record<ClientErrorCode, string>> = {
   NOT_VERIFIED: 'This needs a verified, passing submit first.',
   UNTOUCHED_TEMPLATE: 'That is the unchanged starter template. Write your answer into it before storing it.',
   ARTIFACT_REQUIRED: 'Pass the linked artifact unit solo first — the explain-back opens after.',
-  RETEST_NOT_OPEN: 'This retest is not open yet: it opens when its schedule is due (at least 2 days after the explain-back).',
+  // the server sends this code for a retest with NO schedule at all (a scheduled-but-early one is NOT_DUE)
+  RETEST_NOT_OPEN:
+    'This retest is not scheduled yet. It is scheduled once its project artifact is passed solo and that artifact\'s explain-back meets its coverage gate, and opens at least 2 days after that.',
   // the server's local-only guards (README "The API answers local callers only"); nothing ran
   HOST_NOT_ALLOWED: 'The server only answers requests addressed to 127.0.0.1, localhost or [::1]. Open BootQuest from a local address.',
   ORIGIN_NOT_ALLOWED: 'The server refused a request coming from another site. Use BootQuest from its own local address.',
   UNSUPPORTED_MEDIA_TYPE: 'The server only accepts JSON requests. Reload the page; if it persists, the client and server versions differ.',
-  // NOT "retry the sync": the sync COMMITTED; only the ladder re-link after it failed (and was rolled back)
+  // NOT "retry the sync": the sync COMMITTED; only the ladder re-link after it failed (and was rolled
+  // back). Only the fallback for an empty server message: SERVER_TEXT_FIRST shows the server's own
+  // (it names the cause, and the backup to restore from).
   SYNC_RELINK_FAILED:
-    'The sync itself was saved, but re-linking the ladder units failed, so the server is still serving the old ladder. Restart the server to load the synced content — do not run the sync again.',
+    'The sync itself was saved, but re-linking the ladder units failed and was rolled back, so the server keeps serving the old ladder. Do not run the sync again, and fix the content the server log names before restarting: the next start may refuse until then.',
   NETWORK: 'Could not reach the BootQuest server.',
 };
 
 /**
  * Codes whose SERVER message is the more useful line, shown in place of the friendly text when
  * present: ALREADY_ANSWERED names the stored answer and, for a retired unit's stranded answer,
- * the unit to self-score it on.
+ * the unit to self-score it on; SYNC_RELINK_FAILED names the failing cause, that the next start
+ * may refuse, and (when configured) the pre-sync backup to restore.
  */
-const SERVER_TEXT_FIRST: ReadonlySet<ClientErrorCode> = new Set<ClientErrorCode>(['ALREADY_ANSWERED']);
+const SERVER_TEXT_FIRST: ReadonlySet<ClientErrorCode> = new Set<ClientErrorCode>(['ALREADY_ANSWERED', 'SYNC_RELINK_FAILED']);
 
 /** One line for an error banner: friendly text for known codes, the server message otherwise. */
 export function errorText(e: unknown): string {

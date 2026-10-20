@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useLocation, useSearchParams } from 'react-router-dom';
 import { useApi } from '../api/context';
 import { errorText } from '../api/errors';
@@ -457,6 +457,10 @@ function EvidenceBrowser() {
   const targetId = hashId !== undefined ? Number(hashId) : null;
   const rows = q.status === 'ready' ? q.data.items : null;
   const targetFound = targetId !== null && rows !== null && rows.some((e) => e.id === targetId);
+  // a hash target the loaded list does not hold: its note is what the learner must see (the page
+  // would otherwise sit at the top with no explanation, the stats panels above it in the way)
+  const targetMissing = targetId !== null && rows !== null && !targetFound;
+  const missingNote = useRef<HTMLParagraphElement>(null);
   useEffect(() => {
     if (!targetFound) return;
     const el = document.getElementById(`evidence-${targetId}`);
@@ -464,6 +468,14 @@ function EvidenceBrowser() {
     el.focus({ preventScroll: true });
     el.scrollIntoView?.({ block: 'center' });
   }, [targetFound, targetId]);
+  useEffect(() => {
+    if (targetMissing) missingNote.current?.scrollIntoView?.({ block: 'center' });
+  }, [targetMissing, targetId]);
+  const missing = targetMissing && (
+    <p className="muted small" data-testid="evidence-target-missing" ref={missingNote} role="note">
+      Evidence #{targetId} is not in this list{competency ? ' (it is filtered by competency)' : ''}.
+    </p>
+  );
 
   return (
     <Panel
@@ -496,19 +508,18 @@ function EvidenceBrowser() {
         {q.status !== 'ready' ? (
           <LoadState error={q.error} onRetry={q.reload} minHeight={160} />
         ) : q.data.items.length === 0 ? (
-          <p className="muted" data-testid="evidence-empty">
-            No evidence rows{competency ? ' for this competency' : ''} yet.
-          </p>
+          <>
+            {missing}
+            <p className="muted" data-testid="evidence-empty">
+              No evidence rows{competency ? ' for this competency' : ''} yet.
+            </p>
+          </>
         ) : (
           <>
             <p className="muted small">
               {q.data.items.length} of {q.data.total} row(s), newest first. Evidence is append-only.
             </p>
-            {targetId !== null && !targetFound && (
-              <p className="muted small" data-testid="evidence-target-missing">
-                Evidence #{targetId} is not in this list{competency ? ' (it is filtered by competency)' : ''}.
-              </p>
-            )}
+            {missing}
             <ol className="evidence-list" data-testid="evidence-list">
               {q.data.items.map((e) => (
                 <EvidenceItem key={e.id} e={e} hit={e.id === targetId} />
