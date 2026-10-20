@@ -33,14 +33,21 @@ import { jdkVersion } from '../runners/java/index.ts';
  *           result-channel parser + the process helpers it imports from the C# scratch module + the
  *           javabootcamp harness it compiles (Check.java, BqMain.java) + the
  *           drill-java adapter + the Java validator; node + the JDK (`javac -version`).
- * The validator (validate.ts) is in all of them: it decides what "validated" means.
+ * The import gate (IMPORT_GATE) is in all of them: it decides what "validated" means —
+ * validate.ts, the NOT_A_VERDICT set it judges starters by (verdicts.ts: a starter that
+ * "fails" only by a non-verdict proves nothing) and the resumable journal whose entries it
+ * trusts (journal.ts). java adds the Java validator (validate-java.ts).
  */
 
 export type GraderKind = 'js' | 'csharp' | 'selfrun' | 'java';
 export const GRADER_KINDS: readonly GraderKind[] = ['js', 'csharp', 'selfrun', 'java'];
 
 const REPO = resolve(import.meta.dirname, '..', '..', '..');
-const VALIDATOR = join(REPO, 'tools', 'seed', 'src', 'validate', 'validate.ts');
+const VALIDATE_DIR = join(REPO, 'tools', 'seed', 'src', 'validate');
+/** the import gate (seed:validate) every kind is bound to: the validator, its not-a-verdict set, its journal */
+export const IMPORT_GATE: readonly string[] = [join(VALIDATE_DIR, 'validate.ts'), join(VALIDATE_DIR, 'verdicts.ts'), join(VALIDATE_DIR, 'journal.ts')];
+/** the Java validator (java kind only) */
+export const IMPORT_GATE_JAVA = join(VALIDATE_DIR, 'validate-java.ts');
 const RUNNERS = join(REPO, 'server', 'src', 'runners');
 const CSHARP = join(RUNNERS, 'csharp');
 const SELFRUN = join(REPO, 'server', 'src', 'runners', 'self-run');
@@ -51,7 +58,7 @@ export const FINGERPRINT_FILES: Readonly<Record<GraderKind, readonly string[]>> 
     join(REPO, 'server', 'src', 'runners', 'js', 'grade-core.mjs'),
     join(REPO, 'server', 'src', 'runners', 'js', 'index.ts'),
     join(REPO, 'server', 'src', 'api', 'runners.ts'),
-    VALIDATOR,
+    ...IMPORT_GATE,
   ],
   csharp: [
     join(CSHARP, 'index.ts'),
@@ -66,7 +73,7 @@ export const FINGERPRINT_FILES: Readonly<Record<GraderKind, readonly string[]>> 
     join(CSHARP, 'fixtures', 'jstrain-csbootcamp', '_lib', 'Check', 'Spy.cs'),
     join(SELFRUN, 'compose.ts'),
     join(REPO, 'server', 'src', 'api', 'runner-csharp.ts'),
-    VALIDATOR,
+    ...IMPORT_GATE,
   ],
   selfrun: [
     join(SELFRUN, 'index.ts'),
@@ -78,7 +85,7 @@ export const FINGERPRINT_FILES: Readonly<Record<GraderKind, readonly string[]>> 
     join(SELFRUN, 'fixtures', 'jstrain', 'tsbootcamp', '_lib', 'type-assert.ts'),
     join(REPO, 'server', 'src', 'api', 'runners.ts'),
     join(REPO, 'server', 'src', 'runners', 'js', 'grade-core.mjs'),
-    VALIDATOR,
+    ...IMPORT_GATE,
   ],
   java: [
     join(JAVA, 'index.ts'),
@@ -88,8 +95,8 @@ export const FINGERPRINT_FILES: Readonly<Record<GraderKind, readonly string[]>> 
     join(JAVA, 'fixtures', 'javabootcamp', '_lib', 'check', 'bootcamp', 'Check.java'),
     join(JAVA, 'fixtures', 'javabootcamp', '_lib', 'check', 'bootcamp', 'BqMain.java'),
     join(REPO, 'server', 'src', 'api', 'runner-java.ts'),
-    VALIDATOR,
-    join(REPO, 'tools', 'seed', 'src', 'validate', 'validate-java.ts'),
+    ...IMPORT_GATE,
+    IMPORT_GATE_JAVA,
   ],
 };
 
