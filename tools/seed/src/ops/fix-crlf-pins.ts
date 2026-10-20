@@ -373,30 +373,42 @@ export function runFixCrlfPins(o: FixOptions): FixReport {
         ids.set(it.key, it.diff);
       }
       fixedDrafts.set(m.name, ids);
-      if (itemsChanged) {
-        itemsBytes = stableJson(file);
+      // ALWAYS bind the manifest to the items bytes that will be on disk (re-written or as found): a
+      // run interrupted after writing items.json but before manifest.json resumes cleanly, instead of
+      // leaving a manifest whose items sha256 no loader accepts (the fixed items are a fixpoint, so
+      // the re-run sees itemsChanged=false). The zeroed stamp fingerprint below still forces a full
+      // seed:check --restamp re-validation of whatever these bytes are.
+      itemsBytes = itemsChanged ? stableJson(file) : rawItems;
+      if (sha256(itemsBytes) !== m.items.sha256) {
+        if (!itemsChanged) log(`resume ${p.pack}: items.json was already fixed by an interrupted run; re-binding the manifest to it`);
         m.items.sha256 = sha256(itemsBytes);
       }
     }
     if (rep.failures.length > failuresBefore) continue; // never write a half-fixed pack
     const manifestBytes = stableJson(m);
     if (manifestBytes === p.raw) continue;
-    rep.manifests.push({ pack: p.pack, blobsChanged, pinChanged, itemsChanged });
-    log(`re-pin ${p.pack}: ${blobsChanged}/${Object.keys(m.blobs).length} blob id(s) were not git's${pinChanged ? '; pin -> git-tree' : ''}${itemsChanged ? '; kata items fixed' : ''}`);
-    if (itemsBytes !== null) write(join(p.dir, 'items.json'), itemsBytes);
-    write(join(p.dir, 'manifest.json'), manifestBytes);
     const sp = join(p.dir, 'validation.json');
+    let stampBytes: string | null = null;
     if (existsSync(sp)) {
       const rawStamp = readFileSync(sp, 'utf8');
       const st = rewritable(sp, rawStamp, rep.failures) as { manifestSha256: string; itemsSha256: string; fingerprint: string } | null;
-      if (st) {
-        st.manifestSha256 = sha256(manifestBytes);
-        if (itemsBytes !== null) st.itemsSha256 = sha256(itemsBytes);
-        st.fingerprint = ZERO_FP;
-        write(sp, stableJson(st));
-        rep.stampsRebound.push(p.pack);
-      }
+      if (!st) continue; // nothing written yet: the pack stays as it was
+      st.manifestSha256 = sha256(manifestBytes);
+      if (itemsBytes !== null) st.itemsSha256 = sha256(itemsBytes);
+      st.fingerprint = ZERO_FP;
+      stampBytes = stableJson(st);
     }
+    rep.manifests.push({ pack: p.pack, blobsChanged, pinChanged, itemsChanged });
+    log(`re-pin ${p.pack}: ${blobsChanged}/${Object.keys(m.blobs).length} blob id(s) were not git's${pinChanged ? '; pin -> git-tree' : ''}${itemsChanged ? '; kata items fixed' : ''}`);
+    // write order: stamp (zeroed: the old stamp stops vouching first), items, manifest LAST. Every
+    // interrupted state re-runs to the same result: the manifest is only rewritten once the bytes it
+    // binds are on disk, and the re-run re-derives every sha from the bytes it finds.
+    if (stampBytes !== null) {
+      write(sp, stampBytes);
+      rep.stampsRebound.push(p.pack);
+    }
+    if (itemsChanged && itemsBytes !== null) write(join(p.dir, 'items.json'), itemsBytes);
+    write(join(p.dir, 'manifest.json'), manifestBytes);
   }
 
   // ---- (c) authoring drafts + specs ----

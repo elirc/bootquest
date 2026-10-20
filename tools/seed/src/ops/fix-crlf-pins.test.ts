@@ -42,6 +42,8 @@ const LEGACY = 'legacy\r\nfile\r\n';
 const DIFF = (eol: string) => `diff --git a/src/Svc.java b/src/Svc.java\n--- a/src/Svc.java\n+++ b/src/Svc.java\n@@ -1,4 +1,4 @@\n class Svc {${eol}\n-  int a;${eol}\n+  long a;${eol}\n   int b;${eol}\n }${eol}\n`;
 const LEGACY_DIFF = 'diff --git a/legacy.txt b/legacy.txt\n--- a/legacy.txt\n+++ b/legacy.txt\n@@ -1,2 +1,2 @@\n-legacy\r\n+LEGACY\r\n file\r\n';
 const KEY = stableKey('patches', 'demo', 'patch-kata', ['demo-katas', 'k1']);
+/** the patches pack's pre-fix bytes (to rebuild interrupted-run states) */
+const ORIG: Record<string, string> = {};
 
 function seedPack(dir: string, generator: string, blobs: Record<string, string>, items: unknown): void {
   const itemsBytes = stableJson({ format: 'bootquest-seed-pack@1', generator, name: dir.split('/')[1], items });
@@ -99,6 +101,7 @@ beforeAll(() => {
     seededDefectKey: [],
   };
   seedPack('patches/demo-katas', 'patches', { 'guide.md': id(crlf(GUIDE)), 'src/Svc.java': id(crlf(SVC)), 'legacy.txt': id(LEGACY) }, [kata]);
+  for (const f of ['manifest.json', 'items.json', 'validation.json']) ORIG[f] = read(`content/seed/patches/demo-katas/${f}`);
   put(
     'tools/seed/authoring/katas/demo.draft.json',
     stableJson({ name: 'demo-katas', katas: [{ id: 'k1', title: 'k1', provenance: { path: 'guide.md', lines: { start: 3, end: 3 } }, diff: DIFF('\r') + LEGACY_DIFF, contextFiles: [{ path: 'src/Svc.java', origin: { kind: 'verbatim', repoPath: 'src/Svc.java' } }, { path: 'legacy.txt', origin: { kind: 'verbatim', repoPath: 'legacy.txt' } }, { path: 'bootquest-kata/Svc.Testable.java', content: crlf('// adapted\nclass T {}\n'), origin: { kind: 'adapted', repoPath: 'src/Svc.java' } }], seededDefectKey: [] }] }),
@@ -202,6 +205,38 @@ describe('fix-crlf-pins', () => {
     expect(r.checkouts).toEqual([{ pin: `demo@${SHA}`, action: 'clean', problems: 0 }]);
     expect([r.manifests, r.kataFiles, r.authoring, r.stampsRebound]).toEqual([[], [], [], []]);
     expect(['content/seed/quests/demo/manifest.json', 'content/seed/patches/demo-katas/items.json', 'content/seed/patches/demo-katas/validation.json', 'tools/seed/authoring/katas/demo.spec.json'].map(read)).toEqual(snap);
+  });
+
+  it('crash-resume: a run interrupted between items.json and manifest.json (or after the stamp only) resumes to the same fixed pack', () => {
+    const P = 'content/seed/patches/demo-katas';
+    const files = ['manifest.json', 'items.json', 'validation.json'];
+    const fixed = Object.fromEntries(files.map((f) => [f, read(`${P}/${f}`)]));
+    const consistent = () => {
+      const m = JSON.parse(read(`${P}/manifest.json`));
+      const st = JSON.parse(read(`${P}/validation.json`));
+      expect(m.items.sha256).toBe(sha256(read(`${P}/items.json`)));
+      expect(st.itemsSha256).toBe(m.items.sha256);
+      expect(st.manifestSha256).toBe(sha256(read(`${P}/manifest.json`)));
+      expect(st.fingerprint).toBe('0'.repeat(64));
+    };
+    // (1) items.json already fixed, manifest + stamp still the pre-fix bytes (the old code then wrote
+    //     a manifest with the STALE items sha256: a pack every loader refused, forever)
+    put(`${P}/manifest.json`, ORIG['manifest.json']!);
+    put(`${P}/validation.json`, ORIG['validation.json']!);
+    const r1 = runFixCrlfPins({ root });
+    expect(r1.failures).toEqual([]);
+    expect(r1.ok).toBe(true);
+    consistent();
+    expect(files.map((f) => read(`${P}/${f}`))).toEqual(files.map((f) => fixed[f]));
+    // (2) only the (zeroed) stamp was written: manifest + items still the pre-fix bytes
+    put(`${P}/manifest.json`, ORIG['manifest.json']!);
+    put(`${P}/items.json`, ORIG['items.json']!);
+    const r2 = runFixCrlfPins({ root });
+    expect(r2.failures).toEqual([]);
+    consistent();
+    expect(files.map((f) => read(`${P}/${f}`))).toEqual(files.map((f) => fixed[f]));
+    // and then nothing is left to do
+    expect(runFixCrlfPins({ root }).manifests).toEqual([]);
   });
 
   it('a verbatim file that differs from the repo beyond line endings is reported, and its pack left untouched', () => {
