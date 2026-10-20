@@ -1,0 +1,41 @@
+{
+ "lines": { "start": 15, "end": 77 },
+ "questions": [
+  {
+   "prompt": "DESIGN IT — [mid] outbound webhooks that retry safely (campusops, astraupskill/advanced/extended-course/14-webhook-enqueue-and-retry-state.md). Scenario: a campus-operations CRUD app publishes work-order events, about 20,000 a day with peaks of 30 a second, to customer-configured HTTPS subscribers; each event fans out to 1 to 5 active subscriptions; a receiver may be down for an hour, or may process a request and then time out before it answers. Write your design before you look: how the event and its deliveries are recorded alongside the business write, the identity that deduplicates, the delivery retry state machine and its terminal states, and what you require of the receiver. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+   "keyPoints": [
+    { "text": "[w3] Enqueue with the write: the event receipt and one delivery record per active subscription commit together, so no crash can leave the event marked as handled while some subscribers have nothing queued.", "quote": "commit an event receipt and all intended delivery records together" },
+    { "text": "[w3] The dedupe record means 'this event was fully enqueued', not 'someone started'; claiming a key first and doing the fan-out afterwards turns any mid-way failure into permanently missing work.", "quote": "The key should represent an operation outcome, not just the fact that one attempt started" },
+    { "text": "[w2] One logical event keeps one event id for its whole life, through every retry and replay; only a genuinely new event gets a new id.", "quote": "The producer should retain a stable event identity for one logical event" },
+    { "text": "[w3] Each delivery is a small state machine: pending until it succeeds, or each failure bumps the attempt count and either schedules the next attempt or, at the maximum, dead-letters it. Succeeded and dead-letter are terminal, and the domain object must refuse success or failure calls after either (the inspected methods have no such guard, so this is one you add).", "quote": "The methods do not guard against calling success or failure after a terminal state" },
+    { "text": "[w2] Backoff is data, not a sleep: a failure records the next attempt time (2 minutes after the first, then 4), a separate sender acts on it, and the maximum attempt count is validated and bounded.", "quote": "Keep the supported retry policy bounded and validated" },
+    { "text": "[w3] Delivery is at-least-once, so the receiver deduplicates on the stable event or delivery id; a sender that timed out cannot conclude that the receiver did nothing.", "quote": "A retrying sender cannot infer remote nonexecution from a timeout" },
+    { "text": "[w2] The subscription stores only a secret reference; the sender resolves it at send time, signs the request, handles rotation and never writes the value to logs or to the delivery row.", "quote": "SecretName remains on the subscription and is not copied into WebhookDelivery" }
+   ]
+  },
+  {
+   "prompt": "PRE-MORTEM — the same publisher at 10x: 300 events a second, one large subscriber down for six hours, a deploy that kills the process in the middle of a fan-out, and an operator who disables a subscription while 2,000 of its deliveries are still queued. What breaks first, and what in your design already handles it?",
+   "keyPoints": [
+    { "text": "[w3] Killed mid-fan-out after the dedupe claim: the subscribers not yet reached get no delivery, and every retry of that event is now suppressed, so the gap never heals on its own.", "quote": "A retry then returns zero instead of filling the missing work" },
+    { "text": "[w2] A green duplicate-event test proves only the happy path; recoverability needs a test that injects a failure after the claim and checks what the next retry does.", "quote": "A passing duplicate test is therefore not evidence that enqueue is recoverably idempotent under partial failure" },
+    { "text": "[w3] A six-hour outage exhausts the bounded attempts and dead-letters the backlog; dead letters keep enough evidence to reconcile, and the runbook replays them under the same logical event id.", "quote": "The operational runbook should explain manual replay without generating a new logical event accidentally" },
+    { "text": "[w3] Disabling a subscription stops new deliveries but not queued ones, which keep their endpoint and never re-check the subscription; the design must choose cancel, preserve or review for that backlog.", "quote": "an existing delivery retains its endpoint and has no direct live IsActive check" },
+    { "text": "[w2] Late or duplicate worker reports become corruption without terminal guards: a success report can resurrect a dead-lettered delivery.", "quote": "MarkSucceeded can be called on a DeadLetter delivery" },
+    { "text": "[w2] Retry configuration is input: a maximum of zero dead-letters on the first failure, and very large counts can push the computed next-attempt time into date-range trouble.", "quote": "A zero value makes the first failure dead-letter immediately" },
+    { "text": "[w1] An in-memory dedupe claim holds only inside one store instance; several publisher processes need one durable, shared receipt.", "quote": "so one caller wins insertion of a key within that store instance" }
+   ]
+  },
+  {
+   "prompt": "TRADE-OFF HANDBACK — defend your webhook choices against the alternatives the chapter names: claim-then-work versus an atomic receipt versus a per-subscription progress plan, producer-side versus receiver-side deduplication, exactly-once versus at-least-once, a concatenated key versus a structured one, payload identity in the receipt or not, and a fresh event id per retry. For each, say what you bought and what it cost.",
+   "keyPoints": [
+    { "text": "[w3] Partial-enqueue repair: one atomic commit of receipt plus deliveries is simplest when they share a store; a durable per-subscription progress plan that retries idempotently suits a fan-out that cannot commit at once.", "quote": "record a durable per-subscription progress plan that retries idempotently" },
+    { "text": "[w3] Producer-side dedupe decides how many delivery records exist; receiver-side dedupe decides how many times the external effect happens. You need both, and neither replaces the other.", "quote": "Producer-side deduplication controls creation of delivery records" },
+    { "text": "[w3] Promise at-least-once attempts with stable identity and an idempotent receiver; an exactly-once claim must name the participating protocol and its failure assumptions, which one success flag cannot.", "quote": "specify at-least-once attempts with stable identity and idempotent receiver behavior" },
+    { "text": "[w2] A key built by joining type and id with a delimiter is ambiguous when either part can contain the delimiter; use a structured key or an unambiguous encoding.", "quote": "A structured key or unambiguous encoding avoids that ambiguity" },
+    { "text": "[w2] If a reused event id with a different payload is an error, the receipt must carry payload identity; a key without it suppresses the conflict silently.", "quote": "Reusing that key with a different payload is silently suppressed" },
+    { "text": "[w2] Minting a fresh random event id on each retry looks like it fixes a burned key, but it removes deduplication and can duplicate external effects.", "quote": "Do not solve this by making a new random event ID for every retry" },
+    { "text": "[w1] Keep five boundaries apart, each with its own evidence and retry rule: claimed intent, queued work, attempted transport, acknowledged outcome and remote effect.", "quote": "distinguish claimed intent, queued work, attempted transport, acknowledged outcome, and remote effect" }
+   ]
+  }
+ ]
+}

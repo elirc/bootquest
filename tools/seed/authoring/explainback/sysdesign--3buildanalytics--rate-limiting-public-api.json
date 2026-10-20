@@ -1,0 +1,40 @@
+{
+ "lines": { "start": 84, "end": 115 },
+ "questions": [
+  {
+   "prompt": "DESIGN IT — [mid] rate limiting a public API: one process, then a fleet (3buildanalytics, docs/upskill/03-architecture-and-patterns/05-pattern-catalog.md, Process-Local Rate Limit). Scenario: an analytics CRUD API starts on one instance and grows to 6 instances behind a load balancer; the default budget is 250 requests a minute per caller, sign-in is limited to 5 attempts per 15 minutes, and exports to 10 an hour; some customers put 300 employees behind one office NAT address; Redis is already in the stack for caching. Write your design before you look: where the counters live at each stage, the algorithm, what a counter is keyed by, the per-route tiers, the refusal contract, and what happens when the counter store is down. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+   "keyPoints": [
+    { "text": "[w2] Stage one is honest about its scope: an in-memory map of counters and window starts is cheap and fine for a single instance or internal tooling, and nothing more.", "quote": "In-memory map keyed by client IP with count + window" },
+    { "text": "[w3] Stage two moves the counters into a shared store behind the same middleware contract, so all six instances count against one budget instead of each keeping its own.", "cite": { "path": "docs/upskill/03-architecture-and-patterns/06-architecture-critique.md", "lineStart": 26, "lineEnd": 28 } },
+    { "text": "[w3] Algorithm: a fixed window done as one INCR on a key that embeds the window number, with the expiry set only by the first hit, so each window is a fresh self-expiring key and nothing has to be reset.", "cite": { "path": "backend/src/middleware/rateLimit.middleware.ts", "lineStart": 48, "lineEnd": 63 } },
+    { "text": "[w3] Identity: count per authenticated user and fall back to the IP only for anonymous calls (so the limiter runs after authentication), which gives NAT'd colleagues separate budgets.", "cite": { "path": "fabledocs/02-user-stories.md", "lineStart": 1307, "lineEnd": 1309 } },
+    { "text": "[w2] Tiers are separate buckets from one factory: credential endpoints at 5 per 15 minutes keyed by IP even when signed in, exports at 10 an hour, and a global default for everything else.", "cite": { "path": "backend/src/middleware/rateLimit.middleware.ts", "lineStart": 107, "lineEnd": 132 } },
+    { "text": "[w2] Refusal contract: 429 with its own RATE_LIMITED error code and a Retry-After header, plus limit, remaining and reset headers on normal responses, so clients can back off instead of guessing.", "cite": { "path": "backend/src/middleware/rateLimit.middleware.ts", "lineStart": 83, "lineEnd": 101 } },
+    { "text": "[w3] Store-down behaviour is decided up front: the limiter fails open and logs a warning, because rejecting everything when its own dependency dies would turn a Redis outage into an API outage.", "cite": { "path": "backend/src/middleware/rateLimit.middleware.ts", "lineStart": 64, "lineEnd": 81 } }
+   ]
+  },
+  {
+   "prompt": "PRE-MORTEM — the same API at 10x: still on per-process counters when it reaches 6 instances, a scraper rotating through 50,000 source addresses, a 300-seat customer behind one NAT, and later a 10-minute Redis outage on the shared design. What breaks first, and what in your design already handles it?",
+   "keyPoints": [
+    { "text": "[w3] Per-process counters behind a load balancer give every caller up to six times the stated budget, and every deploy wipes the counts.", "cite": { "path": "backend/src/middleware/rateLimit.middleware.ts", "lineStart": 28, "lineEnd": 30 } },
+    { "text": "[w3] A map that never evicts remembers every address it has seen, so an address-rotating scraper turns the limiter into a memory leak; per-window keys with a TTL clean themselves up.", "cite": { "path": "backend/src/middleware/rateLimit.middleware.ts", "lineStart": 28, "lineEnd": 31 } },
+    { "text": "[w2] Keying on the address alone makes everyone behind one NAT or proxy share a single budget, and behind a proxy the address itself can be ambiguous.", "quote": "Multi-instance inconsistency, memory growth, proxy/IP ambiguity" },
+    { "text": "[w3] During a Redis outage the fail-open limiter enforces nothing, sign-in brute-force protection included; the gap is acceptable only if it is logged and watched.", "cite": { "path": "backend/src/middleware/rateLimit.middleware.ts", "lineStart": 64, "lineEnd": 80 } },
+    { "text": "[w2] A fixed window lets a caller burst across a window boundary, close to twice the budget in a short span; acceptable for stopping abuse, not for precise traffic shaping.", "cite": { "path": "backend/src/middleware/rateLimit.middleware.ts", "lineStart": 36, "lineEnd": 39 } },
+    { "text": "[w2] Swallowed store errors can hide regressions, so limiter and cache failures need their own visible signal rather than silence.", "quote": "Silent failure can hide performance regressions" },
+    { "text": "[w1] The client must treat 429 as 'wait': show the retry time and keep its query library's automatic retries from hammering a limited endpoint.", "cite": { "path": "fabledocs/02-user-stories.md", "lineStart": 1320, "lineEnd": 1321 } }
+   ]
+  },
+  {
+   "prompt": "TRADE-OFF HANDBACK — defend your limiter choices against the alternatives the catalog and its critique name: process-local versus a shared store versus an infrastructure-native limiter, fixed window versus sliding window, fail open versus fail closed, keying by address versus by user, and caching the expensive reads the limiter is protecting. For each, say what you bought and what it cost.",
+   "keyPoints": [
+    { "text": "[w3] Process-local is right for an MVP or a single instance; once production spans several instances or untrusted networks you pay a network hop for a shared store, or move limiting into the infrastructure in front of the app.", "quote": "Production spans multiple instances or untrusted networks" },
+    { "text": "[w3] Fixed window costs one INCR plus one EXPIRE per request; a sliding window needs a sorted set per key. The fixed window was chosen because the job is abuse protection, accepting boundary bursts.", "cite": { "path": "backend/src/middleware/rateLimit.middleware.ts", "lineStart": 36, "lineEnd": 39 } },
+    { "text": "[w3] Fail open applies the graceful-cache-failure rule to the limiter: right while the store is optional protection, wrong wherever its correctness is a hard dependency.", "quote": "Cache correctness is a hard dependency" },
+    { "text": "[w2] Per-user keys isolate colleagues behind one address but need authentication to run first; credential endpoints stay per address because their callers have no identity yet.", "cite": { "path": "backend/src/middleware/rateLimit.middleware.ts", "lineStart": 15, "lineEnd": 22 } },
+    { "text": "[w2] Migrate without changing callers: introduce the shared limiter behind the existing middleware contract and prove it with repeated-request tests and a multi-instance run.", "cite": { "path": "docs/upskill/03-architecture-and-patterns/06-architecture-critique.md", "lineStart": 26, "lineEnd": 28 } },
+    { "text": "[w1] Cache-aside on read-heavy summaries cuts the load behind the limit, at the price of bounded staleness and a key that must include every input, the caller's role among them.", "quote": "Stale data, overly broad keys, missing role component" }
+   ]
+  }
+ ]
+}

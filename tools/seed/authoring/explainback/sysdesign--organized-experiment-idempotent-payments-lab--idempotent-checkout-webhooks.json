@@ -1,0 +1,41 @@
+{
+ "lines": { "start": 60, "end": 120 },
+ "questions": [
+  {
+   "prompt": "DESIGN IT — [mid] an idempotent checkout with payment webhooks (organized-experiment-idempotent-payments-lab, docs/learning/concepts-demonstrated.md). Scenario: a checkout API takes about 50 payment creates a second at peak; roughly 3% of mobile clients retry a create after a timeout, with the same intent; the payment provider confirms each payment asynchronously by webhook and sometimes sends the same event twice; operators issue partial refunds, so a 90.00 charge may be refunded as 50.00 + 40.00 from two browser tabs. Write your design before you look: the idempotency store and its uniqueness scope, the request fingerprint, how provider confirmations are recorded and drained, and how refunds stay within the captured amount. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+   "keyPoints": [
+    { "text": "[w3] A dedicated idempotency table keeps, per key, the route, a hash of the request, a status and a snapshot of the response, so a retry is answered from the stored outcome instead of re-running the charge.", "quote": "stores the key, a route string, a SHA-256 fingerprint of the parsed body, a status, and the response snapshot" },
+    { "text": "[w3] Correctness under concurrency comes from the database: the idempotency row is inserted inside the same transaction as the payment, under a unique index, so two simultaneous requests with one key are serialized by the index rather than by application code.", "quote": "the insert is inside the transaction and the unique constraint serializes duplicates" },
+    { "text": "[w2] The fingerprint is canonical: object keys are sorted recursively before SHA-256, and it is taken over the validated body, so field order or harmless formatting never turns an honest retry into a false mismatch.", "cite": { "path": "src/lib/idempotency/requestFingerprint.ts", "lineStart": 1, "lineEnd": 29 } },
+    { "text": "[w3] Provider confirmations are queued as delivery rows written in the payment's own create transaction (a transactional outbox), so the queued message can never exist without its payment or go missing for a committed one.", "quote": "commits atomically with the business row" },
+    { "text": "[w2] The relay that drains the queue claims rows before working them and re-selects failed rows once their next-attempt time has passed; without a claim two relays work the same rows, and without the re-select a failure is permanent.", "cite": { "path": "docs/learning/build-journal.md", "lineStart": 149, "lineEnd": 149 } },
+    { "text": "[w2] The webhook receiver records each provider event under a unique provider event id, so a duplicated event moves the payment at most once even when two deliveries race.", "cite": { "path": "docs/learning/flow-traces.md", "lineStart": 102, "lineEnd": 107 } },
+    { "text": "[w3] Refunds lock the payment row inside the refund transaction and recompute the already-refunded sum under that lock before checking the remaining amount; reads taken before the transaction opens are what make concurrent refunds overshoot.", "cite": { "path": "docs/learning/build-journal.md", "lineStart": 147, "lineEnd": 147 } }
+   ]
+  },
+  {
+   "prompt": "PRE-MORTEM — the same checkout at 10x: about 500 creates a second, two relay workers draining the confirmation queue at once, a real HTTP payment provider that sometimes takes 10 seconds to answer, and an attacker posting hand-made webhooks. What breaks first, and what in your design already handles it?",
+   "keyPoints": [
+    { "text": "[w3] A create path that calls the provider inside its database transaction holds that transaction (and its connection) open across a network call; a 10-second provider stall then pins connections and blocks every duplicate of an in-flight key.", "quote": "with a real HTTP provider this would hold a database transaction open across a network call" },
+    { "text": "[w2] Because duplicates of an in-flight key block on the uncommitted row, a slow provider makes duplicates wait rather than fail fast.", "cite": { "path": "docs/architecture/request-lifecycle.md", "lineStart": 76, "lineEnd": 76 } },
+    { "text": "[w3] Two relays with no claim step select the same pending rows; the unique provider event id still keeps the payment transition single, but the loser can stamp the delivery FAILED on a payment that is actually fine.", "cite": { "path": "docs/learning/flow-traces.md", "lineStart": 102, "lineEnd": 107 } },
+    { "text": "[w2] A delivery marked FAILED with a next-attempt time is a dead letter unless some query selects it again; the status-and-time index is useless without that query.", "cite": { "path": "docs/architecture/request-lifecycle.md", "lineStart": 127, "lineEnd": 127 } },
+    { "text": "[w3] The webhook route must authenticate its sender (a shared-secret HMAC) and validate the payload before trusting a status; otherwise the audit trail credits the provider with changes nobody verified.", "quote": "asserts an identity that was never verified" },
+    { "text": "[w2] A provider status the mapper does not know must be rejected explicitly; left unmapped it falls through to the database and surfaces as a server error on a public route.", "quote": "ends in a Prisma enum error and a 500" },
+    { "text": "[w1] Idempotency rows with no retention policy grow forever at 10x; expire them after a window that covers the clients' retry horizon.", "quote": "expire records after a retention window" }
+   ]
+  },
+  {
+   "prompt": "TRADE-OFF HANDBACK — defend your checkout choices against the alternatives the doc and its findings name: a payment-row lock versus a serializable transaction for refunds, an in-progress marker other requests can see versus duplicates that wait, a key minted per call versus per user intent, keys scoped by route only versus by caller, and a single all-or-nothing transaction versus a split one for operational runs. For each, say what you bought and what it cost.",
+   "keyPoints": [
+    { "text": "[w3] Refund concurrency: SELECT ... FOR UPDATE on the payment serializes refunds for that payment only; a serializable transaction avoids raw SQL but needs a retry loop on serialization failure. Either way the refunded sum is recomputed inside the transaction.", "cite": { "path": "docs/architecture/request-lifecycle.md", "lineStart": 123, "lineEnd": 123 } },
+    { "text": "[w3] Writing the in-progress row and flipping it to completed inside one transaction keeps the design simple but means no other session ever sees 'in progress'; the price is waiting duplicates during a slow call, and an unread lockedAt column.", "cite": { "path": "docs/architecture/request-lifecycle.md", "lineStart": 76, "lineEnd": 76 } },
+    { "text": "[w2] The client creates the key once per user intent, for example when the checkout form opens, and reuses it on every retry of that intent; a key minted per network call protects nothing.", "quote": "in component state when the form is opened" },
+    { "text": "[w2] Key scope: a record unique on (route, key) alone is global, so a second caller who sends the same key can be handed the first caller's replay; put the caller in the uniqueness scope.", "cite": { "path": "docs/learning/flow-traces.md", "lineStart": 140, "lineEnd": 140 } },
+    { "text": "[w2] Not everything belongs in one transaction: the reconciliation run row is created outside it on purpose, so a crash still leaves an inspectable RUNNING or FAILED run.", "quote": "so a crash still leaves a" },
+    { "text": "[w1] An in-process relay is cheap to build and test but proves nothing about the HTTP route, its authentication or network failure; a real design delivers over the wire.", "quote": "so it does not exercise the HTTP route" },
+    { "text": "[w1] Reconciliation is the safety net for eventual consistency, but it must close the issues it raises or the same payment is flagged again on every run.", "quote": "never closes issues, so the same payment is re-flagged on every run" }
+   ]
+  }
+ ]
+}

@@ -1,0 +1,126 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "grok-build-multitenant--dfableandopus-05-SYSTEM-DESIGN-FOLLOWUPS.md",
+ "items": [
+  {
+   "key": "seed:explainback:grok-build-multitenant/explain-back/8292f9a95a247c6c",
+   "provenance": {
+    "repo": "grok-build-multitenant",
+    "sha": "e899e2056faf5fa912bf980a51d4732e7da20497",
+    "path": "dfableandopus/05-SYSTEM-DESIGN-FOLLOWUPS.md",
+    "lines": {
+     "start": 1,
+     "end": 87
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "DESIGN IT — [mid] multi-tenant isolation for a B2B CRUD app (grok-build-multitenant, dfableandopus/05-SYSTEM-DESIGN-FOLLOWUPS.md). Scenario: a projects-and-tasks SaaS serves 2,000 customer organizations today and plans for 10,000; the largest tenant holds 400,000 projects; a user can belong to several organizations and picks one per request; three API instances sit behind a load balancer; members of one organization edit the same project at the same time. Write your design before you look: the tenancy model, where the tenant id is resolved and where it is enforced (request, service, repository, schema), how writes stay tenant-safe and conflict-safe, and how list reads stay predictable as tenants grow. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "keyPoints": [
+      {
+       "text": "[w3] One shared schema: every tenant-owned table carries the organization id and its indexes lead with it, so a query inside one tenant is an index range scan and adding tenants costs storage rather than query time.",
+       "quote": "so a large tenant count costs storage, not query time"
+      },
+      {
+       "text": "[w3] Enforcement is layered, not delegated: the request layer resolves which organization the caller may act in, the service checks the capability, and the repository still puts the organization id into every query predicate, because a correct membership check cannot repair an unscoped query.",
+       "quote": "every where carries organizationId"
+      },
+      {
+       "text": "[w3] Put the tenant rule in the schema where you can: a composite key (id, organization) on the parent and a child foreign key that carries the organization id make cross-tenant references structurally impossible, whichever service writes next.",
+       "quote": "works the same at any scale"
+      },
+      {
+       "text": "[w3] Concurrent edits use a conditional write: update where id, organization and expected version all match, bump the version, and require exactly one changed row; the database evaluates the predicate, so three instances race exactly like one.",
+       "cite": {
+        "path": "backend/src/repositories/projectRepository.ts",
+        "lineStart": 106,
+        "lineEnd": 113
+       }
+      },
+      {
+       "text": "[w2] Each mutation and its audit row commit in one transaction, so an accepted change and its audit trail can never disagree after a failure.",
+       "quote": "keeps the current property that an effect and its record commit together"
+      },
+      {
+       "text": "[w2] List reads are bounded: a fixed page size on the organization-leading index and a capped page number, with a cursor on the complete ordering tuple planned for when deep pages get expensive.",
+       "quote": "The per-tenant read does, because the index leads with"
+      },
+      {
+       "text": "[w2] Search needs its own index: a case-insensitive substring match cannot use a b-tree, so at scale it needs a trigram index, which is a migration and not a code change.",
+       "quote": "cannot use a b-tree, so at a million rows it needs a"
+      },
+      {
+       "text": "[w2] Creates get a client-generated key scoped to user, organization and operation, stored with a fingerprint of the validated payload and committed with the record and its audit, so a retried create returns the original id.",
+       "quote": "scoped to the authenticated user, the organization and the operation"
+      }
+     ]
+    },
+    {
+     "prompt": "PRE-MORTEM — the same app at 10x: 10,000 tenants, the biggest one at a million projects with users paging deep into the list, a new reporting query that forgets the organization predicate, and a credential-stuffing run against sign-in spread across the three instances. What breaks first, and what in your design already handles it?",
+     "keyPoints": [
+      {
+       "text": "[w3] The forgotten predicate is a cross-tenant leak under convention-only isolation; row-level security keyed on a per-transaction tenant setting makes the same mistake return nothing instead.",
+       "quote": "A forgotten predicate then returns nothing instead of returning someone else's rows"
+      },
+      {
+       "text": "[w3] Offset paging breaks first for the biggest tenant: deep pages make the database walk and throw away rows, and the exact count rescans that tenant's filtered set on every request; a page cap only limits the damage.",
+       "quote": "deep pages make PostgreSQL walk and discard rows"
+      },
+      {
+       "text": "[w3] A login limiter held in process memory gives an attacker one budget per instance, so three instances triple the attempts; the limiter must move to shared state before scaling out.",
+       "quote": "so three instances mean three times the attempt budget"
+      },
+      {
+       "text": "[w2] The per-request membership lookup multiplies with instances and invites a cache; once cached, its TTL is how long a removed member keeps access, so the number is a written policy decision.",
+       "quote": "the TTL becomes the revocation delay"
+      },
+      {
+       "text": "[w2] Row-level security has its own failure mode: with connection pooling the tenant setting must be applied per transaction, or a pooled connection carries the previous request's tenant; table owners bypass policies unless they are forced.",
+       "quote": "or a pooled connection carries the previous request's tenant"
+      },
+      {
+       "text": "[w2] Side effects outside the database cannot be rolled back by it, so notifications go through an outbox row written in the same transaction and a separate worker; delivery is at-least-once.",
+       "quote": "cannot roll back an email"
+      },
+      {
+       "text": "[w1] The first alert to wire up is tenant-context refusals counted apart from capability refusals: the former is someone acting in an organization they do not belong to.",
+       "quote": "which in a multi-tenant system is the alert you actually want"
+      }
+     ]
+    },
+    {
+     "prompt": "TRADE-OFF HANDBACK — defend your tenancy choices against the alternatives the doc names: shared schema versus schema per tenant versus database per tenant, predicates plus tests versus row-level security, offset versus keyset pagination, an advisory lock versus a unique index for idempotent creates, an outbox versus sending from the handler, and where the organization id goes in observability. For each, say what you bought and what it cost.",
+     "keyPoints": [
+      {
+       "text": "[w3] Shared schema keeps one migration and shared connection pools; schema per tenant buys hard isolation and per-tenant restore at the price of ten thousand migration copies and unshareable pools; database per tenant ends noisy neighbours but makes cross-tenant reporting painful.",
+       "quote": "ten thousand copies of every migration"
+      },
+      {
+       "text": "[w3] Row-level security converts a leak into an empty result, but it costs a raw per-transaction setting because the ORM has no first-class support, plus forced policies so owners cannot bypass them; without it the guarantee is convention plus an integration suite.",
+       "quote": "Prisma has no first-class support, so it needs a raw"
+      },
+      {
+       "text": "[w3] Keyset pagination on the ordering tuple keeps deep pages cheap but gives up jumping to an arbitrary page and an exact total.",
+       "quote": "what is lost is jumping to page 40 and knowing the exact total"
+      },
+      {
+       "text": "[w2] For idempotent creates the unique index on the receipt is what makes it correct; a per-caller lock only lets a concurrent duplicate come back as the original record instead of a constraint violation.",
+       "quote": "The lock is not what makes it correct, the unique index is"
+      },
+      {
+       "text": "[w2] An outbox keeps intent and record atomic and moves the unreliable send out of the request; its remaining crash window is closed by a receiver-honoured dedupe key, not a longer transaction.",
+       "quote": "the mitigation is a deduplication key the receiver honours, not a longer transaction"
+      },
+      {
+       "text": "[w1] The organization id belongs on every structured log line for per-tenant debugging, but not in metric labels, where it makes retention expensive.",
+       "quote": "so it belongs in structured logs rather than in metric labels"
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}
