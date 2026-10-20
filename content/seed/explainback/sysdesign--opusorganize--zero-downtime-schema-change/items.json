@@ -18,7 +18,7 @@
    "kind": "explain-back",
    "questions": [
     {
-     "prompt": "DESIGN IT — [senior] a zero-downtime schema change on a live product (opusorganize, apprenticeship/curriculum/07). The product wants to rename the issue field storyPoints to estimate on a 2.1M-row Issue table that takes about 400 writes/s at peak, and the same release adds an index on that table. Migrations run in a release phase on a throwaway machine before any new instance serves, at least 2 machines stay up through a rolling deploy, and browsers can keep running the previous SPA bundle after the API has moved on. Write your release plan before you look: what compatibility each release must hold, the lock every DDL statement takes, how the data moves across, what stale clients do mid-change, how you prove the old column is dead, and what a rollback looks like at each step. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "prompt": "DESIGN IT — [senior] a zero-downtime schema change on a live product (opusorganize, apprenticeship/curriculum/07). The product wants to rename the issue field storyPoints to estimate on a 2.1M-row Issue table that takes about 400 writes/s at peak and can tolerate only about 1 s of blocked writes, and the same release adds an index on that table. Migrations run in a release phase on a throwaway machine before any new instance serves, at least 2 machines stay up through a rolling deploy, and browsers can keep running the previous SPA bundle after the API has moved on. Write your release plan before you look: what compatibility each release must hold, the lock every DDL statement takes, how the data moves across, what stale clients do mid-change, how you prove the old column is dead, and what a rollback looks like at each step. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
      "keyPoints": [
       {
        "text": "[w3] First ask whether the database name has to change at all: mapping the renamed model field onto the existing column makes the generated migration empty, so there is no SQL to make safe.",
@@ -33,16 +33,16 @@
        "quote": "Always read the generated SQL"
       },
       {
-       "text": "[w3] Each DDL statement in the plan states its lock level against a budget: a plain index build stops INSERT/UPDATE/DELETE on the table for the whole build, and the brief tolerates about 1 s of blocking at 400 writes/s.",
+       "text": "[w3] Each DDL statement in the plan states the lock it takes and is checked against the ~1 s write-blocking budget; a statement that would block writes for longer than that (a plain index build, a type change that rewrites the table) is redesigned, not scheduled.",
        "quote": "every DDL statement lists its lock level"
       },
       {
-       "text": "[w2] Copying 2.1M rows is a job that can die halfway: it must pick up where it stopped and be harmless when it re-processes rows it already copied, and it is paced so live writes keep their headroom.",
-       "quote": "throttled, resumable, idempotent"
+       "text": "[w3] If the column itself has to move, the data crosses over in a multi-release sequence, each step its own deploy: an additive nullable column first; then a release that keeps both columns in step while every read still comes from the original; then a throttled, resumable, idempotent backfill job outside the migration transaction; then reads cut over (behind a flag if possible); then the original column stops being written but stays in place for one more release; only then the drop. Rollback at any step is redeploying the previous binary, which works because no step has yet removed anything that binary still uses.",
+       "quote": "with each step as its own release"
       },
       {
-       "text": "[w2] Making the new column NOT NULL on a table this size is its own step that first needs a default or a validated CHECK constraint.",
-       "quote": "on a big table needs a default or a validated"
+       "text": "[w2] The new index is built online (CONCURRENTLY on Postgres) so writes keep flowing for the whole build; that form refuses to run inside a transaction, so it ships as its own migration that the runner does not wrap in one.",
+       "quote": "These can't run inside a transaction."
       },
       {
        "text": "[w3] Stale SPA bundles keep PATCHing the old field name; a lenient request schema strips the unknown key and answers 200 while saving nothing, so the plan decides how the API treats the old key until those clients are gone.",
@@ -66,7 +66,7 @@
        }
       },
       {
-       "text": "[w3] A clean canary proves only the new-binary cell; a rollback runs the previous binary against the migrated schema, which is how atlas saw zero canary errors and then a 40% error rate after rolling back.",
+       "text": "[w3] A clean canary proves only the new-binary cell; a rollback runs the previous binary against the already-migrated schema, so the errors can arrive only after rolling back (atlas, for example, saw zero canary errors and then a 40% error rate after the rollback).",
        "quote": "the rollback raised errors to 40%"
       },
       {
@@ -76,14 +76,6 @@
       {
        "text": "[w3] Green CI is not evidence here: a test database built from scratch has no rows to lose and no old binary running against it, so the mismatch can never show up in tests.",
        "quote": "A fresh database has no rows to lose and no old code running against it."
-      },
-      {
-       "text": "[w2] If production builds its schema with EnsureCreated, a new column never reaches an existing database at all; adopting real migrations needs a baseline that is recorded as applied, not run.",
-       "quote": "That call is a no-op when the database already exists."
-      },
-      {
-       "text": "[w2] Design documents are not evidence of practice: the repo's ADR describes expand/contract while its migration history did an in-place type change, so audit what the history actually ran.",
-       "quote": "the document and the history disagree"
       },
       {
        "text": "[w1] Before relying on an online index build, check on a scratch database how the ORM's runner executes a multi-statement migration file.",
