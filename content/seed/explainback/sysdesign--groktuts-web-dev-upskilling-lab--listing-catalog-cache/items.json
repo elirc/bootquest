@@ -1,0 +1,130 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "groktuts-web-dev-upskilling-lab--system-design-deep-dives.md",
+ "items": [
+  {
+   "key": "seed:explainback:groktuts-web-dev-upskilling-lab/explain-back/799dcf286ea8ac97",
+   "provenance": {
+    "repo": "groktuts-web-dev-upskilling-lab",
+    "sha": "abb2d7ba56c1f7534f7ff08054fcb5e055522f73",
+    "path": "system-design-deep-dives.md",
+    "lines": {
+     "start": 9,
+     "end": 368
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "DESIGN IT — data model, API and caching for a listing-heavy web app [mid] (groktuts-web-dev-upskilling-lab, system-design-deep-dives.md). Scenario: the Support Ticket Dashboard grows into a multi-tenant product for 200 companies. The largest tenant has a 50-person support team and 100,000+ tickets; agents spend the day on one list view filtered by status, priority and assignee, sorted newest first, with free-text search over title and description, and they open ticket details constantly. A colleague's assignment should show up on everyone's list within seconds. Design the data model, the list API, search, where each cache sits and how it is invalidated, before you look. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "keyPoints": [
+      {
+       "text": "[w2] IDs come from the server (or a client-generated UUID), not from the clock: the demo's Date.now() id collides when two tickets are created in the same millisecond or by two users.",
+       "quote": "A server-assigned ID (or a client UUID) is the first change any multi-user version needs."
+      },
+      {
+       "text": "[w3] Every ticket row carries its tenant (team_id / tenantId, NOT NULL) plus assignee and reporter foreign keys and a version or updatedAt column for optimistic locking, because the same platform serves many companies and many agents edit the same rows.",
+       "quote": "teamId or tenantId for multi-tenancy (critical when the same platform serves multiple companies)"
+      },
+      {
+       "text": "[w2] Core fields stay typed columns while flexible custom fields go in JSONB; comments live in their own table, and a ticket_events (history) table records every state change for audit and time-in-status metrics.",
+       "quote": "We also need a ticket_events or ticket_history table to record every state change for auditing and for computing metrics like time-in-status."
+      },
+      {
+       "text": "[w2] The list contract is a filtered REST resource (GET /tickets?status=open&priority=high, POST /tickets, PATCH /tickets/{id}), designed against over-fetching, under-fetching and N+1 queries from missing includes or joins.",
+       "quote": "N+1 problems if not careful with includes or joins"
+      },
+      {
+       "text": "[w3] Filtering and sorting run on the server for a dataset this size; the browser only renders the current page, virtualized when rows run into the thousands, and filters locally within that page at most.",
+       "quote": "Filtering and sorting should happen server-side for large datasets, or use a smart client cache + local filtering only for the current page."
+      },
+      {
+       "text": "[w2] Free-text search starts in Postgres: a generated tsvector column over title and description with a GIN index.",
+       "quote": "a GIN index on a generated tsvector column gives fast results"
+      },
+      {
+       "text": "[w3] Caches are placed by how stale each read may be: the React Query client cache in the browser, a Redis application cache for hot shared lists, the CDN for static assets; a per-user \"my open tickets\" list can be cached for about 30 seconds, but ticket detail is not cached for long because its status changes often.",
+       "quote": "but never cache a specific ticket detail for long because status changes frequently"
+      },
+      {
+       "text": "[w3] Invalidation on update removes both the detail entry and every list key that might contain the ticket, which is why list keys follow a structured naming scheme such as tickets:team:42:status:open.",
+       "quote": "you need to invalidate both the list cache keys that might contain it and any detail cache"
+      }
+     ]
+    },
+    {
+     "prompt": "PRE-MORTEM — the same catalog at 10x: one tenant passes 1,000,000 tickets, 500 agents are online at once, two agents keep editing the same ticket, and support says \"the list is slow today\". What breaks first, how do you find it, and what in your design already handles it?",
+     "keyPoints": [
+      {
+       "text": "[w3] Find the bottleneck before changing anything: structured logs with correlation IDs, metrics and traces show whether the time goes to the React render, the API call, a slow SQL query or Redis.",
+       "quote": "you should be able to look at traces and see whether the bottleneck is the React render, the API call, a slow SQL query, or Redis"
+      },
+      {
+       "text": "[w2] The slow list query is worked down a fixed path: EXPLAIN ANALYZE, an index on (status, team_id), partitioning by team or date, and a materialized view for reports.",
+       "quote": "Add Index on status, team_id"
+      },
+      {
+       "text": "[w2] When one instance is outgrown: read replicas for reporting, PgBouncer connection pooling, and a schema that avoids cross-tenant joins.",
+       "quote": "Connection pooling (PgBouncer)."
+      },
+      {
+       "text": "[w3] Two agents editing one ticket is handled by optimistic locking (the version / updatedAt check on update); the client shows its optimistic change at once and reconciles if the server rejects it.",
+       "quote": "optimistic locking or versioning on updates"
+      },
+      {
+       "text": "[w2] Side effects of a write (notifications, search-index updates, analytics counters) run as background jobs, not synchronously in the request path, and carry idempotency keys because delivery can repeat.",
+       "quote": "These should not be done synchronously in the request path."
+      },
+      {
+       "text": "[w3] Tenant isolation must survive a misconfigured filter at scale: Postgres row-level security enforces it at the database layer, the backend still checks permissions, and the frontend never assumes it only receives allowed data.",
+       "quote": "A user should never be able to see another tenant's data, even through a misconfigured filter."
+      },
+      {
+       "text": "[w2] Live list freshness comes from a push (WebSocket or SSE to the team's viewers) that invalidates the cached list on those clients, instead of every client polling.",
+       "quote": "React Query invalidates the list for those clients"
+      },
+      {
+       "text": "[w1] Manager analytics are moved off the operational path onto a materialized view or a data warehouse.",
+       "quote": "Query hits a materialized view or data warehouse."
+      }
+     ]
+    },
+    {
+     "prompt": "TRADE-OFF HANDBACK — defend your catalog choices against the alternatives the document names: the API style, the search architecture, how flexible fields are stored, where filter state lives, and how lists stay live. For each, say what you bought, what it cost, and which requirement put you on that side.",
+     "keyPoints": [
+      {
+       "text": "[w3] REST versus GraphQL: GraphQL fetches exactly the needed fields and nested data in one round-trip, but costs field-level authorization, federation work across services, and loses simple URL-based caching.",
+       "quote": "caching is harder (no simple URL-based cache)"
+      },
+      {
+       "text": "[w2] For a dashboard that stays inside one team or company, typed RPC (tRPC) with React Query gives end-to-end type safety without a GraphQL runtime.",
+       "quote": "For a support dashboard that stays within one team or company, tRPC + React Query can be incredibly productive."
+      },
+      {
+       "text": "[w3] Search as a hybrid: Postgres keeps the canonical rows (strong consistency, transactions), a denormalized search document is synced to the engine, search queries go to the engine and detail views to Postgres; the price is a sync pipeline to run.",
+       "quote": "Queries go to the search engine; detail views go to Postgres."
+      },
+      {
+       "text": "[w2] Custom fields as JSONB beside typed core columns, rather than a flexible EAV model.",
+       "quote": "custom fields (JSONB in Postgres or a flexible EAV model)"
+      },
+      {
+       "text": "[w2] Filter and sort choices live in the URL so a filtered view is shareable and deep-linkable, while server data lives in the client query cache and only UI state stays in component state.",
+       "quote": "for shareable filters and deep links"
+      },
+      {
+       "text": "[w2] Live updates: short polling is simple but wasteful, Server-Sent Events are one-way and suit dashboards, WebSockets are bidirectional and more complex.",
+       "quote": "Server-Sent Events (one-way, great for dashboards)"
+      },
+      {
+       "text": "[w1] Every extra layer is a cost line: search engines, queues and caches each cost money and operational effort, so each one must be justified by a requirement.",
+       "quote": "Search engines, queues, and caches all cost money and operational effort."
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}
