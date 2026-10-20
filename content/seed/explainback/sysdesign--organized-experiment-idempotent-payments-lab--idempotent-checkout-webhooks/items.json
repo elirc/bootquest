@@ -57,7 +57,7 @@
        }
       },
       {
-       "text": "[w3] Refunds lock the payment row inside the refund transaction and recompute the already-refunded sum under that lock before checking the remaining amount; reads taken before the transaction opens are what make concurrent refunds overshoot.",
+       "text": "[w3] Refunds keep the captured amount as a hard bound by checking it where concurrent writers cannot interleave: the payment row is locked inside the refund transaction and the already-refunded sum is recomputed under that lock, so the 50.00 and 40.00 tabs queue behind each other; a remaining-amount check done on reads taken before the transaction opens lets both tabs pass.",
        "cite": {
         "path": "docs/learning/build-journal.md",
         "lineStart": 147,
@@ -70,15 +70,15 @@
      "prompt": "PRE-MORTEM — the same checkout at 10x: about 500 creates a second, two relay workers draining the confirmation queue at once, a real HTTP payment provider that sometimes takes 10 seconds to answer, and an attacker posting hand-made webhooks. What breaks first, and what in your design already handles it?",
      "keyPoints": [
       {
-       "text": "[w3] A create path that calls the provider inside its database transaction holds that transaction (and its connection) open across a network call; a 10-second provider stall then pins connections and blocks every duplicate of an in-flight key.",
+       "text": "[w3] A create path that calls the provider inside its database transaction holds that transaction open across a network call; the idempotency row stays uncommitted for the whole call, so a 10-second provider stall makes every duplicate of an in-flight key wait on the unique index instead of failing fast.",
        "quote": "with a real HTTP provider this would hold a database transaction open across a network call"
       },
       {
-       "text": "[w2] Because duplicates of an in-flight key block on the uncommitted row, a slow provider makes duplicates wait rather than fail fast.",
+       "text": "[w3] At 500 creates a second, transactions that each live as long as the provider call mean up to 5,000 open at once when the provider stalls for 10 seconds (rate times duration), far beyond any connection pool, so the pool runs dry and refunds, webhooks and reads queue behind payment creates; nothing in the create path bounds the call (the transaction is opened with no options), so commit the intent first and call the provider outside the transaction with its own timeout.",
        "cite": {
-        "path": "docs/architecture/request-lifecycle.md",
-        "lineStart": 76,
-        "lineEnd": 76
+        "path": "src/services/paymentService.ts",
+        "lineStart": 87,
+        "lineEnd": 167
        }
       },
       {
@@ -98,12 +98,17 @@
        }
       },
       {
-       "text": "[w3] The webhook route must authenticate its sender (a shared-secret HMAC) and validate the payload before trusting a status; otherwise the audit trail credits the provider with changes nobody verified.",
-       "quote": "asserts an identity that was never verified"
+       "text": "[w3] The webhook route must authenticate its sender (a shared-secret HMAC) and validate the payload against a schema before trusting a status, rejecting an unknown provider status explicitly with a 4xx; otherwise the audit trail credits the provider with changes nobody verified, and an unmapped status falls through to the database as a 500 on a public route.",
+       "quote": "asserts an identity that was never verified",
+       "cite": {
+        "path": "docs/learning/concepts-demonstrated.md",
+        "lineStart": 83,
+        "lineEnd": 83
+       }
       },
       {
-       "text": "[w2] A provider status the mapper does not know must be rejected explicitly; left unmapped it falls through to the database and surfaces as a server error on a public route.",
-       "quote": "ends in a Prisma enum error and a 500"
+       "text": "[w2] The webhook path reads the payment before its transaction opens and judges the transition against that read, so with real deliveries, relays and forged events landing on one payment the guard can approve a move against a status that has already changed; re-read the payment inside the transaction (under a lock) before checking the transition.",
+       "quote": "the webhook path comparing against a possibly stale"
       },
       {
        "text": "[w1] Idempotency rows with no retention policy grow forever at 10x; expire them after a window that covers the clients' retry horizon.",
@@ -112,10 +117,10 @@
      ]
     },
     {
-     "prompt": "TRADE-OFF HANDBACK — defend your checkout choices against the alternatives the doc and its findings name: a payment-row lock versus a serializable transaction for refunds, an in-progress marker other requests can see versus duplicates that wait, a key minted per call versus per user intent, keys scoped by route only versus by caller, and a single all-or-nothing transaction versus a split one for operational runs. For each, say what you bought and what it cost.",
+     "prompt": "TRADE-OFF HANDBACK — defend your checkout choices against the alternatives the doc and its findings name: a payment-row lock versus a serializable transaction for refunds, an in-progress marker other requests can see versus duplicates that wait, a key minted per call versus per user intent, keys scoped by route only versus by caller, a single all-or-nothing transaction versus a split one for operational runs, and an in-process relay versus delivery over the real webhook route. For each, say what you bought and what it cost.",
      "keyPoints": [
       {
-       "text": "[w3] Refund concurrency: SELECT ... FOR UPDATE on the payment serializes refunds for that payment only; a serializable transaction avoids raw SQL but needs a retry loop on serialization failure. Either way the refunded sum is recomputed inside the transaction.",
+       "text": "[w3] Lock versus serializable for refunds: SELECT ... FOR UPDATE makes the second refund on the same payment wait until the first commits (refunds on other payments are untouched) but needs a raw query in Prisma; a serializable transaction stays in the ORM but lets the loser abort with a serialization failure, so it must be wrapped in a retry loop. The choice is blocking versus abort-and-retry.",
        "cite": {
         "path": "docs/architecture/request-lifecycle.md",
         "lineStart": 123,
@@ -123,7 +128,7 @@
        }
       },
       {
-       "text": "[w3] Writing the in-progress row and flipping it to completed inside one transaction keeps the design simple but means no other session ever sees 'in progress'; the price is waiting duplicates during a slow call, and an unread lockedAt column.",
+       "text": "[w3] Writing the in-progress row and flipping it to completed inside one transaction keeps the design simple but means no other session ever sees 'in progress'; the price is duplicates that wait during a slow call. Committing the marker first buys a fast 409 for duplicates, at the cost of a second write and a rule for markers abandoned by a crash.",
        "cite": {
         "path": "docs/architecture/request-lifecycle.md",
         "lineStart": 76,
@@ -147,12 +152,8 @@
        "quote": "so a crash still leaves a"
       },
       {
-       "text": "[w1] An in-process relay is cheap to build and test but proves nothing about the HTTP route, its authentication or network failure; a real design delivers over the wire.",
+       "text": "[w2] An in-process relay is cheap to build and deterministic to test (no network, no signing) but proves nothing about the HTTP route, its authentication or network failure; a real design delivers over the wire.",
        "quote": "so it does not exercise the HTTP route"
-      },
-      {
-       "text": "[w1] Reconciliation is the safety net for eventual consistency, but it must close the issues it raises or the same payment is flagged again on every run.",
-       "quote": "never closes issues, so the same payment is re-flagged on every run"
       }
      ]
     }
