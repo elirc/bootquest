@@ -25,7 +25,7 @@
        "quote": "never one global limit that also blocks webhooks and scanners"
       },
       {
-       "text": "[w3] Every outbound call has an explicit timeout shorter than its caller's, because library defaults are wrong for a request path (Stripe SDK 80 s, Anthropic SDK 10 min, an ioredis client set to retry forever).",
+       "text": "[w3] Every outbound call has an explicit timeout shorter than its caller's, because library defaults are wrong for a request path (for example, the commonly cited Stripe SDK default of 80 s or Anthropic SDK default of 10 min, or a Redis client configured to retry forever).",
        "quote": "set shorter than the caller's timeout"
       },
       {
@@ -37,7 +37,7 @@
        "quote": "so slow Stripe calls can't eat the connections that check-in needs"
       },
       {
-       "text": "[w2] The hot tier row is decremented by one atomic conditional UPDATE guarded on remaining stock, the order number comes from a sequence instead of counting the table, and Serializable is avoided where it only produces retries.",
+       "text": "[w2] The hot tier row is decremented by one atomic conditional UPDATE guarded on remaining stock, no other step of a reservation contends on shared state (a single counter, a whole-table read), and Serializable is avoided where it only produces retries.",
        "quote": "avoid Serializable where it only yields retries"
       },
       {
@@ -55,14 +55,14 @@
      ]
     },
     {
-     "prompt": "PRE-MORTEM — drop day: the payment provider slows down, a PR 'fixes' the 500s by retrying 20 times with a fixed delay, Redis fills up, and a long generation job outlives its queue timeout. What breaks first, how does it show, and what in your design already prevents it?",
+     "prompt": "PRE-MORTEM — drop day, on a build whose checkout reserves stock inside a Serializable transaction with a version-checked update and an app-level retry loop: the payment provider slows down, a PR 'fixes' the resulting 500s by retrying 20 times with a fixed delay, Redis fills up, and a long generation job outlives its queue timeout. What breaks first, how does it show, and what in your design already prevents it?",
      "keyPoints": [
       {
        "text": "[w3] A provider call made inside a database transaction holds a pool connection for the provider's whole latency, so pool-timeout errors appear on unrelated routes, check-in included; an error that names a shared resource instead of a route is the tell.",
        "quote": "Look for errors that name a shared resource rather than a route"
       },
       {
-       "text": "[w3] Retrying conflicts without jitter makes each retry a fresh conflicting transaction: attempts per success climb with concurrency, callers queue for connections until the pool wait times out, and p95 went from 3.6 s to 14.3 s while most buyers still failed.",
+       "text": "[w3] Retrying conflicts without jitter makes each retry a fresh conflicting transaction: attempts per success climb with concurrency, callers queue for connections until the pool wait times out, and latency gets much worse while most buyers still fail (in the lab, p95 went from 3.6 s to 14.3 s).",
        "quote": "Attempts per success grow with concurrency"
       },
       {
@@ -78,12 +78,8 @@
        "quote": "the queue timeout is not a kill switch"
       },
       {
-       "text": "[w2] Layered retries also show up as money: the provider invoice ran about 4x the internal ledger, because retries were stacked and the ledger overwrote usage per attempt instead of summing it, so the extra attempts never showed internally.",
-       "quote": "The cost ledger hides retries."
-      },
-      {
-       "text": "[w1] A duplicate-checkout guard that checks then acts outside the transaction is a UX guard only; two tabs can race past it.",
-       "quote": "so it's a UX guard, not a correctness guard"
+       "text": "[w2] Any hop still on a library-default timeout (or a Redis client that retries forever) waits as long as the slowing provider does, so the slowdown turns into held connections and busy workers instead of fast failures; it shows as latency on every route tracking the provider's latency.",
+       "quote": "Library defaults are usually wrong."
       }
      ]
     },
@@ -91,7 +87,7 @@
      "prompt": "TRADE-OFF HANDBACK — defend your choices against the alternatives the chapter names: refusing fast vs letting callers wait in a queue, one retry layer vs retries everywhere, Serializable-plus-retry vs a single conditional update, and one shared pool vs per-dependency bulkheads. For each, say what you bought, what it cost, and which requirement put you on that side.",
      "keyPoints": [
       {
-       "text": "[w3] The M1 fix (one conditional update, an admission cap, 503 with Retry-After) measured zero 5xx at both 40 and 200 buyers, but its 503s only arrived after the 5 s queue wait and missed the 1.5 s p95 target: every second a caller waits before being refused is latency on the refusal, so the wait bound has to fit the refusal budget.",
+       "text": "[w3] The wait bound must fit the refusal/latency budget: a refusal is only cheap if it is fast, and every second a caller waits in a queue before being told no is latency spent on the refusal, so a queue wait longer than the refusal target turns a correct 503 into a missed SLO.",
        "quote": "the 503s arrived after the 5 s queue wait"
       },
       {
@@ -107,8 +103,8 @@
        "quote": "you can say which routes degrade first"
       },
       {
-       "text": "[w2] Alerting on queue length alone misses a stuck queue that is short; the age of the oldest job catches both a stalled worker and a backlog.",
-       "quote": "not just queue length"
+       "text": "[w2] The cost of the single conditional update: the tier is still one hot row that every buyer serializes on, so its lock caps that tier's throughput; sharding the counter buys throughput back at the price of stock that is no longer a single row to read and reconcile.",
+       "quote": "hot rows (a per-event counter) serialize everything"
       }
      ]
     }
