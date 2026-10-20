@@ -698,3 +698,22 @@ resolved); quiz variety `concept` and flashcard shape `hand-authored`;
   Q0 key points (suggested trim of the back's last sentence); the six DESIGN IT explain-back
   units carry the `language-fluency` competency (ladder.ts default), which fits system design
   poorly — a design competency or an explicit mapping is a server change.
+- **OPEN (fix/content-review, accepted explain-back/quiz overlap):** the token leak guard
+  (`EB_LEAK_JACCARD`) passes these, but each key point still answers a same-repo quiz in other
+  words. In every case the explain-back PROMPT asks for exactly the fact the quiz keys, so a
+  rubric without it would be hollow; left in place on purpose (do not add them to
+  `EB_LEAK_EXEMPT`, which only covers token leaks). Accepted for the same reason as the kata
+  overlap above (one narrowed quiz cannot clear its pack's 80% gate; blind-pass unaffected):
+  bootlocalopusv2 q1.kp5 vs e0fba98f (the prompt asks what "fixed" had to mean: the parent derives
+  `ok`; q1.kp4 was rewritten to the plan-of-test-names fact instead), q2.kp3+kp4 vs 6cf9d6ea and
+  q2.kp5+kp6 vs e1dcc20c (the prompt asks the mechanism that neutralises each forgery), q3.kp1+kp2
+  vs 066d3c34 (the prompt asks how each escape was closed); campusops q3.kp3+kp4 vs 0861d1f9 (the
+  prompt asks why atomic reservations are not retry-safe); grok-build-hr q2.kp4+kp5 vs f1dec2ae
+  (the prompt asks what each protection layer contributes). Residual, after rewording through the
+  mechanism rather than the key: 1jstrain2.2v2 q3.kp5/kp6 (the minimum-gap and never-serve
+  alternatives, restored for the prompt's "which alternatives were rejected and why") vs
+  36ae6a7a/be8b4384; customer-feedback-board q1.kp2 (BEGIN IMMEDIATE as the lost-update guard) vs
+  8f65790f; relay-upskilling q3.kp4 (why rows are marked uncertain before the POST) vs c1b9480f.
+  Rewritten to a different fact instead: bootlocalopusv2 q1.kp4, campusops q3.kp5 (was the 401/403
+  pair of a6fef2cb; now the caller-supplied demo headers), 1jstrain2.2v2 q3.kp2 (XP drop as a cost,
+  no longer its replay-from-log cause, d76989).
