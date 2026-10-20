@@ -8,7 +8,7 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } f
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 import { SEED_PACK_FORMAT, SeedPackManifest, SeedValidationStamp, type SeedItem, type SeedQuizItem } from '@bootquest/shared';
-import { seedFingerprint, seedToolchain } from '../fingerprint.ts';
+import { packRunners, seedFingerprint, seedToolchain } from '../fingerprint.ts';
 import { REPO_ROOT } from '../report.ts';
 import { sha256, stableJson } from '../util.ts';
 import { FIXTURES as FX, plantAndie, plantedToken } from './plant.ts';
@@ -214,13 +214,15 @@ function stampAsIfPreGuard(dir: string, fingerprint: string | null): void {
   const itemsBytes = readFileSync(join(dir, 'items.json'), 'utf8');
   const m = SeedPackManifest.parse(JSON.parse(manifestBytes));
   const q = JSON.parse(readFileSync(join(dir, 'quarantine.json'), 'utf8')) as { entries: { key: string }[] };
-  const rq = JSON.parse(readFileSync(join(dir, 'review-queue.json'), 'utf8')) as { entries: { key: string }[] };
+  const rq = JSON.parse(readFileSync(join(dir, 'review-queue.json'), 'utf8')) as { entries: { key: string; item: SeedItem }[] };
+  const items = JSON.parse(itemsBytes) as { items: SeedItem[] };
+  const runners = packRunners([...items.items, ...rq.entries.map((e) => e.item)]);
   const stamp = SeedValidationStamp.parse({
     format: SEED_PACK_FORMAT,
     source: `${m.generator}/${m.name}`,
     fingerprintKind: `seed:${m.generator}`,
-    fingerprint: fingerprint ?? seedFingerprint(m.generator),
-    toolchain: seedToolchain(m.generator),
+    fingerprint: fingerprint ?? seedFingerprint(m.generator, runners),
+    toolchain: seedToolchain(m.generator, runners),
     manifestSha256: sha256(manifestBytes),
     itemsSha256: sha256(itemsBytes),
     counts: m.counts,

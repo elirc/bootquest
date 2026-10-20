@@ -104,7 +104,9 @@ export async function shutdownValidatorRunners(): Promise<void> {
 
 // THE one not-a-verdict set; defined in verdicts.ts (a leaf module) so the factory harness
 // can share it without pulling this file's server-grader imports into the seed fingerprint.
-export { NOT_A_VERDICT } from './verdicts.ts';
+// Imported (not bare re-exported) because this file uses it below.
+import { NOT_A_VERDICT } from './verdicts.ts';
+export { NOT_A_VERDICT };
 
 export function exerciseHash(pu: PackUnit, content: UnitContentEntry, fingerprint: string): string {
   return createHash('sha256').update(JSON.stringify({ u: pu, c: content, g: fingerprint })).digest('hex');
