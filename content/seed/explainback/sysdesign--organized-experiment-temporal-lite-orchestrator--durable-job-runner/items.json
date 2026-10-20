@@ -21,7 +21,7 @@
      "prompt": "DESIGN IT — [senior] a durable job runner on Postgres (temporal-lite-orchestrator, docs/learning/concepts-demonstrated.md). Requirements: 8 worker processes share one Postgres and nothing else; peak about 50 tasks a second; a task calls an external API that can take up to 40 s; deploys SIGKILL workers mid-task several times a day; a step gets at most 3 attempts with exponential backoff; a client that retries 'start run' after a timeout must not get a second run; on-call must be able to explain every retry from the database alone. Write your design before you look: how a worker claims a task, what a lease means and who may take an expired one, where the idempotency records live and when they are written, the retry arithmetic, and what the audit trail records. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
      "keyPoints": [
       {
-       "text": "[w3] The claim is a single statement: a CTE picks the oldest due AVAILABLE row with FOR UPDATE SKIP LOCKED and the UPDATE in the same statement stamps owner, token and expiry with RETURNING, so selection and ownership cannot be separated by another worker.",
+       "text": "[w3] A worker selects a task and takes ownership of it in ONE atomic statement, so there is no gap between finding a row and owning it in which a second worker can claim the same task.",
        "quote": "Because the select and the update are one statement, there is no window where two workers both think they own the same row."
       },
       {
@@ -37,8 +37,8 @@
        "quote": "Three total attempts, two retries."
       },
       {
-       "text": "[w2] Backoff doubles per attempt under a one-hour ceiling, and that ceiling quietly overrides a longer configured initial delay (24 h becomes 1 h), so the policy schema and the cap must be validated together.",
-       "quote": "but the cap silently shortens it to 1 h"
+       "text": "[w1] Backoff grows exponentially under a hard ceiling, and its jitter must be random per task: a 'jitter' computed deterministically from the same inputs makes tasks that failed together retry together, which is exactly the synchronized stampede jitter exists to prevent.",
+       "quote": "so two tasks with the same policy that fail together retry together"
       },
       {
        "text": "[w2] Run start is deduplicated by a client idempotency key backed by a unique index; two simultaneous starts race on that index, so the loser must be mapped to 'here is the winning run' rather than surfacing as a server error.",
@@ -49,7 +49,7 @@
        "quote": "accompany run/step state changes."
       },
       {
-       "text": "[w1] The state machine is a guard table checked before each write: a step may go FAILED to QUEUED for a retry, but a failed run is terminal with no run-level retry path.",
+       "text": "[w1] Decide the run-level failure contract explicitly, as a choice with a cost: steps may go FAILED to QUEUED for a retry, but making a FAILED run terminal (no run-level retry) keeps the guard table simple and every terminal state final, and the price is that a run which exhausted its attempts during a transient outage cannot be resumed, only started again as a new run.",
        "quote": "once a run is `FAILED`, no code path can revive it."
       }
      ]
@@ -58,7 +58,7 @@
      "prompt": "PRE-MORTEM — the runner has been live for three months. A deploy SIGKILLs 2 of the 8 workers mid-task, an approver double-clicks Approve and Reject within the same second, and the database blips between creating a run and scheduling its first step. What breaks, how would on-call notice, and what repair or rollback story does your design have for each?",
      "keyPoints": [
       {
-       "text": "[w3] Reclaim is the missing half of the lease: the claim predicate only matches AVAILABLE rows and no code reads leaseExpiresAt, so a killed worker's task has no path back into the queue and its run never finishes; add a reaper (or widen the claim) to take rows whose lease has passed.",
+       "text": "[w3] Reclaim is the missing half of the lease: if nothing ever reclaims expired leases, a SIGKILLed worker's task is stranded and its run never finishes, so the design needs a reaper (or a claim that also takes rows whose lease has passed) that returns those rows to the queue.",
        "cite": {
         "path": "docs/architecture/README.md",
         "lineStart": 64,
@@ -127,7 +127,7 @@
        }
       },
       {
-       "text": "[w2] Delay expressed as availableAt in the claim's WHERE clause vs durable timers: polling makes backoff work with no timer service, while the run's nextWakeAt field is written and never read.",
+       "text": "[w2] Delay expressed as availableAt in the claim's WHERE clause vs a durable timer service: polling makes backoff work with no extra infrastructure, paid for in poll latency and steady load on the task table; a timer service earns its keep only once runs must sleep for long periods or wake at exact times.",
        "cite": {
         "path": "docs/architecture/README.md",
         "lineStart": 52,
@@ -135,7 +135,7 @@
        }
       },
       {
-       "text": "[w1] Be honest about scope: replay, timers, heartbeats, cancellation and sagas are named and deliberately left out, so the design is a durable job queue with a state machine rather than a durable-execution engine.",
+       "text": "[w1] Build a durable job queue or adopt a durable-execution engine: the queue covers claims, retries and an audit trail with nothing beyond Postgres, which fits 8 workers and one database; the switch point is the first requirement the queue can meet only by re-implementing an engine's core, at which point adopting one costs less than growing your own.",
        "quote": "Concepts the project name suggests but the code does not implement (replay, timers, heartbeats, cancellation, sagas or compensation)"
       }
      ]
