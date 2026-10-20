@@ -619,7 +619,7 @@ describe('reviews', () => {
 describe('GET /api/dashboard', () => {
   const ctx = useApi();
 
-  it('assembles streak, 120-day heatmap, XP/level, 7 competencies, slate, review count, next-up', async () => {
+  it('assembles streak, 120-day heatmap, XP/level, 8 competencies, slate, review count, next-up', async () => {
     seedDrill(ctx, 'dash:cs', 'csharp');
     seedDrill(ctx, 'dash:java', 'java');
     await request(ctx.app).post(`/api/units/${ctx.id('fixture:drill-add')}/submit`).send({ code: fixture.submissions.addRight });

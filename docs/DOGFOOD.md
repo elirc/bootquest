@@ -18,7 +18,7 @@ it first.
     the command that fixes it.
 - [ ] **Start the UI.** `npm run dev -w @bootquest/client`, then open
   http://localhost:5173.
-  - Good: a dark dashboard with streak 0, level 1, the 7 competency rows at 1, an empty
+  - Good: a dark dashboard with streak 0, level 1, the 8 competency rows at 1, an empty
     heatmap and today's slate.
 - [ ] **Busy port.** Start a second `npm run serve` while the first is running.
   - Good: a clear "port 4178 is already in use" refusal; the DB is untouched.

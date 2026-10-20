@@ -125,19 +125,22 @@ describe.skipIf(!HAVE_CHECKOUT)('W7 real ladder content end to end (temp DB, no 
     expect(l.units.filter((u) => u.family === 'study').map((u) => u.repo)).toEqual(['ww6']);
     expect(l.units.filter((u) => u.family === 'kata').every((u) => u.trackId === 'agentic')).toBe(true);
     expect(l.units.filter((u) => u.family === 'g2').every((u) => u.trackId === 'agentic')).toBe(true);
-    // every ordinary explain-back set's repo is a campaign quest -> linked for display,
-    // except javabootcamp: its six DESIGN IT system-design rubric sets route by prompt prefix
-    // (store/ladder.ts isDesignIt) to the campaign-less sysdesign track, never quest-linked
+    // DESIGN IT system-design rubric sets route by prompt prefix (store/ladder.ts isDesignIt)
+    // to the campaign-less sysdesign track, never quest-linked, whatever their repo; every
+    // ordinary explain-back set's repo is a campaign quest -> linked for display
     const eb = l.units.filter((u) => u.family === 'explain-back');
-    expect(eb.filter((u) => u.repo !== 'javabootcamp').every((u) => u.quest !== null)).toBe(true);
-    const jb = eb.filter((u) => u.repo === 'javabootcamp');
-    expect(jb.length).toBe(6);
-    expect(jb.every((u) => u.trackId === 'sysdesign' && u.quest === null)).toBe(true);
-    const design = ebItems.filter((i) => /^DESIGN IT\b/.test(i.questions[0]!.prompt));
-    expect(design.length).toBe(6);
-    expect(design.every((i) => i.provenance.repo === 'javabootcamp')).toBe(true);
-    // the sysdesign track holds exactly those six units
-    expect(l.units.filter((u) => u.trackId === 'sysdesign').map((u) => u.id).sort()).toEqual(jb.map((u) => u.id).sort());
+    const designItems = ebItems.filter((i) => /^DESIGN IT\b/.test(i.questions[0]!.prompt));
+    expect(designItems.length).toBe(22); // 6 javabootcamp originals + 16 estate sets
+    const designRepos = [...new Set(designItems.map((i) => i.provenance.repo))].sort();
+    expect(designRepos).toContain('javabootcamp');
+    expect(designRepos.length).toBe(14);
+    const design = eb.filter((u) => u.trackId === 'sysdesign');
+    expect(design.length).toBe(designItems.length);
+    expect(design.every((u) => u.quest === null)).toBe(true);
+    expect([...new Set(design.map((u) => u.repo))].sort()).toEqual(designRepos);
+    expect(eb.filter((u) => u.trackId !== 'sysdesign').every((u) => u.quest !== null)).toBe(true);
+    // the sysdesign track holds exactly the DESIGN IT units (no kata/g2/study strays)
+    expect(l.units.filter((u) => u.trackId === 'sysdesign').map((u) => u.id).sort()).toEqual(design.map((u) => u.id).sort());
   });
 
   it('a REAL explain-back set plays end to end: questions only -> immutable answer -> key -> self-score (20 XP)', async () => {

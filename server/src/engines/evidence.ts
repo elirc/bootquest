@@ -6,7 +6,7 @@ import { DAY_MS, nowMs, type Clock } from './clock.ts';
 /**
  * Competency ladder (spec §6.2) — the truth layer.
  *
- * Seven competencies, each with ONE current rating 1..5 (competency_rating);
+ * Eight competencies, each with ONE current rating 1..5 (competency_rating);
  * history lives in the append-only evidence table. Ratings are never averaged:
  * nothing here aggregates across competencies or across evidence ratings.
  * competency_rating can only change through promote/demote: an SQL trigger

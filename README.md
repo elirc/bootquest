@@ -1,7 +1,7 @@
 # BootQuest
 
 BootQuest is a single-user, local-first, gamified upskilling platform for the JS/TS +
-React, C#/.NET and Java tracks; agentic engineering is a fourth. Its content is the
+React, C#/.NET and Java tracks; agentic engineering and system design round them out. Its content is the
 owner's own estate: thousands of verified exercises and hundreds of curriculum guides
 across the elirc GitHub repos. It keeps growing as guides are added.
 
