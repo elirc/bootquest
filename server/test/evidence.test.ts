@@ -306,11 +306,11 @@ describe('reveal and assistance propagation', () => {
 describe('ratings are per-competency, never averaged, and only move through promote/demote', () => {
   const ctx = useTempDb();
 
-  it('promoting one competency leaves the other six untouched', () => {
+  it('promoting one competency leaves the other seven untouched', () => {
     buildLegs(ctx.db, ctx.clock, 'data-http');
     promoteIfEligible(ctx.db, 'data-http', ctx.clock);
     const ratings = getRatings(ctx.db);
-    expect(ratings).toHaveLength(7);
+    expect(ratings).toHaveLength(8);
     expect(ratings.find((r) => r.competency === 'data-http')!.rating).toBe(2);
     expect(ratings.filter((r) => r.competency !== 'data-http').every((r) => r.rating === 1)).toBe(true);
     expect(ratings.every((r) => Number.isInteger(r.rating))).toBe(true);

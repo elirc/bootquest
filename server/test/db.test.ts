@@ -46,20 +46,20 @@ describe('migrations', () => {
     const tmp = makeTempDb();
     try {
       const first = tmp.db.all<{ version: number }>('SELECT version FROM schema_version ORDER BY version');
-      expect(first.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+      expect(first.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
       tmp.db.close();
 
       const again = openDb({ path: tmp.path, env: {} });
       try {
         expect(migrate(again)).toEqual([]); // third pass, explicit
-        expect(schemaVersion(again)).toBe(13);
-        expect(again.get<{ n: number }>('SELECT COUNT(*) AS n FROM schema_version')!.n).toBe(13);
+        expect(schemaVersion(again)).toBe(14);
+        expect(again.get<{ n: number }>('SELECT COUNT(*) AS n FROM schema_version')!.n).toBe(14);
         // 009: exactly one choice-order secret, and re-opening never regenerates it
         expect(again.all<{ secret: string }>('SELECT secret FROM server_secret')).toHaveLength(1);
         expect(again.all<{ checksum: string }>('SELECT checksum FROM schema_version').every((r) => /^[0-9a-f]{64}$/.test(r.checksum))).toBe(true);
-        expect(again.get<{ n: number }>('SELECT COUNT(*) AS n FROM track')!.n).toBe(4);
-        expect(again.get<{ n: number }>('SELECT COUNT(*) AS n FROM competency')!.n).toBe(7);
-        expect(again.get<{ n: number }>('SELECT COUNT(*) AS n FROM competency_rating')!.n).toBe(7);
+        expect(again.get<{ n: number }>('SELECT COUNT(*) AS n FROM track')!.n).toBe(5);
+        expect(again.get<{ n: number }>('SELECT COUNT(*) AS n FROM competency')!.n).toBe(8);
+        expect(again.get<{ n: number }>('SELECT COUNT(*) AS n FROM competency_rating')!.n).toBe(8);
         expect(again.get<{ n: number }>('SELECT COUNT(*) AS n FROM streak')!.n).toBe(1);
       } finally {
         again.close();
@@ -115,17 +115,18 @@ describe('migrations', () => {
 describe('seed rows', () => {
   const ctx = useTempDb();
 
-  it('seeds tracks js, csharp, java, agentic; 011 unlocks java with a slate drill slot like csharp', () => {
+  it('seeds tracks js, csharp, java, agentic, sysdesign; 011 unlocks java with a slate drill slot like csharp; 014 adds sysdesign unlocked, no drill slot', () => {
     const tracks = ctx.db.all<{ id: string; locked: boolean; slate_drills: boolean }>('SELECT id, locked, slate_drills FROM track ORDER BY sort_order');
     expect(tracks).toEqual([
       { id: 'js', locked: false, slate_drills: true },
       { id: 'csharp', locked: false, slate_drills: true },
       { id: 'java', locked: false, slate_drills: true },
       { id: 'agentic', locked: false, slate_drills: false },
+      { id: 'sysdesign', locked: false, slate_drills: false },
     ]);
   });
 
-  it('seeds exactly the seven §6.2 competencies, each rated 1', () => {
+  it('seeds exactly the eight ladder competencies (§6.2 seven + 014 system-design), each rated 1', () => {
     const rows = ctx.db.all<{ competency_id: string; rating: number }>(
       'SELECT competency_id, rating FROM competency_rating ORDER BY competency_id',
     );
@@ -327,7 +328,7 @@ describe('schema constraints', () => {
         };
         expect(() => db.run(`INSERT INTO attempt (unit_id, mode, assisted, assistance_source, outcome, created_at) VALUES (?, 'assisted', 1, 'prior-key', 'submitted', 0)`, unitId)).toThrow();
         // now the real migration set (013 included)
-        expect(migrate(db)).toEqual([13]);
+        expect(migrate(db)).toEqual([13, 14]);
         expect({ attempt: db.all('SELECT * FROM attempt ORDER BY id'), evidence: db.all('SELECT * FROM evidence ORDER BY id'), run: db.all('SELECT * FROM run ORDER BY id') }).toEqual(before);
         expect(db.all('PRAGMA foreign_key_check')).toEqual([]);
         expect(() => db.run('UPDATE attempt SET score = 0 WHERE id = ?', a.id)).toThrow(/append-only/);

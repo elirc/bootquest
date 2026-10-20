@@ -70,7 +70,7 @@ describe('dailyBuckets / weeklyBuckets (XP over time)', () => {
     expect(days[89]!.day).toBe(today);
     for (let i = 1; i < days.length; i++) expect(days[i]!.day).toBe(addDays(days[i - 1]!.day, 1));
     const dst = days.find((d) => d.day === '2026-03-08')!;
-    expect(dst).toEqual({ day: '2026-03-08', total: 11, byTrack: { js: 10, csharp: 0, java: 0, agentic: 0, none: 1 } });
+    expect(dst).toEqual({ day: '2026-03-08', total: 11, byTrack: { js: 10, csharp: 0, java: 0, agentic: 0, sysdesign: 0, none: 1 } });
     expect(days.reduce((s, d) => s + d.total, 0)).toBe(36);
   });
 
@@ -84,7 +84,7 @@ describe('dailyBuckets / weeklyBuckets (XP over time)', () => {
     const weeks = weeklyBuckets(rows, '2026-11-18');
     expect(weeks.map((w) => w.weekStart)).toEqual(['2026-10-19', '2026-10-26', '2026-11-02', '2026-11-09', '2026-11-16']);
     expect(weeks.map((w) => w.total)).toEqual([5, 5, 0, 0, 8]);
-    expect(weeks[1]!.byTrack).toEqual({ js: 2, csharp: 0, java: 0, agentic: 3, none: 0 });
+    expect(weeks[1]!.byTrack).toEqual({ js: 2, csharp: 0, java: 0, agentic: 3, sysdesign: 0, none: 0 });
     expect(weeklyBuckets([], '2026-11-18')).toEqual([]);
   });
 

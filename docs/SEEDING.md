@@ -705,9 +705,12 @@ resolved); quiz variety `concept` and flashcard shape `hand-authored`;
   narrowed quiz cannot clear a 12-quiz 80% gate, and the blind-pass guard is unaffected. The
   alternative is dropping or re-theming those katas — owner's call. Also left to the owner:
   gitvg-astra flashcard f01-favorites-acceptance's back overlaps its new explain-back set's
-  Q0 key points (suggested trim of the back's last sentence); the six DESIGN IT explain-back
+  Q0 key points (suggested trim of the back's last sentence); ~~the six DESIGN IT explain-back
   units carry the `language-fluency` competency (ladder.ts default), which fits system design
-  poorly — a design competency or an explicit mapping is a server change.
+  poorly~~ — **RESOLVED (sd-plumb):** an explain-back set whose first prompt starts `DESIGN IT`
+  routes (`store/ladder.ts` `isDesignIt`) to the new campaign-less `sysdesign` track with
+  competencies `system-design` + `communication` and no quest link; migration 014 adds the
+  track + competency and moves already-loaded `ladder/explain-back/javabootcamp/*` units.
 - **OPEN (fix/content-review, accepted explain-back/quiz overlap):** the token leak guard
   (`EB_LEAK_JACCARD`) passes these, but each key point still answers a same-repo quiz in other
   words. In every case the explain-back PROMPT asks for exactly the fact the quiz keys, so a

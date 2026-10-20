@@ -152,7 +152,7 @@ export function formatDashboard(d: DashboardResponse, server: string): string {
   ];
   if (d.nextUp.length === 0) lines.push('  (nothing)');
   for (const n of d.nextUp) {
-    lines.push(n.unit ? `  ${n.trackId.padEnd(8)} ${n.unit.title} [${n.unit.kind}] id ${n.unit.id} - ${n.unit.key}` : `  ${n.trackId.padEnd(8)} (nothing available)`);
+    lines.push(n.unit ? `  ${n.trackId.padEnd(9)} ${n.unit.title} [${n.unit.kind}] id ${n.unit.id} - ${n.unit.key}` : `  ${n.trackId.padEnd(9)} (nothing available)`);
   }
   return lines.join('\n');
 }
@@ -190,7 +190,7 @@ export function formatToday(d: DashboardResponse, server: string): string {
   );
   if (d.nextUp.length === 0) lines.push('  (nothing)');
   for (const n of d.nextUp) {
-    lines.push(n.unit ? `  ${n.trackId.padEnd(8)} ${n.unit.title} [${n.unit.kind}] id ${n.unit.id}` : `  ${n.trackId.padEnd(8)} (nothing available)`);
+    lines.push(n.unit ? `  ${n.trackId.padEnd(9)} ${n.unit.title} [${n.unit.kind}] id ${n.unit.id}` : `  ${n.trackId.padEnd(9)} (nothing available)`);
   }
   return lines.join('\n');
 }

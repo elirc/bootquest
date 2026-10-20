@@ -15,7 +15,7 @@ import type { Db } from '../db/database.ts';
  *    repo + sha + sha256 + blob sha + expected test names;
  *  - every other milestone (U04-U12) -> kind 'study' (no machine check).
  * Competencies are free text upstream; competency_alias maps each to one of
- * the seven ladder competencies. An unmapped alias is a sync error, never a
+ * the ladder competencies. An unmapped alias is a sync error, never a
  * silent drop.
  */
 

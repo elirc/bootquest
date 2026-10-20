@@ -96,7 +96,7 @@ describe('GET /api/stats/*: honest empty states on a fresh ledger', () => {
 
   it('campaign: per-track acts with the campaign map counts; a locked track is basis none', async () => {
     const c = await get(ctx.app, '/api/stats/campaign', CampaignProgressResponse);
-    expect(c.tracks.map((t) => t.trackId)).toEqual(['js', 'csharp', 'java', 'agentic']);
+    expect(c.tracks.map((t) => t.trackId)).toEqual(['js', 'csharp', 'java', 'agentic', 'sysdesign']);
     const js = c.tracks[0]!;
     expect(js.progress).toEqual({ pct: 0, basis: 'campaign-core', coreDone: 0, coreTotal: 2, practiceDone: 0, practiceTotal: 0 });
     expect(js.acts).toEqual([

@@ -111,7 +111,7 @@ describe('migration 004 (written unit kind, FK-off table rebuild)', () => {
       const before = db.get('SELECT * FROM unit WHERE id = ?', unitId);
 
       // 007 (W5b campaign) and 008 (W6 ladder rebuilds) also apply here; the enumeration was stale since W5b
-      expect(migrate(db)).toEqual([4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+      expect(migrate(db)).toEqual([4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
       // 005 only adds the nullable retired_at column (live by default)
       expect(db.get('SELECT * FROM unit WHERE id = ?', unitId)).toEqual({ ...(before as object), retired_at: null });
       expect(db.get<{ unit_id: number }>('SELECT unit_id FROM attempt WHERE id = ?', attempt.id)!.unit_id).toBe(unitId);
@@ -155,7 +155,7 @@ describe('migration 008 (W6: evidence + review_item rebuilds)', () => {
       const evBefore = db.all('SELECT * FROM evidence ORDER BY id');
       const riBefore = db.all('SELECT * FROM review_item ORDER BY id');
 
-      expect(migrate(db)).toEqual([8, 9, 10, 11, 12, 13]);
+      expect(migrate(db)).toEqual([8, 9, 10, 11, 12, 13, 14]);
       expect(db.all('SELECT * FROM evidence ORDER BY id')).toEqual(evBefore);
       // 012 only adds the nullable review_item.retired_at (live by default)
       expect(db.all('SELECT * FROM review_item ORDER BY id')).toEqual(riBefore.map((r) => ({ ...(r as object), retired_at: null })));
@@ -195,7 +195,7 @@ describe('migration 010 (drill-java check type, FK-off "check" rebuild)', () => 
       const checksBefore = db.all('SELECT * FROM "check" ORDER BY id');
       const runsBefore = db.all('SELECT * FROM run ORDER BY id');
 
-      expect(migrate(db)).toEqual([10, 11, 12, 13]);
+      expect(migrate(db)).toEqual([10, 11, 12, 13, 14]);
       // 012 only adds the nullable "check".retired_at (live by default)
       expect(db.all('SELECT * FROM "check" ORDER BY id')).toEqual(checksBefore.map((c) => ({ ...(c as object), retired_at: null })));
       expect(db.all('SELECT * FROM run ORDER BY id')).toEqual(runsBefore);

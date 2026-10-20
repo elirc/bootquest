@@ -219,7 +219,7 @@ export function getRating(db: Db, competency: CompetencyId): number {
   return row.rating;
 }
 
-/** All seven current ratings — one integer per competency, never an aggregate. */
+/** Every current rating (eight ladder competencies) — one integer per competency, never an aggregate. */
 export function getRatings(db: Db): { competency: CompetencyId; rating: number; lastEvidenceId: number | null }[] {
   return db.all<{ competency: CompetencyId; rating: number; lastEvidenceId: number | null }>(
     `SELECT r.competency_id AS competency, r.rating AS rating, r.last_evidence_id AS lastEvidenceId

@@ -103,6 +103,7 @@ const XP_SERIES: readonly (ChartSeries & { id: keyof XpStatsResponse['days'][num
   { id: 'csharp', label: TRACK_LABEL.csharp, className: 'series-csharp' },
   { id: 'agentic', label: TRACK_LABEL.agentic, className: 'series-agentic' },
   { id: 'java', label: TRACK_LABEL.java, className: 'series-java' },
+  { id: 'sysdesign', label: TRACK_LABEL.sysdesign, className: 'series-sysdesign' },
 ];
 
 type XpRange = 'days' | 'weeks';

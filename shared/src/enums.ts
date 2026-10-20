@@ -3,7 +3,7 @@ import { z } from 'zod';
 // Every enum here mirrors a CHECK constraint in server/src/db/migrations/001_init.sql.
 // server/test/enum-sync.test.ts asserts they stay in sync with the SQL.
 
-export const TRACK_IDS = ['js', 'csharp', 'java', 'agentic'] as const;
+export const TRACK_IDS = ['js', 'csharp', 'java', 'agentic', 'sysdesign'] as const;
 export const TrackId = z.enum(TRACK_IDS);
 export type TrackId = z.infer<typeof TrackId>;
 
@@ -15,6 +15,7 @@ export const COMPETENCY_IDS = [
   'agentic-engineering',
   'code-reading',
   'communication',
+  'system-design',
 ] as const;
 export const CompetencyId = z.enum(COMPETENCY_IDS);
 export type CompetencyId = z.infer<typeof CompetencyId>;

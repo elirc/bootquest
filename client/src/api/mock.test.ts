@@ -33,7 +33,7 @@ describe('fixture contract (server shapes: numeric ids, epoch ms, server enums)'
     expect(h.filter((d) => d.status === 'missed').length).toBeGreaterThanOrEqual(10);
   });
 
-  it('competencies: 7 rows with name, numeric rating, epoch-ms evidence; exactly one evidence-missing', () => {
+  it('competencies: 8 rows with name, numeric rating, epoch-ms evidence; exactly two evidence-missing (one freshly seeded)', () => {
     const c = fixtures.competencies;
     expect(c.map((r) => r.id)).toEqual([
       'language-fluency',
@@ -43,6 +43,7 @@ describe('fixture contract (server shapes: numeric ids, epoch ms, server enums)'
       'agentic-engineering',
       'code-reading',
       'communication',
+      'system-design',
     ]);
     for (const r of c) {
       expect(typeof r.name).toBe('string');
@@ -52,7 +53,7 @@ describe('fixture contract (server shapes: numeric ids, epoch ms, server enums)'
         expect(Number.isInteger(r.lastEvidence.createdAt)).toBe(true);
       }
     }
-    expect(c.filter((r) => r.lastEvidence === null)).toHaveLength(1);
+    expect(c.filter((r) => r.lastEvidence === null).map((r) => r.id)).toEqual(['agentic-engineering', 'system-design']);
   });
 
   it('slate uses the server kinds and slots', () => {

@@ -19,8 +19,9 @@ describe('routing + global keyboard navigation', () => {
       expect(screen.getAllByRole('heading', { name: new RegExp(name) }).length).toBeGreaterThan(0);
     }
     const rows = within(screen.getByRole('table')).getAllByRole('row');
-    expect(rows).toHaveLength(8); // header + 7 competencies
-    expect(screen.getByText('Evidence missing')).toBeInTheDocument();
+    expect(rows).toHaveLength(9); // header + 8 competencies
+    // agentic-engineering + the freshly seeded system-design (migration 014) have no evidence yet
+    expect(screen.getAllByText('Evidence missing')).toHaveLength(2);
     expect(screen.getByLabelText('1 of 2 freeze tokens banked')).toBeInTheDocument();
     expect(screen.getByRole('figure', { name: /Activity over the last 90 days/ })).toBeInTheDocument();
     expect(screen.getByText('+64 today')).toBeInTheDocument(); // today's heatmap row

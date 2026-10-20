@@ -10,7 +10,7 @@ import { renderApp } from '../test/render';
 /** the page mounts its panels after the dashboard load; give findBy room under multi-agent CPU load (no assertion is timing-based) */
 const SLOW = { timeout: 15_000 };
 
-const zeroTrack = { js: 0, csharp: 0, java: 0, agentic: 0, none: 0 };
+const zeroTrack = { js: 0, csharp: 0, java: 0, agentic: 0, sysdesign: 0, none: 0 };
 
 function emptyStatsApi(): BootQuestApi {
   const base = createMockApi();

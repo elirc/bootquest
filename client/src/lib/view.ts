@@ -13,7 +13,7 @@ import { proseChunks } from './prose';
  * `satisfies typeof` the shared tuple: a reorder, rename, addition or removal there fails the
  * typecheck here, so this can never drift (fix/client-dash: it had agentic before java).
  */
-export const TRACK_IDS = ['js', 'csharp', 'java', 'agentic'] as const satisfies typeof SHARED_TRACK_IDS;
+export const TRACK_IDS = ['js', 'csharp', 'java', 'agentic', 'sysdesign'] as const satisfies typeof SHARED_TRACK_IDS;
 
 /** Every CompetencyId in the server's order; held to shared/src/enums.ts COMPETENCY_IDS the same way. */
 export const COMPETENCY_IDS = [
@@ -24,6 +24,7 @@ export const COMPETENCY_IDS = [
   'agentic-engineering',
   'code-reading',
   'communication',
+  'system-design',
 ] as const satisfies typeof SHARED_COMPETENCY_IDS;
 
 /** Display names (exhaustive over CompetencyId); the dashboard rows carry the server's own `name`. */
@@ -35,6 +36,7 @@ export const COMPETENCY_LABEL: Record<CompetencyId, string> = {
   'agentic-engineering': 'Agentic engineering',
   'code-reading': 'Code reading & maintenance',
   communication: 'Communication',
+  'system-design': 'System design',
 };
 
 export const isCompetencyId = (v: string | null | undefined): v is CompetencyId => (COMPETENCY_IDS as readonly string[]).includes(v ?? '');
@@ -50,9 +52,9 @@ export const competencyLabel = (c: CompetencyId): string => (COMPETENCY_LABEL as
  */
 export const SLATE_DRILL_TRACKS: readonly TrackId[] = ['js', 'csharp', 'java'];
 
-export const TRACK_LABEL: Record<TrackId, string> = { js: 'JS/TS', csharp: 'C#/.NET', agentic: 'Agentic', java: 'Java' };
+export const TRACK_LABEL: Record<TrackId, string> = { js: 'JS/TS', csharp: 'C#/.NET', agentic: 'Agentic', java: 'Java', sysdesign: 'System design' };
 /** Short badge text (W-13b: the server has no `short`; this is presentation only). */
-export const TRACK_SHORT: Record<TrackId, string> = { js: 'JS', csharp: 'C#', agentic: 'AG', java: 'JV' };
+export const TRACK_SHORT: Record<TrackId, string> = { js: 'JS', csharp: 'C#', agentic: 'AG', java: 'JV', sysdesign: 'SD' };
 
 /**
  * W9 (ui-audit #4): what the sidebar and campaign tabs show while GET /tracks is in flight — the
@@ -63,6 +65,7 @@ export const TRACK_PLACEHOLDER: readonly { id: TrackId; name: string; locked: bo
   { id: 'csharp', name: 'C#/.NET', locked: false },
   { id: 'java', name: 'Java', locked: false },
   { id: 'agentic', name: 'Agentic engineering', locked: false },
+  { id: 'sysdesign', name: 'System design', locked: false },
 ];
 
 export const isTrackId = (v: string | undefined): v is TrackId => (TRACK_IDS as readonly string[]).includes(v ?? '');

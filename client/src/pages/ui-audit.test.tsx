@@ -236,7 +236,7 @@ describe('#4 sidebar tracks: one shared request, placeholder rows while loading'
     renderApp('/campaign/csharp', api);
     const list = document.querySelector('.track-list')!;
     expect(list).toHaveAttribute('aria-busy', 'true');
-    expect(list.querySelectorAll('.track-skel')).toHaveLength(4);
+    expect(list.querySelectorAll('.track-skel')).toHaveLength(5);
     expect(screen.getByRole('tab', { name: 'C#/.NET' })).toBeInTheDocument();
     expect(screen.queryByRole('tab', { name: 'csharp' })).not.toBeInTheDocument();
     release();

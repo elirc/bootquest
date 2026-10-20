@@ -371,7 +371,7 @@ describe('today (B4): read-only daily summary, always exit 0', () => {
     expect(out).toContain('Reviews due: 4');
     expect(out).toContain('Streak: 1 day (longest 5) - today complete');
     expect(out).toContain('Freeze tokens: 2');
-    expect(out).toMatch(/Next up:\n {2}js {7}Swap two values \[drill\] id 12\n {2}csharp {3}\(nothing available\)/);
+    expect(out).toMatch(/Next up:\n {2}js {8}Swap two values \[drill\] id 12\n {2}csharp {4}\(nothing available\)/);
     // read-only: exactly one request, a GET, no body
     expect(calls.map((c) => `${c.method} ${new URL(c.url).pathname}`)).toEqual(['GET /api/dashboard']);
     expect(calls[0]!.body).toBeUndefined();

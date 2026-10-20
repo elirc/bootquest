@@ -96,7 +96,7 @@ describe('JSON-only errors', () => {
 describe('tracks', () => {
   const ctx = useApi();
 
-  it('lists all four tracks, all unlocked (Java since migration 011)', async () => {
+  it('lists all five tracks, all unlocked (Java since migration 011; sysdesign since 014)', async () => {
     const res = await request(ctx.app).get('/api/tracks');
     expect(res.status).toBe(200);
     const body = TracksResponse.parse(res.body);
@@ -105,6 +105,7 @@ describe('tracks', () => {
       ['csharp', false],
       ['java', false],
       ['agentic', false],
+      ['sysdesign', false],
     ]);
     expect(body.tracks.find((t) => t.id === 'js')!.unitCount).toBe(5);
     // the lock flag is still served from the track row
@@ -631,7 +632,7 @@ describe('GET /api/dashboard', () => {
     expect(d.heatmap.at(-1)).toEqual({ day: '2026-10-01', xp: 20, status: 'open' });
     expect(d.heatmap[0]!.day).toBe('2026-06-04');
     expect(d.xp).toEqual({ total: 20, level: 1, intoLevel: 20, levelSpan: 150, nextAt: 150 });
-    expect(d.competencies).toHaveLength(7);
+    expect(d.competencies).toHaveLength(8);
     const lf = d.competencies.find((c) => c.id === 'language-fluency')!;
     expect(lf.rating).toBe(1);
     expect(lf.lastEvidence).toMatchObject({ kind: 'submit' });
@@ -639,7 +640,7 @@ describe('GET /api/dashboard', () => {
     expect(d.reviewQueue.due).toBe(1);
     // no campaign quests are seeded: the campaign slot is absent rather than impossible
     expect(d.slate.items.map((i) => i.slot)).toEqual(['drill:js', 'drill:csharp', 'drill:java', 'review']);
-    expect(d.nextUp.map((n) => n.trackId)).toEqual(['js', 'csharp', 'java', 'agentic']); // every unlocked track
+    expect(d.nextUp.map((n) => n.trackId)).toEqual(['js', 'csharp', 'java', 'agentic', 'sysdesign']); // every unlocked track
     expect(d.nextUp.find((n) => n.trackId === 'js')!.unit!.key).toBe('fixture:quiz-typeof');
     expect(d.streak).toMatchObject({ current: 0, tokens: 0, todayComplete: false });
   });

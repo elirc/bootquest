@@ -466,8 +466,8 @@ async function main() {
       // 10. dashboard reflects the ledger
       const d = await api(base, 'GET', '/api/dashboard');
       step(
-        'dashboard: xp total 3, 7 competencies, 120-day heatmap',
-        d.status === 200 && d.json?.xp?.total === 3 && d.json.competencies.length === 7 && d.json.heatmap.length === 120,
+        'dashboard: xp total 3, 8 competencies, 120-day heatmap',
+        d.status === 200 && d.json?.xp?.total === 3 && d.json.competencies.length === 8 && d.json.heatmap.length === 120,
         `xp=${d.json?.xp?.total}`,
       );
 
@@ -603,9 +603,9 @@ async function main() {
       const tr = await api(base, 'GET', '/api/tracks');
       const csTrack = tr.json?.tracks?.find((t) => t.id === 'csharp');
       step(
-        'tracks: js, csharp, java, agentic in order; csharp and java unlocked (java since migration 011)',
+        'tracks: js, csharp, java, agentic, sysdesign in order; csharp and java unlocked (java since migration 011)',
         tr.status === 200 &&
-          tr.json.tracks.map((t) => t.id).join() === 'js,csharp,java,agentic' &&
+          tr.json.tracks.map((t) => t.id).join() === 'js,csharp,java,agentic,sysdesign' &&
           csTrack?.locked === false &&
           tr.json.tracks.find((t) => t.id === 'java')?.locked === false,
         JSON.stringify(tr.json?.tracks ?? null),

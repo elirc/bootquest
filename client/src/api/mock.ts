@@ -152,7 +152,7 @@ interface GradedRow {
   verified: boolean;
   createdAt: number;
 }
-const RATE_TRACK_ORDER: readonly TrackId[] = ['js', 'csharp', 'java', 'agentic'];
+const RATE_TRACK_ORDER: readonly TrackId[] = ['js', 'csharp', 'java', 'agentic', 'sysdesign'];
 const RATE_CHECK_ORDER: readonly CheckType[] = [
   'drill-js', 'drill-cs', 'drill-java', 'quiz', 'predict-output', 'guided-step', 'http', 'repo', 'study-quiz',
   'explain-back', 'patch-kata', 'review', 'node-test-file', 'self-run', 'vitest-project',
@@ -1009,7 +1009,7 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
           const rest = xp - none;
           const cs = i % 2 === 0 ? Math.round(rest * 0.35) : Math.round(rest * 0.15);
           const ag = i % 5 === 0 ? Math.round(rest * 0.2) : 0;
-          return { js: rest - cs - ag, csharp: cs, java: 0, agentic: ag, none };
+          return { js: rest - cs - ag, csharp: cs, java: 0, agentic: ag, sysdesign: 0, none };
         };
         const all = fx.heatmap.map((d, i) => ({ day: d.day, total: d.xp, byTrack: split(d.xp, i) }));
         const days = all.slice(-90);
@@ -1022,7 +1022,7 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
             const ws = new Date(noon - dow * DAY_MS).toISOString().slice(0, 10);
             let w = weeks.at(-1);
             if (!w || w.weekStart !== ws) {
-              w = { weekStart: ws, total: 0, byTrack: { js: 0, csharp: 0, java: 0, agentic: 0, none: 0 } };
+              w = { weekStart: ws, total: 0, byTrack: { js: 0, csharp: 0, java: 0, agentic: 0, sysdesign: 0, none: 0 } };
               weeks.push(w);
             }
             w.total += d.total;

@@ -625,7 +625,7 @@ export function competencyRowsWithPromotion(db: Db, clock: Clock) {
   return competencyTable(db).map((r) => ({ ...r, promotion: promotionProgress(db, r.id, clock) }));
 }
 
-/** GET /competencies — the 7 ratings, each with its three-leg progress, plus open retests. */
+/** GET /competencies — the 8 ratings, each with its three-leg progress, plus open retests. */
 export function getCompetencies(deps: LadderDeps): CompetenciesResponse {
   const { db, clock } = deps;
   return {

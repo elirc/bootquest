@@ -35,10 +35,10 @@ export function dayRange(from: string, to: string): string[] {
   return out;
 }
 
-export const XP_TRACK_KEYS = ['js', 'csharp', 'java', 'agentic', 'none'] as const;
+export const XP_TRACK_KEYS = ['js', 'csharp', 'java', 'agentic', 'sysdesign', 'none'] as const;
 export type XpTrackKey = (typeof XP_TRACK_KEYS)[number];
 
-const emptyByTrack = (): XpByTrack => ({ js: 0, csharp: 0, java: 0, agentic: 0, none: 0 });
+const emptyByTrack = (): XpByTrack => ({ js: 0, csharp: 0, java: 0, agentic: 0, sysdesign: 0, none: 0 });
 
 function trackKey(t: string | null): XpTrackKey {
   return (XP_TRACK_KEYS as readonly string[]).includes(t ?? '') ? (t as XpTrackKey) : 'none';

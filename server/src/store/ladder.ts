@@ -23,8 +23,10 @@ import { STUDY_COMPETENCY, STUDY_QUIZ_PASS_PCT, studyQuizSpecFor } from './study
 /**
  * W7 ladder wiring (audit #4): the REAL competency-ladder units, derived at startup from the
  * stamped seed items (seed-items.ts) — never hand-edited rows:
- *   - one explain-back unit per explain-back item (the 6 G2 delegation-brief rubrics go to the
- *     agentic track; ordinary sets to their repo's campaign track). Prerequisites = the PROJECT
+ *   - one explain-back unit per explain-back item (the G2 delegation-brief rubrics go to the
+ *     agentic track; the DESIGN IT system-design rubrics to the campaign-less sysdesign track,
+ *     competencies system-design + communication, never linked to a campaign quest; ordinary
+ *     sets to their repo's campaign track). Prerequisites (ordinary sets only) = the PROJECT
  *     units the set explains (a unit whose lesson guide ref is the set's source file, e.g.
  *     signalpost U01 after `bootquest sync`), so leg (b) links to leg (a);
  *   - one patch-kata unit per kata, all on the agentic track: the G1 "Kata bank";
@@ -66,6 +68,11 @@ const slug = (s: string): string => s.replace(/[^A-Za-z0-9._-]+/g, '-');
 
 const G2_PROMPT = /^G2 BRIEF\b/;
 export const isG2 = (item: SeedExplainBackItem): boolean => G2_PROMPT.test(item.questions[0]?.prompt ?? '');
+const DESIGN_PROMPT = /^DESIGN IT\b/;
+/** a DESIGN IT system-design rubric set (G2 keeps precedence; the two prefixes cannot both match) */
+export const isDesignIt = (item: SeedExplainBackItem): boolean => !isG2(item) && DESIGN_PROMPT.test(item.questions[0]?.prompt ?? '');
+/** the campaign-less track the DESIGN IT sets load on; its units never carry a quest link */
+export const DESIGN_TRACK = 'sysdesign' as const satisfies TrackId;
 
 export const explainBackUnitKey = (item: SeedExplainBackItem): string =>
   `${LADDER_PREFIX}${isG2(item) ? 'g2' : 'explain-back'}/${slug(item.provenance.repo)}/${h12(item.key)}`;
@@ -126,6 +133,8 @@ interface PlannedUnit {
   variationOf?: string;
   /** explain-back only: the source file the set covers (artifact matching) */
   sourcePath?: string;
+  /** explain-back only: a DESIGN IT set (sysdesign track; no artifact or quest link, like G2) */
+  design?: boolean;
 }
 
 function baseName(p: string): string {
@@ -179,17 +188,19 @@ function plan(items: SeedItemStore, links: Map<string, CampaignLink>, kataDiffic
   const out: PlannedUnit[] = [];
   for (const it of items.explainBackItems()) {
     const g2 = isG2(it);
+    const design = isDesignIt(it);
     out.push({
       family: g2 ? 'g2' : 'explain-back',
       key: explainBackUnitKey(it),
-      track: g2 ? 'agentic' : trackForRepo(it.provenance.repo, links),
+      track: g2 ? 'agentic' : design ? DESIGN_TRACK : trackForRepo(it.provenance.repo, links),
       kind: 'explain-back',
       title: g2 ? `G2 delegation brief: ${it.provenance.repo}` : `Explain back: ${it.provenance.repo} — ${unitLabel(it.provenance.path)}`,
       difficulty: null,
       repo: it.provenance.repo,
-      competencies: g2 ? ['agentic-engineering', 'communication'] : ['language-fluency'],
+      competencies: g2 ? ['agentic-engineering', 'communication'] : design ? ['system-design', 'communication'] : ['language-fluency'],
       check: { type: 'explain-back', questionSetKey: it.key, questionCount: it.questions.length },
       sourcePath: it.provenance.path,
+      ...(design ? { design: true } : {}),
     });
   }
   for (const it of items.kataItems()) {
@@ -360,7 +371,7 @@ function reconcileLadderCheck(db: Db, unitId: number, unitKey: string, want: Che
 }
 
 /** Insert or refresh one unit; returns [id, inserted]. */
-function upsertUnit(db: Db, sourceId: number, u: Omit<PlannedUnit, 'family' | 'repo' | 'sourcePath'> & { variationOfId?: number | null; prerequisites: number[] }, clock: Clock): [number, boolean] {
+function upsertUnit(db: Db, sourceId: number, u: Omit<PlannedUnit, 'family' | 'repo' | 'sourcePath' | 'design'> & { variationOfId?: number | null; prerequisites: number[] }, clock: Clock): [number, boolean] {
   const have = existing(db, u.key);
   let id: number;
   let inserted = false;
@@ -509,13 +520,14 @@ export function loadLadderIntoDb(db: Db, inputs: LadderInputs, clock: Clock): La
         keep.add(p.key);
         continue;
       }
-      // explain-back / g2
-      const artifacts = p.family === 'explain-back' ? artifactUnitsFor(db, p.repo, p.sourcePath!) : [];
+      // explain-back / g2 (a DESIGN IT set is an explain-back that, like G2, explains no project
+      // artifact and links to no campaign quest: its competencies are exactly the planned ones)
+      const artifacts = p.family === 'explain-back' && !p.design ? artifactUnitsFor(db, p.repo, p.sourcePath!) : [];
       if (p.family === 'g2') stats.g2.built++;
       else {
         stats.explainBack.built++;
         if (artifacts.length) stats.explainBack.linkedToArtifact++;
-        if (links.has(p.repo)) stats.explainBack.linkedToQuest++;
+        if (links.has(p.repo) && !p.design) stats.explainBack.linkedToQuest++;
       }
       const comps = [...new Set<CompetencyId>([...p.competencies, ...competenciesOf(db, artifacts)])].sort();
       const [, ins] = upsertUnit(db, sourceId, { ...p, competencies: comps, prerequisites: artifacts }, clock);
@@ -607,7 +619,8 @@ export function ladderUnits(db: Db): LadderUnitRow[] {
   return rows.map((r) => {
     const family = FAMILY_OF(r.key) ?? 'authored';
     const repo = family === 'authored' ? null : (r.key.split('/')[2] ?? null);
-    const l = repo ? links.get(repo) : undefined;
+    // the campaign-less design track never links to a quest, even when its repo has one
+    const l = repo && r.trackId !== DESIGN_TRACK ? links.get(repo) : undefined;
     return {
       id: r.id,
       key: r.key,

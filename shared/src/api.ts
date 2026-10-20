@@ -1128,7 +1128,7 @@ const StatsDayKey = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
 /** XP split by track; `none` = XP events without a track (e.g. review XP). */
 export const XpByTrack = z
-  .object({ js: z.number(), csharp: z.number(), java: z.number(), agentic: z.number(), none: z.number() })
+  .object({ js: z.number(), csharp: z.number(), java: z.number(), agentic: z.number(), sysdesign: z.number(), none: z.number() })
   .strict();
 export type XpByTrack = z.infer<typeof XpByTrack>;
 

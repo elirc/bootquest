@@ -204,6 +204,8 @@ export const campaignFixtures: Record<TrackId, Omit<CampaignResponse, 'level'>> 
     ],
   },
   agentic: { track: { id: 'agentic', name: 'Agentic engineering', locked: false }, acts: [] },
+  // the campaign-less System design track (migration 014): DESIGN IT explain-backs only, no acts
+  sysdesign: { track: { id: 'sysdesign', name: 'System design', locked: false }, acts: [] },
   // the unlocked Java track (migration 011): 3 acts of core study quests; act 1 open, its quest packs
   // still content-pending except one, acts 2-3 behind the 80% + level rule
   java: {

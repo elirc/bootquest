@@ -82,9 +82,9 @@ describe('local dates (lib/format)', () => {
 });
 
 describe('lib/view mirrors shared/src/enums.ts', () => {
-  it('server order for tracks; all seven competencies', () => {
-    expect(TRACK_IDS).toEqual(['js', 'csharp', 'java', 'agentic']);
-    expect(COMPETENCY_IDS).toHaveLength(7);
+  it('server order for tracks; all eight competencies', () => {
+    expect(TRACK_IDS).toEqual(['js', 'csharp', 'java', 'agentic', 'sysdesign']);
+    expect(COMPETENCY_IDS).toHaveLength(8);
     expect(isTrackId('java')).toBe(true);
     expect(isTrackId('python')).toBe(false);
   });
