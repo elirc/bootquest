@@ -7,13 +7,19 @@
    "title": "Index rebuild: flip to the new generation as soon as the snapshot is loaded",
    "difficulty": "hard",
    "findingRef": "tenant-search-indexer T4 (docs/architecture/README.md:50)",
-   "provenance": { "path": "docs/architecture/README.md", "find": "T4: changes indexed during a rebuild can vanish at cutover" },
+   "provenance": {
+    "path": "docs/architecture/README.md",
+    "find": "T4: changes indexed during a rebuild can vanish at cutover"
+   },
    "contextFiles": [
     {
      "path": "src/services/indexingJobRunner.mjs",
      "repoPath": "src/services/indexingJobRunner.ts",
      "kind": "adapted",
-     "lines": { "start": 67, "end": 130 },
+     "lines": {
+      "start": 67,
+      "end": 130
+     },
      "content": "// Adapted from tenant-search-indexer src/services/indexingJobRunner.ts:67-130 @ 0c15ff9\n// (drizzle replaced by an in-memory single-tenant store; the cutover re-applies events\n// processed during the rebuild into the new generation before the flip — the repair\n// finding T4 calls for — so the module runs standalone).\nexport class InMemoryIndexStore {\n  constructor({ sourceRows, events }) {\n    this.state = { activeGeneration: 1, lastProcessedEventId: null };\n    this.documents = new Map();\n    this.sourceRows = sourceRows;\n    this.events = events ?? [];\n  }\n  async getTenantSearchState() {\n    return { ...this.state };\n  }\n  async listSourceSnapshot() {\n    return this.sourceRows.map((row) => ({ ...row }));\n  }\n  /** Events stay in the log after processing; the cursor is what advances. */\n  async listPendingSearchSyncEvents(afterEventId) {\n    return this.events\n      .filter((event) => afterEventId == null || event.id > afterEventId)\n      .map((event) => ({ ...event }));\n  }\n  async upsertSearchDocuments(documents) {\n    for (const document of documents) {\n      this.documents.set(`${document.generation}:${document.entityId}`, { ...document });\n    }\n  }\n  async markSearchSyncEventsProcessed(lastEventId) {\n    this.state.lastProcessedEventId = lastEventId;\n  }\n  async completeTenantRebuild(nextGeneration) {\n    this.state.activeGeneration = nextGeneration;\n  }\n  async deleteGenerationDocuments(generation) {\n    for (const key of [...this.documents.keys()]) {\n      if (key.startsWith(`${generation}:`)) this.documents.delete(key);\n    }\n  }\n  searchActiveGeneration(text) {\n    return [...this.documents.values()].filter(\n      (document) => document.generation === this.state.activeGeneration && document.title.includes(text),\n    );\n  }\n}\n\nexport async function runIncrementalJob(store) {\n  const state = await store.getTenantSearchState();\n  const events = await store.listPendingSearchSyncEvents(state.lastProcessedEventId);\n  if (events.length === 0) return;\n\n  // Incremental writes target the ACTIVE generation only; writing into a rebuild\n  // generation would make the flip non-deterministic.\n  await store.upsertSearchDocuments(\n    events.map((event) => ({ entityId: event.entityId, title: event.title, generation: state.activeGeneration })),\n  );\n  await store.markSearchSyncEventsProcessed(events[events.length - 1].id);\n}\n\nexport async function runRebuildJob(store, nextGeneration) {\n  const stateBeforeFlip = await store.getTenantSearchState();\n  const snapshot = await store.listSourceSnapshot();\n  await store.upsertSearchDocuments(\n    snapshot.map((row) => ({ entityId: row.entityId, title: row.title, generation: nextGeneration })),\n  );\n\n  // Finding T4's repair: events processed while the snapshot loaded went into the OLD\n  // generation, and the cursor has already moved past them. Re-apply everything after\n  // the snapshot-time cursor into the new generation before the flip deletes their only\n  // copy.\n  const catchUp = await store.listPendingSearchSyncEvents(stateBeforeFlip.lastProcessedEventId);\n  await store.upsertSearchDocuments(\n    catchUp.map((event) => ({ entityId: event.entityId, title: event.title, generation: nextGeneration })),\n  );\n\n  await store.completeTenantRebuild(nextGeneration);\n  await store.deleteGenerationDocuments(stateBeforeFlip.activeGeneration);\n}\n"
     }
    ],
@@ -68,13 +74,19 @@
    "title": "Job runner: drain the whole queue so no tenant waits for its own owner",
    "difficulty": "easy",
    "findingRef": "tenant-search-indexer T1 (docs/architecture/README.md:47)",
-   "provenance": { "path": "docs/architecture/README.md", "find": "T1: one tenant OWNER processes every tenant's jobs" },
+   "provenance": {
+    "path": "docs/architecture/README.md",
+    "find": "T1: one tenant OWNER processes every tenant's jobs"
+   },
    "contextFiles": [
     {
      "path": "src/services/runPendingJobs.mjs",
      "repoPath": "src/services/indexingJobRunner.ts",
      "kind": "adapted",
-     "lines": { "start": 32, "end": 65 },
+     "lines": {
+      "start": 32,
+      "end": 65
+     },
      "content": "// Adapted from tenant-search-indexer src/services/indexingJobRunner.ts:32-65 @ 0c15ff9\n// (drizzle replaced by an in-memory job store; requirePermission reduced to the\n// indexing-job:run rule from src/lib/permissions/roles.ts; the tenant scope that\n// docs/architecture/auth-and-permissions.md:73 prescribes applied so the module runs\n// standalone).\nexport function requirePermission(context, permission) {\n  if (permission === 'indexing-job:run' && context.session.tenantRole !== 'OWNER') {\n    throw new Error(`FORBIDDEN: ${permission} requires the OWNER role.`);\n  }\n}\n\nexport class InMemoryJobStore {\n  constructor(jobs) {\n    this.jobs = jobs.map((job) => ({ status: 'QUEUED', ...job }));\n    this.executed = [];\n  }\n  /** tenantId scopes the listing; a null tenantId (platform tooling) lists every tenant's queue. */\n  async listQueuedIndexingJobs({ tenantId, limit }) {\n    return this.jobs\n      .filter((job) => job.status === 'QUEUED' && (tenantId == null || job.tenantId === tenantId))\n      .slice(0, limit)\n      .map((job) => ({ ...job }));\n  }\n  async markIndexingJobRunning(jobId) {\n    this.jobs.find((job) => job.id === jobId).status = 'RUNNING';\n  }\n  async markIndexingJobCompleted(jobId) {\n    this.jobs.find((job) => job.id === jobId).status = 'COMPLETED';\n  }\n  async markIndexingJobFailed(jobId, message) {\n    const job = this.jobs.find((row) => row.id === jobId);\n    job.status = 'FAILED';\n    job.error = message;\n  }\n  async executeJob(job) {\n    if (job.payload && job.payload.poison) throw new Error('index write failed');\n    this.executed.push(job.id);\n  }\n}\n\nexport async function runPendingIndexingJobs(store, context, input) {\n  requirePermission(context, 'indexing-job:run');\n\n  // Finding T1's check: an OWNER drains their own tenant's queue, never another tenant's.\n  const jobs = await store.listQueuedIndexingJobs({ tenantId: context.session.tenantId, limit: input.limit });\n  const results = [];\n\n  for (const job of jobs) {\n    await store.markIndexingJobRunning(job.id);\n    try {\n      await store.executeJob(job);\n      await store.markIndexingJobCompleted(job.id);\n      results.push({ jobId: job.id, status: 'COMPLETED' });\n    } catch (error) {\n      await store.markIndexingJobFailed(job.id, error instanceof Error ? error.message : 'Unknown indexing error');\n      results.push({ jobId: job.id, status: 'FAILED' });\n    }\n  }\n\n  return { processed: results.length, results };\n}\n"
     }
    ],

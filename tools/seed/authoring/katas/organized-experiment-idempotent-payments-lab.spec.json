@@ -7,13 +7,19 @@
    "title": "Refunds: validate the amount up front, before entering the payment lock",
    "difficulty": "medium",
    "findingRef": "idempotent-payments-lab L2 (docs/architecture/request-lifecycle.md:123)",
-   "provenance": { "path": "docs/architecture/request-lifecycle.md", "find": "L2 — Refund amount check is not concurrency-safe." },
+   "provenance": {
+    "path": "docs/architecture/request-lifecycle.md",
+    "find": "L2 — Refund amount check is not concurrency-safe."
+   },
    "contextFiles": [
     {
      "path": "src/services/refundService.mjs",
      "repoPath": "src/services/refundService.ts",
      "kind": "adapted",
-     "lines": { "start": 17, "end": 102 },
+     "lines": {
+      "start": 17,
+      "end": 102
+     },
      "content": "// Adapted from idempotent-payments-lab src/services/refundService.ts:17-102 @ 7e9832b\n// (Prisma replaced by an in-memory store; assertRefundAllowed from\n// src/lib/domain/paymentStateMachine.ts:55-63 inlined; the fix shape finding L2 asks for\n// — recompute the refunded sum inside a per-payment lock — applied so the module runs\n// standalone).\nexport class RouteError extends Error {\n  constructor(status, code, message) {\n    super(message);\n    this.status = status;\n    this.code = code;\n  }\n}\n\nexport function assertRefundAllowed(currentStatus, refundAmountMinor, remainingRefundableAmount) {\n  if (currentStatus !== 'SUCCEEDED') {\n    throw new RouteError(409, 'PAYMENT_NOT_REFUNDABLE', 'Only succeeded payments can be refunded.');\n  }\n  if (refundAmountMinor > remainingRefundableAmount) {\n    throw new RouteError(409, 'REFUND_AMOUNT_EXCEEDS_CAPTURE', 'Refund amount exceeds the captured payment amount.');\n  }\n}\n\nexport class InMemoryPaymentStore {\n  constructor(payment) {\n    this.payment = { ...payment };\n    this.refunds = [];\n    this.locks = new Map();\n  }\n  async findPaymentById(id) {\n    return this.payment.id === id ? { ...this.payment } : null;\n  }\n  async sumSuccessfulRefundsForPayment(paymentId) {\n    return this.refunds\n      .filter((refund) => refund.paymentId === paymentId && refund.status === 'SUCCEEDED')\n      .reduce((sum, refund) => sum + refund.amountMinor, 0);\n  }\n  async createRefund(input) {\n    const refund = { id: `ref-${this.refunds.length + 1}`, status: 'SUCCEEDED', ...input };\n    this.refunds.push(refund);\n    return { ...refund };\n  }\n  /** Serializes work per payment id, like SELECT ... FOR UPDATE on the payment row. */\n  withPaymentLock(paymentId, work) {\n    const previous = this.locks.get(paymentId) ?? Promise.resolve();\n    const run = previous.catch(() => undefined).then(() => work());\n    this.locks.set(paymentId, run.catch(() => undefined));\n    return run;\n  }\n}\n\nexport function createRefundService(store) {\n  return {\n    async createRefundForPayment(input) {\n      const payment = await store.findPaymentById(input.paymentId);\n\n      if (!payment) {\n        throw new RouteError(404, 'PAYMENT_NOT_FOUND', 'Payment not found.');\n      }\n\n      // Finding L2's fix: the refunded sum is recomputed INSIDE the payment lock. Two\n      // concurrent refunds that both read the sum before either writes would both pass\n      // the check, so read-and-assert must share the serialized region with the write.\n      return store.withPaymentLock(payment.id, async () => {\n        const refundedAmount = await store.sumSuccessfulRefundsForPayment(payment.id);\n        const remainingRefundableAmount = payment.amountMinor - refundedAmount;\n        assertRefundAllowed(payment.status, input.amountMinor, remainingRefundableAmount);\n\n        const refund = await store.createRefund({\n          paymentId: payment.id,\n          amountMinor: input.amountMinor,\n          reason: input.reason,\n        });\n\n        return { refundId: refund.id, paymentId: payment.id, refundStatus: refund.status };\n      });\n    },\n  };\n}\n"
     }
    ],
@@ -68,13 +74,19 @@
    "title": "Webhook dispatcher: list pending deliveries up front and mark them when done",
    "difficulty": "medium",
    "findingRef": "idempotent-payments-lab Trace D row D2 (docs/architecture/request-lifecycle.md:113)",
-   "provenance": { "path": "docs/architecture/request-lifecycle.md", "find": "No claim/lock, so two concurrent clicks process the same rows" },
+   "provenance": {
+    "path": "docs/architecture/request-lifecycle.md",
+    "find": "No claim/lock, so two concurrent clicks process the same rows"
+   },
    "contextFiles": [
     {
      "path": "src/services/providerSimulatorService.mjs",
      "repoPath": "src/services/providerSimulatorService.ts",
      "kind": "adapted",
-     "lines": { "start": 157, "end": 186 },
+     "lines": {
+      "start": 157,
+      "end": 186
+     },
      "content": "// Adapted from idempotent-payments-lab src/services/providerSimulatorService.ts:157-186\n// @ 7e9832b (deliverPendingWebhooks over an in-memory delivery store; the PENDING-only\n// listing from src/repositories/webhookRepository.ts:29-37 replaced by an atomic claim —\n// the missing claim/lock Trace D row D2 calls out — so the module runs standalone).\nexport class InMemoryDeliveryStore {\n  constructor(deliveries) {\n    this.deliveries = deliveries.map((delivery, index) => ({\n      id: delivery.id ?? `del-${index + 1}`,\n      status: 'PENDING',\n      attempts: 0,\n      ...delivery,\n    }));\n  }\n  /** Atomically flips up to `limit` PENDING rows to DELIVERING and returns them (one UPDATE ... RETURNING). */\n  async claimPendingWebhookDeliveries(limit) {\n    const claimed = [];\n    for (const delivery of this.deliveries) {\n      if (claimed.length >= limit) break;\n      if (delivery.status !== 'PENDING') continue;\n      delivery.status = 'DELIVERING';\n      claimed.push({ id: delivery.id, payload: delivery.payload });\n    }\n    return claimed;\n  }\n  /** Read-only PENDING listing (the shape the shipped repository exposes). */\n  async listPendingWebhookDeliveries(limit) {\n    return this.deliveries\n      .filter((delivery) => delivery.status === 'PENDING')\n      .slice(0, limit)\n      .map((delivery) => ({ id: delivery.id, payload: delivery.payload }));\n  }\n  async markWebhookDeliveryDelivered(id) {\n    const delivery = this.deliveries.find((row) => row.id === id);\n    delivery.status = 'DELIVERED';\n    delivery.attempts += 1;\n  }\n  async markWebhookDeliveryFailed(id, message) {\n    const delivery = this.deliveries.find((row) => row.id === id);\n    delivery.status = 'FAILED';\n    delivery.attempts += 1;\n    delivery.lastError = message;\n  }\n}\n\nexport async function deliverPendingWebhooks(store, processProviderWebhook, limit) {\n  // Claiming (not just listing) is what makes a second concurrent dispatcher safe:\n  // rows move out of PENDING in the same step that selects them.\n  const deliveries = await store.claimPendingWebhookDeliveries(limit);\n  const results = [];\n\n  for (const delivery of deliveries) {\n    try {\n      await processProviderWebhook(delivery.payload);\n      await store.markWebhookDeliveryDelivered(delivery.id);\n      results.push({ id: delivery.id, status: 'DELIVERED', message: 'Webhook processed successfully.' });\n    } catch (error) {\n      const message = error instanceof Error ? error.message : 'Unknown webhook failure';\n      await store.markWebhookDeliveryFailed(delivery.id, message);\n      results.push({ id: delivery.id, status: 'FAILED', message });\n    }\n  }\n\n  return {\n    delivered: results.filter((result) => result.status === 'DELIVERED').length,\n    failed: results.filter((result) => result.status === 'FAILED').length,\n    results,\n  };\n}\n"
     }
    ],

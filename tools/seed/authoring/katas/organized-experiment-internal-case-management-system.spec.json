@@ -7,13 +7,19 @@
    "title": "Case list: let the request's filters refine the access scope",
    "difficulty": "medium",
    "findingRef": "internal-case-management-system A1 (docs/architecture/auth-and-permissions.md:91)",
-   "provenance": { "path": "docs/architecture/auth-and-permissions.md", "find": "A1 — Client filters override team scope (list and report). High." },
+   "provenance": {
+    "path": "docs/architecture/auth-and-permissions.md",
+    "find": "A1 — Client filters override team scope (list and report). High."
+   },
    "contextFiles": [
     {
      "path": "src/services/caseService.mjs",
      "repoPath": "src/services/caseService.ts",
      "kind": "adapted",
-     "lines": { "start": 94, "end": 120 },
+     "lines": {
+      "start": 94,
+      "end": 120
+     },
      "content": "// Adapted from internal-case-management-system src/services/caseService.ts:94-120\n// @ 4bbcf27 (buildCaseAccessWhere from src/lib/auth/authorize.ts:42-58 and a minimal\n// where-matcher over an in-memory case list inlined; the access scope is spread AFTER the\n// client's filters — finding A1's fix shape — so the module runs standalone).\nexport class AuthorizationError extends Error {}\n\nconst ALL_CASES_ROLES = new Set(['ADMIN', 'OPERATIONS_MANAGER', 'AUDITOR']);\n\nexport function buildCaseAccessWhere(actor) {\n  if (ALL_CASES_ROLES.has(actor.role)) {\n    return {};\n  }\n  if (!actor.teamId) {\n    throw new AuthorizationError('This role requires a team assignment before it can access cases.');\n  }\n  // The team filter is centralized here so callers cannot silently forget it.\n  return { owningTeamId: actor.teamId };\n}\n\nexport function buildCaseListWhere(actor, filters) {\n  const accessWhere = buildCaseAccessWhere(actor);\n\n  return {\n    ...(filters.status ? { status: filters.status } : {}),\n    ...(filters.assignedToId ? { assignedToId: filters.assignedToId } : {}),\n    ...(filters.owningTeamId ? { owningTeamId: filters.owningTeamId } : {}),\n    // The access scope is spread LAST. Object spread is last-writer-wins, so a client\n    // filter may narrow what the scope allows but can never replace it (finding A1).\n    ...accessWhere,\n  };\n}\n\nexport function matchesWhere(record, where) {\n  return Object.entries(where).every(([field, expected]) => record[field] === expected);\n}\n\nexport async function listVisibleCases(store, actor, filters) {\n  const where = buildCaseListWhere(actor, filters);\n  const cases = await store.listCases();\n  return cases.filter((record) => matchesWhere(record, where));\n}\n"
     }
    ],
@@ -72,13 +78,19 @@
    "title": "Case transitions: record the operator's comment in the audit metadata too",
    "difficulty": "medium",
    "findingRef": "internal-case-management-system A2 (docs/architecture/auth-and-permissions.md:94)",
-   "provenance": { "path": "docs/architecture/auth-and-permissions.md", "find": "A2 — Restricted escalation comments leak through `auditLogs`. High." },
+   "provenance": {
+    "path": "docs/architecture/auth-and-permissions.md",
+    "find": "A2 — Restricted escalation comments leak through `auditLogs`. High."
+   },
    "contextFiles": [
     {
      "path": "src/services/transitionCase.mjs",
      "repoPath": "src/services/caseService.ts",
      "kind": "adapted",
-     "lines": { "start": 404, "end": 455 },
+     "lines": {
+      "start": 404,
+      "end": 455
+     },
      "content": "// Adapted from internal-case-management-system src/services/caseService.ts:404-455\n// @ 4bbcf27 (Prisma replaced by an in-memory store; canViewRestrictedNotes reduced to the\n// note:view:restricted role set from src/lib/auth/permissions.ts; audit metadata limited\n// to non-sensitive transition facts — finding A2's fix — so the module runs standalone).\nconst RESTRICTED_NOTE_ROLES = new Set(['ADMIN', 'OPERATIONS_MANAGER', 'TEAM_LEAD', 'AUDITOR']);\n\nexport function canViewRestrictedNotes(actor) {\n  return RESTRICTED_NOTE_ROLES.has(actor.role);\n}\n\nexport class InMemoryCaseStore {\n  constructor(caseRecord) {\n    this.caseRecord = { notes: [], auditLogs: [], ...caseRecord };\n  }\n  async findCaseById(caseId) {\n    return this.caseRecord.id === caseId ? this.caseRecord : null;\n  }\n  async updateCaseRecord(caseId, data) {\n    Object.assign(this.caseRecord, data);\n    return this.caseRecord;\n  }\n  async createAuditLog(entry) {\n    this.caseRecord.auditLogs.push(entry);\n  }\n  async createCaseNote(note) {\n    this.caseRecord.notes.push(note);\n  }\n}\n\nexport function serializeCaseDetail(actor, caseRecord) {\n  return {\n    ...caseRecord,\n    // Restricted notes are filtered here; every other field of the record — auditLogs\n    // included — is spread through to the response as-is.\n    notes: caseRecord.notes.filter((note) => !note.isRestricted || canViewRestrictedNotes(actor)),\n  };\n}\n\nexport async function transitionCase(store, actor, caseId, input) {\n  const existingCase = await store.findCaseById(caseId);\n  const previousStatus = existingCase.status;\n  await store.updateCaseRecord(caseId, { status: input.nextStatus });\n\n  // Finding A2: the comment below may become a RESTRICTED note, but auditLogs are spread\n  // to every viewer of the case, so audit metadata records only non-sensitive facts.\n  await store.createAuditLog({\n    caseId,\n    actorId: actor.id,\n    action: 'case.transitioned',\n    metadata: {\n      from: previousStatus,\n      to: input.nextStatus,\n    },\n  });\n\n  if (input.comment) {\n    await store.createCaseNote({\n      caseId,\n      authorId: actor.id,\n      body: input.comment,\n      isRestricted: input.nextStatus === 'ESCALATED',\n    });\n  }\n\n  return serializeCaseDetail(actor, await store.findCaseById(caseId));\n}\n"
     }
    ],

@@ -7,13 +7,19 @@
    "title": "Sale form: one try/catch around the whole save flow",
    "difficulty": "medium",
    "findingRef": "masterrnative F1 (astraupskill/06-SOLUTIONS-AND-REVIEW.md:19)",
-   "provenance": { "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md", "find": "F1: two sequential writes behind one failure message." },
+   "provenance": {
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "find": "F1: two sequential writes behind one failure message."
+   },
    "contextFiles": [
     {
      "path": "src/screens/transactions/submitSale.mjs",
      "repoPath": "src/screens/transactions/SaleFormScreen.tsx",
      "kind": "adapted",
-     "lines": { "start": 91, "end": 107 },
+     "lines": {
+      "start": 91,
+      "end": 107
+     },
      "content": "// Adapted from masterrnative src/screens/transactions/SaleFormScreen.tsx:91-107\n// @ d14bebb (the React form shell removed: submitSale takes the context writes and alert\n// as injected dependencies; the two AsyncStorage writes are kept as separate failure\n// domains per finding F1, so a batch-status failure is never reported as an unsaved sale).\nexport async function submitSale({ deps, sale, batch, existingSale, sales, mortalityRecords }) {\n  const { addSale, updateSale, updatePigBatch, getBatchCurrentQuantity, alert, goBack } = deps;\n\n  try {\n    if (existingSale) {\n      await updateSale(sale);\n    } else {\n      await addSale(sale);\n    }\n  } catch (error) {\n    alert('Save failed', 'The sale could not be saved. Please try again.');\n    return { saleSaved: false, batchClosed: false };\n  }\n\n  // The sale is durably saved from here on. A failure while persisting the derived batch\n  // status must not tell the user to retry the sale: a retried add creates a duplicate\n  // sale under a new id (finding F1).\n  let batchClosed = false;\n  try {\n    const nextSales = existingSale\n      ? sales.map((item) => (item.id === sale.id ? sale : item))\n      : [sale, ...sales];\n    const remainingQuantity = getBatchCurrentQuantity(batch, nextSales, mortalityRecords);\n    if (remainingQuantity === 0 && batch.status === 'active') {\n      await updatePigBatch({ ...batch, status: 'sold_out' });\n      batchClosed = true;\n    }\n  } catch (error) {\n    alert('Sale saved', 'The sale was recorded, but the batch status could not be updated. Pull to refresh; do not re-enter the sale.');\n    goBack();\n    return { saleSaved: true, batchClosed: false };\n  }\n\n  goBack();\n  return { saleSaved: true, batchClosed };\n}\n"
     }
    ],
@@ -72,13 +78,19 @@
    "title": "Sale form: collapse error handling to one generic retry alert",
    "difficulty": "easy",
    "findingRef": "masterrnative solutions step 6 (astraupskill/06-SOLUTIONS-AND-REVIEW.md:12)",
-   "provenance": { "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md", "find": "the rejected promise lands in the bare `catch` at `SaleFormScreen.tsx:105`" },
+   "provenance": {
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "find": "the rejected promise lands in the bare `catch` at `SaleFormScreen.tsx:105`"
+   },
    "contextFiles": [
     {
      "path": "src/screens/transactions/saveErrors.mjs",
      "repoPath": "src/utils/collection.ts",
      "kind": "adapted",
-     "lines": { "start": 1, "end": 8 },
+     "lines": {
+      "start": 1,
+      "end": 8
+     },
      "content": "// Adapted from masterrnative src/utils/collection.ts:1-8 and the update path of\n// src/screens/transactions/SaleFormScreen.tsx:91-107 @ d14bebb (reduced to\n// replaceRecordById plus a saveSaleUpdate orchestrator; the catch translates a\n// missing-record failure per the course's step-6 answer instead of one generic retry\n// alert).\nexport function replaceRecordById(records, replacement) {\n  const index = records.findIndex((record) => record.id === replacement.id);\n  if (index < 0) {\n    throw new Error(`Record '${replacement.id}' was not found.`);\n  }\n\n  return records.map((record) => (record.id === replacement.id ? replacement : record));\n}\n\nexport async function saveSaleUpdate({ sales, nextSale, persist, alert }) {\n  try {\n    const next = replaceRecordById(sales, nextSale);\n    await persist(next);\n    return { saved: true, stale: false };\n  } catch (error) {\n    // Step-6 answer: a missing record is a stale identity, not a transient failure.\n    // \"Try again\" cannot succeed, so say what actually happened.\n    if (error instanceof Error && error.message.includes('was not found')) {\n      alert('Sale no longer exists', `${error.message} It may have been deleted on another screen; the list will refresh.`);\n      return { saved: false, stale: true };\n    }\n    alert('Save failed', 'The sale could not be saved. Please try again.');\n    return { saved: false, stale: false };\n  }\n}\n"
     }
    ],

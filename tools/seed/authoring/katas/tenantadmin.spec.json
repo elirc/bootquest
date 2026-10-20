@@ -7,13 +7,20 @@
    "title": "Magic link: return the login URL in dev so testers skip the console",
    "difficulty": "medium",
    "findingRef": "tenantadmin senior review 1 (README.md:242)",
-   "provenance": { "path": "README.md", "find": "1. **Magic-link takeover outside production.**", "span": 5 },
+   "provenance": {
+    "path": "README.md",
+    "find": "1. **Magic-link takeover outside production.**",
+    "span": 5
+   },
    "contextFiles": [
     {
      "path": "server/src/services/magicLinkRequest.mjs",
      "repoPath": "server/src/services/authService.js",
      "kind": "adapted",
-     "lines": { "start": 373, "end": 420 },
+     "lines": {
+      "start": 373,
+      "end": 420
+     },
      "content": "// Adapted from tenantadmin server/src/services/authService.js:373-420 @ e9a4b45\n// (Prisma replaced by injected stores; the NODE_ENV default from\n// server/src/config/env.js:5 reproduced by parseEnv). This is the request side of the\n// magic-link flow BEFORE the dev shortcut under review.\nimport { createHash, randomBytes } from 'node:crypto';\n\nexport function parseEnv(source) {\n  return {\n    NODE_ENV: source.NODE_ENV ?? 'development',\n    APP_BASE_URL: source.APP_BASE_URL ?? 'http://localhost:5173',\n    MAGIC_LINK_TTL_MINUTES: Number(source.MAGIC_LINK_TTL_MINUTES ?? 15),\n  };\n}\n\nconst hashToken = (token) => createHash('sha256').update(token).digest('hex');\n\nexport function createMagicLinkRequester({ env, users, tokens, log = () => {} }) {\n  return async function requestMagicLink({ email }) {\n    const normalizedEmail = email.trim().toLowerCase();\n    const user = users.find((u) => u.email === normalizedEmail);\n\n    if (!user) {\n      return { accepted: true };\n    }\n\n    const token = randomBytes(48).toString('hex');\n    const expiresAt = new Date(Date.now() + env.MAGIC_LINK_TTL_MINUTES * 60 * 1000);\n    tokens.push({ userId: user.id, tokenHash: hashToken(token), expiresAt, consumedAt: null });\n\n    const magicLinkUrl = `${env.APP_BASE_URL}/magic-link?token=${token}`;\n    log(`Magic link for ${user.email}: ${magicLinkUrl}`);\n\n    return {\n      accepted: true,\n    };\n  };\n}\n"
     }
    ],
@@ -71,13 +78,20 @@
    "title": "Magic link consume: replace the updateMany+count dance with a plain update",
    "difficulty": "hard",
    "findingRef": "tenantadmin magic-link one-time guard (README.md:120-126)",
-   "provenance": { "path": "README.md", "find": "- **Magic link** (lines 373-484):", "span": 7 },
+   "provenance": {
+    "path": "README.md",
+    "find": "- **Magic link** (lines 373-484):",
+    "span": 7
+   },
    "contextFiles": [
     {
      "path": "server/src/services/magicLinkConsume.mjs",
      "repoPath": "server/src/services/authService.js",
      "kind": "adapted",
-     "lines": { "start": 422, "end": 484 },
+     "lines": {
+      "start": 422,
+      "end": 484
+     },
      "content": "// Adapted from tenantadmin server/src/services/authService.js:422-484 @ e9a4b45\n// (Prisma replaced by an in-memory store with the same semantics: findFirst is an\n// async read, updateMany is an atomic conditional write returning { count }).\nimport { createHash, randomBytes } from 'node:crypto';\n\nexport class HttpError extends Error {\n  constructor(status, message) {\n    super(message);\n    this.status = status;\n  }\n}\n\nexport const hashToken = (token) => createHash('sha256').update(token).digest('hex');\n\nexport function createStore() {\n  const tick = () => new Promise((r) => setTimeout(r, 1));\n  const store = {\n    tokens: [],\n    sessions: [],\n    magicLinkToken: {\n      async findFirst({ where }) {\n        await tick();\n        const t = store.tokens.find((x) => x.tokenHash === where.tokenHash && x.consumedAt === null && x.expiresAt > where.now);\n        return t ? { ...t } : null;\n      },\n      async updateMany({ where, data }) {\n        await tick();\n        const rows = store.tokens.filter((x) => x.id === where.id && (where.consumedAt === undefined || x.consumedAt === where.consumedAt));\n        for (const r of rows) Object.assign(r, data);\n        return { count: rows.length };\n      },\n      async update({ where, data }) {\n        await tick();\n        const r = store.tokens.find((x) => x.id === where.id);\n        Object.assign(r, data);\n        return { ...r };\n      },\n    },\n    async $transaction(fn) {\n      return fn(store);\n    },\n  };\n  return store;\n}\n\nexport function issueToken(store, userId) {\n  const token = randomBytes(24).toString('hex');\n  store.tokens.push({ id: `t${store.tokens.length + 1}`, userId, tokenHash: hashToken(token), consumedAt: null, expiresAt: new Date(Date.now() + 15 * 60 * 1000) });\n  return token;\n}\n\nexport async function consumeMagicLink(prisma, { token }) {\n  const tokenHash = hashToken(token);\n\n  const magicToken = await prisma.magicLinkToken.findFirst({\n    where: { tokenHash, consumedAt: null, now: new Date() },\n  });\n\n  if (!magicToken) {\n    throw new HttpError(400, 'Magic link is invalid or expired');\n  }\n\n  return prisma.$transaction(async (tx) => {\n    const consumeResult = await tx.magicLinkToken.updateMany({\n      where: {\n        id: magicToken.id,\n        consumedAt: null,\n      },\n      data: {\n        consumedAt: new Date(),\n      },\n    });\n\n    if (consumeResult.count !== 1) {\n      throw new HttpError(400, 'Magic link already consumed');\n    }\n\n    const session = { id: `s${tx.sessions.length + 1}`, userId: magicToken.userId };\n    tx.sessions.push(session);\n    return { sessionId: session.id };\n  });\n}\n"
     }
    ],

@@ -7,13 +7,19 @@
    "title": "Reservations: collapse listReservations to a single query path",
    "difficulty": "easy",
    "findingRef": "ww37 data-isolation rule (docs/architecture/auth-and-permissions.md:26)",
-   "provenance": { "path": "docs/architecture/auth-and-permissions.md", "find": "- `reservationService.listReservations` returns everything for owner/manager and filters by `createdByUserId` otherwise" },
+   "provenance": {
+    "path": "docs/architecture/auth-and-permissions.md",
+    "find": "- `reservationService.listReservations` returns everything for owner/manager and filters by `createdByUserId` otherwise"
+   },
    "contextFiles": [
     {
      "path": "src/services/reservationService.mjs",
      "repoPath": "src/services/reservationService.ts",
      "kind": "adapted",
-     "lines": { "start": 66, "end": 121 },
+     "lines": {
+      "start": 66,
+      "end": 121
+     },
      "content": "// Adapted from ww37 src/services/reservationService.ts:66-121 @ 0d0f32c\n// (listReservations + a reduced createHold; the in-memory repository filter from\n// src/repositories/inMemoryInventoryRepository.ts:128-140 and the role helper from\n// src/lib/auth/roles.ts:26-28 inlined so the service runs standalone).\nexport function canViewAllReservationAction(role) {\n  return role === 'owner' || role === 'manager';\n}\n\nexport class InMemoryRepository {\n  constructor() {\n    this.reservations = new Map();\n    this.seq = 0;\n  }\n  async createReservation(r) {\n    const row = { id: `res-${++this.seq}`, ...r };\n    this.reservations.set(row.id, row);\n    return { ...row };\n  }\n  async listReservations(filter) {\n    return [...this.reservations.values()]\n      .filter((reservation) => {\n        if (filter?.createdByUserId && reservation.createdByUserId !== filter.createdByUserId) {\n          return false;\n        }\n        return true;\n      })\n      .map((r) => ({ ...r }));\n  }\n}\n\nexport function createReservationService(repository) {\n  return {\n    async listReservations(session) {\n      if (canViewAllReservationAction(session.role)) {\n        return repository.listReservations();\n      }\n\n      return repository.listReservations({\n        createdByUserId: session.userId,\n      });\n    },\n\n    async createHold(input, session) {\n      if (session.role === 'viewer') {\n        throw new Error('View-only users cannot create stock holds.');\n      }\n      return repository.createReservation({\n        itemId: input.itemId,\n        quantity: input.quantity,\n        reason: input.reason,\n        status: 'active',\n        createdByUserId: session.userId,\n        createdByUserName: session.displayName,\n      });\n    },\n  };\n}\n"
     }
    ],
@@ -64,13 +70,19 @@
    "title": "Session: default a missing x-user-role so the demo UI stops getting 401s",
    "difficulty": "medium",
    "findingRef": "ww37 caller-asserted session (docs/architecture/auth-and-permissions.md:7)",
-   "provenance": { "path": "docs/architecture/auth-and-permissions.md", "find": "**Every field of the session is caller-asserted, including the role.**" },
+   "provenance": {
+    "path": "docs/architecture/auth-and-permissions.md",
+    "find": "**Every field of the session is caller-asserted, including the role.**"
+   },
    "contextFiles": [
     {
      "path": "src/lib/auth/session.mjs",
      "repoPath": "src/lib/auth/session.ts",
      "kind": "adapted",
-     "lines": { "start": 8, "end": 30 },
+     "lines": {
+      "start": 8,
+      "end": 30
+     },
      "content": "// Adapted from ww37 src/lib/auth/session.ts:8-30 @ 0d0f32c (types removed; isUserRole\n// from src/lib/auth/roles.ts:8-16 inlined so the module runs standalone).\nexport const userRoles = ['owner', 'manager', 'clerk', 'viewer'];\n\nexport function isUserRole(value) {\n  return Boolean(value && userRoles.includes(value));\n}\n\nexport function getSessionFromRequest(request) {\n  const userId = request.headers.get('x-user-id')?.trim();\n  const displayName = request.headers.get('x-user-name')?.trim() || 'Unnamed User';\n  const roleHeader = request.headers.get('x-user-role');\n\n  if (!userId || !isUserRole(roleHeader)) {\n    return null;\n  }\n\n  return {\n    userId,\n    displayName,\n    role: roleHeader,\n  };\n}\n"
     }
    ],
