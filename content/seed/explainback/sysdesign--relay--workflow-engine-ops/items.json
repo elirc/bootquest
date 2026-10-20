@@ -1,0 +1,166 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "relay--docs-adr-0009-durable-execution.md",
+ "items": [
+  {
+   "key": "seed:explainback:relay/explain-back/74132065cf116f7b",
+   "provenance": {
+    "repo": "relay",
+    "sha": "d5d8a5ea7dd9648979b6b1edbd7b541c430564eb",
+    "path": "docs/adr/0009-durable-execution.md",
+    "lines": {
+     "start": 1,
+     "end": 56
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "DESIGN IT — [senior] operating a workflow engine: retries by error class, stuck runs (relay, docs/adr/0009-durable-execution.md). Requirements: about 200,000 runs a day across 40 workers; each run is 3-6 steps calling third-party vendors (email and sheets honour an Idempotency-Key, the chat vendor offers none); vendors return 503s and 429s and sometimes simply hang; you deploy ten times a day; after a vendor outage you must be able to recover 10,000 failed runs without double-sending anything. Write your design before you look: what a step records and when, which failures retry and who decides, what happens to a step that never returns, how a deploy mid-run behaves, and how recovery replays work. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "keyPoints": [
+      {
+       "text": "[w3] Each StepRun is a durable state machine whose checkpoint commits before the run advances; on resume a succeeded step rehydrates its stored output instead of running its side effect again.",
+       "quote": "Never take step N+1's word for step N."
+      },
+      {
+       "text": "[w3] Every step derives one idempotency key that stays the same across every retry and resume and is sent with the call, so the vendor that performed the effect can refuse a repeat even when our own checkpoint never got written.",
+       "quote": "even when our checkpoint is missing, the key already reached the arbiter of truth"
+      },
+      {
+       "text": "[w3] Retry is decided by the error's class from a closed taxonomy in one engine-owned table: transient classes earn a delayed retry under a hard attempt cap, deterministic ones never retry, and adding a vendor adds no retry code.",
+       "cite": {
+        "path": "docs/adr/0007-retry-by-error-class.md",
+        "lineStart": 38,
+        "lineEnd": 39
+       }
+      },
+      {
+       "text": "[w3] A hung socket raises no error, so no retry class ever fires: each active step needs a duration budget (expected time x grace factor) and a heartbeat to tell slow from dead, and the timeout must lead to a parked, replayable state rather than a verdict.",
+       "cite": {
+        "path": "docs/adr/0016-stuck-run-policy.md",
+        "lineStart": 14,
+        "lineEnd": 18
+       }
+      },
+      {
+       "text": "[w2] Contain the blast radius per connector: a breaker that trips on a degraded connector holds only that connector's runs, so one hung vendor cannot consume the shared worker fleet.",
+       "cite": {
+        "path": "docs/adr/0016-stuck-run-policy.md",
+        "lineStart": 19,
+        "lineEnd": 22
+       }
+      },
+      {
+       "text": "[w2] Deploys drain instead of killing: on SIGTERM the worker stops taking new jobs and lets the in-flight step commit its checkpoint, and the run continues on another instance.",
+       "quote": "SIGTERM lets the current step checkpoint, then the run resumes on the next instance"
+      },
+      {
+       "text": "[w1] The queue carries work, not truth: the run row exists in Postgres before the job is enqueued and the job is only a pointer, so a lost queue entry leaves a recoverable pending run instead of erased history.",
+       "cite": {
+        "path": "apps/api/src/queue.ts",
+        "lineStart": 8,
+        "lineEnd": 11
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "PRE-MORTEM — peak hour: the email vendor hangs for 6 minutes, two deploys land in the middle of the incident, and once the vendor is back on-call bulk-replays 10,000 dead-lettered runs. Walk the failure windows (what duplicates, what stalls, what pages late) and say what in your design, or in its gaps, decides each one.",
+     "keyPoints": [
+      {
+       "text": "[w3] Bulk replay is only as safe as the key it sends: a live replay clones the trigger into a fresh run id, nothing from the source run rehydrates under that id, and the vendorKey and dedupeWindow keys are built from run id + step id, so every replayed step goes out under a new key; only a content-derived naturalKey dedupes across runs.",
+       "cite": {
+        "path": "apps/engine/src/idempotency.ts",
+        "lineStart": 20,
+        "lineEnd": 31
+       }
+      },
+      {
+       "text": "[w3] A hung vendor saturates the shared fleet and healthy connectors queue behind it; in the drill, detection and the breaker worked but the alert fired minutes after customers felt it, so page on customer-visible symptoms and per-connector queue depth, not on the breaker trip.",
+       "cite": {
+        "path": "docs/postmortems/2026-07-09-vendor-hang-pileup.md",
+        "lineStart": 41,
+        "lineEnd": 47
+       }
+      },
+      {
+       "text": "[w3] A hard kill mid-step requeues the run, which resumes from its last checkpoint and re-executes the in-flight step; that repeat is harmless only where the vendor dedupes on the stable key, so the chat connector is exactly where a deploy can still double-post.",
+       "cite": {
+        "path": "apps/engine/src/worker.ts",
+        "lineStart": 267,
+        "lineEnd": 273
+       }
+      },
+      {
+       "text": "[w2] Replay discipline: sort the DLQ by error class and connector, confirm the root cause is fixed, dry-run a sample, then watch the failure rate; replaying into a vendor that is still broken only refills the DLQ.",
+       "cite": {
+        "path": "docs/runbooks/dlq-triage.md",
+        "lineStart": 10,
+        "lineEnd": 18
+       }
+      },
+      {
+       "text": "[w2] Check the breaker's code against its contract: canRequest returns true whenever the state is not open, so after the cooldown every caller gets through during half-open rather than a single probe, and a recovering vendor receives the whole held backlog at once.",
+       "cite": {
+        "path": "apps/engine/src/observability/breaker.ts",
+        "lineStart": 26,
+        "lineEnd": 34
+       }
+      },
+      {
+       "text": "[w1] Rehydration requires storing outputs, so large vendor responses bloat the runs table; offload big outputs to object storage and keep only a reference in the row.",
+       "quote": "Output must be persisted to rehydrate resumed steps"
+      }
+     ]
+    },
+    {
+     "prompt": "TRADE-OFF HANDBACK — defend your engine-operations choices against the alternatives the ADRs name. For each, say what you bought, what it cost, and which requirement put you on that side.",
+     "keyPoints": [
+      {
+       "text": "[w3] Hand-rolled engine vs adopting Temporal or Restate now: full control and no new infrastructure, paid for by owning checkpoints, resume and replay yourself; having built the core once, adopting a framework later is an informed, sprint-sized move.",
+       "quote": "a real team with this understanding could adopt Temporal in a sprint"
+      },
+      {
+       "text": "[w3] Resuming from our own last write was rejected: it cannot tell what happened between the vendor's commit and ours, because the two systems commit at different instants, and only a key that travelled to the vendor bridges that gap.",
+       "quote": "it cannot survive the gap between the two databases"
+      },
+      {
+       "text": "[w3] Stuck-run alternatives: a hard timeout-and-fail kills legitimately slow runs, a blind timeout-and-retry pounds the same hung vendor and tightens the pileup, and hold-for-human needs 3am capacity nobody has; timing out to retriable-failed behind a breaker automates the common case.",
+       "cite": {
+        "path": "docs/adr/0016-stuck-run-policy.md",
+        "lineStart": 24,
+        "lineEnd": 31
+       }
+      },
+      {
+       "text": "[w2] Per-connector retry logic or retrying everything a few times: N inconsistent implementations the engine cannot bound, and re-sending deterministic failures spams bad requests and revoked tokens into vendor lockouts.",
+       "cite": {
+        "path": "docs/adr/0007-retry-by-error-class.md",
+        "lineStart": 26,
+        "lineEnd": 32
+       }
+      },
+      {
+       "text": "[w2] Exactly-once for every action is impossible when the vendor offers no idempotency; the honest design is an engine-side dedupe window plus an at-least-once warning shown to the builder.",
+       "quote": "honest answer is `dedupeWindow` + an **at-least-once** warning surfaced in the builder"
+      },
+      {
+       "text": "[w2] Replay is side-effect-gated: dry-run by default and live only on a deliberate choice, because a replay button that fires effects by default turns one misclick into thousands of real sends.",
+       "quote": "dry-run by default, live is a deliberate click"
+      },
+      {
+       "text": "[w1] Fail-fast vs continue-on-error: a run fails when a step exhausts its retries, because partial side effects across a half-run relay confuse users; real error paths belong in the DAG model.",
+       "cite": {
+        "path": "docs/adr/0007-retry-by-error-class.md",
+        "lineStart": 33,
+        "lineEnd": 36
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

@@ -1,0 +1,40 @@
+{
+ "lines": { "start": 1, "end": 24 },
+ "questions": [
+  {
+   "prompt": "DESIGN IT — [senior] inventory that cannot oversell under concurrent checkout (bazaar, docs/adr/0007-inventory-consistency.md). Requirements: a flash sale puts 100 units of one variant, split across 2 warehouses, in front of 10,000 buyers who hit add-to-cart and checkout within 60 seconds across 12 API instances; carts are abandoned constantly; the storefront renders availability from a cache; shipments, cancellations and returns arrive later through retried webhooks. Write your design before you look: where the no-oversell invariant lives, how a unit is claimed and given back, what happens to abandoned carts, what the losing buyer sees, and how later stock changes stay exact. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+   "keyPoints": [
+    { "text": "[w3] One place holds the truth: a per-variant, per-location row with on-hand and reserved counts, with available always derived as on-hand minus reserved rather than stored as a third number that can disagree.", "quote": "Inventory truth is the database row containing on-hand and reserved counts." },
+    { "text": "[w3] The availability check lives inside the write: one conditional UPDATE adds the quantity to reserved only where on_hand - reserved still covers it, so concurrent buyers are arbitrated by the database row itself, with no read-then-write gap and no application lock.", "quote": "UPDATE inventory_item SET reserved = reserved + $qty WHERE id = $id AND on_hand - reserved >= $qty;" },
+    { "text": "[w3] A reservation is a hold, not a sale: short-TTL hold records cover the gap from cart to checkout, and an expiry sweep over holds indexed by status and expiry returns abandoned holds so dead carts cannot starve the item.", "quote": "Short-TTL reservation records bridge cart to checkout" },
+    { "text": "[w2] The stock claim and the hold record belong in one database transaction, so a crash between them cannot leave units claimed with no hold that would ever expire.", "cite": { "path": "apps/api/src/inventory.ts", "lineStart": 50, "lineEnd": 51 } },
+    { "text": "[w2] Every later stock change (ship, cancel, return) goes through one effect port that claims an idempotency key and applies all deltas in the same transaction, so a retried webhook or a double-clicked cancel cannot move stock twice.", "cite": { "path": "apps/api/src/inventory-effects.ts", "lineStart": 6, "lineEnd": 14 } },
+    { "text": "[w2] State the invariant as a property and test it under contention: for N concurrent buyers and M units exactly M succeed and the rest get a clean sold-out, never a corrupted count.", "cite": { "path": "docs/sprints/sprint-07.md", "lineStart": 24, "lineEnd": 24 } },
+    { "text": "[w1] Stock is kept per warehouse location, and which location fills an order is an explicit allocation policy (here the location with the most available goes first, ties broken by location id).", "cite": { "path": "apps/api/src/inventory.ts", "lineStart": 65, "lineEnd": 78 } }
+   ]
+  },
+  {
+   "prompt": "PRE-MORTEM — Black Friday on the same design: every reservation for the hot variant lands on one row, a worker dies between flipping a hold to released and giving its units back, and the reconciler starts alerting on drift. What breaks first, how is it detected, and what is the repair story that does not destroy evidence?",
+   "keyPoints": [
+    { "text": "[w3] Correctness holds but throughput does not scale: every claim for the hot variant serializes on one row, so the wall is contention, and the ADR has the Sprint 13 drill measure that wall before anyone reaches for queues or sharding.", "quote": "One hot item may become a contention point; the Sprint 13 drill measures that wall before considering queues or sharding." },
+    { "text": "[w3] Releasing a hold is two separate calls (flip the hold from active to released, then give the units back); a crash between them leaves reserved inflated, an undersell rather than an oversell, and the reconciler's reserved delta (active held units minus recorded reserved) is what surfaces it.", "cite": { "path": "apps/api/src/inventory.ts", "lineStart": 58, "lineEnd": 62 } },
+    { "text": "[w3] Repair without erasing evidence: pause the affected variants, reconcile against receipts, shipments and active holds, correct only through an audited adjustment, rerun reconciliation to zero, and read the expiry and fulfillment logs before reopening sales.", "cite": { "path": "docs/runbooks/inventory-drift.md", "lineStart": 1, "lineEnd": 6 } },
+    { "text": "[w2] Expired holds free stock only when the sweep runs, and each sweep releases a bounded batch (100 by default), so during a sale the sweep cadence, not the TTL alone, decides how long abandoned carts keep units hidden.", "cite": { "path": "apps/worker/src/reservation-expiry.ts", "lineStart": 8, "lineEnd": 15 } },
+    { "text": "[w2] Guards must sit on every entry point: the atomic service rejects non-positive or fractional quantities, but the hold path passes its quantity straight to tryReserve, and a negative quantity would satisfy the predicate and shrink reserved.", "cite": { "path": "apps/api/src/inventory.ts", "lineStart": 41, "lineEnd": 42 } },
+    { "text": "[w2] Keep the contention check as a release gate: it passes on main and fails against the lab branch's read-check-write service, so a refactor that brings the race back is caught before the next sale.", "cite": { "path": "docs/curriculum/sprint-07.md", "lineStart": 31, "lineEnd": 33 } },
+    { "text": "[w1] Do not read the 10,000-attempt proof as capacity evidence: correctness thresholds are exact in-process contract tests, and latency is reported only by the k6 environment with its topology attached.", "cite": { "path": "docs/audits/sprint-13-audit.md", "lineStart": 28, "lineEnd": 29 } }
+   ]
+  },
+  {
+   "prompt": "TRADE-OFF HANDBACK — defend your inventory choices against the alternatives the ADR, the sprint notes and their debates name. For each, say what you bought, what it cost, and which requirement put you on that side.",
+   "keyPoints": [
+    { "text": "[w3] Conditional write vs an application-level lock around read-check-write: the database arbitrates in one statement, so there is no lock service to run or leak, and a losing buyer gets a clean rejection instead of a corrupted count.", "cite": { "path": "docs/sprints/sprint-07.md", "lineStart": 33, "lineEnd": 33 } },
+    { "text": "[w3] A Redis counter as the decrement authority was rejected: fast, but it is a second copy of the count that can drift from the database, while the conditional update keeps the count and its constraint together in one row.", "cite": { "path": "docs/curriculum/sprint-07.md", "lineStart": 18, "lineEnd": 19 } },
+    { "text": "[w3] A serialized reservation queue adds latency to every purchase, and a virtual waiting room buys fairness and smoother load at the price of a new distributed system; both wait until measured lock and latency budgets are actually crossed.", "cite": { "path": "docs/curriculum/sprint-13.md", "lineStart": 17, "lineEnd": 21 } },
+    { "text": "[w2] The ranking is explicit: a slower, contended sold-out is acceptable and an oversell is not, so hot-row contention is a cost accepted on purpose.", "quote": "Correctness precedes throughput." },
+    { "text": "[w2] Holding stock at add-to-cart vs claiming only at payment: holds stop two carts racing to checkout for the last unit, at the cost of parking stock in carts that will be abandoned, which is why holds must expire.", "cite": { "path": "docs/sprints/sprint-07.md", "lineStart": 34, "lineEnd": 35 } },
+    { "text": "[w1] Allocation is a product choice among most-stock, nearest-location and single-location fills; it changes which warehouse ships, never whether the invariant holds.", "cite": { "path": "docs/curriculum/sprint-07.md", "lineStart": 27, "lineEnd": 27 } }
+   ]
+  }
+ ]
+}
