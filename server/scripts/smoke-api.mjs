@@ -676,21 +676,32 @@ async function main() {
       const jvTu = await api(base, 'GET', '/api/tracks/java/units');
       const javaListed = (jvTu.json?.units ?? []).filter((x) => x.key.startsWith('javabootcamp/'));
       const javaTrack = tr.json?.tracks?.find((t) => t.id === 'java');
-      // the rest of the java track: 18 explain-back ladder units — one per Java campaign repo
-      // (j1-j5, j7, the six organized-experiment repos) plus the six standalone javabootcamp
-      // system-design rubric sets (javabootcamp has no campaign quest, so they link to none)
+      // the rest of the java track: 12 explain-back ladder units — one per Java campaign repo
+      // (j1-j5, j7, the six organized-experiment repos). The DESIGN IT rubric sets (javabootcamp's
+      // six and the estate's sixteen) route by prompt prefix to the sysdesign track instead.
       const javaOther = (jvTu.json?.units ?? []).filter((x) => !x.key.startsWith('javabootcamp/'));
-      const javaEbRepo = /^ladder\/explain-back\/(j[123457]|javabootcamp|organized-experiment-[a-z0-9-]+(?:\.[a-z0-9.-]+)?)\//;
-      const javaJbSets = javaOther.filter((x) => x.key.startsWith('ladder/explain-back/javabootcamp/'));
+      const javaEbRepo = /^ladder\/explain-back\/(j[123457]|organized-experiment-[a-z0-9-]+(?:\.[a-z0-9.-]+)?)\//;
       step(
-        `java track lists all ${javaManifest.totals.total} javabootcamp drills in pack order + the 18 explain-backs incl. 6 javabootcamp design sets (java unitCount = pack + 18, 0 done)`,
+        `java track lists all ${javaManifest.totals.total} javabootcamp drills in pack order + the 12 campaign-repo explain-backs (java unitCount = pack + 12, 0 done)`,
         jvTu.status === 200 &&
           javaListed.length === javaManifest.totals.total &&
           javaListed.map((x) => x.key).join('\n') === javaCourses.flatMap((c) => c.units.map((u) => u.unit.key)).join('\n') &&
-          javaOther.length === 18 && javaOther.every((x) => javaEbRepo.test(x.key)) &&
-          javaJbSets.length === 6 &&
-          javaTrack?.unitCount === javaManifest.totals.total + 18 && javaTrack.doneCount === 0,
+          javaOther.length === 12 && javaOther.every((x) => javaEbRepo.test(x.key)) &&
+          javaTrack?.unitCount === javaManifest.totals.total + 12 && javaTrack.doneCount === 0,
         `listed ${javaListed.length} + ${javaOther.map((x) => x.key).join(', ')}; java unitCount ${javaTrack?.unitCount}`,
+      );
+      // 10c-sd. the sysdesign track: exactly the 22 DESIGN IT rubric units (6 javabootcamp + 16 estate)
+      const sdTu = await api(base, 'GET', '/api/tracks/sysdesign/units');
+      const sdUnits = sdTu.json?.units ?? [];
+      const sdTrack = tr.json?.tracks?.find((t) => t.id === 'sysdesign');
+      step(
+        'sysdesign track lists exactly the 22 DESIGN IT explain-back units (6 javabootcamp + 16 estate repos; unitCount 22, 0 done)',
+        sdTu.status === 200 &&
+          sdUnits.length === 22 &&
+          sdUnits.every((x) => x.key.startsWith('ladder/explain-back/')) &&
+          sdUnits.filter((x) => x.key.startsWith('ladder/explain-back/javabootcamp/')).length === 6 &&
+          sdTrack?.unitCount === 22 && sdTrack.doneCount === 0,
+        `listed ${sdUnits.length} (${sdUnits.filter((x) => x.key.startsWith('ladder/explain-back/javabootcamp/')).length} javabootcamp); sysdesign unitCount ${sdTrack?.unitCount}`,
       );
       const javaId = javaListed.find((x) => x.key === JAVA_KEY)?.id;
       const jvD = await api(base, 'GET', `/api/units/${javaId}`);
