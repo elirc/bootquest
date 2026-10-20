@@ -216,6 +216,33 @@ describe('C# leftover reaper: only the spawned Stryker tree, never by name', () 
     expect(selectLeftovers(s, [testhost, compiler, serverTesthost, ideCompiler], 1).map((p) => p.pid)).toEqual([103]);
   });
 
+  it('a pid-reusing stranger is remembered after it EXITS: its later-sampled child is never attributed to the dead member', () => {
+    const s = newTreeState(100, 998, 1500);
+    observeSnapshot(s, [root, vstest, testhost]);
+    // vstest (101) exited; a stranger reused 101 ...
+    observeSnapshot(s, [root, testhost, stranger]);
+    // ... spawned a child and exited before the next sample: the child's ppid 101 now has no live holder
+    const lateOrphan = P(104, 101, 1250, 'testhost.exe'); // a REAL vstest child (born before the reuse), first sampled late
+    const final = [testhost, strangersChild, lateOrphan];
+    expect(selectLeftovers(s, final, 1).map((p) => p.pid).sort()).toEqual([102, 104]);
+    expect([...s.strangers.values()]).toEqual([stranger]);
+  });
+
+  it('the root is bounded by attach(): a stranger that reused the pid of a Stryker that died before the first snapshot is not adopted', () => {
+    // attach() at 1500: Stryker (pid 100) died before the watcher's first sample; node.exe reused pid 100 at 3000
+    const s = newTreeState(100, 998, 1500);
+    const impostor = P(100, 80, 3000, 'node.exe');
+    const impostorsChild = P(301, 100, 3100, 'dotnet.exe');
+    observeSnapshot(s, [impostor, impostorsChild, compiler]);
+    expect(s.rootSeen).toBe(false);
+    // the impostor, its child and anything it spawns later are left alone; the dead root's own orphan is reaped
+    expect(selectLeftovers(s, [impostorsChild, compiler, P(302, 100, 3200, 'testhost.exe')], 1).map((p) => p.pid)).toEqual([103]);
+    // without the bound (the old behaviour) the impostor became the root and its tree was reaped
+    const unbounded = newTreeState(100, 998);
+    observeSnapshot(unbounded, [impostor, impostorsChild, compiler]);
+    expect(unbounded.rootSeen).toBe(true);
+  });
+
   it('a child born before its supposed parent is not attributed to it; the CLI itself is never selected', () => {
     const s = newTreeState(100, 998);
     observeSnapshot(s, [root]);
