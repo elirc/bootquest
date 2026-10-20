@@ -18,7 +18,7 @@
    "kind": "explain-back",
    "questions": [
     {
-     "prompt": "DESIGN IT — OAuth login end-to-end for a web app [mid] (dotnet-auth, docs2/03-oauth-from-the-code.md). Scenario: you run the identity provider behind \"NetLinear\": a single-page app with about 200,000 users, a confidential server-side admin app, and a nightly reporting job that calls the API with no user present. Access tokens should live about 15 minutes, users should stay signed in for up to 30 days without retyping a password, and the API must authorize by permission. Design the flows each client uses, the tokens and what the API checks, where every secret lives, and how the API verifies tokens, before you look. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "prompt": "DESIGN IT — OAuth login end-to-end for a web app [senior] (dotnet-auth, docs2/03-oauth-from-the-code.md). Scenario: you run the identity provider behind \"NetLinear\": a single-page app with about 200,000 users, a confidential server-side admin app, and a nightly reporting job that calls the API with no user present. Access tokens should live about 15 minutes, users should stay signed in for up to 30 days without retyping a password, and the API must authorize by permission. Design the flows each client uses, the tokens and what the API checks, where every secret lives, and how the API verifies tokens, before you look. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
      "keyPoints": [
       {
        "text": "[w3] One flow per kind of client, allowed per client: authorization code with PKCE for apps acting for a user (the SPA and the admin web app), client credentials for the nightly job (machine-to-machine, no user), and the refresh grant to extend a session without a new login.",
@@ -37,7 +37,7 @@
        "quote": "the provider just reflects it; the client must verify it matches what it sent"
       },
       {
-       "text": "[w3] The code-for-token exchange is a server-side checklist run in order: the client exists and may use this grant, a confidential client's secret is verified, and the code must belong to the client redeeming it, each check closing a named attack (wrong-client confused deputy, client impersonation, a code minted for client A redeemed by client B).",
+       "text": "[w3] The code-for-token exchange is a server-side checklist run in order: the client exists and may use this grant, a confidential client's secret is verified, and the code must belong to the client redeeming it. Credit the checks themselves; naming the attack each one closes is a bonus, not required.",
        "quote": "code minted for client A redeemed by client B"
       },
       {
@@ -57,8 +57,12 @@
        }
       },
       {
-       "text": "[w2] Tokens are signed with an asymmetric key and carry a kid; the provider publishes only public key parameters, so each API verifies tokens locally with no call to the provider per request.",
-       "quote": "resource servers verify locally, no call to the provider per request"
+       "text": "[w3] Every request is verified locally against the provider's published public keys (asymmetric signing, kid in the header, no call to the provider per request), and a correct design checks signature, issuer, expiry AND audience, so a token minted for some other client or API is refused; the repo validates only the first three, which is the gap to close.",
+       "cite": {
+        "path": "docs2/03-oauth-from-the-code.md",
+        "lineStart": 208,
+        "lineEnd": 210
+       }
       }
      ]
     },
@@ -70,16 +74,24 @@
        "quote": "every use kills the presented token and issues a child"
       },
       {
-       "text": "[w2] Detection does not need attribution: a dead token reappearing means two parties hold it, and the server cannot tell attacker from victim, so the response must not depend on knowing which; it also writes an audit event worth alerting on.",
-       "quote": "You can't tell whether it's the attacker or the victim presenting it"
+       "text": "[w3] When a dead refresh token is presented again, revoke the WHOLE token family (every descendant, including the attacker's live child) and force a fresh login: the server cannot tell attacker from victim, so it ejects both, and it writes a reuse audit event worth alerting on.",
+       "quote": "Legitimate user logs in again; attacker is ejected."
       },
       {
-       "text": "[w3] Parallel traffic is what breaks single-use first: the checks run in memory and are saved later, so they hold only for requests that arrive one at a time; at 10x, guard the code and refresh rows with a row version or a conditional update so exactly one of two simultaneous redemptions commits.",
+       "text": "[w3] Parallel refreshes are what break single-use first: the checks run in memory and are saved later, so they hold only for requests that arrive one at a time; with several tabs refreshing at once, guard the refresh-token row with a row version or a conditional update so exactly one of two simultaneous refreshes commits.",
        "quote": "Replay detection assumes requests arrive one at a time."
       },
       {
-       "text": "[w2] Rotation must be one commit: the child is saved before the parent is marked rotated, with token issuance in between, so a crash leaves two live tokens in one family; write both in a single transaction.",
+       "text": "[w2] Rotation must be one commit: mark the old token rotated and insert its child in ONE transaction, so a crash between the two writes can never leave two live tokens in one family.",
        "quote": "A crash in the middle leaves two live tokens in one family."
+      },
+      {
+       "text": "[w2] Retries trip false alarms: if a refresh response is lost and the client library retries with the token it already sent, that token is now rotated, so reuse detection revokes the family and logs a legitimate user out; at 10x that becomes mass logouts. Fix with single-flight refresh on the client and/or a short grace window that returns the same child for an immediate repeat.",
+       "cite": {
+        "path": "docs/upskill/extended-course/02-refresh-rotation-and-persistence-windows.md",
+        "lineStart": 49,
+        "lineEnd": 49
+       }
       },
       {
        "text": "[w3] Revoking refresh tokens does not recall access tokens already issued: they are verified locally until they expire, so the short access-token lifetime is the real revocation latency (about one 15-minute window per rotation for an attacker).",
@@ -90,11 +102,7 @@
        "quote": "Sessions in the UI are just refresh-token families"
       },
       {
-       "text": "[w2] Signing-key rotation without an outage: retire keys rather than delete them, and keep publishing retired public keys for a grace window longer than the longest-lived token they signed.",
-       "quote": "The grace window must exceed the longest-lived token signed by"
-      },
-      {
-       "text": "[w1] The token endpoint is rate-limited per client IP (fixed window, 20 a minute, no queue); at 10x, many users behind one carrier or office NAT share that budget.",
+       "text": "[w1] The token endpoint is rate-limited per client IP (a fixed window, e.g. 20 a minute in this repo, with no queue); at 10x, many users behind one carrier or office NAT share that budget.",
        "cite": {
         "path": "src/NetAuth0.Api/Program.cs",
         "lineStart": 73,
@@ -133,14 +141,6 @@
         "lineStart": 38,
         "lineEnd": 38
        }
-      },
-      {
-       "text": "[w2] A missing signing key is generated on first use: convenient for bootstrap, but it means issuing a token can write to the database.",
-       "quote": "self-heals by generating one on first use"
-      },
-      {
-       "text": "[w1] Client authentication accepts HTTP Basic or form fields, as RFC 6749 section 2.3.1 allows, so standard client libraries work unchanged.",
-       "quote": "Client authentication accepts both HTTP Basic and form fields"
       }
      ]
     }

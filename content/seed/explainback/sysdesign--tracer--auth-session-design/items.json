@@ -18,7 +18,7 @@
    "kind": "explain-back",
    "questions": [
     {
-     "prompt": "DESIGN IT — auth and session design for a multi-user web product [mid] (tracer, docs/adr/0003-sessions-over-jwt.md). Scenario: a team issue tracker with a single-page app on its own origin, a REST API and a live WebSocket feed. About 50,000 users sign in through GitHub OAuth, stay signed in for up to 30 days, and an admin must be able to end a compromised session within seconds. Design how a signed-in user stays signed in across requests: the token and where it lives, what the server stores, the cookie settings and what each one defends, how the OAuth callback is protected, and what one authenticated request costs. Write it before you look, then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "prompt": "DESIGN IT — auth and session design for a multi-user web product [mid] (tracer, docs/adr/0003-sessions-over-jwt.md). Scenario: a team issue tracker with a single-page app served from app.example.com, a REST API at api.example.com (different origins on the same site) and a live WebSocket feed. About 50,000 users sign in through GitHub OAuth, stay signed in for up to 30 days, and an admin must be able to end a compromised session within seconds. Design how a signed-in user stays signed in across requests: the token and where it lives, what the server stores, the cookie settings and what each one defends, how the OAuth callback is protected, and what one authenticated request costs. Write it before you look, then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
      "keyPoints": [
       {
        "text": "[w3] Chooses server-side sessions kept in the database the product already runs (Postgres), identified by an opaque random cookie, instead of a signed token held by the client.",
@@ -45,7 +45,7 @@
        }
       },
       {
-       "text": "[w3] Each cookie flag defends something specific: httpOnly keeps page scripts (an XSS payload) from reading the token, SameSite=Lax keeps the browser from attaching it to cross-site POSTs and subrequests, and Secure in production keeps it off plain HTTP.",
+       "text": "[w3] Each cookie flag defends something specific: httpOnly keeps page scripts (an XSS payload) from reading the token, SameSite=Lax keeps the browser from attaching it to cross-site POSTs and subrequests (it still flows between app.example.com and api.example.com because they are the same site), and Secure in production keeps it off plain HTTP.",
        "quote": "Cookies are `httpOnly`, `sameSite=lax`, and `secure` in production."
       },
       {
@@ -74,11 +74,11 @@
      "prompt": "PRE-MORTEM — the same product at 10x (about 500,000 users, every page load and every socket checking the session), plus a named failure: a laptop with a live session is stolen and the admin deletes that user's sessions. What breaks first, and what in your design already handles it?",
      "keyPoints": [
       {
-       "text": "[w3] The first suspected hot spot is the session read on every request; the decision record names its own trigger to revisit, profiling that shows session reads as a bottleneck.",
+       "text": "[w3] The first suspected hot spot is the session read on every request (every page load and every socket check), and it is confirmed by profiling before anything changes; session reads showing up as a bottleneck is the trigger to revisit the store.",
        "quote": "session reads show up as a bottleneck in Sprint 13 profiling"
       },
       {
-       "text": "[w3] The planned move is deliberately narrow: move only the session store to Redis and keep the same cookie and token model, so no client or cookie changes ship with it.",
+       "text": "[w3] The move is deliberately narrow: move only the session store to a faster store such as Redis and keep the same cookie and token model, so no client or cookie change ships with it.",
        "quote": "session store (only) to Redis, keeping the same cookie/token model"
       },
       {
@@ -102,7 +102,7 @@
        "quote": "a stolen or stale JWT is valid until it expires"
       },
       {
-       "text": "[w2] Known hardening the project deferred and a 10x review should pick up: rotating the session on a privilege change and a per-session mutation rate limit.",
+       "text": "[w2] Hardening a 10x review adds: rotate the session token on a privilege change, and rate-limit mutations per session.",
        "cite": {
         "path": "docs/curriculum/sprint-13.md",
         "lineStart": 30,
@@ -120,7 +120,7 @@
      ]
     },
     {
-     "prompt": "TRADE-OFF HANDBACK — defend sessions in Postgres against the alternatives the decision record names (stateless JWTs, Redis sessions), and say what the cookie and CORS posture buys for a single-page app on another origin. For each, say what you bought, what it cost, and which requirement put you on that side.",
+     "prompt": "TRADE-OFF HANDBACK — defend sessions in Postgres against the alternatives the decision record names (stateless JWTs, Redis sessions), and say what the cookie and CORS posture buys for a single-page app on another origin of the same site (app.example.com calling api.example.com). For each, say what you bought, what it cost, and which requirement put you on that side.",
      "keyPoints": [
       {
        "text": "[w3] What a stateless JWT would have bought: no session store at all, and trivial horizontal scaling.",
@@ -147,19 +147,11 @@
        }
       },
       {
-       "text": "[w2] Cross-origin SPA: CORS allows credentialed requests only from the web app's origin, so other sites cannot read authenticated responses; it is SameSite=Lax, not CORS, that keeps the cookie off their cross-site form posts.",
+       "text": "[w2] Cross-origin, same-site SPA: CORS allows credentialed requests only from the web app's origin, so other sites cannot read authenticated responses, and the Lax cookie still rides along because app and API share one site; it is SameSite=Lax, not CORS, that keeps the cookie off other sites' cross-site form posts.",
        "cite": {
         "path": "apps/api/src/server.ts",
         "lineStart": 41,
         "lineEnd": 43
-       }
-      },
-      {
-       "text": "[w1] Hold no secrets speculatively: the provider's access token is used to fetch the profile and then discarded, because a stored token is a liability with no current consumer.",
-       "cite": {
-        "path": "docs/sprints/sprint-02.md",
-        "lineStart": 41,
-        "lineEnd": 41
        }
       }
      ]
