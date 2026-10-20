@@ -9,6 +9,10 @@ import { runQuests } from '../quests/run.ts';
 import { runVariants } from '../variants/run.ts';
 import { canonical, runCheck } from './check.ts';
 
+// The fixture checkouts have no git mirror, so their pins are caller-asserted: these tests use the
+// writers' explicit escape hatch (pack.ts unverifiedPinProblem) to stamp them.
+process.env.BOOTQUEST_SEED_ALLOW_UNVERIFIED_PIN = '1';
+
 const FX = join(import.meta.dirname, '..', 'fixtures');
 const D = join(FX, 'drafts');
 const WW6 = '09751ceaee909a30e5c4b5ff5cdde99880b9a3e5';
@@ -62,6 +66,49 @@ describe('seed:check (umbrella re-verification)', () => {
     await fails(variant('tamper', (d) => writeFileSync(join(d, 'items.json'), readFileSync(join(d, 'items.json'), 'utf8').replace('"back": "', '"back": "X'))), checkouts, /items.json sha256 != manifest/);
     await fails(variant('forge', (d) => writeFileSync(join(d, 'validation.json'), readFileSync(join(d, 'validation.json'), 'utf8').replace(/"fingerprint": "[0-9a-f]{64}"/, `"fingerprint": "${'a'.repeat(64)}"`))), checkouts, /stale\/invalid stamp: seed fingerprint aaaaaaaaaaaa/);
     await fails(variant('nostamp', (d) => rmSync(join(d, 'validation.json'))), checkouts, /no validation.json stamp/);
+  }, 240_000);
+
+  it('FAILS a pack recorded pin git-tree whose checkout now opens caller-asserted (no mirror): never a silent downgrade', async () => {
+    const root = join(tmp, 'downgrade');
+    cpSync(join(seed, 'quests'), join(root, 'quests'), { recursive: true });
+    const d = join(root, 'quests', 'ww6');
+    const man = JSON.parse(readFileSync(join(d, 'manifest.json'), 'utf8'));
+    expect(man.source.pin).toBe('caller-asserted'); // the fixture checkout has no mirror
+    man.source.pin = 'git-tree'; // what a mirror-verified seed run would have recorded
+    const manBytes = JSON.stringify(man, null, 1) + String.fromCharCode(10);
+    writeFileSync(join(d, 'manifest.json'), manBytes);
+    const st = JSON.parse(readFileSync(join(d, 'validation.json'), 'utf8'));
+    st.manifestSha256 = createHash('sha256').update(manBytes).digest('hex');
+    writeFileSync(join(d, 'validation.json'), JSON.stringify(st));
+    const log: string[] = [];
+    const r = await runCheck({ seedDir: root, checkouts, log: (l) => log.push(l) });
+    expect(r.ok).toBe(false);
+    expect(log.join('\n')).toMatch(/pin downgraded: the manifest records pin git-tree but .* opened caller-asserted/);
+  }, 240_000);
+
+  it('--exclusions: a registry that is not the committed one FAILS every pack and never restamps (unsafeExclusions: tests only)', async () => {
+    const committed = JSON.parse(readFileSync(join(import.meta.dirname, '..', '..', '..', 'exclusions.json'), 'utf8'));
+    const permissive = join(tmp, 'permissive-exclusions.json');
+    writeFileSync(permissive, JSON.stringify({ ...committed, entries: [], secretPatterns: [{ id: 'never', regex: 'NEVERMATCHES_[0-9]{40}' }] }));
+    const copy = join(tmp, 'same-content-exclusions.json');
+    writeFileSync(copy, JSON.stringify(committed));
+    const root = join(tmp, 'excl');
+    cpSync(join(seed, 'quests'), join(root, 'quests'), { recursive: true });
+    const log: string[] = [];
+    const r = await runCheck({ seedDir: root, checkouts, exclusionsPath: permissive, log: (l) => log.push(l) });
+    expect(r.ok).toBe(false);
+    expect(log.join('\n')).toMatch(/permissive-exclusions\.json is not the committed tools\/seed\/exclusions\.json/);
+    // the same CONTENT at another path is the committed registry
+    expect((await runCheck({ seedDir: root, checkouts, exclusionsPath: copy })).ok).toBe(true);
+    expect((await runCheck({ seedDir: root, checkouts, exclusionsPath: permissive, unsafeExclusions: true })).ok).toBe(true);
+    // ...but even the unsafe flag never restamps under it
+    const sp = join(root, 'quests', 'ww6', 'validation.json');
+    writeFileSync(sp, readFileSync(sp, 'utf8').replace(/"fingerprint": "[0-9a-f]{64}"/, `"fingerprint": "${'c'.repeat(64)}"`));
+    const rlog: string[] = [];
+    const rr = await runCheck({ seedDir: root, checkouts, exclusionsPath: permissive, unsafeExclusions: true, restamp: true, log: (l) => rlog.push(l) });
+    expect(rr.ok).toBe(false);
+    expect(rr.packs[0]!.restamped).toBe(false);
+    expect(rlog.join('\n')).toMatch(/restamp refused: the exclusions registry in use is not the committed one/);
   }, 240_000);
 
   it('--restamp (W7): a stale-fingerprint-only pack is restamped after a clean full re-validation; anything else is not', async () => {

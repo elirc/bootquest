@@ -10,6 +10,10 @@ import { REPO_ROOT } from '../report.ts';
 import { applyInTemp, diffTargets, sliceLines } from './patches.ts';
 import { runPatches } from './run.ts';
 
+// The fixture checkouts have no git mirror, so their pins are caller-asserted: these tests use the
+// writers' explicit escape hatch (pack.ts unverifiedPinProblem) to stamp them.
+process.env.BOOTQUEST_SEED_ALLOW_UNVERIFIED_PIN = '1';
+
 /** a usable .NET SDK on PATH (`dotnet --list-sdks` exits 0 and lists at least one SDK) */
 const HAVE_DOTNET_SDK = (() => {
   const r = spawnSync('dotnet', ['--list-sdks'], { encoding: 'utf8', timeout: 30_000, windowsHide: true });

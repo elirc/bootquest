@@ -230,7 +230,9 @@ export function findNetReport(projectDir: string, sinceMs: number): string | nul
  * from the root pid; intermediates that later exit (dotnet test, csc) stay in the set,
  * so their orphans are still recognised. Identity is pid@creationTime, and a child is
  * attributed to a parent only if it was created after that parent and before any
- * stranger that reused the parent's pid. After the run, a final snapshot picks the
+ * stranger that reused the parent's pid (every such stranger is remembered, also after it
+ * exits), and the root itself must have been born by attach() (a holder of the root pid
+ * born later reused the pid of a Stryker that died before the first sample). After the run, a final snapshot picks the
  * still-alive members and only those are killed. Limitation (deliberately conservative):
  * an intermediate that lives shorter than one sample (~2s; the first takes a cold
  * PowerShell start) is never seen, so ITS orphans are left alone rather than guessed at.
@@ -249,15 +251,37 @@ export interface TreeState {
   rootPid: number;
   /** the root was spawned at/after this (its creation time until first seen) */
   notBeforeMs: number;
+  /**
+   * ...and at/before this (attach() time + clock slack): a process holding the root pid that was born
+   * later is a stranger that reused the pid of a root which died before the first snapshot
+   */
+  notAfterMs: number;
   rootSeen: boolean;
   members: Map<string, ProcInfo>;
+  /**
+   * every non-member ever seen holding a member's pid, born after that member (pid reuse). Remembered
+   * after the stranger exits: a process whose ppid names that pid and that was born at/after the
+   * stranger is the stranger's child, never the member's.
+   */
+  strangers: Map<string, ProcInfo>;
 }
 
 const procKey = (p: ProcInfo): string => `${p.pid}@${p.createdMs}`;
 
-export function newTreeState(rootPid: number, notBeforeMs: number): TreeState {
+/** WMI creation times and Date.now() share the system clock; the slack only absorbs rounding */
+export const ROOT_CLOCK_SLACK_MS = 500;
+
+export function newTreeState(rootPid: number, notBeforeMs: number, notAfterMs: number = Number.POSITIVE_INFINITY): TreeState {
   const seed: ProcInfo = { pid: rootPid, ppid: -1, createdMs: notBeforeMs, name: '(root)' };
-  return { rootPid, notBeforeMs, rootSeen: false, members: new Map([[procKey(seed), seed]]) };
+  return { rootPid, notBeforeMs, notAfterMs, rootSeen: false, members: new Map([[procKey(seed), seed]]), strangers: new Map() };
+}
+
+/** Did a stranger take member k's pid at/before p was born? Then p (ppid = k.pid) is not k's child. */
+function bornAfterPidReuse(p: ProcInfo, k: ProcInfo, state: TreeState): boolean {
+  for (const s of state.strangers.values()) {
+    if (s.pid === k.pid && s.createdMs > k.createdMs && p.createdMs >= s.createdMs && !state.members.has(procKey(s))) return true;
+  }
+  return false;
 }
 
 /** Parse `pid ppid createdMs name` lines (the PowerShell snapshot format); junk lines are skipped. */
@@ -276,6 +300,8 @@ function childOfMember(p: ProcInfo, state: TreeState, live: Map<number, ProcInfo
     if (k.pid !== p.ppid || p.createdMs < k.createdMs) continue;
     // the parent pid now belongs to a stranger born after k: p is the stranger's child if born after it
     if (holder && !state.members.has(procKey(holder)) && holder.createdMs >= k.createdMs && p.createdMs >= holder.createdMs) continue;
+    // ...or a stranger that held it in an EARLIER snapshot and has exited since
+    if (bornAfterPidReuse(p, k, state)) continue;
     return true;
   }
   return false;
@@ -284,7 +310,8 @@ function childOfMember(p: ProcInfo, state: TreeState, live: Map<number, ProcInfo
 /** Grow the descendant set from one snapshot (pure apart from mutating `state`). */
 export function observeSnapshot(state: TreeState, snapshot: readonly ProcInfo[]): void {
   if (!state.rootSeen) {
-    const root = snapshot.find((p) => p.pid === state.rootPid && p.createdMs >= state.notBeforeMs);
+    // the root existed by attach(): a holder of its pid born after that is a pid-reusing stranger
+    const root = snapshot.find((p) => p.pid === state.rootPid && p.createdMs >= state.notBeforeMs && p.createdMs <= state.notAfterMs);
     if (root) {
       state.members.clear();
       state.members.set(procKey(root), root);
@@ -300,6 +327,16 @@ export function observeSnapshot(state: TreeState, snapshot: readonly ProcInfo[])
       if (childOfMember(p, state, live)) {
         state.members.set(procKey(p), p);
         grew = true;
+      }
+    }
+  }
+  // remember every pid-reusing stranger (it may exit before its children are sampled)
+  for (const p of snapshot) {
+    if (state.members.has(procKey(p))) continue;
+    for (const k of state.members.values()) {
+      if (k.pid === p.pid && p.createdMs > k.createdMs) {
+        state.strangers.set(procKey(p), p);
+        break;
       }
     }
   }
@@ -345,7 +382,8 @@ export function trackDotnetDescendants(sinceMs: number, run: ToolRunner = spawnT
     for (const block of parts) if (state) observeSnapshot(state, parseSnapshot(block));  };
   return {
     attach(pid) {
-      state = newTreeState(pid, notBefore);
+      // the spawned root exists by now: bound its creation time (a pid holder born later is a stranger)
+      state = newTreeState(pid, notBefore, Date.now() + ROOT_CLOCK_SLACK_MS);
       const loop =
         snapScript(notBefore) +
         `while ((Get-Process -Id ${pid} -ErrorAction SilentlyContinue) -and (Get-Process -Id ${process.pid} -ErrorAction SilentlyContinue)) ` +

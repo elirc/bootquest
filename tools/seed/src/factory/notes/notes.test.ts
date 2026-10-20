@@ -12,6 +12,10 @@ import { runQuests } from '../quests/run.ts';
 import { buildNoteItem, keyedAnswer, loadQuestPackView, noteLeaks, validateNote, type QuestPackView } from './notes.ts';
 import { runNotes } from './run.ts';
 
+// The fixture checkouts have no git mirror, so their pins are caller-asserted: these tests use the
+// writers' explicit escape hatch (pack.ts unverifiedPinProblem) to stamp them.
+process.env.BOOTQUEST_SEED_ALLOW_UNVERIFIED_PIN = '1';
+
 const FX = join(import.meta.dirname, '..', 'fixtures');
 const D = join(FX, 'drafts');
 const WW6 = '09751ceaee909a30e5c4b5ff5cdde99880b9a3e5';

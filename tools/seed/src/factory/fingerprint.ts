@@ -26,15 +26,15 @@
  *   3. PER PACK, only the graders its items actually execute: the runner types of its
  *      shipped + review-held items (variant.check, patch-kata test.check). Each runner
  *      binds the server's grader file list for its kind (FINGERPRINT_FILES, the same
- *      list that binds code-pack stamps, minus the import gate's validators the factory
- *      never runs) and its toolchain: drill-js -> esbuild, drill-cs -> the .NET SDK +
+ *      list that binds code-pack stamps, minus the import gate, IMPORT_GATE_FILES, which
+ *      the factory never runs) and its toolchain: drill-js -> esbuild, drill-cs -> the .NET SDK +
  *      ref pack, drill-java -> the JDK. A mixed pack binds the union; a pack with no
  *      runnable check (quests / explainback / notes, test-less katas) binds none. So a
  *      .NET update stales only the packs that run drill-cs.
  * Every bound file is hashed with its repo-relative path and CRLF-normalised bytes.
  */
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path';
+import { dirname, extname, join, relative, resolve, sep } from 'node:path';
 import { FINGERPRINT_FILES, toolchainVersions, type GraderKind, type Toolchain } from '@bootquest/server/grader-fingerprint';
 import { SEED_GENERATORS, type SeedGenerator, type SeedItem, type SeedRunnableCheck } from '@bootquest/shared';
 import { sha256 } from './util.ts';
@@ -87,8 +87,19 @@ export const SERVER_EDGES: Readonly<Record<string, ServerEdge>> = {
   },
 };
 
-/** the import gate's validators (seed:validate) ride in the grader file lists; the factory never runs them */
-const IMPORT_GATE_VALIDATORS: ReadonlySet<string> = new Set(['validate.ts', 'validate-java.ts']);
+/**
+ * The import gate (seed:validate: the validators, the NOT_A_VERDICT set, the journal) rides in every
+ * grader file list; the factory never runs the validators or the journal, and verdicts.ts is bound
+ * through every generator closure already (harness.ts imports it). Excluded by exact repo-relative
+ * path, never by basename (a runner file that happened to be called validate.ts must stay bound),
+ * and each path must still be in some grader list (a renamed gate file cannot become a silent no-op).
+ */
+export const IMPORT_GATE_FILES: readonly string[] = [
+  'tools/seed/src/validate/journal.ts',
+  'tools/seed/src/validate/validate-java.ts',
+  'tools/seed/src/validate/validate.ts',
+  'tools/seed/src/validate/verdicts.ts',
+];
 
 // ------------------------------------------------------------------ import extraction
 
@@ -105,7 +116,9 @@ const DYNAMIC_RE = /\bimport\(\s*(['"`]?)([^'"`)\s]*)\1\s*\)/g;
 /** Static, side-effect and dynamic import specifiers of a module (regex; cross-checked against the TypeScript AST in fingerprint.test.ts). */
 export function extractImports(src: string, file = '<module>'): ImportRef[] {
   const out: ImportRef[] = [];
-  for (const m of src.matchAll(FROM_RE)) out.push({ spec: m[4]!, typeOnly: /^\s+type\s/.test(m[2]!) });
+  // `import type X from` / `import type { X } from` / `export type * from` are type-only; `import type from`
+  // and `import type, { x } from` import a DEFAULT binding named `type` (a value import)
+  for (const m of src.matchAll(FROM_RE)) out.push({ spec: m[4]!, typeOnly: /^\s+type(?:\s+[^\s,]|\s*[{*])/.test(m[2]!) });
   for (const m of src.matchAll(BARE_RE)) out.push({ spec: m[2]!, typeOnly: false });
   for (const m of src.matchAll(DYNAMIC_RE)) {
     if (!m[1] || m[1] === '`') throw new Error(`fingerprint: ${file}: non-literal dynamic import of '${m[2]}': the closure cannot be derived`);
@@ -239,8 +252,12 @@ function normRunners(generator: SeedGenerator, runners: readonly SeedRunner[]): 
 
 /** Grader files (repo-relative, sorted) bound by these runners. */
 export function runnerFiles(runners: readonly SeedRunner[]): string[] {
+  const listed = new Set(Object.values(FINGERPRINT_FILES).flatMap((fs) => fs.map(relOf)));
+  const stale = IMPORT_GATE_FILES.filter((f) => !listed.has(f));
+  if (stale.length) throw new Error(`fingerprint: IMPORT_GATE_FILES names ${stale.join(', ')}, which no grader file list (FINGERPRINT_FILES) binds: update the exclusion`);
+  const gate = new Set(IMPORT_GATE_FILES);
   const out = new Set<string>();
-  for (const r of runners) for (const f of FINGERPRINT_FILES[RUNNER_GRADER[r]]) if (!IMPORT_GATE_VALIDATORS.has(basename(f))) out.add(relOf(f));
+  for (const r of runners) for (const f of FINGERPRINT_FILES[RUNNER_GRADER[r]]) if (!gate.has(relOf(f))) out.add(relOf(f));
   return [...out].sort();
 }
 

@@ -242,7 +242,7 @@ Each gate is a real command that must exit 0. Run them in the foreground.
 | `npm run demo:promotion` | One full competency promotion cycle (artifact → explain-back → ≥2-day retest) plus the negative legs, over HTTP on a temp DB with an injected clock |
 | `npm run demo:m4` | Real GitHub sync of signalpost; U01 renders from the per-SHA cache; its real `u01.test.mjs` fails the starter and passes the solution; new-guide detection; fully offline re-run |
 | `npm run seed:check` | Every seed pack re-verified: stamp, pins, every shipped item re-validated (variants and katas re-executed), and the pack-level guards every generator also runs before stamping (blind-pass, quiz-balance, explanation-lint, explain-back key-point leaks, secret scan of all shipped text; SEEDING.md §3) |
-| `npm run seed:pins` | Read-only: every seed manifest's blob ids == `git ls-tree -r <pinned sha>` in the repo mirror (OK / MISMATCH / UNCHECKABLE; `--strict` fails on missing mirrors) |
+| `npm run seed:pins` | Read-only: every seed manifest's blob ids == `git ls-tree -r <pinned sha>` in the repo mirror (OK / MISMATCH / UNCHECKABLE; a missing mirror FAILS unless `--no-strict`; a 0-blob pack is OK by definition) |
 | `npm run seed:lint:leaks` | Lists every explain-back key point that restates a same-repo quiz key (exit 1 while any exist, exempt or not) |
 | `npm run seed:validate -- --source <bootforge\|csbootcamp\|javabootcamp>` | The import gate: every imported reference solution executes green under BootQuest's runners (quarantine otherwise) |
 | `npm run seed:import:javabootcamp` | Re-imports the javabootcamp Java pack from `elirc/javabootcamp` at the pinned sha (then re-run `seed:validate -- --source javabootcamp`) |

@@ -7,6 +7,10 @@ import { defaultHarness, withRunner } from '../harness/harness.ts';
 import { loadSeedPack } from '../pack.ts';
 import { runVariants } from './run.ts';
 
+// The fixture checkouts have no git mirror, so their pins are caller-asserted: these tests use the
+// writers' explicit escape hatch (pack.ts unverifiedPinProblem) to stamp them.
+process.env.BOOTQUEST_SEED_ALLOW_UNVERIFIED_PIN = '1';
+
 const FX = join(import.meta.dirname, '..', 'fixtures');
 const D = join(FX, 'drafts');
 const tmp = mkdtempSync(join(tmpdir(), 'bq-var-test-'));

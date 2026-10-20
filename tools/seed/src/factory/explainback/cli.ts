@@ -1,7 +1,9 @@
-// npm run seed:explainback -- <unit-source> --checkout <dir> --sha <sha> [--repo <name>] [--draft <set.json>] [--out <dir>] [--force-replace]
+// npm run seed:explainback -- <unit-source> --checkout <dir> --sha <sha> [--repo <name>] [--draft <set.json>] [--out <dir>] [--force-replace] [--allow-no-quests]
 // 3 questions x 5-8 key points from the unit's source; every key point must quote
 // (whitespace-normalized substring) or cite (resolvable file:line) the source.
 // Without --draft: a deterministic scaffold (first three H2 sections, verbatim sentences).
+// No stamp unless a quest pack of the same repo exists under <out>/../../quests (the eb-leak guard's
+// keyed answers); --allow-no-quests stamps without one (a repo that has no quest pack).
 import { finish, parseArgs } from '../report.ts';
 import { runExplainBack } from './run.ts';
 
@@ -20,5 +22,6 @@ finish('seed:explainback', () => {
     ...(opts.has('out') ? { out: opts.get('out')! } : {}),
     ...(opts.has('exclusions') ? { exclusionsPath: opts.get('exclusions')! } : {}),
     forceReplace: flags.has('force-replace'),
+    allowNoQuests: flags.has('allow-no-quests'),
   });
 });

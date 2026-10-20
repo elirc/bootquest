@@ -3,11 +3,12 @@ import { join, relative, sep } from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 import { SEED_GENERATORS, type SeedGenerator, type SeedItem } from '@bootquest/shared';
-import type { GraderKind, Toolchain } from '@bootquest/server/grader-fingerprint';
+import { FINGERPRINT_FILES, type GraderKind, type Toolchain } from '@bootquest/server/grader-fingerprint';
 import {
   ALWAYS_ROOTS,
   computeSeedFingerprint,
   extractImports,
+  IMPORT_GATE_FILES,
   packRunners,
   runnerFiles,
   seedClosure,
@@ -119,26 +120,69 @@ describe('seed fingerprint: the pinned input set (derived import closure)', () =
     expect(all.filter((f) => !bound.has(f)).sort()).toEqual(sorted(NOT_BOUND));
   });
 
+  /** the imports of a module as the TypeScript AST sees them ("type " prefix = elided at runtime) */
+  const astImports = (rel: string, src: string): string[] => {
+    const sf = ts.createSourceFile(rel, src, ts.ScriptTarget.Latest, true);
+    const want: string[] = [];
+    const visit = (n: ts.Node): void => {
+      if (ts.isImportDeclaration(n) && ts.isStringLiteral(n.moduleSpecifier)) want.push(`${n.importClause?.isTypeOnly ? 'type ' : ''}${n.moduleSpecifier.text}`);
+      else if (ts.isExportDeclaration(n) && n.moduleSpecifier && ts.isStringLiteral(n.moduleSpecifier)) want.push(`${n.isTypeOnly ? 'type ' : ''}${n.moduleSpecifier.text}`);
+      else if (ts.isCallExpression(n) && n.expression.kind === ts.SyntaxKind.ImportKeyword) {
+        const a = n.arguments[0];
+        want.push(a && ts.isStringLiteral(a) ? a.text : '<non-literal>');
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(sf);
+    return want.sort();
+  };
+  const regexImports = (rel: string, src: string): string[] => extractImports(src, rel).map((r) => `${r.typeOnly ? 'type ' : ''}${r.spec}`).sort();
+
   it('the regex import extractor agrees with the TypeScript AST on every walked module', () => {
     const modules = sorted(SEED_GENERATORS.flatMap((g) => seedClosure(g).files)).filter((f) => /\.(m?ts|tsx)$/.test(f) && !f.startsWith('server/'));
     expect(modules.length).toBeGreaterThan(20);
     for (const rel of modules) {
       const src = readFileSync(join(REPO_ROOT, ...rel.split('/')), 'utf8');
-      const sf = ts.createSourceFile(rel, src, ts.ScriptTarget.Latest, true);
-      const want: string[] = [];
-      const visit = (n: ts.Node): void => {
-        if (ts.isImportDeclaration(n) && ts.isStringLiteral(n.moduleSpecifier)) want.push(`${n.importClause?.isTypeOnly ? 'type ' : ''}${n.moduleSpecifier.text}`);
-        else if (ts.isExportDeclaration(n) && n.moduleSpecifier && ts.isStringLiteral(n.moduleSpecifier)) want.push(`${n.isTypeOnly ? 'type ' : ''}${n.moduleSpecifier.text}`);
-        else if (ts.isCallExpression(n) && n.expression.kind === ts.SyntaxKind.ImportKeyword) {
-          const a = n.arguments[0];
-          want.push(a && ts.isStringLiteral(a) ? a.text : '<non-literal>');
-        }
-        ts.forEachChild(n, visit);
-      };
-      visit(sf);
-      const got = extractImports(src, rel).map((r) => `${r.typeOnly ? 'type ' : ''}${r.spec}`);
-      expect(got.sort(), rel).toEqual(want.sort());
+      expect(regexImports(rel, src), rel).toEqual(astImports(rel, src));
     }
+  });
+
+  it('the regex agrees with the AST on the `type` edge cases (a DEFAULT import named `type` is a value import)', () => {
+    const src = [
+      "import type from './default-named-type.ts';",
+      "import type, { v } from './default-type-plus-named.ts';",
+      "import type T from './type-only-default.ts';",
+      "import type{ U } from './type-only-tight.ts';",
+      "import type * as NS from './type-only-ns.ts';",
+      "import typeish from './identifier-starting-with-type.ts';",
+      "export type * from './export-type-star.ts';",
+      "export type { W } from './export-type-named.ts';",
+    ].join('\n');
+    const want = astImports('edge.ts', src);
+    expect(want).toEqual([
+      './default-named-type.ts',
+      './default-type-plus-named.ts',
+      './identifier-starting-with-type.ts',
+      'type ./export-type-named.ts',
+      'type ./export-type-star.ts',
+      'type ./type-only-default.ts',
+      'type ./type-only-ns.ts',
+      'type ./type-only-tight.ts',
+    ]);
+    expect(regexImports('edge.ts', src)).toEqual(want);
+  });
+
+  it('the import gate is excluded from runner sets by exact path (IMPORT_GATE_FILES), and every listed path is really in a grader list', () => {
+    const all = new Set(Object.values(FINGERPRINT_FILES).flatMap((fs) => fs.map((f) => relative(REPO_ROOT, f).split(sep).join('/'))));
+    for (const f of IMPORT_GATE_FILES) expect(all, f).toContain(f);
+    // every grader kind carries the whole gate (validator + NOT_A_VERDICT + journal)...
+    for (const fs of Object.values(FINGERPRINT_FILES)) {
+      const rel = fs.map((f) => relative(REPO_ROOT, f).split(sep).join('/'));
+      for (const f of ['tools/seed/src/validate/validate.ts', 'tools/seed/src/validate/verdicts.ts', 'tools/seed/src/validate/journal.ts']) expect(rel).toContain(f);
+    }
+    // ...none of it reaches a per-pack runner set, and verdicts.ts stays bound through every closure
+    for (const r of Object.keys(PINNED_RUNNERS) as SeedRunner[]) for (const f of IMPORT_GATE_FILES) expect(runnerFiles([r])).not.toContain(f);
+    for (const g of SEED_GENERATORS) expect(seedClosure(g).files).toContain('tools/seed/src/validate/verdicts.ts');
   });
 
   it('the extractor: type-only skipped, multi-line + side-effect + dynamic kept, a non-literal dynamic import throws', () => {

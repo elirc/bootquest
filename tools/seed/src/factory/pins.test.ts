@@ -9,7 +9,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { runPins } from '../ops/pins.ts';
+import { pinsFailed, runPins } from '../ops/pins.ts';
 import { CheckoutError, openCheckout, readTracked, verifyBlobs } from './checkout.ts';
 import { checkTreeShape, extractTree, gitTree, verifyManifestBlobs } from './pins.ts';
 import { gitBlobSha1, stableJson } from './util.ts';
@@ -127,6 +127,32 @@ describe('openCheckout verifies a <cache>/checkouts/<repo>@<sha> dir against <ca
     expect(openCheckout({ root: d, sha: B }).pin).toBe('caller-asserted');
     expect(openCheckout({ root: co(B), sha: B, mirrors: false }).pin).toBe('caller-asserted');
   });
+
+  it('a bare .git/HEAD (no objects) never earns git-head: it falls through to the mirror check', () => {
+    const fakeGit = (d: string) => {
+      mkdirSync(join(d, '.git'), { recursive: true });
+      writeFileSync(join(d, '.git', 'HEAD'), `${B}\n`);
+    };
+    // nested INSIDE the mirror (a real repo that has B): git would walk up to it and list ITS tree
+    const nested = join(mirror, 'nested', `demo@${B}`);
+    extractTree(mirror, B, nested);
+    fakeGit(nested);
+    const c = openCheckout({ root: nested, sha: B, repo: 'demo', mirrors: roots });
+    expect(c.pin).toBe('git-tree');
+    expect(c.tree).not.toBeNull();
+    // ...so the mirror's shape check runs: CRLF-converted bytes behind a fake HEAD are REFUSED
+    put(nested, 'README.md', crlfify('# Demo\n\nLF in git.\n'));
+    expect(() => openCheckout({ root: nested, sha: B, repo: 'demo', mirrors: roots })).toThrow(/README\.md: 22 bytes, git blob has 19 \(CRLF-converted\?\)/);
+    // with no mirror anywhere it is a plain dir: caller-asserted (never git-head with no tree)
+    const lone = join(tmp, 'lone', `demo@${B}`);
+    extractTree(mirror, B, lone);
+    fakeGit(lone);
+    expect(openCheckout({ root: lone, sha: B, repo: 'demo', mirrors: [] })).toMatchObject({ pin: 'caller-asserted', tree: null });
+    // a REAL repo at the sha still opens git-head, with git's tree
+    const real = openCheckout({ root: mirror, sha: B, repo: 'demo' });
+    expect(real.pin).toBe('git-head');
+    expect(real.tree?.get('README.md')?.id).toBe(gitTree(mirror, B).get('README.md')!.id);
+  });
 });
 
 describe('seed:pins', () => {
@@ -168,5 +194,12 @@ describe('seed:pins', () => {
     expect([r.ok, r.mismatch, r.uncheckable]).toEqual([2, 1, 1]);
     expect(log.join('\n')).toMatch(/^MISMATCH {4}notes\/demo .*\n {14}README\.md: manifest [0-9a-f]{12} != git [0-9a-f]{12}$/m);
     expect(runPins({ seedDir: seed, roots, repos: ['other'] }).packs.map((p) => p.status)).toEqual(['uncheckable']);
+  });
+
+  it('pinsFailed: strict by default (UNCHECKABLE fails); --no-strict only reports it; MISMATCH always fails', () => {
+    expect(pinsFailed({ mismatch: 0, uncheckable: 1 })).toBe(true);
+    expect(pinsFailed({ mismatch: 0, uncheckable: 1 }, false)).toBe(false);
+    expect(pinsFailed({ mismatch: 1, uncheckable: 0 }, false)).toBe(true);
+    expect(pinsFailed({ mismatch: 0, uncheckable: 0 })).toBe(false);
   });
 });

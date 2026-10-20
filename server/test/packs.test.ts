@@ -14,7 +14,7 @@ import { startServer } from '../src/api/serve.ts';
 import { Db } from '../src/db/database.ts';
 import { migrate } from '../src/db/migrate.ts';
 import { fixedClock } from '../src/engines/clock.ts';
-import { FINGERPRINT_FILES, graderFingerprint, graderKindForManifest, graderKindForTrack, toolchainVersions } from '../src/store/grader-fingerprint.ts';
+import { FINGERPRINT_FILES, IMPORT_GATE, graderFingerprint, graderKindForManifest, graderKindForTrack, toolchainVersions } from '../src/store/grader-fingerprint.ts';
 import { ALLOW_UNSTAMPED_ENV, loadPackIntoDb, packContentEntries, PackLoadError, readPack, type ReadPackOptions } from '../src/store/packs.ts';
 import { localNoon, makeTempDb, makeUnit, submit, type TempDb } from './helpers.ts';
 import { servedQuizAnswer } from './api/harness.ts';
@@ -532,14 +532,19 @@ describe('import-gate stamp (validation.json): the loader refuses a pack seed:va
     // the C# fingerprint covers the C# runner (not the JS grader) and vice versa; only the validator is shared
     const js = new Set(FINGERPRINT_FILES.js);
     const shared = FINGERPRINT_FILES.csharp.filter((f) => js.has(f));
-    expect(shared.map((f) => f.replace(/\\/g, '/').split('/').pop())).toEqual(['validate.ts']);
+    expect(shared.map((f) => f.replace(/\\/g, '/').split('/').pop())).toEqual(['validate.ts', 'verdicts.ts', 'journal.ts']);
     expect(FINGERPRINT_FILES.csharp.some((f) => /grade-core/.test(f))).toBe(false);
     expect(graderKindForTrack('csharp')).toBe('csharp');
     expect(graderKindForTrack('java')).toBe('java');
     expect(() => graderKindForTrack('agentic')).toThrow(/no grader kind/);
     // the java fingerprint covers the Java runner + its harness + validators, not the JS grader or runners.ts
     const base = (f: string) => f.replace(/\\/g, '/').split('/').pop();
-    expect(FINGERPRINT_FILES.java.filter((f) => js.has(f)).map(base)).toEqual(['validate.ts']);
+    expect(FINGERPRINT_FILES.java.filter((f) => js.has(f)).map(base)).toEqual(['validate.ts', 'verdicts.ts', 'journal.ts']);
+    // the whole import gate binds every kind: the validator, the NOT_A_VERDICT set its starter rule
+    // reads (verdicts.ts) and the journal whose entries it trusts (journal.ts)
+    for (const k of ['js', 'csharp', 'selfrun', 'java'] as const) {
+      for (const f of IMPORT_GATE) expect(FINGERPRINT_FILES[k], `${k} ${base(f)}`).toContain(f);
+    }
     expect(FINGERPRINT_FILES.java.some((f) => /runners\.ts$|grade-core/.test(f))).toBe(false);
     expect(FINGERPRINT_FILES.java.map(base)).toEqual(expect.arrayContaining(['Check.java', 'BqMain.java', 'runner-java.ts', 'validate-java.ts', 'scratch.ts']));
   });

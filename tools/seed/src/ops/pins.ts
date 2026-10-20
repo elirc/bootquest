@@ -6,7 +6,9 @@
  * manifest's `blobs` map must be git's blob id for that path:
  *   OK          every recorded id is git's
  *   MISMATCH    file-level detail (an id git never had there, or a path not in the tree)
- *   UNCHECKABLE no mirror for the repo, or the mirror lacks the sha
+ *   UNCHECKABLE no mirror for the repo, or the mirror lacks the sha (a FAILURE by
+ *               default; --no-strict reports it without failing)
+ * A pack that pins 0 blobs is OK by definition: nothing pinned, nothing to verify.
  * Nothing is written. The checkout is NOT consulted: this checks what the pack
  * claims against the repo, not against the bytes that produced the claim.
  */
@@ -36,6 +38,15 @@ export interface PinsSummary {
   ok: number;
   mismatch: number;
   uncheckable: number;
+}
+
+/**
+ * seed:pins' verdict: any MISMATCH fails; so does any UNCHECKABLE pack (no mirror / mirror lacks the
+ * sha) unless strict is off (--no-strict): a pin nobody can check is not a verified pin. A 0-blob pack
+ * is OK by definition (nothing pinned, nothing to verify) and never needs a mirror.
+ */
+export function pinsFailed(s: Pick<PinsSummary, 'mismatch' | 'uncheckable'>, strict = true): boolean {
+  return s.mismatch > 0 || (strict && s.uncheckable > 0);
 }
 
 export function runPins(o: PinsOptions): PinsSummary {

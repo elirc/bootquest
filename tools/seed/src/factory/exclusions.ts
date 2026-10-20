@@ -60,6 +60,20 @@ export function loadExclusions(path: string = DEFAULT_EXCLUSIONS_PATH): Exclusio
   return ExclusionRegistry.parse(JSON.parse(readFileSync(path, 'utf8')));
 }
 
+/** JSON with sorted object keys (registry equality independent of key order). */
+function canonicalJson(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(canonicalJson).join(',')}]`;
+  if (v && typeof v === 'object') {
+    const o = v as Record<string, unknown>;
+    return `{${Object.keys(o)
+      .filter((k) => o[k] !== undefined)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${canonicalJson(o[k])}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(v);
+}
+
 /** Translate a registry path pattern to a RegExp over repo-relative /-paths. */
 export function pathPatternRegex(pattern: string): RegExp {
   // 'dir/' = everything under dir
@@ -101,6 +115,20 @@ export class Exclusions {
 
   static load(path?: string): Exclusions {
     return new Exclusions(loadExclusions(path));
+  }
+
+  /**
+   * Is this registry the committed tools/seed/exclusions.json (same content, whatever path it was
+   * loaded from)? Every seed fingerprint binds the COMMITTED file's bytes, so a stamp written or
+   * restamped under any other registry (a permissive --exclusions file with no secret patterns or
+   * no path exclusions) would vouch for guards that never ran: writers and seed:check refuse that.
+   */
+  isCommitted(): boolean {
+    try {
+      return canonicalJson(this.registry) === canonicalJson(loadExclusions(DEFAULT_EXCLUSIONS_PATH));
+    } catch {
+      return false;
+    }
   }
 
   /** Whole-repo exclusion (an active entry without paths), else null. */

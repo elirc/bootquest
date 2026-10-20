@@ -7,6 +7,10 @@ import { checkPack } from '../factory/check/check.ts';
 import { loadSeedPack } from '../factory/pack.ts';
 import { QUEST_DRAFTS_FORMAT, runQuestsWithDrafts } from './quests.ts';
 
+// The fixture checkouts have no git mirror, so their pins are caller-asserted: these tests use the
+// writers' explicit escape hatch (pack.ts unverifiedPinProblem) to stamp them.
+process.env.BOOTQUEST_SEED_ALLOW_UNVERIFIED_PIN = '1';
+
 const FX = join(import.meta.dirname, '..', 'factory', 'fixtures');
 const WW6 = '09751ceaee909a30e5c4b5ff5cdde99880b9a3e5';
 const tmp = mkdtempSync(join(tmpdir(), 'bq-drafts-test-'));

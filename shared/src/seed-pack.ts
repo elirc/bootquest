@@ -408,9 +408,12 @@ export const SeedPackManifest = z
         repo: z.string().min(1),
         sha,
         /**
-         * git-head: the checkout's HEAD was read and matched; git-tree: a plain dir verified against a
-         * mirror's `git ls-tree` at the sha (every blob id below is git's own); caller-asserted: a plain
-         * dir with no mirror, pinned by blobs only (seed:pins: UNCHECKABLE until a mirror exists)
+         * git-head: the checkout is a real repo whose HEAD matched and whose tree git listed; git-tree: a
+         * plain dir verified against a mirror's `git ls-tree` at the sha (every blob id below is git's
+         * own); caller-asserted: a plain dir with no mirror, nothing checked against git. Writers only
+         * stamp it with 0 blobs (fixtures: BOOTQUEST_SEED_ALLOW_UNVERIFIED_PIN=1). seed:pins: a 0-blob
+         * pack is OK by definition (nothing pinned, nothing to verify); otherwise UNCHECKABLE (a
+         * failure unless --no-strict) until a mirror exists
          */
         pin: z.enum(['git-head', 'git-tree', 'caller-asserted']),
         /** the source documents the generator read (guides / unit file / draft) */
