@@ -64,8 +64,13 @@ export function rewriteDirectives(src: string): string {
  * Compose the program to grade: learner code (starter, attempt or solution) with
  * the canonical tests of the exercise. A learner file without a marker is treated
  * as all-head (they pasted just their code).
+ *
+ * With a `gate` (the runner always passes one; see wrapTestsBlock) the canonical
+ * tests block is wrapped in a local function of that per-grade random name, which
+ * the launcher (BqLaunch.cs) requires directly beneath every harness record it
+ * believes.
  */
-export function composeGraded(learnerSrc: string, exerciseSrc: string): string {
+export function composeGraded(learnerSrc: string, exerciseSrc: string, gate?: string): string {
   const ex = splitAtTestsMarker(exerciseSrc);
   const text = normalize(learnerSrc);
   let head: string;
@@ -78,7 +83,49 @@ export function composeGraded(learnerSrc: string, exerciseSrc: string): string {
     head = text.endsWith('\n') ? text : text + '\n';
     tail = ex.tail; // keep the exercise's types section if the learner sent code only
   }
-  return rewriteDirectives(head + ex.tests + tail);
+  return rewriteDirectives(head + (gate === undefined ? ex.tests : wrapTestsBlock(ex.tests, gate, 'csbootcamp')) + tail);
+}
+
+/** A gate name the runner may use: a C# identifier no submission can have spelled (fresh per grade). */
+export const GATE_NAME = /^__bqTests_[0-9a-f]{16}$/;
+
+/**
+ * Wrap a canonical tests block in a local function named `gate` and call it where the
+ * block used to run, WITHOUT changing the line count (compiler line numbers of the
+ * learner's file stay true):
+ *   csbootcamp: `int <gate>() { // ─── tests ───` … `return Report(); } return <gate>();`
+ *   jstrain:    `void <gate>() { // ─── tests ───` … `} <gate>();` on the block's last line
+ *               (a blank or comment-only last line; a code last line gets one extra line).
+ *
+ * Why (verdict integrity, see BqLaunch.cs): the harness's Test/Report are public and
+ * learner code compiles into the same assembly, so "printed by Check.dll" proves
+ * nothing about WHO called Test. The launcher records a test only when the Check.Test
+ * frame is called directly by this wrapper, called directly by the entry point. The
+ * name is random per grade, so no submission can name it, and the launcher refuses
+ * to grade a program in which the wrapper does not exist: learner text that comments
+ * out / `#if`s away / string-swallows the canonical block removes the wrapper too.
+ * The wrapper body is exactly the canonical block: once its opener parses as code,
+ * nothing outside the block can change where the block ends.
+ */
+export function wrapTestsBlock(tests: string, gate: string, format: 'csbootcamp' | 'jstrain'): string {
+  if (!GATE_NAME.test(gate)) throw new CsbootcampFormatError(`invalid gate name ${JSON.stringify(gate)}`);
+  if (!TESTS_MARKER.test(tests) || TESTS_MARKER.exec(tests)!.index !== 0) throw new CsbootcampFormatError('tests block does not start with the tests marker');
+  if (format === 'csbootcamp') {
+    const r = /return\s+Report\(\)\s*;(?=\s*$)/.exec(tests);
+    if (!r) throw new CsbootcampFormatError('tests block does not end with `return Report();`');
+    const end = r.index + r[0].length;
+    return `int ${gate}() { ${tests.slice(0, end)} } return ${gate}();${tests.slice(end)}`;
+  }
+  const closer = `} ${gate}();`;
+  const open = `void ${gate}() { `;
+  const nl = tests.endsWith('\n');
+  const lines = (nl ? tests.slice(0, -1) : tests).split('\n');
+  const last = lines.length - 1;
+  const l = lines[last]!;
+  if (last > 0 && l.trim() === '') lines[last] = closer;
+  else if (last > 0 && l.trimStart().startsWith('//')) lines[last] = `${closer} ${l}`;
+  else lines.push(closer);
+  return open + lines.join('\n') + (nl ? '\n' : '');
 }
 
 // ── jstrain2.2's embedded csbootcamp revision (W3c) ───────────────────────────
@@ -104,7 +151,7 @@ export function splitJstrainCs(src: string): SplitFile {
 }
 
 /** composeGraded for the jstrain revision (tests end at the next divider, not at `return Report();`). */
-export function composeGradedJstrain(learnerSrc: string, exerciseSrc: string): string {
+export function composeGradedJstrain(learnerSrc: string, exerciseSrc: string, gate?: string): string {
   const ex = splitJstrainCs(exerciseSrc);
   const text = normalize(learnerSrc);
   let head: string;
@@ -117,7 +164,7 @@ export function composeGradedJstrain(learnerSrc: string, exerciseSrc: string): s
     head = text.endsWith('\n') ? text : text + '\n';
     tail = ex.tail;
   }
-  return rewriteDirectives(head + ex.tests + tail);
+  return rewriteDirectives(head + (gate === undefined ? ex.tests : wrapTestsBlock(ex.tests, gate, 'jstrain')) + tail);
 }
 
 function unescapeCs(s: string): string {
@@ -130,9 +177,12 @@ function unescapeCs(s: string): string {
 /**
  * The test names a tests block registers with a plain string literal
  * (`Test("name", ...)`, either harness revision). The runner requires every one of
- * them in the harness's report, so a learner who reports early (`Report()` /
- * `Environment.Exit` from inside their code, before the remaining tests ran) is an
- * incomplete run, never a pass. Names built at run time (interpolation, loops,
+ * them in the recorded report, so a run that stops early (an `Environment.Exit` from
+ * inside learner code, before the remaining tests ran) is incomplete, never a pass.
+ * This is a completeness check only: a name being present proves nothing about who
+ * called Test with it (Test is public and learner code shares the assembly). That
+ * a recorded test came from the canonical block is the launcher's stack rule
+ * (BqLaunch.cs + wrapTestsBlock). Names built at run time (interpolation, loops,
  * verbatim or raw literals) are not listed.
  */
 export function literalTestNames(tests: string): string[] {

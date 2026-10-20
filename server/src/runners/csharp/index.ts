@@ -3,19 +3,36 @@
 // Compiler errors come back VERBATIM in `output` with pass=false.
 //
 // console-check verdicts (Java parity, see ../java/index.ts and ../result-channel.ts):
-// the graded program runs under BootQuest's launcher (BqLaunch.cs), which reads a fresh
-// random nonce from a file and DELETES it before Exercise.dll is loaded, then records
-// only the lines the Check harness itself prints (`✔ / ✘ / ☐`, `#done`) and on the
-// harness's report writes `#bq-result <nonce> <base64 json>` to a result file. The
-// verdict comes ONLY from that nonce-checked result; stdout is display and the exit
-// code is never trusted. No result (crash, early Environment.Exit, timeout) is never
-// a pass, nor is a result that misses a test the canonical tests block names
-// literally (an early Report() from learner code). The scratch project is re-verified
-// before every grade (scratch.ts), so no attempt can tamper with a later one.
+// the canonical tests block is wrapped in a local function with a fresh random name
+// per grade (csbootcamp-split wrapTestsBlock), and the graded program runs under
+// BootQuest's launcher (BqLaunch.cs). The launcher reads a fresh random nonce from a
+// file and deletes it before Exercise.dll is loaded (so it is never on disk while
+// learner code runs), refuses a program in which the wrapper does not exist, and
+// records a `✔ / ✘ / ☐` line only when the Check.Test frame that printed it is called
+// DIRECTLY by that wrapper, itself called directly by the entry point, after the entry
+// point was invoked; a `#done` only from a Report() called the same way (csbootcamp)
+// or from the jstrain harness's ProcessExit hook. Test() calls from anywhere else
+// (learner code, a [ModuleInitializer], a test body) are displayed and subtracted from
+// the harness's tallies, never graded. On the report it writes
+// `#bq-result <nonce> <base64 json>` to a result file. The verdict comes ONLY from that
+// nonce-checked result; stdout is display and the exit code is never trusted. No
+// result (crash, early Environment.Exit, timeout) is never a pass, nor is a result
+// that misses a test the canonical tests block names literally.
+//
+// What this does NOT stop (out of scope, stated so nobody relies on it):
+//   - same-process reflection: the nonce lives in the launcher's memory, so code that
+//     reflects into the launcher's private state can read it and write a result itself;
+//   - in-language subversion of the canonical tests: learner code that shadows a
+//     harness name the tests call bare (a local `Eq`, a `partial class Program` member,
+//     a source `Bootcamp.Check`), or returns objects whose Equals always says yes, makes
+//     the canonical tests pass without the work being right (like hard-coding answers).
+// The scratch project is re-verified before every grade (scratch.ts), so no attempt
+// can tamper with a later one.
 //
 // xunit verdicts come from the TRX that `dotnet vstest` (not learner code) writes;
 // every [Fact]/[Theory] method of the canonical tests must appear in it.
 
+import { randomBytes } from 'node:crypto';
 import { composeGraded, composeGradedJstrain, literalTestNames, splitAtTestsMarker, splitJstrainCs } from './csbootcamp-split.js';
 import { ScratchManager, type AttemptRaw, type Shape, type XunitEngine } from './scratch.js';
 import { failureFrom, missingTests, parseResultFile } from '../result-channel.ts';
@@ -86,15 +103,17 @@ export function createCsharpRunner(opts: CsharpRunnerOptions) {
       if (exercise.shape === 'console-check') {
         let program: string;
         let required: string[];
+        // fresh per grade: the name of the local function the canonical tests block is wrapped in
+        const gate = `__bqTests_${randomBytes(8).toString('hex')}`;
         try {
           const jstrain = exercise.format === 'jstrain';
-          program = jstrain ? composeGradedJstrain(submission.code, exercise.exerciseSource) : composeGraded(submission.code, exercise.exerciseSource);
+          program = jstrain ? composeGradedJstrain(submission.code, exercise.exerciseSource, gate) : composeGraded(submission.code, exercise.exerciseSource, gate);
           required = literalTestNames((jstrain ? splitJstrainCs(exercise.exerciseSource) : splitAtTestsMarker(exercise.exerciseSource)).tests);
         } catch (e) {
           const msg = (e as Error).message;
           return { pass: false, output: msg, failures: [{ name: '(format)', message: msg }], durationMs: Date.now() - started };
         }
-        raw = await scratch.attemptConsole(program, timeoutMs);
+        raw = await scratch.attemptConsole(program, timeoutMs, gate);
         result = fromCheck(raw, timeoutMs, required);
       } else {
         raw = await scratch.attemptXunit(submission.code, exercise.tests, timeoutMs);

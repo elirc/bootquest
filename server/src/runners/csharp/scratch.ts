@@ -9,7 +9,7 @@
 // blows the <10 s gate. So the warm path talks to Roslyn directly:
 //   - compile: `dotnet <sdk>/Roslyn/bincore/csc.dll -shared:<pipe>` (warm compiler
 //     server, ~1 s), output into the scratch bin/;
-//   - console-check: `dotnet bin/BqLaunch.dll <nonce> <result> bin/Exercise.dll`;
+//   - console-check: `dotnet bin/BqLaunch.dll <nonce> <result> bin/Exercise.dll <gate>`;
 //   - xunit: `dotnet vstest bin/Scratch.Tests.dll` (TRX logger) against the bin/
 //     the one-time `dotnet build` populated (deps.json, xunit adapter, testhost).
 // The literal spec path (`dotnet test --no-restore`) is kept as engine "msbuild"
@@ -510,11 +510,12 @@ export class ScratchManager {
 
   /**
    * console-check: write Program.cs, compile against Check.dll, run it under the
-   * launcher (`dotnet bin/BqLaunch.dll <nonce> <result> bin/Exercise.dll`) with a fresh
-   * attempt dir as cwd, then collect the grading channel. Caller holds the shape mutex
-   * and has called prepare().
+   * launcher (`dotnet bin/BqLaunch.dll <nonce> <result> bin/Exercise.dll <gate>`) with a
+   * fresh attempt dir as cwd, then collect the grading channel. `gate` names the local
+   * function the canonical tests block was wrapped in (csbootcamp-split wrapTestsBlock).
+   * Caller holds the shape mutex and has called prepare().
    */
-  async attemptConsole(program: string, timeoutMs: number): Promise<AttemptRaw> {
+  async attemptConsole(program: string, timeoutMs: number, gate: string): Promise<AttemptRaw> {
     const started = Date.now();
     const dir = this.dir('console-check');
     writeFileSync(join(dir, 'src', 'Program.cs'), program);
@@ -531,7 +532,7 @@ export class ScratchManager {
     const resultFile = join(attempt, 'result');
     writeFileSync(nonceFile, nonce);
     const bin = join(dir, 'bin');
-    const run = await runProc('dotnet', [join(bin, 'BqLaunch.dll'), nonceFile, resultFile, join(bin, 'Exercise.dll')], { cwd: attempt, timeoutMs });
+    const run = await runProc('dotnet', [join(bin, 'BqLaunch.dll'), nonceFile, resultFile, join(bin, 'Exercise.dll'), gate], { cwd: attempt, timeoutMs });
     const channel: NonNullable<AttemptRaw['channel']> = { nonce, nonceLeft: existsSync(nonceFile) };
     try {
       if (existsSync(resultFile)) channel.result = readFileSync(resultFile, 'utf8');

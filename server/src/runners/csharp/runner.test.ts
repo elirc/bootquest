@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { composeGraded, CsbootcampFormatError, literalTestNames, rewriteDirectives, splitAtTestsMarker } from './csbootcamp-split.js';
+import { composeGraded, CsbootcampFormatError, literalTestNames, rewriteDirectives, splitAtTestsMarker, wrapTestsBlock } from './csbootcamp-split.js';
 import { createCsharpRunner, xunitTestMethods, type CsExercise, type RunResult } from './index.js';
 import { livePids } from './scratch.js';
 import { createDrillCsRunner, JSTRAIN_CS_HARNESS } from '../../api/runner-csharp.ts';
@@ -267,12 +267,90 @@ describe('console-check verdict integrity: the verdict comes only from the nonce
     expect(a.failures.map((f) => f.name)).toEqual(['(program)']);
   });
 
-  it('an early Report() + Environment.Exit(0) from learner code (2 of 6 tests ran) is incomplete, never a pass', async () => {
+  it('an early Report() + Environment.Exit(0) from learner code (2 of 6 tests ran) is never a pass: a Report() the tests block did not call is not a report', async () => {
     const r = await runner.run(consoleEx, { code: withBody(`if (text.Length == 0) { Report(); Environment.Exit(0); } ${COUNT}`) });
-    expect(r.counts).toEqual({ passed: 2, failed: 0, todo: 0 });
+    expect(r.output).toContain('#done passed=2 failed=0 todo=0'); // displayed ...
+    expect(r.pass).toBe(false); // ... never recorded
+    expect(r.crashed).toBe(true);
+    expect(r.failures[0]).toMatchObject({ name: '(program)', message: expect.stringMatching(/without a result/) });
+  });
+
+  // ── the harness's own PUBLIC API (Check.Test / Check.Report): learner code shares Exercise.dll ──
+  const SOL_LF = SOLUTION_SRC.replace(/\r\n/g, '\n');
+  const EX_LF = EXERCISE_SRC.replace(/\r\n/g, '\n');
+  const FORGE_ALL = `foreach (var n in new[] { ${NAMES.map((n) => JSON.stringify(n)).join(', ')} }) Bootcamp.Check.Test(n, () => {});`;
+
+  it('ATTACK (c): Check.Test(name, () => {}) for every literal name + Check.Report() + Environment.Exit(0) inside the solved method is never a pass', async () => {
+    const r = await runner.run(consoleEx, { code: withBody(`${FORGE_ALL} Bootcamp.Check.Report(); Environment.Exit(0); return 0;`) });
+    // the forged records really were printed by Check.dll (nonce-less display) ...
+    expect(r.output).toContain('  ✔ counts lowercase vowels');
+    expect(r.output).toContain('#done passed=6 failed=0 todo=0');
+    // ... and none of it is believed: the Test frame was not called by the tests wrapper
     expect(r.pass).toBe(false);
     expect(r.crashed).toBe(true);
-    expect(r.failures.at(-1)).toMatchObject({ name: '(incomplete)', message: expect.stringMatching(/"handles the empty string"/) });
+    expect(r.failures[0]).toMatchObject({ name: '(program)', message: expect.stringMatching(/without a result/) });
+  });
+
+  it('ATTACK (c) from top-level code BEFORE the tests block (same <Main>$ as the canonical tests) is never a pass', async () => {
+    const head = splitAtTestsMarker(SOLUTION_SRC).head;
+    const forged = SOL_LF.replace(head, `${head}${FORGE_ALL}\nReport();\nEnvironment.Exit(0);\n`);
+    const r = await runner.run(consoleEx, { code: forged });
+    expect(r.output).toContain('#done passed=6 failed=0 todo=0');
+    expect(r.pass).toBe(false);
+    expect(r.crashed).toBe(true);
+  });
+
+  it('ATTACK (c) with the canonical block disabled (#if around it from learner head/tail) + own Test calls: the wrapper is gone, so nothing is graded', async () => {
+    const head = splitAtTestsMarker(SOLUTION_SRC).head;
+    const forged = SOL_LF.replace(head, `${head}${FORGE_ALL}\nreturn Report();\n#if BQ_NEVER_DEFINED\n`).replace(/return Report\(\);\s*$/, 'return Report();\n#endif\n');
+    const graded = composeGraded(forged, EXERCISE_SRC, '__bqTests_0123456789abcdef');
+    expect(graded.indexOf('#if BQ_NEVER_DEFINED')).toBeLessThan(graded.indexOf('int __bqTests_0123456789abcdef()')); // the block really is #if'd away
+    const r = await runner.run(consoleEx, { code: forged });
+    expect(r.pass).toBe(false);
+    expect(r.crashed).toBe(true);
+    expect(r.output).toMatch(/canonical tests block is missing from the program/);
+  });
+
+  it('ATTACK (d): a [ModuleInitializer] in the submission that forges every record + Report() + Exit(0) runs before the entry point and is never recorded', async () => {
+    const tailClass = `\nstatic class Pwn\n{\n    [System.Runtime.CompilerServices.ModuleInitializer]\n    internal static void Init() { ${FORGE_ALL} Bootcamp.Check.Report(); System.Environment.Exit(0); }\n}\n`;
+    const r = await runner.run(consoleEx, { code: SOL_LF + tailClass });
+    expect(r.output).toContain('#done passed=6 failed=0 todo=0'); // it ran (display) ...
+    expect(r.pass).toBe(false); // ... before anything could be recorded
+    expect(r.crashed).toBe(true);
+    expect(r.failures[0]).toMatchObject({ name: '(program)', message: expect.stringMatching(/without a result/) });
+  });
+
+  it('forged ✔ records followed by the real tests on the untouched STARTER stay 6 todo (other Test() calls are subtracted, not graded)', async () => {
+    const head = splitAtTestsMarker(EXERCISE_SRC).head;
+    const r = await runner.run(consoleEx, { code: EX_LF.replace(head, `${head}${FORGE_ALL}\n`) });
+    expect(r.pass).toBe(false);
+    expect(r.counts).toEqual({ passed: 0, failed: 0, todo: 6 });
+    expect(r.output).toContain('#done passed=6 failed=0 todo=6'); // the harness counted the forgeries; the result did not
+  });
+
+  it("a learner's OWN extra Test() calls (top-level and inside their code) are displayed but neither help nor hurt: the real solution still passes 6/0/0", async () => {
+    const base = withBody(`Bootcamp.Check.Test("my own probe", () => {}); ${COUNT}`).replace(/\r\n/g, '\n');
+    const head = splitAtTestsMarker(base).head;
+    const code = base.replace(head, `${head}Test("my failing scratch test", () => Eq(1, 2));\n`);
+    const r = await runner.run(consoleEx, { code });
+    expect(r.output).toContain('  ✘ my failing scratch test');
+    expect(r.output).toContain('#done passed=12 failed=1 todo=0');
+    expect(r.counts).toEqual({ passed: 6, failed: 0, todo: 0 });
+    expect(r.failures).toEqual([]);
+    expect(r.pass).toBe(true);
+  });
+
+  it('wrapTestsBlock keeps every line where it was (compiler line numbers stay true) and refuses a bad gate', () => {
+    const gate = '__bqTests_0123456789abcdef';
+    const plain = composeGraded(SOLUTION_SRC, EXERCISE_SRC);
+    const wrapped = composeGraded(SOLUTION_SRC, EXERCISE_SRC, gate);
+    expect(wrapped.split('\n').length).toBe(plain.split('\n').length);
+    expect(wrapped).toContain(`int ${gate}() { // ─── tests`);
+    expect(wrapped).toContain(`return Report(); } return ${gate}();`);
+    const tests = '// ─── tests ───\nTest("a", () => {});\n\n';
+    expect(wrapTestsBlock(tests, gate, 'jstrain')).toBe(`void ${gate}() { // ─── tests ───\nTest("a", () => {});\n} ${gate}();\n`);
+    expect(wrapTestsBlock('// ─── tests ───\nTest("a", () => {});\n// end\n', gate, 'jstrain')).toBe(`void ${gate}() { // ─── tests ───\nTest("a", () => {});\n} ${gate}(); // end\n`);
+    expect(() => wrapTestsBlock(tests, 'evil(); //', 'jstrain')).toThrow(CsbootcampFormatError);
   });
 
   it('a forged result file (the learner cannot know the nonce: it was deleted) is rejected', async () => {
@@ -379,6 +457,32 @@ describe('console-check, jstrain harness revision: same channel, report at Proce
     expect(r.counts).toEqual({ passed: 0, failed: 0, todo: 0 });
     expect(r.failures.at(-1)).toMatchObject({ name: '(incomplete)', message: expect.stringMatching(/"doubles two"/) });
   });
+
+  const JS_FORGE = 'foreach (var n in new[] { "doubles two", "doubles zero", "doubles negatives" }) Bootcamp.Check.Test(n, () => {});';
+
+  it('ATTACK (c): Check.Test for every literal name inside the solved method + Environment.Exit(0) (the ProcessExit report fires) is never a pass', async () => {
+    const r = await jsRunner.run(ex, { code: solve(`${JS_FORGE} Environment.Exit(0); return 0;`) });
+    expect(r.output).toContain('  ✔ doubles two');
+    expect(r.output).toContain('#done passed=3 failed=0 todo=0');
+    expect(r.pass).toBe(false);
+    expect(r.crashed).toBe(true);
+  });
+
+  it('ATTACK (d): a [ModuleInitializer] forging every record then exiting (the ProcessExit report fires before the entry point) is never a pass', async () => {
+    const tail = `\npublic static class Pwn\n{\n    [System.Runtime.CompilerServices.ModuleInitializer]\n    internal static void Init() { ${JS_FORGE} System.Environment.Exit(0); }\n}\n`;
+    const r = await jsRunner.run(ex, { code: solve('return x * 2;') + tail });
+    expect(r.output).toContain('#done passed=3 failed=0 todo=0');
+    expect(r.pass).toBe(false);
+    expect(r.crashed).toBe(true);
+    expect(r.failures[0]).toMatchObject({ name: '(program)', message: expect.stringMatching(/without a result/) });
+  });
+
+  it('the solution with an extra learner Test() inside it still passes 3/0/0 (other records are subtracted from the ProcessExit tallies)', async () => {
+    const r = await jsRunner.run(ex, { code: solve('Bootcamp.Check.Test("my probe", () => {}); return x * 2;') });
+    expect(r.output).toContain('#done passed=6 failed=0 todo=0');
+    expect(r.counts).toEqual({ passed: 3, failed: 0, todo: 0 });
+    expect(r.pass).toBe(true);
+  });
 });
 
 // ── xunit shape (classic make-tests-pass) ──────────────────────────────────────
@@ -478,7 +582,8 @@ describe('drill-cs adapter (createDrillCsRunner) over the real runner', () => {
   const spec = CheckSpec.parse({ type: 'drill-cs', shape: 'console-check', files: { tests: ex.tests, tail: ex.tail } });
 
   it('GRADER-INTEGRITY TRAP documented: the untouched starter process EXITS 0 with todo=6', async () => {
-    const raw = await runner.scratch.withShape('console-check', () => runner.scratch.attemptConsole(composeGraded(EXERCISE_SRC, EXERCISE_SRC), 10_000));
+    const gate = '__bqTests_00000000000000aa';
+    const raw = await runner.scratch.withShape('console-check', () => runner.scratch.attemptConsole(composeGraded(EXERCISE_SRC, EXERCISE_SRC, gate), 10_000, gate));
     expect(raw.compile.ok).toBe(true);
     expect(raw.run?.code).toBe(0); // exit code says "fine" ...
     expect(raw.run?.output).toContain('#done passed=0 failed=0 todo=6'); // ... the counts say "nothing done"
