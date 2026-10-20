@@ -29,8 +29,19 @@ interface Case {
   expect: string[];
 }
 
-function run(c: Case): { code: number; out: string } {
-  const r = spawnSync(process.execPath, ['--import', 'tsx', CLI(c.gen), ...c.args], { cwd: REPO_ROOT, encoding: 'utf8', windowsHide: true, timeout: 180000 });
+/**
+ * The fixture checkouts have no git mirror (pin caller-asserted): the demo's CLIs run with the writers'
+ * explicit fixtures escape hatch, except the U1 case that proves the hatch is needed.
+ */
+const FIXTURE_ENV: NodeJS.ProcessEnv = { ...process.env, BOOTQUEST_SEED_ALLOW_UNVERIFIED_PIN: '1' };
+const STRICT_ENV: NodeJS.ProcessEnv = (() => {
+  const e = { ...process.env };
+  delete e.BOOTQUEST_SEED_ALLOW_UNVERIFIED_PIN;
+  return e;
+})();
+
+function run(c: Case, env: NodeJS.ProcessEnv = FIXTURE_ENV): { code: number; out: string } {
+  const r = spawnSync(process.execPath, ['--import', 'tsx', CLI(c.gen), ...c.args], { cwd: REPO_ROOT, encoding: 'utf8', windowsHide: true, timeout: 180000, env });
   return { code: r.status ?? -1, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
 }
 
@@ -108,10 +119,26 @@ async function main(): Promise<number> {
       const r = run(c);
       record(c, r.code, r.out);
     }
+    // ---- the writers' trust gates (fix/tooling-review): no stamp for an unverified pin, a
+    //      non-committed exclusions registry, or an explain-back pack with no quest pack to leak-check
+    const permissive = join(tmp, 'permissive-exclusions.json');
+    const committedEx = JSON.parse(readFileSync(join(REPO_ROOT, 'tools', 'seed', 'exclusions.json'), 'utf8')) as Record<string, unknown>;
+    writeFileSync(permissive, JSON.stringify({ ...committedEx, entries: [], secretPatterns: [{ id: 'never', regex: 'NEVERMATCHES_[0-9]{40}' }] }));
+    const ww6Quests = [join(FX, 'ww6'), '--sha', WW6_SHA, '--repo', 'ww6', '--guides', 'astraupskill/05-PRACTICE.md,astraupskill/06-SOLUTIONS-AND-REVIEW.md'];
+    const gates: Array<[Case, NodeJS.ProcessEnv]> = [
+      [{ id: 'U1', what: 'quests over a mirror-less checkout WITHOUT the fixtures hatch: written, NOT stamped (pin caller-asserted + blobs)', gen: 'quests', args: [...ww6Quests, '--out', out('u1')], exit: 'nonzero', expect: ['STAMP none: pin caller-asserted with', 'no mirror verified the checkout against git', 'RESULT FAIL'] }, STRICT_ENV],
+      [{ id: 'X1', what: 'quests under a permissive --exclusions registry: written, NOT stamped', gen: 'quests', args: [...ww6Quests, '--exclusions', permissive, '--out', out('x1')], exit: 'nonzero', expect: ['STAMP none: exclusions: the registry in use is not the committed tools/seed/exclusions.json', 'RESULT FAIL'] }, FIXTURE_ENV],
+      [{ id: 'EB0', what: 'explainback --out outside the estate (no same-repo quest pack): NOT stamped', gen: 'explainback', args: ['docs/learning/testing-rationale.md', '--checkout', join(FX, 'ww6'), '--sha', WW6_SHA, '--repo', 'ww6', '--draft', join(D, 'explainback-ww6-testing-rationale.json'), '--out', out('eb0')], exit: 'nonzero', expect: ['STAMP none: guard eb-leak: no quest pack of repo ww6', 'RESULT FAIL'] }, FIXTURE_ENV],
+      [{ id: 'EB+', what: 'explainback --allow-no-quests (positive control)', gen: 'explainback', args: ['docs/learning/testing-rationale.md', '--checkout', join(FX, 'ww6'), '--sha', WW6_SHA, '--repo', 'ww6', '--draft', join(D, 'explainback-ww6-testing-rationale.json'), '--out', out('ebpos'), '--allow-no-quests'], exit: 0, expect: ['STAMP written', 'RESULT OK'] }, FIXTURE_ENV],
+    ];
+    for (const [c, env] of gates) {
+      const r = run(c, env);
+      record(c, r.code, r.out);
+    }
 
     // seed:check: clean (exit 0), tampered items (nonzero), forged stamp (nonzero)
     const check = (id: string, what: string, dir: string, exit: 'nonzero' | 0, expect: string[]) => {
-      const r = spawnSync(process.execPath, ['--import', 'tsx', CLI('check'), '--dir', dir, '--checkouts', checkouts], { cwd: REPO_ROOT, encoding: 'utf8', windowsHide: true, timeout: 180000 });
+      const r = spawnSync(process.execPath, ['--import', 'tsx', CLI('check'), '--dir', dir, '--checkouts', checkouts], { cwd: REPO_ROOT, encoding: 'utf8', windowsHide: true, timeout: 180000, env: FIXTURE_ENV });
       record({ id, what, gen: 'check', args: [], exit, expect }, r.status ?? -1, `${r.stdout ?? ''}${r.stderr ?? ''}`);
     };
     check('K0', 'seed:check over the good packs: quests + notes (positive control)', seedDir, 0, ['OK ', `notes${sep}ww6: 20 item(s) re-validated`, 'RESULT OK']);
@@ -127,7 +154,7 @@ async function main(): Promise<number> {
     // ---- the pack-level guards (factory/guards.ts) in the stamp path: generators refuse to stamp,
     //      seed:check / --restamp refuse a pack that carries a tell even when its stamp is valid
     const runCli = (cli: string, args: string[]) => {
-      const r = spawnSync(process.execPath, ['--import', 'tsx', cli, ...args], { cwd: REPO_ROOT, encoding: 'utf8', windowsHide: true, timeout: 180000 });
+      const r = spawnSync(process.execPath, ['--import', 'tsx', cli, ...args], { cwd: REPO_ROOT, encoding: 'utf8', windowsHide: true, timeout: 180000, env: FIXTURE_ENV });
       return { code: r.status ?? -1, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
     };
     let extra = 0;
@@ -175,7 +202,7 @@ async function main(): Promise<number> {
       '--force-replace',
     ]);
 
-    const total = cases.length + 3 + extra;
+    const total = cases.length + gates.length + 3 + extra;
     console.log(`[seed:demo:planted] ${total - failed}/${total} cases behaved as required`);
     console.log(`RESULT ${failed === 0 ? 'OK' : 'FAIL'}`);
     return failed === 0 ? 0 : 1;

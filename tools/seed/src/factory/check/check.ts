@@ -24,12 +24,12 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { SeedItem, SeedNoteItem } from '@bootquest/shared';
 import { SeedReviewQueue } from '@bootquest/shared';
-import { openCheckout, verifyBlobs, type Checkout } from '../checkout.ts';
+import { openCheckout, pinStrength, verifyBlobs, type Checkout } from '../checkout.ts';
 import { validateExplainBack } from '../explainback/explainback.ts';
 import { Exclusions } from '../exclusions.ts';
 import { keyedQuizIndex, packGuardProblems, type KeyedQuiz } from '../guards.ts';
 import { defaultHarness, type Harness } from '../harness/harness.ts';
-import { loadSeedPack, restampSeedPack, type LoadedSeedPack } from '../pack.ts';
+import { loadSeedPack, restampSeedPack, unverifiedPinProblem, type LoadedSeedPack } from '../pack.ts';
 import { BINDING_RE, loadQuestPackView, notesCoverageProblems, validateNote, type QuestPackView } from '../notes/notes.ts';
 import { validatePatchKata } from '../patches/patches.ts';
 import { checkProvenance, validateQuestItem, type ItemVerdict } from '../quests/validate.ts';
@@ -90,6 +90,11 @@ export interface CheckOptions {
   restamp?: boolean;
   /** keyedQuizIndex(seedDir), built once by runCheck for the explain-back leak guard */
   questIndex?: ReadonlyMap<string, readonly KeyedQuiz[]>;
+  /**
+   * TESTS ONLY: judge packs under an `exclusionsPath` registry that is not the committed one (without
+   * it such a run FAILS every pack). Even with it, nothing is ever restamped under that registry.
+   */
+  unsafeExclusions?: boolean;
 }
 
 export async function checkPack(dir: string, o: CheckOptions): Promise<PackCheck> {
@@ -105,6 +110,12 @@ export async function checkPack(dir: string, o: CheckOptions): Promise<PackCheck
   res.review = pack.reviewKeys.length;
   const m = pack.manifest;
   const ex = Exclusions.load(o.exclusionsPath);
+  // the stamp's fingerprint binds the COMMITTED registry: judging (or restamping) under any other
+  // one would vouch for a secret scan / path exclusions that never ran
+  const committedExclusions = ex.isCommitted();
+  if (!committedExclusions && !o.unsafeExclusions) {
+    res.problems.push(`exclusions ${o.exclusionsPath ?? '(default)'} is not the committed tools/seed/exclusions.json (the stamp fingerprint binds that one): refusing to vouch for or restamp the pack under it`);
+  }
   // 5. the pack-level guards (factory/guards.ts) the generators also run before stamping: blind-pass,
   //    quiz-balance and explanation-lint (quests), the explain-back key-point leak check, and a secret
   //    scan over every shipped string. They need no checkout, so they run first; any failure FAILS
@@ -121,6 +132,14 @@ export async function checkPack(dir: string, o: CheckOptions): Promise<PackCheck
     } catch (err) {
       res.problems.push(`checkout ${coDir}: ${err instanceof Error ? err.message : String(err)}`);
       return res;
+    }
+    // no silent downgrade: a pack recorded git-tree / git-head must re-open against git (a missing
+    // mirror would otherwise re-check the blobs against the checkout bytes alone: the CRLF-bug conditions)
+    if (pinStrength(co.pin) < pinStrength(m.source.pin)) {
+      res.problems.push(
+        `pin downgraded: the manifest records pin ${m.source.pin} but ${coDir} opened ${co.pin} (no mirror holds ${m.source.repo}@${m.source.sha.slice(0, 12)}: ` +
+          'put it at <cache>/repos/<repo> or on BOOTQUEST_REPOS); the pinned blob ids cannot be checked against git',
+      );
     }
     const bad = verifyBlobs(co, m.blobs);
     if (bad.length) res.problems.push(`pin broken: ${bad.slice(0, 5).join('; ')}`);
@@ -188,6 +207,9 @@ export async function checkPack(dir: string, o: CheckOptions): Promise<PackCheck
   if (pack.staleFingerprint && res.problems.length === 0) {
     // stale-only + clean full re-validation: the current validators vouch for these bytes
     try {
+      if (!committedExclusions) throw new Error('the exclusions registry in use is not the committed one (--unsafe-exclusions never restamps)');
+      const pinProblem = unverifiedPinProblem(m.source.pin, Object.keys(m.blobs).length);
+      if (pinProblem) throw new Error(pinProblem);
       restampSeedPack(pack, h.executions);
       res.restamped = true;
     } catch (err) {

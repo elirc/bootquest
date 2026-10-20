@@ -90,7 +90,41 @@ export interface WriteSeedPackOptions {
    * than this run (the --force-replace escape hatch; see replaceRefusal)
    */
   forceReplace?: boolean;
+  /**
+   * stamp a pack that pins >= 1 blob at pin 'caller-asserted' (no mirror verified the bytes against
+   * git: the CRLF-bug conditions). Test fixtures / demo drivers only; default: the env escape hatch
+   * BOOTQUEST_SEED_ALLOW_UNVERIFIED_PIN=1, else refused.
+   */
+  allowUnverifiedPin?: boolean;
+  /**
+   * stamp although `exclusions` is not the committed registry (the stamp's fingerprint binds the
+   * committed tools/seed/exclusions.json, so it would vouch for a secret scan / path exclusions that
+   * never ran). Tests only.
+   */
+  unsafeExclusions?: boolean;
+  /**
+   * explain-back only: stamp although no quest pack of the same source repo exists under the guard
+   * seed root (the eb-leak guard would compare the key points against nothing). --allow-no-quests.
+   */
+  allowNoQuests?: boolean;
 }
+
+/** BOOTQUEST_SEED_ALLOW_UNVERIFIED_PIN=1: the fixtures' escape hatch for caller-asserted pins. */
+export const ALLOW_UNVERIFIED_PIN_ENV = 'BOOTQUEST_SEED_ALLOW_UNVERIFIED_PIN';
+const envAllowsUnverifiedPin = (): boolean => process.env[ALLOW_UNVERIFIED_PIN_ENV] === '1';
+
+/** Why a pack with this pin + blob count may not be stamped (null = it may). */
+export function unverifiedPinProblem(pin: string, blobs: number, allow: boolean = envAllowsUnverifiedPin()): string | null {
+  if (pin !== 'caller-asserted' || blobs === 0 || allow) return null;
+  return (
+    `pin caller-asserted with ${blobs} pinned blob(s): no mirror verified the checkout against git at the sha ` +
+    `(put the repo's mirror at <cache>/repos/<repo> or on BOOTQUEST_REPOS and re-extract with npm run seed:checkout; ` +
+    `fixtures only: ${ALLOW_UNVERIFIED_PIN_ENV}=1)`
+  );
+}
+
+export const NON_COMMITTED_EXCLUSIONS =
+  'exclusions: the registry in use is not the committed tools/seed/exclusions.json, which is what the stamp fingerprint binds (a permissive --exclusions file would stamp guards that never ran): refusing to stamp';
 
 /**
  * Three writers target content/seed/quests/<repo> (seed:quests, seed:quests:drafts,
@@ -205,15 +239,13 @@ export function writeSeedPack(o: WriteSeedPackOptions): WriteSeedPackResult {
   if (rejected.length > 0 && !o.allowQuarantine) unstampedBecause.push(`${rejected.length} candidate(s) quarantined (pass --allow-quarantine to stamp with them withheld)`);
   if (accepted.length === 0) unstampedBecause.push('no accepted items');
   for (const b of o.blockers ?? []) unstampedBecause.push(b);
+  const pinProblem = unverifiedPinProblem(o.checkout.pin, Object.keys(blobs).length, o.allowUnverifiedPin ?? envAllowsUnverifiedPin());
+  if (pinProblem) unstampedBecause.push(pinProblem);
+  const ex = o.exclusions ?? Exclusions.load();
+  if (!o.unsafeExclusions && !ex.isCommitted()) unstampedBecause.push(NON_COMMITTED_EXCLUSIONS);
+  const seedRoot = o.guardSeedRoot === undefined ? resolve(o.dir, '..', '..') : o.guardSeedRoot;
   // the pack-level answer-tell / leak / secret guards (guards.ts): the same checks seed:check runs
-  for (const g of packGuardProblems({
-    generator: o.generator,
-    name: o.name,
-    repo: o.checkout.repo,
-    items: accepted,
-    ex: o.exclusions ?? Exclusions.load(),
-    seedRoot: o.guardSeedRoot === undefined ? resolve(o.dir, '..', '..') : o.guardSeedRoot,
-  })) {
+  for (const g of packGuardProblems({ generator: o.generator, name: o.name, repo: o.checkout.repo, items: accepted, ex, seedRoot, requireQuests: !o.allowNoQuests })) {
     unstampedBecause.push(`guard ${g}`);
   }
   if (unstampedBecause.length === 0) {

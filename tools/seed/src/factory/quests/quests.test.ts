@@ -14,6 +14,10 @@ import { extractFindings, extractGoalChecks, headings, scanLines } from './parse
 import { runQuests } from './run.ts';
 import { singleKeyedProblems, validateQuestItem } from './validate.ts';
 
+// The fixture checkouts have no git mirror, so their pins are caller-asserted: these tests use the
+// writers' explicit escape hatch (pack.ts unverifiedPinProblem) to stamp them.
+process.env.BOOTQUEST_SEED_ALLOW_UNVERIFIED_PIN = '1';
+
 const SEED = join(import.meta.dirname, '..', '..');
 const FX = join(SEED, 'factory', 'fixtures');
 const P4 = join(SEED, 'citations', 'fixtures');
@@ -526,6 +530,7 @@ describe('exclusions inside seed:quests', () => {
     const r2 = runQuests({ root: g, sha: ZZ9, repo: 'zz9', out: out('gitco') });
     expect(r2.refused).toMatch(/is at 111111111111, not the pinned a1982f88/);
     const r3 = runQuests({ root: g, sha: '1111111', repo: 'zz9', guides: ['docs/architecture/auth-and-permissions.md'], out: out('gitco2') });
-    expect(r3.write!.manifest.source.pin).toBe('git-head');
+    // a bare .git/HEAD with no objects proves nothing: only a real, listable repo earns git-head (pins.test.ts)
+    expect(r3.write!.manifest.source.pin).toBe('caller-asserted');
   });
 });

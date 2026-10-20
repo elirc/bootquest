@@ -76,11 +76,20 @@ dir as pin `git-tree` only if the file set and every byte size equal
 `git ls-tree -r -l <sha>` (a wrong sha, a stale file or CRLF-converted bytes are
 refused), and every file a generator reads or cites must hash to git's blob id, so a
 pack can no longer record an id git does not have. A mirror that lacks the sha is
-refused (fetch it). With no mirror at all the dir stays `caller-asserted` (test
-fixtures). `npm run seed:pins` (read-only) checks every manifest's `blobs` against
+refused (fetch it). A `.git/HEAD` earns pin `git-head` only when the dir is the top of
+a real repo whose tree git lists; a bare HEAD file is treated as a plain dir. With no
+mirror at all the dir stays `caller-asserted` (test fixtures), and **no writer stamps a
+pack that pins blobs that way** (fixtures and the planted demo set
+`BOOTQUEST_SEED_ALLOW_UNVERIFIED_PIN=1`); `seed:check` FAILS a pack recorded `git-tree` /
+`git-head` whose checkout now opens `caller-asserted` (a lost mirror is never a silent
+downgrade). `npm run seed:pins` (read-only) checks every manifest's `blobs` against
 the mirror: OK / MISMATCH (per file) / UNCHECKABLE (no mirror); exit 1 on any
-mismatch, `--strict` also fails on UNCHECKABLE. `seed:check` accepts `--checkouts <dir>`,
-and `BOOTQUEST_CHECKOUTS` points every tool at another checkout root.
+mismatch AND on any UNCHECKABLE (strict by default; `--no-strict` only reports it). A
+pack that pins 0 blobs is OK by definition (nothing to verify). `seed:check` accepts `--checkouts <dir>`,
+and `BOOTQUEST_CHECKOUTS` points every tool at another checkout root. `--exclusions <file>`
+is for dry exploration only: a registry that is not the committed `tools/seed/exclusions.json`
+(which every stamp's fingerprint binds) never gets a pack stamped, and `seed:check` under it
+fails every pack.
 
 **Java checkouts.** The 12 Java study-quest repos (the campaign's `content/campaign/java.json`
 names them, e.g. `organized-experiment-quiz-engine`, `j1`, `j7`) use the same
@@ -276,8 +285,9 @@ classifier counts those as test-owned. Its reference solution deliberately solve
 different function, so revealing the retest never hands over G4's hidden
 `wrongSolutionFilter`) and `http-tasks-api.json` (unit `fixture:http-tasks-api`, a
 drill-js substitution — see the backlog) cite `selfboot` files and run WITHOUT
-`--checkout`: the pin is recorded as caller-asserted, which `seed:check` accepts
-for the variants generator (it re-executes the filter instead).
+`--checkout`: the pin is recorded as caller-asserted with 0 blobs (nothing pinned, so
+nothing to verify), which `seed:check` accepts for the variants generator (it re-executes
+the filter instead).
 
 ### Patch katas: `seed:patches`
 

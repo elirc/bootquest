@@ -1,7 +1,9 @@
 /**
  * A source checkout at a pinned sha (spec §7: "resolve in the repo at the
  * pinned SHA").
- *   pin = 'git-head'        the dir has a .git and its HEAD equals --sha
+ *   pin = 'git-head'        the dir is the top of a real repo whose HEAD equals --sha
+ *                           and whose tree git lists (a bare .git/HEAD file with no
+ *                           objects is treated as a plain dir: mirror check below)
  *   pin = 'git-tree'        a plain dir checked against a MIRROR holding the sha
  *                           (`<cache>/repos/<repo>` or `<cache>/sources/<repo>`
  *                           next to `<cache>/checkouts/<repo>@<sha>`, or the
@@ -10,8 +12,16 @@
  *                           `git ls-tree -r -l <sha>` (catches a wrong sha, a
  *                           stale overlay and autocrlf-converted bytes)
  *   pin = 'caller-asserted' a plain dir with no mirror (test fixtures, ad-hoc
- *                           dirs): the caller vouches for the sha; `seed:pins`
- *                           reports such packs UNCHECKABLE until a mirror exists.
+ *                           dirs): the caller vouches for the sha, nothing is
+ *                           checked against git. writeSeedPack refuses to STAMP a
+ *                           pack that pins >= 1 blob this way (escape hatch for
+ *                           fixtures: BOOTQUEST_SEED_ALLOW_UNVERIFIED_PIN=1), and
+ *                           seed:check fails a pack recorded git-tree/git-head whose
+ *                           checkout now opens caller-asserted (no silent downgrade).
+ *                           `seed:pins` reports a caller-asserted pack UNCHECKABLE
+ *                           until a mirror exists — unless it pins 0 blobs: nothing
+ *                           pinned is nothing to verify, so it is OK by definition
+ *                           (a variants pack made without --checkout).
  * Refused: a .git checkout whose HEAD differs from --sha; a mirror that lacks the
  * sha; a plain dir that does not match the mirror's tree.
  * With a tree (git-head or git-tree), every file read or cited must hash to
@@ -19,10 +29,10 @@
  * CRs and nothing else may have any): a pack can never record a blob id git
  * does not have. Checkouts are made by `npm run seed:checkout` (pins.ts extractTree).
  */
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { buildRepoIndex, DEFAULT_EXCLUDED_DIRS, type RepoIndex } from '../citations/resolve.ts';
-import { checkTreeShape, findMirror, gitTree, mirrorRoots, type GitTree } from './pins.ts';
+import { checkTreeShape, findMirror, gitBytes, gitTree, mirrorRoots, resolveCommit, type GitTree } from './pins.ts';
 import { gitBlobSha1 } from './util.ts';
 
 export class CheckoutError extends Error {
@@ -31,6 +41,9 @@ export class CheckoutError extends Error {
     this.name = 'CheckoutError';
   }
 }
+
+/** How much a pin proves: git-head / git-tree check every byte against git; caller-asserted checks nothing. */
+export const pinStrength = (pin: Checkout['pin']): number => (pin === 'caller-asserted' ? 0 : 1);
 
 export interface Checkout {
   root: string;
@@ -77,6 +90,30 @@ function readGitHead(root: string): string | null {
   return null;
 }
 
+const samePath = (a: string, b: string): boolean => {
+  const norm = (p: string) => {
+    const r = realpathSync.native(resolve(p));
+    return process.platform === 'win32' ? r.toLowerCase() : r;
+  };
+  try {
+    return norm(a) === norm(b);
+  } catch {
+    return false;
+  }
+};
+
+/** git's tree at `head` when `root` is itself the top of a real, listable repo; else null. */
+function realRepoTree(root: string, head: string): GitTree | null {
+  try {
+    const top = gitBytes(root, ['rev-parse', '--show-toplevel']).toString('utf8').trim();
+    if (!top || !samePath(top, root)) return null;
+    if (resolveCommit(root, head) !== head) return null;
+    return gitTree(root, head);
+  } catch {
+    return null;
+  }
+}
+
 /** Snapshot dirs inside guide trees duplicate code and make bare suffixes ambiguous (P4). */
 export function discoverSnapshotDirs(index: RepoIndex): string[] {
   return [...index.dirs].filter((d) => /(^|\/)snapshots$/.test(d) && !d.split('/').slice(0, -1).some((s) => s === 'snapshots')).sort();
@@ -111,15 +148,14 @@ export function openCheckout(opts: OpenCheckoutOptions): Checkout {
   let tree: GitTree | null = null;
   if (head !== null) {
     if (!head.startsWith(opts.sha)) throw new CheckoutError(`checkout ${root} is at ${head.slice(0, 12)}, not the pinned ${opts.sha}`);
-    pin = 'git-head';
-    // a real repo lists its tree, and then every file read must be git's blob (an autocrlf
-    // working tree is refused per file); a bare HEAD file with no objects keeps the old behaviour
-    try {
-      tree = gitTree(root, head);
-    } catch {
-      tree = null;
-    }
-  } else if (opts.mirrors !== false) {
+    // only a REAL repo rooted here whose tree lists earns git-head (then every file read must be
+    // git's blob; an autocrlf working tree is refused per file). A bare .git/HEAD file (no objects,
+    // or a dir git does not accept, so it would walk up to an enclosing repo) proves nothing: fall
+    // through to the mirror check like any plain dir.
+    tree = realRepoTree(root, head);
+    if (tree) pin = 'git-head';
+  }
+  if (tree === null && opts.mirrors !== false) {
     const roots = opts.mirrors ?? mirrorRoots(CHECKOUT_DIR_RE.test(basename(root)) ? dirname(dirname(root)) : null);
     const m = findMirror(repo, opts.sha, roots);
     if (!m.found && m.why === 'sha-missing') {

@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -10,6 +10,10 @@ import { loadSeedPack } from '../pack.ts';
 import { buildExplainBackItem, scaffoldQuestions, sentences, validateExplainBack } from './explainback.ts';
 import { runExplainBack } from './run.ts';
 
+// The fixture checkouts have no git mirror, so their pins are caller-asserted: these tests use the
+// writers' explicit escape hatch (pack.ts unverifiedPinProblem) to stamp them.
+process.env.BOOTQUEST_SEED_ALLOW_UNVERIFIED_PIN = '1';
+
 const FX = join(import.meta.dirname, '..', 'fixtures');
 const D = join(FX, 'drafts');
 const WW6 = '09751ceaee909a30e5c4b5ff5cdde99880b9a3e5';
@@ -17,10 +21,26 @@ const UNIT = 'docs/learning/testing-rationale.md';
 const tmp = mkdtempSync(join(tmpdir(), 'bq-eb-test-'));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 const out = (n: string) => join(tmp, n);
+// these packs land outside any estate (no quest pack to leak-check against): the validator is what is under test
 const run = (draft: string | null, name: string) =>
-  runExplainBack({ unit: UNIT, checkout: join(FX, 'ww6'), sha: WW6, repo: 'ww6', ...(draft ? { draft: join(D, draft) } : {}), out: out(name) });
+  runExplainBack({ unit: UNIT, checkout: join(FX, 'ww6'), sha: WW6, repo: 'ww6', ...(draft ? { draft: join(D, draft) } : {}), out: out(name), allowNoQuests: true });
 
 describe('seed:explainback', () => {
+  it('REFUSES to stamp when no same-repo quest pack exists under the seed root (the eb-leak guard would check nothing); --allow-no-quests stamps', () => {
+    const root = join(tmp, 'estate-without-quests');
+    const r = runExplainBack({ unit: UNIT, checkout: join(FX, 'ww6'), sha: WW6, repo: 'ww6', draft: join(D, 'explainback-ww6-testing-rationale.json'), out: join(root, 'explainback', 'ww6-tr') });
+    expect(r.ok).toBe(false);
+    expect(r.lines.join('\n')).toMatch(/STAMP none: guard eb-leak: no quest pack of repo ww6 under .*estate-without-quests[\\/]quests: the key points cannot be checked/);
+    // a quest pack of ANOTHER repo does not count
+    mkdirSync(join(root, 'quests', 'other'), { recursive: true });
+    writeFileSync(join(root, 'quests', 'other', 'manifest.json'), JSON.stringify({ source: { repo: 'other' } }));
+    writeFileSync(join(root, 'quests', 'other', 'items.json'), JSON.stringify({ items: [] }));
+    const r2 = runExplainBack({ unit: UNIT, checkout: join(FX, 'ww6'), sha: WW6, repo: 'ww6', draft: join(D, 'explainback-ww6-testing-rationale.json'), out: join(root, 'explainback', 'ww6-tr') });
+    expect(r2.lines.join('\n')).toMatch(/no quest pack of repo ww6/);
+    const ok = runExplainBack({ unit: UNIT, checkout: join(FX, 'ww6'), sha: WW6, repo: 'ww6', draft: join(D, 'explainback-ww6-testing-rationale.json'), out: join(root, 'explainback', 'ww6-tr'), allowNoQuests: true });
+    expect(ok.lines).toContain('RESULT OK');
+  });
+
   it('an LLM-style draft whose key points quote / cite the real unit passes; the pack is stamped', () => {
     const r = run('explainback-ww6-testing-rationale.json', 'good');
     expect(r.lines).toContain('RESULT OK');

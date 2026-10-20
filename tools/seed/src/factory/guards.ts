@@ -530,6 +530,14 @@ export interface PackGuardInput {
   seedRoot: string | null;
   /** a prebuilt keyedQuizIndex(seedRoot) (seed:check builds one per run); default: built here */
   questIndex?: ReadonlyMap<string, readonly KeyedQuiz[]>;
+  /**
+   * explain-back: FAIL when no quest pack of the same source repo exists to check the key points
+   * against (an --out outside the estate, or explain-back seeded before its quest pack: the leak
+   * guard would silently pass on an empty index). The explain-back WRITER sets this (escape:
+   * --allow-no-quests); seed:check does not (the estate has explain-back packs over repos with no
+   * quest pack, e.g. javabootcamp).
+   */
+  requireQuests?: boolean;
 }
 
 /** Every guard failure of one pack, each prefixed with the guard's name. Empty = the guards vouch for it. */
@@ -545,7 +553,14 @@ export function packGuardProblems(p: PackGuardInput): string[] {
     if (el) out.push(el);
   }
   if (p.generator === 'explainback') {
-    const quizzes = p.questIndex?.get(p.repo) ?? (p.seedRoot !== null && !p.questIndex ? sameRepoKeyedQuizzes(p.seedRoot, p.repo) : []);
+    const index = p.questIndex ?? (p.seedRoot !== null ? keyedQuizIndex(p.seedRoot) : null);
+    if (p.requireQuests && !index?.has(p.repo)) {
+      out.push(
+        `eb-leak: no quest pack of repo ${p.repo} under ${p.seedRoot === null ? '(no seed root)' : join(p.seedRoot, 'quests')}: the key points cannot be checked against its keyed answers ` +
+          '(seed the quest pack first / write into the estate, or pass --allow-no-quests when the repo has none)',
+      );
+    }
+    const quizzes = index?.get(p.repo) ?? [];
     const leaks = p.items.flatMap((it) => (it.kind === 'explain-back' ? explainBackKeyLeaks(it, quizzes) : []));
     out.push(...explainBackLeakProblems(p.name, leaks));
   }
