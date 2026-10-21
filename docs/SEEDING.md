@@ -290,9 +290,11 @@ npm run seed:explainback -- apprenticeship/curriculum/14-load-backpressure-timeo
   --sha 6a6e84522bd58c88ccec72421a15b8dbef797602 \
   --draft tools/seed/authoring/explainback/sysdesign--opusorganize--web-app-at-10x-load--set-b.json \
   --set b \
-  --out content/seed/explainback/sysdesign--opusorganize--web-app-at-10x-load--set-b \
-  --allow-no-quests
+  --out content/seed/explainback/sysdesign--opusorganize--web-app-at-10x-load--set-b
 ```
+
+(No `--allow-no-quests` here: opusorganize HAS a quest pack, so the eb-leak guard must run; the
+flag belongs only on repos with no quest pack, e.g. the javabootcamp sets.)
 
 The **eb-sibling guard** (factory/guards.ts, in the stamp path and in `seed:check`) fails a pack
 whose prompt, or whose key-point text / quote, near-duplicates one of any OTHER set of the same
