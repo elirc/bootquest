@@ -48,7 +48,7 @@ export const CLASS_NAME = 'Exercise';
  * Census of javabootcamp @ JAVABOOTCAMP_SHA. Re-pinned together with the sha (source.ts);
  * null = no expectation (the placeholder sha / --source dev mode pass --expect explicitly).
  */
-export const JAVABOOTCAMP_EXPECTED: PackCounts | null = { total: 104, code: 104, quiz: 0, output: 0, written: 0 };
+export const JAVABOOTCAMP_EXPECTED: PackCounts | null = { total: 168, code: 168, quiz: 0, output: 0, written: 0 };
 
 const REPO = resolve(import.meta.dirname, '..', '..', '..', '..');
 export const DEFAULT_CACHE_DIR = join(REPO, '.cache', 'sources', SOURCE_KEY);

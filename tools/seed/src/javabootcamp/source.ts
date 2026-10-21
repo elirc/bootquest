@@ -24,7 +24,7 @@ export const JAVABOOTCAMP_URL = 'https://github.com/elirc/javabootcamp.git';
  * Pinned upstream commit. The orchestrator re-pins it (with JAVABOOTCAMP_EXPECTED in
  * import.ts) once the repo is pushed; until then use `--source <localdir>`.
  */
-export const JAVABOOTCAMP_SHA = 'faf5d9df3a5b998025126f8aca72459b56ca52bb';
+export const JAVABOOTCAMP_SHA = 'b1b099df2ff3764f60157d09c57a928800149c6b';
 
 /** the harness files, relative to bootcamp/ */
 export const HARNESS_FILES = ['_lib/check/bootcamp/Check.java', '_lib/check/bootcamp/BqMain.java'] as const;
