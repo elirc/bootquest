@@ -55,23 +55,27 @@
      ]
     },
     {
-     "prompt": "PRE-MORTEM — launch week. A merchant changes a price at 14:03; at 14:25 shoppers still see the old one, the merchant sees the new one, and any pod restarted since 14:03 is correct, so on-call restarts every pod and closes the ticket. The origin database then has a five-minute outage behind the stale-while-revalidate layer, memory on the API pods climbs all week, and the agent inbox fires a burst of requests after every load-balancer idle timeout. What breaks first, how does each problem show, and what in your design already prevents it?",
+     "prompt": "PRE-MORTEM — launch week. A merchant changes a price at 14:03; at 14:25 shoppers still see the old one, the merchant sees the new one, and any pod restarted since 14:03 is correct, so on-call restarts every pod and closes the ticket. The identity consumer, scaled to three processes for launch, merges a guest profile into a signed-in shopper, and for about a minute afterwards some of that shopper's events are credited to the deleted guest profile; memory on the API pods climbs all week, and the agent inbox fires a burst of requests after every load-balancer idle timeout. What breaks first, how does each problem show, and what in your design already prevents it?",
      "keyPoints": [
       {
        "text": "[w3] Warm processes stale, cold processes and the merchant correct, no error: the read side tagged entries with the handle and the publisher invalidated the product id, so the invalidation matched nothing and still reported success; the invalidation counter staying flat after a publish is the tell.",
        "quote": "the invalidation becomes a no-op"
       },
       {
-       "text": "[w3] Stale for 22 minutes, far past any configured TTL, means the TTL is not being enforced: an in-memory store that drops the TTL argument keeps the entry until restart and grows without bound, so restarting pods hides the bug and the climbing memory is the same bug.",
-       "quote": "never expires anything"
+       "text": "[w3] Restarting every pod and closing the ticket hid the bug instead of fixing it: a restarted pod starts with an empty in-process map and loads the new price, but the read side and the publisher still build different tags, so the next price edit goes stale again on every warm pod. Close it only on a reproduction that tags by handle, invalidates by id, and shows the invalidation deleting nothing while the next read is still served from the cache.",
+       "quote": "A freshly started pod has an empty"
       },
       {
-       "text": "[w2] Even with matching tags, a load that started before the edit can finish after the invalidation and store the old price, which then stays until the next invalidation or expiry.",
-       "quote": "The invalidation happened, and the stale value survives it anyway."
+       "text": "[w2] Memory that climbs all week with no errors fits an in-process cache that has a TTL but no size bound and no sweep: an expired entry is checked on read and overwritten only when that same key is read again, never removed, so the map keeps every key it has ever seen until the pod restarts (the pulse identity cache has exactly this shape). Each in-process cache needs a size bound with eviction, or a sweep of expired entries.",
+       "quote": "TTL-only caches with no size bound and no sweep of expired entries"
       },
       {
-       "text": "[w3] During the origin outage, readers are served stale values until the stale window ends and then block on loads that fail, and because the background refresh errors were swallowed, no metric shows the outage until users do.",
-       "quote": "nothing ever counted the failures"
+       "text": "[w3] Events credited to the just-deleted guest for about a minute is a wrong-scope invalidation: the consumer that ran the merge re-primed only its own in-process map, so the other two keep resolving the moved id to the deleted person until their 60 s TTL runs out. Re-priming locally is enough only with a single consumer; with three, the moved ids have to be invalidated on every consumer (or the mapping cached only in a shared tier).",
+       "cite": {
+        "path": "apprenticeship/curriculum/06-caching-correctness.md",
+        "lineStart": 82,
+        "lineEnd": 84
+       }
       },
       {
        "text": "[w2] The inbox burst is not wrong data but cost: an unfiltered invalidate-everything on reconnect refetches every cached query at once, and because missed realtime events arrive only through that refetch, the fix narrows it to the queries that can miss events and jitters it rather than deleting it.",
@@ -80,7 +84,7 @@
      ]
     },
     {
-     "prompt": "TRADE-OFF HANDBACK — defend your caching choices against the alternatives the chapter names: a TTL or ISR timer alone versus explicit invalidation, a per-process cache versus a shared one, version stamps versus a delayed second delete, stale-while-revalidate versus a blocking reload, invalidating everything on reconnect versus a narrow invalidation, and bypassing the cache for consistency-sensitive reads. For each, say what you bought, what it cost, and which requirement put you on that side.",
+     "prompt": "TRADE-OFF HANDBACK — defend your caching choices against the alternatives the chapter names: a TTL or ISR timer alone versus explicit invalidation, a per-process cache versus a shared one, caching every lookup versus caching only entries that can be reused, raw request keys versus normalized ones, invalidating everything on reconnect versus a narrow invalidation, and bypassing the cache for consistency-sensitive reads. For each, say what you bought, what it cost, and which requirement put you on that side.",
      "keyPoints": [
       {
        "text": "[w3] A timer alone needs no invalidation code and its bound is easy to state, but every edit waits out the full bound; explicit invalidation is fresher but adds a failure that makes no noise, so the timer stays behind it as the ceiling.",
@@ -91,12 +95,12 @@
        "quote": "the maximum revocation lag ('undead key' window)"
       },
       {
-       "text": "[w2] Version stamps close the load-versus-invalidate race exactly but need a monotonic version per entity carried into every cache write; a second delete after a short delay is cheap to add but only shrinks the window, since a load slower than the delay still lands stale.",
-       "quote": "delete again after a short delay"
+       "text": "[w2] Caching only lookups that can be reused (the API-key resolver never stores an unknown or revoked key) keeps the cache's size bounded by the live set, at the price that every request carrying a bad key goes to the store; caching every lookup saves those trips, but without a size bound the map grows with every id it has ever seen.",
+       "quote": "so its size is bounded by the number of live keys"
       },
       {
-       "text": "[w2] Stale-while-revalidate keeps latency flat and rides out a short origin outage, but it is exactly what hides that outage, so its stale window becomes that path's real staleness bound and refresh failures must be counted.",
-       "quote": "If the origin is down, readers keep getting stale data"
+       "text": "[w2] A normalized key (query parameters sorted, so the same search written in any order shares one entry) raises the hit rate at almost no cost, because it merges only requests that really are identical; normalizing further by dropping parameters that look irrelevant would raise it more, but each dropped parameter must first be proven not to change the response, or two different answers end up under one key.",
+       "quote": "sorts the query params"
       },
       {
        "text": "[w3] Invalidating everything on reconnect is simple and correct but turns every network blip into a request spike; removing it would lose missed events; narrowing it to the queries that can miss events, with jitter, keeps correctness at a fraction of the cost.",
