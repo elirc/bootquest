@@ -120,12 +120,12 @@ describe('migration 014', () => {
   it('fresh DB: track sysdesign (unlocked, no drill slot, sort 5) and competency system-design rated 1 with no evidence', () => {
     const tmp = makeTempDb();
     try {
-      expect(schemaVersion(tmp.db)).toBe(15);
+      expect(schemaVersion(tmp.db)).toBe(16);
       expect(tmp.db.get('SELECT id, name, locked, slate_drills, sort_order FROM track WHERE id = ?', 'sysdesign')).toEqual({
         id: 'sysdesign',
         name: 'System design',
         locked: false,
-        slate_drills: false,
+        slate_drills: true,
         sort_order: 5,
       });
       expect(tmp.db.get('SELECT id, name, sort_order FROM competency WHERE id = ?', 'system-design')).toEqual({ id: 'system-design', name: 'System design', sort_order: 8 });
@@ -190,7 +190,7 @@ describe('migration 014', () => {
       // 2. startup: openDb applies 014, then the seed-derived content load succeeds
       const db = openDb({ path, env: {} });
       try {
-        expect(schemaVersion(db)).toBe(15);
+        expect(schemaVersion(db)).toBe(16);
         const before = unitRow(db, key)!;
         expect(before.track_id).toBe('sysdesign'); // moved by 014 itself
         const { ladder } = loadSeedDerivedContent(db, { seedItems: mapSeedItemStore([DESIGN]), authored: null }, clock);

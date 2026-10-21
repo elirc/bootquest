@@ -46,14 +46,14 @@ describe('migrations', () => {
     const tmp = makeTempDb();
     try {
       const first = tmp.db.all<{ version: number }>('SELECT version FROM schema_version ORDER BY version');
-      expect(first.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+      expect(first.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
       tmp.db.close();
 
       const again = openDb({ path: tmp.path, env: {} });
       try {
         expect(migrate(again)).toEqual([]); // third pass, explicit
-        expect(schemaVersion(again)).toBe(15);
-        expect(again.get<{ n: number }>('SELECT COUNT(*) AS n FROM schema_version')!.n).toBe(15);
+        expect(schemaVersion(again)).toBe(16);
+        expect(again.get<{ n: number }>('SELECT COUNT(*) AS n FROM schema_version')!.n).toBe(16);
         // 009: exactly one choice-order secret, and re-opening never regenerates it
         expect(again.all<{ secret: string }>('SELECT secret FROM server_secret')).toHaveLength(1);
         expect(again.all<{ checksum: string }>('SELECT checksum FROM schema_version').every((r) => /^[0-9a-f]{64}$/.test(r.checksum))).toBe(true);
@@ -122,7 +122,7 @@ describe('seed rows', () => {
       { id: 'csharp', locked: false, slate_drills: true },
       { id: 'java', locked: false, slate_drills: true },
       { id: 'agentic', locked: false, slate_drills: false },
-      { id: 'sysdesign', locked: false, slate_drills: false },
+      { id: 'sysdesign', locked: false, slate_drills: true },
     ]);
   });
 
@@ -333,7 +333,7 @@ describe('schema constraints', () => {
         };
         expect(() => db.run(`INSERT INTO attempt (unit_id, mode, assisted, assistance_source, outcome, created_at) VALUES (?, 'assisted', 1, 'prior-key', 'submitted', 0)`, unitId)).toThrow();
         // now the real migration set (013 included)
-        expect(migrate(db)).toEqual([13, 14, 15]);
+        expect(migrate(db)).toEqual([13, 14, 15, 16]);
         expect({ attempt: db.all('SELECT * FROM attempt ORDER BY id'), evidence: db.all('SELECT * FROM evidence ORDER BY id'), run: db.all('SELECT * FROM run ORDER BY id') }).toEqual(before);
         expect(db.all('PRAGMA foreign_key_check')).toEqual([]);
         expect(() => db.run('UPDATE attempt SET score = 0 WHERE id = ?', a.id)).toThrow(/append-only/);
@@ -380,7 +380,7 @@ describe('schema constraints', () => {
           ),
         ).toThrow();
         // now the real migration set (015 included)
-        expect(migrate(db)).toEqual([15]);
+        expect(migrate(db)).toEqual([15, 16]);
         expect({ attempt: db.all('SELECT * FROM attempt ORDER BY id'), evidence: db.all('SELECT * FROM evidence ORDER BY id'), run: db.all('SELECT * FROM run ORDER BY id') }).toEqual({ ...before, attempt: before15 });
         expect(db.all('PRAGMA foreign_key_check')).toEqual([]);
         expect(() => db.run('UPDATE attempt SET score = 0 WHERE id = ?', a.id)).toThrow(/append-only/);
