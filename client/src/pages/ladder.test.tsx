@@ -1,6 +1,6 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { GATED_ARTIFACT_ID, GATED_EXPLAIN_BACK_ID } from '../api/fixtures/ladder';
+import { ALT_SET_A_ID, ALT_SET_B_ID, GATED_ARTIFACT_ID, GATED_EXPLAIN_BACK_ID } from '../api/fixtures/ladder';
 import { createMockApi } from '../api/mock';
 import { ApiError, type BootQuestApi } from '../api/types';
 import { renderApp } from '../test/render';
@@ -672,5 +672,122 @@ describe('mock parity: the mock enforces the server\'s ladder rules', () => {
       outcome: 'submitted',
     });
     expect((await api.getKataKey(KATA)).findings[0]!.scenario).toBe('s2');
+  });
+});
+
+describe('explain-back retakes: practice attempts + alternate sets', () => {
+  const ALT_A = ALT_SET_A_ID;
+  const ALT_B = ALT_SET_B_ID;
+  const codeOf = (p: Promise<unknown>) => p.then(() => 'resolved', (e: ApiError) => e.code);
+  const allCovered = { q1k1: 'covered', q1k2: 'covered', q2k1: 'covered', q2k2: 'covered', q3k1: 'covered' } as const;
+
+  it('no practice before the answer of record is self-scored; afterwards "Practice again" records an assisted 0-XP attempt scored with its own checklist', async () => {
+    const api = createMockApi();
+    const { user } = renderApp(`/play/${EB}`, api);
+    await answerEb(user);
+    expect(screen.queryByTestId('practice')).not.toBeInTheDocument();
+    for (const id of ['q1k1', 'q1k2', 'q2k1', 'q2k2', 'q3k1']) await user.click(screen.getByRole('radio', { name: `${id} covered` }));
+    await user.click(screen.getByRole('button', { name: /Submit self-score/ }));
+    await user.click(screen.getByRole('button', { name: 'File self-score' }));
+    expect(await screen.findByTestId('coverage-result')).toHaveTextContent('+20 XP');
+
+    expect(await screen.findByTestId('practice-copy')).toHaveTextContent('0 XP, recorded as an assisted practice attempt — never counts toward promotion');
+    await user.click(screen.getByRole('button', { name: /Practice again/ }));
+    // fresh, empty textareas (no stored draft: practice is repeatable)
+    for (let i = 1; i <= 3; i++) expect(screen.getByRole('textbox', { name: `Practice answer ${i}` })).toHaveValue('');
+    const store = screen.getByRole('button', { name: /Store practice answers/ });
+    expect(store).toBeDisabled();
+    for (let i = 1; i <= 3; i++) await user.type(screen.getByRole('textbox', { name: `Practice answer ${i}` }), `retry ${i}`);
+    await user.click(store);
+
+    const scorer = await screen.findByTestId(/^practice-scorer-\d+$/);
+    const pid = Number(scorer.getAttribute('data-testid')!.split('-').pop());
+    expect((await api.getUnit(EB)).explainBack!.practice).toEqual({ available: true, count: 1, latestUnscoredAttemptId: pid });
+    expect(within(scorer).getByTestId('practice-answer-1')).toHaveTextContent('retry 1');
+    // one unscored practice at a time
+    expect(screen.getByRole('button', { name: /Practice again/ })).toBeDisabled();
+    expect((await api.getAttempt(pid)).mode).toBe('assisted');
+
+    for (const id of ['q1k1', 'q1k2', 'q2k1']) await user.click(within(scorer).getByRole('radio', { name: `practice ${id} covered` }));
+    for (const id of ['q2k2', 'q3k1']) await user.click(within(scorer).getByRole('radio', { name: `practice ${id} missed` }));
+    await user.click(within(scorer).getByRole('button', { name: /File practice score/ }));
+    const result = await screen.findByTestId('practice-result');
+    expect(result).toHaveTextContent('Practice coverage 60% (3/5)');
+    expect(result).toHaveTextContent('feedback only: 0 XP, no retest, never a promotion leg');
+    expect(result).not.toHaveTextContent('+20 XP');
+    await waitFor(() => expect(screen.getByTestId(`practice-${pid}`)).toHaveTextContent('self-scored 60% coverage (practice: 0 XP)'));
+    expect(screen.getByRole('button', { name: /Practice again/ })).toBeEnabled();
+    // the answer of record is untouched; the practice evidence is assistance 'practice'
+    expect(screen.getByTestId('coverage-result')).toHaveTextContent('Coverage 100% (5/5)');
+    expect((await api.listEvidence({ kind: 'explain-back' })).items[0]).toMatchObject({ attemptId: pid, assistance: 'practice', score: 0.6 });
+    expect((await api.getUnit(EB)).explainBack!.practice).toEqual({ available: true, count: 1, latestUnscoredAttemptId: null });
+  });
+
+  it('alternate sets: the sibling strip links the sets; once set A is answered, set B shows the rotation banner and a read-only form', async () => {
+    const api = createMockApi();
+    const first = renderApp(`/play/${ALT_A}`, api);
+    const strip = await screen.findByTestId('alt-sets');
+    expect(within(strip).getByTestId('alt-set-A')).toHaveTextContent('Set A · new (this set)');
+    expect(within(strip).getByRole('link', { name: 'Set B · new' })).toHaveAttribute('href', `/play/${ALT_B}`);
+    expect(screen.queryByTestId('set-gate-lock')).not.toBeInTheDocument();
+    first.unmount();
+
+    await api.answerExplainBack(ALT_A, { answers: ['a', 'b', 'c'], selfAssisted: false });
+    renderApp(`/play/${ALT_B}`, api);
+    const banner = await screen.findByTestId('set-gate-lock');
+    expect(banner).toHaveTextContent('Alternate set B opens');
+    expect(banner).toHaveTextContent('spaced repetition: fresh sets are at least 2 days apart');
+    expect(screen.getByRole('textbox', { name: 'Answer 1' })).toHaveAttribute('readonly');
+    expect(screen.getByRole('button', { name: /Submit answers/ })).toBeDisabled();
+    expect(within(screen.getByTestId('alt-sets')).getByRole('link', { name: 'Set A · answered' })).toHaveAttribute('href', `/play/${ALT_A}`);
+  });
+
+  it('a raced 409 NOT_DUE on submit (a sibling answered since the page loaded) shows the rotation banner, not an error', async () => {
+    const api = createMockApi();
+    const { user } = renderApp(`/play/${ALT_B}`, api);
+    await screen.findByRole('textbox', { name: 'Answer 1' });
+    expect(screen.queryByTestId('set-gate-lock')).not.toBeInTheDocument();
+    await api.answerExplainBack(ALT_A, { answers: ['a', 'b', 'c'], selfAssisted: false }); // another tab
+    for (let i = 1; i <= 3; i++) await user.type(screen.getByRole('textbox', { name: `Answer ${i}` }), `b${i}`);
+    await user.click(screen.getByRole('button', { name: /Submit answers/ }));
+    await user.click(screen.getByRole('button', { name: /Store answers/ }));
+    expect(await screen.findByTestId('set-gate-lock')).toHaveTextContent('Alternate set B opens');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect((await api.getUnit(ALT_B)).explainBack!.answered).toBe(false);
+  });
+
+  it('mock parity: the practice and rotation refusals use the server codes, in its order', async () => {
+    const api = createMockApi();
+    const body = { answers: ['a', 'b', 'c'] };
+    expect(await codeOf(api.practiceExplainBack(EB, body))).toBe('NOT_ANSWERED');
+    const rec = await api.answerExplainBack(EB, { ...body, selfAssisted: false });
+    expect(await codeOf(api.practiceExplainBack(EB, body))).toBe('NOT_VERIFIED');
+    expect(await codeOf(api.practiceExplainBack(EB, { ...body, selfAssisted: false } as never))).toBe('VALIDATION');
+    await api.selfScoreExplainBack(EB, { perKeyPoint: { ...allCovered } });
+    const p = await api.practiceExplainBack(EB, body);
+    expect(p).toMatchObject({ mode: 'assisted', outcome: 'submitted' });
+    expect(await codeOf(api.practiceExplainBack(EB, body))).toBe('ALREADY_ANSWERED');
+    expect(await codeOf(api.practiceScoreExplainBack(EB, { attemptId: rec.attemptId, perKeyPoint: { ...allCovered } }))).toBe('NOT_VERIFIED');
+    expect(await codeOf(api.practiceScoreExplainBack(EB, { attemptId: 999_999, perKeyPoint: { ...allCovered } }))).toBe('NOT_FOUND');
+    expect(await codeOf(api.practiceScoreExplainBack(EB, { attemptId: p.attemptId, perKeyPoint: { q1k1: 'covered' } }))).toBe('VALIDATION');
+    await expect(api.practiceScoreExplainBack(EB, { attemptId: p.attemptId, perKeyPoint: { ...allCovered } })).resolves.toMatchObject({ passed: true, xp: null, retests: [], promotions: [] });
+    expect(await codeOf(api.practiceScoreExplainBack(EB, { attemptId: p.attemptId, perKeyPoint: { ...allCovered } }))).toBe('ALREADY_SCORED');
+    const key = await api.getExplainBackKey(EB);
+    expect(key.attemptId).toBe(rec.attemptId);
+    expect(key.practice).toEqual([{ attemptId: p.attemptId, answeredAt: expect.any(Number), answers: ['a', 'b', 'c'], scored: expect.objectContaining({ score: 1 }) }]);
+    // the one-shot answer of record is unchanged
+    expect(await codeOf(api.answerExplainBack(EB, { ...body, selfAssisted: false }))).toBe('ALREADY_ANSWERED');
+
+    // rotation: the first answer in a group is never gated; the sibling then is (409 NOT_DUE), practice never moves it
+    expect((await api.getUnit(ALT_B)).explainBack!.altSets!.gate).toEqual({ open: true, opensAt: null });
+    await api.answerExplainBack(ALT_A, { ...body, selfAssisted: false });
+    const gate = (await api.getUnit(ALT_B)).explainBack!.altSets!.gate;
+    expect(gate.open).toBe(false);
+    expect(gate.opensAt! - (await api.getExplainBackKey(ALT_A)).answeredAt).toBe(2 * 86_400_000);
+    await expect(api.answerExplainBack(ALT_B, { ...body, selfAssisted: false })).rejects.toMatchObject({
+      status: 409,
+      code: 'NOT_DUE',
+      message: expect.stringContaining('alternate set B of this question set opens at'),
+    });
   });
 });

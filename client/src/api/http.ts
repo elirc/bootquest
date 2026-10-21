@@ -107,6 +107,10 @@ export function createHttpApi(baseUrl = '/api', fetchImpl: typeof fetch = (...a)
     answerExplainBack: (id, b) => post<AnswerRecordedResponse>(`${unit(id)}/explain-back/answers`, { answers: b.answers, selfAssisted: b.selfAssisted }),
     getExplainBackKey: (id) => call<ExplainBackKeyResponse>(`${unit(id)}/explain-back/key`),
     selfScoreExplainBack: (id, b) => post<ExplainBackScoreResponse>(`${unit(id)}/explain-back/self-score`, { perKeyPoint: b.perKeyPoint }),
+    // Whitelisted bodies: practice is assisted by construction — no selfAssisted, nothing but the answers / marks.
+    practiceExplainBack: (id, b) => post<AnswerRecordedResponse>(`${unit(id)}/explain-back/practice`, { answers: b.answers }),
+    practiceScoreExplainBack: (id, b) =>
+      post<ExplainBackScoreResponse>(`${unit(id)}/explain-back/practice-score`, { attemptId: b.attemptId, perKeyPoint: b.perKeyPoint }),
     submitKataFindings: (id, b) =>
       post<AnswerRecordedResponse>(`${unit(id)}/kata/findings`, {
         findings: b.findings.map((f) => ({ scenario: f.scenario, evidence: f.evidence, consequence: f.consequence })),

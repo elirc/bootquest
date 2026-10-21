@@ -9,6 +9,12 @@ export interface ExplainBackFixture {
   questions: { prompt: string; keyPoints: { text: string; quote: string | null; cite: { path: string; lineStart: number; lineEnd: number } | null }[] }[];
   /** retest the passing self-score schedules (null = no variation seeded) */
   retest: { unitId: number; title: string; artifactUnitId: number } | null;
+  /**
+   * explain-back ALTERNATE sets (retakes): fixtures sharing `group` are sibling sets of one question
+   * set (the server derives the group from the seed provenance repo + path); `set` absent = the
+   * primary set (label 'A'), else its id (label = upper-cased id).
+   */
+  altSet?: { group: string; set?: string };
 }
 
 export interface KataFixture {
@@ -63,7 +69,48 @@ export const explainBackFixtures: Record<string, ExplainBackFixture> = {
     ],
     retest: null,
   },
+  // explain-back ALTERNATE sets (see altSetLadderUnits): one DESIGN IT question set, two sibling sets
+  '501': {
+    competencies: ['system-design', 'communication'],
+    questions: [
+      {
+        prompt: 'DESIGN IT — the web app takes 10x its usual load. What saturates first, and how do you keep latency bounded?',
+        keyPoints: [
+          { text: 'Bounded queues shed load instead of turning overload into latency.', quote: 'a bounded queue sheds load', cite: null },
+          { text: 'Timeouts are budgeted per hop so one slow call cannot eat the deadline.', quote: null, cite: { path: 'apprenticeship/curriculum/14-load-backpressure-timeouts.md', lineStart: 20, lineEnd: 28 } },
+        ],
+      },
+      { prompt: 'Where does backpressure enter the request path?', keyPoints: [{ text: 'At admission, before work is queued.', quote: 'admission control', cite: null }] },
+      { prompt: 'How do retries stay safe under overload?', keyPoints: [{ text: 'A retry budget caps the extra load.', quote: 'retry budget', cite: null }] },
+    ],
+    retest: null,
+    altSet: { group: 'opusorganize/web-app-at-10x-load' },
+  },
+  '502': {
+    competencies: ['system-design', 'communication'],
+    questions: [
+      {
+        prompt: 'DESIGN IT — capacity just doubled overnight. Which limits move first, and which stay fixed?',
+        keyPoints: [
+          { text: 'Admission limits follow measured headroom, not instance count.', quote: 'measured headroom', cite: null },
+          { text: 'Per-tenant quotas stay fixed so one tenant cannot claim the new room.', quote: 'per-tenant quota', cite: null },
+        ],
+      },
+      { prompt: 'A dependency starts timing out at p99: what does the caller see?', keyPoints: [{ text: 'Tail latency eats the deadline before the error surfaces.', quote: 'tail latency', cite: null }] },
+      { prompt: 'Design a retry policy for a payment call that must not double-charge.', keyPoints: [{ text: 'An idempotency key turns the second attempt into a lookup.', quote: 'idempotency key', cite: null }] },
+    ],
+    retest: null,
+    altSet: { group: 'opusorganize/web-app-at-10x-load', set: 'b' },
+  },
 };
+
+/** explain-back alternate sets (retakes): the primary set A and its sibling set B (sysdesign track). */
+export const ALT_SET_A_ID = 501;
+export const ALT_SET_B_ID = 502;
+export const altSetLadderUnits: UnitSummary[] = [
+  { id: ALT_SET_A_ID, key: 'ladder/explain-back/opusorganize/a10x', trackId: 'sysdesign', kind: 'explain-back', title: 'Explain back: opusorganize — web-app-at-10x-load.md', difficulty: null, state: 'available', revealed: false, prerequisites: [] },
+  { id: ALT_SET_B_ID, key: 'ladder/explain-back/opusorganize/b10x', trackId: 'sysdesign', kind: 'explain-back', title: 'Explain back: opusorganize — web-app-at-10x-load.md (set B)', difficulty: null, state: 'available', revealed: false, prerequisites: [] },
+];
 
 /**
  * Ladder dead end #2 (mock parity): an explain-back that is promotion leg (b) of a project unit.

@@ -494,6 +494,41 @@ export const ExplainBackPublic = z
      * absent on older servers, [] when there are none.
      */
     supersededAnswerIds: z.array(z.number().int()).optional(),
+    /**
+     * Explain-back PRACTICE retakes: once the answer of record for the loaded version exists and
+     * is self-scored, the learner may re-answer as practice (POST .../explain-back/practice;
+     * recorded assisted, assistance 'practice'; 0 XP; never a promotion leg). One unscored
+     * practice attempt at a time. Absent on older servers.
+     */
+    practice: z
+      .object({
+        /** answer of record exists AND is self-scored */
+        available: z.boolean(),
+        /** practice attempts recorded against the loaded version */
+        count: z.number().int(),
+        /** the practice attempt awaiting its self-score (blocks a new one), else null */
+        latestUnscoredAttemptId: z.number().int().nullable(),
+      })
+      .strict()
+      .optional(),
+    /**
+     * Explain-back ALTERNATE SETS: sibling question sets over the same source (seed provenance
+     * repo + path; derived, never stored). Present only when the group has >= 2 loaded siblings.
+     * A fresh answer to any sibling opens >= 2 days after the newest fresh answer in the group.
+     */
+    altSets: z
+      .object({
+        /** derived group id */
+        group: z.string(),
+        /** this unit's set label: 'A' for the primary, else the set id upper-cased */
+        label: z.string(),
+        /** every loaded sibling (this unit included), in load order */
+        siblings: z.array(z.object({ unitId: z.number().int(), label: z.string(), answered: z.boolean(), scored: z.boolean() }).strict()),
+        /** the rotation gate for answering THIS unit: closed until opensAt */
+        gate: z.object({ open: z.boolean(), opensAt: z.number().nullable() }).strict(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 export type ExplainBackPublic = z.infer<typeof ExplainBackPublic>;
@@ -801,6 +836,30 @@ export const ExplainBackSelfScoreBody = z
   .strict();
 export type ExplainBackSelfScoreBody = z.infer<typeof ExplainBackSelfScoreBody>;
 
+/**
+ * POST /api/units/:id/explain-back/practice: a voluntary PRACTICE retake of a set whose answer
+ * of record is already self-scored (the key was read). Recorded as an assisted attempt
+ * (assistance 'practice'), append-only; one unscored practice attempt at a time. No
+ * selfAssisted field: practice is assisted by construction (a server-side fact).
+ */
+export const ExplainBackPracticeBody = z
+  .object({ answers: z.array(nonBlank(MAX_EXPLAIN_ANSWER_CHARS)).length(EXPLAIN_BACK_QUESTION_COUNT) })
+  .strict();
+export type ExplainBackPracticeBody = z.infer<typeof ExplainBackPracticeBody>;
+
+/**
+ * POST /api/units/:id/explain-back/practice-score: self-score ONE practice attempt (every key
+ * point marked). Feedback only: evidence with assistance 'practice', never XP, retests or
+ * promotions (the response reuses ExplainBackScoreResponse with xp null, [] and []).
+ */
+export const ExplainBackPracticeScoreBody = z
+  .object({
+    attemptId: z.number().int().positive(),
+    perKeyPoint: z.record(z.string().regex(KEY_POINT_ID_RE, 'key point id like q1k1'), z.enum(COVERAGE_MARKS)),
+  })
+  .strict();
+export type ExplainBackPracticeScoreBody = z.infer<typeof ExplainBackPracticeScoreBody>;
+
 export const AnswerRecordedResponse = z
   .object({ attemptId: z.number(), mode: z.enum(['solo', 'assisted', 'guided']), outcome: z.literal('submitted') })
   .strict();
@@ -820,6 +879,19 @@ export type KeyPointDto = z.infer<typeof KeyPointDto>;
 
 export const SelfScoreSummary = z.object({ score: z.number(), evidenceIds: z.array(z.number()), at: z.number() }).strict();
 
+/** One explain-back PRACTICE retake attempt (the key was already read; 0 XP; feedback only). */
+export const PracticeAttemptDto = z
+  .object({
+    attemptId: z.number(),
+    answeredAt: z.number(),
+    /** the learner's practice answers, verbatim */
+    answers: z.array(z.string()),
+    /** null until self-scored */
+    scored: SelfScoreSummary.nullable(),
+  })
+  .strict();
+export type PracticeAttemptDto = z.infer<typeof PracticeAttemptDto>;
+
 /** GET /api/units/:id/explain-back/key: 403 NOT_ANSWERED until the answer row exists. */
 export const ExplainBackKeyResponse = z
   .object({
@@ -830,6 +902,8 @@ export const ExplainBackKeyResponse = z
     questions: z.array(z.object({ prompt: z.string(), keyPoints: z.array(KeyPointDto) }).strict()),
     /** null until self-scored */
     scored: SelfScoreSummary.nullable(),
+    /** practice retakes of the loaded version, ascending by attemptId; absent on older servers */
+    practice: z.array(PracticeAttemptDto).optional(),
   })
   .strict();
 export type ExplainBackKeyResponse = z.infer<typeof ExplainBackKeyResponse>;

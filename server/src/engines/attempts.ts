@@ -72,11 +72,21 @@ export function revealedInVariationChain(db: Db, unitId: number): boolean {
  *  - priorKey: the caller derived from the ledger that the learner could already have
  *    read a key for this item (a fresh answer to a re-seeded explain-back / kata after
  *    answering an earlier version, server review F2) -> assisted (auto-flag, 'prior-key')
+ *  - practiceKey: the caller derived from the ledger that this is a voluntary practice
+ *    re-answer of an item whose key THIS learner already read (explain-back retakes;
+ *    outranks priorKey: the exposure is this very key) -> assisted (auto-flag, 'practice')
  *  - honor-system self flag         -> assisted ('self')
  *  - otherwise                      -> solo ('none')
  */
-export function deriveMode(db: Db, unitId: number, selfAssisted: boolean, priorKey = false): { mode: AttemptMode; source: Assistance } {
+export function deriveMode(
+  db: Db,
+  unitId: number,
+  selfAssisted: boolean,
+  priorKey = false,
+  practiceKey = false,
+): { mode: AttemptMode; source: Assistance } {
   if (revealedInVariationChain(db, unitId)) return { mode: 'guided', source: 'reveal' };
+  if (practiceKey) return { mode: 'assisted', source: 'practice' };
   if (priorKey) return { mode: 'assisted', source: 'prior-key' };
   if (selfAssisted) return { mode: 'assisted', source: 'self' };
   return { mode: 'solo', source: 'none' };
@@ -121,15 +131,16 @@ function insertAttempt(
 /**
  * Append an UNGRADED answer attempt (outcome 'submitted'): the explain-back
  * transcript or kata findings, stored immutably before the key is revealed.
- * Mode/assistance are derived, never caller-chosen: `priorKey` is a server-side fact the
- * ladder service derives from the ledger, never a client field.
+ * Mode/assistance are derived, never caller-chosen: `priorKey` and `practiceKey` are
+ * server-side facts the ladder service derives from the ledger (practiceKey: the practice
+ * endpoint, after a scored answer of record), never client fields.
  */
-export function recordAttempt(db: Db, input: AttemptInput, now: Clock, opts: { priorKey?: boolean } = {}): AttemptRow {
+export function recordAttempt(db: Db, input: AttemptInput, now: Clock, opts: { priorKey?: boolean; practiceKey?: boolean } = {}): AttemptRow {
   const a = AttemptInput.parse(input);
   return db.tx(() => {
     requireUnitKind(db, a.unitId);
     if (a.checkId !== undefined) assertCheckOfUnit(db, a.checkId, a.unitId);
-    const { mode, source } = deriveMode(db, a.unitId, a.selfAssisted, opts.priorKey ?? false);
+    const { mode, source } = deriveMode(db, a.unitId, a.selfAssisted, opts.priorKey ?? false, opts.practiceKey ?? false);
     const id = insertAttempt(db, { unitId: a.unitId, checkId: a.checkId, mode, source, outcome: 'submitted', answer: a.answer }, nowMs(now));
     return getAttempt(db, id);
   });

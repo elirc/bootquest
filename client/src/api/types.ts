@@ -26,6 +26,8 @@ import type {
   EvidenceListResponse,
   EvidenceRowDto,
   ExplainBackKeyResponse,
+  ExplainBackPracticeBody,
+  ExplainBackPracticeScoreBody,
   ExplainBackPublic,
   ExplainBackScoreResponse,
   KataDefectDto,
@@ -36,6 +38,7 @@ import type {
   KataStatsResponse,
   KeyPointDto,
   ModelAnswerResponse,
+  PracticeAttemptDto,
   PromotionLegState,
   PromotionProgress,
   QuestState,
@@ -92,6 +95,8 @@ export type {
   EvidenceListResponse,
   EvidenceRowDto,
   ExplainBackKeyResponse,
+  ExplainBackPracticeBody,
+  ExplainBackPracticeScoreBody,
   ExplainBackPublic,
   ExplainBackScoreResponse,
   KataDefectDto,
@@ -135,6 +140,13 @@ export type ReviewQueueItem = z.infer<typeof ReviewQueueItemSchema>;
 export type ReviewQueueResponse = z.infer<typeof ReviewQueueResponseSchema>;
 export type GradeResponse = z.infer<typeof GradeResponseSchema>;
 export type SlateItem = z.infer<typeof SlateItemDto>;
+/** explain-back retakes: one practice attempt (the key was already read; 0 XP; feedback only) */
+export type PracticeAttempt = z.infer<typeof PracticeAttemptDto>;
+/** explain-back retakes: the practice state of the loaded version (unit detail) */
+export type ExplainBackPracticeState = NonNullable<ExplainBackPublic['practice']>;
+/** explain-back alternate sets: the sibling group of this unit (unit detail) */
+export type ExplainBackAltSets = NonNullable<ExplainBackPublic['altSets']>;
+export type ExplainBackAltSibling = ExplainBackAltSets['siblings'][number];
 
 // Enums, derived from the contract so they can never drift from shared/src/enums.ts.
 export type TrackId = TrackSummary['id'];
@@ -245,6 +257,17 @@ export interface BootQuestApi {
   getExplainBackKey(unitId: number): Promise<ExplainBackKeyResponse>;
   /** POST /api/units/:id/explain-back/self-score — 409 ALREADY_SCORED on a second score. */
   selfScoreExplainBack(unitId: number, body: { perKeyPoint: Record<string, 'covered' | 'missed'> }): Promise<ExplainBackScoreResponse>;
+  /**
+   * POST /api/units/:id/explain-back/practice — a PRACTICE retake once the answer of record is
+   * self-scored (403 NOT_ANSWERED before it, 409 NOT_VERIFIED before its self-score, 403
+   * ALREADY_ANSWERED while a practice attempt is unscored). Recorded assisted; 0 XP; never a leg.
+   */
+  practiceExplainBack(unitId: number, body: ExplainBackPracticeBody): Promise<AnswerRecordedResponse>;
+  /**
+   * POST /api/units/:id/explain-back/practice-score — self-score ONE practice attempt (feedback
+   * only: xp null, no retests, no promotions; 409 ALREADY_SCORED on a second score).
+   */
+  practiceScoreExplainBack(unitId: number, body: ExplainBackPracticeScoreBody): Promise<ExplainBackScoreResponse>;
   /** POST /api/units/:id/kata/findings — immutable; 403 ALREADY_ANSWERED on a second submit. */
   submitKataFindings(unitId: number, body: { findings: KataFinding[]; selfAssisted: boolean }): Promise<AnswerRecordedResponse>;
   /** GET /api/units/:id/kata/key — 403 NOT_ANSWERED until the findings row exists. */

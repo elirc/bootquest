@@ -12,6 +12,8 @@ import {
   EvidenceQuery,
   ExplainBackAnswersBody,
   ExplainBackKeyResponse,
+  ExplainBackPracticeBody,
+  ExplainBackPracticeScoreBody,
   ExplainBackScoreResponse,
   ExplainBackSelfScoreBody,
   KataFindingsBody,
@@ -64,6 +66,8 @@ import {
   getKataKey,
   kataStats,
   listEvidence,
+  practiceExplainBack,
+  practiceScoreExplainBack,
   recordMutationMarker,
   selfScoreExplainBack,
   selfScoreKata,
@@ -289,6 +293,22 @@ export function createApp(opts: AppOptions): Express {
     validate(EmptyQuery, req.query, 'query');
     const body = validate(ExplainBackSelfScoreBody, req.body, 'body');
     sendJson(res, 200, ExplainBackScoreResponse.parse(selfScoreExplainBack(ladder, id, body)));
+  }));
+
+  // explain-back retakes: a PRACTICE re-answer (after the answer of record is self-scored) and its
+  // self-score; assisted ('practice'), 0 XP, never a promotion leg — the answer of record is untouched
+  router.post('/units/:id/explain-back/practice', asyncRoute((req, res) => {
+    const { id } = validate(UnitIdParams, req.params, 'params');
+    validate(EmptyQuery, req.query, 'query');
+    const body = validate(ExplainBackPracticeBody, req.body, 'body');
+    sendJson(res, 200, AnswerRecordedResponse.parse(practiceExplainBack(ladder, id, body)));
+  }));
+
+  router.post('/units/:id/explain-back/practice-score', asyncRoute((req, res) => {
+    const { id } = validate(UnitIdParams, req.params, 'params');
+    validate(EmptyQuery, req.query, 'query');
+    const body = validate(ExplainBackPracticeScoreBody, req.body, 'body');
+    sendJson(res, 200, ExplainBackScoreResponse.parse(practiceScoreExplainBack(ladder, id, body)));
   }));
 
   router.post('/units/:id/kata/findings', asyncRoute((req, res) => {

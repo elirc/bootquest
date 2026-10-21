@@ -26,7 +26,7 @@ import type { Runner } from '../../src/api/runners.ts';
 import { DAY_MS, fixedClock } from '../../src/engines/clock.ts';
 import { getRating } from '../../src/engines/evidence.ts';
 import { recordAttempt, revealSolution } from '../../src/engines/attempts.ts';
-import { retestGate } from '../../src/engines/ladder.ts';
+import { EB_SET_MIN_GAP_MS, retestGate } from '../../src/engines/ladder.ts';
 import { assertUniqueSeedItemRefs, explainBackUnitKey, kataUnitKey } from '../../src/store/ladder.ts';
 import { loadSeedDerivedContent } from '../../src/api/serve.ts';
 import { insertUnit } from '../../src/store/content.ts';
@@ -283,7 +283,12 @@ describe('explain-back: immutable answer first, then the key, then the self-scor
       db: ctx.tmp.db,
       clock: ctx.clock,
       runners: {},
-      seedItems: mapSeedItemStore([...fixture.seedItems, { ...EB, key: 'seed:explainback:strict-copy' }, { ...EB, key: 'seed:explainback:lax-copy' }]),
+      // distinct source paths: copies sharing EB's (repo, path) would be alternate SETS of one group (rotation-gated)
+      seedItems: mapSeedItemStore([
+        ...fixture.seedItems,
+        { ...EB, key: 'seed:explainback:strict-copy', provenance: { ...EB.provenance, path: 'docs/learning/strict-copy.md' } },
+        { ...EB, key: 'seed:explainback:lax-copy', provenance: { ...EB.provenance, path: 'docs/learning/lax-copy.md' } },
+      ]),
     });
     expect(UnitDetailResponse.parse((await request(app).get(`/api/units/${strict}`)).body).explainBack?.minCoveragePct).toBe(90);
     expect(UnitDetailResponse.parse((await request(app).get(`/api/units/${lax}`)).body).explainBack?.minCoveragePct).toBe(80);
@@ -689,7 +694,12 @@ describe('dead end #2: an explain-back that is leg (b) of an artifact refuses an
       db: ctx.tmp.db,
       clock: ctx.clock,
       runners: {},
-      seedItems: mapSeedItemStore([...fixture.seedItems, { ...EB, key: 'seed:explainback:standalone-copy' }, { ...EB, key: 'seed:explainback:drill-copy' }]),
+      // distinct source paths: copies sharing EB's (repo, path) would be alternate SETS of one group (rotation-gated)
+      seedItems: mapSeedItemStore([
+        ...fixture.seedItems,
+        { ...EB, key: 'seed:explainback:standalone-copy', provenance: { ...EB.provenance, path: 'docs/learning/standalone-copy.md' } },
+        { ...EB, key: 'seed:explainback:drill-copy', provenance: { ...EB.provenance, path: 'docs/learning/drill-copy.md' } },
+      ]),
     });
     for (const u of [solo, drillLinked]) {
       expect(UnitDetailResponse.parse((await request(app).get(`/api/units/${u}`)).body).explainBack?.artifactRequired).toEqual([]);
@@ -707,6 +717,8 @@ describe('dead end #2: an explain-back that is leg (b) of an artifact refuses an
     for (const u of [eb, low]) {
       expect(UnitDetailResponse.parse((await request(ctx.app).get(`/api/units/${u}`)).body).explainBack?.artifactRequired).toEqual([]);
       await request(ctx.app).post(`/api/units/${u}/explain-back/answers`).send({ answers: ANSWERS }).expect(200);
+      // the two fixture sets cover the same source (ww6 testing-rationale.md): sibling sets, spaced >= 2 days
+      ctx.clock.advance(EB_SET_MIN_GAP_MS);
     }
     // ...and with no solo pass behind the answer, a passing self-score schedules NO (pointless) retest
     const sc = ExplainBackScoreResponse.parse((await request(ctx.app).post(`/api/units/${eb}/explain-back/self-score`).send({ perKeyPoint: marks(16) })).body);
@@ -962,6 +974,176 @@ describe('F6: artifactsAwaitingSoloPass never waits on an artifact that can neve
     await request(app).post(`/api/units/${healthy}/submit`).send({ port: GOOD_PORT }).expect(200);
     expect(await required()).toEqual([]);
     await request(app).post(`/api/units/${eb}/explain-back/answers`).send({ answers: ANSWERS }).expect(200);
+  });
+});
+
+describe('explain-back PRACTICE retakes (assisted, 0 XP, never a promotion leg; the answer of record is untouched)', () => {
+  const ctx = useLadder();
+  const practiceUrl = (id: number) => `/api/units/${id}/explain-back/practice`;
+  const practiceScoreUrl = (id: number) => `/api/units/${id}/explain-back/practice-score`;
+  const detail = async (app: Express, id: number) => UnitDetailResponse.parse((await request(app).get(`/api/units/${id}`)).body).explainBack;
+  const PRACTICE = ['practice: read-only roles are guarded', 'practice: transitions are guarded', 'practice: tenants are isolated'];
+
+  it('refused before the answer of record (403 NOT_ANSWERED) and before its self-score (409 NOT_VERIFIED); nothing recorded', async () => {
+    const id = ctx.id('fixture:ladder/explain-api');
+    expect((await detail(ctx.app, id))?.practice).toEqual({ available: false, count: 0, latestUnscoredAttemptId: null });
+    expectError(await request(ctx.app).post(practiceUrl(id)).send({ answers: PRACTICE }), 403, 'NOT_ANSWERED');
+    await passArtifact(ctx);
+    const ans = await request(ctx.app).post(`/api/units/${id}/explain-back/answers`).send({ answers: ANSWERS }).expect(200);
+    const before = ledgerCounts(ctx.tmp.db);
+    const res = await request(ctx.app).post(practiceUrl(id)).send({ answers: PRACTICE });
+    expectError(res, 409, 'NOT_VERIFIED');
+    expect(res.body.error.message).toContain(`answer of record #${ans.body.attemptId}`);
+    expect(ledgerCounts(ctx.tmp.db)).toEqual(before);
+    expect((await detail(ctx.app, id))?.practice).toEqual({ available: false, count: 0, latestUnscoredAttemptId: null });
+  });
+
+  it('strict bodies: 3 non-empty answers, no selfAssisted (practice is assisted by construction); practice-score marks every key point once', async () => {
+    const id = ctx.id('fixture:ladder/explain-api');
+    expectError(await request(ctx.app).post(practiceUrl(id)).send({ answers: PRACTICE.slice(0, 2) }), 400, 'VALIDATION');
+    expectError(await request(ctx.app).post(practiceUrl(id)).send({ answers: [...PRACTICE.slice(0, 2), '  '] }), 400, 'VALIDATION');
+    expectError(await request(ctx.app).post(practiceUrl(id)).send({ answers: PRACTICE, selfAssisted: false }), 400, 'VALIDATION');
+    expectError(await request(ctx.app).post(practiceScoreUrl(id)).send({ attemptId: 0, perKeyPoint: marks(16) }), 400, 'VALIDATION');
+    expectError(await request(ctx.app).post(practiceScoreUrl(id)).send({ perKeyPoint: marks(16) }), 400, 'VALIDATION');
+    expectError(await request(ctx.app).post(practiceScoreUrl(id)).send({ attemptId: 1, perKeyPoint: marks(16), xp: 20 }), 400, 'VALIDATION');
+  });
+
+  it('a practice retake: assisted attempt (practice), listed on the key, self-scored as practice evidence with NO xp_event / retest / promotion; one unscored at a time; append-only', async () => {
+    const id = ctx.id('fixture:ladder/explain-api');
+    await passArtifact(ctx);
+    ctx.clock.advance(60_000);
+    const rec = await request(ctx.app).post(`/api/units/${id}/explain-back/answers`).send({ answers: ANSWERS }).expect(200);
+    const sc = ExplainBackScoreResponse.parse((await request(ctx.app).post(`/api/units/${id}/explain-back/self-score`).send({ perKeyPoint: marks(14) })).body);
+    expect(sc.xp).toMatchObject({ amount: 20 });
+    expect((await detail(ctx.app, id))?.practice).toEqual({ available: true, count: 0, latestUnscoredAttemptId: null });
+    const reviewItems = () => ctx.tmp.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM review_item')!.n;
+    const rating = getRating(ctx.tmp.db, 'data-http');
+    const retestsBefore = reviewItems();
+
+    ctx.clock.advance(60_000);
+    const before = ledgerCounts(ctx.tmp.db);
+    const p1 = await request(ctx.app).post(practiceUrl(id)).send({ answers: PRACTICE });
+    expect(p1.status, p1.text).toBe(200);
+    expect(p1.body).toMatchObject({ mode: 'assisted', outcome: 'submitted' });
+    expect(ledgerCounts(ctx.tmp.db)).toEqual({ ...before, attempt: before.attempt + 1 });
+    const row = ctx.tmp.db.get<{ mode: string; assisted: boolean; assistance_source: string; answer: string }>(
+      'SELECT mode, assisted, assistance_source, answer FROM attempt WHERE id = ?',
+      p1.body.attemptId,
+    )!;
+    expect({ mode: row.mode, assisted: row.assisted, assistance_source: row.assistance_source }).toEqual({ mode: 'assisted', assisted: true, assistance_source: 'practice' });
+    expect(JSON.parse(row.answer)).toEqual({ explainBack: { questionSetKey: EB.key, itemSha: seedItemHash(EB), answers: PRACTICE, practice: true } });
+    expect(() => ctx.tmp.db.run('UPDATE attempt SET answer = NULL WHERE id = ?', p1.body.attemptId)).toThrow(/append-only/);
+    expect((await detail(ctx.app, id))?.practice).toEqual({ available: true, count: 1, latestUnscoredAttemptId: p1.body.attemptId });
+
+    // the answer of record is untouched: the key, POST /answers one-shot and the record's score all stand
+    const key = ExplainBackKeyResponse.parse((await request(ctx.app).get(`/api/units/${id}/explain-back/key`)).body);
+    expect(key.attemptId).toBe(rec.body.attemptId);
+    expect(key.answers).toEqual(ANSWERS);
+    expect(key.scored?.score).toBeCloseTo(0.875);
+    expect(key.practice).toEqual([{ attemptId: p1.body.attemptId, answeredAt: ctx.clock().getTime(), answers: PRACTICE, scored: null }]);
+    expectError(await request(ctx.app).post(`/api/units/${id}/explain-back/answers`).send({ answers: ANSWERS }), 403, 'ALREADY_ANSWERED');
+    expectError(await request(ctx.app).post(`/api/units/${id}/explain-back/self-score`).send({ perKeyPoint: marks(16) }), 409, 'ALREADY_SCORED');
+
+    // one unscored practice at a time
+    const p2early = await request(ctx.app).post(practiceUrl(id)).send({ answers: PRACTICE });
+    expectError(p2early, 403, 'ALREADY_ANSWERED');
+    expect(p2early.body.error.message).toContain(`practice attempt #${p1.body.attemptId}`);
+
+    // practice-score: never the answer of record, never an unknown attempt
+    expectError(await request(ctx.app).post(practiceScoreUrl(id)).send({ attemptId: rec.body.attemptId, perKeyPoint: marks(16) }), 409, 'NOT_VERIFIED');
+    expectError(await request(ctx.app).post(practiceScoreUrl(id)).send({ attemptId: 999_999, perKeyPoint: marks(16) }), 404, 'NOT_FOUND');
+    expectError(await request(ctx.app).post(practiceScoreUrl(id)).send({ attemptId: p1.body.attemptId, perKeyPoint: { ...marks(16), q9k9: 'covered' } }), 400, 'VALIDATION');
+    // ...nor from another unit
+    expectError(
+      await request(ctx.app).post(practiceScoreUrl(ctx.id('fixture:ladder/explain-low'))).send({ attemptId: p1.body.attemptId, perKeyPoint: marksLow(LOW_IDS.length) }),
+      409,
+      'NOT_VERIFIED',
+    );
+
+    ctx.clock.advance(60_000);
+    const xpBefore = ledgerCounts(ctx.tmp.db).xp_event;
+    const ps = ExplainBackScoreResponse.parse((await request(ctx.app).post(practiceScoreUrl(id)).send({ attemptId: p1.body.attemptId, perKeyPoint: marks(16) })).body);
+    expect(ps).toMatchObject({ attemptId: p1.body.attemptId, covered: 16, total: 16, passed: true, xp: null, retests: [], promotions: [] });
+    expect(ledgerCounts(ctx.tmp.db).xp_event).toBe(xpBefore); // no xp_event row at all (not even a 0-XP one)
+    expect(reviewItems()).toBe(retestsBefore);
+    expect(getRating(ctx.tmp.db, 'data-http')).toBe(rating);
+    const evs = ctx.tmp.db.all<{ kind: string; assessor: string; assistance: string; attempt_id: number; score: number }>(
+      `SELECT kind, assessor, assistance, attempt_id, score FROM evidence WHERE id IN (${ps.evidenceIds.map(() => '?').join(', ')})`,
+      ...ps.evidenceIds,
+    );
+    expect(evs.length).toBeGreaterThan(0);
+    for (const e of evs) expect(e).toEqual({ kind: 'explain-back', assessor: 'self', assistance: 'practice', attempt_id: p1.body.attemptId, score: 1 });
+    expectError(await request(ctx.app).post(practiceScoreUrl(id)).send({ attemptId: p1.body.attemptId, perKeyPoint: marks(16) }), 409, 'ALREADY_SCORED');
+
+    // scored -> the next practice opens; history is ascending, each with its own score
+    const p2 = await request(ctx.app).post(practiceUrl(id)).send({ answers: PRACTICE.map((a) => `again ${a}`) });
+    expect(p2.status, p2.text).toBe(200);
+    const key2 = ExplainBackKeyResponse.parse((await request(ctx.app).get(`/api/units/${id}/explain-back/key`)).body);
+    expect(key2.attemptId).toBe(rec.body.attemptId);
+    expect(key2.practice?.map((p) => p.attemptId)).toEqual([p1.body.attemptId, p2.body.attemptId]);
+    expect(key2.practice?.[0]!.scored?.score).toBe(1);
+    expect(key2.practice?.[1]!.scored).toBeNull();
+    expect((await detail(ctx.app, id))?.practice).toEqual({ available: true, count: 2, latestUnscoredAttemptId: p2.body.attemptId });
+  });
+
+  it('a practice pass never anchors leg (b); a weak practice score never renders a failed leg (the display query is assistance-none only)', async () => {
+    const id = ctx.id('fixture:ladder/explain-api');
+    await passArtifact(ctx);
+    // the answer of record is honor-system assisted, so leg (b) is open; practice must not fill it
+    await request(ctx.app).post(`/api/units/${id}/explain-back/answers`).send({ answers: ANSWERS, selfAssisted: true }).expect(200);
+    await request(ctx.app).post(`/api/units/${id}/explain-back/self-score`).send({ perKeyPoint: marks(16) }).expect(200);
+    const leg = async () => CompetenciesResponse.parse((await request(ctx.app).get('/api/competencies')).body).competencies.find((c) => c.id === 'data-http')!.promotion;
+    expect((await leg()).explainBack).toMatchObject({ state: 'pending', evidenceId: null });
+
+    const p1 = await request(ctx.app).post(practiceUrl(id)).send({ answers: PRACTICE }).expect(200);
+    const pass = ExplainBackScoreResponse.parse((await request(ctx.app).post(practiceScoreUrl(id)).send({ attemptId: p1.body.attemptId, perKeyPoint: marks(16) })).body);
+    expect(pass.passed).toBe(true);
+    expect((await leg()).explainBack).toMatchObject({ state: 'pending', evidenceId: null });
+
+    const p2 = await request(ctx.app).post(practiceUrl(id)).send({ answers: PRACTICE }).expect(200);
+    const weak = ExplainBackScoreResponse.parse((await request(ctx.app).post(practiceScoreUrl(id)).send({ attemptId: p2.body.attemptId, perKeyPoint: marks(4) })).body);
+    expect(weak).toMatchObject({ passed: false, xp: null, retests: [], promotions: [] });
+    // was: the newest explain-back evidence of ANY assistance showed as a failed promotion leg
+    expect((await leg()).explainBack).toMatchObject({ state: 'pending', evidenceId: null, coverage: null });
+    expect((await leg()).retest.state).toBe('pending');
+  });
+
+  it('a solo answer of record keeps leg (b) through practice: the leg stays the RECORD evidence', async () => {
+    const id = ctx.id('fixture:ladder/explain-api');
+    await passArtifact(ctx);
+    await request(ctx.app).post(`/api/units/${id}/explain-back/answers`).send({ answers: ANSWERS }).expect(200);
+    const rec = ExplainBackScoreResponse.parse((await request(ctx.app).post(`/api/units/${id}/explain-back/self-score`).send({ perKeyPoint: marks(16) })).body);
+    const p = await request(ctx.app).post(practiceUrl(id)).send({ answers: PRACTICE }).expect(200);
+    await request(ctx.app).post(practiceScoreUrl(id)).send({ attemptId: p.body.attemptId, perKeyPoint: marks(2) }).expect(200);
+    const row = CompetenciesResponse.parse((await request(ctx.app).get('/api/competencies')).body).competencies.find((c) => c.id === 'data-http')!;
+    expect(row.promotion.explainBack).toMatchObject({ state: 'done', evidenceId: rec.evidenceIds[0] });
+  });
+
+  it('interplay with a re-seed: practice rows of the earlier version are superseded with it; the fresh answer is still prior-key; practice restarts per version', async () => {
+    const id = ctx.id('fixture:ladder/explain-api');
+    await passArtifact(ctx);
+    const rec = await request(ctx.app).post(`/api/units/${id}/explain-back/answers`).send({ answers: ANSWERS }).expect(200);
+    await request(ctx.app).post(`/api/units/${id}/explain-back/self-score`).send({ perKeyPoint: marks(16) }).expect(200);
+    const p = await request(ctx.app).post(practiceUrl(id)).send({ answers: PRACTICE }).expect(200);
+    await request(ctx.app).post(practiceScoreUrl(id)).send({ attemptId: p.body.attemptId, perKeyPoint: marks(16) }).expect(200);
+
+    const changed = { ...EB, questions: EB.questions.map((q, i) => (i === 0 ? { ...q, keyPoints: q.keyPoints.slice(1) } : q)) };
+    const app = createApp({ db: ctx.tmp.db, clock: ctx.clock, runners: {}, seedItems: mapSeedItemStore([changed, ...KATAS]) });
+    const d = await detail(app, id);
+    expect(d?.answered).toBe(false);
+    expect(d?.supersededAnswerIds).toEqual([rec.body.attemptId, p.body.attemptId]);
+    expect(d?.practice).toEqual({ available: false, count: 0, latestUnscoredAttemptId: null });
+    expectError(await request(app).post(practiceUrl(id)).send({ answers: PRACTICE }), 403, 'NOT_ANSWERED');
+    // the earlier version's practice attempt cannot be scored against the new content
+    expectError(await request(app).post(practiceScoreUrl(id)).send({ attemptId: p.body.attemptId, perKeyPoint: marks(15) }), 409, 'NOT_VERIFIED');
+    ctx.clock.advance(60_000);
+    const fresh = await request(app).post(`/api/units/${id}/explain-back/answers`).send({ answers: ANSWERS }).expect(200);
+    expect(ctx.tmp.db.get('SELECT mode, assisted, assistance_source FROM attempt WHERE id = ?', fresh.body.attemptId)).toEqual({ mode: 'assisted', assisted: true, assistance_source: 'prior-key' });
+    expect(ExplainBackKeyResponse.parse((await request(app).get(`/api/units/${id}/explain-back/key`)).body)).toMatchObject({ attemptId: fresh.body.attemptId, practice: [] });
+    // the original content still serves its own record and its practice history
+    const old = ExplainBackKeyResponse.parse((await request(ctx.app).get(`/api/units/${id}/explain-back/key`)).body);
+    expect(old.attemptId).toBe(rec.body.attemptId);
+    expect(old.practice?.map((x) => x.attemptId)).toEqual([p.body.attemptId]);
   });
 });
 

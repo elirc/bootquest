@@ -9,6 +9,7 @@ import { Exclusions } from '../exclusions.ts';
 import { loadSeedPack } from '../pack.ts';
 import { buildExplainBackItem, scaffoldQuestions, sentences, validateExplainBack } from './explainback.ts';
 import { runExplainBack } from './run.ts';
+import { stableKey } from '../util.ts';
 
 // The fixture checkouts have no git mirror, so their pins are caller-asserted: these tests use the
 // writers' explicit escape hatch (pack.ts unverifiedPinProblem) to stamp them.
@@ -116,6 +117,66 @@ describe('seed:explainback', () => {
     draft.questions[0].keyPoints[0].quote = 'This verifies   that read-only roles\ncannot trigger mutating, high-impact workflows';
     const item = buildExplainBackItem(co, UNIT, draft.questions, draft.lines, 'draft');
     expect(validateExplainBack(co, Exclusions.load(), src, item).verdict).toBe('accept');
+  });
+
+  it('--set (alternate sets): needs --draft; the id must be 1-8 of [a-z0-9]', () => {
+    const base = { unit: UNIT, checkout: join(FX, 'ww6'), sha: WW6, repo: 'ww6', allowNoQuests: true };
+    const noDraft = runExplainBack({ ...base, set: 'b', out: out('set-no-draft') });
+    expect(noDraft.ok).toBe(false);
+    expect(noDraft.refused).toMatch(/--set b needs --draft: an alternate set is an authored draft, never the deterministic scaffold/);
+    for (const bad of ['B', 'set-b', '', 'abcdefghi']) {
+      const r = runExplainBack({ ...base, draft: join(D, 'explainback-ww6-testing-rationale--set-b.json'), set: bad, out: out(`set-bad-${bad.length}`) });
+      expect(r.refused, bad).toMatch(/is not an alternate-set id/);
+    }
+  });
+
+  it('an alternate set stamps beside its primary: item `set`, key origin draft-<set> (distinct), same provenance, pack name --set-<id>; re-validates byte-identically', () => {
+    const root = join(tmp, 'estate-sets');
+    const primary = runExplainBack({ unit: UNIT, checkout: join(FX, 'ww6'), sha: WW6, repo: 'ww6', draft: join(D, 'explainback-ww6-testing-rationale.json'), out: join(root, 'explainback', 'ww6-tr'), allowNoQuests: true });
+    expect(primary.lines).toContain('RESULT OK');
+    const b = runExplainBack({
+      unit: UNIT,
+      checkout: join(FX, 'ww6'),
+      sha: WW6,
+      repo: 'ww6',
+      draft: join(D, 'explainback-ww6-testing-rationale--set-b.json'),
+      set: 'b',
+      out: join(root, 'explainback', 'ww6-tr--set-b'),
+      allowNoQuests: true,
+    });
+    expect(b.lines.join('\n')).toContain('alternate set b');
+    expect(b.lines, b.lines.join('\n')).toContain('RESULT OK');
+    const pa = loadSeedPack(join(root, 'explainback', 'ww6-tr'), { requireStamp: true });
+    const pb = loadSeedPack(join(root, 'explainback', 'ww6-tr--set-b'), { requireStamp: true });
+    const ia = pa.items[0] as SeedExplainBackItem;
+    const ib = pb.items[0] as SeedExplainBackItem;
+    expect(ia.set).toBeUndefined();
+    expect(ib.set).toBe('b');
+    expect(ia.key).toBe(stableKey('explainback', 'ww6', 'explain-back', [UNIT, 'draft']));
+    expect(ib.key).toBe(stableKey('explainback', 'ww6', 'explain-back', [UNIT, 'draft-b']));
+    expect(ib.provenance).toEqual(ia.provenance);
+    expect(pb.manifest.name).toBe('ww6--docs-learning-testing-rationale.md--set-b');
+    expect(pa.manifest.name).toBe('ww6--docs-learning-testing-rationale.md');
+    // what seed:check compares: the stored set item re-validates to itself (`set` carried through the re-bound item)
+    const co = openCheckout({ root: join(FX, 'ww6'), sha: WW6, repo: 'ww6' });
+    expect(validateExplainBack(co, Exclusions.load(), readFileSync(join(FX, 'ww6', UNIT), 'utf8'), ib)).toEqual({ verdict: 'accept', item: ib });
+  });
+
+  it('eb-sibling: an alternate set whose q1 prompt near-duplicates its primary is NOT stamped (rewrite the draft, never admit)', () => {
+    const root = join(tmp, 'estate-sets-bad');
+    runExplainBack({ unit: UNIT, checkout: join(FX, 'ww6'), sha: WW6, repo: 'ww6', draft: join(D, 'explainback-ww6-testing-rationale.json'), out: join(root, 'explainback', 'ww6-tr'), allowNoQuests: true });
+    const r = runExplainBack({
+      unit: UNIT,
+      checkout: join(FX, 'ww6'),
+      sha: WW6,
+      repo: 'ww6',
+      draft: join(D, 'planted-explainback-sibling-dup-prompt.json'),
+      set: 'b',
+      out: join(root, 'explainback', 'ww6-tr--set-b'),
+      allowNoQuests: true,
+    });
+    expect(r.ok).toBe(false);
+    expect(r.lines.join('\n')).toMatch(/STAMP none: guard eb-sibling: q1 prompt near-duplicates the q1 prompt of sibling ww6-tr \(primary set\)/);
   });
 
   it('a cite into an excluded file drops the set (counted); an excluded unit source is refused', () => {

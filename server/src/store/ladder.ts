@@ -74,6 +74,15 @@ export const isDesignIt = (item: SeedExplainBackItem): boolean => !isG2(item) &&
 /** the campaign-less track the DESIGN IT sets load on; its units never carry a quest link */
 export const DESIGN_TRACK = 'sysdesign' as const satisfies TrackId;
 
+/**
+ * Explain-back alternate sets (retakes): sibling sets of one question set share the seed
+ * provenance (repo, path) — the grouping is DERIVED, never stored (no DB column;
+ * unit.variation_of_unit_id stays reserved for retests). Each sibling is its own item, unit and
+ * key, so every per-item honesty invariant applies to it unchanged. The group id is surfaced
+ * only in the unit-detail API.
+ */
+export const ebSetGroup = (it: SeedExplainBackItem): string => h12(`${it.provenance.repo}\u0000${it.provenance.path}`);
+
 export const explainBackUnitKey = (item: SeedExplainBackItem): string =>
   `${LADDER_PREFIX}${isG2(item) ? 'g2' : 'explain-back'}/${slug(item.provenance.repo)}/${h12(item.key)}`;
 export const kataUnitKey = (item: SeedPatchKataItem): string => `${LADDER_PREFIX}kata/${slug(item.provenance.repo)}/${h12(item.key)}`;
@@ -135,6 +144,8 @@ interface PlannedUnit {
   sourcePath?: string;
   /** explain-back only: a DESIGN IT set (sysdesign track; no artifact or quest link, like G2) */
   design?: boolean;
+  /** explain-back only: the alternate-set id (absent = the primary set) */
+  set?: string;
 }
 
 function baseName(p: string): string {
@@ -189,18 +200,21 @@ function plan(items: SeedItemStore, links: Map<string, CampaignLink>, kataDiffic
   for (const it of items.explainBackItems()) {
     const g2 = isG2(it);
     const design = isDesignIt(it);
+    const title = g2 ? `G2 delegation brief: ${it.provenance.repo}` : `Explain back: ${it.provenance.repo} — ${unitLabel(it.provenance.path)}`;
     out.push({
       family: g2 ? 'g2' : 'explain-back',
       key: explainBackUnitKey(it),
       track: g2 ? 'agentic' : design ? DESIGN_TRACK : trackForRepo(it.provenance.repo, links),
       kind: 'explain-back',
-      title: g2 ? `G2 delegation brief: ${it.provenance.repo}` : `Explain back: ${it.provenance.repo} — ${unitLabel(it.provenance.path)}`,
+      // an alternate set is titled as its primary's sibling; primary titles are unchanged
+      title: it.set !== undefined ? `${title} (set ${it.set.toUpperCase()})` : title,
       difficulty: null,
       repo: it.provenance.repo,
       competencies: g2 ? ['agentic-engineering', 'communication'] : design ? ['system-design', 'communication'] : ['language-fluency'],
       check: { type: 'explain-back', questionSetKey: it.key, questionCount: it.questions.length },
       sourcePath: it.provenance.path,
       ...(design ? { design: true } : {}),
+      ...(it.set !== undefined ? { set: it.set } : {}),
     });
   }
   for (const it of items.kataItems()) {
@@ -371,7 +385,7 @@ function reconcileLadderCheck(db: Db, unitId: number, unitKey: string, want: Che
 }
 
 /** Insert or refresh one unit; returns [id, inserted]. */
-function upsertUnit(db: Db, sourceId: number, u: Omit<PlannedUnit, 'family' | 'repo' | 'sourcePath' | 'design'> & { variationOfId?: number | null; prerequisites: number[] }, clock: Clock): [number, boolean] {
+function upsertUnit(db: Db, sourceId: number, u: Omit<PlannedUnit, 'family' | 'repo' | 'sourcePath' | 'design' | 'set'> & { variationOfId?: number | null; prerequisites: number[] }, clock: Clock): [number, boolean] {
   const have = existing(db, u.key);
   let id: number;
   let inserted = false;

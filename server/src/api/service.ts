@@ -192,7 +192,7 @@ export function getUnitDetail(deps: ServiceDeps, unitId: number): UnitDetailResp
   const entry = deps.content.get(unit.key);
   // W6: PUBLIC halves only (questions; diff + context) — key points / defect keys never leave here
   // W9 (ui-audit #10): `answered` lets the client skip the on-mount key probe (no expected 403)
-  const explainBack = check ? explainBackPublicFor(deps.seedItems, check.spec, db, unit.id) : undefined;
+  const explainBack = check ? explainBackPublicFor(deps.seedItems, check.spec, db, unit.id, deps.clock) : undefined;
   const kata = check ? kataPublicFor(deps.seedItems, check.spec, db) : undefined;
   // W8: reading list + questions with choices (never keys); null = the quest pack is not loaded
   const studyQuest = check ? studyQuestPublicFor(deps.seedItems, check.spec, choiceOrdererFor(db, unit.id)) : undefined;

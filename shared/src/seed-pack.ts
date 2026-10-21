@@ -177,6 +177,16 @@ export const SeedExplainBackItem = z
     ...base,
     kind: z.literal('explain-back'),
     questions: z.array(z.object({ prompt: z.string().min(1), keyPoints: z.array(SeedKeyPoint) }).strict()),
+    /**
+     * alternate-set id (explain-back retakes): absent = the PRIMARY set. An alternate set is a
+     * sibling pack — same provenance (repo, path), its own item key / unit — so every per-item
+     * honesty invariant applies to it unchanged. Siblings are derived from (repo, path), never
+     * stored. Optional, so every pack authored before alternate sets parses unchanged.
+     */
+    set: z
+      .string()
+      .regex(/^[a-z0-9]{1,8}$/)
+      .optional(),
   })
   .strict();
 

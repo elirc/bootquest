@@ -195,6 +195,42 @@ async function main(): Promise<number> {
       'guard eb-leak: q1.kp1 contains the keyed answer of quests/ww6 quiz',
       'RESULT FAIL',
     ]);
+    // G4/S+: explain-back ALTERNATE sets (retakes) — the eb-sibling guard. Each estate first gets the
+    // primary set; then an alternate set (--set b) whose q1 prompt near-duplicates the primary's is
+    // written but NOT stamped, and a genuinely rephrased set stamps (positive control).
+    const ebArgs = (draft: string, o: string, ...more: string[]) => [
+      'docs/learning/testing-rationale.md',
+      '--checkout',
+      join(checkouts, `ww6@${WW6_SHA}`),
+      '--sha',
+      WW6_SHA,
+      '--repo',
+      'ww6',
+      '--draft',
+      join(D, draft),
+      '--out',
+      o,
+      '--allow-no-quests',
+      ...more,
+    ];
+    const setsBad = join(tmp, 'seed-sets-bad');
+    const setsGood = join(tmp, 'seed-sets-good');
+    for (const root of [setsBad, setsGood]) {
+      g('S0', `explainback: the primary set of the sibling group (${root.split(sep).pop()}; positive control)`, CLI('explainback'), ebArgs('explainback-ww6-testing-rationale.json', join(root, 'explainback', 'ww6-tr')), 0, ['STAMP written', 'RESULT OK']);
+    }
+    g('G4', 'explainback --set b: an alternate set whose q1 prompt near-duplicates its primary is written but NOT stamped (guard eb-sibling)', CLI('explainback'), ebArgs('planted-explainback-sibling-dup-prompt.json', join(setsBad, 'explainback', 'ww6-tr--set-b'), '--set', 'b'), 'nonzero', [
+      'STAMP none',
+      'guard eb-sibling: q1 prompt near-duplicates the q1 prompt of sibling ww6-tr (primary set)',
+      'RESULT FAIL',
+    ]);
+    g('G5', 'explainback --set without --draft is refused (an alternate set is an authored draft)', CLI('explainback'), ['docs/learning/testing-rationale.md', '--checkout', join(checkouts, `ww6@${WW6_SHA}`), '--sha', WW6_SHA, '--repo', 'ww6', '--set', 'b', '--out', out('g5'), '--allow-no-quests'], 'nonzero', [
+      'REFUSED --set b needs --draft',
+    ]);
+    g('S+', 'explainback --set b: a rephrased alternate set stamps beside its primary (positive control)', CLI('explainback'), ebArgs('explainback-ww6-testing-rationale--set-b.json', join(setsGood, 'explainback', 'ww6-tr--set-b'), '--set', 'b'), 0, [
+      'alternate set b',
+      'STAMP written',
+      'RESULT OK',
+    ]);
     // G3: the plain generator over a drafts-built repo dir is refused (it would replace every hand item)
     g('G3', 'quests: the generator over a pack seed:quests:drafts built is refused (no silent replace of hand items)', CLI('quests'), [join(checkouts, `ww6@${WW6_SHA}`), '--sha', WW6_SHA, '--guides', 'astraupskill/05-PRACTICE.md', '--out', tellPack], 'nonzero', [
       'REFUSED refusing to replace',

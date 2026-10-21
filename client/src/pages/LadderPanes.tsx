@@ -350,6 +350,49 @@ function ArtifactLock({ artifacts }: { artifacts: ArtifactRef[] }) {
   );
 }
 
+type AltSets = NonNullable<ExplainBackPublic['altSets']>;
+
+/**
+ * Explain-back ALTERNATE sets: the sibling question sets over the same source. Each chip links to
+ * its unit and says whether that set is answered / self-scored; the current set is marked.
+ */
+function AltSetStrip({ altSets, current }: { altSets: AltSets; current: number }) {
+  return (
+    <nav className="alt-sets" aria-label="Alternate question sets" data-testid="alt-sets">
+      <span className="muted small">Question sets on this source:</span>{' '}
+      {altSets.siblings.map((s) => {
+        const state = s.scored ? 'scored' : s.answered ? 'answered' : 'new';
+        const text = `Set ${s.label} · ${state}`;
+        const tone = s.scored ? 'chip-success' : s.answered ? 'chip-info' : '';
+        return s.unitId === current ? (
+          <span key={s.unitId} className="chip chip-accent" aria-current="page" data-testid={`alt-set-${s.label}`}>
+            {text} (this set)
+          </span>
+        ) : (
+          <Link key={s.unitId} to={`/play/${s.unitId}`} className={`chip ${tone}`.trim()} data-testid={`alt-set-${s.label}`}>
+            {text}
+          </Link>
+        );
+      })}
+    </nav>
+  );
+}
+
+/** The rotation gate of an alternate set (server: 409 NOT_DUE): the form stays read-only until it opens. */
+function SetGateLock({ label, opensAt }: { label: string; opensAt: number | null }) {
+  return (
+    <div className="verdict verdict-todo" role="note" data-testid="set-gate-lock">
+      <Icon name="lock" />
+      <span>
+        <strong>
+          Alternate set {label} opens {opensAt === null ? 'later' : fmtWhen(opensAt)}
+        </strong>{' '}
+        — spaced repetition: fresh sets are at least 2 days apart. Read the questions now; answering opens then.
+      </span>
+    </div>
+  );
+}
+
 export function ExplainBackPane({ detail }: { detail: UnitDetail }) {
   const api = useApi();
   const id = detail.unit.id;
@@ -367,6 +410,7 @@ export function ExplainBackPane({ detail }: { detail: UnitDetail }) {
   });
   const [stored, setStored] = useState(pub?.answered === true);
   const [lockOverride, setLockOverride] = useState<ArtifactRef[] | null>(null);
+  const [gateOverride, setGateOverride] = useState<{ label: string; opensAt: number | null } | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -390,7 +434,10 @@ export function ExplainBackPane({ detail }: { detail: UnitDetail }) {
   }
 
   const artifacts = lockOverride ?? pub.artifactRequired ?? [];
-  const locked = artifacts.length > 0;
+  // alternate sets: a fresh answer opens >= 2 days after the newest one in the set group
+  const setGate = gateOverride ?? (pub.altSets && pub.answered !== true && !pub.altSets.gate.open ? { label: pub.altSets.label, opensAt: pub.altSets.gate.opensAt } : null);
+  const locked = artifacts.length > 0 || setGate !== null;
+  const strip = pub.altSets ? <AltSetStrip altSets={pub.altSets} current={id} /> : null;
 
   const loadKey = async () => {
     try {
@@ -431,6 +478,18 @@ export function ExplainBackPane({ detail }: { detail: UnitDetail }) {
         } catch {
           // keep the friendly error line
         }
+      } else if (isApiError(e, 'NOT_DUE')) {
+        // raced: a sibling set was answered since the page loaded. Re-read the rotation gate.
+        setError(ladderErrorText(e));
+        try {
+          const alt = (await api.getUnit(id)).explainBack?.altSets;
+          if (alt && !alt.gate.open) {
+            setGateOverride({ label: alt.label, opensAt: alt.gate.opensAt });
+            setError(null); // the banner says it
+          }
+        } catch {
+          // keep the friendly error line
+        }
       } else setError(ladderErrorText(e));
     } finally {
       setBusy(false);
@@ -438,7 +497,14 @@ export function ExplainBackPane({ detail }: { detail: UnitDetail }) {
   };
 
   const onStale = (e: ApiError) => void staleNotice(e, async () => (await api.getUnit(id)).explainBack).then(ks.reopen);
-  if (ks.key) return <ExplainBackKeyView unitId={id} keyResp={ks.key} gatePct={pub.minCoveragePct ?? PROMOTION_MIN_COVERAGE * 100} onStale={onStale} />;
+  if (ks.key) {
+    return (
+      <>
+        {strip}
+        <ExplainBackKeyView unitId={id} keyResp={ks.key} gatePct={pub.minCoveragePct ?? PROMOTION_MIN_COVERAGE * 100} onStale={onStale} />
+      </>
+    );
+  }
 
   const ready = answers.length > 0 && answers.every((a) => a.trim() !== '');
   const frozen = busy || locked;
@@ -451,12 +517,14 @@ export function ExplainBackPane({ detail }: { detail: UnitDetail }) {
       <p className="code-hidden-note" data-testid="code-hidden">
         <Icon name="lock" size={14} /> Code hidden. Answer from memory, in your own words. Your answers are stored before the key points are shown.
       </p>
+      {strip}
       {ks.phase === 'checking' && <p className="muted small">Checking for an earlier answer…</p>}
       {ks.phase === 'unavailable' && <KeyUnavailable noun="answers" stored={stored || pub.answered === true} error={ks.error} onRetry={ks.retry} />}
       {ks.phase === 'answering' && (
         <>
           <SupersededNote notice={ks.notice} />
-          {locked && <ArtifactLock artifacts={artifacts} />}
+          {artifacts.length > 0 && <ArtifactLock artifacts={artifacts} />}
+          {setGate && <SetGateLock label={setGate.label} opensAt={setGate.opensAt} />}
           <ol className="eb-questions">
             {pub.questions.map((q, i) => (
               <li key={i} className="eb-question">
@@ -645,7 +713,259 @@ function ExplainBackKeyView({
           </div>
         )}
       </div>
+      {/* practice retakes open once the answer of record is self-scored (absent on older servers) */}
+      {done && keyResp.practice !== undefined && <PracticeSection unitId={unitId} keyResp={keyResp} gatePct={gatePct} />}
     </section>
+  );
+}
+
+// ---------------------------------------------------------------- explain-back PRACTICE retakes
+
+type PracticeAttempt = NonNullable<ExplainBackKeyResponse['practice']>[number];
+
+const PRACTICE_COPY = '0 XP, recorded as an assisted practice attempt — never counts toward promotion.';
+
+/**
+ * Practice retakes of a self-scored set: re-answer the same questions (the key was already read,
+ * so the attempt is recorded ASSISTED with assistance 'practice'), then self-score it for feedback
+ * only — no XP, no retest, never a promotion leg. One unscored practice attempt at a time; the
+ * answer of record above is never touched. No localStorage draft: practice is repeatable.
+ */
+function PracticeSection({ unitId, keyResp, gatePct }: { unitId: number; keyResp: ExplainBackKeyResponse; gatePct: number }) {
+  const api = useApi();
+  const n = keyResp.questions.length;
+  const [list, setList] = useState<PracticeAttempt[]>(keyResp.practice ?? []);
+  const [writing, setWriting] = useState(false);
+  const [answers, setAnswers] = useState<string[]>(() => Array.from({ length: n }, () => ''));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [lastResult, setLastResult] = useState<ExplainBackScoreResponse | null>(null);
+  const unscored = list.find((p) => p.scored === null) ?? null;
+  const ready = answers.every((a) => a.trim() !== '');
+
+  const refresh = async () => {
+    try {
+      setList((await api.getExplainBackKey(unitId)).practice ?? []);
+    } catch (e) {
+      setError(errorText(e));
+    }
+  };
+
+  const submit = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.practiceExplainBack(unitId, { answers });
+      setWriting(false);
+      setAnswers(Array.from({ length: n }, () => ''));
+      await refresh();
+    } catch (e) {
+      setError(ladderErrorText(e));
+      // ALREADY_ANSWERED: an unscored practice attempt exists (another tab): show it
+      if (isApiError(e, 'ALREADY_ANSWERED')) await refresh();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="practice" data-testid="practice">
+      <h3>Practice</h3>
+      <p className="muted small" data-testid="practice-copy">
+        Re-answer this set from memory as often as you like. {PRACTICE_COPY}
+      </p>
+      {list.length > 0 && (
+        <ol className="practice-history" aria-label="Practice attempts">
+          {list.map((p) => (
+            <li key={p.attemptId} className="practice-attempt" data-testid={`practice-${p.attemptId}`}>
+              <p className="muted small">
+                Practice <code>#{p.attemptId}</code> stored {fmtWhen(p.answeredAt)}
+                {p.scored ? ` — self-scored ${fmtPct(p.scored.score)} coverage (practice: 0 XP).` : ' — not scored yet.'}
+              </p>
+              {p.scored ? (
+                <ol className="practice-answers">
+                  {p.answers.map((a, i) => (
+                    <li key={i}>
+                      <p className="eb-stored">{a}</p>
+                    </li>
+                  ))}
+                </ol>
+              ) : (
+                <PracticeScorer
+                  unitId={unitId}
+                  attempt={p}
+                  keyResp={keyResp}
+                  gatePct={gatePct}
+                  onScored={(r) => {
+                    setLastResult(r);
+                    void refresh();
+                  }}
+                />
+              )}
+            </li>
+          ))}
+        </ol>
+      )}
+      {!writing && (
+        <div className="toolbar">
+          <button
+            type="button"
+            className="btn"
+            disabled={busy || unscored !== null}
+            title={unscored ? `Score practice attempt #${unscored.attemptId} first` : undefined}
+            onClick={() => {
+              setError(null);
+              setLastResult(null);
+              setWriting(true);
+            }}
+          >
+            <Icon name="cards" /> Practice again
+          </button>
+          {unscored && <span className="muted small">Score practice attempt #{unscored.attemptId} first.</span>}
+        </div>
+      )}
+      {writing && (
+        <>
+          <ol className="eb-questions">
+            {keyResp.questions.map((q, i) => (
+              <li key={i} className="eb-question">
+                <label>
+                  <span className="eb-prompt">
+                    <InlineProse text={q.prompt} />
+                  </span>
+                  <textarea
+                    className="answer-text eb-answer"
+                    rows={3}
+                    value={answers[i] ?? ''}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setAnswers((prev) => prev.map((a, j) => (j === i ? v : a)));
+                    }}
+                    aria-label={`Practice answer ${i + 1}`}
+                    disabled={busy}
+                  />
+                </label>
+              </li>
+            ))}
+          </ol>
+          <div className="toolbar">
+            <button type="button" className="btn" onClick={() => setWriting(false)} disabled={busy}>
+              Cancel
+            </button>
+            <span className="toolbar-spacer" />
+            <button type="button" className="btn btn-primary" disabled={!ready || busy} onClick={() => void submit()}>
+              <Icon name="check" /> Store practice answers
+            </button>
+          </div>
+        </>
+      )}
+      {lastResult && <PracticeResult r={lastResult} />}
+      <ErrorLine error={error} />
+    </div>
+  );
+}
+
+function PracticeResult({ r }: { r: ExplainBackScoreResponse }) {
+  return (
+    <div className={`verdict verdict-${r.passed ? 'pass' : 'fail'}`} data-testid="practice-result">
+      <Icon name={r.passed ? 'check' : 'warn'} />
+      <strong>
+        Practice coverage {fmtPct(r.coverage)} ({r.covered}/{r.total})
+      </strong>
+      <span className="muted">
+        {r.passed ? 'meets' : 'below'} the {r.minCoveragePct}% mark — feedback only: 0 XP, no retest, never a promotion leg
+      </span>
+    </div>
+  );
+}
+
+/** Self-score ONE practice attempt against the key (feedback only; the record's own score is unchanged). */
+function PracticeScorer({
+  unitId,
+  attempt,
+  keyResp,
+  gatePct,
+  onScored,
+}: {
+  unitId: number;
+  attempt: PracticeAttempt;
+  keyResp: ExplainBackKeyResponse;
+  gatePct: number;
+  onScored: (r: ExplainBackScoreResponse) => void;
+}) {
+  const api = useApi();
+  const allIds = keyResp.questions.flatMap((q) => q.keyPoints.map((k) => k.id));
+  const [marks, setMarks] = useState<Record<string, 'covered' | 'missed'>>({});
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const covered = allIds.filter((k) => marks[k] === 'covered').length;
+  const marked = allIds.filter((k) => marks[k] !== undefined).length;
+  const ready = marked === allIds.length;
+
+  const send = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      onScored(await api.practiceScoreExplainBack(unitId, { attemptId: attempt.attemptId, perKeyPoint: marks }));
+    } catch (e) {
+      setError(ladderErrorText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="practice-scorer" data-testid={`practice-scorer-${attempt.attemptId}`}>
+      <ol className="eb-questions">
+        {keyResp.questions.map((q, qi) => (
+          <li key={qi} className="eb-question">
+            <span className="eb-prompt">
+              <InlineProse text={q.prompt} />
+            </span>
+            <div className="eb-split">
+              <div className="eb-mine">
+                <span className="muted small">Your practice answer</span>
+                <p className="eb-stored" data-testid={`practice-answer-${qi + 1}`}>
+                  {attempt.answers[qi] ?? ''}
+                </p>
+              </div>
+              <ul className="checklist" aria-label={`Practice key points for question ${qi + 1}`}>
+                {q.keyPoints.map((kp) => (
+                  <li key={kp.id} className={`checklist-item${marks[kp.id] ? ` is-${marks[kp.id]}` : ''}`}>
+                    <span className="checklist-text">
+                      <InlineProse text={kp.text} />
+                    </span>
+                    <span className="seg" role="radiogroup" aria-label={`practice ${kp.id} coverage`}>
+                      {(['covered', 'missed'] as const).map((m) => (
+                        <label key={m} className={`seg-opt${marks[kp.id] === m ? ' on' : ''}`}>
+                          <input
+                            type="radio"
+                            name={`pkp-${attempt.attemptId}-${kp.id}`}
+                            checked={marks[kp.id] === m}
+                            disabled={busy}
+                            onChange={() => setMarks((prev) => ({ ...prev, [kp.id]: m }))}
+                            aria-label={`practice ${kp.id} ${m}`}
+                          />
+                          {m}
+                        </label>
+                      ))}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </li>
+        ))}
+      </ol>
+      <div className="toolbar">
+        <ScorePreview hit={covered} marked={marked} total={allIds.length} verb="covered" gatePct={gatePct} gateName="pass mark (practice: feedback only)" />
+        <span className="toolbar-spacer" />
+        <button type="button" className="btn btn-primary" disabled={!ready || busy} onClick={() => void send()}>
+          <Icon name="check" /> File practice score
+        </button>
+      </div>
+      <ErrorLine error={error} />
+    </div>
   );
 }
 

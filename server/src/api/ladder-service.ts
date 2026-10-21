@@ -8,6 +8,9 @@ import {
   type EvidenceListResponse,
   type ExplainBackAnswersBody,
   type ExplainBackKeyResponse,
+  type ExplainBackPracticeBody,
+  type ExplainBackPracticeScoreBody,
+  type ExplainBackPublic,
   type ExplainBackScoreResponse,
   type KataFindingsBody,
   type KataKeyResponse,
@@ -20,7 +23,7 @@ import {
 import type { Db } from '../db/database.ts';
 import { HonestyRuleError, recordAttempt, type AttemptRow } from '../engines/attempts.ts';
 import { PROMOTION_MIN_COVERAGE, promoteIfEligible, recordEvidence } from '../engines/evidence.ts';
-import { artifactsAwaitingSoloPass, MutationGateError, openRetests, promotionProgress, recordMutationEvidence, scheduleRetests } from '../engines/ladder.ts';
+import { artifactsAwaitingSoloPass, EB_SET_MIN_GAP_MS, MutationGateError, openRetests, promotionProgress, recordMutationEvidence, scheduleRetests } from '../engines/ladder.ts';
 import { closeElapsedDays, composeSlate } from '../engines/streak.ts';
 import { awardXp } from '../engines/xp.ts';
 import { competencyTable, getTrack, getUnit, primaryCheck, unitCompetencies, type CheckRecord, type UnitRecord } from '../store/queries.ts';
@@ -28,7 +31,8 @@ import { explainBackKey, explainBackQuestions, kataKey, kataPublic, seedItemHash
 import type { SeedExplainBackItem, SeedPatchKataItem } from '@bootquest/shared';
 import { HttpError } from './http.ts';
 import { questUnitUnlocked } from '../engines/campaign.ts';
-import type { Clock } from '../engines/clock.ts';
+import { nowMs, type Clock } from '../engines/clock.ts';
+import { ebSetGroup, explainBackUnitKey } from '../store/ladder.ts';
 
 /**
  * W6 competency-ladder endpoints (spec §4 explain-back + patch-review kata rows,
@@ -270,8 +274,81 @@ export function effectiveMinCoverage(spec: CheckSpec): number {
   return spec.type === 'explain-back' ? Math.max(spec.minCoverage, PROMOTION_MIN_COVERAGE) : PROMOTION_MIN_COVERAGE;
 }
 
+// ---------------------------------------------------------------- explain-back retakes
+
+/**
+ * PRACTICE retakes of the LOADED item version (newest last): the voluntary re-answers recorded
+ * after the answer of record was self-scored (`$.explainBack.practice` = true; assistance
+ * 'practice'). currentAnswer / supersededAnswerIds / firstAnswer need no predicate change: a
+ * practice row can only be recorded after a scored answer of record for the same key + sha, so it
+ * always has a LATER id and `ORDER BY id LIMIT 1` still returns the answer of record (and, after a
+ * re-seed, practice rows of the earlier version are superseded exactly like that version's answer).
+ */
+function practiceAttempts(db: Db, item: SeedExplainBackItem): AttemptRow[] {
+  return db.all<AttemptRow>(
+    `SELECT * FROM attempt WHERE outcome = 'submitted' AND json_extract(answer, '$.explainBack.questionSetKey') = ?
+        AND json_extract(answer, '$.explainBack.itemSha') = ? AND json_extract(answer, '$.explainBack.practice') = 1
+      ORDER BY id`,
+    item.key,
+    seedItemHash(item),
+  );
+}
+
+/** The alternate-set label of an item: 'A' for the primary set (no `set` field), else the set id upper-cased. */
+const setLabel = (it: SeedExplainBackItem): string => (it.set === undefined ? 'A' : it.set.toUpperCase());
+
+/** Loaded sibling sets of an explain-back item (same provenance repo + path; itself included), in load order. */
+function ebSiblings(seedItems: SeedItemStore, item: SeedExplainBackItem): SeedExplainBackItem[] {
+  return seedItems.explainBackItems().filter((s) => s.provenance.repo === item.provenance.repo && s.provenance.path === item.provenance.path);
+}
+
+/**
+ * The alternate-set rotation gate for a FRESH (non-practice) answer to `item`: open when its group
+ * has fewer than 2 loaded siblings or no fresh answer yet; else it opens EB_SET_MIN_GAP_MS after
+ * the newest fresh answer to ANY sibling (any item version: the key exposure is what is spaced).
+ */
+function ebSetGate(db: Db, seedItems: SeedItemStore, item: SeedExplainBackItem, clock: Clock): { open: boolean; opensAt: number | null } {
+  const sibs = ebSiblings(seedItems, item);
+  if (sibs.length < 2) return { open: true, opensAt: null };
+  const keys = sibs.map((s) => s.key);
+  const last = db.get<{ at: number | null }>(
+    `SELECT MAX(created_at) AS at FROM attempt WHERE outcome = 'submitted'
+        AND json_extract(answer, '$.explainBack.questionSetKey') IN (${keys.map(() => '?').join(', ')})
+        AND json_extract(answer, '$.explainBack.practice') IS NULL`,
+    ...keys,
+  )?.at;
+  if (last === null || last === undefined) return { open: true, opensAt: null };
+  const opensAt = last + EB_SET_MIN_GAP_MS;
+  return { open: nowMs(clock) >= opensAt, opensAt };
+}
+
+/** `altSets` for the unit detail: present only when the group has >= 2 loaded siblings. */
+function altSetsFor(db: Db, seedItems: SeedItemStore, item: SeedExplainBackItem, clock: Clock): ExplainBackPublic['altSets'] {
+  const sibs = ebSiblings(seedItems, item);
+  if (sibs.length < 2) return undefined;
+  const siblings = sibs.flatMap((s) => {
+    const row = db.get<{ id: number }>('SELECT id FROM unit WHERE key = ? AND retired_at IS NULL', explainBackUnitKey(s));
+    if (!row) return [];
+    const rec = currentAnswer(db, 'explainBack', s);
+    return [{ unitId: row.id, label: setLabel(s), answered: rec !== undefined, scored: rec !== undefined && scoredOn(db, rec.id, 'explain-back') !== null }];
+  });
+  return { group: ebSetGroup(item), label: setLabel(item), siblings, gate: ebSetGate(db, seedItems, item, clock) };
+}
+
+/** `practice` for the unit detail: available once the answer of record exists AND is self-scored. */
+function practiceStateFor(db: Db, item: SeedExplainBackItem): NonNullable<ExplainBackPublic['practice']> {
+  const rec = currentAnswer(db, 'explainBack', item);
+  const rows = practiceAttempts(db, item);
+  const latest = rows[rows.length - 1];
+  return {
+    available: rec !== undefined && scoredOn(db, rec.id, 'explain-back') !== null,
+    count: rows.length,
+    latestUnscoredAttemptId: latest && scoredOn(db, latest.id, 'explain-back') === null ? latest.id : null,
+  };
+}
+
 /** Public half for GET /units/:id (null = content pending). */
-export function explainBackPublicFor(seedItems: SeedItemStore, spec: CheckSpec, db?: Db, unitId?: number) {
+export function explainBackPublicFor(seedItems: SeedItemStore, spec: CheckSpec, db?: Db, unitId?: number, clock?: Clock) {
   if (spec.type !== 'explain-back') return undefined;
   const item = seedItems.explainBack(spec.questionSetKey);
   if (!item) return null;
@@ -283,9 +360,15 @@ export function explainBackPublicFor(seedItems: SeedItemStore, spec: CheckSpec, 
     answered: currentAnswer(db, 'explainBack', item) !== undefined,
     // F7e: structured form of the NOT_ANSWERED "superseded" prose
     supersededAnswerIds: supersededAnswerIds(db, 'explainBack', item),
+    // retakes: the same predicates POST .../explain-back/practice enforces
+    practice: practiceStateFor(db, item),
   };
+  if (unitId === undefined) return answered;
   // dead end #2: the same predicate POST .../answers enforces (409 ARTIFACT_REQUIRED)
-  return unitId === undefined ? answered : { ...answered, artifactRequired: artifactsAwaitingSoloPass(db, unitId) };
+  const withArtifacts = { ...answered, artifactRequired: artifactsAwaitingSoloPass(db, unitId) };
+  // alternate sets: the same gate POST .../answers enforces (409 NOT_DUE)
+  const altSets = clock ? altSetsFor(db, seedItems, item, clock) : undefined;
+  return altSets ? { ...withArtifacts, altSets } : withArtifacts;
 }
 
 export function kataPublicFor(seedItems: SeedItemStore, spec: CheckSpec, db?: Db) {
@@ -324,6 +407,16 @@ export function answerExplainBack(deps: LadderDeps, unitId: number, body: Explai
           'an answer recorded before the artifact can never count, and the set can only be answered once',
       );
     }
+    // alternate sets: fresh sets of one question-set group are spaced >= EB_SET_MIN_GAP_MS apart
+    const gate = ebSetGate(db, deps.seedItems, item, clock);
+    if (!gate.open) {
+      throw new HttpError(
+        409,
+        'NOT_DUE',
+        `unit ${unit.id}: alternate set ${setLabel(item)} of this question set opens at ${new Date(gate.opensAt!).toISOString()} ` +
+          '(>= 2 days after your last answer in this set group — spaced repetition, not same-day re-reads)',
+      );
+    }
     const attempt = recordAttempt(
       db,
       {
@@ -357,7 +450,22 @@ export function getExplainBackKey(deps: LadderDeps, unitId: number): ExplainBack
   if (!attempt) throw notAnswered(db, 'explainBack', item, unit, 'answers');
   const stored = storedAnswer(attempt);
   const answers = Array.isArray(stored.explainBack?.answers) ? stored.explainBack.answers.map(String) : [];
-  return { attemptId: attempt.id, answeredAt: attempt.created_at, answers, questions: explainBackKey(item), scored: scoredOn(db, attempt.id, 'explain-back') };
+  return {
+    attemptId: attempt.id,
+    answeredAt: attempt.created_at,
+    answers,
+    questions: explainBackKey(item),
+    scored: scoredOn(db, attempt.id, 'explain-back'),
+    practice: practiceAttempts(db, item).map((p) => {
+      const s = storedAnswer(p);
+      return {
+        attemptId: p.id,
+        answeredAt: p.created_at,
+        answers: Array.isArray(s.explainBack?.answers) ? s.explainBack.answers.map(String) : [],
+        scored: scoredOn(db, p.id, 'explain-back'),
+      };
+    }),
+  };
 }
 
 /**
@@ -419,6 +527,118 @@ export function selfScoreExplainBack(deps: LadderDeps, unitId: number, body: { p
         xp: award ? { id: award.id, amount: award.amount, reason: award.reason } : null,
         retests: retests.map((r) => ({ reviewItemId: r.reviewItemId, unitId: r.unitId, title: r.title, dueAt: r.dueAt, artifactUnitId: r.artifactUnitId })),
         promotions,
+      };
+    }),
+  );
+}
+
+/**
+ * POST /units/:id/explain-back/practice — a voluntary PRACTICE retake of the loaded version.
+ * Allowed only once the answer of record exists (403 NOT_ANSWERED) and is self-scored (409
+ * NOT_VERIFIED), one unscored practice attempt at a time (403 ALREADY_ANSWERED). Recorded
+ * append-only as an ASSISTED attempt (assistance 'practice', a server-side fact): the key of this
+ * very version was already read. It never touches the answer of record, the alternate-set gate,
+ * XP, retests, promotion, streak or slate.
+ */
+export function practiceExplainBack(deps: LadderDeps, unitId: number, body: ExplainBackPracticeBody): AnswerRecordedResponse {
+  const { db, clock } = deps;
+  const unit = requireUnit(db, unitId);
+  assertOpen(db, unit);
+  const { check, item } = requireExplainBack(deps, unit, 'explain-back practice');
+  if (body.answers.length !== item.questions.length) {
+    throw new HttpError(400, 'VALIDATION', `this set has ${item.questions.length} questions; send exactly one answer per question`, [
+      { path: 'body.answers', message: `expected ${item.questions.length} answers, got ${body.answers.length}` },
+    ]);
+  }
+  return db.tx(() => {
+    const rec = currentAnswer(db, 'explainBack', item);
+    if (!rec) throw notAnswered(db, 'explainBack', item, unit, 'answers');
+    if (scoredOn(db, rec.id, 'explain-back') === null) {
+      throw new HttpError(409, 'NOT_VERIFIED', `unit ${unit.id}: self-score your answer of record #${rec.id} first — practice opens after the first scored answer`);
+    }
+    const rows = practiceAttempts(db, item);
+    const latest = rows[rows.length - 1];
+    if (latest && scoredOn(db, latest.id, 'explain-back') === null) {
+      throw new HttpError(403, 'ALREADY_ANSWERED', `unit ${unit.id}: practice attempt #${latest.id} is recorded and unscored; score it first`);
+    }
+    const attempt = recordAttempt(
+      db,
+      {
+        unitId: unit.id,
+        checkId: check.id,
+        selfAssisted: false,
+        answer: { explainBack: { questionSetKey: item.key, itemSha: seedItemHash(item), answers: body.answers, practice: true } },
+      },
+      clock,
+      { practiceKey: true },
+    );
+    return { attemptId: attempt.id, mode: attempt.mode, outcome: 'submitted' };
+  });
+}
+
+/**
+ * POST /units/:id/explain-back/practice-score — self-score ONE practice attempt of the loaded
+ * version: explain-back evidence per competency (assessor self, assistance 'practice' inherited
+ * from the attempt). Feedback only: never awardXp (no xp_event row at all), never
+ * scheduleRetests, never promotion, never streak/slate (the reveal analog).
+ */
+export function practiceScoreExplainBack(deps: LadderDeps, unitId: number, body: ExplainBackPracticeScoreBody): ExplainBackScoreResponse {
+  const { db, clock } = deps;
+  const unit = requireUnit(db, unitId);
+  assertOpen(db, unit);
+  const { check, item } = requireExplainBack(deps, unit, 'explain-back practice self-score');
+  const attempt = db.get<AttemptRow>('SELECT * FROM attempt WHERE id = ?', body.attemptId);
+  if (!attempt) throw new HttpError(404, 'NOT_FOUND', `attempt ${body.attemptId} not found`);
+  const stored = storedAnswer(attempt).explainBack as (StoredAnswer['explainBack'] & { practice?: unknown }) | undefined;
+  if (
+    attempt.outcome !== 'submitted' ||
+    stored?.practice !== true ||
+    attempt.unit_id !== unit.id ||
+    stored.questionSetKey !== item.key ||
+    stored.itemSha !== seedItemHash(item)
+  ) {
+    throw new HttpError(409, 'NOT_VERIFIED', `attempt ${attempt.id} is not a practice attempt of the question set loaded on unit ${unit.id}`);
+  }
+  const competencies = requireCompetencies(db, attempt.unit_id);
+  const ids = explainBackKey(item).flatMap((q) => q.keyPoints.map((k) => k.id));
+  assertExactMarks(ids, body.perKeyPoint, 'perKeyPoint');
+  const missed = ids.filter((id) => body.perKeyPoint[id] === 'missed');
+  const covered = ids.length - missed.length;
+  const coverage = covered / ids.length;
+  const minCoverage = effectiveMinCoverage(check.spec);
+
+  return honest(() =>
+    db.tx(() => {
+      if (scoredOn(db, attempt.id, 'explain-back')) {
+        throw new HttpError(409, 'ALREADY_SCORED', `practice attempt #${attempt.id} is already self-scored (evidence is append-only)`);
+      }
+      const evidenceIds = competencies.map(
+        (competency) =>
+          recordEvidence(
+            db,
+            {
+              competency,
+              kind: 'explain-back',
+              intention: 'explain-back PRACTICE retake: the key was already seen; scored for feedback only',
+              observation: `${covered}/${ids.length} key points covered (${pct(coverage)}%)${missed.length ? `; missed ${missed.join(', ')}` : ''}`,
+              score: coverage,
+              attemptId: attempt.id,
+            },
+            clock,
+          ).id,
+      );
+      return {
+        attemptId: attempt.id,
+        covered,
+        total: ids.length,
+        coverage,
+        minCoveragePct: pct(minCoverage),
+        passed: coverage >= minCoverage,
+        missed,
+        evidenceIds,
+        xp: null,
+        retests: [],
+        promotions: [],
       };
     }),
   );

@@ -8,6 +8,9 @@ import { plantedToken } from './demo/plant.ts';
 import { Exclusions } from './exclusions.ts';
 import {
   EB_LEAK_EXEMPT,
+  ebSiblingGroupKey,
+  ebSiblingIndex,
+  explainBackSiblingProblems,
   explainBackKeyLeaks,
   explainBackLeakId,
   explainBackLeakProblems,
@@ -118,6 +121,111 @@ describe('explain-back key points vs same-repo quiz keys', () => {
     expect(r.rows.flatMap((x) => x.leaks.filter((l) => !l.exempt).map((l) => `${x.pack}: ${l.id}`))).toEqual([]);
     expect(c.stale).toBe(0);
     expect(c.leaks).toBe(Object.values(EB_LEAK_EXEMPT).reduce((n, ids) => n + ids.length, 0));
+  });
+});
+
+describe('explain-back sibling (alternate) sets: eb-sibling', () => {
+  const set = (key: string, prompts: string[], points: string[][], over: Partial<SeedExplainBackItem> = {}): SeedExplainBackItem => ({
+    kind: 'explain-back',
+    key: `seed:explainback:r/explain-back/${key}`,
+    provenance: { repo: 'r', sha: 'a'.repeat(40), path: 'guide/backpressure.md', lines: { start: 1, end: 9 } },
+    citations: [],
+    questions: prompts.map((prompt, qi) => ({ prompt, keyPoints: points[qi]!.map((text) => ({ text, quote: `quoted source line about ${text.toLowerCase()}` })) })),
+    ...over,
+  });
+  const PRIMARY = set(
+    'primary',
+    ['Why does the queue shed load instead of growing without bound?', 'What does the timeout budget protect downstream?', 'How is retry amplification kept in check?'],
+    [
+      ['Unbounded queues turn overload into latency for everyone', 'Shedding early keeps the healthy requests fast'],
+      ['A per-hop budget stops one slow call eating the whole deadline', 'Callers give up before the user does'],
+      ['Retries multiply traffic exactly when capacity is lowest', 'A retry budget caps the extra load at a fixed fraction'],
+    ],
+  );
+  const SET_B = set(
+    'draft-b',
+    ['Capacity just doubled overnight: which limits would you move first, and which stay put?', 'A dependency starts timing out at p99: walk through what the caller sees.', 'Design a retry policy for a payment call that must not double-charge.'],
+    [
+      ['Admission limits follow measured headroom rather than raw instance count', 'Per-tenant quotas stay fixed so a noisy tenant cannot claim the new room'],
+      ['Tail latency eats the remaining deadline before the error surfaces', 'Hedged requests trade extra load for lower tail latency'],
+      ['Idempotency keys make the second attempt a lookup instead of a charge', 'Jittered backoff spreads synchronized clients apart'],
+    ],
+    { set: 'b' },
+  );
+  const OTHER_PATH = set('other', PRIMARY.questions.map((q) => q.prompt), PRIMARY.questions.map((q) => q.keyPoints.map((k) => k.text)), {
+    provenance: { ...PRIMARY.provenance, path: 'guide/other.md' },
+  });
+  const estate = (packs: Record<string, SeedExplainBackItem[]>): string => {
+    const root = mkdtempSync(join(tmp, 'eb-sib-'));
+    for (const [name, items] of Object.entries(packs)) {
+      mkdirSync(join(root, 'explainback', name), { recursive: true });
+      writeFileSync(join(root, 'explainback', name, 'items.json'), JSON.stringify({ items }));
+    }
+    return root;
+  };
+
+  it('ebSiblingIndex groups explain-back items by (repo, path) across packs', () => {
+    const idx = ebSiblingIndex(estate({ p: [PRIMARY], 'p--set-b': [SET_B], o: [OTHER_PATH] }));
+    expect(idx.get(ebSiblingGroupKey(PRIMARY))!.map((e) => [e.pack, e.item.key])).toEqual([
+      ['p', PRIMARY.key],
+      ['p--set-b', SET_B.key],
+    ]);
+    expect(idx.get(ebSiblingGroupKey(OTHER_PATH))!.map((e) => e.pack)).toEqual(['o']);
+  });
+
+  it('a rephrased set (fresh prompts, fresh key points) passes; a different (repo, path) is never a sibling, even verbatim', () => {
+    const idx = ebSiblingIndex(estate({ p: [PRIMARY], 'p--set-b': [SET_B], o: [OTHER_PATH] }));
+    expect(explainBackSiblingProblems([SET_B], idx)).toEqual([]);
+    expect(explainBackSiblingProblems([PRIMARY], idx)).toEqual([]);
+    expect(explainBackSiblingProblems([OTHER_PATH], idx)).toEqual([]);
+  });
+
+  it('a prompt that near-duplicates a sibling prompt FAILS', () => {
+    const idx = ebSiblingIndex(estate({ p: [PRIMARY] }));
+    const bad = structuredClone(SET_B);
+    bad.questions[1]!.prompt = 'What does the timeout budget protect downstream?';
+    const probs = explainBackSiblingProblems([bad], idx, 'p--set-b');
+    expect(probs).toHaveLength(1);
+    expect(probs[0]).toMatch(/^eb-sibling: q2 prompt near-duplicates the q2 prompt of sibling p \(primary set\)/);
+  });
+
+  it('a key point (text or quote) that near-duplicates a sibling key point FAILS', () => {
+    const idx = ebSiblingIndex(estate({ p: [PRIMARY] }));
+    const byText = structuredClone(SET_B);
+    byText.questions[2]!.keyPoints[0]!.text = 'Retries multiply traffic exactly when capacity is lowest!';
+    expect(explainBackSiblingProblems([byText], idx)[0]).toMatch(/^eb-sibling: q3\.kp1 near-duplicates q3\.kp1 of sibling p \(primary set\)/);
+    const byQuote = structuredClone(SET_B);
+    byQuote.questions[0]!.keyPoints[1]!.quote = PRIMARY.questions[1]!.keyPoints[0]!.quote!;
+    expect(explainBackSiblingProblems([byQuote], idx)[0]).toMatch(/^eb-sibling: q1\.kp2\.quote near-duplicates q2\.kp1(\.quote)? of sibling p/);
+    // and in the other direction: the primary re-checked against an offending set (seed:check judges every pack)
+    const idx2 = ebSiblingIndex(estate({ p: [PRIMARY], b: [byText] }));
+    expect(explainBackSiblingProblems([PRIMARY], idx2)[0]).toMatch(/^eb-sibling: q3\.kp1 near-duplicates q3\.kp1 of sibling b \(set b\)/);
+  });
+
+  it('two PRIMARY sets of one unit (draft + deterministic scaffold, the W7 pattern) are not compared: only pairs with an alternate set are', () => {
+    const scaffold = { ...structuredClone(PRIMARY), key: 'seed:explainback:r/explain-back/scaffold' };
+    const idx = ebSiblingIndex(estate({ p: [PRIMARY], s: [scaffold] }));
+    expect(explainBackSiblingProblems([scaffold], idx)).toEqual([]);
+    // ...but the same content as an alternate set of that unit fails
+    expect(explainBackSiblingProblems([{ ...scaffold, set: 'c' }], idx).length).toBeGreaterThan(0);
+  });
+
+  it('packGuardProblems runs it for explain-back packs: lazily from seedRoot (the writer path) or from a prebuilt index (seed:check)', () => {
+    const bad = structuredClone(SET_B);
+    bad.questions[0]!.prompt = PRIMARY.questions[0]!.prompt;
+    const root = estate({ p: [PRIMARY], 'p--set-b': [bad] });
+    const lazy = packGuardProblems({ generator: 'explainback', name: 'p--set-b', repo: 'r', items: [bad], ex, seedRoot: root });
+    expect(lazy.filter((p) => p.startsWith('eb-sibling:'))).toHaveLength(1);
+    const prebuilt = packGuardProblems({ generator: 'explainback', name: 'p--set-b', repo: 'r', items: [bad], ex, seedRoot: null, ebIndex: ebSiblingIndex(root) });
+    expect(prebuilt).toEqual(lazy);
+    expect(packGuardProblems({ generator: 'explainback', name: 'p--set-b', repo: 'r', items: [SET_B], ex, seedRoot: estate({ p: [PRIMARY] }) }).filter((p) => p.startsWith('eb-sibling:'))).toEqual([]);
+  });
+
+  it('GATE: the estate ships no eb-sibling problem', () => {
+    const idx = ebSiblingIndex(SEED);
+    expect([...idx.values()].reduce((n, l) => n + l.length, 0)).toBeGreaterThan(50);
+    const bad = [...idx.values()].flatMap((entries) => entries.flatMap((e) => explainBackSiblingProblems([e.item], idx, e.pack).map((p) => `${e.pack}: ${p}`)));
+    expect(bad).toEqual([]);
   });
 });
 

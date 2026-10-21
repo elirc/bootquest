@@ -244,6 +244,35 @@ The G2 delegation-brief rubrics are explain-back packs too: the drafts are in
 `tools/seed/authoring/g2/` and the output in `content/seed/explainback/g2-brief--<repo>/`.
 See `docs/recon/w5c-content.md` for the `[wN]` weight convention.
 
+**Alternate sets (retakes).** An alternate set of an existing explain-back pack is a SIBLING
+pack: the same unit path and sha as the primary pack's manifest, its own draft, `--set <id>`
+(1-8 of `[a-z0-9]`, e.g. `b`; `--set` without `--draft` is refused). The item gets `set: "<id>"`,
+its key origin becomes `draft-<id>` (the primary's is `draft`), so it is its own item, unit and
+answer-before-key; the default pack name is `<repo>--<unit>--set-<id>`. The server derives the
+sibling group from the provenance (repo, path) — nothing is stored — titles the unit
+`... (set B)` and spaces FRESH answers within a group >= 2 days apart. Write the draft at
+`tools/seed/authoring/explainback/<primary-pack-dir>--set-<id>.json` and pass the primary's
+`--allow-no-quests` iff the primary was stamped that way:
+
+```sh
+npm run seed:explainback -- apprenticeship/curriculum/14-load-backpressure-timeouts.md \
+  --checkout .cache/checkouts/opusorganize@6a6e84522bd58c88ccec72421a15b8dbef797602 \
+  --sha 6a6e84522bd58c88ccec72421a15b8dbef797602 \
+  --draft tools/seed/authoring/explainback/sysdesign--opusorganize--web-app-at-10x-load--set-b.json \
+  --set b \
+  --out content/seed/explainback/sysdesign--opusorganize--web-app-at-10x-load--set-b \
+  --allow-no-quests
+```
+
+The **eb-sibling guard** (factory/guards.ts, in the stamp path and in `seed:check`) fails a pack
+whose prompt, or whose key-point text / quote, near-duplicates one of any OTHER set of the same
+(repo, path) (`nearDuplicate`, factory/util.ts) whenever at least one of the pair is an alternate
+set (two primary sets of one unit, e.g. a draft and the deterministic scaffold, are the older W7
+pattern and are not compared). There is no exemption map: rewrite the draft
+(fresh scenario numbers, a different angle: steady state vs a failure drill, a migration or a
+capacity doubling), never admit. Keep the `DESIGN IT` prompt prefix on design sets so the
+sibling routes to the sysdesign track like its primary.
+
 ### Changed-example retests: `seed:variants`
 
 A draft holds `{unit, provenance, items[{id, task, check, referenceSolution,
@@ -576,10 +605,22 @@ step.
 - **Demotion cap:** every lapse of a Review-state FSRS card demotes its competency by one
   notch, as the spec literally says. Should demotions be capped at one per competency per
   day?
-- **Retake policy:** explain-back and kata answers are one-shot per item (answer-first:
-  the key is seen afterwards). After a demotion or a promotion, an item cannot anchor leg
-  (b) again. Options are several question sets per project unit or rotating sets per
-  window.
+- **Retake policy (RESOLVED, explain-back retakes):** the answer of record stays one-shot per
+  item version (answer-first: the key is seen afterwards). Two additions:
+  - **Practice retakes** (`POST /units/:id/explain-back/practice` + `.../practice-score`): once
+    the answer of record is self-scored, the learner may re-answer the same set any time, one
+    unscored practice attempt at a time. Each is a new append-only attempt recorded ASSISTED
+    (assistance `practice`, migration 015; the answer JSON carries `practice: true`); its
+    self-score files explain-back evidence with assistance `practice` and NEVER awards XP (no
+    xp_event row), schedules a retest, runs promotion or touches the streak/slate. A practice (or
+    prior-key) self-score never renders a failed promotion leg (the dashboard's "failed" query is
+    assistance-none only).
+  - **Alternate sets** (sibling packs, `seed:explainback --set <id>`, see §3): each set is its own
+    item/unit/key with the full one-shot discipline; siblings are derived from the provenance
+    (repo, path). A fresh answer to any sibling opens >= 2 days (`EB_SET_MIN_GAP_MS`) after the
+    newest fresh answer in the group (409 `NOT_DUE`); each set pays its own 20 XP and any
+    first-time set can anchor leg (b) (same prerequisites, solo + unassisted as always).
+  - Follow-ups (not built): kata practice retakes; any FSRS interplay.
 - **Node upgrade:** node 22.16 → ≥22.18. Stryker 10 / Babel 8 warns with EBADENGINE but
   runs. Upgrading invalidates every grader and seed fingerprint, so plan a full
   re-validate and restamp afterwards.

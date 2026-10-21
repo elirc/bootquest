@@ -13,6 +13,12 @@
 //    the new version takes one fresh answer - no row changes, like the server
 //  - an explain-back that is leg (b) of a project unit refuses an answer (409 ARTIFACT_REQUIRED)
 //    and lists the artifact in detail.explainBack.artifactRequired until it has a solo verified pass
+//  - explain-back retakes: a PRACTICE re-answer opens once the answer of record is self-scored
+//    (403 NOT_ANSWERED / 409 NOT_VERIFIED before; one unscored practice at a time, 403
+//    ALREADY_ANSWERED), recorded assisted; its practice-score files 'practice' evidence, 0 XP, no
+//    retests; ALTERNATE sets (fixtures sharing altSet.group) rotate: a fresh answer to a sibling
+//    opens >= 2 days after the newest fresh answer in the group (409 NOT_DUE; the mock clock is
+//    fixed, so once one sibling is answered the others stay closed)
 // State lives per instance, so tests can make a fresh one.
 
 import competenciesJson from './fixtures/competencies.json';
@@ -24,6 +30,7 @@ import unitDetailsJson from './fixtures/unit-details.json';
 import unitsJson from './fixtures/units.json';
 import { notesFixtures, type NoteFixture } from './fixtures/notes';
 import {
+  altSetLadderUnits,
   campaignFixtures,
   emptyPromotion,
   lockedCampaignFixtures,
@@ -239,6 +246,8 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
   const units = clone(fx.units);
   // ladder dead end #2: the gated explain-back and its artifact (agentic track)
   for (const u of gatedLadderUnits) units[u.trackId] = [...(units[u.trackId] ?? []), clone(u)];
+  // explain-back alternate sets: two sibling sets of one DESIGN IT question set (sysdesign track)
+  for (const u of altSetLadderUnits) units[u.trackId] = [...(units[u.trackId] ?? []), clone(u)];
   // W8: the study-quest fixture units (csharp borrowbox quest)
   for (const sq of Object.values(studyQuestFixtures)) units[sq.unit.trackId] = [...(units[sq.unit.trackId] ?? []), clone(sq.unit)];
   // B4: the written-unit fixtures (answer first, then the model answer)
@@ -259,6 +268,8 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
   // W6 answer-first state: unitId -> every recorded answer (append-only, oldest first); attemptId -> self-score
   const ebAnswers = new Map<number, StoredAnswer<string[]>[]>();
   const kataAnswers = new Map<number, StoredAnswer<KataFinding[]>[]>();
+  // explain-back PRACTICE retakes: unitId -> practice attempts (append-only, oldest first; never answers of record)
+  const ebPractice = new Map<number, StoredAnswer<string[]>[]>();
   // item version per unit (1 until reseedItem): an answer counts only for the version it answered
   const itemVersion = new Map<number, number>();
   const versionOf = (unitId: number) => itemVersion.get(unitId) ?? 1;
@@ -469,6 +480,8 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
     score: number,
     observation: string,
     competencies: CompetencyId[],
+    /** derived from the attempt's mode unless given (a practice attempt is assisted with source 'practice') */
+    assistance?: EvidenceRowDto['assistance'],
   ): number[] {
     const a = attempts.get(attemptId)!;
     const ids = competencies.map((competency) => {
@@ -477,9 +490,14 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
         id,
         competency,
         kind,
-        intention: kind === 'kata' ? 'patch-review kata: findings first, then self-score' : 'explain-back with the code hidden',
+        intention:
+          kind === 'kata'
+            ? 'patch-review kata: findings first, then self-score'
+            : assistance === 'practice'
+              ? 'explain-back PRACTICE retake: the key was already seen; scored for feedback only'
+              : 'explain-back with the code hidden',
         observation,
-        assistance: a.mode === 'solo' ? 'none' : a.mode === 'assisted' ? 'self' : 'reveal',
+        assistance: assistance ?? (a.mode === 'solo' ? 'none' : a.mode === 'assisted' ? 'self' : 'reveal'),
         assessor: 'self',
         rating: null,
         verified: false,
@@ -602,6 +620,52 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
       .map((p) => ({ unitId: p.id, title: p.title }));
   }
 
+  // ---- explain-back retakes (server ladder-service practiceAttempts / ebSiblings / ebSetGate)
+  /** practice attempts of the item version now loaded */
+  const practiceOf = (unitId: number) => (ebPractice.get(unitId) ?? []).filter((p) => p.version === versionOf(unitId));
+  function practiceState(unitId: number): NonNullable<ExplainBackPublic['practice']> {
+    const rec = currentAnswer(ebAnswers, unitId);
+    const rows = practiceOf(unitId);
+    const latest = rows[rows.length - 1];
+    return {
+      available: rec !== undefined && scores.has(rec.attemptId),
+      count: rows.length,
+      latestUnscoredAttemptId: latest && !scores.has(latest.attemptId) ? latest.attemptId : null,
+    };
+  }
+  const setLabel = (unitId: number) => explainBackFixtures[String(unitId)]?.altSet?.set?.toUpperCase() ?? 'A';
+  /** loaded sibling sets (same altSet.group; itself included), in fixture (load) order */
+  function ebSiblings(unitId: number): number[] {
+    const group = explainBackFixtures[String(unitId)]?.altSet?.group;
+    if (group === undefined) return [unitId];
+    return Object.entries(explainBackFixtures)
+      .filter(([, f]) => f.altSet?.group === group)
+      .map(([k]) => Number(k))
+      .filter((k) => findUnit(k) !== null);
+  }
+  /** a FRESH answer opens >= 2 days after the newest fresh (non-practice) answer of any sibling, any version */
+  function ebSetGate(unitId: number): { open: boolean; opensAt: number | null } {
+    const sibs = ebSiblings(unitId);
+    if (sibs.length < 2) return { open: true, opensAt: null };
+    const ats = sibs.flatMap((s) => (ebAnswers.get(s) ?? []).map((a) => a.at));
+    if (ats.length === 0) return { open: true, opensAt: null };
+    const opensAt = Math.max(...ats) + 2 * DAY_MS;
+    return { open: NOW >= opensAt, opensAt };
+  }
+  function altSetsFor(unitId: number): ExplainBackPublic['altSets'] {
+    const sibs = ebSiblings(unitId);
+    if (sibs.length < 2) return undefined;
+    return {
+      group: explainBackFixtures[String(unitId)]!.altSet!.group,
+      label: setLabel(unitId),
+      siblings: sibs.map((s) => {
+        const rec = currentAnswer(ebAnswers, s);
+        return { unitId: s, label: setLabel(s), answered: rec !== undefined, scored: rec !== undefined && scores.has(rec.attemptId) };
+      }),
+      gate: ebSetGate(unitId),
+    };
+  }
+
   return {
     getHealth: () => wrap(() => ({ ok: true as const, version: 'mock', counts: { units: allUnits().length, checks: Object.values(fx.details).filter((d) => d.check).length } })),
 
@@ -648,6 +712,8 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
                 answered: currentAnswer(ebAnswers, id) !== undefined,
                 artifactRequired: artifactsAwaitingSoloPass(id),
                 supersededAnswerIds: supersededAnswerIds(ebAnswers, id),
+                practice: practiceState(id),
+                ...(altSetsFor(id) ? { altSets: altSetsFor(id) } : {}),
               }
             : null;
           out.explainBack = pub;
@@ -845,6 +911,16 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
               'an answer recorded before the artifact can never count, and the set can only be answered once',
           );
         }
+        // alternate sets: fresh sets of one question-set group are spaced >= 2 days apart
+        const gate = ebSetGate(id);
+        if (!gate.open) {
+          throw err(
+            409,
+            'NOT_DUE',
+            `unit ${id}: alternate set ${setLabel(id)} of this question set opens at ${new Date(gate.opensAt!).toISOString()} ` +
+              '(>= 2 days after your last answer in this set group — spaced repetition, not same-day re-reads)',
+          );
+        }
         const attemptId = recordAttempt(u, { explainBack: { questionSetKey: ITEM.explainBack.key(id), answers: body.answers } }, body.selfAssisted);
         recordAnswer(ebAnswers, id, { attemptId, at: NOW, version: versionOf(id), body: [...body.answers] });
         return { attemptId, mode: attempts.get(attemptId)!.mode, outcome: 'submitted' as const };
@@ -855,7 +931,14 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
         requireType(id, 'explain-back');
         const a = currentAnswer(ebAnswers, id);
         if (!a) throw notAnswered(ebAnswers, id, 'explainBack');
-        return { attemptId: a.attemptId, answeredAt: a.at, answers: a.body, questions: ebKeyPoints(id), scored: scores.get(a.attemptId) ?? null };
+        return {
+          attemptId: a.attemptId,
+          answeredAt: a.at,
+          answers: a.body,
+          questions: ebKeyPoints(id),
+          scored: scores.get(a.attemptId) ?? null,
+          practice: practiceOf(id).map((p) => ({ attemptId: p.attemptId, answeredAt: p.at, answers: p.body, scored: scores.get(p.attemptId) ?? null })),
+        };
       }),
 
     selfScoreExplainBack: (id, body) =>
@@ -883,6 +966,66 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
             ? [{ reviewItemId: nextId++, unitId: eb.retest.unitId, title: eb.retest.title, dueAt: NOW + 2 * DAY_MS, artifactUnitId: eb.retest.artifactUnitId }]
             : [];
         return { attemptId: a.attemptId, covered, total: ids.length, coverage, minCoveragePct: PROMOTION_MIN_COVERAGE * 100, passed, missed, evidenceIds, xp, retests, promotions: [] };
+      }),
+
+    practiceExplainBack: (id, body) =>
+      wrap(() => {
+        const { u } = requireType(id, 'explain-back');
+        const eb = explainBackFixtures[String(id)];
+        if (!eb) throw err(409, 'CONTENT_PENDING', 'question set not loaded');
+        const b = body as unknown as Record<string, unknown>;
+        if (Object.keys(b).some((k) => k !== 'answers')) throw err(400, 'VALIDATION', 'unrecognized key');
+        if (!Array.isArray(body.answers) || body.answers.length !== eb.questions.length || body.answers.some((a) => typeof a !== 'string' || a.trim() === '')) {
+          throw err(400, 'VALIDATION', `send exactly ${eb.questions.length} non-empty answers`);
+        }
+        const rec = currentAnswer(ebAnswers, id);
+        if (!rec) throw notAnswered(ebAnswers, id, 'explainBack');
+        if (!scores.has(rec.attemptId)) {
+          throw err(409, 'NOT_VERIFIED', `unit ${id}: self-score your answer of record #${rec.attemptId} first — practice opens after the first scored answer`);
+        }
+        const rows = practiceOf(id);
+        const latest = rows[rows.length - 1];
+        if (latest && !scores.has(latest.attemptId)) throw err(403, 'ALREADY_ANSWERED', `unit ${id}: practice attempt #${latest.attemptId} is recorded and unscored; score it first`);
+        // assisted by construction (the key of this very version was read)
+        const attemptId = recordAttempt(u, { explainBack: { questionSetKey: ITEM.explainBack.key(id), answers: body.answers, practice: true } }, true);
+        recordAnswer(ebPractice, id, { attemptId, at: NOW, version: versionOf(id), body: [...body.answers] });
+        return { attemptId, mode: attempts.get(attemptId)!.mode, outcome: 'submitted' as const };
+      }),
+
+    practiceScoreExplainBack: (id, body) =>
+      wrap(() => {
+        const { u } = requireType(id, 'explain-back');
+        const eb = explainBackFixtures[String(id)];
+        if (!eb) throw err(409, 'CONTENT_PENDING', 'question set not loaded');
+        const b = body as unknown as Record<string, unknown>;
+        if (Object.keys(b).some((k) => k !== 'attemptId' && k !== 'perKeyPoint') || !Number.isInteger(body.attemptId) || body.attemptId <= 0) {
+          throw err(400, 'VALIDATION', 'send { attemptId, perKeyPoint }');
+        }
+        if (!attempts.has(body.attemptId)) throw err(404, 'NOT_FOUND', `attempt ${body.attemptId} not found`);
+        const p = practiceOf(id).find((x) => x.attemptId === body.attemptId);
+        if (!p) throw err(409, 'NOT_VERIFIED', `attempt ${body.attemptId} is not a practice attempt of the question set loaded on unit ${id}`);
+        const ids = ebKeyPoints(id).flatMap((q) => q.keyPoints.map((k) => k.id));
+        exactMarks(ids, body.perKeyPoint);
+        if (scores.has(p.attemptId)) throw err(409, 'ALREADY_SCORED', `practice attempt #${p.attemptId} is already self-scored (evidence is append-only)`);
+        const missed = ids.filter((k) => body.perKeyPoint[k] === 'missed');
+        const covered = ids.length - missed.length;
+        const coverage = covered / ids.length;
+        const evidenceIds = fileEvidence(u, p.attemptId, 'explain-back', coverage, `${covered}/${ids.length} key points covered`, eb.competencies, 'practice');
+        scores.set(p.attemptId, { score: coverage, evidenceIds, at: NOW });
+        // feedback only: never XP, retests or promotions
+        return {
+          attemptId: p.attemptId,
+          covered,
+          total: ids.length,
+          coverage,
+          minCoveragePct: PROMOTION_MIN_COVERAGE * 100,
+          passed: coverage >= PROMOTION_MIN_COVERAGE,
+          missed,
+          evidenceIds,
+          xp: null,
+          retests: [],
+          promotions: [],
+        };
       }),
 
     submitKataFindings: (id, body) =>

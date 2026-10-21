@@ -12,7 +12,11 @@
  *   3. "Learn more" (GET /units/:id/notes): readings before answering, explanations withheld as a
  *      count until a recorded answer covers them (a missed question's stays withheld until its
  *      review card is due), all after a pass; a code unit's explanation after a pass, its solution
- *      only after a reveal. The server side loads the mock's OWN study-quest + notes fixtures.
+ *      only after a reveal. The server side loads the mock's OWN study-quest + notes fixtures;
+ *   4. explain-back retakes: PRACTICE re-answers (refused before the scored answer of record, one
+ *      unscored at a time, assisted, practice evidence, 0 XP) and ALTERNATE-set rotation (altSets on
+ *      the detail; a sibling of an answered set is 409 NOT_DUE for 2 days). The server side loads the
+ *      mock's OWN explain-back fixtures as seed items (the alternate sets share one provenance).
  * Cheap: one temp DB, a stand-in drill runner that applies the mock fixture's own pass rule, no
  * real grader. The client modules are loaded dynamically (they are typechecked by the client
  * workspace, not by this server program).
@@ -27,6 +31,8 @@ import { mapContentStore } from '../../src/api/content-store.ts';
 import type { Runner } from '../../src/api/runners.ts';
 import { fixedClock } from '../../src/engines/clock.ts';
 import { insertUnit } from '../../src/store/content.ts';
+import { explainBackUnitKey } from '../../src/store/ladder.ts';
+import type { SeedExplainBackItem } from '@bootquest/shared';
 import { localNoon, makeTempDb, type TempDb } from '../helpers.ts';
 
 const CLIENT_API = fileURLToPath(new URL('../../../client/src/api/', import.meta.url));
@@ -52,8 +58,33 @@ interface NotesLike {
   explanation: string | null;
   solution: unknown;
 }
+interface AltSetsLike {
+  label: string;
+  siblings: { unitId: number; label: string; answered: boolean; scored: boolean }[];
+  gate: { open: boolean; opensAt: number | null };
+}
+interface EbScoreLike {
+  attemptId: number;
+  covered: number;
+  total: number;
+  passed: boolean;
+  xp: unknown;
+  retests: unknown[];
+  promotions: unknown[];
+}
 interface ContractApi {
-  getUnit(id: number): Promise<{ rubric: unknown; written?: { answered: boolean }; studyQuest?: { questions: { itemKey: string; choices: string[] }[] } | null }>;
+  getUnit(id: number): Promise<{
+    rubric: unknown;
+    written?: { answered: boolean };
+    studyQuest?: { questions: { itemKey: string; choices: string[] }[] } | null;
+    explainBack?: { practice?: { available: boolean; count: number; latestUnscoredAttemptId: number | null }; altSets?: AltSetsLike } | null;
+  }>;
+  answerExplainBack(id: number, body: { answers: string[]; selfAssisted: boolean }): Promise<{ attemptId: number; mode: string }>;
+  getExplainBackKey(id: number): Promise<{ attemptId: number; answeredAt: number; practice?: { attemptId: number; answers: string[]; scored: { score: number } | null }[] }>;
+  selfScoreExplainBack(id: number, body: { perKeyPoint: Record<string, string> }): Promise<EbScoreLike>;
+  practiceExplainBack(id: number, body: { answers: string[] }): Promise<{ attemptId: number; mode: string; outcome: string }>;
+  practiceScoreExplainBack(id: number, body: { attemptId: number; perKeyPoint: Record<string, string> }): Promise<EbScoreLike>;
+  listEvidence(q?: { kind?: string }): Promise<{ items: { attemptId: number | null; assistance: string; kind: string }[] }>;
   getUnitNotes(id: number): Promise<NotesLike>;
   answerWritten(id: number, body: { answer: string; selfAssisted: boolean }): Promise<unknown>;
   getModelAnswer(id: number): Promise<{ answer: string; modelAnswer: string; rubric: { id: string; label: string }[] }>;
@@ -71,6 +102,11 @@ interface StudyFixture {
   public: { repo: string; sha: string; readingSteps: { key: string; title: string; headingPath: string[]; path: string; lines: { start: number; end: number } }[]; questions: { itemKey: string; prompt: string; choices: string[] }[] };
   keys: number[];
 }
+interface EbFixture {
+  competencies: string[];
+  questions: { prompt: string; keyPoints: { text: string; quote: string | null; cite: { path: string; lineStart: number; lineEnd: number } | null }[] }[];
+  altSet?: { group: string; set?: string };
+}
 interface WrittenFixture {
   unit: { key: string; title: string; difficulty: number };
   competencies: string[];
@@ -86,6 +122,9 @@ const AFTER: RateLike = { attempts: 2, passes: 1, guidedPasses: 1, passRate: 0.5
 const DRILL = 102; // mock fixture: js/reduce-groupby (drill-js, revealable, pass rule `reduce(`)
 const WRITTEN = 113; // mock fixture: a written review unit with a starter template
 const STUDY = 206; // mock fixture: the borrowbox study quest (5 questions) + its notes
+const EB = 105; // mock fixture: explain-back "closures" (3 questions, 5 key points)
+const ALT_A = 501; // mock fixture: explain-back alternate sets — the primary set A ...
+const ALT_B = 502; // ... and its sibling set B (same provenance)
 
 async function errorOf(p: Promise<unknown>): Promise<{ status: number; code: string }> {
   try {
@@ -104,7 +143,10 @@ let drillUnit: { key: string; title: string; difficulty: number };
 let study: StudyFixture;
 let server: Server;
 let tmp: TempDb;
-const ids = { mock: { drill: DRILL, written: WRITTEN, study: STUDY, drill2: DRILL }, server: { drill: 0, written: 0, study: 0, drill2: 0 } };
+const ids = {
+  mock: { drill: DRILL, written: WRITTEN, study: STUDY, drill2: DRILL, eb: EB, altA: ALT_A, altB: ALT_B },
+  server: { drill: 0, written: 0, study: 0, drill2: 0, eb: 0, altA: 0, altB: 0 },
+};
 const apis: Record<'mock' | 'server', () => ContractApi> = { mock: () => createMockApi({ passRateHistory: 'empty' }), server: () => httpApi };
 let httpApi: ContractApi;
 
@@ -114,7 +156,10 @@ beforeAll(async () => {
   const details = ((await import(CLIENT_API + 'fixtures/unit-details.json')) as { default: Record<string, DrillFixture> }).default;
   const units = ((await import(CLIENT_API + 'fixtures/units.json')) as { default: Record<string, { id: number; key: string; title: string; difficulty: number }[]> }).default;
   const { writtenFixtures } = (await import(CLIENT_API + 'fixtures/written.ts')) as { writtenFixtures: Record<string, WrittenFixture> };
-  const { studyQuestFixtures } = (await import(CLIENT_API + 'fixtures/ladder.ts')) as { studyQuestFixtures: Record<string, StudyFixture> };
+  const { studyQuestFixtures, explainBackFixtures } = (await import(CLIENT_API + 'fixtures/ladder.ts')) as {
+    studyQuestFixtures: Record<string, StudyFixture>;
+    explainBackFixtures: Record<string, EbFixture>;
+  };
   const { notesFixtures } = (await import(CLIENT_API + 'fixtures/notes.ts')) as { notesFixtures: Record<string, unknown[]> };
   study = studyQuestFixtures[String(STUDY)]!;
   drill = details[String(DRILL)]!;
@@ -158,6 +203,41 @@ beforeAll(async () => {
     },
     clock,
   );
+  // the mock's explain-back fixtures as real seed items: the alternate sets share one provenance (their sibling group)
+  const ebItem = (fid: number): SeedExplainBackItem => {
+    const f = explainBackFixtures[String(fid)]!;
+    return {
+      kind: 'explain-back',
+      key: `seed:explain-back:mock-${fid}`,
+      provenance: { repo: 'mockrepo', sha: study.public.sha, path: f.altSet ? `${f.altSet.group}.md` : `docs/eb-${fid}.md`, lines: { start: 1, end: 1 } },
+      citations: [],
+      questions: f.questions.map((q) => ({
+        prompt: q.prompt,
+        keyPoints: q.keyPoints.map((k) => ({ text: k.text, ...(k.quote !== null ? { quote: k.quote } : {}), ...(k.cite !== null ? { cite: k.cite } : {}) })),
+      })),
+      ...(f.altSet?.set !== undefined ? { set: f.altSet.set } : {}),
+    };
+  };
+  ids.server.eb = insertUnit(
+    tmp.db,
+    { key: 'contract/explain-closures', track: 'js', kind: 'explain-back', title: 'Explain-back: closures', competencies: ['language-fluency'], checks: [{ spec: { type: 'explain-back', questionSetKey: ebItem(EB).key } }] },
+    clock,
+  );
+  // the sibling lookup resolves units by their LADDER key (store/ladder.ts explainBackUnitKey)
+  for (const [k, fid] of [['altA', ALT_A], ['altB', ALT_B]] as const) {
+    ids.server[k] = insertUnit(
+      tmp.db,
+      {
+        key: explainBackUnitKey(ebItem(fid)),
+        track: 'sysdesign',
+        kind: 'explain-back',
+        title: `alt set ${fid}`,
+        competencies: ['system-design', 'communication'],
+        checks: [{ spec: { type: 'explain-back', questionSetKey: ebItem(fid).key } }],
+      },
+      clock,
+    );
+  }
   // the mock's study-quest fixture as real seed items (+ its notes, in the stamped SeedNoteItem shape)
   const sq = study.public;
   const prov = (path: string, lines = { start: 1, end: 1 }) => ({ repo: sq.repo, sha: sq.sha, path, lines });
@@ -175,6 +255,7 @@ beforeAll(async () => {
     })),
     ...sq.readingSteps.map((r) => ({ kind: 'reading-step', key: r.key, provenance: prov(r.path, r.lines), citations: [], title: r.title, headingPath: r.headingPath })),
     ...(notesFixtures[sq.repo] ?? []),
+    ...[EB, ALT_A, ALT_B].map((fid) => ebItem(fid)),
   ]);
   ids.server.study = insertUnit(
     tmp.db,
@@ -298,6 +379,54 @@ describe.each(['mock', 'server'] as const)('F17 contract (%s): the same honesty 
     });
     expect((await api.submitUnit(id, { answers: right, selfAssisted: false })).verdict).toBe('pass');
     expect(view(await api.getUnitNotes(id))).toMatchObject({ state: 'released', released: ['x-q1', 'x-q2', 'x-q3', 'x-q4', 'x-q5'], withheld: 0, waiting: false });
+  });
+
+  it('explain-back practice: refused before the SCORED answer of record; assisted, 0 XP, practice evidence; one unscored at a time; the record untouched', async () => {
+    const api = apis[side]();
+    const id = ids[side].eb;
+    const body = { answers: ['a', 'b', 'c'] };
+    const marks = Object.fromEntries(['q1k1', 'q1k2', 'q2k1', 'q2k2', 'q3k1'].map((k) => [k, 'covered']));
+    expect(await errorOf(api.practiceExplainBack(id, body))).toEqual({ status: 403, code: 'NOT_ANSWERED' });
+    const rec = await api.answerExplainBack(id, { ...body, selfAssisted: false });
+    expect(await errorOf(api.practiceExplainBack(id, body))).toEqual({ status: 409, code: 'NOT_VERIFIED' });
+    await api.selfScoreExplainBack(id, { perKeyPoint: marks });
+    expect((await api.getUnit(id)).explainBack?.practice).toEqual({ available: true, count: 0, latestUnscoredAttemptId: null });
+    const p = await api.practiceExplainBack(id, body);
+    expect(p).toMatchObject({ mode: 'assisted', outcome: 'submitted' });
+    expect(await errorOf(api.practiceExplainBack(id, body))).toEqual({ status: 403, code: 'ALREADY_ANSWERED' });
+    expect((await api.getUnit(id)).explainBack?.practice).toEqual({ available: true, count: 1, latestUnscoredAttemptId: p.attemptId });
+    expect(await errorOf(api.practiceScoreExplainBack(id, { attemptId: rec.attemptId, perKeyPoint: marks }))).toEqual({ status: 409, code: 'NOT_VERIFIED' });
+    expect(await errorOf(api.practiceScoreExplainBack(id, { attemptId: 999_999, perKeyPoint: marks }))).toEqual({ status: 404, code: 'NOT_FOUND' });
+    const s = await api.practiceScoreExplainBack(id, { attemptId: p.attemptId, perKeyPoint: marks });
+    expect(s).toMatchObject({ attemptId: p.attemptId, covered: 5, total: 5, passed: true, xp: null, retests: [], promotions: [] });
+    expect(await errorOf(api.practiceScoreExplainBack(id, { attemptId: p.attemptId, perKeyPoint: marks }))).toEqual({ status: 409, code: 'ALREADY_SCORED' });
+    const key = await api.getExplainBackKey(id);
+    expect(key.attemptId).toBe(rec.attemptId);
+    expect(key.practice?.map((x) => ({ attemptId: x.attemptId, answers: x.answers, score: x.scored?.score }))).toEqual([{ attemptId: p.attemptId, answers: body.answers, score: 1 }]);
+    const ev = (await api.listEvidence({ kind: 'explain-back' })).items.filter((e) => e.attemptId === p.attemptId);
+    expect(ev.map((e) => e.assistance)).toEqual(['practice']);
+    expect(await errorOf(api.answerExplainBack(id, { ...body, selfAssisted: false }))).toEqual({ status: 403, code: 'ALREADY_ANSWERED' });
+  });
+
+  it('explain-back alternate sets: altSets on the detail; the first answer in a group is never gated, its sibling is then 409 NOT_DUE for 2 days', async () => {
+    const api = apis[side]();
+    const [a, b] = [ids[side].altA, ids[side].altB];
+    const view = (alt: AltSetsLike | undefined) =>
+      alt && { label: alt.label, siblings: alt.siblings.map((x) => ({ set: x.unitId === a ? 'unit A' : x.unitId === b ? 'unit B' : x.unitId, label: x.label, answered: x.answered, scored: x.scored })), gate: alt.gate };
+    expect(view((await api.getUnit(b)).explainBack?.altSets)).toEqual({
+      label: 'B',
+      siblings: [
+        { set: 'unit A', label: 'A', answered: false, scored: false },
+        { set: 'unit B', label: 'B', answered: false, scored: false },
+      ],
+      gate: { open: true, opensAt: null },
+    });
+    await api.answerExplainBack(a, { answers: ['a', 'b', 'c'], selfAssisted: false });
+    const at = (await api.getExplainBackKey(a)).answeredAt;
+    const alt = view((await api.getUnit(b)).explainBack?.altSets);
+    expect(alt?.gate).toEqual({ open: false, opensAt: at + 2 * 86_400_000 });
+    expect(alt?.siblings[0]).toEqual({ set: 'unit A', label: 'A', answered: true, scored: false });
+    expect(await errorOf(api.answerExplainBack(b, { answers: ['a', 'b', 'c'], selfAssisted: false }))).toEqual({ status: 409, code: 'NOT_DUE' });
   });
 
   it('"Learn more" code unit: explanation locked, released by a pass (no solution), solution only after a reveal', async () => {

@@ -9,7 +9,7 @@ import {
 } from '@bootquest/shared';
 import type { Db } from '../db/database.ts';
 import { findVariation, getAttempt, HonestyRuleError, revealedInVariationChain, VERIFIED_PASS_SQL } from './attempts.ts';
-import { nowMs, type Clock } from './clock.ts';
+import { DAY_MS, nowMs, type Clock } from './clock.ts';
 import { evaluatePromotion, isVariationOf, lastRatingChangeAt, PROMOTION_MIN_COVERAGE, RETEST_MIN_DELAY_MS } from './evidence.ts';
 
 /**
@@ -27,6 +27,15 @@ import { evaluatePromotion, isVariationOf, lastRatingChangeAt, PROMOTION_MIN_COV
  *  - the MUTATION gate evidence (spec §5): re-evaluated server-side from the
  *    report counts, linked to the unit's latest verified-pass attempt.
  */
+
+/**
+ * Explain-back alternate sets (retakes): sibling sets of one question set (same seed
+ * provenance repo + path) rotate on a spaced schedule. A fresh (non-practice) answer to any
+ * sibling is refused until at least this long after the newest fresh answer anywhere in the
+ * sibling group (attempt.created_at, any item version) — spaced repetition, never same-day
+ * re-reads of a just-seen key's twin. The first answer in a group is never gated.
+ */
+export const EB_SET_MIN_GAP_MS = 2 * DAY_MS;
 
 const PROJECT_KINDS_SQL = PROJECT_UNIT_KINDS.map((k) => `'${k}'`).join(', ');
 const PROJECT_KIND_SET: ReadonlySet<string> = new Set(PROJECT_UNIT_KINDS);
@@ -252,9 +261,11 @@ export function promotionProgress(db: Db, competency: CompetencyId, now: Clock):
   if (ev.legs.explainBack !== null) {
     explainBack = { state: 'done', evidenceId: ev.legs.explainBack, coverage: evRow(ev.legs.explainBack)?.score ?? null };
   } else {
-    // the newest explain-back in the window: a sub-80% self-score is a visible "failed" leg
+    // the newest UNASSISTED explain-back in the window: a sub-80% self-score is a visible
+    // "failed" leg. Assisted self-scores (practice retakes, prior-key answers) can never anchor
+    // leg (b), so a weak one is feedback, never a failed promotion leg.
     const last = db.get<{ id: number; score: number | null }>(
-      `SELECT id, score FROM evidence WHERE competency_id = ? AND kind = 'explain-back' AND created_at > ? AND created_at <= ?
+      `SELECT id, score FROM evidence WHERE competency_id = ? AND kind = 'explain-back' AND assistance = 'none' AND created_at > ? AND created_at <= ?
         ORDER BY created_at DESC, id DESC LIMIT 1`,
       competency,
       since,

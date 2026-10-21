@@ -99,6 +99,16 @@ describe('http client: real routes', () => {
     expect(calls[4]!.body).toEqual({ findings: [{ scenario: 's', evidence: 'e', consequence: 'c' }], selfAssisted: true });
   });
 
+  it('explain-back retakes: the practice routes, with whitelisted bodies (never selfAssisted / an assistance / xp field)', async () => {
+    const { calls, impl } = fakeFetch(() => ok({}));
+    const api = createHttpApi('/api', impl);
+    await api.practiceExplainBack(5, { answers: ['a', 'b', 'c'], selfAssisted: true, assistance: 'none' } as never);
+    await api.practiceScoreExplainBack(5, { attemptId: 42, perKeyPoint: { q1k1: 'covered' }, xp: 20 } as never);
+    expect(calls.map((c) => `${c.method} ${c.url}`)).toEqual(['POST /api/units/5/explain-back/practice', 'POST /api/units/5/explain-back/practice-score']);
+    expect(calls[0]!.body).toEqual({ answers: ['a', 'b', 'c'] });
+    expect(calls[1]!.body).toEqual({ attemptId: 42, perKeyPoint: { q1k1: 'covered' } });
+  });
+
   it('submit sends only code|answer + boolean selfAssisted — never an assistance string', async () => {
     const { calls, impl } = fakeFetch(() => ok());
     const api = createHttpApi('/api', impl);

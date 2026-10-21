@@ -46,14 +46,14 @@ describe('migrations', () => {
     const tmp = makeTempDb();
     try {
       const first = tmp.db.all<{ version: number }>('SELECT version FROM schema_version ORDER BY version');
-      expect(first.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
+      expect(first.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
       tmp.db.close();
 
       const again = openDb({ path: tmp.path, env: {} });
       try {
         expect(migrate(again)).toEqual([]); // third pass, explicit
-        expect(schemaVersion(again)).toBe(14);
-        expect(again.get<{ n: number }>('SELECT COUNT(*) AS n FROM schema_version')!.n).toBe(14);
+        expect(schemaVersion(again)).toBe(15);
+        expect(again.get<{ n: number }>('SELECT COUNT(*) AS n FROM schema_version')!.n).toBe(15);
         // 009: exactly one choice-order secret, and re-opening never regenerates it
         expect(again.all<{ secret: string }>('SELECT secret FROM server_secret')).toHaveLength(1);
         expect(again.all<{ checksum: string }>('SELECT checksum FROM schema_version').every((r) => /^[0-9a-f]{64}$/.test(r.checksum))).toBe(true);
@@ -303,6 +303,11 @@ describe('schema constraints', () => {
       expect(() => ctx.db.run(`INSERT INTO attempt (unit_id, mode, assisted, assistance_source, outcome, created_at) VALUES (?, ${bad}, 'submitted', 0)`, unitId), bad).toThrow();
     }
     ctx.db.run(`INSERT INTO attempt (unit_id, mode, assisted, assistance_source, outcome, created_at) VALUES (?, 'assisted', 1, 'prior-key', 'submitted', 0)`, unitId);
+    // 015: 'practice' is an ASSISTED source only
+    for (const bad of [`'solo', 0, 'practice'`, `'guided', 1, 'practice'`, `'assisted', 0, 'practice'`]) {
+      expect(() => ctx.db.run(`INSERT INTO attempt (unit_id, mode, assisted, assistance_source, outcome, created_at) VALUES (?, ${bad}, 'submitted', 0)`, unitId), bad).toThrow();
+    }
+    ctx.db.run(`INSERT INTO attempt (unit_id, mode, assisted, assistance_source, outcome, created_at) VALUES (?, 'assisted', 1, 'practice', 'submitted', 0)`, unitId);
   });
 
   it('migration 013 (prior-key) rebuilds attempt + evidence on a DB WITH history: rows, FKs, append-only triggers and the frozen-check trigger all survive', () => {
@@ -328,13 +333,86 @@ describe('schema constraints', () => {
         };
         expect(() => db.run(`INSERT INTO attempt (unit_id, mode, assisted, assistance_source, outcome, created_at) VALUES (?, 'assisted', 1, 'prior-key', 'submitted', 0)`, unitId)).toThrow();
         // now the real migration set (013 included)
-        expect(migrate(db)).toEqual([13, 14]);
+        expect(migrate(db)).toEqual([13, 14, 15]);
         expect({ attempt: db.all('SELECT * FROM attempt ORDER BY id'), evidence: db.all('SELECT * FROM evidence ORDER BY id'), run: db.all('SELECT * FROM run ORDER BY id') }).toEqual(before);
         expect(db.all('PRAGMA foreign_key_check')).toEqual([]);
         expect(() => db.run('UPDATE attempt SET score = 0 WHERE id = ?', a.id)).toThrow(/append-only/);
         expect(() => db.run('DELETE FROM evidence WHERE id = ?', ev.id)).toThrow(/append-only/);
         expect(() => db.run(`UPDATE "check" SET spec = json_set(spec, '$.timeoutMs', 1) WHERE unit_id = ?`, unitId)).toThrow(/frozen/);
         db.run(`INSERT INTO attempt (unit_id, mode, assisted, assistance_source, outcome, created_at) VALUES (?, 'assisted', 1, 'prior-key', 'submitted', 0)`, unitId);
+      } finally {
+        db.close();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
+  });
+
+  it('migration 015 (practice) rebuilds attempt + evidence on a DB WITH history: rows, FKs, append-only triggers and the frozen-check trigger all survive', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bootquest-m015-'));
+    const migDir = join(dir, 'migrations');
+    const all = join(import.meta.dirname, '..', 'src', 'db', 'migrations');
+    try {
+      // a DB at schema 14 with history
+      mkdirSync(migDir);
+      for (const f of readdirSync(all).filter((f) => /^0(0\d|1[0-4])_/.test(f))) copyFileSync(join(all, f), join(migDir, f));
+      const db = new Db(join(dir, 'm.db'));
+      try {
+        migrate(db, migDir);
+        expect(schemaVersion(db)).toBe(14);
+        const clock = fixedClock(localNoon(2026, 10, 1));
+        const unitId = makeUnit(db, clock, { kind: 'drill', competencies: ['language-fluency'] });
+        const a = submit(db, clock, unitId);
+        const ev = recordEvidence(db, { competency: 'language-fluency', kind: 'submit', intention: 'i', observation: 'o', attemptId: a.id }, clock);
+        const before = {
+          attempt: db.all('SELECT * FROM attempt ORDER BY id'),
+          evidence: db.all('SELECT * FROM evidence ORDER BY id'),
+          run: db.all('SELECT * FROM run ORDER BY id'),
+        };
+        // a prior-key row (013) is history 015 must carry across the rebuild
+        db.run(`INSERT INTO attempt (unit_id, mode, assisted, assistance_source, outcome, created_at) VALUES (?, 'assisted', 1, 'prior-key', 'submitted', 0)`, unitId);
+        const before15 = db.all('SELECT * FROM attempt ORDER BY id');
+        expect(() => db.run(`INSERT INTO attempt (unit_id, mode, assisted, assistance_source, outcome, created_at) VALUES (?, 'assisted', 1, 'practice', 'submitted', 0)`, unitId)).toThrow();
+        expect(() =>
+          db.run(
+            `INSERT INTO evidence (competency_id, unit_id, kind, intention, observation, assistance, assessor, created_at) VALUES ('language-fluency', ?, 'explain-back', 'i', 'o', 'practice', 'self', 0)`,
+            unitId,
+          ),
+        ).toThrow();
+        // now the real migration set (015 included)
+        expect(migrate(db)).toEqual([15]);
+        expect({ attempt: db.all('SELECT * FROM attempt ORDER BY id'), evidence: db.all('SELECT * FROM evidence ORDER BY id'), run: db.all('SELECT * FROM run ORDER BY id') }).toEqual({ ...before, attempt: before15 });
+        expect(db.all('PRAGMA foreign_key_check')).toEqual([]);
+        expect(() => db.run('UPDATE attempt SET score = 0 WHERE id = ?', a.id)).toThrow(/append-only/);
+        expect(() => db.run('DELETE FROM evidence WHERE id = ?', ev.id)).toThrow(/append-only/);
+        expect(() => db.run(`UPDATE "check" SET spec = json_set(spec, '$.timeoutMs', 1) WHERE unit_id = ?`, unitId)).toThrow(/frozen/);
+        // 015's lists: 'practice' is accepted only as an ASSISTED source, and on evidence
+        for (const bad of [`'solo', 0, 'practice'`, `'guided', 1, 'practice'`, `'assisted', 0, 'practice'`]) {
+          expect(() => db.run(`INSERT INTO attempt (unit_id, mode, assisted, assistance_source, outcome, created_at) VALUES (?, ${bad}, 'submitted', 0)`, unitId), bad).toThrow();
+        }
+        const p = db.run(`INSERT INTO attempt (unit_id, mode, assisted, assistance_source, outcome, created_at) VALUES (?, 'assisted', 1, 'practice', 'submitted', 0)`, unitId).lastInsertRowid;
+        const pe = db.run(
+          `INSERT INTO evidence (competency_id, attempt_id, unit_id, kind, intention, observation, assistance, assessor, created_at) VALUES ('language-fluency', ?, ?, 'explain-back', 'i', 'o', 'practice', 'self', 0)`,
+          p,
+          unitId,
+        ).lastInsertRowid;
+        // the triggers survive the rebuild (all nine re-created)
+        expect(() => db.run('UPDATE attempt SET score = 0 WHERE id = ?', p)).toThrow(/append-only/);
+        expect(() => db.run('DELETE FROM attempt WHERE id = ?', p)).toThrow(/append-only/);
+        expect(() => db.run('UPDATE evidence SET score = 0 WHERE id = ?', pe)).toThrow(/append-only/);
+        const triggers = db.all<{ name: string }>(`SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name`).map((t) => t.name);
+        for (const t of [
+          'attempt_no_update',
+          'attempt_no_delete',
+          'attempt_no_replace',
+          'check_referenced_frame_frozen',
+          'evidence_no_update',
+          'evidence_no_delete',
+          'evidence_no_replace',
+          'evidence_rating_change_consistent',
+          'competency_rating_guarded_update',
+        ])
+          expect(triggers, t).toContain(t);
       } finally {
         db.close();
       }

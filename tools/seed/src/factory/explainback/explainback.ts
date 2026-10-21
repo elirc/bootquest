@@ -118,7 +118,19 @@ export function scaffoldQuestions(text: string): { questions: DraftQuestion[]; l
   return { questions: picked.map((p) => p.q), lines: { start: picked[0]!.from, end: picked[picked.length - 1]!.to } };
 }
 
-export function buildExplainBackItem(co: Checkout, unitPath: string, questions: DraftQuestion[], lines: { start: number; end: number }, origin: string): SeedExplainBackItem {
+/**
+ * `set`: an ALTERNATE set id (explain-back retakes; absent = the primary set). The caller gives an
+ * alternate set its own origin (`draft-<set>`), so its key differs from the primary's while the
+ * provenance (repo, path) — the derived sibling group — stays the same.
+ */
+export function buildExplainBackItem(
+  co: Checkout,
+  unitPath: string,
+  questions: DraftQuestion[],
+  lines: { start: number; end: number },
+  origin: string,
+  set?: string,
+): SeedExplainBackItem {
   return {
     kind: 'explain-back',
     key: stableKey('explainback', co.repo, 'explain-back', [unitPath, origin]),
@@ -128,6 +140,7 @@ export function buildExplainBackItem(co: Checkout, unitPath: string, questions: 
       prompt: q.prompt,
       keyPoints: q.keyPoints.map((kp) => ({ text: kp.text, ...(kp.quote !== undefined ? { quote: kp.quote } : {}), ...(kp.cite ? { cite: kp.cite } : {}) })),
     })),
+    ...(set ? { set } : {}),
   };
 }
 
@@ -199,6 +212,7 @@ export function validateExplainBack(co: Checkout, ex: Exclusions, sourceText: st
   const drop = why.find((w) => w.startsWith('__drop__'));
   if (drop) return { verdict: 'drop', reason: drop.slice('__drop__'.length) };
   if (why.length) return { verdict: 'reject', reason: why.join(' ; ') };
+  // `...item` carries every parsed field through, the alternate-set id (`set`) included
   const bound: SeedExplainBackItem = {
     ...item,
     questions: item.questions.map((q, qi) => ({

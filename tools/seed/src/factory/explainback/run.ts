@@ -39,10 +39,24 @@ export interface ExplainBackOptions {
    * eb-leak guard against (--allow-no-quests: for repos that have no quest pack at all)
    */
   allowNoQuests?: boolean;
+  /**
+   * an ALTERNATE set id (explain-back retakes, [a-z0-9]{1,8}): requires `draft`. The item gets
+   * `set`, its key origin becomes `draft-<set>` (distinct from the primary's `draft`) and the default
+   * pack name `<repo>--<unit>--set-<set>`; the provenance (repo, path) — the sibling group — is the
+   * primary's. The eb-sibling guard fails it when a prompt / key point near-duplicates a sibling.
+   */
+  set?: string;
 }
+
+/** an alternate-set id: the SeedExplainBackItem.set grammar */
+const SET_ID = /^[a-z0-9]{1,8}$/;
 
 export function runExplainBack(o: ExplainBackOptions): RunReport {
   const head = ['[seed:explainback]'];
+  if (o.set !== undefined) {
+    if (!o.draft) return refusal('explainback', head, `--set ${o.set} needs --draft: an alternate set is an authored draft, never the deterministic scaffold`);
+    if (!SET_ID.test(o.set)) return refusal('explainback', head, `--set ${JSON.stringify(o.set)} is not an alternate-set id (1-8 of [a-z0-9], e.g. b)`);
+  }
   let ex: Exclusions;
   let co;
   try {
@@ -53,7 +67,7 @@ export function runExplainBack(o: ExplainBackOptions): RunReport {
     throw err;
   }
   const unit = (isAbsolute(o.unit) ? relative(co.root, o.unit) : o.unit).replace(/\\/g, '/');
-  head[0] = `[seed:explainback] repo ${co.repo} @ ${co.sha} (pin ${co.pin}) unit ${unit}${o.draft ? ` draft ${o.draft}` : ' (deterministic scaffold)'}`;
+  head[0] = `[seed:explainback] repo ${co.repo} @ ${co.sha} (pin ${co.pin}) unit ${unit}${o.draft ? ` draft ${o.draft}` : ' (deterministic scaffold)'}${o.set !== undefined ? ` alternate set ${o.set}` : ''}`;
   const repoHit = ex.repo(co.repo);
   if (repoHit) return refusal('explainback', head, `repo ${co.repo} is ${repoHit.reason}: ${repoHit.entry.note}`);
   const hit = ex.path(co.repo, unit);
@@ -85,10 +99,11 @@ export function runExplainBack(o: ExplainBackOptions): RunReport {
     if (err instanceof z.ZodError) return refusal('explainback', head, `draft is malformed: ${err.issues.slice(0, 3).map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')}`);
     throw err;
   }
-  const item = buildExplainBackItem(co, unit, questions, lines, o.draft ? 'draft' : 'scaffold');
+  const origin = o.set !== undefined ? `draft-${o.set}` : o.draft ? 'draft' : 'scaffold';
+  const item = buildExplainBackItem(co, unit, questions, lines, origin, o.set);
   const outcome = emptyOutcome();
   bucket(outcome, item.key, validateExplainBack(co, ex, text, item));
-  const name = `${co.repo}--${unit.replace(/[^A-Za-z0-9._-]+/g, '-')}`;
+  const name = `${co.repo}--${unit.replace(/[^A-Za-z0-9._-]+/g, '-')}${o.set !== undefined ? `--set-${o.set}` : ''}`;
   const outDir = o.out ?? join(DEFAULT_SEED_DIR, 'explainback', name);
   const write = writeSeedPack({ dir: outDir, generator: 'explainback', name, checkout: co, inputs: [unit, ...(o.draft ? [`draft:${o.draft.replace(/\\/g, '/').split('/').pop()}`] : [])], outcome, exclusions: ex, forceReplace: o.forceReplace === true, allowNoQuests: o.allowNoQuests === true });
   return summarize('explainback', head, outcome, write, outDir, false);

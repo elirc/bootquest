@@ -1,9 +1,12 @@
-// npm run seed:explainback -- <unit-source> --checkout <dir> --sha <sha> [--repo <name>] [--draft <set.json>] [--out <dir>] [--force-replace] [--allow-no-quests]
+// npm run seed:explainback -- <unit-source> --checkout <dir> --sha <sha> [--repo <name>] [--draft <set.json>] [--set <id>] [--out <dir>] [--force-replace] [--allow-no-quests]
 // 3 questions x 5-8 key points from the unit's source; every key point must quote
 // (whitespace-normalized substring) or cite (resolvable file:line) the source.
 // Without --draft: a deterministic scaffold (first three H2 sections, verbatim sentences).
 // No stamp unless a quest pack of the same repo exists under <out>/../../quests (the eb-leak guard's
 // keyed answers); --allow-no-quests stamps without one (a repo that has no quest pack).
+// --set <id> (needs --draft): an ALTERNATE set of the same unit (explain-back retakes): item `set`,
+// key origin draft-<id>, default pack <repo>--<unit>--set-<id>; the eb-sibling guard refuses a set
+// whose prompts / key points near-duplicate a sibling set of the same (repo, path).
 import { finish, parseArgs } from '../report.ts';
 import { runExplainBack } from './run.ts';
 
@@ -12,13 +15,15 @@ finish('seed:explainback', () => {
   const unit = positional[0];
   const checkout = opts.get('checkout');
   const sha = opts.get('sha');
-  if (!unit || !checkout || !sha) throw new Error('usage: seed:explainback <unit-source> --checkout <dir> --sha <sha> [--repo <name>] [--draft <set.json>] [--out <dir>]');
+  if (!unit || !checkout || !sha) throw new Error('usage: seed:explainback <unit-source> --checkout <dir> --sha <sha> [--repo <name>] [--draft <set.json> [--set <id>]] [--out <dir>]');
+  if (flags.has('set')) throw new Error('--set needs an alternate-set id, e.g. --set b');
   return runExplainBack({
     unit,
     checkout,
     sha,
     ...(opts.has('repo') ? { repo: opts.get('repo')! } : {}),
     ...(opts.has('draft') ? { draft: opts.get('draft')! } : {}),
+    ...(opts.has('set') ? { set: opts.get('set')! } : {}),
     ...(opts.has('out') ? { out: opts.get('out')! } : {}),
     ...(opts.has('exclusions') ? { exclusionsPath: opts.get('exclusions')! } : {}),
     forceReplace: flags.has('force-replace'),

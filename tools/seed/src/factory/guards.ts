@@ -18,6 +18,8 @@
  *               quiz-balance (length / rank / format / slot tells over the pack's quizzes),
  *               explanation-lint (no generator-label artifact as a quiz explanation);
  *   explainback no key point (text or quote) leaks a keyed answer of a same-repo quest pack;
+ *               eb-sibling: no prompt / key point near-duplicates one of a sibling (alternate)
+ *               set of the same (repo, path);
  *   every pack  secret scan over ALL shipped text (every string in every item, the registry's
  *               secretPatterns — the same scanner every generator runs over its inputs).
  */
@@ -26,6 +28,7 @@ import { join } from 'node:path';
 import type { SeedExplainBackItem, SeedGenerator, SeedItem, SeedQuizItem } from '@bootquest/shared';
 import type { Exclusions } from './exclusions.ts';
 import { leakMatchPrepared, prepareLeakKey, prepareLeakText, type LeakMatchOptions, type LeakText } from './leak.ts';
+import { nearDuplicate } from './util.ts';
 
 // =====================================================================================
 // blind-pass (moved from ops/blind-pass.test.ts; that suite now calls these)
@@ -512,6 +515,96 @@ export function sameRepoKeyedQuizzes(seedDir: string, repo: string): KeyedQuiz[]
 }
 
 // =====================================================================================
+// eb-sibling: alternate sets of one question set must not share prompts or key points
+// =====================================================================================
+
+/**
+ * Explain-back alternate sets (retakes) are SIBLING packs: same provenance (repo, path), one item
+ * each, rotated on a spaced schedule. Answering one set unlocks its key, so a sibling whose prompt or
+ * key point near-duplicates it would be answered from a just-read key, never recalled. Every
+ * explain-back item is compared against every OTHER item of its (repo, path) group across the
+ * estate: any prompt pair, and any pair of key-point text / quote strings, that nearDuplicate()
+ * (factory/util.ts) flags FAILS the pack. No exemption map: rewrite the draft, never admit.
+ * A pair is compared when at least one side is an ALTERNATE set (`set` present): two PRIMARY sets
+ * of one unit (a draft and the deterministic scaffold, each its own origin — the established W7
+ * pattern the ladder fixture and demo:promotion rely on) predate alternate sets and may quote the
+ * same source sentences; the server still spaces their fresh answers like any sibling group.
+ */
+export interface EbSiblingEntry {
+  /** the explain-back pack directory name */
+  pack: string;
+  item: SeedExplainBackItem;
+}
+
+/** The group an explain-back item rotates in: its seed provenance (repo, path), never a stored id. */
+export const ebSiblingGroupKey = (it: Pick<SeedExplainBackItem, 'provenance'>): string => `${it.provenance.repo}\u0000${it.provenance.path}`;
+
+/** (repo \u0000 path) -> every explain-back item under <seedDir>/explainback/<pack>/items.json (one parse of the estate). */
+export function ebSiblingIndex(seedDir: string): Map<string, EbSiblingEntry[]> {
+  const dir = join(seedDir, 'explainback');
+  const out = new Map<string, EbSiblingEntry[]>();
+  if (!existsSync(dir)) return out;
+  for (const pack of readdirSync(dir).sort()) {
+    const f = join(dir, pack, 'items.json');
+    if (!statSync(join(dir, pack)).isDirectory() || !existsSync(f)) continue;
+    const items = (JSON.parse(readFileSync(f, 'utf8')) as { items?: SeedItem[] }).items ?? [];
+    for (const it of items) {
+      if (it.kind !== 'explain-back') continue;
+      const k = ebSiblingGroupKey(it);
+      const list = out.get(k) ?? [];
+      list.push({ pack, item: it });
+      out.set(k, list);
+    }
+  }
+  return out;
+}
+
+const ebStrings = (it: SeedExplainBackItem): { where: string; text: string }[] =>
+  it.questions.flatMap((q, qi) =>
+    q.keyPoints.flatMap((kp, ki) => [
+      { where: `q${qi + 1}.kp${ki + 1}`, text: kp.text },
+      ...(kp.quote !== undefined ? [{ where: `q${qi + 1}.kp${ki + 1}.quote`, text: kp.quote }] : []),
+    ]),
+  );
+
+/**
+ * The eb-sibling problems of a pack's explain-back items against their (repo, path) siblings in
+ * `index` and in the pack itself (an identical item key is the item itself, never a sibling).
+ */
+export function explainBackSiblingProblems(items: readonly SeedItem[], index: ReadonlyMap<string, readonly EbSiblingEntry[]>, packName = '(this pack)'): string[] {
+  const out: string[] = [];
+  const own = items.filter((i): i is SeedExplainBackItem => i.kind === 'explain-back');
+  for (const it of own) {
+    const g = ebSiblingGroupKey(it);
+    const seen = new Set<string>([it.key]);
+    const others: EbSiblingEntry[] = [];
+    for (const e of [...own.filter((o) => ebSiblingGroupKey(o) === g).map((item) => ({ pack: packName, item })), ...(index.get(g) ?? [])]) {
+      if (seen.has(e.item.key)) continue;
+      seen.add(e.item.key);
+      others.push(e);
+    }
+    const mine = ebStrings(it);
+    for (const o of others) {
+      if (it.set === undefined && o.item.set === undefined) continue; // primary vs primary: see the doc above
+      const tag =`${o.pack} (${o.item.set === undefined ? 'primary set' : `set ${o.item.set}`})`;
+      it.questions.forEach((q, qi) =>
+        o.item.questions.forEach((oq, oi) => {
+          if (nearDuplicate(q.prompt, oq.prompt)) {
+            out.push(`eb-sibling: q${qi + 1} prompt near-duplicates the q${oi + 1} prompt of sibling ${tag}: "${q.prompt.slice(0, 80)}" ~ "${oq.prompt.slice(0, 80)}"`);
+          }
+        }),
+      );
+      const theirs = ebStrings(o.item);
+      for (const a of mine) {
+        const hit = theirs.find((b) => nearDuplicate(a.text, b.text));
+        if (hit) out.push(`eb-sibling: ${a.where} near-duplicates ${hit.where} of sibling ${tag}: "${a.text.slice(0, 80)}" ~ "${hit.text.slice(0, 80)}"`);
+      }
+    }
+  }
+  return out;
+}
+
+// =====================================================================================
 // the per-pack entry point (writeSeedPack + seed:check)
 // =====================================================================================
 
@@ -530,6 +623,8 @@ export interface PackGuardInput {
   seedRoot: string | null;
   /** a prebuilt keyedQuizIndex(seedRoot) (seed:check builds one per run); default: built here */
   questIndex?: ReadonlyMap<string, readonly KeyedQuiz[]>;
+  /** a prebuilt ebSiblingIndex(seedRoot) (seed:check builds one per run); default: built here (lazily, explain-back only) */
+  ebIndex?: ReadonlyMap<string, readonly EbSiblingEntry[]>;
   /**
    * explain-back: FAIL when no quest pack of the same source repo exists to check the key points
    * against (an --out outside the estate, or explain-back seeded before its quest pack: the leak
@@ -563,6 +658,9 @@ export function packGuardProblems(p: PackGuardInput): string[] {
     const quizzes = index?.get(p.repo) ?? [];
     const leaks = p.items.flatMap((it) => (it.kind === 'explain-back' ? explainBackKeyLeaks(it, quizzes) : []));
     out.push(...explainBackLeakProblems(p.name, leaks));
+    // alternate sets: no prompt / key point shared with a sibling set of the same (repo, path)
+    const ebIndex = p.ebIndex ?? (p.seedRoot !== null ? ebSiblingIndex(p.seedRoot) : new Map<string, EbSiblingEntry[]>());
+    out.push(...explainBackSiblingProblems(p.items, ebIndex, p.name));
   }
   return out;
 }
