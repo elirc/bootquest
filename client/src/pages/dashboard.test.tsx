@@ -226,7 +226,7 @@ describe('slate routing and variants', () => {
   it('a review-only slate explains itself', async () => {
     renderApp('/', withSlate([{ slot: 'review', kind: 'review-clear', done: false }]));
     expect(await screen.findByTestId('slate-review-only')).toHaveTextContent('Review-only day');
-    for (const t of ['js', 'csharp', 'java']) expect(slateRow(`drill:${t}`)).toHaveAttribute('data-missing', 'true');
+    for (const t of ['js', 'csharp', 'java', 'sysdesign']) expect(slateRow(`drill:${t}`)).toHaveAttribute('data-missing', 'true');
     expect(slateRow('campaign')).toHaveTextContent('nothing open in an unlocked act today');
     expect(within(slateRow('review')!).getByRole('link')).toHaveAttribute('href', '/review');
     expect(screen.getByRole('progressbar', { name: 'Slate items cleared' })).toHaveAttribute('aria-valuemax', '1');

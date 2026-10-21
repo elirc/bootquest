@@ -130,6 +130,36 @@ its `Walkthrough:` stay in the pack's private content (revealed only through the
 solution endpoint). The pin lives in `tools/seed/src/javabootcamp/source.ts`
 (`JAVABOOTCAMP_SHA`).
 
+#### sysdrills (the sysdesign track's drill bank)
+
+`sysdrills` has no upstream repo: its source is hand-written JSON committed in this repo,
+one file per module, under `tools/seed/authoring/sysdrills/<NN-module>.json`
+(format `sysdrills-authoring@1`, Zod-validated `.strict()` by
+`tools/seed/src/sysdrills/source.ts`). Each exercise is an estimation / capacity /
+reliability-math rep: a pure exported function, `drill-js` tests whose expectations are
+exact integers, a `// TODO` starter, a reference solution, an explanation and hints. The
+importer maps every exercise to a `drill-js` unit on the **sysdesign** track (competency
+`system-design`, key `sysdrills/<module>/<slug>`), one course per module, into
+`content/packs/sysdrills/` with manifest `{ track: 'sysdesign', grader: 'js' }`. Migration
+016 gives the track a daily slate drill slot (dropped automatically when the bank is
+exhausted).
+
+```sh
+# authoring JSON -> content/packs/sysdrills/{<module>.json, manifest.json} (refuses on any
+# format problem or a census other than SYSDRILLS_EXPECTED; writes nothing then)
+npm run seed:import:sysdrills
+npm run seed:import:sysdrills -- --authoring tools/seed/authoring/sysdrills --out content/packs/sysdrills
+# stamp: every reference solution passes and every starter fails under the REAL drill-js runner
+npm run seed:validate -- --source sysdrills
+```
+
+Append a module: add `tools/seed/authoring/sysdrills/NN-topic.json` (next free `NN`; slugs
+`NN-name`, unique test names, every test touching `mod.`, difficulty 1-3), bump
+`SYSDRILLS_EXPECTED` in `tools/seed/src/sysdrills/source.ts`, then re-import, re-validate
+(the journal resumes) and commit the authoring file, the pack files and the new
+`validation.json` together. A quarantined exercise blocks the stamp at this bank size: fix
+the authoring, never the test.
+
 ### The import gate: `seed:validate`
 
 `seed:validate` executes EVERY imported reference solution under BootQuest's own
