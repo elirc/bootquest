@@ -1,0 +1,202 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "zz8--astraupskill-02-CONCEPTS.md--set-b",
+ "items": [
+  {
+   "key": "seed:explainback:zz8/explain-back/3e871c9799d9effb",
+   "provenance": {
+    "repo": "zz8",
+    "sha": "ae8c8234428271147fda7d136e3936acf3c4c692",
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 1,
+     "end": 72
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "Walk through what an integration partner experiences when its HTTP client blindly retries every write against zz8 after a timeout or an error: which repeated requests are harmless, which apply twice or come back with a misleading answer, what each status code actually promises about whether the first attempt committed, and how the partner could even find out what happened to a job it queued.",
+     "keyPoints": [
+      {
+       "text": "[w3] Only an answer that arrives promises anything: a 2xx means the write committed, but a 5xx or a dropped connection is ambiguous unless the whole write was one transaction. The self-review submit is (assignment move, response row and audit row commit or vanish together), so a failed attempt there left nothing behind and resending it is a clean retry. Any write not wrapped like this can fail after part of it was saved, which is exactly what makes a 5xx ambiguous to the caller.",
+       "quote": "If the callback throws, nothing is written.",
+       "cite": {
+        "path": "src/repositories/review-repository.ts",
+        "lineStart": 105,
+        "lineEnd": 155
+       }
+      },
+      {
+       "text": "[w3] Repeating a PATCH is safe in effect: it sets absolute values through an update scoped by tenant and id, so the second identical request leaves the row exactly as the first did. What repeats is the bookkeeping: every successful PATCH appends another EMPLOYEE_UPDATED audit entry listing the same field names, so a retry storm inflates the audit trail without changing any data.",
+       "cite": {
+        "path": "src/services/employee-service.ts",
+        "lineStart": 89,
+        "lineEnd": 102
+       }
+      },
+      {
+       "text": "[w3] Repeating a create is where retries hurt: queueing a job inserts a brand-new QUEUED row on every call and answers 201 with a different id each time, so a partner that re-sends after a timeout owns two jobs that will both run, and neither response hints at the other.",
+       "cite": {
+        "path": "src/services/integration-service.ts",
+        "lineStart": 48,
+        "lineEnd": 72
+       }
+      },
+      {
+       "text": "[w2] Re-sending an employee create fails the other way: the employee number is unique per tenant, so the repeat of a create that did commit collides with its own first attempt, and since nothing translates that database error it surfaces as an 'Unexpected server error', which invites yet another retry instead of saying 'already exists'.",
+       "cite": {
+        "path": "prisma/schema.prisma",
+        "lineStart": 199,
+        "lineEnd": 204
+       }
+      },
+      {
+       "text": "[w2] Re-sending a manual retry does no harm but reads like a failure: the first call already moved the job back to QUEUED, so the repeat is refused with a 409 whose message names the job's status now (QUEUED, or RUNNING once a sweep picked it up). The partner has to treat that particular 409 as 'already done', which only the message text tells it.",
+       "cite": {
+        "path": "src/services/integration-service.ts",
+        "lineStart": 88,
+        "lineEnd": 93
+       }
+      },
+      {
+       "text": "[w2] Re-sending the process call is not a replay at all: each call claims the next QUEUED rows of the tenant, oldest first, up to the batch size (default 5, at most 20), so a partner that times out and tries again drains another batch instead of learning what the first call did.",
+       "cite": {
+        "path": "src/lib/validation/integrationSchemas.ts",
+        "lineStart": 18,
+        "lineEnd": 20
+       }
+      },
+      {
+       "text": "[w2] Checking on a job is guesswork: there is no endpoint for a single job, and the job list returns only the tenant's 20 newest jobs with their three latest log lines, so once 20 newer jobs exist the partner's job has fallen off the only view it has.",
+       "cite": {
+        "path": "src/repositories/integration-repository.ts",
+        "lineStart": 36,
+        "lineEnd": 57
+       }
+      },
+      {
+       "text": "[w2] A sane retry policy repeats only on 5xx and timeouts and stops on 4xx, and the guide's own rule for a write that changed no rows is to report and stop, never loop. Here that policy misfires: a body that fails validation is answered as a 500, so a well-behaved client resends a bad request until it gives up.",
+       "quote": "Return a 404/409, never retry blindly.",
+       "cite": {
+        "path": "src/lib/http/api-response.ts",
+        "lineStart": 19,
+        "lineEnd": 40
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "Explain the review-cycle lifecycle as the API enforces it: which status changes any route can make to a cycle or to an assignment, what a self-review sent into a draft, closed or unknown cycle gets back, and what happens when the cycle is closed while a submission is in flight. Then defend or indict how POST /api/integration-jobs answers a body that names an integration config the caller's tenant cannot see, compared with how the employee routes answer a manager id they cannot see.",
+     "keyPoints": [
+      {
+       "text": "[w3] The API changes very little: no route creates, opens or closes a cycle (the review routes are a cycle list and the self-review submit), and the only assignment move any route makes is from NOT_STARTED or IN_PROGRESS to SUBMITTED, with every predicate repeated inside the write. Cycle status is set outside the API.",
+       "cite": {
+        "path": "src/repositories/review-repository.ts",
+        "lineStart": 106,
+        "lineEnd": 121
+       }
+      },
+      {
+       "text": "[w3] A cycle that exists but is DRAFT or CLOSED is a known record in the wrong state, so the submit answers 409 with the cycle's current status spelled out in the message. A cycle id that is unknown, or belongs to another tenant, finds no assignment and gets the same 404 as a missing assignment, so the answer never reveals whether that id exists elsewhere.",
+       "cite": {
+        "path": "src/services/review-service.ts",
+        "lineStart": 56,
+        "lineEnd": 65
+       }
+      },
+      {
+       "text": "[w2] A cycle closed between the context read and the write makes the write's 'cycle still ACTIVE' predicate match nothing, and the service reports that as a 404 'not found for submission' although the assignment exists and only the cycle's state moved. By the guide's own rule that is a conflict: answer 409 and re-read to say why.",
+       "quote": "A missing assignment can be a 404, while a known submitted assignment is a 409.",
+       "cite": {
+        "path": "src/repositories/review-repository.ts",
+        "lineStart": 114,
+        "lineEnd": 123
+       }
+      },
+      {
+       "text": "[w2] Echoing the cycle's status in a 409 is safe here because the lookup that found it is already limited to the caller's tenant, the caller as reviewer and the caller as subject, so the message only describes a record the caller is entitled to see.",
+       "cite": {
+        "path": "src/repositories/review-repository.ts",
+        "lineStart": 57,
+        "lineEnd": 64
+       }
+      },
+      {
+       "text": "[w2] Defend the queue route's 404 for an unseen config: the lookup is scoped by tenant, so another organisation's config and a typo look identical, which honours the non-disclosure rule. Indict it for consistency: the URL exists and the problem is a reference inside the body, which the employee routes answer with a 400 ('must belong to the active tenant') for exactly the same situation. Pick one code, 400 or 422, for an unresolved body reference.",
+       "cite": {
+        "path": "src/services/integration-service.ts",
+        "lineStart": 58,
+        "lineEnd": 65
+       }
+      },
+      {
+       "text": "[w1] The cycle list is the client's only view of the lifecycle: every cycle of the tenant with its status, dates and counts, newest start date first, with no paging.",
+       "cite": {
+        "path": "src/repositories/review-repository.ts",
+        "lineStart": 17,
+        "lineEnd": 46
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "Defend or indict zz8's error contract as a whole: the shape of success and error bodies across the routes, what a client can and cannot learn from an error body, what a schema failure or a malformed JSON body returns and why, and where the same kind of failure gets different status codes on different routes.",
+     "keyPoints": [
+      {
+       "text": "[w3] One envelope with two shapes: success wraps the payload as data, failure returns an error object with a message and an optional details field, and the HTTP status carries the class. There is no machine-readable code, so a client that must tell 'already submitted' from 'cycle not active' (both 409) has to match English text; add a stable code to every error.",
+       "cite": {
+        "path": "src/lib/http/api-response.ts",
+        "lineStart": 11,
+        "lineEnd": 29
+       }
+      },
+      {
+       "text": "[w3] The details slot is promised but never filled: every throw site in the services and auth helpers passes only a status and a message, so in practice each error body carries a bare sentence.",
+       "cite": {
+        "path": "src/lib/http/app-error.ts",
+        "lineStart": 7,
+        "lineEnd": 17
+       }
+      },
+      {
+       "text": "[w3] Validation failures fall through the contract: each route parses its body inside the try block, and the shared handler converts only instances of the application's own error class, so a schema failure (and the syntax error a malformed JSON body throws) reaches the client as a generic 500 with the reason left in the server log. Convert the validation error into a 400 that lists the failing fields in details.",
+       "cite": {
+        "path": "src/lib/http/app-error.ts",
+        "lineStart": 19,
+        "lineEnd": 21
+       }
+      },
+      {
+       "text": "[w2] The same failure, two codes: a write that finds its row in the wrong state is a 409 when the up-front read catches it but a 404 when the guarded write catches it, on the self-review and on the job retry alike, so a client sees 'not found' for a record that plainly exists.",
+       "cite": {
+        "path": "src/services/integration-service.ts",
+        "lineStart": 95,
+        "lineEnd": 102
+       }
+      },
+      {
+       "text": "[w2] Identity errors are the consistent part: an unknown session is a 401 and a tenant header that does not match the caller's membership is a 403, both raised while the request context is built and before any route logic runs, and neither message says anything about other users or tenants.",
+       "cite": {
+        "path": "src/lib/auth/session.ts",
+        "lineStart": 22,
+        "lineEnd": 28
+       }
+      },
+      {
+       "text": "[w1] Unexpected errors are logged in full on the server and replaced by a fixed sentence for the client, which keeps driver messages out of responses; the price is that the client cannot tell its own mistake from a real outage.",
+       "cite": {
+        "path": "src/lib/http/api-response.ts",
+        "lineStart": 32,
+        "lineEnd": 40
+       }
+      }
+     ]
+    }
+   ],
+   "set": "b"
+  }
+ ]
+}

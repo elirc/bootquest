@@ -1,0 +1,180 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "w22--docs-architecture-domain-model.md--set-b",
+ "items": [
+  {
+   "key": "seed:explainback:w22/explain-back/6bc59e2f3ef53d49",
+   "provenance": {
+    "repo": "w22",
+    "sha": "a0d6e0d96e72867c149937f1ad5bb66d1f254b8e",
+    "path": "docs/architecture/domain-model.md",
+    "lines": {
+     "start": 1,
+     "end": 78
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "DESIGN IT — [senior] catching up after the payment provider's webhook outage (w22, docs/architecture/domain-model.md). Scenario: on a normal day your endpoint takes about 1,500 status events an hour; the provider's status page then reports webhook delivery down for 36 hours; when it recovers it replays roughly 60,000 held events within 20 minutes, in no guaranteed order, waits at most 10 seconds for each response and abandons an event after 5 failed attempts; checkout kept creating payments the whole time. Write your design before you look: how the endpoint absorbs the replay without missing the provider's deadline, what makes applying tens of thousands of shuffled events safe, how one payment's several events are kept from racing each other, how copies of the same event are absorbed, whether and how the reconciliation sweep changes while deliveries are missing, and how you would have spotted the silence within minutes instead of from customer tickets. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "keyPoints": [
+      {
+       "text": "[w3] Acknowledge after one durable insert and apply later: today the delivery request does all of the work (the duplicate lookup, the payment lookups, a transaction holding the mirror update, the history rows, the transition and the processed mark) before the route answers, so at ~50 events a second every slow commit pushes deliveries toward the provider's cutoff. Make intake a single insert of the raw event keyed by its event id, answer 2xx, and let a worker apply events at a pace the database can sustain.",
+       "cite": {
+        "path": "src/services/webhookService.ts",
+        "lineStart": 28,
+        "lineEnd": 128
+       }
+      },
+      {
+       "text": "[w3] Shuffled arrival is made safe by the table of allowed moves, not by arrival order: every event is translated to a local status and checked before anything is written, and a target equal to the status already held passes as a no-op. A 'refunded' that outruns its 'succeeded' is refused while the row still reads PENDING (the only exits from PENDING are SUCCEEDED and FAILED) and becomes legal once the success has landed, so an early event needs a later retry, not a different rule.",
+       "cite": {
+        "path": "src/lib/domain/paymentStateMachine.ts",
+        "lineStart": 21,
+        "lineEnd": 31
+       }
+      },
+      {
+       "text": "[w2] One payment, one writer: the handler loads the payment before its transaction opens, judges the move against that snapshot, and writes the new status with an update keyed only by id, so two events for the same payment applied concurrently can both pass against the same stale status and the later commit silently wins. Route the worker so a payment's events are applied one at a time (partition by payment id), or make the status write conditional on the status that was judged.",
+       "cite": {
+        "path": "src/repositories/paymentRepository.ts",
+        "lineStart": 105,
+        "lineEnd": 124
+       }
+      },
+      {
+       "text": "[w2] Absorb copies at intake: the replay carries events already applied before the outage and repeats across its own batches. With the event id unique, intake can insert-or-ignore, and the worker skips any id whose stored row is already marked processed.",
+       "cite": {
+        "path": "src/repositories/webhookRepository.ts",
+        "lineStart": 85,
+        "lineEnd": 100
+       }
+      },
+      {
+       "text": "[w3] Alarm on absence, because a dead delivery path raises no errors: compare events received per 15 minutes with payments created in the same window, and watch how many payments are still PENDING half an hour after creation; either crosses its threshold within the first hour of a 36-hour gap. The Payment table already carries an index on (status, createdAt) that makes the second count cheap.",
+       "cite": {
+        "path": "prisma/schema.prisma",
+        "lineStart": 163,
+        "lineEnd": 164
+       }
+      },
+      {
+       "text": "[w2] While delivery is down the sweep is the only way back to the provider's outcomes, and here it is not scheduled at all: a run happens when a signed-in user holding the reconciliation permission posts to the admin route. Put it on a timer, shorten the interval for the outage, and let its corrections go through the same allowed-move check the events use.",
+       "cite": {
+        "path": "src/app/api/admin/reconciliation/run/route.ts",
+        "lineStart": 6,
+        "lineEnd": 16
+       }
+      },
+      {
+       "text": "[w1] Expect the issue labels to understate the outage: a provider-terminal payment is filed under the missing-delivery type only when it has no delivery row at all, so payments whose delivery was queued but never landed show up as ordinary status mismatches.",
+       "cite": {
+        "path": "src/services/reconciliationService.ts",
+        "lineStart": 60,
+        "lineEnd": 72
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "PRE-MORTEM — the catch-up goes wrong: during the replay your endpoint's p99 climbs past the provider's 10-second limit and some events burn all 5 attempts; during the 36 hours an on-call engineer had pushed the provider's outcomes onto stuck payments by hand, and replayed events now ask those payments to move backwards; the second replay batch re-sends about 9,000 event ids from the first, often two copies at the same instant; support spent the outage unable to refund charges customers could already see on their statements; and the provider mirror quietly loses a capture. What breaks, how would you notice, and what is the repair?",
+     "keyPoints": [
+      {
+       "text": "[w3] Abandoned events leave no trace on your side: the event's row is written inside the apply's own transaction, so an attempt that never commits leaves no record that it ever arrived, and nothing lists what the provider gave up on. Diff the provider's event log for the outage window against your stored event ids, feed the missing ones (or the payments they name) to the worker, and let a sweep over the window catch the rest.",
+       "cite": {
+        "path": "src/services/webhookService.ts",
+        "lineStart": 53,
+        "lineEnd": 66
+       }
+      },
+      {
+       "text": "[w3] Whether a replayed event is harmless depends on where its translated status lands relative to the row: one that lands on the status already held is waved through with no write; one that lands behind it (a 'received' for a payment the engineer moved to SUCCEEDED) has no listed move, is answered 409, and the provider retries it until it gives up, thousands of times over for the hand-fixed set. You see it as a wall of 409s in the replay window; the repair is to answer an event that is behind the row with a 2xx and record it as superseded. A hand fix written straight into the table also skipped the move check entirely.",
+       "cite": {
+        "path": "src/services/webhookService.ts",
+        "lineStart": 51,
+        "lineEnd": 88
+       }
+      },
+      {
+       "text": "[w2] Twin copies arriving together both miss the processed-id lookup, both try to insert the same event id, and the loser trips the unique constraint; that is not a typed route error, so it leaves as a generic 500 and the provider schedules another attempt, which then finds the processed row and is answered as a duplicate. The money is safe, the dashboards are noisy; insert-or-ignore at intake removes the noise.",
+       "quote": "The check runs before the transaction, so concurrent duplicates are caught by the unique constraint rather than handled gracefully.",
+       "cite": {
+        "path": "src/lib/api/route-helpers.ts",
+        "lineStart": 43,
+        "lineEnd": 53
+       }
+      },
+      {
+       "text": "[w2] Refunds fail during the gap: payments the provider captured still read PENDING locally, and the refund guard accepts only SUCCEEDED payments, so every refund support tried on a charge the customer could already see was turned away. You notice through support tickets; the repair is to catch payments up from the provider before working the refund queue, and to show agents the provider's status beside the local one.",
+       "cite": {
+        "path": "src/lib/domain/paymentStateMachine.ts",
+        "lineStart": 50,
+        "lineEnd": 57
+       }
+      },
+      {
+       "text": "[w2] The mirror can go backwards: each event's provider status is written onto the provider-mirror row with an unconditional update, whatever the transition decision, so a replayed 'processing' for a payment that is still PENDING locally overwrites a mirror that said SUCCEEDED. Local row and mirror now agree on PENDING, and a sweep that compares the two reports nothing for a payment the provider captured.",
+       "cite": {
+        "path": "src/repositories/providerRepository.ts",
+        "lineStart": 40,
+        "lineEnd": 55
+       }
+      },
+      {
+       "text": "[w1] The simulated provider gives up even sooner than the real one: a failed outbound delivery is marked FAILED with a next-attempt time, but the query that picks deliveries to send selects PENDING rows only, so in this codebase a failed delivery is never sent again.",
+       "cite": {
+        "path": "src/repositories/webhookRepository.ts",
+        "lineStart": 29,
+        "lineEnd": 65
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "TRADE-OFF HANDBACK — defend your catch-up plan against the alternatives: acknowledging after a durable insert versus doing the full apply before answering; alarming on missing traffic versus letting the next reconciliation run discover the gap; running the sweep more often during the outage versus making each run reach further back; letting the provider's retries re-order early events versus parking them yourself; and slowing the provider down with errors versus absorbing everything it sends. For each, say what it bought, what it cost, and which part of the outage decided it.",
+     "keyPoints": [
+      {
+       "text": "[w3] Insert-then-acknowledge buys a response time that no longer depends on database load and a drain rate you control; it costs the provider's view of failures (once you have answered 2xx, a refusal or crash in the worker is yours to retry and to surface) and demands that intake itself be durable. The event table can be that intake: rows are created in a RECEIVED status before they are marked processed, so a worker can poll it by status and arrival time.",
+       "cite": {
+        "path": "src/repositories/webhookRepository.ts",
+        "lineStart": 67,
+        "lineEnd": 83
+       }
+      },
+      {
+       "text": "[w3] A traffic alarm costs a metric, a baseline that follows the daily curve and some false pages in quiet hours; it buys finding a 36-hour gap in minutes. Waiting for reconciliation means discovery waits for someone to run it, while customers watch stuck payments: its issue rows explain a gap after the fact, they do not page anyone.",
+       "quote": "Missing provider rows, missing local rows, missing webhook deliveries, and status mismatches are stored explicitly so operators can reason about eventual consistency failures."
+      },
+      {
+       "text": "[w2] Running more often shortens how long a payment sits wrong but multiplies the read cost and the provider calls, and because every run is kept as its own record with its own issues, a mismatch that lasts the whole outage is filed again by every run; deduplicate open issues per payment or the queue floods. Reaching further back per run catches events that were in flight when delivery stopped, at a larger volume per run.",
+       "quote": "Reconciliation runs are historical records, not a single mutable report."
+      },
+      {
+       "text": "[w2] Leaning on the provider's retries to re-order works only while you answer synchronously: the refusal of a too-early 'refunded' turns into a free retry-later, but each one spends one of the provider's 5 attempts and shows on its dashboard as your failure. Parking an early event and re-running it when its predecessor lands keeps the attempts for real faults, at the cost of a holding set someone must watch.",
+       "cite": {
+        "path": "src/lib/domain/paymentStateMachine.ts",
+        "lineStart": 11,
+        "lineEnd": 12
+       }
+      },
+      {
+       "text": "[w2] Pushing back with errors (a 503 to slow the replay) protects the database but spends the provider's limited attempts and risks events abandoned for good; every thrown error in this route already leaves as a non-2xx. Absorbing everything is cheap once intake is a single insert, so back-pressure belongs between the intake table and the worker, not at the provider.",
+       "cite": {
+        "path": "src/app/api/webhooks/provider/route.ts",
+        "lineStart": 11,
+        "lineEnd": 13
+       }
+      },
+      {
+       "text": "[w1] Modelling 'the provider knew, we did not' as data is what makes a gap visible instead of inferred: the codebase keeps outbound delivery rows for exactly that reason, and the expected-volume check is the same idea pointed at inbound traffic.",
+       "quote": "Outbound delivery tracking exists so \"provider succeeded but our local system never heard about it\" is a first-class state."
+      }
+     ]
+    }
+   ],
+   "set": "b"
+  }
+ ]
+}
