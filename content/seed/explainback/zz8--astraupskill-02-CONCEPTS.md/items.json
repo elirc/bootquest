@@ -1,0 +1,190 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "zz8--astraupskill-02-CONCEPTS.md",
+ "items": [
+  {
+   "key": "seed:explainback:zz8/explain-back/bf9bd41219a4fcf8",
+   "provenance": {
+    "repo": "zz8",
+    "sha": "ae8c8234428271147fda7d136e3936acf3c4c692",
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 1,
+     "end": 72
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "Walk through every HTTP status a client can get back from POST /api/review-cycles/:cycleId/submit-self-review, and defend or indict each one: an unknown session or a role that may not submit, a body that fails the schema, an assignment that does not exist for this caller, one that was already submitted before the request started, and the second of two browser tabs that submit at the same instant. What does each case return today, what should it return, and what may an error body contain?",
+     "keyPoints": [
+      {
+       "text": "[w3] A body that fails the schema does not get a 400: every route calls parse inside its try and hands the error to the shared handler, which only recognises the application's own error type and turns everything else, the validation error and malformed JSON included, into a 500 'Unexpected server error.' The client is told to retry later when it should fix its input; map the validation error to 400 with its issues as details.",
+       "cite": {
+        "path": "src/lib/http/api-response.ts",
+        "lineStart": 19,
+        "lineEnd": 41
+       }
+      },
+      {
+       "text": "[w3] The tab that loses the race is told its assignment was not found: the guarded update matched zero rows because the other tab had just moved it to SUBMITTED, and the service turns that empty result into a not-found error. The record exists and only its state changed, which is the definition of a conflict, so it should be a 409 that tells the client to reload.",
+       "cite": {
+        "path": "src/services/review-service.ts",
+        "lineStart": 84,
+        "lineEnd": 86
+       }
+      },
+      {
+       "text": "[w2] When the context read finds no assignment for this tenant, reviewer and subject, the answer is a 404, and the same 404 covers an assignment that belongs to someone else or to another tenant, so the response never confirms that a record exists outside the caller's reach.",
+       "quote": "A useful failure response distinguishes not found from conflict without revealing whether another tenant owns a record."
+      },
+      {
+       "text": "[w2] An assignment already SUBMITTED when the request starts gets a 409 with a readable message from that first read; the read is the friendly path, while the predicate inside the write remains the real guarantee.",
+       "quote": "The initial context read supplies a useful error for an already submitted assignment, but it is not the concurrency guarantee."
+      },
+      {
+       "text": "[w2] Identity failures are distinct codes: an unknown session is a 401, and a session asking for a tenant it does not belong to is a 403, both raised while the route builds its request context.",
+       "cite": {
+        "path": "src/lib/auth/session.ts",
+        "lineStart": 16,
+        "lineEnd": 41
+       }
+      },
+      {
+       "text": "[w2] Capability failures are 403s that name the refused action: a tenant role outside the allowed list, or a membership with no linked employee record, cannot submit a self-review.",
+       "cite": {
+        "path": "src/lib/auth/permissions.ts",
+        "lineStart": 10,
+        "lineEnd": 40
+       }
+      },
+      {
+       "text": "[w2] An error body carries a message and optional details and nothing else; unexpected errors are logged on the server and answered with a generic message, so no driver text, password or submitted answer reaches the client.",
+       "quote": "Neither response should include raw Prisma errors, passwords, or the submitted text."
+      },
+      {
+       "text": "[w1] A successful submit is returned through ok(), a 200, rather than created(), a 201: it is a state transition of an existing assignment, so 200 is defensible even though a response row is created underneath.",
+       "cite": {
+        "path": "src/app/api/review-cycles/[cycleId]/submit-self-review/route.ts",
+        "lineStart": 17,
+        "lineEnd": 25
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "Explain how the integration-job endpoints keep one job from being processed twice or finished by the wrong worker: what the claim step writes and how a worker knows which rows it owns, what completing a job requires, how a manual retry is gated and what HTTP status each refusal gets, and what the process endpoint's 200 actually reports. Then name what the HTTP layer still does not protect: a client that re-sends the request that queues a job, and a worker that dies mid-job.",
+     "keyPoints": [
+      {
+       "text": "[w3] Claiming is a per-row conditional update from QUEUED to RUNNING, scoped by tenant and id, that writes a fresh random token and bumps the attempt count; a worker keeps only the rows whose update changed exactly one row and re-reads each by its token, so two sweeps that listed the same candidates never both own one.",
+       "cite": {
+        "path": "src/repositories/integration-repository.ts",
+        "lineStart": 181,
+        "lineEnd": 208
+       }
+      },
+      {
+       "text": "[w3] Completion is guarded the same way: the update must match tenant, id, status RUNNING and the exact token, otherwise it changes nothing and the repository returns null; the worker writes its completion log only for a completion that matched.",
+       "cite": {
+        "path": "src/repositories/integration-repository.ts",
+        "lineStart": 217,
+        "lineEnd": 231
+       }
+      },
+      {
+       "text": "[w2] A manual retry is gated twice: the service reads the job (404 when it is not in this tenant) and refuses any status other than FAILED or RETRY_REQUIRED with a 409 that names the current status; the repository then repeats that status predicate in its update. A retry that loses the race at that second check is reported as a 404 'not found for retry', the same not-found-for-a-conflict mistake as the review submit.",
+       "cite": {
+        "path": "src/services/integration-service.ts",
+        "lineStart": 82,
+        "lineEnd": 102
+       }
+      },
+      {
+       "text": "[w2] The retry's status reset, cleared token, operational log and audit row commit together, so a failed audit insert leaves the job exactly as it was.",
+       "quote": "The repository performs the conditional status change, retry metadata reset, operational log, and audit event in one transaction."
+      },
+      {
+       "text": "[w2] The process endpoint answers 200 for the sweep, not for the jobs: it returns only the jobs this call claimed and completed, and a job that failed in the worker is in that list with status FAILED, so a client must read each job's status instead of trusting the HTTP code.",
+       "cite": {
+        "path": "src/jobs/process-queued-integration-jobs.ts",
+        "lineStart": 31,
+        "lineEnd": 52
+       }
+      },
+      {
+       "text": "[w2] Queueing is a plain insert of a new QUEUED row with no idempotency key, so a client that times out and re-sends creates a second job for the same work. Accept an Idempotency-Key header, store it unique per tenant, and answer the repeat with the first job.",
+       "cite": {
+        "path": "src/repositories/integration-repository.ts",
+        "lineStart": 59,
+        "lineEnd": 74
+       }
+      },
+      {
+       "text": "[w2] A token without a deadline cannot be taken back: if the worker dies after its claim, the row sits in RUNNING and neither the sweep nor the retry endpoint will touch it. Give claims a lease time and return expired ones to QUEUED.",
+       "quote": "this project has no expiry"
+      }
+     ]
+    },
+    {
+     "prompt": "Defend or indict the employee API's input and update contract: what PATCH /api/employees/:employeeId accepts (which fields, an empty body), what happens to a manager or org unit id from another tenant and to an employee id that does not exist, how extra fields in a body are treated, and which failures still escape as the wrong status code or leave a half-finished write behind.",
+     "keyPoints": [
+      {
+       "text": "[w3] The PATCH body is a constrained partial: it is picked from the create schema (title, status, compensation, manager, org unit), every field optional, with a refinement that rejects an empty object, so the bounds of create and update can never drift apart.",
+       "cite": {
+        "path": "src/lib/validation/employeeSchemas.ts",
+        "lineStart": 27,
+        "lineEnd": 38
+       }
+      },
+      {
+       "text": "[w3] Foreign references are checked inside the caller's tenant before the write: a manager or org unit id is counted with the tenant in the WHERE clause, and an id from another tenant is refused with a 400 rather than linking two organisations' records.",
+       "cite": {
+        "path": "src/services/employee-service.ts",
+        "lineStart": 107,
+        "lineEnd": 128
+       }
+      },
+      {
+       "text": "[w2] An unknown employee id is a correct 404: the update is an updateMany scoped by tenant and id, zero changed rows can only mean the employee is not visible here, because no state predicate is involved that another request could have changed.",
+       "cite": {
+        "path": "src/repositories/employee-repository.ts",
+        "lineStart": 147,
+        "lineEnd": 158
+       }
+      },
+      {
+       "text": "[w2] Parsing produces a fixed shape, so a key the schema does not list never reaches the service; the guide's rule is that what a person writes comes from the client while who they are comes from the server.",
+       "quote": "narrative fields are client-owned, identity fields are server-owned."
+      },
+      {
+       "text": "[w2] A duplicate employee number violates the unique (tenant, employee number) index; nothing catches that driver error, so the client gets a 500 where a 409 belongs. Catch the unique violation and answer it as a conflict.",
+       "cite": {
+        "path": "prisma/schema.prisma",
+        "lineStart": 201,
+        "lineEnd": 201
+       }
+      },
+      {
+       "text": "[w2] Employee create and update write the row and then the audit entry as two separate statements with no transaction: if the audit insert fails, the employee is saved but the client receives a 500, and a retried create then trips the unique employee number. The review and retry paths show the fix, one transaction for both.",
+       "cite": {
+        "path": "src/services/employee-service.ts",
+        "lineStart": 63,
+        "lineEnd": 76
+       }
+      },
+      {
+       "text": "[w1] The edge bounds every string at both ends and coerces numbers from form strings: self-review texts are 10 to 2,000 characters, the rating an integer from 1 to 5, and every answer a non-empty string.",
+       "cite": {
+        "path": "src/lib/validation/reviewSchemas.ts",
+        "lineStart": 9,
+        "lineEnd": 15
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}
