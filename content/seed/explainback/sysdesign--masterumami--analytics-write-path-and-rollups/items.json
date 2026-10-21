@@ -1,0 +1,194 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "masterumami--umami-fabledocs-upskill-03-architecture-and-patterns-02-data-model-and-persistence.md",
+ "items": [
+  {
+   "key": "seed:explainback:masterumami/explain-back/609d8fce705dbe91",
+   "provenance": {
+    "repo": "masterumami",
+    "sha": "0a09dbb42c1efc74206f9569053a4553087ebb0f",
+    "path": "umami/fabledocs/upskill/03-architecture-and-patterns/02-data-model-and-persistence.md",
+    "lines": {
+     "start": 1,
+     "end": 97
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "DESIGN IT — [mid] a privacy-first analytics write path and its read side (masterumami, umami/fabledocs/upskill/03-architecture-and-patterns/02-data-model-and-persistence.md). Scenario: a hosted web-analytics service tracks 2,000 websites and about 30 million events a month, the largest site 5 million; the promise to customers is no cookies, no stored IP addresses and no consent banner; a quarter of raw hits are bots; an occasional lost or doubled pageview is acceptable, but a 30-day dashboard must load in under 2 seconds. Write your design before you look: what the collect endpoint validates and bounds before writing anything, what it does with a bot hit and what the bot sees, how a returning visitor is recognised without a cookie and what is stored about them, how long that recognition lasts, what a 'visit' is and when it ends, how the events table is shaped and indexed for the dashboard queries, and what changes on the read side when one tenant reaches hundreds of millions of events. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "keyPoints": [
+      {
+       "text": "[w3] Bound everything at the edge before any write: the collect schema caps string fields (hostname 100 chars, language 35, screen 11, event name and tag 50), bounds the web-vitals numbers, and requires exactly one of website, link or pixel. A fixed-shape, size-bounded payload keeps a public unauthenticated endpoint cheap to abuse-proof.",
+       "cite": {
+        "path": "umami/src/app/api/send/route.ts",
+        "lineStart": 24,
+        "lineEnd": 64
+       }
+      },
+      {
+       "text": "[w3] Filter bots silently: a user agent the bot detector flags gets a 200 with a joke body and nothing is written, and an address on the configured ignore list (exact or CIDR) gets a 403. The bot learns nothing it could adapt to, and because the product tolerates small errors, a heuristic filter is good enough.",
+       "cite": {
+        "path": "umami/src/app/api/send/route.ts",
+        "lineStart": 130,
+        "lineEnd": 138
+       }
+      },
+      {
+       "text": "[w3] Recognise a visitor without a cookie by deriving the id: the session id is a deterministic UUID hashed from the site, the IP address, the user agent and a period salt, with the server secret mixed in, so the same browser maps to the same row while nothing on the device is stored. A site that knows its user can send its own id instead, and then the hash is built from the site and that id alone.",
+       "cite": {
+        "path": "umami/src/app/api/send/route.ts",
+        "lineStart": 143,
+        "lineEnd": 147
+       }
+      },
+      {
+       "text": "[w2] Store only coarse attributes: the session row keeps browser, OS, device, screen, language, country, region, city and an optional distinct id, and has no IP or user-agent column at all, so the raw identifiers exist only for the length of the request.",
+       "cite": {
+        "path": "umami/prisma/schema.prisma",
+        "lineStart": 34,
+        "lineEnd": 50
+       }
+      },
+      {
+       "text": "[w2] Recognition is deliberately short-lived: the salt is the hash of the start of the current day, week or month, so the same visitor gets a new session id each period and cannot be followed across periods. The salt itself is predictable; what keeps outsiders from recomputing ids is the server secret inside the hash.",
+       "cite": {
+        "path": "umami/src/lib/crypto.ts",
+        "lineStart": 56,
+        "lineEnd": 78
+       }
+      },
+      {
+       "text": "[w2] A visit is a hash of the session and the start of the hour, carried between hits in a signed cache token that also lets later hits skip the website lookup and the session insert; it is replaced once 30 minutes have passed since the visit's start time, which the token carries unchanged from hit to hit rather than refreshing on activity, so a visit ends 30 minutes after it began rather than after 30 idle minutes.",
+       "cite": {
+        "path": "umami/src/app/api/send/route.ts",
+        "lineStart": 100,
+        "lineEnd": 175
+       }
+      },
+      {
+       "text": "[w2] Shape the table for the one query shape dashboards run: one wide row per event, and indexes that put the website first, then time, then the breakdown dimension, matching 'this site, this range, grouped by X'.",
+       "quote": "Almost every index leads with `(website_id, created_at, X)`"
+      },
+      {
+       "text": "[w2] At hundreds of millions of events the read side changes store: the ClickHouse path counts visitors with approximate distinct counts and answers the headline stats from an hourly rollup table, falling back to raw events only when a filter names an event column.",
+       "cite": {
+        "path": "umami/src/queries/sql/getWebsiteStats.ts",
+        "lineStart": 72,
+        "lineEnd": 137
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "PRE-MORTEM — three months in: one customer's blog post goes viral at about 3,000 events a second for an hour, and every share link carries its own ?ref= token; a customer reports that unique visitors 'doubled' for a week that spans the first of the month; another customer's 30-day dashboard on the Postgres deployment now covers 120 million events and takes 40 seconds; and a scraper fleet arrives with a browser user agent. What breaks, how would you notice, and what is the repair?",
+     "keyPoints": [
+      {
+       "text": "[w3] Salt rotation splits sessions at the period boundary: the same person active on both sides of the first of the month gets two session ids, so any range that spans the boundary counts them twice. This is the price of the privacy promise; repair by defining uniques per rotation period in the product and the docs rather than by keeping a longer-lived identifier.",
+       "cite": {
+        "path": "umami/src/lib/crypto.ts",
+        "lineStart": 72,
+        "lineEnd": 78
+       }
+      },
+      {
+       "text": "[w3] On Postgres the headline stats re-scan every raw event in the range, grouped by session and visit, on every dashboard load, so latency grows with event count and there is no rollup to fall back on. Repair with incrementally maintained per-site rollups (hourly or daily), a read replica for dashboards, or moving the large tenant to the columnar store.",
+       "cite": {
+        "path": "umami/src/queries/sql/getWebsiteStats.ts",
+        "lineStart": 26,
+        "lineEnd": 70
+       }
+      },
+      {
+       "text": "[w2] Unique share tokens turn the query string into a high-cardinality column: every event stores its query string (cut to 500 characters) and Postgres maintains an index on (website, time, url query) among the 14 indexes maintained on every insert, so a viral hour multiplies write cost and breakdowns by query explode into one group per share.",
+       "cite": {
+        "path": "umami/prisma/schema.prisma",
+        "lineStart": 99,
+        "lineEnd": 150
+       }
+      },
+      {
+       "text": "[w2] Query strings are also where personal data hides (emails, reset tokens): they reach the server unless the site turned on the tracker's opt-in exclude-search and exclude-hash settings. Keep an allowlist of meaningful parameters (UTM fields, click ids) server-side instead of trusting every site to configure its snippet.",
+       "cite": {
+        "path": "umami/src/tracker/index.js",
+        "lineStart": 35,
+        "lineEnd": 57
+       }
+      },
+      {
+       "text": "[w2] The bot filter trusts the caller: the payload may carry its own user agent and IP address, which then win over the request's headers, so a scraper can present a clean user agent, pick the address that feeds both its session hash and the ignore-list check. Accept payload-supplied identity only from authenticated server-side senders.",
+       "cite": {
+        "path": "umami/src/lib/detect.ts",
+        "lineStart": 126,
+        "lineEnd": 137
+       }
+      },
+      {
+       "text": "[w2] On the direct ClickHouse path each hit is its own one-row insert, and a columnar store wants few large inserts: 3,000 tiny inserts a second pile up parts faster than merges retire them. Batch on the way in (server-side async inserts or a buffer); because a lost event is acceptable here, a small in-memory batch is a fair trade.",
+       "cite": {
+        "path": "umami/src/queries/sql/events/saveEvent.ts",
+        "lineStart": 259,
+        "lineEnd": 263
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "TRADE-OFF HANDBACK — defend your analytics design against the alternatives: a cookie or local-storage visitor id versus a hashed, rotating one; keeping raw events plus rollups versus storing pre-aggregated counters only; exact versus approximate distinct counts; the grain of the rollup table; one product on two interchangeable stores versus a single store; answering bots with an error versus a silent success; and writing an event, its properties and its revenue without a transaction. For each, say what you bought, what it cost, and which requirement put you on that side.",
+     "keyPoints": [
+      {
+       "text": "[w3] A stored client id is precise and survives network changes, but it is a cookie with consent obligations. The hashed id needs no banner and stores nothing personal, at the cost of fuzzy identity: two people behind one address with the same browser merge, one person who changes network splits, and rotation caps how long anyone is recognised. A site-supplied id is the escape hatch when precision matters.",
+       "cite": {
+        "path": "umami/src/app/api/send/route.ts",
+        "lineStart": 140,
+        "lineEnd": 147
+       }
+      },
+      {
+       "text": "[w3] Raw events plus rollups keeps every future breakdown possible (the stats query drops back to raw rows whenever a filter names an event column) at the cost of storage and scans; counters alone are cheap but cannot answer a new question, cannot be filtered after the fact, and cannot deduplicate visitors across dimensions.",
+       "cite": {
+        "path": "umami/src/queries/sql/getWebsiteStats.ts",
+        "lineStart": 86,
+        "lineEnd": 135
+       }
+      },
+      {
+       "text": "[w2] Exact distinct counts (Postgres count distinct) are right to the visitor but cost memory and time in proportion to the data; the ClickHouse path's approximate uniq has a fixed footprint and a small error, which an analytics dashboard can accept and a bill cannot.",
+       "cite": {
+        "path": "umami/src/queries/sql/getWebsiteStats.ts",
+        "lineStart": 112,
+        "lineEnd": 125
+       }
+      },
+      {
+       "text": "[w2] The rollup's grain is per visit per hour: a materialized view groups inserted events by site, session, visit, hour and attributes, summing views and keeping min and max time and entry and exit pages as aggregate states. It is filled as events are inserted, and it shrinks the many events of one visit to a row while still growing with visits, which is what keeps bounces and time on site computable; a per-site hourly counter would be far smaller and could compute neither.",
+       "cite": {
+        "path": "umami/db/clickhouse/schema.sql",
+        "lineStart": 145,
+        "lineEnd": 239
+       }
+      },
+      {
+       "text": "[w2] Two interchangeable stores let a small self-host run on Postgres alone and a large deployment scale on ClickHouse, but every read and the save path exist twice and the schemas drift unless both are changed together.",
+       "quote": "The dual implementation means a schema change is two code changes."
+      },
+      {
+       "text": "[w1] A silent 200 keeps the filter invisible to whoever runs the bot, so it is not tuned against; the cost is that a real visitor misclassified as a bot leaves no trace anywhere, which makes the filter hard to audit.",
+       "cite": {
+        "path": "umami/src/app/api/send/route.ts",
+        "lineStart": 130,
+        "lineEnd": 133
+       }
+      },
+      {
+       "text": "[w1] Skipping a transaction across the event, its properties and its revenue saves a round trip per event on the hottest path, and a crash between them leaves an event with missing detail; that is acceptable for approximate traffic counts and would not be for money.",
+       "quote": "Acceptable for analytics (approximate by nature); it would be wrong for financial correctness."
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}
