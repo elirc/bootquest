@@ -1,0 +1,115 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "opusorganize--apprenticeship-curriculum-18-durable-execution.md--set-b",
+ "items": [
+  {
+   "key": "seed:explainback:opusorganize/explain-back/9f38ab499fbc6e8c",
+   "provenance": {
+    "repo": "opusorganize",
+    "sha": "6a6e84522bd58c88ccec72421a15b8dbef797602",
+    "path": "apprenticeship/curriculum/18-durable-execution.md",
+    "lines": {
+     "start": 3,
+     "end": 109
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "DESIGN IT — [senior] versioning live workflows whose runs wait for days (opusorganize, apprenticeship/curriculum/18). A recruiting customer has about 12,000 runs in flight of a five-step v3 whose third step waits up to 10 days for a signed contract. They publish v4, which inserts a reminder step before that wait, shortens the wait to 5 days and swaps the email vendor; the v3 email vendor is being shut down in three weeks, and the engine itself is deployed twice a day. Write your design before you look: which definition each in-flight run executes, which runs (if any) are moved to v4 and how completed work carries across, how step identity survives the edit, what a stored timer records and how its wake-up stays single, what an edited wait length means for runs already parked, how old versions stay runnable, and how vendor calls already made are not repeated after a move. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "keyPoints": [
+      {
+       "text": "[w3] Published versions are immutable and retained: v4 is a new version row, v3 is never edited in place, and no version is deleted while a non-terminal run references it, so a run's version reference keeps meaning what it meant when the run started.",
+       "quote": "new runs use the latest"
+      },
+      {
+       "text": "[w3] Moving a run to a newer version is a deliberate per-run migration, used only when staying is impossible (here, the vendor shutdown): it maps each completed step of v3 onto the matching step of v4, which can only be written down when the builder mints identities that survive an insertion.",
+       "quote": "S2 (migrating in-flight state)"
+      },
+      {
+       "text": "[w3] A moved run keeps its original run id, so idempotency keys for steps already done stay the same; recreating it as a fresh run would derive new keys and the vendors would treat the repeats as new requests.",
+       "quote": "A key derived from a *new* run id breaks"
+      },
+      {
+       "text": "[w3] A timer row records the run, the step it belongs to within the run's pinned version, and the due time; waking is a claim (an atomic state change that only one sweeper can win), and the woken run re-enters through the normal checkpoint read rather than jumping straight to the next step.",
+       "quote": "names the table, the sweeper query and what happens when two sweepers race"
+      },
+      {
+       "text": "[w2] An edited wait length does not reach runs already parked unless a migration says so: their due times were computed when they parked, and re-reading the newest definition at wake time is the same mistake as resuming on it.",
+       "quote": "Resuming on \"latest\" duplicates or skips side effects."
+      },
+      {
+       "text": "[w2] Every version a live run pins must stay executable, connectors included, so a vendor shutdown sets a deadline: runs that cannot drain before it (the longest wait decides) are the ones that must be migrated.",
+       "quote": "a pinned vendor, and resumable partial failure"
+      },
+      {
+       "text": "[w1] On a replay engine, changes to workflow code that ship while histories are still open must replay those histories exactly as before, so code changes are gated by version inside the workflow rather than edited in place.",
+       "quote": "The code must be **deterministic**"
+      }
+     ]
+    },
+    {
+     "prompt": "PRE-MORTEM — the morning v4 goes live: the builder also edits v3's stored definition in place to fix a typo in one step; the timer sweeper wakes runs by loading the workflow's current version instead of the run's own; two sweeper replicas each select due timers and then mark them; a script moves the parked runs to v4 by cloning each into a new run; the old email connector is deleted in the same release; and waits shorter than an hour are kept as in-process timers while longer ones are rows. What breaks, how does it show, and what in your design already prevents it?",
+     "keyPoints": [
+      {
+       "text": "[w3] Editing a published definition in place moves every run pinned to it without changing its version reference: the pin still looks intact while the steps behind it have shifted, so the protection silently stops applying.",
+       "quote": "Pin the definition version per run."
+      },
+      {
+       "text": "[w3] A sweeper that loads the workflow's current version wakes a v3 run onto v4: the step at the parked position is now the reminder, so completed-step matching lands on the wrong step and the run skips or repeats work; the run loader fetches the run's own version next to the workflow it belongs to, so resolving the version through the workflow instead is a small, easy-to-miss change.",
+       "quote": "include: { version: true, relay: true }"
+      },
+      {
+       "text": "[w3] Select-then-mark lets both sweepers wake the same run, so two workers resume it at once and the next side effect goes out twice unless the run's writes are fenced and the claim itself is atomic.",
+       "quote": "Leases + fencing, not just queue locks."
+      },
+      {
+       "text": "[w3] Cloning parked runs into new runs loses both kinds of memory: the clone has no completed steps to skip, and its vendor keys are built from a different run id, so the vendors cannot recognise the steps they already performed.",
+       "quote": "returns `${runId}:${stepId}` for `vendorKey` and `dedupeWindow`"
+      },
+      {
+       "text": "[w2] Deleting a connector that pinned versions still use is invisible at release time and fails days later when a parked run wakes at that step; the release gate is that no non-terminal run pins a version using it.",
+       "cite": {
+        "path": "apprenticeship/curriculum/18-durable-execution.md",
+        "lineStart": 11,
+        "lineEnd": 11
+       }
+      },
+      {
+       "text": "[w2] Two timer mechanisms mean two failure models: the short in-process waits die with each of the twice-daily deploys and those runs depend on redelivery to move again, while the long ones survive; one durable mechanism for every wait removes the split.",
+       "quote": "not in `setTimeout` or queue delays alone"
+      }
+     ]
+    },
+    {
+     "prompt": "TRADE-OFF HANDBACK — defend your versioning and timer choices against the alternatives: pinning runs until they drain vs migrating them to the new version, checkpoint-and-skip vs history replay as the thing you version, timer rows with a sweeper vs delayed queue jobs, copying the definition into each run vs referencing an immutable version row, and keeping parked runs' original due times vs recomputing them after an edit. For each, say what you bought, what it cost, and which requirement put you on that side.",
+     "keyPoints": [
+      {
+       "text": "[w3] Pin-and-drain needs no mapping and cannot misalign steps, but old versions and every connector they use must live as long as the longest wait; migrating ends that tail sooner at the price of a per-version mapping and the risk of a wrong one, so it is chosen only when something forces it.",
+       "quote": "A workflow runs for minutes to days across many steps and external calls."
+      },
+      {
+       "text": "[w3] With checkpoint-and-skip, a version change is a data problem (which recorded step results map to which new steps); with replay it is a code problem (version branches in workflow code kept until every history that needs them has closed), so the choice decides who maintains old versions: migrations or code.",
+       "quote": "persist each step's result; on resume, skip the steps that have results"
+      },
+      {
+       "text": "[w2] Timer rows are queryable, survive losing the queue and can be rewritten by a migration, at the cost of a polling sweeper and its claim logic; delayed queue jobs are less code but invisible to queries and only as durable as the queue.",
+       "quote": "a sweeper wakes due runs"
+      },
+      {
+       "text": "[w2] Copying the whole definition into each run makes the run immune to later edits at the price of storage per run; referencing a version row is cheap but only safe if published versions are never changed.",
+       "quote": "The worker loads the run *with its own version*"
+      },
+      {
+       "text": "[w2] Keeping a parked run's original due time honours what its end user was promised and follows from pinning; recomputing after an edit follows the customer's new intent but is a migration with surprises, so it happens only on an explicit request.",
+       "quote": "Design a durable timer."
+      }
+     ]
+    }
+   ],
+   "set": "b"
+  }
+ ]
+}
