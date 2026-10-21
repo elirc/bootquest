@@ -478,6 +478,612 @@
    ],
    "front": "What should replace the in-memory store in production?",
    "back": "Relational tables (customers, plans, subscriptions, usage, invoices and lines, payments, coupons, idempotency keys, webhook events); a transactional outbox for webhooks; a durable queue for payment and invoice jobs; tenant scoping and RBAC; a reporting currency or FX layer."
+  },
+  {
+   "id": "q14-unique-constraint",
+   "kind": "quiz",
+   "source": {
+    "path": "docs2/03-architecture-and-patterns/02-data-model-and-persistence.md",
+    "lines": {
+     "start": 39,
+     "end": 56
+    }
+   },
+   "cites": [
+    {
+     "path": "docs2/03-architecture-and-patterns/02-data-model-and-persistence.md",
+     "lineStart": 52,
+     "lineEnd": 56
+    }
+   ],
+   "prompt": "BillingStore rejects a duplicate customer email with a .Any() scan inside its lock. Per the data-model guide, what happens to that check once the store becomes a database, and what is the fix?",
+   "answer": "It becomes a read-then-write race; the fix is a unique constraint",
+   "distractors": [
+    "It stays safe, since each request still runs its scan inside a lock",
+    "It becomes slow but safe; the fix is caching every email in memory",
+    "It becomes a race; the fix is a retry loop around the .Any() check"
+   ],
+   "explanation": "The teaching point (lines 52-56): as linear scans the uniqueness checks are O(n) but always consistent under the single lock; as a database without a unique index they become a read-then-write race, because two concurrent inserts both pass the .Any() check. 'The fix isn't app code — it's a unique constraint': the database enforces uniqueness, not the application, so neither a cache nor a retry loop around the check closes the race."
+  },
+  {
+   "id": "q15-generate-invoice-writes",
+   "kind": "quiz",
+   "source": {
+    "path": "docs2/03-architecture-and-patterns/02-data-model-and-persistence.md",
+    "lines": {
+     "start": 58,
+     "end": 72
+    }
+   },
+   "cites": [
+    {
+     "path": "docs2/03-architecture-and-patterns/02-data-model-and-persistence.md",
+     "lineStart": 60,
+     "lineEnd": 66
+    },
+    {
+     "path": "docs2/03-architecture-and-patterns/02-data-model-and-persistence.md",
+     "lineStart": 70,
+     "lineEnd": 71
+    },
+    {
+     "path": "src/Billing.Api/Infrastructure/BillingEngine.cs",
+     "lineStart": 82,
+     "lineEnd": 110
+    }
+   ],
+   "prompt": "GenerateInvoice saves the invoice, stamps usage as billed, advances the subscription period and enqueues a webhook. What does the data-model guide say about those writes?",
+   "answer": "Four locked calls, so a crash may save the invoice yet never advance the period",
+   "distractors": [
+    "One locked transaction, so a crash rolls every write back together",
+    "Four locked calls, but the shared lock makes all four writes one atomic unit",
+    "One outbox write, so a crash simply replays the whole invoice on restart"
+   ],
+   "explanation": "The guide (lines 60-66) says there are no durable transaction boundaries, only the single lock, and lists GenerateInvoice's four writes as 'Four separate locked calls': a crash between them leaves inconsistent state such as an invoice saved but the period not advanced. Lines 70-71: each call is individually atomic (each takes the lock) but not collectively atomic, so there is no rollback and no replay of the whole operation. BillingEngine.cs:82-110 shows the order: SaveInvoice, SaveUsageEvents, SaveSubscription, EnqueueWebhook."
+  },
+  {
+   "id": "q16-last-write-wins",
+   "kind": "quiz",
+   "source": {
+    "path": "docs2/03-architecture-and-patterns/02-data-model-and-persistence.md",
+    "lines": {
+     "start": 74,
+     "end": 80
+    }
+   },
+   "cites": [
+    {
+     "path": "docs2/03-architecture-and-patterns/02-data-model-and-persistence.md",
+     "lineStart": 76,
+     "lineEnd": 80
+    }
+   ],
+   "prompt": "Two requests load the same invoice, each builds an updated copy with a `with { … }` expression, and both call SaveInvoice. Per the data-model guide, what happens?",
+   "answer": "The later save overwrites the earlier one; there is no concurrency check",
+   "distractors": [
+    "The later save fails, as the record's version no longer matches",
+    "Both saves merge field by field into a single combined invoice",
+    "The store's lock queues them, so the second one re-reads the invoice before writing"
+   ],
+   "explanation": "Lines 76-80: entities are immutable records, an 'update' is `entity with { … }` plus an explicit Save*, and the store overwrites by key. 'There is no optimistic concurrency — last write wins.' A RowVersion/xmin check is what a database version would add; today nothing compares versions, merges fields, or makes the second writer re-read."
+  },
+  {
+   "id": "q17-safe-schema-change",
+   "kind": "quiz",
+   "source": {
+    "path": "docs2/03-architecture-and-patterns/02-data-model-and-persistence.md",
+    "lines": {
+     "start": 82,
+     "end": 91
+    }
+   },
+   "cites": [
+    {
+     "path": "docs2/03-architecture-and-patterns/02-data-model-and-persistence.md",
+     "lineStart": 87,
+     "lineEnd": 90
+    }
+   ],
+   "prompt": "Per the guide's safe schema-change rules, how should a new required column be added, and how should a column be renamed?",
+   "answer": "Nullable, backfill, then non-null; rename by add, copy, drop over releases",
+   "distractors": [
+    "Non-null with no default in one step; rename in place during a deploy",
+    "Non-null with a temporary default; rename through a view kept over the old name",
+    "Nullable forever with app checks; rename by dropping and re-adding it"
+   ],
+   "explanation": "Rule 1 (lines 87-88): additive first, a new nullable column, deploy, backfill, then make it non-null, and never add a non-null column without a default in one step. Rule 2 (lines 89-90): rename = add + copy + drop across releases: add the new column, write both, migrate readers, then drop the old, and never rename in place while old code runs."
+  },
+  {
+   "id": "q18-money-mapping-trap",
+   "kind": "quiz",
+   "source": {
+    "path": "docs2/03-architecture-and-patterns/02-data-model-and-persistence.md",
+    "lines": {
+     "start": 82,
+     "end": 95
+    }
+   },
+   "cites": [
+    {
+     "path": "docs2/03-architecture-and-patterns/02-data-model-and-persistence.md",
+     "lineStart": 92,
+     "lineEnd": 95
+    }
+   ],
+   "prompt": "Which persistence decision does the data-model guide call 'the trap' when the store becomes EF Core, and why must it be settled up front?",
+   "answer": "How Money maps to columns; changing it later is a data migration",
+   "distractors": [
+    "How Guid keys are generated; changing them later breaks every URL",
+    "How Invoice.Lines is cached; changing it later needs a cache flush",
+    "How usage is partitioned; changing it later needs a full reindex"
+   ],
+   "explanation": "Rule 4 (lines 92-93): 'The Money mapping is the trap.' Decide up front between two columns (MinorUnits, Currency) per money field or an owned type, because changing that decision later is a data migration, not a code change. Rule 5 (lines 94-95) is about Invoice.Lines becoming a child table or owned collection, not caching; key generation and partitioning are not discussed."
+  },
+  {
+   "id": "q19-r12-validation-gaps",
+   "kind": "quiz",
+   "source": {
+    "path": "docs2/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 24,
+     "end": 29
+    }
+   },
+   "cites": [
+    {
+     "path": "docs2/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 26,
+     "lineEnd": 28
+    }
+   ],
+   "prompt": "Per the R-12 validation gaps, what happens today to a new customer whose email is \"x\", and to a usage event of two billion units?",
+   "answer": "Both are accepted, as email is only checked for presence and quantity for > 0",
+   "distractors": [
+    "Both are rejected, as email needs an @ and quantity has a plan maximum",
+    "The email is accepted, but the quantity is capped at the plan's limit",
+    "The email is rejected, but the usage event is recorded just as it was sent"
+   ],
+   "explanation": "The R-12 list (lines 26-28): email format isn't validated, only presence, so \"x\" passes; and usage quantity has no upper bound, so a 2-billion-unit event yields an absurd invoice (the endpoint only checks quantity > 0). Neither input is rejected or capped."
+  },
+  {
+   "id": "q20-hmac-not-user-auth",
+   "kind": "quiz",
+   "source": {
+    "path": "docs2/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 31,
+     "end": 38
+    }
+   },
+   "cites": [
+    {
+     "path": "docs2/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 33,
+     "lineEnd": 38
+    }
+   ],
+   "prompt": "NetBilling verifies an HMAC signature on its inbound webhook. Per the auth guide, what does that signature authenticate, and who may call the rest of /api?",
+   "answer": "The payment provider on one endpoint; all of /api stays anonymous",
+   "distractors": [
+    "Each user's session on every route; anonymous calls get a 401",
+    "The merchant's API key on every write; reads under /api stay public",
+    "The dashboard's SPA origin; other origins are refused by CORS"
+   ],
+   "explanation": "Lines 33-38: there is no authentication middleware, no AddAuthentication, no [Authorize] and no JWT or cookie handling. The only thing resembling a credential is the webhook HMAC signature, which authenticates the payment provider on one endpoint, not users, so every endpoint under /api is anonymous. There are no sessions, no API keys, and CORS is not authentication."
+  },
+  {
+   "id": "q21-idor-guid-only",
+   "kind": "quiz",
+   "source": {
+    "path": "docs2/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 40,
+     "end": 52
+    }
+   },
+   "cites": [
+    {
+     "path": "docs2/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 42,
+     "lineEnd": 52
+    }
+   ],
+   "prompt": "No entity carries a TenantId or OwnerId. What does a caller need in order to pay someone else's invoice through POST /api/invoices/{id}/pay?",
+   "answer": "Only the invoice's Guid, since holding the id is enough",
+   "distractors": [
+    "A session cookie taken from the invoice owner's own browser",
+    "An admin role claim, which the pay handler checks first",
+    "The owner's Idempotency-Key from the first pay attempt"
+   ],
+   "explanation": "Lines 42-52: entities have no TenantId/OwnerId, so POST /api/invoices/{id}/pay lets any caller pay any invoice by id, and every id-bearing endpoint is an IDOR: 'the only thing you need to act on someone else's resource is its Guid'. There are no sessions, no role claims and no ownership check, and the idempotency header is not a credential."
+  },
+  {
+   "id": "q22-auth-retrofit-claims",
+   "kind": "quiz",
+   "source": {
+    "path": "docs2/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 63,
+     "end": 76
+    }
+   },
+   "cites": [
+    {
+     "path": "docs2/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 68,
+     "lineEnd": 76
+    }
+   ],
+   "prompt": "In the guide's design for adding auth, where do the caller's identity and tenant come from, and how is a resource id taken from the URL handled?",
+   "answer": "From validated claims; then look the resource up and verify ownership",
+   "distractors": [
+    "From a tenant id sent in the request body; then verify ownership of the id",
+    "From a tenant header the SPA sends; then verify ownership of the id",
+    "From validated claims; then trust the URL id once the user signs in"
+   ],
+   "explanation": "Step 1 (lines 68-69): the caller's identity and tenant come from validated claims, never from the request body. Step 2 sets TenantId on every owned entity from the authenticated principal, step 3 scopes every store query, and step 4 (lines 75-76): don't trust ids from the URL or body; look the resource up and verify ownership, where a 404 rather than a 403 often hides existence. A body or header tenant is caller-controlled, and signing in does not make a URL id yours."
+  },
+  {
+   "id": "q23-authz-cross-cutting",
+   "kind": "quiz",
+   "source": {
+    "path": "docs2/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 78,
+     "end": 80
+    }
+   },
+   "cites": [
+    {
+     "path": "docs2/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 78,
+     "lineEnd": 80
+    }
+   ],
+   "prompt": "Why does the guide say authorization is hard to retrofit here, and what does it recommend instead of per-endpoint checks?",
+   "answer": "It is a cross-cutting invariant, so use one boundary nobody can bypass",
+   "distractors": [
+    "It needs a new database, so add it only after the EF Core migration",
+    "It slows every request, so check it only on the endpoints that write",
+    "It breaks the SPA client, so add it per endpoint behind separate feature flags"
+   ],
+   "explanation": "Lines 78-80: authorization is a cross-cutting invariant, and bolting it on per endpoint guarantees you'll miss one. The right move is a boundary, a filter or scoping baked into the store, that is impossible to bypass. The guide does not tie it to the database migration, to write-only endpoints, or to feature flags."
+  },
+  {
+   "id": "q24-csrf-mostly-na",
+   "kind": "quiz",
+   "source": {
+    "path": "docs2/05-quality-engineering/05-security-checklist.md",
+    "lines": {
+     "start": 7,
+     "end": 27
+    }
+   },
+   "cites": [
+    {
+     "path": "docs2/05-quality-engineering/05-security-checklist.md",
+     "lineStart": 17,
+     "lineEnd": 17
+    }
+   ],
+   "prompt": "The security checklist marks CSRF as 'mostly N/A' for this repo. Why, and what would change that?",
+   "answer": "No cookies or sessions exist; adding cookie auth requires anti-forgery",
+   "distractors": [
+    "CORS blocks other origins; adding JWT bearer auth would require anti-forgery",
+    "React escapes output; adding forms requires a CSRF token header",
+    "Every route is a GET; adding POST routes requires a CSRF token"
+   ],
+   "explanation": "The CSRF row (line 17): no cookies or sessions exist today, so there is no CSRF surface; 'If you add cookie auth, you must add anti-forgery.' CORS and React escaping are separate rows, a bearer-token scheme is not what the row warns about, and the API already has many POST endpoints."
+  },
+  {
+   "id": "q25-ssrf-destination",
+   "kind": "quiz",
+   "source": {
+    "path": "docs2/05-quality-engineering/05-security-checklist.md",
+    "lines": {
+     "start": 7,
+     "end": 27
+    }
+   },
+   "cites": [
+    {
+     "path": "docs2/05-quality-engineering/05-security-checklist.md",
+     "lineStart": 18,
+     "lineEnd": 18
+    }
+   ],
+   "prompt": "Why does the security checklist mark SSRF 'N/A today', and what turns it into a live risk?",
+   "answer": "Delivery is simulated; a real send makes Destination an attacker-steered URL",
+   "distractors": [
+    "No URLs are stored; a real send would only use the provider's fixed host",
+    "CORS limits origins; a real send would stay inside that same allowlist",
+    "Delivery is simulated; a real send is safe as only admins can set URLs"
+   ],
+   "explanation": "The SSRF row (line 18): outbound webhook delivery is simulated today. When it becomes real, the destination is attacker-influenced (WebhookEvent.Destination), so URLs must be validated or allowlisted or it is an SSRF vector. Destinations are stored on every event, CORS governs inbound browser calls, and with no auth at all there is no admin-only path."
+  },
+  {
+   "id": "q26-committed-secret",
+   "kind": "quiz",
+   "source": {
+    "path": "docs2/05-quality-engineering/05-security-checklist.md",
+    "lines": {
+     "start": 7,
+     "end": 27
+    }
+   },
+   "cites": [
+    {
+     "path": "docs2/05-quality-engineering/05-security-checklist.md",
+     "lineStart": 20,
+     "lineEnd": 20
+    },
+    {
+     "path": "src/Billing.Api/appsettings.json",
+     "lineStart": 4,
+     "lineEnd": 4
+    }
+   ],
+   "prompt": "What does the security checklist flag about the webhook signing secret, and what fix does it give?",
+   "answer": "A default dev_secret_replace_me is committed; move it out and fail fast in prod",
+   "distractors": [
+    "It is read from an env var with no rotation; add a rotation schedule",
+    "It is stored hashed in the store; switch to a reversible encryption",
+    "It ships inside the SPA bundle; move the webhook signing to the server"
+   ],
+   "explanation": "The Secrets row (line 20, R-09): the signing secret defaults to dev_secret_replace_me, committed in appsettings.json (line 4). The fix is to move it to the environment or a secret store and fail fast in production. It is not read from an env var, not stored hashed, and not part of the front-end bundle."
+  },
+  {
+   "id": "q27-no-tests-first-80",
+   "kind": "quiz",
+   "source": {
+    "path": "docs2/05-quality-engineering/01-testing-strategy.md",
+    "lines": {
+     "start": 1,
+     "end": 19
+    }
+   },
+   "cites": [
+    {
+     "path": "docs2/05-quality-engineering/01-testing-strategy.md",
+     "lineStart": 3,
+     "lineEnd": 4
+    },
+    {
+     "path": "docs2/05-quality-engineering/01-testing-strategy.md",
+     "lineStart": 17,
+     "lineEnd": 19
+    }
+   ],
+   "prompt": "What does the testing-strategy page say exists today, and what does it call the highest-value 80% to write?",
+   "answer": "No test project at all; engine unit tests plus thin WebApplicationFactory tests",
+   "distractors": [
+    "A unit project only; Playwright journeys plus React component tests",
+    "An integration project; contract tests plus a full E2E smoke suite",
+    "No test project at all; Playwright end-to-end journeys across the whole app"
+   ],
+   "explanation": "Lines 3-4: there is no test project and no test anywhere (R-03). Lines 17-19: for a repo this size the highest-value 80% is unit tests on the engine, deterministic via the clock, plus a thin layer of WebApplicationFactory integration tests; UI and E2E are lower priority for a single screen."
+  },
+  {
+   "id": "q28-seed-relative-dates",
+   "kind": "quiz",
+   "source": {
+    "path": "docs2/05-quality-engineering/01-testing-strategy.md",
+    "lines": {
+     "start": 21,
+     "end": 33
+    }
+   },
+   "cites": [
+    {
+     "path": "docs2/05-quality-engineering/01-testing-strategy.md",
+     "lineStart": 30,
+     "lineEnd": 33
+    }
+   ],
+   "prompt": "The self-seeding store gives tests fixed GUIDs. What caveat does the testing strategy attach to the seeded dates?",
+   "answer": "They are relative to construction time, so tests need a fixed clock",
+   "distractors": [
+    "They are hard-coded calendar dates, so tests must pin the machine's time zone",
+    "They are random on each run, so assertions need a tolerance window",
+    "They are relative to the first request, so tests need a fixed clock"
+   ],
+   "explanation": "The caveat (lines 30-33): the seed uses now.AddDays(-30) and similar offsets relative to construction time, and Seed is called with clock.UtcNow. With a fixed clock the seed dates are deterministic; with the system clock they shift, so date assertions flake. The dates are neither hard-coded nor random, and they are taken when the store is constructed, not at the first request."
+  },
+  {
+   "id": "q29-flake-timer-factory",
+   "kind": "quiz",
+   "source": {
+    "path": "docs2/05-quality-engineering/01-testing-strategy.md",
+    "lines": {
+     "start": 44,
+     "end": 52
+    }
+   },
+   "cites": [
+    {
+     "path": "docs2/05-quality-engineering/01-testing-strategy.md",
+     "lineStart": 50,
+     "lineEnd": 51
+    }
+   ],
+   "prompt": "Per the flake-prevention table, how should a test exercise the workers' PeriodicTimer, and what fixes tests that share one WebApplicationFactory?",
+   "answer": "Call Process/Deliver directly; build a fresh factory per test class",
+   "distractors": [
+    "Wait out one real 4s tick; then reset the factory's port after each test",
+    "Shorten the timer to 1 ms; mark every test class as non-parallel",
+    "Mock PeriodicTimer itself; share one factory but sort the results"
+   ],
+   "explanation": "The table (lines 50-51): don't wait on the real timer; call Process/Deliver directly or drain the queue synchronously. Tests sharing one WebApplicationFactory mutate the same singleton store, so build a fresh factory per test class or reset state between tests. Waiting on real ticks, shrinking the interval, or sorting results does not address either source of flake."
+  },
+  {
+   "id": "f04-junior-vs-senior",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs2/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 54,
+     "end": 61
+    }
+   },
+   "cites": [
+    {
+     "path": "docs2/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 56,
+     "lineEnd": 61
+    }
+   ],
+   "front": "In the auth guide's junior-vs-senior table, what does a senior also ask about the pay endpoint, the dashboard, recorded usage and validated input?",
+   "back": "Pay works: who is allowed to pay this invoice, and what stops me paying yours? Dashboard loads all data: whose data, and where is the tenant scope on every store query? Usage recorded for the id I send: is that subscription mine, and is the URL id trusted? Input is validated: validated for shape, but is it authorized? A different question."
+  },
+  {
+   "id": "f05-pre-merge-checks",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs2/05-quality-engineering/05-security-checklist.md",
+    "lines": {
+     "start": 37,
+     "end": 46
+    }
+   },
+   "cites": [
+    {
+     "path": "docs2/05-quality-engineering/05-security-checklist.md",
+     "lineStart": 39,
+     "lineEnd": 39
+    },
+    {
+     "path": "docs2/05-quality-engineering/05-security-checklist.md",
+     "lineStart": 44,
+     "lineEnd": 46
+    }
+   ],
+   "front": "What does the pre-merge security checklist ask about id-based endpoints, signed or idempotent operations, error messages and new dependencies?",
+   "back": "Id-based endpoints: is ownership verified, not just existence? Signed or idempotent operations: is replay or dedup handled? Error messages: do they leak internals? Dependencies: is the new one necessary, maintained and audited?"
+  },
+  {
+   "id": "f06-two-test-seams",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs2/05-quality-engineering/01-testing-strategy.md",
+    "lines": {
+     "start": 21,
+     "end": 28
+    }
+   },
+   "cites": [
+    {
+     "path": "docs2/05-quality-engineering/01-testing-strategy.md",
+     "lineStart": 23,
+     "lineEnd": 28
+    }
+   ],
+   "front": "Name the two seams the testing strategy says make NetBilling testable.",
+   "back": "IBillingClock: inject a fixed clock and the invoice arithmetic becomes deterministic, the single most important testing affordance. The self-seeding BillingStore: it seeds known data with fixed GUIDs, so you can assert against the seeded Scale subscription without setup. The seed is your fixture."
+  },
+  {
+   "id": "f07-what-not-to-test",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs2/05-quality-engineering/01-testing-strategy.md",
+    "lines": {
+     "start": 35,
+     "end": 42
+    }
+   },
+   "cites": [
+    {
+     "path": "docs2/05-quality-engineering/01-testing-strategy.md",
+     "lineStart": 37,
+     "lineEnd": 42
+    }
+   ],
+   "front": "What does the testing strategy tell you NOT to test in this repo?",
+   "back": "The framework (that ASP.NET routes /api/customers); trivial DTO mapping such as MoneyDto.From beyond one smoke check; the in-memory store's Dictionary semantics (test the business rules layered on it instead); and record getters or equality, which are the compiler's job."
+  },
+  {
+   "id": "f08-observability-today",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs2/05-quality-engineering/06-observability-and-operations.md",
+    "lines": {
+     "start": 6,
+     "end": 13
+    }
+   },
+   "cites": [
+    {
+     "path": "docs2/05-quality-engineering/06-observability-and-operations.md",
+     "lineStart": 8,
+     "lineEnd": 13
+    }
+   ],
+   "front": "What observability signals does NetBilling already have?",
+   "back": "An ILogger injected into both workers (covering a dropped payment job and a failed delivery); log levels in appsettings.Development.json (Information by default, ASP.NET at Warning); GET /api/health, a liveness endpoint returning ok plus a timestamp; and the dashboard's webhook table showing Status, Attempt and LastError for manual eyeballing."
+  },
+  {
+   "id": "f09-observability-starter",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs2/05-quality-engineering/06-observability-and-operations.md",
+    "lines": {
+     "start": 41,
+     "end": 46
+    }
+   },
+   "cites": [
+    {
+     "path": "docs2/05-quality-engineering/06-observability-and-operations.md",
+     "lineStart": 43,
+     "lineEnd": 46
+    }
+   ],
+   "front": "What are the first two items of the guide's minimal observability starter?",
+   "back": "1) A global exception handler (app.UseExceptionHandler) that logs and returns RFC-7807 problem-details, turning R-01 from a silent 500 into a captured, alertable event. 2) Counters via System.Diagnostics.Metrics or OpenTelemetry: invoices_generated, payments_succeeded, payments_failed, webhooks_delivered, webhooks_failed."
+  },
+  {
+   "id": "f10-store-layout",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs2/03-architecture-and-patterns/02-data-model-and-persistence.md",
+    "lines": {
+     "start": 25,
+     "end": 37
+    }
+   },
+   "cites": [
+    {
+     "path": "docs2/03-architecture-and-patterns/02-data-model-and-persistence.md",
+     "lineStart": 27,
+     "lineEnd": 37
+    }
+   ],
+   "front": "How does BillingStore lay out its collections?",
+   "back": "One Guid-keyed dictionary per entity (_customers, _plans, _coupons, _subscriptions, _usageEvents, _invoices, _payments); a _paymentJobs Queue of pending payment jobs; and for webhooks a _webhookEvents dictionary of outbox rows plus a _webhookQueue of ids for delivery order, so an event can be updated by id while the id queue keeps the order."
+  },
+  {
+   "id": "f11-hot-query-indexes",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs2/03-architecture-and-patterns/02-data-model-and-persistence.md",
+    "lines": {
+     "start": 39,
+     "end": 50
+    }
+   },
+   "cites": [
+    {
+     "path": "docs2/03-architecture-and-patterns/02-data-model-and-persistence.md",
+     "lineStart": 46,
+     "lineEnd": 46
+    },
+    {
+     "path": "docs2/03-architecture-and-patterns/02-data-model-and-persistence.md",
+     "lineStart": 50,
+     "lineEnd": 50
+    }
+   ],
+   "front": "Which non-unique indexes would the unbilled-usage query and the dashboard need once BillingStore is a database?",
+   "back": "Unbilled usage for a period (a full scan of _usageEvents today) needs an index on (SubscriptionId, InvoiceId, OccurredAt). The dashboard, which sorts each list by CreatedAt on every call, needs an index on CreatedAt per table."
   }
  ]
 }
