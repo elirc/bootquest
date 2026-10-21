@@ -1067,3 +1067,23 @@ resolved); quiz variety `concept` and flashcard shape `hand-authored`;
     fact (details in the quiz pack commit messages); quiz-a/c borderline elimination-hints
     (atlas f02/q16, harbor f04/q27, netcleanarch f07/q07, openstatus r02/q21) were reviewed
     and accepted as below-threshold.
+- **fundamentals wave — review fixes (2026-10-21):** three Fable reviewers (code/pins; EB cite
+  audit 425/425 key points at the pins; quiz keys 80/80 independently derived + all 214 drill
+  assertions recomputed) found 0 blockers. Fixed on review: payments-lab NEW quiz q13 re-angled
+  (its key was stated verbatim by generator goal-check a8d417bd's keyed choice; it now keys the
+  unstructured-500 outcome, auth-and-permissions.md:60-65); TEN pre-existing flashcard backs
+  reworded through-the-mechanism (xleak class — backs stated same-pack quiz keys: dotnet-auth
+  f02/f03/f04, atlas-swe-bootcamp f01/f02/f03, payments-lab f01, openstatus f01/f02/f03; ids
+  unchanged, packs re-seeded quests-then-notes, payments-lab still exactly its 1 historical
+  quarantine); w22 set reworded away from payments-lab set-B reconciliation phrasing (Jaccard
+  0.32-0.35 → <0.25) and Q1.KP4's cite moved to paymentStateMachine.ts:17-48; netslack scenario
+  unified to 10,000; ww19 Q1 gained the dead (status,createdAt) run-index key point
+  (schema.prisma:170, no reader); masterumami dropped an uncited "(exact or CIDR)"; pulse Q1
+  prompt narrowed to the three load-protection refusals. Post-fix gates: leak lint 170/0, seed
+  2194/2194 (exit 0), server 631 + selfrun 20 (both vitest configs run directly — note the npm
+  script's && chain stops after the first config's known onTaskUpdate noise exit, so flags and
+  selfrun only reach a direct run). Reviewer extras worth keeping: the 630-vs-631 server-test
+  count difference between batteries is the IPv6-loopback environment skip at
+  server/src/runners/http/runner.test.ts:189, not new surface; the six g2-brief--javabootcamp
+  packs' "DESIGN IT" Q1 prompts are BY DESIGN (routing keys on the prompt prefix — they are the
+  6 javabootcamp designItems).
