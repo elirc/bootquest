@@ -944,3 +944,126 @@ resolved); quiz variety `concept` and flashcard shape `hand-authored`;
   drills, 62 total; SYSDRILLS_EXPECTED 22 → 62; 62/62 validated (solution passes + starter
   fails under the real drill-js runner), 0 quarantined; every expected integer recomputed by
   the cross-reviewer; hint 3 is approach+formula only (never pasteable code).
+- **fundamentals wave — DONE (2026-10-21):** interview + real-SWE-fundamentals content, zero
+  shared/factory edits (no estate restamp). 9 new DESIGN IT primaries → 47 items / 29 repos;
+  11 fundamentals explain-backs on repos with no prior EB pack → EB packs 150 → 170, strict
+  pins 594 → 614; quiz layer +80 quizzes / +40 flashcards / +86 notes across 6 packs
+  (atlas-swe-bootcamp 15→31q 4→12fc, harbor-swe-bootcamp 16→30/4→11, dotnet-auth 13→27/4→11,
+  payments-lab 19→31/4→10, netcleanarch 13→27/4→11, openstatus 12→22/4→9; old items
+  byte-identical everywhere); sysdrills 22 → 62 (bullet above). Orchestration: 3 Fable
+  architects → 9 Opus implementers in isolated clones → 3 Fable reviewers.
+  - New DESIGN IT sets: tenant-search-indexer search-freshness; icms audit-log-integrity;
+    w22 webhook-consumer-and-reconciliation (unit docs/architecture/domain-model.md — the
+    astraupskill units do not cover the webhook flow); scedulingpyjs reminders-and-recurrence
+    (time-fired work, not durable-queue doctrine); masterumami analytics-write-path-and-rollups
+    (unit 02-data-model; ch04 is pulse-net at-most-once territory); cal-com
+    feature-flags-and-rollout (unit 06-architecture-critique — ch01 mentions flags once);
+    dotnet-drop chunked-upload-pipeline; netslack channel-message-fanout; netcalendy
+    no-double-booking (states the real check-then-insert mechanism, not bazaar's atomic
+    decrement).
+  - New fundamentals EBs: zz8 (HTTP status judgment), ww19 (indexes for due work), gitjira
+    (fractional ordering + schema evolution), pulse (ingest edge contracts, unit
+    docs/adr/0001), tenantadmin (sessions/RBAC/audit, unit README.md, --allow-no-quests),
+    organized-build-analytics (token lifecycle/rotation), e20 (edit envelope + optimistic
+    concurrency), netgum (checkout transaction boundaries; states the code's oversell, never
+    the wrong doc line), atlas (clock-as-dependency + idempotency seams, unit ADR-0007), agora
+    (Money value object + windowed pricing, unit ADR-0006), globehire (state machines + bulk
+    partial failure).
+  - Accepted prompt-demanded overlaps (token guard passes all; EB_LEAK_EXEMPT still empty):
+    zz8 q1.kp2/q2.kp1/q2.kp2/q2.kp7/q2.kp3 vs quizzes 4bed7003/c35c4273/586f760f/7a5ca3d4/
+    288399d0; ww19 q3.kp7 vs 8d281860 (lexical 0.44, key not revealed); dotnet-drop q1.kp2-4 +
+    q2.kp5 vs 12a7b7e6/4db63cee/8a818b99/c38a1dcc/a899e7c8/381485b1; netslack q1.kp1/kp3/kp7 +
+    q2.kp3/kp4 vs 7f418cd3/4900b82d/441dee00/c0b95e53/be4916b3; netcalendy q1.kp4+q2.kp0+
+    q3.kp1 vs 484cc46b, q2.kp3 vs c9fdee7c+f56bfece; netgum q1.kp0/kp1/kp3 + q2.kp4 + q3.kp0
+    vs 50f9408f/97a38330/f4bc33fb/0808a7c4/f03-stock-race/51bcc88b; atlas q1.kp2 vs 2e7ce076
+    (0.25). eb2/eb4 packs: none.
+  - Upstream findings (owner follow-ups; mirrors untouched; all verified at the pins):
+    - organized-build-analytics **CRITICAL**: public POST /api/auth/register accepts `role`
+      from the body including SYSTEM_ADMIN (auth.routes.ts:11, auth.schemas.ts:9-17,
+      auth.service.ts:37-45) — anyone can self-register as a system admin. Also: no
+      refresh-token reuse detection and check-then-act rotation (auth.service.ts:125-146);
+      refresh ignores user.isActive (:121-147); expired/tampered refresh JWT → 500 not 401;
+      metricVisibility.middleware.ts:8 Express-5 query-write no-op (re-verified).
+    - masterumami: on unauthenticated /api/send a payload-supplied ip/userAgent overrides the
+      headers — bypasses bot filtering and IGNORE_IP and lets the caller pick the session-hash
+      input (src/lib/detect.ts:126-129); visit expiry counts from visit START not idle
+      (send/route.ts:169-175); doc 02-data-model:68 wrong about rollup size and freshness.
+    - netslack: auth routes incl. anonymous /dev-token mapped in EVERY environment
+      (Program.cs:76) and the endpoint issues a token for any existing email AND renames that
+      user (AuthEndpoints.cs:21-33); SignalR reconnect never re-joins the channel group
+      (useSignalRChannel.ts:13-28); JoinChannel has no access check (MessageHub.cs:10-13);
+      author email broadcast to every member.
+    - dotnet-drop: RestoreVersion sets PendingScan but nothing queues a scan — a restored file
+      is never downloadable again (FileService.cs:106-112); scan worker marks Clean without
+      checking the version is current; trash purge frees DB rows only — blobs and quota never
+      released (JanitorWorker.cs:46-51); resume hands back expired sessions; duplicate chunk
+      race → 500; retried Complete refused; scanner reads first 1 MiB only;
+      Infrastructure/Storage/* missing from git (.gitignore storage/) so the pin does not
+      build; Entity.Version concurrency token possibly inert (unverified).
+    - netcalendy: GetAvailableSlots honors only the FIRST rule per weekday (Schedule.cs:55);
+      bookings loaded at UTC-midnight bounds vs host-local slot dates — far-east hosts show
+      booked morning slots as free (GetAvailableSlotsHandler.cs:37-40); DST-skipped local time
+      throws (TimeSlot.cs:5-9); create never checks the start is one of the host's slots;
+      Cancel has no window; IDateTimeProvider registered but never injected; TimeConflict maps
+      to 400 not the documented 409.
+    - netgum: checkout oversell mechanics confirmed at Repositories.cs:42-59 +
+      Product.cs:147-162 + NetgumDbContext.cs:124-140 (no concurrency token); coupon
+      RedeemedCount has the same lost update; simultaneous CompleteOrderAsync both mark paid
+      and both send the receipt; receipt email sent after the commit (lost on a crash between).
+    - globehire: validate endpoint takes Today from the request body — the client controls the
+      clock — and ignores the route clientId (EmploymentLifecycleEndpoints.cs:9-30);
+      ComplianceCase.SubmitForReview sets Expired BEFORE throwing and Expired is unrecoverable
+      (:202-218, :186-192) — and there is no source-state guard, so Approved can be demoted;
+      null bulk-import Rows → 500 not 422.
+    - agora: PriceCalculator double fast path contradicts ADR-0006 and Money's decimal-only
+      rule (planted flaw per sprint-13.md:45); non-unique active-cart lookup can throw after
+      two concurrent first sign-ins (SingleOrDefault); ADR-0006:137 "24.98%" vs int
+      SavedPercent → 25.
+    - zz8: api-response.ts:19-41 maps only AppError so Zod failures/malformed JSON become 500
+      (contradicts 07-TRACE-LAB.md:57); lost retry race reported as 404
+      (integration-service.ts:100-102); employee create/update row+audit not in one
+      transaction despite 02-CONCEPTS.md:58; duplicate employeeNumber → unhandled 500.
+    - ww19: expired sessions never purged (expiresAt index serves no query); task leases never
+      reclaimed (task-repository.ts:50-76); no cycle check in definition validation → runtime
+      unique violation; two dead indexes/functions; unbounded admin run list.
+    - w22: a stale event maps to a refused transition and is redelivered for the whole retry
+      window (webhookService.ts:51-88); provider mirror overwritten BEFORE the transition
+      check; unknown payment → 404 with nothing persisted; outbound FAILED deliveries get
+      nextAttemptAt but the pending query selects PENDING only — never retried
+      (webhookRepository.ts:53-65 vs :29-37).
+    - scedulingpyjs: duplicate job re-sends an already-SENT reminder and never checks the
+      appointment's status (notifications.service.ts:67); cancelSeries leaves Notification
+      rows PENDING; FAILED notifications are terminal (BullMQ never retries, sweep reads
+      PENDING only); T-24h reminder row written even for <24h bookings.
+    - organized-study-cal-com: team/user flag checks never read the global Feature row (the
+      BotDetectionService.ts:55 comment is wrong); static 5-minute per-process flag cache that
+      writes never invalidate (ttl param ignored); Memoize never caches null; every booking
+      runs an uncached team-flag DB check via a deprecated repository class.
+    - gitjira: position column migrated double→text IN PLACE (existing values are decimal
+      strings, not base-62 keys) although ADR-0031 uses this exact change as its
+      expand/contract example; server trusts any non-empty client position string; createIssue
+      reads the last key outside the transaction → tied keys make keyBetween throw; no
+      (columnId, position) index.
+    - pulse: PII scrub reaches top-level keys only + unsalted sha256; unparseable ts silently
+      becomes ingest time; quota check is GET + fire-and-forget INCRBY (overshoot near the
+      limit, silent under-metering); hard-quota Retry-After says 3600s though the allowance
+      resets monthly.
+    - icms: audit-metadata leak re-verified (caseService.ts:436-440 + serializeCaseDetail +
+      caseRepository.ts:150-164); a deleted actor's audit rows render as "System".
+    - tenantadmin: password-login and tenant-switch audits written outside any transaction.
+    - dotnet-auth docs2/07-testing-and-debugging.md:263-265: the "logged in UI-wise with no
+      token" claim points at the wrong path — the MFA branch guards it; the real case is the
+      non-MFA missing-accessToken path (LoginPage.tsx:29-37, IdentityService.cs:89-92).
+    - openstatus 05-test-design-katas.md:27 (Kata 1): "tRPC input rejects `statuses`" is wrong
+      — the list input is a non-strict z.object, zod strips the key and the call succeeds
+      (router/statusReport.ts:189-197).
+    - netcleanarch adr-010:29 cites ADR-008 for a DB-health-check gap ADR-008 never mentions;
+      02-api-design.md:5 describes the route-group default as the rule (RoutePrefix override
+      exists, unused).
+  - Wave notes: buildsql was REJECTED for the quiz layer (its vol3 course is .NET runtime
+    content — GC/collections/IDisposable — not SQL); the git-workflow topic is intentionally
+    unserved (no committed guide material in any candidate repo); several brief topics were
+    dropped author-side because a shipped DESIGN IT key point or flashcard already keys the
+    fact (details in the quiz pack commit messages); quiz-a/c borderline elimination-hints
+    (atlas f02/q16, harbor f04/q27, netcleanarch f07/q07, openstatus r02/q21) were reviewed
+    and accepted as below-threshold.
