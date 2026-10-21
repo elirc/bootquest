@@ -593,12 +593,15 @@ export function practiceScoreExplainBack(deps: LadderDeps, unitId: number, body:
   if (
     attempt.outcome !== 'submitted' ||
     stored?.practice !== true ||
-    attempt.unit_id !== unit.id ||
     stored.questionSetKey !== item.key ||
     stored.itemSha !== seedItemHash(item)
   ) {
     throw new HttpError(409, 'NOT_VERIFIED', `attempt ${attempt.id} is not a practice attempt of the question set loaded on unit ${unit.id}`);
   }
+  // same retired-unit carve-out as selfScoreExplainBack (ladder dead end #3): a practice attempt
+  // stranded on a RETIRED unit is scored from the live unit carrying the same item; the evidence
+  // still binds the attempt's own unit and competencies below.
+  assertAnsweredHere(db, unit, attempt);
   const competencies = requireCompetencies(db, attempt.unit_id);
   const ids = explainBackKey(item).flatMap((q) => q.keyPoints.map((k) => k.id));
   assertExactMarks(ids, body.perKeyPoint, 'perKeyPoint');

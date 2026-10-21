@@ -1008,6 +1008,38 @@ describe('explain-back PRACTICE retakes (assisted, 0 XP, never a promotion leg; 
     expectError(await request(ctx.app).post(practiceScoreUrl(id)).send({ attemptId: 1, perKeyPoint: marks(16), xp: 20 }), 400, 'VALIDATION');
   });
 
+  it('dead end #3 (practice): a practice attempt stranded on a RETIRED unit is scored from the live twin carrying the same item; practice continues there', async () => {
+    const a = ctx.id('fixture:ladder/explain-api');
+    await passArtifact(ctx);
+    await request(ctx.app).post(`/api/units/${a}/explain-back/answers`).send({ answers: ANSWERS }).expect(200);
+    await request(ctx.app).post(`/api/units/${a}/explain-back/self-score`).send({ perKeyPoint: marks(16) }).expect(200);
+    const p1 = await request(ctx.app).post(practiceUrl(a)).send({ answers: PRACTICE }).expect(200);
+    // a re-seed / re-link moves the item to a new unit key: the old unit retires (404s everywhere)
+    ctx.tmp.db.run('UPDATE unit SET retired_at = ? WHERE id = ?', ctx.clock().getTime(), a);
+    const live = insertUnit(
+      ctx.tmp.db,
+      {
+        key: 'fixture:ladder/explain-api-v2',
+        track: 'js',
+        kind: 'explain-back',
+        title: '[fixture] explain-api moved',
+        competencies: ['data-http'],
+        prerequisites: ['fixture:ladder/project-api'],
+        checks: [{ spec: { type: 'explain-back', questionSetKey: EB.key } }],
+      },
+      ctx.clock,
+    );
+    expect(() => assertUniqueSeedItemRefs(ctx.tmp.db)).not.toThrow();
+    // the stranded UNSCORED practice attempt is scored FROM the live twin (was: 409 NOT_VERIFIED — a wedge,
+    // since the retired unit 404s); the evidence still binds the attempt's own unit and competencies
+    const sc = await request(ctx.app).post(practiceScoreUrl(live)).send({ attemptId: p1.body.attemptId, perKeyPoint: marks(16) });
+    expect(sc.status, sc.text).toBe(200);
+    expect(sc.body).toMatchObject({ xp: null, retests: [], promotions: [] });
+    expect(ctx.tmp.db.get<{ unit_id: number }>('SELECT unit_id FROM evidence WHERE attempt_id = ?', p1.body.attemptId)!.unit_id).toBe(a);
+    // and new practice continues on the twin
+    await request(ctx.app).post(practiceUrl(live)).send({ answers: PRACTICE }).expect(200);
+  });
+
   it('a practice retake: assisted attempt (practice), listed on the key, self-scored as practice evidence with NO xp_event / retest / promotion; one unscored at a time; append-only', async () => {
     const id = ctx.id('fixture:ladder/explain-api');
     await passArtifact(ctx);
