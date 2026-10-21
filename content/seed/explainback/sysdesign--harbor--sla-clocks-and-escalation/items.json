@@ -1,0 +1,138 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "harbor--docs-adr-0007-sla-clock-and-escalation.md",
+ "items": [
+  {
+   "key": "seed:explainback:harbor/explain-back/cc5e1bf0529fd785",
+   "provenance": {
+    "repo": "harbor",
+    "sha": "383b296196d5912fa9ed57893bea1de8ba5f394b",
+    "path": "docs/adr/0007-sla-clock-and-escalation.md",
+    "lines": {
+     "start": 1,
+     "end": 55
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "DESIGN IT — [senior] SLA clocks, pause rules and escalation for a support platform (harbor, docs/adr/0007-sla-clock-and-escalation.md). A support team of 40 agents works Monday to Friday, 09:00 to 17:00 New York time, and handles about 1,500 new conversations a day. The promises are a first response within 4 business hours and a resolution within 32 business hours; customers often take a day to answer a question, agents go offline at the end of their shift, and a background monitor checks every live SLA every 30 seconds. Write your design before you look: what time counts against the promise and how it is computed, when the clock pauses and how pauses are stored, what happens as a conversation approaches and passes its deadline, how a monitor that runs 120 times an hour avoids alerting 120 times, and how you will report the team's performance. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "keyPoints": [
+      {
+       "text": "[w3] Elapsed time is business time on the team's calendar: only minutes inside each day's open window count, computed by a pure function of start, now and the schedule, so nights, weekends and closed days can be property-tested without a database or a real clock.",
+       "quote": "only minutes inside the schedule's daily windows count"
+      },
+      {
+       "text": "[w3] Waiting on the customer stops the clock, as an openly stated fairness rule: the states that pause are named, and each pause is stored on the window as an interval whose end stays open until the customer replies.",
+       "quote": "an SLA that ticks during customer latency punishes agents for something they don't control"
+      },
+      {
+       "text": "[w3] Escalation grows in steps: early thresholds warn the person who owns the conversation, the deadline brings in someone senior, and ownership moves automatically only when the owner cannot act, such as being offline.",
+       "quote": "escalation should add attention before it changes ownership"
+      },
+      {
+       "text": "[w3] Each alert is remembered by window and threshold in a persisted sent-marker, so a monitor that runs every 30 seconds alerts once per crossing instead of once per run.",
+       "quote": "The monitor runs on a cadence; without a sent-marker it re-alerts every tick"
+      },
+      {
+       "text": "[w2] Targets live in a policy per workspace, priority and optionally channel, and each conversation gets one live window per kind of promise (first response, resolution) holding its business-time budget, start time and pauses, with breach and satisfaction times recorded.",
+       "cite": {
+        "path": "packages/db/prisma/schema.prisma",
+        "lineStart": 262,
+        "lineEnd": 288
+       }
+      },
+      {
+       "text": "[w2] The UTC instant is converted to the team's local time once, using an offset resolved from the team's IANA time zone at that instant, not a fixed number, so daylight-saving changes move the window with the clocks.",
+       "cite": {
+        "path": "packages/shared/src/routing.ts",
+        "lineStart": 188,
+        "lineEnd": 200
+       }
+      },
+      {
+       "text": "[w1] First-response and resolution times are reported as p50, p90 and p95 computed from the raw durations, because a mean of a skewed distribution matches no real conversation.",
+       "quote": "describing no real customer"
+      }
+     ]
+    },
+    {
+     "prompt": "PRE-MORTEM — the build ships with the clock and monitor exactly as they are. US clocks spring forward on the second Sunday of March; on Monday the monitor's queue is down for two hours and the job resumes mid-morning; the chat tool used as the escalation channel is down for ten minutes while the monitor keeps running; a deploy restarts the job; an agent's macro writes a second 'awaiting customer' pause while the first is still open; and a team lead asks why the dashboard's at-risk badge appears after the owner was already warned. What breaks first, how does each problem show, and what in your design prevents it?",
+     "keyPoints": [
+      {
+       "text": "[w3] The offset is a fixed number, so after the switch every window is computed an hour off: for New York kept on its standard offset, the clock counts 10:00 to 18:00 real local time, missing the first business hour and charging one after closing, until someone changes the offset.",
+       "cite": {
+        "path": "packages/shared/src/routing.ts",
+        "lineStart": 188,
+        "lineEnd": 200
+       }
+      },
+      {
+       "text": "[w3] The fire-once marker is set when the escalation is planned, before anything is sent: with a persisted marker, an alert planned while the channel is down (or by a job that dies before dispatching) is never sent; with the in-memory log, a restart forgets every marker and re-fires every threshold already crossed. Neither is the 'exactly once' the ADR's heading promises; not losing alerts means a sent status on the marker that is set only after a confirmed send and retried, accepting a rare repeat.",
+       "cite": {
+        "path": "apps/worker/src/sla-monitor.ts",
+        "lineStart": 29,
+        "lineEnd": 49
+       }
+      },
+      {
+       "text": "[w2] After a two-hour gap the monitor sees every threshold the window has passed in one run, so the early warnings arrive in the same moment as the breach, too late to help; the design decides whether warnings that are out of date are still sent.",
+       "cite": {
+        "path": "packages/shared/src/sla.ts",
+        "lineStart": 84,
+        "lineEnd": 89
+       }
+      },
+      {
+       "text": "[w2] Each pause interval is subtracted on its own, so two overlapping pauses remove the same business time twice and the clock runs slow (the total is only clamped at zero); the window must hold at most one open pause at a time.",
+       "cite": {
+        "path": "packages/shared/src/sla.ts",
+        "lineStart": 57,
+        "lineEnd": 67
+       }
+      },
+      {
+       "text": "[w1] Two definitions of 'nearly late' disagree: the status call marks a window at risk only in the last 20% of its budget (80% used), while the first warning fires at 75%, so the badge lags the warning; one shared definition fixes it.",
+       "cite": {
+        "path": "packages/shared/src/sla.ts",
+        "lineStart": 69,
+        "lineEnd": 82
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "TRADE-OFF HANDBACK — defend your SLA design against the alternatives the ADR names: wall-clock versus business time, a clock that keeps ticking versus one that pauses for the customer, auto-reassign versus alert-and-hold versus a tiered policy, alerting every run versus once per threshold, averages versus percentiles, and subject matching versus the reply-chain headers for deciding which conversation (and so which clock) an email belongs to. For each, say what you bought, what it cost, and which requirement put you on that side.",
+     "keyPoints": [
+      {
+       "text": "[w3] Wall-clock time needs no calendar and is trivially right about elapsed time, but it measures a promise nobody made; business time measures the real promise, at the cost of a calendar per team and edge cases (zones, daylight saving, closed days) that need property tests.",
+       "quote": "is wrong in ways that matter to the humans being measured"
+      },
+      {
+       "text": "[w3] Pausing is fair to agents but hands them a lever: moving a conversation to 'awaiting customer' stops the clock, so the pause must follow a real state change and be visible in reports; a clock that never pauses is simpler and closer to the customer's experience but blames agents for the customer's delay.",
+       "quote": "punishes agents for something they don't control"
+      },
+      {
+       "text": "[w3] Auto-reassign keeps work moving but churns ownership, loses context and can land the conversation on someone equally swamped; alert-and-hold keeps context but depends on a person responding; the tiered policy pays for both a notification path and an availability check to get attention first and reassignment only as the last resort.",
+       "quote": "churns ownership (losing context)"
+      },
+      {
+       "text": "[w2] Alerting once per threshold keeps the channel trusted, but a single missed alert is never repeated, which is one reason to have several thresholds rather than one; alerting every run guarantees the message gets through and guarantees it gets muted.",
+       "quote": "an escalation channel that cries wolf gets muted"
+      },
+      {
+       "text": "[w2] Averages are cheap to store and can be combined across teams; percentiles show the tail but need the raw durations (or a sketch) and cannot be averaged together, so the reporting store keeps per-conversation times.",
+       "quote": "Reporting uses percentiles, not averages"
+      },
+      {
+       "text": "[w1] A reply attached to the wrong conversation stops or starts the wrong clock, so threading follows the reply-chain headers first and keeps subject matching only as a fallback limited to the same sender, rather than deleting it.",
+       "quote": "demote the old signal to a constrained fallback rather than deleting it"
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}
