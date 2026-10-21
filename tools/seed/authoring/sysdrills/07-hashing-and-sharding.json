@@ -1,0 +1,514 @@
+{
+  "format": "sysdrills-authoring@1",
+  "module": "07-hashing-and-sharding",
+  "title": "Hashing, sharding & partitioning math",
+  "description": "What sharding COSTS once you know how many shards you need (02-caching-and-pools/06-shard-count covers that count): keys moved under modulo versus consistent hashing, the load each survivor absorbs when a node dies, hot-key skew, the copy time of a rebalance, partition pruning on time ranges, weighted vnodes, scatter-gather amplification, and why partitions cap consumer parallelism. Uniform key distribution is assumed and stated, shares are in per-mille (parts per thousand) and copy rates in decimal units (1 MB/s = 1,000,000 bytes/s), so every answer is a whole number.",
+  "exercises": [
+    {
+      "slug": "01-modulo-vs-consistent",
+      "title": "Keys moved: modulo vs consistent hashing",
+      "difficulty": 2,
+      "skills": [
+        "sharding",
+        "hashing"
+      ],
+      "instructions": "**Interview prompt.** \"We cache 1,000,000 keys on 4 nodes using `hash(key) % 4`. Traffic grew, so we add a fifth node. How many keys now map to a different node — and how many would move with consistent hashing?\"\n\n**Why it works.** Model: keys are spread uniformly over a span divisible by n × (n + 1). Under `key % shards` a key stays put only when its remainder mod n equals its remainder mod (n + 1), which happens for exactly **1 key in every (n + 1)**. So n ÷ (n + 1) of all keys move — 80% going from 4 to 5 nodes, which means a cache stampede and a rebalance storm. Consistent hashing places nodes on a ring: the new node takes over only its own 1 ÷ (n + 1) slice from its neighbours, and nothing else moves.\n\n**Your task.** Export two functions (`oldShards` is n, the count before adding one):\n- `movedKeysModulo(totalKeys, oldShards)` → `totalKeys × oldShards / (oldShards + 1)`\n- `movedKeysConsistent(totalKeys, oldShards)` → `totalKeys / (oldShards + 1)` (only the new node's share moves)\n\nThe tests choose inputs that divide exactly, so every answer is a whole number.\n\n**Worked example.** 600,000 keys going from 2 nodes to 3: modulo moves 600,000 × 2 / 3 = **400,000** keys; consistent hashing moves 600,000 / 3 = **200,000**.",
+      "starter": "export function movedKeysModulo(totalKeys, oldShards) {\n  // TODO: all but 1 key in (oldShards + 1) change remainder\n}\n\nexport function movedKeysConsistent(totalKeys, oldShards) {\n  // TODO: only the new node's share moves\n}\n",
+      "solution": "export function movedKeysModulo(totalKeys, oldShards) {\n  return (totalKeys * oldShards) / (oldShards + 1);\n}\n\nexport function movedKeysConsistent(totalKeys, oldShards) {\n  return totalKeys / (oldShards + 1);\n}\n",
+      "tests": [
+        {
+          "name": "modulo, 4 -> 5 shards: 800,000 of 1,000,000 keys move",
+          "code": "assert.equal(typeof mod.movedKeysModulo, 'function', 'export a function named movedKeysModulo');\nassert.equal(mod.movedKeysModulo(1000000, 4), 800000);",
+          "input": [
+            1000000,
+            4
+          ]
+        },
+        {
+          "name": "modulo, 2 -> 3 shards: 400,000 of 600,000 keys move",
+          "code": "assert.equal(typeof mod.movedKeysModulo, 'function', 'export a function named movedKeysModulo');\nassert.equal(mod.movedKeysModulo(600000, 2), 400000);",
+          "input": [
+            600000,
+            2
+          ]
+        },
+        {
+          "name": "consistent, 4 -> 5 nodes: 200,000 keys move",
+          "code": "assert.equal(typeof mod.movedKeysConsistent, 'function', 'export a function named movedKeysConsistent');\nassert.equal(mod.movedKeysConsistent(1000000, 4), 200000);",
+          "input": [
+            1000000,
+            4
+          ]
+        },
+        {
+          "name": "consistent, 2 -> 3 nodes: 200,000 keys move",
+          "code": "assert.equal(typeof mod.movedKeysConsistent, 'function', 'export a function named movedKeysConsistent');\nassert.equal(mod.movedKeysConsistent(600000, 2), 200000);",
+          "input": [
+            600000,
+            2
+          ]
+        },
+        {
+          "name": "modulo, even 1 -> 2 shards moves half (boundary)",
+          "code": "assert.equal(typeof mod.movedKeysModulo, 'function', 'export a function named movedKeysModulo');\nassert.equal(mod.movedKeysModulo(1000000, 1), 500000);",
+          "input": [
+            1000000,
+            1
+          ]
+        }
+      ],
+      "explanation": "Count the keys that keep their node; everything else moves.\n\nFor `movedKeysModulo(1000000, 4)` versus `movedKeysConsistent(1000000, 4)`:\n- modulo: only 1 key in 5 keeps its remainder, so 1,000,000 × 4 / 5 = **800,000** keys move (80%)\n- consistent: the new node takes its 1 / 5 share, so 1,000,000 / 5 = **200,000** keys move (20%)\n\nUnder modulo, 80% of cache lookups miss at once and stampede the database while 80% of stored data copies — consistent hashing moves exactly the 20% the new node owns, which is the whole reason it exists.",
+      "hints": [
+        "A key stays on its node only if its old and new shard numbers agree — how often does key % n equal key % (n + 1)?",
+        "Modulo: moved = total × n / (n + 1). Consistent: moved = total / (n + 1).",
+        "Under modulo only 1 key in (old + 1) keeps its remainder, so old ÷ (old + 1) of them move. Consistent hashing relocates only the newcomer's 1 ÷ (old + 1) share."
+      ]
+    },
+    {
+      "slug": "02-node-loss-load",
+      "title": "When a node dies: load on the survivors",
+      "difficulty": 2,
+      "skills": [
+        "sharding",
+        "consistent-hashing"
+      ],
+      "instructions": "**Interview prompt.** \"12,000,000 keys live on 4 cache nodes using consistent hashing with many virtual nodes. One node dies. How many keys does each survivor hold now?\"\n\n**Why it works.** With many vnodes per box, a dead node's ring slices are scattered all over the ring, so its keys spread evenly across every survivor instead of landing on one neighbour. Each survivor goes from total ÷ n keys to total ÷ (n − 1). Survivors need that headroom in advance — capacity is sized for n − 1 nodes, not n.\n\n**Your task.** Export two functions:\n- `keysPerNode(totalKeys, nodes)` → `totalKeys / nodes`\n- `keysPerSurvivor(totalKeys, nodes)` → `totalKeys / (nodes - 1)` (one of `nodes` has died, nodes ≥ 2)\n\nThe tests choose inputs that divide exactly, so every answer is a whole number.\n\n**Worked example.** 60,000,000 keys on 5 nodes → 12,000,000 each; lose one → 60,000,000 / 4 = **15,000,000** per survivor (+25%).",
+      "starter": "export function keysPerNode(totalKeys, nodes) {\n  // TODO: even split across all nodes\n}\n\nexport function keysPerSurvivor(totalKeys, nodes) {\n  // TODO: even split across one fewer node\n}\n",
+      "solution": "export function keysPerNode(totalKeys, nodes) {\n  return totalKeys / nodes;\n}\n\nexport function keysPerSurvivor(totalKeys, nodes) {\n  return totalKeys / (nodes - 1);\n}\n",
+      "tests": [
+        {
+          "name": "12M keys on 4 nodes -> 3,000,000 each",
+          "code": "assert.equal(typeof mod.keysPerNode, 'function', 'export a function named keysPerNode');\nassert.equal(mod.keysPerNode(12000000, 4), 3000000);",
+          "input": [
+            12000000,
+            4
+          ]
+        },
+        {
+          "name": "4 nodes lose one -> 4,000,000 per survivor (+33%)",
+          "code": "assert.equal(typeof mod.keysPerSurvivor, 'function', 'export a function named keysPerSurvivor');\nassert.equal(mod.keysPerSurvivor(12000000, 4), 4000000);",
+          "input": [
+            12000000,
+            4
+          ]
+        },
+        {
+          "name": "60M keys on 5 nodes -> 12,000,000 each",
+          "code": "assert.equal(typeof mod.keysPerNode, 'function', 'export a function named keysPerNode');\nassert.equal(mod.keysPerNode(60000000, 5), 12000000);",
+          "input": [
+            60000000,
+            5
+          ]
+        },
+        {
+          "name": "5 nodes lose one -> 15,000,000 per survivor (+25%)",
+          "code": "assert.equal(typeof mod.keysPerSurvivor, 'function', 'export a function named keysPerSurvivor');\nassert.equal(mod.keysPerSurvivor(60000000, 5), 15000000);",
+          "input": [
+            60000000,
+            5
+          ]
+        },
+        {
+          "name": "2 nodes lose one -> the survivor takes everything (boundary)",
+          "code": "assert.equal(typeof mod.keysPerSurvivor, 'function', 'export a function named keysPerSurvivor');\nassert.equal(mod.keysPerSurvivor(10000000, 2), 10000000);",
+          "input": [
+            10000000,
+            2
+          ]
+        }
+      ],
+      "explanation": "Same keys, one fewer node: compare the two even splits.\n\nFor `keysPerSurvivor(12000000, 4)`:\n- before: 12,000,000 / 4 = 3,000,000 keys per node\n- after: 12,000,000 / 3 = **4,000,000** keys per survivor\n- surge: +1,000,000 each, +33%\n\nIf every node normally runs above 75% of its memory or CPU, losing one pushes the survivors past 100% and the failure cascades — which is why you size for n − 1, not n.",
+      "hints": [
+        "With many vnodes, a dead node's keys are scattered across every survivor, not dumped on one neighbour.",
+        "before = total / nodes. after = total / (nodes − 1).",
+        "After a loss the same keys divide among one fewer node — compare total ÷ nodes with total ÷ (nodes − 1) to see the surge each survivor absorbs."
+      ]
+    },
+    {
+      "slug": "03-hot-key-skew",
+      "title": "Hot-key skew on one shard",
+      "difficulty": 2,
+      "skills": [
+        "sharding",
+        "skew"
+      ],
+      "instructions": "**Interview prompt.** \"100,000 QPS hits 10 shards. One celebrity account gets 20% of all traffic. How loaded is that account's shard compared with a fair share?\"\n\n**Why it works.** Hashing spreads **keys**, not requests. One key always lands on one shard, so that shard carries the hot key's entire traffic plus its even slice of everything else. The fair share is total ÷ shards; skew in per-mille compares the hot shard with it (1,000‰ = perfectly even, 2,000‰ = twice the fair share). Shares are given in per-mille: 200‰ = 20%.\n\n**Your task.** Export two functions:\n- `hotShardQps(totalQps, shards, hotKeyPermille)` → `totalQps × hotKeyPermille / 1000 + totalQps × (1000 - hotKeyPermille) / 1000 / shards`\n- `skewPermille(totalQps, shards, hotKeyPermille)` → `hotShardQps(...) × 1000 / (totalQps / shards)` (the hot shard as per-mille of the fair share)\n\nThe tests choose inputs that divide exactly, so every answer is a whole number.\n\n**Worked example.** 50,000 QPS, 5 shards, a 400‰ hot key: the hot key brings 20,000 QPS, the rest is 30,000 / 5 = 6,000 per shard, so the hot shard runs **26,000 QPS** against a fair share of 10,000.",
+      "starter": "export function hotShardQps(totalQps, shards, hotKeyPermille) {\n  // TODO: whole hot key + an even slice of the rest\n}\n\nexport function skewPermille(totalQps, shards, hotKeyPermille) {\n  // TODO: hot shard as per-mille of the fair share\n}\n",
+      "solution": "export function hotShardQps(totalQps, shards, hotKeyPermille) {\n  const hot = (totalQps * hotKeyPermille) / 1000;\n  const rest = (totalQps * (1000 - hotKeyPermille)) / 1000;\n  return hot + rest / shards;\n}\n\nexport function skewPermille(totalQps, shards, hotKeyPermille) {\n  return (hotShardQps(totalQps, shards, hotKeyPermille) * 1000) / (totalQps / shards);\n}\n",
+      "tests": [
+        {
+          "name": "100,000 QPS, 10 shards, 200 per-mille hot key -> 28,000 QPS",
+          "code": "assert.equal(typeof mod.hotShardQps, 'function', 'export a function named hotShardQps');\nassert.equal(mod.hotShardQps(100000, 10, 200), 28000);",
+          "input": [
+            100000,
+            10,
+            200
+          ]
+        },
+        {
+          "name": "no hot key -> exactly the fair share (boundary)",
+          "code": "assert.equal(typeof mod.hotShardQps, 'function', 'export a function named hotShardQps');\nassert.equal(mod.hotShardQps(100000, 10, 0), 10000);",
+          "input": [
+            100000,
+            10,
+            0
+          ]
+        },
+        {
+          "name": "50,000 QPS, 5 shards, 400 per-mille hot key -> 26,000 QPS",
+          "code": "assert.equal(typeof mod.hotShardQps, 'function', 'export a function named hotShardQps');\nassert.equal(mod.hotShardQps(50000, 5, 400), 26000);",
+          "input": [
+            50000,
+            5,
+            400
+          ]
+        },
+        {
+          "name": "hot shard at 2,800 per-mille of fair share (2.8x)",
+          "code": "assert.equal(typeof mod.skewPermille, 'function', 'export a function named skewPermille');\nassert.equal(mod.skewPermille(100000, 10, 200), 2800);",
+          "input": [
+            100000,
+            10,
+            200
+          ]
+        },
+        {
+          "name": "hot shard at 2,600 per-mille of fair share (2.6x)",
+          "code": "assert.equal(typeof mod.skewPermille, 'function', 'export a function named skewPermille');\nassert.equal(mod.skewPermille(50000, 5, 400), 2600);",
+          "input": [
+            50000,
+            5,
+            400
+          ]
+        }
+      ],
+      "explanation": "Build the hot shard's load from its two parts, then compare it with the fair share.\n\nFor `skewPermille(100000, 10, 200)`:\n- hot key: 100,000 × 200 / 1,000 = 20,000 QPS\n- its slice of the rest: 100,000 × 800 / 1,000 / 10 = 8,000 QPS\n- hot shard = 28,000 QPS; fair share = 100,000 / 10 = 10,000 QPS\n- skew = 28,000 × 1,000 / 10,000 = **2,800‰** (2.8×)\n\nAdding shards does not fix it — even at 100 shards the hot key's full 20,000 QPS still lands on one of them — so split the key (salt it into sub-keys) or cache it in front.",
+      "hints": [
+        "Hashing spreads keys, not requests — one key, however busy, always lands on a single shard.",
+        "hot = total × h / 1000 + total × (1000 − h) / 1000 / shards. skew‰ = hot × 1000 / (total / shards).",
+        "The hot shard carries the whole hot key plus its even slice of the remaining traffic. Divide by the fair share (total ÷ shards) and scale to per-mille for the skew."
+      ]
+    },
+    {
+      "slug": "04-rebalance-cost",
+      "title": "Rebalance: bytes to move and copy time",
+      "difficulty": 2,
+      "skills": [
+        "sharding",
+        "operations"
+      ],
+      "instructions": "**Interview prompt.** \"A 9 TB dataset lives on 2 shards placed by consistent hashing. We add a third. How much data moves, and how long does the copy take at 150 MB/s?\"\n\n**Why it works.** With consistent hashing, growing from `oldShards` to `newShards` hands the new shards their share and nothing else moves: the (new − old) ÷ new fraction of the data. Copy time is bytes ÷ rate, in decimal units: 1 MB/s = 1,000,000 bytes/s and 1 TB = 1,000,000,000,000 bytes.\n\n**Your task.** Export two functions:\n- `bytesToMove(totalBytes, oldShards, newShards)` → `totalBytes × (newShards - oldShards) / newShards`\n- `rebalanceSeconds(bytesToMove, mbPerSec)` → `bytesToMove / (mbPerSec × 1000000)`\n\nThe tests choose inputs that divide exactly, so every answer is a whole number.\n\n**Worked example.** 8 TB going from 4 to 8 shards: 8,000,000,000,000 × 4 / 8 = 4,000,000,000,000 bytes (half); at 200 MB/s that is 4,000,000,000,000 / 200,000,000 = **20,000 s**.",
+      "starter": "export function bytesToMove(totalBytes, oldShards, newShards) {\n  // TODO: the new shards' share of the data\n}\n\nexport function rebalanceSeconds(bytesToMove, mbPerSec) {\n  // TODO: bytes / copy rate in bytes per second\n}\n",
+      "solution": "export function bytesToMove(totalBytes, oldShards, newShards) {\n  return (totalBytes * (newShards - oldShards)) / newShards;\n}\n\nexport function rebalanceSeconds(bytesToMove, mbPerSec) {\n  return bytesToMove / (mbPerSec * 1000000);\n}\n",
+      "tests": [
+        {
+          "name": "9 TB, 2 -> 3 shards: a third (3 TB) moves",
+          "code": "assert.equal(typeof mod.bytesToMove, 'function', 'export a function named bytesToMove');\nassert.equal(mod.bytesToMove(9000000000000, 2, 3), 3000000000000);",
+          "input": [
+            9000000000000,
+            2,
+            3
+          ]
+        },
+        {
+          "name": "8 TB, 4 -> 8 shards: doubling moves half",
+          "code": "assert.equal(typeof mod.bytesToMove, 'function', 'export a function named bytesToMove');\nassert.equal(mod.bytesToMove(8000000000000, 4, 8), 4000000000000);",
+          "input": [
+            8000000000000,
+            4,
+            8
+          ]
+        },
+        {
+          "name": "no change in shard count -> nothing moves (boundary)",
+          "code": "assert.equal(typeof mod.bytesToMove, 'function', 'export a function named bytesToMove');\nassert.equal(mod.bytesToMove(5000000000000, 5, 5), 0);",
+          "input": [
+            5000000000000,
+            5,
+            5
+          ]
+        },
+        {
+          "name": "3 TB at 150 MB/s -> 20,000 s (about 5.5 hours)",
+          "code": "assert.equal(typeof mod.rebalanceSeconds, 'function', 'export a function named rebalanceSeconds');\nassert.equal(mod.rebalanceSeconds(3000000000000, 150), 20000);",
+          "input": [
+            3000000000000,
+            150
+          ]
+        },
+        {
+          "name": "4 TB at 200 MB/s -> 20,000 s",
+          "code": "assert.equal(typeof mod.rebalanceSeconds, 'function', 'export a function named rebalanceSeconds');\nassert.equal(mod.rebalanceSeconds(4000000000000, 200), 20000);",
+          "input": [
+            4000000000000,
+            200
+          ]
+        }
+      ],
+      "explanation": "Find the fraction that moves, then divide by the copy rate in bytes per second.\n\nFor the 9 TB, 2 → 3 shard case at 150 MB/s:\n- moved = 9,000,000,000,000 × (3 − 2) / 3 = 3,000,000,000,000 bytes (3 TB)\n- rate = 150 × 1,000,000 = 150,000,000 bytes/s\n- time = `rebalanceSeconds(3000000000000, 150)` = 3,000,000,000,000 / 150,000,000 = **20,000 s** (about 5.5 hours)\n\nHours of sustained copy traffic is why rebalances are planned operations, not clicks — throttle the copy or it starves production I/O.",
+      "hints": [
+        "Consistent hashing only hands the new shards their share — the old shards keep everything else.",
+        "moved = total × (new − old) / new. seconds = moved / (MB/s × 1,000,000).",
+        "Growing old → new moves the (new − old) ÷ new fraction of the data. Divide bytes moved by the copy rate in bytes per second (MB/s × one million)."
+      ]
+    },
+    {
+      "slug": "05-partition-pruning",
+      "title": "Partition pruning on time ranges",
+      "difficulty": 1,
+      "skills": [
+        "partitioning",
+        "sql"
+      ],
+      "instructions": "**Interview prompt.** \"An events table is range-partitioned by week (7-day partitions) with 21,000,000 rows per partition. A dashboard queries the last 30 days. How many partitions and rows does it scan?\"\n\n**Why it works.** With range partitioning, the planner **prunes** every partition the `WHERE` clause on the partition key cannot touch. Model: a D-day window over P-day partitions needs D ÷ P partitions **rounded up** — a window that does not fill its last partition exactly still reads that whole partition. (A window that starts mid-partition can straddle one more boundary; this drill uses the simple ceiling.)\n\n**Your task.** Export two functions:\n- `partitionsScanned(daysQueried, daysPerPartition)` → `Math.ceil(daysQueried / daysPerPartition)`\n- `rowsScanned(daysQueried, daysPerPartition, rowsPerPartition)` → `partitionsScanned(...) × rowsPerPartition`\n\n**Worked example.** 28 days of weekly partitions → exactly **4** partitions; 30 days → 30 / 7 ≈ 4.3, rounded up to **5**.",
+      "starter": "export function partitionsScanned(daysQueried, daysPerPartition) {\n  // TODO: partitions the window touches (round up)\n}\n\nexport function rowsScanned(daysQueried, daysPerPartition, rowsPerPartition) {\n  // TODO: partitions touched x rows each\n}\n",
+      "solution": "export function partitionsScanned(daysQueried, daysPerPartition) {\n  return Math.ceil(daysQueried / daysPerPartition);\n}\n\nexport function rowsScanned(daysQueried, daysPerPartition, rowsPerPartition) {\n  return partitionsScanned(daysQueried, daysPerPartition) * rowsPerPartition;\n}\n",
+      "tests": [
+        {
+          "name": "30 days over 7-day partitions -> 5",
+          "code": "assert.equal(typeof mod.partitionsScanned, 'function', 'export a function named partitionsScanned');\nassert.equal(mod.partitionsScanned(30, 7), 5);",
+          "input": [
+            30,
+            7
+          ]
+        },
+        {
+          "name": "28 days over 7-day partitions -> exact fit, 4 (boundary)",
+          "code": "assert.equal(typeof mod.partitionsScanned, 'function', 'export a function named partitionsScanned');\nassert.equal(mod.partitionsScanned(28, 7), 4);",
+          "input": [
+            28,
+            7
+          ]
+        },
+        {
+          "name": "1 day -> still one whole partition",
+          "code": "assert.equal(typeof mod.partitionsScanned, 'function', 'export a function named partitionsScanned');\nassert.equal(mod.partitionsScanned(1, 7), 1);",
+          "input": [
+            1,
+            7
+          ]
+        },
+        {
+          "name": "30 days, weekly partitions of 21M rows -> 105,000,000 rows",
+          "code": "assert.equal(typeof mod.rowsScanned, 'function', 'export a function named rowsScanned');\nassert.equal(mod.rowsScanned(30, 7, 21000000), 105000000);",
+          "input": [
+            30,
+            7,
+            21000000
+          ]
+        },
+        {
+          "name": "1 day over daily partitions of 3M rows -> 3,000,000 rows",
+          "code": "assert.equal(typeof mod.rowsScanned, 'function', 'export a function named rowsScanned');\nassert.equal(mod.rowsScanned(1, 1, 3000000), 3000000);",
+          "input": [
+            1,
+            1,
+            3000000
+          ]
+        }
+      ],
+      "explanation": "Count the partitions the window touches (rounding up), then multiply by rows per partition.\n\nFor `rowsScanned(30, 7, 21000000)`:\n- partitions = ⌈30 / 7⌉ = ⌈4.29⌉ = 5\n- rows = 5 × 21,000,000 = **105,000,000**\n\nA year of weekly partitions is 52 × 21,000,000 ≈ 1.1 billion rows, so pruning reads about a tenth of the table — but only for queries that filter on the partition key; without it, every partition is scanned.",
+      "hints": [
+        "The planner reads only the partitions the time range can touch and skips the rest.",
+        "partitions = ⌈daysQueried / daysPerPartition⌉. rows = partitions × rowsPerPartition.",
+        "A span of D days over P-day partitions can straddle a boundary, so round D ÷ P UP. Multiply by each partition's rows for the scan size."
+      ]
+    },
+    {
+      "slug": "06-weighted-vnodes",
+      "title": "Weighted vnodes: keys follow ownership",
+      "difficulty": 2,
+      "skills": [
+        "consistent-hashing",
+        "capacity"
+      ],
+      "instructions": "**Interview prompt.** \"Our hash ring has 300 vnodes over 48,000,000 keys. A big box owns 75 vnodes and a small one owns 25. How many keys does each hold? And how many vnodes should a node get for a 25% share of a 400-vnode ring?\"\n\n**Why it works.** In consistent hashing each physical node owns many **virtual nodes** (points on the ring). With enough vnodes, a node's share of the keys equals its share of the vnodes, so bigger boxes simply get proportionally more vnodes. Shares are given in per-mille: 250‰ = 25%.\n\n**Your task.** Export two functions:\n- `keysForNode(totalKeys, totalVnodes, nodeVnodes)` → `totalKeys × nodeVnodes / totalVnodes`\n- `vnodesForShare(totalVnodes, sharePermille)` → `totalVnodes × sharePermille / 1000`\n\nThe tests choose inputs that divide exactly, so every answer is a whole number.\n\n**Worked example.** 75 of 300 vnodes → 48,000,000 × 75 / 300 = **12,000,000 keys** (a quarter of the ring).",
+      "starter": "export function keysForNode(totalKeys, totalVnodes, nodeVnodes) {\n  // TODO: keys in proportion to vnode ownership\n}\n\nexport function vnodesForShare(totalVnodes, sharePermille) {\n  // TODO: vnodes for a per-mille share of the ring\n}\n",
+      "solution": "export function keysForNode(totalKeys, totalVnodes, nodeVnodes) {\n  return (totalKeys * nodeVnodes) / totalVnodes;\n}\n\nexport function vnodesForShare(totalVnodes, sharePermille) {\n  return (totalVnodes * sharePermille) / 1000;\n}\n",
+      "tests": [
+        {
+          "name": "75 of 300 vnodes over 48M keys -> 12,000,000 keys",
+          "code": "assert.equal(typeof mod.keysForNode, 'function', 'export a function named keysForNode');\nassert.equal(mod.keysForNode(48000000, 300, 75), 12000000);",
+          "input": [
+            48000000,
+            300,
+            75
+          ]
+        },
+        {
+          "name": "a third the vnodes -> a third the keys: 4,000,000",
+          "code": "assert.equal(typeof mod.keysForNode, 'function', 'export a function named keysForNode');\nassert.equal(mod.keysForNode(48000000, 300, 25), 4000000);",
+          "input": [
+            48000000,
+            300,
+            25
+          ]
+        },
+        {
+          "name": "drained node with 0 vnodes -> 0 keys (boundary)",
+          "code": "assert.equal(typeof mod.keysForNode, 'function', 'export a function named keysForNode');\nassert.equal(mod.keysForNode(10000000, 100, 0), 0);",
+          "input": [
+            10000000,
+            100,
+            0
+          ]
+        },
+        {
+          "name": "250 per-mille of a 400-vnode ring -> 100 vnodes",
+          "code": "assert.equal(typeof mod.vnodesForShare, 'function', 'export a function named vnodesForShare');\nassert.equal(mod.vnodesForShare(400, 250), 100);",
+          "input": [
+            400,
+            250
+          ]
+        },
+        {
+          "name": "125 per-mille of a 640-vnode ring -> 80 vnodes",
+          "code": "assert.equal(typeof mod.vnodesForShare, 'function', 'export a function named vnodesForShare');\nassert.equal(mod.vnodesForShare(640, 125), 80);",
+          "input": [
+            640,
+            125
+          ]
+        }
+      ],
+      "explanation": "A node's key share is its vnode share; invert that to choose a vnode count.\n\nFor `vnodesForShare(640, 125)`:\n- 640 × 125 = 80,000\n- 80,000 / 1,000 = **80 vnodes** (12.5% of the ring)\n\nVnodes are the knob — to drain a node for maintenance, walk its vnode count down to zero and its keys follow a slice at a time.",
+      "hints": [
+        "With many vnodes, each node's share of the keys matches its share of the ring's vnodes.",
+        "keys = totalKeys × nodeVnodes / totalVnodes. vnodes = totalVnodes × share‰ / 1000.",
+        "Keys distribute in proportion to vnode ownership: the node's share is its vnodes over the ring's total. Invert to pick a vnode count for a target per-mille share."
+      ]
+    },
+    {
+      "slug": "07-scatter-gather",
+      "title": "Scatter-gather amplification",
+      "difficulty": 3,
+      "skills": [
+        "sharding",
+        "query-routing"
+      ],
+      "instructions": "**Interview prompt.** \"Our API serves 2,000 QPS over 8 shards. Calls that include the tenant id route to one shard; the rest must ask all 8 and merge. If 75% of calls carry the key, how many shard queries per second hit the backend?\"\n\n**Why it works.** A keyed call costs **one** shard query. An unkeyed call must scatter to **every** shard and gather the results, so it costs `shards` queries (and waits for the slowest shard). Blend the two populations by per-mille share: per 1,000 API calls the backend sees keyed‰ × 1 + (1000 − keyed‰) × shards queries. The worst case — nothing keyed — is apiQps × shards.\n\n**Your task.** Export two functions:\n- `shardQueriesPerSec(apiQps, shards, keyedPermille)` → `apiQps × (keyedPermille × 1 + (1000 - keyedPermille) × shards) / 1000`\n- `queriesSavedPerSec(apiQps, shards, keyedPermille)` → `apiQps × shards - shardQueriesPerSec(...)` (saved versus every call fanning out)\n\nThe tests choose inputs that divide exactly, so every answer is a whole number.\n\n**Worked example.** 4,000 QPS, 16 shards, 900‰ keyed: per 1,000 calls 900 × 1 + 100 × 16 = 2,500 shard queries → 4,000 × 2,500 / 1,000 = **10,000 shard queries/s**.",
+      "starter": "export function shardQueriesPerSec(apiQps, shards, keyedPermille) {\n  // TODO: keyed calls hit 1 shard, unkeyed hit all of them\n}\n\nexport function queriesSavedPerSec(apiQps, shards, keyedPermille) {\n  // TODO: full fan-out minus the blended load\n}\n",
+      "solution": "export function shardQueriesPerSec(apiQps, shards, keyedPermille) {\n  return (apiQps * (keyedPermille * 1 + (1000 - keyedPermille) * shards)) / 1000;\n}\n\nexport function queriesSavedPerSec(apiQps, shards, keyedPermille) {\n  return apiQps * shards - shardQueriesPerSec(apiQps, shards, keyedPermille);\n}\n",
+      "tests": [
+        {
+          "name": "every call keyed -> 2,000 shard queries/s (boundary)",
+          "code": "assert.equal(typeof mod.shardQueriesPerSec, 'function', 'export a function named shardQueriesPerSec');\nassert.equal(mod.shardQueriesPerSec(2000, 8, 1000), 2000);",
+          "input": [
+            2000,
+            8,
+            1000
+          ]
+        },
+        {
+          "name": "nothing keyed -> full fan-out, 16,000/s (boundary)",
+          "code": "assert.equal(typeof mod.shardQueriesPerSec, 'function', 'export a function named shardQueriesPerSec');\nassert.equal(mod.shardQueriesPerSec(2000, 8, 0), 16000);",
+          "input": [
+            2000,
+            8,
+            0
+          ]
+        },
+        {
+          "name": "750 per-mille keyed over 8 shards -> 5,500/s",
+          "code": "assert.equal(typeof mod.shardQueriesPerSec, 'function', 'export a function named shardQueriesPerSec');\nassert.equal(mod.shardQueriesPerSec(2000, 8, 750), 5500);",
+          "input": [
+            2000,
+            8,
+            750
+          ]
+        },
+        {
+          "name": "750 per-mille keyed saves 10,500 shard queries/s",
+          "code": "assert.equal(typeof mod.queriesSavedPerSec, 'function', 'export a function named queriesSavedPerSec');\nassert.equal(mod.queriesSavedPerSec(2000, 8, 750), 10500);",
+          "input": [
+            2000,
+            8,
+            750
+          ]
+        },
+        {
+          "name": "4,000 QPS, 16 shards, 900 per-mille keyed -> 10,000/s",
+          "code": "assert.equal(typeof mod.shardQueriesPerSec, 'function', 'export a function named shardQueriesPerSec');\nassert.equal(mod.shardQueriesPerSec(4000, 16, 900), 10000);",
+          "input": [
+            4000,
+            16,
+            900
+          ]
+        }
+      ],
+      "explanation": "Price each population, blend by per-mille share, and compare with the all-fan-out worst case.\n\nFor `shardQueriesPerSec(2000, 8, 750)`:\n- per 1,000 calls: 750 × 1 + 250 × 8 = 750 + 2,000 = 2,750 shard queries\n- per second: 2,000 × 2,750 / 1,000 = **5,500**\n- saved versus full fan-out: 2,000 × 8 − 5,500 = 16,000 − 5,500 = 10,500\n\nThe unkeyed 25% of callers still generate 4,000 of those 5,500 shard queries (about 73%) — which is why APIs force the tenant id into the path.",
+      "hints": [
+        "There are two kinds of calls: ones that know their shard, and ones that must ask every shard.",
+        "per-1000 cost = keyed‰ × 1 + (1000 − keyed‰) × shards. shard QPS = apiQps × that / 1000. saved = apiQps × shards − shard QPS.",
+        "Weight the two populations: keyed calls cost one shard query, unkeyed cost one per shard. Blend by per-mille share and compare with the all-fan-out worst case."
+      ]
+    },
+    {
+      "slug": "08-partitions-and-consumers",
+      "title": "Partitions cap consumer parallelism",
+      "difficulty": 1,
+      "skills": [
+        "partitioning",
+        "queues"
+      ],
+      "instructions": "**Interview prompt.** \"A Kafka topic has 12 partitions. We run 5 consumers in one consumer group, then scale to 20. How many consumers actually do work, and how many partitions does the busiest one own?\"\n\n**Why it works.** Within one consumer group, each partition is assigned to **at most one** consumer — that is how per-partition ordering is kept. So active consumers = the smaller of partitions and consumers; any extra consumers sit idle. Partitions are spread as evenly as possible, so the busiest consumer owns partitions ÷ active consumers, **rounded up**.\n\n**Your task.** Export two functions:\n- `activeConsumers(partitions, consumers)` → `Math.min(partitions, consumers)`\n- `busiestConsumerPartitions(partitions, consumers)` → `Math.ceil(partitions / Math.min(partitions, consumers))`\n\n**Worked example.** 12 partitions, 5 consumers → 5 active; 12 / 5 = 2.4, rounded up → the busiest consumer owns **3** partitions.",
+      "starter": "export function activeConsumers(partitions, consumers) {\n  // TODO: at most one consumer per partition\n}\n\nexport function busiestConsumerPartitions(partitions, consumers) {\n  // TODO: partitions per active consumer, rounded up\n}\n",
+      "solution": "export function activeConsumers(partitions, consumers) {\n  return Math.min(partitions, consumers);\n}\n\nexport function busiestConsumerPartitions(partitions, consumers) {\n  return Math.ceil(partitions / Math.min(partitions, consumers));\n}\n",
+      "tests": [
+        {
+          "name": "12 partitions, 5 consumers -> 5 active",
+          "code": "assert.equal(typeof mod.activeConsumers, 'function', 'export a function named activeConsumers');\nassert.equal(mod.activeConsumers(12, 5), 5);",
+          "input": [
+            12,
+            5
+          ]
+        },
+        {
+          "name": "12 partitions, 20 consumers -> 12 active, 8 idle (boundary)",
+          "code": "assert.equal(typeof mod.activeConsumers, 'function', 'export a function named activeConsumers');\nassert.equal(mod.activeConsumers(12, 20), 12);",
+          "input": [
+            12,
+            20
+          ]
+        },
+        {
+          "name": "12 partitions over 5 consumers -> busiest owns 3",
+          "code": "assert.equal(typeof mod.busiestConsumerPartitions, 'function', 'export a function named busiestConsumerPartitions');\nassert.equal(mod.busiestConsumerPartitions(12, 5), 3);",
+          "input": [
+            12,
+            5
+          ]
+        },
+        {
+          "name": "12 partitions over 4 consumers -> even split, 3 each",
+          "code": "assert.equal(typeof mod.busiestConsumerPartitions, 'function', 'export a function named busiestConsumerPartitions');\nassert.equal(mod.busiestConsumerPartitions(12, 4), 3);",
+          "input": [
+            12,
+            4
+          ]
+        },
+        {
+          "name": "12 partitions, 20 consumers -> 1 each",
+          "code": "assert.equal(typeof mod.busiestConsumerPartitions, 'function', 'export a function named busiestConsumerPartitions');\nassert.equal(mod.busiestConsumerPartitions(12, 20), 1);",
+          "input": [
+            12,
+            20
+          ]
+        },
+        {
+          "name": "7 partitions, 7 consumers -> one each (boundary)",
+          "code": "assert.equal(typeof mod.busiestConsumerPartitions, 'function', 'export a function named busiestConsumerPartitions');\nassert.equal(mod.busiestConsumerPartitions(7, 7), 1);",
+          "input": [
+            7,
+            7
+          ]
+        }
+      ],
+      "explanation": "Cap the active consumers at the partition count, then split the partitions evenly and round up.\n\nFor `busiestConsumerPartitions(12, 20)`:\n- active = min(12, 20) = 12 (8 consumers sit idle)\n- busiest = ⌈12 / 12⌉ = **1** partition\n\nThe partition count is the parallelism ceiling and it is chosen at topic creation — scaling consumers past it buys nothing, so pick partitions for the peak consumer count you expect.",
+      "hints": [
+        "Inside one consumer group a partition is read by exactly one consumer — it is never shared.",
+        "active = min(partitions, consumers). busiest = ⌈partitions / active⌉.",
+        "At most one consumer per partition caps the active count at the smaller of the two. The busiest consumer holds the partition count divided by active consumers, rounded up."
+      ]
+    }
+  ]
+}

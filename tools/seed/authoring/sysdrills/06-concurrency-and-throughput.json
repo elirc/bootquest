@@ -1,0 +1,545 @@
+{
+  "format": "sysdrills-authoring@1",
+  "module": "06-concurrency-and-throughput",
+  "title": "Concurrency & throughput math",
+  "description": "Throughput reps for the concurrency part of a system-design interview: how long a backlog takes to drain, how hot a fleet runs (utilisation and headroom), why one lock caps a whole cluster, Little's law sizing a worker pool, how batching amortizes a fixed cost, why the slowest pipeline stage sets the rate, how retries multiply load during an outage (and how retry budgets cap it), and Amdahl's law for serial work. Every drill is whole-number arithmetic with the conversions named (1,000 ms per second, per-mille = parts per thousand), so you practise the reasoning, not the calculator.",
+  "exercises": [
+    {
+      "slug": "01-queue-drain-time",
+      "title": "Queue drain time and backlog projection",
+      "difficulty": 1,
+      "skills": [
+        "queues",
+        "throughput"
+      ],
+      "instructions": "**Interview prompt.** \"A consumer outage left 90,000 messages in the queue. Once the consumers are back they process 350 messages/s, but producers keep adding 100 messages/s. How long until the queue is empty?\"\n\n**Why it works.** While messages keep arriving, only the *surplus* rate eats into the backlog: 350 − 100 = 250 messages/s net. Dividing the backlog by the raw processing rate is the classic mistake — it ignores the arrivals that keep landing while you drain. Projecting forward is the same arithmetic in the other direction: after `seconds` the backlog has changed by (arrive − process) × seconds, and a queue can never hold fewer than zero messages.\n\n**Your task.** Export two functions:\n- `drainSeconds(backlog, processPerSec, arrivePerSec)` → `backlog / (processPerSec - arrivePerSec)` (only meaningful when processing outpaces arrivals — the tests keep it so)\n- `backlogAfter(backlog, processPerSec, arrivePerSec, seconds)` → `max(0, backlog + (arrivePerSec - processPerSec) × seconds)` (clamp at an empty queue)\n\nThe tests choose inputs that divide exactly, so every answer is a whole number.\n\n**Worked example.** 5,000 messages, 300/s processed, 50/s arriving → net drain 250/s → 5,000 / 250 = **20 s** until empty.",
+      "starter": "export function drainSeconds(backlog, processPerSec, arrivePerSec) {\n  // TODO: backlog / net drain rate\n}\n\nexport function backlogAfter(backlog, processPerSec, arrivePerSec, seconds) {\n  // TODO: project the backlog forward, never below empty\n}\n",
+      "solution": "export function drainSeconds(backlog, processPerSec, arrivePerSec) {\n  return backlog / (processPerSec - arrivePerSec);\n}\n\nexport function backlogAfter(backlog, processPerSec, arrivePerSec, seconds) {\n  return Math.max(0, backlog + (arrivePerSec - processPerSec) * seconds);\n}\n",
+      "tests": [
+        {
+          "name": "90,000 backlog, process 350/s, arrive 100/s -> 360 s",
+          "code": "assert.equal(typeof mod.drainSeconds, 'function', 'export a function named drainSeconds');\nassert.equal(mod.drainSeconds(90000, 350, 100), 360);",
+          "input": [
+            90000,
+            350,
+            100
+          ]
+        },
+        {
+          "name": "5,000 backlog, process 300/s, arrive 50/s -> 20 s",
+          "code": "assert.equal(typeof mod.drainSeconds, 'function', 'export a function named drainSeconds');\nassert.equal(mod.drainSeconds(5000, 300, 50), 20);",
+          "input": [
+            5000,
+            300,
+            50
+          ]
+        },
+        {
+          "name": "no arrivals: 7,200 at 2/s -> 3,600 s (boundary)",
+          "code": "assert.equal(typeof mod.drainSeconds, 'function', 'export a function named drainSeconds');\nassert.equal(mod.drainSeconds(7200, 2, 0), 3600);",
+          "input": [
+            7200,
+            2,
+            0
+          ]
+        },
+        {
+          "name": "90,000 backlog after 60 s of net draining -> 75,000",
+          "code": "assert.equal(typeof mod.backlogAfter, 'function', 'export a function named backlogAfter');\nassert.equal(mod.backlogAfter(90000, 350, 100, 60), 75000);",
+          "input": [
+            90000,
+            350,
+            100,
+            60
+          ]
+        },
+        {
+          "name": "drained before the window ends -> clamped at 0 (boundary)",
+          "code": "assert.equal(typeof mod.backlogAfter, 'function', 'export a function named backlogAfter');\nassert.equal(mod.backlogAfter(1000, 300, 50, 10), 0);",
+          "input": [
+            1000,
+            300,
+            50,
+            10
+          ]
+        },
+        {
+          "name": "arrivals exceed capacity: an empty queue grows to 6,000 in 120 s",
+          "code": "assert.equal(typeof mod.backlogAfter, 'function', 'export a function named backlogAfter');\nassert.equal(mod.backlogAfter(0, 100, 150, 120), 6000);",
+          "input": [
+            0,
+            100,
+            150,
+            120
+          ]
+        }
+      ],
+      "explanation": "Subtract arrivals from processing to get the net drain rate, then divide the backlog by it.\n\nFor `drainSeconds(90000, 350, 100)`:\n- net drain = 350 − 100 = 250 messages/s\n- time = 90,000 / 250 = **360 s** (6 minutes)\n\nDividing by the raw 350/s would promise about 257 s and miss by well over a minute and a half — recovery time comes from surplus capacity, which is why consumers need headroom above steady-state load.",
+      "hints": [
+        "A backlog only shrinks by the rate you process MINUS the rate new messages keep arriving.",
+        "drainSeconds = backlog / (processPerSec − arrivePerSec). backlogAfter = max(0, backlog + (arrivePerSec − processPerSec) × seconds).",
+        "Only the SURPLUS processing rate drains the backlog — divide by (process − arrive), not by the raw rate. Projecting forward, clamp at zero because a queue cannot go negative."
+      ]
+    },
+    {
+      "slug": "02-utilisation-headroom",
+      "title": "Utilisation and servers for a target",
+      "difficulty": 1,
+      "skills": [
+        "capacity",
+        "throughput"
+      ],
+      "instructions": "**Interview prompt.** \"Peak traffic is 12,000 QPS and one server handles 200 QPS. We run 100 servers — how hot are they? And how many servers do we need to run at a 60% target?\"\n\n**Why it works.** Utilisation is offered load divided by total capacity (servers × per-server QPS). We express it in **per-mille** (parts per thousand: 600‰ = 60%) so every answer stays a whole number. Fleets are sized for roughly 600–700‰, not 1000‰: the slack absorbs traffic peaks, rolling deploys and a lost node, and queueing delay climbs steeply as utilisation approaches 100%. Solving the same formula for the server count gives the fleet size for a target utilisation.\n\n**Your task.** Export two functions:\n- `utilisationPermille(qps, servers, perServerQps)` → `qps × 1000 / (servers × perServerQps)`\n- `serversForTarget(qps, perServerQps, targetPermille)` → `qps × 1000 / (perServerQps × targetPermille)`\n\nThe tests choose inputs that divide exactly, so every answer is a whole number.\n\n**Worked example.** 4,500 QPS on 30 servers × 300 QPS = 9,000 QPS of capacity → 4,500 × 1,000 / 9,000 = **500‰** (50% busy).",
+      "starter": "export function utilisationPermille(qps, servers, perServerQps) {\n  // TODO: offered load over total capacity, in per-mille\n}\n\nexport function serversForTarget(qps, perServerQps, targetPermille) {\n  // TODO: servers that put utilisation exactly at the target\n}\n",
+      "solution": "export function utilisationPermille(qps, servers, perServerQps) {\n  return (qps * 1000) / (servers * perServerQps);\n}\n\nexport function serversForTarget(qps, perServerQps, targetPermille) {\n  return (qps * 1000) / (perServerQps * targetPermille);\n}\n",
+      "tests": [
+        {
+          "name": "12,000 QPS on 100 x 200 QPS servers -> 600 per-mille",
+          "code": "assert.equal(typeof mod.utilisationPermille, 'function', 'export a function named utilisationPermille');\nassert.equal(mod.utilisationPermille(12000, 100, 200), 600);",
+          "input": [
+            12000,
+            100,
+            200
+          ]
+        },
+        {
+          "name": "4,500 QPS on 30 x 300 QPS servers -> 500 per-mille",
+          "code": "assert.equal(typeof mod.utilisationPermille, 'function', 'export a function named utilisationPermille');\nassert.equal(mod.utilisationPermille(4500, 30, 300), 500);",
+          "input": [
+            4500,
+            30,
+            300
+          ]
+        },
+        {
+          "name": "no traffic -> 0 per-mille (boundary)",
+          "code": "assert.equal(typeof mod.utilisationPermille, 'function', 'export a function named utilisationPermille');\nassert.equal(mod.utilisationPermille(0, 10, 200), 0);",
+          "input": [
+            0,
+            10,
+            200
+          ]
+        },
+        {
+          "name": "12,000 QPS at 200 QPS each, 600 per-mille target -> 100 servers",
+          "code": "assert.equal(typeof mod.serversForTarget, 'function', 'export a function named serversForTarget');\nassert.equal(mod.serversForTarget(12000, 200, 600), 100);",
+          "input": [
+            12000,
+            200,
+            600
+          ]
+        },
+        {
+          "name": "42,000 QPS at 300 QPS each, 700 per-mille target -> 200 servers",
+          "code": "assert.equal(typeof mod.serversForTarget, 'function', 'export a function named serversForTarget');\nassert.equal(mod.serversForTarget(42000, 300, 700), 200);",
+          "input": [
+            42000,
+            300,
+            700
+          ]
+        }
+      ],
+      "explanation": "Utilisation is load over capacity; invert it to solve for the number of servers.\n\nFor `serversForTarget(42000, 300, 700)`:\n- load × 1,000 = 42,000 × 1,000 = 42,000,000\n- one server at the target = 300 × 700 = 210,000\n- servers = 42,000,000 / 210,000 = **200**\n\nAt 100% you would need only 42,000 / 300 = 140 servers — the extra 60 are the headroom that absorbs peaks, deploys and a lost node, which is why fleets are sized for ~60–70% utilisation.",
+      "hints": [
+        "Utilisation compares the load that arrives with the load the whole fleet could serve.",
+        "utilisation‰ = qps × 1000 / (servers × perServerQps). Solved for servers: servers = qps × 1000 / (perServerQps × target‰).",
+        "Utilisation is offered load over total capacity, scaled to per-mille. Invert it to solve for the server count that pins utilisation at the target."
+      ]
+    },
+    {
+      "slug": "03-lock-serialization",
+      "title": "One lock caps the whole fleet",
+      "difficulty": 2,
+      "skills": [
+        "concurrency",
+        "locks"
+      ],
+      "instructions": "**Interview prompt.** \"Every write bumps one hot counter row under a lock held for 2 ms. Each app server can push 100 writes/s. How far can we scale writes by adding servers?\"\n\n**Why it works.** A lock admits one holder at a time. If each holder keeps it for H ms, the whole system completes at most 1,000 ÷ H critical sections per second (1,000 ms in a second) — no matter how many servers queue for it. Once the servers together can offer more than that ceiling, every extra server just adds waiters.\n\n**Your task.** Export two functions:\n- `lockMaxOpsPerSec(criticalMs)` → `1000 / criticalMs` (system-wide ceiling)\n- `serversThatHelp(criticalMs, perServerOpsPerSec)` → `lockMaxOpsPerSec(criticalMs) / perServerOpsPerSec` (beyond this many servers, added servers only wait)\n\nThe tests use critical sections that divide 1,000 exactly, so every answer is a whole number.\n\n**Worked example.** A 2 ms lock admits 1,000 / 2 = 500 ops/s in total; at 100 ops/s per server, **5 servers** saturate it — the sixth only waits.",
+      "starter": "export function lockMaxOpsPerSec(criticalMs) {\n  // TODO: critical sections per second, fleet-wide\n}\n\nexport function serversThatHelp(criticalMs, perServerOpsPerSec) {\n  // TODO: lock ceiling / one server's throughput\n}\n",
+      "solution": "export function lockMaxOpsPerSec(criticalMs) {\n  return 1000 / criticalMs;\n}\n\nexport function serversThatHelp(criticalMs, perServerOpsPerSec) {\n  return lockMaxOpsPerSec(criticalMs) / perServerOpsPerSec;\n}\n",
+      "tests": [
+        {
+          "name": "2 ms critical section -> 500 ops/s",
+          "code": "assert.equal(typeof mod.lockMaxOpsPerSec, 'function', 'export a function named lockMaxOpsPerSec');\nassert.equal(mod.lockMaxOpsPerSec(2), 500);",
+          "input": [
+            2
+          ]
+        },
+        {
+          "name": "25 ms critical section -> 40 ops/s",
+          "code": "assert.equal(typeof mod.lockMaxOpsPerSec, 'function', 'export a function named lockMaxOpsPerSec');\nassert.equal(mod.lockMaxOpsPerSec(25), 40);",
+          "input": [
+            25
+          ]
+        },
+        {
+          "name": "one-second critical section -> 1 op/s TOTAL (boundary)",
+          "code": "assert.equal(typeof mod.lockMaxOpsPerSec, 'function', 'export a function named lockMaxOpsPerSec');\nassert.equal(mod.lockMaxOpsPerSec(1000), 1);",
+          "input": [
+            1000
+          ]
+        },
+        {
+          "name": "2 ms lock, 100 ops/s per server -> 5 servers",
+          "code": "assert.equal(typeof mod.serversThatHelp, 'function', 'export a function named serversThatHelp');\nassert.equal(mod.serversThatHelp(2, 100), 5);",
+          "input": [
+            2,
+            100
+          ]
+        },
+        {
+          "name": "5 ms lock, 40 ops/s per server -> 5 servers",
+          "code": "assert.equal(typeof mod.serversThatHelp, 'function', 'export a function named serversThatHelp');\nassert.equal(mod.serversThatHelp(5, 40), 5);",
+          "input": [
+            5,
+            40
+          ]
+        }
+      ],
+      "explanation": "Find the lock's fleet-wide ceiling first, then see how many servers it takes to reach it.\n\nFor `serversThatHelp(5, 40)`:\n- ceiling = 1,000 / 5 = 200 ops/s for the whole system\n- servers = 200 / 40 = **5**\n\nA hot row or global mutex is a system-wide 1000 ÷ holdMs ceiling — to go faster, shrink the critical section or shard the lock, because a sixth server buys nothing.",
+      "hints": [
+        "Only one holder at a time: the lock, not the number of servers, decides the total rate.",
+        "max ops/s = 1000 / criticalMs. serversThatHelp = (1000 / criticalMs) / perServerOpsPerSec.",
+        "A lock held H ms admits 1000 ÷ H holders per second, whatever the fleet size. Divide that ceiling by one server's throughput to find where scaling stops paying."
+      ]
+    },
+    {
+      "slug": "04-littles-law-worker-pool",
+      "title": "Little's law: sizing a worker pool",
+      "difficulty": 2,
+      "skills": [
+        "littles-law",
+        "concurrency"
+      ],
+      "instructions": "**Interview prompt.** \"Jobs arrive at 200 per second and each takes 50 ms of worker time. How many workers are busy on average? And what is the most a pool of 16 workers can sustain when jobs take 40 ms?\"\n\n**Why it works.** Little's law, **L = λ × W**: the number of items in a system equals their arrival rate times the time each spends there. For a worker pool, L is the number of busy workers, λ the jobs per second and W the service time — convert milliseconds to seconds by dividing by 1,000. Run it backwards (λ = L ÷ W) and you get the throughput ceiling of a fixed pool. This is the same law drill `01-estimation/07-littles-law` applied to requests in flight and `02-caching-and-pools/03-connection-pool` applied to connection pools — here it sizes a worker pool.\n\n**Your task.** Export two functions:\n- `workersNeeded(jobsPerSec, serviceMs)` → `jobsPerSec × serviceMs / 1000`\n- `maxJobsPerSec(workers, serviceMs)` → `workers × 1000 / serviceMs`\n\nThe tests choose inputs that divide exactly, so every answer is a whole number.\n\n**Worked example.** 200 jobs/s × 50 ms = 10,000 worker-ms per second → 10,000 / 1,000 = **10 workers** busy.",
+      "starter": "export function workersNeeded(jobsPerSec, serviceMs) {\n  // TODO: L = arrival rate x service time (in seconds)\n}\n\nexport function maxJobsPerSec(workers, serviceMs) {\n  // TODO: Little's law run backwards\n}\n",
+      "solution": "export function workersNeeded(jobsPerSec, serviceMs) {\n  return (jobsPerSec * serviceMs) / 1000;\n}\n\nexport function maxJobsPerSec(workers, serviceMs) {\n  return (workers * 1000) / serviceMs;\n}\n",
+      "tests": [
+        {
+          "name": "200 jobs/s x 50 ms -> 10 workers",
+          "code": "assert.equal(typeof mod.workersNeeded, 'function', 'export a function named workersNeeded');\nassert.equal(mod.workersNeeded(200, 50), 10);",
+          "input": [
+            200,
+            50
+          ]
+        },
+        {
+          "name": "40 jobs/s x 250 ms -> 10 workers",
+          "code": "assert.equal(typeof mod.workersNeeded, 'function', 'export a function named workersNeeded');\nassert.equal(mod.workersNeeded(40, 250), 10);",
+          "input": [
+            40,
+            250
+          ]
+        },
+        {
+          "name": "1,000 jobs/s x 8 ms -> 8 workers",
+          "code": "assert.equal(typeof mod.workersNeeded, 'function', 'export a function named workersNeeded');\nassert.equal(mod.workersNeeded(1000, 8), 8);",
+          "input": [
+            1000,
+            8
+          ]
+        },
+        {
+          "name": "16 workers, 40 ms jobs -> 400 jobs/s",
+          "code": "assert.equal(typeof mod.maxJobsPerSec, 'function', 'export a function named maxJobsPerSec');\nassert.equal(mod.maxJobsPerSec(16, 40), 400);",
+          "input": [
+            16,
+            40
+          ]
+        },
+        {
+          "name": "one-second jobs -> one job/s per worker (boundary)",
+          "code": "assert.equal(typeof mod.maxJobsPerSec, 'function', 'export a function named maxJobsPerSec');\nassert.equal(mod.maxJobsPerSec(10, 1000), 10);",
+          "input": [
+            10,
+            1000
+          ]
+        }
+      ],
+      "explanation": "Little's law forwards sizes the pool; backwards it gives the pool's ceiling.\n\nFor `maxJobsPerSec(16, 40)`:\n- 16 workers supply 16 × 1,000 = 16,000 worker-ms every second\n- each job consumes 40 ms, so 16,000 / 40 = **400 jobs/s**\n\nThis is the same L = λW you used for requests in flight (01/07) and connection pools (02/03): if jobs arrive faster than 400/s the queue grows without bound, so add workers or cut service time.",
+      "hints": [
+        "Little's law links three numbers: how many are busy, how fast work arrives, and how long each piece takes.",
+        "L = λ × W with W in seconds: workers = jobsPerSec × serviceMs / 1000. Backwards: λ = workers × 1000 / serviceMs.",
+        "Little's law: busy workers = arrival rate × service time (convert ms to seconds). Run it backwards for the ceiling a fixed pool can sustain."
+      ]
+    },
+    {
+      "slug": "05-batching-amortization",
+      "title": "Batching amortizes the fixed cost",
+      "difficulty": 2,
+      "skills": [
+        "batching",
+        "throughput"
+      ],
+      "instructions": "**Interview prompt.** \"Every database write costs a 20 ms round trip plus 2 ms per row. How much throughput do we gain by flushing rows in batches of 30 instead of one at a time?\"\n\n**Why it works.** A batch pays its fixed cost (network round trip, fsync, request overhead) once, however many items ride along, plus a per-item cost. Throughput is items delivered ÷ batch time, scaled to per second by × 1,000 (1,000 ms in a second). As batches grow, the fixed cost amortizes away and throughput approaches the ceiling 1,000 ÷ perItemMs — it never passes it. Bigger batches also make each item wait longer, so the sweet spot is the knee of the curve.\n\n**Your task.** Export two functions:\n- `batchMs(fixedMs, perItemMs, items)` → `fixedMs + perItemMs × items`\n- `itemsPerSec(fixedMs, perItemMs, items)` → `items × 1000 / batchMs(fixedMs, perItemMs, items)`\n\nThe tests choose inputs that divide exactly, so every answer is a whole number.\n\n**Worked example.** A batch of 30 costs 20 + 2 × 30 = 80 ms → 30 × 1,000 / 80 = **375 items/s**.",
+      "starter": "export function batchMs(fixedMs, perItemMs, items) {\n  // TODO: fixed cost once + per-item cost\n}\n\nexport function itemsPerSec(fixedMs, perItemMs, items) {\n  // TODO: items delivered per second of batch time\n}\n",
+      "solution": "export function batchMs(fixedMs, perItemMs, items) {\n  return fixedMs + perItemMs * items;\n}\n\nexport function itemsPerSec(fixedMs, perItemMs, items) {\n  return (items * 1000) / batchMs(fixedMs, perItemMs, items);\n}\n",
+      "tests": [
+        {
+          "name": "batch of 30 -> 80 ms",
+          "code": "assert.equal(typeof mod.batchMs, 'function', 'export a function named batchMs');\nassert.equal(mod.batchMs(20, 2, 30), 80);",
+          "input": [
+            20,
+            2,
+            30
+          ]
+        },
+        {
+          "name": "unbatched single item -> 22 ms (boundary)",
+          "code": "assert.equal(typeof mod.batchMs, 'function', 'export a function named batchMs');\nassert.equal(mod.batchMs(20, 2, 1), 22);",
+          "input": [
+            20,
+            2,
+            1
+          ]
+        },
+        {
+          "name": "batch of 30 -> 375 items/s",
+          "code": "assert.equal(typeof mod.itemsPerSec, 'function', 'export a function named itemsPerSec');\nassert.equal(mod.itemsPerSec(20, 2, 30), 375);",
+          "input": [
+            20,
+            2,
+            30
+          ]
+        },
+        {
+          "name": "batch of 90 -> 450 items/s",
+          "code": "assert.equal(typeof mod.itemsPerSec, 'function', 'export a function named itemsPerSec');\nassert.equal(mod.itemsPerSec(20, 2, 90), 450);",
+          "input": [
+            20,
+            2,
+            90
+          ]
+        },
+        {
+          "name": "batch of 490 -> 490 items/s, nearing the 500 ceiling",
+          "code": "assert.equal(typeof mod.itemsPerSec, 'function', 'export a function named itemsPerSec');\nassert.equal(mod.itemsPerSec(20, 2, 490), 490);",
+          "input": [
+            20,
+            2,
+            490
+          ]
+        },
+        {
+          "name": "zero fixed cost IS the 1000 / perItem ceiling (boundary)",
+          "code": "assert.equal(typeof mod.itemsPerSec, 'function', 'export a function named itemsPerSec');\nassert.equal(mod.itemsPerSec(0, 2, 50), 500);",
+          "input": [
+            0,
+            2,
+            50
+          ]
+        }
+      ],
+      "explanation": "Time one batch, then divide the items it delivers by that time.\n\nFor `itemsPerSec(20, 2, 90)`:\n- batch time = 20 + 2 × 90 = 200 ms\n- throughput = 90 × 1,000 / 200 = **450 items/s**\n\nUnbatched, the same writer manages 1,000 / 22 ≈ 45 items/s; batch-30 gives 375 and batch-90 gives 450, creeping toward the 1,000 ÷ 2 = 500 ceiling — most of the win comes from the first few dozen items, after which bigger batches mostly add latency.",
+      "hints": [
+        "A batch pays its fixed overhead once, however many items ride along.",
+        "batchMs = fixedMs + perItemMs × items. itemsPerSec = items × 1000 / batchMs.",
+        "One batch costs fixed + perItem × n ms and delivers n items. Throughput is n × 1000 over that cost, and it can never beat 1000 ÷ perItem."
+      ]
+    },
+    {
+      "slug": "06-pipeline-bottleneck",
+      "title": "Pipeline throughput and latency",
+      "difficulty": 1,
+      "skills": [
+        "throughput",
+        "pipelines"
+      ],
+      "instructions": "**Interview prompt.** \"Our ingest pipeline has three stages: parse (500 msg/s), enrich (120 msg/s) and write (900 msg/s). What throughput does it sustain? And if the stages take 5, 30 and 15 ms per message, what is the end-to-end latency?\"\n\n**Why it works.** Every message passes through every stage in order, so the **slowest stage sets the rate** — work piles up in front of it (the bottleneck). Latency is a different aggregation: a message waits through each stage in turn, so **stage times add up**. Throughput is the MIN, latency is the SUM.\n\n**Your task.** Export two functions, each taking an array with at least one stage:\n- `pipelineQps(stageQps)` → the smallest value in `stageQps`\n- `pipelineLatencyMs(stageMs)` → the sum of `stageMs`\n\n**Worked example.** Stages at [500, 120, 900] msg/s → the pipeline sustains **120 msg/s**: enrich is the bottleneck.",
+      "starter": "export function pipelineQps(stageQps) {\n  // TODO: the slowest stage sets the rate\n}\n\nexport function pipelineLatencyMs(stageMs) {\n  // TODO: every stage adds its time\n}\n",
+      "solution": "export function pipelineQps(stageQps) {\n  return Math.min(...stageQps);\n}\n\nexport function pipelineLatencyMs(stageMs) {\n  return stageMs.reduce((sum, ms) => sum + ms, 0);\n}\n",
+      "tests": [
+        {
+          "name": "parse 500, enrich 120, write 900 -> 120 msg/s",
+          "code": "assert.equal(typeof mod.pipelineQps, 'function', 'export a function named pipelineQps');\nassert.equal(mod.pipelineQps([500, 120, 900]), 120);",
+          "input": [
+            [
+              500,
+              120,
+              900
+            ]
+          ]
+        },
+        {
+          "name": "one stage -> its own rate (boundary)",
+          "code": "assert.equal(typeof mod.pipelineQps, 'function', 'export a function named pipelineQps');\nassert.equal(mod.pipelineQps([300]), 300);",
+          "input": [
+            [
+              300
+            ]
+          ]
+        },
+        {
+          "name": "one slow stage caps everything -> 50 msg/s",
+          "code": "assert.equal(typeof mod.pipelineQps, 'function', 'export a function named pipelineQps');\nassert.equal(mod.pipelineQps([400, 400, 50, 400, 400]), 50);",
+          "input": [
+            [
+              400,
+              400,
+              50,
+              400,
+              400
+            ]
+          ]
+        },
+        {
+          "name": "5 + 30 + 15 ms -> 50 ms end to end",
+          "code": "assert.equal(typeof mod.pipelineLatencyMs, 'function', 'export a function named pipelineLatencyMs');\nassert.equal(mod.pipelineLatencyMs([5, 30, 15]), 50);",
+          "input": [
+            [
+              5,
+              30,
+              15
+            ]
+          ]
+        },
+        {
+          "name": "single 250 ms stage -> 250 ms",
+          "code": "assert.equal(typeof mod.pipelineLatencyMs, 'function', 'export a function named pipelineLatencyMs');\nassert.equal(mod.pipelineLatencyMs([250]), 250);",
+          "input": [
+            [
+              250
+            ]
+          ]
+        }
+      ],
+      "explanation": "Two aggregations over the same stages: MIN for throughput, SUM for latency.\n\nFor `pipelineLatencyMs([5, 30, 15])`:\n- parse 5 ms + enrich 30 ms + write 15 ms\n- latency = 5 + 30 + 15 = **50 ms**\n\nSpeeding up parse or write shaves a few milliseconds of latency but leaves throughput stuck at enrich's 120 msg/s — only work on the bottleneck moves the rate.",
+      "hints": [
+        "Every message passes through every stage — ask which stage limits how many get through, and how long a message spends in total.",
+        "throughput = min(stageQps). latency = stageMs[0] + stageMs[1] + … + stageMs[n − 1].",
+        "Two different aggregations over the same stages: the slowest stage sets the rate, while every stage's time adds to the end-to-end latency."
+      ]
+    },
+    {
+      "slug": "07-retry-storm",
+      "title": "Retry storms and retry budgets",
+      "difficulty": 2,
+      "skills": [
+        "retries",
+        "throughput"
+      ],
+      "instructions": "**Interview prompt.** \"Clients send 4,000 QPS to a dependency and retry failures up to 3 times. The dependency goes down hard. How much load hits it — and what changes with a 10% retry budget?\"\n\n**Why it works.** In a full outage every attempt fails, so each request spends all of its `maxAttempts` (1 original + the retries): the dying dependency sees base × maxAttempts — 3 retries means 4× the load exactly when it can least take it. A **retry budget** caps retries at a per-mille fraction of normal traffic (100‰ = 10%), so total load can never exceed base × (1000 + budget‰) / 1000.\n\n**Your task.** Export two functions:\n- `worstCaseQps(baseQps, maxAttempts)` → `baseQps × maxAttempts`\n- `budgetCapQps(baseQps, retryBudgetPermille)` → `baseQps × (1000 + retryBudgetPermille) / 1000`\n\nThe tests choose inputs that divide exactly, so every answer is a whole number.\n\n**Worked example.** 4,000 QPS with a 100‰ budget → 4,000 × 1,100 / 1,000 = **4,400 QPS** at most, versus 4,000 × 4 = 16,000 QPS unbudgeted.",
+      "starter": "export function worstCaseQps(baseQps, maxAttempts) {\n  // TODO: every request spends every attempt\n}\n\nexport function budgetCapQps(baseQps, retryBudgetPermille) {\n  // TODO: base traffic + at most budget per-mille of retries\n}\n",
+      "solution": "export function worstCaseQps(baseQps, maxAttempts) {\n  return baseQps * maxAttempts;\n}\n\nexport function budgetCapQps(baseQps, retryBudgetPermille) {\n  return (baseQps * (1000 + retryBudgetPermille)) / 1000;\n}\n",
+      "tests": [
+        {
+          "name": "3 retries = 4 attempts -> 16,000 QPS at the worst moment",
+          "code": "assert.equal(typeof mod.worstCaseQps, 'function', 'export a function named worstCaseQps');\nassert.equal(mod.worstCaseQps(4000, 4), 16000);",
+          "input": [
+            4000,
+            4
+          ]
+        },
+        {
+          "name": "no retries -> 4,000 QPS (boundary)",
+          "code": "assert.equal(typeof mod.worstCaseQps, 'function', 'export a function named worstCaseQps');\nassert.equal(mod.worstCaseQps(4000, 1), 4000);",
+          "input": [
+            4000,
+            1
+          ]
+        },
+        {
+          "name": "4,000 QPS with a 100 per-mille budget -> 4,400 QPS",
+          "code": "assert.equal(typeof mod.budgetCapQps, 'function', 'export a function named budgetCapQps');\nassert.equal(mod.budgetCapQps(4000, 100), 4400);",
+          "input": [
+            4000,
+            100
+          ]
+        },
+        {
+          "name": "9,000 QPS with a 50 per-mille budget -> 9,450 QPS",
+          "code": "assert.equal(typeof mod.budgetCapQps, 'function', 'export a function named budgetCapQps');\nassert.equal(mod.budgetCapQps(9000, 50), 9450);",
+          "input": [
+            9000,
+            50
+          ]
+        },
+        {
+          "name": "zero retry budget -> base traffic only (boundary)",
+          "code": "assert.equal(typeof mod.budgetCapQps, 'function', 'export a function named budgetCapQps');\nassert.equal(mod.budgetCapQps(2000, 0), 2000);",
+          "input": [
+            2000,
+            0
+          ]
+        }
+      ],
+      "explanation": "Worst case multiplies by the attempts; a budget adds only a per-mille slice on top of the base.\n\nFor `budgetCapQps(9000, 50)`:\n- allowance = 1,000 + 50 = 1,050 attempts per 1,000 requests\n- cap = 9,000 × 1,050 / 1,000 = **9,450 QPS**\n\nUnbudgeted, 3 retries would turn the same 9,000 QPS into 36,000 against a dependency that is already down — budgets (with backoff and circuit breakers) keep a blip from becoming a self-inflicted outage.",
+      "hints": [
+        "In a full outage nothing succeeds, so every request uses every attempt it is allowed.",
+        "worst case = baseQps × maxAttempts. budgeted cap = baseQps × (1000 + budget‰) / 1000.",
+        "During a full outage every request spends all its attempts, so load multiplies by maxAttempts. A retry budget instead caps total traffic at base × (1000 + budget‰) ÷ 1000."
+      ]
+    },
+    {
+      "slug": "08-amdahl-runtime",
+      "title": "Amdahl's law: the serial part wins",
+      "difficulty": 3,
+      "skills": [
+        "concurrency",
+        "parallelism"
+      ],
+      "instructions": "**Interview prompt.** \"A batch job takes 1,000 ms on one worker: 20 ms of it is serial (setup and the final merge) and 980 ms splits perfectly across workers. We run it on 49 workers. Is doubling to 98 worth it?\"\n\n**Why it works.** **Amdahl's law**: only the parallel part divides by the worker count — the serial part runs at the same speed no matter how many workers you add. Runtime = serial + parallel ÷ workers. With infinitely many workers the runtime floors at the serial part alone, so the best speedup you can ever get is (serial + parallel) ÷ serial. It is the same ceiling as `03-lock-serialization`: a critical section is serial work everyone queues through.\n\n**Your task.** Export two functions:\n- `runtimeMs(serialMs, parallelMs, workers)` → `serialMs + parallelMs / workers`\n- `maxSpeedupX(serialMs, parallelMs)` → `(serialMs + parallelMs) / serialMs`\n\nThe tests choose inputs that divide exactly, so every answer is a whole number.\n\n**Worked example.** 20 ms serial + 980 ms parallel → at best (20 + 980) / 20 = **50×** faster than one worker, however big the fleet.",
+      "starter": "export function runtimeMs(serialMs, parallelMs, workers) {\n  // TODO: only the parallel part divides by workers\n}\n\nexport function maxSpeedupX(serialMs, parallelMs) {\n  // TODO: one-worker time / serial floor\n}\n",
+      "solution": "export function runtimeMs(serialMs, parallelMs, workers) {\n  return serialMs + parallelMs / workers;\n}\n\nexport function maxSpeedupX(serialMs, parallelMs) {\n  return (serialMs + parallelMs) / serialMs;\n}\n",
+      "tests": [
+        {
+          "name": "one worker = the whole job, 1,000 ms (boundary)",
+          "code": "assert.equal(typeof mod.runtimeMs, 'function', 'export a function named runtimeMs');\nassert.equal(mod.runtimeMs(20, 980, 1), 1000);",
+          "input": [
+            20,
+            980,
+            1
+          ]
+        },
+        {
+          "name": "49 workers -> 40 ms",
+          "code": "assert.equal(typeof mod.runtimeMs, 'function', 'export a function named runtimeMs');\nassert.equal(mod.runtimeMs(20, 980, 49), 40);",
+          "input": [
+            20,
+            980,
+            49
+          ]
+        },
+        {
+          "name": "DOUBLING to 98 workers -> 30 ms, only 10 ms saved",
+          "code": "assert.equal(typeof mod.runtimeMs, 'function', 'export a function named runtimeMs');\nassert.equal(mod.runtimeMs(20, 980, 98), 30);",
+          "input": [
+            20,
+            980,
+            98
+          ]
+        },
+        {
+          "name": "2% serial -> at most 50x",
+          "code": "assert.equal(typeof mod.maxSpeedupX, 'function', 'export a function named maxSpeedupX');\nassert.equal(mod.maxSpeedupX(20, 980), 50);",
+          "input": [
+            20,
+            980
+          ]
+        },
+        {
+          "name": "10% serial -> at most 10x",
+          "code": "assert.equal(typeof mod.maxSpeedupX, 'function', 'export a function named maxSpeedupX');\nassert.equal(mod.maxSpeedupX(100, 900), 10);",
+          "input": [
+            100,
+            900
+          ]
+        },
+        {
+          "name": "half serial -> at best 2x, ever",
+          "code": "assert.equal(typeof mod.maxSpeedupX, 'function', 'export a function named maxSpeedupX');\nassert.equal(mod.maxSpeedupX(500, 500), 2);",
+          "input": [
+            500,
+            500
+          ]
+        }
+      ],
+      "explanation": "Divide only the parallel part by the workers, then add the serial part back untouched.\n\nFor `runtimeMs(20, 980, 98)`, compared with 49 workers:\n- 49 workers: 20 + 980 / 49 = 20 + 20 = 40 ms\n- 98 workers: 20 + 980 / 98 = 20 + 10 = **30 ms**\n\nDoubling the fleet saved 10 ms while the 20 ms serial part grew to two thirds of the runtime — past this point, shrink the serial part (the same ceiling 06/03 showed through a lock) instead of adding workers.",
+      "hints": [
+        "Split the job into the part that can be shared among workers and the part that cannot.",
+        "runtime = serialMs + parallelMs / workers. max speedup = (serialMs + parallelMs) / serialMs.",
+        "Only the parallel share divides by the worker count — the serial share rides along untouched, and with infinite workers the runtime floors at the serial share alone."
+      ]
+    }
+  ]
+}
