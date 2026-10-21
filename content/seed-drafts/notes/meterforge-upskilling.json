@@ -442,6 +442,321 @@
     }
    ],
    "readMore": []
+  },
+  {
+   "id": "r04-contracts-labs-and-sql",
+   "target": "pack",
+   "phase": "before",
+   "title": "More of the handbook: API contracts, Lab 03 and the SQL bridge",
+   "body": "The later quizzes in this pack come from four parts of `astra docs/` that the earlier ones do not use:\n\n- `notes/02-api-boundaries.md`: what an HTTP contract includes, who owns which kind of validation, how errors and cancellation reach the wire.\n- the second half of `notes/05-testing-operations.md`: choosing test data, and what the health endpoints and the trace header are for.\n- `labs/03-idempotency-and-concurrency.md`: a lab that forces the usage-ingestion race and then changes the store's contract, step by step, ending with acceptance criteria and a comparison with a sibling repository.\n- `bridges/01-data-and-sql.md`: a disposable PostgreSQL playground with two small tables, a few queries and a transaction.\n\nFor the bridge, run the setup in your own `psql` session if you can, and write down your predicted rows before each query, as the bridge asks. For the lab and the notes, keep the linked source files open and check each claim against the code rather than memorising the sentence.",
+   "excerpts": [
+    {
+     "path": "astra docs/notes/02-api-boundaries.md",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "An HTTP contract includes route, method, input shape, status, body, headers, side effects, and retry behavior."
+    },
+    {
+     "path": "astra docs/bridges/01-data-and-sql.md",
+     "lineStart": 3,
+     "lineEnd": 3,
+     "quote": "explain what a query returns and which database rule protects a write."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "astra docs/codebase-tour.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Follows one request through the projects before you read the notes."
+    }
+   ]
+  },
+  {
+   "id": "x-q15-dto-shape-not-compat",
+   "target": "seed:quests:meterforge-upskilling/quiz/b001f91870176952",
+   "phase": "after",
+   "title": "A DTO fixes the shape, not the compatibility",
+   "body": "**Key: it keeps new domain properties off the wire, but not compatibility for callers.**\n\nThe API-boundaries note gives a DTO one job: make the public shape explicit, so that refactoring a domain class does not accidentally start serializing a new property. It then warns that this is not a compatibility guarantee. Callers depend on the JSON, the validation rules and the error codes, and all of those can change while the C# compiles cleanly.\n\nWhy the others are wrong:\n- *Callers bind to the C# type*: external callers see only JSON names, so a rename breaks them.\n- *Safe while the compiler is quiet*: a clean compile is exactly the case the note warns about.\n- *Nothing at all, serialized like the entity*: the whole point of the DTO is that it is a separate shape from the domain entity.",
+   "excerpts": [
+    {
+     "path": "astra docs/notes/02-api-boundaries.md",
+     "lineStart": 9,
+     "lineEnd": 9,
+     "quote": "It does not guarantee compatibility by itself: renaming a JSON property, tightening validation, or changing an error code may affect a caller even when the C# code compiles."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q16-route-tenant-proves-little",
+   "target": "seed:quests:meterforge-upskilling/quiz/2f1efb2a919f1051",
+   "phase": "after",
+   "title": "Tenant scoping is not tenant authorization",
+   "body": "**Key: it does not establish that the caller is allowed to act for the tenant named in the route.**\n\nThe tenant arrives as part of the URL, so the caller chooses it. Putting the tenant in the repository key stops one tenant's lookup from finding another tenant's product, which the note credits as avoiding an obvious cross-tenant mistake. But nothing checks that the caller belongs to that tenant: `Program.cs` configures no production authentication. The note asks a future slice to bind an authenticated principal to allowed tenant access and to test a forbidden tenant request.\n\nThe three distractors are all things the current design does do: lookup scoping by tenant, mapping request fields into `ProductService`, and returning a location for the created product.",
+   "excerpts": [
+    {
+     "path": "astra docs/notes/02-api-boundaries.md",
+     "lineStart": 11,
+     "lineEnd": 11,
+     "quote": "a caller-controlled route value is not proof of authorization."
+    },
+    {
+     "path": "astra docs/notes/02-api-boundaries.md",
+     "lineStart": 11,
+     "lineEnd": 11,
+     "quote": "A future authorization slice must bind an authenticated principal to allowed tenant access and test a forbidden tenant request."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q17-application-owns-related",
+   "target": "seed:quests:meterforge-upskilling/quiz/4232dc5fc2fb89a3",
+   "phase": "after",
+   "title": "Four owners of validation, and who checks related records",
+   "body": "**Key: application logic, coordinating the check through repository ports.**\n\nThe note splits validation four ways. Binding rejects malformed JSON and wrong types. Domain methods enforce rules a single object can check on its own, such as a positive amount or a legal state transition. Application logic coordinates a use case, which includes asking a repository port whether a related record such as a product exists. Authorization decides who may perform the operation.\n\nThe note's example is `StartAsync`: it checks that the product ID is nonempty, which is a local check, not a repository-backed check that the product exists. Each object can be locally valid while the operation as a whole is not, so do not return success on local validity alone.",
+   "excerpts": [
+    {
+     "path": "astra docs/notes/02-api-boundaries.md",
+     "lineStart": 13,
+     "lineEnd": 13,
+     "quote": "Application logic owns use-case coordination, such as verifying related records through ports."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/MeterForge.Application/Subscriptions/SubscriptionService.cs",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "StartAsync and its nonempty product ID check."
+    }
+   ]
+  },
+  {
+   "id": "x-q18-if-match-parse-400",
+   "target": "seed:quests:meterforge-upskilling/quiz/ec730328f95a9906",
+   "phase": "after",
+   "title": "A non-numeric If-Match gets a custom 400 today",
+   "body": "**Key: a custom 400 body, because If-Match must parse as an integer.**\n\nThe amendment endpoint strips quotes from the `If-Match` header and calls `int.TryParse`. When that fails it returns `Results.BadRequest` with the code `subscription.if_match_required`. The note calls this out as part of today's wire behavior, alongside the separate business-rule handler, and asks you to describe what exists before proposing one consistent error envelope.\n\nWhy the others are wrong:\n- *412 Precondition Failed*: the endpoint never gets as far as comparing versions; parsing fails first.\n- *409 Conflict*: there is no version to compare, so no conflict is detected.\n- *200, header ignored*: the endpoint returns early; the amendment does not run.",
+   "excerpts": [
+    {
+     "path": "astra docs/notes/02-api-boundaries.md",
+     "lineStart": 15,
+     "lineEnd": 15,
+     "quote": "Subscription amendments parse `If-Match` as an integer and return a custom `400` body when parsing fails."
+    },
+    {
+     "path": "src/MeterForge.Api/Subscriptions/SubscriptionEndpoints.cs",
+     "lineStart": 27,
+     "lineEnd": 27,
+     "quote": "return Results.BadRequest(new { code = \"subscription.if_match_required\" });"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q19-cancellation-noticing",
+   "target": "seed:quests:meterforge-upskilling/quiz/ad5f91ffaf2a88b5",
+   "phase": "after",
+   "title": "Cancellation lets work stop; it does not rewind it",
+   "body": "**Key: it lets work notice abandonment; it cannot undo the committed write.**\n\nA cancellation token is a signal that code checks at its own pace. Passing it down to storage means a long operation can stop early if the caller has gone. Once the database or a remote provider has committed, the token has nothing to say about that work. The note adds the consequence: a client that lost the response may still need a safe replay or a lookup to learn what happened, so retries and persistence have to be designed together.\n\nWhy the others are wrong:\n- *Rolls the committed write back*: a token does not roll back a committed transaction.\n- *Marks the write as failed*: the write succeeded; nothing re-labels it.\n- *Reverses the provider call*: committed remote work is not undone either.",
+   "excerpts": [
+    {
+     "path": "astra docs/notes/02-api-boundaries.md",
+     "lineStart": 17,
+     "lineEnd": 17,
+     "quote": "It does not undo an operation already committed by a database or remote provider."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q20-data-exposes-rule",
+   "target": "seed:quests:meterforge-upskilling/quiz/4e39123d4b1ddc17",
+   "phase": "after",
+   "title": "Expected values worked out by hand",
+   "body": "**Key: expose the rule: work a small example out by hand rather than reuse the rater.**\n\nIf a test's expected value comes from the code under test, the test can only confirm that the code agrees with itself. The testing note asks for data that exposes the rule: for tiered rating, a small example you calculate by hand. It gives two parallel cases: for time, a fixed timestamp with an intentional offset; for tenant isolation, the same resource ID under a different tenant, because a successful same-tenant request cannot prove isolation.\n\nWhy the others are wrong:\n- *Paste the rater's output*: that copies the algorithm into the expectation.\n- *A large real invoice*: crossing every boundary hides which rule failed.\n- *Random quantities against a copy of the rater*: again the expectation is the algorithm itself.",
+   "excerpts": [
+    {
+     "path": "astra docs/notes/05-testing-operations.md",
+     "lineStart": 22,
+     "lineEnd": 22,
+     "quote": "For tiered rating, calculate a small example by hand rather than copying the algorithm into the expected result."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q21-readiness-says-in-memory",
+   "target": "seed:quests:meterforge-upskilling/quiz/18206a8eec6ccf42",
+   "phase": "after",
+   "title": "What a 200 from /health/ready does and does not mean",
+   "body": "**Key: it reports the in-memory default; it is not a database connectivity test.**\n\nThe testing note separates the questions health checks answer. Liveness asks whether the process can respond; readiness asks whether it can serve the intended workload. MeterForge's readiness endpoint simply returns a fixed object that includes `durableDefault = false`, saying the default composition is in memory. It never opens a database connection.\n\nWhy the others are wrong:\n- *The PostgreSQL container passed a probe*: nothing in the endpoint touches PostgreSQL, and starting the container does not swap the registered adapters.\n- *The outbox worker is draining rows*: readiness reports nothing about an outbox.\n- *The tracing backend received spans*: `X-Trace-Id` is a correlation value; it does not configure a tracing backend.",
+   "excerpts": [
+    {
+     "path": "astra docs/notes/05-testing-operations.md",
+     "lineStart": 24,
+     "lineEnd": 24,
+     "quote": "The current readiness response explicitly reports the in-memory default; it is not a database connectivity test."
+    },
+    {
+     "path": "src/MeterForge.Api/Program.cs",
+     "lineStart": 56,
+     "lineEnd": 56,
+     "quote": "durableDefault = false,"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q22-factory-may-rerun",
+   "target": "seed:quests:meterforge-upskilling/quiz/5fd0a2beba689753",
+   "phase": "after",
+   "title": "Dictionary factories are not run-exactly-once",
+   "body": "**Key: the factory can run more than once, so keep side effects outside it.**\n\nLab 03 step 3 moves ingestion to an insert-or-read result and asks that losing callers get the stored winner, not their own discarded candidate. If you use a dictionary factory to build the value, the lab warns that the factory can run more than once: two callers can each run it, with only one result kept. Anything the factory does besides returning a value, such as logging an insert, publishing, or counting, may then happen twice.\n\nWhy the others are wrong:\n- *It holds a global lock*: the lab says nothing of the kind.\n- *It never runs on a replay, so put payload checks inside*: the lab tells you to keep side effects out, not to move checks in.\n- *Its result is kept even on a race*: the loser's candidate is discarded.",
+   "excerpts": [
+    {
+     "path": "astra docs/labs/03-idempotency-and-concurrency.md",
+     "lineStart": 19,
+     "lineEnd": 19,
+     "quote": "If using a dictionary factory, remember factories can run more than once; keep side effects outside them."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q23-one-handler-one-status",
+   "target": "seed:quests:meterforge-upskilling/quiz/da4e06a285ec79a1",
+   "phase": "after",
+   "title": "Every business code is a 422 until you change the handler",
+   "body": "**Key: the global business handler maps every code to 422, so 409 needs a deliberate change.**\n\n`BusinessRuleExceptionHandler` sets the status to 422 for every business-rule exception, whatever its code. Throwing a new code such as an idempotency conflict therefore produces a 422 like every other rule failure. Lab 03 step 5 asks you to choose and document the conflict mapping, and points out that a 409 requires an intentional implementation change, plus an API test that shows it.\n\nWhy the others are wrong:\n- *The usage endpoint maps codes to 400*: the mapping is global, and it is 422.\n- *Conflict codes already map to 409*: no code gets a special status today.\n- *Unhandled business exceptions become 500*: they are handled, by this handler.",
+   "excerpts": [
+    {
+     "path": "astra docs/labs/03-idempotency-and-concurrency.md",
+     "lineStart": 21,
+     "lineEnd": 21,
+     "quote": "the current global business exception handler maps all business codes to 422, so a new 409 requires an intentional implementation change."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/MeterForge.Api/Errors/BusinessRuleExceptionHandler.cs",
+     "lineStart": 13,
+     "lineEnd": 19,
+     "why": "Where the 422 is set."
+    }
+   ]
+  },
+  {
+   "id": "x-q24-assert-stored-state",
+   "target": "seed:quests:meterforge-upskilling/quiz/dc96f07eea012925",
+   "phase": "after",
+   "title": "Assert what was stored, not what was handed back",
+   "body": "**Key: the persisted final product and version, not the returned mutable object.**\n\nThe existing amendment test already runs two writers. Step 6 strengthens it: after both writers complete, read the stored subscription and check its product and version. The object a writer got back is a live, mutable reference; it may change after the call returned, so treating it as a snapshot of the moment it saved can make a broken test look green.\n\nWhy the others are wrong:\n- *Check each returned object*: that is the assumption the lab warns against.\n- *The versions the writers returned*: the same returned objects, so the same trap.\n- *Time spent waiting on the lock*: the step is about final stored state; the acceptance criteria ask that writers on one expected version commit exactly one amendment and advance the version once.",
+   "excerpts": [
+    {
+     "path": "astra docs/labs/03-idempotency-and-concurrency.md",
+     "lineStart": 22,
+     "lineEnd": 22,
+     "quote": "Avoid assuming the returned mutable object is a historical snapshot."
+    },
+    {
+     "path": "astra docs/labs/03-idempotency-and-concurrency.md",
+     "lineStart": 30,
+     "lineEnd": 30,
+     "quote": "commit exactly one amendment and advance the version once."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q25-missing-tenant-condition",
+   "target": "seed:quests:meterforge-upskilling/quiz/603958d1bde9a170",
+   "phase": "after",
+   "title": "Drop the tenant condition and invoices 7 swap lines",
+   "body": "**Key: six rows; grouping reports 114.00 for both tenants' invoice 7.**\n\nTwo invoices share the id 7, one per tenant. With only `l.invoice_id = i.id`, each invoice 7 matches every line whose invoice_id is 7: a/7/1 (10.00), a/7/2 (5.00) and b/7/1 (99.00). That is three lines for each of two invoices, six rows. Summing per invoice gives 10 + 5 + 99 = 114.00 for both. Invoice a/8 still has no line with invoice_id 8, so it adds nothing.\n\nWhy the others are wrong:\n- *Three rows*: that is the correct join's result; the invoice id alone does not separate tenants.\n- *Four rows with a/8*: a/8 still matches no line.\n- *Nine rows*: the invoice-id condition is still there, so a/8 is excluded.",
+   "excerpts": [
+    {
+     "path": "astra docs/bridges/01-data-and-sql.md",
+     "lineStart": 99,
+     "lineEnd": 99,
+     "quote": "The incomplete join produces six rows: each tenant's invoice 7 matches all three lines."
+    },
+    {
+     "path": "astra docs/bridges/01-data-and-sql.md",
+     "lineStart": 99,
+     "lineEnd": 99,
+     "quote": "Grouping those incorrect matches would report `114.00` for both tenants."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q26-left-join-coalesce",
+   "target": "seed:quests:meterforge-upskilling/quiz/f31745c2eaa9e271",
+   "phase": "after",
+   "title": "An invoice with no lines: inner versus left join",
+   "body": "**Key: it has no lines, so the inner join drops it; the left join shows 0.00.**\n\nAn inner join only returns pairs that satisfy the condition, and a/8 has no line to pair with. A left join keeps every invoice row, filling the line columns with NULL when nothing matches. `SUM` over no amounts is NULL, and `COALESCE(..., 0)` turns that into zero, so the totals are a/7 15.00, a/8 0.00, b/7 99.00. The bridge adds that this zero is a teaching policy for empty invoices, not a billing rule for the app.\n\nWhy the others are wrong:\n- *NULL from the left join*: `COALESCE` replaces it.\n- *A key collision with a/7*: (a, 8) and (a, 7) are different keys.\n- *ORDER BY hides it*: ordering never removes rows, and there is no limit.",
+   "excerpts": [
+    {
+     "path": "astra docs/bridges/01-data-and-sql.md",
+     "lineStart": 68,
+     "lineEnd": 68,
+     "quote": "Invoice `a/8` has no matching lines, so this inner join omits it."
+    },
+    {
+     "path": "astra docs/bridges/01-data-and-sql.md",
+     "lineStart": 79,
+     "lineEnd": 79,
+     "quote": "`COALESCE` replaces the absent sum with zero."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q27-rollback-takes-header",
+   "target": "seed:quests:meterforge-upskilling/quiz/0658b97a6f89ccd8",
+   "phase": "after",
+   "title": "A rollback discards the whole transaction",
+   "body": "**Key: 0, because the failed transaction also discards the earlier header insert.**\n\nInside `BEGIN`, the header insert for a/9 succeeds, then the line insert violates `CHECK (amount >= 0)`. In PostgreSQL that error aborts the transaction, and `ROLLBACK` discards every change made in it, including the header that had looked fine. The count for a/9 is exactly 0. The bridge then asks why an exception alone is not a useful assertion: what matters is the rows that were stored.\n\nWhy the others are wrong:\n- *1, the header stays*: changes inside an open transaction are not kept on their own.\n- *0, the CHECK deletes headers*: a check constraint only rejects its own row.\n- *1, ROLLBACK undoes only the failed statement*: it discards the whole transaction.",
+   "excerpts": [
+    {
+     "path": "astra docs/bridges/01-data-and-sql.md",
+     "lineStart": 95,
+     "lineEnd": 95,
+     "quote": "The line fails its check constraint; after rollback the count is exactly `0`."
+    },
+    {
+     "path": "astra docs/bridges/01-data-and-sql.md",
+     "lineStart": 101,
+     "lineEnd": 101,
+     "quote": "The failed transaction discards the earlier header insert too."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q28-what-fk-and-rollback-skip",
+   "target": "seed:quests:meterforge-upskilling/quiz/0bfca5bf9b8abf1b",
+   "phase": "after",
+   "title": "The limits of a foreign key and of a rollback",
+   "body": "**Key: an FK does not authorize the caller; rollback does not undo a sent email.**\n\nThe bridge's plain-words section is careful about what each database rule does not do. A foreign key requires the referenced row to exist, and that is all: it does not calculate totals and it does not authorize the caller. A transaction's rollback discards database changes made inside it, but it does not undo an email that was already sent, and it does not establish that a retried request had identical content.\n\nEach distractor breaks one of those sentences: an FK that does not need the referenced row, a rollback that undoes an email or proves a retry matched, an FK that authorizes, and a rollback that keeps earlier writes.",
+   "excerpts": [
+    {
+     "path": "astra docs/bridges/01-data-and-sql.md",
+     "lineStart": 11,
+     "lineEnd": 11,
+     "quote": "A **foreign key** requires a referenced row to exist; it does not calculate totals or authorize the caller."
+    },
+    {
+     "path": "astra docs/bridges/01-data-and-sql.md",
+     "lineStart": 15,
+     "lineEnd": 15,
+     "quote": "It does not undo an email or establish that a retried request has identical content."
+    }
+   ],
+   "readMore": []
   }
  ]
 }
