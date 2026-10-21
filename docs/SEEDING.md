@@ -947,7 +947,7 @@ resolved); quiz variety `concept` and flashcard shape `hand-authored`;
 - **fundamentals wave — DONE (2026-10-21):** interview + real-SWE-fundamentals content, zero
   shared/factory edits (no estate restamp). 9 new DESIGN IT primaries → 47 items / 29 repos;
   11 fundamentals explain-backs on repos with no prior EB pack → EB packs 150 → 170, strict
-  pins 594 → 614; quiz layer +80 quizzes / +40 flashcards / +86 notes across 6 packs
+  pins 594 → 614; quiz layer +80 quizzes / +40 flashcards / +84 notes across 6 packs
   (atlas-swe-bootcamp 15→31q 4→12fc, harbor-swe-bootcamp 16→30/4→11, dotnet-auth 13→27/4→11,
   payments-lab 19→31/4→10, netcleanarch 13→27/4→11, openstatus 12→22/4→9; old items
   byte-identical everywhere); sysdrills 22 → 62 (bullet above). Orchestration: 3 Fable
