@@ -1,0 +1,392 @@
+{
+  "format": "sysdrills-authoring@1",
+  "module": "02-caching-and-pools",
+  "title": "Caching, pools & limits",
+  "description": "The arithmetic behind the boxes you draw between the app and the database: what a cache hit ratio does to latency and database load, how many entries fit and how fast they churn, how big a connection pool must be, how fixed-window and token-bucket rate limiters decide, and how many shards a dataset needs. All integer math with the rounding rule named in each drill (Math.ceil for capacity, Math.floor for what fits).",
+  "exercises": [
+    {
+      "slug": "01-effective-latency",
+      "title": "Effective latency and database load behind a cache",
+      "difficulty": 2,
+      "skills": [
+        "caching",
+        "latency"
+      ],
+      "instructions": "**Interview prompt.** \"Our cache answers in 200 µs and the database in 10 ms. With a 95% hit ratio, what is the average read latency — and how many reads per second still reach the database?\"\n\n**Why it works.** The average latency is a **weighted average**: hits cost the cache time, misses cost the miss time. With the hit ratio in **per-mille** (‰, out of 1,000; 950‰ = 95%) it is `(hit‰ × hitUs + (1000 − hit‰) × missUs) / 1000`. Only misses hit the database, so DB reads/s = `qps × (1000 − hit‰) / 1000` — this is why a cache going from 99% to 98% **doubles** database load.\n\n**Your task.** Export two functions:\n- `effectiveLatencyUs(hitPermille, hitUs, missUs)` → weighted average latency in microseconds\n- `missesPerSecond(qps, hitPermille)` → reads per second that reach the database\n\nInputs are chosen so both answers are exact whole numbers — as long as you keep per-mille as an integer and divide by 1,000 **last**. Converting to a fraction first (`1 - 0.99`) gives `0.010000000000000009` in JavaScript and the tests will see the dust.\n\n**Worked example.** 900‰ hits at 1,000 µs, misses at 11,000 µs → (900 × 1,000 + 100 × 11,000) / 1,000 = **2,000 µs**. At 4,000 QPS and 900‰: 4,000 × 100 / 1,000 = **400 DB reads/s**.",
+      "starter": "export function effectiveLatencyUs(hitPermille, hitUs, missUs) {\n  // TODO: weighted average of hit and miss latency\n}\n\nexport function missesPerSecond(qps, hitPermille) {\n  // TODO: only misses reach the database\n}\n",
+      "solution": "export function effectiveLatencyUs(hitPermille, hitUs, missUs) {\n  const missPermille = 1000 - hitPermille;\n  return (hitPermille * hitUs + missPermille * missUs) / 1000;\n}\n\nexport function missesPerSecond(qps, hitPermille) {\n  return (qps * (1000 - hitPermille)) / 1000;\n}\n",
+      "tests": [
+        {
+          "name": "950 per-mille hits, 200 us vs 10,200 us -> 700 us",
+          "code": "assert.equal(typeof mod.effectiveLatencyUs, 'function', 'export a function named effectiveLatencyUs');\nassert.equal(mod.effectiveLatencyUs(950, 200, 10200), 700);",
+          "input": [
+            950,
+            200,
+            10200
+          ]
+        },
+        {
+          "name": "every read hits (1000 per-mille) -> the cache latency (boundary)",
+          "code": "assert.equal(typeof mod.effectiveLatencyUs, 'function', 'export a function named effectiveLatencyUs');\nassert.equal(mod.effectiveLatencyUs(1000, 300, 50000), 300);",
+          "input": [
+            1000,
+            300,
+            50000
+          ]
+        },
+        {
+          "name": "nothing hits (0 per-mille) -> the miss latency (boundary)",
+          "code": "assert.equal(typeof mod.effectiveLatencyUs, 'function', 'export a function named effectiveLatencyUs');\nassert.equal(mod.effectiveLatencyUs(0, 300, 50000), 50000);",
+          "input": [
+            0,
+            300,
+            50000
+          ]
+        },
+        {
+          "name": "20,000 QPS at 990 per-mille -> 200 DB reads/s",
+          "code": "assert.equal(typeof mod.missesPerSecond, 'function', 'export a function named missesPerSecond');\nassert.equal(mod.missesPerSecond(20000, 990), 200);",
+          "input": [
+            20000,
+            990
+          ]
+        },
+        {
+          "name": "5,000 QPS at 800 per-mille -> 1,000 DB reads/s",
+          "code": "assert.equal(typeof mod.missesPerSecond, 'function', 'export a function named missesPerSecond');\nassert.equal(mod.missesPerSecond(5000, 800), 1000);",
+          "input": [
+            5000,
+            800
+          ]
+        }
+      ],
+      "explanation": "Weight each latency by how often it happens; the database sees only the misses.\n\nFor `effectiveLatencyUs(950, 200, 10200)`:\n- miss‰ = 1,000 − 950 = 50\n- weighted sum = 950 × 200 + 50 × 10,200 = 190,000 + 510,000 = 700,000\n- average = 700,000 / 1,000 = **700 µs**\n\nNotice that the 5% of misses contribute 510 of the 700 µs: tail misses dominate the average, which is why hit ratio is the number to defend.",
+      "hints": [
+        "Average latency = (share of hits × hit latency) + (share of misses × miss latency). Misses are 1000 − hit‰.",
+        "effective = (hitPermille × hitUs + (1000 − hitPermille) × missUs) / 1000; misses/s = qps × (1000 − hitPermille) / 1000.",
+        "return (hitPermille * hitUs + (1000 - hitPermille) * missUs) / 1000;"
+      ]
+    },
+    {
+      "slug": "02-lru-capacity",
+      "title": "LRU capacity and evictions per hour",
+      "difficulty": 2,
+      "skills": [
+        "caching",
+        "capacity"
+      ],
+      "instructions": "**Interview prompt.** \"A 36 MB LRU cache stores 1 KB entries, starts the hour empty, and sees 20 brand-new keys per second. How many entries fit, and how many evictions happen in that hour?\"\n\n**Why it works.** Entries that fit = cache size ÷ entry size, **rounded DOWN** (Math.floor) — a partial entry does not fit. An LRU cache starting empty absorbs its first `capacity` new keys for free; after that, **every** new key evicts the least-recently-used one. So evictions = max(0, new keys in the hour − capacity). High eviction counts mean the hot set does not fit — you need a bigger cache or a smaller entry.\n\n**Your task.** Export two functions:\n- `entriesThatFit(cacheBytes, entryBytes)` → `Math.floor(cacheBytes / entryBytes)` — **round DOWN** (Math.floor)\n- `evictionsPerHour(cacheBytes, entryBytes, newKeysPerSec)` → `max(0, newKeysPerSec × 3600 − entriesThatFit(...))`\n\n**Worked example.** 1,000,000 B cache, 300 B entries → 3,333.3 → **3,333 entries**. At 2 new keys/s: 7,200 inserts in the hour − 3,333 = **3,867 evictions**.",
+      "starter": "export function entriesThatFit(cacheBytes, entryBytes) {\n  // TODO: whole entries only, rounded DOWN\n}\n\nexport function evictionsPerHour(cacheBytes, entryBytes, newKeysPerSec) {\n  // TODO: inserts beyond capacity each evict one entry\n}\n",
+      "solution": "export function entriesThatFit(cacheBytes, entryBytes) {\n  return Math.floor(cacheBytes / entryBytes);\n}\n\nexport function evictionsPerHour(cacheBytes, entryBytes, newKeysPerSec) {\n  const inserts = newKeysPerSec * 3600;\n  return Math.max(0, inserts - entriesThatFit(cacheBytes, entryBytes));\n}\n",
+      "tests": [
+        {
+          "name": "1 GB cache, 1 KB entries -> 1,000,000 entries",
+          "code": "assert.equal(typeof mod.entriesThatFit, 'function', 'export a function named entriesThatFit');\nassert.equal(mod.entriesThatFit(1000000000, 1000), 1000000);",
+          "input": [
+            1000000000,
+            1000
+          ]
+        },
+        {
+          "name": "10,000 B cache, 3,000 B entries -> 3.33 rounds DOWN to 3",
+          "code": "assert.equal(typeof mod.entriesThatFit, 'function', 'export a function named entriesThatFit');\nassert.equal(mod.entriesThatFit(10000, 3000), 3);",
+          "input": [
+            10000,
+            3000
+          ]
+        },
+        {
+          "name": "cache smaller than one entry -> 0 entries (boundary)",
+          "code": "assert.equal(typeof mod.entriesThatFit, 'function', 'export a function named entriesThatFit');\nassert.equal(mod.entriesThatFit(999, 1000), 0);",
+          "input": [
+            999,
+            1000
+          ]
+        },
+        {
+          "name": "36,000 entries, 72,000 inserts/hour -> 36,000 evictions",
+          "code": "assert.equal(typeof mod.evictionsPerHour, 'function', 'export a function named evictionsPerHour');\nassert.equal(mod.evictionsPerHour(36000000, 1000, 20), 36000);",
+          "input": [
+            36000000,
+            1000,
+            20
+          ]
+        },
+        {
+          "name": "cache never fills -> 0 evictions (boundary)",
+          "code": "assert.equal(typeof mod.evictionsPerHour, 'function', 'export a function named evictionsPerHour');\nassert.equal(mod.evictionsPerHour(1000000000, 500, 100), 0);",
+          "input": [
+            1000000000,
+            500,
+            100
+          ]
+        }
+      ],
+      "explanation": "Capacity first (floor), then compare the hour's inserts against it.\n\nFor `evictionsPerHour(36000000, 1000, 20)`:\n- capacity = floor(36,000,000 / 1,000) = 36,000 entries\n- inserts = 20 × 3,600 = 72,000\n- evictions = 72,000 − 36,000 = **36,000**\n\nFor `evictionsPerHour(1000000000, 500, 100)`: capacity 2,000,000, inserts 360,000 → the cache never fills → **0**.",
+      "hints": [
+        "Only whole entries fit. Once the cache is full, each new key pushes one old key out.",
+        "entriesThatFit = Math.floor(cacheBytes / entryBytes); evictions = Math.max(0, newKeysPerSec × 3600 − capacity).",
+        "return Math.max(0, newKeysPerSec * 3600 - entriesThatFit(cacheBytes, entryBytes));"
+      ]
+    },
+    {
+      "slug": "03-connection-pool",
+      "title": "Connection pool size with headroom",
+      "difficulty": 2,
+      "skills": [
+        "capacity",
+        "queueing",
+        "databases"
+      ],
+      "instructions": "**Interview prompt.** \"Each app instance sends 1,000 queries per second, each holding a connection for 20 ms. How big should its pool be with 20% headroom — and if the database allows 500 connections, how many instances can we run?\"\n\n**Why it works.** Busy connections = QPS × hold time (Little's law, ms ÷ 1,000). Add headroom for bursts by multiplying by (100 + pct) / 100 and **round UP** (Math.ceil) — a pool one short queues requests. Every instance owns its own pool, so the database's connection limit ÷ pool size, **rounded DOWN** (Math.floor), caps the instance count.\n\n**Your task.** Export two functions:\n- `poolSize(qps, queryMs, headroomPct)` → `Math.ceil(qps × queryMs × (100 + headroomPct) / 100000)` — **round UP** (Math.ceil)\n- `maxInstances(poolPerInstance, dbMaxConnections)` → `Math.floor(dbMaxConnections / poolPerInstance)` — **round DOWN** (Math.floor)\n\n**Float trap — multiply first, divide last.** `100 * 1.1` is `110.00000000000001` in JavaScript, and Math.ceil turns that into 111. Keep the whole numerator in integers and do one division at the end (100,000 = 1,000 for ms × 100 for percent).\n\n**Worked example.** 400 QPS × 25 ms with 20% headroom → 400 × 25 × 120 / 100,000 = **12 connections**. A 100-connection database with pools of 12 → 8.33 → **8 instances**.",
+      "starter": "export function poolSize(qps, queryMs, headroomPct) {\n  // TODO: busy connections + headroom, rounded UP\n}\n\nexport function maxInstances(poolPerInstance, dbMaxConnections) {\n  // TODO: whole pools that fit under the DB limit, rounded DOWN\n}\n",
+      "solution": "export function poolSize(qps, queryMs, headroomPct) {\n  // multiply first, divide once: no floating-point dust before Math.ceil\n  return Math.ceil((qps * queryMs * (100 + headroomPct)) / 100_000);\n}\n\nexport function maxInstances(poolPerInstance, dbMaxConnections) {\n  return Math.floor(dbMaxConnections / poolPerInstance);\n}\n",
+      "tests": [
+        {
+          "name": "1,000 QPS x 20 ms, no headroom -> 20 connections (boundary)",
+          "code": "assert.equal(typeof mod.poolSize, 'function', 'export a function named poolSize');\nassert.equal(mod.poolSize(1000, 20, 0), 20);",
+          "input": [
+            1000,
+            20,
+            0
+          ]
+        },
+        {
+          "name": "300 QPS x 10 ms + 50% -> 4.5 rounds UP to 5",
+          "code": "assert.equal(typeof mod.poolSize, 'function', 'export a function named poolSize');\nassert.equal(mod.poolSize(300, 10, 50), 5);",
+          "input": [
+            300,
+            10,
+            50
+          ]
+        },
+        {
+          "name": "5,000 QPS x 20 ms + 10% -> exactly 110 (the float trap: not 111)",
+          "code": "assert.equal(typeof mod.poolSize, 'function', 'export a function named poolSize');\nassert.equal(mod.poolSize(5000, 20, 10), 110);",
+          "input": [
+            5000,
+            20,
+            10
+          ]
+        },
+        {
+          "name": "pools of 30 under a 100-connection DB -> 3 instances (rounded DOWN)",
+          "code": "assert.equal(typeof mod.maxInstances, 'function', 'export a function named maxInstances');\nassert.equal(mod.maxInstances(30, 100), 3);",
+          "input": [
+            30,
+            100
+          ]
+        },
+        {
+          "name": "pools of 25 under a 500-connection DB -> exactly 20 instances",
+          "code": "assert.equal(typeof mod.maxInstances, 'function', 'export a function named maxInstances');\nassert.equal(mod.maxInstances(25, 500), 20);",
+          "input": [
+            25,
+            500
+          ]
+        }
+      ],
+      "explanation": "Little's law gives the busy connections; headroom scales it; Math.ceil makes it whole. The DB limit divides into whole pools with Math.floor.\n\nFor `poolSize(5000, 20, 10)`:\n- busy = 5,000 × 20 / 1,000 = 100 connections\n- with headroom = 100 × 110 / 100 = 110\n- in one integer step: 5,000 × 20 × 110 = 11,000,000; / 100,000 = **110** exactly → Math.ceil(110) = 110\n\nThe tempting `5000 * 20 / 1000 * 1.1` gives 110.00000000000001 and Math.ceil makes it 111 — an off-by-one pool caused by floating point, not by the design.",
+      "hints": [
+        "Little's law: connections busy = queries per second × seconds each query holds one. Then add the headroom percentage.",
+        "poolSize = Math.ceil(qps × queryMs × (100 + headroomPct) / 100000); maxInstances = Math.floor(dbMaxConnections / poolPerInstance).",
+        "return Math.ceil((qps * queryMs * (100 + headroomPct)) / 100000);"
+      ]
+    },
+    {
+      "slug": "04-rate-limit-window",
+      "title": "Fixed-window rate limiting",
+      "difficulty": 2,
+      "skills": [
+        "rate-limiting"
+      ],
+      "instructions": "**Interview prompt.** \"Each API key may make 60 requests per minute, counted in fixed one-minute windows. How many requests get through in a window, and over several windows how many are rejected?\"\n\n**Why it works.** A **fixed-window** limiter keeps one counter per key per window (e.g. per calendar minute). The first `limit` requests in the window pass and the rest are rejected until the counter resets. So a window allows `min(limit, arrivals)` and rejects `max(0, arrivals − limit)`. Its known weakness — a burst at the end of one window plus the start of the next can pass 2× the limit — is why interviewers then ask about sliding windows and token buckets.\n\n**Your task.** Export two functions:\n- `allowed(limit, arrivals)` → requests that pass in one window\n- `requestsRejected(limit, windows)` → total rejected across an array of per-window arrival counts (empty array → 0)\n\n**Worked example.** limit 100, windows [80, 150, 100] → rejected 0 + 50 + 0 = **50**; `allowed(100, 150)` = **100**.",
+      "starter": "export function allowed(limit, arrivals) {\n  // TODO\n}\n\nexport function requestsRejected(limit, windows) {\n  // TODO: sum the overflow of every window\n}\n",
+      "solution": "export function allowed(limit, arrivals) {\n  return Math.min(limit, arrivals);\n}\n\nexport function requestsRejected(limit, windows) {\n  return windows.reduce((sum, arrivals) => sum + (arrivals - allowed(limit, arrivals)), 0);\n}\n",
+      "tests": [
+        {
+          "name": "limit 60, 45 arrivals -> all 45 pass",
+          "code": "assert.equal(typeof mod.allowed, 'function', 'export a function named allowed');\nassert.equal(mod.allowed(60, 45), 45);",
+          "input": [
+            60,
+            45
+          ]
+        },
+        {
+          "name": "limit 60, 200 arrivals -> 60 pass",
+          "code": "assert.equal(typeof mod.allowed, 'function', 'export a function named allowed');\nassert.equal(mod.allowed(60, 200), 60);",
+          "input": [
+            60,
+            200
+          ]
+        },
+        {
+          "name": "arrivals exactly at the limit -> all pass (boundary)",
+          "code": "assert.equal(typeof mod.allowed, 'function', 'export a function named allowed');\nassert.equal(mod.allowed(60, 60), 60);",
+          "input": [
+            60,
+            60
+          ]
+        },
+        {
+          "name": "limit 10, windows [5, 12, 30, 10] -> 22 rejected",
+          "code": "assert.equal(typeof mod.requestsRejected, 'function', 'export a function named requestsRejected');\nassert.equal(mod.requestsRejected(10, [5,12,30,10]), 22);",
+          "input": [
+            10,
+            [
+              5,
+              12,
+              30,
+              10
+            ]
+          ]
+        },
+        {
+          "name": "no windows -> 0 rejected (boundary)",
+          "code": "assert.equal(typeof mod.requestsRejected, 'function', 'export a function named requestsRejected');\nassert.equal(mod.requestsRejected(10, []), 0);",
+          "input": [
+            10,
+            []
+          ]
+        }
+      ],
+      "explanation": "Per window: pass = min(limit, arrivals), reject = arrivals − pass. Sum the rejects.\n\nFor `requestsRejected(10, [5, 12, 30, 10])`:\n- window 1: 5 ≤ 10 → 0 rejected\n- window 2: 12 − 10 → 2\n- window 3: 30 − 10 → 20\n- window 4: 10 ≤ 10 → 0\n- total = 0 + 2 + 20 + 0 = **22**",
+      "hints": [
+        "Within one window the limiter lets requests through until the counter reaches the limit; everything after that is rejected.",
+        "allowed = Math.min(limit, arrivals); rejected in a window = arrivals − allowed; add them up over the windows.",
+        "return windows.reduce((sum, a) => sum + Math.max(0, a - limit), 0);"
+      ]
+    },
+    {
+      "slug": "05-token-bucket",
+      "title": "Token bucket: refill, cap and admit",
+      "difficulty": 2,
+      "skills": [
+        "rate-limiting"
+      ],
+      "instructions": "**Interview prompt.** \"We rate-limit with a token bucket: capacity (burst) 100, refilled at 10 tokens per second. The bucket is empty; after 5 seconds, how many tokens are there — and can a request costing 20 tokens go through?\"\n\n**Why it works.** A token bucket **refills** at a steady rate but can never hold more than its **burst** capacity — that cap is what bounds a burst after a quiet period. Tokens after `t` seconds = `min(burst, tokens + refillPerSec × t)`. A request is admitted when the bucket holds **at least** its cost (≥, not >).\n\n**Your task.** Export two functions:\n- `tokensAfter(tokens, burst, refillPerSec, elapsedSec)` → tokens after refilling, capped at `burst`\n- `canServe(tokens, burst, refillPerSec, elapsedSec, cost)` → `true` when `tokensAfter(...) >= cost`, else `false`\n\n**Worked example.** Burst 10, holding 2, refill 3/s, 2 s elapsed → min(10, 2 + 6) = **8 tokens**; a request costing 9 → **false**.",
+      "starter": "export function tokensAfter(tokens, burst, refillPerSec, elapsedSec) {\n  // TODO: refill, but never above burst\n}\n\nexport function canServe(tokens, burst, refillPerSec, elapsedSec, cost) {\n  // TODO\n}\n",
+      "solution": "export function tokensAfter(tokens, burst, refillPerSec, elapsedSec) {\n  return Math.min(burst, tokens + refillPerSec * elapsedSec);\n}\n\nexport function canServe(tokens, burst, refillPerSec, elapsedSec, cost) {\n  return tokensAfter(tokens, burst, refillPerSec, elapsedSec) >= cost;\n}\n",
+      "tests": [
+        {
+          "name": "empty bucket, 10/s for 5 s -> 50 tokens",
+          "code": "assert.equal(typeof mod.tokensAfter, 'function', 'export a function named tokensAfter');\nassert.equal(mod.tokensAfter(0, 100, 10, 5), 50);",
+          "input": [
+            0,
+            100,
+            10,
+            5
+          ]
+        },
+        {
+          "name": "refill would reach 140 -> capped at burst 100",
+          "code": "assert.equal(typeof mod.tokensAfter, 'function', 'export a function named tokensAfter');\nassert.equal(mod.tokensAfter(40, 100, 10, 10), 100);",
+          "input": [
+            40,
+            100,
+            10,
+            10
+          ]
+        },
+        {
+          "name": "no time elapsed -> tokens unchanged (boundary)",
+          "code": "assert.equal(typeof mod.tokensAfter, 'function', 'export a function named tokensAfter');\nassert.equal(mod.tokensAfter(7, 20, 5, 0), 7);",
+          "input": [
+            7,
+            20,
+            5,
+            0
+          ]
+        },
+        {
+          "name": "20 tokens for a cost of 20 -> served (boundary: >=)",
+          "code": "assert.equal(typeof mod.canServe, 'function', 'export a function named canServe');\nassert.equal(mod.canServe(0, 50, 5, 4, 20), true);",
+          "input": [
+            0,
+            50,
+            5,
+            4,
+            20
+          ]
+        },
+        {
+          "name": "5 tokens for a cost of 6 -> refused",
+          "code": "assert.equal(typeof mod.canServe, 'function', 'export a function named canServe');\nassert.equal(mod.canServe(3, 10, 1, 2, 6), false);",
+          "input": [
+            3,
+            10,
+            1,
+            2,
+            6
+          ]
+        }
+      ],
+      "explanation": "Refill linearly, cap at the burst size, then compare with the cost.\n\nFor `tokensAfter(40, 100, 10, 10)`:\n- refill = 10 tokens/s × 10 s = 100\n- uncapped = 40 + 100 = 140\n- capped = min(100, 140) = **100**\n\nFor `canServe(0, 50, 5, 4, 20)`: tokens = min(50, 0 + 20) = 20; 20 ≥ 20 → **true**.",
+      "hints": [
+        "Tokens grow at a steady rate while time passes, but the bucket overflows at its burst size.",
+        "tokensAfter = Math.min(burst, tokens + refillPerSec × elapsedSec); canServe = tokensAfter(...) >= cost.",
+        "return Math.min(burst, tokens + refillPerSec * elapsedSec);"
+      ]
+    },
+    {
+      "slug": "06-shard-count",
+      "title": "Shard count: storage-bound or write-bound",
+      "difficulty": 2,
+      "skills": [
+        "sharding",
+        "capacity"
+      ],
+      "instructions": "**Interview prompt.** \"We hold 1 TB of data and take 45,000 writes per second at peak. A shard holds 500 GB and sustains 4,000 writes/s. How many shards?\"\n\n**Why it works.** A shard has **two** limits — how much it stores and how many writes it absorbs — and you need enough shards for **both**. Compute each requirement and **round UP** (Math.ceil: 11.25 shards means 12), then take the **larger** one. Saying which limit binds (\"we are write-bound\") is the sentence interviewers listen for.\n\n**Your task.** Export `shardCount(totalBytes, bytesPerShard, peakWriteQps, writeQpsPerShard)` →\n`Math.max(Math.ceil(totalBytes / bytesPerShard), Math.ceil(peakWriteQps / writeQpsPerShard))` — each side **rounded UP** (Math.ceil).\n\n**Worked example.** 10 TB at 2 TB/shard → 5; 30,000 writes/s at 4,000/shard → 7.5 → 8; max(5, 8) = **8 shards** (write-bound).",
+      "starter": "export function shardCount(totalBytes, bytesPerShard, peakWriteQps, writeQpsPerShard) {\n  // TODO: shards for storage vs shards for writes - the larger wins\n}\n",
+      "solution": "export function shardCount(totalBytes, bytesPerShard, peakWriteQps, writeQpsPerShard) {\n  const forStorage = Math.ceil(totalBytes / bytesPerShard);\n  const forWrites = Math.ceil(peakWriteQps / writeQpsPerShard);\n  return Math.max(forStorage, forWrites);\n}\n",
+      "tests": [
+        {
+          "name": "5 TB at 1 TB/shard vs 6,000 w/s at 5,000 -> 5 (storage-bound)",
+          "code": "assert.equal(typeof mod.shardCount, 'function', 'export a function named shardCount');\nassert.equal(mod.shardCount(5000000000000, 1000000000000, 6000, 5000), 5);",
+          "input": [
+            5000000000000,
+            1000000000000,
+            6000,
+            5000
+          ]
+        },
+        {
+          "name": "1 TB at 500 GB/shard vs 45,000 w/s at 4,000 -> 12 (write-bound)",
+          "code": "assert.equal(typeof mod.shardCount, 'function', 'export a function named shardCount');\nassert.equal(mod.shardCount(1000000000000, 500000000000, 45000, 4000), 12);",
+          "input": [
+            1000000000000,
+            500000000000,
+            45000,
+            4000
+          ]
+        },
+        {
+          "name": "both limits need exactly 4 -> 4 (boundary: exact tie)",
+          "code": "assert.equal(typeof mod.shardCount, 'function', 'export a function named shardCount');\nassert.equal(mod.shardCount(4000000000000, 1000000000000, 16000, 4000), 4);",
+          "input": [
+            4000000000000,
+            1000000000000,
+            16000,
+            4000
+          ]
+        },
+        {
+          "name": "a tiny dataset still needs 1 shard",
+          "code": "assert.equal(typeof mod.shardCount, 'function', 'export a function named shardCount');\nassert.equal(mod.shardCount(1, 1000000000000, 1, 10000), 1);",
+          "input": [
+            1,
+            1000000000000,
+            1,
+            10000
+          ]
+        }
+      ],
+      "explanation": "Two ceilings, take the max.\n\nFor `shardCount(1e12, 5e11, 45000, 4000)`:\n- storage: 1,000,000,000,000 / 500,000,000,000 = 2 → 2 shards\n- writes: 45,000 / 4,000 = 11.25 → Math.ceil → 12 shards\n- answer = max(2, 12) = **12 shards — write-bound**\n\nFollow-up worth saying aloud: with replication factor 3, that is 36 nodes, and resharding later is expensive, so leave growth headroom.",
+      "hints": [
+        "Work out how many shards the data size needs and how many the write rate needs, separately.",
+        "shards = Math.max(Math.ceil(totalBytes / bytesPerShard), Math.ceil(peakWriteQps / writeQpsPerShard)).",
+        "return Math.max(Math.ceil(totalBytes / bytesPerShard), Math.ceil(peakWriteQps / writeQpsPerShard));"
+      ]
+    }
+  ]
+}
