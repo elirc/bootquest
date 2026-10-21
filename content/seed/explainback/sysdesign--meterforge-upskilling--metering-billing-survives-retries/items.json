@@ -1,0 +1,146 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "meterforge-upskilling--astra-docs-notes-04-distributed-reliability.md",
+ "items": [
+  {
+   "key": "seed:explainback:meterforge-upskilling/explain-back/6bfde2feaf85a1c1",
+   "provenance": {
+    "repo": "meterforge-upskilling",
+    "sha": "c71962c62dea5883c3735ba3360b38c42fe14e1a",
+    "path": "astra docs/notes/04-distributed-reliability.md",
+    "lines": {
+     "start": 1,
+     "end": 41
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "DESIGN IT — [senior] metering and billing that survive retries and crashes (meterforge-upskilling, astra docs/notes/04-distributed-reliability.md, with notes/03 on persistence). MeterForge meters API usage for 300 tenants: about 2 million usage events a day arrive from tenant SDKs, and about 2% are client retries of an event that was already sent. At month end a job finalizes about 1,200 invoices and collects each one through a payment provider whose p99 is 8 s, behind a 10 s client timeout; each finalized invoice also emits an event that a ledger service uses to apply account credits. API and worker pods are restarted by deploys at any time. Write your design before you look: how usage ingestion stays single, what is written before a collection is sent, how a collection whose outcome is unknown is represented and recovered, how the finalization event reaches the ledger, how the ledger avoids applying a credit twice, and what an operator looks at before retrying. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "keyPoints": [
+      {
+       "text": "[w3] Usage ingestion is one atomic store operation keyed by tenant and external event id that hands every caller the same stored event plus a new-or-replay flag, rather than a lookup followed by a separate insert, and an event id that comes back with a different quantity is a conflict to reject, not a replay to accept.",
+       "cite": {
+        "path": "astra docs/notes/03-persistence-concurrency.md",
+        "lineStart": 9,
+        "lineEnd": 19
+       }
+      },
+      {
+       "text": "[w3] Before a collection is sent, a durable attempt record (invoice, amount, the operation's provider key, attempt time) is committed, so a crash at any later point leaves something a recovery job can find.",
+       "quote": "Was durable intent recorded?"
+      },
+      {
+       "text": "[w3] An outcome that is unknown after a timeout is a state of its own, separate from failed: either stored explicitly or held as pending intent that a recovery job resolves by asking the provider about that key, never by charging again blind.",
+       "quote": "whether unknown must be stored explicitly or represented by recoverable pending intent"
+      },
+      {
+       "text": "[w2] A client that replays a request whose result was already saved gets the stored, canonical result back, not a second run of the operation.",
+       "quote": "Return a canonical result for a client replay"
+      },
+      {
+       "text": "[w2] The invoice-finalized event is written to the outbox table in the finalization transaction, and a worker publishes it; in this repository the table exists (with a partial index on unpublished rows by occurrence time for the poller) but no code writes or drains it, so the design has to add both.",
+       "cite": {
+        "path": "src/MeterForge.Infrastructure/Persistence/Migrations/002_outbox.sql",
+        "lineStart": 1,
+        "lineEnd": 13
+       }
+      },
+      {
+       "text": "[w2] The ledger records each event it has handled in the same transaction as the credit it applies, so a second delivery finds the receipt and changes nothing.",
+       "quote": "ensure its receipt record and business mutation share an appropriate transaction when possible"
+      },
+      {
+       "text": "[w1] The provider key is built so that two tenants cannot collide on it (tenant inside the key, or a provider namespace that guarantees it), and that guarantee is checked in the provider's documentation.",
+       "quote": "Do not assume two tenants may safely reuse one provider key unless the provider's namespace or your adapter construction makes that true."
+      },
+      {
+       "text": "[w1] The runbook names the records an operator reads before retrying a collection by hand: the attempt record, its provider key and reference, and the provider's own view of that key.",
+       "quote": "Include which records an operator uses to decide whether a retry is safe."
+      }
+     ]
+    },
+    {
+     "prompt": "PRE-MORTEM — month end on the current code. The provider commits about 3% of charges but times out before answering; a teammate makes the retry generate a fresh provider key per attempt to 'get past' the provider's stored answers; usage ingestion is scaled from one API instance to three; and a deploy kills the finalization worker after it has published some events but before it marks them published. What breaks first, how does it show, and what in your design already prevents it?",
+     "keyPoints": [
+      {
+       "text": "[w3] A fresh key per retry turns a committed-but-timed-out charge into a second, independent charge: reconciliation finds two provider charges for one internal payment.",
+       "cite": {
+        "path": "docs/operations/INCIDENT-DRILL.md",
+        "lineStart": 3,
+        "lineEnd": 3
+       }
+      },
+      {
+       "text": "[w3] Containment stops collection for the affected tenant and preserves the evidence (invoice, payment id, both provider references, trace ids, a UTC timeline); recovery refunds the duplicate as a new linked record rather than editing history, and replays only once the retry key is stable again.",
+       "cite": {
+        "path": "docs/operations/INCIDENT-DRILL.md",
+        "lineStart": 5,
+        "lineEnd": 5
+       }
+      },
+      {
+       "text": "[w3] In today's model a timeout is an exception out of the send, so the attempt is never marked failed or succeeded: it stays pending, the retry method refuses anything that is not failed, and there is no path that resolves it.",
+       "cite": {
+        "path": "src/MeterForge.Domain/Payments/PaymentAttempt.cs",
+        "lineStart": 31,
+        "lineEnd": 46
+       }
+      },
+      {
+       "text": "[w2] With three ingestion instances, any guard that lives inside one process stops protecting the check-then-add sequence; uniqueness on tenant and event identity has to be enforced by the shared database, proved with two connections racing for the same key.",
+       "cite": {
+        "path": "astra docs/notes/03-persistence-concurrency.md",
+        "lineStart": 31,
+        "lineEnd": 33
+       }
+      },
+      {
+       "text": "[w2] The proof that the ledger survives the killed worker asserts the account balance after two deliveries of one event, not how many times the handler ran.",
+       "quote": "assert the persisted result, not just the number of handler invocations"
+      },
+      {
+       "text": "[w2] The regression for the timeout is a fake provider that records the charge under its key and then throws, followed by a retry of the same operation that must produce one provider-side charge and a recoverable result.",
+       "quote": "Build a fake provider that records a charge under a stable key and then throws a timeout."
+      }
+     ]
+    },
+    {
+     "prompt": "TRADE-OFF HANDBACK — defend your billing design against the alternatives the notes name: an explicit unknown state versus recoverable pending intent, an outbox versus publishing right after commit, 'we use an outbox' versus consumer-side deduplication, recording the attempt before the call versus after it, rejecting versus replaying a reused key with a changed payload, and a controllable fake versus a real provider. For each, say what you bought, what it cost, and which requirement put you on that side.",
+     "keyPoints": [
+      {
+       "text": "[w3] An explicit unknown state makes the uncertainty queryable and alertable, at the cost of every reader and report having to handle a fourth state; pending intent reuses the existing states but must carry enough evidence for a sweeper to tell 'never sent' from 'sent, no answer'.",
+       "quote": "whether unknown must be stored explicitly or represented by recoverable pending intent"
+      },
+      {
+       "text": "[w3] An outbox closes the gap between committing the invoice and publishing its event, at the price of a table, a worker to run and monitor, and duplicate delivery to plan for; a table with no worker and no writer buys none of that yet.",
+       "quote": "The table in this repository is a building block"
+      },
+      {
+       "text": "[w2] An outbox on the producer side does not make the ledger's effect happen once; that still costs deduplication in the consumer.",
+       "quote": "does not mean every downstream effect happens exactly once"
+      },
+      {
+       "text": "[w2] Recording the attempt before the call costs an extra write per collection and a sweeper for attempts that stay pending, and buys evidence that survives a crash; recording only after the result, as the current service does by keeping the attempt in memory, leaves nothing behind when the process dies mid-call.",
+       "cite": {
+        "path": "src/MeterForge.Application/Payments/PaymentService.cs",
+        "lineStart": 16,
+        "lineEnd": 34
+       }
+      },
+      {
+       "text": "[w2] Rejecting a reused key whose payload changed costs storing a fingerprint per key and catches client bugs; treating it as a replay silently answers a different request with the first one's result.",
+       "quote": "Define the key's scope, payload-conflict behavior, and retention expectations."
+      },
+      {
+       "text": "[w1] A controllable fake makes each failure window reproducible on demand; what it cannot tell you (the real provider's deduplication window, key retention and namespace) has to be verified before the fake is replaced.",
+       "quote": "a controllable fake gives better failure evidence for this learning task"
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}
