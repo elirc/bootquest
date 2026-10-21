@@ -1,0 +1,181 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "organized-experiment-idempotent-payments-lab--docs-learning-concepts-demonstrated.md--set-c",
+ "items": [
+  {
+   "key": "seed:explainback:organized-experiment-idempotent-payments-lab/explain-back/02e87c5d25eacd60",
+   "provenance": {
+    "repo": "organized-experiment-idempotent-payments-lab",
+    "sha": "7e9832bab90cba8b26fffebb884edc0a7397cee0",
+    "path": "docs/learning/concepts-demonstrated.md",
+    "lines": {
+     "start": 1,
+     "end": 120
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "DESIGN IT — [senior] containing a client release that defeated idempotency (organized-experiment-idempotent-payments-lab, docs/learning/concepts-demonstrated.md). Scenario: mobile release 4.1 shipped on a Thursday and builds a fresh idempotency key inside its Pay handler, so every tap, and every automatic retry after a slow response, carries a new key; by Sunday support has logged 214 double-charge complaints out of roughly 31,000 mobile checkouts, 60% of mobile users are already on 4.1, and app-store review of a fix takes two days; refunds and card disputes can arrive for up to 120 days after a charge. Write your design before you look: why the server accepted every one of those taps, how you find all the duplicates rather than only the ones who complained, a server-side defense that does not depend on the key the client sends, how long idempotency records and their link to the payment must live, and the runbook for refunding a confirmed duplicate safely. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "keyPoints": [
+      {
+       "text": "[w3] Why every tap went through: the service demands only that the header is present and that a key it has seen before comes with the same body; a value it has never seen goes straight to the insert. A client that invents a key per tap therefore buys one payment per tap, and the shipped web client already behaves that way, so the protection is exactly as strong as the caller's key discipline.",
+       "quote": "the browser hook mints a new key per call",
+       "cite": {
+        "path": "src/services/paymentService.ts",
+        "lineStart": 62,
+        "lineEnd": 84
+       }
+      },
+      {
+       "text": "[w3] Find duplicates by what the payments look like, not by who complained: same owner, same amount and currency, same description, created within a couple of minutes of each other, neither failed. The Payment table is indexed on (ownerUserId, createdAt), so the search per owner is a short range read; the description sits inside the metadata JSON, so it is compared after the range read, not indexed.",
+       "cite": {
+        "path": "prisma/schema.prisma",
+        "lineStart": 138,
+        "lineEnd": 164
+       }
+      },
+      {
+       "text": "[w3] Take the key out of the client's hands: create a checkout row on the server when the payment sheet opens and make confirming it idempotent on that row's id (or derive the key from the caller and that id), so no client bug can turn one checkout into two charges. Keep a short-window lookalike check in the create path as a backstop that answers 'this looks like a repeat' instead of charging again. Today the only inputs to the dedupe are a hard-coded route string, the client's key and a hash of the body.",
+       "cite": {
+        "path": "src/services/paymentService.ts",
+        "lineStart": 66,
+        "lineEnd": 68
+       }
+      },
+      {
+       "text": "[w2] Retention has two horizons: the full record (with its stored response) must outlive the longest a client may keep retrying, such as a phone that flushes its queue after a weekend offline, while the link from key to payment must outlive the 120-day refund and dispute window, because that link is the proof that a charge was a repeat. The completed record already stores the payment's resource type and id beside the response; today nothing ever deletes a record.",
+       "quote": "no TTL or cleanup — records live forever",
+       "cite": {
+        "path": "src/repositories/idempotencyRepository.ts",
+        "lineStart": 41,
+        "lineEnd": 62
+       }
+      },
+      {
+       "text": "[w3] The refund runbook goes through the guarded refund path exactly once per confirmed pair: wait until both payments read SUCCEEDED locally (the guard refuses a refund on anything else), refund the full amount of the one being reversed, and name the kept payment in the refund reason so the pairing stays in the audit trail. The refund route accepts no idempotency key, so the job must look for an existing refund on that payment before it issues one.",
+       "cite": {
+        "path": "src/app/api/payments/[paymentId]/refund/route.ts",
+        "lineStart": 11,
+        "lineEnd": 17
+       }
+      },
+      {
+       "text": "[w2] Contain before the fixed app ships: with two days of store review ahead, the server has to act now, for example a minimum-version gate or a flag that routes 4.1's Pay through the lookalike check. The only double-submit guard the existing UI has is disabling the button while the request is pending, which does nothing for a retry fired after a timeout.",
+       "cite": {
+        "path": "src/components/payments/PaymentCreateForm.tsx",
+        "lineStart": 110,
+        "lineEnd": 116
+       }
+      },
+      {
+       "text": "[w1] Nothing the create path records names the client: the creation event stores amount, currency and owner, so the blast radius of 4.1 has to be estimated from the lookalike scan. Record the client version and the key on each payment so the next incident is measured, not inferred from complaints.",
+       "cite": {
+        "path": "src/services/paymentService.ts",
+        "lineStart": 119,
+        "lineEnd": 132
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "PRE-MORTEM — the remedies, a month on: the auto-refund job reaches a duplicate whose confirmation has not been applied yet; a new 48-hour expiry deletes a record while a phone that was offline over a long weekend is still retrying its original request; the lookalike window turns away a parent buying the same two tickets again for a second child; the auto-refund job times out and its scheduler starts it again over the same 26 pairs while the first run is still going; and one refund lands on the payment whose order already shipped. What breaks, how would you notice, and what is the repair?",
+     "keyPoints": [
+      {
+       "text": "[w3] An unconfirmed duplicate still reads PENDING locally, and the refund guard turns away anything that has not reached SUCCEEDED, so the job fails on exactly the newest repeats. Treat that refusal as 'not yet' rather than 'done': keep the pair queued until both payments are settled, alert on pairs that stay unsettled, and never mark a pair handled because its refund was refused.",
+       "cite": {
+        "path": "src/lib/domain/paymentStateMachine.ts",
+        "lineStart": 50,
+        "lineEnd": 57
+       }
+      },
+      {
+       "text": "[w3] Once the record has expired, the late retry is indistinguishable from a first request: the lookup by route and key finds nothing and the create runs again, correct by the server's rules and a second charge for the customer. Set the expiry from the longest retry the client may attempt, make the client stop retrying well before it, and let the lookalike check cover anything older.",
+       "cite": {
+        "path": "src/repositories/idempotencyRepository.ts",
+        "lineStart": 11,
+        "lineEnd": 20
+       }
+      },
+      {
+       "text": "[w2] The lookalike check cannot tell a repeat tap from a deliberate second purchase: the create body carries only amount, currency, description, an optional owner and the simulation mode, with no basket or line-item identity to tell the two apart. Ask instead of refusing ('you paid this 40 seconds ago; pay again?') with an explicit override the client sends back, keep the window short, and track the override rate; a high rate means the window is too wide.",
+       "cite": {
+        "path": "src/lib/validation/paymentSchemas.ts",
+        "lineStart": 16,
+        "lineEnd": 22
+       }
+      },
+      {
+       "text": "[w2] Run one after the other, the second job's attempt is harmless: a fully refunded payment has left SUCCEEDED and is refused. Run side by side, the guard does not save you, because the refund path reads the payment and the refunded total before its transaction opens, so both runs can approve the same full refund. The job needs a single-runner rule and a per-pair marker written before it refunds.",
+       "cite": {
+        "path": "src/services/refundService.ts",
+        "lineStart": 25,
+        "lineEnd": 36
+       }
+      },
+      {
+       "text": "[w2] 'Refund the later one' is the wrong rule when the earlier order is the one that shipped: choose by fulfilment, which the payment row knows nothing about, so the pairing must be checked against the order system first. Because the refund reason is written into the refund-requested event, a reason naming the kept payment lets support see afterwards which of the pair survived.",
+       "cite": {
+        "path": "src/services/refundService.ts",
+        "lineStart": 47,
+        "lineEnd": 60
+       }
+      },
+      {
+       "text": "[w1] The automated job must act as a named service identity holding the refund permission, which only the OPS and ADMIN roles carry; borrowing a human login writes that person's email into every refund event and blurs the audit trail.",
+       "cite": {
+        "path": "src/lib/permissions.ts",
+        "lineStart": 20,
+        "lineEnd": 37
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "TRADE-OFF HANDBACK — defend your incident fixes against the alternatives: keys the server derives from its own checkout state versus keys the client sends; keeping idempotency records for a day versus for a month or more; refunding detected duplicates automatically versus queueing them for a person; refusing a suspected repeat outright versus asking the buyer to confirm it; and fixing the client versus defending on the server. For each, say what you bought, what it cost, and which fact of the incident decided it.",
+     "keyPoints": [
+      {
+       "text": "[w3] Server-derived keys survive any client bug, since a second confirmation of the same server-side checkout cannot become a second charge; they cost an extra row and round trip per checkout and an API change every client has to adopt. Client keys are free and standard and fine for disciplined callers, but release 4.1 showed they fail silently, and the failure mode is the one the doc warns about.",
+       "quote": "Retries create duplicate charges or ambiguous API behavior."
+      },
+      {
+       "text": "[w3] A day of retention keeps the table small and covers ordinary retries, but forgets the key long before a refund or dispute question is asked; a month or more costs storage and a cleanup job, and most of each row is the stored response. Split the two: keep the full record for the replay horizon and a slim key-to-payment link for the dispute horizon.",
+       "cite": {
+        "path": "prisma/schema.prisma",
+        "lineStart": 121,
+        "lineEnd": 136
+       }
+      },
+      {
+       "text": "[w2] Automatic refunds close complaints in minutes and reach the duplicates nobody reported, but a false match reverses a real purchase and money once returned is hard to recover; a review queue is slower and spends staff time, yet catches the deliberate repeat. Here a refund is marked succeeded in the same transaction that creates it, so there is no later step at which a person could still stop a wrong one. Refund automatically only exact matches seconds apart, and queue the rest.",
+       "cite": {
+        "path": "src/services/refundService.ts",
+        "lineStart": 62,
+        "lineEnd": 76
+       }
+      },
+      {
+       "text": "[w2] Refusing a suspected repeat stops the money at once but blocks honest repeat buyers and sends them to support; asking them to confirm keeps the purchase possible at the cost of a step and a client change. The service already answers key conflicts with distinct 409 codes, so a separate 'probable repeat' code lets clients show the prompt instead of an error.",
+       "cite": {
+        "path": "src/services/paymentService.ts",
+        "lineStart": 70,
+        "lineEnd": 83
+       }
+      },
+      {
+       "text": "[w2] The client fix (a key created once per checkout and reused on retries) removes the cause, but takes days to ship and old versions linger for months; the server-side check works at once for every client, at the cost of false positives and an extra query on every create, which the owner-and-time index keeps cheap.",
+       "cite": {
+        "path": "src/hooks/usePaymentActions.ts",
+        "lineStart": 18,
+        "lineEnd": 35
+       }
+      }
+     ]
+    }
+   ],
+   "set": "c"
+  }
+ ]
+}
