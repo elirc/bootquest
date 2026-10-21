@@ -1094,3 +1094,94 @@ resolved); quiz variety `concept` and flashcard shape `hand-authored`;
   server/src/runners/http/runner.test.ts:189, not new surface; the six g2-brief--javabootcamp
   packs' "DESIGN IT" Q1 prompts are BY DESIGN (routing keys on the prompt prefix — they are the
   6 javabootcamp designItems).
+- **spaced-repetition wave — DONE (2026-10-21):** retake + daily-rep content on the highest-value
+  interview topics, zero shared/factory/server-src edits (no estate restamp). 15 NEW alternate
+  explain-back sets (EB packs 170 → 185, strict pins 629): 9 DESIGN IT set-B (dotnet-drop GC +
+  blob migration; netslack offline push + badges; netcalendy round-robin pool + reschedule
+  storm; dotnet-stripe backlog-drain day; w22 webhook outage + redelivery flood; support-desk
+  outbox fairness at 10M rows; bazaar personalized price groups vs the page cache; opusorganize
+  cached values across deploy/rollback; zz1 enterprise SSO/SCIM + deprovisioning), 2 set-C
+  (payments-lab client-broke-idempotency retro; grok-build-multitenant noisy neighbor + the
+  cache-key tenancy near-miss — third siblings verified supported end-to-end: SET_ID regex,
+  pairwise guard vs both siblings, ebSetGate rotates A→2d→B→2d→C), and 4 fundamentals set-B
+  (netgum crash recovery + remedies menu; zz8 the client's seat/retries; ww19 the schema at 40M
+  rows; organized-build-analytics operating the token system). designItems pin 47 → 58
+  (ladder-real.test.ts:133); designRepos 29 unchanged. Quiz layer (doctrine wave): 6 packs
+  +88 quizzes/+45 flashcards/+86 after-notes (bazaar 12→28q/3→11fc, dotnet-stripe 13→29/3→11,
+  relay 12→26/4→11, temporal-lite 12→26/4→11, w22 12→26 hand/4→11 [pack 18→32 with the 6
+  generator quizzes], meterforge-upskilling 14→28/4→11; all old items byte-identical; relay and
+  temporal-lite re-seeded with exactly their historical quarantines). sysdrills wave 3 (62→78)
+  recorded in its own bullet above. Orchestration: 3 Fable architects → 7 Opus implementers in
+  selective clones → 3 Fable reviewers.
+  - Cross-stream discipline: quiz keys were routed around each same-repo EB set's PROMPT
+    territory (not just current key points) because alternates were authored in parallel; the
+    integrated-tree leak lint is the authoritative check, and a flagged key is fixed on the
+    QUIZ side. Author-flagged merge-time borderlines: bazaar z14/z28, dotnet-stripe q15, w22
+    q23/q26, meterforge q19/q22/q23, temporal-lite q17.
+  - Accepted prompt-demanded overlaps (token guard passes all; EB_LEAK_EXEMPT still empty):
+    dotnet-drop-b q1.kp6+q2.kp1+q3.kp1 vs a899e7c8; netgum-b q1.kp1 vs f4bc33fb+0808a7c4;
+    netcalendy-b q2.kp5 vs 18a1959f; payments-c q1.kp1 vs bd1f7bad, q2.kp4 vs 4f28e0fc+88e7c3e8;
+    zz8-b q2.kp2 vs 2b15c1a5, q2.kp3 vs 7c0d2daf, q1.kp4 vs 3280b128; support-desk-b q2.kp3 vs
+    4672d6a3; w22-b q2.kp1 vs bab4a993; zz1-b q1.kp4+q3.kp1 vs 2fd26dfb, q2.kp3 vs 778a4c41,
+    q2.kp4 vs 7ce569b5; obanalytics-b q2.kp3 vs ca65fe8d, q2.kp5+q1.kp3 vs be4c9140;
+    opus-caching-b q1.kp6 vs fa5e3705, q3.kp3 vs c9912c05. Sibling-echo acceptances (chapter
+    doctrine the prompts demand, worded fresh) are listed per set in the wave ledger; the one
+    deliberately identical cite span is dotnet-stripe-b's BillingStore.cs:229-255 (instructed).
+  - Code-truth corrections made while authoring (sets state the CODE): support-desk claim query
+    is INDEX-served — the 10M-row slowdown is exhausted-row churn, not a full scan; w22's sweep
+    never writes payment statuses (scenarios use operator hand-advances); netgum has no buyer
+    cancel (set-B Q3 supposes one is added).
+  - Upstream findings (owner follow-ups; mirrors untouched; verified at the pins):
+    - w22: LOST-UPDATE race in the webhook transition — payment read outside the transaction
+      (webhookService.ts:45), move checked against that snapshot (:87-88), unconditional update
+      by id (paymentRepository.ts:105-124): two concurrent events for one payment can both pass;
+      reconciliation has NO schedule (admin POST only); MISSING_WEBHOOK_DELIVERY fires only at
+      zero delivery rows so queued-but-failed deliveries file as STATUS_MISMATCH; flow-traces.md
+      :27-28/:39-40 order wrong (guard runs before body parse); the reason==="test" refinement
+      is unreachable.
+    - dotnet-drop: blobs mapping has NO concurrency token (users/file_nodes have one) so
+      RefCount loses increments; RemoveReference and IBlobStorage.DeleteAsync are never called
+      (no blob collection at all); upload_chunks rows never deleted; a crash between
+      CompleteUpload.cs:85/:86 orphans a Completed session's chunks forever (janitor selects
+      Open only); blob bytes written before commit; janitor deletes files before Expired saves;
+      thumbnails stored with no blobs row.
+    - dotnet-stripe: PaymentWorker loop has no per-job try/catch — one exception ends the
+      worker; /api/health is a constant ok; repeated Pay on an Open invoice adds a Pending
+      payment + job each time; webhook retry has no jitter; events carry no occurrence time.
+    - netgum: 02-CONCEPTS.md:26's BeginTransactionAsync recipe throws under EnableRetryOnFailure
+      (InvalidOperationException → 409); :27's CHECK-constraint claim is false for this code's
+      in-memory decrement (both racers write 0, never −1); SaveChangesAsync clears domain
+      events without publishing (OrderPaidEvent never delivered); DbUpdateException /
+      DbUpdateConcurrencyException surface as 500.
+    - netslack: no join/invite routes exist (membership only via create or posting in a public
+      channel); MessagePosted domain event raised but never dispatched; Message.Edit has no route.
+    - netcalendy: domain events published after commit but no INotificationHandler exists;
+      ListByHostAsync has no status filter (counts include cancelled); no reassign/reschedule;
+      availability rules have no date exceptions.
+    - organized-build-analytics: frontend refreshSession has NO caller and apiFetch has no
+      401→refresh path — sessions effectively end at the 15-minute access expiry; unknown email
+      short-circuits before bcrypt (timing enumeration); no trust proxy + per-IP process-local
+      Map limiter (one shared bucket behind an LB, no auth-specific budget, 429 labeled
+      FORBIDDEN); JWT secrets min(10); no key id → graceful rotation impossible.
+    - grok-build-multitenant: /health runs SELECT 1 through the shared Prisma pool (tenant
+      saturation ejects healthy instances); no API rate limiting beyond the login Map.
+    - bazaar: InMemoryTagIndex.detach scans every tag's set per key (mass invalidation costs
+      keys × tags); storefront-security allows en-GB while i18n ships only en-US/fr-FR;
+      ADR-0010's status line is stale (deny-by-default combination enforcement already shipped,
+      discounts.ts:44-50).
+    - relay: ADR-0014:19-21/:42-43's "replay physically cannot double-bill" is wrong — a live
+      replay creates a fresh run id (relays.ts:169-173) so the (runId, stepId) guard does not
+      apply; meterRun/quotaState/UsageRecord are wired nowhere at the pin (metering and the
+      soft-warn/hard-pause quota are unimplemented).
+    - zz8: AppError.details is never passed (no machine-readable error codes); unseen config →
+      404 while unseen manager/org-unit → 400; a cycle closed mid-flight reports 404; GET
+      /api/employees never passes search; no single-job GET and the job list caps at 20.
+    - ww19: WorkflowTask rows are never deleted (contradicts the workflow-engine-service.ts:185
+      comment).
+    - support-desk-crm: no code deletes OutboxEvent rows; no per-tenant pending index.
+    - zz1: jobService.ts:83-90 makes the import creator the owner of every imported contact
+      without checking membership status (extends the §8 forged-context finding).
+    - dotnet-stripe guide docs2/03.02:65-66 lists an impossible crash state ("usage billed but
+      no invoice" — the invoice is saved BEFORE usage is stamped, BillingEngine.cs:82-83).
+  - Deprioritized alternates recorded for a future wave: meterforge-upskilling, masteropen,
+    harbor, scedulingpyjs/umami/cal-com/search-indexer/icms, atlas set-B candidates.

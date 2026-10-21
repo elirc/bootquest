@@ -130,7 +130,7 @@ describe.skipIf(!HAVE_CHECKOUT)('W7 real ladder content end to end (temp DB, no 
     // ordinary explain-back set's repo is a campaign quest -> linked for display
     const eb = l.units.filter((u) => u.family === 'explain-back');
     const designItems = ebItems.filter((i) => /^DESIGN IT\b/.test(i.questions[0]!.prompt));
-    expect(designItems.length).toBe(47); // 6 javabootcamp + 16 sysdesign-wave + 8 second-scenario + 8 set-B alternates + 9 fundamentals-wave primaries
+    expect(designItems.length).toBe(58); // 6 javabootcamp + 16 sysdesign-wave + 8 second-scenario + 8 set-B alternates + 9 fundamentals-wave primaries + 11 spaced-repetition alternates
     const designRepos = [...new Set(designItems.map((i) => i.provenance.repo))].sort();
     expect(designRepos).toContain('javabootcamp');
     expect(designRepos.length).toBe(29);
