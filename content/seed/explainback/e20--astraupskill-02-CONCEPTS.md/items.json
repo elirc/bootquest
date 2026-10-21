@@ -1,0 +1,206 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "e20--astraupskill-02-CONCEPTS.md",
+ "items": [
+  {
+   "key": "seed:explainback:e20/explain-back/9aab2288c3fecdf0",
+   "provenance": {
+    "repo": "e20",
+    "sha": "134a82ab8b36a81e4c6631191e23ab8409b8f784",
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 1,
+     "end": 69
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "Walk through what e20's server does with an edit request such as PUT /customers/:id: which handler serves it, the exact shape the body must have, the order in which the request is checked and the status each failed check produces, what a successful edit does to fields the body leaves out, and what protects the stored state if a check fails part-way through the handler.",
+     "keyPoints": [
+      {
+       "text": "[w2] One generic pair of routes serves all eight master and project collections: PUT /<collection>/:id and DELETE /<collection>/:id both pass the body to editMaster, the delete with a remove flag.",
+       "cite": {
+        "path": "src/app.ts",
+        "lineStart": 151,
+        "lineEnd": 178
+       }
+      },
+      {
+       "text": "[w2] An unknown collection is a 404, and the role check comes before anything is parsed: company_admin or one of the collection's own roles (sales_user for customers), otherwise 403.",
+       "cite": {
+        "path": "src/domain/erp-service.ts",
+        "lineStart": 2105,
+        "lineEnd": 2157
+       }
+      },
+      {
+       "text": "[w3] The body is a strict envelope: a positive integer version plus data, with any other top-level key rejected as a validation error (400).",
+       "cite": {
+        "path": "src/domain/erp-service.ts",
+        "lineStart": 2158,
+        "lineEnd": 2164
+       }
+      },
+      {
+       "text": "[w3] The version comparison runs before the new data is validated against the collection schema, so a stale edit is answered 409 even when its data would also have been invalid.",
+       "cite": {
+        "path": "src/domain/erp-service.ts",
+        "lineStart": 2176,
+        "lineEnd": 2193
+       }
+      },
+      {
+       "text": "[w3] A successful PUT is a full replacement: every field except id, companyId, createdAt, updatedAt, createdBy and version is deleted, the validated payload is assigned, the version goes up by one and updatedAt is stamped; a field left out of data is gone, not kept.",
+       "cite": {
+        "path": "src/domain/erp-service.ts",
+        "lineStart": 2203,
+        "lineEnd": 2218
+       }
+      },
+      {
+       "text": "[w2] One rule runs after the record has already been rewritten: a customer or supplier left without a code throws only after the new values and version were assigned.",
+       "cite": {
+        "path": "src/domain/erp-service.ts",
+        "lineStart": 2215,
+        "lineEnd": 2223
+       }
+      },
+      {
+       "text": "[w3] That is safe because every route handler is wrapped in the store's access call, a write transaction for any method other than GET and HEAD, so a throw anywhere in the handler rolls the whole state back.",
+       "cite": {
+        "path": "src/app.ts",
+        "lineStart": 39,
+        "lineEnd": 47
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "Explain the workbench client's side of the edit contract: what it sends for a create, an edit and a delete, what happens to the user's unsaved inputs when a save is refused as a conflict or because the session has lapsed, how the user gets back to a saveable state after a conflict and why that path must be manual, and how the client treats a write whose response never arrived.",
+     "keyPoints": [
+      {
+       "text": "[w2] Every call carries the bearer token and the x-company-id of the company chosen for the session.",
+       "cite": {
+        "path": "public/workbench.js",
+        "lineStart": 185,
+        "lineEnd": 200
+       }
+      },
+      {
+       "text": "[w2] A create is a POST of the bare data; an edit is a PUT of {version, data} with the version the editor was opened at; a delete is a DELETE carrying {version}.",
+       "cite": {
+        "path": "public/workbench.js",
+        "lineStart": 562,
+        "lineEnd": 591
+       }
+      },
+      {
+       "text": "[w3] The editor closes only after a save succeeds, so when the server refuses the save (a 409 included) the draft stays on screen untouched.",
+       "cite": {
+        "path": "public/workbench.js",
+        "lineStart": 562,
+        "lineEnd": 575
+       }
+      },
+      {
+       "text": "[w3] Getting back in sync is a deliberate user action: reloading fetches the current list and replaces the editor with the saved record only when the user asks for it.",
+       "quote": "Loading is an explicit replacement of the draft."
+      },
+      {
+       "text": "[w3] Re-fetching and resubmitting the draft automatically under the new version would make the version check decorative while still overwriting the other editor's work.",
+       "quote": "Do not automatically fetch and resubmit B's changes with version 5"
+      },
+      {
+       "text": "[w2] A 401 reopens the sign-in panel with a notice that the draft is still available.",
+       "cite": {
+        "path": "public/workbench.js",
+        "lineStart": 218,
+        "lineEnd": 228
+       }
+      },
+      {
+       "text": "[w2] A save is refused on the client unless the signed-in user and company match the ones the draft was opened under, so signing back in as someone else cannot carry the draft across.",
+       "cite": {
+        "path": "public/workbench.js",
+        "lineStart": 544,
+        "lineEnd": 552
+       }
+      },
+      {
+       "text": "[w3] A write whose response was lost is marked uncertain, and the next save first reloads the list and makes the user confirm they checked for an already-saved record before retrying: a warning, not server-side idempotency.",
+       "cite": {
+        "path": "public/workbench.js",
+        "lineStart": 553,
+        "lineEnd": 561
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "Explain how e20 establishes who is calling and on behalf of which company on each request: what the bearer is and what the server keeps for it, how long it lives and whether use extends it, what the company header must satisfy, what happens when the URL names a record of some other company, and one surprising consequence for logging out. Then defend or indict how the API expresses its edit precondition and its conflicts in HTTP terms.",
+     "keyPoints": [
+      {
+       "text": "[w3] Login mints a random bearer and stores only its hash with the user id and an expiry fixed at 30 minutes after login; expired rows are pruned at login and live sessions are capped at 1,000 (429 beyond that).",
+       "cite": {
+        "path": "src/domain/erp-service.ts",
+        "lineStart": 219,
+        "lineEnd": 248
+       }
+      },
+      {
+       "text": "[w3] Every request re-authenticates from scratch: the bearer must be 64 lowercase hex characters, match an unexpired session and lead to a user who is still active; any miss is a 401.",
+       "cite": {
+        "path": "src/domain/erp-service.ts",
+        "lineStart": 250,
+        "lineEnd": 262
+       }
+      },
+      {
+       "text": "[w3] The company is never inferred from the user: the requested company id must be present and among the user's company ids, otherwise the request is forbidden; the result is the (user, company) context every service call receives.",
+       "cite": {
+        "path": "src/domain/store.ts",
+        "lineStart": 161,
+        "lineEnd": 174
+       }
+      },
+      {
+       "text": "[w2] Records are looked up by id and by the context's company together, so another company's record answers 404 exactly like a missing one and its existence is not revealed.",
+       "cite": {
+        "path": "src/domain/erp-service.ts",
+        "lineStart": 2535,
+        "lineEnd": 2549
+       }
+      },
+      {
+       "text": "[w1] Logout runs the full context check before deleting the session, so a logout without a valid company header is refused and the session stays alive until it expires.",
+       "cite": {
+        "path": "src/app.ts",
+        "lineStart": 112,
+        "lineEnd": 115
+       }
+      },
+      {
+       "text": "[w2] The precondition travels in the JSON body of both PUT and DELETE rather than in a conditional-request header, so generic HTTP tooling cannot see it and every delete must carry a body.",
+       "cite": {
+        "path": "src/app.ts",
+        "lineStart": 161,
+        "lineEnd": 177
+       }
+      },
+      {
+       "text": "[w2] A stale version is a 409, but so are business-rule refusals in the same handler (a stock-classification change after ledger history), so the status alone does not tell the client which kind of conflict it hit; HTTP's dedicated precondition status, 412, is not used.",
+       "cite": {
+        "path": "src/domain/erp-service.ts",
+        "lineStart": 2176,
+        "lineEnd": 2202
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}
