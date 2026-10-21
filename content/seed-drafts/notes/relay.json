@@ -342,6 +342,331 @@
     }
    ],
    "readMore": []
+  },
+  {
+   "id": "r04-the-other-adrs",
+   "target": "pack",
+   "phase": "before",
+   "title": "Beyond the engine core: storage, secrets, connectors, graphs and billing",
+   "body": "The second half of this quest reads the ADRs the first readings skipped. Together they explain where Relay keeps its records, what it tests against, how it protects the credentials it holds for other services, what every connector has to declare, how a branching relay executes, where large payloads live, how user code is sandboxed, how connectors change over time, and what the bill counts.\n\nA good order: 0002 (run state), 0003 (the mock vendor farm), 0004 (secret storage), 0005 (declarative connectors), 0010 (DAG execution), 0012 (payload offloading) and 0014 (what a task is), then 0011 (the sandbox) and 0015 (connector versioning).\n\nEvery ADR has the same shape: Context, Decision, Alternatives considered, Consequences. Read the Alternatives as carefully as the Decision. Most questions here ask why an option lost, and the reason is always written in the ADR itself. Before reading each Decision, write down the requirement from the Context that you think will decide it, then check yourself.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0002-run-state-in-postgres.md",
+     "lineStart": 12,
+     "lineEnd": 13,
+     "quote": "Ask the load-bearing question: **if Redis were flushed right now, what must survive?**"
+    },
+    {
+     "path": "docs/adr/0014-what-is-a-task.md",
+     "lineStart": 9,
+     "lineEnd": 10,
+     "quote": "That word is where engineering meets trust: it's a `count++` in the code and a line on an invoice a customer will scrutinize."
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/adr/0011-sandbox-threat-model.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The threat model and defense layers for user code steps."
+    },
+    {
+     "path": "docs/adr/0015-connector-versioning-certification.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "How connectors are versioned and certified."
+    }
+   ]
+  },
+  {
+   "id": "x-q13-pg-truth-redis-work",
+   "target": "seed:quests:relay/quiz/7ee9f2b058f305ce",
+   "phase": "after",
+   "title": "The job is a pointer; the Run row comes first",
+   "body": "ADR-0002 splits the two jobs a queue tempts you to merge. Postgres holds the truth (`Run`, `StepRun` and the `RunEvent` log); Redis holds only work. The BullMQ job's payload is just the run id, a pointer that says \"go execute run X\", and the Run row is written before the job is enqueued. A lost job therefore leaves a recoverable pending run, and losing the whole queue never loses history.\n\n- The full run state in Redis is the alternative the ADR rejected, because Redis is not a durable record.\n- Creating the Run row when a worker claims the job reverses the ordering the ADR requires: truth first, then work.\n- The job does not carry the step list, and the Run row is not deferred to the end of the run.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0002-run-state-in-postgres.md",
+     "lineStart": 17,
+     "lineEnd": 17,
+     "quote": "**Redis holds only work**: a job whose payload is a run *id*, a pointer that says"
+    },
+    {
+     "path": "docs/adr/0002-run-state-in-postgres.md",
+     "lineStart": 18,
+     "lineEnd": 18,
+     "quote": "The Run row exists *before* the job is enqueued"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q14-redis-not-filing-cabinet",
+   "target": "seed:quests:relay/quiz/9ccbb7d124e90a67",
+   "phase": "after",
+   "title": "Why the run cannot live in Redis",
+   "body": "The job-is-the-run design had real advantages: it is fast, it is one system, and there is no join between the queue and the record. ADR-0002 still rejects it, because a run is a business record that users, support and billing come back to days later. Redis is a conveyor, not a filing cabinet: it is memory-first and eviction-prone, so a flush or an eviction would erase run history.\n\n- Speed was never the objection; the ADR lists \"fast\" as a point in Redis's favour.\n- The missing join is also listed as an advantage of that option, not a cost.\n- Losing only queued work describes the accepted design, where Postgres keeps the runs. With run state in Redis, a flush takes the history with it.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0002-run-state-in-postgres.md",
+     "lineStart": 24,
+     "lineEnd": 24,
+     "quote": "But Redis is a conveyor, not a filing cabinet: it's memory-first, eviction-prone, and its"
+    },
+    {
+     "path": "docs/adr/0002-run-state-in-postgres.md",
+     "lineStart": 25,
+     "lineEnd": 26,
+     "quote": "A flush or eviction would erase run history — unacceptable."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q15-s01-end-persistence",
+   "target": "seed:quests:relay/quiz/92be431445907111",
+   "phase": "after",
+   "title": "The gap ADR-0002 admits in the S01 engine",
+   "body": "ADR-0002 decides where truth lives and sets an ordering rule: create the Run first, then enqueue the work. It is also honest about what it does not yet fix. The naive S01 engine persists run results only at the end of execution, not incrementally, so a crash in the middle strands the run and can fire side effects twice. Making the truth durable step by step is S07's job, and `worker.ts` carries a warning comment on the hole.\n\n- Enqueuing before creating the Run row is the opposite of the ordering the ADR prescribes.\n- Saving after each step is the later S07 design, not what S01 does.\n- Results are never kept in Redis; Redis holds only the run-id job.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0002-run-state-in-postgres.md",
+     "lineStart": 34,
+     "lineEnd": 35,
+     "quote": "The naive S01 engine still persists run results *at the end* of execution, not incrementally — a real gap (a crash mid-run strands the run and can double-fire side effects)."
+    },
+    {
+     "path": "docs/adr/0002-run-state-in-postgres.md",
+     "lineStart": 32,
+     "lineEnd": 33,
+     "quote": "truth first (create the Run), then work (enqueue)."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q16-envelope-kek",
+   "target": "seed:quests:relay/quiz/3153709a777e15d2",
+   "phase": "after",
+   "title": "Two key tiers: DEKs for tokens, one KEK for DEKs",
+   "body": "Envelope encryption uses two tiers of keys. Each org gets a DEK that encrypts that org's OAuth tokens with AES-256-GCM. The KEK is the single master secret, and it only ever encrypts DEKs. Each DEK is stored wrapped by the KEK, while the KEK itself lives in memory or a KMS and never in the database. That is why a database dump alone yields nothing usable: wrapped DEKs and ciphertext, with no key to open them.\n\n- Encrypting tokens directly with the master key is the rejected single-key design.\n- Storing the KEK next to the wrapped DEKs would hand an attacker both halves in one dump.\n- Per-connection keys were considered and rejected as more key material for marginal benefit; the tenancy boundary is the org.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0004-secret-storage.md",
+     "lineStart": 17,
+     "lineEnd": 17,
+     "quote": "a **KEK** (key encryption key), the single master secret, that only ever encrypts DEKs."
+    },
+    {
+     "path": "docs/adr/0004-secret-storage.md",
+     "lineStart": 19,
+     "lineEnd": 20,
+     "quote": "The KEK lives in memory / a KMS, **never in the database**."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q17-kek-rotation",
+   "target": "seed:quests:relay/quiz/a57b4686bc5ec8f2",
+   "phase": "after",
+   "title": "Rotating the KEK re-wraps DEKs and leaves tokens alone",
+   "body": "The requirement in ADR-0004's Context is to rotate the master secret without a multi-day re-encryption of every row. Envelopes meet it: because the KEK only encrypts DEKs, rotating it means unwrapping each org's small DEK with the old KEK and wrapping it again with the new one. The token ciphertext is untouched, and a test in `packages/secrets` proves it.\n\n- Re-encrypting every token in bulk is precisely the cost that sank the one-master-key alternative.\n- Regenerating the DEKs would force every token to be re-encrypted, which is the work envelopes avoid.\n- DEKs are not derived from the KEK; each is generated on the org's first secret and stored wrapped.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0004-secret-storage.md",
+     "lineStart": 35,
+     "lineEnd": 36,
+     "quote": "re-wrap each org's (tiny) DEK; token ciphertext is untouched (proven by a test)."
+    },
+    {
+     "path": "docs/adr/0004-secret-storage.md",
+     "lineStart": 25,
+     "lineEnd": 26,
+     "quote": "Simpler, but rotating that key means re-encrypting every token in the system"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q18-idempotency-at-registration",
+   "target": "seed:quests:relay/quiz/2c16a496dbce90cf",
+   "phase": "after",
+   "title": "A missing idempotency strategy stops the connector at boot",
+   "body": "ADR-0005 makes the idempotency strategy a required field of every action: `vendorKey`, `naturalKey` or `dedupeWindow`. The registry enforces it when it loads connectors, so an action without one fails registration at boot and the connector never becomes available. The ADR treats \"optional idempotency\" as a duplicate-charge incident waiting for S07's retries, and calls enforcement at registration cheap insurance.\n\n- Waiting for the first retry is too late: the side effect would already have fired twice.\n- Relay publish validation checks graphs, not connector declarations.\n- The vendor is not the gatekeeper; many vendors offer no idempotency at all.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0005-declarative-connectors.md",
+     "lineStart": 19,
+     "lineEnd": 19,
+     "quote": "An action without one fails registry registration at boot."
+    },
+    {
+     "path": "docs/adr/0005-declarative-connectors.md",
+     "lineStart": 33,
+     "lineEnd": 34,
+     "quote": "Making it mandatory (enforced at registration) is cheap insurance."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q19-vendor-farm-inconsistency",
+   "target": "seed:quests:relay/quiz/344e31dad0421807",
+   "phase": "after",
+   "title": "Why the mock vendors disagree with each other on purpose",
+   "body": "ADR-0003's vendor farm has three mock services (MailPost, SheetLite, ChatBox) that deliberately disagree: different auth headers, different pagination, different error shapes, one of which reports failure inside an HTTP 200. That inconsistency is the point. It is what real vendors are like, and it forces the Sprint 3 connector SDK to be a real abstraction. One generic mock with a uniform API would hide the very problem the course exists to teach, and would make the SDK look like pointless indirection.\n\n- Three mocks are not cheaper; the ADR lists maintaining three fake APIs as a real cost.\n- Real vendor sandboxes cannot be driven into specific failure modes, so they cannot replace the farm.\n- A tidy mock makes the SDK look unnecessary, not hard to build.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0003-vendor-farm.md",
+     "lineStart": 35,
+     "lineEnd": 37,
+     "quote": "Easy, but it would *hide* the exact problem the course exists to teach: absorbing vendor inconsistency. A tidy mock makes the connector SDK look like pointless indirection."
+    },
+    {
+     "path": "docs/adr/0003-vendor-farm.md",
+     "lineStart": 22,
+     "lineEnd": 23,
+     "quote": "This is realism, and it's what forces the Sprint 3 connector SDK to be a real abstraction rather than a wrapper over one tidy API."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q20-data-as-plugin",
+   "target": "seed:quests:relay/quiz/29161ecbe1b8a849",
+   "phase": "after",
+   "title": "Why connectors are data, not functions",
+   "body": "A connector written as a free function is maximally flexible, but the platform can only run it. A declarative definition can be described: the registry can introspect it to generate forms, validate it against build-time invariants, and version its interface cleanly. ADR-0005 puts it in one line: code-as-plugin can only be executed; data-as-plugin can be described. The zod schemas on each action do triple duty as runtime validation, UI form generation and docs.\n\n- Speed is not the argument, and nothing is compiled to code.\n- Declarative connectors still reach the network only through `ctx.http`.\n- The zod schemas are required, not inferred; they are what makes forms and validation possible.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0005-declarative-connectors.md",
+     "lineStart": 28,
+     "lineEnd": 29,
+     "quote": "introspect it (no auto-generated forms), can't validate it (no build-time invariants), can't version its interface cleanly. Code-as-plugin can only be *executed*; data-as-plugin can be *described*."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q21-kahn-dfs-oracle",
+   "target": "seed:quests:relay/quiz/491fa79bdc7bb1e9",
+   "phase": "after",
+   "title": "The recursive DFS stays as a failing oracle",
+   "body": "ADR-0010 executes a relay graph in Kahn's topological order: each node runs exactly once, and a node that never reaches in-degree 0 exposes a cycle as a side effect. The learner's first version, a recursive DFS with no visited set, was not deleted. It is kept in `dag-exec.test.ts` as the failing oracle, because it shows both classic graph-executor bugs: it runs a diamond's join node twice, and it loops forever on a cycle.\n\n- It is not a fallback executor, and it has no visited set at all.\n- It does not detect cycles; it loops on them.\n- It plays no part in publish-time validation, which lives in the API's relay routes.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0010-dag-execution.md",
+     "lineStart": 18,
+     "lineEnd": 19,
+     "quote": "is kept as the failing oracle (`dag-exec.test.ts`): it runs a diamond's join twice and loops on cycles."
+    },
+    {
+     "path": "docs/adr/0010-dag-execution.md",
+     "lineStart": 16,
+     "lineEnd": 16,
+     "quote": "each node runs **exactly once** (fixing diamonds)"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q22-validate-at-publish",
+   "target": "seed:quests:relay/quiz/1f594c4456881875",
+   "phase": "after",
+   "title": "Why the graph is also checked when it is saved",
+   "body": "ADR-0010 validates a DAG twice. At publish, the API checks that the graph is acyclic, has a single source, is reachable, and only references upstream nodes; a cycle sent through the raw API gets a 422. At run time, the executor's `topoOrder` guards again as defense in depth. The ADR considered keeping only the run-time guard and rejected it as a bad experience: it is correct, but the user discovers the broken graph when a run hangs, not when they save.\n\n- The run-time guard does catch cycles; that is why it is kept as the second layer.\n- Kahn's order runs each join once, at either layer.\n- Raw-API cycles are rejected at publish and still cannot run.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0010-dag-execution.md",
+     "lineStart": 38,
+     "lineEnd": 39,
+     "quote": "Correct but a bad experience — the user learns their graph is broken when a run hangs, not when they save."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q23-structured-conditions",
+   "target": "seed:quests:relay/quiz/f2fed2b9b6fd4de3",
+   "phase": "after",
+   "title": "Conditions as data, with no eval surface",
+   "body": "Branch conditions in ADR-0010 are built with a structured rule builder: a field, an operator and a value, authored as data. That data compiles to a tiny boolean AST, so the engine gains comparisons and and/or/not without ever evaluating user-written logic. Each new operator is a deliberate, logged addition. The ADR's slogan is to give users structure and keep one execution path.\n\n- User-typed logic strings were rejected as an injection surface inside Relay's own evaluator; the code sandbox is for code steps, not conditions.\n- A mini expression language is the same rejected option, and the template renderer only resolves paths.\n- Nothing is compiled to JavaScript; the AST is interpreted by one evaluator.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0010-dag-execution.md",
+     "lineStart": 26,
+     "lineEnd": 27,
+     "quote": "Conditions are a **structured rule builder** (field / op / value), authored as data, that compiles to a tiny boolean AST"
+    },
+    {
+     "path": "docs/adr/0010-dag-execution.md",
+     "lineStart": 32,
+     "lineEnd": 33,
+     "quote": "user-authored logic in *our* evaluator — an injection surface and a debuggability problem."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q24-offload-threshold",
+   "target": "seed:quests:relay/quiz/4ac698838f7948ab",
+   "phase": "after",
+   "title": "Why offloading starts at a threshold",
+   "body": "ADR-0012 moves a step's output bytes to object storage only when they exceed a threshold (64 KB by default); the `StepRun` row keeps a small `outputRef`. That fixes planted flaw #2, blobs bloating the OLTP runs table. Offloading every output was rejected because every read would then become a network fetch, even for tiny outputs, which is slow and needlessly complex. Below the threshold the common case stays a plain column read.\n\n- Small outputs are not dropped; they stay in the row and are read normally.\n- Postgres did store large JSONB inline; that is exactly how flaw #2 bloated the table.\n- Redis holds only work, never step outputs.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0012-payload-offloading.md",
+     "lineStart": 33,
+     "lineEnd": 34,
+     "quote": "Every read becomes a network fetch, even for tiny outputs — slow and needlessly complex. The threshold keeps the common (small) case a plain column read."
+    },
+    {
+     "path": "docs/adr/0012-payload-offloading.md",
+     "lineStart": 15,
+     "lineEnd": 16,
+     "quote": "Above a size threshold (default 64 KB), a step's output bytes go to **object storage** and only a small `outputRef` stays in the `StepRun` row."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q25-billable-task-count",
+   "target": "seed:quests:relay/quiz/66e095cdc4fee638",
+   "phase": "after",
+   "title": "Counting billable tasks under ADR-0014",
+   "body": "ADR-0014 defines a task as one successful action step and lists what is not billable: triggers, filter and condition nodes, steps in a halted branch, failed steps and retries. Its own example settles the attempts: a step that succeeds on attempt 3 is one task, not three. So this run bills exactly one task, for the action step that eventually succeeded.\n\n- Three tasks for three attempts would charge for retries, which the ADR excludes.\n- Counting the trigger and the filter would bill plumbing the user did not think of as work.\n- Five tasks combines both mistakes.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0014-what-is-a-task.md",
+     "lineStart": 15,
+     "lineEnd": 15,
+     "quote": "**A task = one SUCCESSFUL action step.**"
+    },
+    {
+     "path": "docs/adr/0014-what-is-a-task.md",
+     "lineStart": 17,
+     "lineEnd": 18,
+     "quote": "and **retries** (a step that succeeds on attempt 3 is one task, not three)."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q26-meter-attempts-rejected",
+   "target": "seed:quests:relay/quiz/77b902179ed15ecd",
+   "phase": "after",
+   "title": "Why Relay does not bill every attempt",
+   "body": "Metering every attempt has a real argument for it: it matches the vendor load Relay actually incurs. ADR-0014 rejects it anyway, because it charges customers for the platform's own unreliability. A step that failed twice while the vendor was down and then succeeded would bill three times, and customers can neither predict nor control that. Relay absorbs the retry and failure cost as a deliberate margin decision, in exchange for bills customers can reason about.\n\n- It would not undercount vendor load; it would count all of it.\n- Billing filters and triggers is a different rejected option, metering every step.\n- Hard-pausing without warning is the separate quota alternative; the chosen quota warns at 80%.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0014-what-is-a-task.md",
+     "lineStart": 27,
+     "lineEnd": 28,
+     "quote": "But it charges customers for *our* unreliability — a step that failed twice because the vendor was down, then succeeded, would bill 3×."
+    }
+   ],
+   "readMore": []
   }
  ]
 }
