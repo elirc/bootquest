@@ -1,0 +1,192 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "organized-experiment-tenant-search-indexer--docs-learning-concepts-demonstrated.md",
+ "items": [
+  {
+   "key": "seed:explainback:organized-experiment-tenant-search-indexer/explain-back/0cfc5c5854b20213",
+   "provenance": {
+    "repo": "organized-experiment-tenant-search-indexer",
+    "sha": "0c15ff9db8ebd08d79d93e3f5ec6d02ebdc4b8eb",
+    "path": "docs/learning/concepts-demonstrated.md",
+    "lines": {
+     "start": 1,
+     "end": 106
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "DESIGN IT — [mid] a search index that stays fresh while the data keeps changing (organized-experiment-tenant-search-indexer, docs/learning/concepts-demonstrated.md). Scenario: one internal help desk serves 40 business units as separate tenants; the largest holds 400,000 tickets and 6,000 directory entries; agents create or change about 30 tickets a minute across all tenants; product wants a changed ticket to be findable within 2 minutes; a cron calls the job endpoint once a minute; search shows 10 hits per page and people page as deep as page 50. Write your design before you look: what is written for the index with each ticket change and in which transaction, what a change event carries, how small incremental updates and a full rebuild coexist without a reader ever seeing a half-built index, how background work is grouped per tenant, how a query is matched and ranked and what that costs at 400,000 documents, how pages are cut and counted, how many tenants one cron tick can serve, and how a caller learns that results may lag. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "keyPoints": [
+      {
+       "text": "[w3] Make the index owed inside the change itself: the ticket insert and a sync-event row are written in one transaction, together with a staleness marker, the per-tenant job and the audit row, so a rolled-back ticket leaves no event and a committed one can never be missed by the indexer.",
+       "quote": "The business row and the event that describes it commit together."
+      },
+      {
+       "text": "[w2] Shape the search document once, at write time: the change path builds the denormalized document with a shared builder and stores that whole document as the event payload, so the indexer applies rows without re-reading the source tables.",
+       "cite": {
+        "path": "src/services/ticketService.ts",
+        "lineStart": 55,
+        "lineEnd": 68
+       }
+      },
+      {
+       "text": "[w3] Keep two paths into one index: incremental jobs apply pending events to the live copy, and a full rebuild writes a complete new generation next to it; one transaction then moves the tenant's active-generation pointer and deletes the old generation, and every query reads only the active generation, so a reader sees one whole index or the other.",
+       "quote": "Readers see either all of N or all of N+1."
+      },
+      {
+       "text": "[w2] Coalesce background work per tenant instead of one job per change: before queueing, the write looks for an incremental job of that tenant that is still QUEUED or RUNNING and reuses it, so a busy tenant has one job in flight rather than one per change.",
+       "cite": {
+        "path": "src/repositories/indexingJobRepository.ts",
+        "lineStart": 32,
+        "lineEnd": 48
+       }
+      },
+      {
+       "text": "[w3] Know what a query costs: the text vector and the rank are computed inside the query from title and body, filtered by tenant, active generation and not-deleted, so every search reads every document of the tenant's active generation. At 400,000 documents that calls for a stored vector column with a GIN index.",
+       "cite": {
+        "path": "src/repositories/searchDocumentRepository.ts",
+        "lineStart": 70,
+        "lineEnd": 83
+       }
+      },
+      {
+       "text": "[w2] Pages are cut with ORDER BY rank (or update time), LIMIT page size and OFFSET, and a second COUNT query re-runs the same conditions for the total. Deep pages make the database produce and throw away every earlier row, and results shift between page loads while the index changes; keyset paging on (sort time, id) is the fix for the time sort.",
+       "cite": {
+        "path": "src/repositories/searchDocumentRepository.ts",
+        "lineStart": 99,
+        "lineEnd": 114
+       }
+      },
+      {
+       "text": "[w2] Size the drain: one run-pending call takes at most `limit` jobs (default 5, maximum 20), oldest QUEUED first across ALL tenants. With 40 dirty tenants and one call a minute at the default, the last tenant waits about 8 minutes, far past a 2-minute target; raise the limit and frequency or run a real worker.",
+       "cite": {
+        "path": "docs/architecture/request-lifecycle.md",
+        "lineStart": 53,
+        "lineEnd": 55
+       }
+      },
+      {
+       "text": "[w2] Report freshness with every result page: the response carries the pending event count, the active and rebuilding generations and an is-stale flag, so the UI can say the results may lag instead of silently missing a just-changed ticket.",
+       "cite": {
+        "path": "src/services/searchService.ts",
+        "lineStart": 32,
+        "lineEnd": 45
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "PRE-MORTEM — the same help desk a month later: the largest tenant's rebuild takes 20 minutes while agents keep editing tickets; the cron and an operator both call the job endpoint in the same second; one rebuild dies halfway through its upserts; and a ticket is created and then has its status changed before the next job run. What breaks, how would you notice, and what is the repair?",
+     "keyPoints": [
+      {
+       "text": "[w3] Edits indexed while the rebuild runs are lost at the cutover: incremental jobs write to the generation that is still active, the rebuild's new generation holds the older snapshot, and the flip deletes the old generation; the event cursor already moved past those events, so the hit stays stale until the ticket changes again. Repair: record the last event id when the snapshot starts and replay later events into the new generation before the flip.",
+       "quote": "Changes processed incrementally *during* a rebuild go to N and are deleted at the flip (finding T4).",
+       "cite": {
+        "path": "docs/architecture/README.md",
+        "lineStart": 50,
+        "lineEnd": 50
+       }
+      },
+      {
+       "text": "[w3] A rebuild that dies halfway leaves a partial new generation and the tenant's rebuilding marker set; readers are unharmed because they still read the active generation, but every later rebuild request is refused as already in progress, so the tenant can no longer repair its index. The failure path must clear the marker for that generation and delete the partial documents.",
+       "quote": "A failed rebuild leaves `rebuildingGeneration` set forever (T3).",
+       "cite": {
+        "path": "src/services/indexingService.ts",
+        "lineStart": 26,
+        "lineEnd": 30
+       }
+      },
+      {
+       "text": "[w3] Two simultaneous calls both run the same jobs: the runner lists QUEUED rows and then marks each RUNNING with an update by id that has no status condition, so nothing makes the claim exclusive. Claim with a conditional update (only while still QUEUED, check that one row changed) or lock rows with SKIP LOCKED.",
+       "cite": {
+        "path": "src/repositories/indexingJobRepository.ts",
+        "lineStart": 61,
+        "lineEnd": 81
+       }
+      },
+      {
+       "text": "[w3] A ticket changed twice before the next run puts two rows with the same (tenant, type, entity, generation) key into one multi-row INSERT ... ON CONFLICT, which PostgreSQL rejects; the job fails, the events stay pending, and every later run reads the same batch and fails again, so the tenant's index stops moving. Collapse each batch to the newest event per entity before the upsert.",
+       "cite": {
+        "path": "docs/architecture/README.md",
+        "lineStart": 48,
+        "lineEnd": 48
+       }
+      },
+      {
+       "text": "[w2] A process that dies after marking a job RUNNING leaves it RUNNING forever: the runner only ever lists QUEUED jobs, and the per-tenant coalescing treats a RUNNING job as already queued, so no new incremental job is created for that tenant. Store a claim time and hand back jobs that have been RUNNING longer than a lease.",
+       "cite": {
+        "path": "src/repositories/indexingJobRepository.ts",
+        "lineStart": 36,
+        "lineEnd": 68
+       }
+      },
+      {
+       "text": "[w2] The consumer also reads only events with an id above its cursor, but ids are assigned at insert, not at commit: a slow transaction's lower id that commits after the cursor has moved is never read. Not-yet-processed alone is enough to find pending events; drop the cursor condition.",
+       "quote": "uses a cursor that can skip late-committing events"
+      },
+      {
+       "text": "[w2] You notice through the freshness signal: a wedged tenant's pending count never drops and its stale flag stays true, but nothing alerts on it. Alert on the age of the oldest unprocessed event per tenant and on FAILED or long-RUNNING jobs, not only on errors.",
+       "quote": "The signal works; nothing acts on it."
+      },
+      {
+       "text": "[w1] Once jobs can run twice, an older payload can overwrite a newer document: each row stores a source version, but the upsert overwrites title, body and version unconditionally. Make the update conditional on the incoming version being at least the stored one.",
+       "cite": {
+        "path": "src/repositories/searchDocumentRepository.ts",
+        "lineStart": 35,
+        "lineEnd": 50
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "TRADE-OFF HANDBACK — defend your index design against the alternatives: searching the source tables directly instead of a separate index, writing the index synchronously inside the ticket transaction, rebuilding in place instead of into a new generation, computing the text vector per query versus storing it, PostgreSQL full-text search versus a dedicated search engine, and running jobs inside an HTTP request versus a separate worker. For each, say what you bought, what it cost, and which requirement put you on that side.",
+     "keyPoints": [
+      {
+       "text": "[w3] A separate denormalized index keeps the read path a single tenant-scoped query over flat documents, paid for on the write side: every change also emits an event and queues work, and search becomes eventually consistent. Searching the source tables would be fresh but would put joins and text matching on the tables agents write to.",
+       "quote": "`createTicket()` does more work on write because it emits events and queues indexing."
+      },
+      {
+       "text": "[w3] Updating the index inside the ticket transaction would give read-your-writes, but every agent write would then pay for indexing and fail when indexing fails; the event row decouples them and costs the lag the freshness flag reports. The 2-minute target allows lag, so the decoupled path wins.",
+       "cite": {
+        "path": "src/services/ticketService.ts",
+        "lineStart": 40,
+        "lineEnd": 72
+       }
+      },
+      {
+       "text": "[w3] Rebuilding into a new generation costs double storage for the tenant during the rebuild and the extra work of catching up the edits made meanwhile; rebuilding in place is cheaper but lets readers see a half-written index.",
+       "quote": "Rebuilds overwrite live data or expose half-built indexes to readers."
+      },
+      {
+       "text": "[w2] Computing the vector per query needs no column, migration or backfill and can never disagree with the stored title and body, but every search scans the tenant's whole active generation; a stored vector with a GIN index makes search sub-linear and costs write overhead plus a migration. The size of the largest tenant decides.",
+       "quote": "a stored `tsvector` with a GIN index"
+      },
+      {
+       "text": "[w2] Staying on PostgreSQL keeps the index next to its state: the generation flip and the old-generation delete commit in one transaction, and tenant and generation filters are plain WHERE clauses. A dedicated engine buys better ranking and scale, but the cutover becomes an alias swap in another system and nothing commits atomically with your database.",
+       "cite": {
+        "path": "src/services/indexingJobRunner.ts",
+        "lineStart": 125,
+        "lineEnd": 129
+       }
+      },
+      {
+       "text": "[w2] Running jobs inside the run-pending request needs no extra process, but a large tenant's rebuild holds one HTTP request open for its whole duration and freshness depends on someone calling the endpoint; a worker process costs deployment and supervision and buys steady draining.",
+       "cite": {
+        "path": "docs/architecture/request-lifecycle.md",
+        "lineStart": 69,
+        "lineEnd": 69
+       }
+      },
+      {
+       "text": "[w1] Treat the tenant as the index's partition key, not an afterthought: every document, query and delete carries the tenant, because generation numbers repeat across tenants and a delete by generation alone would wipe other tenants' live documents.",
+       "quote": "every tenant starts at generation 1"
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}
