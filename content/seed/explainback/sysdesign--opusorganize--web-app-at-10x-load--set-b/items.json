@@ -1,0 +1,115 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "opusorganize--apprenticeship-curriculum-14-load-backpressure-timeouts.md--set-b",
+ "items": [
+  {
+   "key": "seed:explainback:opusorganize/explain-back/e3afb2af6734dcfc",
+   "provenance": {
+    "repo": "opusorganize",
+    "sha": "6a6e84522bd58c88ccec72421a15b8dbef797602",
+    "path": "apprenticeship/curriculum/14-load-backpressure-timeouts.md",
+    "lines": {
+     "start": 5,
+     "end": 76
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "DESIGN IT — [senior] doubling a ticketing app's capacity for a second venue (opusorganize, apprenticeship/curriculum/14). A 30,000-seat venue joins the platform next month and the planning number is twice today's peak. Today the API runs as 2 instances, each with a 10-connection database pool, against a Postgres that accepts at most 40 connections; the queue workers for order expiry and QR generation (3 of them, on Redis) open their own connections to the same database; the payment provider's p50 is about 0.9 s; door scanners at both venues and the provider's webhooks hit the same API as buyers. Write your migration plan before you look: what you re-measure first and against which baseline, how you re-derive pool sizes and connection totals when you add instances, how each hop's timeout budget changes when queues get longer, how admission limits are re-keyed for the new venue's buyers, scanners and webhooks, how worker concurrency and the backlog bound are re-sized for twice the orders, and what the go/no-go run looks like. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "keyPoints": [
+      {
+       "text": "[w3] Re-measure before re-sizing: take a fresh baseline of today's build on the machine the go/no-go run will use, and treat any earlier lab figures as relative only; every doubling decision is judged against that new baseline, not against remembered numbers.",
+       "quote": "They are relative, not absolute."
+      },
+      {
+       "text": "[w3] Throughput per instance is connections divided by how long each request holds one, so adding instances only multiplies the connection total against the database ceiling (2 x 10 today, 4 x 10 would consume all 40 and starve the workers and any admin or migration session); the plan budgets the total across API instances plus workers first, then sizes each pool.",
+       "quote": "checkout throughput is capped at a few per second per instance"
+      },
+      {
+       "text": "[w3] Timeouts are re-derived from the outside in: start at the client-facing deadline and give every inner hop a strictly smaller budget, re-checking that the database pool wait (Prisma's 2 s default) plus the provider timeout still fits now that doubled traffic makes those waits longer.",
+       "quote": "(2 s by default, per the M1 answer)"
+      },
+      {
+       "text": "[w2] Admission limits are re-keyed rather than just raised: the new venue's buyers get their own per-route, per-identity allowance, and each venue's scanners and the provider webhooks get one of their own, so a buyer surge at one venue cannot spend the door or webhook budget of either.",
+       "quote": "covers buyers, webhooks and scanners alike"
+      },
+      {
+       "text": "[w2] Worker concurrency is re-sized from the measured time per job and twice the order volume, with an explicit bound on how long the post-onsale backlog may take to drain; a single QR worker is the known way this backlog falls behind.",
+       "quote": "005 QR backlog at concurrency 1."
+      },
+      {
+       "text": "[w2] Steps whose cost grows with total traffic instead of per-tier traffic are found before launch: an order number computed by counting every order makes the second venue's buyers contend with the first venue's, so it is replaced by a sequence.",
+       "quote": "a sequence-based order number"
+      },
+      {
+       "text": "[w1] The go/no-go run changes one thing at a time and re-runs the same simulator scenario after each change, so a regression is attributable to the change that caused it.",
+       "quote": "against the same baseline"
+      }
+     ]
+    },
+    {
+     "prompt": "PRE-MORTEM — launch week of the second venue on a build where the team doubled the API from 2 to 4 instances without touching the per-instance pool size, raised the single global rate limit from 100 to 200 requests a minute, left the payment SDK's timeout at its documented default, started a second worker process with the same job handlers, and never looked at how order numbers are generated. Both venues put tickets on sale the same evening. What breaks first, how does it show, and what in your plan already prevents it?",
+     "keyPoints": [
+      {
+       "text": "[w3] Four instances at the old pool size open as many connections as the database accepts, so the workers and any new instance fail to connect while each API instance is no faster than before: hold time did not change, only the number of holders did.",
+       "quote": "One slow thing holds scarce resources"
+      },
+      {
+       "text": "[w3] Doubling one global number moves the failure instead of removing it: two venues' buyers can now take the whole larger allowance, and door scanning at an event already under way is refused along with them, because every caller still draws from one bucket.",
+       "quote": "One global rate limit, `max: 100, timeWindow: '1 minute'`"
+      },
+      {
+       "text": "[w3] A provider timeout longer than the request's own deadline inverts the budget: the client gives up first, but the server-side call keeps waiting and keeps its connection, so abandoned requests hold resources the retrying client then competes for.",
+       "quote": "The commonly cited defaults are the Stripe SDK at 80 s"
+      },
+      {
+       "text": "[w2] A second worker process doubles the job side's demand on the shared database pool: drained backlog turns into connection pressure on checkout unless jobs are given a pool or concurrency limit of their own.",
+       "quote": "separate pools per dependency or route class"
+      },
+      {
+       "text": "[w2] Doubled traffic through untouched retry layers shows up in the provider's bill and rate limits before it shows in the app's own counts, because the app records one success while the provider saw every attempt.",
+       "quote": "the invoice is about 4× the ledger because of layered retries"
+      },
+      {
+       "text": "[w2] Counting the whole order table to number each order gets slower as two venues' orders accumulate and conflicts with every concurrent reservation, so serialization aborts rise even on tiers that are not hot.",
+       "quote": "`generateOrderNumber`, which is `tx.order.count()` + 1"
+      }
+     ]
+    },
+    {
+     "prompt": "TRADE-OFF HANDBACK — defend your migration choices against the alternatives: scaling out instances vs shortening how long each request holds a connection, one shared deployment for both venues vs isolating the new venue's traffic, raising worker concurrency vs accepting a bounded catch-up window, Redis as a hard vs a soft dependency, and planning from an unrun load script vs a measured run. For each, say what you bought, what it cost, and which requirement put you on that side.",
+     "keyPoints": [
+      {
+       "text": "[w3] Scaling out buys throughput only while the database is not the scarce resource; shortening connection hold time raises what every existing connection can serve without asking the database for more, at the cost of code changes landing before the launch instead of a config change.",
+       "quote": "Find what holds connections longest."
+      },
+      {
+       "text": "[w3] Isolating the new venue (its own pools, limits or deployment) costs idle reserve capacity and a second thing to size, but buys a guarantee that one venue's onsale cannot make the other venue's door and webhook traffic wait in line.",
+       "quote": "and everything else queues behind it."
+      },
+      {
+       "text": "[w2] Raising worker concurrency drains the backlog sooner but moves the same work onto the database and the provider at the worst moment; a bounded catch-up window keeps the onsale fast and pays in delayed QR codes and expiries, which is acceptable only if the bound is stated and watched.",
+       "quote": "backlog catch-up"
+      },
+      {
+       "text": "[w2] Treating Redis as a soft dependency (degrade the cache or limiter when it struggles) keeps buyers served during the doubled load but can let more traffic through than planned; the queue cannot be treated that way, so the decision is made per use of Redis, not once.",
+       "quote": "Redis as a soft dependency"
+      },
+      {
+       "text": "[w2] A load script that has never been executed is a plan, not evidence: a measured run costs setup time before launch but is the only number the capacity plan may rest on.",
+       "quote": "The k6 skeleton has never run."
+      },
+      {
+       "text": "[w1] When the doubled run passes on errors but misses a latency target, shipping anyway is an explicit, written decision that states the miss rather than a silent pass.",
+       "quote": "and the answer says so"
+      }
+     ]
+    }
+   ],
+   "set": "b"
+  }
+ ]
+}
