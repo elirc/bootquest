@@ -1,0 +1,191 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "bazaar--docs-adr-0006-multi-layer-cache-coherence.md--set-b",
+ "items": [
+  {
+   "key": "seed:explainback:bazaar/explain-back/6c120c9b4f0d64c9",
+   "provenance": {
+    "repo": "bazaar",
+    "sha": "5dc2dd6e342b4eae57689ed5fa8a0d7ab9420b91",
+    "path": "docs/adr/0006-multi-layer-cache-coherence.md",
+    "lines": {
+     "start": 1,
+     "end": 22
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "DESIGN IT — [senior] personalized pricing on a cached storefront (bazaar, docs/adr/0006-multi-layer-cache-coherence.md). Scenario: the storefront introduces logged-in customer price groups — 12 of them (trade, wholesale, staff and so on) — across roughly 65,000 product and collection pages; today each page is cached whole at the CDN and in ISR, which is now wrong for any buyer who is signed in, and the CDN's purge API accepts about 2,000 keys a minute. Write your design before you look: where the page splits into a shared part and a per-group part (or whether the edge keys whole variants), how the group gets into a cache key without opening a hole, how many variants per page you allow and what keeps that number bounded, what a group-wide price change does given the purge cap, and how search results and checkout stay consistent with the price the buyer was shown. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "keyPoints": [
+      {
+       "text": "[w3] Whole-page caching rests on one premise: every buyer who asks for the page is owed the same bytes. A group price breaks that premise for signed-in traffic, and the house rule already says what follows: anything that differs per buyer is rendered dynamically unless you move the varying part out of the cached HTML or make the group part of the identity of the cached copy.",
+       "cite": {
+        "path": "docs/rendering-strategy.md",
+        "lineStart": 12,
+        "lineEnd": 17
+       }
+      },
+      {
+       "text": "[w3] The group enters the key as one more allow-listed, server-derived dimension. Today the key builder admits only a validated handle and the known locales and currencies, and keeps request headers and cookies out on purpose; a group id copied from a header or cookie would let any visitor choose a cheaper price list or mint unbounded keys, so resolve it from the verified session and check it against the known groups.",
+       "cite": {
+        "path": "apps/api/src/storefront-security.ts",
+        "lineStart": 7,
+        "lineEnd": 10
+       }
+      },
+      {
+       "text": "[w3] Keep cardinality bounded by splitting: 12 groups times today's 3 locales and 3 currencies is 108 whole-page copies per page (about 7 million for 65,000 pages, most never reused). Cache the shell per locale and currency as now and serve the price as a small per-group fragment; because the display string is produced from the locale and currency at presentation time, the fragment can carry minor units plus currency, so locale drops out of its key (12 x 3 = 36 per product).",
+       "cite": {
+        "path": "apps/storefront/src/product-view.ts",
+        "lineStart": 8,
+        "lineEnd": 15
+       }
+      },
+      {
+       "text": "[w3] A group-wide price change cannot be purged key by key under the cap: one group's copies of every page are 65,000 x 9 = 585,000 keys, about five hours at 2,000 a minute. Either carry the group's price-list revision in the fragment key (a new revision means new keys and old ones simply age out) or purge one group-level tag. The publisher today only knows product tags, collection tags and one product path, so a group dependency needs its own tag.",
+       "cite": {
+        "path": "apps/api/src/catalog-publisher.ts",
+        "lineStart": 8,
+        "lineEnd": 13
+       }
+      },
+      {
+       "text": "[w2] Checkout must look prices up by group: its validation port asks only for a variant's current price and rejects any line whose snapshot differs, so a cart filled at a trade price would be refused as a price change unless the lookup also takes the buyer's group, so that the amount charged is the amount the page displayed.",
+       "cite": {
+        "path": "apps/api/src/checkout.ts",
+        "lineStart": 10,
+        "lineEnd": 19
+       }
+      },
+      {
+       "text": "[w2] Search is the forgotten surface: its cache key is built from the store and the sorted query parameters only, so a cached result page that embeds prices would show one group's numbers to everyone. Cache the ranked id list shared and fill prices per group, or add the group to the search key for signed-in queries.",
+       "cite": {
+        "path": "packages/cache/src/policy.ts",
+        "lineStart": 12,
+        "lineEnd": 15
+       }
+      },
+      {
+       "text": "[w2] Give the new fragment layer a written audience and staleness bound before it ships, as every cached surface must have: its audience is one price group, not all buyers, and its tolerance should match the catalog's rather than inherit the shell's longer life.",
+       "cite": {
+        "path": "docs/adr/0002-caching-roadmap.md",
+        "lineStart": 22,
+        "lineEnd": 24
+       }
+      },
+      {
+       "text": "[w1] Ship it with counters: the new layer adds keys and invalidations, so its hit rate, miss count and number of keys invalidated per group edit must be visible from day one.",
+       "quote": "metrics must expose hits, misses, invalidated keys, and hit rate"
+      }
+     ]
+    },
+    {
+     "prompt": "PRE-MORTEM — launch week of group pricing on the same design: a CDN rule change strips the header that carried a signed-in trade buyer's group before requests reach the origin, a follow-up release adds per-group variants for collection pages and the CDN's object count jumps roughly tenfold while its hit ratio sinks, and the staff group gets a 15% markdown that must reach every product page within a minute through the 2,000-keys-a-minute purge API. What breaks, how do you see it, and what is the repair?",
+     "keyPoints": [
+      {
+       "text": "[w3] Silent fallback is how a group price leaks: the key builder maps any unknown or missing dimension to a default instead of refusing the request. Copy that habit for groups and a signed-in request whose group was stripped is keyed as the default; if the render read the trade price from the session anyway, that page now sits under the shared default key for every anonymous visitor. Key and render must read the group from one source, and a signed-in request with no resolvable group must bypass the shared cache, not fall back.",
+       "cite": {
+        "path": "apps/api/src/storefront-security.ts",
+        "lineStart": 7,
+        "lineEnd": 8
+       }
+      },
+      {
+       "text": "[w3] Checkout is both the guard rail and the alarm: because it reloads every line's price and throws when the reloaded value differs from the cart snapshot, nobody is charged a leaked price, and a sudden rise in those price-changed failures, split by group, is the fastest signal that pages are showing numbers buyers are not owed.",
+       "cite": {
+        "path": "apps/api/src/checkout.ts",
+        "lineStart": 15,
+        "lineEnd": 26
+       }
+      },
+      {
+       "text": "[w3] The markdown misses its minute: purging every staff copy key by key queues hundreds of thousands of purges behind a 2,000-a-minute cap, hours past the 60-second tolerance product and collection pages promise. Repair by switching to a revision-in-key or group-tag scheme; while the backlog drains, purge the most-viewed pages first and let checkout's reload hold the money line.",
+       "cite": {
+        "path": "apps/storefront/src/rendering-policy.ts",
+        "lineStart": 3,
+        "lineEnd": 4
+       }
+      },
+      {
+       "text": "[w2] More variants make every deploy colder: the deploy warmer takes a fixed head of 50 keys, which at 108 copies per page covers less than half of one product's variants, so a variant explosion means most groups meet a cold cache after each release. Shrinking what is keyed per group (the fragment) is the fix; a larger warm list only hides it.",
+       "cite": {
+        "path": "packages/cache/src/warming.ts",
+        "lineStart": 4,
+        "lineEnd": 11
+       }
+      },
+      {
+       "text": "[w2] Group-wide invalidation can get slow inside the data cache too: removing each invalidated key from the in-memory tag index walks every tag's key set, so a group edit that drops hundreds of thousands of keys costs keys times tags. Index keys by tag in both directions, or rely on revision-in-key so no mass detach happens.",
+       "cite": {
+        "path": "packages/cache/src/index.ts",
+        "lineStart": 53,
+        "lineEnd": 79
+       }
+      },
+      {
+       "text": "[w2] See the explosion before the bill: track key cardinality and per-layer hit ratio, not origin load alone, because a tenfold object count with a sinking hit ratio is the measurable sign that the keys vary on more than the content does.",
+       "cite": {
+        "path": "docs/sprints/sprint-06.md",
+        "lineStart": 21,
+        "lineEnd": 21
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "TRADE-OFF HANDBACK — defend your personalization design against the alternatives: computing the group price at the edge versus fetching per-group fragments from the origin, `Cache-Control: private` versus a shared cache entry keyed by price group for signed-in pages, the group in the key versus marking every signed-in response no-store, purging by group tag versus a price-list revision in the key, and leaving list prices on cached pages while the group price is applied only in the cart. For each, say what you bought, what it cost, and which requirement put you on that side.",
+     "keyPoints": [
+      {
+       "text": "[w3] Edge-computed prices keep shared HTML fast for everyone, but the edge needs each group's price table, which becomes one more copy of money data that can lag and one more target every price change must reach; origin fragments keep pricing in one place and pay a round trip per signed-in view. With 12 groups and frequent merchant edits, one source of price truth won.",
+       "cite": {
+        "path": "docs/cache-conventions.md",
+        "lineStart": 6,
+        "lineEnd": 6
+       }
+      },
+      {
+       "text": "[w3] A private response lives only in the buyer's own browser: it can never leak across buyers, but it gives the CDN no shared hits, so every signed-in first view costs the origin. A shared entry per group lets thousands of group members reuse one copy, at the price that a key bug leaks a price list across groups. Many members per group is what makes the shared entry pay.",
+       "cite": {
+        "path": "docs/adr/0004-storefront-rendering.md",
+        "lineStart": 8,
+        "lineEnd": 11
+       }
+      },
+      {
+       "text": "[w3] A segment key only works when the value depends on the group and not on the person: discount rules can already target named customers, and anything driven by such a rule is per-person, so it must be no-store or computed in the cart. No-store is correct by construction, and its cost is origin latency on every signed-in page view.",
+       "cite": {
+        "path": "apps/api/src/discounts.ts",
+        "lineStart": 12,
+        "lineEnd": 20
+       }
+      },
+      {
+       "text": "[w2] A group-tag purge is one call and keeps keys stable, but it depends on the CDN supporting tag purge and still makes every copy of the group cold at once; a revision in the key needs no purge at all and survives the cap, but it leaves old copies resident until their TTL and turns every group edit into a burst of cold fragments.",
+       "cite": {
+        "path": "docs/cache-conventions.md",
+        "lineStart": 3,
+        "lineEnd": 3
+       }
+      },
+      {
+       "text": "[w2] List prices on cached pages with the group price applied in the cart costs no cache change at all, since discount rules are re-evaluated when the buyer checks out; the bill is that a trade buyer browses at retail prices and only learns their real price in the cart, which defeats the point of group pricing for business buyers.",
+       "cite": {
+        "path": "apps/api/src/discounts.ts",
+        "lineStart": 69,
+        "lineEnd": 76
+       }
+      },
+      {
+       "text": "[w2] Whatever the page cache does, the money paths stay where they are: the cart and checkout never take a cached group price as truth, so every alternative above is a display trade-off, not a charging one.",
+       "quote": "Admin, cart, checkout, and inventory authorization tolerate zero staleness"
+      }
+     ]
+    }
+   ],
+   "set": "b"
+  }
+ ]
+}

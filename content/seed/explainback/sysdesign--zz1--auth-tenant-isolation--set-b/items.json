@@ -1,0 +1,175 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "zz1--docs-architecture-auth-and-tenant-isolation.md--set-b",
+ "items": [
+  {
+   "key": "seed:explainback:zz1/explain-back/5bb56fedde9f90d9",
+   "provenance": {
+    "repo": "zz1",
+    "sha": "a561c1b62f7d7ff9b445c7c15700f10b312d7a0f",
+    "path": "docs/architecture/auth-and-tenant-isolation.md",
+    "lines": {
+     "start": 1,
+     "end": 111
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "DESIGN IT — [senior] enterprise SSO and SCIM deprovisioning for a multi-tenant CRM (zz1, docs/architecture/auth-and-tenant-isolation.md). Scenario: an 8,000-user enterprise will sign only if its people log in through its own SAML/OIDC identity provider and are deprovisioned by SCIM; what sold the requirement was an incident at their previous vendor, where a terminated employee's session stayed usable for about 6 hours. Every other customer keeps today's sign-in, and a handful of consultants belong to the enterprise and to two smaller organizations as well. Write your design before you look: how identity-provider sign-in sits beside the existing sign-in and which organizations require it, how an identity from the provider is matched to (or creates) a user and a membership, just-in-time creation versus SCIM push, what a SCIM deactivation changes and how quickly it reaches a live session, and how leaving one organization leaves a person's other organizations untouched. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "keyPoints": [
+      {
+       "text": "[w3] Start from what sign-in is today: the demo route picks an identity from an email and nothing else, so SSO is not a second door beside a real one, it is the first real credential; for the enterprise the provider's assertion replaces the email selection, and the demo route must be refused in production.",
+       "quote": "There is no password or second factor anywhere in this flow."
+      },
+      {
+       "text": "[w3] SSO is an organization policy, not a user attribute: a person is one global user row (one per email) holding memberships in several organizations, so 'must use SSO' is enforced when a session is opened on a membership of the enterprise, and the same consultant can still open sessions for their other organizations the way those organizations allow.",
+       "cite": {
+        "path": "prisma/schema.prisma",
+        "lineStart": 200,
+        "lineEnd": 213
+       }
+      },
+      {
+       "text": "[w3] Matching is where account takeover hides: users are found by lower-cased email and email is unique across the whole system, so accept an assertion's email only for domains verified as the enterprise's, then record the provider's stable subject id and match on that from then on; an identity provider allowed to assert any address could otherwise sign in as another organization's user.",
+       "cite": {
+        "path": "src/services/authService.ts",
+        "lineStart": 15,
+        "lineEnd": 18
+       }
+      },
+      {
+       "text": "[w3] A SCIM deactivation flips that person's enterprise membership to DISABLED, a state the schema already has. Every request rebuilds the session from the database and the tenant guard refuses a membership that is not active, so the write ends their access on their very next request; this path needs no session store and no token change.",
+       "cite": {
+        "path": "src/lib/middleware/withTenantGuard.ts",
+        "lineStart": 17,
+        "lineEnd": 19
+       }
+      },
+      {
+       "text": "[w2] A SCIM delete cannot be a row delete: leads (and the other records) point at the membership that created them through required relations, so removing a membership that ever authored anything is refused by the database. Map delete to disable, plus a written policy for personal data.",
+       "cite": {
+        "path": "prisma/schema.prisma",
+        "lineStart": 362,
+        "lineEnd": 364
+       }
+      },
+      {
+       "text": "[w2] Just-in-time creation makes a membership on first sign-in and never hears about a departure, which is exactly the six-hour gap; SCIM push creates people ahead of their first login (an INVITED membership fits) and, more importantly, delivers the leaver signal.",
+       "cite": {
+        "path": "prisma/schema.prisma",
+        "lineStart": 45,
+        "lineEnd": 49
+       }
+      },
+      {
+       "text": "[w2] The SCIM endpoint is an integration with its own credential bound to one organization, not a staff session: the platform-admin guard is a separate scope used by only a few platform handlers, and nothing about provisioning should widen it.",
+       "cite": {
+        "path": "src/lib/middleware/withAuth.ts",
+        "lineStart": 36,
+        "lineEnd": 44
+       }
+      },
+      {
+       "text": "[w1] Each SCIM change writes the same organization audit event an admin's membership edit writes, with the previous and next status, so 'when exactly was this person cut off' has a recorded answer.",
+       "cite": {
+        "path": "src/services/organizationService.ts",
+        "lineStart": 222,
+        "lineEnd": 233
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "PRE-MORTEM — first quarter on SSO: the enterprise's identity provider is down for 90 minutes on a Monday morning; a SCIM deactivation for a sales rep arrives while the overnight CSV import that rep queued is still waiting to run; a consultant leaves the enterprise and the SCIM handler, written against the user table, disables the user record; and SCIM deprovisions the enterprise's last remaining organization admin. What breaks, how do you see it, and what is the repair?",
+     "keyPoints": [
+      {
+       "text": "[w3] The outage stops new sign-ins, not work in progress: requests are authorized from the app's own user and membership rows, rebuilt on each request, so people already signed in keep working and only those who need a new session are blocked. Keep a break-glass path for named enterprise admins (a non-provider credential with strong factors, audited and alerted), never a staff-wide bypass.",
+       "cite": {
+        "path": "src/lib/auth/session.ts",
+        "lineStart": 75,
+        "lineEnd": 92
+       }
+      },
+      {
+       "text": "[w3] The queued import still runs with the departed rep's authority: the job runner never re-reads the membership that created the import, builds its own context claiming an active admin, and makes the departed rep the owner of every imported contact. At run time, reload the creating membership and either stop or reassign the job when it is no longer active.",
+       "cite": {
+        "path": "src/services/jobService.ts",
+        "lineStart": 52,
+        "lineEnd": 91
+       }
+      },
+      {
+       "text": "[w3] Disabling the user row is a global switch: the user's status is checked while any session is being built, whichever organization it is for, so the consultant also loses the two organizations that never asked for it. A SCIM call from one organization may change only that organization's membership.",
+       "cite": {
+        "path": "src/lib/auth/session.ts",
+        "lineStart": 95,
+        "lineEnd": 97
+       }
+      },
+      {
+       "text": "[w2] Even done correctly, the consultant's current session still points at the disabled enterprise membership: it is loaded by its id with no status filter and is never swapped for another membership, so every organization route refuses them until they sign in again and choose another organization. Tell them so instead of showing an error that looks like a bug.",
+       "cite": {
+        "path": "src/lib/auth/session.ts",
+        "lineStart": 78,
+        "lineEnd": 82
+       }
+      },
+      {
+       "text": "[w2] The admin-update path refuses to disable the last active organization admin, but a SCIM handler that writes the membership directly skips that rule and leaves the enterprise with nobody able to manage it. Send SCIM changes through the same service rule, and decide in advance who becomes admin when the provider removes the last one.",
+       "cite": {
+        "path": "src/services/organizationService.ts",
+        "lineStart": 198,
+        "lineEnd": 202
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "TRADE-OFF HANDBACK — defend your identity design against the alternatives: the identity provider as the source of truth versus a local mirror of users and memberships, short sessions with refresh versus long sessions with a revocation check, sessions scoped to one organization versus one session spanning every organization a person belongs to, just-in-time membership creation versus SCIM push, and a break-glass local admin versus SSO with no exceptions. For each, say what you bought, what it cost, and which requirement put you on that side.",
+     "keyPoints": [
+      {
+       "text": "[w3] A local mirror fed by SCIM keeps authorization a local lookup and keeps the app usable when the provider is down, at the cost of lag between a change at the provider and the mirror; asking the provider on every request has no lag but makes it a hard dependency of every page. The mirror fits because authorization here already comes from local rows read on each request.",
+       "quote": "Because the membership is reloaded on every request"
+      },
+      {
+       "text": "[w3] The long session here is already checked against current membership on every request, so organization access is revocable today; what it cannot do is end one particular session, because logging out only tells the browser to discard the cookie while the signed token stays valid. Short sessions with refresh add a periodic re-check with the provider (catching a disable even when SCIM is late) at the cost of refresh machinery and its failure modes.",
+       "cite": {
+        "path": "src/app/api/auth/logout/route.ts",
+        "lineStart": 10,
+        "lineEnd": 15
+       }
+      },
+      {
+       "text": "[w3] A session scoped to one membership lets each organization apply its own sign-in rule and lets one deprovisioning end exactly one session; a session spanning organizations is friendlier to consultants but must satisfy the strictest organization's policy and must drop one organization from a live session on deprovision. The token already names a single membership and the organization claim is never read back, so the scoped model is what the code does.",
+       "cite": {
+        "path": "src/lib/auth/session.ts",
+        "lineStart": 59,
+        "lineEnd": 66
+       }
+      },
+      {
+       "text": "[w2] Just-in-time creation needs no integration and has no exit signal; SCIM push gives pre-provisioning and the leaver signal, at the cost of building and securing a provisioning API with conflict rules, for example an email that already belongs to a user of another organization. The invitation table (per-organization email, role, token and expiry) is the nearest existing pre-provisioning shape to build on.",
+       "cite": {
+        "path": "prisma/schema.prisma",
+        "lineStart": 251,
+        "lineEnd": 267
+       }
+      },
+      {
+       "text": "[w2] A break-glass admin keeps the organization recoverable through a provider outage or an over-eager SCIM run, which is the same recoverability the last-admin guard protects; it is also the one account that skips the provider's MFA and offboarding, so keep it to named people, audit every use and alert on it.",
+       "cite": {
+        "path": "src/services/organizationService.ts",
+        "lineStart": 204,
+        "lineEnd": 210
+       }
+      }
+     ]
+    }
+   ],
+   "set": "b"
+  }
+ ]
+}
