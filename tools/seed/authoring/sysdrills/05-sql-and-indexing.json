@@ -1,0 +1,511 @@
+{
+  "format": "sysdrills-authoring@1",
+  "module": "05-sql-and-indexing",
+  "title": "SQL & indexing math",
+  "description": "Database reps for the storage half of a system-design interview: selectivity, rows examined vs rows returned, B-tree depth and page reads per lookup, covering indexes, OFFSET pagination cost, index write amplification, nested-loop vs hash join reads, and when an index outgrows RAM (index memory fit). Every drill uses a uniform-distribution model (each distinct value owns total ÷ distinct rows) and simple page-count models, stated plainly, so you practise the reasoning behind EXPLAIN rather than one planner's internals. Every answer is an exact integer.",
+  "exercises": [
+    {
+      "slug": "01-selectivity",
+      "title": "Selectivity: is this column worth an index?",
+      "difficulty": 1,
+      "skills": [
+        "sql",
+        "indexing"
+      ],
+      "instructions": "**Interview prompt.** \"The orders table has 10 million rows. `customer_id` has 2,000 distinct values and `status` has 4. Which column is worth an index?\"\n\n**Why it works.** Under a **uniform-distribution model**, every distinct value owns the same number of rows: total ÷ distinct. **Selectivity** is the fraction of the table a predicate returns; we write it in per-mille (‰, parts per thousand). A predicate that returns a few ‰ of the table is a good index lookup; one that returns hundreds of ‰ is cheaper as a sequential scan, because hopping through an index to that many rows costs more than reading the table straight through — so the planner scans.\n\n**Your task.** Export two functions:\n- `rowsForValue(totalRows, distinctValues)` → `totalRows / distinctValues`\n- `selectivityPermille(matchedRows, totalRows)` → `matchedRows × 1000 / totalRows`\n\nThe tests choose inputs that divide exactly, so every answer is a whole number.\n\n**Worked example.** 10,000,000 rows over 2,000 customers → 10,000,000 / 2,000 = **5,000** rows per customer.",
+      "starter": "export function rowsForValue(totalRows, distinctValues) {\n  // TODO: uniform model, rows per distinct value\n}\n\nexport function selectivityPermille(matchedRows, totalRows) {\n  // TODO: matched share of the table in per-mille\n}\n",
+      "solution": "export function rowsForValue(totalRows, distinctValues) {\n  return totalRows / distinctValues;\n}\n\nexport function selectivityPermille(matchedRows, totalRows) {\n  return (matchedRows * 1000) / totalRows;\n}\n",
+      "tests": [
+        {
+          "name": "10,000,000 rows, 2,000 customers -> 5,000 rows each",
+          "code": "assert.equal(typeof mod.rowsForValue, 'function', 'export a function named rowsForValue');\nassert.equal(mod.rowsForValue(10000000, 2000), 5000);",
+          "input": [
+            10000000,
+            2000
+          ]
+        },
+        {
+          "name": "500,000 rows, a 4-value status column -> 125,000 rows each",
+          "code": "assert.equal(typeof mod.rowsForValue, 'function', 'export a function named rowsForValue');\nassert.equal(mod.rowsForValue(500000, 4), 125000);",
+          "input": [
+            500000,
+            4
+          ]
+        },
+        {
+          "name": "50,000 of 10,000,000 rows -> 5 per-mille",
+          "code": "assert.equal(typeof mod.selectivityPermille, 'function', 'export a function named selectivityPermille');\nassert.equal(mod.selectivityPermille(50000, 10000000), 5);",
+          "input": [
+            50000,
+            10000000
+          ]
+        },
+        {
+          "name": "a half-the-table predicate -> 500 per-mille, the planner will scan",
+          "code": "assert.equal(typeof mod.selectivityPermille, 'function', 'export a function named selectivityPermille');\nassert.equal(mod.selectivityPermille(250000, 500000), 500);",
+          "input": [
+            250000,
+            500000
+          ]
+        },
+        {
+          "name": "nothing matches -> 0 per-mille (boundary)",
+          "code": "assert.equal(typeof mod.selectivityPermille, 'function', 'export a function named selectivityPermille');\nassert.equal(mod.selectivityPermille(0, 500000), 0);",
+          "input": [
+            0,
+            500000
+          ]
+        }
+      ],
+      "explanation": "Selectivity is matched rows as a share of the table.\n\nFor `selectivityPermille(50000, 10000000)`:\n- 50,000 × 1000 = 50,000,000\n- 50,000,000 / 10,000,000 = **5‰** (0.5% of the table)\n\nAn index earns its keep at a few per-mille like this; a 4-value status column returns 250‰ per value even before skew, so on its own it is rarely worth an index.",
+      "hints": [
+        "Under a uniform distribution every distinct value owns the same number of rows.",
+        "rowsPerValue = total ÷ distinct. selectivity‰ = matched × 1000 ÷ total.",
+        "Uniform model: rows per value is total ÷ distinct, and selectivity in per-mille is matched × 1000 ÷ total."
+      ]
+    },
+    {
+      "slug": "02-rows-examined-vs-returned",
+      "title": "Rows examined vs rows returned",
+      "difficulty": 2,
+      "skills": [
+        "sql",
+        "indexing"
+      ],
+      "instructions": "**Interview prompt.** \"`SELECT * FROM orders WHERE status = 'shipped' AND customer_id = 42` returns 500 rows but takes seconds. There are 8 million orders, 4 statuses, and an index on `status` only. What is the database actually doing?\"\n\n**Why it works.** An index can only narrow by its own column. The `status` index finds every `shipped` row — total ÷ distinct statuses under the **uniform model** — fetches each one, and only then checks `customer_id`. EXPLAIN shows this as rows examined vs rows returned (MySQL's `rows examined`, Postgres's `Rows Removed by Filter`). Every row examined but not returned is wasted work.\n\n**Your task.** Export two functions:\n- `rowsExamined(totalRows, distinctStatuses)` → `totalRows / distinctStatuses`\n- `wastedReads(totalRows, distinctStatuses, rowsReturned)` → `rowsExamined(totalRows, distinctStatuses) − rowsReturned`\n\nThe tests choose inputs that divide exactly, so every answer is a whole number.\n\n**Worked example.** 600,000 rows over 3 statuses → 600,000 / 3 = **200,000** rows examined.",
+      "starter": "export function rowsExamined(totalRows, distinctStatuses) {\n  // TODO: rows the single-column index has to visit\n}\n\nexport function wastedReads(totalRows, distinctStatuses, rowsReturned) {\n  // TODO: examined but not returned\n}\n",
+      "solution": "export function rowsExamined(totalRows, distinctStatuses) {\n  return totalRows / distinctStatuses;\n}\n\nexport function wastedReads(totalRows, distinctStatuses, rowsReturned) {\n  return rowsExamined(totalRows, distinctStatuses) - rowsReturned;\n}\n",
+      "tests": [
+        {
+          "name": "8,000,000 orders, 4 statuses -> 2,000,000 examined",
+          "code": "assert.equal(typeof mod.rowsExamined, 'function', 'export a function named rowsExamined');\nassert.equal(mod.rowsExamined(8000000, 4), 2000000);",
+          "input": [
+            8000000,
+            4
+          ]
+        },
+        {
+          "name": "600,000 orders, 3 statuses -> 200,000 examined",
+          "code": "assert.equal(typeof mod.rowsExamined, 'function', 'export a function named rowsExamined');\nassert.equal(mod.rowsExamined(600000, 3), 200000);",
+          "input": [
+            600000,
+            3
+          ]
+        },
+        {
+          "name": "2,000,000 examined for 500 returned -> 1,999,500 wasted",
+          "code": "assert.equal(typeof mod.wastedReads, 'function', 'export a function named wastedReads');\nassert.equal(mod.wastedReads(8000000, 4, 500), 1999500);",
+          "input": [
+            8000000,
+            4,
+            500
+          ]
+        },
+        {
+          "name": "the index already matches exactly -> 0 wasted (boundary)",
+          "code": "assert.equal(typeof mod.wastedReads, 'function', 'export a function named wastedReads');\nassert.equal(mod.wastedReads(600000, 3, 200000), 0);",
+          "input": [
+            600000,
+            3,
+            200000
+          ]
+        },
+        {
+          "name": "900,000 orders, 9 statuses, 1,000 returned -> 99,000 wasted",
+          "code": "assert.equal(typeof mod.wastedReads, 'function', 'export a function named wastedReads');\nassert.equal(mod.wastedReads(900000, 9, 1000), 99000);",
+          "input": [
+            900000,
+            9,
+            1000
+          ]
+        }
+      ],
+      "explanation": "The index visits every row with that status; the filter throws most of them away.\n\nFor `wastedReads(8000000, 4, 500)`:\n- examined = 8,000,000 / 4 = 2,000,000\n- wasted = 2,000,000 − 500 = **1,999,500** rows\n\nThat 2,000,000-examined-for-500-returned gap is exactly what EXPLAIN shows you; a composite `(status, customer_id)` index closes it, so the rows examined fall to the rows returned.",
+      "hints": [
+        "An index on status can only narrow by status — the customer_id check happens after each row is fetched.",
+        "examined = total ÷ distinctStatuses. wasted = examined − returned.",
+        "The index narrows only by its own column — total ÷ distinct statuses rows get examined, and everything beyond the rows the query actually sends back is wasted filtering."
+      ]
+    },
+    {
+      "slug": "03-btree-depth",
+      "title": "B-tree depth and page reads per lookup",
+      "difficulty": 2,
+      "skills": [
+        "indexing",
+        "storage"
+      ],
+      "instructions": "**Interview prompt.** \"A users table has 100 million rows and a B-tree index on `id`. How many page reads does a point lookup need — and what changes at a billion rows?\"\n\n**Why it works.** The model (a simplification of real B-trees): every node is one page holding `fanout` entries. One level reaches `fanout` rows, two levels reach fanout × fanout, and `L` levels reach fanout^L rows. A point lookup reads one page per level, root to leaf. Real fanouts are in the hundreds (an 8 KB page of small keys), so depth grows as log base fanout of the row count — glacially. The upper levels are hot and stay cached in RAM, so only the remaining levels cost disk reads.\n\n**Your task.** Export two functions:\n- `btreeLevels(fanout, rows)` → the smallest `L ≥ 1` with fanout^L ≥ rows (start at 1 level reaching `fanout` rows; while that reach is below `rows`, multiply it by `fanout` and add a level)\n- `coldPageReads(fanout, rows, cachedLevels)` → `btreeLevels(fanout, rows) − cachedLevels`\n\n**Worked example.** Fanout 500, 100,000,000 rows: 1 level reaches 500, 2 reach 250,000, 3 reach 125,000,000 ≥ 100,000,000 → **3 levels**.",
+      "starter": "export function btreeLevels(fanout, rows) {\n  // TODO: grow the reach by fanout per level until it covers rows\n}\n\nexport function coldPageReads(fanout, rows, cachedLevels) {\n  // TODO: levels not already in RAM\n}\n",
+      "solution": "export function btreeLevels(fanout, rows) {\n  let levels = 1;\n  let reach = fanout;\n  while (reach < rows) {\n    reach *= fanout;\n    levels += 1;\n  }\n  return levels;\n}\n\nexport function coldPageReads(fanout, rows, cachedLevels) {\n  return btreeLevels(fanout, rows) - cachedLevels;\n}\n",
+      "tests": [
+        {
+          "name": "400 rows fit in one 500-entry page -> 1 level (boundary)",
+          "code": "assert.equal(typeof mod.btreeLevels, 'function', 'export a function named btreeLevels');\nassert.equal(mod.btreeLevels(500, 400), 1);",
+          "input": [
+            500,
+            400
+          ]
+        },
+        {
+          "name": "exactly 500 x 500 = 250,000 rows -> 2 levels (boundary)",
+          "code": "assert.equal(typeof mod.btreeLevels, 'function', 'export a function named btreeLevels');\nassert.equal(mod.btreeLevels(500, 250000), 2);",
+          "input": [
+            500,
+            250000
+          ]
+        },
+        {
+          "name": "one row over 250,000 -> 3 levels",
+          "code": "assert.equal(typeof mod.btreeLevels, 'function', 'export a function named btreeLevels');\nassert.equal(mod.btreeLevels(500, 250001), 3);",
+          "input": [
+            500,
+            250001
+          ]
+        },
+        {
+          "name": "100,000,000 rows at fanout 500 -> 3 levels",
+          "code": "assert.equal(typeof mod.btreeLevels, 'function', 'export a function named btreeLevels');\nassert.equal(mod.btreeLevels(500, 100000000), 3);",
+          "input": [
+            500,
+            100000000
+          ]
+        },
+        {
+          "name": "root and internal level cached -> 1 disk read per lookup",
+          "code": "assert.equal(typeof mod.coldPageReads, 'function', 'export a function named coldPageReads');\nassert.equal(mod.coldPageReads(500, 100000000, 2), 1);",
+          "input": [
+            500,
+            100000000,
+            2
+          ]
+        },
+        {
+          "name": "a billion rows at fanout 1,000, nothing cached -> 3 page reads",
+          "code": "assert.equal(typeof mod.coldPageReads, 'function', 'export a function named coldPageReads');\nassert.equal(mod.coldPageReads(1000, 1000000000, 0), 3);",
+          "input": [
+            1000,
+            1000000000,
+            0
+          ]
+        }
+      ],
+      "explanation": "Grow the reach one level at a time until it covers the rows, then subtract the cached levels.\n\nFor `coldPageReads(1000, 1000000000, 0)`:\n- 1 level reaches 1,000 rows\n- 2 levels reach 1,000 × 1,000 = 1,000,000\n- 3 levels reach 1,000,000 × 1,000 = 1,000,000,000, which covers 1,000,000,000 → 3 levels\n- nothing cached: 3 − 0 = **3 page reads**\n\nA thousand times more rows costs one more level: that logarithmic growth is why indexed point lookups stay fast as a table grows.",
+      "hints": [
+        "Each level multiplies how many rows the tree can reach by the fanout.",
+        "levels = the smallest L ≥ 1 with fanout^L ≥ rows. coldReads = levels − cachedLevels.",
+        "Multiply the fanout by itself until it reaches the row count, counting levels as you go — cached upper levels subtract straight off the page reads."
+      ]
+    },
+    {
+      "slug": "04-covering-index",
+      "title": "What a covering index saves",
+      "difficulty": 2,
+      "skills": [
+        "indexing",
+        "io"
+      ],
+      "instructions": "**Interview prompt.** \"An index scan finds 2,000 matching orders in a 3-level B-tree, but the query also needs `total`, which is not in the index. How many pages does it read — and how many if we add `total` to the index with `INCLUDE`?\"\n\n**Why it works.** The model: both plans pay the tree walk, one page per level. A **non-covering** index then has to fetch every matching row from the table (the heap), worst case one random heap page per row. A **covering** index already holds every column the query needs, so it reads the matches straight off consecutive leaf pages: `rowsMatched ÷ entriesPerLeaf` of them, with no heap visits at all.\n\n**Your task.** Export two functions:\n- `indexLookupReads(levels, rowsMatched)` → `levels + rowsMatched`\n- `coveringLookupReads(levels, rowsMatched, entriesPerLeaf)` → `levels + rowsMatched / entriesPerLeaf`\n\nThe tests choose inputs that divide exactly, so every answer is a whole number.\n\n**Worked example.** 4 levels, 50,000 matches, 250 entries per leaf → 4 + 50,000 / 250 = 4 + 200 = **204** pages.",
+      "starter": "export function indexLookupReads(levels, rowsMatched) {\n  // TODO: tree walk plus one heap page per match\n}\n\nexport function coveringLookupReads(levels, rowsMatched, entriesPerLeaf) {\n  // TODO: tree walk plus the leaf pages that hold the matches\n}\n",
+      "solution": "export function indexLookupReads(levels, rowsMatched) {\n  return levels + rowsMatched;\n}\n\nexport function coveringLookupReads(levels, rowsMatched, entriesPerLeaf) {\n  return levels + rowsMatched / entriesPerLeaf;\n}\n",
+      "tests": [
+        {
+          "name": "3 levels, 2,000 matches, non-covering -> 2,003 pages",
+          "code": "assert.equal(typeof mod.indexLookupReads, 'function', 'export a function named indexLookupReads');\nassert.equal(mod.indexLookupReads(3, 2000), 2003);",
+          "input": [
+            3,
+            2000
+          ]
+        },
+        {
+          "name": "no matches still walks to a leaf -> 2 pages (boundary)",
+          "code": "assert.equal(typeof mod.indexLookupReads, 'function', 'export a function named indexLookupReads');\nassert.equal(mod.indexLookupReads(2, 0), 2);",
+          "input": [
+            2,
+            0
+          ]
+        },
+        {
+          "name": "3 levels, 2,000 matches, 100 per leaf, covering -> 23 pages",
+          "code": "assert.equal(typeof mod.coveringLookupReads, 'function', 'export a function named coveringLookupReads');\nassert.equal(mod.coveringLookupReads(3, 2000, 100), 23);",
+          "input": [
+            3,
+            2000,
+            100
+          ]
+        },
+        {
+          "name": "4 levels, 50,000 matches, 250 per leaf -> 204 pages",
+          "code": "assert.equal(typeof mod.coveringLookupReads, 'function', 'export a function named coveringLookupReads');\nassert.equal(mod.coveringLookupReads(4, 50000, 250), 204);",
+          "input": [
+            4,
+            50000,
+            250
+          ]
+        },
+        {
+          "name": "3 levels, 100 matches that fill one leaf -> 4 pages",
+          "code": "assert.equal(typeof mod.coveringLookupReads, 'function', 'export a function named coveringLookupReads');\nassert.equal(mod.coveringLookupReads(3, 100, 100), 4);",
+          "input": [
+            3,
+            100,
+            100
+          ]
+        }
+      ],
+      "explanation": "Same tree walk; the difference is one heap page per row versus one leaf page per hundred rows.\n\nFor the 2,000-match query on a 3-level tree:\n- non-covering: `indexLookupReads(3, 2000)` = 3 + 2,000 = 2,003 pages\n- covering: `coveringLookupReads(3, 2000, 100)` = 3 + 2,000 / 100 = 3 + 20 = **23 pages**\n\nRoughly 87× fewer reads: that is what adding the needed columns with `INCLUDE` buys, paid for with a fatter index and slower writes.",
+      "hints": [
+        "If the index lacks a column the query needs, every match costs a trip to the table (the heap).",
+        "nonCovering = levels + rowsMatched. covering = levels + rowsMatched ÷ entriesPerLeaf.",
+        "Both pay the tree walk (levels). The non-covering one adds one heap page per matched row, the covering one adds matched ÷ entries-per-leaf leaf pages."
+      ]
+    },
+    {
+      "slug": "05-offset-pagination-cost",
+      "title": "What OFFSET pagination really scans",
+      "difficulty": 1,
+      "skills": [
+        "sql",
+        "pagination"
+      ],
+      "instructions": "**Interview prompt.** \"Our admin list uses `ORDER BY id LIMIT 20 OFFSET …`. Page 1 is instant, page 5,000 takes seconds. Why — and what does a crawler that reads every page up to 100 cost?\"\n\n**Why it works.** `OFFSET` does not skip work: to return page `p` the database walks `(p − 1) × pageSize` index entries, throws them away, then reads `pageSize` more — `pageSize × p` entries in all. A crawler reading pages 1 through `p` scans `pageSize × (1 + 2 + … + p)`, and 1 + 2 + … + p = p × (p + 1) / 2, so the total grows with the square of the page count. Keyset pagination (`WHERE id > :last ORDER BY id LIMIT 20`) scans only `pageSize` per page.\n\n**Your task.** Export two functions:\n- `rowsScannedAtPage(pageSize, page)` → `pageSize × page`\n- `rowsScannedThroughPage(pageSize, page)` → `pageSize × page × (page + 1) / 2`\n\np × (p + 1) is always even, so every answer is a whole number.\n\n**Worked example.** 20 rows per page, page 5,000 → 20 × 5,000 = **100,000** rows scanned to return 20.",
+      "starter": "export function rowsScannedAtPage(pageSize, page) {\n  // TODO: skipped rows plus the page itself\n}\n\nexport function rowsScannedThroughPage(pageSize, page) {\n  // TODO: every page from 1 to page, summed\n}\n",
+      "solution": "export function rowsScannedAtPage(pageSize, page) {\n  return pageSize * page;\n}\n\nexport function rowsScannedThroughPage(pageSize, page) {\n  return (pageSize * page * (page + 1)) / 2;\n}\n",
+      "tests": [
+        {
+          "name": "page 1 of 20 -> 20 rows (boundary)",
+          "code": "assert.equal(typeof mod.rowsScannedAtPage, 'function', 'export a function named rowsScannedAtPage');\nassert.equal(mod.rowsScannedAtPage(20, 1), 20);",
+          "input": [
+            20,
+            1
+          ]
+        },
+        {
+          "name": "page 5,000 of 20 -> 100,000 rows scanned for 20",
+          "code": "assert.equal(typeof mod.rowsScannedAtPage, 'function', 'export a function named rowsScannedAtPage');\nassert.equal(mod.rowsScannedAtPage(20, 5000), 100000);",
+          "input": [
+            20,
+            5000
+          ]
+        },
+        {
+          "name": "page 200 of 50 -> 10,000 rows",
+          "code": "assert.equal(typeof mod.rowsScannedAtPage, 'function', 'export a function named rowsScannedAtPage');\nassert.equal(mod.rowsScannedAtPage(50, 200), 10000);",
+          "input": [
+            50,
+            200
+          ]
+        },
+        {
+          "name": "crawling pages 1-100 of 20 -> 101,000 rows",
+          "code": "assert.equal(typeof mod.rowsScannedThroughPage, 'function', 'export a function named rowsScannedThroughPage');\nassert.equal(mod.rowsScannedThroughPage(20, 100), 101000);",
+          "input": [
+            20,
+            100
+          ]
+        },
+        {
+          "name": "crawling pages 1-1,000 of 50 -> 25,025,000 rows",
+          "code": "assert.equal(typeof mod.rowsScannedThroughPage, 'function', 'export a function named rowsScannedThroughPage');\nassert.equal(mod.rowsScannedThroughPage(50, 1000), 25025000);",
+          "input": [
+            50,
+            1000
+          ]
+        }
+      ],
+      "explanation": "Each page re-scans everything before it, so a crawl sums an arithmetic series.\n\nFor `rowsScannedThroughPage(20, 100)`:\n- 1 + 2 + … + 100 = 100 × 101 / 2 = 5,050 page-widths\n- 5,050 × 20 = **101,000** rows\n\nKeyset pagination reads the same 100 pages for 20 × 100 = 2,000 rows — this is why infinite scroll and export jobs use a cursor, not OFFSET.",
+      "hints": [
+        "OFFSET n still reads the n rows it skips — they are just thrown away.",
+        "atPage = pageSize × page. throughPage = pageSize × (1 + 2 + … + page) = pageSize × page × (page + 1) ÷ 2.",
+        "OFFSET never skips work — page p scans p × pageSize rows, and a full crawl sums 1 + 2 + … + p pages, which is pageSize × p × (p + 1) ÷ 2."
+      ]
+    },
+    {
+      "slug": "06-index-write-amplification",
+      "title": "What every index costs on writes",
+      "difficulty": 1,
+      "skills": [
+        "indexing",
+        "writes"
+      ],
+      "instructions": "**Interview prompt.** \"The events table takes 500 inserts a second and has 4 secondary indexes. Someone wants to add a fifth. What does each index cost on the write path?\"\n\n**Why it works.** Inserting a row writes the table (the heap or clustered index) once, and then **every secondary index once more** — each one is its own B-tree that has to be updated. A day has 24 × 60 × 60 = **86,400 seconds**, so the daily write count is inserts per second × 86,400 × writes per insert.\n\n**Your task.** Export two functions:\n- `writesPerInsert(secondaryIndexes)` → `1 + secondaryIndexes`\n- `indexWritesPerDay(insertsPerSec, secondaryIndexes)` → `insertsPerSec × 86400 × (1 + secondaryIndexes)`\n\n**Worked example.** A table with 6 secondary indexes → 1 + 6 = **7** writes per insert.",
+      "starter": "export function writesPerInsert(secondaryIndexes) {\n  // TODO: the table plus each secondary index\n}\n\nexport function indexWritesPerDay(insertsPerSec, secondaryIndexes) {\n  // TODO: writes per insert over a whole day\n}\n",
+      "solution": "const SECONDS_PER_DAY = 86_400;\n\nexport function writesPerInsert(secondaryIndexes) {\n  return 1 + secondaryIndexes;\n}\n\nexport function indexWritesPerDay(insertsPerSec, secondaryIndexes) {\n  return insertsPerSec * SECONDS_PER_DAY * writesPerInsert(secondaryIndexes);\n}\n",
+      "tests": [
+        {
+          "name": "no secondary indexes -> 1 write per insert (boundary)",
+          "code": "assert.equal(typeof mod.writesPerInsert, 'function', 'export a function named writesPerInsert');\nassert.equal(mod.writesPerInsert(0), 1);",
+          "input": [
+            0
+          ]
+        },
+        {
+          "name": "6 secondary indexes -> 7 writes per insert",
+          "code": "assert.equal(typeof mod.writesPerInsert, 'function', 'export a function named writesPerInsert');\nassert.equal(mod.writesPerInsert(6), 7);",
+          "input": [
+            6
+          ]
+        },
+        {
+          "name": "500 inserts/s, 4 indexes -> 216,000,000 writes/day",
+          "code": "assert.equal(typeof mod.indexWritesPerDay, 'function', 'export a function named indexWritesPerDay');\nassert.equal(mod.indexWritesPerDay(500, 4), 216000000);",
+          "input": [
+            500,
+            4
+          ]
+        },
+        {
+          "name": "50 inserts/s, 1 index -> 8,640,000 writes/day",
+          "code": "assert.equal(typeof mod.indexWritesPerDay, 'function', 'export a function named indexWritesPerDay');\nassert.equal(mod.indexWritesPerDay(50, 1), 8640000);",
+          "input": [
+            50,
+            1
+          ]
+        },
+        {
+          "name": "1,000 inserts/s, no indexes -> 86,400,000 writes/day (boundary)",
+          "code": "assert.equal(typeof mod.indexWritesPerDay, 'function', 'export a function named indexWritesPerDay');\nassert.equal(mod.indexWritesPerDay(1000, 0), 86400000);",
+          "input": [
+            1000,
+            0
+          ]
+        }
+      ],
+      "explanation": "Count the structures one insert touches, then scale to a day.\n\nFor `indexWritesPerDay(500, 4)`:\n- writes per insert = 1 + 4 = 5\n- inserts per day = 500 × 86,400 = 43,200,000\n- writes per day = 43,200,000 × 5 = **216,000,000**\n\nEach secondary index is a whole extra B-tree to keep up to date, so \"just add an index\" speeds one read path and taxes every future write.",
+      "hints": [
+        "An index is a separate sorted structure — it is updated on every insert, not just the table.",
+        "writesPerInsert = 1 + secondaryIndexes. perDay = insertsPerSec × 86,400 × (1 + secondaryIndexes).",
+        "Every insert touches the heap once plus each secondary index once — scale by 86,400 seconds for the daily total."
+      ]
+    },
+    {
+      "slug": "07-join-strategy-reads",
+      "title": "Nested-loop or hash join?",
+      "difficulty": 3,
+      "skills": [
+        "sql",
+        "joins"
+      ],
+      "instructions": "**Interview prompt.** \"We join 10,000 recent orders to a 1,000,000-row customers table. Should the planner use a nested-loop join through the customers primary-key index, or a hash join?\"\n\n**Why it works.** The model (a deliberate simplification: every index level, every fetched row and every scanned row costs one read). A **nested-loop join** with an index probes the inner table once per outer row: walk the inner index (`innerLevels` reads) and fetch the `matchesPerRow` matching rows. A **hash join** ignores indexes: it reads each side once (build a hash table on one, stream the other through it). Small outer side + indexed inner favours the nested loop; when both sides are big, per-row probes lose to one pass over each.\n\n**Your task.** Export two functions:\n- `nestedLoopReads(outerRows, innerLevels, matchesPerRow)` → `outerRows × (innerLevels + matchesPerRow)`\n- `hashJoinReads(outerRows, innerRows)` → `outerRows + innerRows`\n\n**Worked example.** 100 outer rows, a 4-level inner index, 1 match each → 100 × (4 + 1) = **500** reads.",
+      "starter": "export function nestedLoopReads(outerRows, innerLevels, matchesPerRow) {\n  // TODO: one indexed probe per outer row\n}\n\nexport function hashJoinReads(outerRows, innerRows) {\n  // TODO: one pass over each side\n}\n",
+      "solution": "export function nestedLoopReads(outerRows, innerLevels, matchesPerRow) {\n  return outerRows * (innerLevels + matchesPerRow);\n}\n\nexport function hashJoinReads(outerRows, innerRows) {\n  return outerRows + innerRows;\n}\n",
+      "tests": [
+        {
+          "name": "10,000 outer rows, 3 levels, 2 matches -> 50,000 reads",
+          "code": "assert.equal(typeof mod.nestedLoopReads, 'function', 'export a function named nestedLoopReads');\nassert.equal(mod.nestedLoopReads(10000, 3, 2), 50000);",
+          "input": [
+            10000,
+            3,
+            2
+          ]
+        },
+        {
+          "name": "100 outer rows, 4 levels, 1 match -> 500 reads",
+          "code": "assert.equal(typeof mod.nestedLoopReads, 'function', 'export a function named nestedLoopReads');\nassert.equal(mod.nestedLoopReads(100, 4, 1), 500);",
+          "input": [
+            100,
+            4,
+            1
+          ]
+        },
+        {
+          "name": "empty outer side -> 0 reads (boundary)",
+          "code": "assert.equal(typeof mod.nestedLoopReads, 'function', 'export a function named nestedLoopReads');\nassert.equal(mod.nestedLoopReads(0, 3, 2), 0);",
+          "input": [
+            0,
+            3,
+            2
+          ]
+        },
+        {
+          "name": "hash join 10,000 x 1,000,000 -> 1,010,000 reads",
+          "code": "assert.equal(typeof mod.hashJoinReads, 'function', 'export a function named hashJoinReads');\nassert.equal(mod.hashJoinReads(10000, 1000000), 1010000);",
+          "input": [
+            10000,
+            1000000
+          ]
+        },
+        {
+          "name": "hash join 5,000,000 x 5,000,000 -> 10,000,000 reads",
+          "code": "assert.equal(typeof mod.hashJoinReads, 'function', 'export a function named hashJoinReads');\nassert.equal(mod.hashJoinReads(5000000, 5000000), 10000000);",
+          "input": [
+            5000000,
+            5000000
+          ]
+        }
+      ],
+      "explanation": "Price both plans under the same model and compare.\n\nFor 10,000 orders joined to 1,000,000 customers:\n- nested loop: `nestedLoopReads(10000, 3, 2)` = 10,000 × (3 + 2) = **50,000 reads**\n- hash join: `hashJoinReads(10000, 1000000)` = 10,000 + 1,000,000 = 1,010,000 reads\n\nThe nested loop wins about 20× here because the outer side is small and the inner side is indexed; with millions of rows on both sides the hash join's single pass over each side wins instead — which is exactly the call the planner makes from its row estimates.",
+      "hints": [
+        "A nested loop does one index probe per outer row. A hash join reads each side once, whatever the sizes.",
+        "NLJ = outerRows × (innerLevels + matchesPerRow). hash = outerRows + innerRows.",
+        "Nested loop pays one indexed probe (tree levels + matches) per outer row, while a hash join pays one pass over each side — compare the two totals."
+      ]
+    },
+    {
+      "slug": "08-index-memory-fit",
+      "title": "When the index outgrows RAM",
+      "difficulty": 2,
+      "skills": [
+        "indexing",
+        "capacity"
+      ],
+      "instructions": "**Interview prompt.** \"Our hot index is already 16 GB on a database box with 64 GB of RAM. Entries are 100 bytes and we add 4.8 million rows a day. How long until the index no longer fits in memory?\"\n\n**Why it works.** Index size is rows × bytes per entry (1 GB = 10^9 bytes). Lookups stay fast while the hot index is cached in RAM; once it outgrows memory, lookups start hitting disk and p99 falls off a cliff. The days left are the free headroom (RAM minus what is used) divided by how many bytes the index gains per day (entry size × rows added per day).\n\n**Your task.** Export two functions:\n- `indexBytes(rows, bytesPerEntry)` → `rows × bytesPerEntry`\n- `daysUntilRamFull(ramBytes, usedBytes, bytesPerEntry, rowsPerDay)` → `(ramBytes − usedBytes) / (bytesPerEntry × rowsPerDay)` (0 means already full)\n\nThe tests choose inputs that divide exactly, so every answer is a whole number.\n\n**Worked example.** 100,000,000 rows × 40 bytes = **4,000,000,000 bytes** (4 GB).",
+      "starter": "export function indexBytes(rows, bytesPerEntry) {\n  // TODO: entries x entry size\n}\n\nexport function daysUntilRamFull(ramBytes, usedBytes, bytesPerEntry, rowsPerDay) {\n  // TODO: free headroom / daily growth\n}\n",
+      "solution": "export function indexBytes(rows, bytesPerEntry) {\n  return rows * bytesPerEntry;\n}\n\nexport function daysUntilRamFull(ramBytes, usedBytes, bytesPerEntry, rowsPerDay) {\n  return (ramBytes - usedBytes) / (bytesPerEntry * rowsPerDay);\n}\n",
+      "tests": [
+        {
+          "name": "100,000,000 rows x 40 bytes -> 4,000,000,000 bytes",
+          "code": "assert.equal(typeof mod.indexBytes, 'function', 'export a function named indexBytes');\nassert.equal(mod.indexBytes(100000000, 40), 4000000000);",
+          "input": [
+            100000000,
+            40
+          ]
+        },
+        {
+          "name": "empty table -> 0 bytes (boundary)",
+          "code": "assert.equal(typeof mod.indexBytes, 'function', 'export a function named indexBytes');\nassert.equal(mod.indexBytes(0, 40), 0);",
+          "input": [
+            0,
+            40
+          ]
+        },
+        {
+          "name": "64 GB RAM, 16 GB used, 100 B x 4,800,000 rows/day -> 100 days",
+          "code": "assert.equal(typeof mod.daysUntilRamFull, 'function', 'export a function named daysUntilRamFull');\nassert.equal(mod.daysUntilRamFull(64000000000, 16000000000, 100, 4800000), 100);",
+          "input": [
+            64000000000,
+            16000000000,
+            100,
+            4800000
+          ]
+        },
+        {
+          "name": "8 GB RAM, 6 GB used, 50 B x 2,000,000 rows/day -> 20 days",
+          "code": "assert.equal(typeof mod.daysUntilRamFull, 'function', 'export a function named daysUntilRamFull');\nassert.equal(mod.daysUntilRamFull(8000000000, 6000000000, 50, 2000000), 20);",
+          "input": [
+            8000000000,
+            6000000000,
+            50,
+            2000000
+          ]
+        },
+        {
+          "name": "already full -> 0 days (boundary)",
+          "code": "assert.equal(typeof mod.daysUntilRamFull, 'function', 'export a function named daysUntilRamFull');\nassert.equal(mod.daysUntilRamFull(32000000000, 32000000000, 100, 1000000), 0);",
+          "input": [
+            32000000000,
+            32000000000,
+            100,
+            1000000
+          ]
+        }
+      ],
+      "explanation": "Free headroom divided by daily growth.\n\nFor `daysUntilRamFull(64000000000, 16000000000, 100, 4800000)`:\n- headroom = 64,000,000,000 − 16,000,000,000 = 48,000,000,000 bytes\n- growth per day = 100 × 4,800,000 = 480,000,000 bytes\n- days = 48,000,000,000 / 480,000,000 = **100 days**\n\nPut that date in the capacity plan: a bigger box, partitioning, or archiving cold rows has to land before the index spills to disk, not after.",
+      "hints": [
+        "Size = how many entries × how big each one is. Daily growth works the same way.",
+        "indexBytes = rows × bytesPerEntry. days = (ram − used) ÷ (bytesPerEntry × rowsPerDay).",
+        "Free headroom is RAM minus what is used — divide by the bytes the index gains per day (entry size × rows per day)."
+      ]
+    }
+  ]
+}

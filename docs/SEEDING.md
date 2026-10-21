@@ -136,13 +136,14 @@ solution endpoint). The pin lives in `tools/seed/src/javabootcamp/source.ts`
 one file per module, under `tools/seed/authoring/sysdrills/<NN-module>.json`
 (format `sysdrills-authoring@1`, Zod-validated `.strict()` by
 `tools/seed/src/sysdrills/source.ts`). Each exercise is an estimation / capacity /
-reliability-math rep: a pure exported function, `drill-js` tests whose expectations are
-exact integers, a `// TODO` starter, a reference solution, an explanation and hints. The
-importer maps every exercise to a `drill-js` unit on the **sysdesign** track (competency
-`system-design`, key `sysdrills/<module>/<slug>`), one course per module, into
-`content/packs/sysdrills/` with manifest `{ track: 'sysdesign', grader: 'js' }`. Migration
-016 gives the track a daily slate drill slot (dropped automatically when the bank is
-exhausted).
+reliability / networking-and-latency / SQL-and-indexing / concurrency / sharding /
+encoding-and-counting math rep: a pure exported function, `drill-js` tests whose
+expectations are exact integers, a `// TODO` starter, a reference solution, an explanation
+and hints. The importer maps every exercise to a `drill-js` unit on the **sysdesign**
+track (competency `system-design`, key `sysdrills/<module>/<slug>`), one course per module,
+into `content/packs/sysdrills/` with manifest `{ track: 'sysdesign', grader: 'js' }`.
+Migration 016 gives the track a daily slate drill slot (dropped automatically when the bank
+is exhausted).
 
 ```sh
 # authoring JSON -> content/packs/sysdrills/{<module>.json, manifest.json} (refuses on any
@@ -938,3 +939,8 @@ resolved); quiz variety `concept` and flashcard shape `hand-authored`;
     naming drift. The shipped reading r04 warns the learner the bank's index is unreliable.
   - eb-sibling guard gap (factory, minor): it compares prompts, key-point text and quotes, but
     not CITE ranges — a sibling could reuse set A's cite spans unflagged.
+- **sysdrills wave 2 — DONE (2026-10-21):** modules 04-08 (networking & latency, SQL &
+  indexing, concurrency & throughput, hashing & sharding, encoding & counting), 40 new drill-js
+  drills, 62 total; SYSDRILLS_EXPECTED 22 → 62; 62/62 validated (solution passes + starter
+  fails under the real drill-js runner), 0 quarantined; every expected integer recomputed by
+  the cross-reviewer; hint 3 is approach+formula only (never pasteable code).
