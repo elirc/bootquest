@@ -380,7 +380,7 @@
     }
    ],
    "front": "What runs inside the single create-payment transaction, in order?",
-   "back": "Insert the IN_PROGRESS idempotency record; resolve and check the owner (404 OWNER_NOT_FOUND); create the PENDING payment; PAYMENT_CREATED event; dispatch to the provider simulator (mirror, PROVIDER_ACCEPTED, WebhookDelivery unless PARTIAL_SUCCESS); mark the record COMPLETED with 202 and the body. Any throw rolls back all of it, including the idempotency row."
+   "back": "Every step writes through the same transaction client, tx: insert the idempotency record as IN_PROGRESS; resolve the payment owner and confirm that user exists; create the payment as PENDING plus its PAYMENT_CREATED event; dispatch to the provider simulator (mirror row, PROVIDER_ACCEPTED event, and a WebhookDelivery unless the mode is PARTIAL_SUCCESS); last, mark the record COMPLETED together with the response it is about to return."
   },
   {
    "id": "f02-transitions",
@@ -451,22 +451,27 @@
    "id": "q13-auth-error-escapes",
    "kind": "quiz",
    "source": {
-    "path": "docs/architecture/request-lifecycle.md",
+    "path": "docs/architecture/auth-and-permissions.md",
     "lines": {
-     "start": 121,
-     "end": 121
+     "start": 60,
+     "end": 65
     }
    },
    "cites": [
     {
-     "path": "docs/architecture/request-lifecycle.md",
-     "lineStart": 121,
-     "lineEnd": 121
-    },
-    {
      "path": "docs/architecture/auth-and-permissions.md",
      "lineStart": 65,
      "lineEnd": 65
+    },
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 60,
+     "lineEnd": 60
+    },
+    {
+     "path": "docs/architecture/request-lifecycle.md",
+     "lineStart": 121,
+     "lineEnd": 121
     },
     {
      "path": "src/lib/auth/guards.ts",
@@ -474,14 +479,14 @@
      "lineEnd": 35
     }
    ],
-   "prompt": "A SUPPORT user calls POST /api/admin/reconciliation/run. Per findings L1 and A1, why doesn't the client get the documented 403 JSON body?",
-   "answer": "The guard throws before the handler runs, outside its try/catch",
+   "prompt": "A SUPPORT user calls POST /api/admin/reconciliation/run. Per finding A1 in auth-and-permissions.md, what response does the API client actually get?",
+   "answer": "An unstructured 500, not the documented 403 JSON body",
    "distractors": [
-    "The guard returns a 403 JSON body, but Next.js strips it on errors",
-    "requirePermission returns false, and the handler then runs anyway",
-    "jsonError serializes the error but drops the code field from it"
+    "A 401 JSON body, as the session check runs before the role check",
+    "A 200, as the reconciliation handler still runs after the guard",
+    "A bare 403 status whose JSON body was simply never built"
    ],
-   "explanation": "L1 (request-lifecycle.md:121): guards.ts:32 throws before `handler(...)` at line 34 runs, and every handler's try/catch is inside `handler`, so the documented 401/403 bodies are not what a client receives. A1 (auth-and-permissions.md:65): the RouteError that requirePermission() throws is never passed to jsonError(), so clients get an unstructured 500 (a code-reading conclusion, modelled by scratch check C12)."
+   "explanation": "A1 (auth-and-permissions.md:65): withRouteAuth() calls requirePermission() at guards.ts:32, outside the handler's try/catch, and the RouteError it throws is never passed to jsonError(), so API clients get an unstructured 500 instead of the documented 401/403 JSON (a code-reading conclusion, modelled by scratch check C12, not observed against a running server). It is not a bare 403: nothing turns that RouteError into a 403 response. It is not a 401: requirePermission() throws 401 only when there is no session (line 60), and a SUPPORT user has one but lacks the permission. And it is not a 200: L1 (request-lifecycle.md:121) shows line 32 throws before handler(...) at line 34 ever runs."
   },
   {
    "id": "q14-conflict-never-written",
