@@ -1,0 +1,179 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "dotnet-stripe--docs2-03-architecture-and-patterns-04-side-effects-async-and-reliability.md--set-b",
+ "items": [
+  {
+   "key": "seed:explainback:dotnet-stripe/explain-back/26178c8d2ad4f1f8",
+   "provenance": {
+    "repo": "dotnet-stripe",
+    "sha": "8f402575b200ba258dbd43b5802642c1ecbfa63e",
+    "path": "docs2/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+    "lines": {
+     "start": 1,
+     "end": 91
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "DESIGN IT — [senior] draining a side-effect backlog after a long worker outage (dotnet-stripe, docs2/03-architecture-and-patterns/04-side-effects-async-and-reliability.md). Scenario: the background worker that applies payments and sends merchant events and customer emails stopped on Friday evening and nobody noticed until Monday morning; about 190,000 due jobs piled up while the API kept accepting checkouts, and new ones keep arriving; the card provider rate-limits you at roughly 100 requests a second; some queued work is customer-visible, such as a payment-reminder email that would now go out 7 days late. Write your design before you look: how the outage stayed silent and what would have caught it, how long the drain takes at the provider's limit, how live work and backlog share that limit, what each job re-checks before it acts, which effects are still worth sending and which go stale, and how retry budgets behave when jobs have aged through an outage. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "keyPoints": [
+      {
+       "text": "[w3] The workers are background loops hosted inside the API process, and the payment loop has no try/catch around the work it does for each job: once that work calls a real provider, a single exception escapes the loop and the worker is gone while the API keeps answering Pay with 202. Catch per job, record the failure on the job, and keep the loop alive.",
+       "cite": {
+        "path": "src/Billing.Api/Infrastructure/PaymentWorker.cs",
+        "lineStart": 13,
+        "lineEnd": 24
+       }
+      },
+      {
+       "text": "[w2] The health route returns a fixed 'ok' with a timestamp and looks at nothing, so three days of a dead worker are invisible to it. Publish each worker's last-tick time and the age of the oldest due job, and page when either goes stale; that turns a weekend outage into a five-minute one.",
+       "cite": {
+        "path": "src/Billing.Api/Program.cs",
+        "lineStart": 39,
+        "lineEnd": 39
+       }
+      },
+      {
+       "text": "[w3] Size the drain before starting it: 190,000 calls at about 100 a second is roughly 32 minutes of the provider's entire allowance, and live checkouts need a reserved slice of it (say 20 to 30 a second), so the backlog drains at the remainder in the better part of an hour. That pacing has to be added: today each tick takes every due item back to back with nothing limiting the rate, and a limiter must be shared by every instance.",
+       "cite": {
+        "path": "src/Billing.Api/Infrastructure/WebhookDeliveryWorker.cs",
+        "lineStart": 17,
+        "lineEnd": 22
+       }
+      },
+      {
+       "text": "[w3] Separate live work from backlog: the job queue and the event queue are plain arrival-order queues, so every checkout made on Monday morning lands behind the whole weekend. Give live work its own lane, or a priority class, with a guaranteed share of the rate, and let the backlog take what is left.",
+       "cite": {
+        "path": "src/Billing.Api/Infrastructure/BillingStore.cs",
+        "lineStart": 15,
+        "lineEnd": 17
+       }
+      },
+      {
+       "text": "[w3] Every aged job re-reads the world before acting, because three days changed it: the provider's confirmation webhook may have paid the invoice, an operator may have voided it or marked it uncollectible. The worker today re-checks only 'invoice gone' and 'already Paid'; a backlog drain must also skip Void and Uncollectible invoices instead of charging them.",
+       "cite": {
+        "path": "src/Billing.Api/Infrastructure/PaymentWorker.cs",
+        "lineStart": 27,
+        "lineEnd": 38
+       }
+      },
+      {
+       "text": "[w3] Decide per kind of effect what lateness means: applying a payment result is never dropped, merchant events are delivered but marked as late, and customer-facing nudges such as a reminder get a validity window after which they are dropped or folded into one current summary. Queued events already carry a creation time and an attempt count, so their age is known without new bookkeeping.",
+       "cite": {
+        "path": "src/Billing.Api/Domain/BillingModels.cs",
+        "lineStart": 112,
+        "lineEnd": 122
+       }
+      },
+      {
+       "text": "[w2] Measure a retry budget in time since the first real attempt, not in attempts or in age since enqueue, and start the clock again at recovery: otherwise jobs that waited out the outage arrive with their budget already spent. The event retry delay today is computed per event from its own attempt number, with no notion of an outage.",
+       "cite": {
+        "path": "src/Billing.Api/Infrastructure/WebhookDeliveryWorker.cs",
+        "lineStart": 43,
+        "lineEnd": 48
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "PRE-MORTEM — Monday's drain, run naively. The worker restarts and works strictly oldest first; the provider starts answering 429 within a minute and every failing job schedules its own retry; customers who checked out at 09:00 see their payment stuck and press Pay again; and a payment-reminder email queued on Friday goes out alongside the one the Monday reminder run creates for the same invoice. What breaks, in what order, and what in your design prevents each?",
+     "keyPoints": [
+      {
+       "text": "[w3] Oldest-first starves the present: a 09:00 checkout waits behind the entire weekend, half an hour at best and hours once 429s slow the drain. Customers then press Pay again, and because a new Pay is refused only when the invoice is already Paid, each press writes another Pending payment and another job, so the backlog grows from the very traffic it is starving.",
+       "cite": {
+        "path": "src/Billing.Api/Infrastructure/BillingEngine.cs",
+        "lineStart": 129,
+        "lineEnd": 154
+       }
+      },
+      {
+       "text": "[w3] Per-job backoff turns a rate limit into a storm: each failed job waits 2, 4, 8 and up to 300 seconds on its own, so thousands of independent clocks keep firing into a provider that is already refusing. A 429 is about the whole account, not one job, and calls for a shared pause that honours the provider's Retry-After, with per-job backoff and jitter kept for job-specific failures.",
+       "cite": {
+        "path": "src/Billing.Api/Infrastructure/WebhookDeliveryWorker.cs",
+        "lineStart": 40,
+        "lineEnd": 52
+       }
+      },
+      {
+       "text": "[w2] A failed event is re-appended to the tail with a later due time, and the event dequeue gives up at the first entry whose time has not come; when the drain wraps around to a backed-off event it therefore halts there, and Monday's fresh events queued behind it wait for that one retry.",
+       "cite": {
+        "path": "src/Billing.Api/Infrastructure/BillingStore.cs",
+        "lineStart": 229,
+        "lineEnd": 255
+       }
+      },
+      {
+       "text": "[w3] The double reminder happens because each queued event gets a fresh random id and nothing ties two events about the same invoice together. Give every customer-visible effect a dedupe key such as (invoice, effect, stage), check it at send time, and re-read the invoice first so a bill paid over the weekend gets no reminder at all.",
+       "cite": {
+        "path": "src/Billing.Api/Infrastructure/BillingEngine.cs",
+        "lineStart": 181,
+        "lineEnd": 199
+       }
+      },
+      {
+       "text": "[w2] A merchant receiving Friday's payment on Monday cannot tell it is late: the event body holds the invoice id, number, total and provider reference but no time at which the payment happened. Add the occurrence time so receivers order and judge events by when they happened, not when they arrived.",
+       "cite": {
+        "path": "src/Billing.Api/Infrastructure/BillingEngine.cs",
+        "lineStart": 185,
+        "lineEnd": 193
+       }
+      },
+      {
+       "text": "[w2] Speeding the drain up with parallel consumers breaks per-invoice order: an invoice's 'created' event and its 'payment succeeded' event can then be delivered the wrong way round. Partition the work by invoice or merchant so each key is handled by one consumer in order while different keys run in parallel.",
+       "cite": {
+        "path": "src/Billing.Api/Infrastructure/BillingEngine.cs",
+        "lineStart": 100,
+        "lineEnd": 110
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "TRADE-OFF HANDBACK — defend your drain against the alternatives: separate queues for live work and backlog versus a single queue ordered by priority, dropping side effects that have gone stale versus sending everything that was ever queued, pausing all retries when the provider says 429 versus exponential backoff for each job, and retry budgets counted in attempts versus in elapsed time. For each, say what you bought and what it cost.",
+     "keyPoints": [
+      {
+       "text": "[w3] Two lanes give live traffic isolation that is easy to explain and to monitor, at the cost of a rule for what counts as live, two consumers, and a backlog that never moves if live traffic never pauses (so it needs a weighted share). One queue ordered by class then due time is a single mechanism, but needs an index or sort and a dequeue that passes over items not yet due, which the current head check does not do.",
+       "cite": {
+        "path": "src/Billing.Api/Infrastructure/BillingStore.cs",
+        "lineStart": 200,
+        "lineEnd": 207
+       }
+      },
+      {
+       "text": "[w3] Dropping stale effects spares customers confusing mail and spares the rate limit, but risks discarding something someone needed; drop only effects whose meaning expires (reminders, nudges), always deliver records (receipts, merchant events, ledger changes), and replace a pile of stale notices with one current message. Sending everything needs no judgement and buys maximum noise.",
+       "quote": "Billing is mostly side effects: charge a card, advance a period, emit a webhook."
+      },
+      {
+       "text": "[w3] A shared pause on 429 honours the provider's signal and stops the herd, but if it is scoped too widely one noisy merchant or endpoint pauses everybody; per-job exponential backoff isolates job-specific failures yet multiplies traffic under an account-wide limit. The usual answer is both: a shared rate gate in front, per-job backoff with jitter behind it; the delay formula today has no jitter at all.",
+       "cite": {
+        "path": "src/Billing.Api/Infrastructure/WebhookDeliveryWorker.cs",
+        "lineStart": 48,
+        "lineEnd": 48
+       }
+      },
+      {
+       "text": "[w2] Counting attempts is cheap and stops a poison job, but an outage or a pause can burn attempts that never reached the provider; a deadline in elapsed time from the first real attempt ties the budget to business value at the price of storing that time. A payment job already carries an attempt number and a creation time, so either is one field away.",
+       "cite": {
+        "path": "src/Billing.Api/Domain/BillingModels.cs",
+        "lineStart": 105,
+        "lineEnd": 110
+       }
+      },
+      {
+       "text": "[w2] Draining as fast as the gate allows finishes soonest but spikes merchants' endpoints and your own database; a slower, steady drain is kinder to everyone downstream and leaves headroom for the live lane, at the cost of more hours in a degraded state. Today the only pacing knobs are the two workers' tick intervals, which space the drains but not the calls inside one.",
+       "cite": {
+        "path": "src/Billing.Api/Infrastructure/BillingOptions.cs",
+        "lineStart": 6,
+        "lineEnd": 7
+       }
+      }
+     ]
+    }
+   ],
+   "set": "b"
+  }
+ ]
+}
