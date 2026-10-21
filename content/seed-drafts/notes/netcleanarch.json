@@ -377,6 +377,321 @@
     }
    ],
    "readMore": []
+  },
+  {
+   "id": "r04-api-tests-errors",
+   "target": "pack",
+   "phase": "before",
+   "title": "Further reading: API design, testing strategy and the error contract",
+   "body": "The later items in this pack draw on three chapters of `CleanArchitecture/fabledocs2` and on four more ADRs in `fabledocs3`. Each chapter is short and follows the same shape: what the code does, the hardest decisions with the alternative the author rejected, an incident, and \"three questions before you move on\". Try those three questions yourself before the quizzes.\n\n1. `fabledocs2/02-api-design.md`: how the Minimal API endpoints are organised and how the OpenAPI document is produced, plus three design decisions and what each one costs.\n2. `fabledocs2/04-testing-strategy.md`: a table of the four test projects, then the decisions behind the functional test suite.\n3. `fabledocs2/05-error-handling.md`: how exceptions become HTTP responses, and the gaps the author admits to.\n4. `fabledocs3/adr-004`, `adr-007`, `adr-008` and `adr-010`: the same kind of decisions written as Architecture Decision Records, each listing the rejected alternatives. `fabledocs3/interview-translation.md` turns every ADR into a spoken interview answer.\n\nFor each decision, write down what was rejected, why, and which failure mode the author tells you to watch for. Open the linked code as you go.",
+   "excerpts": [
+    {
+     "path": "CleanArchitecture/fabledocs2/02-api-design.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "The HTTP surface is built on **Minimal APIs**, organized as one class per resource group."
+    },
+    {
+     "path": "CleanArchitecture/fabledocs2/04-testing-strategy.md",
+     "lineStart": 5,
+     "lineEnd": 5,
+     "quote": "Four layers, each entering the system at a different seam:"
+    }
+   ]
+  },
+  {
+   "id": "x-q14-operationid-rename",
+   "target": "seed:quests:netcleanarch/quiz/06825bd7228d531b",
+   "phase": "after",
+   "title": "Renaming an endpoint method renames the generated client method",
+   "body": "**Key: the operationId comes from the method name, so both SPAs get a renamed client method.**\n\nWhen an endpoint is registered, the code calls `.WithName(handler.Method.Name)`, and that name becomes the OpenAPI `operationId`. NSwag turns the operationId into the generated TypeScript method, so the C# method `GetTodoLists` becomes `getTodoLists()` in both frontends. Rename the C# method and the generated method gets a new name, while every call site in the SPAs still uses the old one. The guide calls this a breaking API change whose blast radius is invisible from the method itself.\n\nWhy the others are wrong:\n- *The backend stops compiling*: in the guide's incident the backend CI was green; it was the frontend build that failed.\n- *Only server log labels change*: both SPAs and any external OpenAPI consumer are affected.\n- *NSwag names client methods from route and verb*: the guide shows the method name flowing straight into the client method name.",
+   "excerpts": [
+    {
+     "path": "CleanArchitecture/fabledocs2/02-api-design.md",
+     "lineStart": 15,
+     "lineEnd": 15,
+     "quote": "we derive its name — which becomes the OpenAPI `operationId` — from the **handler method's name**."
+    },
+    {
+     "path": "CleanArchitecture/fabledocs2/02-api-design.md",
+     "lineStart": 52,
+     "lineEnd": 52,
+     "quote": "The backend CI was green (C# compiles fine)."
+    }
+   ]
+  },
+  {
+   "id": "x-q15-explicit-name-drift",
+   "target": "seed:quests:netcleanarch/quiz/e84a3d20cce64540",
+   "phase": "after",
+   "title": "Why hand-written operation ids were rejected as the default",
+   "body": "**Key: renames tend to leave the literal stale, so code and contract silently disagree.**\n\nThe alternative to deriving the name was to write `.WithName(\"GetTodoLists\")` by hand on every endpoint. The author rejected it because it is boilerplate that drifts: someone renames the method, forgets the string, and nothing complains. Deriving the name from the method keeps code and contract in lockstep by construction. The guide is honest that this trades one risk for another, and says that for a public-facing API it would pin explicit ids after all.\n\nWhy the others are wrong:\n- *Pinned ids suit internal APIs only*: the guide says the opposite; a public-facing API is where it would pin them.\n- *NSwag ignores literal names*: nothing in the guide says so; explicit ids are presented as a working option.\n- *A reflection lookup per request*: performance is never the reason given.",
+   "excerpts": [
+    {
+     "path": "CleanArchitecture/fabledocs2/02-api-design.md",
+     "lineStart": 17,
+     "lineEnd": 17,
+     "quote": "I rejected it because it's boilerplate that drifts: people forget to update the string when they rename the method, and now your code and your contract disagree silently."
+    },
+    {
+     "path": "CleanArchitecture/fabledocs2/02-api-design.md",
+     "lineStart": 19,
+     "lineEnd": 19,
+     "quote": "If I were doing it again for a public-facing API, I'd pin explicit operation IDs and accept the drift risk"
+    }
+   ]
+  },
+  {
+   "id": "x-q16-server-field-request-dto",
+   "target": "seed:quests:netcleanarch/quiz/8c615a88bf7f6cd2",
+   "phase": "after",
+   "title": "A field the client must not set needs its own request DTO",
+   "body": "**Key: give that endpoint a real request DTO and keep direct binding for the others.**\n\nIn this template the JSON body binds straight into the Application command; there is no separate request type. That is fine while every command field is something the client may set. A server-controlled field breaks the assumption: a client could put a value for it in the body (mass-assignment, also called over-posting). The guide's advice is a question to ask for each new field, \"should the client be allowed to set this?\", and when the answer is no, that endpoint needs a real request DTO.\n\nWhy the others are wrong:\n- *A DTO and mapper in front of every command*: the guide keeps the convention and fixes only the endpoint that needs it.\n- *A validator rule that rejects the field*: the guide prescribes a request DTO, because nothing structural stops the binding.\n- *Over-posting stays theoretical*: the guide calls it a real vulnerability.",
+   "excerpts": [
+    {
+     "path": "CleanArchitecture/fabledocs2/02-api-design.md",
+     "lineStart": 27,
+     "lineEnd": 27,
+     "quote": "If no, the direct-bind convention is working against you and you need a real request DTO for that endpoint."
+    },
+    {
+     "path": "CleanArchitecture/fabledocs2/02-api-design.md",
+     "lineStart": 27,
+     "lineEnd": 27,
+     "quote": "that's mass-assignment / over-posting, and it's a real vulnerability, not a theoretical one."
+    }
+   ]
+  },
+  {
+   "id": "x-q17-id-check-transport",
+   "target": "seed:quests:netcleanarch/quiz/c34400f9f928cea3",
+   "phase": "after",
+   "title": "The id check is transport logic, and endpoint logic tends to grow",
+   "body": "**Key: it is transport logic about URL versus body, and endpoints may accrete more logic.**\n\n`UpdateTodoItem` compares the `id` from the route with `command.Id` from the body and returns `BadRequest()` if they differ. The author keeps that in the endpoint because it is about the relationship between the URL and the payload, an HTTP idea the handler should not need to know about. The risk the author watches is growth: today an id check, next a null check, then a \"quick\" business rule, until endpoints hold logic the handlers do not know about and the tests do not cover.\n\nWhy the others are wrong:\n- *A business rule the handler lacks*: the guide classifies it as transport logic, not business logic.\n- *A 404 leaking which ids exist*: the check returns 400, and the risk named is creeping endpoint logic.\n- *It needs the signed-in user*: it compares two ids and uses no identity at all.",
+   "excerpts": [
+    {
+     "path": "CleanArchitecture/fabledocs2/02-api-design.md",
+     "lineStart": 38,
+     "lineEnd": 38,
+     "quote": "it's about the relationship between the URL and the payload, which is an HTTP idea the handler shouldn't need to know exists."
+    },
+    {
+     "path": "CleanArchitecture/fabledocs2/02-api-design.md",
+     "lineStart": 40,
+     "lineEnd": 40,
+     "quote": "it's the kind of thing that, uncontested, grows — next it's a null check, then a \"quick\" business rule"
+    }
+   ]
+  },
+  {
+   "id": "x-q18-lowest-observing-layer",
+   "target": "seed:quests:netcleanarch/quiz/d56dbc5620b328ff",
+   "phase": "after",
+   "title": "Place each test at the lowest layer that can see the failure",
+   "body": "**Key: use the lowest layer that can still observe the failure you actually fear.**\n\nThe four test projects each enter the system at a different seam, and each is blind to something another one catches. So the question for a new test is not \"which layer is best?\" but \"which failure am I afraid of, and what is the lowest layer that can actually see it?\" The guide states the tradeoff in one line: push a fear down a layer and the test gets faster but fictional; push it up and it gets real but slow and vague.\n\nWhy the others are wrong:\n- *The highest layer*: real, but slow, and a full-stack failure says little about where it broke.\n- *The fastest layer*: if that layer cannot see the failure, the test is fictional.\n- *Each layer at once*: the rule picks one layer per fear; the layers complement each other rather than duplicate.",
+   "excerpts": [
+    {
+     "path": "CleanArchitecture/fabledocs2/04-testing-strategy.md",
+     "lineStart": 14,
+     "lineEnd": 14,
+     "quote": "**test at the lowest layer that can observe the failure you actually fear.**"
+    },
+    {
+     "path": "CleanArchitecture/fabledocs2/04-testing-strategy.md",
+     "lineStart": 14,
+     "lineEnd": 14,
+     "quote": "Push a fear down a layer and it's faster but fictional; push it up and it's real but slow and vague."
+    }
+   ]
+  },
+  {
+   "id": "x-q19-untranslatable-linq-incident",
+   "target": "seed:quests:netcleanarch/quiz/b2bf8588a9a91f4d",
+   "phase": "after",
+   "title": "The in-memory double passed and a latency alarm fired",
+   "body": "**Key: as a production latency alarm, after the in-memory double had passed the tests.**\n\nThe handler used a LINQ filter that the real EF provider could not turn into SQL. The in-memory test double did not care: it ran the filter in memory and every test passed. In production the query either threw a translation exception or, on an older EF version, quietly loaded the whole table and filtered it in memory. Nobody saw a red test; the first sign was a latency alarm. This incident is why the functional suite now runs against a real database.\n\nWhy the others are wrong:\n- *A CI failure*: the in-memory provider accepted the query, so CI stayed green.\n- *A constraint violation from the mock*: mocked and in-memory contexts ignore constraints rather than add them.\n- *A code review comment*: the guide says the first sign came from production latency.",
+   "excerpts": [
+    {
+     "path": "CleanArchitecture/fabledocs2/04-testing-strategy.md",
+     "lineStart": 59,
+     "lineEnd": 59,
+     "quote": "The first sign was a latency alarm, not a test failure, because *the tests couldn't see it.*"
+    },
+    {
+     "path": "CleanArchitecture/fabledocs2/04-testing-strategy.md",
+     "lineStart": 59,
+     "lineEnd": 59,
+     "quote": "Against the in-memory test double it evaluated client-side and passed every test."
+    }
+   ]
+  },
+  {
+   "id": "x-q20-static-user-no-parallel",
+   "target": "seed:quests:netcleanarch/quiz/46f0482645b458e7",
+   "phase": "after",
+   "title": "Parallelizing this suite would cause the cross-talk",
+   "body": "**Key: it would cause the cross-talk, so first remove the static user fields in TestApp.**\n\n`TestApp` stores the current test user in `private static` fields (`_userId`, `_roles`). Static fields are shared by the whole process, so two tests running at the same time would overwrite each other's identity. Respawn's reset between tests also assumes only one test uses the database at a time. That is why the suite runs serially. Turning on `[Parallelizable]` would create exactly the cross-talk the colleague thinks they are fixing. The guide's order of work: remove the statics first.\n\nWhy the others are wrong:\n- *Statics scoped to each test's thread*: static fields are process-global.\n- *Respawn already isolates each test*: its reset assumes one test at a time.\n- *A database per test, keeping the statics*: the shared identity would still collide; the statics have to go first.",
+   "excerpts": [
+    {
+     "path": "CleanArchitecture/fabledocs2/04-testing-strategy.md",
+     "lineStart": 35,
+     "lineEnd": 35,
+     "quote": "Static process-global state means **two tests running at once would stomp on each other's identity.**"
+    },
+    {
+     "path": "CleanArchitecture/fabledocs2/04-testing-strategy.md",
+     "lineStart": 39,
+     "lineEnd": 39,
+     "quote": "The right fix is to remove the statics first."
+    }
+   ]
+  },
+  {
+   "id": "x-q21-endpoint-coverage-seam",
+   "target": "seed:quests:netcleanarch/quiz/ee5815b00faaaa60",
+   "phase": "after",
+   "title": "No suite exercises the todo endpoints' HTTP behaviour",
+   "body": "**Key: both suites miss it, as functional tests enter below it and Todo.feature is missing.**\n\nThe id-consistency check lives in `TodoItems.cs`, an endpoint. Functional tests send commands through `ISender`, which sits below the endpoints, so routing, binding, status codes and that check never run there. The acceptance suite drives a real browser, but it only has features for Home, Counter, Weather and Login; there is no `Todo.feature`. The guide says breaking the check would leave every test green, and calls adding a `Todo.feature` acceptance test the highest-value test work in the repo.\n\nWhy the others are wrong:\n- *Application.FunctionalTests*: they enter at `ISender`, so the endpoint code never runs.\n- *Web.AcceptanceTests*: no feature covers the todo screens.\n- *Domain.UnitTests*: the check is in the endpoint, not in the TodoItem entity.",
+   "excerpts": [
+    {
+     "path": "CleanArchitecture/fabledocs2/04-testing-strategy.md",
+     "lineStart": 45,
+     "lineEnd": 45,
+     "quote": "the todo endpoints' HTTP behavior is tested by *neither* the functional nor the acceptance suite."
+    },
+    {
+     "path": "CleanArchitecture/fabledocs2/04-testing-strategy.md",
+     "lineStart": 45,
+     "lineEnd": 45,
+     "quote": "the acceptance layer only covers Home/Counter/Weather/Login (there's no `Todo.feature`)"
+    }
+   ]
+  },
+  {
+   "id": "x-q22-aggregated-validation",
+   "target": "seed:quests:netcleanarch/quiz/7f4f6e76754a38b7",
+   "phase": "after",
+   "title": "Validation reports every failure in a single response",
+   "body": "**Key: one 400 listing all three, gathered by the validation behaviour before one throw.**\n\n`ValidationBehaviour` is a MediatR pipeline stage. It runs every validator for the request, collects every failure, and throws a single `ValidationException` with a dictionary from property name to messages. The exception handler turns that into one 400 `ValidationProblemDetails` response. So the client sees every problem with its input at once instead of fixing one field per round trip, which the guide lists as the incident this design prevented.\n\nWhy the others are wrong:\n- *Only the first failure*: the behaviour collects all failures before throwing.\n- *Gathered by the endpoint from model binding*: the aggregation happens in the pipeline behaviour, not in the endpoint.\n- *One 400 per failing field*: there is one exception and therefore one response.",
+   "excerpts": [
+    {
+     "path": "CleanArchitecture/fabledocs2/05-error-handling.md",
+     "lineStart": 14,
+     "lineEnd": 14,
+     "quote": "aggregates *all* failures, and throws a single `ValidationException` carrying a `PropertyName → messages[]` dictionary."
+    },
+    {
+     "path": "CleanArchitecture/fabledocs2/05-error-handling.md",
+     "lineStart": 14,
+     "lineEnd": 14,
+     "quote": "So a client gets *every* problem with their input at once, not one-at-a-time."
+    }
+   ]
+  },
+  {
+   "id": "x-q23-map-every-escaping-exception",
+   "target": "seed:quests:netcleanarch/quiz/7e1383bd0fb50a45",
+   "phase": "after",
+   "title": "Every exception that can escape a handler needs an HTTP identity",
+   "body": "**Key: grep Domain and Application for every Exception subclass and confirm it is mapped.**\n\nIn the fork's incident, colour codes from an API integration threw a domain exception that the error mapper did not know, so each one became a 500 and paged people. The guide's lesson is broader than colours: every exception type that can escape a handler needs a deliberate HTTP identity, so periodically grep the Domain and Application layers for `: Exception` and check each one is mapped. An unmapped domain exception is a latent 500.\n\nWhy the others are wrong:\n- *A catch-all arm that returns 400*: unmapped exceptions becoming 500 is right for genuinely unexpected errors such as a `NullReferenceException`.\n- *Route all clients through the UI*: the API is the contract; the UI is just one client.\n- *Swap domain exceptions for Result*: the guide keeps throwing for domain-contract violations.",
+   "excerpts": [
+    {
+     "path": "CleanArchitecture/fabledocs2/05-error-handling.md",
+     "lineStart": 50,
+     "lineEnd": 50,
+     "quote": "Periodically grep your Domain and Application layers for `: Exception` and check each one is mapped."
+    },
+    {
+     "path": "CleanArchitecture/fabledocs2/05-error-handling.md",
+     "lineStart": 28,
+     "lineEnd": 28,
+     "quote": "a `NullReferenceException` *should* be a 500"
+    }
+   ]
+  },
+  {
+   "id": "x-q24-expected-vs-exceptional",
+   "target": "seed:quests:netcleanarch/quiz/e21532b3230014e0",
+   "phase": "after",
+   "title": "Result for expected failures, exceptions for exceptional ones",
+   "body": "**Key: whether it is an expected outcome the caller branches on or an exceptional one.**\n\nThe pipeline mostly signals errors with typed exceptions that one handler maps to HTTP. But Identity operations return a `Result`, because \"the password was too weak\" is a normal outcome the caller has to branch on. Not found, not authorized and invalid input are exceptional relative to a handler's happy path, so they throw. For the interview question \"exceptions or result types?\", the guide's advice is not to pick a side but to say it depends on whether the failure is exceptional or expected.\n\nWhy the others are wrong:\n- *Identity code versus the app's handlers*: the source of the failure does not decide; its kind does.\n- *A 4xx versus a 500*: exceptional failures such as not-found also end up as client errors.\n- *Written before or after Result became the default*: Result was rejected as the default.",
+   "excerpts": [
+    {
+     "path": "CleanArchitecture/fabledocs2/05-error-handling.md",
+     "lineStart": 24,
+     "lineEnd": 24,
+     "quote": "Domain-contract violations throw; user-facing expected failures return results."
+    },
+    {
+     "path": "CleanArchitecture/fabledocs2/05-error-handling.md",
+     "lineStart": 24,
+     "lineEnd": 24,
+     "quote": "it depends on whether the failure is exceptional or expected"
+    }
+   ]
+  },
+  {
+   "id": "x-q25-roles-split-no-trim",
+   "target": "seed:quests:netcleanarch/quiz/04ad020033b350f1",
+   "phase": "after",
+   "title": "A space after the comma creates a role that never matches",
+   "body": "**Key: a 403, as splitting without Trim leaves a role named \" User\" that never matches.**\n\n`AuthorizationBehaviour` splits the roles string with `Split(',')` and does not trim the pieces. `\"Admin, User\"` therefore becomes `\"Admin\"` and `\" User\"`, with a leading space. A user whose role is `User` matches neither, so the behaviour treats them as an authenticated user without the required role and throws `ForbiddenAccessException`, which the exception handler maps to 403. The guide calls this latent: no caller in the repo writes such a string, which is why nobody has hit it.\n\nWhy the others are wrong:\n- *Access granted after trimming*: there is no `Trim()`.\n- *A 401*: 401 is for a request with no authenticated user at all; this user is signed in.\n- *A startup failure*: nothing checks role strings at startup, which is why the edge has survived.",
+   "excerpts": [
+    {
+     "path": "CleanArchitecture/fabledocs2/05-error-handling.md",
+     "lineStart": 38,
+     "lineEnd": 38,
+     "quote": "produces a role literally named `\" User\"`, which will never match anything."
+    },
+    {
+     "path": "CleanArchitecture/fabledocs2/05-error-handling.md",
+     "lineStart": 36,
+     "lineEnd": 36,
+     "quote": "`ForbiddenAccessException` when the user is authenticated but lacks the role/policy"
+    }
+   ]
+  },
+  {
+   "id": "x-q26-rollback-per-test-rejected",
+   "target": "seed:quests:netcleanarch/quiz/9143d8593eb997c5",
+   "phase": "after",
+   "title": "Why rollback-per-test was rejected for the functional suite",
+   "body": "**Key: it breaks once a handler commits its own transaction, which every handler does.**\n\nWrapping each test in a transaction and rolling it back at the end only isolates tests while the code under test leaves that transaction open. In this codebase every handler saves and commits its own work, so a rollback around the test cannot undo it. ADR-008 chose Respawn instead, which resets the data (not the schema) between tests.\n\nWhy the others are wrong:\n- *Slower, each test booting a container*: that is the reason container-per-test isolation was rejected.\n- *Relies on the in-memory provider*: that describes the mocked or in-memory alternative, rejected because it accepts queries the real provider cannot translate.\n- *Clashes with the static user fields*: the statics are the reason the suite cannot run in parallel, a separate consequence.",
+   "excerpts": [
+    {
+     "path": "CleanArchitecture/fabledocs3/adr-008-real-database-functional-testing.md",
+     "lineStart": 17,
+     "lineEnd": 17,
+     "quote": "Breaks the moment code under test commits its own transaction (which every handler does)."
+    },
+    {
+     "path": "CleanArchitecture/fabledocs3/adr-008-real-database-functional-testing.md",
+     "lineStart": 16,
+     "lineEnd": 16,
+     "quote": "**Container-per-test isolation.** Cleaner isolation, far slower."
+    }
+   ]
+  },
+  {
+   "id": "x-q27-suppressed-drift-warning",
+   "target": "seed:quests:netcleanarch/quiz/bad7776c6d879a5f",
+   "phase": "after",
+   "title": "Suppressing the pending-changes warning hides schema drift",
+   "body": "**Key: schema drift goes unseen, as the alarm that the model diverged has been silenced.**\n\nThe template builds its schema with `EnsureCreated` and has no migrations. EF Core normally warns when the model has pending changes that no migration captures; line 33 of `Infrastructure/DependencyInjection.cs` turns that warning off, so nothing tells you the model has moved away from what a migration would produce. ADR-010 lists this among its negative consequences, and the interview answer says a production fork should un-suppress the warning so drift is visible again.\n\nWhy the others are wrong:\n- *Seeding stops being idempotent*: seeding is guarded so it can safely re-run.\n- *Migrations apply silently*: there are no migrations at all.\n- *Only SQLite tolerates it*: one model targets SQLite, PostgreSQL and SQL Server behind switches.",
+   "excerpts": [
+    {
+     "path": "CleanArchitecture/fabledocs3/adr-010-schema-by-convention-no-migrations.md",
+     "lineStart": 28,
+     "lineEnd": 28,
+     "quote": "**Schema drift is invisible** because the pending-changes warning is suppressed"
+    },
+    {
+     "path": "CleanArchitecture/fabledocs3/adr-010-schema-by-convention-no-migrations.md",
+     "lineStart": 11,
+     "lineEnd": 11,
+     "quote": "guarded so seeding is idempotent"
+    }
+   ]
   }
  ]
 }
