@@ -1,0 +1,146 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "zz1--docs-architecture-auth-and-tenant-isolation.md",
+ "items": [
+  {
+   "key": "seed:explainback:zz1/explain-back/8e116815ce7afe7d",
+   "provenance": {
+    "repo": "zz1",
+    "sha": "a561c1b62f7d7ff9b445c7c15700f10b312d7a0f",
+    "path": "docs/architecture/auth-and-tenant-isolation.md",
+    "lines": {
+     "start": 1,
+     "end": 111
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "DESIGN IT — [mid] auth + tenant isolation for a small B2B app (zz1, docs/architecture/auth-and-tenant-isolation.md). Scenario: a sales CRM serves 300 customer organizations of 5 to 40 users each; about 50 consultants belong to 3 organizations and work in one at a time; a session lasts 7 days; when a rep is removed or demoted the change must bite on their very next request; finance suspends about 10 unpaid organizations a month and all of their users must lose access at once; work is assigned to colleagues; and 3 platform staff sometimes need to see a customer's workspace to help. Write your design before you look: what the session token carries and what every request works out again, how the active organization is chosen and switched, where the tenant and permission checks run and how the code makes skipping them hard, how staff reach customer data, how assignment stays inside the tenant, and how the cookie and its secret are set up. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "keyPoints": [
+      {
+       "text": "[w3] The token names, it does not grant: it carries the user id and which membership is active, and on every request the user, that membership's role and status and the organization's status are loaded again from the database, so a 7-day token never outlives a demotion or a removal.",
+       "cite": {
+        "path": "src/lib/auth/session.ts",
+        "lineStart": 52,
+        "lineEnd": 118
+       }
+      },
+      {
+       "text": "[w3] Make the check impossible to skip by type: every organization route goes through one guard that returns a context whose tenant and membership are never null, and every tenant service accepts only that context, so a route cannot reach a service without the guard. The type does not pick the permission, though; which permission a route demands stays a choice reviewers must check.",
+       "quote": "so TypeScript prevents calling a tenant service with an unauthenticated context"
+      },
+      {
+       "text": "[w2] Membership status and organization status are separate gates checked on every request, so suspending an organization locks out all of its members with one write and no token changes, and disabling one membership locks out one person.",
+       "cite": {
+        "path": "src/lib/middleware/withTenantGuard.ts",
+        "lineStart": 13,
+        "lineEnd": 30
+       }
+      },
+      {
+       "text": "[w2] The active organization is chosen at sign-in and pinned into the session as a membership id, either the one the user names or else their oldest qualifying membership; naming an organization they do not belong to is refused. Switching therefore means issuing a new session, not a per-request header the browser could edit.",
+       "quote": "otherwise the oldest qualifying membership wins"
+      },
+      {
+       "text": "[w3] Staff access is a separate scope, not a bypass: platform routes have their own guard, and there is no platform-admin shortcut inside organization services, so a staff member who must read a customer's data needs a real membership there, which is explicit, granted per organization and governed by the normal role rules.",
+       "quote": "There is no automatic platform-admin bypass in org services"
+      },
+      {
+       "text": "[w2] Assignment is an authorization boundary: giving work to anyone other than yourself needs a permission, and the assignee is looked up through the tenant-scoped repository, so a member of another organization is simply not found.",
+       "cite": {
+        "path": "src/lib/permissions/assignment.ts",
+        "lineStart": 13,
+        "lineEnd": 35
+       }
+      },
+      {
+       "text": "[w1] The session cookie is httpOnly, SameSite=Lax, Secure in production and lives 7 days, and the signing secret comes from a required environment variable, so a missing secret makes signing fail and every session check come back invalid instead of falling back to a default.",
+       "cite": {
+        "path": "src/lib/auth/session.ts",
+        "lineStart": 18,
+        "lineEnd": 45
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "PRE-MORTEM — six months in: a rep's laptop is stolen with a live session cookie, an engineer adds a reports route that reads the membership straight from the authenticated context, the nightly CSV import for an organization suspended at 18:00 runs at 02:00, and a new repository method takes a raw organization id. What breaks, how is it detected, and what is the repair?",
+     "keyPoints": [
+      {
+       "text": "[w3] Sessions are stateless and sign-out only deletes the cookie in that browser, so a copied token keeps working until its 7-day expiry; the only server-side switch is disabling the user or the membership, which ends every session that person has. Put a session id or token version in the token and check it against a server record, or use short tokens with refresh.",
+       "cite": {
+        "path": "src/lib/auth/session.ts",
+        "lineStart": 22,
+        "lineEnd": 50
+       }
+      },
+      {
+       "text": "[w3] The membership is loaded without a status filter and only the tenant guard rejects an inactive one, so the new reports route serves disabled members and suspended organizations. Catch it with a test or lint rule that every organization route calls the guard.",
+       "quote": "If you ever add a route that uses `ctx.session.membership` without calling `requireOrgRequest`, you lose that check."
+      },
+      {
+       "text": "[w3] Background jobs have no request, so they need a tenant context built from the job's own row and the same status checks at run time. The job runner here builds an organization context with a hard-coded admin role and active statuses through a type cast, which defeats the type guarantee and lets a suspended organization's queued import still apply; load the organization and membership and check them when the job runs.",
+       "cite": {
+        "path": "src/services/jobService.ts",
+        "lineStart": 52,
+        "lineEnd": 76
+       }
+      },
+      {
+       "text": "[w2] Repositories that take a raw organization id are safe only while every caller passes the guarded tenant id; the first caller that passes a request parameter instead reads another tenant. Make them take the guarded context as the others do.",
+       "quote": "They are safe only because their callers pass `ctx.tenantId`"
+      },
+      {
+       "text": "[w1] Two updates go by bare id with no tenant in the predicate, which is acceptable only while the platform job runner is their sole caller; reuse from a request path turns them into cross-tenant writes.",
+       "quote": "update by bare id; they are only called from the platform-admin job runner."
+      },
+      {
+       "text": "[w1] The permission error tells the caller its role, the permission and the tenant id, and the request id is whatever the client sent in a header; neither should be treated as safe to show or as trusted identity in logs and audits.",
+       "cite": {
+        "path": "src/lib/permissions/policy.ts",
+        "lineStart": 95,
+        "lineEnd": 103
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "TRADE-OFF HANDBACK — defend your auth choices against the alternatives the guide names or implies: a stateless signed cookie versus a server-side session record, checking named permissions versus checking roles, one assign permission for every record type versus one per type, role checks in the server policy versus in client components, detailed versus plain error messages, and pinning the active organization in the session versus naming it on every request. For each, say what you bought, what it cost, and which requirement put you on that side.",
+     "keyPoints": [
+      {
+       "text": "[w3] A signed stateless cookie needs no session store and works on any instance, but one session cannot be revoked on its own; a server-side session record (or a version per user) adds a lookup per request and makes sign-out and 'sign out everywhere' real. Since this app already reads the user on every request, the extra cost is small.",
+       "cite": {
+        "path": "src/lib/auth/session.ts",
+        "lineStart": 22,
+        "lineEnd": 50
+       }
+      },
+      {
+       "text": "[w3] Routes ask for a named permission, and roles are just bundles of permissions in one table, so adding a role or moving a permission edits one map instead of every route; the cost is that coarse permissions get reused: one assign permission covers contacts, deals and activities too, so a rep can assign nothing and a manager can assign everything, and splitting it costs more strings and role edits.",
+       "quote": "There is no `deals.assign` or `activities.assign`"
+      },
+      {
+       "text": "[w2] Role checks belong in the server policy: hiding a button in a client component is not authorization, because anyone can call the API directly.",
+       "quote": "Checking roles in client components instead of `policy.ts`."
+      },
+      {
+       "text": "[w2] A detailed error (role, permission, tenant id) saves support time and costs a small leak of internal facts to the caller; a plain code with the detail kept in server logs gives the same help without the leak.",
+       "quote": "acceptable here, worth knowing"
+      },
+      {
+       "text": "[w2] Pinning the active organization in the session means one lookup by membership id and nothing in the request that the client can swap, but a consultant who works in 3 organizations must start a new session to switch; naming the organization on every request lets one session span all three, at the price of a membership check against whatever each request names.",
+       "cite": {
+        "path": "src/services/authService.ts",
+        "lineStart": 41,
+        "lineEnd": 53
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

@@ -1,0 +1,166 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "organized-study-support-desk-crm--docs-features-003-outbox-worker-notifications.md",
+ "items": [
+  {
+   "key": "seed:explainback:organized-study-support-desk-crm/explain-back/7db1ae8874356dcd",
+   "provenance": {
+    "repo": "organized-study-support-desk-crm",
+    "sha": "fed8472af12f1d5e4724688e0741d4ec491f26e4",
+    "path": "docs/features/003-outbox-worker-notifications.md",
+    "lines": {
+     "start": 1,
+     "end": 51
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "DESIGN IT — [mid] notifications without dual writes in a support-desk CRM (organized-study-support-desk-crm, docs/features/003-outbox-worker-notifications.md). Scenario: 120 customer companies share one help desk as tenants; at the Monday peak agents post about 3,000 public replies an hour, and each must reach the customer by email within a minute; internal notes must never email anyone; the mail provider posts inbound customer emails to the API and redelivers any it did not get a 2xx for; one tenant's mailbox sync can push 6,000 inbound emails in a single minute; and you will run 2 worker replicas so that one crash does not stop email. Write your design before you look: what is written with each reply and in which transaction, what an event row carries, how a redelivered inbound email is kept from opening a second ticket, how the worker records its progress and shares work between replicas, how long the 6,000-email burst takes to drain, and how that burst is kept from delaying every other tenant's replies. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "keyPoints": [
+      {
+       "text": "[w3] Decide what is owed inside the change itself: the reply, its audit row and its outbox row commit in one transaction, and the event is written only when the reply is public, so an internal note can never produce a customer email and a rolled-back reply leaves no email behind.",
+       "cite": {
+        "path": "apps/api/src/modules/tickets/ticketService.ts",
+        "lineStart": 218,
+        "lineEnd": 256
+       }
+      },
+      {
+       "text": "[w3] Keep events thin: the reply event carries only the ticket and comment ids, and the row carries the tenant, so the sender should load the reply under that tenant at send time. Rows stay small, customer text is not copied into the queue, and the email is built from what is actually stored.",
+       "cite": {
+        "path": "apps/api/src/modules/tickets/ticketService.ts",
+        "lineStart": 245,
+        "lineEnd": 252
+       }
+      },
+      {
+       "text": "[w3] Stop duplicates at the inbound edge with the provider's own message id: a unique key on (tenant, external id) makes a redelivered email fail the whole ingest transaction, so no second ticket and no second outbox event can exist. Then answer that unique-key failure as 'already ingested'; left alone it becomes a 500, and the provider keeps redelivering.",
+       "cite": {
+        "path": "prisma/schema.prisma",
+        "lineStart": 146,
+        "lineEnd": 162
+       }
+      },
+      {
+       "text": "[w2] Give the side effect a visible lifecycle: each row moves from PENDING through PROCESSING to PROCESSED or FAILED and records its attempts, last error and processed time, with an index on (status, created at) that serves exactly the poller's query.",
+       "quote": "Asynchronous side effects deserve explicit state."
+      },
+      {
+       "text": "[w2] Size the drain from batch size and interval: one worker handles at most 10 events per pass and waits 4 seconds after each pass, so roughly 150 a minute at best. 3,000 replies an hour (50 a minute) fits, but the 6,000-email burst is about 40 minutes of backlog for one worker; batch size, interval and worker count are the knobs.",
+       "cite": {
+        "path": "apps/worker/src/worker.ts",
+        "lineStart": 4,
+        "lineEnd": 11
+       }
+      },
+      {
+       "text": "[w2] Keep one tenant's burst from delaying everyone: the poller takes the oldest events across all tenants, so 6,000 imported emails sit in front of every other tenant's reply emails until they drain. Each row already carries its tenant, so take work tenant by tenant in turn, or cap each tenant's share of a batch.",
+       "cite": {
+        "path": "apps/worker/src/worker.ts",
+        "lineStart": 6,
+        "lineEnd": 11
+       }
+      },
+      {
+       "text": "[w2] With 2 replicas, setting a row to PROCESSING is not yet a claim: it is an unconditional update by id after a plain read, so both replicas can mark and send the same event. A claim has to be conditional on the row still being PENDING and check that exactly one row changed, or lock rows so the other replica skips them.",
+       "cite": {
+        "path": "apps/worker/src/worker.ts",
+        "lineStart": 7,
+        "lineEnd": 18
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "PRE-MORTEM — the same desk a month later: FAILED events are now retried, 2 worker replicas run, a deploy kills one worker in the middle of a batch, and the mail provider answers 503 for 5 minutes. What breaks, how would you notice, and what is the repair?",
+     "keyPoints": [
+      {
+       "text": "[w3] A worker killed between marking an event PROCESSING and marking it PROCESSED leaves that row in PROCESSING for good, because the poller only selects PENDING rows: the customer never gets the email and nothing alerts. Record when a row was claimed and run a sweep that hands back rows stuck in PROCESSING longer than a lease.",
+       "cite": {
+        "path": "README.md",
+        "lineStart": 58,
+        "lineEnd": 58
+       }
+      },
+      {
+       "text": "[w3] Once that sweep exists, an event whose email went out just before the kill is sent again: delivery is at-least-once. Pass the outbox row's id to the mail provider as an idempotency key, so a repeated send is recognised and dropped instead of reaching the customer twice.",
+       "quote": "exponential backoff, dead-letter queues, idempotency keys, and real providers"
+      },
+      {
+       "text": "[w3] An event whose handler always throws (for example a payload the sender cannot use) must end in a dead-letter state someone looks at, neither looping nor vanishing; the attempt counter exists but nothing compares it with a limit, so naive retries would run such an event forever.",
+       "quote": "`attempts` is counted but never compared to a limit"
+      },
+      {
+       "text": "[w2] If failed events simply come back on the next 4-second pass, a 5-minute provider outage uses up any small retry budget in well under a minute and every event dead-letters. The delay must grow with each attempt so that the attempts times the delay outlast a realistic outage.",
+       "cite": {
+        "path": "docs/features/003-outbox-worker-notifications.md",
+        "lineStart": 38,
+        "lineEnd": 38
+       }
+      },
+      {
+       "text": "[w2] Two replicas or a retry can deliver one ticket's updates out of order: the update event records the status as it was at that moment, so a 'resolved' email can arrive after the ticket was reopened. Send a version the consumer can compare, or have the sender read the ticket's current state when it sends.",
+       "cite": {
+        "path": "apps/api/src/modules/tickets/ticketService.ts",
+        "lineStart": 195,
+        "lineEnd": 201
+       }
+      },
+      {
+       "text": "[w1] Today the delivery is a log line, so nothing proves an email actually left; when a real provider is wired in, store its response (such as its message id) on the row so support can answer 'did the customer get it?' from the table.",
+       "quote": "The \"delivery\" is a `console.log`."
+      }
+     ]
+    },
+    {
+     "prompt": "TRADE-OFF HANDBACK — defend your notification design against the alternatives the plan and its review name: sending the email straight from the request handler, polling the table versus a real queue (Redis already runs in Compose), a durable event table versus an in-memory promise chain, a separate worker process versus work inside the API, thin id-only events versus full snapshots, and building the outbox in the first version versus later. For each, say what you bought, what it cost, and which requirement put you on that side.",
+     "keyPoints": [
+      {
+       "text": "[w3] Sending from the handler is a dual write: send after the commit and a crash or provider error loses the email with no record that it was owed; send before the commit and a rolled-back reply still emails the customer. The outbox costs a table, a worker and up to one poll of delay, and buys a single atomic commit.",
+       "cite": {
+        "path": "docs/features/003-outbox-worker-notifications.md",
+        "lineStart": 18,
+        "lineEnd": 20
+       }
+      },
+      {
+       "text": "[w3] Polling the table needs no new infrastructure and keeps the table as the only source of truth, at the cost of up to one interval of delay and a query every few seconds. A broker such as the Redis that Compose starts but nothing uses would push at once and spread consumers, but events still have to enter it atomically, so a queue replaces the poller, not the outbox table.",
+       "cite": {
+        "path": "docs/architecture/final-system-design.md",
+        "lineStart": 38,
+        "lineEnd": 38
+       }
+      },
+      {
+       "text": "[w2] A durable event row survives a crash and can be queried, retried and inspected; a promise chain in memory dies with the process and leaves no trace of what was still owed.",
+       "quote": "A durable event table is easier to inspect and retry than a hidden in-memory promise chain."
+      },
+      {
+       "text": "[w2] A separate worker can be scaled and restarted on its own, and a slow send never holds up an API request; the cost is that it imports the API's database client directly, so a schema change has to ship to both processes together.",
+       "quote": "The worker depends on the same Prisma client as the API but runs as a separate process."
+      },
+      {
+       "text": "[w2] Thin id-only events keep rows small and let the sender build the email from current data, but the sender needs database access and sees later changes; a full snapshot is self-contained and exact for its moment, but copies customer text into a queue table. The producers here mix both: the reply event is ids only, while the created event also copies the subject.",
+       "cite": {
+        "path": "apps/api/src/modules/tickets/ticketService.ts",
+        "lineStart": 131,
+        "lineEnd": 137
+       }
+      },
+      {
+       "text": "[w1] Building the outbox in the first version cost little while delivery was only a log line, and it fixed the boundary a real provider plugs into; adding it later means hunting down every write that should have emitted an event.",
+       "cite": {
+        "path": "docs/architecture/architecture-plan.md",
+        "lineStart": 69,
+        "lineEnd": 69
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

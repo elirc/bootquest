@@ -1,0 +1,130 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "dotnet-stripe--docs2-03-architecture-and-patterns-04-side-effects-async-and-reliability.md",
+ "items": [
+  {
+   "key": "seed:explainback:dotnet-stripe/explain-back/989afb4d43d5a095",
+   "provenance": {
+    "repo": "dotnet-stripe",
+    "sha": "8f402575b200ba258dbd43b5802642c1ecbfa63e",
+    "path": "docs2/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+    "lines": {
+     "start": 1,
+     "end": 91
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "DESIGN IT — [mid] payment side-effects that survive retries, for a .NET storefront (dotnet-stripe, docs2/03-architecture-and-patterns/04-side-effects-async-and-reliability.md). Scenario: a subscription storefront opens 3,000 invoices in its monthly billing run at midnight; buyers press Pay, some of them twice, and mobile clients resend after a 10-second timeout; Pay answers 202 and a background worker that ticks every 4 seconds applies the payment, while the card provider also confirms each payment with a signed webhook that sometimes arrives before the worker gets there; every paid invoice must send exactly one event to the merchant's own webhook endpoint; you will run 2 API instances and deploy every day. Write your design before you look: where the duplicate-detection record lives and what it is committed with, how a payment result that two paths can reach is applied once, what one payment record stands for, how the outbound merchant event is recorded, and how work retried after a delay gets picked up again. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "keyPoints": [
+      {
+       "text": "[w3] Keep the duplicate check with the data, not beside it: a response cache held in one process's memory forgets every key on a restart and is not shared with the second instance, so a resend after the daily deploy, or one routed to the other instance, runs the payment again. The record has to be durable, shared by every instance, and committed together with the payment itself.",
+       "quote": "a restart loses keys, so a retry after restart re-executes."
+      },
+      {
+       "text": "[w3] There are two layers of idempotency: the HTTP layer only protects a client's resend, while the payment result is reached by two internal paths (the worker and the provider's confirmation webhook) that never pass through it. Make applying a result a guarded state change from Open to Paid that can succeed once, so whichever path arrives second changes nothing and writes no second payment and no second merchant event.",
+       "quote": "Idempotent processing (engine)"
+      },
+      {
+       "text": "[w2] The worker's already-paid check is the only guard against a double charge when the confirmation webhook wins the race, but it reads the invoice and applies the result as separate steps, so a confirmation that lands between the read and the write still gets through; the check and the write must be one conditional step.",
+       "quote": "The skip is the one thing standing between the system and a double-charge when the inbound webhook beats the worker."
+      },
+      {
+       "text": "[w2] One payment record should stand for one payment intent and move through its states. Here Pay writes a Pending payment and the result is saved as a second, brand-new payment, so the Pending record is never closed and 'one intent, one outcome' cannot be checked; transition the original record instead.",
+       "cite": {
+        "path": "src/Billing.Api/Infrastructure/BillingEngine.cs",
+        "lineStart": 141,
+        "lineEnd": 179
+       }
+      },
+      {
+       "text": "[w3] Record the merchant event in the same commit as the state change it announces (an outbox). Here the invoice update, the payment and the queued event are three separate store calls, each taking and releasing the lock on its own; a lock per call is not a transaction, so a crash between them leaves a paid invoice with no event, or an event about a change that never landed.",
+       "quote": "not transactional with the write"
+      },
+      {
+       "text": "[w2] Work retried after a delay must be picked by due time, not by queue position: a queue that only looks at its head is fine while every job is due at once, but the moment you add a retry delay it bites, because one waiting job holds back every ready job behind it.",
+       "quote": "the moment you add a retry delay it bites"
+      }
+     ]
+    },
+    {
+     "prompt": "PRE-MORTEM — the same storefront after you replace the simulated send with real HTTP and give failed payment jobs a 5-minute retry delay: one merchant's endpoint now hangs for 30 seconds on every call, another merchant's endpoint is gone for good, and a deploy restarts both instances in the middle of the 3,000-invoice run. What breaks first, how would on-call find out, and what in your design already handles it?",
+     "keyPoints": [
+      {
+       "text": "[w3] The retry path has never run: today the send cannot fail, so the backoff-and-requeue code runs for the first time in production, and it has no attempt limit. An endpoint that is gone for good is retried forever, every 5 minutes once the doubling delay reaches its 300-second cap. Add a maximum attempt count and a dead-letter state someone looks at.",
+       "quote": "Backoff code exists but is unreachable — the delivery can't fail (R-06)."
+      },
+      {
+       "text": "[w3] Both queues stall behind their first delayed item. The payment queue only checks its head, and the webhook dequeue, although the guide describes it as skipping rows that are not yet due, also stops at the first one: it only walks past ids whose event row is gone. So the dead endpoint's 5-minute backoff holds every other merchant's events, and one delayed payment job holds the rest of the billing run.",
+       "cite": {
+        "path": "src/Billing.Api/Infrastructure/BillingStore.cs",
+        "lineStart": 229,
+        "lineEnd": 255
+       }
+      },
+      {
+       "text": "[w3] Queued work must be as durable as the data. In this repo every collection, the job queue and the event queue included, lives in process memory; if the queues stay in memory after invoices and payments move to a database, the restart drops every queued job and event, leaving payments Pending and merchants never told. Durable queues stop the loss, and a sweep for payments still Pending after N minutes catches what slipped through.",
+       "cite": {
+        "path": "src/Billing.Api/Infrastructure/BillingStore.cs",
+        "lineStart": 5,
+        "lineEnd": 17
+       }
+      },
+      {
+       "text": "[w2] A hung endpoint holds up the whole drain: each tick delivers events one after another, so with no timeout every 30-second hang delays every event queued behind it. Give every send a timeout and the cancellation token, and do not let one slow merchant delay the others.",
+       "quote": "No HTTP client, no `HttpClient` timeout, no `CancellationToken` on the (simulated) send."
+      },
+      {
+       "text": "[w2] On-call would hear about it from merchants: failures only reach a log line, there are no metrics or alerts, and today even that log line cannot fire. Add a delivered/failed counter and an alert on events stuck Pending for longer than N minutes.",
+       "quote": "a delivered/failed counter + a \"rows stuck Pending > N min\" alert"
+      },
+      {
+       "text": "[w2] The error field is written on successful deliveries too, so a search for events with an error returns every delivered event and the real failures are lost among them; keep that field for failures only.",
+       "quote": "is set on *success*"
+      },
+      {
+       "text": "[w2] At-least-once means duplicates at the merchant: once real failures happen, a send that worked but whose status update was lost goes out again, and the event body carries no event id the merchant could use to drop the repeat. Put a stable event id in every delivery.",
+       "quote": "the harder at-least-once-under-failure case is never exercised"
+      }
+     ]
+    },
+    {
+     "prompt": "TRADE-OFF HANDBACK — defend your choices against the alternatives this guide names: idempotency as cross-cutting middleware versus inside the business transaction, a plain FIFO queue versus picking work by due time, a timer that drains everything each tick versus finer scheduling, sending before marking versus marking before sending, and async all the way versus blocking on tasks. For each, say what you bought, what it cost, and which requirement put you on that side.",
+     "keyPoints": [
+      {
+       "text": "[w3] Middleware is one clean place that covers every unsafe /api request with no handler changes, but it stores the response apart from the business write. Idempotency inside the transaction costs a change to every mutation and a durable key table, and buys a duplicate that fails together with its write. Money movement needs the second.",
+       "quote": "is a clean cross-cutting concern"
+      },
+      {
+       "text": "[w3] Marking an event as sent before sending loses it if the process dies in between (at most once); sending before marking can send it twice (at least once). For merchant webhooks choose at-least-once and pay for it with a stable id and receivers that ignore repeats; losing a payment event costs more than a duplicate.",
+       "cite": {
+        "path": "src/Billing.Api/Infrastructure/WebhookDeliveryWorker.cs",
+        "lineStart": 26,
+        "lineEnd": 54
+       }
+      },
+      {
+       "text": "[w2] A FIFO queue is cheap and keeps arrival order, which is enough while every job is due straight away; picking by due time (an index on the due timestamp, or a scan that passes over rows not yet due) costs a sort or a walk per dequeue, and lets delayed work wait without blocking ready work.",
+       "cite": {
+        "path": "src/Billing.Api/Infrastructure/BillingStore.cs",
+        "lineStart": 192,
+        "lineEnd": 213
+       }
+      },
+      {
+       "text": "[w2] A timer that wakes, drains everything due and sleeps again is simple and survives restarts once its queue is durable, but every hop adds up to one interval: with the 4-second and 8-second ticks a merchant can hear about a payment about 12 seconds after Pay, and a big backlog is drained inside a single tick.",
+       "quote": "tick → drain-all → wait"
+      },
+      {
+       "text": "[w1] Async all the way, with a periodic timer and a cancellation token that is honoured, gives clean shutdown and no thread parked on a task; blocking with .Result or .Wait() can look simpler in one spot, but it is how ASP.NET apps deadlock.",
+       "quote": "sync-over-async deadlocks are a classic ASP.NET bug this repo avoids"
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}
