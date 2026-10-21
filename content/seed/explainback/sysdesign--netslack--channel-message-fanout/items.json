@@ -1,0 +1,218 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "netslack--docs-architecture.md",
+ "items": [
+  {
+   "key": "seed:explainback:netslack/explain-back/2a6a791202760c76",
+   "provenance": {
+    "repo": "netslack",
+    "sha": "c7337d7d381418cfd35ccf0ade33f89901ac8d2a",
+    "path": "docs/architecture.md",
+    "lines": {
+     "start": 1,
+     "end": 33
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "DESIGN IT — [mid] real-time channel message delivery for a team chat (netslack, docs/architecture.md). Scenario: one 8,000-person company workspace; #announcements has every employee as a member; #incidents peaks at 40 messages a second during an outage; most people sit on laptops whose Wi-Fi sleeps several times a day; each channel shows an unread badge; and you will run 3 API instances behind a load balancer. Write your design before you look: the write path and where it sits relative to the live push, how one posted message reaches every open client in the channel, who is allowed to post and who is allowed to subscribe, how messages are ordered within a channel, how a client that was offline gets what it missed, how unread state is kept, and what has to change before the second API instance starts. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "keyPoints": [
+      {
+       "text": "[w3] Persist first, push second: the POST handler saves the message through the message service and only then sends it to the channel's group, so nothing is ever pushed that the database does not hold; the live push is a notification of a stored fact, never the record itself.",
+       "cite": {
+        "path": "src/NetSlack.Api/Endpoints/MessageEndpoints.cs",
+        "lineStart": 26,
+        "lineEnd": 36
+       }
+      },
+      {
+       "text": "[w3] Keep the posting rule in the message service, not the endpoint: the poster must belong to the channel's workspace, a private channel additionally requires channel membership, and posting in a public channel adds the poster as a member in the same save.",
+       "cite": {
+        "path": "src/NetSlack.Application/Messages/MessageService.cs",
+        "lineStart": 79,
+        "lineEnd": 115
+       }
+      },
+      {
+       "text": "[w3] Fan out by channel group: every connection viewing a channel is added to a group named after the channel id, and one group send per message lets the real-time layer deliver to all of them; the poster's request does no per-recipient loop and no per-recipient database read.",
+       "cite": {
+        "path": "src/NetSlack.Api/Hubs/MessageHub.cs",
+        "lineStart": 10,
+        "lineEnd": 20
+       }
+      },
+      {
+       "text": "[w3] Subscribing is a read and needs the read rule: today JoinChannel takes any channel id and adds the connection to that group with no lookup at all, so any signed-in user who knows a private channel's id receives its live messages. The join must run the same workspace and private-channel membership check as the history read.",
+       "cite": {
+        "path": "src/NetSlack.Api/Hubs/MessageHub.cs",
+        "lineStart": 10,
+        "lineEnd": 13
+       }
+      },
+      {
+       "text": "[w2] Order within a channel comes from a server timestamp: history is sorted by the posted time alone with nothing to break a tie, so two messages in the same clock tick have no defined order and a push can arrive before an older one. Sort on the client by (posted time, id) at least, or assign a per-channel sequence number at insert.",
+       "cite": {
+        "path": "src/NetSlack.Application/Messages/MessageService.cs",
+        "lineStart": 14,
+        "lineEnd": 33
+       }
+      },
+      {
+       "text": "[w3] Treat the push as a hint and the database as the record: a client that connects or reconnects subscribes first, then fetches everything after the last message it holds and merges; the web client already drops a message whose id it has seen, so overlap between the fetched page and live pushes is harmless.",
+       "cite": {
+        "path": "client/src/features/workspace/WorkspaceShell.tsx",
+        "lineStart": 32,
+        "lineEnd": 34
+       }
+      },
+      {
+       "text": "[w2] Unread state has to be designed from scratch: a channel membership records only who joined and when. Add a per-member last-read position, move it when the user views the channel, and count messages after it using the (channel, posted time) index; badge updates go to the user, not to the whole channel group.",
+       "cite": {
+        "path": "src/NetSlack.Domain/Channels/ChannelMember.cs",
+        "lineStart": 11,
+        "lineEnd": 22
+       }
+      },
+      {
+       "text": "[w2] Each API instance only knows the connections it holds, so a group send from one instance never reaches members connected to the other two; a shared pub/sub layer between the instances has to exist before the second instance starts.",
+       "cite": {
+        "path": "docs/architecture.md",
+        "lineStart": 27,
+        "lineEnd": 27
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "PRE-MORTEM — the chat has run for a month on 3 instances. A laptop sleeps for 20 minutes while #incidents receives 300 messages, then wakes up; a user opens a channel at the moment a teammate posts in it; the real-time publish throws right after a message was saved; a user's POST times out and the client sends it again; a security review asks who, today, can receive a private channel's live messages; and someone posts in the 10,000-member #announcements. For each: what does the system do today, what breaks, and what is the repair?",
+     "keyPoints": [
+      {
+       "text": "[w3] Automatic reconnect hands the client a new connection, group membership belongs to the old one, and the hook joins the channel only once after the first start, so after the laptop wakes it is connected but in no group and silently receives nothing. Re-join in the reconnected callback and then fetch the gap.",
+       "cite": {
+        "path": "client/src/hooks/useSignalRChannel.ts",
+        "lineStart": 13,
+        "lineEnd": 28
+       }
+      },
+      {
+       "text": "[w3] The history read returns only the newest page, at most 100 messages, with no 'after this message' cursor, so even a client that re-fetches cannot see 200 of the 300 it missed. Add a cursor read keyed on the last message held, or page backwards until the known message appears.",
+       "cite": {
+        "path": "src/NetSlack.Application/Messages/MessageService.cs",
+        "lineStart": 10,
+        "lineEnd": 20
+       }
+      },
+      {
+       "text": "[w2] Opening a channel starts the history fetch and the group join independently, and the fetched list replaces whatever was shown: a push that lands before the history response is wiped, and a message saved after the history query but before the join is never seen. Join first, buffer pushes, then fetch and merge by id.",
+       "cite": {
+        "path": "client/src/features/workspace/WorkspaceShell.tsx",
+        "lineStart": 36,
+        "lineEnd": 115
+       }
+      },
+      {
+       "text": "[w3] The endpoint awaits the group send after the save, so a hub failure turns a stored message into an error response: online members get no push and the author is told the post failed. Do not fail the request for a broadcast failure; log it and let clients catch up from the database.",
+       "cite": {
+        "path": "src/NetSlack.Api/Endpoints/MessageEndpoints.cs",
+        "lineStart": 32,
+        "lineEnd": 35
+       }
+      },
+      {
+       "text": "[w2] Every post builds a brand-new message with a fresh random id, so the re-sent POST is stored a second time and both copies are pushed. Let the client generate the message id (or an idempotency key) and treat a repeat of a stored id as the same message.",
+       "cite": {
+        "path": "src/NetSlack.Domain/Messages/Message.cs",
+        "lineStart": 31,
+        "lineEnd": 42
+       }
+      },
+      {
+       "text": "[w3] The dev-token route is anonymous and signs a JWT for whatever email it is given, looking up and reusing an existing user with that email, so anyone who can reach the API can act as any user.",
+       "cite": {
+        "path": "src/NetSlack.Api/Endpoints/AuthEndpoints.cs",
+        "lineStart": 15,
+        "lineEnd": 40
+       }
+      },
+      {
+       "text": "[w2] The auth routes are mapped outside the Development-only block, so that token route is live in every environment; combined with a channel join that checks nothing, a stranger can mint a token and follow any private channel live by its id. Map the route only in Development and authorize the join.",
+       "cite": {
+        "path": "src/NetSlack.Api/Program.cs",
+        "lineStart": 61,
+        "lineEnd": 80
+       }
+      },
+      {
+       "text": "[w2] The pushed payload is complete — body, time and author — so 10,000 recipients can render without a database read each, which is what makes the fan-out cheap; but the author block includes the author's email address, which is now delivered to every member's browser.",
+       "cite": {
+        "path": "src/NetSlack.Application/Messages/MessageService.cs",
+        "lineStart": 44,
+        "lineEnd": 50
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "TRADE-OFF HANDBACK — defend your delivery design against the alternatives: pushing before the commit versus after it, pushing the whole message versus a small 'channel changed' ping that makes clients fetch, one group per channel versus sending to each member's own connections, server timestamps versus a per-channel sequence number, catching up from the database versus a replayable per-channel log, unread counts computed on read versus counters kept per member, and whether posting needs a rate limit at all. For each, say what you bought, what it cost, and which requirement put you on that side.",
+     "keyPoints": [
+      {
+       "text": "[w3] Pushing after the commit means a message that fails to save is never shown; the price is that a crash or hub error between the save and the send loses the live push, which is why the database catch-up is mandatory. Pushing first shows messages that may never exist and can contradict history.",
+       "cite": {
+        "path": "src/NetSlack.Api/Endpoints/MessageEndpoints.cs",
+        "lineStart": 32,
+        "lineEnd": 34
+       }
+      },
+      {
+       "text": "[w2] A full message in the push saves every recipient a read, which matters most in the 10,000-member channel; a ping-and-fetch design multiplies reads by the member count but re-checks access on each fetch and sends nothing private through the group, so fields like author email stay out of the broadcast.",
+       "cite": {
+        "path": "src/NetSlack.Application/Messages/MessageService.cs",
+        "lineStart": 44,
+        "lineEnd": 50
+       }
+      },
+      {
+       "text": "[w3] One group per channel makes a send a single call, but group membership belongs to connections and is tied to nothing in the database: it must be re-established on every reconnect, and once members can be removed from a private channel, a removed user's open connection would keep receiving. Sending to each member's own connections re-reads membership at send time at the cost of a lookup per post.",
+       "cite": {
+        "path": "src/NetSlack.Api/Hubs/MessageHub.cs",
+        "lineStart": 10,
+        "lineEnd": 20
+       }
+      },
+      {
+       "text": "[w2] A posted-time value from the server clock costs nothing, but with several instances the clocks differ and same-tick ties have no order; a per-channel sequence number assigned at insert gives total order and lets a client spot a gap (it holds 1041, the next push is 1043, so it fetches 1042), at the cost of a per-channel counter every post contends on.",
+       "cite": {
+        "path": "src/NetSlack.Domain/Messages/Message.cs",
+        "lineStart": 31,
+        "lineEnd": 42
+       }
+      },
+      {
+       "text": "[w2] The database is already indexed on (channel, posted time), so 'everything after X in this channel' is one range read and there is a single source of truth; a replayable per-channel log gives cheap replay to many consumers but is a second store that must agree with the first.",
+       "cite": {
+        "path": "src/NetSlack.Infrastructure/Data/Configurations/MessageConfiguration.cs",
+        "lineStart": 17,
+        "lineEnd": 17
+       }
+      },
+      {
+       "text": "[w2] Unread counts computed from a last-read position cost one indexed count per channel when the badge is shown; counters kept per member cost a write for every member on every post, 10,000 writes per message in #announcements, in exchange for an instant badge.",
+       "cite": {
+        "path": "src/NetSlack.Domain/Channels/ChannelMember.cs",
+        "lineStart": 11,
+        "lineEnd": 22
+       }
+      },
+      {
+       "text": "[w1] Posting needs a limit because fan-out multiplies it: one client looping on a 10,000-member channel produces 10,000 deliveries per message, so a per-user posting limit protects every other member and the instances, not just the database.",
+       "quote": "Add rate limits for login, message posting, workspace creation, and channel creation."
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}
