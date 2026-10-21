@@ -875,3 +875,66 @@ resolved); quiz variety `concept` and flashcard shape `hand-authored`;
     trace (:59-60) spans ~5.5 minutes.
   - jsprojectlearn/groktuts quest packs are untouched by their new DESIGN IT sets (no shared
     keyed facts found).
+- **OPEN (repetition wave, accepted explain-back/quiz overlap):** same doctrine — the prompt
+  demands the fact; token guard passes all; none in `EB_LEAK_EXEMPT`. dotnet-stripe q1.kp1+kp3
+  vs d64a7c63/92add395, q1.kp4+q2.kp2 vs f03-production-migration; support-desk-crm q1.kp6 vs
+  f03/7dd938e9, q2.kp2+kp3 vs f03/4672d6a3, q1.kp4 vs 7b00b8a7+881d97f9, q1.kp0+q3.kp0 vs
+  b347e945; zz1 q1.kp0 vs f03-claims-not-read/2fd26dfb, q1.kp2 vs f02/6ab376ee/778a4c41;
+  bazaar-coherence q1.kp0+q2.kp1+q3.kp0 vs c3e3c8a5, q1.kp5 vs 09a0b905, q3.kp2 vs 2ba8e46e,
+  q1.kp6 vs f01-cache-conventions; meterforge q1.kp0 vs 2e63f998, q1.kp2 vs 4a6d22f2, q3.kp2-4
+  vs d222214e/2ad0da27/44bec901; masteropen q1.kp1 vs 11354b32, q1.kp4+q3.kp4 vs f01, q3.kp1 vs
+  7097b6a4/f02, q3.kp2 vs f03/5eac2030; harbor q1.kp3 vs 6bbe1677, q1.kp1 vs a6fd9c83,
+  q1.kp2+q3.kp2 vs 206fe139, q1.kp6+q3.kp4 vs f04-why-percentiles, q3.kp5 vs 8c8f8736, q2.kp2
+  vs b346b83a; saga--set-b q1.kp3 vs 456fe5b5/f01; zero-downtime--set-b q2.kp3+q3.kp0 vs
+  fa5e3705/f03; payments-lab--set-b q2.kp2 vs b960acbf (partial); multitenant--set-b
+  q1.kp1+q3.kp0 vs f03-composite-fk, q1.kp0/q2.kp3 vs f02 (partial). Set-B SIBLING ECHOES are
+  additionally accepted as sibling-inherent where B's own prompt demands a chapter-core fact the
+  sibling also keys (web-app--set-b re-keyed limits + timeout hierarchy; saga/zero-downtime/
+  durable/3buildanalytics/pulse-net/multitenant set-B doctrine echoes; durable--set-b vs the
+  relay set's fresh-run-id replay fact): the eb-sibling guard bars near-duplicate WORDING, not
+  shared chapter doctrine, and a retake that cannot state the chapter's core would be hollow.
+- **OPEN: upstream bugs and doc errors found by the repetition wave** (fix in the source repos;
+  mirrors never edited; no shipped key point rests on any of them — four packs deliberately
+  state the code's behavior against their own unit's wrong claim):
+  - dotnet-stripe: `docs2/.../04-side-effects-async-and-reliability.md:57-60` claims the webhook
+    dequeue "skips not-yet-due rows"; `BillingStore.cs:229-255` breaks at the first not-yet-due
+    row (head-of-line trap, both queues). Also: QueuePayment's Pending payment row is orphaned
+    (ApplyPaymentResult saves a new one), outbound webhook retries have no attempt cap.
+  - organized-study-support-desk-crm: a redelivered inbound email hits UNIQUE(tenantId,
+    externalId) and surfaces as a 500 (no P2002 handling), so the provider keeps retrying;
+    PROCESSING is an unconditional update after a plain findMany (no claim).
+  - zz1: `jobService.ts:52-76` forges an OrgRequestContext via `as unknown as` with a hard-coded
+    admin role, so a SUSPENDED org's queued CSV import still applies; logout only deletes the
+    cookie (a copied token stays valid to expiry); an unset CRM_SESSION_SECRET becomes a 401,
+    not a startup failure.
+  - bazaar (cache side; inventory items are in the sysdesign-wave bullet): sprint-06 promises a
+    distributed Redis single-flight lock but `SingleFlight` is a per-process Map;
+    `InMemoryCacheStore.set` ignores ttlSeconds; `StaleEntryStore` has no delete (tag
+    invalidation cannot reach SWR entries); `TaggedCache.read` attaches tags after the value
+    (invalidation race window); key schemes mix v1-by-id and v2-by-handle.
+  - masteropen/openstatus: the error-status flip commits before the incident insert
+    (`checker/index.ts:285-307` — a crash there means no incident and no page, ever);
+    `alerting.ts:136` treats ANY trigger-insert error as "already exists" (a transient DB error
+    silently suppresses the send); quorum `>= N/2` lets a tie flip status; ADR-009's
+    "double-enqueue is a no-op" holds only within one cron invocation (task names embed the
+    handler's Date.now, `cron/checker.ts:75,336`).
+  - harbor: the ADR's "fires exactly once" escalation is at-most-once with a PLAN-time marker
+    (`sla-monitor.ts:39`), and the in-memory log re-fires after a restart; overlapping pauses
+    are subtracted twice (`sla.ts:57-67`); at-risk badge (80%) disagrees with the first warning
+    (75%); the ADR's "~18 minutes" average is 18.9 (the shipped harbor flashcard
+    f04-why-percentiles repeats "about 18 minutes" — owner call).
+  - opusorganize ch06 finding B: "attach tags before loading" alone does not close the
+    invalidate-vs-slow-load race (the slow load still stores a stale value untagged).
+  - pulse-net: an old-shape queued row a newer IncomingEvent cannot read is dead-lettered as
+    PERMANENT (never retried, `IngestionPipeline.cs:148-163`); the export job caps at 50,000
+    rows; the definitions registry stamps ingest time, not event time.
+  - 3buildanalytics: `/refresh` and `/logout` are NOT behind authRateLimit (global 250/min
+    only, `auth.routes.ts:12-20`); every failed login inserts a trackedEvent row (write
+    amplification under credential stuffing).
+  - jsprojectlearn `content/questions/system-design-lite.json`: the `answer` INDEX is wrong on
+    sd-041 (correct: stateless servers interchangeable), sd-047 (deploys/crashes without the
+    whole API down) and sd-110 (preloads the hottest keys) — none shipped; sd-098 has two
+    near-duplicate choices; sd-064 has a key length tell; `tmp/` vs sd-079's `pending/` prefix
+    naming drift. The shipped reading r04 warns the learner the bank's index is unreliable.
+  - eb-sibling guard gap (factory, minor): it compares prompts, key-point text and quotes, but
+    not CITE ranges — a sibling could reuse set A's cite spans unflagged.
