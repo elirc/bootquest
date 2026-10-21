@@ -412,6 +412,545 @@
    ],
    "front": "Why the vendor token bucket is shared and atomic",
    "back": "The vendor limit is per account, so per-worker or per-org buckets multiply it by N and get the account banned. One bucket per connection in Redis, taken atomically (Lua), or two workers both see \"1 left\" and both take it."
+  },
+  {
+   "id": "q13-pg-truth-redis-work",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0002-run-state-in-postgres.md",
+    "lines": {
+     "start": 15,
+     "end": 20
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0002-run-state-in-postgres.md",
+     "lineStart": 16,
+     "lineEnd": 20
+    }
+   ],
+   "prompt": "Under ADR-0002, a webhook starts a relay run. What does the BullMQ job in Redis carry, and what already exists when that job is enqueued?",
+   "answer": "A pointer that names the run id, with the Run row already in Postgres",
+   "distractors": [
+    "The full run state, which the worker updates and writes back to Redis",
+    "The trigger payload, with the Run row created once a worker claims it",
+    "A step list and its inputs, with the Run row written when the run ends"
+   ],
+   "explanation": "ADR-0002 (lines 16-20): Postgres is the source of truth for Run, StepRun and RunEvent, and Redis holds only work: a job whose payload is a run id, a pointer that says \"go execute run X\". The Run row exists before the job is enqueued, so a lost job leaves a recoverable pending run and a lost queue never loses history. A job that carries the whole run is the alternative the ADR rejected."
+  },
+  {
+   "id": "q14-redis-not-filing-cabinet",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0002-run-state-in-postgres.md",
+    "lines": {
+     "start": 22,
+     "end": 26
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0002-run-state-in-postgres.md",
+     "lineStart": 23,
+     "lineEnd": 26
+    }
+   ],
+   "prompt": "ADR-0002 considered letting the BullMQ job be the run itself, with all run state kept in Redis. Why was that option rejected?",
+   "answer": "Redis is memory-first and eviction-prone, so a flush could erase run history",
+   "distractors": [
+    "Redis is too slow for workers to rewrite the whole run after every step",
+    "It would need a join between the queue and the run record on every read",
+    "A flush would drop queued work, which the API has to re-enqueue at boot"
+   ],
+   "explanation": "ADR-0002 (lines 23-26): the job-is-the-run option is fast, one system, and needs no join between the queue and the record. But Redis is a conveyor, not a filing cabinet: it is memory-first, eviction-prone, and lacks the durability an auditable business record needs. A flush or eviction would erase run history, which the ADR calls unacceptable."
+  },
+  {
+   "id": "q15-s01-end-persistence",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0002-run-state-in-postgres.md",
+    "lines": {
+     "start": 31,
+     "end": 37
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0002-run-state-in-postgres.md",
+     "lineStart": 32,
+     "lineEnd": 37
+    }
+   ],
+   "prompt": "ADR-0002's Consequences state a write-ordering rule and admit a gap in the naive S01 engine. What is that gap?",
+   "answer": "Results are persisted only at the end, so a mid-run crash strands the run",
+   "distractors": [
+    "The job is enqueued before the Run row, so a crash leaves orphaned jobs behind",
+    "Results are saved after each step, so a crash repeats only that step",
+    "Step results live only in Redis, so a flush erases finished outputs"
+   ],
+   "explanation": "ADR-0002 (lines 32-37): the ordering rule is truth first (create the Run), then work (enqueue). The admitted gap is that the naive S01 engine persists run results at the end of execution, not incrementally, so a crash mid-run strands the run and can double-fire side effects; making that truth durable step by step is S07's work. Results never live in Redis, which holds only work."
+  },
+  {
+   "id": "q16-envelope-kek",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0004-secret-storage.md",
+    "lines": {
+     "start": 14,
+     "end": 22
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0004-secret-storage.md",
+     "lineStart": 15,
+     "lineEnd": 22
+    }
+   ],
+   "prompt": "In Relay's envelope encryption (ADR-0004), what does the KEK encrypt, and where is the KEK kept?",
+   "answer": "Each org's DEK, and it is held in memory or a KMS outside the database",
+   "distractors": [
+    "Every org's tokens directly, and it is stored wrapped in the database",
+    "Each org's DEK, and it is stored next to the wrapped DEKs in Postgres",
+    "Each connection's tokens, and it is held in memory or a KMS service"
+   ],
+   "explanation": "ADR-0004 (lines 15-22): a DEK, one per org, encrypts that org's tokens with AES-256-GCM, and the KEK, the single master secret, only ever encrypts DEKs. Each DEK is stored wrapped by the KEK, and the KEK lives in memory or a KMS, never in the database. Tokens are never encrypted directly by the KEK, and per-connection keys were a rejected alternative."
+  },
+  {
+   "id": "q17-kek-rotation",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0004-secret-storage.md",
+    "lines": {
+     "start": 24,
+     "end": 36
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0004-secret-storage.md",
+     "lineStart": 25,
+     "lineEnd": 27
+    },
+    {
+     "path": "docs/adr/0004-secret-storage.md",
+     "lineStart": 35,
+     "lineEnd": 36
+    }
+   ],
+   "prompt": "Under ADR-0004, what does rotating the KEK actually rewrite?",
+   "answer": "Each org's wrapped DEK, leaving all token ciphertext as it was",
+   "distractors": [
+    "Every stored token, re-encrypted under the new master key in bulk",
+    "Each org's DEK, regenerated so every token is re-encrypted with it",
+    "The KMS entry alone, as DEKs are derived from the KEK at use time"
+   ],
+   "explanation": "ADR-0004 (lines 35-36): KEK rotation re-wraps each org's tiny DEK and leaves token ciphertext untouched, which a test proves. Re-encrypting every token is exactly the cost that sank the single-master-key alternative (lines 25-27). DEKs are generated per org on its first secret and stored wrapped, not derived from the KEK at use time."
+  },
+  {
+   "id": "q18-idempotency-at-registration",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0005-declarative-connectors.md",
+    "lines": {
+     "start": 14,
+     "end": 20
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0005-declarative-connectors.md",
+     "lineStart": 18,
+     "lineEnd": 20
+    }
+   ],
+   "prompt": "ADR-0005 makes every connector action declare an idempotency strategy. When is an action that lacks one caught?",
+   "answer": "At boot, when registering the connector in the registry fails",
+   "distractors": [
+    "At run time, when the engine first retries the action's step",
+    "At publish, when a relay that uses the action is validated",
+    "At first deploy, when the vendor rejects a call with no key"
+   ],
+   "explanation": "ADR-0005 (lines 18-20): each action MUST declare vendorKey, naturalKey or dedupeWindow, and an action without one fails registry registration at boot. The ADR makes the field mandatory at registration as cheap insurance against S07's retries re-firing a non-idempotent side effect, so the gap is not left for a retry, a publish or a vendor to find."
+  },
+  {
+   "id": "q19-vendor-farm-inconsistency",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0003-vendor-farm.md",
+    "lines": {
+     "start": 20,
+     "end": 43
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0003-vendor-farm.md",
+     "lineStart": 20,
+     "lineEnd": 23
+    },
+    {
+     "path": "docs/adr/0003-vendor-farm.md",
+     "lineStart": 32,
+     "lineEnd": 37
+    },
+    {
+     "path": "docs/adr/0003-vendor-farm.md",
+     "lineStart": 42,
+     "lineEnd": 43
+    }
+   ],
+   "prompt": "ADR-0003 builds three mock vendors that disagree on auth headers, pagination and error shapes. Why not one generic mock with a uniform API instead?",
+   "answer": "A uniform API would hide the inconsistency the connector SDK must absorb",
+   "distractors": [
+    "Three separate mock vendors cost less to maintain than one generic mock",
+    "Real vendor sandboxes already cover every failure a generic mock lacks",
+    "A uniform mock would make the connector SDK far too hard to build and test"
+   ],
+   "explanation": "ADR-0003 (lines 20-23, 35-37): the three vendors deliberately disagree on auth header, pagination and error shape, and that realism forces the Sprint 3 connector SDK to be a real abstraction. One generic mock with a uniform API was rejected because it would hide the exact problem the course teaches, absorbing vendor inconsistency, and make the SDK look like pointless indirection. The ADR calls the three fake APIs a real maintenance cost (line 42), and real sandboxes cannot be driven into specific failure modes (lines 32-34)."
+  },
+  {
+   "id": "q20-data-as-plugin",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0005-declarative-connectors.md",
+    "lines": {
+     "start": 15,
+     "end": 29
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0005-declarative-connectors.md",
+     "lineStart": 16,
+     "lineEnd": 17
+    },
+    {
+     "path": "docs/adr/0005-declarative-connectors.md",
+     "lineStart": 27,
+     "lineEnd": 29
+    }
+   ],
+   "prompt": "ADR-0005 rejected connectors written as free imperative code. What can a declarative connector definition do that a plugin function cannot?",
+   "answer": "Be introspected for forms, validated, and versioned as data",
+   "distractors": [
+    "Run faster, as the registry compiles each definition to code",
+    "Reach vendor APIs directly and skip the ctx.http chokepoint",
+    "Skip zod schemas, as shapes are inferred from vendor replies"
+   ],
+   "explanation": "ADR-0005 (lines 27-29): free imperative code can't be introspected (no auto-generated forms), can't be validated (no build-time invariants) and can't version its interface cleanly; code-as-plugin can only be executed, while data-as-plugin can be described. Lines 16-17: each action's zod schemas serve runtime validation, UI form generation and docs, and network access still goes through ctx.http."
+  },
+  {
+   "id": "q21-kahn-dfs-oracle",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0010-dag-execution.md",
+    "lines": {
+     "start": 14,
+     "end": 19
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0010-dag-execution.md",
+     "lineStart": 15,
+     "lineEnd": 19
+    }
+   ],
+   "prompt": "ADR-0010 kept the learner's first recursive DFS executor in the repo. In what role, and what does it do on a diamond-shaped graph?",
+   "answer": "As the failing test oracle; it runs the diamond's join node twice",
+   "distractors": [
+    "As the fallback executor; it runs the join once using a visited set",
+    "As the cycle detector; it runs the join once and reports any loop",
+    "As the publish-time validator; it skips the join until both arrive"
+   ],
+   "explanation": "ADR-0010 (lines 15-19): execution uses Kahn's topological order, so each node runs exactly once and a node that never reaches in-degree 0 reveals a cycle. The first cut, recursive DFS with no visited set, is kept only as the failing oracle in dag-exec.test.ts: it runs a diamond's join twice and loops on cycles."
+  },
+  {
+   "id": "q22-validate-at-publish",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0010-dag-execution.md",
+    "lines": {
+     "start": 22,
+     "end": 39
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0010-dag-execution.md",
+     "lineStart": 22,
+     "lineEnd": 25
+    },
+    {
+     "path": "docs/adr/0010-dag-execution.md",
+     "lineStart": 38,
+     "lineEnd": 39
+    }
+   ],
+   "prompt": "ADR-0010 validates DAGs at publish and again at run time. Why was keeping only the run-time topoOrder guard rejected?",
+   "answer": "Users would learn their graph is broken when a run hangs, not on save",
+   "distractors": [
+    "The run-time guard catches unreachable nodes but does not catch cycles",
+    "A run-time check would run the join node of each diamond twice",
+    "The raw API skips run-time checks, so cycles would reach workers"
+   ],
+   "explanation": "ADR-0010 (lines 22-25, 38-39): acyclic, single-source, reachable and upstream-only refs are checked at publish (a 422 for a cycle sent through the raw API), and the executor's topoOrder guards again at run time as defense in depth, so a cycle can't run even if it slips past the writer. Run-time-only was rejected as a bad experience: correct, but the user learns the graph is broken when a run hangs instead of when they save."
+  },
+  {
+   "id": "q23-structured-conditions",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0010-dag-execution.md",
+    "lines": {
+     "start": 26,
+     "end": 35
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0010-dag-execution.md",
+     "lineStart": 26,
+     "lineEnd": 29
+    },
+    {
+     "path": "docs/adr/0010-dag-execution.md",
+     "lineStart": 32,
+     "lineEnd": 35
+    }
+   ],
+   "prompt": "How does ADR-0010 let builders write branch conditions without adding an eval surface to the engine?",
+   "answer": "A field/op/value rule builder kept as data, compiled to a boolean AST",
+   "distractors": [
+    "User-typed logic strings, run in the sandbox under a wall-clock deadline",
+    "A mini expression language parsed by the existing template renderer",
+    "Conditions compiled to JavaScript functions and cached per relay"
+   ],
+   "explanation": "ADR-0010 (lines 26-29): conditions are a structured rule builder (field / op / value) authored as data that compiles to a tiny boolean AST, so comparisons and and/or/not exist with no eval surface. User-typed logic strings, a mini expression language inside our own evaluator, were rejected as an injection surface and a debuggability problem (lines 32-35)."
+  },
+  {
+   "id": "q24-offload-threshold",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0012-payload-offloading.md",
+    "lines": {
+     "start": 9,
+     "end": 34
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0012-payload-offloading.md",
+     "lineStart": 15,
+     "lineEnd": 19
+    },
+    {
+     "path": "docs/adr/0012-payload-offloading.md",
+     "lineStart": 33,
+     "lineEnd": 34
+    }
+   ],
+   "prompt": "ADR-0012 moves step outputs above a size threshold (64 KB by default) to object storage. Why not offload every output?",
+   "answer": "Every read would become a network fetch, even for tiny outputs",
+   "distractors": [
+    "Outputs under the threshold are dropped once the next step reads them",
+    "Postgres cannot store any JSONB value that is above that size",
+    "Small outputs are kept in Redis, beside the job that produced them"
+   ],
+   "explanation": "ADR-0012 (lines 15-19): above the threshold a step's output bytes go to object storage and only a small outputRef stays in the StepRun row, harvesting flaw #2 (blobs in the OLTP table). Offloading everything was rejected because every read becomes a network fetch, even for tiny outputs; the threshold keeps the common small case a plain column read (lines 33-34). Inline JSONB is what flaw #2 already stored, so size is not a Postgres limit."
+  },
+  {
+   "id": "q25-billable-task-count",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0014-what-is-a-task.md",
+    "lines": {
+     "start": 14,
+     "end": 18
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0014-what-is-a-task.md",
+     "lineStart": 15,
+     "lineEnd": 18
+    }
+   ],
+   "prompt": "Under ADR-0014, a run has a trigger, a filter that passes, and one action step that succeeds on its third attempt. How many billable tasks does it produce?",
+   "answer": "One, for the action step that finally succeeded",
+   "distractors": [
+    "Three, one for each attempt of the action step",
+    "Three, for the trigger, the filter and the action",
+    "Five, for the trigger, the filter and three attempts"
+   ],
+   "explanation": "ADR-0014 (lines 15-18): a task is one successful action step. Triggers, filter and condition nodes, steps in a halted branch, failed steps and retries are not billable, and a step that succeeds on attempt 3 is one task, not three. Neither the attempts nor the plumbing nodes add to the count."
+  },
+  {
+   "id": "q26-meter-attempts-rejected",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0014-what-is-a-task.md",
+    "lines": {
+     "start": 25,
+     "end": 30
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0014-what-is-a-task.md",
+     "lineStart": 26,
+     "lineEnd": 30
+    }
+   ],
+   "prompt": "ADR-0014 rejected metering every attempt, retries and failures included. What was its objection to that option?",
+   "answer": "It would bill customers for the platform's own unreliability",
+   "distractors": [
+    "It would undercount the real vendor load the platform incurs",
+    "It would make filters and triggers billable as plumbing work",
+    "It would force a hard pause at 100% with no warning shown first"
+   ],
+   "explanation": "ADR-0014 (lines 26-30): metering all attempts reflects the real vendor load, so it does not undercount it, but it charges customers for our unreliability: a step that failed twice because the vendor was down and then succeeded would bill 3x, which customers can neither predict nor control. Relay deliberately absorbs retry and failure cost. Billing filters and triggers, and hard-pausing without warning, are separate rejected alternatives."
+  },
+  {
+   "id": "f05-sandbox-subtraction",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0011-sandbox-threat-model.md",
+    "lines": {
+     "start": 14,
+     "end": 21
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0011-sandbox-threat-model.md",
+     "lineStart": 15,
+     "lineEnd": 21
+    }
+   ],
+   "front": "Sandbox layer 1 in ADR-0011: what does a code step's execution context start with?",
+   "back": "Nothing. Sandboxing is subtraction: the context starts empty and grants only input and console, with no require, process, fetch, globalThis escape, Buffer or timers. It is an allowlist because you cannot enumerate every escape, so the surface grows only by deliberate additions."
+  },
+  {
+   "id": "f06-limits-from-outside",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0011-sandbox-threat-model.md",
+    "lines": {
+     "start": 22,
+     "end": 24
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0011-sandbox-threat-model.md",
+     "lineStart": 22,
+     "lineEnd": 24
+    }
+   ],
+   "front": "Sandbox layer 2 in ADR-0011: how are a code step's resource limits enforced?",
+   "back": "From outside the guest. A wall-clock deadline kills a runaway step (in-sandbox time is untrusted; a guest setTimeout is not a limit), memory is capped at the isolate level, and a breach surfaces as a typed SandboxError, never a raw host error carrying server paths."
+  },
+  {
+   "id": "f07-isolation-spectrum",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0011-sandbox-threat-model.md",
+    "lines": {
+     "start": 30,
+     "end": 43
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0011-sandbox-threat-model.md",
+     "lineStart": 33,
+     "lineEnd": 41
+    }
+   ],
+   "front": "ADR-0011's isolation spectrum: node:vm, worker_threads, isolated-vm, microVMs",
+   "back": "node:vm: the teaching stand-in, not a security boundary (this.constructor.constructor escapes it). worker_threads: a separate thread in a shared process; contains resource abuse better than a determined escape. isolated-vm: a real separate V8 isolate, the production choice. microVMs (Firecracker/gVisor): strongest and ops-heavy; adopt them for native code or a paid hard multi-tenancy tier."
+  },
+  {
+   "id": "f08-unbounded-console",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0011-sandbox-threat-model.md",
+    "lines": {
+     "start": 47,
+     "end": 49
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0011-sandbox-threat-model.md",
+     "lineStart": 47,
+     "lineEnd": 49
+    }
+   ],
+   "front": "The known sandbox gap in ADR-0011 (flaw #5)",
+   "back": "Console-log capture is unbounded: while(true) console.log() can OOM the worker by capturing output faster than the deadline fires. It is harvested in S13 (the poison-pill lab), and output caps are on the security checklist."
+  },
+  {
+   "id": "f09-connector-semver",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0015-connector-versioning-certification.md",
+    "lines": {
+     "start": 15,
+     "end": 19
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0015-connector-versioning-certification.md",
+     "lineStart": 16,
+     "lineEnd": 19
+    }
+   ],
+   "front": "How ADR-0015 keeps a connector's schema changes from breaking existing relays",
+   "back": "Each connector declares a semver version and each relay pins the version it was built against, so it keeps working when a new major ships. A breaking schema change is a MAJOR bump, and marking a version deprecated opens a deprecation window without breaking pinned relays."
+  },
+  {
+   "id": "f10-certification-floor",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0015-connector-versioning-certification.md",
+    "lines": {
+     "start": 20,
+     "end": 27
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0015-connector-versioning-certification.md",
+     "lineStart": 20,
+     "lineEnd": 27
+    }
+   ],
+   "front": "ADR-0015 certification: what the gate is, and what its two tiers share",
+   "back": "certifyConnector is an automated gate that encodes the course's lessons as checks (idempotency declared, dedupe key present, valid semver, auth declared, object schemas), dogfooded on first-party connectors first. First-party connectors must pass strict with zero findings; the community tier may ship quality gaps but never safety gaps (idempotency, dedupe key, escape-safety)."
+  },
+  {
+   "id": "f11-dag-consequences",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0010-dag-execution.md",
+    "lines": {
+     "start": 41,
+     "end": 46
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0010-dag-execution.md",
+     "lineStart": 42,
+     "lineEnd": 46
+    }
+   ],
+   "front": "What ADR-0010's DAG model changed for runs, and what it deferred",
+   "back": "Filters halt a branch independently and a run's status reflects partial completion, so error and halt handling became graph structure instead of a global switch. linearToDag migrates existing linear relays (a line is a straight DAG). Deferred: parallel-branch concurrency, explicit try/catch error-handler nodes, and the visual graph-editor canvas."
   }
  ]
 }
