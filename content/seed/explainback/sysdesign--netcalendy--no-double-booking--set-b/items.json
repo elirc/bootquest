@@ -1,0 +1,171 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "netcalendy--astraupskill-02-CONCEPTS.md--set-b",
+ "items": [
+  {
+   "key": "seed:explainback:netcalendy/explain-back/f8ca6b66c3cb2183",
+   "provenance": {
+    "repo": "netcalendy",
+    "sha": "99c271024d31736514911e3f2adc335e4f6d0e60",
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 1,
+     "end": 34
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "DESIGN IT — [senior] round-robin team booking (netcalendy, astraupskill/02-CONCEPTS.md). Scenario: a sales team turns its single-host demo link into a round-robin pool of 6 reps; the pool takes about 1,200 bookings a week; leadership wants the work spread fairly across the reps; each rep also has an external work calendar that syncs into the product with up to 15 minutes of lag; and one rep goes on leave in the middle of a week. Write your design before you look: what in today's model assumes exactly one host, how a pool's offered times are computed, where and how a rep is chosen for a booking, what keeps one rep from being given two overlapping meetings when requests arrive together, how external busy time and a mid-week absence are taken into account, and what a booking needs in order to move to a different rep. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "keyPoints": [
+      {
+       "text": "[w3] Today everything is one-owner: an event type carries a single OwnerId, a booking a single HostId, and the public booking command asks the caller to name the host. A pool needs an event-to-members relation (with active flags and weights), the rep chosen by the server rather than the caller, and the scope check rewritten as tenant, event, and a rep that belongs to that event's pool.",
+       "cite": {
+        "path": "src/NetCalendy.Application/Bookings/Commands/CreateBooking/CreateBookingCommand.cs",
+        "lineStart": 6,
+        "lineEnd": 13
+       }
+      },
+      {
+       "text": "[w3] The pool's offered times are a union: a start is offered when at least one rep is free for the whole interval under that rep's own rules, zone, bookings and external busy blocks. Today the slot query loads one host's default schedule and that host's bookings, so the pool version gathers six of each once per request and merges them, rather than running six independent queries per slot.",
+       "cite": {
+        "path": "src/NetCalendy.Application/Schedules/Queries/GetAvailableSlots/GetAvailableSlotsHandler.cs",
+        "lineStart": 30,
+        "lineEnd": 40
+       }
+      },
+      {
+       "text": "[w3] Choose the rep inside the create path, not in the page: compute the reps free for that exact interval, rank them by the fairness measure, then claim the winner. The existing guard is a read of one host's overlaps followed by a separate insert, so the choice and the claim must be serialised per pool (or backed by a per-rep database constraint) and a lost claim must fall through to the next free rep.",
+       "quote": "A conflict query followed by a write can still race with another booking."
+      },
+      {
+       "text": "[w2] Build the fairness count on the right query: the existing per-host listing filters on host, tenant and start range but not on status, so a count taken from it charges a rep for meetings that were later cancelled. Count only live bookings, or keep a per-rep tally that cancellations decrement.",
+       "cite": {
+        "path": "src/NetCalendy.Infrastructure/Persistence/Repositories/BookingRepository.cs",
+        "lineStart": 25,
+        "lineEnd": 30
+       }
+      },
+      {
+       "text": "[w3] External calendars are a second, lagging source of busy time; the current availability test masks slots only with the product's own bookings. Store each rep's synced busy blocks with their sync time, treat them as advisory in the offered list, re-check the chosen rep at create time (fetch fresh free/busy if the copy is older than the lag), and run a sweep after each sync that reassigns any booking a newly synced event now overlaps.",
+       "cite": {
+        "path": "src/NetCalendy.Application/Schedules/Queries/GetAvailableSlots/GetAvailableSlotsHandler.cs",
+        "lineStart": 50,
+        "lineEnd": 53
+       }
+      },
+      {
+       "text": "[w3] Absence has nowhere to live: an availability rule is a weekday plus a time range, with no date, so the only way to remove a rep for three days is to rewrite rules that apply to every week. Add dated exceptions (unavailable from, until) that both the offered list and assignment consult, and run reassignment for that rep's bookings already inside the window.",
+       "cite": {
+        "path": "src/NetCalendy.Domain/Schedules/AvailabilityRule.cs",
+        "lineStart": 13,
+        "lineEnd": 21
+       }
+      },
+      {
+       "text": "[w2] Moving a booking needs its own operation: the host field has no setter, so today a booking can change rep only by being cancelled and created again, with a new id, a new cancellation token and two emails to the invitee. A Reassign operation keeps the id and token, records who moved it and why, and raises its own event.",
+       "cite": {
+        "path": "src/NetCalendy.Domain/Bookings/Booking.cs",
+        "lineStart": 31,
+        "lineEnd": 40
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "PRE-MORTEM — the pool's second month. Two invitees submit the same Thursday 14:00 within a second and both requests rank the same rep as least busy; an industry conference is cancelled and about 450 invitees reschedule within an hour, and one of them comes back to find that the time she freed a minute earlier is gone; and a rep's leave is entered after 30 meetings have already been given to her. For each, what does the code at this commit do, what goes wrong, and what in your design prevents it?",
+     "keyPoints": [
+      {
+       "text": "[w3] Both requests read the same tallies and the same free set and pick the same rep; for the same interval each then runs that rep's overlap read, both see nothing, and both insert, so one rep holds two 14:00 meetings while five colleagues sit idle. A round-robin pool turns a contention problem into a double booking unless the pick-and-claim step is serialised per pool and a lost claim retries with the next free rep instead of reporting the time as taken.",
+       "cite": {
+        "path": "src/NetCalendy.Application/Bookings/Commands/CreateBooking/CreateBookingHandler.cs",
+        "lineStart": 33,
+        "lineEnd": 44
+       }
+      },
+      {
+       "text": "[w2] When the two requests are for different intervals the same race is harmless to correctness and merely hands one rep both meetings; a fairness measure recomputed from stored bookings absorbs that drift on the next pick, whereas a counter kept in memory would carry it forever.",
+       "cite": {
+        "path": "src/NetCalendy.Infrastructure/Persistence/Repositories/BookingRepository.cs",
+        "lineStart": 32,
+        "lineEnd": 37
+       }
+      },
+      {
+       "text": "[w3] There is no reschedule: the invitee's only move is to cancel, which flips the status and frees the interval at once, and then to book again as a stranger, so in a storm of 450 anyone can take the freed time in between. Make rescheduling one operation (claim the new time, then release the old one, in a single transaction) or give the freed interval a short hold that only the original invitee's token can redeem.",
+       "cite": {
+        "path": "src/NetCalendy.Application/Bookings/Commands/CancelBooking/CancelBookingHandler.cs",
+        "lineStart": 13,
+        "lineEnd": 23
+       }
+      },
+      {
+       "text": "[w2] A reschedule should keep the invitee's rep when that rep is free at the new time, and fall back to pool assignment only when not; re-rolling the rep on every move churns external calendars and makes the fairness tally swing with the storm.",
+       "cite": {
+        "path": "src/NetCalendy.Domain/Bookings/Booking.cs",
+        "lineStart": 14,
+        "lineEnd": 26
+       }
+      },
+      {
+       "text": "[w3] The storm's side effects ride on domain events that the database context publishes in-process once the save has gone through, and no handler for them exists yet; the 450 'your meeting moved' emails and external-calendar updates built on that hook vanish if the process dies between the save and the publish. Write them to an outbox in the same transaction.",
+       "cite": {
+        "path": "src/NetCalendy.Infrastructure/Persistence/AppDbContext.cs",
+        "lineStart": 31,
+        "lineEnd": 49
+       }
+      },
+      {
+       "text": "[w3] Nothing notices the 30 meetings: absence is not modelled, so they stay on the absent rep. A reassignment job must take each one, find another rep free for the same interval through the same serialised pool claim, keep the invitee's time, id and token, and notify; a meeting with no free rep goes to a person to resolve rather than being cancelled automatically.",
+       "cite": {
+        "path": "src/NetCalendy.Domain/Schedules/Schedule.cs",
+        "lineStart": 41,
+        "lineEnd": 51
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "TRADE-OFF HANDBACK — defend your round-robin choices against the alternatives: picking the rep when the invitee books versus when the booking is confirmed, measuring fairness by a rolling count of meetings versus by load over a time window, guarding each rep with a database rule versus serialising assignment for the whole pool, and letting invitees pick a rep versus assigning on the server. For each, say what you bought and what it cost.",
+     "keyPoints": [
+      {
+       "text": "[w3] Picking at booking time names the rep immediately (the creation event already carries a single host) and blocks that rep's calendar at once, but decides on busy data that may be 15 minutes stale and turns later corrections into visible reassignments. Picking at confirmation holds pool capacity first and chooses the rep after a fresh check, at the price of a later invite and a capacity hold the pool must count so the interval is not oversold.",
+       "cite": {
+        "path": "src/NetCalendy.Domain/Bookings/BookingCreatedEvent.cs",
+        "lineStart": 7,
+        "lineEnd": 11
+       }
+      },
+      {
+       "text": "[w3] A rolling count of meetings is simple and easy to audit but treats a 15-minute and a 60-minute meeting alike and ignores how much time each rep actually offered, so a rep returning from leave is far behind and gets flooded. Load over a window (booked minutes divided by offered minutes) is fair to part-timers and returners, but needs every rep's availability for the window whenever a rep is picked.",
+       "cite": {
+        "path": "src/NetCalendy.Domain/EventTypes/EventType.cs",
+        "lineStart": 31,
+        "lineEnd": 38
+       }
+      },
+      {
+       "text": "[w3] A per-rep database rule keeps overlaps impossible whatever code path writes (create, reschedule, the reassignment job) but only refuses; the pool still needs a retry loop over candidates. Serialising per pool makes the fairness decision consistent and simple to reason about, but admits one assignment at a time: trivial at 1,200 a week (about seven an hour on average), a queue during a launch-day burst. Doing both, with the database rule as the backstop, is the usual answer.",
+       "quote": "The new checks do not prove availability membership, timezone correctness, atomic reservation or delivery of domain events."
+      },
+      {
+       "text": "[w2] Letting invitees pick a rep gives continuity with someone they already know and defeats fairness; server-side assignment spreads the work but must ignore or validate any rep id a direct caller submits, because hiding the picker in the page stops nobody.",
+       "quote": "Do not trust the client to disable an invalid combination; direct callers can submit the same command."
+      },
+      {
+       "text": "[w2] Showing the rep's name at booking makes every reassignment visible to the invitee; presenting the pool as the team (one shared identity on the invite) lets reps swap quietly but feels less personal and still needs a named rep in the meeting itself.",
+       "cite": {
+        "path": "src/NetCalendy.Domain/Users/User.cs",
+        "lineStart": 20,
+        "lineEnd": 26
+       }
+      }
+     ]
+    }
+   ],
+   "set": "b"
+  }
+ ]
+}
