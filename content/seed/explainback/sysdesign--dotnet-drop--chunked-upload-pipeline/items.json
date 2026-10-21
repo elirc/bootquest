@@ -1,0 +1,206 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "dotnet-drop--docs-upskill-03-architecture-and-patterns-04-side-effects-async-and-reliability.md",
+ "items": [
+  {
+   "key": "seed:explainback:dotnet-drop/explain-back/2142655764552caa",
+   "provenance": {
+    "repo": "dotnet-drop",
+    "sha": "d7ae725e4646d103648e52c8e34cff0daf47d093",
+    "path": "docs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+    "lines": {
+     "start": 1,
+     "end": 17
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "DESIGN IT — [mid] resumable chunked uploads with a quarantine step (dotnet-drop, docs/upskill/03-architecture-and-patterns/04-side-effects-async-and-reliability.md). Scenario: a team file-storage product with 40,000 users and a 50 GiB quota each; people upload files of up to 6 GiB (4K video) from hotel and train Wi-Fi that drops every 2 to 3 minutes; the client picks a chunk size per upload; a public download link is often created the moment an upload finishes; and the virus scanner can take a minute or more per file. Write your design before you look: the upload session's lifecycle from start to complete and how a reconnecting client learns what it still has to send, how each chunk and then the whole file are verified, what happens when a chunk arrives a second time, how identical content and a repeat upload of the same file name are stored, and what stops anyone — the owner or a link holder — from downloading a file the scanner has not passed. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "keyPoints": [
+      {
+       "text": "[w3] Make the session a server-side record: Start fixes the chunk size, the chunk count and the whole-file SHA-256 the client declared, and a repeat Start for the same owner, folder, file name and final hash picks up the newest Open session and answers with the indexes it already holds, so a client that lost its connection resends only the gaps.",
+       "cite": {
+        "path": "src/NetDropbox.Application/Uploads/StartUpload.cs",
+        "lineStart": 51,
+        "lineEnd": 77
+       }
+      },
+      {
+       "text": "[w3] Let the server own the chunk grid: every index has one exact expected length derived from the declared total and chunk size, the storage layer is handed that length together with the chunk's SHA-256 header, and nothing is recorded for the index unless storage reports the bytes committed.",
+       "cite": {
+        "path": "src/NetDropbox.Application/Uploads/UploadChunk.cs",
+        "lineStart": 49,
+        "lineEnd": 76
+       }
+      },
+      {
+       "text": "[w3] Make an accepted chunk write-once: the session and index identify one chunk row, so sending the same bytes again is harmless and simply reports progress, while different bytes for an index that was already accepted are a conflict, never an overwrite.",
+       "cite": {
+        "path": "src/NetDropbox.Application/Uploads/UploadChunk.cs",
+        "lineStart": 40,
+        "lineEnd": 82
+       }
+      },
+      {
+       "text": "[w3] Verify the whole file before it becomes a file: Complete demands exactly the contiguous index set 0..n-1, reassembles the chunks, and compares the assembled length with the declared size and its SHA-256 with the declared final hash; any mismatch ends the request with no blob, file or version written.",
+       "cite": {
+        "path": "src/NetDropbox.Application/Uploads/CompleteUpload.cs",
+        "lineStart": 36,
+        "lineEnd": 53
+       }
+      },
+      {
+       "text": "[w2] Store bytes by content and names by version: the blob is looked up by its SHA-256, so identical content is written to storage once and later uploads only bump that blob's reference count; a completed upload to a name that already exists in the folder becomes that file's next version instead of a second file.",
+       "cite": {
+        "path": "src/NetDropbox.Application/Uploads/CompleteUpload.cs",
+        "lineStart": 56,
+        "lineEnd": 79
+       }
+      },
+      {
+       "text": "[w3] Quarantine is part of the completion commit: the new version and its virus-scan job are saved by the same SaveChanges as the quota reservation and the session's Completed status, so a version can never exist without a scan owed for it.",
+       "cite": {
+        "path": "src/NetDropbox.Application/Uploads/CompleteUpload.cs",
+        "lineStart": 79,
+        "lineEnd": 85
+       }
+      },
+      {
+       "text": "[w3] Gate serving, not sharing: a link can be handed out before the scan finishes, so the public download re-checks on every request that the link is usable, the password and permission allow a download, and the file's scan status is Clean; a pending, infected or failed file is refused, which makes the scan verdict the only thing that opens the bytes.",
+       "cite": {
+        "path": "src/NetDropbox.Application/Shares/ShareService.cs",
+        "lineStart": 53,
+        "lineEnd": 68
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "PRE-MORTEM — the same service a month after launch. A client sends 500 of a 768-chunk upload and is never seen again; another client's network drops right after it sends a chunk, so it sends that chunk again, and once the two copies arrive at the same moment; a Complete succeeds but its response is lost, so the client retries the Complete; the API process restarts two seconds after a Complete commits; a recipient opens a share link while the file's scan is still running; and the owner uploads version 2 while version 1's scan is in flight. For each, what does the system do today, what goes wrong, and what is the repair?",
+     "keyPoints": [
+      {
+       "text": "[w2] The session's deadline is set once, 12 hours after it is created, and accepted chunks do not extend it: a client that vanishes is cleaned up, but a slow 6 GiB upload over a bad link that is still running at hour 12 is cut off mid-flight. Slide the deadline forward on each accepted chunk.",
+       "cite": {
+        "path": "src/NetDropbox.Domain/UploadSession.cs",
+        "lineStart": 9,
+        "lineEnd": 20
+       }
+      },
+      {
+       "text": "[w2] Garbage collection is a janitor that wakes every 15 minutes, marks Open sessions past their deadline Expired and deletes their chunk files, so the 500 abandoned chunks occupy disk until the first sweep after the deadline.",
+       "cite": {
+        "path": "src/NetDropbox.Infrastructure/Processing/JanitorWorker.cs",
+        "lineStart": 26,
+        "lineEnd": 44
+       }
+      },
+      {
+       "text": "[w1] The resume lookup filters on the Open status only and never compares the deadline, so between the deadline and the next sweep a reconnecting client is handed back a session that is already closed for chunk writes; resume should skip sessions past their deadline and start a fresh one.",
+       "cite": {
+        "path": "src/NetDropbox.Application/Uploads/StartUpload.cs",
+        "lineStart": 51,
+        "lineEnd": 58
+       }
+      },
+      {
+       "text": "[w3] Two simultaneous copies of one chunk both look, find no row and both reach storage; the unique (session, index) index lets exactly one row insert win, and the loser's insert fails as an unhandled database error, so a correct retry is reported as a server failure. Treat that unique violation as 'already accepted' and answer with the current progress.",
+       "cite": {
+        "path": "src/NetDropbox.Infrastructure/Persistence/NetDropboxDbContext.cs",
+        "lineStart": 77,
+        "lineEnd": 82
+       }
+      },
+      {
+       "text": "[w2] Completing is a one-way door: a session must be Open to complete, and completing records which file it produced. A retried Complete after a lost response is therefore refused, and a fresh Start will not find the finished session, so the client re-sends the whole file as a new version. Make Complete idempotent by answering a Completed session with the file it already recorded.",
+       "cite": {
+        "path": "src/NetDropbox.Domain/UploadSession.cs",
+        "lineStart": 50,
+        "lineEnd": 56
+       }
+      },
+      {
+       "text": "[w3] The scan job row commits with the version, but the work order itself is then handed to the in-process queue; a restart after the commit leaves a job that says Queued with no message anywhere, and nothing reads Queued rows back, so the file stays PendingScan and undownloadable for good. Have the worker claim jobs from the table, or re-enqueue Queued and Running jobs at startup.",
+       "cite": {
+        "path": "src/NetDropbox.Application/Uploads/CompleteUpload.cs",
+        "lineStart": 80,
+        "lineEnd": 87
+       }
+      },
+      {
+       "text": "[w3] A recipient who opens the link while the scan runs gets a refusal, not the bytes, because the download path checks the scan status on every request; the repair is on the client side: tell the recipient the file is being checked and to retry, rather than letting the link look broken.",
+       "cite": {
+        "path": "src/NetDropbox.Application/Shares/ShareService.cs",
+        "lineStart": 57,
+        "lineEnd": 63
+       }
+      },
+      {
+       "text": "[w2] The verdict is stored on the file, not on the version it was computed for: the worker marks the file Clean after scanning the version named in its message without checking that version is still the current one, so a version-1 verdict that lands after version 2 committed opens version 2 before version 2 is scanned. Record the verdict per version and serve only a current version that is Clean.",
+       "cite": {
+        "path": "src/NetDropbox.Infrastructure/Processing/ProcessingWorker.cs",
+        "lineStart": 32,
+        "lineEnd": 65
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "TRADE-OFF HANDBACK — defend your upload design against the alternatives: small versus large chunks, verifying the whole file synchronously inside Complete versus finishing it in the background, storing content once by hash versus storing every upload separately, checking or reserving quota when an upload starts versus when it completes, an in-process queue versus a durable one for scan jobs, retrying a failed scan at once versus later, and how much of each file the scanner reads. For each, say what you bought, what it cost, and which requirement put you on that side.",
+     "keyPoints": [
+      {
+       "text": "[w2] The validator allows chunks from 256 KiB to 32 MiB: for a 6 GiB file that is 24,576 requests and chunk rows at the small end and 192 at the large end. Small chunks resend little after each drop but multiply round trips and rows; large chunks are cheap to track but lose up to 32 MiB of progress on every disconnect, which on a link that drops every few minutes argues for the middle of the range.",
+       "cite": {
+        "path": "src/NetDropbox.Application/Uploads/StartUpload.cs",
+        "lineStart": 20,
+        "lineEnd": 28
+       }
+      },
+      {
+       "text": "[w3] Complete reads the whole assembled file to hash it, rewinds, and, for content it has not stored before, reads it again to write the blob, all inside one HTTP request; that is simple and gives a definite answer, but for 6 GiB it is two full passes that can outlast client and proxy timeouts, which then trigger the retried-Complete problem. Hash incrementally as chunks are accepted, or finish in a background step that the client polls.",
+       "cite": {
+        "path": "src/NetDropbox.Application/Uploads/CompleteUpload.cs",
+        "lineStart": 48,
+        "lineEnd": 62
+       }
+      },
+      {
+       "text": "[w2] Storing content once by hash saves space whenever the same file is uploaded twice, but turns deletion into reference counting; here the 30-day trash purge only removes file rows, so neither the blob's reference count nor the owner's used bytes ever go down. Separate copies per upload cost space but make deletion trivial.",
+       "cite": {
+        "path": "src/NetDropbox.Infrastructure/Processing/JanitorWorker.cs",
+        "lineStart": 46,
+        "lineEnd": 51
+       }
+      },
+      {
+       "text": "[w3] Start compares used plus declared bytes with the quota and holds nothing, so several parallel sessions can each pass it and the late ones fail only after all their bytes were sent. Reserving at start fails early but holds space for abandoned sessions until the janitor gives it back; choose by whether parallel uploads or abandoned ones are the common case.",
+       "cite": {
+        "path": "src/NetDropbox.Application/Uploads/StartUpload.cs",
+        "lineStart": 35,
+        "lineEnd": 39
+       }
+      },
+      {
+       "text": "[w2] An in-memory channel is fast and needs no infrastructure, but every queued scan disappears with the process; a durable queue, or the job table itself polled by status, costs an extra system or poll delay and buys scans that survive deploys.",
+       "quote": "This is simple but not durable."
+      },
+      {
+       "text": "[w2] A failed scan goes straight back on the queue, so a scanner outage of a few seconds burns through the job's attempts and dead-letters it, leaving the file Failed with nothing that brings it back. Delayed retries with growing gaps and an operator re-run path cost bookkeeping and buy recovery from outages.",
+       "quote": "there is no backoff schedule or admin UI"
+      },
+      {
+       "text": "[w1] The simulated scanner samples only the first 1 MiB of the blob, which is fast but misses anything later in the file; a real engine must read the whole object, which for 6 GiB files means scan capacity has to be sized and scaled separately from the API.",
+       "cite": {
+        "path": "src/NetDropbox.Infrastructure/Processing/ProcessingWorker.cs",
+        "lineStart": 78,
+        "lineEnd": 91
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}
