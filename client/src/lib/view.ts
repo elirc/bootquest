@@ -46,11 +46,11 @@ export const competencyLabel = (c: CompetencyId): string => (COMPETENCY_LABEL as
 
 /**
  * Tracks whose daily slate USUALLY carries a drill set (track.slate_drills = 1 as seeded:
- * migrations 002 + 011). Presentation only, and a client-side guess: an unlocked one missing from
+ * migrations 002 + 011 + 016). Presentation only, and a client-side guess: an unlocked one missing from
  * today's slate may be out of drills OR have had slate_drills switched off, so the dashboard says
  * neutrally that there is no drill slot today and never asserts why.
  */
-export const SLATE_DRILL_TRACKS: readonly TrackId[] = ['js', 'csharp', 'java'];
+export const SLATE_DRILL_TRACKS: readonly TrackId[] = ['js', 'csharp', 'java', 'sysdesign'];
 
 export const TRACK_LABEL: Record<TrackId, string> = { js: 'JS/TS', csharp: 'C#/.NET', agentic: 'Agentic', java: 'Java', sysdesign: 'System design' };
 /** Short badge text (W-13b: the server has no `short`; this is presentation only). */

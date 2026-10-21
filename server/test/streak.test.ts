@@ -58,6 +58,14 @@ describe('daily slate composition', () => {
     expect(composeSlate(ctx.db, ctx.clock).items).toEqual(slate.items); // idempotent
   });
 
+  it('sysdesign joins the slate once it has drills (migration 016 + sysdrills pack)', () => {
+    // 016 sets slate_drills = 1; with no sysdesign drill units the slot is dropped (the test above)
+    seedDrills(ctx.db, ctx.clock, 'sysdesign', 3);
+    // sort_order 5: after drill:java, before review; the slot is min(5, remaining) = 3
+    expect(composeSlate(ctx.db, ctx.clock).items.map((i) => i.slot)).toEqual(['drill:js', 'drill:csharp', 'drill:java', 'drill:sysdesign', 'review']);
+    expect(slot(ctx.db, ctx.clock, 'drill:sysdesign')).toMatchObject({ size: 3, done: false });
+  });
+
   it('a campaign slot appears once a quest is seeded on an unlocked track, and a quest-unit pass ticks it', () => {
     const unitId = makeUnit(ctx.db, ctx.clock, { kind: 'guided-project' });
     const act = ctx.db.run(`INSERT INTO campaign_act (track_id, act_no, title) VALUES ('js', 1, 'Act 1')`).lastInsertRowid;

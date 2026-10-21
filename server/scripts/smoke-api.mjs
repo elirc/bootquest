@@ -74,6 +74,13 @@ const JAVA_KEY = 'javabootcamp/01-language-core/01-count-vowels';
 const javaUnit = javaCourses.flatMap((c) => c.units).find((u) => u.unit.key === JAVA_KEY);
 const javaContent = javaCourses.find((c) => JAVA_KEY in c.content).content[JAVA_KEY];
 const javaWrong = javaContent.solution.replace('"aeiouAEIOU".indexOf(c)', '"aeiou".indexOf(c)');
+// sysdesign track: the sysdrills estimation/reliability drill bank (drill-js, graded by the real JS
+// runner, manifest grader 'js'); the first unit of the first course is submitted for real (10c-sd2)
+const SD_DIR = join(REPO, 'content', 'packs', 'sysdrills');
+const sdManifest = JSON.parse(readFileSync(join(SD_DIR, 'manifest.json'), 'utf8'));
+const sdCourses = sdManifest.courses.map((c) => JSON.parse(readFileSync(join(SD_DIR, c.file), 'utf8')));
+const sdUnit = sdCourses[0].units[0];
+const sdContent = sdCourses[0].content[sdUnit.unit.key];
 // W5b: the committed campaign map (seed:campaign output), loaded at startup (light stamp + loaded === built)
 const CAMPAIGN_DIR = join(REPO, 'content', 'campaign');
 const campaignManifest = JSON.parse(readFileSync(join(CAMPAIGN_DIR, 'manifest.json'), 'utf8'));
@@ -295,8 +302,8 @@ async function main() {
         BOOTQUEST_DB: dbPath,
         BOOTQUEST_PORT: String(port),
         BOOTQUEST_UNIT_CONTENT: contentPath,
-        BOOTQUEST_PACKS: `${PACK_DIR},${CS_DIR},${JS_DIR},${JCS_DIR},${JAVA_DIR}`,
-        BOOTQUEST_PACK_COURSES: [PACK_COURSE, ...csManifest.courses.map((c) => c.id), ...JS_COURSES, JCS_COURSE, ...javaManifest.courses.map((c) => c.id)].join(','),
+        BOOTQUEST_PACKS: `${PACK_DIR},${CS_DIR},${JS_DIR},${JCS_DIR},${JAVA_DIR},${SD_DIR}`,
+        BOOTQUEST_PACK_COURSES: [PACK_COURSE, ...csManifest.courses.map((c) => c.id), ...JS_COURSES, JCS_COURSE, ...javaManifest.courses.map((c) => c.id), ...sdManifest.courses.map((c) => c.id)].join(','),
         BOOTQUEST_CS_SCRATCH: csScratch,
         BOOTQUEST_JAVA_SCRATCH: javaScratch,
         BOOTQUEST_CAMPAIGN: CAMPAIGN_DIR,
@@ -352,10 +359,10 @@ async function main() {
       // + every csbootcamp drill + one placeholder unit per playable campaign quest (no checks until seed:quests)
       // + W7: one ladder unit per explain-back set / kata + the authored G3/G4 units + the retests whose
       //   pre-seeded artifact made them live at boot (each with one check)
-      const wantUnits = 3 + packCounts.total + csManifest.totals.total + javaManifest.totals.total + campaignUnits + ladderUnitCount + jsCount('total') + jcsFile.units.length + standaloneStudyUnits;
-      const wantChecks = 3 + packCounts.total - packCounts.written + csManifest.totals.total + javaManifest.totals.total + ladderUnitCount + jsCount('total') - jsCount('written') + jcsFile.units.length + campaignStudyGates + standaloneStudyUnits;
+      const wantUnits = 3 + packCounts.total + csManifest.totals.total + javaManifest.totals.total + campaignUnits + ladderUnitCount + jsCount('total') + jcsFile.units.length + standaloneStudyUnits + sdManifest.totals.total;
+      const wantChecks = 3 + packCounts.total - packCounts.written + csManifest.totals.total + javaManifest.totals.total + ladderUnitCount + jsCount('total') - jsCount('written') + jcsFile.units.length + campaignStudyGates + standaloneStudyUnits + sdManifest.totals.total;
       step(
-        `health (3 fixture + ${packCounts.total} BootForge ${PACK_COURSE} + ${csManifest.totals.total} csbootcamp + ${javaManifest.totals.total} javabootcamp + ${campaignUnits} campaign + ${ladderUnitCount} ladder/authored + ${jsCount('total')} jstrain + ${jcsFile.units.length} jstrain-cs + ${standaloneStudyUnits} standalone study units; + ${campaignStudyGates} W8 study-quest gates: loaded === built)`,
+        `health (3 fixture + ${packCounts.total} BootForge ${PACK_COURSE} + ${csManifest.totals.total} csbootcamp + ${javaManifest.totals.total} javabootcamp + ${campaignUnits} campaign + ${ladderUnitCount} ladder/authored + ${jsCount('total')} jstrain + ${jcsFile.units.length} jstrain-cs + ${standaloneStudyUnits} standalone study units + ${sdManifest.totals.total} sysdrills; + ${campaignStudyGates} W8 study-quest gates: loaded === built)`,
         h.status === 200 && h.json?.ok === true && h.json.counts.units === wantUnits && h.json.counts.checks === wantChecks,
         JSON.stringify(h.json),
       );
@@ -690,18 +697,22 @@ async function main() {
           javaTrack?.unitCount === javaManifest.totals.total + 12 && javaTrack.doneCount === 0,
         `listed ${javaListed.length} + ${javaOther.map((x) => x.key).join(', ')}; java unitCount ${javaTrack?.unitCount}`,
       );
-      // 10c-sd. the sysdesign track: exactly the 22 DESIGN IT rubric units (6 javabootcamp + 16 estate)
+      // 10c-sd. the sysdesign track: the DESIGN IT explain-back rubric units (javabootcamp + estate repos;
+      // counted from the listing, never a literal — more sets arrive with new seed packs) + every
+      // sysdrills drill in pack order, and nothing else
       const sdTu = await api(base, 'GET', '/api/tracks/sysdesign/units');
       const sdUnits = sdTu.json?.units ?? [];
       const sdTrack = tr.json?.tracks?.find((t) => t.id === 'sysdesign');
+      const sdEbCount = sdUnits.filter((x) => x.key.startsWith('ladder/explain-back/')).length;
+      const sdDrillKeys = sdUnits.filter((x) => x.key.startsWith('sysdrills/')).map((x) => x.key);
       step(
-        'sysdesign track lists exactly the 22 DESIGN IT explain-back units (6 javabootcamp + 16 estate repos; unitCount 22, 0 done)',
+        `sysdesign track lists ${sdEbCount} DESIGN IT explain-backs + all ${sdManifest.totals.total} sysdrills drills in pack order (unitCount = explain-backs + drills, 0 done)`,
         sdTu.status === 200 &&
-          sdUnits.length === 22 &&
-          sdUnits.every((x) => x.key.startsWith('ladder/explain-back/')) &&
-          sdUnits.filter((x) => x.key.startsWith('ladder/explain-back/javabootcamp/')).length === 6 &&
-          sdTrack?.unitCount === 22 && sdTrack.doneCount === 0,
-        `listed ${sdUnits.length} (${sdUnits.filter((x) => x.key.startsWith('ladder/explain-back/javabootcamp/')).length} javabootcamp); sysdesign unitCount ${sdTrack?.unitCount}`,
+          sdEbCount > 0 &&
+          sdUnits.length === sdEbCount + sdDrillKeys.length &&
+          sdDrillKeys.join('\n') === sdCourses.flatMap((c) => c.units.map((u) => u.unit.key)).join('\n') &&
+          sdTrack?.unitCount === sdEbCount + sdManifest.totals.total && sdTrack.doneCount === 0,
+        `listed ${sdUnits.length}: ${sdEbCount} explain-back (${sdUnits.filter((x) => x.key.startsWith('ladder/explain-back/javabootcamp/')).length} javabootcamp) + ${sdDrillKeys.length} sysdrills; sysdesign unitCount ${sdTrack?.unitCount}`,
       );
       const javaId = javaListed.find((x) => x.key === JAVA_KEY)?.id;
       const jvD = await api(base, 'GET', `/api/units/${javaId}`);
@@ -776,6 +787,62 @@ async function main() {
         `dashboard xp total ${3 + 5 + wantXp + 2 + 4 + csXp + javaXp} after the Java submission; drill:java slate slot present (now completable: javabootcamp drills exist)`,
         jvDash.json?.xp?.total === 3 + 5 + wantXp + 2 + 4 + csXp + javaXp && (jvDash.json?.slate?.items ?? []).some((i) => i.slot === 'drill:java'),
         `xp=${jvDash.json?.xp?.total}`,
+      );
+
+      // 10c-sd2. sysdrills on the sysdesign track, graded by the REAL drill-js runner (relative ledger deltas)
+      const sdId = sdUnits.find((x) => x.key === sdUnit.unit.key)?.id;
+      const sdD = await api(base, 'GET', `/api/units/${sdId}`);
+      const sdSpec = sdD.json?.check?.spec ?? {};
+      const sdWalkLine = sdContent.explanation.split('\n').find((l) => l.trim().length > 30) ?? sdContent.explanation;
+      step(
+        'sysdrills detail: public drill-js spec {type, language, tests:[{name}], timeoutMs}, instructions + starter; no test code, no solution, no walkthrough',
+        sdD.status === 200 &&
+          JSON.stringify(Object.keys(sdSpec).sort()) === JSON.stringify(['language', 'tests', 'timeoutMs', 'type']) &&
+          sdSpec.type === 'drill-js' &&
+          sdSpec.language === 'js' &&
+          sdSpec.tests.length === sdUnit.unit.checks[0].spec.tests.length &&
+          sdSpec.tests.every((t) => Object.keys(t).join() === 'name') &&
+          sdD.json.instructions === sdContent.instructions &&
+          sdD.json.starter === sdContent.starter &&
+          !('solution' in sdD.json) &&
+          !sdD.text.includes('assert.equal(mod.') &&
+          !sdD.text.includes(JSON.stringify(sdContent.solution).slice(1, -1)) &&
+          !sdD.text.includes(JSON.stringify(sdWalkLine).slice(1, -1)),
+        `unit ${sdId} ${sdUnit.unit.key}`,
+      );
+
+      const sdC0 = counts();
+      const sdSt = await api(base, 'POST', `/api/units/${sdId}/submit`, { code: sdContent.starter });
+      const sdC1 = counts();
+      step(
+        'sysdrills: submitting the untouched starter fails (real JS runner), recorded, no XP',
+        sdSt.status === 200 &&
+          sdSt.json.verdict === 'fail' &&
+          sdSt.json.result.pass === false &&
+          sdSt.json.xp === null &&
+          sdC1.attempt === sdC0.attempt + 1 && sdC1.run === sdC0.run + 1 && sdC1.xp_event === sdC0.xp_event,
+        `failures=${sdSt.json?.result?.failures?.length}`,
+      );
+
+      const sdR = await api(base, 'POST', `/api/units/${sdId}/submit`, { code: sdContent.solution });
+      const sdC2 = counts();
+      const sdXp = 10 * sdUnit.unit.difficulty;
+      const sdXpRow = reader.get('SELECT amount, kind, unit_id, track_id FROM xp_event WHERE id = ?', sdR.json?.xp?.id ?? -1);
+      step(
+        `sysdrills: reference solution submitted -> real drill-js grade pass, +${sdXp} code XP (10 x difficulty ${sdUnit.unit.difficulty}) on the sysdesign track`,
+        sdR.status === 200 &&
+          sdR.json.verdict === 'pass' &&
+          sdR.json.result.pass === true &&
+          sdR.json.xp?.amount === sdXp &&
+          sdC2.attempt === sdC1.attempt + 1 && sdC2.run === sdC1.run + 1 && sdC2.xp_event === sdC1.xp_event + 1 &&
+          sdXpRow?.amount === sdXp && sdXpRow.kind === 'code' && sdXpRow.unit_id === sdId && sdXpRow.track_id === 'sysdesign',
+        `xp=${JSON.stringify(sdR.json?.xp)} row=${JSON.stringify(sdXpRow)}`,
+      );
+      const sdDash = await api(base, 'GET', '/api/dashboard');
+      step(
+        'dashboard: drill:sysdesign slate slot present (migration 016 + the sysdrills bank)',
+        (sdDash.json?.slate?.items ?? []).some((i) => i.slot === 'drill:sysdesign'),
+        `slots ${(sdDash.json?.slate?.items ?? []).map((i) => i.slot).join(',')}`,
       );
 
       // 10d. W3c: the http-check lesson, graded by the REAL http runner against a fixture server
