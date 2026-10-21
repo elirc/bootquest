@@ -1,0 +1,187 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "grok-build-multitenant--dfableandopus-05-SYSTEM-DESIGN-FOLLOWUPS.md--set-b",
+ "items": [
+  {
+   "key": "seed:explainback:grok-build-multitenant/explain-back/0b08ce844f1475a6",
+   "provenance": {
+    "repo": "grok-build-multitenant",
+    "sha": "e899e2056faf5fa912bf980a51d4732e7da20497",
+    "path": "dfableandopus/05-SYSTEM-DESIGN-FOLLOWUPS.md",
+    "lines": {
+     "start": 1,
+     "end": 87
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "DESIGN IT — [senior] the tenant lifecycle on a shared schema: import, offboarding and moving a tenant out (grok-build-multitenant, dfableandopus/05-SYSTEM-DESIGN-FOLLOWUPS.md). Scenario: an enterprise customer arrives from a rival tool with 50,000 projects, 1.2 million tasks and 3,000 users, 200 of whom already belong to other organizations here. In the same quarter another customer churns and asks for a full export of their data and written proof of deletion within 30 days. And your largest tenant, now 2 million tasks and 40% of all writes, must move to its own PostgreSQL database without downtime for anyone. Write your design before you look: how the import runs and resumes, how imported people and records fit the existing schema rules, the order of an offboarding teardown and what counts as proof, and how one tenant is moved and its traffic switched. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "keyPoints": [
+      {
+       "text": "[w3] Import is a resumable job, not 50,000 replays of the public create: each batch writes its rows and their audit events in one transaction, and a mapping from the source system's id to the new id (unique per organization) lets a resumed job skip what already landed.",
+       "cite": {
+        "path": "backend/src/repositories/projectRepository.ts",
+        "lineStart": 90,
+        "lineEnd": 98
+       }
+      },
+      {
+       "text": "[w2] Imported rows obey the same schema rules as live ones: every task carries the organization id and references its project through the composite key, so projects go in first, source project ids are mapped to the new ids, and only then are tasks written against them.",
+       "cite": {
+        "path": "backend/prisma/schema.prisma",
+        "lineStart": 57,
+        "lineEnd": 68
+       }
+      },
+      {
+       "text": "[w3] People are global and membership is per organization: a user's email is unique across the whole system and stored in canonical form, so the 200 people who already have an account get a membership row in the new organization, matched on canonical email, never a second user.",
+       "cite": {
+        "path": "backend/prisma/schema.prisma",
+        "lineStart": 26,
+        "lineEnd": 43
+       }
+      },
+      {
+       "text": "[w3] Offboarding is an ordered teardown because every foreign key restricts deletion: close the organization to new work, then delete tasks, projects and memberships, and the organization row last; the database refusing that final delete while anything still references it is part of the proof.",
+       "cite": {
+        "path": "backend/prisma/migrations/202609090001_tenant_workspace/migration.sql",
+        "lineStart": 104,
+        "lineEnd": 113
+       }
+      },
+      {
+       "text": "[w2] Audit rows carry the organization id but no foreign key to it and are kept by design when records are deleted, so the deletion promise must say explicitly whether that history (ids, actions, versions, no content) is purged or retained, and why.",
+       "cite": {
+        "path": "backend/prisma/schema.prisma",
+        "lineStart": 69,
+        "lineEnd": 79
+       }
+      },
+      {
+       "text": "[w2] Proof of deletion is a count of rows for that organization id in every tenant-owned table, zero afterwards, recorded with the time and the operator, plus the date the last backup holding the data expires.",
+       "quote": "Every tenant-owned table carries `organizationId`"
+      },
+      {
+       "text": "[w2] Export walks each table by the organization-leading index in its (created, id) order and resumes from the last key, so a two-million-row tenant exports in bounded pages without offsets, and its manifest records a count per table that the deletion proof can later be checked against.",
+       "cite": {
+        "path": "backend/prisma/schema.prisma",
+        "lineStart": 55,
+        "lineEnd": 67
+       }
+      },
+      {
+       "text": "[w3] Moving a tenant: the organization is already resolved per request, which is the natural place to look up which database serves it; replace the single global client with one per database, copy a snapshot, catch up the rows that changed since, freeze that one tenant's writes for seconds, apply the final delta, verify counts, and flip its directory entry.",
+       "cite": {
+        "path": "backend/src/lib/prisma.ts",
+        "lineStart": 1,
+        "lineEnd": 9
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "PRE-MORTEM — lifecycle week: the import dies at project 31,000 and someone simply reruns it, the enterprise's admins try to bring their 3,000 colleagues in on day one, the offboarding script stops halfway when a project with tasks refuses to delete, and during the database move a member edits a task in the minute before the flip. What breaks first, and what in your design already handles it?",
+     "keyPoints": [
+      {
+       "text": "[w3] A plain rerun duplicates the first 31,000 projects, because nothing about a create is idempotent here; the source-id mapping with a unique constraint turns the rerun into a resume.",
+       "quote": "only updates and deletes carry a version"
+      },
+      {
+       "text": "[w3] There is no invitation or membership-administration path, so the enterprise's admins cannot bring anyone in themselves; onboarding 3,000 people needs that path (or a supervised bulk membership load) before day one.",
+       "quote": "without them a real customer cannot onboard a colleague at all"
+      },
+      {
+       "text": "[w3] Deleting a project refuses while it still has tasks, so a script that deletes per project without ordering stops midway and leaves a half-deleted tenant; make the teardown resumable, delete children before parents, record progress, and keep the organization closed until it finishes.",
+       "cite": {
+        "path": "backend/src/repositories/projectRepository.ts",
+        "lineStart": 122,
+        "lineEnd": 147
+       }
+      },
+      {
+       "text": "[w3] The last-minute edit is caught by the catch-up, not by luck: every create, update and delete already writes an audit row with the organization, resource id and new version, which is a change list since the snapshot; it carries no content, so the delta re-copies those rows by id and deletes the ids whose last action is a delete. A write during the short freeze gets a retryable refusal.",
+       "cite": {
+        "path": "backend/src/repositories/projectRepository.ts",
+        "lineStart": 19,
+        "lineEnd": 37
+       }
+      },
+      {
+       "text": "[w2] Users and memberships are shared across organizations, so they cannot move with one tenant: keep identity central, move only tenant-owned tables, and accept a second database hop per request for the moved tenant.",
+       "cite": {
+        "path": "backend/prisma/schema.prisma",
+        "lineStart": 26,
+        "lineEnd": 43
+       }
+      },
+      {
+       "text": "[w2] Every instance must stop writing that tenant to the old database at the flip; an instance still routing there writes rows the new database never sees, so make the old copy refuse that tenant's writes before the directory changes.",
+       "cite": {
+        "path": "backend/src/lib/prisma.ts",
+        "lineStart": 7,
+        "lineEnd": 7
+       }
+      },
+      {
+       "text": "[w1] Data from another tool will break the schema's own checks (blank project names and task titles, which the database itself refuses); the import should reject those rows into a report the customer can fix, not fail the whole job.",
+       "cite": {
+        "path": "backend/prisma/migrations/202609090001_tenant_workspace/migration.sql",
+        "lineStart": 119,
+        "lineEnd": 120
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "TRADE-OFF HANDBACK — defend your lifecycle choices against the alternatives: importing through the public API versus a bulk path, retaining audit history after offboarding versus purging it, moving a tenant by snapshot plus catch-up versus dual writes versus a maintenance window, keeping identity central versus moving it with the tenant, a dedicated database for outsized tenants only versus for everyone, and reusing existing read endpoints for export versus a purpose-built export. For each, say what you bought and what it cost.",
+     "keyPoints": [
+      {
+       "text": "[w3] Importing through the public API gets every validation, scope check and audit row for free but costs one transaction per record; a bulk path is fast but must re-implement what the services enforce, while the guarantees that live in the schema (composite key, checks) still hold for any writer.",
+       "quote": "shows the tenant rule lives in the schema rather than in whichever service writes next"
+      },
+      {
+       "text": "[w3] Retaining audit history keeps the deliberate change record but weakens a deletion promise; purging it gives a clean proof and loses the evidence. The middle path works here because audit rows hold only ids, actions and versions, no project or task content.",
+       "cite": {
+        "path": "backend/prisma/schema.prisma",
+        "lineStart": 69,
+        "lineEnd": 79
+       }
+      },
+      {
+       "text": "[w3] Snapshot plus catch-up plus a seconds-long per-tenant freeze trades a few refused writes for no global downtime; dual writes avoid the freeze but make every write path write twice and need a divergence check; a maintenance window is simplest and means downtime for that tenant.",
+       "cite": {
+        "path": "backend/src/repositories/projectRepository.ts",
+        "lineStart": 19,
+        "lineEnd": 37
+       }
+      },
+      {
+       "text": "[w2] Central identity keeps one sign-in for people in several organizations; the cost is that the moved tenant's requests read membership centrally and data elsewhere.",
+       "cite": {
+        "path": "backend/src/middleware/tenantContext.ts",
+        "lineStart": 25,
+        "lineEnd": 39
+       }
+      },
+      {
+       "text": "[w2] A dedicated database only for outsized tenants keeps the shared schema's single migration and pools for everyone else, but every migration now runs on more than one database and cross-tenant reporting spans them; giving every tenant one multiplies that by the tenant count.",
+       "quote": "connection pools that cannot be shared"
+      },
+      {
+       "text": "[w1] The existing history read returns only the latest 30 audit rows of one record, so an export cannot be assembled from today's endpoints; it needs its own paged reader over each table.",
+       "cite": {
+        "path": "backend/src/repositories/projectRepository.ts",
+        "lineStart": 252,
+        "lineEnd": 262
+       }
+      }
+     ]
+    }
+   ],
+   "set": "b"
+  }
+ ]
+}

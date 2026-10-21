@@ -1,0 +1,171 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "organized-experiment-idempotent-payments-lab--docs-learning-concepts-demonstrated.md--set-b",
+ "items": [
+  {
+   "key": "seed:explainback:organized-experiment-idempotent-payments-lab/explain-back/edcac31041bd8e7b",
+   "provenance": {
+    "repo": "organized-experiment-idempotent-payments-lab",
+    "sha": "7e9832bab90cba8b26fffebb884edc0a7397cee0",
+    "path": "docs/learning/concepts-demonstrated.md",
+    "lines": {
+     "start": 48,
+     "end": 110
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "DESIGN IT — [mid] end-of-day reconciliation and drift repair for an idempotent checkout (organized-experiment-idempotent-payments-lab, docs/learning/concepts-demonstrated.md). Scenario: the provider's daily settlement covers 18,400 payments. Your records disagree on 42 of them: 37 are still PENDING locally although the provider settled them, 4 were reversed on the provider's side without any operator refund (the nearest thing this codebase models to a chargeback; it has no dispute model), and 1 provider payment matches no local payment at all. Yesterday's run died two minutes in, and finance closes the books at 06:00. Write your design before you look: how drift is detected and classified, how each run is recorded, how a repair is applied so it can never charge anyone twice and is safe to repeat, how a provider-side reversal enters the system, and how the comparison stays bounded and consistent. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "keyPoints": [
+      {
+       "text": "[w3] Compare meaning, not just presence: map each provider status to the local status it implies and flag every disagreement, in addition to rows that exist on only one side; a check that only looks for missing rows misses the commonest drift, settled at the provider but pending here.",
+       "quote": "compares local and provider views and writes"
+      },
+      {
+       "text": "[w3] Classify drift by cause, because the repair differs: provider terminal with no confirmation ever queued (send the missing confirmation), a confirmation that exists but a status that still disagrees (find out why it never applied), and rows present on one side only (escalate; never auto-create a payment or a charge).",
+       "cite": {
+        "path": "src/services/reconciliationService.ts",
+        "lineStart": 58,
+        "lineEnd": 100
+       }
+      },
+      {
+       "text": "[w3] Repair goes through the front door: today reconciliation detects and records only, so a repair is new code that applies the provider's outcome through the same guarded status transition and audit event the confirmation path uses, inside its own transaction, and never calls the provider to create or capture anything, which is what makes a double charge impossible.",
+       "cite": {
+        "path": "docs/architecture/README.md",
+        "lineStart": 48,
+        "lineEnd": 48
+       }
+      },
+      {
+       "text": "[w3] A repaired issue must be closed (resolved, with a timestamp), and the next run must skip what is closed and now agrees; the schema already has those states but nothing writes them, so drift is re-reported forever and nobody can tell an open problem from a fixed one.",
+       "quote": "never closes issues, so the same payment is re-flagged on every run"
+      },
+      {
+       "text": "[w2] Bound the comparison: run it over the settlement window as of a cutoff, in pages, from one consistent read, and treat a provider payment still received or processing as in flight rather than drift, since it maps to local pending.",
+       "cite": {
+        "path": "src/lib/domain/paymentStateMachine.ts",
+        "lineStart": 44,
+        "lineEnd": 46
+       }
+      },
+      {
+       "text": "[w2] A provider-side reversal arrives as a provider event: it is deduplicated on its provider event id, judged by the transition table (a reversal only from a succeeded payment) and written to the event trail under the provider's label, which keeps it distinguishable from an operator-issued refund.",
+       "cite": {
+        "path": "src/services/webhookService.ts",
+        "lineStart": 87,
+        "lineEnd": 113
+       }
+      },
+      {
+       "text": "[w2] Each run is its own durable record, with who started it and a summary of what it found, so finance can see when a drift first appeared and whether it grew; the runs form a history, not one report that is overwritten.",
+       "cite": {
+        "path": "docs/architecture/domain-model.md",
+        "lineStart": 73,
+        "lineEnd": 73
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "PRE-MORTEM — the same reconciliation at 10x: 3 million payments in the table, two operators press Run within the same minute, the repair job times out and is retried over the same 37 payments, a provider confirmation lands for one of them while the repair is running, and one flagged payment was created in the ambiguous-network mode. What breaks first, and what in your design already handles it?",
+     "keyPoints": [
+      {
+       "text": "[w3] Every run loads both whole tables into application memory before comparing, so at 3 million payments the run's memory and duration grow with all history instead of the day being settled.",
+       "quote": "Loads all payments and all provider mirrors with two unscoped"
+      },
+      {
+       "text": "[w3] The local and provider reads are taken separately, so a confirmation that lands between them shows up as drift that is not there; a repair acting on it would fight the confirmation path.",
+       "quote": "the two queries are separate statements"
+      },
+      {
+       "text": "[w3] A retried repair must change nothing the second time: re-read each payment inside the repair transaction and skip it when its status already matches the provider, so the retry writes no second status change or event, and a confirmation that landed in the meantime is simply observed instead of overwritten.",
+       "cite": {
+        "path": "src/services/webhookService.ts",
+        "lineStart": 87,
+        "lineEnd": 88
+       }
+      },
+      {
+       "text": "[w3] The ambiguous-network outcome is labelled but not modelled: there is no lookup by reference and no second attempt, so repair for such a payment must ask the provider about the existing reference and never dispatch a new create, or the customer pays twice.",
+       "cite": {
+        "path": "docs/architecture/domain-model.md",
+        "lineStart": 123,
+        "lineEnd": 123
+       }
+      },
+      {
+       "text": "[w2] Nothing serializes runs: each press creates a new running run and writes its own full set of issues and flag events, so two presses double the operators' queue; refuse a second run while one is running, or take a lock for the run.",
+       "cite": {
+        "path": "src/services/reconciliationService.ts",
+        "lineStart": 23,
+        "lineEnd": 27
+       }
+      },
+      {
+       "text": "[w2] The two missing-row issue types cannot arise from this app's own writes, because the provider mirror is written in the same transaction as the payment; against a real provider's settlement they become the important ones, a provider payment with no local record being money taken with nothing to show for it.",
+       "cite": {
+        "path": "docs/architecture/domain-model.md",
+        "lineStart": 124,
+        "lineEnd": 124
+       }
+      },
+      {
+       "text": "[w1] Detection is already limited to operations staff; a repair moves money state and deserves its own permission, with the operator recorded as the actor on every change it makes.",
+       "quote": "Powerful operational actions like refunds or reconciliation become callable by the wrong staff role."
+      }
+     ]
+    },
+    {
+     "prompt": "TRADE-OFF HANDBACK — defend your reconciliation choices against the alternatives: detect-only versus automatic repair, the provider as the source of truth versus your own records, a full comparison versus a windowed one, joining in application memory versus in the database, a new issue per run versus one open issue per payment, and repairing drift versus fixing the confirmation feed that produced it. For each, say what you bought and what it cost.",
+     "keyPoints": [
+      {
+       "text": "[w3] Detect-only can never make a money movement worse, but drift stays until a person acts; automatic repair closes the gap for transitions the guard allows and must escalate everything else, at the cost of code that writes payment state outside the request path.",
+       "quote": "Silent inconsistencies accumulate until finance or support discovers them manually."
+      },
+      {
+       "text": "[w3] The provider is the truth for a payment's outcome and local status is allowed to lag behind it; your records stay the truth for intent (who asked, under which key), so a provider payment with no local intent is escalated, never imported.",
+       "cite": {
+        "path": "docs/architecture/domain-model.md",
+        "lineStart": 38,
+        "lineEnd": 38
+       }
+      },
+      {
+       "text": "[w3] A full comparison is simple and catches old drift, but its cost grows with every payment ever taken; a window over the settlement period is bounded and fast but misses older drift unless an occasional full sweep backs it up.",
+       "cite": {
+        "path": "src/services/reconciliationService.ts",
+        "lineStart": 29,
+        "lineEnd": 34
+       }
+      },
+      {
+       "text": "[w2] Joining in memory is easy to read and to test but holds both data sets in the process; a database join or keyed pages lets the database do the matching and keeps the process small.",
+       "quote": "joins them in memory by `paymentId`"
+      },
+      {
+       "text": "[w2] A new issue per run keeps a record of every time a payment was seen broken; it costs a pile-up unless issues are closed. One open issue per payment with a last-seen time and a count is cheaper to work through but loses that per-run trail.",
+       "cite": {
+        "path": "prisma/schema.prisma",
+        "lineStart": 274,
+        "lineEnd": 290
+       }
+      },
+      {
+       "text": "[w2] Much of this drift is a confirmation that was never sent or never applied; delivery tracking exists to make that case visible, so fixing the feed removes drift at its source, and repair stays a safety net rather than the main path.",
+       "cite": {
+        "path": "docs/architecture/domain-model.md",
+        "lineStart": 53,
+        "lineEnd": 53
+       }
+      }
+     ]
+    }
+   ],
+   "set": "b"
+  }
+ ]
+}
