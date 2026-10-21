@@ -498,6 +498,560 @@
    ],
    "front": "Four sharp edges of refresh rotation here?",
    "back": "1 expiry checked before reuse (expired replay never alarms); 2 rotation not atomic (replacement saved before the old token is marked); 3 parallel use of one live token mints two branches; 4 refresh never re-checks IsBlocked."
+  },
+  {
+   "id": "q14-review-pass-order",
+   "kind": "quiz",
+   "source": {
+    "path": "docs2/08-security-review-walkthrough.md",
+    "lines": {
+     "start": 7,
+     "end": 24
+    }
+   },
+   "cites": [
+    {
+     "path": "docs2/08-security-review-walkthrough.md",
+     "lineStart": 19,
+     "lineEnd": 24
+    }
+   ],
+   "prompt": "Doc 08's review runs four passes: trust boundary, asset, state machine, negative space. Why trust boundaries first and negative space last?",
+   "answer": "Trust boundaries need no domain knowledge; negative space needs all of it",
+   "distractors": [
+    "Trust-boundary bugs are always the most severe, so they are found first",
+    "Negative space is the cheapest pass, so it is left for the time remaining",
+    "The asset pass needs the endpoint list that the trust pass produces"
+   ],
+   "explanation": "Doc 08 (lines 23-24): \"trust boundaries first because they require zero domain knowledge, negative space last because it requires all of it.\" The order follows how much you must understand about the system, not severity or a hand-off between passes, and the negative-space pass is called the hardest one (line 20), not the cheapest."
+  },
+  {
+   "id": "q15-totp-no-lockout",
+   "kind": "quiz",
+   "source": {
+    "path": "docs2/08-security-review-walkthrough.md",
+    "lines": {
+     "start": 38,
+     "end": 38
+    }
+   },
+   "cites": [
+    {
+     "path": "docs2/08-security-review-walkthrough.md",
+     "lineStart": 38,
+     "lineEnd": 38
+    },
+    {
+     "path": "src/NetAuth0.Application/Identity/IdentityService.cs",
+     "lineStart": 80,
+     "lineEnd": 84
+    }
+   ],
+   "prompt": "An attacker already knows a user's password and starts guessing TOTP codes at login. Per finding F3, what limits them?",
+   "answer": "Only the per-IP limiter, since failed codes never count toward lockout",
+   "distractors": [
+    "A lockout after repeated bad codes, the same as for bad passwords",
+    "A per-account counter of wrong codes that slows each next attempt",
+    "Nothing at all, since the IP limiter does not cover the MFA step"
+   ],
+   "explanation": "F3 (line 38): MFA failures bypass RegisterFailure, so there is no per-account counter and no lockout, and `out _` discards the matched time step, so there is no per-step replay rejection. \"Only the per-IP 20/min limiter stands between a password-holder and the 10⁶ code space.\" IdentityService.cs:80-84 audits the MFA failure and throws without calling RegisterFailure."
+  },
+  {
+   "id": "q16-refresh-without-secret",
+   "kind": "quiz",
+   "source": {
+    "path": "docs2/08-security-review-walkthrough.md",
+    "lines": {
+     "start": 40,
+     "end": 40
+    }
+   },
+   "cites": [
+    {
+     "path": "docs2/08-security-review-walkthrough.md",
+     "lineStart": 40,
+     "lineEnd": 40
+    },
+    {
+     "path": "src/NetAuth0.Application/OAuth/OAuthService.cs",
+     "lineStart": 182,
+     "lineEnd": 186
+    }
+   ],
+   "prompt": "A confidential client's refresh token is stolen. Per finding F5, what else must the attacker send to the token endpoint to use it?",
+   "answer": "Only the public client_id, because omitting the secret skips its check",
+   "distractors": [
+    "The client secret too, which is checked on every refresh request",
+    "The original code_verifier, which refresh re-checks against PKCE",
+    "A live access token, since refresh needs an active bearer session"
+   ],
+   "explanation": "F5 (line 40): the secret is \"verified only when the request volunteers one\", so a \"stolen refresh token + public client_id suffices\". OAuthService.cs:183-186 calls ValidateClientSecretIfRequiredAsync only inside `if (!string.IsNullOrWhiteSpace(request.ClientSecret))`: leaving the secret out skips the check instead of failing it."
+  },
+  {
+   "id": "q17-recovery-codes-dead",
+   "kind": "quiz",
+   "source": {
+    "path": "docs2/08-security-review-walkthrough.md",
+    "lines": {
+     "start": 41,
+     "end": 41
+    }
+   },
+   "cites": [
+    {
+     "path": "docs2/08-security-review-walkthrough.md",
+     "lineStart": 41,
+     "lineEnd": 41
+    },
+    {
+     "path": "src/NetAuth0.Application/Identity/IdentityService.cs",
+     "lineStart": 104,
+     "lineEnd": 108
+    }
+   ],
+   "prompt": "A user with TOTP enabled loses their phone but still has the recovery codes shown at enrollment. Per finding F6, what happens?",
+   "answer": "They stay locked out, because no login path ever redeems a recovery code",
+   "distractors": [
+    "They log in once with a recovery code, and MFA is then reset for them",
+    "They can redeem a code, but only after an admin unblocks the account",
+    "They enter a code in place of the TOTP, and that code is then consumed"
+   ],
+   "explanation": "F6 (line 41): recovery codes are \"generated and stored; no redemption path exists\" (`RecoveryCode.Use` has no callers). \"Lost authenticator = permanent lockout, while the API advertises recovery.\" IdentityService.cs:104-108 only creates and hashes the codes at enrollment."
+  },
+  {
+   "id": "q18-mfa-enrollment-idor",
+   "kind": "quiz",
+   "source": {
+    "path": "docs2/08-security-review-walkthrough.md",
+    "lines": {
+     "start": 43,
+     "end": 43
+    }
+   },
+   "cites": [
+    {
+     "path": "docs2/08-security-review-walkthrough.md",
+     "lineStart": 43,
+     "lineEnd": 43
+    },
+    {
+     "path": "src/NetAuth0.Application/Identity/IdentityService.cs",
+     "lineStart": 114,
+     "lineEnd": 120
+    }
+   ],
+   "prompt": "Per finding F8, how does MFA enrollment verification find the enrollment it is about to verify?",
+   "answer": "By enrollment ID alone, without comparing the caller to its owner",
+   "distractors": [
+    "By enrollment ID and the user ID taken from the caller's token",
+    "By the caller's user ID, so only their own pending enrollment",
+    "By enrollment ID within the tenant named in the caller's claims"
+   ],
+   "explanation": "F8 (line 43): \"Verification looks up by enrollment ID only; caller's identity never checked\", part of a pattern of unscoped lookups. IdentityService.cs:116 loads the row with `x.Id == request.EnrollmentId` and nothing else, so no user or tenant from the caller's token takes part."
+  },
+  {
+   "id": "q19-errors-collapse-400",
+   "kind": "quiz",
+   "source": {
+    "path": "docs2/08-security-review-walkthrough.md",
+    "lines": {
+     "start": 45,
+     "end": 45
+    }
+   },
+   "cites": [
+    {
+     "path": "docs2/08-security-review-walkthrough.md",
+     "lineStart": 45,
+     "lineEnd": 45
+    },
+    {
+     "path": "src/NetAuth0.Api/Program.cs",
+     "lineStart": 113,
+     "lineEnd": 123
+    }
+   ],
+   "prompt": "Why can't a standard OAuth client library tell an invalid_grant failure from an invalid_client failure at this provider's token endpoint?",
+   "answer": "Every failure becomes a generic 400 that is not shaped per RFC 6749",
+   "distractors": [
+    "Both errors return 401, and only the WWW-Authenticate header differs",
+    "Both errors become a 500 whose body hides the original exception",
+    "Spec-shaped errors are sent, but production strips the error field"
+   ],
+   "explanation": "F10 (line 45): error handling \"collapses everything to 400\" and leaks exception messages in Development; \"OAuth errors are not RFC 6749-shaped, so client libraries can't distinguish `invalid_grant` from `invalid_client`.\" Program.cs:113-123 is one exception handler that always answers statusCode 400 with a generic \"Request failed\" problem."
+  },
+  {
+   "id": "q20-login-timing-oracle",
+   "kind": "quiz",
+   "source": {
+    "path": "docs2/08-security-review-walkthrough.md",
+    "lines": {
+     "start": 46,
+     "end": 46
+    }
+   },
+   "cites": [
+    {
+     "path": "docs2/08-security-review-walkthrough.md",
+     "lineStart": 46,
+     "lineEnd": 46
+    },
+    {
+     "path": "src/NetAuth0.Application/Identity/IdentityService.cs",
+     "lineStart": 51,
+     "lineEnd": 69
+    }
+   ],
+   "prompt": "Unknown-user and wrong-password logins both return \"Invalid credentials.\" Per finding F11, how can an attacker still tell which emails have accounts?",
+   "answer": "Unknown users skip the BCrypt verify, so their failures return faster",
+   "distractors": [
+    "Unknown users get a different message once the tenant slug is valid",
+    "Unknown users run BCrypt twice, so their failures return slower",
+    "Real users' failures are slower, but only after their account locks"
+   ],
+   "explanation": "F11 (line 46): \"Unknown-user login skips the BCrypt verify (work factor 12, hundreds of ms); uniform message, non-uniform latency.\" So the timing, not the text, separates real accounts. A locked or blocked account gets its own message \"before any password check\" (IdentityService.cs:58-61), so locking does not make a failure slower."
+  },
+  {
+   "id": "q21-limiter-ip-rotation",
+   "kind": "quiz",
+   "source": {
+    "path": "docs2/08-security-review-walkthrough.md",
+    "lines": {
+     "start": 47,
+     "end": 47
+    }
+   },
+   "cites": [
+    {
+     "path": "docs2/08-security-review-walkthrough.md",
+     "lineStart": 47,
+     "lineEnd": 47
+    },
+    {
+     "path": "src/NetAuth0.Api/Program.cs",
+     "lineStart": 73,
+     "lineEnd": 83
+    }
+   ],
+   "prompt": "The public-auth limiter partitions on raw RemoteIpAddress, and the API is exposed directly with no proxy in front. Per finding F12, what defeats it?",
+   "answer": "An attacker rotating source IPs, since each address gets its own bucket",
+   "distractors": [
+    "A forged X-Forwarded-For header, which it reads as the client address",
+    "Varying the email per attempt, since buckets are kept per account",
+    "Switching client_id per attempt, since buckets are kept per client"
+   ],
+   "explanation": "F12 (line 47): the limiter is \"keyed on raw `RemoteIpAddress`\"; behind a proxy everyone shares one bucket, and \"without one, attacker IP rotation defeats it.\" \"No forwarded-headers config exists\", so X-Forwarded-For is never read, and Program.cs:75-76 partitions on the connection address only, not on the account or the client."
+  },
+  {
+   "id": "q22-ci-runs-unit-only",
+   "kind": "quiz",
+   "source": {
+    "path": "docs2/07-testing-and-debugging.md",
+    "lines": {
+     "start": 27,
+     "end": 43
+    }
+   },
+   "cites": [
+    {
+     "path": "docs2/07-testing-and-debugging.md",
+     "lineStart": 29,
+     "lineEnd": 43
+    },
+    {
+     "path": ".github/workflows/ci.yml",
+     "lineStart": 18,
+     "lineEnd": 18
+    }
+   ],
+   "prompt": "You add Testcontainers-based tests to NetAuth0.IntegrationTests and they pass on your machine. Per doc 07, why do they not protect anything yet?",
+   "answer": "CI runs only the UnitTests project, so a CI step must be added",
+   "distractors": [
+    "Testcontainers cannot start Docker on ubuntu-latest GitHub runners",
+    "The project lacks the Mvc.Testing and Testcontainers packages",
+    "CI runs every test project but skips any test that needs Docker"
+   ],
+   "explanation": "Doc 07 (lines 29-43): \"CI runs exactly one test command\", `dotnet test tests/NetAuth0.UnitTests/...` (ci.yml:18). IntegrationTests already has the packages but no CI step, so \"nothing you put in IntegrationTests is protected until someone adds a CI step for it\"; that step needs Docker, which ubuntu-latest runners have. \"A test that no pipeline runs is documentation, not protection.\""
+  },
+  {
+   "id": "q23-dont-mock-dbcontext",
+   "kind": "quiz",
+   "source": {
+    "path": "docs2/07-testing-and-debugging.md",
+    "lines": {
+     "start": 21,
+     "end": 25
+    }
+   },
+   "cites": [
+    {
+     "path": "docs2/07-testing-and-debugging.md",
+     "lineStart": 21,
+     "lineEnd": 25
+    }
+   ],
+   "prompt": "Why does doc 07 tell you to skip mocking IAppDbContext in this repo's service tests?",
+   "answer": "The SQL translation is part of what the service test must check",
+   "distractors": [
+    "Service tests should be pure unit tests that use no database at all",
+    "A mocked DbSet rejects LINQ that PostgreSQL would happily translate",
+    "WebApplicationFactory tests already cover every query end to end"
+   ],
+   "explanation": "Doc 07 (lines 21-25): the shape mix is \"mostly service-level tests against a real database (EF + PostgreSQL via Testcontainers)\" and only \"a few WebApplicationFactory tests for the HTTP contract\". Skip mocking IAppDbContext because \"mocked DbSet LINQ lies to you; the SQL translation is part of what you're testing\": the mock is more permissive than the database, not stricter."
+  },
+  {
+   "id": "q24-401-or-403-first",
+   "kind": "quiz",
+   "source": {
+    "path": "docs2/07-testing-and-debugging.md",
+    "lines": {
+     "start": 255,
+     "end": 273
+    }
+   },
+   "cites": [
+    {
+     "path": "docs2/07-testing-and-debugging.md",
+     "lineStart": 259,
+     "lineEnd": 262
+    }
+   ],
+   "prompt": "Login succeeds, but the admin pages fail. In doc 07's playbook, what is the first question to ask, and why?",
+   "answer": "Is it 401 or 403, since that splits authentication from authorization",
+   "distractors": [
+    "Is the JWT expired, since its 15-minute lifetime is the usual cause",
+    "Is the user's role seeded, since empty permissions are the usual cause",
+    "Is the API reachable, since the network tab shows whether calls fail"
+   ],
+   "explanation": "Doc 07's worked scenario (lines 259-262): step 1 is \"401 vs 403, which?\" 401 is authentication (token absent or invalid) and 403 is authorization (valid token, missing claim); \"this one question halves the search space.\" Checking expiry and decoding permissions come later (steps 3 and 4), on the branch the first answer selects."
+  },
+  {
+   "id": "q25-test-where-bug-lived",
+   "kind": "quiz",
+   "source": {
+    "path": "docs2/07-testing-and-debugging.md",
+    "lines": {
+     "start": 269,
+     "end": 273
+    }
+   },
+   "cites": [
+    {
+     "path": "docs2/07-testing-and-debugging.md",
+     "lineStart": 272,
+     "lineEnd": 273
+    }
+   ],
+   "prompt": "An admin-page 403 is traced to a permission string that drifted between the seeded claims and the endpoint policy. Per doc 07, where does the regression test go?",
+   "answer": "At the layer where the bug lived, not the layer it surfaced in",
+   "distractors": [
+    "At the layer where it surfaced, since that is what the user saw",
+    "In the UI, end to end, so that one test covers every layer at once",
+    "At every layer it crossed, with one regression test for each layer"
+   ],
+   "explanation": "Doc 07 (lines 272-273): \"Root cause found → write the regression test at the layer the bug lived in, not the layer it surfaced in.\" Here the 403 surfaced in the admin UI, but the drift lives in the claim and policy strings, so that is where the test belongs; neither a UI test nor one test per layer is what the playbook asks for."
+  },
+  {
+   "id": "q26-logout-triage-first",
+   "kind": "quiz",
+   "source": {
+    "path": "docs2/07-testing-and-debugging.md",
+    "lines": {
+     "start": 275,
+     "end": 282
+    }
+   },
+   "cites": [
+    {
+     "path": "docs2/07-testing-and-debugging.md",
+     "lineStart": 277,
+     "lineEnd": 282
+    }
+   ],
+   "prompt": "A user reports being logged out of everything. Which hypothesis does doc 07's playbook check first, and with what probe?",
+   "answer": "Replay detection fired: query the audit table for reuse_detected",
+   "distractors": [
+    "Natural expiry: compare the ExpiresAt values of the user's tokens",
+    "Admin force-logout: query the audit table for the force-logout event",
+    "Key rotation: check whether the token's kid is still served by JWKS"
+   ],
+   "explanation": "Doc 07 (lines 277-282) ranks hypotheses \"by prior probability, cheapest probe first\": (a) replay detection fired, so query audit for `refresh_token.reuse_detected` (one SQL query, which also gives the IP); (b) admin force-logout, audit again; (c) natural expiry, compare ExpiresAt values. Key rotation is not one of the three; the doc mentions it only because its missing audit event would hide a rotation-caused mass logout."
+  },
+  {
+   "id": "q27-user-search-scan",
+   "kind": "quiz",
+   "source": {
+    "path": "docs2/09-performance-and-operations.md",
+    "lines": {
+     "start": 37,
+     "end": 45
+    }
+   },
+   "cites": [
+    {
+     "path": "docs2/09-performance-and-operations.md",
+     "lineStart": 39,
+     "lineEnd": 43
+    },
+    {
+     "path": "src/NetAuth0.Application/Admin/AdminService.cs",
+     "lineStart": 76,
+     "lineEnd": 80
+    }
+   ],
+   "prompt": "Admin user search runs `Email.Contains(q) || DisplayName.ToLower().Contains(q)` on PostgreSQL. Per doc 09, why does it time out at a million users?",
+   "answer": "Its leading-wildcard LIKE and LOWER calls defeat any B-tree index",
+   "distractors": [
+    "EF evaluates Contains in memory after loading every user row first",
+    "The Email index is used, but DisplayName has no index to fall back on",
+    "Contains becomes a regex match that PostgreSQL re-plans per keystroke"
+   ],
+   "explanation": "Doc 09 (lines 39-42): the query translates to `LIKE '%q%'` plus `LOWER(...)`, and \"neither can use a B-tree index\", so every search is a sequential scan: unnoticed at 10⁴ users, a timeout at 10⁶. The translation happens in SQL (no in-memory evaluation, no regex), and the fix ladder starts with a sargable prefix match (StartsWith), then a pg_trgm GIN index."
+  },
+  {
+   "id": "f05-pass-attribution",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs2/08-security-review-walkthrough.md",
+    "lines": {
+     "start": 54,
+     "end": 57
+    }
+   },
+   "cites": [
+    {
+     "path": "docs2/08-security-review-walkthrough.md",
+     "lineStart": 54,
+     "lineEnd": 57
+    }
+   ],
+   "front": "Doc 08's pass attribution: which findings did each review pass catch?",
+   "back": "Trust boundary: F1, F2, F8, F17. Asset: F7, F9. State machine: F3, F4, F5, F11, F15. Negative space: F6, F10, F13, F14, F16 and the missing rotation audit. If your own review missed a cluster, that names the pass you under-practice, which is more useful than knowing the bug you missed."
+  },
+  {
+   "id": "f06-fix-leverage",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs2/08-security-review-walkthrough.md",
+    "lines": {
+     "start": 59,
+     "end": 100
+    }
+   },
+   "cites": [
+    {
+     "path": "docs2/08-security-review-walkthrough.md",
+     "lineStart": 59,
+     "lineEnd": 62
+    },
+    {
+     "path": "docs2/08-security-review-walkthrough.md",
+     "lineStart": 99,
+     "lineEnd": 100
+    }
+   ],
+   "front": "Doc 08: how should a security review's fixes be ordered and grouped?",
+   "back": "By leverage: ordering fixes is the senior deliverable, since anyone can list problems. Group findings by the fix that closes them, not by location; one pattern applied everywhere can close several findings and the whole class. Lead with a small, fully testable PR; file deployment-posture items until productionizing. Three PRs beat fourteen tickets."
+  },
+  {
+   "id": "f07-test-seams",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs2/07-testing-and-debugging.md",
+    "lines": {
+     "start": 45,
+     "end": 57
+    }
+   },
+   "cites": [
+    {
+     "path": "docs2/07-testing-and-debugging.md",
+     "lineStart": 47,
+     "lineEnd": 57
+    }
+   ],
+   "front": "Doc 07: the seams that make this codebase testable?",
+   "back": "IClock: a FakeClock makes lockout and expiry tests deterministic, no Thread.Sleep. IPasswordHasher: BCrypt at work factor 12 is slow on purpose, so login-heavy suites inject a cheap fake. RequestContext: construct it directly, no HTTP needed for service tests. `public partial class Program`: lets WebApplicationFactory<Program> host the app in-process."
+  },
+  {
+   "id": "f08-test-risk-order",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs2/07-testing-and-debugging.md",
+    "lines": {
+     "start": 9,
+     "end": 19
+    }
+   },
+   "cites": [
+    {
+     "path": "docs2/07-testing-and-debugging.md",
+     "lineStart": 11,
+     "lineEnd": 19
+    }
+   ],
+   "front": "Doc 07: what to test first in this repo, in order of value?",
+   "back": "Aim for invariant protection, not coverage. 1 Token lifecycle (rotation, replay, expiry, single-use codes): a regression silently breaks security. 2 Login state machine (lockout, MFA branching). 3 PKCE/redirect validation: one negative test per check. 4 Tenant scoping of queries. 5 UI behavior last."
+  },
+  {
+   "id": "f09-layer-probes",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs2/07-testing-and-debugging.md",
+    "lines": {
+     "start": 242,
+     "end": 253
+    }
+   },
+   "cites": [
+    {
+     "path": "docs2/07-testing-and-debugging.md",
+     "lineStart": 242,
+     "lineEnd": 253
+    }
+   ],
+   "front": "Doc 07's layer bisection: the cheap probe for each layer?",
+   "back": "Frontend state: React Query devtools, localStorage. Transport: network tab, did the Authorization header go out. Authentication: decode the JWT, check iss, exp and kid against JWKS. Authorization: permissions claims vs the endpoint's policy. Service: Serilog logs. SQL: EF Database.Command logging at Information. Data: psql on RefreshTokens."
+  },
+  {
+   "id": "f10-token-unit-costs",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs2/09-performance-and-operations.md",
+    "lines": {
+     "start": 8,
+     "end": 20
+    }
+   },
+   "cites": [
+    {
+     "path": "docs2/09-performance-and-operations.md",
+     "lineStart": 16,
+     "lineEnd": 20
+    }
+   ],
+   "front": "Doc 09: unit costs of token issuance and token lookups?",
+   "back": "RSA PEM import + sign: about 1-5 ms for every JWT, twice per user login, each with its own key fetch. RSA-2048 keygen: tens to hundreds of ms, only after rotation or bootstrap. SHA-256 of a token: microseconds. Indexed point query on TokenHash or ClientId: sub-ms. Permissions join: one 3-join query per token pair."
+  },
+  {
+   "id": "f11-invariant-status",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs2/04-flow-traces.md",
+    "lines": {
+     "start": 177,
+     "end": 196
+    }
+   },
+   "cites": [
+    {
+     "path": "docs2/04-flow-traces.md",
+     "lineStart": 188,
+     "lineEnd": 196
+    }
+   ],
+   "front": "Doc 04's cross-flow invariants: the audit and permission promises, and their status?",
+   "back": "Every security-relevant state change writes an audit event: currently false for key rotation and MFA enrollment. Permission changes take effect within one access-token lifetime (15 min), true because every refresh re-queries permissions. The senior skill is knowing which invariants are enforced and which are aspirational."
   }
  ]
 }
