@@ -446,6 +446,533 @@
    ],
    "front": "Which REFUNDED write skips assertAllowedPaymentTransition()?",
    "back": "The refund path: refundService.ts:68-75 sets the payment to REFUNDED when the sum equals the amount without calling the transition guard. Only assertRefundAllowed (status SUCCEEDED, amount <= remaining) runs, before the transaction, at line 34."
+  },
+  {
+   "id": "q13-auth-error-escapes",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/request-lifecycle.md",
+    "lines": {
+     "start": 121,
+     "end": 121
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture/request-lifecycle.md",
+     "lineStart": 121,
+     "lineEnd": 121
+    },
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 65,
+     "lineEnd": 65
+    },
+    {
+     "path": "src/lib/auth/guards.ts",
+     "lineStart": 28,
+     "lineEnd": 35
+    }
+   ],
+   "prompt": "A SUPPORT user calls POST /api/admin/reconciliation/run. Per findings L1 and A1, why doesn't the client get the documented 403 JSON body?",
+   "answer": "The guard throws before the handler runs, outside its try/catch",
+   "distractors": [
+    "The guard returns a 403 JSON body, but Next.js strips it on errors",
+    "requirePermission returns false, and the handler then runs anyway",
+    "jsonError serializes the error but drops the code field from it"
+   ],
+   "explanation": "L1 (request-lifecycle.md:121): guards.ts:32 throws before `handler(...)` at line 34 runs, and every handler's try/catch is inside `handler`, so the documented 401/403 bodies are not what a client receives. A1 (auth-and-permissions.md:65): the RouteError that requirePermission() throws is never passed to jsonError(), so clients get an unstructured 500 (a code-reading conclusion, modelled by scratch check C12)."
+  },
+  {
+   "id": "q14-conflict-never-written",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/domain-model.md",
+    "lines": {
+     "start": 97,
+     "end": 101
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture/domain-model.md",
+     "lineStart": 101,
+     "lineEnd": 101
+    },
+    {
+     "path": "src/repositories/idempotencyRepository.ts",
+     "lineStart": 64,
+     "lineEnd": 72
+    }
+   ],
+   "prompt": "IdempotencyStatus has a CONFLICT value. Per the domain-model doc, where does an idempotency record actually get that status?",
+   "answer": "Only via markIdempotencyConflict, a function that nothing calls",
+   "distractors": [
+    "Only in the mismatch branch, once the retry's body hash differs",
+    "Only in the P2002 catch, when a concurrent duplicate insert fails",
+    "Only in the rollback path, when the create transaction throws"
+   ],
+   "explanation": "domain-model.md:101: CONFLICT's \"only writer is markIdempotencyConflict() (idempotencyRepository.ts:64-72), which nothing calls. Payload mismatches are reported as 409 without touching the record.\" No branch of the create path (mismatch, duplicate-insert catch or rollback) ever stores CONFLICT, so the value looks like a feature in the schema but is dead."
+  },
+  {
+   "id": "q15-record-outside-tx",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/load-bearing-files.md",
+    "lines": {
+     "start": 69,
+     "end": 71
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/load-bearing-files.md",
+     "lineStart": 71,
+     "lineEnd": 71
+    },
+    {
+     "path": "docs/learning/load-bearing-files.md",
+     "lineStart": 101,
+     "lineEnd": 101
+    },
+    {
+     "path": "src/services/paymentService.ts",
+     "lineStart": 87,
+     "lineEnd": 95
+    }
+   ],
+   "prompt": "Suppose paymentService.ts passed `prisma` instead of `tx` to createIdempotencyRecord, and the create then threw and rolled back. Per load-bearing-files.md, what happens to the key?",
+   "answer": "The record commits anyway, and the key stays IN_PROGRESS for good",
+   "distractors": [
+    "The record rolls back with the payment, so the key is free again",
+    "The record is marked COMPLETED with the error, and retries replay it",
+    "The record commits, and the next retry with that key completes it"
+   ],
+   "explanation": "load-bearing-files.md:71: if createIdempotencyRecord were not passed the transaction client (it is, at paymentService.ts:94), \"the record would commit even when the payment rolled back, permanently 'using up' the key with an IN_PROGRESS row that no code ever completes.\" The blast-radius list repeats it (line 101): pass prisma instead of tx and keys stay stuck IN_PROGRESS after rollbacks."
+  },
+  {
+   "id": "q16-role-read-live",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/auth-and-permissions.md",
+    "lines": {
+     "start": 53,
+     "end": 61
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 58,
+     "lineEnd": 59
+    }
+   ],
+   "prompt": "An operator changes a logged-in user's role from OPS to SUPPORT directly in the database. Per auth-and-permissions.md, when do the OPS permissions stop working?",
+   "answer": "On their next request, since each request reads the role live",
+   "distractors": [
+    "At their next login, since the role is copied into the session",
+    "When the session cookie expires and a new session is created",
+    "At once, since the role change deletes the user's open sessions"
+   ],
+   "explanation": "auth-and-permissions.md:59: the role comes from `session.user.role` on every request, because findSessionByToken() includes the user, so a role change in the database \"takes effect on their next request without re-login\". Nothing copies the role into the session, and line 58 notes session rows are never deleted except at logout, so no session is dropped by the change."
+  },
+  {
+   "id": "q17-scrypt-cost-misnamed",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/auth-and-permissions.md",
+    "lines": {
+     "start": 56,
+     "end": 56
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 56,
+     "lineEnd": 56
+    },
+    {
+     "path": "src/lib/auth/password.ts",
+     "lineStart": 9,
+     "lineEnd": 14
+    }
+   ],
+   "prompt": "password.ts defines SCRYPT_COST = 64 and passes it to scryptSync. Per auth-and-permissions.md, what does that 64 actually control?",
+   "answer": "The derived key length; the cost parameters stay at Node's defaults",
+   "distractors": [
+    "The scrypt CPU and memory cost, raised above Node's default value",
+    "The salt length in bytes, while the cost comes from the env file",
+    "The number of hashing rounds, as with a bcrypt work factor"
+   ],
+   "explanation": "auth-and-permissions.md:56: hashing uses `scryptSync(password, salt, 64)` with a 16-byte random salt; \"the constant is named SCRYPT_COST (line 9) but it is passed as the *key length* argument; the scrypt cost parameters are Node's defaults.\" It is neither a cost setting, a salt size nor a round count."
+  },
+  {
+   "id": "q18-support-ui-cosmetic",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/auth-and-permissions.md",
+    "lines": {
+     "start": 48,
+     "end": 51
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 51,
+     "lineEnd": 51
+    },
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 40,
+     "lineEnd": 45
+    }
+   ],
+   "prompt": "SUPPORT users see no create or refund forms in the admin console. Per auth-and-permissions.md, what really stops a SUPPORT user from creating or refunding?",
+   "answer": "The API permissions: SUPPORT lacks PAYMENT_CREATE and PAYMENT_REFUND",
+   "distractors": [
+    "The hidden forms: the pages check the role name before rendering",
+    "A per-record check that refuses SUPPORT callers on each payment",
+    "The admin layout guard, which keeps SUPPORT out of /admin entirely"
+   ],
+   "explanation": "auth-and-permissions.md:51: \"Support's 'cannot mutate' rule is enforced at the API, the UI is cosmetic.\" The pages hide forms by role name, \"but the real protection is that SUPPORT lacks PAYMENT_CREATE/PAYMENT_REFUND in permissions.ts:22\". The route matrix shows the refund route has no per-record check (line 40) and the /admin layout admits SUPPORT through PAYMENT_READ_ANY (line 45)."
+  },
+  {
+   "id": "q19-customer-create-only",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/auth-and-permissions.md",
+    "lines": {
+     "start": 9,
+     "end": 13
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 10,
+     "lineEnd": 10
+    },
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 37,
+     "lineEnd": 40
+    },
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 50,
+     "lineEnd": 50
+    }
+   ],
+   "prompt": "Per the correction and the route matrix in auth-and-permissions.md, what can a CUSTOMER actually do through the app's routes today?",
+   "answer": "Create payments, but read none, since every read route needs READ_ANY",
+   "distractors": [
+    "Create payments and read their own through the ownership scope branch",
+    "Read their own payments, but create none without a staff member",
+    "Create and refund their own payments, scoped by their ownerUserId"
+   ],
+   "explanation": "auth-and-permissions.md:10: the policy grants PAYMENT_READ_OWN, \"but no route or page accepts it. Every payment read route and every admin page requires PAYMENT_READ_ANY\", so a customer can only POST /api/payments and cannot read even their own payments. Line 50: the ownership branch is unreachable today, exercised only by tests. The refund route needs PAYMENT_REFUND, held by OPS and ADMIN (line 40)."
+  },
+  {
+   "id": "q20-transition-matrix-test",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/testing-rationale.md",
+    "lines": {
+     "start": 58,
+     "end": 68
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/testing-rationale.md",
+     "lineStart": 68,
+     "lineEnd": 68
+    },
+    {
+     "path": "docs/learning/testing-rationale.md",
+     "lineStart": 45,
+     "lineEnd": 45
+    },
+    {
+     "path": "docs/architecture/domain-model.md",
+     "lineStart": 94,
+     "lineEnd": 94
+    }
+   ],
+   "prompt": "testing-rationale.md suggests committing scratch check C5, the full status-pair matrix, as a table-driven test. What payoff does it name?",
+   "answer": "Any edit to allowedTransitions must then update an explicit expectation",
+   "distractors": [
+    "It catches the concurrent-refund race on the payment status column",
+    "It replaces a scratch check that could not import the real guard",
+    "It proves the schema enforces the legal edges in the database itself"
+   ],
+   "explanation": "testing-rationale.md:68: commit C5 \"as a table-driven test, so a future edit to allowedTransitions must update an explicit expectation.\" C5 already imports the real assertAllowedPaymentTransition() (line 45); the refund race needs a real database (test 1); and domain-model.md:94 says nothing in the schema enforces legal edges."
+  },
+  {
+   "id": "q21-strip-types-failure",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/testing-rationale.md",
+    "lines": {
+     "start": 25,
+     "end": 33
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/testing-rationale.md",
+     "lineStart": 29,
+     "lineEnd": 29
+    },
+    {
+     "path": "docs/learning/testing-rationale.md",
+     "lineStart": 33,
+     "lineEnd": 33
+    }
+   ],
+   "prompt": "Per the 2026-10 re-run in testing-rationale.md, why would `npm test` still fail on Node v22.16.0 even with zod installed?",
+   "answer": "RouteError's constructor parameter properties break strip-only mode",
+   "distractors": [
+    "The test glob matches no files, so node --test exits with an error",
+    "That Node version has no --experimental-strip-types flag at all",
+    "The tests need a running PostgreSQL that the script never starts"
+   ],
+   "explanation": "testing-rationale.md:29: under the package.json flags, three files fail before any test runs with ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX, \"TypeScript parameter property is not supported in strip-only mode\", pointing at `export class RouteError` in src/lib/errors.ts; the fourth needs zod. So even with zod the script would not pass. Line 33: the cheapest repair is ordinary field declarations and assignments in RouteError's constructor."
+  },
+  {
+   "id": "q22-undefined-vs-absent",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/testing-rationale.md",
+    "lines": {
+     "start": 39,
+     "end": 44
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/testing-rationale.md",
+     "lineStart": 44,
+     "lineEnd": 44
+    }
+   ],
+   "prompt": "Scratch check C4 fingerprints {a:1, o:undefined} and {a:1}. What did it find, and why is that harmless in this app?",
+   "answer": "They hash differently; harmless as zod omits absent optional fields",
+   "distractors": [
+    "They hash the same, since stableStringify drops undefined values",
+    "They hash the same, which is why currency retries replay correctly",
+    "They hash differently, which turns every UI retry into a 409 mismatch"
+   ],
+   "explanation": "testing-rationale.md:44: C4 passes with `{a:1, o:undefined}` and `{a:1}` hashing differently, \"harmless here because zod omits absent optionals, but a trap if a non-zod caller builds the body.\" So undefined values are not dropped, and the difference does not reach normal retries."
+  },
+  {
+   "id": "q23-login-timing-scrypt",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/auth-and-permissions.md",
+    "lines": {
+     "start": 55,
+     "end": 55
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 55,
+     "lineEnd": 55
+    },
+    {
+     "path": "src/services/authService.ts",
+     "lineStart": 15,
+     "lineEnd": 26
+    }
+   ],
+   "prompt": "An unknown email and a wrong password both get 401 INVALID_CREDENTIALS. Per auth-and-permissions.md, what can still tell the two apart?",
+   "answer": "Response time, since the unknown-email path skips the scrypt work",
+   "distractors": [
+    "The error code, since unknown emails get 404 USER_NOT_FOUND",
+    "The response body, which echoes the email only when it exists",
+    "A Set-Cookie header, which is sent only for known email addresses"
+   ],
+   "explanation": "auth-and-permissions.md:55: \"Unknown email and wrong password both return the same 401 INVALID_CREDENTIALS (lines 19 and 25), which avoids an obvious account-enumeration oracle in the response body. (Timing still differs: the unknown-email path skips the scrypt work.)\" The code, body and headers of the two failures match; only latency differs."
+  },
+  {
+   "id": "q24-concurrent-refund-test",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/testing-rationale.md",
+    "lines": {
+     "start": 58,
+     "end": 62
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/testing-rationale.md",
+     "lineStart": 62,
+     "lineEnd": 62
+    }
+   ],
+   "prompt": "testing-rationale.md ranks the concurrent-refund test first and says it needs a real database. What does that test run, and what does it assert?",
+   "answer": "Two concurrent 60-unit refunds via Promise.all; assert exactly one succeeds",
+   "distractors": [
+    "Two sequential 60-unit refunds; assert the second is rejected by the guard",
+    "Two concurrent 50-unit refunds; assert the payment ends up REFUNDED",
+    "One 120-unit refund through the route; assert it fails with a 409"
+   ],
+   "explanation": "testing-rationale.md:62: create a 100-unit SUCCEEDED payment, \"fire two createRefundForPayment({ amountMinor: 60 }) calls with Promise.all, assert exactly one succeeds. Today it would fail.\" It targets Finding L2; the sequential case is scratch check C11, and neither a 50-unit pair nor a single over-refund is the test described."
+  },
+  {
+   "id": "f05-fingerprint-checks",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/learning/testing-rationale.md",
+    "lines": {
+     "start": 39,
+     "end": 43
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/testing-rationale.md",
+     "lineStart": 41,
+     "lineEnd": 43
+    }
+   ],
+   "front": "Scratch checks C1 and C3: what do they show about buildRequestFingerprint()?",
+   "back": "C1: {a, b:{c, d}} and {b:{d, c}, a} give the same hash, so object key order is normalized. C3: identical bodies hash identically whoever sends them, because the hash input carries no user. Both checks import the real requestFingerprint.ts."
+  },
+  {
+   "id": "f06-scratch-check-limits",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/learning/testing-rationale.md",
+    "lines": {
+     "start": 35,
+     "end": 56
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/testing-rationale.md",
+     "lineStart": 37,
+     "lineEnd": 37
+    },
+    {
+     "path": "docs/learning/testing-rationale.md",
+     "lineStart": 56,
+     "lineEnd": 56
+    }
+   ],
+   "front": "What can the review's scratch checks not prove, and why?",
+   "back": "They import the pure source modules, or model the ordering of the real code but not its database semantics. So they prove nothing about PostgreSQL locking, Prisma transaction rollback or Next.js error rendering; findings that rest on those are code-reading conclusions, labelled as such in the architecture docs."
+  },
+  {
+   "id": "f07-dead-schema",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/architecture/domain-model.md",
+    "lines": {
+     "start": 97,
+     "end": 108
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture/domain-model.md",
+     "lineStart": 104,
+     "lineEnd": 104
+    },
+    {
+     "path": "docs/architecture/domain-model.md",
+     "lineStart": 106,
+     "lineEnd": 106
+    },
+    {
+     "path": "docs/architecture/domain-model.md",
+     "lineStart": 108,
+     "lineEnd": 108
+    }
+   ],
+   "front": "Schema items that look like features but no code uses?",
+   "back": "PaymentEventType REFUND_FAILED and RECONCILIATION_CLEARED: never emitted (refunds always succeed instantly, and issues are never cleared). reconciliationRunSchema: defined, never imported. RefundStatus.PENDING: exists only inside the refund transaction, so no committed refund is ever PENDING."
+  },
+  {
+   "id": "f08-fingerprint-and-record-files",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/learning/load-bearing-files.md",
+    "lines": {
+     "start": 63,
+     "end": 70
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/load-bearing-files.md",
+     "lineStart": 64,
+     "lineEnd": 65
+    },
+    {
+     "path": "docs/learning/load-bearing-files.md",
+     "lineStart": 70,
+     "lineEnd": 70
+    }
+   ],
+   "front": "requestFingerprint.ts and idempotencyRepository.ts: what does each own?",
+   "back": "requestFingerprint.ts: stableStringify() recursively sorts object keys and serializes; buildRequestFingerprint() SHA-256s the result; it is called from paymentService.ts:67. idempotencyRepository.ts: finds a record by the compound unique route_key, creates it as IN_PROGRESS, and marks it COMPLETED with the response."
+  },
+  {
+   "id": "f09-refund-service",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/learning/load-bearing-files.md",
+    "lines": {
+     "start": 73,
+     "end": 75
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/load-bearing-files.md",
+     "lineStart": 74,
+     "lineEnd": 74
+    },
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 40,
+     "lineEnd": 40
+    }
+   ],
+   "front": "What does refundService.ts own?",
+   "back": "The app's only money-out path, reached through POST /api/payments/[paymentId]/refund. In one transaction it inserts the refund, marks it SUCCEEDED and, on an exact full refund, flips the payment to REFUNDED."
+  },
+  {
+   "id": "f10-webhook-repository",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/learning/load-bearing-files.md",
+    "lines": {
+     "start": 78,
+     "end": 92
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/load-bearing-files.md",
+     "lineStart": 79,
+     "lineEnd": 79
+    },
+    {
+     "path": "docs/learning/load-bearing-files.md",
+     "lineStart": 92,
+     "lineEnd": 92
+    }
+   ],
+   "front": "webhookRepository.ts: what does it own, and how idempotent is webhook processing?",
+   "back": "Both directions of the provider feed: the outbound WebhookDelivery lifecycle (lines 11-65) and the inbound WebhookEvent lifecycle (67-111). Webhook processing is idempotent for sequential duplicates; concurrent duplicates are stopped by the database constraint but surface as errors."
   }
  ]
 }

@@ -506,6 +506,281 @@
     }
    ],
    "readMore": []
+  },
+  {
+   "id": "r04-review-layer",
+   "target": "pack",
+   "phase": "before",
+   "title": "The review layer: schema truths, session details and the test record",
+   "body": "The later quizzes and flashcards in this pack go beyond the request traces. They draw on the parts of the docs written during the review, which check the code's claims against the code itself.\n\n1. **`docs/architecture/domain-model.md`, second half.** A table that pairs each correctness guarantee with whatever enforces it, a section on individual fields and enum values, a table of the rows each simulation mode writes, and the status lifecycles as implemented. For each guarantee, find the schema line or the service check yourself before reading the table's answer.\n2. **`docs/architecture/auth-and-permissions.md`.** The route and page permission matrix and the line-by-line walk from login to a permission decision. Open the cited file for each step before you read the next one.\n3. **`docs/learning/testing-rationale.md`, from the 2026-10 re-run on.** What happened when the suite was run again, the table of scratch checks C1 to C14, and the tests worth adding next, in order.\n4. **`docs/learning/load-bearing-files.md`, the extra files section** and the corrections that follow it.\n\nRead each claim next to the cited line before you accept it.",
+   "excerpts": [
+    {
+     "path": "docs/architecture/domain-model.md",
+     "lineStart": 84,
+     "lineEnd": 84,
+     "quote": "because in this repo several guarantees live only in the database."
+    },
+    {
+     "path": "docs/learning/testing-rationale.md",
+     "lineStart": 37,
+     "lineEnd": 37,
+     "quote": "To verify claims in the docs without installing anything"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/architecture/domain-model.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The models, the constraints table and the simulation-mode table."
+    },
+    {
+     "path": "docs/learning/load-bearing-files.md",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Which files carry the weight, with what would break if each were wrong."
+    }
+   ]
+  },
+  {
+   "id": "x-q13-auth-error-escapes",
+   "target": "seed:quests:organized-experiment-idempotent-payments-lab/quiz/5372890f5b9fe8a7",
+   "phase": "after",
+   "title": "Why an auth failure never reaches the JSON error contract",
+   "body": "**Key: the guard throws before the handler runs, outside its try/catch.** `withRouteAuth()` calls `requirePermission()` at `guards.ts:32` and only then calls `handler(...)` at line 34. Every route's `try/catch`, the place where errors become JSON through `jsonError()`, lives inside `handler`. A SUPPORT user without `RECONCILIATION_RUN` makes line 32 throw a `RouteError` that no `try` surrounds, so the documented 403 body is never built; finding A1 says clients get an unstructured 500 instead.\n\n- *A 403 body that Next.js strips*: no JSON body is built in the first place.\n- *requirePermission returns false and the handler runs*: it throws, and the handler never runs.\n- *jsonError drops the code field*: the error is never passed to `jsonError()` at all.",
+   "excerpts": [
+    {
+     "path": "docs/architecture/request-lifecycle.md",
+     "lineStart": 121,
+     "lineEnd": 121,
+     "quote": "`src/lib/auth/guards.ts:32` throws before `handler(...)` at line 34 runs"
+    },
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 65,
+     "lineEnd": 65,
+     "quote": "The `RouteError` it throws is never passed to `jsonError()`"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q14-conflict-never-written",
+   "target": "seed:quests:organized-experiment-idempotent-payments-lab/quiz/4214aefc22e837fa",
+   "phase": "after",
+   "title": "CONFLICT: a status no request ever produces",
+   "body": "**Key: only via `markIdempotencyConflict`, a function that nothing calls.** The schema's `IdempotencyStatus` enum lists `CONFLICT`, and `idempotencyRepository.ts:64-72` has a function that would write it. But no code calls that function, so no record ever reaches that status. The domain-model doc lists it among the fields and enum values that look like features and are not.\n\n- *The mismatch branch*: a retry whose body hash differs gets a 409 without the record being touched.\n- *The P2002 catch*: a duplicate insert that fails on the unique constraint is turned into a replay, not a conflict mark.\n- *The rollback path*: a throw inside the create transaction rolls the record back with everything else; nothing is marked.",
+   "excerpts": [
+    {
+     "path": "docs/architecture/domain-model.md",
+     "lineStart": 101,
+     "lineEnd": 101,
+     "quote": "which nothing calls. Payload mismatches are reported as `409` without touching the record."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q15-record-outside-tx",
+   "target": "seed:quests:organized-experiment-idempotent-payments-lab/quiz/74cbf929f5be4d0e",
+   "phase": "after",
+   "title": "One wrong client argument can use up a key forever",
+   "body": "**Key: the record commits anyway, and the key stays IN_PROGRESS for good.** Today `paymentService.ts:94` passes `tx`, so the idempotency record is part of the create transaction and disappears with it on a rollback. `createIdempotencyRecord` defaults to the global `prisma` client, though. Passed `prisma`, the insert would commit on its own while the payment rolled back, leaving an `IN_PROGRESS` row that no code ever completes. The key is then used up, which is why the doc's blast-radius list names this one-word change.\n\n- *Rolls back with the payment*: that is what happens with `tx`, the case this question rules out.\n- *Marked COMPLETED with the error*: completion happens only at the end of a successful transaction.\n- *Completed by the next retry*: no code path ever completes a stranded `IN_PROGRESS` row.",
+   "excerpts": [
+    {
+     "path": "docs/learning/load-bearing-files.md",
+     "lineStart": 71,
+     "lineEnd": 71,
+     "quote": "the record would commit even when the payment rolled back, permanently \"using up\" the key with an `IN_PROGRESS` row that no code ever completes."
+    },
+    {
+     "path": "docs/learning/load-bearing-files.md",
+     "lineStart": 101,
+     "lineEnd": 101,
+     "quote": "pass `prisma` instead of `tx` → keys stuck `IN_PROGRESS` after rollbacks."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q16-role-read-live",
+   "target": "seed:quests:organized-experiment-idempotent-payments-lab/quiz/8f072a89b6cf5d6b",
+   "phase": "after",
+   "title": "Roles are read live on every request",
+   "body": "**Key: on their next request, since each request reads the role live.** `findSessionByToken()` loads the session together with its user, and the permission check reads `session.user.role` every time. The session row stores no copy of the role, so a role changed in the database applies to the very next request, with no re-login. That is worth knowing when you debug \"why can this user still do X\".\n\n- *At the next login*: the role is not copied into the session, so logging in again changes nothing.\n- *When the cookie expires*: expiry is irrelevant, because the role is not cached anywhere.\n- *At once, because sessions are deleted*: changing a role deletes nothing; session rows go away only at logout.",
+   "excerpts": [
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 59,
+     "lineEnd": 59,
+     "quote": "Changing a user's role in the database therefore takes effect on their next request without re-login"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q17-scrypt-cost-misnamed",
+   "target": "seed:quests:organized-experiment-idempotent-payments-lab/quiz/93472bdae2d25129",
+   "phase": "after",
+   "title": "A constant called SCRYPT_COST that sets the key length",
+   "body": "**Key: the derived key length; the cost parameters stay at Node's defaults.** `scryptSync(password, salt, keylen)` takes the output length as its third argument, and `password.ts` passes `SCRYPT_COST` (64) there, so each hash is 64 bytes long. The CPU and memory cost settings would go in an options object, which the code never passes, so Node's defaults apply. The name suggests a tuning knob that is not there.\n\n- *The CPU and memory cost*: those are Node's defaults; nothing raises them.\n- *The salt length*: the salt is a separate 16-byte random value.\n- *A round count, like a bcrypt work factor*: scrypt has no such argument here, and the value goes to the key length slot.",
+   "excerpts": [
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 56,
+     "lineEnd": 56,
+     "quote": "it is passed as the *key length* argument; the scrypt cost parameters are Node's defaults."
+    },
+    {
+     "path": "src/lib/auth/password.ts",
+     "lineStart": 12,
+     "lineEnd": 13,
+     "quote": "scryptSync(password, salt, SCRYPT_COST)"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q18-support-ui-cosmetic",
+   "target": "seed:quests:organized-experiment-idempotent-payments-lab/quiz/431b6bacde9adc65",
+   "phase": "after",
+   "title": "Hidden forms are cosmetic; the API permission is the rule",
+   "body": "**Key: the API permissions; SUPPORT lacks PAYMENT_CREATE and PAYMENT_REFUND.** The payment pages hide their forms when the role name is SUPPORT, but that only changes what is drawn. A SUPPORT user who sends the request directly is stopped by `withRouteAuth`, because `permissions.ts:22` gives SUPPORT neither permission.\n\n- *The hidden forms*: the doc calls the UI cosmetic; anyone can call the API without the form.\n- *A per-record check*: the refund route has none, and create's per-record step is the owner override.\n- *The admin layout guard*: it requires `PAYMENT_READ_ANY`, which SUPPORT holds, so SUPPORT gets into `/admin`.",
+   "excerpts": [
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 51,
+     "lineEnd": 51,
+     "quote": "the real protection is that `SUPPORT` lacks `PAYMENT_CREATE`/`PAYMENT_REFUND` in `permissions.ts:22`."
+    },
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 45,
+     "lineEnd": 45,
+     "quote": "`requireStaffPaymentsPage` | `PAYMENT_READ_ANY` | SUPPORT, OPS, ADMIN"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q19-customer-create-only",
+   "target": "seed:quests:organized-experiment-idempotent-payments-lab/quiz/ca3f0f6104de78c8",
+   "phase": "after",
+   "title": "What a CUSTOMER can really reach today",
+   "body": "**Key: create payments, but read none, since every read route needs READ_ANY.** The policy in `permissions.ts` grants CUSTOMER both `PAYMENT_CREATE` and `PAYMENT_READ_OWN`. The route matrix tells a different story: every payment read route and every admin page requires `PAYMENT_READ_ANY`, so the one route a customer can use is `POST /api/payments`. The ownership code is correct, but only tests exercise it; it goes live the day someone adds a customer read route.\n\n- *Read their own through the ownership branch*: no route that a customer can reach calls it.\n- *Read but not create*: CUSTOMER holds `PAYMENT_CREATE`; it is reading that is blocked.\n- *Create and refund*: refunds need `PAYMENT_REFUND`, which only OPS and ADMIN hold.",
+   "excerpts": [
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 10,
+     "lineEnd": 10,
+     "quote": "in practice a customer can only `POST /api/payments` and cannot read anything, not even their own payments."
+    },
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 50,
+     "lineEnd": 50,
+     "quote": "**The ownership code is unreachable today.**"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q20-transition-matrix-test",
+   "target": "seed:quests:organized-experiment-idempotent-payments-lab/quiz/9a823f065dc15920",
+   "phase": "after",
+   "title": "Why commit the transition matrix as a table",
+   "body": "**Key: any edit to allowedTransitions must then update an explicit expectation.** Scratch check C5 pushes all 16 (from, to) status pairs through the real `assertAllowedPaymentTransition()` and finds exactly seven allowed. Committed as a table-driven test, that matrix becomes a contract: whoever changes the allowed-edge table also has to change a visible row of expectations, so an accidental new edge cannot slip in quietly.\n\n- *Catches the refund race*: that needs concurrent calls against a real database (the first test on the list); a pure matrix cannot see it.\n- *Replaces a check that could not import the guard*: C5 already imports the real function.\n- *Proves the schema enforces the edges*: the domain-model doc says nothing in the schema does; the function is the only guard.",
+   "excerpts": [
+    {
+     "path": "docs/learning/testing-rationale.md",
+     "lineStart": 68,
+     "lineEnd": 68,
+     "quote": "so a future edit to `allowedTransitions` must update an explicit expectation."
+    },
+    {
+     "path": "docs/architecture/domain-model.md",
+     "lineStart": 94,
+     "lineEnd": 94,
+     "quote": "Only `assertAllowedPaymentTransition()`"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q21-strip-types-failure",
+   "target": "seed:quests:organized-experiment-idempotent-payments-lab/quiz/8d79b1593ab665d1",
+   "phase": "after",
+   "title": "Why npm test fails before a single test runs",
+   "body": "**Key: RouteError's constructor parameter properties break strip-only mode.** The `test` script runs Node with `--experimental-strip-types`, which can only erase type annotations. `export class RouteError` in `src/lib/errors.ts` declares `public readonly status` as a constructor parameter property, which is TypeScript-only syntax that also emits code. Three of the four test files fail on it with `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`; the fourth needs zod. So installing zod alone gives no passing run. The cheapest repair is ordinary field declarations and assignments inside the constructor.\n\n- *The glob matches no files*: four files are loaded and fail with specific errors.\n- *The flag does not exist*: it runs, and its strip-only mode is what rejects the syntax.\n- *A database is needed*: none of the reported errors is about PostgreSQL.",
+   "excerpts": [
+    {
+     "path": "docs/learning/testing-rationale.md",
+     "lineStart": 29,
+     "lineEnd": 29,
+     "quote": "TypeScript parameter property is not supported in strip-only mode"
+    },
+    {
+     "path": "docs/learning/testing-rationale.md",
+     "lineStart": 33,
+     "lineEnd": 33,
+     "quote": "rewrite `RouteError` with ordinary field declarations and assignments in the constructor"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q22-undefined-vs-absent",
+   "target": "seed:quests:organized-experiment-idempotent-payments-lab/quiz/b316ee433505b335",
+   "phase": "after",
+   "title": "An explicit undefined is not the same as a missing key",
+   "body": "**Key: they hash differently; harmless as zod omits absent optional fields.** `stableStringify()` sorts keys but keeps a key whose value is `undefined`, so `{a:1, o:undefined}` and `{a:1}` produce different fingerprints. In this app the hashed body is zod's parsed output, and zod leaves an absent optional field out entirely, so two honest retries never differ this way. The trap is for a caller that builds the body without zod.\n\n- *Same hash because undefined is dropped*: check C4 shows the hashes differ.\n- *Same hash, explaining currency replays*: the hashes differ, so C4 explains nothing about any replay.\n- *Every UI retry becomes a 409*: the doc calls it harmless here, because zod already omits absent fields.",
+   "excerpts": [
+    {
+     "path": "docs/learning/testing-rationale.md",
+     "lineStart": 44,
+     "lineEnd": 44,
+     "quote": "harmless here because zod omits absent optionals, but a trap if a non-zod caller builds the body"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q23-login-timing-scrypt",
+   "target": "seed:quests:organized-experiment-idempotent-payments-lab/quiz/88055ffcd6024e4a",
+   "phase": "after",
+   "title": "Same 401, different timing: login enumeration",
+   "body": "**Key: response time, since the unknown-email path skips the scrypt work.** `login()` throws the same `401 INVALID_CREDENTIALS` with the same message in both cases (lines 19 and 25), so the response body is no account-enumeration oracle. But for an unknown email it throws straight after the lookup, while for a real account it first runs `verifyPassword()`, a scrypt hash. Measuring how long the failure takes separates the two.\n\n- *A different error code*: both paths return 401 `INVALID_CREDENTIALS`; there is no 404.\n- *The body echoes the email*: the body is identical in both cases.\n- *A Set-Cookie header*: a session cookie is set only after a successful login, and neither request succeeds.",
+   "excerpts": [
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 55,
+     "lineEnd": 55,
+     "quote": "(Timing still differs: the unknown-email path skips the scrypt work.)"
+    },
+    {
+     "path": "src/services/authService.ts",
+     "lineStart": 18,
+     "lineEnd": 19,
+     "quote": "throw new RouteError(401, \"INVALID_CREDENTIALS\", \"Email or password is incorrect.\");"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q24-concurrent-refund-test",
+   "target": "seed:quests:organized-experiment-idempotent-payments-lab/quiz/eb6a0eec80736ce2",
+   "phase": "after",
+   "title": "The first test worth adding: two refunds at once",
+   "body": "**Key: two concurrent 60-unit refunds via Promise.all; assert exactly one succeeds.** The test creates a 100-unit SUCCEEDED payment and fires two `createRefundForPayment({ amountMinor: 60 })` calls together with `Promise.all`, and it runs against a real database, as the doc requires. It asserts the outcome you want: exactly one refund succeeds. The doc adds that today it would fail, which is the point: it catches Finding L2.\n\n- *Two sequential refunds*: that case already behaves (scratch check C11); the bug needs concurrency.\n- *Two concurrent 50-unit refunds ending REFUNDED*: not the test described, and not the assertion it makes.\n- *One 120-unit refund failing with 409*: a single request exercises the guard alone, not the race.",
+   "excerpts": [
+    {
+     "path": "docs/learning/testing-rationale.md",
+     "lineStart": 62,
+     "lineEnd": 62,
+     "quote": "fire two `createRefundForPayment({ amountMinor: 60 })` calls with `Promise.all`, assert exactly one succeeds. Today it would fail."
+    }
+   ],
+   "readMore": []
   }
  ]
 }
