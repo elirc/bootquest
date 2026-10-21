@@ -1,0 +1,198 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "organized-build-scedulingpyjs--ARCHITECTURE.md",
+ "items": [
+  {
+   "key": "seed:explainback:organized-build-scedulingpyjs/explain-back/2ea9e760d403af8b",
+   "provenance": {
+    "repo": "organized-build-scedulingpyjs",
+    "sha": "ab052930f5623267564ba990153f8c68c48b0517",
+    "path": "ARCHITECTURE.md",
+    "lines": {
+     "start": 1,
+     "end": 64
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "DESIGN IT — [mid] reminders and recurring bookings as time-fired work (organized-build-scedulingpyjs, ARCHITECTURE.md). Scenario: 350 salons across 4 US time zones book about 40,000 appointments a week; every appointment owes the customer a confirmation now, a reminder 24 hours before and another 1 hour before; about 1 in 5 appointments is moved at least once, often inside its last day; 3,000 regulars hold a weekly standing appointment with no end date; Redis (BullMQ) and Postgres both run, and workers restart on every nightly deploy. Write your design before you look: where the record of what is owed lives and when it is written, how a reminder actually fires at its time, what makes enqueuing the same reminder twice harmless, what the sender checks at the moment it sends, how a moved appointment's old reminders stop mattering, how an open-ended weekly series gets its occurrences and their reminders, how 'every Tuesday at 10:00' survives a daylight-saving change, and what a booking made 3 hours ahead should receive. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "keyPoints": [
+      {
+       "text": "[w3] Postgres holds the truth of what is owed: each message is a Notification row with its own send time (scheduledForUtc), written inside the same transaction that creates the appointment, so a rolled-back booking owes nothing and a committed one cannot lose its reminders. Anything in Redis is a copy you can rebuild from these rows.",
+       "cite": {
+        "path": "backend/src/modules/appointments/appointments.service.ts",
+        "lineStart": 133,
+        "lineEnd": 156
+       }
+      },
+      {
+       "text": "[w3] Fire on the due time, not on the sweep: either select only PENDING rows whose scheduledForUtc is at or before now, or add each row as a delayed job. Today's sweep reads every PENDING row with no time filter and adds jobs with no delay, so a reminder meant for tomorrow goes out on the first pass.",
+       "cite": {
+        "path": "backend/src/modules/notifications/notifications.service.ts",
+        "lineStart": 21,
+        "lineEnd": 35
+       }
+      },
+      {
+       "text": "[w3] Make enqueuing idempotent by naming the job after the row: use the notification id as the BullMQ jobId so a second or overlapping sweep cannot add a second copy. The current add passes only a job name and the id as data, so each sweep run creates a fresh job for every row that is still pending.",
+       "cite": {
+        "path": "backend/src/modules/notifications/notifications.service.ts",
+        "lineStart": 28,
+        "lineEnd": 32
+       }
+      },
+      {
+       "text": "[w3] Re-check the row at send time and send only what is still owed: the sender re-reads the notification, but it skips only CANCELLED, so a duplicate job for a row already marked SENT sends again. Refuse anything that is not PENDING, and record SENT with a conditional update (status still PENDING) so a second copy finds nothing to do.",
+       "cite": {
+        "path": "backend/src/modules/notifications/notifications.service.ts",
+        "lineStart": 49,
+        "lineEnd": 69
+       }
+      },
+      {
+       "text": "[w2] A move invalidates by row status rather than by hunting jobs in Redis: reschedule turns the appointment's PENDING rows to CANCELLED and inserts two fresh reminder rows for the new start, so a job already queued for the old time meets a CANCELLED row and does nothing.",
+       "cite": {
+        "path": "backend/src/modules/appointments/appointments.service.ts",
+        "lineStart": 282,
+        "lineEnd": 299
+       }
+      },
+      {
+       "text": "[w2] Store the rule, materialize a horizon, and remind every occurrence: the series row keeps frequency, interval, count or end date, timezone and the local HH:mm start, which is enough to keep generating. Creation writes concrete occurrences up front under a hard cap, so an open-ended weekly regular simply runs out, and it writes no Notification rows for them, so as built a standing customer is never reminded at all. A recurring job should extend each open series a few weeks ahead and write reminder rows with every occurrence it adds.",
+       "cite": {
+        "path": "backend/src/modules/appointments/recurrence.service.ts",
+        "lineStart": 63,
+        "lineEnd": 140
+       }
+      },
+      {
+       "text": "[w2] Expand local rules in local time, then convert: the occurrence cursor is a DateTime zoned to the series timezone and steps by days, weeks or months there, so the salon's wall-clock start holds across a DST change while the stored UTC instant moves.",
+       "cite": {
+        "path": "backend/src/modules/appointments/recurrence.service.ts",
+        "lineStart": 19,
+        "lineEnd": 46
+       }
+      },
+      {
+       "text": "[w1] A booking made 3 hours ahead still gets a 24-hour reminder row whose time has already passed (both reminder times are computed from the start with no check against now), so a due sweep would send it right beside the confirmation. Decide at creation to skip or merge reminders that are already late.",
+       "cite": {
+        "path": "backend/src/modules/appointments/appointments.service.ts",
+        "lineStart": 133,
+        "lineEnd": 156
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "PRE-MORTEM — six weeks after launch: Redis restarts with no persistence during a Sunday-night deploy and stays down for 40 minutes; on Monday evening a customer moves her Tuesday 10:00 appointment to Wednesday 09:30, after the job for her Tuesday reminder was already queued; a regular's weekly series is cancelled a week after one of its occurrences was moved; and the sweep scheduler ends up running in both API replicas. What goes wrong, how would you notice, and what is the repair?",
+     "keyPoints": [
+      {
+       "text": "[w3] Losing Redis loses every queued and delayed job. If the rows are the truth and a due sweep (or a startup re-enqueue keyed by notification id) rebuilds the queue from PENDING rows, nothing is lost; if a delayed job was the only record that a reminder was owed at 09:00 tomorrow, that reminder vanishes and nothing reports it.",
+       "cite": {
+        "path": "backend/src/jobs/queue.ts",
+        "lineStart": 5,
+        "lineEnd": 8
+       }
+      },
+      {
+       "text": "[w3] Catching up after 40 minutes down finds rows whose moment has passed: a 1-hour reminder for a visit that has already begun is worse than none. Give each type a send-by deadline and mark late rows as skipped instead of sending; the sender has no such check today and sends whatever row it is handed.",
+       "cite": {
+        "path": "backend/src/modules/notifications/notifications.service.ts",
+        "lineStart": 49,
+        "lineEnd": 92
+       }
+      },
+      {
+       "text": "[w3] The moved appointment is safe only through ordering: the reminder flip to CANCELLED and the insert of new reminders run as separate statements after the reschedule transaction has committed, so a crash between them leaves the appointment at its new time with no pending reminder at all (or its old reminders still live). Move both into the transaction.",
+       "cite": {
+        "path": "backend/src/modules/appointments/appointments.service.ts",
+        "lineStart": 279,
+        "lineEnd": 299
+       }
+      },
+      {
+       "text": "[w2] Cancelling the series cancels its appointments but never touches their notifications, and the sender checks only the notification's own status, never the appointment's: the reminders the moved occurrence received when it was rescheduled stay PENDING and the regular is reminded of a visit that no longer exists. Cancel notifications in the same transaction and have the sender check the appointment too.",
+       "cite": {
+        "path": "backend/src/modules/appointments/recurrence.service.ts",
+        "lineStart": 161,
+        "lineEnd": 197
+       }
+      },
+      {
+       "text": "[w2] Two schedulers double every enqueue; without a stable job id each copy is its own job and the second send reaches the customer. Notice it from the table: each successful send increments attempts on the row, and failures are never retried today, so a SENT row with more than one attempt is a duplicate you can alert on.",
+       "cite": {
+        "path": "backend/src/modules/notifications/notifications.service.ts",
+        "lineStart": 85,
+        "lineEnd": 92
+       }
+      },
+      {
+       "text": "[w2] Alert on lateness, not only on errors: PENDING rows whose scheduledForUtc is more than a few minutes old mean no worker or scheduler is running, and the index on (status, scheduledForUtc) answers that query cheaply.",
+       "cite": {
+        "path": "backend/prisma/schema.prisma",
+        "lineStart": 154,
+        "lineEnd": 170
+       }
+      },
+      {
+       "text": "[w1] A failed send is terminal today: the catch writes FAILED and returns normally, so BullMQ records success and never retries, and the sweep only reads PENDING rows. A provider blip during the catch-up silently drops reminders; put a retriable failure back to PENDING with a later time, still bounded by its send-by deadline.",
+       "cite": {
+        "path": "backend/src/modules/notifications/notifications.service.ts",
+        "lineStart": 93,
+        "lineEnd": 102
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "TRADE-OFF HANDBACK — defend your scheduling choices against the alternatives: one BullMQ delayed job per reminder versus a periodic sweep over due rows in Postgres; writing notification rows in the business transaction versus enqueuing straight from the request; materializing occurrences up front versus a rolling horizon versus computing them from the rule on the fly; storing UTC instants alone versus UTC plus the IANA zone; checking the row at send time versus removing stale jobs from the queue; and '24 hours before' as elapsed hours versus the same local time the day before. For each, say what you bought, what it cost, and which requirement put you on that side.",
+     "keyPoints": [
+      {
+       "text": "[w3] A delayed job per reminder fires on time with no polling, but makes Redis the holder of timing: every move must remove or outlive stale jobs and a flush loses them. A due sweep survives Redis loss and picks up moves for free because it reads current rows, at the cost of up to one interval of lateness and a query per pass, which is nothing against a 24-hour or 1-hour reminder. The deployment notes name a BullMQ repeatable job or a platform cron to drive it.",
+       "cite": {
+        "path": "DEPLOYMENT_GUIDE.md",
+        "lineStart": 11,
+        "lineEnd": 11
+       }
+      },
+      {
+       "text": "[w3] Rows in the business transaction versus enqueuing from the request: enqueuing to Redis inside a request is a dual write across two stores (the job can exist for a booking that rolled back, or the booking can commit with no job). The row commits atomically with the booking; the cost is a separate process that must turn rows into sends.",
+       "quote": "Booking writes three `Notification` rows inside its transaction"
+      },
+      {
+       "text": "[w2] Concrete occurrence rows let reminders, reporting and single-occurrence cancel treat a series like any other appointment, at the cost of edits touching many rows and a hard stop with no incremental generator. Computing occurrences from the rule on the fly cannot hold a moved or cancelled single occurrence and gives the overlap check no rows to query; a rolling horizon keeps the concrete rows and bounds them.",
+       "cite": {
+        "path": "SENIOR_ENGINEERING_DECISIONS.md",
+        "lineStart": 9,
+        "lineEnd": 9
+       }
+      },
+      {
+       "text": "[w2] UTC instants make comparisons and range queries unambiguous, but 'every Tuesday at 10:00 in Chicago' is a local rule UTC alone cannot reproduce across DST, so the zone is stored beside each appointment, series and availability window. The cost is that every reader must pick the right zone.",
+       "cite": {
+        "path": "SENIOR_ENGINEERING_DECISIONS.md",
+        "lineStart": 8,
+        "lineEnd": 8
+       }
+      },
+      {
+       "text": "[w2] Checking the row at send time costs one read per send and makes every stale or duplicated job harmless; removing jobs on each change needs the job id stored on the row and still races a job that has already started. Keep the send-time check as the safety net even if you also remove jobs.",
+       "quote": "calls `processNotification`, which skips `CANCELLED` rows"
+      },
+      {
+       "text": "[w1] Reminder offsets are computed as the UTC start minus 24 hours and minus 1 hour: elapsed hours are trivial on instants, but across a DST weekend the 24-hour reminder lands an hour off the appointment's wall-clock time the day before. 'Same local time yesterday' matches what a customer expects and needs the stored zone; pick one on purpose.",
+       "cite": {
+        "path": "backend/src/modules/appointments/appointments.service.ts",
+        "lineStart": 143,
+        "lineEnd": 154
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}
