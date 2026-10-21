@@ -1,0 +1,40 @@
+{
+ "questions": [
+  {
+   "prompt": "Walk through the session lifecycle in organized-build-analytics from login to logout: which tokens a successful login hands out and how they differ, what the server persists for each, how a request is identified, what POST /api/auth/refresh does step by step, what logout actually ends, and what a client gets back when it presents a refresh token that is past its lifetime.",
+   "keyPoints": [
+    { "text": "[w3] Session creation signs two JWTs over the same claims (user id, email, role), writes a database record only for the refresh token, and returns both tokens with the sanitized user.", "cite": { "path": "backend/src/modules/auth/auth.service.ts", "lineStart": 164, "lineEnd": 197 } },
+    { "text": "[w2] The two tokens use separate signing secrets and separate lifetimes: 15 minutes for access and 7 days for refresh by default.", "cite": { "path": "backend/src/config/env.ts", "lineStart": 13, "lineEnd": 16 } },
+    { "text": "[w3] Access tokens are never looked up in the database: the middleware only checks signature and expiry and copies the id, email and role claims onto the request.", "cite": { "path": "backend/src/middleware/auth.middleware.ts", "lineStart": 5, "lineEnd": 26 } },
+    { "text": "[w3] Refresh verifies the JWT, finds a record for that user with the token's digest that is neither revoked nor expired, marks that record revoked, and then issues a whole new pair.", "cite": { "path": "backend/src/modules/auth/auth.service.ts", "lineStart": 121, "lineEnd": 147 } },
+    { "text": "[w2] The new pair is built from the user row loaded with the record, so a role change reaches the token claims at the next refresh; until then the old access token keeps asserting the old role.", "cite": { "path": "backend/src/modules/auth/auth.service.ts", "lineStart": 125, "lineEnd": 146 } },
+    { "text": "[w2] Logout revokes only the refresh record whose digest matches; the access token is untouched and keeps working until it expires.", "cite": { "path": "backend/src/modules/auth/auth.service.ts", "lineStart": 149, "lineEnd": 161 } },
+    { "text": "[w1] A refresh JWT that fails verification (expired or tampered) throws a library error rather than an AppError, and the error middleware answers anything that is not an AppError with a 500, not a 401.", "cite": { "path": "backend/src/middleware/error.middleware.ts", "lineStart": 13, "lineEnd": 34 } }
+   ]
+  },
+  {
+   "prompt": "Defend or indict the refresh-token rotation as protection against a stolen refresh token. When an attacker and the legitimate client hold the same token, what happens to each of them, and does the server notice that an already-rotated token was presented again? What happens if two refresh calls carrying one token arrive at the same moment? And what does marking a user inactive do to a session that is already running?",
+   "keyPoints": [
+    { "text": "[w3] Rotation: a successful refresh revokes the presented record before the new pair is issued, so each refresh token is meant to be redeemable once.", "cite": { "path": "backend/src/modules/auth/auth.service.ts", "lineStart": 137, "lineEnd": 146 } },
+    { "text": "[w3] There is no reuse detection: a rotated token presented again fails the same lookup an unknown or expired token fails, and nothing else is revoked, so whoever redeemed it first keeps a valid chain while the other party is simply refused.", "cite": { "path": "backend/src/modules/auth/auth.service.ts", "lineStart": 125, "lineEnd": 139 } },
+    { "text": "[w2] A refresh record carries no family or chain id (only user, digest, expiry, revoked-at and created-at), so revoking the chain a replayed token belongs to is not expressible; the nearest available response is revoking every record of that user.", "cite": { "path": "backend/prisma/schema.prisma", "lineStart": 125, "lineEnd": 135 } },
+    { "text": "[w3] The lookup and the revoke are separate statements and the revoke updates by id with no revoked-at condition, so two concurrent refreshes with one token can both pass the lookup and both receive new pairs; a conditional update whose affected-row count is checked would make exactly one of them win.", "cite": { "path": "backend/src/modules/auth/auth.service.ts", "lineStart": 125, "lineEnd": 146 } },
+    { "text": "[w3] Refresh never consults isActive: it mints tokens from the stored record's user row, so a user marked inactive keeps an existing session alive by refreshing, each rotation producing a brand-new refresh token.", "cite": { "path": "backend/src/modules/auth/auth.service.ts", "lineStart": 121, "lineEnd": 147 } },
+    { "text": "[w2] Whatever is revoked, an access token already handed out stays valid for the rest of its lifetime, because requests are authenticated from the token alone.", "cite": { "path": "backend/src/middleware/auth.middleware.ts", "lineStart": 12, "lineEnd": 20 } }
+   ]
+  },
+  {
+   "prompt": "Explain how a caller's role turns into the data a dashboard endpoint returns in organized-build-analytics: where route access is decided and how selective it is, where the role being checked comes from, how individual KPI metrics are withheld and what that costs, which dashboard endpoints apply no per-role filtering at all, and whether the rule that only a system admin may bypass the KPI cache actually holds in the code. Close with the guide's own rule for changing visibility.",
+   "keyPoints": [
+    { "text": "[w2] Route access is decided once for the whole dashboard router: a dashboard:view permission check runs before the visibility middleware and before every handler.", "cite": { "path": "backend/src/modules/dashboard/dashboard.routes.ts", "lineStart": 12, "lineEnd": 13 } },
+    { "text": "[w3] dashboard:view is held by all seven roles in the static role-to-permission matrix, so route-level RBAC admits every signed-in role and all role differences live in result filtering.", "cite": { "path": "backend/src/shared/permissions.ts", "lineStart": 13, "lineEnd": 48 } },
+    { "text": "[w3] KPI visibility is a per-role denylist applied after the summary is built: any metric key not listed as hidden is shown, so a newly added metric is visible to every role until someone remembers to hide it.", "cite": { "path": "backend/src/shared/permissions.ts", "lineStart": 54, "lineEnd": 67 } },
+    { "text": "[w2] Every caller pays for every metric: all the counts and aggregates run in parallel first, and filtering only drops fields from the finished object.", "cite": { "path": "backend/src/modules/dashboard/kpi.service.ts", "lineStart": 29, "lineEnd": 63 } },
+    { "text": "[w3] Recent activity returns the 20 newest raw tracked-event rows in the range, of every event type, and is never given the caller's role, so per-role visibility does not apply to it at all.", "cite": { "path": "backend/src/modules/dashboard/dashboard.repository.ts", "lineStart": 144, "lineEnd": 152 } },
+    { "text": "[w3] The admin-only cache bypass does not hold: the visibility middleware assigns into request.query, but on Express 5 request.query is a getter that re-parses the URL on every read, so the assignment is lost and the controller still sees refresh=true from any role, letting any dashboard viewer force the uncached fan-out.", "cite": { "path": "backend/src/middleware/metricVisibility.middleware.ts", "lineStart": 8, "lineEnd": 8 } },
+    { "text": "[w2] With refresh set, the KPI service skips the cache read entirely, recomputes, and overwrites the cached entry.", "cite": { "path": "backend/src/modules/dashboard/kpi.service.ts", "lineStart": 22, "lineEnd": 66 } },
+    { "text": "[w1] The guide's rule: a feature that changes visibility must change both the permission and the result filtering.", "quote": "If the feature affects visibility, update both permissions and result filtering." }
+   ]
+  }
+ ]
+}

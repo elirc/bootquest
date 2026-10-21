@@ -1,0 +1,194 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "agora--docs-adr-0006-money-and-time-windowed-pricing.md",
+ "items": [
+  {
+   "key": "seed:explainback:agora/explain-back/e3dd305d7ce0132a",
+   "provenance": {
+    "repo": "agora",
+    "sha": "2030d638fde80a7f90a595a964d69e74b5f28b96",
+    "path": "docs/adr/0006-money-and-time-windowed-pricing.md",
+    "lines": {
+     "start": 1,
+     "end": 182
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "Explain what Agora's Money type guarantees and how the type itself enforces it: the numeric representation and why, how an instance comes into existence, where rounding happens and under which policy (and why that policy), what happens when two amounts in different currencies meet, which arithmetic the type offers and which it refuses, and how it splits an amount across several lines. Then test the codebase's claim that money arithmetic is done in that representation end to end against the code that applies a percentage-off campaign.",
+     "keyPoints": [
+      {
+       "text": "[w3] Amounts are decimal, never double: base-2 cannot hold 0.10 exactly, so ten of them do not sum to 1.00, whereas decimal is base-10 and exact.",
+       "quote": "A double is base-2 and cannot represent `0.10`"
+      },
+      {
+       "text": "[w3] The constructor is private and Money.Of is the only door: it rounds to the currency's minor units with MidpointRounding.ToEven, so every instance that exists is already at its currency's scale and nothing downstream re-rounds.",
+       "cite": {
+        "path": "src/Agora.Domain/Values/Money.cs",
+        "lineStart": 51,
+        "lineEnd": 62
+       }
+      },
+      {
+       "text": "[w2] Why half-to-even: rounding every tie upward is biased, so across many order lines the house drifts a fraction of a cent per tie; sending ties both ways lets the error cancel.",
+       "quote": "half-up is *biased*"
+      },
+      {
+       "text": "[w2] Every binary operation (Add, Subtract, CompareTo and the operators built on them) passes one currency gate that throws a domain error when the currencies differ; there is no implicit conversion and no default currency.",
+       "cite": {
+        "path": "src/Agora.Domain/Values/Money.cs",
+        "lineStart": 206,
+        "lineEnd": 212
+       }
+      },
+      {
+       "text": "[w2] Multiply takes a plain decimal factor (a quantity, a rate) and there is no Money-times-Money operation to call by mistake.",
+       "cite": {
+        "path": "src/Agora.Domain/Values/Money.cs",
+        "lineStart": 81,
+        "lineEnd": 88
+       }
+      },
+      {
+       "text": "[w3] Distribute works in integer minor units: it floors each weighted share, then hands the leftover units one by one to the largest remainders (ties broken by position), so the shares always sum to exactly the original amount; Allocate is the equal-weights case.",
+       "cite": {
+        "path": "src/Agora.Domain/Values/Money.cs",
+        "lineStart": 129,
+        "lineEnd": 185
+       }
+      },
+      {
+       "text": "[w3] The decimal-only rule does not hold at this pin: percentage discounts of a whole percent up to 50 take a 'PERF' fast path that computes the sale price in double and rounds the double, so an amount that sits exactly on a half cent in decimal can be represented just above or below it and round to the other cent; the comment's claim that nothing survives the conversion is unbenchmarked and untested.",
+       "cite": {
+        "path": "src/Agora.Domain/Pricing/PriceCalculator.cs",
+        "lineStart": 24,
+        "lineEnd": 42
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "Explain how Agora decides what a product costs at a given moment: how a sale is modelled and why the obvious alternative was rejected, which instants belong to a sale window at its edges, which campaign wins when two cover the same instant (including on a tie), where the current time enters the pricing pipeline and how often it is read, who decides whose midnight an admin meant, and how the storefront's 'save X%' figure is computed and what type it comes back as.",
+     "keyPoints": [
+      {
+       "text": "[w3] A sale is a campaign holding a discount and a time window; the price is resolved from the list price, the campaigns and an instant, and nothing has to flip a sale on or off.",
+       "quote": "Nothing switches it on."
+      },
+      {
+       "text": "[w2] The rejected design, an on-sale boolean plus a sale price, records only the present: it cannot say what something cost last Tuesday or what is scheduled, and it needs a human awake at midnight twice.",
+       "quote": "A boolean records only *now*"
+      },
+      {
+       "text": "[w3] Windows are half-open: the start instant is inside and an instant equal to the end is already outside, so back-to-back campaigns touch without ever sharing a tick.",
+       "cite": {
+        "path": "src/Agora.Domain/Values/DateRange.cs",
+        "lineStart": 58,
+        "lineEnd": 58
+       }
+      },
+      {
+       "text": "[w3] Every campaign active at the instant is applied and the lowest resulting price wins; candidates are visited in (CreatedAtUtc, Id) order and only a strictly lower price replaces the best, so a tie goes deterministically to the earliest-created campaign, and a campaign that does not beat the list price leaves the list price in force.",
+       "cite": {
+        "path": "src/Agora.Domain/Pricing/PriceResolver.cs",
+        "lineStart": 47,
+        "lineEnd": 61
+       }
+      },
+      {
+       "text": "[w3] The clock is read once per request in the pricing use case, and that one instant is both pushed into the campaign query and passed to the resolver for every product, so a page rendered across midnight is priced at a single moment; everything below it takes the instant as an argument.",
+       "cite": {
+        "path": "src/Agora.Application/Pricing/ProductPricing.cs",
+        "lineStart": 40,
+        "lineEnd": 56
+       }
+      },
+      {
+       "text": "[w2] Whose midnight: the admin's browser, the only party that knows the admin's timezone, turns the local date-time into a real instant and sends offsets; the server does not interpret dates with its own locale.",
+       "quote": "The server never guesses with its own locale."
+      },
+      {
+       "text": "[w3] The save-percent figure is derived from the two amounts (savings divided by list price, times 100) rather than the campaign's nominal percentage, then rounded to a whole number with the same half-to-even policy and returned as an int; it is 0 when nothing is on sale or the list price is zero.",
+       "cite": {
+        "path": "src/Agora.Domain/Pricing/EffectivePrice.cs",
+        "lineStart": 38,
+        "lineEnd": 51
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "Explain how Agora models whom a cart belongs to and how it stays consistent: what an anonymous cart is found by versus a signed-in shopper's, what sign-in does to the anonymous cart's lines when a product sits in both carts and why that rule beat the alternatives, what a merged line remembers, what makes running the same merge twice harmless, and why the cart carries no optimistic-concurrency version although products do. Then name what actually stands between two simultaneous writers and a corrupt cart, and where that protection stops.",
+     "keyPoints": [
+      {
+       "text": "[w3] Two kinds of owner, two keys: a signed-in caller's live cart is looked up by user id, an anonymous caller's by the hash of an unprivileged cart token, and the identity branch is checked first.",
+       "cite": {
+        "path": "src/Agora.Application/Carts/CartLookup.cs",
+        "lineStart": 41,
+        "lineEnd": 51
+       }
+      },
+      {
+       "text": "[w3] At sign-in a product present in both carts ends up with the larger of the two quantities, not their sum.",
+       "cite": {
+        "path": "src/Agora.Domain/Carts/Cart.cs",
+        "lineStart": 296,
+        "lineEnd": 296
+       }
+      },
+      {
+       "text": "[w2] Why max over sum: summing bills a shopper who re-added a forgotten item, can push a line past the 99 maximum inside a login where nobody can see an error, and doubles again on a repeated merge; max of two legal quantities is always legal and repeating it changes nothing.",
+       "cite": {
+        "path": "src/Agora.Domain/Carts/Cart.cs",
+        "lineStart": 205,
+        "lineEnd": 221
+       }
+      },
+      {
+       "text": "[w2] A line moved across keeps its original price snapshot and added-at time instead of being re-stamped, and a surviving line keeps its own history with only the quantity reconciled.",
+       "cite": {
+        "path": "src/Agora.Domain/Carts/Cart.cs",
+        "lineStart": 239,
+        "lineEnd": 259
+       }
+      },
+      {
+       "text": "[w3] The anonymous cart is retired rather than deleted, and both cart lookups only search carts that are not retired, so a second merge with the same token finds nothing and returns without touching anything.",
+       "cite": {
+        "path": "src/Agora.Infrastructure/Persistence/Repositories/CartRepository.cs",
+        "lineStart": 9,
+        "lineEnd": 36
+       }
+      },
+      {
+       "text": "[w2] No version on a cart: the only writer is the shopper in a couple of tabs, the operations are narrow and nearly commutative, and last-write-wins on a line loses nothing anyone would ask for back; a product has one because two admins silently overwriting each other is a loss a human must see.",
+       "cite": {
+        "path": "src/Agora.Domain/Carts/Cart.cs",
+        "lineStart": 21,
+        "lineEnd": 30
+       }
+      },
+      {
+       "text": "[w2] What does stand guard is the unique (CartId, ProductId) index: two simultaneous adds of the same new product cannot both insert, but the loser surfaces as an untranslated database update error (a 500), not a conflict.",
+       "cite": {
+        "path": "docs/adr/0007-cart-identity-merge-and-domain-events.md",
+        "lineStart": 213,
+        "lineEnd": 216
+       }
+      },
+      {
+       "text": "[w1] The one-live-cart-per-shopper rule has no index behind it: the UserId index is deliberately non-unique and the rule is left to the lookup, so nothing in the schema stops two concurrent first sign-ins from each creating an owned cart.",
+       "cite": {
+        "path": "src/Agora.Infrastructure/Persistence/Configurations/CartConfiguration.cs",
+        "lineStart": 37,
+        "lineEnd": 45
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}
