@@ -1,0 +1,183 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "ww19--astraupskill-02-CONCEPTS.md--set-b",
+ "items": [
+  {
+   "key": "seed:explainback:ww19/explain-back/94e9e0a37154e8e6",
+   "provenance": {
+    "repo": "ww19",
+    "sha": "34f69ebb4a40d998eafafcad35b96f8fcbffd1c4",
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 1,
+     "end": 37
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "Explain what happens to the engine's hot queries when the task table has grown to 40 million rows and every task still changes status several times in its life: whether table size by itself slows the worker's next-task claim, what each status change leaves behind in the table and in every one of its indexes, where those leftovers collect relative to where the claim starts reading, what vacuum has to do about them and why its defaults fit badly here, when a partial index on the due predicate pays for itself, and what happens to finished tasks.",
+     "keyPoints": [
+      {
+       "text": "[w3] Table size alone does not slow the claim: it asks only for rows whose status is AVAILABLE and whose time has come, so it reads the AVAILABLE slice of the (status, availableAt) index, and the tens of millions of finished tasks filed under other statuses are never visited. Its cost follows the ready backlog, plus whatever dead entries sit inside that slice.",
+       "cite": {
+        "path": "src/repositories/task-repository.ts",
+        "lineStart": 56,
+        "lineEnd": 64
+       }
+      },
+      {
+       "text": "[w3] Every status change is a full new row version: status is an indexed column, so the flip to LEASED at claim time and the flip to COMPLETED, FAILED or back to AVAILABLE at the end can never be heap-only updates. Each writes a new tuple plus a new entry in every index on the task table (primary key, the unique stepRunId and (status, availableAt)), and leaves the old tuple and old entries dead until vacuum removes them.",
+       "cite": {
+        "path": "src/repositories/task-repository.ts",
+        "lineStart": 65,
+        "lineEnd": 73
+       }
+      },
+      {
+       "text": "[w3] The leftovers pile up exactly where the claim starts reading: it always wants the oldest due entries, which are the ones just leased, so each claim steps over a growing crowd of index entries whose rows have already moved on and must check each against the table. A long-running transaction elsewhere, such as an analytics query, keeps vacuum from reclaiming them, and the head of the queue slows down while the backlog is small.",
+       "cite": {
+        "path": "src/repositories/task-repository.ts",
+        "lineStart": 59,
+        "lineEnd": 63
+       }
+      },
+      {
+       "text": "[w2] Vacuum's defaults suit large, slowly changing tables: autovacuum waits until dead rows reach roughly a fifth of the table plus a small threshold, which at 40 million rows is around eight million dead rows, far too late for a table whose live working set is a few thousand ready tasks. Give the task table a per-table scale factor near zero and a fixed threshold so it is vacuumed continuously.",
+       "cite": {
+        "path": "prisma/schema.prisma",
+        "lineStart": 208,
+        "lineEnd": 226
+       }
+      },
+      {
+       "text": "[w2] A partial index on (availableAt, createdAt) restricted to status = 'AVAILABLE' holds only claimable rows, so it stays the size of the backlog instead of the history, and it matches the claim's whole ORDER BY (available time, then creation time), which the current two-column index can only finish with an extra sort among rows that share a timestamp. It pays once finished rows vastly outnumber ready ones, which is exactly the 40-million-row case.",
+       "cite": {
+        "path": "src/repositories/task-repository.ts",
+        "lineStart": 59,
+        "lineEnd": 62
+       }
+      },
+      {
+       "text": "[w2] Retries add churn of their own: a failed attempt sends the task back to AVAILABLE with a later available time, another non-heap-only update with fresh index entries, so a task that retries five times leaves several generations of dead entries behind.",
+       "cite": {
+        "path": "src/services/workflow-engine-service.ts",
+        "lineStart": 557,
+        "lineEnd": 564
+       }
+      },
+      {
+       "text": "[w2] The single-row lookups barely notice the growth: the run idempotency key, the task's unique stepRunId and the step run's unique (run, step key) are each one probe of a B-tree whose depth grows with the logarithm of the row count, so 40 million rows add a level or two, not a scan.",
+       "cite": {
+        "path": "prisma/migrations/202604121613_init/migration.sql",
+        "lineStart": 236,
+        "lineEnd": 257
+       }
+      },
+      {
+       "text": "[w1] Finished tasks are never removed: no code deletes a task row, although the engine's own comment expects the step row to outlive the queue item. The 40 million rows are history; delete or archive finished tasks after a retention period and let the step-run row carry the record.",
+       "cite": {
+        "path": "src/services/workflow-engine-service.ts",
+        "lineStart": 185,
+        "lineEnd": 185
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "Walk through adding an index the engine actually needs to a 40-million-row production task table without an outage: what the repository's own migrations do when they create an index and what that would do to enqueues and claims at this size, how a concurrent build differs and what can go wrong with it, what every enqueued step already pays in index writes and what one more index adds, and how you prove with EXPLAIN, before and after, that the planner uses it, given that the claim itself is an UPDATE.",
+     "keyPoints": [
+      {
+       "text": "[w3] The shipped migration builds every index with a plain CREATE INDEX, which is harmless on an empty database; repeated against a 40-million-row task table, that statement holds a lock that blocks every insert, update and delete on the table until the build finishes, so enqueues and claims stall for the duration.",
+       "cite": {
+        "path": "prisma/migrations/202604121613_init/migration.sql",
+        "lineStart": 256,
+        "lineEnd": 260
+       }
+      },
+      {
+       "text": "[w3] CREATE INDEX CONCURRENTLY keeps writes flowing: it scans the table twice and waits out transactions already in flight, so it takes longer and cannot run inside a transaction block, and a failed build leaves an INVALID index that still costs writes and must be dropped and retried. Write that migration by hand, naming the index the way the shipped ones are named (model, columns, then idx) so the declared schema and the database keep agreeing.",
+       "cite": {
+        "path": "prisma/migrations/202604121613_init/migration.sql",
+        "lineStart": 259,
+        "lineEnd": 260
+       }
+      },
+      {
+       "text": "[w3] Enqueueing one step already pays fourteen index insertions in one transaction: the step-run row carries five indexes, each of the two execution events three, and the task row three. A new task index adds one to that insert and, because status flips are never heap-only, one more on every later status change of every task; a partial index escapes most of this, since only row versions that match its predicate get an entry.",
+       "cite": {
+        "path": "src/services/workflow-engine-service.ts",
+        "lineStart": 166,
+        "lineEnd": 214
+       }
+      },
+      {
+       "text": "[w2] Prove use with EXPLAIN, carefully: the claim is an UPDATE, and EXPLAIN ANALYZE executes the statement it explains, so it would lease a real task. Run it inside BEGIN and ROLLBACK, or explain the candidate SELECT on its own, and compare the plan, the rows removed by the filter and the buffers read before and after, on production-sized data, because on a small development table the planner prefers a sequential scan whatever exists.",
+       "cite": {
+        "path": "src/repositories/task-repository.ts",
+        "lineStart": 55,
+        "lineEnd": 64
+       }
+      },
+      {
+       "text": "[w2] After release, check the index is read in production (its scan counter in the index statistics view keeps rising) and that an index it replaces has stopped being read before dropping that one, also concurrently. The step-run (status, availableAt) index shows why: created, maintained on every step-status change, and read by nothing.",
+       "cite": {
+        "path": "prisma/migrations/202604121613_init/migration.sql",
+        "lineStart": 250,
+        "lineEnd": 251
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "Defend or indict a composite index for a new admin screen that lists tasks with a chosen status created within a date range, newest first: which column goes first and why, whether newest-first needs a descending index, whether the index should cover the columns the screen shows, and when adding this second task index is worse than letting the query filter a scan.",
+     "keyPoints": [
+      {
+       "text": "[w3] Equality first, range second: (status, createdAt) turns one status's tasks in the date range into a single contiguous slice already ordered by creation time, while (createdAt, status) would walk every task created in the range and discard the other statuses. The existing (status, availableAt) index matches the status but orders by the wrong time column, so it cannot serve the date range or the sort.",
+       "cite": {
+        "path": "prisma/schema.prisma",
+        "lineStart": 221,
+        "lineEnd": 225
+       }
+      },
+      {
+       "text": "[w2] Newest first needs no descending index: a B-tree can be read backwards, so (status, createdAt) answers ORDER BY createdAt DESC for one status as readily as ascending. Declared directions only matter when two sort columns run in opposite directions.",
+       "cite": {
+        "path": "prisma/migrations/202604121613_init/migration.sql",
+        "lineStart": 259,
+        "lineEnd": 260
+       }
+      },
+      {
+       "text": "[w2] Covering is a weak bet here: adding the screen's columns with INCLUDE (id, handler key, attempt count) only skips the table for pages the visibility map marks all-visible, and a task table whose rows keep changing status keeps its recent pages dirty. Never include the wide columns (the last error text, the JSON payload): they bloat every entry for every row.",
+       "cite": {
+        "path": "prisma/schema.prisma",
+        "lineStart": 218,
+        "lineEnd": 220
+       }
+      },
+      {
+       "text": "[w3] A second full index is worse than a filtered scan when the screen runs a few times a day but the index is written on every insert and every status flip of 40 million rows, and when the chosen status is most of the table (COMPLETED) the planner will scan sequentially anyway. Index only what admins actually hunt for: a partial (createdAt) index restricted to FAILED gets an entry only when a row version becomes FAILED, so ordinary claims and completions never touch it.",
+       "cite": {
+        "path": "src/services/workflow-engine-service.ts",
+        "lineStart": 541,
+        "lineEnd": 547
+       }
+      },
+      {
+       "text": "[w1] Creation time is not unique, so a paged admin list needs the id as a final tie-breaker, both in the ORDER BY and as the index's last column, to page by key without skipping or repeating tasks created in the same instant.",
+       "cite": {
+        "path": "prisma/schema.prisma",
+        "lineStart": 209,
+        "lineEnd": 221
+       }
+      }
+     ]
+    }
+   ],
+   "set": "b"
+  }
+ ]
+}
