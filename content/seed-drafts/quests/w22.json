@@ -417,6 +417,575 @@
    ],
    "front": "What happens when one provider event is delivered twice concurrently?",
    "back": "The duplicate check reads the event before the transaction, so both deliveries proceed; the second createWebhookEvent hits the providerEventId unique constraint and surfaces as a 500."
+  },
+  {
+   "id": "q13-fetchjson-fallback-message",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/flow-traces.md",
+    "lines": {
+     "start": 15,
+     "end": 22
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/flow-traces.md",
+     "lineStart": 21,
+     "lineEnd": 22
+    },
+    {
+     "path": "src/hooks/apiClient.ts",
+     "lineStart": 16,
+     "lineEnd": 26
+    }
+   ],
+   "prompt": "A SUPPORT user's admin panel calls `POST /api/admin/reconciliation/run`. Per the flow trace, what does the browser-side `fetchJson()` do with the response that actually comes back?",
+   "answer": "It still throws, with the fallback message \"Request failed.\" if the body is not JSON",
+   "distractors": [
+    "It resolves with a null payload, since the 403 body never reached jsonError",
+    "It throws the FORBIDDEN message taken from the { error } body jsonError built",
+    "It retries the call once, because an unhandled route error comes back as 503"
+   ],
+   "explanation": "Flow-traces lines 21-22: the RouteError is thrown at guards.ts:32 outside the handler's try, so jsonError() is never reached and Next.js receives an unhandled rejection instead of the intended structured 403. In the UI, fetchJson() (apiClient.ts:24-26) still throws on the non-OK response, but its message falls back to the literal \"Request failed.\" when the body is not JSON. It does not resolve, there is no jsonError body to read a FORBIDDEN message from, and nothing retries."
+  },
+  {
+   "id": "q14-rbac-test-skips-wrapper",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/testing-rationale.md",
+    "lines": {
+     "start": 3,
+     "end": 6
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/testing-rationale.md",
+     "lineStart": 3,
+     "lineEnd": 6
+    },
+    {
+     "path": "tests/auth/authorization.test.ts",
+     "lineStart": 8,
+     "lineEnd": 19
+    }
+   ],
+   "prompt": "The shipped test `support role cannot run reconciliation` passes, yet the guard's 403 never reaches `jsonError()`. Per the testing rationale, why can't that test notice the problem?",
+   "answer": "It calls requirePermission() directly instead of going through withRouteAuth()",
+   "distractors": [
+    "It stubs jsonError, so any RouteError it sees counts as a structured 403 body",
+    "It runs only in the .mjs runtime harness, which the npm test glob never picks up",
+    "It signs in as an OPS user rather than SUPPORT, so the permission check passes"
+   ],
+   "explanation": "Testing-rationale line 6: the test calls requirePermission() directly and does not go through withRouteAuth() in src/lib/auth/guards.ts, which is why it cannot notice that the guard throws its RouteError at line 32 outside the handler's try/catch; an HTTP-harness test of the reconciliation route asserting the structured 403 body would currently fail. The test lives in tests/auth/authorization.test.ts (line 3), a .test.ts file rather than the .mjs harness, it uses the SUPPORT role, and it stubs nothing about jsonError."
+  },
+  {
+   "id": "q15-customer-never-reaches-scope",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/testing-rationale.md",
+    "lines": {
+     "start": 13,
+     "end": 16
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/testing-rationale.md",
+     "lineStart": 14,
+     "lineEnd": 16
+    },
+    {
+     "path": "src/app/api/admin/payments/route.ts",
+     "lineStart": 6,
+     "lineEnd": 8
+    }
+   ],
+   "prompt": "`buildPaymentListScope()` returns `{ ownerUserId }` for a CUSTOMER, and a shipped test proves it. Why does no CUSTOMER request exercise that branch through the HTTP API today?",
+   "answer": "The only HTTP list route requires PAYMENT_READ_ANY, which a CUSTOMER lacks",
+   "distractors": [
+    "The only HTTP list route requires the ADMIN role, so OPS sessions fail too",
+    "The list route is unwrapped, so every caller gets the staff-wide {} scope",
+    "The scope helper is only invoked by detail reads, never by the list query"
+   ],
+   "explanation": "Testing-rationale line 16: the only HTTP list route today, src/app/api/admin/payments/route.ts, requires PAYMENT_READ_ANY (route.ts:6-8 wraps GET in withRouteAuth with that permission), so a CUSTOMER never reaches the scoped branch through the API. The gate is a permission, not the ADMIN role; the route is wrapped, not open; and line 14 calls buildPaymentListScope() the ownership filter for list endpoints, not a detail-only helper."
+  },
+  {
+   "id": "q16-mjs-harness-outside-glob",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/testing-rationale.md",
+    "lines": {
+     "start": 25,
+     "end": 26
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/testing-rationale.md",
+     "lineStart": 26,
+     "lineEnd": 26
+    },
+    {
+     "path": "package.json",
+     "lineStart": 10,
+     "lineEnd": 10
+    }
+   ],
+   "prompt": "`tests/runtime-refund-scope.test.mjs` loads the real refundService with stubbed repositories. What does the testing rationale say about how it runs and what it proves?",
+   "answer": "npm test's glob skips it; it proves one shared tx client, not rollback or concurrency",
+   "distractors": [
+    "npm test runs it with the rest; it proves the refund row rolls back on event failure",
+    "npm test's glob skips it; it proves two concurrent refunds can no longer over-refund",
+    "npm test runs it with the rest; it proves every read and write shares one tx client"
+   ],
+   "explanation": "Testing-rationale line 26: the .mjs file is not matched by the npm test glob in package.json:10 (tests/**/*.test.ts); it runs with node --experimental-vm-modules --test. It asserts that both refund reads and every write receive the same transaction client, plus full/partial outcomes, policy refusals, missing payment and event-failure propagation, and it does not prove database rollback or concurrency behavior."
+  },
+  {
+   "id": "q17-not-tested-anywhere",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/testing-rationale.md",
+    "lines": {
+     "start": 25,
+     "end": 31
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/testing-rationale.md",
+     "lineStart": 26,
+     "lineEnd": 31
+    }
+   ],
+   "prompt": "Which of these sits on the testing rationale's \"Not tested anywhere\" list, rather than among the cases the runtime refund-scope harness already covers?",
+   "answer": "The payload-mismatch 409 and the P2002 collision branch in paymentService",
+   "distractors": [
+    "The event-failure propagation out of the createRefundForPayment callback",
+    "The missing-payment refusal raised inside the createRefundForPayment flow",
+    "The policy refusals that assertRefundAllowed raises for a large refund"
+   ],
+   "explanation": "Testing-rationale line 26 lists what the runtime refund-scope harness asserts: the shared transaction client, full/partial outcomes, policy refusals, missing payment, and event-failure propagation. Lines 28-31, \"Not tested anywhere\", name idempotent replay, the payload-mismatch 409 and the P2002 collision branch in src/services/paymentService.ts:168-188, every reconciliation issue type, and concurrent refunds."
+  },
+  {
+   "id": "q18-replay-snapshot-stored-last",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/request-lifecycle.md",
+    "lines": {
+     "start": 3,
+     "end": 13
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture/request-lifecycle.md",
+     "lineStart": 7,
+     "lineEnd": 13
+    },
+    {
+     "path": "src/services/paymentService.ts",
+     "lineStart": 134,
+     "lineEnd": 160
+    }
+   ],
+   "prompt": "In the create-payment request lifecycle, at what point is the replayable API response snapshot persisted?",
+   "answer": "Last, by markIdempotencyCompleted() after the provider dispatch step",
+   "distractors": [
+    "First, by createIdempotencyRecord() before the payment row is inserted",
+    "Right after createPayment() inserts the PENDING row, before dispatch",
+    "Never on the server; the browser caches the 202 and resends it on retry"
+   ],
+   "explanation": "Request-lifecycle lines 7-13: findIdempotencyRecord()/createIdempotencyRecord() replay, reject, or open a new in-progress record; then the owner is resolved, createPayment() inserts the PENDING row, PAYMENT_CREATED is appended and dispatchPaymentToProvider() runs; only at step 9 does markIdempotencyCompleted() store the replayable API response snapshot, before the 202 returns (paymentService.ts:134-160, the last write in the transaction). The opening record carries no snapshot, and nothing is cached client-side."
+  },
+  {
+   "id": "q19-role-change-next-request",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/auth-and-permissions.md",
+    "lines": {
+     "start": 26,
+     "end": 26
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 26,
+     "lineEnd": 26
+    },
+    {
+     "path": "src/lib/auth/session.ts",
+     "lineStart": 29,
+     "lineEnd": 43
+    }
+   ],
+   "prompt": "An admin demotes a signed-in OPS user to SUPPORT directly in the database. Per the auth doc, when does that user's existing session lose refund permission?",
+   "answer": "On the next request, as each request re-reads the session row and current role",
+   "distractors": [
+    "Only after logout, as the role is copied into the session row at login time",
+    "When the cookie expires, as the role travels inside the signed session cookie",
+    "After a server restart, as withRouteAuth caches each user's role in memory"
+   ],
+   "explanation": "Auth-and-permissions line 26: sessions are revocable server-side; logout deletes the session row (authService.ts:37-39) and every request re-reads the row and the user's current role (session.ts:30-43 returns role: session.user.role from the freshly loaded row). So the demotion applies on the next request. The role is not frozen at login, the cookie carries only a token resolved to a row, and the guard caches nothing."
+  },
+  {
+   "id": "q20-guard-runs-before-parse",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/request-lifecycle.md",
+    "lines": {
+     "start": 3,
+     "end": 6
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture/request-lifecycle.md",
+     "lineStart": 4,
+     "lineEnd": 6
+    },
+    {
+     "path": "src/lib/auth/guards.ts",
+     "lineStart": 28,
+     "lineEnd": 35
+    }
+   ],
+   "prompt": "A request with no session cookie, a malformed JSON body and no `Idempotency-Key` hits `POST /api/payments`. Which lifecycle step runs first?",
+   "answer": "withRouteAuth resolves the cookie session and checks PAYMENT_CREATE",
+   "distractors": [
+    "The handler parses the request body with createPaymentSchema.parse()",
+    "The handler reads the Idempotency-Key header and rejects its absence",
+    "createPaymentWithIdempotency hashes the body to look up its record"
+   ],
+   "explanation": "Request-lifecycle line 4: POST is the function returned by withRouteAuth(), so it first resolves the cookie session through getSessionForRequest() and enforces Permission.PAYMENT_CREATE (guards.ts:32). Line 5: only then does the handler parse the body with createPaymentSchema.parse() and read the Idempotency-Key header; line 6 places the fingerprint and record lookup later still, inside createPaymentWithIdempotency()."
+  },
+  {
+   "id": "q21-owner-decided-by-policy",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/request-lifecycle.md",
+    "lines": {
+     "start": 8,
+     "end": 9
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture/request-lifecycle.md",
+     "lineStart": 8,
+     "lineEnd": 9
+    },
+    {
+     "path": "docs/learning/load-bearing-files.md",
+     "lineStart": 31,
+     "lineEnd": 33
+    }
+   ],
+   "prompt": "During payment creation, which component decides who owns the new payment and rejects an owner override the caller is not allowed to make?",
+   "answer": "resolvePaymentOwnerForCreate() in paymentAccessPolicy, called by the service",
+   "distractors": [
+    "createPaymentSchema in the route, which strips owner fields during parsing",
+    "withRouteAuth() in guards.ts, which pins the owner to the session's user",
+    "createPayment() in paymentRepository, which defaults the owner on insert"
+   ],
+   "explanation": "Request-lifecycle line 8: resolvePaymentOwnerForCreate() in src/services/paymentAccessPolicy.ts decides who owns the payment and rejects unauthorized owner overrides; load-bearing-files line 33 lists paymentService as a caller of that policy module. Line 9 gives createPayment() only the insert of the PENDING row, and neither the schema nor the guard makes the ownership decision."
+  },
+  {
+   "id": "q22-repository-underfetch",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/load-bearing-files.md",
+    "lines": {
+     "start": 45,
+     "end": 50
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/load-bearing-files.md",
+     "lineStart": 46,
+     "lineEnd": 50
+    }
+   ],
+   "prompt": "load-bearing-files names one likely junior miswrite for `src/repositories/paymentRepository.ts`. Which is it?",
+   "answer": "Under-fetching related rows, then re-querying ad hoc in the service layer",
+   "distractors": [
+    "Eagerly fetching every related row, so each payment read loads its history",
+    "Opening a fresh transaction in each query instead of accepting the caller's",
+    "Caching payment rows in memory between requests to save database trips"
+   ],
+   "explanation": "load-bearing-files lines 46-50: paymentRepository holds the authoritative payment queries used by both write and read services and is called by five services; if it were wrong, services would decide on incomplete or stale payment shapes, especially around refunds and webhook history. The named junior miswrite is to under-fetch related rows and re-query ad hoc in the service layer, the opposite of eager over-fetching; per-query transactions and in-memory caching are not what the file names."
+  },
+  {
+   "id": "q23-webhook-service-callers",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/load-bearing-files.md",
+    "lines": {
+     "start": 10,
+     "end": 15
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/load-bearing-files.md",
+     "lineStart": 12,
+     "lineEnd": 13
+    },
+    {
+     "path": "docs/learning/flow-traces.md",
+     "lineStart": 26,
+     "lineEnd": 30
+    }
+   ],
+   "prompt": "Per load-bearing-files, which two files call into `src/services/webhookService.ts`?",
+   "answer": "The provider webhook route and providerSimulatorService",
+   "distractors": [
+    "The provider webhook route and the reconciliationService",
+    "The admin webhooks deliver route and the refundService",
+    "providerSimulatorService and the paymentService module"
+   ],
+   "explanation": "load-bearing-files line 12: webhookService is called by src/app/api/webhooks/provider/route.ts and src/services/providerSimulatorService.ts. The flow trace (lines 26-30) shows the admin deliver route reaching it only through providerSimulatorService.deliverPendingWebhooks(); reconciliationService, refundService and paymentService are not among its callers."
+  },
+  {
+   "id": "q24-guards-page-not-route",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/load-bearing-files.md",
+    "lines": {
+     "start": 24,
+     "end": 29
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/load-bearing-files.md",
+     "lineStart": 25,
+     "lineEnd": 29
+    }
+   ],
+   "prompt": "What does load-bearing-files say a junior engineer would likely miswrite in `src/lib/auth/guards.ts`?",
+   "answer": "Securing the page but forgetting to secure the underlying API route",
+   "distractors": [
+    "Securing the API route but forgetting the admin page that renders it",
+    "Checking the permission after the handler has already written rows",
+    "Trusting a role read from the cookie instead of the stored session"
+   ],
+   "explanation": "load-bearing-files lines 25-29: guards.ts bridges Next.js routes and pages to shared auth and permission logic, is called by most API routes and the admin pages, and if wrong would expose protected operations even though the policy layer exists. The named miswrite is securing the page and forgetting the underlying API route, not the reverse; the other two are not what the file names."
+  },
+  {
+   "id": "q25-policy-list-scope-miswrite",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/load-bearing-files.md",
+    "lines": {
+     "start": 31,
+     "end": 36
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/load-bearing-files.md",
+     "lineStart": 32,
+     "lineEnd": 36
+    }
+   ],
+   "prompt": "If `paymentAccessPolicy.ts` were wrong, where does load-bearing-files say customer data isolation would fail first, and what is the likely junior miswrite?",
+   "answer": "At list endpoints; ownership checked in the detail route but not the list scope",
+   "distractors": [
+    "At detail pages; the list query filters by owner but single reads skip it",
+    "At refund endpoints; ownership checked on reads but never before a refund write",
+    "At login; ownership checked per request but never bound into the session row"
+   ],
+   "explanation": "load-bearing-files lines 32-36: paymentAccessPolicy centralizes ownership checks and list scoping for payment visibility; if it were wrong, customer data isolation would fail first at list endpoints, and the junior miswrite is to check ownership in the detail route but not in the list query scope. A detail-first failure, the refund-write variant and the login variant are not what the file states."
+  },
+  {
+   "id": "q26-schema-collapse-miswrite",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/load-bearing-files.md",
+    "lines": {
+     "start": 38,
+     "end": 43
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/load-bearing-files.md",
+     "lineStart": 39,
+     "lineEnd": 43
+    }
+   ],
+   "prompt": "load-bearing-files warns about one junior miswrite in `prisma/schema.prisma`. What is it, and what would it cost?",
+   "answer": "Merging provider and local state into one table, losing reconciliation",
+   "distractors": [
+    "Folding refunds into a JSON column on Payment, losing per-refund history",
+    "Leaving out the Session model, losing server-side session revocation",
+    "Keying payments by the provider's id, losing the local replay record"
+   ],
+   "explanation": "load-bearing-files lines 39-43: the schema defines payments, provider mirrors, webhooks, refunds, reconciliation and sessions, and missing uniqueness, relations or under-modeled entities would erase whole classes of correctness guarantees. The named junior miswrite is to collapse provider state and local state into one table and lose reconciliation capability; the refunds-as-JSON, missing-Session and provider-id-key variants are not what the file warns about."
+  },
+  {
+   "id": "f05-multitenancy-retrofit",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/architecture/auth-and-permissions.md",
+    "lines": {
+     "start": 28,
+     "end": 33
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 28,
+     "lineEnd": 33
+    }
+   ],
+   "front": "w22 is not multi-tenant. The auth doc's five steps to add tenancy later without a rewrite",
+   "back": "1) Add tenantId to tenant-owned models (Payment, ProviderPayment, WebhookDelivery, WebhookEvent, Refund, ReconciliationIssue). 2) Extend AuthenticatedSession with tenantId. 3) Make buildPaymentListScope() return tenant and ownership filters. 4) Make every repository read of tenant-owned data scope by tenantId before business filters. 5) Add a tenant-aware permission layer beside permissions.ts so platform admins and org operators are separated."
+  },
+  {
+   "id": "f06-layer-map-reading-order",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/architecture/README.md",
+    "lines": {
+     "start": 5,
+     "end": 21
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture/README.md",
+     "lineStart": 5,
+     "lineEnd": 21
+    }
+   ],
+   "front": "w22's folder layers, and the reading order the architecture overview recommends",
+   "back": "src/app: pages and HTTP entrypoints. src/components: client UI that calls React Query hooks. src/hooks: the browser data boundary that calls REST and owns cache invalidation. src/services: business logic. src/repositories: the database boundary. src/lib: cross-cutting policy and domain rules. prisma/schema.prisma: relational source of truth. Read schema, permissions.ts, paymentService, webhookService, reconciliationService: schema first, policy second, write path third, async correction paths fourth."
+  },
+  {
+   "id": "f07-entity-owning-services",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/architecture/domain-model.md",
+    "lines": {
+     "start": 20,
+     "end": 78
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture/domain-model.md",
+     "lineStart": 20,
+     "lineEnd": 78
+    }
+   ],
+   "front": "Which service is the primary owner of each w22 entity?",
+   "back": "authService: User and Session. paymentService: IdempotencyRecord and Payment. providerSimulatorService: PaymentAttempt, ProviderPayment and WebhookDelivery. webhookService: WebhookEvent. refundService: Refund. reconciliationService: ReconciliationRun and ReconciliationIssue."
+  },
+  {
+   "id": "f08-audit-trail-events",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/learning/concepts-demonstrated.md",
+    "lines": {
+     "start": 43,
+     "end": 46
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/concepts-demonstrated.md",
+     "lineStart": 43,
+     "lineEnd": 46
+    },
+    {
+     "path": "docs/architecture/domain-model.md",
+     "lineStart": 60,
+     "lineEnd": 63
+    }
+   ],
+   "front": "How w22 keeps an audit trail of each payment, and the risk if it were wrong",
+   "back": "PaymentEvent rows are appended through one write boundary, createPaymentEvent() in paymentEventRepository, which the payment, refund, webhook and reconciliation services all call; PaymentDetailsCard renders the trail for operators. If wrong, operators lose the historical sequence needed to explain incidents or financial anomalies."
+  },
+  {
+   "id": "f09-shipped-test-risks",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/learning/testing-rationale.md",
+    "lines": {
+     "start": 3,
+     "end": 23
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/testing-rationale.md",
+     "lineStart": 4,
+     "lineEnd": 4
+    },
+    {
+     "path": "docs/learning/testing-rationale.md",
+     "lineStart": 9,
+     "lineEnd": 9
+    },
+    {
+     "path": "docs/learning/testing-rationale.md",
+     "lineStart": 14,
+     "lineEnd": 14
+    },
+    {
+     "path": "docs/learning/testing-rationale.md",
+     "lineStart": 19,
+     "lineEnd": 23
+    }
+   ],
+   "front": "The four shipped .test.ts files: the risk each guards, and which one needs installed dependencies",
+   "back": "SUPPORT cannot run reconciliation: a privileged action exposing system-wide financial state, so RBAC must be trustworthy. FAILED cannot move back to SUCCEEDED: terminal-state regressions create false revenue or refund eligibility. CUSTOMER list scope: list endpoints are the easiest place to leak multi-record data. Non-positive amounts rejected: amount validation belongs at the API boundary. Only the schema test imports zod; the other three import local source and node: modules."
+  },
+  {
+   "id": "f10-zod-validation-boundary",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/learning/concepts-demonstrated.md",
+    "lines": {
+     "start": 13,
+     "end": 16
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/concepts-demonstrated.md",
+     "lineStart": 13,
+     "lineEnd": 16
+    }
+   ],
+   "front": "Where w22 draws its Zod validation boundary, and what goes wrong without it",
+   "back": "createPaymentSchema and refundPaymentSchema live in src/lib/validation/paymentSchemas.ts; the payments route and the refund route call .parse() before any business logic. Without that boundary, malformed money values or weak refund reasons reach service code and fail later in less predictable ways."
+  },
+  {
+   "id": "f11-staff-role-permissions",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/architecture/auth-and-permissions.md",
+    "lines": {
+     "start": 9,
+     "end": 13
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 9,
+     "lineEnd": 13
+    }
+   ],
+   "front": "w22's staff roles: what SUPPORT, OPS and ADMIN may do, and where the map lives",
+   "back": "src/lib/permissions.ts holds the explicit role-to-permission map. SUPPORT can read any payment but cannot create, refund, deliver webhooks or run reconciliation. OPS can create payments, read any payment, refund, deliver webhooks and run reconciliation. ADMIN has the same operational permissions as OPS."
   }
  ]
 }
