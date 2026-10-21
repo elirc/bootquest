@@ -1,0 +1,42 @@
+{
+ "questions": [
+  {
+   "prompt": "Walk through what tenantadmin does with a request that carries its session cookie, from the cookie to the permission check: what the server keeps about the session, what it looks up and re-derives on each request, where and with which status a request is turned away, and what makes suspending a member take effect. Name the per-request cost of the design too.",
+   "keyPoints": [
+    { "text": "[w3] The cookie carries an opaque random token (a 64-character nanoid); the database keeps only its SHA-256 digest, so a copy of the sessions table cannot be replayed as cookies.", "quote": "a 64-char nanoid is returned to the client; only its SHA-256" },
+    { "text": "[w2] The session middleware is mounted for every request and never rejects: no cookie just continues, and a cookie that resolves to nothing has the cookie cleared and continues unauthenticated.", "cite": { "path": "server/src/middleware/authenticateSession.js", "lineStart": 5, "lineEnd": 22 } },
+    { "text": "[w3] Resolution looks up a session by the token digest that is neither revoked nor past its expiry, then rebuilds the member's permissions from the roles of an ACTIVE membership in the session's tenant on every request, so a role change applies to the very next request.", "cite": { "path": "server/src/services/authService.js", "lineStart": 36, "lineEnd": 107 } },
+    { "text": "[w3] If the membership is no longer ACTIVE the session row is marked revoked right there and the request proceeds unauthenticated, which is how a suspension locks the member out on their next request.", "cite": { "path": "server/src/services/authService.js", "lineStart": 109, "lineEnd": 116 } },
+    { "text": "[w2] Rejection happens later, per route: requirePermission(key) answers 401 when there is no session and 403 naming the missing key when the member lacks it.", "cite": { "path": "server/src/middleware/requirePermission.js", "lineStart": 3, "lineEnd": 15 } },
+    { "text": "[w2] The cookie is httpOnly, SameSite=lax, Secure only in production, path /, with a max age of SESSION_TTL_DAYS days.", "cite": { "path": "server/src/utils/authCookie.js", "lineStart": 3, "lineEnd": 16 } },
+    { "text": "[w1] The cost: every authenticated request also writes the session's last-used timestamp, a write per read that serializes on SQLite under load.", "cite": { "path": "server/src/services/authService.js", "lineStart": 118, "lineEnd": 121 } }
+   ]
+  },
+  {
+   "prompt": "Explain how tenantadmin decides whether a member may perform an admin action: what a role and a permission are in this schema, how one request's effective permissions are computed, where the tenant of the action comes from, and which pieces of code are and are not part of enforcement. Then indict the role-management rules: what can a member who holds the role-management permissions do that they arguably should not?",
+   "keyPoints": [
+    { "text": "[w3] Roles belong to one tenant (role names are unique per tenant) and reach permissions through a join table; the Permission table itself is global, with no tenant column.", "cite": { "path": "server/prisma/schema.prisma", "lineStart": 56, "lineEnd": 87 } },
+    { "text": "[w3] A request's effective permissions are the union of the permission keys of every role on the membership, collected into a Set.", "cite": { "path": "server/src/services/authService.js", "lineStart": 70, "lineEnd": 74 } },
+    { "text": "[w3] Each route names the one key it needs at registration, e.g. the users routes require users.read, users.create, users.update and users.roles.manage respectively.", "cite": { "path": "server/src/routes/usersRoutes.js", "lineStart": 13, "lineEnd": 20 } },
+    { "text": "[w2] The tenant of an action comes from the authenticated session context, never from the request body or URL.", "quote": "never from the request body or URL" },
+    { "text": "[w2] The web client's permission checks only hide controls; the server is the authority.", "quote": "the server is the authority" },
+    { "text": "[w1] A policy helper with an extra resource-tenant check exists, but no code calls it; all enforcement is the route middleware.", "quote": "with an extra resource-tenant check, but **nothing imports it**" },
+    { "text": "[w3] Assigning roles only checks that the role ids belong to the tenant, so a holder of the role-assignment permission can put the Owner role on their own membership: that permission is effectively Owner.", "cite": { "path": "server/src/services/userService.js", "lineStart": 35, "lineEnd": 45 } },
+    { "text": "[w2] Deleting a system role is refused, but updating one is not guarded, so a roles.manage holder can grant every permission to Member or strip Owner.", "cite": { "path": "server/src/services/roleService.js", "lineStart": 93, "lineEnd": 172 } }
+   ]
+  },
+  {
+   "prompt": "Defend or indict tenantadmin's audit log as an accountability record. When does an audit row commit relative to the change it describes, and is that true of every audited action? Which actions leave no trace, who can read the trail, what can end up inside it, and what actually stops someone from rewriting or erasing it?",
+   "keyPoints": [
+    { "text": "[w3] The audit writer accepts a transaction client, and the admin services pass it: creating a role writes the role, its permission links and the roles.create row in one transaction, so a failed create leaves no audit row.", "cite": { "path": "server/src/services/roleService.js", "lineStart": 44, "lineEnd": 91 } },
+    { "text": "[w2] Not every audited action shares a transaction: a password login creates the session and then writes auth.login as a separate statement, so a crash between the two leaves a live session with no login row.", "cite": { "path": "server/src/services/authService.js", "lineStart": 351, "lineEnd": 366 } },
+    { "text": "[w2] Switching tenant rewrites the session's tenant first and audits afterwards, again outside any transaction.", "cite": { "path": "server/src/services/authService.js", "lineStart": 513, "lineEnd": 536 } },
+    { "text": "[w2] The writer silently returns nothing when no tenant id is passed, so such an event is dropped without an error.", "cite": { "path": "server/src/services/auditService.js", "lineStart": 14, "lineEnd": 16 } },
+    { "text": "[w1] Logout leaves no audit row at all.", "quote": "Logout is not audited." },
+    { "text": "[w3] Append-only is a convention: there is simply no route that updates or deletes audit rows; the database does not prevent it, and audit rows cascade-delete with their tenant.", "cite": { "path": "server/prisma/schema.prisma", "lineStart": 132, "lineEnd": 149 } },
+    { "text": "[w2] Reading the trail is its own permission, audit.read, on the single list route; there is no route that writes to it.", "cite": { "path": "server/src/routes/auditRoutes.js", "lineStart": 6, "lineEnd": 10 } },
+    { "text": "[w2] A settings update copies the full submitted value into the audit row's metadata, so anything stored as a setting is also readable by everyone who may read the audit trail.", "cite": { "path": "server/src/services/settingsService.js", "lineStart": 15, "lineEnd": 42 } }
+   ]
+  }
+ ]
+}
