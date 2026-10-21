@@ -1,0 +1,206 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "ww19--astraupskill-02-CONCEPTS.md",
+ "items": [
+  {
+   "key": "seed:explainback:ww19/explain-back/dbb6db6976d3fd53",
+   "provenance": {
+    "repo": "ww19",
+    "sha": "34f69ebb4a40d998eafafcad35b96f8fcbffd1c4",
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 1,
+     "end": 37
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "Explain which query each index on the workflow engine's work tables exists for. Walk through how a worker finds its next task (the WHERE, the ORDER BY and the lock) and which index serves it and why its columns are in that order; why the step-run table carries a unique (run, step key) pair and what the second, string idempotency key on the same table adds; and which run-list query each WorkflowRun index serves. For each, say what the database would have to do if the index were dropped.",
+     "keyPoints": [
+      {
+       "text": "[w3] A worker's next task comes from one statement: rows with status AVAILABLE whose available time has passed, ordered by available time then creation time, LIMIT 1, locked with FOR UPDATE SKIP LOCKED and flipped to LEASED in the same statement. Busy rows are skipped instead of waited on, so many workers can poll at once.",
+       "cite": {
+        "path": "src/repositories/task-repository.ts",
+        "lineStart": 55,
+        "lineEnd": 74
+       }
+      },
+      {
+       "text": "[w3] The task table's (status, availableAt) index matches that query exactly: an equality on the leading column, then a range and the sort order on the second, so the database reads due rows already in order and can stop at the first one it can lock. Reversed, it would walk every row whose time has passed, finished ones included.",
+       "cite": {
+        "path": "prisma/schema.prisma",
+        "lineStart": 225,
+        "lineEnd": 225
+       }
+      },
+      {
+       "text": "[w2] Without it, every poll by every worker scans the whole task table and sorts the candidates, so polling cost grows with the history of finished tasks rather than with the backlog that is actually due.",
+       "cite": {
+        "path": "prisma/migrations/202604121613_init/migration.sql",
+        "lineStart": 259,
+        "lineEnd": 260
+       }
+      },
+      {
+       "text": "[w3] The unique (run, step key) pair makes the database the judge of 'this step already has a row in this run': a step run is inserted with a plain create, so a second insert for the same step of the same run fails instead of producing two rows the engine would both advance.",
+       "cite": {
+        "path": "prisma/schema.prisma",
+        "lineStart": 203,
+        "lineEnd": 203
+       }
+      },
+      {
+       "text": "[w2] The same pair also defines a compound-key lookup by run and step key in the repository, an index-backed read of one row; at this commit nothing calls that function, so today the pair is used as a constraint only.",
+       "cite": {
+        "path": "src/repositories/workflow-run-repository.ts",
+        "lineStart": 203,
+        "lineEnd": 215
+       }
+      },
+      {
+       "text": "[w2] The step's string idempotency key is built as run id plus step key, so its global unique index encodes the same one-row-per-step rule a second time: two unique indexes are maintained on every step insert for a single invariant.",
+       "cite": {
+        "path": "src/services/workflow-engine-service.ts",
+        "lineStart": 176,
+        "lineEnd": 176
+       }
+      },
+      {
+       "text": "[w2] A viewer's run list filters on the starting user and sorts by creation time, which is exactly (startedById, createdAt); a role that may read all runs gets no WHERE at all, and neither run index leads with creation time, so that list sorts the whole table, and it has no limit either.",
+       "cite": {
+        "path": "src/repositories/workflow-run-repository.ts",
+        "lineStart": 17,
+        "lineEnd": 44
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "Walk through the session and approval tables the same way. Which query uses the token hash, which (if any) uses the user id index and the expiry index today, and what happens to a session after it expires? What does each authenticated request write? How is an approver's inbox queried, which index serves it, and what does the unique step-run column on approvals guarantee? Defend or indict each index by the query it serves now.",
+     "keyPoints": [
+      {
+       "text": "[w3] Authentication looks a session up by the hash of the cookie token together with 'expires after now'; the unique index on the hash finds at most one row, and the expiry is a filter on that single row, so the expiry index plays no part.",
+       "cite": {
+        "path": "src/lib/auth/session.ts",
+        "lineStart": 47,
+        "lineEnd": 58
+       }
+      },
+      {
+       "text": "[w3] Nothing ever removes an expired session: logout deletes only the row for the presented token, and no job or query selects by expiry. The expiry index serves no query at this commit; it is waiting for a purge that deletes sessions whose expiry has passed, and until someone writes and schedules that, the table only grows.",
+       "cite": {
+        "path": "src/lib/auth/session.ts",
+        "lineStart": 42,
+        "lineEnd": 45
+       }
+      },
+      {
+       "text": "[w2] No application query filters sessions by user either. The user id index still earns its place on the foreign key: sessions cascade when their user is deleted, and without an index on the referencing column that delete scans the whole session table. It would also serve a future 'sign out everywhere'.",
+       "cite": {
+        "path": "prisma/schema.prisma",
+        "lineStart": 106,
+        "lineEnd": 117
+       }
+      },
+      {
+       "text": "[w2] Every authenticated request also writes: the session's last-seen time is updated on each lookup, so a read-heavy API pays one row update per request. Only updating when the stored value is older than a minute or so keeps the signal and drops most of those writes.",
+       "cite": {
+        "path": "src/lib/auth/session.ts",
+        "lineStart": 64,
+        "lineEnd": 68
+       }
+      },
+      {
+       "text": "[w3] The inbox asks for PENDING approvals in request order, adding the required role for anyone who is not an admin; (status, requestedAt) serves the filter and the order together. The role is applied as a filter on top, so an index of (status, requiredRole, requestedAt) would fit role-specific inboxes better once the queue is large.",
+       "cite": {
+        "path": "src/repositories/approval-repository.ts",
+        "lineStart": 16,
+        "lineEnd": 24
+       }
+      },
+      {
+       "text": "[w2] The unique step-run id on an approval request makes it one-to-one with its step: an engine that advanced the same step twice could not open a second approval for it, and the decision has exactly one request to resolve.",
+       "cite": {
+        "path": "prisma/schema.prisma",
+        "lineStart": 231,
+        "lineEnd": 231
+       }
+      },
+      {
+       "text": "[w1] The second approval index, (workflowRunId, status), serves the run list's nested read of each run's pending approval: a relation filter by run and status, taking one row.",
+       "cite": {
+        "path": "src/repositories/workflow-run-repository.ts",
+        "lineStart": 39,
+        "lineEnd": 42
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "Defend or indict the engine's indexing against the system a year from now: which work-table index has no query behind it, which query the engine will need that has no index yet (think about a worker that dies holding a lease), what the unique step constraint means for a workflow whose definition routes back to an earlier step, and what every extra index costs on the write path. For each, say what you would add, drop or reject, and why.",
+     "keyPoints": [
+      {
+       "text": "[w3] Leases are written but never collected: the claim sets LEASED with a lease expiry, but no query looks for LEASED rows whose lease has passed, so a worker that dies keeps its task forever. The reclaim query (status LEASED, lease expiry before now) needs its own (status, leaseExpiresAt) index; the available-time index cannot serve it.",
+       "cite": {
+        "path": "src/repositories/task-repository.ts",
+        "lineStart": 50,
+        "lineEnd": 76
+       }
+      },
+      {
+       "text": "[w3] The definition validator rejects duplicate step keys and edges to unknown steps, but not cycles. A definition whose rejection branch routes back to an earlier step is accepted, yet visiting a step creates a fresh step-run row, which the unique (run, step key) pair refuses on the second visit. Either reject cycles when the definition is saved or add a visit number to the key.",
+       "cite": {
+        "path": "src/lib/workflows/definition-schema.ts",
+        "lineStart": 84,
+        "lineEnd": 127
+       }
+      },
+      {
+       "text": "[w2] A retry does not collide with that constraint: the task goes back to AVAILABLE with a later available time and the same step-run row moves back to QUEUED, so only a second visit to a step, not a second attempt, creates a new row.",
+       "cite": {
+        "path": "src/services/workflow-engine-service.ts",
+        "lineStart": 555,
+        "lineEnd": 573
+       }
+      },
+      {
+       "text": "[w2] The step-run table's (status, availableAt) index has no reader: due work is read from the task table, and no query selects step runs by status and time, so the index is pure write cost on every step status change. Drop it or write the query it was meant for.",
+       "cite": {
+        "path": "prisma/schema.prisma",
+        "lineStart": 205,
+        "lineEnd": 205
+       }
+      },
+      {
+       "text": "[w2] Every index is maintained on each insert and on each update of its columns: a task changes status several times in its life, and every change rewrites its (status, availableAt) entry. That is the right price for the hot claim query and the wrong price for an index nothing reads.",
+       "cite": {
+        "path": "prisma/migrations/202604121613_init/migration.sql",
+        "lineStart": 245,
+        "lineEnd": 260
+       }
+      },
+      {
+       "text": "[w2] The admin run list needs pagination and an index that leads with creation time, because it has neither: it orders the whole run table by creation time and returns every row with its version, starter and pending approval.",
+       "cite": {
+        "path": "src/repositories/workflow-run-repository.ts",
+        "lineStart": 26,
+        "lineEnd": 44
+       }
+      },
+      {
+       "text": "[w1] Keep the run table's unique idempotency key whatever else changes: every start request first looks its key up with a unique read, so it is the one run index on the hot path of creating work.",
+       "cite": {
+        "path": "src/repositories/workflow-run-repository.ts",
+        "lineStart": 87,
+        "lineEnd": 90
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}
