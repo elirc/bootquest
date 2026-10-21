@@ -1,0 +1,591 @@
+{
+  "format": "sysdrills-authoring@1",
+  "module": "10-capacity-and-cost",
+  "title": "Capacity planning & cost math",
+  "description": "Capacity and cost reps for the back half of a system-design interview: turning CPU time per request into cores and purchasable instances, storage and egress bills, cost per million requests and the serverless breakeven, how long stepped autoscaling takes to catch a spike, sizing read replicas once the write stream is replayed, the real footprint of replication and backups, disk IOPS budgets with a warm or cold cache, and splitting a database's connection budget across an autoscaling fleet. Every drill is whole-number arithmetic with the conversions named (730 h/month; 1 GB = 1,000,000,000 bytes; money in integer cents; per-mille = parts per thousand = x/1000), so you practise the reasoning, not the calculator.",
+  "exercises": [
+    {
+      "slug": "01-cores-for-load",
+      "title": "CPU time to cores to instances",
+      "difficulty": 2,
+      "skills": [
+        "capacity",
+        "cpu"
+      ],
+      "instructions": "**Interview prompt.** \"Profiling says each request burns 20 ms of CPU. We expect 3,000 QPS and run 8-core instances with 60% headroom. How many instances do we buy?\"\n\n**Why it works.** Little's law for CPUs: busy cores = arrival rate × CPU time per request = qps × cpuMs ÷ 1000 (1,000 ms per second). Headroom (peaks, deploys, a lost node) grows that by (100 + headroomPct) ÷ 100, and you can only buy whole machines, so divide by cores per instance and round UP. Multiply first and divide once — the same float-dust guard as 02/03.\n\n**Your task.** Export two functions:\n- `coresBusy(qps, cpuMsPerRequest)` → `qps × cpuMsPerRequest ÷ 1000`\n- `instancesToBuy(qps, cpuMsPerRequest, coresPerInstance, headroomPct)` → `ceil((qps × cpuMsPerRequest × (100 + headroomPct)) ÷ (100000 × coresPerInstance))`\n\nThe tests choose inputs where `coresBusy` divides exactly, so it is always a whole number.\n\n**Worked example.** 3,000 QPS × 20 ms ÷ 1000 = **60** busy cores.",
+      "starter": "export function coresBusy(qps, cpuMsPerRequest) {\n  // TODO: Little's law for CPU cores\n}\n\nexport function instancesToBuy(qps, cpuMsPerRequest, coresPerInstance, headroomPct) {\n  // TODO: busy cores plus headroom, in whole instances\n}\n",
+      "solution": "export function coresBusy(qps, cpuMsPerRequest) {\n  return (qps * cpuMsPerRequest) / 1000;\n}\n\nexport function instancesToBuy(qps, cpuMsPerRequest, coresPerInstance, headroomPct) {\n  return Math.ceil((qps * cpuMsPerRequest * (100 + headroomPct)) / (100000 * coresPerInstance));\n}\n",
+      "tests": [
+        {
+          "name": "3,000 QPS x 20 ms -> 60 busy cores",
+          "code": "assert.equal(typeof mod.coresBusy, 'function', 'export a function named coresBusy');\nassert.equal(mod.coresBusy(3000, 20), 60);",
+          "input": [
+            3000,
+            20
+          ]
+        },
+        {
+          "name": "500 QPS x 8 ms -> 4 busy cores",
+          "code": "assert.equal(typeof mod.coresBusy, 'function', 'export a function named coresBusy');\nassert.equal(mod.coresBusy(500, 8), 4);",
+          "input": [
+            500,
+            8
+          ]
+        },
+        {
+          "name": "no traffic -> 0 busy cores (boundary)",
+          "code": "assert.equal(typeof mod.coresBusy, 'function', 'export a function named coresBusy');\nassert.equal(mod.coresBusy(0, 50), 0);",
+          "input": [
+            0,
+            50
+          ]
+        },
+        {
+          "name": "no headroom still rounds 7.5 up to 8 machines (boundary)",
+          "code": "assert.equal(typeof mod.instancesToBuy, 'function', 'export a function named instancesToBuy');\nassert.equal(mod.instancesToBuy(3000, 20, 8, 0), 8);",
+          "input": [
+            3000,
+            20,
+            8,
+            0
+          ]
+        },
+        {
+          "name": "60 cores + 60% headroom on 8-core boxes -> 12 instances",
+          "code": "assert.equal(typeof mod.instancesToBuy, 'function', 'export a function named instancesToBuy');\nassert.equal(mod.instancesToBuy(3000, 20, 8, 60), 12);",
+          "input": [
+            3000,
+            20,
+            8,
+            60
+          ]
+        },
+        {
+          "name": "4 cores + 50% headroom on 4-core boxes -> 2 instances",
+          "code": "assert.equal(typeof mod.instancesToBuy, 'function', 'export a function named instancesToBuy');\nassert.equal(mod.instancesToBuy(500, 8, 4, 50), 2);",
+          "input": [
+            500,
+            8,
+            4,
+            50
+          ]
+        }
+      ],
+      "explanation": "Measure CPU-ms per request, then let Little's law and whole machines do the rest.\n\nFor `instancesToBuy(3000, 20, 8, 60)`:\n- busy cores = 3,000 × 20 ÷ 1000 = 60\n- with headroom: 60 × 160 ÷ 100 = 96 cores\n- 96 ÷ 8 cores per instance = **12** instances\n\nCPU-ms per request is the number to measure in profiling; headroom absorbs peaks, deploys and a lost node.",
+      "hints": [
+        "A core busy for 20 ms per request handles 50 requests a second — think of busy cores as rate × time.",
+        "cores = qps × cpuMs ÷ 1000; instances = ⌈cores × (100 + headroom%) ÷ 100 ÷ coresPerInstance⌉.",
+        "Busy cores follow Little's law, QPS × CPU-ms ÷ 1000 — grow by (100 + headroom) ÷ 100, divide by cores per instance and round up to whole machines"
+      ]
+    },
+    {
+      "slug": "02-storage-egress-bill",
+      "title": "Storage and egress: the monthly data bill",
+      "difficulty": 1,
+      "skills": [
+        "cost",
+        "storage"
+      ],
+      "instructions": "**Interview prompt.** \"We store 1 TB at 2¢ per GB-month and serve 1,000,000 requests a day with 100 KB responses at 9¢ per GB of egress. What is the monthly bill, and which line dominates?\"\n\n**Why it works.** Monthly egress is requests per day × bytes per response × 30 days (a 30-day billing month), converted with 1 GB = 1,000,000,000 bytes. The bill is two unit-price lines in integer cents: stored GB × storage price + egress GB × egress price (1 TB = 1,000 GB). The tests choose inputs that divide exactly, so every answer is a whole number.\n\n**Your task.** Export two functions:\n- `egressGbPerMonth(requestsPerDay, bytesPerResponse)` → `requestsPerDay × bytesPerResponse × 30 ÷ 1000000000`\n- `monthlyBillCents(storedGb, storeCentsPerGb, egressGb, egressCentsPerGb)` → `storedGb × storeCentsPerGb + egressGb × egressCentsPerGb`\n\n**Worked example.** 1,000,000 requests/day × 100,000 bytes × 30 ÷ 1,000,000,000 = **3,000** GB of egress a month.",
+      "starter": "export function egressGbPerMonth(requestsPerDay, bytesPerResponse) {\n  // TODO: bytes served in a 30-day month, in GB\n}\n\nexport function monthlyBillCents(storedGb, storeCentsPerGb, egressGb, egressCentsPerGb) {\n  // TODO: storage line plus egress line, in cents\n}\n",
+      "solution": "export function egressGbPerMonth(requestsPerDay, bytesPerResponse) {\n  return (requestsPerDay * bytesPerResponse * 30) / 1000000000;\n}\n\nexport function monthlyBillCents(storedGb, storeCentsPerGb, egressGb, egressCentsPerGb) {\n  return storedGb * storeCentsPerGb + egressGb * egressCentsPerGb;\n}\n",
+      "tests": [
+        {
+          "name": "1,000,000 req/day x 100 KB -> 3,000 GB/month",
+          "code": "assert.equal(typeof mod.egressGbPerMonth, 'function', 'export a function named egressGbPerMonth');\nassert.equal(mod.egressGbPerMonth(1000000, 100000), 3000);",
+          "input": [
+            1000000,
+            100000
+          ]
+        },
+        {
+          "name": "no traffic -> 0 GB (boundary)",
+          "code": "assert.equal(typeof mod.egressGbPerMonth, 'function', 'export a function named egressGbPerMonth');\nassert.equal(mod.egressGbPerMonth(0, 50000), 0);",
+          "input": [
+            0,
+            50000
+          ]
+        },
+        {
+          "name": "500,000 req/day x 20 KB -> 300 GB/month",
+          "code": "assert.equal(typeof mod.egressGbPerMonth, 'function', 'export a function named egressGbPerMonth');\nassert.equal(mod.egressGbPerMonth(500000, 20000), 300);",
+          "input": [
+            500000,
+            20000
+          ]
+        },
+        {
+          "name": "1,000 GB at 2 cents + 3,000 GB egress at 9 cents -> 29,000 cents",
+          "code": "assert.equal(typeof mod.monthlyBillCents, 'function', 'export a function named monthlyBillCents');\nassert.equal(mod.monthlyBillCents(1000, 2, 3000, 9), 29000);",
+          "input": [
+            1000,
+            2,
+            3000,
+            9
+          ]
+        },
+        {
+          "name": "storage-only -> 2,000 cents (boundary)",
+          "code": "assert.equal(typeof mod.monthlyBillCents, 'function', 'export a function named monthlyBillCents');\nassert.equal(mod.monthlyBillCents(1000, 2, 0, 9), 2000);",
+          "input": [
+            1000,
+            2,
+            0,
+            9
+          ]
+        },
+        {
+          "name": "500 GB at 3 cents + 300 GB egress at 12 cents -> 5,100 cents",
+          "code": "assert.equal(typeof mod.monthlyBillCents, 'function', 'export a function named monthlyBillCents');\nassert.equal(mod.monthlyBillCents(500, 3, 300, 12), 5100);",
+          "input": [
+            500,
+            3,
+            300,
+            12
+          ]
+        }
+      ],
+      "explanation": "Data at rest is cheap; data in motion is where the bill lives.\n\nFor `monthlyBillCents(1000, 2, 3000, 9)`:\n- storage = 1,000 GB × 2¢ = 2,000¢\n- egress = 3,000 GB × 9¢ = 27,000¢\n- total = **29,000¢** ($290)\n\nServing the terabyte costs 13.5× storing it — a CDN or smaller responses move this bill far more than cheaper storage does.",
+      "hints": [
+        "Two separate meters run: one for the bytes you keep, one for the bytes you send out.",
+        "egress GB = requests/day × bytes × 30 ÷ 10^9; bill = stored × storePrice + egress × egressPrice.",
+        "Monthly egress is requests per day × bytes × 30 ÷ one billion for GB — the bill adds stored GB × its unit price to egress GB × its unit price"
+      ]
+    },
+    {
+      "slug": "03-cost-per-million",
+      "title": "Cost per million requests and the serverless breakeven",
+      "difficulty": 2,
+      "skills": [
+        "cost",
+        "unit-economics"
+      ],
+      "instructions": "**Interview prompt.** \"Our fleet costs $730 a month (73,000¢ — e.g. ten instances at 10¢ an hour × 730 h/month) and serves 100,000,000 requests. What does a million requests cost us, and at what monthly volume does the fixed fleet beat serverless at 20¢ per million?\"\n\n**Why it works.** Unit cost normalizes a fixed bill to the work it does: monthly cents × 1,000,000 ÷ requests per month = cents per million requests (money stays in integer cents). The breakeven is where a per-request price adds up to the same fixed bill: fixed cents × 1,000,000 ÷ per-million cents requests a month. Below that volume per-request pricing wins; above it the fleet does. The tests choose inputs that divide exactly, so every answer is a whole number.\n\n**Your task.** Export two functions:\n- `centsPerMillionRequests(monthlyCostCents, requestsPerMonth)` → `monthlyCostCents × 1000000 ÷ requestsPerMonth`\n- `breakevenRequestsPerMonth(monthlyFixedCents, perMillionCents)` → `monthlyFixedCents × 1000000 ÷ perMillionCents`\n\n**Worked example.** 73,000¢ over 100,000,000 requests → 73,000 × 1,000,000 ÷ 100,000,000 = **730¢** ($7.30) per million.",
+      "starter": "export function centsPerMillionRequests(monthlyCostCents, requestsPerMonth) {\n  // TODO: the monthly bill spread over the month's requests, per million\n}\n\nexport function breakevenRequestsPerMonth(monthlyFixedCents, perMillionCents) {\n  // TODO: volume where per-request pricing costs as much as the fixed fleet\n}\n",
+      "solution": "export function centsPerMillionRequests(monthlyCostCents, requestsPerMonth) {\n  return (monthlyCostCents * 1000000) / requestsPerMonth;\n}\n\nexport function breakevenRequestsPerMonth(monthlyFixedCents, perMillionCents) {\n  return (monthlyFixedCents * 1000000) / perMillionCents;\n}\n",
+      "tests": [
+        {
+          "name": "73,000 cents over 100,000,000 requests -> 730 cents per million",
+          "code": "assert.equal(typeof mod.centsPerMillionRequests, 'function', 'export a function named centsPerMillionRequests');\nassert.equal(mod.centsPerMillionRequests(73000, 100000000), 730);",
+          "input": [
+            73000,
+            100000000
+          ]
+        },
+        {
+          "name": "400,000 cents over 2,000,000,000 requests -> 200 cents per million",
+          "code": "assert.equal(typeof mod.centsPerMillionRequests, 'function', 'export a function named centsPerMillionRequests');\nassert.equal(mod.centsPerMillionRequests(400000, 2000000000), 200);",
+          "input": [
+            400000,
+            2000000000
+          ]
+        },
+        {
+          "name": "exactly one million requests carry the whole bill -> 50,000 cents (boundary)",
+          "code": "assert.equal(typeof mod.centsPerMillionRequests, 'function', 'export a function named centsPerMillionRequests');\nassert.equal(mod.centsPerMillionRequests(50000, 1000000), 50000);",
+          "input": [
+            50000,
+            1000000
+          ]
+        },
+        {
+          "name": "73,000 cents fixed vs 20 cents per million -> 3,650,000,000 requests",
+          "code": "assert.equal(typeof mod.breakevenRequestsPerMonth, 'function', 'export a function named breakevenRequestsPerMonth');\nassert.equal(mod.breakevenRequestsPerMonth(73000, 20), 3650000000);",
+          "input": [
+            73000,
+            20
+          ]
+        },
+        {
+          "name": "20,000 cents fixed vs 100 cents per million -> 200,000,000 requests",
+          "code": "assert.equal(typeof mod.breakevenRequestsPerMonth, 'function', 'export a function named breakevenRequestsPerMonth');\nassert.equal(mod.breakevenRequestsPerMonth(20000, 100), 200000000);",
+          "input": [
+            20000,
+            100
+          ]
+        }
+      ],
+      "explanation": "Normalize the fixed bill to a unit price, then find where the two pricing models cross.\n\nFor `breakevenRequestsPerMonth(73000, 20)`:\n- 73,000¢ × 1,000,000 = 73,000,000,000\n- ÷ 20¢ per million = **3,650,000,000** requests a month before the fixed fleet is cheaper than 20¢/million serverless\n\nLow traffic → pay per request; sustained high traffic → pay for the fleet — unit economics decide, not fashion.",
+      "hints": [
+        "Spread the fixed monthly bill over the requests it served, then express it per million to compare with a per-million price.",
+        "cents/M = monthlyCents × 10^6 ÷ requests; breakeven = fixedCents × 10^6 ÷ perMillionCents.",
+        "Divide the monthly cost by the month's requests and scale by one million for the unit price — the breakeven volume is the fixed monthly cost × one million ÷ the per-million price"
+      ]
+    },
+    {
+      "slug": "04-autoscale-steps",
+      "title": "Autoscaling: target tracking and step timing",
+      "difficulty": 2,
+      "skills": [
+        "autoscaling",
+        "capacity"
+      ],
+      "instructions": "**Interview prompt.** \"Ten instances run at 90% CPU against a 60% target. How many does target tracking ask for — and if the policy adds at most 5 instances per 5-minute cooldown, how long does it take to reach 40 during a spike?\"\n\n**Why it works.** Target tracking assumes load spreads evenly, so the desired count is current × actual utilisation ÷ target utilisation, rounded UP (utilisation in per-mille: 900‰ = 90%). It scales IN too when utilisation is below target. Scale-out is stepped: each step adds at most `maxAddPerStep` instances and then waits a cooldown, so reaching `needed` takes ceil((needed − current) ÷ maxAddPerStep) steps × cooldown minutes — never negative when you are already there.\n\n**Your task.** Export two functions:\n- `desiredInstances(current, utilPermille, targetPermille)` → `ceil(current × utilPermille ÷ targetPermille)`\n- `minutesToScaleOut(current, needed, maxAddPerStep, cooldownMinutes)` → `max(0, ceil((needed − current) ÷ maxAddPerStep) × cooldownMinutes)`\n\n**Worked example.** 10 instances at 900‰ against a 600‰ target → ceil(10 × 900 ÷ 600) = **15** instances.",
+      "starter": "export function desiredInstances(current, utilPermille, targetPermille) {\n  // TODO: target-tracking desired count\n}\n\nexport function minutesToScaleOut(current, needed, maxAddPerStep, cooldownMinutes) {\n  // TODO: stepped scale-out time, never negative\n}\n",
+      "solution": "export function desiredInstances(current, utilPermille, targetPermille) {\n  return Math.ceil((current * utilPermille) / targetPermille);\n}\n\nexport function minutesToScaleOut(current, needed, maxAddPerStep, cooldownMinutes) {\n  return Math.max(0, Math.ceil((needed - current) / maxAddPerStep) * cooldownMinutes);\n}\n",
+      "tests": [
+        {
+          "name": "10 at 900 per-mille vs 600 target -> 15",
+          "code": "assert.equal(typeof mod.desiredInstances, 'function', 'export a function named desiredInstances');\nassert.equal(mod.desiredInstances(10, 900, 600), 15);",
+          "input": [
+            10,
+            900,
+            600
+          ]
+        },
+        {
+          "name": "8 at 450 per-mille vs 600 target -> 6 (it scales in too)",
+          "code": "assert.equal(typeof mod.desiredInstances, 'function', 'export a function named desiredInstances');\nassert.equal(mod.desiredInstances(8, 450, 600), 6);",
+          "input": [
+            8,
+            450,
+            600
+          ]
+        },
+        {
+          "name": "at target -> steady at 10 (boundary)",
+          "code": "assert.equal(typeof mod.desiredInstances, 'function', 'export a function named desiredInstances');\nassert.equal(mod.desiredInstances(10, 600, 600), 10);",
+          "input": [
+            10,
+            600,
+            600
+          ]
+        },
+        {
+          "name": "4 at 1000 per-mille vs 800 target -> 5",
+          "code": "assert.equal(typeof mod.desiredInstances, 'function', 'export a function named desiredInstances');\nassert.equal(mod.desiredInstances(4, 1000, 800), 5);",
+          "input": [
+            4,
+            1000,
+            800
+          ]
+        },
+        {
+          "name": "10 -> 15, 2 per step, 3 min cooldown -> 9 minutes",
+          "code": "assert.equal(typeof mod.minutesToScaleOut, 'function', 'export a function named minutesToScaleOut');\nassert.equal(mod.minutesToScaleOut(10, 15, 2, 3), 9);",
+          "input": [
+            10,
+            15,
+            2,
+            3
+          ]
+        },
+        {
+          "name": "10 -> 40, 5 per step, 5 min cooldown -> 30 minutes",
+          "code": "assert.equal(typeof mod.minutesToScaleOut, 'function', 'export a function named minutesToScaleOut');\nassert.equal(mod.minutesToScaleOut(10, 40, 5, 5), 30);",
+          "input": [
+            10,
+            40,
+            5,
+            5
+          ]
+        },
+        {
+          "name": "already there -> 0 minutes (boundary)",
+          "code": "assert.equal(typeof mod.minutesToScaleOut, 'function', 'export a function named minutesToScaleOut');\nassert.equal(mod.minutesToScaleOut(20, 20, 5, 5), 0);",
+          "input": [
+            20,
+            20,
+            5,
+            5
+          ]
+        }
+      ],
+      "explanation": "The control loop knows the right size immediately but can only climb one step per cooldown.\n\nFor `minutesToScaleOut(10, 40, 5, 5)`:\n- instances to add = 40 − 10 = 30\n- steps = 30 ÷ 5 = 6\n- 6 steps × 5 min cooldown = **30 minutes** to reach spike capacity\n\nA spike that arrives in 2 minutes must be absorbed by headroom or a scheduled pre-scale, because the control loop cannot outrun it.",
+      "hints": [
+        "If 10 instances run at 90% and you want 60%, the same load must be spread over more instances; then count how many cooldowns the climb needs.",
+        "desired = ⌈current × util‰ ÷ target‰⌉; minutes = max(0, ⌈(needed − current) ÷ maxAdd⌉ × cooldown).",
+        "Target tracking scales the current count by actual ÷ target utilisation rounded up — the climb takes (needed − current) ÷ max-add-per-step steps rounded up, times the cooldown, never negative"
+      ]
+    },
+    {
+      "slug": "05-read-replica-sizing",
+      "title": "Read replicas that also replay every write",
+      "difficulty": 3,
+      "skills": [
+        "replication",
+        "capacity"
+      ],
+      "instructions": "**Interview prompt.** \"We need 24,000 read QPS. A replica handles 5,000 QPS total — but every replica must also apply the primary's full 2,000 writes/s. How many replicas?\"\n\n**Why it works.** Replication copies the WHOLE write stream to every replica, and replaying it consumes the same capacity a query would. So each replica's read capacity is perReplicaQps − writeQps, and the replica count is the read load ÷ that leftover, rounded UP. Naively dividing by the full 5,000 undercounts — and as writes approach a replica's capacity, adding replicas barely helps. The tests keep writeQps below perReplicaQps.\n\n**Your task.** Export two functions:\n- `replicaReadCapacity(perReplicaQps, writeQps)` → `perReplicaQps − writeQps`\n- `replicasNeeded(readQps, perReplicaQps, writeQps)` → `ceil(readQps ÷ (perReplicaQps − writeQps))`\n\n**Worked example.** 5,000 QPS replica replaying 2,000 writes/s → **3,000** QPS left for reads.",
+      "starter": "export function replicaReadCapacity(perReplicaQps, writeQps) {\n  // TODO: capacity left for reads after replaying writes\n}\n\nexport function replicasNeeded(readQps, perReplicaQps, writeQps) {\n  // TODO: whole replicas for the read load\n}\n",
+      "solution": "export function replicaReadCapacity(perReplicaQps, writeQps) {\n  return perReplicaQps - writeQps;\n}\n\nexport function replicasNeeded(readQps, perReplicaQps, writeQps) {\n  return Math.ceil(readQps / (perReplicaQps - writeQps));\n}\n",
+      "tests": [
+        {
+          "name": "5,000 QPS replica replaying 2,000 writes/s -> 3,000 for reads",
+          "code": "assert.equal(typeof mod.replicaReadCapacity, 'function', 'export a function named replicaReadCapacity');\nassert.equal(mod.replicaReadCapacity(5000, 2000), 3000);",
+          "input": [
+            5000,
+            2000
+          ]
+        },
+        {
+          "name": "read-only workload -> all 5,000 for reads (boundary)",
+          "code": "assert.equal(typeof mod.replicaReadCapacity, 'function', 'export a function named replicaReadCapacity');\nassert.equal(mod.replicaReadCapacity(5000, 0), 5000);",
+          "input": [
+            5000,
+            0
+          ]
+        },
+        {
+          "name": "24,000 reads at 3,000 per replica -> 8 replicas",
+          "code": "assert.equal(typeof mod.replicasNeeded, 'function', 'export a function named replicasNeeded');\nassert.equal(mod.replicasNeeded(24000, 5000, 2000), 8);",
+          "input": [
+            24000,
+            5000,
+            2000
+          ]
+        },
+        {
+          "name": "24,000 reads, no writes -> 5 replicas",
+          "code": "assert.equal(typeof mod.replicasNeeded, 'function', 'export a function named replicasNeeded');\nassert.equal(mod.replicasNeeded(24000, 5000, 0), 5);",
+          "input": [
+            24000,
+            5000,
+            0
+          ]
+        },
+        {
+          "name": "9,000 reads at 3,000 per replica -> 3 (boundary: exact fit)",
+          "code": "assert.equal(typeof mod.replicasNeeded, 'function', 'export a function named replicasNeeded');\nassert.equal(mod.replicasNeeded(9000, 4000, 1000), 3);",
+          "input": [
+            9000,
+            4000,
+            1000
+          ]
+        },
+        {
+          "name": "write-heavy: 100 QPS left per replica -> 10 replicas",
+          "code": "assert.equal(typeof mod.replicasNeeded, 'function', 'export a function named replicasNeeded');\nassert.equal(mod.replicasNeeded(1000, 4000, 3900), 10);",
+          "input": [
+            1000,
+            4000,
+            3900
+          ]
+        }
+      ],
+      "explanation": "Subtract the replicated writes first; only the leftover serves reads.\n\nFor `replicasNeeded(24000, 5000, 2000)`:\n- each replica spends 2,000 QPS replaying writes, leaving 5,000 − 2,000 = 3,000 for reads\n- ceil(24,000 ÷ 3,000) = **8** replicas — not the 5 that naive 24,000 ÷ 5,000 suggests\n\nReplicas scale READS only; every copy pays every write (05/06's lesson at cluster scale) — a write-heavy database needs sharding, not replicas.",
+      "hints": [
+        "A replica is not a fresh server: before it serves a single read it has to keep up with every write the primary accepts.",
+        "readCap = perReplica − writes; replicas = ⌈readQps ÷ readCap⌉.",
+        "Every replica replays the full write stream first, so reads get only perReplica − writeQps — divide the read load by that leftover capacity and round up"
+      ]
+    },
+    {
+      "slug": "06-replication-and-backups",
+      "title": "Replication and backup footprint",
+      "difficulty": 1,
+      "skills": [
+        "storage",
+        "cost"
+      ],
+      "instructions": "**Interview prompt.** \"It's only a 1 TB database. We run replication factor 3 and keep 30 daily snapshots, each compressed to 200‰ of the logical size. How much storage are we actually paying for?\"\n\n**Why it works.** The live cluster stores every byte `replicationFactor` times (1 TB = 1,000 GB). Each retained daily snapshot adds logicalGb × snapshotPermille ÷ 1000 (per-mille = ‰ = x/1000), and you keep `retentionDays` of them. The footprint is live copies + snapshots. The tests choose inputs that keep every step whole.\n\n**Your task.** Export two functions:\n- `physicalGb(logicalGb, replicationFactor)` → `logicalGb × replicationFactor`\n- `footprintGb(logicalGb, replicationFactor, retentionDays, snapshotPermille)` → `logicalGb × replicationFactor + logicalGb × retentionDays × snapshotPermille ÷ 1000`\n\n**Worked example.** 1,000 GB at RF 3 → 1,000 × 3 = **3,000** GB live.",
+      "starter": "export function physicalGb(logicalGb, replicationFactor) {\n  // TODO: live data across all replicas\n}\n\nexport function footprintGb(logicalGb, replicationFactor, retentionDays, snapshotPermille) {\n  // TODO: live copies plus retained snapshots\n}\n",
+      "solution": "export function physicalGb(logicalGb, replicationFactor) {\n  return logicalGb * replicationFactor;\n}\n\nexport function footprintGb(logicalGb, replicationFactor, retentionDays, snapshotPermille) {\n  return logicalGb * replicationFactor + (logicalGb * retentionDays * snapshotPermille) / 1000;\n}\n",
+      "tests": [
+        {
+          "name": "1,000 GB at RF 3 -> 3,000 GB",
+          "code": "assert.equal(typeof mod.physicalGb, 'function', 'export a function named physicalGb');\nassert.equal(mod.physicalGb(1000, 3), 3000);",
+          "input": [
+            1000,
+            3
+          ]
+        },
+        {
+          "name": "RF 1 -> no copies, no safety (boundary)",
+          "code": "assert.equal(typeof mod.physicalGb, 'function', 'export a function named physicalGb');\nassert.equal(mod.physicalGb(500, 1), 500);",
+          "input": [
+            500,
+            1
+          ]
+        },
+        {
+          "name": "1,000 GB, RF 3, 30 snapshots at 200 per-mille -> 9,000 GB",
+          "code": "assert.equal(typeof mod.footprintGb, 'function', 'export a function named footprintGb');\nassert.equal(mod.footprintGb(1000, 3, 30, 200), 9000);",
+          "input": [
+            1000,
+            3,
+            30,
+            200
+          ]
+        },
+        {
+          "name": "no backups retained -> 3,000 GB (boundary)",
+          "code": "assert.equal(typeof mod.footprintGb, 'function', 'export a function named footprintGb');\nassert.equal(mod.footprintGb(1000, 3, 0, 200), 3000);",
+          "input": [
+            1000,
+            3,
+            0,
+            200
+          ]
+        },
+        {
+          "name": "200 GB, RF 2, 7 snapshots at 500 per-mille -> 1,100 GB",
+          "code": "assert.equal(typeof mod.footprintGb, 'function', 'export a function named footprintGb');\nassert.equal(mod.footprintGb(200, 2, 7, 500), 1100);",
+          "input": [
+            200,
+            2,
+            7,
+            500
+          ]
+        }
+      ],
+      "explanation": "Copies and retention multiply the logical size.\n\nFor `footprintGb(1000, 3, 30, 200)`:\n- live = 1,000 × 3 = 3,000 GB\n- backups = 1,000 × 30 × 200 ÷ 1000 = 6,000 GB\n- total = 3,000 + 6,000 = **9,000 GB** — the backups outweigh the live cluster\n\nQuote 9× the logical size, not 1×, when someone says \"it's only a terabyte\".",
+      "hints": [
+        "Count every place the bytes live: each replica holds a full copy, and each kept snapshot is a compressed copy.",
+        "footprint = logical × RF + logical × days × snapshot‰ ÷ 1000.",
+        "Live data costs logical GB × the replication factor — each retained daily snapshot adds logical GB × snapshot‰ ÷ 1000, times the retention days"
+      ]
+    },
+    {
+      "slug": "07-iops-budget",
+      "title": "IOPS budget with a warm and a cold cache",
+      "difficulty": 3,
+      "skills": [
+        "capacity",
+        "io"
+      ],
+      "instructions": "**Interview prompt.** \"Every query touches 5 pages and the buffer cache serves 900‰ of page reads. At 2,000 QPS, how many disk IOPS do we need? Our volume is provisioned at 3,000 IOPS — what QPS can it sustain warm, and after a restart with a cold cache?\"\n\n**Why it works.** Only cache misses reach the disk: the miss share is (1000 − hit‰) ÷ 1000 (per-mille = ‰ = x/1000). Disk reads per second = qps × pagesPerQuery × (1000 − hit‰) ÷ 1000. Inverting against a fixed IOPS ceiling gives the QPS the device can sustain: iopsLimit × 1000 ÷ (pagesPerQuery × (1000 − hit‰)). `maxQpsWithinIops` is only called with a hit rate below 1000‰, and the tests choose inputs that divide exactly, so every answer is a whole number.\n\n**Your task.** Export two functions:\n- `iopsNeeded(qps, pagesPerQuery, cacheHitPermille)` → `qps × pagesPerQuery × (1000 − cacheHitPermille) ÷ 1000`\n- `maxQpsWithinIops(iopsLimit, pagesPerQuery, cacheHitPermille)` → `iopsLimit × 1000 ÷ (pagesPerQuery × (1000 − cacheHitPermille))`\n\n**Worked example.** 2,000 QPS × 5 pages × (1000 − 900) ÷ 1000 = **1,000** IOPS — fits the 3,000 budget while warm.",
+      "starter": "export function iopsNeeded(qps, pagesPerQuery, cacheHitPermille) {\n  // TODO: page reads per second that miss the cache\n}\n\nexport function maxQpsWithinIops(iopsLimit, pagesPerQuery, cacheHitPermille) {\n  // TODO: the QPS a fixed IOPS budget sustains\n}\n",
+      "solution": "export function iopsNeeded(qps, pagesPerQuery, cacheHitPermille) {\n  return (qps * pagesPerQuery * (1000 - cacheHitPermille)) / 1000;\n}\n\nexport function maxQpsWithinIops(iopsLimit, pagesPerQuery, cacheHitPermille) {\n  return (iopsLimit * 1000) / (pagesPerQuery * (1000 - cacheHitPermille));\n}\n",
+      "tests": [
+        {
+          "name": "2,000 QPS x 5 pages at 900 per-mille hits -> 1,000 IOPS",
+          "code": "assert.equal(typeof mod.iopsNeeded, 'function', 'export a function named iopsNeeded');\nassert.equal(mod.iopsNeeded(2000, 5, 900), 1000);",
+          "input": [
+            2000,
+            5,
+            900
+          ]
+        },
+        {
+          "name": "cold cache: every page is a disk read -> 10,000 IOPS (boundary)",
+          "code": "assert.equal(typeof mod.iopsNeeded, 'function', 'export a function named iopsNeeded');\nassert.equal(mod.iopsNeeded(2000, 5, 0), 10000);",
+          "input": [
+            2000,
+            5,
+            0
+          ]
+        },
+        {
+          "name": "everything cached -> 0 IOPS (boundary)",
+          "code": "assert.equal(typeof mod.iopsNeeded, 'function', 'export a function named iopsNeeded');\nassert.equal(mod.iopsNeeded(2000, 5, 1000), 0);",
+          "input": [
+            2000,
+            5,
+            1000
+          ]
+        },
+        {
+          "name": "3,000 IOPS, 5 pages, 900 per-mille hits -> 6,000 QPS",
+          "code": "assert.equal(typeof mod.maxQpsWithinIops, 'function', 'export a function named maxQpsWithinIops');\nassert.equal(mod.maxQpsWithinIops(3000, 5, 900), 6000);",
+          "input": [
+            3000,
+            5,
+            900
+          ]
+        },
+        {
+          "name": "3,000 IOPS on a cold cache -> 600 QPS (10x less)",
+          "code": "assert.equal(typeof mod.maxQpsWithinIops, 'function', 'export a function named maxQpsWithinIops');\nassert.equal(mod.maxQpsWithinIops(3000, 5, 0), 600);",
+          "input": [
+            3000,
+            5,
+            0
+          ]
+        },
+        {
+          "name": "16,000 IOPS, 4 pages, 800 per-mille hits -> 20,000 QPS",
+          "code": "assert.equal(typeof mod.maxQpsWithinIops, 'function', 'export a function named maxQpsWithinIops');\nassert.equal(mod.maxQpsWithinIops(16000, 4, 800), 20000);",
+          "input": [
+            16000,
+            4,
+            800
+          ]
+        }
+      ],
+      "explanation": "The disk only sees misses, so the cache hit rate sets how much QPS an IOPS budget buys.\n\nFor `maxQpsWithinIops(3000, 5, 0)`:\n- a cold cache misses every page, so the miss share is (1000 − 0) ÷ 1000 = all 5 pages per query\n- 3,000 × 1000 ÷ (5 × 1000) = **600** QPS on a cold cache, against 6,000 warm\n\nThe same database is 10× slower until the cache refills — this is why restarts page you at peak and why provisioned IOPS (and cache warmup) are sized for the cold case.",
+      "hints": [
+        "Only pages the cache misses turn into disk reads, and every query touches several pages.",
+        "IOPS = qps × pages × (1000 − hit‰) ÷ 1000; maxQps = iops × 1000 ÷ (pages × (1000 − hit‰)).",
+        "Disk reads per second are QPS × pages per query × the miss share (1000 − hit‰) ÷ 1000 — invert it to find the QPS a fixed IOPS budget sustains"
+      ]
+    },
+    {
+      "slug": "08-pool-per-instance",
+      "title": "Splitting a database connection budget across a fleet",
+      "difficulty": 2,
+      "skills": [
+        "databases",
+        "capacity"
+      ],
+      "instructions": "**Interview prompt.** \"Postgres allows 500 connections and we reserve 20 for admin and replication. The autoscaling group just doubled from 24 to 48 instances, each still configured with a pool of 20. How big may each pool be — and by how much are we overcommitted?\"\n\n**Why it works.** The grantable budget is dbMaxConnections − reservedConnections, shared by every instance. Each instance may hold at most an even share, rounded DOWN (a pool cannot hold a fractional connection, and rounding up would overcommit). If instances × poolSize exceeds the budget, the difference is how many connection attempts will fail with \"too many connections\" — never below zero.\n\n**Your task.** Export two functions:\n- `poolPerInstance(dbMaxConnections, reservedConnections, instances)` → `floor((dbMaxConnections − reservedConnections) ÷ instances)`\n- `connectionsOverCommit(dbMaxConnections, reservedConnections, instances, poolSize)` → `max(0, instances × poolSize − (dbMaxConnections − reservedConnections))`\n\n**Worked example.** (500 − 20) ÷ 24 instances = **20** connections per pool.",
+      "starter": "export function poolPerInstance(dbMaxConnections, reservedConnections, instances) {\n  // TODO: even share of the grantable connections, rounded down\n}\n\nexport function connectionsOverCommit(dbMaxConnections, reservedConnections, instances, poolSize) {\n  // TODO: connections wanted beyond the grantable budget, never below zero\n}\n",
+      "solution": "export function poolPerInstance(dbMaxConnections, reservedConnections, instances) {\n  return Math.floor((dbMaxConnections - reservedConnections) / instances);\n}\n\nexport function connectionsOverCommit(dbMaxConnections, reservedConnections, instances, poolSize) {\n  return Math.max(0, instances * poolSize - (dbMaxConnections - reservedConnections));\n}\n",
+      "tests": [
+        {
+          "name": "480 grantable over 24 instances -> pool of 20",
+          "code": "assert.equal(typeof mod.poolPerInstance, 'function', 'export a function named poolPerInstance');\nassert.equal(mod.poolPerInstance(500, 20, 24), 20);",
+          "input": [
+            500,
+            20,
+            24
+          ]
+        },
+        {
+          "name": "scale-out to 48 halves everyone's pool -> 10",
+          "code": "assert.equal(typeof mod.poolPerInstance, 'function', 'export a function named poolPerInstance');\nassert.equal(mod.poolPerInstance(500, 20, 48), 10);",
+          "input": [
+            500,
+            20,
+            48
+          ]
+        },
+        {
+          "name": "100 over 3 instances -> 33 (floor leaves one spare)",
+          "code": "assert.equal(typeof mod.poolPerInstance, 'function', 'export a function named poolPerInstance');\nassert.equal(mod.poolPerInstance(100, 0, 3), 33);",
+          "input": [
+            100,
+            0,
+            3
+          ]
+        },
+        {
+          "name": "24 x 20 = 480 -> exactly committed (boundary)",
+          "code": "assert.equal(typeof mod.connectionsOverCommit, 'function', 'export a function named connectionsOverCommit');\nassert.equal(mod.connectionsOverCommit(500, 20, 24, 20), 0);",
+          "input": [
+            500,
+            20,
+            24,
+            20
+          ]
+        },
+        {
+          "name": "48 x 20 = 960 vs 480 grantable -> 480 over",
+          "code": "assert.equal(typeof mod.connectionsOverCommit, 'function', 'export a function named connectionsOverCommit');\nassert.equal(mod.connectionsOverCommit(500, 20, 48, 20), 480);",
+          "input": [
+            500,
+            20,
+            48,
+            20
+          ]
+        },
+        {
+          "name": "4 x 40 = 160 vs 190 grantable -> under-committed (boundary)",
+          "code": "assert.equal(typeof mod.connectionsOverCommit, 'function', 'export a function named connectionsOverCommit');\nassert.equal(mod.connectionsOverCommit(200, 10, 4, 40), 0);",
+          "input": [
+            200,
+            10,
+            4,
+            40
+          ]
+        }
+      ],
+      "explanation": "The database budget is fixed; the instance count is not.\n\nFor `connectionsOverCommit(500, 20, 48, 20)`:\n- wanted = 48 instances × pool 20 = 960\n- grantable = 500 − 20 = 480\n- 960 − 480 = **480** connections over — the post-scale-out \"FATAL: too many connections\" page\n\nPool size must be a function of the instance COUNT (or put a proxy like pgbouncer in front); autoscaling without shrinking pools is self-DoS.",
+      "hints": [
+        "The database's connection limit does not grow when the fleet does — every new instance takes a share of the same budget.",
+        "pool = ⌊(max − reserved) ÷ instances⌋; over = max(0, instances × pool − (max − reserved)).",
+        "The grantable budget is dbMax minus the reserved connections — split it evenly across instances rounding down, and the overcommit is instances × pool minus that budget, clamped at zero"
+      ]
+    }
+  ]
+}

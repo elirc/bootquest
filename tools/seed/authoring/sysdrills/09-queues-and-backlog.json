@@ -1,0 +1,582 @@
+{
+  "format": "sysdrills-authoring@1",
+  "module": "09-queues-and-backlog",
+  "title": "Queues & backlog math",
+  "description": "Queue and backlog reps for the async part of a system-design interview: when one job in the queue will actually run (per-job ETAs), turning a freshness SLA into the backlog threshold you alert on, how many consumers it takes to drain a lag before a deadline while arrivals continue, how retries at every layer multiply into an exponential storm, sizing a dead-letter queue, batching requests against someone else's rate limit, the backlog a fan-out-on-write timeline creates, and how much load you must shed during overload. Every drill is whole-number arithmetic with the conversions named (86,400 s/day; per-mille = parts per thousand = x/1000), so you practise the reasoning, not the calculator.",
+  "exercises": [
+    {
+      "slug": "01-queue-position-eta",
+      "title": "When does my job run? Queue position math",
+      "difficulty": 1,
+      "skills": [
+        "queues",
+        "latency"
+      ],
+      "instructions": "**Interview prompt.** \"Your export queue shows 1,200 jobs ahead of mine; 4 workers each take 2 s per job. When does my export finish?\"\n\n**Why it works.** With `workers` identical workers each finishing a job every `jobSec` seconds, the head of the queue advances `workers` jobs per `jobSec` — the pool's throughput, not one worker's. A job with k jobs ahead waits `k × jobSec ÷ workers` seconds for its turn, then runs for its own `jobSec`. This is the user-facing number (\"position 1,200 — about 10 minutes\"), not the time to empty the whole queue. The tests choose inputs that divide exactly, so every answer is a whole number.\n\n**Your task.** Export two functions:\n- `queueWaitSec(jobsAhead, workers, jobSec)` → `jobsAhead × jobSec ÷ workers`\n- `jobEtaSec(jobsAhead, workers, jobSec)` → `queueWaitSec(…) + jobSec`\n\n**Worked example.** 1,200 ahead, 4 workers, 2 s/job → wait 1,200 × 2 ÷ 4 = 600 s → done at **602 s** (~10 minutes).",
+      "starter": "export function queueWaitSec(jobsAhead, workers, jobSec) {\n  // TODO: time until it is this job's turn\n}\n\nexport function jobEtaSec(jobsAhead, workers, jobSec) {\n  // TODO: the wait plus the job's own run time\n}\n",
+      "solution": "export function queueWaitSec(jobsAhead, workers, jobSec) {\n  return (jobsAhead * jobSec) / workers;\n}\n\nexport function jobEtaSec(jobsAhead, workers, jobSec) {\n  return queueWaitSec(jobsAhead, workers, jobSec) + jobSec;\n}\n",
+      "tests": [
+        {
+          "name": "1,200 ahead, 4 workers x 2 s -> 600 s wait",
+          "code": "assert.equal(typeof mod.queueWaitSec, 'function', 'export a function named queueWaitSec');\nassert.equal(mod.queueWaitSec(1200, 4, 2), 600);",
+          "input": [
+            1200,
+            4,
+            2
+          ]
+        },
+        {
+          "name": "front of the queue -> 0 s wait (boundary)",
+          "code": "assert.equal(typeof mod.queueWaitSec, 'function', 'export a function named queueWaitSec');\nassert.equal(mod.queueWaitSec(0, 8, 5), 0);",
+          "input": [
+            0,
+            8,
+            5
+          ]
+        },
+        {
+          "name": "90 ahead, 3 workers x 10 s -> 300 s wait",
+          "code": "assert.equal(typeof mod.queueWaitSec, 'function', 'export a function named queueWaitSec');\nassert.equal(mod.queueWaitSec(90, 3, 10), 300);",
+          "input": [
+            90,
+            3,
+            10
+          ]
+        },
+        {
+          "name": "1,200 ahead, 4 workers x 2 s -> done at 602 s",
+          "code": "assert.equal(typeof mod.jobEtaSec, 'function', 'export a function named jobEtaSec');\nassert.equal(mod.jobEtaSec(1200, 4, 2), 602);",
+          "input": [
+            1200,
+            4,
+            2
+          ]
+        },
+        {
+          "name": "front of the queue -> just your own 5 s (boundary)",
+          "code": "assert.equal(typeof mod.jobEtaSec, 'function', 'export a function named jobEtaSec');\nassert.equal(mod.jobEtaSec(0, 8, 5), 5);",
+          "input": [
+            0,
+            8,
+            5
+          ]
+        },
+        {
+          "name": "500 ahead, 10 workers x 6 s -> done at 306 s",
+          "code": "assert.equal(typeof mod.jobEtaSec, 'function', 'export a function named jobEtaSec');\nassert.equal(mod.jobEtaSec(500, 10, 6), 306);",
+          "input": [
+            500,
+            10,
+            6
+          ]
+        }
+      ],
+      "explanation": "The pool, not one worker, advances the queue.\n\nFor `jobEtaSec(1200, 4, 2)`:\n- the 4 workers finish 4 jobs every 2 s, so 1,200 jobs ahead take 1,200 × 2 ÷ 4 = 600 s\n- add the job's own 2 s run → **602 s**\n\nThis is the number to show users (\"~10 minutes\") instead of a spinner — queue position ÷ pool throughput, a different question from how long the WHOLE backlog takes to drain (module 06).",
+      "hints": [
+        "The whole pool advances the queue: 4 workers at 2 s each finish 2 jobs every second, not one job every 2 s.",
+        "wait = jobsAhead × jobSec ÷ workers; eta = wait + jobSec.",
+        "The queue advances workers jobs every jobSec, so the wait is jobsAhead × jobSec ÷ workers — add your own jobSec on top for the finish time"
+      ]
+    },
+    {
+      "slug": "02-backlog-sla-threshold",
+      "title": "Backlog alert threshold from a freshness SLA",
+      "difficulty": 2,
+      "skills": [
+        "queues",
+        "slo"
+      ],
+      "instructions": "**Interview prompt.** \"Product says every job must start within 5 minutes of being enqueued. The workers process 200 jobs/s. What backlog should page someone — and right now there are 90,000 jobs queued: how many will start late?\"\n\n**Why it works.** A job at the back of a queue of size B starts after B ÷ processPerSec seconds. Requiring that to be at most `slaSec` means B ≤ processPerSec × slaSec — the freshness SLA turns into ONE backlog number you can alert on (5 minutes = 300 s). Every job beyond that threshold is already doomed to start late even if nothing else arrives, so the late count is the excess over the threshold, never below zero.\n\n**Your task.** Export two functions:\n- `maxHealthyBacklog(processPerSec, slaSec)` → `processPerSec × slaSec`\n- `jobsOverSla(backlog, processPerSec, slaSec)` → `max(0, backlog − processPerSec × slaSec)`\n\n**Worked example.** 200 jobs/s with a 300 s SLA → threshold 200 × 300 = **60,000** jobs; alert when the backlog crosses it.",
+      "starter": "export function maxHealthyBacklog(processPerSec, slaSec) {\n  // TODO: the largest backlog that still starts every job within the SLA\n}\n\nexport function jobsOverSla(backlog, processPerSec, slaSec) {\n  // TODO: jobs beyond the threshold, never below zero\n}\n",
+      "solution": "export function maxHealthyBacklog(processPerSec, slaSec) {\n  return processPerSec * slaSec;\n}\n\nexport function jobsOverSla(backlog, processPerSec, slaSec) {\n  return Math.max(0, backlog - processPerSec * slaSec);\n}\n",
+      "tests": [
+        {
+          "name": "200 jobs/s with a 300 s SLA -> 60,000 backlog threshold",
+          "code": "assert.equal(typeof mod.maxHealthyBacklog, 'function', 'export a function named maxHealthyBacklog');\nassert.equal(mod.maxHealthyBacklog(200, 300), 60000);",
+          "input": [
+            200,
+            300
+          ]
+        },
+        {
+          "name": "50 jobs/s with a 60 s SLA -> 3,000 backlog threshold",
+          "code": "assert.equal(typeof mod.maxHealthyBacklog, 'function', 'export a function named maxHealthyBacklog');\nassert.equal(mod.maxHealthyBacklog(50, 60), 3000);",
+          "input": [
+            50,
+            60
+          ]
+        },
+        {
+          "name": "zero-delay SLA admits no queue at all (boundary)",
+          "code": "assert.equal(typeof mod.maxHealthyBacklog, 'function', 'export a function named maxHealthyBacklog');\nassert.equal(mod.maxHealthyBacklog(400, 0), 0);",
+          "input": [
+            400,
+            0
+          ]
+        },
+        {
+          "name": "90,000 queued over a 60,000 threshold -> 30,000 late",
+          "code": "assert.equal(typeof mod.jobsOverSla, 'function', 'export a function named jobsOverSla');\nassert.equal(mod.jobsOverSla(90000, 200, 300), 30000);",
+          "input": [
+            90000,
+            200,
+            300
+          ]
+        },
+        {
+          "name": "exactly at the threshold -> 0 late (boundary)",
+          "code": "assert.equal(typeof mod.jobsOverSla, 'function', 'export a function named jobsOverSla');\nassert.equal(mod.jobsOverSla(3000, 50, 60), 0);",
+          "input": [
+            3000,
+            50,
+            60
+          ]
+        },
+        {
+          "name": "100,000 queued, 100 jobs/s, 600 s SLA -> 40,000 late",
+          "code": "assert.equal(typeof mod.jobsOverSla, 'function', 'export a function named jobsOverSla');\nassert.equal(mod.jobsOverSla(100000, 100, 600), 40000);",
+          "input": [
+            100000,
+            100,
+            600
+          ]
+        }
+      ],
+      "explanation": "The SLA times the processing rate is the backlog you can afford; everything above it is already late.\n\nFor `jobsOverSla(90000, 200, 300)`:\n- threshold = 200 × 300 = 60,000 jobs\n- 90,000 − 60,000 = **30,000** jobs will start late no matter what\n\nPage on backlog > rate × SLA, not on a vibes number like \"10k messages\" — the threshold moves whenever the processing rate or the SLA does.",
+      "hints": [
+        "The last job in a queue of size B waits B ÷ processPerSec seconds before it starts — set that wait equal to the SLA.",
+        "threshold = processPerSec × slaSec; late = max(0, backlog − threshold).",
+        "The largest healthy backlog is processPerSec × slaSec — anything above that is already doomed, so subtract the threshold from the backlog and clamp at zero"
+      ]
+    },
+    {
+      "slug": "03-consumers-to-drain",
+      "title": "Consumers needed to drain a lag by a deadline",
+      "difficulty": 2,
+      "skills": [
+        "queues",
+        "capacity"
+      ],
+      "instructions": "**Interview prompt.** \"Kafka consumer lag is 600,000 messages, producers keep writing 2,000 messages/s, and each consumer handles 500 messages/s. We must be caught up within 10 minutes. How many consumers do we run?\"\n\n**Why it works.** Work conservation: over the `drainSec` window the fleet must process the existing backlog PLUS everything that arrives during the window (arrivePerSec × drainSec). One consumer does perConsumerPerSec × drainSec in the window, so the fleet size is total work ÷ one consumer's work, rounded UP to whole consumers (10 minutes = 600 s). Once caught up, the fleet's surplus (fleet rate − arrival rate) tells you whether the backlog shrinks (positive) or still grows (negative).\n\n**Your task.** Export two functions:\n- `consumersToDrain(backlog, drainSec, arrivePerSec, perConsumerPerSec)` → `ceil((backlog + arrivePerSec × drainSec) ÷ (drainSec × perConsumerPerSec))`\n- `surplusPerSec(consumers, perConsumerPerSec, arrivePerSec)` → `consumers × perConsumerPerSec − arrivePerSec` (negative = the backlog still grows)\n\n**Worked example.** 600,000 lag, 600 s, 2,000/s arriving, 500/s per consumer → work = 600,000 + 2,000 × 600 = 1,800,000; one consumer does 500 × 600 = 300,000 → **6** consumers exactly.",
+      "starter": "export function consumersToDrain(backlog, drainSec, arrivePerSec, perConsumerPerSec) {\n  // TODO: whole consumers needed to clear backlog + arrivals within the window\n}\n\nexport function surplusPerSec(consumers, perConsumerPerSec, arrivePerSec) {\n  // TODO: fleet rate minus arrival rate\n}\n",
+      "solution": "export function consumersToDrain(backlog, drainSec, arrivePerSec, perConsumerPerSec) {\n  return Math.ceil((backlog + arrivePerSec * drainSec) / (drainSec * perConsumerPerSec));\n}\n\nexport function surplusPerSec(consumers, perConsumerPerSec, arrivePerSec) {\n  return consumers * perConsumerPerSec - arrivePerSec;\n}\n",
+      "tests": [
+        {
+          "name": "600,000 lag, 10 min, 500/s consumers -> 6 (boundary: exact fit)",
+          "code": "assert.equal(typeof mod.consumersToDrain, 'function', 'export a function named consumersToDrain');\nassert.equal(mod.consumersToDrain(600000, 600, 2000, 500), 6);",
+          "input": [
+            600000,
+            600,
+            2000,
+            500
+          ]
+        },
+        {
+          "name": "600,000 lag, 10 min, 400/s consumers -> 7.5 rounds up to 8",
+          "code": "assert.equal(typeof mod.consumersToDrain, 'function', 'export a function named consumersToDrain');\nassert.equal(mod.consumersToDrain(600000, 600, 2000, 400), 8);",
+          "input": [
+            600000,
+            600,
+            2000,
+            400
+          ]
+        },
+        {
+          "name": "no backlog -> just keep up with arrivals (boundary)",
+          "code": "assert.equal(typeof mod.consumersToDrain, 'function', 'export a function named consumersToDrain');\nassert.equal(mod.consumersToDrain(0, 300, 900, 300), 3);",
+          "input": [
+            0,
+            300,
+            900,
+            300
+          ]
+        },
+        {
+          "name": "100,000 lag, no arrivals, 250/s consumers -> 4",
+          "code": "assert.equal(typeof mod.consumersToDrain, 'function', 'export a function named consumersToDrain');\nassert.equal(mod.consumersToDrain(100000, 100, 0, 250), 4);",
+          "input": [
+            100000,
+            100,
+            0,
+            250
+          ]
+        },
+        {
+          "name": "6 consumers x 500/s vs 2,000/s arriving -> +1,000/s",
+          "code": "assert.equal(typeof mod.surplusPerSec, 'function', 'export a function named surplusPerSec');\nassert.equal(mod.surplusPerSec(6, 500, 2000), 1000);",
+          "input": [
+            6,
+            500,
+            2000
+          ]
+        },
+        {
+          "name": "3 consumers x 500/s vs 2,000/s arriving -> -500/s, still growing",
+          "code": "assert.equal(typeof mod.surplusPerSec, 'function', 'export a function named surplusPerSec');\nassert.equal(mod.surplusPerSec(3, 500, 2000), -500);",
+          "input": [
+            3,
+            500,
+            2000
+          ]
+        }
+      ],
+      "explanation": "Arrivals keep landing WHILE you drain, so they belong in the work total.\n\nFor `consumersToDrain(600000, 600, 2000, 400)`:\n- work in the window = 600,000 + 2,000 × 600 = 1,800,000 messages\n- one consumer does 400 × 600 = 240,000 in the window\n- 1,800,000 ÷ 240,000 = 7.5 → rounds UP to **8**\n\nAnd remember 07/08: partitions cap how many consumers in a group can actually run, so check the partition count before promising 8.",
+      "hints": [
+        "Over the window the fleet must clear the backlog AND everything that arrives during the window.",
+        "consumers = ⌈(backlog + arrive × drainSec) ÷ (drainSec × perConsumer)⌉; surplus = consumers × perConsumer − arrive.",
+        "Total work in the window is the backlog plus arrivals during it (arrive × seconds) — divide by one consumer's work in the window (rate × seconds) and round up, and the surplus is fleet rate minus arrival rate"
+      ]
+    },
+    {
+      "slug": "04-retry-amplification",
+      "title": "Retry amplification across layers",
+      "difficulty": 3,
+      "skills": [
+        "retries",
+        "architecture"
+      ],
+      "instructions": "**Interview prompt.** \"A request goes client → API → service → database, and every layer retries failed calls up to 3 attempts. The database dies. How much load actually hits it?\"\n\n**Why it works.** Retries MULTIPLY per layer. If the database is down, the service makes 3 attempts per call it receives; the API makes 3 attempts at the service, each of which becomes 3 database attempts; the client does the same to the API. With `depth` retrying layers each allowing `attemptsPerCall` attempts, one user request becomes attemptsPerCall^depth attempts at the bottom — linear retry math gone exponential. Zero retrying layers means just the request itself (factor 1).\n\n**Your task.** Export two functions:\n- `attemptsPerUserRequest(attemptsPerCall, depth)` → `attemptsPerCall` multiplied together `depth` times, starting from 1 (use a loop)\n- `bottomLayerQps(baseQps, attemptsPerCall, depth)` → `baseQps × attemptsPerUserRequest(attemptsPerCall, depth)`\n\n**Worked example.** 3 attempts per call through 3 retrying layers → 3 × 3 × 3 = **27** attempts per user request.",
+      "starter": "export function attemptsPerUserRequest(attemptsPerCall, depth) {\n  // TODO: attempts compound once per retrying layer\n}\n\nexport function bottomLayerQps(baseQps, attemptsPerCall, depth) {\n  // TODO: base load times the amplification factor\n}\n",
+      "solution": "export function attemptsPerUserRequest(attemptsPerCall, depth) {\n  let amp = 1;\n  for (let i = 0; i < depth; i++) amp *= attemptsPerCall;\n  return amp;\n}\n\nexport function bottomLayerQps(baseQps, attemptsPerCall, depth) {\n  return baseQps * attemptsPerUserRequest(attemptsPerCall, depth);\n}\n",
+      "tests": [
+        {
+          "name": "3 attempts, 1 retrying layer -> 3",
+          "code": "assert.equal(typeof mod.attemptsPerUserRequest, 'function', 'export a function named attemptsPerUserRequest');\nassert.equal(mod.attemptsPerUserRequest(3, 1), 3);",
+          "input": [
+            3,
+            1
+          ]
+        },
+        {
+          "name": "3 attempts, 3 retrying layers -> 27",
+          "code": "assert.equal(typeof mod.attemptsPerUserRequest, 'function', 'export a function named attemptsPerUserRequest');\nassert.equal(mod.attemptsPerUserRequest(3, 3), 27);",
+          "input": [
+            3,
+            3
+          ]
+        },
+        {
+          "name": "2 attempts, 4 retrying layers -> 16",
+          "code": "assert.equal(typeof mod.attemptsPerUserRequest, 'function', 'export a function named attemptsPerUserRequest');\nassert.equal(mod.attemptsPerUserRequest(2, 4), 16);",
+          "input": [
+            2,
+            4
+          ]
+        },
+        {
+          "name": "no retrying layers -> the request itself (boundary)",
+          "code": "assert.equal(typeof mod.attemptsPerUserRequest, 'function', 'export a function named attemptsPerUserRequest');\nassert.equal(mod.attemptsPerUserRequest(5, 0), 1);",
+          "input": [
+            5,
+            0
+          ]
+        },
+        {
+          "name": "1,000 QPS through 3 layers of 3 attempts -> 27,000 QPS",
+          "code": "assert.equal(typeof mod.bottomLayerQps, 'function', 'export a function named bottomLayerQps');\nassert.equal(mod.bottomLayerQps(1000, 3, 3), 27000);",
+          "input": [
+            1000,
+            3,
+            3
+          ]
+        },
+        {
+          "name": "single attempts -> no amplification at any depth (boundary)",
+          "code": "assert.equal(typeof mod.bottomLayerQps, 'function', 'export a function named bottomLayerQps');\nassert.equal(mod.bottomLayerQps(4000, 1, 5), 4000);",
+          "input": [
+            4000,
+            1,
+            5
+          ]
+        }
+      ],
+      "explanation": "Each layer multiplies what the layer above sends it.\n\nFor `bottomLayerQps(1000, 3, 3)`:\n- amplification = 3 × 3 × 3 = 27 attempts per user request\n- 1,000 × 27 = **27,000** QPS pounding the dead database at the worst moment\n\nRetry at ONE layer only (usually the edge) — this is 06/07's linear base × attempts gone exponential through a call chain, and 04/06's cascade argument in load form.",
+      "hints": [
+        "If the database is down, every layer above it sees every call fail and retries each one — those retries stack.",
+        "factor = attemptsPerCall^depth; bottom QPS = baseQps × factor.",
+        "Each retrying layer multiplies attempts by attemptsPerCall, so multiply 1 by attemptsPerCall once per layer of depth — the bottom-layer load is base QPS × that factor"
+      ]
+    },
+    {
+      "slug": "05-dlq-sizing",
+      "title": "Sizing a dead-letter queue",
+      "difficulty": 1,
+      "skills": [
+        "queues",
+        "storage"
+      ],
+      "instructions": "**Interview prompt.** \"We process 8,640,000 messages a day (100/s). About 5‰ fail every retry and land in the dead-letter queue, messages are 2,000 bytes, and we keep dead letters 14 days for replay. How big does the DLQ get?\"\n\n**Why it works.** The DLQ inflow is the failing per-mille slice of the day's traffic: messagesPerDay × failPermille ÷ 1000 (per-mille = ‰ = x/1000; 86,400 s/day × 100/s = 8,640,000/day). Nothing leaves the DLQ until someone replays or the retention window expires, so its steady-state size is a day's dead letters × bytes per message × retention days. The tests choose inputs that divide exactly, so every answer is a whole number.\n\n**Your task.** Export two functions:\n- `dlqPerDay(messagesPerDay, failPermille)` → `messagesPerDay × failPermille ÷ 1000`\n- `dlqBytes(messagesPerDay, failPermille, bytesPerMessage, retentionDays)` → `dlqPerDay(…) × bytesPerMessage × retentionDays`\n\n**Worked example.** 8,640,000 messages/day at 5‰ → 8,640,000 × 5 ÷ 1000 = **43,200** dead letters a day.",
+      "starter": "export function dlqPerDay(messagesPerDay, failPermille) {\n  // TODO: the failing per-mille slice of a day's messages\n}\n\nexport function dlqBytes(messagesPerDay, failPermille, bytesPerMessage, retentionDays) {\n  // TODO: dead letters per day x bytes x retention days\n}\n",
+      "solution": "export function dlqPerDay(messagesPerDay, failPermille) {\n  return (messagesPerDay * failPermille) / 1000;\n}\n\nexport function dlqBytes(messagesPerDay, failPermille, bytesPerMessage, retentionDays) {\n  return dlqPerDay(messagesPerDay, failPermille) * bytesPerMessage * retentionDays;\n}\n",
+      "tests": [
+        {
+          "name": "8,640,000/day at 5 per-mille -> 43,200 dead letters/day",
+          "code": "assert.equal(typeof mod.dlqPerDay, 'function', 'export a function named dlqPerDay');\nassert.equal(mod.dlqPerDay(8640000, 5), 43200);",
+          "input": [
+            8640000,
+            5
+          ]
+        },
+        {
+          "name": "nothing fails -> empty DLQ (boundary)",
+          "code": "assert.equal(typeof mod.dlqPerDay, 'function', 'export a function named dlqPerDay');\nassert.equal(mod.dlqPerDay(8640000, 0), 0);",
+          "input": [
+            8640000,
+            0
+          ]
+        },
+        {
+          "name": "2,000,000/day at 25 per-mille -> 50,000 dead letters/day",
+          "code": "assert.equal(typeof mod.dlqPerDay, 'function', 'export a function named dlqPerDay');\nassert.equal(mod.dlqPerDay(2000000, 25), 50000);",
+          "input": [
+            2000000,
+            25
+          ]
+        },
+        {
+          "name": "43,200/day x 2,000 B x 14 days -> 1,209,600,000 bytes",
+          "code": "assert.equal(typeof mod.dlqBytes, 'function', 'export a function named dlqBytes');\nassert.equal(mod.dlqBytes(8640000, 5, 2000, 14), 1209600000);",
+          "input": [
+            8640000,
+            5,
+            2000,
+            14
+          ]
+        },
+        {
+          "name": "50,000/day x 1,000 B x 7 days -> 350,000,000 bytes",
+          "code": "assert.equal(typeof mod.dlqBytes, 'function', 'export a function named dlqBytes');\nassert.equal(mod.dlqBytes(2000000, 25, 1000, 7), 350000000);",
+          "input": [
+            2000000,
+            25,
+            1000,
+            7
+          ]
+        },
+        {
+          "name": "full outage: everything dead-letters for a day -> 500,000,000 bytes (boundary)",
+          "code": "assert.equal(typeof mod.dlqBytes, 'function', 'export a function named dlqBytes');\nassert.equal(mod.dlqBytes(1000000, 1000, 500, 1), 500000000);",
+          "input": [
+            1000000,
+            1000,
+            500,
+            1
+          ]
+        }
+      ],
+      "explanation": "The failure per-mille sets the inflow; retention sets how long it piles up.\n\nFor `dlqBytes(8640000, 5, 2000, 14)`:\n- dead letters per day = 8,640,000 × 5 ÷ 1000 = 43,200\n- 43,200 × 2,000 B = 86,400,000 bytes per day\n- × 14 days = **1,209,600,000** bytes (~1.2 GB)\n\nA DLQ is a buffer you size and alert on, not a dumpster — and the outage case (1000‰ for a day), not the happy case, sets the size.",
+      "hints": [
+        "Only the failing slice of traffic reaches the DLQ, and it stays there for the whole retention window.",
+        "perDay = messages × fail‰ ÷ 1000; bytes = perDay × bytesPerMessage × retentionDays.",
+        "The dead-letter inflow is the failing per-mille slice of the day's messages (messages × fail‰ ÷ 1000) — multiply by bytes per message and the retention days for the storage"
+      ]
+    },
+    {
+      "slug": "06-batch-vs-single-requests",
+      "title": "Batching against a partner rate limit",
+      "difficulty": 2,
+      "skills": [
+        "batching",
+        "rate-limiting"
+      ],
+      "instructions": "**Interview prompt.** \"The nightly sync pushes 1,000,000 records to a partner API capped at 50 requests/s. The API accepts batches of up to 500 records. How long does the sync take batched versus one record per request?\"\n\n**Why it works.** The rate limit counts REQUESTS, not records, so batching is the only lever you control. The request count is items ÷ batchSize rounded UP — a partial last batch still costs one whole request. Duration is then the request count ÷ the allowed requests per second. The tests choose inputs that divide exactly, so every duration is a whole number.\n\n**Your task.** Export two functions:\n- `requestsNeeded(items, batchSize)` → `ceil(items ÷ batchSize)`\n- `sendSeconds(items, batchSize, requestsPerSec)` → `requestsNeeded(items, batchSize) ÷ requestsPerSec`\n\n**Worked example.** 1,000,000 records in batches of 500 → ceil(1,000,000 ÷ 500) = **2,000** requests.",
+      "starter": "export function requestsNeeded(items, batchSize) {\n  // TODO: how many requests, counting a partial last batch\n}\n\nexport function sendSeconds(items, batchSize, requestsPerSec) {\n  // TODO: request count under the rate limit\n}\n",
+      "solution": "export function requestsNeeded(items, batchSize) {\n  return Math.ceil(items / batchSize);\n}\n\nexport function sendSeconds(items, batchSize, requestsPerSec) {\n  return requestsNeeded(items, batchSize) / requestsPerSec;\n}\n",
+      "tests": [
+        {
+          "name": "1,000,000 records in batches of 500 -> 2,000 requests",
+          "code": "assert.equal(typeof mod.requestsNeeded, 'function', 'export a function named requestsNeeded');\nassert.equal(mod.requestsNeeded(1000000, 500), 2000);",
+          "input": [
+            1000000,
+            500
+          ]
+        },
+        {
+          "name": "unbatched -> 1,000,000 requests (boundary)",
+          "code": "assert.equal(typeof mod.requestsNeeded, 'function', 'export a function named requestsNeeded');\nassert.equal(mod.requestsNeeded(1000000, 1), 1000000);",
+          "input": [
+            1000000,
+            1
+          ]
+        },
+        {
+          "name": "1,001 records in batches of 500 -> partial batch rounds up to 3",
+          "code": "assert.equal(typeof mod.requestsNeeded, 'function', 'export a function named requestsNeeded');\nassert.equal(mod.requestsNeeded(1001, 500), 3);",
+          "input": [
+            1001,
+            500
+          ]
+        },
+        {
+          "name": "2,000 requests at 50/s -> 40 s",
+          "code": "assert.equal(typeof mod.sendSeconds, 'function', 'export a function named sendSeconds');\nassert.equal(mod.sendSeconds(1000000, 500, 50), 40);",
+          "input": [
+            1000000,
+            500,
+            50
+          ]
+        },
+        {
+          "name": "unbatched at 50/s -> 20,000 s (5.5 hours)",
+          "code": "assert.equal(typeof mod.sendSeconds, 'function', 'export a function named sendSeconds');\nassert.equal(mod.sendSeconds(1000000, 1, 50), 20000);",
+          "input": [
+            1000000,
+            1,
+            50
+          ]
+        },
+        {
+          "name": "180,000 records in batches of 200 at 30/s -> 30 s",
+          "code": "assert.equal(typeof mod.sendSeconds, 'function', 'export a function named sendSeconds');\nassert.equal(mod.sendSeconds(180000, 200, 30), 30);",
+          "input": [
+            180000,
+            200,
+            30
+          ]
+        }
+      ],
+      "explanation": "The limiter sees requests, so fewer, fuller requests finish sooner.\n\nFor `sendSeconds(1000000, 500, 50)`:\n- requests = ceil(1,000,000 ÷ 500) = 2,000\n- 2,000 ÷ 50/s = **40 s**\n- versus 1,000,000 ÷ 50 = 20,000 s (~5½ h) sent one by one\n\nUnder someone else's rate limit, batch size is the only lever you have — ask for the maximum batch size before you ask for a higher limit.",
+      "hints": [
+        "The rate limit only counts requests — how many records ride in each request is up to you.",
+        "requests = ⌈items ÷ batchSize⌉; seconds = requests ÷ requestsPerSec.",
+        "Requests are items ÷ batchSize rounded up because a partial batch still costs one request — divide the request count by the allowed requests per second for the duration"
+      ]
+    },
+    {
+      "slug": "07-fanout-backlog",
+      "title": "Fan-out on write: delivery rate and celebrity lag",
+      "difficulty": 2,
+      "skills": [
+        "queues",
+        "fan-out"
+      ],
+      "instructions": "**Interview prompt.** \"Our timeline is push-based: every post becomes one delivery job per follower. Users post 100 times a second with 200 followers on average. Then a celebrity with 50,000,000 followers posts and the delivery workers top out at 100,000 writes/s. What happens?\"\n\n**Why it works.** Fan-out on write turns every post into `followers` timeline writes, so steady-state delivery load is postsPerSec × avgFollowers. One celebrity post enqueues `followers` writes at once; at a capped delivery rate the LAST follower sees the post only after followers ÷ cap seconds. The tests choose inputs that divide exactly, so every answer is a whole number.\n\n**Your task.** Export two functions:\n- `deliveriesPerSec(postsPerSec, avgFollowers)` → `postsPerSec × avgFollowers`\n- `celebrityLagSec(followers, deliveriesPerSecCap)` → `followers ÷ deliveriesPerSecCap`\n\n**Worked example.** 100 posts/s × 200 followers → **20,000** timeline writes per second.",
+      "starter": "export function deliveriesPerSec(postsPerSec, avgFollowers) {\n  // TODO: timeline writes per second\n}\n\nexport function celebrityLagSec(followers, deliveriesPerSecCap) {\n  // TODO: seconds until the last follower has the post\n}\n",
+      "solution": "export function deliveriesPerSec(postsPerSec, avgFollowers) {\n  return postsPerSec * avgFollowers;\n}\n\nexport function celebrityLagSec(followers, deliveriesPerSecCap) {\n  return followers / deliveriesPerSecCap;\n}\n",
+      "tests": [
+        {
+          "name": "100 posts/s x 200 followers -> 20,000 writes/s",
+          "code": "assert.equal(typeof mod.deliveriesPerSec, 'function', 'export a function named deliveriesPerSec');\nassert.equal(mod.deliveriesPerSec(100, 200), 20000);",
+          "input": [
+            100,
+            200
+          ]
+        },
+        {
+          "name": "nobody posting -> 0 writes/s (boundary)",
+          "code": "assert.equal(typeof mod.deliveriesPerSec, 'function', 'export a function named deliveriesPerSec');\nassert.equal(mod.deliveriesPerSec(0, 5000000), 0);",
+          "input": [
+            0,
+            5000000
+          ]
+        },
+        {
+          "name": "50 posts/s x 400 followers -> 20,000 writes/s",
+          "code": "assert.equal(typeof mod.deliveriesPerSec, 'function', 'export a function named deliveriesPerSec');\nassert.equal(mod.deliveriesPerSec(50, 400), 20000);",
+          "input": [
+            50,
+            400
+          ]
+        },
+        {
+          "name": "50,000,000 followers at 100,000/s -> 500 s",
+          "code": "assert.equal(typeof mod.celebrityLagSec, 'function', 'export a function named celebrityLagSec');\nassert.equal(mod.celebrityLagSec(50000000, 100000), 500);",
+          "input": [
+            50000000,
+            100000
+          ]
+        },
+        {
+          "name": "followers equal to the cap -> one second of queue (boundary)",
+          "code": "assert.equal(typeof mod.celebrityLagSec, 'function', 'export a function named celebrityLagSec');\nassert.equal(mod.celebrityLagSec(100000, 100000), 1);",
+          "input": [
+            100000,
+            100000
+          ]
+        },
+        {
+          "name": "12,000,000 followers at 60,000/s -> 200 s",
+          "code": "assert.equal(typeof mod.celebrityLagSec, 'function', 'export a function named celebrityLagSec');\nassert.equal(mod.celebrityLagSec(12000000, 60000), 200);",
+          "input": [
+            12000000,
+            60000
+          ]
+        }
+      ],
+      "explanation": "Fan-out multiplies one write by the follower count.\n\nFor `celebrityLagSec(50000000, 100000)`:\n- one post = 50,000,000 timeline writes\n- 50,000,000 ÷ 100,000 deliveries/s = **500 s** (~8 minutes) before the LAST follower's timeline has the post\n\nThis one number is why real feeds go hybrid — push for normal users, pull (merge at read time) for celebrities.",
+      "hints": [
+        "Push-model timelines copy each post into every follower's timeline, so a post costs one write per follower.",
+        "deliveries/s = postsPerSec × avgFollowers; lag = followers ÷ cap.",
+        "Every post becomes one timeline write per follower, so deliveries per second is posts × average followers — one celebrity post queues followers ÷ the delivery rate seconds of work"
+      ]
+    },
+    {
+      "slug": "08-load-shedding",
+      "title": "Load shedding during overload",
+      "difficulty": 1,
+      "skills": [
+        "overload",
+        "throughput"
+      ],
+      "instructions": "**Interview prompt.** \"The service can handle 20,000 requests/s. A traffic spike brings 50,000/s. How much must we reject to keep the requests we admit fast?\"\n\n**Why it works.** A server pushed past capacity does not serve capacity-worth of requests slowly — queues grow without bound and EVERY request times out. Shedding the excess at the door (fast 503s) keeps the admitted requests within latency. The excess is arrivals − capacity, never below zero; as a share of traffic it is shed × 1000 ÷ arrivals in per-mille (‰ = x/1000). `shedPermille` is only called with arrivals above zero, and the tests choose inputs that divide exactly, so every answer is a whole number.\n\n**Your task.** Export two functions:\n- `shedPerSec(arrivePerSec, capacityPerSec)` → `max(0, arrivePerSec − capacityPerSec)`\n- `shedPermille(arrivePerSec, capacityPerSec)` → `shedPerSec(…) × 1000 ÷ arrivePerSec`\n\n**Worked example.** 30,000/s arriving at a 20,000/s service → shed **10,000/s**.",
+      "starter": "export function shedPerSec(arrivePerSec, capacityPerSec) {\n  // TODO: requests per second above capacity, never below zero\n}\n\nexport function shedPermille(arrivePerSec, capacityPerSec) {\n  // TODO: the shed share of arrivals in per-mille\n}\n",
+      "solution": "export function shedPerSec(arrivePerSec, capacityPerSec) {\n  return Math.max(0, arrivePerSec - capacityPerSec);\n}\n\nexport function shedPermille(arrivePerSec, capacityPerSec) {\n  return (shedPerSec(arrivePerSec, capacityPerSec) * 1000) / arrivePerSec;\n}\n",
+      "tests": [
+        {
+          "name": "30,000/s at 20,000/s capacity -> shed 10,000/s",
+          "code": "assert.equal(typeof mod.shedPerSec, 'function', 'export a function named shedPerSec');\nassert.equal(mod.shedPerSec(30000, 20000), 10000);",
+          "input": [
+            30000,
+            20000
+          ]
+        },
+        {
+          "name": "under capacity -> shed nothing (boundary)",
+          "code": "assert.equal(typeof mod.shedPerSec, 'function', 'export a function named shedPerSec');\nassert.equal(mod.shedPerSec(15000, 20000), 0);",
+          "input": [
+            15000,
+            20000
+          ]
+        },
+        {
+          "name": "exactly at capacity -> shed nothing (boundary)",
+          "code": "assert.equal(typeof mod.shedPerSec, 'function', 'export a function named shedPerSec');\nassert.equal(mod.shedPerSec(20000, 20000), 0);",
+          "input": [
+            20000,
+            20000
+          ]
+        },
+        {
+          "name": "40,000/s at 30,000/s capacity -> 250 per-mille",
+          "code": "assert.equal(typeof mod.shedPermille, 'function', 'export a function named shedPermille');\nassert.equal(mod.shedPermille(40000, 30000), 250);",
+          "input": [
+            40000,
+            30000
+          ]
+        },
+        {
+          "name": "50,000/s at 20,000/s capacity -> 600 per-mille",
+          "code": "assert.equal(typeof mod.shedPermille, 'function', 'export a function named shedPermille');\nassert.equal(mod.shedPermille(50000, 20000), 600);",
+          "input": [
+            50000,
+            20000
+          ]
+        },
+        {
+          "name": "10,000/s at 25,000/s capacity -> 0 per-mille",
+          "code": "assert.equal(typeof mod.shedPermille, 'function', 'export a function named shedPermille');\nassert.equal(mod.shedPermille(10000, 25000), 0);",
+          "input": [
+            10000,
+            25000
+          ]
+        }
+      ],
+      "explanation": "Reject the excess so the rest stays fast.\n\nFor `shedPermille(50000, 20000)`:\n- shed = 50,000 − 20,000 = 30,000/s\n- 30,000 × 1000 ÷ 50,000 = **600‰**\n\nAt 2.5× overload you reject 60% so the 40% you admit stay fast; admit everything and 100% of users get timeouts.",
+      "hints": [
+        "Past capacity, admitting more does not serve more — it makes every request slow. Only the excess has to go.",
+        "shed = max(0, arrive − capacity); shed‰ = shed × 1000 ÷ arrive.",
+        "Whatever arrives above capacity must be rejected: the shed rate is arrivals minus capacity clamped at zero — scale by 1000 ÷ arrivals for the per-mille share"
+      ]
+    }
+  ]
+}

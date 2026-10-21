@@ -137,9 +137,10 @@ one file per module, under `tools/seed/authoring/sysdrills/<NN-module>.json`
 (format `sysdrills-authoring@1`, Zod-validated `.strict()` by
 `tools/seed/src/sysdrills/source.ts`). Each exercise is an estimation / capacity /
 reliability / networking-and-latency / SQL-and-indexing / concurrency / sharding /
-encoding-and-counting math rep: a pure exported function, `drill-js` tests whose
-expectations are exact integers, a `// TODO` starter, a reference solution, an explanation
-and hints. The importer maps every exercise to a `drill-js` unit on the **sysdesign**
+encoding-and-counting / queues-and-backlog / capacity-and-cost math rep: a pure exported
+function, `drill-js` tests whose expectations are exact integers, a `// TODO` starter, a
+reference solution, an explanation and hints. The importer maps every exercise to a
+`drill-js` unit on the **sysdesign**
 track (competency `system-design`, key `sysdrills/<module>/<slug>`), one course per module,
 into `content/packs/sysdrills/` with manifest `{ track: 'sysdesign', grader: 'js' }`.
 Migration 016 gives the track a daily slate drill slot (dropped automatically when the bank
@@ -944,6 +945,12 @@ resolved); quiz variety `concept` and flashcard shape `hand-authored`;
   drills, 62 total; SYSDRILLS_EXPECTED 22 → 62; 62/62 validated (solution passes + starter
   fails under the real drill-js runner), 0 quarantined; every expected integer recomputed by
   the cross-reviewer; hint 3 is approach+formula only (never pasteable code).
+- **sysdrills wave 3 — DONE (2026-10-21):** modules 09-10 (queues & backlog, capacity
+  planning & cost), 16 new drill-js drills, 78 total; SYSDRILLS_EXPECTED 62 → 78; 78/78
+  validated (solution passes + starter fails under the real drill-js runner), 0 quarantined;
+  every expected integer recomputed by the cross-reviewer; hint 3 is approach+formula only
+  (never pasteable code); per-drill nearest-existing-drill distinctness recorded in the wave
+  brief.
 - **fundamentals wave — DONE (2026-10-21):** interview + real-SWE-fundamentals content, zero
   shared/factory edits (no estate restamp). 9 new DESIGN IT primaries → 47 items / 29 repos;
   11 fundamentals explain-backs on repos with no prior EB pack → EB packs 150 → 170, strict
