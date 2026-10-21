@@ -1,0 +1,195 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "netgum--astraupskill-02-CONCEPTS.md--set-b",
+ "items": [
+  {
+   "key": "seed:explainback:netgum/explain-back/066ce6b3a0db6746",
+   "provenance": {
+    "repo": "netgum",
+    "sha": "2984d9b817641444ac5886255f10f08788fc2882",
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 1,
+     "end": 31
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "Walk through what Netgum does when a SaveChangesAsync fails after the payment gateway has already said yes, at both places it can happen: in CreateSessionAsync (the intent was created, then the order insert fails) and in CompleteOrderAsync (the provider reports the payment succeeded, then the Paid update fails). For each, say what state the provider and each table are left in, whether any money has moved, what the caller sees, and which recovery options the code supports today: compensating or refunding at the provider, retrying the save, or reconciling later.",
+     "keyPoints": [
+      {
+       "text": "[w3] When the checkout save fails, none of its three writes exists: the insert, the stock change and the coupon change were one database transaction, and the tracked objects die with the request scope. The provider holds a live intent created during the await, but no money has moved, because the checkout URL the buyer would pay through travels only in the success response.",
+       "cite": {
+        "path": "src/Netgum.Application/Checkout/CheckoutService.cs",
+        "lineStart": 82,
+        "lineEnd": 92
+       }
+      },
+      {
+       "text": "[w2] The caller of that failed checkout gets a bare 500: the global handler maps only DomainException (400) and InvalidOperationException (409), so a database update failure falls to the default branch, with the message hidden outside Development.",
+       "cite": {
+        "path": "src/Netgum.Api/Program.cs",
+        "lineStart": 47,
+        "lineEnd": 58
+       }
+      },
+      {
+       "text": "[w2] Retrying the save is built in for transient faults only: the SQL Server provider is registered with EnableRetryOnFailure, so a dropped connection or a deadlock victim is retried before anything reaches the caller; a constraint violation, or running out of retries, still surfaces.",
+       "cite": {
+        "path": "src/Netgum.Infrastructure/DependencyInjection.cs",
+        "lineStart": 16,
+        "lineEnd": 20
+       }
+      },
+      {
+       "text": "[w3] Compensation has no API to call: the gateway abstraction offers only creating an intent and reading its status, with no cancel and no refund, and the Refunded payment status is never assigned anywhere. A stray intent therefore cannot be withdrawn from code; the remedy is a cancel operation called when the save fails, or a reconciler that cancels intents whose order id has no row.",
+       "cite": {
+        "path": "src/Netgum.Application/Abstractions/IPaymentGateway.cs",
+        "lineStart": 5,
+        "lineEnd": 10
+       }
+      },
+      {
+       "text": "[w3] When the completion save fails, money has moved but the row still says Pending: the unit reserved at checkout stays reserved, no receipt is sent because the email comes after the save, and the download route refuses the buyer with 403 because it serves only Paid orders.",
+       "cite": {
+        "path": "src/Netgum.Api/Endpoints/OrderEndpoints.cs",
+        "lineStart": 17,
+        "lineEnd": 26
+       }
+      },
+      {
+       "text": "[w3] The recovery for that case is to run completion again: from Pending it asks the provider once more and re-applies the Paid transition, so repeating the whole operation is safe and is the natural reconcile-later step. Nothing schedules it, though; the paid order waits until some caller hits the completion route again, so a provider webhook or a sweep over old Pending orders has to exist.",
+       "cite": {
+        "path": "src/Netgum.Application/Checkout/CheckoutService.cs",
+        "lineStart": 107,
+        "lineEnd": 128
+       }
+      },
+      {
+       "text": "[w2] If a stray intent were ever paid, completion would find no order for it and throw a domain error (a 400) without recording anything, so the provider's own list is the only ledger of that money and reconciliation has to start from the provider side.",
+       "cite": {
+        "path": "src/Netgum.Application/Checkout/CheckoutService.cs",
+        "lineStart": 97,
+        "lineEnd": 98
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "Defend or indict each candidate fix for the stock re-check in CreateSessionAsync, judged against this codebase as it stands rather than in general: a CHECK constraint on the stock column, an UPDLOCK row lock taken when the variant is read, a rowversion concurrency token, and a higher transaction isolation level. For each, say what it would actually stop given how EF writes the variant here, what it costs (locks held and for how long, retries, the losing request that already has an intent, how the failure reaches the caller), and which fix the code is a single step away from.",
+     "keyPoints": [
+      {
+       "text": "[w3] A CHECK that stock stays at or above zero would not stop this oversell: the decrement happens on the in-memory object and EF sends the resulting value, so both racing requests write 0, never -1, and the constraint is satisfied. It starts to bite only when the write becomes a relative decrement the database computes; a uniqueness rule has nothing to say about a count at all.",
+       "cite": {
+        "path": "src/Netgum.Domain/Products/ProductVariant.cs",
+        "lineStart": 56,
+        "lineEnd": 61
+       }
+      },
+      {
+       "text": "[w3] Locking on the read happens at the wrong moment: the aggregate is loaded before the gateway await, so an update lock taken there would be held across an external network call and queue every buyer of that product behind provider latency. If a lock is used, re-read the variant with the lock just before reserving, after the await.",
+       "cite": {
+        "path": "src/Netgum.Infrastructure/Persistence/Repositories.cs",
+        "lineStart": 104,
+        "lineEnd": 108
+       }
+      },
+      {
+       "text": "[w3] Both the lock and a stricter isolation level need a transaction you open yourself, and this context is registered with a retrying execution strategy, which EF does not allow alongside a user-opened transaction unless the whole unit runs through the strategy's ExecuteAsync. Copied as written, the chapter's recipe would fail here with an InvalidOperationException, which the global handler reports as a 409.",
+       "quote": "If you need several `SaveChangesAsync` calls (for example a save plus an audit write) to be atomic, open the transaction yourself"
+      },
+      {
+       "text": "[w3] A row-version token is the single step: one mapping line on the variant (and one on the coupon, whose redemption count suffers the same lost write) makes the losing UPDATE match no row, with no explicit transaction and no lock held across the await. The bill: the loser fails after its intent exists, unrelated edits to the same variant also conflict, and DbUpdateConcurrencyException is not in the handler's map, so it reaches the client as a 500 until mapped to 409.",
+       "cite": {
+        "path": "src/Netgum.Api/Program.cs",
+        "lineStart": 52,
+        "lineEnd": 57
+       }
+      },
+      {
+       "text": "[w2] A higher isolation level would have to wrap everything from the first read to the final save, the gateway call included; on SQL Server two serializable readers that both try to update meet in a deadlock, one is chosen as the victim and must be retried, and every row read along the way stays locked for the whole request.",
+       "cite": {
+        "path": "src/Netgum.Application/Checkout/CheckoutService.cs",
+        "lineStart": 39,
+        "lineEnd": 47
+       }
+      },
+      {
+       "text": "[w2] The fix with the fewest new failure modes changes the order of work: claim the unit with a conditional decrement the database evaluates before the gateway is called, so a buyer who loses is turned away while no intent exists yet, and put the unit back if the payment later fails; the domain today has no method that returns stock, so that one is new too.",
+       "cite": {
+        "path": "src/Netgum.Domain/Products/Product.cs",
+        "lineStart": 164,
+        "lineEnd": 172
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "Explain the cancellation-versus-completion race. First say what cancellation the code offers a buyer today and which transitions an order can make; then suppose a buyer cancel is added the obvious way (load the order, call a new Cancel method on it, save) and it runs while CompleteOrderAsync is finishing the same order. Which write wins, what happens to the receipt email, the download and the reserved stock, and what ordering does the code actually guarantee?",
+     "keyPoints": [
+      {
+       "text": "[w3] There is no buyer cancel today: an order leaves Pending only through MarkPaid (Paid and Fulfilled) or MarkPaymentFailed (Failed and Cancelled), so Cancelled is reachable only by a failed payment, and the Refunded payment status is declared but nothing ever sets it.",
+       "cite": {
+        "path": "src/Netgum.Domain/Orders/Order.cs",
+        "lineStart": 139,
+        "lineEnd": 166
+       }
+      },
+      {
+       "text": "[w3] Last writer wins: each request loads the order as Pending into its own context, each guard checks only its own loaded copy, and each save writes its own status columns; with no concurrency token on the order mapping neither UPDATE is refused, so the row ends as whichever commit came second, a paid order turned Cancelled or a cancelled one turned Paid.",
+       "cite": {
+        "path": "src/Netgum.Infrastructure/Persistence/NetgumDbContext.cs",
+        "lineStart": 166,
+        "lineEnd": 181
+       }
+      },
+      {
+       "text": "[w3] The receipt follows the completer, not the final state: completion sends it as soon as its own save returns, without reading the row again, so if the cancel commits after it the buyer still holds an email with a working-looking license key for an order now marked Cancelled.",
+       "cite": {
+        "path": "src/Netgum.Application/Checkout/CheckoutService.cs",
+        "lineStart": 130,
+        "lineEnd": 138
+       }
+      },
+      {
+       "text": "[w2] The download follows whatever is stored at the moment of the request: it checks that the payment status is Paid each time, so the buyer's access flips with the last write, regardless of which email arrived.",
+       "cite": {
+        "path": "src/Netgum.Api/Endpoints/OrderEndpoints.cs",
+        "lineStart": 23,
+        "lineEnd": 33
+       }
+      },
+      {
+       "text": "[w2] Cancelling has to give back the unit reserved at checkout, yet the domain has no way to raise stock again, and a release written like the reservation (change the loaded copy, write the value) is itself a lost-update target; if completion then wins after the release, one unit is both sold and back on the shelf.",
+       "cite": {
+        "path": "src/Netgum.Domain/Products/ProductVariant.cs",
+        "lineStart": 44,
+        "lineEnd": 62
+       }
+      },
+      {
+       "text": "[w3] The only ordering the code guarantees is inside one request: the status save precedes the email, so no receipt goes out for a change that failed to save. Across requests it guarantees nothing, and domain events are cleared at save without being published, so there is no event stream to order on. The repair is a guarded transition, an UPDATE that succeeds only while the order is still Pending (or a row version), with the loser told the order has already moved.",
+       "cite": {
+        "path": "src/Netgum.Infrastructure/Persistence/NetgumDbContext.cs",
+        "lineStart": 35,
+        "lineEnd": 46
+       }
+      },
+      {
+       "text": "[w2] Once the provider has reported success, a buyer's 'cancel' is really a refund, which needs a provider call the gateway lacks and the unused Refunded status; so allow cancel only from Pending through the guarded write, and make anything after Paid a separate refund flow.",
+       "cite": {
+        "path": "src/Netgum.Domain/Orders/PaymentStatus.cs",
+        "lineStart": 3,
+        "lineEnd": 9
+       }
+      }
+     ]
+    }
+   ],
+   "set": "b"
+  }
+ ]
+}
