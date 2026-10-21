@@ -609,6 +609,230 @@
      "why": "Where the version changes when a tracked entity is modified."
     }
    ]
+  },
+  {
+   "id": "x-q17-digest-lookup",
+   "target": "seed:quests:harbor-swe-bootcamp/quiz/ae6e1749d01274d9",
+   "phase": "after",
+   "title": "Harbor finds a teammate by the digest of the presented key",
+   "body": "The right answer: the handler hashes the presented key with SHA-256 and looks up the teammate by that digest.\n\nADR 0001 stores only the SHA-256 digest of each key, in the unique column `Teammate.ApiKeyHash`. The plain key exists once, in the creation response, and never in the database. So authentication cannot compare plain keys; it hashes whatever the caller sent and searches for that digest. The matching teammate's id, workspace id and role become claims that the scope filter, role checks and request logging read.\n\nWhy the other answers are wrong:\n- \"Decrypt each stored key\": hashing is one-way and nothing decryptable is stored.\n- \"Read the teammate id inside the key\": a key is `hbk_` plus 48 generated hex characters; it encodes no teammate.\n- \"Compare the plain key with every stored key\": there are no stored plain keys to compare with; the lookup is a single digest match.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0001-api-key-auth.md",
+     "lineStart": 21,
+     "lineEnd": 22,
+     "quote": "`ApiKeyAuthenticationHandler` hashes the presented key and looks up the teammate by digest."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q18-anonymous-bootstrap",
+   "target": "seed:quests:harbor-swe-bootcamp/quiz/8406822f36daf15b",
+   "phase": "after",
+   "title": "Workspace bootstrap is anonymous because no key exists yet",
+   "body": "The right answer: it mints the first admin's key, so it must work before any key exists.\n\nEvery other workspace operation is authenticated with a teammate's API key. But a brand-new workspace has no teammates and therefore no keys. Something has to create the first admin and hand back that admin's key, and that request cannot present a key it does not have yet. ADR 0001 names `POST /api/workspaces` as that one bootstrapping path.\n\nWhy the other answers are wrong:\n- \"Workspace names are public\": the ADR makes no such claim; the reason is the chicken-and-egg problem of the first key.\n- \"The mail relay calls it\": the relay is only listed among the services that call Harbor; it has nothing to do with bootstrap.\n- \"Rate limiting per IP is enough\": the ADR does not justify anonymity with rate limiting at all.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0001-api-key-auth.md",
+     "lineStart": 25,
+     "lineEnd": 26,
+     "quote": "is anonymous and mints the first admin's key — the one path that must work before any key exists."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q19-no-rotation",
+   "target": "seed:quests:harbor-swe-bootcamp/quiz/4ae7e5df3f69850b",
+   "phase": "after",
+   "title": "Harbor keys have no rotation or expiry; revoking is manual",
+   "body": "The right answer: delete or re-issue that teammate's credential by hand.\n\nADR 0001 is explicit about what the scheme lacks: there is no built-in key rotation and no expiry. Revoking a key means deleting or re-issuing the teammate's credential. The ADR accepts this for the current scope and notes a mitigating design point: because every request goes through a single lookup point, adding rotation later would be a local change.\n\nWhy the other answers are wrong:\n- \"Wait for built-in expiry\": keys do not expire.\n- \"Call the rotation endpoint with a grace period\": no rotation exists yet; a grace period would be part of a future design.\n- \"Revoke the bearer token at the OAuth server\": bearer-token and OAuth flows were rejected as overkill for service-to-service traffic, so there is no token server.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0001-api-key-auth.md",
+     "lineStart": 36,
+     "lineEnd": 37,
+     "quote": "There is no built-in key rotation or expiry; revoking a key means deleting or re-issuing the teammate's credential."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q20-rule-by-construction",
+   "target": "seed:quests:harbor-swe-bootcamp/quiz/574950236e13ca7a",
+   "phase": "after",
+   "title": "The 403/404 rule is inherited by construction and pinned by tests",
+   "body": "The right answer: one global filter and per-query scoping enforce it, and WorkspaceScopeMatrixTests pin it.\n\nThe workspace-scoped 403 lives in one global filter, `WorkspaceScopeFilter`, so any new route under `/api/workspaces/{workspaceId}/...` gets it automatically. The by-id 404 comes from the scoping predicate every resource query includes. Because the split can look inconsistent at a glance, the ADR pins it with a dedicated test class rather than trusting reviewers to remember.\n\nWhy the other answers are wrong:\n- \"Each controller checks by hand; code review pins it\": the point of the design is that endpoints do not each re-implement the rule.\n- \"A middleware looks the workspace up per request\": the scoped-route 403 is decided without touching the database.\n- \"Route attributes and the OpenAPI document\": neither is mentioned; the mechanism is the filter plus the query predicate.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0002-403-vs-404.md",
+     "lineStart": 36,
+     "lineEnd": 37,
+     "quote": "The rule is enforced in one global filter for scoped routes and one scoping predicate per resource query, so new endpoints inherit it by construction."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q21-foreign-write-404",
+   "target": "seed:quests:harbor-swe-bootcamp/quiz/691c5471ce50e207",
+   "phase": "after",
+   "title": "A write to another workspace's resource is a 404 too",
+   "body": "The right answer: 404, because the workspace-scoped lookup finds no such contact for this caller.\n\nBy-id routes carry no workspace in the path, only an opaque id. Every resource query adds `c.WorkspaceId == User.GetWorkspaceId()`, so a contact in workspace B is invisible to a caller from workspace A, exactly like an id that never existed. ADR 0002 applies the same answer to writes: a PUT, like a GET, gets 404. Any other code would tell the caller that the id is real somewhere else, turning the status code into an oracle.\n\nWhy the other answers are wrong:\n- \"403, refused not hidden\": 403 is used for a foreign workspace in the route; for a by-id resource it would confirm existence.\n- \"403 for writes, 404 for reads\": the ADR says writes also 404 rather than 403.\n- \"409 because another workspace owns it\": a conflict response would leak the same existence information.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0002-403-vs-404.md",
+     "lineStart": 41,
+     "lineEnd": 41,
+     "quote": "Writes to a foreign resource also 404 rather than 403, for the same reason."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q22-cannot-restamp",
+   "target": "seed:quests:harbor-swe-bootcamp/quiz/61a7d3605bdc036c",
+   "phase": "after",
+   "title": "The timestamp is inside the signature, so it cannot be refreshed",
+   "body": "The right answer: the HMAC covers the timestamp too, and re-signing needs the secret.\n\nHarbor does not sign the body alone. It signs the string `{timestamp}.{body}` with HMAC-SHA256 and sends the timestamp next to the signature. A receiver recomputes the HMAC over `{t}.{body}` with the shared secret, compares it, and rejects a `t` outside its tolerance window. If an attacker swaps in a fresh timestamp, the recomputed HMAC no longer matches the captured signature, and producing a new valid one needs the secret the attacker does not have.\n\nWhy the other answers are wrong:\n- \"Receivers use the HTTP Date header\": the check uses the signed `t` value.\n- \"Receivers store every timestamp they have seen\": the ADR's defence is the tolerance window plus the signature, not a store of seen values.\n- \"Deliveries are bound to Harbor's IP\": the ADR mentions no IP binding.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0004-timestamp-body-signing.md",
+     "lineStart": 29,
+     "lineEnd": 31,
+     "quote": "the signature is still cryptographically valid, but the timestamp it covers is stale, and the attacker cannot re-stamp it without the secret."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q23-serialize-once",
+   "target": "seed:quests:harbor-swe-bootcamp/quiz/46ace8894fb0aede",
+   "phase": "after",
+   "title": "Signed bytes must not change between publish and send",
+   "body": "The right answer: re-serializing when sending could alter the bytes and void the signature.\n\nAn HMAC is computed over exact bytes. If Harbor rebuilt the JSON at send time, any difference in property order, casing or formatting, for example from a change to how the API renders responses, would produce different bytes than a receiver expects for that signature. So the payload is serialized once at publish time with pinned options (`Webhooks.PayloadJson`) and those bytes are sent verbatim. The outbox stores the exact payload for the same reason.\n\nWhy the other answers are wrong:\n- \"Cheaper to store once\": cost is not the reason the ADR gives.\n- \"Entities cannot be loaded after the save\": nothing in the ADR says so; the issue is byte stability.\n- \"Receivers require camelCase\": the ADR pins options so the bytes are reproducible, not to satisfy a receiver's naming rule.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0004-timestamp-body-signing.md",
+     "lineStart": 36,
+     "lineEnd": 37,
+     "quote": "never re-serialized at send time, which would change bytes and invalidate the signature."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q24-segment-subquery",
+   "target": "seed:quests:harbor-swe-bootcamp/quiz/410010601231786c",
+   "phase": "after",
+   "title": "Segment membership is composed as a subquery, not a list",
+   "body": "The right answer: as a subquery over contact ids, so it stays a single SQL statement.\n\nSegmentCompiler turns the segment's rules into an expression EF translates into a WHERE clause over contacts. The conversation filter then uses that contact query as a subquery (`SegmentQueries.ContactIdsQuery`), so the database evaluates membership and the conversation filter together, in one statement, however many contacts match.\n\nWhy the other answers are wrong:\n- \"Load the matching ids and pass them back in\": this is the shortcut the Context rejects; the id list grows with the segment and needs a second query.\n- \"Filter the contacts in memory\": also rejected; it works on ten contacts and falls over on a million.\n- \"Read a refreshed membership table\": membership is live and evaluated against contacts as they are now, so there is nothing to refresh or invalidate.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0005-segments-as-sql.md",
+     "lineStart": 27,
+     "lineEnd": 29,
+     "quote": "not a materialized list, so it stays one statement however many contacts match."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q25-write-time-compile",
+   "target": "seed:quests:harbor-swe-bootcamp/quiz/84e2f0a19cec4b9d",
+   "phase": "after",
+   "title": "A broken segment is rejected once, when it is written",
+   "body": "The right answer: on save, with a 422, from compiling its rules once at write time.\n\nA segment's rules have to become SQL every time the segment is used. If a rule could not compile, every list or membership read would throw. ADR 0005 moves that failure to the moment of writing: saving a segment compiles its rules once, and a segment that does not compile is refused with 422. Reads then only ever see segments known to compile.\n\nWhy the other answers are wrong:\n- \"On the first list read, as a 422\": the check runs when the segment is written, so the bad rule never reaches a read.\n- \"On save, as a 400 from model binding\": binding checks the request's shape; the rule problem is found by compiling it, and the ADR names 422.\n- \"On every read, as a 500\": that is exactly the behavior the write-time check exists to prevent.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0005-segments-as-sql.md",
+     "lineStart": 30,
+     "lineEnd": 31,
+     "quote": "Rules are validated by compiling them once at write time, so a broken segment is rejected with `422` instead of throwing on every read."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q26-assert-the-sql",
+   "target": "seed:quests:harbor-swe-bootcamp/quiz/8d6cba3d9b62b6fc",
+   "phase": "after",
+   "title": "When the rows stay right, test the SQL itself",
+   "body": "The right answer: SegmentSqlTranslationTests, which assert the generated SQL text itself.\n\nIf segment filtering silently moved into memory, the endpoint would still return exactly the right conversations. Every ordinary functional test checks rows, so every one would still pass, while the query had quietly become a full load that falls over at scale. ADR 0005 therefore tests the property that changed: SegmentSqlTranslationTests calls `ToQueryString` and asserts that `json_extract` is present, the filter sits in the WHERE clause, and the conversation filter is a subquery.\n\nWhy the other answers are wrong:\n- \"A latency budget\": the ADR names no timing test, and small test data would hide the cost anyway.\n- \"A row-count assertion\": in-memory filtering returns the right rows, so counts do not change.\n- \"The request log\": the ADR does not use logs to detect this regression.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0005-segments-as-sql.md",
+     "lineStart": 37,
+     "lineEnd": 39,
+     "quote": "A regression to in-memory filtering would still return the right rows and pass ordinary functional tests"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q27-pointer-without-token",
+   "target": "seed:quests:harbor-swe-bootcamp/quiz/80a0637d906f0fe0",
+   "phase": "after",
+   "title": "A token on the round-robin pointer would reject customers",
+   "body": "The right answer: a token would 409 the save that commits a customer's new conversation.\n\nThe pointer bump is saved in the same SaveChanges as the new conversation. With a concurrency token, the second of two simultaneous arrivals would fail with DbUpdateConcurrencyException and a 409, and that failure would reject an incoming customer message just to keep the rotation fair. ADR 0006 decides rotation fairness is not a correctness property, so the pointer is an ordinary column whose concurrent update may be lost. The worst case is one teammate getting an extra conversation, which self-corrects.\n\nWhy the other answers are wrong:\n- \"SQLite serializes the writes, so nothing is lost\": the ADR calls this a classic lost update and ConcurrencyTests prove the loss happens silently.\n- \"The pointer is recomputed on read\": it is a stored column, and the lost write does persist.\n- \"A token would deadlock\": optimistic tokens take no locks; they fail the save.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0006-no-token-round-robin.md",
+     "lineStart": 17,
+     "lineEnd": 18,
+     "quote": "Failing it to protect the pointer means rejecting an incoming customer message."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q28-omitted-and-oversized",
+   "target": "seed:quests:harbor-swe-bootcamp/quiz/43829e15e9bf4a0e",
+   "phase": "after",
+   "title": "Harbor pages by default and clamps oversized page sizes",
+   "body": "The right answer: the first page of 50, then a page whose size is capped at 200.\n\nADR 0007 exists to make unbounded list responses impossible. So a caller that sends no paging parameters does not get everything: it gets the first page with the default page size of 50. Out-of-range values are clamped rather than rejected, so `pageSize=500` is capped at the maximum of 200, and a page past the end is simply empty. Only values that cannot be parsed at all, such as `?page=abc`, still produce a 400 from model binding.\n\nWhy the other answers are wrong:\n- \"Every matching row\": returning everything when parameters are omitted is the hazard the ADR removes.\n- \"A 400 for pageSize 500\": Harbor clamps instead of rejecting; it trades strictness for robustness.\n- \"A page of 500, the max is advisory\": the maximum is enforced by capping.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0007-header-pagination.md",
+     "lineStart": 24,
+     "lineEnd": 26,
+     "quote": "a page past the end is an empty page, which is what a client walking pages expects; a `pageSize` over the max is capped."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q29-page-binding-collision",
+   "target": "seed:quests:harbor-swe-bootcamp/quiz/52745275af3ca7ad",
+   "phase": "after",
+   "title": "A parameter name that silently swallowed ?page=",
+   "body": "The right answer: it clashed with PageRequest.Page and silently ignored ?page=.\n\nWhen the action parameter was declared as `[FromQuery] PageRequest page`, its name collided with the `Page` property of the same object, and the `?page=` value never reached it. Nothing errored: every request quietly got page one. The test suite missed it because every test asserted page one too. The fix was renaming the parameter to `paging`, and `PaginationBoundaryTests` now walks to a real second page on every list endpoint so the regression cannot return unnoticed.\n\nWhy the other answers are wrong:\n- \"It failed to bind, so every call was a 400\": the bug was silent; requests succeeded with the wrong page.\n- \"It shadowed a route value, so page 2 was a 404\": no route value or 404 was involved.\n- \"It clashed with the X-Page header\": the collision was with the object's own property, not a response header.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0007-header-pagination.md",
+     "lineStart": 35,
+     "lineEnd": 36,
+     "quote": "collided with the object's own `Page` property and silently ignored `?page=`, and every test passed because they all asserted page one."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q30-parity-guard-rail",
+   "target": "seed:quests:harbor-swe-bootcamp/quiz/5a975b5333bcc0fd",
+   "phase": "after",
+   "title": "One creation path, kept honest by parity tests, not the compiler",
+   "body": "The right answer: convention, guarded by ChannelParityTests and the ADR itself.\n\nADR 0009 funnels chat and email creation through `ConversationStarter.StartAsync` so every channel gets the same SLA stamping, auto-assignment, assignment event and webhooks. It is honest about the limit: nothing in the type system stops a future controller from creating a `Conversation` directly. What catches a divergent path is `ChannelParityTests`, which runs one scenario down both channels and asserts the same SLA, assignee and events, together with the ADR that states the rule.\n\nWhy the other answers are wrong:\n- \"The compiler, via an internal constructor\": the ADR says the compiler does not enforce the rule.\n- \"A Roslyn analyzer\": none is mentioned; the guard rails are the tests and the ADR.\n- \"A database trigger\": the start-time steps are application code committed in one save; no trigger checks them.",
+   "excerpts": [
+    {
+     "path": "docs/adr/0009-single-creation-path.md",
+     "lineStart": 41,
+     "lineEnd": 42,
+     "quote": "The parity tests and this ADR are the guard rails."
+    }
+   ],
+   "readMore": []
   }
  ]
 }

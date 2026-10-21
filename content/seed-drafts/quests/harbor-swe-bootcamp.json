@@ -515,6 +515,555 @@
    ],
    "front": "Walk two writers through Harbor's optimistic concurrency: both load V1, A saves first. What happens to B, and what does the API return?",
    "back": "A's save changes the version; B's update still uses V1 as the original token, matches no row, and EF throws DbUpdateConcurrencyException, which the API maps to 409."
+  },
+  {
+   "id": "q17-digest-lookup",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0001-api-key-auth.md",
+    "lines": {
+     "start": 14,
+     "end": 33
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0001-api-key-auth.md",
+     "lineStart": 18,
+     "lineEnd": 22
+    }
+   ],
+   "prompt": "A teammate's request presents an API key. Per ADR 0001, how does ApiKeyAuthenticationHandler find which teammate sent it?",
+   "answer": "It hashes the presented key with SHA-256 and looks up that digest",
+   "distractors": [
+    "It decrypts each stored key and compares it with the presented one",
+    "It reads the teammate id encoded in the hex part of the key itself",
+    "It compares the plain key with every stored key in constant time"
+   ],
+   "explanation": "ADR 0001 lines 18-22: keys are generated once, returned exactly once at creation, and only their SHA-256 digest is stored (Teammate.ApiKeyHash, a unique column); ApiKeyAuthenticationHandler hashes the presented key and looks up the teammate by digest. No decryptable or plain key is stored to compare against, and the key is hbk_ plus 48 random hex characters, not an encoded teammate id."
+  },
+  {
+   "id": "q18-anonymous-bootstrap",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0001-api-key-auth.md",
+    "lines": {
+     "start": 14,
+     "end": 29
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0001-api-key-auth.md",
+     "lineStart": 25,
+     "lineEnd": 26
+    }
+   ],
+   "prompt": "POST /api/workspaces needs no API key. What reason does ADR 0001 give for making workspace bootstrap anonymous?",
+   "answer": "It mints the first admin's key, so it must work before any key exists",
+   "distractors": [
+    "Workspace names are public, so creating one reveals nothing to callers",
+    "The mail relay calls it, and a relay cannot carry a per-teammate key",
+    "It is rate-limited per IP, which the ADR treats as enough protection"
+   ],
+   "explanation": "ADR 0001 lines 25-26: workspace bootstrap (POST /api/workspaces) is anonymous and mints the first admin's key, the one path that must work before any key exists. The ADR gives no publicity, mail-relay or rate-limit argument; the mail relay is listed only as one of the services that call Harbor."
+  },
+  {
+   "id": "q19-no-rotation",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0001-api-key-auth.md",
+    "lines": {
+     "start": 30,
+     "end": 40
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0001-api-key-auth.md",
+     "lineStart": 36,
+     "lineEnd": 40
+    }
+   ],
+   "prompt": "A teammate's Harbor API key may have leaked. Per ADR 0001's consequences, what remedy exists today?",
+   "answer": "Delete or re-issue that teammate's credential by hand",
+   "distractors": [
+    "Wait for the key's built-in expiry to retire it within a day",
+    "Call the rotation endpoint, which keeps a short grace period",
+    "Revoke its bearer token at the OAuth server that issued it"
+   ],
+   "explanation": "ADR 0001 lines 36-38: there is no built-in key rotation or expiry; revoking a key means deleting or re-issuing the teammate's credential, which the ADR accepts for the current scope and notes that the single lookup point would make adding rotation later a local change. Lines 39-40: bearer-token/OAuth flows were rejected, so there is no token server to revoke at."
+  },
+  {
+   "id": "q20-rule-by-construction",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0002-403-vs-404.md",
+    "lines": {
+     "start": 32,
+     "end": 41
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0002-403-vs-404.md",
+     "lineStart": 36,
+     "lineEnd": 40
+    }
+   ],
+   "prompt": "Per ADR 0002, how does a newly added Harbor endpoint end up with the right 403-versus-404 behavior, and what pins the distinction?",
+   "answer": "A global filter and per-query scoping; WorkspaceScopeMatrixTests pin it",
+   "distractors": [
+    "Each controller checks the workspace by hand; code review pins it",
+    "A middleware looks the workspace up per request; request logs pin it",
+    "Route attributes infer it from the URL; the OpenAPI document pins it"
+   ],
+   "explanation": "ADR 0002 lines 36-40: the rule is enforced in one global filter for scoped routes and one scoping predicate per resource query, so new endpoints inherit it by construction, and because it can look inconsistent at a glance the distinction is pinned by WorkspaceScopeMatrixTests. No per-controller check is relied on, the scoped-route 403 involves no database lookup, and routing metadata is not the mechanism."
+  },
+  {
+   "id": "q21-foreign-write-404",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0002-403-vs-404.md",
+    "lines": {
+     "start": 17,
+     "end": 41
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0002-403-vs-404.md",
+     "lineStart": 27,
+     "lineEnd": 30
+    },
+    {
+     "path": "docs/adr/0002-403-vs-404.md",
+     "lineStart": 41,
+     "lineEnd": 41
+    }
+   ],
+   "prompt": "A teammate in workspace A sends a PUT to /api/contacts/{id} for a contact that really exists in workspace B. What status does ADR 0002 prescribe?",
+   "answer": "404, as the workspace-scoped lookup finds no such contact for them",
+   "distractors": [
+    "403, as a write to another tenant's resource is refused, not hidden",
+    "403 for this write, though a read of the same id would have been 404",
+    "409, as the contact exists but is owned by a different workspace"
+   ],
+   "explanation": "ADR 0002 lines 27-30: every resource query is scoped to the caller's workspace (c.WorkspaceId == User.GetWorkspaceId()), so a row the caller may not see is simply not found, identical to an id that never existed. Line 41: writes to a foreign resource also 404 rather than 403, for the same reason. Answering 403 or 409 here would confirm that the id exists in some other workspace, which is the oracle the ADR avoids."
+  },
+  {
+   "id": "q22-cannot-restamp",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0004-timestamp-body-signing.md",
+    "lines": {
+     "start": 13,
+     "end": 33
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0004-timestamp-body-signing.md",
+     "lineStart": 15,
+     "lineEnd": 16
+    },
+    {
+     "path": "docs/adr/0004-timestamp-body-signing.md",
+     "lineStart": 22,
+     "lineEnd": 24
+    },
+    {
+     "path": "docs/adr/0004-timestamp-body-signing.md",
+     "lineStart": 29,
+     "lineEnd": 31
+    }
+   ],
+   "prompt": "An attacker holds a captured Harbor webhook that is now older than the receiver's tolerance. Per ADR 0004, why can the attacker not simply attach a fresh timestamp and resend it?",
+   "answer": "The HMAC covers the timestamp too, and re-signing needs the secret",
+   "distractors": [
+    "Receivers take the time from the HTTP Date header, not the signature",
+    "Receivers store every timestamp they have seen and refuse repeats",
+    "Each delivery is bound to Harbor's IP, which the attacker cannot use"
+   ],
+   "explanation": "ADR 0004 lines 15-16 and 22-24: Harbor signs the string {timestamp}.{body} with HMAC-SHA256, and the receiver recomputes the HMAC over {t}.{body} with the shared secret and also rejects a t outside its tolerance. Changing the timestamp changes the signed string, so lines 29-31 conclude the attacker cannot re-stamp the request without the secret. The ADR uses the signed t, keeps no record of seen timestamps, and relies on no IP binding."
+  },
+  {
+   "id": "q23-serialize-once",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0004-timestamp-body-signing.md",
+    "lines": {
+     "start": 27,
+     "end": 39
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0004-timestamp-body-signing.md",
+     "lineStart": 34,
+     "lineEnd": 39
+    }
+   ],
+   "prompt": "Harbor serializes a webhook payload once at publish time with pinned options and sends those bytes verbatim. What reason does ADR 0004 give?",
+   "answer": "Re-serializing when sending could alter the bytes and void the signature",
+   "distractors": [
+    "Storing the JSON once is cheaper than rebuilding it again for every retry",
+    "The dispatcher can no longer load the entities after the save commits",
+    "Receivers require camelCase names, which only publish-time options set"
+   ],
+   "explanation": "ADR 0004 lines 34-39: the signed bytes must be reproducible independently of how the API renders responses, so the payload is serialized once at publish time with pinned options (Webhooks.PayloadJson) and sent verbatim; re-serializing at send time would change bytes and invalidate the signature, the same reason the outbox stores the exact payload. Cost, entity access and receiver casing are not the reasons the ADR gives."
+  },
+  {
+   "id": "q24-segment-subquery",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0005-segments-as-sql.md",
+    "lines": {
+     "start": 14,
+     "end": 29
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0005-segments-as-sql.md",
+     "lineStart": 23,
+     "lineEnd": 29
+    }
+   ],
+   "prompt": "A conversation list is filtered with `?segmentId=`, so only conversations whose contact is in the segment should remain. How does ADR 0005 compose that filter?",
+   "answer": "As a subquery over contact ids, so it stays a single SQL statement",
+   "distractors": [
+    "By loading the matching contact ids first and passing them back in",
+    "By filtering the workspace's contacts in memory with a compiled rule",
+    "By reading a membership table that is refreshed when contacts change"
+   ],
+   "explanation": "ADR 0005 lines 23-29: SegmentCompiler.Compile builds an expression EF translates to a WHERE clause, and the conversation filter composes the segment as a subquery over contact ids (SegmentQueries.ContactIdsQuery), not a materialized list, so it stays one statement however many contacts match. Loading ids or filtering contacts in memory is the shortcut the Context rejects (lines 14-17), and membership is live, with nothing to refresh (lines 9-10)."
+  },
+  {
+   "id": "q25-write-time-compile",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0005-segments-as-sql.md",
+    "lines": {
+     "start": 19,
+     "end": 31
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0005-segments-as-sql.md",
+     "lineStart": 30,
+     "lineEnd": 31
+    }
+   ],
+   "prompt": "A teammate saves a segment whose rules cannot be compiled. Per ADR 0005, when is the broken segment rejected, and how?",
+   "answer": "On save, with a 422 from compiling its rules once at write time",
+   "distractors": [
+    "On the first list read that uses it, as a 422 from the controller",
+    "On save, with a 400 from model binding before any rule compiles",
+    "On every read that uses it, as a 500 when EF cannot translate it"
+   ],
+   "explanation": "ADR 0005 lines 30-31: rules are validated by compiling them once at write time, so a broken segment is rejected with 422 instead of throwing on every read. The rejection therefore happens when the segment is saved, not on a later list read, and it comes from compiling the rules, not from model binding, which only checks the request's shape."
+  },
+  {
+   "id": "q26-assert-the-sql",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0005-segments-as-sql.md",
+    "lines": {
+     "start": 33,
+     "end": 43
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0005-segments-as-sql.md",
+     "lineStart": 37,
+     "lineEnd": 40
+    }
+   ],
+   "prompt": "A refactor quietly moves segment filtering back into memory, and every ordinary functional test still passes. What does ADR 0005 rely on to catch it?",
+   "answer": "SegmentSqlTranslationTests, which assert the generated SQL text itself",
+   "distractors": [
+    "A latency budget in the functional suite that fails slow list calls",
+    "A row-count assertion, as in-memory filtering returns extra rows",
+    "The request log, which flags list calls that read many contacts"
+   ],
+   "explanation": "ADR 0005 lines 37-40: a regression to in-memory filtering would still return the right rows and pass ordinary functional tests, so SegmentSqlTranslationTests asserts the generated SQL directly via ToQueryString: json_extract present, the filter in the WHERE, and the conversation filter as a subquery. Row counts cannot catch it because the rows are right, and the ADR names no timing budget or log check."
+  },
+  {
+   "id": "q27-pointer-without-token",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0006-no-token-round-robin.md",
+    "lines": {
+     "start": 5,
+     "end": 42
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0006-no-token-round-robin.md",
+     "lineStart": 15,
+     "lineEnd": 18
+    },
+    {
+     "path": "docs/adr/0006-no-token-round-robin.md",
+     "lineStart": 29,
+     "lineEnd": 31
+    }
+   ],
+   "prompt": "Two conversations arrive at the same instant and both advance Inbox.LastAssignedTeammateId. Why does ADR 0006 leave that pointer without a concurrency token?",
+   "answer": "A token would 409 the save that commits a customer's new conversation",
+   "distractors": [
+    "SQLite serializes the two writes, so this pointer update is never lost",
+    "The pointer is recomputed on each read, so a lost write never persists",
+    "A token would deadlock the two saves, as both lock the same inbox row"
+   ],
+   "explanation": "ADR 0006 lines 15-18: a token would make the second writer's SaveChanges fail with DbUpdateConcurrencyException and a 409, but that save is committing a customer's new conversation along with the pointer bump, so failing it rejects an incoming customer message. The pointer is an ordinary column whose concurrent update is allowed to be lost; the worst case is one repeated teammate, which self-corrects on the next assignment (lines 29-31)."
+  },
+  {
+   "id": "q28-omitted-and-oversized",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0007-header-pagination.md",
+    "lines": {
+     "start": 14,
+     "end": 41
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0007-header-pagination.md",
+     "lineStart": 19,
+     "lineEnd": 26
+    }
+   ],
+   "prompt": "A client calls a Harbor list endpoint with no paging parameters, then calls it again with ?pageSize=500. What does ADR 0007 say each call gets?",
+   "answer": "The first page of 50, then a page whose size is capped at 200",
+   "distractors": [
+    "Every matching row, then a 400 for the pageSize over the limit",
+    "The first page of 50, then a 400 for the pageSize over the limit",
+    "Every matching row, then a page of 500 as the max is advisory"
+   ],
+   "explanation": "ADR 0007 lines 19-26: pageSize defaults to Paging.DefaultPageSize = 50 with a max of 200; omitting the parameters selects the first page, not everything, so the bound holds even for a caller that says nothing; out-of-range input is clamped, not rejected, so a pageSize over the max is capped. Only truly unparseable values such as ?page=abc still 400, via model binding (lines 39-41)."
+  },
+  {
+   "id": "q29-page-binding-collision",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0007-header-pagination.md",
+    "lines": {
+     "start": 28,
+     "end": 41
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0007-header-pagination.md",
+     "lineStart": 34,
+     "lineEnd": 38
+    }
+   ],
+   "prompt": "Harbor's list actions bind `[FromQuery] PageRequest paging`. ADR 0007 records what went wrong when that parameter was named `page`. What was it?",
+   "answer": "It clashed with PageRequest.Page and silently ignored ?page=",
+   "distractors": [
+    "It failed to bind at all, so every list call returned a 400",
+    "It shadowed a route value, so asking for page 2 gave a 404",
+    "It clashed with the X-Page header, so the header was dropped"
+   ],
+   "explanation": "ADR 0007 lines 34-38: a `[FromQuery] PageRequest page` collided with the object's own Page property and silently ignored ?page=, and every test passed because they all asserted page one. The rename to `paging` fixed it, and PaginationBoundaryTests walks to a real second page on every list endpoint to guard the regression. Nothing returned a 400 or 404, and the headers were not involved."
+  },
+  {
+   "id": "q30-parity-guard-rail",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0009-single-creation-path.md",
+    "lines": {
+     "start": 20,
+     "end": 42
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0009-single-creation-path.md",
+     "lineStart": 37,
+     "lineEnd": 42
+    }
+   ],
+   "prompt": "ADR 0009 says every new conversation-creation path must go through ConversationStarter.StartAsync. What enforces that rule?",
+   "answer": "Convention, guarded by ChannelParityTests and the ADR itself",
+   "distractors": [
+    "The compiler, as Conversation exposes only an internal constructor",
+    "A Roslyn analyzer that fails the build on new Conversation(...)",
+    "A database trigger that rejects conversations with no assignment"
+   ],
+   "explanation": "ADR 0009 lines 37-42: ChannelParityTests runs one scenario down both channels and asserts equivalent results (same SLA, assignee and events), so a divergent new path is caught. The rule is a convention, not something the compiler enforces: a future contributor could write a controller that news up a Conversation directly, and the parity tests and the ADR are the guard rails. No constructor restriction, analyzer or trigger is involved."
+  },
+  {
+   "id": "f05-paging-surface",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0007-header-pagination.md",
+    "lines": {
+     "start": 14,
+     "end": 21
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0007-header-pagination.md",
+     "lineStart": 16,
+     "lineEnd": 21
+    }
+   ],
+   "front": "ADR 0007: where do the page request and the paging metadata live in Harbor's list API, and why not an envelope?",
+   "back": "The request uses query parameters ?page= (1-based) and ?pageSize=; the response carries X-Total-Count, X-Page, X-Page-Size and X-Total-Pages headers; bodies stay plain JSON arrays. A { data, total, page } envelope would have broken every existing client and test that expected plain arrays."
+  },
+  {
+   "id": "f06-attribute-string-map",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0005-segments-as-sql.md",
+    "lines": {
+     "start": 23,
+     "end": 45
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0005-segments-as-sql.md",
+     "lineStart": 24,
+     "lineEnd": 26
+    },
+    {
+     "path": "docs/adr/0005-segments-as-sql.md",
+     "lineStart": 44,
+     "lineEnd": 45
+    }
+   ],
+   "front": "ADR 0005: how are contact custom attributes stored and read in segment rules?",
+   "back": "As a flat string map, so a comparison behaves the same whether the value arrived as \"5\" or 5. Rules address them as attributes.<key>, and SQL reads them with SQLite's json_extract, exposed to EF as a [DbFunction] on HarborDbContext; built-in fields map to columns."
+  },
+  {
+   "id": "f07-signature-header",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0004-timestamp-body-signing.md",
+    "lines": {
+     "start": 18,
+     "end": 43
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0004-timestamp-body-signing.md",
+     "lineStart": 18,
+     "lineEnd": 25
+    },
+    {
+     "path": "docs/adr/0004-timestamp-body-signing.md",
+     "lineStart": 40,
+     "lineEnd": 43
+    }
+   ],
+   "front": "ADR 0004: what does Harbor's webhook signature header look like, how is it compared, and when can you see the secret?",
+   "back": "X-Harbor-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256>, a Stripe-style format. Compare signatures in constant time; WebhookSigner.TryVerify is the one definition shared by Harbor's tests and a real receiver. The signing secret is returned only once, at subscription creation, and never appears in a later response."
+  },
+  {
+   "id": "f08-measure-before-indexing",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/learning/data-and-queries.md",
+    "lines": {
+     "start": 91,
+     "end": 105
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/data-and-queries.md",
+     "lineStart": 93,
+     "lineEnd": 97
+    },
+    {
+     "path": "docs/learning/data-and-queries.md",
+     "lineStart": 104,
+     "lineEnd": 105
+    }
+   ],
+   "front": "Harbor data guide: what does a controlled measure-before-indexing experiment record, and what must it show?",
+   "back": "Synthetic data with several tenants and realistic variation in states and timestamps; record row counts, filters, generated SQL, warm-up strategy, repeated timings and result size; compare a candidate index with SQLite's query plan, then measure again. Count queries and substring searches can stay expensive even when few rows come back. Exit: one measured improvement, one preserved behavior, one limitation of the experiment."
+  },
+  {
+   "id": "f09-list-vs-overview-shape",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0010-shared-conversation-queries.md",
+    "lines": {
+     "start": 18,
+     "end": 21
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0010-shared-conversation-queries.md",
+     "lineStart": 18,
+     "lineEnd": 20
+    }
+   ],
+   "front": "ADR 0010: once membership is shared, what does the list do with it, and what does the overview do?",
+   "back": "The list applies a named ordering with an ID tie-breaker and then pagination. The overview performs one SQL aggregate over all matches and returns zeros for an empty population."
+  },
+  {
+   "id": "f10-conversation-queries",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0010-shared-conversation-queries.md",
+    "lines": {
+     "start": 10,
+     "end": 28
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0010-shared-conversation-queries.md",
+     "lineStart": 12,
+     "lineEnd": 14
+    },
+    {
+     "path": "docs/adr/0010-shared-conversation-queries.md",
+     "lineStart": 26,
+     "lineEnd": 27
+    }
+   ],
+   "front": "ADR 0010: what is ConversationQueries, and what is it deliberately not?",
+   "back": "A concrete component in the API project that consumes the API filter contract, accepts one evaluation time and a cancellation token, resolves segments within the workspace, and returns a no-tracking IQueryable; segment rule and query helpers moved to Infrastructure. It depends on EF and API contracts and is intentionally not a provider-independent repository abstraction."
+  },
+  {
+   "id": "f11-missing-key-401",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0001-api-key-auth.md",
+    "lines": {
+     "start": 16,
+     "end": 29
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0001-api-key-auth.md",
+     "lineStart": 16,
+     "lineEnd": 19
+    },
+    {
+     "path": "docs/adr/0001-api-key-auth.md",
+     "lineStart": 27,
+     "lineEnd": 28
+    }
+   ],
+   "front": "ADR 0001: where does a Harbor API key travel, what happens when it is missing or unknown, and when can a response contain it?",
+   "back": "Callers send a per-teammate key in the X-Api-Key header; a missing or unknown key is a 401. The key is returned exactly once, at creation, and no later response echoes it: TeammateResponse has no key field."
   }
  ]
 }
