@@ -268,6 +268,35 @@ describe('explain-back: immutable answer first, then the key, then the self-scor
     expectError(await request(ctx.app).post(`/api/units/${k1}/kata/self-score`).send({ perDefect: { d1: 'caught' } }), 409, 'ALREADY_SCORED');
   });
 
+  it('second answer / second self-score errors carry no global attempt id', async () => {
+    const eb = ctx.id('fixture:ladder/explain-api');
+    await passArtifact(ctx);
+    const ans = await request(ctx.app).post(`/api/units/${eb}/explain-back/answers`).send({ answers: ANSWERS }).expect(200);
+    const again = await request(ctx.app).post(`/api/units/${eb}/explain-back/answers`).send({ answers: ANSWERS });
+    expectError(again, 403, 'ALREADY_ANSWERED');
+    expect(again.body.error.message).toContain(`unit ${eb}: your explain-back answer is recorded and immutable`);
+    expect(again.body.error.message).not.toContain('#' + ans.body.attemptId);
+
+    await request(ctx.app).post(`/api/units/${eb}/explain-back/self-score`).send({ perKeyPoint: marks(16) }).expect(200);
+    const rescore = await request(ctx.app).post(`/api/units/${eb}/explain-back/self-score`).send({ perKeyPoint: marks(16) });
+    expectError(rescore, 409, 'ALREADY_SCORED');
+    expect(rescore.body.error.message).toContain('your answer on this unit is already self-scored');
+    expect(rescore.body.error.message).not.toContain('#' + ans.body.attemptId);
+
+    const k1 = ctx.id('fixture:ladder/kata-1');
+    const FINDING = { scenario: 'two rules, one matches', evidence: 'allocationSummary.mjs:17', consequence: 'coverage is overstated' };
+    const f = await request(ctx.app).post(`/api/units/${k1}/kata/findings`).send({ findings: [FINDING] }).expect(200);
+    const f2 = await request(ctx.app).post(`/api/units/${k1}/kata/findings`).send({ findings: [FINDING] });
+    expectError(f2, 403, 'ALREADY_ANSWERED');
+    expect(f2.body.error.message).toContain(`unit ${k1}: your findings are recorded and immutable`);
+    expect(f2.body.error.message).not.toContain('#' + f.body.attemptId);
+    await request(ctx.app).post(`/api/units/${k1}/kata/self-score`).send({ perDefect: { d1: 'caught' } }).expect(200);
+    const kre = await request(ctx.app).post(`/api/units/${k1}/kata/self-score`).send({ perDefect: { d1: 'caught' } });
+    expectError(kre, 409, 'ALREADY_SCORED');
+    expect(kre.body.error.message).toContain('your findings on this unit are already self-scored');
+    expect(kre.body.error.message).not.toContain('#' + f.body.attemptId);
+  });
+
   it('W7 audit #12e: a unit stricter than the floor (minCoverage 0.9) shows AND enforces 90%; a laxer one is floored at 80%', async () => {
     const strict = insertUnit(
       ctx.tmp.db,
@@ -993,7 +1022,8 @@ describe('explain-back PRACTICE retakes (assisted, 0 XP, never a promotion leg; 
     const before = ledgerCounts(ctx.tmp.db);
     const res = await request(ctx.app).post(practiceUrl(id)).send({ answers: PRACTICE });
     expectError(res, 409, 'NOT_VERIFIED');
-    expect(res.body.error.message).toContain(`answer of record #${ans.body.attemptId}`);
+    expect(res.body.error.message).toContain('self-score your answer of record first');
+    expect(res.body.error.message).not.toContain('#' + ans.body.attemptId);
     expect(ledgerCounts(ctx.tmp.db)).toEqual(before);
     expect((await detail(ctx.app, id))?.practice).toEqual({ available: false, count: 0, latestUnscoredAttemptId: null });
   });
@@ -1079,7 +1109,8 @@ describe('explain-back PRACTICE retakes (assisted, 0 XP, never a promotion leg; 
     // one unscored practice at a time
     const p2early = await request(ctx.app).post(practiceUrl(id)).send({ answers: PRACTICE });
     expectError(p2early, 403, 'ALREADY_ANSWERED');
-    expect(p2early.body.error.message).toContain(`practice attempt #${p1.body.attemptId}`);
+    expect(p2early.body.error.message).toContain('practice attempt 1');
+    expect(p2early.body.error.message).not.toContain('#' + p1.body.attemptId);
 
     // practice-score: never the answer of record, never an unknown attempt
     expectError(await request(ctx.app).post(practiceScoreUrl(id)).send({ attemptId: rec.body.attemptId, perKeyPoint: marks(16) }), 409, 'NOT_VERIFIED');
@@ -1116,6 +1147,39 @@ describe('explain-back PRACTICE retakes (assisted, 0 XP, never a promotion leg; 
     expect(key2.practice?.[0]!.scored?.score).toBe(1);
     expect(key2.practice?.[1]!.scored).toBeNull();
     expect((await detail(ctx.app, id))?.practice).toEqual({ available: true, count: 2, latestUnscoredAttemptId: p2.body.attemptId });
+  });
+
+  it('learner-facing errors use per-unit practice ordinals, never global attempt ids', async () => {
+    const id = ctx.id('fixture:ladder/explain-api');
+    await passArtifact(ctx);
+    await request(ctx.app).post(`/api/units/${id}/explain-back/answers`).send({ answers: ANSWERS }).expect(200);
+    await request(ctx.app).post(`/api/units/${id}/explain-back/self-score`).send({ perKeyPoint: marks(16) }).expect(200);
+
+    // practice #1 recorded -> a second practice is refused, naming it by its per-unit ordinal
+    const p1 = await request(ctx.app).post(practiceUrl(id)).send({ answers: PRACTICE }).expect(200);
+    const early = await request(ctx.app).post(practiceUrl(id)).send({ answers: PRACTICE });
+    expectError(early, 403, 'ALREADY_ANSWERED');
+    expect(early.body.error.message).toContain('practice attempt 1 is recorded and unscored');
+    expect(early.body.error.message).not.toContain('#' + p1.body.attemptId);
+
+    // score #1, then record and score #2
+    await request(ctx.app).post(practiceScoreUrl(id)).send({ attemptId: p1.body.attemptId, perKeyPoint: marks(16) }).expect(200);
+    const p2 = await request(ctx.app).post(practiceUrl(id)).send({ answers: PRACTICE }).expect(200);
+    await request(ctx.app).post(practiceScoreUrl(id)).send({ attemptId: p2.body.attemptId, perKeyPoint: marks(16) }).expect(200);
+
+    // re-scoring #1 names #1 (index-based), not the latest
+    const again1 = await request(ctx.app).post(practiceScoreUrl(id)).send({ attemptId: p1.body.attemptId, perKeyPoint: marks(16) });
+    expectError(again1, 409, 'ALREADY_SCORED');
+    expect(again1.body.error.message).toContain('practice attempt 1 is already self-scored');
+    expect(again1.body.error.message).not.toContain('#' + p1.body.attemptId);
+    const again2 = await request(ctx.app).post(practiceScoreUrl(id)).send({ attemptId: p2.body.attemptId, perKeyPoint: marks(16) });
+    expectError(again2, 409, 'ALREADY_SCORED');
+    expect(again2.body.error.message).toContain('practice attempt 2 is already self-scored');
+    expect(again2.body.error.message).not.toContain('#' + p2.body.attemptId);
+
+    // the ordinals match the served practice array (oldest-first)
+    const key = ExplainBackKeyResponse.parse((await request(ctx.app).get(`/api/units/${id}/explain-back/key`)).body);
+    expect(key.practice?.map((p) => p.attemptId)).toEqual([p1.body.attemptId, p2.body.attemptId]);
   });
 
   it('a practice pass never anchors leg (b); a weak practice score never renders a failed leg (the display query is assistance-none only)', async () => {

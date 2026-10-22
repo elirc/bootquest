@@ -197,25 +197,25 @@ const storedAnswer = (a: AttemptRow): StoredAnswer => JSON.parse(a.answer ?? '{}
  */
 function assertAnsweredHere(db: Db, unit: UnitRecord, attempt: AttemptRow): void {
   if (attempt.unit_id === unit.id || getUnit(db, attempt.unit_id) === undefined) return;
-  throw new HttpError(403, 'ALREADY_ANSWERED', `this item was answered on unit ${attempt.unit_id} (answer #${attempt.id}); self-score it there`);
+  throw new HttpError(403, 'ALREADY_ANSWERED', `this item was answered on unit ${attempt.unit_id}; self-score it there`);
 }
 
 /** ALREADY_ANSWERED for a second answer to the same item version. */
 function alreadyAnswered(db: Db, prior: AttemptRow, unit: UnitRecord, item: SeedAnswerItem, noun: string): HttpError {
   if (prior.unit_id === unit.id) {
-    return new HttpError(403, 'ALREADY_ANSWERED', `unit ${unit.id}: your ${noun} #${prior.id} ${noun === 'findings' ? 'are' : 'is'} recorded and immutable; open the key instead`);
+    return new HttpError(403, 'ALREADY_ANSWERED', `unit ${unit.id}: your ${noun} ${noun === 'findings' ? 'are' : 'is'} recorded and immutable; open the key instead`);
   }
   if (getUnit(db, prior.unit_id) === undefined) {
     return new HttpError(
       403,
       'ALREADY_ANSWERED',
-      `${item.key} was already answered on unit ${prior.unit_id} (${noun} #${prior.id}), since retired; open its key and self-score it here on unit ${unit.id}`,
+      `${item.key} was already answered on unit ${prior.unit_id}, since retired; open its key and self-score it here on unit ${unit.id}`,
     );
   }
   return new HttpError(
     403,
     'ALREADY_ANSWERED',
-    `${item.key} was already answered on unit ${prior.unit_id} (${noun} #${prior.id}); its key may have been read, so it cannot be answered again`,
+    `${item.key} was already answered on unit ${prior.unit_id}; its key may have been read, so it cannot be answered again`,
   );
 }
 
@@ -493,7 +493,7 @@ export function selfScoreExplainBack(deps: LadderDeps, unitId: number, body: { p
   return honest(() =>
     db.tx(() => {
       if (scoredOn(db, attempt.id, 'explain-back')) {
-        throw new HttpError(409, 'ALREADY_SCORED', `answer #${attempt.id} is already self-scored (evidence is append-only)`);
+        throw new HttpError(409, 'ALREADY_SCORED', 'your answer on this unit is already self-scored (evidence is append-only)');
       }
       closeElapsedDays(db, clock);
       const evidenceIds = competencies.map(
@@ -554,12 +554,12 @@ export function practiceExplainBack(deps: LadderDeps, unitId: number, body: Expl
     const rec = currentAnswer(db, 'explainBack', item);
     if (!rec) throw notAnswered(db, 'explainBack', item, unit, 'answers');
     if (scoredOn(db, rec.id, 'explain-back') === null) {
-      throw new HttpError(409, 'NOT_VERIFIED', `unit ${unit.id}: self-score your answer of record #${rec.id} first — practice opens after the first scored answer`);
+      throw new HttpError(409, 'NOT_VERIFIED', `unit ${unit.id}: self-score your answer of record first — practice opens after the first scored answer`);
     }
     const rows = practiceAttempts(db, item);
     const latest = rows[rows.length - 1];
     if (latest && scoredOn(db, latest.id, 'explain-back') === null) {
-      throw new HttpError(403, 'ALREADY_ANSWERED', `unit ${unit.id}: practice attempt #${latest.id} is recorded and unscored; score it first`);
+      throw new HttpError(403, 'ALREADY_ANSWERED', `unit ${unit.id}: practice attempt ${rows.length} is recorded and unscored; score it first`);
     }
     const attempt = recordAttempt(
       db,
@@ -613,7 +613,8 @@ export function practiceScoreExplainBack(deps: LadderDeps, unitId: number, body:
   return honest(() =>
     db.tx(() => {
       if (scoredOn(db, attempt.id, 'explain-back')) {
-        throw new HttpError(409, 'ALREADY_SCORED', `practice attempt #${attempt.id} is already self-scored (evidence is append-only)`);
+        const ord = practiceAttempts(db, item).findIndex((p) => p.id === attempt.id) + 1;
+        throw new HttpError(409, 'ALREADY_SCORED', `practice attempt ${ord} is already self-scored (evidence is append-only)`);
       }
       const evidenceIds = competencies.map(
         (competency) =>
@@ -716,7 +717,7 @@ export function selfScoreKata(deps: LadderDeps, unitId: number, body: { perDefec
   const catchRate = caught / ids.length;
   return honest(() =>
     db.tx(() => {
-      if (scoredOn(db, attempt.id, 'kata')) throw new HttpError(409, 'ALREADY_SCORED', `findings #${attempt.id} are already self-scored (evidence is append-only)`);
+      if (scoredOn(db, attempt.id, 'kata')) throw new HttpError(409, 'ALREADY_SCORED', 'your findings on this unit are already self-scored (evidence is append-only)');
       closeElapsedDays(db, clock);
       const evidenceIds = competencies.map(
         (competency) =>
