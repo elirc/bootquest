@@ -1195,3 +1195,25 @@ resolved); quiz variety `concept` and flashcard shape `hand-authored`;
       no invoice" — the invoice is saved BEFORE usage is stamped, BillingEngine.cs:82-83).
   - Deprioritized alternates recorded for a future wave: meterforge-upskilling, masteropen,
     harbor, scedulingpyjs/umami/cal-com/search-indexer/icms, atlas set-B candidates.
+- **spaced-repetition wave — review fixes (2026-10-21):** three Fable reviewers (code/pins +
+  cite-span audit; EB alternates 276/276 kps at the pins via forked sub-reviewers; quiz keys
+  88/88 independently derived + drills 95/95 recomputed) found 0 blockers. Fixed on review:
+  netcalendy-b "two emails" → domain-event terms (no mail infra at the pin) + Q3's fifth
+  trade-off axis added to the prompt; dotnet-stripe-b customer-email scenario now DECLARED as a
+  supposition (netgum precedent; the worker sends only merchant webhooks at the pin);
+  w22-b mirror-overwrite reworded to "on any event that commits" (the 409 path rolls back) and
+  its twin-clause vs payments-lab-c reworded; netslack-b truncated sentence completed + the
+  domain-events claim split to its own cited kp; netgum-b Q2.kp6 brought inside the prompt's
+  enumerated fixes (null-StockQuantity angle); ww19-b dropped the recycled dead-index
+  set-piece; zz8-b Q1.kp8 deduplicated to the retry-policy angle + the no-sweep clause fixed;
+  bazaar-b Q1 prompt now demands kp7/kp8 + the 3×3 locale/currency anchor cited; dotnet-drop-b
+  janitor cadence moved to its own cited kp; five cite widenings. Flashcard xleaks (pre-existing
+  at main, fixed per precedent): dotnet-stripe f02, relay f01/f02, temporal-lite f01 — plus the
+  fix agent's own finds temporal-lite f03/f11/f02/f04 (full-pack sweep; f06/f08 adjudicated
+  acceptable: mechanism-card/consequence-quiz pattern, giveaway only visible inside the cite)
+  and bazaar f02. All reworded through-the-mechanism, ids kept, packs re-seeded quests-then-
+  notes with exactly their historical quarantines. Post-fix gates: leak lint 185/0, seed
+  2194/2194, server 631 + selfrun 20 (all exit 0). Accepted without change: w22 q13/q14
+  explanations state an old generator goal-check's expected answer (the pack's own reading
+  material states it openly); drill notes 09-08/10-01 re-skin existing formula shapes with new
+  teaching content.
