@@ -141,6 +141,13 @@ describe.skipIf(!HAVE_CHECKOUT)('W7 real ladder content end to end (temp DB, no 
     expect(eb.filter((u) => u.trackId !== 'sysdesign').every((u) => u.quest !== null)).toBe(true);
     // the sysdesign track holds exactly the DESIGN IT units (no kata/g2/study strays)
     expect(l.units.filter((u) => u.trackId === 'sysdesign').map((u) => u.id).sort()).toEqual(design.map((u) => u.id).sort());
+    // DESIGN IT titles come from each set's Q1 topic (store/ladder.ts designTopic); every real
+    // prompt parses, and the 19 set-B/C alternates keep their sibling suffix
+    expect(design.every((u) => u.title.startsWith('DESIGN IT: '))).toBe(true);
+    const designTitles = design.map((u) => u.title);
+    expect(designTitles).toContain('DESIGN IT: bazaar — cache coherence across layers for a storefront');
+    expect(designTitles).toContain('DESIGN IT: bazaar — personalized pricing on a cached storefront (set B)');
+    expect(design.filter((u) => / \(set [BC]\)$/.test(u.title)).length).toBe(19);
   });
 
   it('a REAL explain-back set plays end to end: questions only -> immutable answer -> key -> self-score (20 XP)', async () => {

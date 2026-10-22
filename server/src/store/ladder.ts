@@ -165,6 +165,29 @@ export function unitLabel(p: string): string {
   return parent ? `${parent}/${base}` : base;
 }
 
+const DESIGN_TOPIC = /^DESIGN IT\s*[—–-]\s*([^(\n]+?)\s*\(/;
+const DESIGN_TOPIC_MAX = 90;
+
+/**
+ * The system-design topic of a DESIGN IT set, read from its Q1 prompt (the prompt prefix is the
+ * routing contract; pack dir names are not stable). Handles `[senior] <topic> (`, `<topic> [mid] (`
+ * and the untagged `<topic> (javabootcamp …` shapes; a topic over 90 chars is cut at a word
+ * boundary with an ellipsis. null when the prompt does not parse (the caller falls back to
+ * unitLabel(path)).
+ */
+export function designTopic(item: SeedExplainBackItem): string | null {
+  const q1 = item.questions[0]?.prompt ?? '';
+  const m = DESIGN_TOPIC.exec(q1);
+  if (!m) return null;
+  const t = m[1]!
+    .replace(/^\[[^\]]*\]\s*/, '')
+    .replace(/\s*\[[^\]]*\]$/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!t) return null;
+  return t.length > DESIGN_TOPIC_MAX ? `${t.slice(0, DESIGN_TOPIC_MAX - 1).replace(/\s+\S*$/u, '')}…` : t;
+}
+
 interface CampaignLink {
   questId: number;
   questKey: string;
@@ -200,7 +223,11 @@ function plan(items: SeedItemStore, links: Map<string, CampaignLink>, kataDiffic
   for (const it of items.explainBackItems()) {
     const g2 = isG2(it);
     const design = isDesignIt(it);
-    const title = g2 ? `G2 delegation brief: ${it.provenance.repo}` : `Explain back: ${it.provenance.repo} — ${unitLabel(it.provenance.path)}`;
+    const title = g2
+      ? `G2 delegation brief: ${it.provenance.repo}`
+      : design
+        ? `DESIGN IT: ${it.provenance.repo} — ${designTopic(it) ?? unitLabel(it.provenance.path)}`
+        : `Explain back: ${it.provenance.repo} — ${unitLabel(it.provenance.path)}`;
     out.push({
       family: g2 ? 'g2' : 'explain-back',
       key: explainBackUnitKey(it),
