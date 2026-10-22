@@ -104,9 +104,13 @@ describe('code drafts', () => {
     const again = await editorBox();
     expect(again.value).toBe(starter); // the draft is gone after the pass
     expect(screen.queryByTestId('draft-restored')).not.toBeInTheDocument();
-    await second.user.click(screen.getByRole('button', { name: /Load my last submitted code \(attempt #\d+\)/ }));
+    const load = screen.getByRole('button', { name: 'Load my last submitted code' });
+    expect(load).toHaveAttribute('data-attempt', expect.stringMatching(/^[1-9]\d*$/));
+    expect(load.textContent).not.toMatch(/#\d/); // the global id is a fetch handle, never learner copy
+    await second.user.click(load);
     await waitFor(() => expect(again.value).toBe(PASSING_CODE));
-    expect(screen.getByTestId('draft-undo')).toHaveTextContent(/Loaded your code from attempt #\d+/);
+    expect(screen.getByTestId('draft-undo')).toHaveTextContent('Loaded your last submitted code.');
+    expect(screen.getByTestId('draft-undo').textContent).not.toMatch(/#\d/);
   });
 
   it('the "Load my last submitted code" offer follows every submit (never names an older attempt)', async () => {
@@ -116,18 +120,20 @@ describe('code drafts', () => {
     await first.user.keyboard('// one');
     await first.user.click(screen.getByRole('button', { name: /Submit/ }));
     await within(screen.getByTestId('results')).findByText('Checks failed');
-    const a1 = Number(/#(\d+)/.exec(screen.getByRole('button', { name: /Load my last submitted code/ }).textContent ?? '')![1]);
+    const attemptOf = (b: HTMLElement) => Number(b.getAttribute('data-attempt'));
+    const a1 = attemptOf(screen.getByRole('button', { name: 'Load my last submitted code' }));
+    expect(a1).toBeGreaterThan(0);
     first.unmount();
 
     const { user } = renderApp(`/play/${DRILL}`, api);
     const editor = await editorBox();
-    expect(screen.getByRole('button', { name: `Load my last submitted code (attempt #${a1})` })).toBeInTheDocument();
+    expect(attemptOf(screen.getByRole('button', { name: 'Load my last submitted code' }))).toBe(a1);
     await user.click(editor);
     await user.keyboard('// two');
     await user.click(screen.getByRole('button', { name: /Submit/ }));
     await within(screen.getByTestId('results')).findByText('Checks failed');
-    const offer = screen.getByRole('button', { name: /Load my last submitted code/ });
-    const a2 = Number(/#(\d+)/.exec(offer.textContent ?? '')![1]);
+    const offer = screen.getByRole('button', { name: 'Load my last submitted code' });
+    const a2 = attemptOf(offer);
     expect(a2).toBeGreaterThan(a1);
     // and it loads THAT attempt's code
     await user.click(editor);
@@ -135,7 +141,77 @@ describe('code drafts', () => {
     await user.click(offer);
     await waitFor(() => expect(editor.value).toContain('// two'));
     expect(editor.value).not.toContain('// three');
-    expect(screen.getByTestId('draft-undo')).toHaveTextContent(`Loaded your code from attempt #${a2}.`);
+    expect(screen.getByTestId('draft-undo')).toHaveTextContent('Loaded your last submitted code.');
+  });
+
+  /** recording() whose GET /attempts/:id waits until the test releases it (a slow network). */
+  function slowAttempts() {
+    const { api: base } = recording();
+    const gates: Array<() => void> = [];
+    const api: BootQuestApi = {
+      ...base,
+      getAttempt: async (attemptId) => {
+        await new Promise<void>((resolve) => gates.push(resolve));
+        return base.getAttempt(attemptId);
+      },
+    };
+    return { api, release: () => gates.splice(0).forEach((g) => g()), waiting: () => gates.length };
+  }
+
+  /** Submit `code` once (a failing attempt keeps the draft) and remount: a revisit with an offer. */
+  async function revisitAfterSubmit(api: BootQuestApi, code: string) {
+    const first = renderApp(`/play/${DRILL}`, api);
+    const editor = await editorBox();
+    await first.user.clear(editor);
+    await first.user.type(editor, code);
+    await first.user.click(screen.getByRole('button', { name: /Submit/ }));
+    await within(screen.getByTestId('results')).findByText(/Checks failed|All checks passed/);
+    first.unmount();
+    const second = renderApp(`/play/${DRILL}`, api);
+    return { user: second.user, editor: await editorBox() };
+  }
+
+  it('a slow attempt load never stomps edits typed while it was in flight; the held code applies only on request, undoably', async () => {
+    const { api, release, waiting } = slowAttempts();
+    const { user, editor } = await revisitAfterSubmit(api, '// submitted');
+    await user.clear(editor);
+    await user.type(editor, '// before');
+    await user.click(screen.getByRole('button', { name: 'Load my last submitted code' }));
+    await waitFor(() => expect(waiting()).toBe(1)); // the load is in flight
+    expect(screen.getByRole('button', { name: 'Loading…' })).toBeDisabled();
+    await user.click(editor);
+    await user.keyboard(' typed meanwhile');
+    const typed = editor.value;
+    expect(typed).toBe('// before typed meanwhile');
+
+    release();
+    const held = await screen.findByTestId('load-held');
+    expect(held).toHaveTextContent('Your last submitted code loaded while you were typing; your edits were kept.');
+    expect(editor.value).toBe(typed); // the editor kept the typing
+    expect(screen.queryByTestId('draft-undo')).not.toBeInTheDocument();
+    expect(screen.getByTestId('draft-bar')).toHaveAttribute('aria-live', 'polite');
+
+    await user.click(within(held).getByRole('button', { name: 'Replace with my last submitted code' }));
+    expect(editor.value).toBe('// submitted');
+    expect(screen.queryByTestId('load-held')).not.toBeInTheDocument();
+    expect(screen.getByTestId('draft-undo')).toHaveTextContent('Loaded your last submitted code.');
+    await user.click(screen.getByRole('button', { name: 'Undo' }));
+    expect(editor.value).toBe(typed); // the undo snapshot is the live text, not the click-time text
+  });
+
+  it('a load with no edits in flight still applies automatically', async () => {
+    const { api, release, waiting } = slowAttempts();
+    const { user, editor } = await revisitAfterSubmit(api, '// submitted');
+    await user.clear(editor);
+    await user.type(editor, '// mine');
+    await user.click(screen.getByRole('button', { name: 'Load my last submitted code' }));
+    await waitFor(() => expect(waiting()).toBe(1));
+    release();
+    await waitFor(() => expect(editor.value).toBe('// submitted'));
+    expect(screen.queryByTestId('load-held')).not.toBeInTheDocument();
+    expect(screen.getByTestId('draft-undo')).toHaveTextContent('Loaded your last submitted code.');
+    await user.click(screen.getByRole('button', { name: 'Undo' }));
+    expect(editor.value).toBe('// mine');
   });
 
   it('dirty guard: with storage refusing drafts, unsaved edits arm beforeunload and an in-app navigation confirm', async () => {

@@ -10,12 +10,15 @@
 //     least the opening length (CommonMark), so a ``` inside a code line does not end the block
 //   - inline `code` and **bold**
 //   - a line ending in two spaces is a hard break; other single newlines are soft wraps
+//   - "- item" / "* item" / "+ item" bullet lines (≤3 leading spaces): one <li> per line; a
+//     bullet line interrupts a paragraph (the sysdrills "Steps:\n- a\n- b" shape). 4-space
+//     indented and fenced bullets stay code. Ordered "1." lists are not parsed (literal text).
 // It builds React nodes only (never innerHTML), so every character of the source is rendered
 // as text. No markdown library: anything it does not understand stays literal text.
 
 import { Fragment, type ReactNode } from 'react';
 
-export type ProseBlock = { kind: 'p'; lines: string[] } | { kind: 'code'; text: string; lang: string | null };
+export type ProseBlock = { kind: 'p'; lines: string[] } | { kind: 'code'; text: string; lang: string | null } | { kind: 'list'; items: string[] };
 
 const FENCE_RE = /^\s{0,3}(```+|~~~+)\s*([\w#+.-]*)\s*$/;
 const INDENT_RE = /^( {4}|\t)/;
@@ -23,6 +26,7 @@ const NUMBERED_RE = /^(\d{1,3}) +\S/;
 const NUMBER_PREFIX_RE = /^\d{1,3} +/;
 const CLOSE_FENCE_RE = /^\s{0,3}(```+|~~~+)\s*$/;
 const CODE_CHAR_RE = /[({;=]/;
+const LIST_RE = /^\s{0,3}[-*+] +(\S.*)$/;
 
 /** W10: does `line` close a fence opened with `marker` (same character, same or longer run)? */
 export function closesFence(line: string, marker: string): boolean {
@@ -65,6 +69,20 @@ export function parseProse(src: string): ProseBlock[] {
         body.push(lines[i++]!);
       }
       out.push({ kind: 'code', text: dedent(body), lang: null });
+      continue;
+    }
+    // a bullet list: after the fence / blank / indented-code branches, so a 4-space-indented or
+    // fenced "- x" stays code. A bullet line interrupts a paragraph; one item per line.
+    if (LIST_RE.test(line)) {
+      flush();
+      const items: string[] = [];
+      while (i < lines.length) {
+        const m = LIST_RE.exec(lines[i]!);
+        if (!m) break;
+        items.push(m[1]!.trimEnd());
+        i++;
+      }
+      out.push({ kind: 'list', items });
       continue;
     }
     // a numbered listing: "1 …", "2 …" … on consecutive lines. W10: code only when the run has
@@ -133,21 +151,35 @@ function renderLines(lines: string[]): ReactNode[] {
   });
 }
 
-/** Already-parsed blocks: paragraphs (<p>) and code blocks (<pre class="code-block">). */
+/** One parsed block → its element. Exhaustive over ProseBlock['kind'] (a new kind fails typecheck). */
+function renderBlock(b: ProseBlock, key: number): ReactNode {
+  switch (b.kind) {
+    case 'code':
+      return (
+        <pre key={key} className="code-block" data-lang={b.lang ?? undefined}>
+          {b.text}
+        </pre>
+      );
+    case 'list':
+      return (
+        <ul key={key} className="prose-list">
+          {b.items.map((t, j) => (
+            <li key={j}>{renderInline(t)}</li>
+          ))}
+        </ul>
+      );
+    case 'p':
+      return <p key={key}>{renderLines(b.lines)}</p>;
+    default: {
+      const never: never = b;
+      return never;
+    }
+  }
+}
+
+/** Already-parsed blocks: paragraphs (<p>), bullet lists (<ul class="prose-list">) and code blocks (<pre class="code-block">). */
 export function ProseBlocks({ blocks }: { blocks: ProseBlock[] }) {
-  return (
-    <>
-      {blocks.map((b, i) =>
-        b.kind === 'code' ? (
-          <pre key={i} className="code-block" data-lang={b.lang ?? undefined}>
-            {b.text}
-          </pre>
-        ) : (
-          <p key={i}>{renderLines(b.lines)}</p>
-        ),
-      )}
-    </>
-  );
+  return <>{blocks.map(renderBlock)}</>;
 }
 
 /** Block prose from source text. */
