@@ -10,6 +10,7 @@ import { useAsync } from '../lib/useAsync';
 import { useTracks } from '../lib/tracks';
 import { TRACK_PLACEHOLDER, isTrackId, progressLabel, progressTitle } from '../lib/view';
 import { SkillTree, ViewToggle, useCampaignView } from './CampaignTree';
+import { TrackUnitsSection } from './TrackUnits';
 
 const STATE_LABEL: Record<QuestState, string> = {
   done: 'Done',
@@ -93,22 +94,30 @@ function CampaignView({ trackId }: { trackId: TrackId }) {
         )}
         {campaign.status === 'ready' ? (
           campaign.data.acts.length === 0 ? (
-            <div className="act-empty" data-testid="campaign-empty">
-              <p>No campaign acts are seeded for this track yet.</p>
-              <p className="muted small">Practice units on this track are still playable from the dashboard's next-up list.</p>
-            </div>
-          ) : view === 'tree' ? (
-            <div role="tabpanel" aria-label="Campaign skill tree">
-              <SkillTree key={trackId} acts={campaign.data.acts} trackLocked={locked} level={campaign.data.level} targetQuestId={targetId} />
-            </div>
+            <>
+              <div className="act-empty" data-testid="campaign-empty">
+                <p>No campaign acts are seeded for this track yet.</p>
+                <p className="muted small">Every practice unit on this track is browsable below.</p>
+              </div>
+              {!locked && <TrackUnitsSection trackId={trackId} variant="primary" />}
+            </>
           ) : (
-            <ol className="acts" role="tabpanel" aria-label="Campaign acts">
-              {[...campaign.data.acts]
-                .sort((a, b) => a.ordinal - b.ordinal)
-                .map((act) => (
-                  <ActCard key={act.id} act={act} level={campaign.data.level} targetQuestId={targetId} />
-                ))}
-            </ol>
+            <>
+              {view === 'tree' ? (
+                <div role="tabpanel" aria-label="Campaign skill tree">
+                  <SkillTree key={trackId} acts={campaign.data.acts} trackLocked={locked} level={campaign.data.level} targetQuestId={targetId} />
+                </div>
+              ) : (
+                <ol className="acts" role="tabpanel" aria-label="Campaign acts">
+                  {[...campaign.data.acts]
+                    .sort((a, b) => a.ordinal - b.ordinal)
+                    .map((act) => (
+                      <ActCard key={act.id} act={act} level={campaign.data.level} targetQuestId={targetId} />
+                    ))}
+                </ol>
+              )}
+              {!locked && <TrackUnitsSection trackId={trackId} variant="secondary" />}
+            </>
           )
         ) : (
           <LoadState error={campaign.error} onRetry={campaign.reload} minHeight={480} />
