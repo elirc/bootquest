@@ -18,7 +18,7 @@
    "kind": "explain-back",
    "questions": [
     {
-     "prompt": "DESIGN IT — [senior] draining a side-effect backlog after a long worker outage (dotnet-stripe, docs2/03-architecture-and-patterns/04-side-effects-async-and-reliability.md). Scenario: the background worker that applies payments and sends merchant events and customer emails stopped on Friday evening and nobody noticed until Monday morning; about 190,000 due jobs piled up while the API kept accepting checkouts, and new ones keep arriving; the card provider rate-limits you at roughly 100 requests a second; some queued work is customer-visible, such as a payment-reminder email that would now go out 7 days late. Write your design before you look: how the outage stayed silent and what would have caught it, how long the drain takes at the provider's limit, how live work and backlog share that limit, what each job re-checks before it acts, which effects are still worth sending and which go stale, and how retry budgets behave when jobs have aged through an outage. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "prompt": "DESIGN IT — [senior] draining a side-effect backlog after a long worker outage (dotnet-stripe, docs2/03-architecture-and-patterns/04-side-effects-async-and-reliability.md). Scenario: the background workers that apply payments and deliver merchant webhook events stopped on Friday evening and nobody noticed until Monday morning; about 190,000 due jobs piled up while the API kept accepting checkouts, and new ones keep arriving; the card provider rate-limits you at roughly 100 requests a second. Suppose also that the event worker has been extended to send customer emails (it sends none at this commit, only webhook events to one merchant URL), so some queued work is customer-visible, such as a payment-reminder email that would now go out 7 days late. Write your design before you look: how the outage stayed silent and what would have caught it, how long the drain takes at the provider's limit, how live work and backlog share that limit, what each job re-checks before it acts, which effects are still worth sending and which go stale, and how retry budgets behave when jobs have aged through an outage. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
      "keyPoints": [
       {
        "text": "[w3] The workers are background loops hosted inside the API process, and the payment loop has no try/catch around the work it does for each job: once that work calls a real provider, a single exception escapes the loop and the worker is gone while the API keeps answering Pay with 202. Catch per job, record the failure on the job, and keep the loop alive.",
@@ -37,7 +37,7 @@
        }
       },
       {
-       "text": "[w3] Size the drain before starting it: 190,000 calls at about 100 a second is roughly 32 minutes of the provider's entire allowance, and live checkouts need a reserved slice of it (say 20 to 30 a second), so the backlog drains at the remainder in the better part of an hour. That pacing has to be added: today each tick takes every due item back to back with nothing limiting the rate, and a limiter must be shared by every instance.",
+       "text": "[w3] Size the drain before starting it: 190,000 calls at about 100 a second is roughly 32 minutes of the provider's entire allowance, and live checkouts need a reserved slice of it (say 20 to 30 a second), so the backlog drains at the remainder in the better part of an hour. That pacing has to be added: today each tick takes every due item back to back with nothing limiting the rate, so one rate gate that the live work and the backlog both draw from has to sit in front of the provider calls.",
        "cite": {
         "path": "src/Billing.Api/Infrastructure/WebhookDeliveryWorker.cs",
         "lineStart": 17,
@@ -79,7 +79,7 @@
      ]
     },
     {
-     "prompt": "PRE-MORTEM — Monday's drain, run naively. The worker restarts and works strictly oldest first; the provider starts answering 429 within a minute and every failing job schedules its own retry; customers who checked out at 09:00 see their payment stuck and press Pay again; and a payment-reminder email queued on Friday goes out alongside the one the Monday reminder run creates for the same invoice. What breaks, in what order, and what in your design prevents each?",
+     "prompt": "PRE-MORTEM — Monday's drain, run naively. The worker restarts and works strictly oldest first; the provider starts answering 429 within a minute and every failing job schedules its own retry; customers who checked out at 09:00 see their payment stuck and press Pay again; and, keeping the supposed customer emails riding the event queue, a payment-reminder email queued on Friday goes out alongside the one the Monday reminder run creates for the same invoice. What breaks, in what order, and what in your design prevents each?",
      "keyPoints": [
       {
        "text": "[w3] Oldest-first starves the present: a 09:00 checkout waits behind the entire weekend, half an hour at best and hours once 429s slow the drain. Customers then press Pay again, and because a new Pay is refused only when the invoice is already Paid, each press writes another Pending payment and another job, so the backlog grows from the very traffic it is starving.",
@@ -106,7 +106,7 @@
        }
       },
       {
-       "text": "[w3] The double reminder happens because each queued event gets a fresh random id and nothing ties two events about the same invoice together. Give every customer-visible effect a dedupe key such as (invoice, effect, stage), check it at send time, and re-read the invoice first so a bill paid over the weekend gets no reminder at all.",
+       "text": "[w3] The double reminder happens because each queued event, today's merchant webhooks included, gets a fresh random id and nothing ties two events about the same invoice together. Give every customer-visible effect a dedupe key such as (invoice, effect, stage), check it at send time, and re-read the invoice first so a bill paid over the weekend gets no reminder at all.",
        "cite": {
         "path": "src/Billing.Api/Infrastructure/BillingEngine.cs",
         "lineStart": 181,
