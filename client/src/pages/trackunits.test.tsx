@@ -99,66 +99,83 @@ describe('track units: campaign-less track (primary)', () => {
     expect(sec.closest('.campaign')).not.toBeNull();
   });
 
-  it('136-unit payload: count line, kind filters, search, hide done, chips and locked rows', async () => {
-    const units = generated();
-    const { user } = renderApp('/campaign/sysdesign', withUnits('sysdesign', units));
-    const sec = await section();
-    const count = await within(sec).findByTestId('track-units-count');
-    expect(count).toHaveTextContent(`Showing 136 of 136 units · ${GENERATED_DONE} done`);
-    expect(rows()).toHaveLength(136);
-    expect(within(sec).getAllByRole('heading', { level: 3 })).toHaveLength(10 + 29);
+  describe('136-unit payload (78 drills / 10 modules + 58 explain-backs / 29 repos)', () => {
+    // role queries over 136 rows are slow in jsdom: scope them to the small toolbar
+    async function open136() {
+      const r = renderApp('/campaign/sysdesign', withUnits('sysdesign', generated()));
+      const sec = await section();
+      const count = await within(sec).findByTestId('track-units-count');
+      const toolbar = within(sec.querySelector<HTMLElement>('.tu-toolbar')!);
+      const kinds = within(toolbar.getByRole('group', { name: 'Filter by kind' }));
+      const groupHeads = () => [...sec.querySelectorAll('h3')].map((h) => h.textContent);
+      return { ...r, sec, count, toolbar, kinds, groupHeads };
+    }
 
-    const kinds = within(sec).getByRole('group', { name: 'Filter by kind' });
-    expect(within(kinds).getByRole('button', { name: 'All (136)' })).toHaveAttribute('aria-pressed', 'true');
-    expect(within(kinds).getByRole('button', { name: 'Explain-backs (58)' })).toBeInTheDocument();
-    expect(within(kinds).queryByRole('button', { name: /^Other/ })).toBeNull();
+    it('count line, kind-button counts, 136 [data-unit] rows, done/revealed chips, locked row is a non-link', async () => {
+      const { count, kinds, groupHeads } = await open136();
+      expect(count).toHaveTextContent(`Showing 136 of 136 units · ${GENERATED_DONE} done`);
+      expect(rows()).toHaveLength(136);
+      expect(groupHeads()).toHaveLength(10 + 29);
+      expect(kinds.getByRole('button', { name: 'All (136)' })).toHaveAttribute('aria-pressed', 'true');
+      expect(kinds.getByRole('button', { name: 'Drills (78)' })).toHaveAttribute('aria-pressed', 'false');
+      expect(kinds.getByRole('button', { name: 'Explain-backs (58)' })).toBeInTheDocument();
+      expect(kinds.queryByRole('button', { name: /^Other/ })).toBeNull();
 
-    // done chip; revealed chip; locked drill is a non-link, aria-disabled, announced as locked
-    expect(within(row(1000)!).getByText('done')).toBeInTheDocument();
-    expect(within(row(REVEALED_DRILL)!).getByText('revealed')).toBeInTheDocument();
-    const locked = row(LOCKED_DRILL)!;
-    expect(locked.tagName).toBe('DIV');
-    expect(locked).not.toHaveAttribute('href');
-    expect(locked).toHaveAttribute('aria-disabled', 'true');
-    expect(locked).toHaveAttribute('data-state', 'locked');
-    expect(locked).toHaveTextContent(', Locked');
-    expect(within(sec).queryAllByRole('link').map((a) => a.getAttribute('href'))).not.toContain(`/play/${LOCKED_DRILL}`);
+      expect(within(row(1000)!).getByText('done')).toBeInTheDocument();
+      expect(within(row(REVEALED_DRILL)!).getByText('revealed')).toBeInTheDocument();
+      expect(row(1003)!.tagName).toBe('A');
+      expect(row(1003)).toHaveAttribute('href', '/play/1003');
+      const locked = row(LOCKED_DRILL)!;
+      expect(locked.tagName).toBe('DIV');
+      expect(locked).not.toHaveAttribute('href');
+      expect(locked).toHaveAttribute('aria-disabled', 'true');
+      expect(locked).toHaveAttribute('data-state', 'locked');
+      expect(locked).toHaveTextContent(', Locked');
+      expect(document.querySelector(`a[href="/play/${LOCKED_DRILL}"]`)).toBeNull();
+    });
 
-    // Drills only: every explain-back group disappears
-    const drillsBtn = within(kinds).getByRole('button', { name: 'Drills (78)' });
-    await user.click(drillsBtn);
-    expect(drillsBtn).toHaveAttribute('aria-pressed', 'true');
-    expect(count).toHaveTextContent(`Showing 78 of 136 units · ${GENERATED_DONE} done`);
-    expect(rows()).toHaveLength(78);
-    expect(within(sec).queryByRole('heading', { level: 3, name: /^bazaar/ })).toBeNull();
-    expect(within(sec).getByRole('heading', { level: 3, name: /^estimation/ })).toBeInTheDocument();
-    await user.click(within(kinds).getByRole('button', { name: 'All (136)' }));
-    expect(rows()).toHaveLength(136);
+    it('pressing Drills hides every explain-back group; All restores them', async () => {
+      const { user, count, kinds, groupHeads } = await open136();
+      const drills = kinds.getByRole('button', { name: 'Drills (78)' });
+      await user.click(drills);
+      expect(drills).toHaveAttribute('aria-pressed', 'true');
+      expect(count).toHaveTextContent(`Showing 78 of 136 units · ${GENERATED_DONE} done`);
+      expect(rows()).toHaveLength(78);
+      expect(groupHeads()).toHaveLength(10);
+      expect(groupHeads().some((h) => h?.startsWith('bazaar'))).toBe(false);
+      expect(groupHeads().some((h) => h?.startsWith('estimation'))).toBe(true);
+      await user.click(kinds.getByRole('button', { name: 'All (136)' }));
+      expect(rows()).toHaveLength(136);
+    });
 
-    // search narrows to the bazaar repo
-    await user.type(within(sec).getByRole('searchbox', { name: 'Filter units' }), 'bazaar');
-    expect(count).toHaveTextContent(`Showing 2 of 136 units · ${GENERATED_DONE} done`);
-    expect([...rows()].map((r) => r.dataset.unit)).toEqual([String(BAZAAR_A), String(BAZAAR_B)]);
-    expect(within(sec).getByRole('heading', { level: 3, name: 'bazaar (1/2)' })).toBeInTheDocument();
-    await user.clear(within(sec).getByRole('searchbox', { name: 'Filter units' }));
-    expect(rows()).toHaveLength(136);
+    it('typing bazaar narrows the list to the bazaar repo', async () => {
+      const { user, count, toolbar, groupHeads } = await open136();
+      await user.type(toolbar.getByRole('searchbox', { name: 'Filter units' }), 'bazaar');
+      expect(count).toHaveTextContent(`Showing 2 of 136 units · ${GENERATED_DONE} done`);
+      expect([...rows()].map((r) => r.dataset.unit)).toEqual([String(BAZAAR_A), String(BAZAAR_B)]);
+      expect(groupHeads()).toEqual(['bazaar (1/2)']);
+      expect(within(row(BAZAAR_B)!).getByText(/\(set B\)$/)).toBeInTheDocument();
+    });
 
-    // hide done drops every done row
-    const hide = within(sec).getByRole('button', { name: 'Hide done' });
-    await user.click(hide);
-    expect(hide).toHaveAttribute('aria-pressed', 'true');
-    expect(count).toHaveTextContent(`Showing ${136 - GENERATED_DONE} of 136 units · ${GENERATED_DONE} done`);
-    expect(document.querySelectorAll('[data-unit][data-state="done"]')).toHaveLength(0);
-    expect(rows()).toHaveLength(136 - GENERATED_DONE);
+    it('Hide done removes every data-state="done" row; a no-match filter offers Clear filters', async () => {
+      const { user, sec, count, toolbar } = await open136();
+      const hide = toolbar.getByRole('button', { name: 'Hide done' });
+      await user.click(hide);
+      expect(hide).toHaveAttribute('aria-pressed', 'true');
+      expect(count).toHaveTextContent(`Showing ${136 - GENERATED_DONE} of 136 units · ${GENERATED_DONE} done`);
+      expect(document.querySelectorAll('[data-unit][data-state="done"]')).toHaveLength(0);
+      expect(rows()).toHaveLength(136 - GENERATED_DONE);
 
-    // nothing matches: the toolbar stays, Clear filters restores the list
-    await user.type(within(sec).getByRole('searchbox', { name: 'Filter units' }), 'qqq');
-    const nomatch = within(sec).getByTestId('track-units-nomatch');
-    expect(nomatch).toHaveTextContent('No units match.');
-    expect(rows()).toHaveLength(0);
-    await user.click(within(nomatch).getByRole('button', { name: 'Clear filters' }));
-    expect(rows()).toHaveLength(136);
-    expect(count).toHaveTextContent(`Showing 136 of 136 units · ${GENERATED_DONE} done`);
+      await user.type(toolbar.getByRole('searchbox', { name: 'Filter units' }), 'qqq');
+      const nomatch = within(sec).getByTestId('track-units-nomatch');
+      expect(nomatch).toHaveTextContent('No units match.');
+      expect(rows()).toHaveLength(0);
+      expect(count).toHaveTextContent(`Showing 0 of 136 units · ${GENERATED_DONE} done`);
+      await user.click(within(nomatch).getByRole('button', { name: 'Clear filters' }));
+      expect(rows()).toHaveLength(136);
+      expect(hide).toHaveAttribute('aria-pressed', 'false');
+      expect(count).toHaveTextContent(`Showing 136 of 136 units · ${GENERATED_DONE} done`);
+    });
   });
 
   it('keyboard: j focuses the first available row, and rows are anchors', async () => {
