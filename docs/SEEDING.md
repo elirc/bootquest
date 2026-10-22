@@ -1125,8 +1125,18 @@ resolved); quiz variety `concept` and flashcard shape `hand-authored`;
     4672d6a3; w22-b q2.kp1 vs bab4a993; zz1-b q1.kp4+q3.kp1 vs 2fd26dfb, q2.kp3 vs 778a4c41,
     q2.kp4 vs 7ce569b5; obanalytics-b q2.kp3 vs ca65fe8d, q2.kp5+q1.kp3 vs be4c9140;
     opus-caching-b q1.kp6 vs fa5e3705, q3.kp3 vs c9912c05. Sibling-echo acceptances (chapter
-    doctrine the prompts demand, worded fresh) are listed per set in the wave ledger; the one
-    deliberately identical cite span is dotnet-stripe-b's BillingStore.cs:229-255 (instructed).
+    doctrine the prompts demand, worded fresh) are listed per set in the wave ledger; the
+    review added these declared acceptances: zz1-b q2.kp2 (queued-import beat, new ownership
+    angle at jobService.ts:83-90), netcalendy-b q2.kp1 (check-then-insert doctrine the prompt
+    demands, nested cite), w22-old-f04 ≈ w22-b q2.kp3 and w22-old-q12 ≈ w22-b q2.kp1 (twin
+    diagnosis, quiz pack holders get those kps partly free — accepted as doctrine). Identical
+    cite spans across siblings (all carrying DIFFERENT claims, adjudicated non-duplicative):
+    dotnet-stripe-b BillingStore.cs:229-255 (instructed); ww19-b migration.sql:259-260 (×2 kps);
+    grok-c tenantContext.ts:25-39 and prisma.ts:7 (vs set-b); netgum-b DbContext:166-181 nested
+    in the primary's span. The eb-sibling guard's cite-range blind spot remains the standing
+    backlog item. w22-b q2.kp4 and payments-lab-c q2.kp1 cite the same span of twin-identical
+    files (paymentStateMachine.ts:50-57) with one near-templated clause — accepted; reword one
+    side when next touched.
   - Code-truth corrections made while authoring (sets state the CODE): support-desk claim query
     is INDEX-served — the 10M-row slowdown is exhausted-row churn, not a full scan; w22's sweep
     never writes payment statuses (scenarios use operator hand-advances); netgum has no buyer
