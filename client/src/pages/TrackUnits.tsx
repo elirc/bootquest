@@ -41,7 +41,9 @@ function TrackUnitsBody({ trackId, variant }: { trackId: TrackId; variant: Varia
         </h2>
       )}
       {res.status !== 'ready' ? (
-        <LoadState error={res.error} onRetry={res.reload} minHeight={240} />
+        // while COLLAPSED, a plain loading state must not flash a tall block under the header;
+        // errors still render collapsed so the Retry affordance (and header count) can recover
+        (expanded || res.status === 'error') && <LoadState error={res.error} onRetry={res.reload} minHeight={expanded ? 240 : undefined} />
       ) : (
         expanded && <UnitBrowser units={res.data.units} />
       )}

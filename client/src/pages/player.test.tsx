@@ -186,7 +186,7 @@ describe('code drafts', () => {
 
     release();
     const held = await screen.findByTestId('load-held');
-    expect(held).toHaveTextContent('Your last submitted code loaded while you were typing; your edits were kept.');
+    expect(held).toHaveTextContent('Your last submitted code loaded while you were editing; your edits were kept.');
     expect(editor.value).toBe(typed); // the editor kept the typing
     expect(screen.queryByTestId('draft-undo')).not.toBeInTheDocument();
     expect(screen.getByTestId('draft-bar')).toHaveAttribute('aria-live', 'polite');

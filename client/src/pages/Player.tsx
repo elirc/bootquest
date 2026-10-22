@@ -657,7 +657,7 @@ function CodePane({ detail, spec }: { detail: UnitDetail; spec: PublicCheck }) {
           )}
           {pending !== null ? (
             <p className="small" data-testid="load-held">
-              Your last submitted code loaded while you were typing; your edits were kept.{' '}
+              Your last submitted code loaded while you were editing; your edits were kept.{' '}
               <button type="button" className="btn btn-sm" onClick={applyPending}>
                 Replace with my last submitted code
               </button>

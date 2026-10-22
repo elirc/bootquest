@@ -946,7 +946,7 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
         const { u } = requireType(id, 'explain-back');
         const a = currentAnswer(ebAnswers, id);
         if (!a) throw notAnswered(ebAnswers, id, 'explainBack');
-        if (scores.has(a.attemptId)) throw err(409, 'ALREADY_SCORED', 'already self-scored');
+        if (scores.has(a.attemptId)) throw err(409, 'ALREADY_SCORED', 'your answer on this unit is already self-scored (evidence is append-only)');
         const eb = explainBackFixtures[String(id)]!;
         const ids = ebKeyPoints(id).flatMap((q) => q.keyPoints.map((k) => k.id));
         exactMarks(ids, body.perKeyPoint);
@@ -1059,7 +1059,7 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
         const { u } = requireType(id, 'patch-kata');
         const a = currentAnswer(kataAnswers, id);
         if (!a) throw notAnswered(kataAnswers, id, 'kata');
-        if (scores.has(a.attemptId)) throw err(409, 'ALREADY_SCORED', 'already self-scored');
+        if (scores.has(a.attemptId)) throw err(409, 'ALREADY_SCORED', 'your findings on this unit are already self-scored (evidence is append-only)');
         const ids = kataDefects(id).map((d) => d.id);
         exactMarks(ids, body.perDefect);
         const missed = ids.filter((k) => body.perDefect[k] === 'missed');
