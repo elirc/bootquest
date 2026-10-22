@@ -394,8 +394,7 @@ function XpLine({ submit }: { submit: SubmitResponse }) {
       {text}
       {' · '}
       {submit.attempt.mode}
-      {' attempt '}
-      <code>#{submit.attempt.id}</code>
+      {' attempt recorded'}
     </span>
   );
 }
@@ -517,12 +516,25 @@ function CodePane({ detail, spec }: { detail: UnitDetail; spec: PublicCheck }) {
 
   // once the learner replaced the editor content (reset / load), "restored" is old news
   const [replaced, setReplaced] = useState(false);
+  // Defect 3 (restore race): GET /attempts/:id is async, so the learner can type while it is in
+  // flight. editSeq counts every learner-originated change of the editor text (typing, reset,
+  // undo, a held-code replace); a load that resolves after the count moved never replaces the
+  // editor — it is HELD (`pending`) until the learner asks for it. codeRef is the live text, so
+  // the Undo snapshot is what the editor shows at replace time, not a stale click-time closure.
+  const editSeq = useRef(0);
+  const codeRef = useRef(code);
+  codeRef.current = code;
+  // bumped by every recorded submit: a load started before it refers to an older attempt
+  const loadGen = useRef(0);
+  const [pending, setPending] = useState<{ code: string } | null>(null);
   const replaceCode = (next: string, note: string) => {
-    setUndo({ code, note });
+    editSeq.current++;
+    setUndo({ code: codeRef.current, note });
     setReplaced(true);
     draft.setValue(next);
   };
   const edit = (v: string) => {
+    editSeq.current++;
     setUndo(null); // typing after a reset / load: Undo would now also discard the new edits
     draft.setValue(v);
   };
@@ -531,20 +543,33 @@ function CodePane({ detail, spec }: { detail: UnitDetail; spec: PublicCheck }) {
     if (lastAttempt === null || loadBusy) return;
     setLoadBusy(true);
     setLoadError(null);
+    setPending(null);
+    const seqAtStart = editSeq.current;
+    const genAtStart = loadGen.current;
     try {
       const a = await api.getAttempt(lastAttempt);
+      if (loadGen.current !== genAtStart) return; // a newer submit superseded this attempt
       const submitted = a.unitId === id ? attemptCode(a.answer) : null;
-      if (submitted === null) setLoadError(`Attempt #${lastAttempt} has no stored code for this unit.`);
-      else {
-        replaceCode(submitted, `Loaded your code from attempt #${lastAttempt}.`);
+      if (submitted === null) setLoadError('Your last submitted attempt has no stored code for this unit.');
+      else if (editSeq.current === seqAtStart) {
+        // nothing changed the editor while the load was in flight: apply it, as before
+        replaceCode(submitted, 'Loaded your last submitted code.');
         setSavedCode(submitted);
         setLoaded(true);
-      }
+      } else setPending({ code: submitted }); // edits arrived meanwhile: keep them, offer the code
     } catch (e) {
-      setLoadError(errorText(e));
+      if (loadGen.current === genAtStart) setLoadError(errorText(e));
     } finally {
       setLoadBusy(false);
     }
+  };
+
+  const applyPending = () => {
+    if (pending === null) return;
+    replaceCode(pending.code, 'Loaded your last submitted code.');
+    setSavedCode(pending.code);
+    setLoaded(true);
+    setPending(null);
   };
 
   const go = async (kind: 'run' | 'submit') => {
@@ -559,6 +584,8 @@ function CodePane({ detail, spec }: { detail: UnitDetail; spec: PublicCheck }) {
         storedSet(lastAttemptKey(id), String(submit.attempt.id));
         setLastAttempt(submit.attempt.id);
         setLoaded(false); // a new attempt to offer (an earlier "loaded" referred to an older one)
+        loadGen.current++; // an in-flight load of the older attempt is now stale
+        setPending(null); // a held load referred to the older attempt too
         setLoadError(null);
         setSavedCode(code); // recorded on the attempt now: nothing to lose
         if (submit.verdict === 'pass') draft.clear(); // verified pass: the draft is done
@@ -581,7 +608,8 @@ function CodePane({ detail, spec }: { detail: UnitDetail; spec: PublicCheck }) {
   });
 
   const showRestored = draft.restored && !replaced;
-  const showBar = showRestored || draft.discardedStale || (lastAttempt !== null && !loaded) || undo !== null || loadError !== null || !draft.persisted;
+  const showBar =
+    showRestored || draft.discardedStale || (lastAttempt !== null && !loaded) || pending !== null || undo !== null || loadError !== null || !draft.persisted;
   return (
     <section className="panel player-work" aria-label="Solution">
       <div className="editor-head">
@@ -609,6 +637,7 @@ function CodePane({ detail, spec }: { detail: UnitDetail; spec: PublicCheck }) {
                 type="button"
                 className="linkish"
                 onClick={() => {
+                  editSeq.current++;
                   draft.setValue(undo.code);
                   setUndo(null);
                 }}
@@ -626,12 +655,22 @@ function CodePane({ detail, spec }: { detail: UnitDetail; spec: PublicCheck }) {
               </p>
             )
           )}
-          {lastAttempt !== null && !loaded && (
-            <p className="small">
-              <button type="button" className="btn btn-sm" onClick={() => void loadLastSubmitted()} disabled={loadBusy}>
-                {loadBusy ? 'Loading…' : `Load my last submitted code (attempt #${lastAttempt})`}
+          {pending !== null ? (
+            <p className="small" data-testid="load-held">
+              Your last submitted code loaded while you were typing; your edits were kept.{' '}
+              <button type="button" className="btn btn-sm" onClick={applyPending}>
+                Replace with my last submitted code
               </button>
             </p>
+          ) : (
+            lastAttempt !== null &&
+            !loaded && (
+              <p className="small">
+                <button type="button" className="btn btn-sm" onClick={() => void loadLastSubmitted()} disabled={loadBusy} data-attempt={lastAttempt}>
+                  {loadBusy ? 'Loading…' : 'Load my last submitted code'}
+                </button>
+              </p>
+            )
           )}
           {loadError && (
             <p className="error-text small" role="alert">
