@@ -1107,7 +1107,7 @@ resolved); quiz variety `concept` and flashcard shape `hand-authored`;
   (netgum crash recovery + remedies menu; zz8 the client's seat/retries; ww19 the schema at 40M
   rows; organized-build-analytics operating the token system). designItems pin 47 → 58
   (ladder-real.test.ts:133); designRepos 29 unchanged. Quiz layer (doctrine wave): 6 packs
-  +88 quizzes/+45 flashcards/+86 after-notes (bazaar 12→28q/3→11fc, dotnet-stripe 13→29/3→11,
+  +88 quizzes/+44 flashcards/+94 notes (88 after + 6 before) (bazaar 12→28q/3→11fc, dotnet-stripe 13→29/3→11,
   relay 12→26/4→11, temporal-lite 12→26/4→11, w22 12→26 hand/4→11 [pack 18→32 with the 6
   generator quizzes], meterforge-upskilling 14→28/4→11; all old items byte-identical; relay and
   temporal-lite re-seeded with exactly their historical quarantines). sysdrills wave 3 (62→78)
