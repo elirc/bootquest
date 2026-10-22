@@ -808,7 +808,7 @@ describe('explain-back retakes: practice attempts + alternate sets', () => {
     expect(items[0]).toHaveTextContent(/^Practice attempt 1 · stored .+ — self-scored 100% coverage \(practice: 0 XP\)\./);
     expect(items[1]).toHaveTextContent(/^Practice attempt 2 · stored .+ — not scored yet\./);
     // the id-keyed test hooks stay (data-testid / scorer), only the copy changed
-    expect(items[0].getAttribute('data-testid')).toMatch(/^practice-\d+$/);
+    expect(items[0]!.getAttribute('data-testid')).toMatch(/^practice-\d+$/);
     expect(history).not.toHaveTextContent(/#\d/);
     const again = screen.getByRole('button', { name: /Practice again/ });
     expect(again).toBeDisabled();
