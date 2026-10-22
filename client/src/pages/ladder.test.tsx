@@ -76,7 +76,58 @@ describe('explain-back player: immutable answer first, then the key, then the se
     await user.click(screen.getByRole('button', { name: /Submit self-score/ }));
     await user.click(screen.getByRole('button', { name: 'File self-score' }));
     expect(await screen.findByTestId('coverage-result')).toHaveTextContent('Coverage 60% (3/5)');
-    expect(screen.getByTestId('retest-notice')).toHaveTextContent('No retest scheduled');
+    expect(screen.getByTestId('retest-notice')).toHaveTextContent('No retest scheduled — coverage is below the promotion threshold.');
+  });
+
+  it('a passing self-score on an alternate-set unit points at the rotating sets, not a missing variation', async () => {
+    const all = { q1k1: 'covered', q1k2: 'covered', q2k1: 'covered', q2k2: 'covered', q3k1: 'covered' } as const;
+    /** EB with its seeded retest suppressed; `withAltSets` adds a 2-sibling alternate-set group to getUnit. */
+    const apiFor = (withAltSets: boolean): BootQuestApi => {
+      const base = createMockApi();
+      return {
+        ...base,
+        getUnit: async (id) => {
+          const u = await base.getUnit(id);
+          if (id !== EB || !withAltSets || !u.explainBack) return u;
+          const altSets = {
+            group: 'g-closures',
+            label: 'A',
+            siblings: [
+              { unitId: EB, label: 'A', answered: false, scored: false },
+              { unitId: 9_105, label: 'B', answered: false, scored: false },
+            ],
+            gate: { open: true, opensAt: null },
+          };
+          return { ...u, explainBack: { ...u.explainBack, altSets } };
+        },
+        selfScoreExplainBack: async (id, body) => ({ ...(await base.selfScoreExplainBack(id, body)), retests: [] }),
+      };
+    };
+    const scoreAllCovered = async (user: ReturnType<typeof renderApp>['user']) => {
+      await answerEb(user);
+      for (const id of Object.keys(all)) await user.click(screen.getByRole('radio', { name: `${id} covered` }));
+      await user.click(screen.getByRole('button', { name: /Submit self-score/ }));
+      await user.click(screen.getByRole('button', { name: 'File self-score' }));
+      expect(await screen.findByTestId('coverage-result')).toHaveTextContent('Coverage 100% (5/5)');
+      return screen.getByTestId('retest-notice');
+    };
+
+    const first = renderApp(`/play/${EB}`, apiFor(true));
+    expect(await screen.findByTestId('alt-sets')).toBeInTheDocument();
+    const notice = await scoreAllCovered(first.user);
+    expect(notice).toHaveTextContent(
+      'No changed-example retest for this unit — its spaced repetition is the rotating question sets (see the set pills above): the next fresh set opens at least 2 days after this answer.',
+    );
+    expect(notice).not.toHaveTextContent('no changed-example variation is seeded');
+    first.unmount();
+    window.localStorage.clear();
+
+    // counter-case: no alternate sets -> the original "nothing seeded" branch, verbatim
+    const second = renderApp(`/play/${EB}`, apiFor(false));
+    const plain = await scoreAllCovered(second.user);
+    expect(screen.queryByTestId('alt-sets')).not.toBeInTheDocument();
+    expect(plain).toHaveTextContent('No retest scheduled (no changed-example variation is seeded for this artifact yet).');
+    expect(plain).not.toHaveTextContent('rotating question sets');
   });
 
   it('an already-answered unit opens straight on the key flow (answers are immutable)', async () => {
@@ -505,7 +556,8 @@ describe('answered, but the key will not load: Retry, never an empty answer form
     expect(screen.queryByRole('textbox', { name: 'Finding 1 scenario' })).not.toBeInTheDocument();
     fail = false;
     await user.click(within(box).getByRole('button', { name: 'Retry' }));
-    expect(await screen.findByTestId('kata-key')).toHaveTextContent('Your findings (stored #');
+    expect(await screen.findByTestId('kata-key')).toHaveTextContent('Your findings (stored');
+    expect(screen.getByTestId('kata-key')).not.toHaveTextContent(/#\d/);
   });
 
   it('a NOT_ANSWERED probe (older server, no `answered` flag) still means "answer now"', async () => {
@@ -721,6 +773,77 @@ describe('explain-back retakes: practice attempts + alternate sets', () => {
     expect(screen.getByTestId('coverage-result')).toHaveTextContent('Coverage 100% (5/5)');
     expect((await api.listEvidence({ kind: 'explain-back' })).items[0]).toMatchObject({ attemptId: pid, assistance: 'practice', score: 0.6 });
     expect((await api.getUnit(EB)).explainBack!.practice).toEqual({ available: true, count: 1, latestUnscoredAttemptId: null });
+  });
+
+  it('the key view and practice list show per-unit ordinals and stored times, never global attempt ids', async () => {
+    const api = createMockApi();
+    const { user } = renderApp(`/play/${EB}`, api);
+    await answerEb(user);
+    const header = screen.getByText(/Your answer was stored/);
+    expect(header).toHaveTextContent('(immutable). Mark each key point your answer covered.');
+    expect(header).not.toHaveTextContent(/#\d/);
+    for (const id of Object.keys(allCovered)) await user.click(screen.getByRole('radio', { name: `${id} covered` }));
+    await user.click(screen.getByRole('button', { name: /Submit self-score/ }));
+    await user.click(screen.getByRole('button', { name: 'File self-score' }));
+    await screen.findByTestId('practice-copy');
+
+    const storePractice = async (tag: string) => {
+      await user.click(screen.getByRole('button', { name: /Practice again/ }));
+      for (let i = 1; i <= 3; i++) await user.type(screen.getByRole('textbox', { name: `Practice answer ${i}` }), `${tag} ${i}`);
+      await user.click(screen.getByRole('button', { name: /Store practice answers/ }));
+      return screen.findByTestId(/^practice-scorer-\d+$/);
+    };
+    // round 1: store + score
+    const s1 = await storePractice('one');
+    for (const id of Object.keys(allCovered)) await user.click(within(s1).getByRole('radio', { name: `practice ${id} covered` }));
+    await user.click(within(s1).getByRole('button', { name: /File practice score/ }));
+    await screen.findByTestId('practice-result');
+    await waitFor(() => expect(screen.getByRole('button', { name: /Practice again/ })).toBeEnabled());
+    // round 2: stored, left unscored -> the gate hint
+    await storePractice('two');
+
+    const history = screen.getByRole('list', { name: 'Practice attempts' });
+    const items = within(history).getAllByRole('listitem').filter((li) => li.classList.contains('practice-attempt'));
+    expect(items).toHaveLength(2);
+    expect(items[0]).toHaveTextContent(/^Practice attempt 1 · stored .+ — self-scored 100% coverage \(practice: 0 XP\)\./);
+    expect(items[1]).toHaveTextContent(/^Practice attempt 2 · stored .+ — not scored yet\./);
+    // the id-keyed test hooks stay (data-testid / scorer), only the copy changed
+    expect(items[0].getAttribute('data-testid')).toMatch(/^practice-\d+$/);
+    expect(history).not.toHaveTextContent(/#\d/);
+    const again = screen.getByRole('button', { name: /Practice again/ });
+    expect(again).toBeDisabled();
+    expect(again).toHaveAttribute('title', 'Score your latest practice attempt first.');
+    expect(screen.getByText('Score your latest practice attempt first.')).toBeInTheDocument();
+    expect(screen.getByTestId('practice')).not.toHaveTextContent(/#\d/);
+  });
+
+  it('mock refusals word per-unit practice ordinals like the server, never global attempt ids', async () => {
+    const api = createMockApi();
+    const body = { answers: ['a', 'b', 'c'] };
+    const messageOf = (p: Promise<unknown>) => p.then(() => 'resolved', (e: ApiError) => e.message);
+    const rec = await api.answerExplainBack(EB, { ...body, selfAssisted: false });
+    const notVerified = await messageOf(api.practiceExplainBack(EB, body));
+    expect(notVerified).toBe(`unit ${EB}: self-score your answer of record first — practice opens after the first scored answer`);
+    const again = await messageOf(api.answerExplainBack(EB, { ...body, selfAssisted: false }));
+    expect(again).toBe(`unit ${EB}: your explain-back answer is recorded and immutable; open the key instead`);
+    await api.selfScoreExplainBack(EB, { perKeyPoint: { ...allCovered } });
+
+    const p1 = await api.practiceExplainBack(EB, body);
+    expect(await messageOf(api.practiceExplainBack(EB, body))).toBe(`unit ${EB}: practice attempt 1 is recorded and unscored; score it first`);
+    await api.practiceScoreExplainBack(EB, { attemptId: p1.attemptId, perKeyPoint: { ...allCovered } });
+    const p2 = await api.practiceExplainBack(EB, body);
+    expect(await messageOf(api.practiceExplainBack(EB, body))).toBe(`unit ${EB}: practice attempt 2 is recorded and unscored; score it first`);
+    await api.practiceScoreExplainBack(EB, { attemptId: p2.attemptId, perKeyPoint: { ...allCovered } });
+    // re-scoring the FIRST practice names ordinal 1 (index-based, not "the latest")
+    const rescore = await messageOf(api.practiceScoreExplainBack(EB, { attemptId: p1.attemptId, perKeyPoint: { ...allCovered } }));
+    expect(rescore).toBe('practice attempt 1 is already self-scored (evidence is append-only)');
+
+    const kataFirst = await api.submitKataFindings(KATA, { findings: [{ scenario: 's', evidence: 'e:1', consequence: 'c' }], selfAssisted: false });
+    const kataAgain = await messageOf(api.submitKataFindings(KATA, { findings: [{ scenario: 's', evidence: 'e:1', consequence: 'c' }], selfAssisted: false }));
+    expect(kataAgain).toBe(`unit ${KATA}: your findings are recorded and immutable; open the key instead`);
+    for (const m of [notVerified, again, rescore, kataAgain]) {
+      for (const gid of [rec.attemptId, p1.attemptId, p2.attemptId, kataFirst.attemptId]) expect(m).not.toContain(`#${gid}`);
+    }
   });
 
   it('alternate sets: the sibling strip links the sets; once set A is answered, set B shows the rotation banner and a read-only form', async () => {
