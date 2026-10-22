@@ -45,9 +45,22 @@ export function DashboardPage() {
   );
 }
 
+/**
+ * fix-wave 6a (display only — the server's slate/streak math is untouched): on a day that has real
+ * work, a "Clear the review queue" slot the server marks done while NOTHING is due is not work
+ * cleared, so it is left out of the tile's X / N and the progress bar and its row says "nothing
+ * due". A review-only day is exempt: there the review slot is the whole slate (never 0 / 0).
+ */
+function vacuousReviewSlot(items: readonly SlateItem[], reviewDue: number): (s: SlateItem) => boolean {
+  const reviewOnly = items.every((s) => s.kind === 'review-clear');
+  return (s) => !reviewOnly && s.kind === 'review-clear' && s.done && reviewDue === 0;
+}
+
 function DashboardBody({ d, comp }: { d: DashboardData; comp: Loaded<CompetenciesResponse> }) {
   const items = d.slate.items;
-  const slateDone = items.filter((s) => s.done).length;
+  const vacuous = vacuousReviewSlot(items, d.reviewQueue.due);
+  const counted = items.filter((s) => !vacuous(s));
+  const slateDone = counted.filter((s) => s.done).length;
   // No xpToday on the wire (W-7): today's heatmap row is the server's own number for it.
   const xpToday = d.heatmap.find((h) => h.day === d.today)?.xp ?? 0;
   const tokens = Math.min(d.streak.tokens, FREEZE_TOKENS_MAX);
@@ -65,7 +78,11 @@ function DashboardBody({ d, comp }: { d: DashboardData; comp: Loaded<Competencie
             <span className="tile-unit">days</span>
           </div>
           <div className="tile-meta">
-            <span className="freeze" aria-label={`${d.streak.tokens} of ${FREEZE_TOKENS_MAX} freeze tokens banked`}>
+            <span
+              className="freeze"
+              aria-label={`${d.streak.tokens} of ${FREEZE_TOKENS_MAX} freeze tokens banked`}
+              title={`${d.streak.tokens} of ${FREEZE_TOKENS_MAX} freeze tokens banked — a banked token automatically covers one missed day; every 7 full slate days banks one`}
+            >
               {Array.from({ length: FREEZE_TOKENS_MAX }, (_, i) => (
                 <span key={i} className={`freeze-token${i < tokens ? ' freeze-on' : ''}`}>
                   <Icon name="snow" size={14} />
@@ -121,9 +138,9 @@ function DashboardBody({ d, comp }: { d: DashboardData; comp: Loaded<Competencie
           </h2>
           <div className="tile-value">
             {slateDone}
-            <span className="tile-unit">/ {items.length} cleared</span>
+            <span className="tile-unit">/ {counted.length} cleared</span>
           </div>
-          <ProgressBar value={slateDone} max={items.length} label="Slate items cleared" tone="success" />
+          <ProgressBar value={slateDone} max={counted.length} label="Slate items cleared" tone="success" />
           <div className="tile-meta">
             <span>{d.streak.todayComplete ? 'Slate complete — today counts' : 'Clear the slate (or earn 20 XP) to keep the streak'}</span>
           </div>
@@ -199,7 +216,7 @@ function DueNowPanel({ q, retests }: { q: Loaded<CompetenciesResponse>; retests:
           <LoadState error={q.error} onRetry={q.reload} minHeight={64} />
         ) : sorted.length === 0 ? (
           <p className="muted small due-empty" data-testid="due-empty">
-            No retests scheduled. A passing explain-back (≥80% coverage) schedules a changed-example retest at least 2 days later.
+            No retests scheduled. A passing explain-back (≥80% coverage) on an artifact with a seeded changed example schedules a retest at least 2 days later; units without a seeded variation rotate alternate question sets instead — the next fresh set opens from the unit page.
           </p>
         ) : (
           <ul className="due-list">
@@ -313,11 +330,12 @@ function Slate({ d }: { d: DashboardData }) {
   const noDrillSlot = SLATE_DRILL_TRACKS.filter((t) => unlocked(t) && !items.some((s) => slateTrack(s) === t));
   const noCampaign = !items.some((s) => s.kind === 'campaign-step');
   const reviewOnly = items.every((s) => s.kind === 'review-clear');
+  const vacuous = vacuousReviewSlot(items, d.reviewQueue.due);
   return (
     <>
       <ul className="slate">
         {items.map((s) => (
-          <SlateRow key={s.slot} s={s} view={slateView(s, nextDrill, targets)} />
+          <SlateRow key={s.slot} s={s} view={slateView(s, nextDrill, targets)} vacuous={vacuous(s)} />
         ))}
         {noDrillSlot.map((t) => (
           <li key={`gone-${t}`} className="slate-row slate-gone" data-slot={`drill:${t}`} data-missing="true">
@@ -349,19 +367,21 @@ function Slate({ d }: { d: DashboardData }) {
   );
 }
 
-function SlateRow({ s, view }: { s: SlateItem; view: { label: string; href: string; hint?: string } }) {
+function SlateRow({ s, view, vacuous }: { s: SlateItem; view: { label: string; href: string; hint?: string }; vacuous: boolean }) {
+  // a vacuous review slot (see vacuousReviewSlot) keeps its check, but says why: nothing was due
+  const state = vacuous ? 'nothing due' : s.done ? 'done' : 'open';
   return (
-    <li className={`slate-row${s.done ? ' slate-done' : ''}`} data-slot={s.slot}>
+    <li className={`slate-row${s.done ? ' slate-done' : ''}`} data-slot={s.slot} {...(vacuous ? { 'data-vacuous': 'true' } : {})}>
       <span className={`slate-check${s.done ? ' on' : ''}`} aria-hidden="true">
         {s.done && <Icon name="check" size={12} />}
       </span>
       <Link to={view.href} className="slate-label">
         {view.label}
         {view.hint && <span className="slate-why"> {view.hint}</span>}
-        <span className="sr-only">{s.done ? ' (done)' : ' (open)'}</span>
+        <span className="sr-only">{vacuous ? ' (nothing due today)' : s.done ? ' (done)' : ' (open)'}</span>
       </Link>
       <span className="slate-count" aria-hidden="true">
-        {s.done ? 'done' : 'open'}
+        {state}
       </span>
     </li>
   );

@@ -8,6 +8,7 @@ import { useDueReport } from '../components/AppShell';
 import { Icon } from '../components/Icon';
 import { Chip, Kbd, LoadState, PageHeader, ProgressBar } from '../components/ui';
 import { LearnMoreButton } from '../components/LearnMore';
+import { fmtWhen } from '../lib/format';
 import { useKeydown } from '../lib/keys';
 import { bareKeyBlocked } from '../lib/shortcuts';
 import { useAsync } from '../lib/useAsync';
@@ -53,6 +54,10 @@ function Session({ cards }: { cards: ReviewQueueItem[] }) {
   const [error, setError] = useState<string | null>(null);
   // fix/client-dash: a lapse on a Review-state card can demote its competency; say so, loudly
   const [demotions, setDemotions] = useState<Demotion[]>([]);
+  // fix-wave 6b: the soonest GradeResponse.nextDueAt of this session's grades, shown once the queue
+  // is cleared. Only graded cards carry one; the queue endpoint serves no next-due time, so a session
+  // that ARRIVES empty ("Nothing due") deliberately shows no next-due line (skipped by design).
+  const [nextDueAt, setNextDueAt] = useState<number | null>(null);
   const busy = useRef(false);
   const reportDue = useDueReport();
   const card = cards[index];
@@ -65,6 +70,7 @@ function Session({ cards }: { cards: ReviewQueueItem[] }) {
       reportDue(r.remainingDue); // W11: the nav badge counts down live
       const dem = r.demotion;
       if (dem) setDemotions((ds) => [dem, ...ds]);
+      setNextDueAt((n) => (n === null ? r.nextDueAt : Math.min(n, r.nextDueAt)));
       setXp((x) => x + r.xp.amount);
       setTally((t) => ({ ...t, [g]: t[g] + 1 }));
       setRevealed(false);
@@ -106,6 +112,11 @@ function Session({ cards }: { cards: ReviewQueueItem[] }) {
           {cards.length > 0 && (
             <p>
               {cards.length} cards · +{xp} XP · {GRADES.map((g) => `${g.label} ${tally[g.grade]}`).join(' · ')}
+            </p>
+          )}
+          {cards.length > 0 && nextDueAt !== null && (
+            <p className="muted small" data-testid="next-due">
+              Next card due {fmtWhen(nextDueAt)}.
             </p>
           )}
           <Link to="/" className="btn">

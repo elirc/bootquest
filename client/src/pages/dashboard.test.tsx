@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { errorText } from '../api/errors';
 import { createMockApi } from '../api/mock';
 import { ApiError, type BootQuestApi, type Dashboard, type RetestListItemDto, type SlateItem } from '../api/types';
-import { daysFrom, fmtRelative, fmtShortDate, fmtStamp, plural } from '../lib/format';
+import { daysFrom, fmtRelative, fmtShortDate, fmtStamp, fmtWhen, plural } from '../lib/format';
 import { COMPETENCY_IDS, TRACK_IDS, isTrackId } from '../lib/view';
 import { renderApp } from '../test/render';
 import { reviewKeyBlocked } from './Review';
@@ -28,6 +28,20 @@ function withSlate(items: SlateItem[], base = createMockApi()): BootQuestApi {
 }
 
 const slateRow = (slot: string) => document.querySelector<HTMLElement>(`.slate [data-slot="${slot}"]`);
+
+/** the fixture's five slots (drill:js done), with the review slot and queue size under test control */
+function withReviewSlot(done: boolean, due: number, base = createMockApi()): BootQuestApi {
+  return {
+    ...base,
+    getDashboard: async (): Promise<Dashboard> => {
+      const d = await base.getDashboard();
+      const items = d.slate.items.map((s) => (s.kind === 'review-clear' ? { ...s, done } : s));
+      return { ...d, slate: { ...d.slate, items }, reviewQueue: { due } };
+    },
+  };
+}
+
+const slateTile = () => document.querySelector<HTMLElement>('section[aria-labelledby="t-slate"]')!;
 
 describe('local dates (lib/format)', () => {
   it('a timestamp renders on its LOCAL day: 20:00 in Los Angeles is not the next (UTC) day', () => {
@@ -126,7 +140,12 @@ describe('Due now (open retests)', () => {
 
   it('says how a retest gets scheduled when there is none; a failed read has its own retry', async () => {
     renderApp('/');
-    expect(await screen.findByTestId('due-empty')).toHaveTextContent('A passing explain-back');
+    const empty = await screen.findByTestId('due-empty');
+    expect(empty).toHaveTextContent('A passing explain-back');
+    // fix-wave 4: both spaced-repetition mechanisms are named, so a sibling-set unit's pass is not a mystery
+    expect(empty).toHaveTextContent('on an artifact with a seeded changed example schedules a retest at least 2 days later');
+    expect(empty).toHaveTextContent('units without a seeded variation rotate alternate question sets instead');
+    expect(empty).toHaveTextContent('the next fresh set opens from the unit page');
     expect(screen.getByTestId('due-now').closest('section')).not.toHaveClass('due-now-hot');
 
     const base = createMockApi();
@@ -231,6 +250,68 @@ describe('slate routing and variants', () => {
     expect(within(slateRow('review')!).getByRole('link')).toHaveAttribute('href', '/review');
     expect(screen.getByRole('progressbar', { name: 'Slate items cleared' })).toHaveAttribute('aria-valuemax', '1');
   });
+
+  it('a fresh day with an empty review queue is not counted as cleared work', async () => {
+    renderApp('/', withReviewSlot(true, 0));
+    await screen.findByTestId('due-now');
+    // drill:js is the only real work done; the vacuous review slot leaves numerator AND denominator
+    const bar = screen.getByRole('progressbar', { name: 'Slate items cleared' });
+    expect(bar).toHaveAttribute('aria-valuemax', '4');
+    expect(bar).toHaveAttribute('aria-valuenow', '1');
+    expect(slateTile().querySelector('.tile-value')).toHaveTextContent(/^1\s*\/ 4 cleared$/);
+    const review = slateRow('review')!;
+    expect(review).toHaveAttribute('data-vacuous', 'true');
+    expect(review.querySelector('.slate-check.on')).not.toBeNull(); // the server's done stays visible
+    expect(review.querySelector('.slate-count')).toHaveTextContent(/^nothing due$/);
+    expect(within(review).getByRole('link')).toHaveAccessibleName('Clear the review queue (nothing due today)');
+    expect(screen.queryByTestId('slate-review-only')).toBeNull();
+  });
+
+  it('a due queue keeps the review slot counted and open', async () => {
+    renderApp('/', withReviewSlot(false, 3));
+    await screen.findByTestId('due-now');
+    const bar = screen.getByRole('progressbar', { name: 'Slate items cleared' });
+    expect(bar).toHaveAttribute('aria-valuemax', '5');
+    expect(bar).toHaveAttribute('aria-valuenow', '1');
+    expect(slateTile().querySelector('.tile-value')).toHaveTextContent(/^1\s*\/ 5 cleared$/);
+    const review = slateRow('review')!;
+    expect(review).not.toHaveAttribute('data-vacuous');
+    expect(review.querySelector('.slate-count')).toHaveTextContent(/^open$/);
+    expect(within(review).getByRole('link')).toHaveAccessibleName('Clear the review queue (open)');
+  });
+
+  it('a done review slot with cards still due stays counted (only due === 0 is vacuous)', async () => {
+    renderApp('/', withReviewSlot(true, 2));
+    await screen.findByTestId('due-now');
+    const bar = screen.getByRole('progressbar', { name: 'Slate items cleared' });
+    expect(bar).toHaveAttribute('aria-valuemax', '5');
+    expect(bar).toHaveAttribute('aria-valuenow', '2');
+    expect(slateRow('review')).not.toHaveAttribute('data-vacuous');
+    expect(slateRow('review')!.querySelector('.slate-count')).toHaveTextContent(/^done$/);
+  });
+
+  it('a review-only day is never excluded', async () => {
+    // done with nothing due: on a review-only day the slot IS the slate, so it is never 0 / 0
+    const api = withSlate([{ slot: 'review', kind: 'review-clear', done: true }]);
+    const patched: BootQuestApi = { ...api, getDashboard: async () => ({ ...(await api.getDashboard()), reviewQueue: { due: 0 } }) };
+    renderApp('/', patched);
+    expect(await screen.findByTestId('slate-review-only')).toBeInTheDocument();
+    const bar = screen.getByRole('progressbar', { name: 'Slate items cleared' });
+    expect(bar).toHaveAttribute('aria-valuemax', '1');
+    expect(bar).toHaveAttribute('aria-valuenow', '1');
+    expect(slateTile().querySelector('.tile-value')).toHaveTextContent(/^1\s*\/ 1 cleared$/);
+    expect(slateRow('review')).not.toHaveAttribute('data-vacuous');
+    expect(slateRow('review')!.querySelector('.slate-count')).toHaveTextContent(/^done$/);
+  });
+
+  it('the freeze slots carry a tooltip naming banked count and the earn rule', async () => {
+    renderApp('/');
+    const freeze = await screen.findByLabelText('1 of 2 freeze tokens banked');
+    expect(freeze).toHaveClass('freeze');
+    expect(freeze).toHaveAttribute('title', '1 of 2 freeze tokens banked — a banked token automatically covers one missed day; every 7 full slate days banks one');
+    // the accessible name stays the short label (App.test.tsx pins it); the tooltip is extra
+    expect(freeze).toHaveAttribute('aria-label', '1 of 2 freeze tokens banked');
+  });
 });
 
 describe('Review: demotions and shortcut gating', () => {
@@ -249,6 +330,37 @@ describe('Review: demotions and shortcut gating', () => {
     expect(note).toHaveAttribute('role', 'alert');
     expect(note).toHaveTextContent('Language fluency demoted: 3 → 2');
     expect(within(note).getByRole('link', { name: 'evidence #913' })).toHaveAttribute('href', '/stats?competency=language-fluency#evidence-913');
+  });
+
+  it('finishing a session says when the next card is due (min of the graded nextDueAt)', async () => {
+    const base = createMockApi();
+    const items = (await base.getReviewQueue()).items.slice(0, 3);
+    const T = Date.UTC(2026, 10, 2, 15, 30);
+    // graded in order: the middle grade is the soonest, so neither first nor last wins by accident
+    const due = [T + 5 * 86_400_000, T, T + 2 * 86_400_000];
+    let n = 0;
+    const api: BootQuestApi = {
+      ...base,
+      getReviewQueue: async () => ({ count: items.length, items }),
+      gradeReview: async (id, g) => ({ ...(await base.gradeReview(id, g)), nextDueAt: due[n++]! }),
+    };
+    const { user } = renderApp('/review', api);
+    await screen.findByRole('button', { name: /Show answer/ });
+    for (let i = 0; i < items.length; i++) {
+      await user.keyboard(' ');
+      await user.keyboard('3');
+    }
+    const done = await screen.findByRole('status');
+    expect(done).toHaveTextContent('Queue cleared');
+    const line = within(done).getByTestId('next-due'); // inside the status region
+    expect(line).toHaveTextContent(/Next card due/);
+    expect(line).toHaveTextContent(`Next card due ${fmtWhen(T)}.`);
+
+    // arrived empty: the queue endpoint serves no next-due time, so none is claimed
+    const empty = renderApp('/review', { ...base, getReviewQueue: async () => ({ count: 0, items: [] }) });
+    const status = await within(empty.container).findByRole('status');
+    expect(status).toHaveTextContent('Nothing due');
+    expect(within(status).queryByTestId('next-due')).toBeNull();
   });
 
   it('1-4 do nothing while a dialog is open, on auto-repeat, or when already handled', async () => {
