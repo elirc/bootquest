@@ -501,7 +501,7 @@ export function ExplainBackPane({ detail }: { detail: UnitDetail }) {
     return (
       <>
         {strip}
-        <ExplainBackKeyView unitId={id} keyResp={ks.key} gatePct={pub.minCoveragePct ?? PROMOTION_MIN_COVERAGE * 100} onStale={onStale} />
+        <ExplainBackKeyView unitId={id} keyResp={ks.key} gatePct={pub.minCoveragePct ?? PROMOTION_MIN_COVERAGE * 100} altSets={pub.altSets ?? null} onStale={onStale} />
       </>
     );
   }
@@ -583,12 +583,15 @@ function ExplainBackKeyView({
   unitId,
   keyResp,
   gatePct,
+  altSets,
   onStale,
 }: {
   unitId: number;
   keyResp: ExplainBackKeyResponse;
   /** the unit's own pass mark, percent (ExplainBackPublic.minCoveragePct) */
   gatePct: number;
+  /** the unit's alternate-set group (ExplainBackPublic.altSets), null when it has none */
+  altSets: AltSets | null;
   /** the self-score answered NOT_ANSWERED: the item was re-seeded since the key loaded */
   onStale: (e: ApiError) => void;
 }) {
@@ -629,7 +632,7 @@ function ExplainBackKeyView({
         Key points — self-score your stored answers
       </h2>
       <p className="muted small">
-        Answer <code>#{keyResp.attemptId}</code> stored {fmtWhen(keyResp.answeredAt)} (immutable). Mark each key point your answer covered.
+        Your answer was stored {fmtWhen(keyResp.answeredAt)} (immutable). Mark each key point your answer covered.
       </p>
       <ol className="eb-questions">
         {keyResp.questions.map((q, qi) => (
@@ -706,7 +709,7 @@ function ExplainBackKeyView({
       )}
       <div className="results" aria-live="polite" data-testid="results">
         <ErrorLine error={error} />
-        {result && <ExplainBackResult r={result} />}
+        {result && <ExplainBackResult r={result} hasAltSets={altSets !== null && altSets.siblings.length > 1} />}
         {!result && scoredBefore && (
           <div className="verdict verdict-todo">
             <Icon name="check" /> Already self-scored: {fmtPct(scoredBefore.score)} coverage (evidence #{scoredBefore.evidenceIds.join(', #')}).
@@ -776,10 +779,11 @@ function PracticeSection({ unitId, keyResp, gatePct }: { unitId: number; keyResp
       </p>
       {list.length > 0 && (
         <ol className="practice-history" aria-label="Practice attempts">
-          {list.map((p) => (
+          {/* the served list is oldest-first (ORDER BY id), so the index IS the per-unit ordinal the server's messages use */}
+          {list.map((p, i) => (
             <li key={p.attemptId} className="practice-attempt" data-testid={`practice-${p.attemptId}`}>
               <p className="muted small">
-                Practice <code>#{p.attemptId}</code> stored {fmtWhen(p.answeredAt)}
+                Practice attempt {i + 1} · stored {fmtWhen(p.answeredAt)}
                 {p.scored ? ` — self-scored ${fmtPct(p.scored.score)} coverage (practice: 0 XP).` : ' — not scored yet.'}
               </p>
               {p.scored ? (
@@ -812,7 +816,7 @@ function PracticeSection({ unitId, keyResp, gatePct }: { unitId: number; keyResp
             type="button"
             className="btn"
             disabled={busy || unscored !== null}
-            title={unscored ? `Score practice attempt #${unscored.attemptId} first` : undefined}
+            title={unscored ? 'Score your latest practice attempt first.' : undefined}
             onClick={() => {
               setError(null);
               setLastResult(null);
@@ -821,7 +825,7 @@ function PracticeSection({ unitId, keyResp, gatePct }: { unitId: number; keyResp
           >
             <Icon name="cards" /> Practice again
           </button>
-          {unscored && <span className="muted small">Score practice attempt #{unscored.attemptId} first.</span>}
+          {unscored && <span className="muted small">Score your latest practice attempt first.</span>}
         </div>
       )}
       {writing && (
@@ -969,7 +973,12 @@ function PracticeScorer({
   );
 }
 
-function ExplainBackResult({ r }: { r: ExplainBackScoreResponse }) {
+/**
+ * hasAltSets: the unit rotates alternate question sets (>= 2 siblings). Such a unit has no
+ * changed-example retest by design — its spaced repetition is the next fresh set, so a passing
+ * score with no retest names that path instead of "no variation is seeded yet".
+ */
+function ExplainBackResult({ r, hasAltSets }: { r: ExplainBackScoreResponse; hasAltSets: boolean }) {
   return (
     <>
       <div className={`verdict verdict-${r.passed ? 'pass' : 'fail'}`} data-testid="coverage-result">
@@ -988,6 +997,10 @@ function ExplainBackResult({ r }: { r: ExplainBackScoreResponse }) {
             <Icon name="cards" /> Retest scheduled: <Link to={`/play/${t.unitId}`}>{t.title}</Link> opens {fmtWhen(t.dueAt)} (a changed example, at least 2 days later, no help).
           </div>
         ))
+      ) : r.passed && hasAltSets ? (
+        <div className="verdict verdict-todo" data-testid="retest-notice">
+          <Icon name="cards" /> No changed-example retest for this unit — its spaced repetition is the rotating question sets (see the set pills above): the next fresh set opens at least 2 days after this answer.
+        </div>
       ) : (
         <div className="verdict verdict-todo" data-testid="retest-notice">
           <Icon name="warn" /> No retest scheduled
@@ -1228,7 +1241,7 @@ function KataKeyView({ unitId, keyResp, onStale }: { unitId: number; keyResp: Ka
 
   return (
     <div className="kata-key" data-testid="kata-key">
-      <h3 className="small">Your findings (stored #{keyResp.attemptId})</h3>
+      <h3 className="small">Your findings (stored {fmtWhen(keyResp.answeredAt)})</h3>
       <ul className="findings-stored">
         {keyResp.findings.map((f, i) => (
           <li key={i}>

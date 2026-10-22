@@ -602,8 +602,8 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
       : '';
     return err(403, 'NOT_ANSWERED', `unit ${unitId}: ${superseded}record your ${it.what} first (POST /api/units/${unitId}/${it.path}) — the key is shown only after`);
   }
-  const alreadyAnswered = (unitId: number, prior: { attemptId: number }, kind: AnswerKind) =>
-    err(403, 'ALREADY_ANSWERED', `unit ${unitId}: your ${kind === 'kata' ? 'findings' : 'explain-back answer'} #${prior.attemptId} ${kind === 'kata' ? 'are' : 'is'} recorded and immutable; open the key instead`);
+  const alreadyAnswered = (unitId: number, _prior: { attemptId: number }, kind: AnswerKind) =>
+    err(403, 'ALREADY_ANSWERED', `unit ${unitId}: your ${kind === 'kata' ? 'findings' : 'explain-back answer'} ${kind === 'kata' ? 'are' : 'is'} recorded and immutable; open the key instead`);
 
   /**
    * Ladder dead end #2 (server engines/ladder.ts artifactsAwaitingSoloPass): the explain-back's
@@ -981,11 +981,11 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
         const rec = currentAnswer(ebAnswers, id);
         if (!rec) throw notAnswered(ebAnswers, id, 'explainBack');
         if (!scores.has(rec.attemptId)) {
-          throw err(409, 'NOT_VERIFIED', `unit ${id}: self-score your answer of record #${rec.attemptId} first — practice opens after the first scored answer`);
+          throw err(409, 'NOT_VERIFIED', `unit ${id}: self-score your answer of record first — practice opens after the first scored answer`);
         }
         const rows = practiceOf(id);
         const latest = rows[rows.length - 1];
-        if (latest && !scores.has(latest.attemptId)) throw err(403, 'ALREADY_ANSWERED', `unit ${id}: practice attempt #${latest.attemptId} is recorded and unscored; score it first`);
+        if (latest && !scores.has(latest.attemptId)) throw err(403, 'ALREADY_ANSWERED', `unit ${id}: practice attempt ${practiceOf(id).length} is recorded and unscored; score it first`);
         // assisted by construction (the key of this very version was read)
         const attemptId = recordAttempt(u, { explainBack: { questionSetKey: ITEM.explainBack.key(id), answers: body.answers, practice: true } }, true);
         recordAnswer(ebPractice, id, { attemptId, at: NOW, version: versionOf(id), body: [...body.answers] });
@@ -1006,7 +1006,7 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
         if (!p) throw err(409, 'NOT_VERIFIED', `attempt ${body.attemptId} is not a practice attempt of the question set loaded on unit ${id}`);
         const ids = ebKeyPoints(id).flatMap((q) => q.keyPoints.map((k) => k.id));
         exactMarks(ids, body.perKeyPoint);
-        if (scores.has(p.attemptId)) throw err(409, 'ALREADY_SCORED', `practice attempt #${p.attemptId} is already self-scored (evidence is append-only)`);
+        if (scores.has(p.attemptId)) throw err(409, 'ALREADY_SCORED', `practice attempt ${practiceOf(id).findIndex((x) => x.attemptId === body.attemptId) + 1} is already self-scored (evidence is append-only)`);
         const missed = ids.filter((k) => body.perKeyPoint[k] === 'missed');
         const covered = ids.length - missed.length;
         const coverage = covered / ids.length;
