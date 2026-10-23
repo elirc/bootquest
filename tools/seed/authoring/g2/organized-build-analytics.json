@@ -1,0 +1,37 @@
+{
+ "lines": { "start": 9, "end": 12 },
+ "questions": [
+  {
+   "prompt": "G2 BRIEF — organized-build-analytics (analytics admin dashboard: Express 5 + Prisma + PostgreSQL API, React client, Vitest). Verified CRITICAL finding: the public `POST /api/auth/register` route needs no authentication, its schema accepts a `role` field from the full role enum including SYSTEM_ADMIN, and `authService.register()` writes `input.role` straight into the new user row; anyone on the internet can sign up as a system administrator. You will delegate the fix to a coding agent. Write the brief: goal, allowed files, boundaries, test command, stop condition. Commit to your brief first, then tick the checkpoints you covered and add up the weights.",
+   "keyPoints": [
+    { "text": "[w3] Goal: a public registration can only ever create the least-privileged account. The Role enum has no plain user value, so the brief names READ_ONLY explicitly; a body that asks for SYSTEM_ADMIN or any other role still yields READ_ONLY.", "cite": { "path": "backend/prisma/schema.prisma", "lineStart": 137, "lineEnd": 145 } },
+    { "text": "[w3] Guarded form: the service assigns the role itself and the controller passes it only the whitelisted fields, because the validate middleware parses a copy and never writes it back; deleting `role` from the schema alone would leave request.body.role flowing untouched into user.create.", "cite": { "path": "backend/src/middleware/validate.middleware.ts", "lineStart": 7, "lineEnd": 15 } },
+    { "text": "[w2] Scope: `role` leaves the public register schema and the RegisterInput type, and the signup tracked event and the USER_CREATED audit row keep recording the role that was actually assigned.", "cite": { "path": "backend/src/modules/auth/auth.service.ts", "lineStart": 12, "lineEnd": 18 } },
+    { "text": "[w2] Allowed files: backend/src/modules/auth/auth.schemas.ts, auth.controller.ts, auth.service.ts, and one new test under backend/tests/integration/.", "cite": { "path": "backend/src/modules/auth/auth.controller.ts", "lineStart": 6, "lineEnd": 9 } },
+    { "text": "[w3] Boundary: the privileged-account path stays as it is (the seed script is the only place other roles are created), no admin-creation endpoint is invented, and the refresh-token and dashboard-visibility findings are reported, not fixed; the brief makes no claim that per-role metric hiding currently works.", "cite": { "path": "backend/prisma/seed.ts", "lineStart": 28, "lineEnd": 40 } },
+    { "text": "[w2] Test command: `npm run test -w backend` (vitest run over tests/**/*.test.ts, env defaults from vitest.setup.ts), posting to /api/auth/register through createApp with supertest as the health test does, with the prisma module and the audit service replaced by vi.mock so no PostgreSQL is needed.", "cite": { "path": "backend/tests/integration/health.test.ts", "lineStart": 1, "lineEnd": 12 } },
+    { "text": "[w2] Stop condition: a test that registers with role SYSTEM_ADMIN and asserts both the role handed to user.create and the role in the response is red on the original and green on the fix, the existing tests and `npm run typecheck` pass, and accounts that already self-registered with elevated roles are reported for a data review.", "cite": { "path": "backend/src/modules/auth/auth.routes.ts", "lineStart": 11, "lineEnd": 11 } }
+   ]
+  },
+  {
+   "prompt": "G2 PRE-MORTEM — same delegation. What will an agent most likely get wrong here, and which line of your brief prevents it?",
+   "keyPoints": [
+    { "text": "[w3] It narrows or removes the enum in the schema and declares victory; the controller still hands the raw body to the service, so the role sails through, and a thin controller is exactly the layer that forwards it. The guarded-form line and a test that inspects what was persisted prevent it.", "quote": "Controllers stay thin and delegate to services." },
+    { "text": "[w3] Wrong layer: it removes the role from the web client's register helper, which no page even calls; the endpoint is public, so the client is not a control.", "cite": { "path": "frontend/src/api/auth.api.ts", "lineStart": 17, "lineEnd": 28 } },
+    { "text": "[w2] It adds a USER value to the Role enum (with a migration) because the finding talks about 'a normal user', a schema change the brief rules out by naming the existing least-privileged role.", "cite": { "path": "backend/prisma/schema.prisma", "lineStart": 137, "lineEnd": 145 } },
+    { "text": "[w2] Feature creep: an invite flow or an admin create-user route 'so admins can still be made', or edits to the users router and the permission matrix; the boundary keeps privileged creation where it is.", "cite": { "path": "backend/src/modules/users/users.routes.ts", "lineStart": 9, "lineEnd": 11 } },
+    { "text": "[w1] False green: the suite passes because the only auth-adjacent unit test checks the static permission matrix, which says nothing about who can obtain a role.", "cite": { "path": "backend/tests/unit/permissions.test.ts", "lineStart": 1, "lineEnd": 11 } }
+   ]
+  },
+  {
+   "prompt": "G2 HANDBACK REVIEW — the agent hands back a diff and a green run. What do you check before accepting it?",
+   "keyPoints": [
+    { "text": "[w3] The role written by user.create in register is a literal chosen by the service; nothing read from request.body reaches that field any more.", "cite": { "path": "backend/src/modules/auth/auth.service.ts", "lineStart": 37, "lineEnd": 45 } },
+    { "text": "[w3] The new test sends role SYSTEM_ADMIN, and the handback shows it failing on the original code (an admin was created) before passing on the fix.", "cite": { "path": "backend/src/modules/auth/auth.schemas.ts", "lineStart": 9, "lineEnd": 17 } },
+    { "text": "[w2] Login, refresh, logout and the duplicate-email 409 are byte-identical in the diff and their behaviour is unchanged.", "cite": { "path": "backend/src/modules/auth/auth.service.ts", "lineStart": 27, "lineEnd": 33 } },
+    { "text": "[w2] The typecheck of both workspaces passes, so the web client's register helper, whose payload type still lists a role, either still compiles or is named as a follow-up rather than silently edited.", "cite": { "path": "package.json", "lineStart": 14, "lineEnd": 14 } },
+    { "text": "[w1] Follow-ups are listed, not fixed and not over-claimed: existing elevated self-registrations, refresh tokens with no reuse detection, and the visibility middleware's assignment to request.query, which is unverified under Express 5.", "cite": { "path": "backend/src/middleware/metricVisibility.middleware.ts", "lineStart": 8, "lineEnd": 8 } }
+   ]
+  }
+ ]
+}
