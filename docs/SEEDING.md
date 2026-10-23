@@ -162,6 +162,48 @@ Append a module: add `tools/seed/authoring/sysdrills/NN-topic.json` (next free `
 `validation.json` together. A quarantined exercise blocks the stamp at this bank size: fix
 the authoring, never the test.
 
+#### csdrills (the csharp track's authored drill bank)
+
+`csdrills` has no upstream repo either: its source is hand-written JSON committed in this
+repo, one file per module, under `tools/seed/authoring/csdrills/<NN-module>.json` (format
+`csdrills-authoring@1`, Zod-validated `.strict()` by `tools/seed/src/csdrills/source.ts`).
+Each exercise is an interview-shaped C# rep (LINQ set reconciliation, async composition,
+flags, money, time, edge strings, hashing, hand-built data structures, thread safety,
+CRUD endpoint logic) authored as a jstrain-harness console-check program in three parts:
+`starterHead` (usings + stub local functions: `// TODO` + `throw new
+NotImplementedException();`, so an untouched starter reports todo), `solutionHead` (the same
+with the bodies implemented), ONE canonical `tests` block opening with the
+`// ─── tests ───` divider, and an optional `tail` opening with a labelled divider such as
+`// ─── types ───` (enum/class/record declarations after the top-level statements); plus
+instructions, an explanation and exactly three hints (hint 3 is approach in words — never
+`;`, `=>` or `return`). The importer maps every exercise to a `drill-cs` unit on the
+**csharp** track (competency `language-fluency`, key `csdrills/<module>/<slug>`, spec
+`{ shape: 'console-check', harness: 'jstrain', files: { tests, tail, frozen: [] },
+timeoutMs: 20000 }` — the jstrain-cs shape), starter = starterHead + tests + tail and
+solution = solutionHead + tests + tail, one course per module, into
+`content/packs/csdrills/` with manifest `{ track: 'csharp', grader: 'csharp' }`. No
+migration: csharp has had a daily slate drill slot since migration 002 (`slate_drills=1`),
+and the slate counts csharp drills from every pack.
+
+```sh
+# authoring JSON -> content/packs/csdrills/{<module>.json, manifest.json} (refuses on any
+# format problem or a census other than CSDRILLS_EXPECTED; writes nothing then)
+npm run seed:import:csdrills
+npm run seed:import:csdrills -- --authoring tools/seed/authoring/csdrills --out content/packs/csdrills
+# stamp: every reference solution passes and every starter fails as a todo/failed test
+# verdict (never a compile error) under the REAL warm C# runner
+npm run seed:validate -- --source csdrills
+npm run seed:validate -- --source csdrills --course 01-linq-set-reconciliation   # dev loop
+```
+
+Append a module: add `tools/seed/authoring/csdrills/NN-topic.json` (next free `NN`; slugs
+`NN-name`, unique plain-literal `Test("…")` names, at least one `(boundary)` test,
+difficulty 1-3, no `#:` directives, deterministic tests: no clock, culture, `Random`,
+network, filesystem or timing races), bump `CSDRILLS_EXPECTED` in
+`tools/seed/src/csdrills/source.ts`, then re-import, re-validate (the journal resumes) and
+commit the authoring file, the pack files and the new `validation.json` together. A
+quarantined exercise blocks the stamp at this bank size: fix the authoring, never the test.
+
 ### The import gate: `seed:validate`
 
 `seed:validate` executes EVERY imported reference solution under BootQuest's own
@@ -951,6 +993,12 @@ resolved); quiz variety `concept` and flashcard shape `hand-authored`;
   every expected integer recomputed by the cross-reviewer; hint 3 is approach+formula only
   (never pasteable code); per-drill nearest-existing-drill distinctness recorded in the wave
   brief.
+- **csdrills wave 1 — DONE (2026-10-23):** new authored C# drill bank, 10 modules × 8 = 80
+  drill-cs drills (harness jstrain, grader csharp, track csharp); CSDRILLS_EXPECTED 80; 80/80
+  validated (solution passes + starter fails as todo/failed verdicts under the real C#
+  runner), 0 quarantined; per-drill nearest-existing-unit distinctness vs
+  csbootcamp/jstrain-cs recorded in the wave brief; hint 3 never pasteable (no ;, =>,
+  return); no migration (csharp slate_drills=1 since 002), no fingerprinted file touched.
 - **fundamentals wave — DONE (2026-10-21):** interview + real-SWE-fundamentals content, zero
   shared/factory edits (no estate restamp). 9 new DESIGN IT primaries → 47 items / 29 repos;
   11 fundamentals explain-backs on repos with no prior EB pack → EB packs 150 → 170, strict
