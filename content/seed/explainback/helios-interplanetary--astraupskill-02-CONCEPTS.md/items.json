@@ -1,0 +1,186 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "helios-interplanetary--astraupskill-02-CONCEPTS.md",
+ "items": [
+  {
+   "key": "seed:explainback:helios-interplanetary/explain-back/14f2a22cb5a144d6",
+   "provenance": {
+    "repo": "helios-interplanetary",
+    "sha": "4e043bdee9b29558651376740d9953d73c0b6ffc",
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 3,
+     "end": 38
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "Walk through a POST to helios's /api/operations/commands from the first check to COMMIT. Name each gate in the order it runs and what a request that fails it gets back.",
+     "keyPoints": [
+      {
+       "text": "assertSameOrigin runs first: the request must be local and its Origin header must equal the configured application origin, or it is refused with ORIGIN_DENIED.",
+       "cite": {
+        "path": "src/server/identity.ts",
+        "lineStart": 60,
+        "lineEnd": 69
+       }
+      },
+      {
+       "text": "principalFromRequest is evaluated before the body is touched: the session cookie's HMAC is compared timing-safe, the expiry and persona are checked, and anything off is UNAUTHENTICATED (401).",
+       "cite": {
+        "path": "src/server/identity.ts",
+        "lineStart": 81,
+        "lineEnd": 118
+       }
+      },
+      {
+       "text": "readJson then insists on an application/json content type (415), caps the body at 16 KiB (413) and turns a parse failure into INVALID_JSON.",
+       "cite": {
+        "path": "src/server/http.ts",
+        "lineStart": 11,
+        "lineEnd": 33
+       }
+      },
+      {
+       "text": "executeOperation parses the body against a strict discriminated union keyed on action, with a uuid commandId on every variant; a ZodError becomes 400 VALIDATION_FAILED with field paths.",
+       "cite": {
+        "path": "src/domain/operations.ts",
+        "lineStart": 3,
+        "lineEnd": 49
+       }
+      },
+      {
+       "text": "Only then does idempotentCommand run its first statement, the role check: a persona whose role is not operator is refused as FORBIDDEN while no pool client has been borrowed yet.",
+       "cite": {
+        "path": "src/server/operations.ts",
+        "lineStart": 13,
+        "lineEnd": 20
+       }
+      },
+      {
+       "text": "transaction() checks out one client, issues BEGIN, runs the callback, and COMMITs; any throw issues ROLLBACK, and the client is always released.",
+       "cite": {
+        "path": "src/server/db.ts",
+        "lineStart": 16,
+        "lineEnd": 32
+       }
+      },
+      {
+       "text": "Inside the transaction the order is: advisory lock on organization plus command id, receipt lookup, the operation's work on the same client, and the receipt insert last.",
+       "cite": {
+        "path": "src/server/operations.ts",
+        "lineStart": 20,
+        "lineEnd": 44
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "Explain why helios keeps the schema parse and the operator check outside the database transaction but the receipt lookup inside it, behind a lock. For each, say what would change if it moved.",
+     "keyPoints": [
+      {
+       "text": "Parsing first means a malformed body never takes one of the pool's ten connections or a lock, and the receipt compares the parsed object rather than raw bytes.",
+       "quote": "the compared input is the zod-parsed object from `executeOperation`, not the raw request body."
+      },
+      {
+       "text": "Checking the role before any lookup keeps a read-only caller from learning anything about stored commands: moved after the lookup, an existing command id would answer differently from a new one, and the caller would hold a connection and the lock while finding out.",
+       "cite": {
+        "path": "src/server/operations.ts",
+        "lineStart": 19,
+        "lineEnd": 38
+       }
+      },
+      {
+       "text": "The order is a choice of this envelope, not a law: the platform route calls requireOperator before it parses, so there a read-only persona with a malformed body gets the role refusal, while the operations route gives it the validation error.",
+       "cite": {
+        "path": "src/app/api/platform/route.ts",
+        "lineStart": 25,
+        "lineEnd": 30
+       }
+      },
+      {
+       "text": "The lookup sits behind pg_advisory_xact_lock on organization:command:id, so two concurrent sends of one command id queue; the second reads the first's committed receipt and replays instead of running the work again. The lock is transaction-scoped and needs no unlock.",
+       "cite": {
+        "path": "src/server/operations.ts",
+        "lineStart": 20,
+        "lineEnd": 29
+       }
+      },
+      {
+       "text": "Without that lock both would find no receipt and both run the work; the composite primary key would then fail one INSERT after its work, rolling it back and sending the client an error instead of the stored result.",
+       "cite": {
+        "path": "db/migrations/002-repair-supply-chain.sql",
+        "lineStart": 108,
+        "lineEnd": 112
+       }
+      },
+      {
+       "text": "Receipts are keyed by organization and command id and remember the actor, so a stored receipt from another operator or with different input is refused as IDEMPOTENCY_CONFLICT rather than handed back.",
+       "cite": {
+        "path": "src/server/operations.ts",
+        "lineStart": 30,
+        "lineEnd": 36
+       }
+      },
+      {
+       "text": "Putting the lookup, the work and the receipt in one transaction is what makes a receipt mean 'this committed'.",
+       "quote": "ties the replay decision to durable success."
+      }
+     ]
+    },
+    {
+     "prompt": "Defend or indict this claim about helios's command envelope: \"Any command can be retried blindly with the same commandId and body; the envelope guarantees it runs at most once and the client always sees the true outcome.\"",
+     "keyPoints": [
+      {
+       "text": "Only success leaves a receipt: the insert follows the work, so a domain refusal or a crash leaves nothing behind and the same command id later executes afresh against whatever state exists then.",
+       "cite": {
+        "path": "src/server/operations.ts",
+        "lineStart": 39,
+        "lineEnd": 44
+       }
+      },
+      {
+       "text": "That makes 'at most once' true for committed effects only; a failed attempt's outcome is not cached, so a retry can succeed where the first try was refused, or the reverse.",
+       "quote": "A retry after a rollback is this case, not a replay."
+      },
+      {
+       "text": "A replay hands back the result stored at first commit, a snapshot that does not reflect anything that has changed since.",
+       "cite": {
+        "path": "src/server/operations.ts",
+        "lineStart": 37,
+        "lineEnd": 37
+       }
+      },
+      {
+       "text": "The atomicity covers only writes made through the client passed to the work; anything done on another connection is outside it.",
+       "quote": "A function can throw after some independent writes have committed (for example, writes made through a different pool connection)."
+      },
+      {
+       "text": "Which is why the test reads the tables after the failure instead of trusting the thrown error.",
+       "quote": "The regression checks database state after the exception instead of assuming that a rejected promise proves rollback."
+      },
+      {
+       "text": "operation_commands keeps every receipt with only a created_at column and nothing in the code prunes it, so command ids are remembered forever and the table only grows.",
+       "cite": {
+        "path": "db/migrations/002-repair-supply-chain.sql",
+        "lineStart": 108,
+        "lineEnd": 112
+       }
+      },
+      {
+       "text": "The guarantee is per envelope, not per route: billing and platform commands reuse idempotentCommand, but the platform route's process_events and redrive_event actions return before reaching it.",
+       "cite": {
+        "path": "src/app/api/platform/route.ts",
+        "lineStart": 31,
+        "lineEnd": 41
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}
