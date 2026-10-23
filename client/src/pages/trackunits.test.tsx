@@ -114,6 +114,8 @@ describe('track units: campaign-less track (primary)', () => {
     it('count line, kind-button counts, 136 [data-unit] rows, done/revealed chips, locked row is a non-link', async () => {
       const { count, kinds, groupHeads } = await open136();
       expect(count).toHaveTextContent(`Showing 136 of 136 units · ${GENERATED_DONE} done`);
+      // the count line is a live region, so filter results are announced
+      expect(count).toHaveAttribute('role', 'status');
       expect(rows()).toHaveLength(136);
       expect(groupHeads()).toHaveLength(10 + 29);
       expect(kinds.getByRole('button', { name: 'All (136)' })).toHaveAttribute('aria-pressed', 'true');

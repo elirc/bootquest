@@ -89,7 +89,8 @@ function UnitBrowser({ units }: { units: UnitSummary[] }) {
           Hide done
         </button>
       </div>
-      <p className="tu-count muted small" data-testid="track-units-count">
+      {/* a live region: filter results are announced as the count changes */}
+      <p className="tu-count muted small" data-testid="track-units-count" role="status">
         Showing {shown} of {units.length} units · {done} done
       </p>
       {groups.length === 0 ? (
