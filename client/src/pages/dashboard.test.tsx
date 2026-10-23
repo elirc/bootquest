@@ -496,6 +496,36 @@ describe('evidence deep link', () => {
   });
 });
 
+describe('Next up: browse all', () => {
+  const nextUp = () => document.querySelector<HTMLElement>('section[aria-labelledby="p-next"] .nextup')!;
+
+  it('every track card carries a Browse all link to its campaign page, null-unit tracks included', async () => {
+    renderApp('/');
+    await screen.findByRole('table');
+    const browse = within(nextUp()).getAllByRole('link', { name: /^Browse all/ });
+    expect(browse.map((a) => a.getAttribute('href'))).toEqual(['/campaign/js', '/campaign/csharp', '/campaign/agentic', '/campaign/java', '/campaign/sysdesign']);
+    // the accessible names are distinct per track (the arrow is aria-hidden)
+    expect(browse.map((a) => a.textContent)).toContain('Browse all System design units →');
+    expect(within(nextUp()).getByRole('link', { name: 'Browse all System design units' })).toHaveAttribute('href', '/campaign/sysdesign');
+    expect(new Set(browse.map((a) => a.textContent)).size).toBe(5);
+    // the null-unit cards (java, sysdesign) stay inert; their only action is the browse link
+    const javaItem = within(nextUp()).getByRole('link', { name: 'Browse all Java units' }).closest('li')!;
+    expect(within(javaItem).getAllByRole('link')).toHaveLength(1);
+    expect(javaItem.querySelector('.nextup-locked')).toHaveTextContent('Nothing available');
+  });
+
+  it('the unit card link is unchanged and never nests the browse link', async () => {
+    renderApp('/');
+    await screen.findByRole('table');
+    const card = within(nextUp()).getByRole('link', { name: /signalpost U04/ });
+    expect(card).toHaveAttribute('href', '/play/107');
+    expect(card.querySelector('a')).toBeNull();
+    expect(card.closest('li')!.querySelector('.nextup-browse')).toHaveAttribute('href', '/campaign/js');
+    expect(screen.getAllByRole('link', { name: /Clear the review queue/ })).toHaveLength(1);
+    expect(screen.getByRole('heading', { name: 'Next up' })).toBeInTheDocument();
+  });
+});
+
 describe('friendly error text for the new codes', () => {
   it('ARTIFACT_REQUIRED, the local-only guards, and SYNC_RELINK_FAILED (which is NOT "retry the sync")', () => {
     expect(errorText(new ApiError(409, 'ARTIFACT_REQUIRED', 'x'))).toBe('Pass the linked artifact unit solo first — the explain-back opens after. (ARTIFACT_REQUIRED)');
