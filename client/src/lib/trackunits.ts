@@ -74,6 +74,23 @@ export function sectionCounts(units: readonly UnitSummary[]): Record<UnitSection
   return counts;
 }
 
+/** Per-group done/total over the UNFILTERED list: the headers show these even while filters
+ *  narrow the rows, so they always agree with the global "Showing X of Y · Z done" line. */
+export function groupTotals(units: readonly UnitSummary[]): ReadonlyMap<string, { done: number; total: number }> {
+  const totals = new Map<string, { done: number; total: number }>();
+  for (const u of units) {
+    const label = groupLabelOf(u);
+    let t = totals.get(label);
+    if (!t) {
+      t = { done: 0, total: 0 };
+      totals.set(label, t);
+    }
+    t.total++;
+    if (u.state === 'done') t.done++;
+  }
+  return totals;
+}
+
 /**
  * Filter then group. The query matches (case-insensitively) the title, the group label or the key.
  * Groups are sorted by label; units keep the order the server served them in.

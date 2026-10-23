@@ -157,6 +157,15 @@ describe('track units: campaign-less track (primary)', () => {
       expect(within(row(BAZAAR_B)!).getByText(/\(set B\)$/)).toBeInTheDocument();
     });
 
+    it('group headers keep their UNFILTERED done/total under Hide done + a query (agree with the count line)', async () => {
+      const { user, count, toolbar, groupHeads } = await open136();
+      await user.click(toolbar.getByRole('button', { name: 'Hide done' }));
+      await user.type(toolbar.getByRole('searchbox', { name: 'Filter units' }), 'bazaar');
+      expect(count).toHaveTextContent(`Showing 1 of 136 units · ${GENERATED_DONE} done`);
+      expect([...rows()].map((r) => r.dataset.unit)).toEqual([String(BAZAAR_B)]);
+      expect(groupHeads()).toEqual(['bazaar (1/2)']);
+    });
+
     it('Hide done removes every data-state="done" row; a no-match filter offers Clear filters', async () => {
       const { user, sec, count, toolbar } = await open136();
       const hide = toolbar.getByRole('button', { name: 'Hide done' });
