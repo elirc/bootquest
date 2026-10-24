@@ -31,7 +31,9 @@ import { CSDRILLS_EXPECTED, ID_RE, ImportError, readModules, type CsdrillsExerci
  *              the jstrain-cs units
  *   content  → instructions (skills + level header + the authored markdown),
  *              starter = starterHead + tests + tail (public), solution =
- *              solutionHead + tests + tail / explanation / hints (PRIVATE)
+ *              solutionHead + tests + (solutionTail ?? tail) / explanation / hints
+ *              (PRIVATE); spec.files.tail is always the STARTER's tail (jstrain-cs
+ *              precedent — the grader composes with the learner's own tail)
  *   difficulty 1..3 → code XP 10 × difficulty
  * Import-time refusals (throw ImportError, write nothing): ids not NN-kebab,
  * duplicate slug, difficulty outside 1..3, empty instructions / starterHead /
@@ -40,7 +42,9 @@ import { CSDRILLS_EXPECTED, ID_RE, ImportError, readModules, type CsdrillsExerci
  * still throwing NotImplementedException, any `#:` directive, a tests block that
  * does not open with the tests divider / does not end with a newline / contains a
  * further section divider, a tests divider in a head or the tail, a tail that does
- * not open with a section divider, fewer than 3 literal Test("…") names or a
+ * not open with a section divider, a solutionTail without a tail / identical to it /
+ * still throwing NotImplementedException / not opening with a section divider (with a
+ * solutionTail the TODO marker may sit in starterHead or tail), fewer than 3 literal Test("…") names or a
  * duplicate one, a pasteable hint 3 (`;`, `=>` or `return`), and a census that
  * differs from the expected counts. Output is deterministic: same authoring bytes →
  * same pack bytes (the manifest's importedFrom.path / gitHead / dirty record where
@@ -111,7 +115,13 @@ export function mapExercise(module: string, ex: CsdrillsExercise, position: numb
   if (!ex.solutionHead.trim()) fail('empty solutionHead');
   if (!ex.tests.trim()) fail('empty tests');
   if (!ex.explanation.trim()) fail('empty explanation');
-  if (!/\bTODO\b/.test(ex.starterHead)) fail('starterHead has no TODO marker (the learner must see what to write)');
+  if (ex.solutionTail !== undefined) {
+    // a class drill: the learner's work lives in the tail (types must follow the top-level statements)
+    if (ex.tail === undefined) fail('solutionTail without a tail (the starter needs the stubbed types section)');
+    if (ex.solutionTail === ex.tail) fail('solutionTail is identical to the tail (the starter types section)');
+    if (ex.solutionTail.includes('NotImplementedException')) fail('solutionTail still contains NotImplementedException (its tests would report todo)');
+    if (!/\bTODO\b/.test(ex.starterHead + (ex.tail ?? ''))) fail('neither starterHead nor tail has a TODO marker (the learner must see what to write)');
+  } else if (!/\bTODO\b/.test(ex.starterHead)) fail('starterHead has no TODO marker (the learner must see what to write)');
   if (!ex.starterHead.includes('using static Bootcamp.Check;')) fail('starterHead lacks `using static Bootcamp.Check;` (the harness API)');
   if (ex.solutionHead === ex.starterHead) fail('solutionHead is identical to the starterHead');
   if (ex.solutionHead.includes('NotImplementedException')) fail('solutionHead still contains NotImplementedException (its tests would report todo)');
@@ -120,6 +130,7 @@ export function mapExercise(module: string, ex: CsdrillsExercise, position: numb
     ['solutionHead', ex.solutionHead],
     ['tests', ex.tests],
     ['tail', ex.tail],
+    ['solutionTail', ex.solutionTail],
   ];
   for (const [name, text] of sections) {
     if (text !== undefined && DIRECTIVE.test(text)) fail(`${name} contains a \`#:\` file-based-app directive (unsupported: the warm runner references Check.dll itself)`);
@@ -128,10 +139,11 @@ export function mapExercise(module: string, ex: CsdrillsExercise, position: numb
   if (!TESTS_FIRST_LINE.test(firstLine)) fail('tests must start (first line) with the `// ─── tests ───` divider');
   if (!ex.tests.endsWith('\n')) fail('tests must end with a newline');
   if (SECTION_DIVIDER.test(ex.tests.slice(firstLine.length))) fail('tests contain a further section divider (the runner would end the tests block there)');
-  for (const [name, text] of [['starterHead', ex.starterHead], ['solutionHead', ex.solutionHead], ['tail', ex.tail]] as const) {
+  for (const [name, text] of [['starterHead', ex.starterHead], ['solutionHead', ex.solutionHead], ['tail', ex.tail], ['solutionTail', ex.solutionTail]] as const) {
     if (text !== undefined && TESTS_MARKER.test(text)) fail(`${name} contains a tests divider (only the tests block may)`);
   }
   if (ex.tail !== undefined && !SECTION_FIRST_LINE.test(ex.tail.split('\n', 1)[0]!)) fail('tail must start (first line) with a labelled section divider such as `// ─── types ───`');
+  if (ex.solutionTail !== undefined && !SECTION_FIRST_LINE.test(ex.solutionTail.split('\n', 1)[0]!)) fail('solutionTail must start (first line) with a labelled section divider such as `// ─── types ───`');
   const names = literalTestNames(ex.tests);
   if (names.length < 3) fail(`tests register ${names.length} literal Test("…") name(s); at least 3 required`);
   const seen = new Set<string>();
@@ -166,7 +178,7 @@ export function mapExercise(module: string, ex: CsdrillsExercise, position: numb
   const content = UnitContentEntry.parse({
     instructions: `${header}\n\n${ex.instructions.trim()}\n`,
     starter: ex.starterHead + ex.tests + tail,
-    solution: ex.solutionHead + ex.tests + tail,
+    solution: ex.solutionHead + ex.tests + (ex.solutionTail ?? tail),
     explanation: ex.explanation,
     hints: ex.hints,
   });

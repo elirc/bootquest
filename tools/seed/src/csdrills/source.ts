@@ -12,12 +12,13 @@ import type { PackCounts } from '@bootquest/shared';
  * Shape (Zod, .strict() everywhere — a misspelled key is an error, never dropped):
  *   { format: 'csdrills-authoring@1', module, title, description,
  *     exercises: [{ slug, title, difficulty, skills, instructions, starterHead,
- *                   solutionHead, tests, tail?, explanation, hints[3] }] }
+ *                   solutionHead, tests, tail?, solutionTail?, explanation, hints[3] }] }
  * The one structural difference from sysdrills: a C# drill is a jstrain-harness
  * console-check program, graded as learner.head + CANONICAL tests + learner.tail,
  * so the authoring carries the tests as ONE block string (starting with the
  * `// ─── tests ───` divider) and the starter/solution as their heads (plus an
- * optional shared `// ─── types ───` tail).
+ * optional `// ─── types ───` tail, shared by both unless a solutionTail is given — used
+ * when the learner implements a class, which must live in the tail).
  * Content rules the schema cannot express (non-empty strings, TODO starters,
  * divider placement, literal test names, difficulty 1..3, census) are import.ts
  * refusals.
@@ -54,8 +55,20 @@ export const CsdrillsExercise = z
     solutionHead: z.string(),
     /** the canonical tests block: starts with the `// ─── tests ───` divider line, ends with \n */
     tests: z.string(),
-    /** optional `// ─── types ───` section (enum/class/record declarations after the top-level statements) */
+    /**
+     * optional `// ─── types ───` section (enum/class/record declarations after the top-level
+     * statements). It is the STARTER's tail and the spec's canonical tail; shared with the
+     * solution unless solutionTail is given.
+     */
     tail: z.string().optional(),
+    /**
+     * optional solution-side tail, for drills whose learner work is a CLASS (types must follow the
+     * top-level statements, so the class lives in the tail): `tail` then carries the stubbed class
+     * (TODO + NotImplementedException) and this field the implemented one. The grader composes
+     * learner.head + canonical tests + learner.tail, so the solution's own tail is what runs —
+     * the jstrain-cs precedent (solution tail ≠ spec tail). Requires `tail`.
+     */
+    solutionTail: z.string().optional(),
     explanation: z.string(),
     hints: z.array(z.string().min(1)).length(3),
   })

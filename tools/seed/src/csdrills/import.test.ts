@@ -293,6 +293,80 @@ describe('import-time refusals (write nothing)', () => {
   });
 });
 
+// a class drill: the learner implements a type, which must follow the top-level statements,
+// so the starter's tail stubs it and the solution's tail implements it
+const STUB_TAIL = `${TYPES}\n\nclass Counter\n{\n    public int Next()\n    {\n        // TODO: count up from 1\n        throw new NotImplementedException();\n    }\n}\n`;
+const IMPL_TAIL = `${TYPES}\n\nclass Counter\n{\n    private int _n;\n    public int Next() => ++_n;\n}\n`;
+const classExercise = (over: Partial<CsdrillsExercise> = {}): CsdrillsExercise =>
+  exercise({
+    slug: '03-counter',
+    title: 'Counter',
+    starterHead: 'using static Bootcamp.Check;\n\n// TODO: implement Counter in the types section below\n\n',
+    solutionHead: 'using static Bootcamp.Check;\n\n// Counter is implemented in the types section below\n\n',
+    tests: `${MARKER}\n\nTest("first Next -> 1 (boundary)", () => Eq(new Counter().Next(), 1));\nTest("second Next -> 2", () => { var c = new Counter(); c.Next(); Eq(c.Next(), 2); });\nTest("counters are independent", () => { new Counter().Next(); Eq(new Counter().Next(), 1); });\n\n`,
+    tail: STUB_TAIL,
+    solutionTail: IMPL_TAIL,
+    ...over,
+  });
+
+describe('class drills (solutionTail)', () => {
+  it('composes the solution with solutionTail while the starter and spec.files.tail keep the stubbed tail', () => {
+    const out = join(dir, 'pack');
+    const root = writeAuthoring({ '01-alpha.json': moduleFile('01-alpha', [exercise(), classExercise()]) });
+    importCsdrills({ authoringDir: root, outDir: out, expected: null });
+    const c = PackCourseFile.parse(JSON.parse(readFileSync(join(out, '01-alpha.json'), 'utf8')));
+    const u = c.units[1]!;
+    const spec = u.unit.checks[0]!.spec;
+    if (spec.type !== 'drill-cs') throw new Error('unreachable');
+    const ex = classExercise();
+    expect(spec.files.tail).toBe(STUB_TAIL);
+    const content = c.content[u.unit.key]!;
+    expect(content.starter).toBe(ex.starterHead + ex.tests + STUB_TAIL);
+    expect(content.solution).toBe(ex.solutionHead + ex.tests + IMPL_TAIL);
+    expect(content.solution).not.toContain('NotImplementedException');
+    // a drill without solutionTail still shares its tail (unchanged behaviour)
+    const s0 = c.content[c.units[0]!.unit.key]!;
+    expect(s0.solution).toBe(exercise().solutionHead + exercise().tests);
+  });
+
+  it('accepts a TODO that sits only in the stubbed tail when a solutionTail is given', () => {
+    const out = join(dir, 'pack');
+    const root = writeAuthoring({ '01-alpha.json': moduleFile('01-alpha', [classExercise({ starterHead: 'using static Bootcamp.Check;\n\n// implement Counter below\n\n' })]) });
+    expect(() => importCsdrills({ authoringDir: root, outDir: out, expected: null })).not.toThrow();
+  });
+
+  it('refuses a solutionTail without a tail', () => {
+    refuse([classExercise({ tail: undefined })], /solutionTail without a tail/);
+  });
+
+  it('refuses a solutionTail identical to the tail', () => {
+    refuse([classExercise({ solutionTail: STUB_TAIL })], /solutionTail is identical to the tail/);
+  });
+
+  it('refuses a solutionTail still throwing NotImplementedException', () => {
+    refuse([classExercise({ solutionTail: `${IMPL_TAIL}\nclass Extra { public void X() => throw new NotImplementedException(); }\n` })], /solutionTail still contains NotImplementedException/);
+  });
+
+  it('refuses a solutionTail that does not open with a section divider', () => {
+    refuse([classExercise({ solutionTail: IMPL_TAIL.slice(TYPES.length + 2) })], /solutionTail must start \(first line\) with a labelled section divider/);
+  });
+
+  it('refuses a solutionTail containing a tests divider', () => {
+    refuse([classExercise({ solutionTail: `${IMPL_TAIL}${MARKER}\n` })], /solutionTail contains a tests divider/);
+  });
+
+  it('refuses a `#:` directive in the solutionTail', () => {
+    refuse([classExercise({ solutionTail: `${IMPL_TAIL}#:package Foo@1.0.0\n` })], /solutionTail contains a `#:`/);
+  });
+
+  it('refuses a class drill with no TODO in either starterHead or tail', () => {
+    refuse(
+      [classExercise({ starterHead: 'using static Bootcamp.Check;\n\n// implement Counter below\n\n', tail: STUB_TAIL.replace('// TODO: count up from 1', '// count up from 1') })],
+      /neither starterHead nor tail has a TODO marker/,
+    );
+  });
+});
+
 describe('committed csdrills authoring + pack (content/packs/csdrills)', () => {
   it('the authoring imports to the pinned census and its course files match the committed pack byte-for-byte', () => {
     const out = join(dir, 'pack');
