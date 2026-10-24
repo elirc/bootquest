@@ -1,0 +1,612 @@
+{
+  "format": "sysdrills-authoring@1",
+  "module": "11-replication-and-consistency",
+  "title": "Replication & consistency math",
+  "description": "Replication and consistency reps for the data-tier part of a system-design interview: how long a quorum write or a strong read waits for its acks, which reads must stay on the primary when freshness is required, the write load that read repair quietly adds, anti-entropy traffic with and without Merkle trees, point-in-time restore time (snapshot copy plus WAL replay), sizing a consensus cluster for f failures, how long before a lagging replica breaches its staleness SLA, and the share of reads a replica serves stale. Every drill is whole-number arithmetic with the conversions named (86,400 s/day; per-mille = parts per thousand = x/1000), so you practise the reasoning, not the calculator.",
+  "exercises": [
+    {
+      "slug": "01-quorum-step-latency",
+      "title": "Quorum latency: the k-th ack, not the last",
+      "difficulty": 2,
+      "skills": [
+        "replication",
+        "latency"
+      ],
+      "instructions": "**Interview prompt.** \"Three replicas acknowledge a write after 10, 40 and 120 ms. With a write quorum of 2, when does the write commit? And if we drop to w = 1 on a five-replica cluster, what does a strongly consistent read cost now?\"\n\n**Why it works.** A quorum operation completes when the k-th replica answers — the slower ones after it do not matter. With the ack times sorted ascending, the k-quorum latency is simply the k-th entry, at zero-based index k − 1. Reads and writes trade against each other: a read is only guaranteed to see the latest write when r + w > n, so the smallest strong read quorum is r = n − w + 1, whose latency sits at index n − w. Inputs: `sortedAckMs` is sorted ascending, k ≥ 1 and w ≤ n.\n\n**Your task.** Export two functions:\n- `quorumAckMs(sortedAckMs, k)` → `sortedAckMs[k − 1]`\n- `strongReadAckMs(sortedAckMs, n, w)` → `sortedAckMs[n − w]` (the r = n − w + 1-th ack)\n\n**Worked example.** Acks at [10, 40, 120] ms with a quorum of k = 2 → the 2nd ack → **40 ms**.",
+      "starter": "export function quorumAckMs(sortedAckMs, k) {\n  // TODO: the moment the k-th fastest replica answers\n}\n\nexport function strongReadAckMs(sortedAckMs, n, w) {\n  // TODO: the ack a read quorum of n - w + 1 waits for\n}\n",
+      "solution": "export function quorumAckMs(sortedAckMs, k) {\n  return sortedAckMs[k - 1];\n}\n\nexport function strongReadAckMs(sortedAckMs, n, w) {\n  return sortedAckMs[n - w];\n}\n",
+      "tests": [
+        {
+          "name": "acks 10, 40, 120 with k = 2 -> 40 ms",
+          "code": "assert.equal(typeof mod.quorumAckMs, 'function', 'export a function named quorumAckMs');\nassert.equal(mod.quorumAckMs([10,40,120], 2), 40);",
+          "input": [
+            [
+              10,
+              40,
+              120
+            ],
+            2
+          ]
+        },
+        {
+          "name": "k = 1 -> the fastest ack, 10 ms (boundary)",
+          "code": "assert.equal(typeof mod.quorumAckMs, 'function', 'export a function named quorumAckMs');\nassert.equal(mod.quorumAckMs([10,40,120], 1), 10);",
+          "input": [
+            [
+              10,
+              40,
+              120
+            ],
+            1
+          ]
+        },
+        {
+          "name": "five acks with k = 3 -> 200 ms",
+          "code": "assert.equal(typeof mod.quorumAckMs, 'function', 'export a function named quorumAckMs');\nassert.equal(mod.quorumAckMs([5,80,200,350,900], 3), 200);",
+          "input": [
+            [
+              5,
+              80,
+              200,
+              350,
+              900
+            ],
+            3
+          ]
+        },
+        {
+          "name": "n = 3, w = 2 -> the strong read waits 40 ms",
+          "code": "assert.equal(typeof mod.strongReadAckMs, 'function', 'export a function named strongReadAckMs');\nassert.equal(mod.strongReadAckMs([10,40,120], 3, 2), 40);",
+          "input": [
+            [
+              10,
+              40,
+              120
+            ],
+            3,
+            2
+          ]
+        },
+        {
+          "name": "w = 1 forces the read to wait for every replica -> 900 ms (boundary)",
+          "code": "assert.equal(typeof mod.strongReadAckMs, 'function', 'export a function named strongReadAckMs');\nassert.equal(mod.strongReadAckMs([5,80,200,350,900], 5, 1), 900);",
+          "input": [
+            [
+              5,
+              80,
+              200,
+              350,
+              900
+            ],
+            5,
+            1
+          ]
+        },
+        {
+          "name": "n = 5, w = 4 -> the read needs 2 acks, 80 ms",
+          "code": "assert.equal(typeof mod.strongReadAckMs, 'function', 'export a function named strongReadAckMs');\nassert.equal(mod.strongReadAckMs([5,80,200,350,900], 5, 4), 80);",
+          "input": [
+            [
+              5,
+              80,
+              200,
+              350,
+              900
+            ],
+            5,
+            4
+          ]
+        }
+      ],
+      "explanation": "The quorum size is the index into the sorted acks.\n\nFor `strongReadAckMs([5, 80, 200, 350, 900], 5, 1)`:\n- strong read quorum r = n − w + 1 = 5 − 1 + 1 = 5\n- the 5th ack sits at index n − w = 4 → **900 ms**\n\nA cheap write quorum is paid for at read time — module 03's `quorum-check` decides who must answer; this drill prices how long they take.",
+      "hints": [
+        "A quorum is done the moment its k-th member answers; sort the acks and the slower replicas after that position stop mattering.",
+        "quorum latency = sorted[k − 1]; strong read: r = n − w + 1, so latency = sorted[n − w].",
+        "The k-th fastest ack arrives at sorted position k − 1, and a strong read needs r = n − w + 1 acks — index the sorted array at n − w for that latency"
+      ]
+    },
+    {
+      "slug": "02-freshness-read-routing",
+      "title": "Routing fresh reads: what the primary really carries",
+      "difficulty": 1,
+      "skills": [
+        "replication",
+        "capacity"
+      ],
+      "instructions": "**Interview prompt.** \"The app does 24,000 reads/s and 2,000 writes/s on one primary with async replicas; product says 25% of reads must see the latest write. What must the primary carry, and what may the replicas serve?\"\n\n**Why it works.** An async replica serves a slightly old view, so any read that must reflect the latest write has to go where the writes go. The primary therefore carries every write plus the fresh slice of reads; only the stale-tolerant remainder can be offloaded. Shares are in per-mille (‰ = x/1000). The tests choose inputs that divide exactly, so every answer is a whole number.\n\n**Your task.** Export two functions:\n- `primaryQps(writeQps, readQps, freshPermille)` → `writeQps + readQps × freshPermille ÷ 1000`\n- `replicaQps(readQps, freshPermille)` → `readQps × (1000 − freshPermille) ÷ 1000`\n\n**Worked example.** 2,000 writes/s, 24,000 reads/s, 250‰ fresh → primary 2,000 + 6,000 = **8,000 QPS**; replicas serve 18,000.",
+      "starter": "export function primaryQps(writeQps, readQps, freshPermille) {\n  // TODO: writes plus the fresh slice of reads\n}\n\nexport function replicaQps(readQps, freshPermille) {\n  // TODO: the stale-tolerant remainder\n}\n",
+      "solution": "export function primaryQps(writeQps, readQps, freshPermille) {\n  return writeQps + (readQps * freshPermille) / 1000;\n}\n\nexport function replicaQps(readQps, freshPermille) {\n  return (readQps * (1000 - freshPermille)) / 1000;\n}\n",
+      "tests": [
+        {
+          "name": "2,000 writes + 25% of 24,000 reads -> 8,000 on the primary",
+          "code": "assert.equal(typeof mod.primaryQps, 'function', 'export a function named primaryQps');\nassert.equal(mod.primaryQps(2000, 24000, 250), 8000);",
+          "input": [
+            2000,
+            24000,
+            250
+          ]
+        },
+        {
+          "name": "no read needs the primary -> writes only (boundary)",
+          "code": "assert.equal(typeof mod.primaryQps, 'function', 'export a function named primaryQps');\nassert.equal(mod.primaryQps(2000, 24000, 0), 2000);",
+          "input": [
+            2000,
+            24000,
+            0
+          ]
+        },
+        {
+          "name": "everything fresh -> replicas buy nothing (boundary)",
+          "code": "assert.equal(typeof mod.primaryQps, 'function', 'export a function named primaryQps');\nassert.equal(mod.primaryQps(500, 10000, 1000), 10500);",
+          "input": [
+            500,
+            10000,
+            1000
+          ]
+        },
+        {
+          "name": "24,000 reads at 250 permille fresh -> replicas serve 18,000",
+          "code": "assert.equal(typeof mod.replicaQps, 'function', 'export a function named replicaQps');\nassert.equal(mod.replicaQps(24000, 250), 18000);",
+          "input": [
+            24000,
+            250
+          ]
+        },
+        {
+          "name": "1000 permille fresh -> replicas serve 0 (boundary)",
+          "code": "assert.equal(typeof mod.replicaQps, 'function', 'export a function named replicaQps');\nassert.equal(mod.replicaQps(10000, 1000), 0);",
+          "input": [
+            10000,
+            1000
+          ]
+        },
+        {
+          "name": "30,000 reads at 100 permille fresh -> 27,000 offloaded",
+          "code": "assert.equal(typeof mod.replicaQps, 'function', 'export a function named replicaQps');\nassert.equal(mod.replicaQps(30000, 100), 27000);",
+          "input": [
+            30000,
+            100
+          ]
+        }
+      ],
+      "explanation": "Read-your-writes belongs to the primary.\n\nFor `primaryQps(2000, 24000, 250)`:\n- fresh reads: 24,000 × 250 ÷ 1000 = 6,000/s\n- plus all 2,000 writes → **8,000 QPS** on the primary\n\nReplicas only ever offload the stale-tolerant slice — if product demands 100% freshness, replicas buy nothing (module 10's replica sizing then applies to what is left).",
+      "hints": [
+        "A read that must see the latest write cannot be answered by an async replica — it lands on the primary on top of every write.",
+        "primary = writeQps + readQps × fresh‰ ÷ 1000; replicas = readQps × (1000 − fresh‰) ÷ 1000.",
+        "Fresh reads must go where the writes land, so the primary carries writes plus the fresh per-mille slice of reads — the replicas get the remaining (1000 − fresh‰) slice"
+      ]
+    },
+    {
+      "slug": "03-read-repair-volume",
+      "title": "Read repair: the writes your reads create",
+      "difficulty": 2,
+      "skills": [
+        "consistency",
+        "writes"
+      ],
+      "instructions": "**Interview prompt.** \"Reads run at 10,000/s and read repair compares 3 replicas on every read; 2% of those checks find a stale copy and write it back. Real client writes are 2,000/s. How many repair writes does read traffic create, and how big is that next to the real write load?\"\n\n**Why it works.** Read repair compares every copy a read touches and writes the fresh value back to any stale one. Checks per second are reads × replicasChecked, and the stale per-mille of those checks (‰ = x/1000) become repair writes — writes caused by READ traffic. Comparing that stream to the real write rate, again in per-mille, shows how much the read path amplifies the write path. The tests choose inputs that divide exactly, so every answer is a whole number.\n\n**Your task.** Export two functions:\n- `repairWritesPerSec(readQps, replicasChecked, stalePermille)` → `readQps × replicasChecked × stalePermille ÷ 1000`\n- `repairSharePermille(readQps, replicasChecked, stalePermille, writeQps)` → `repairWritesPerSec(readQps, replicasChecked, stalePermille) × 1000 ÷ writeQps`\n\n**Worked example.** 10,000 reads/s × 3 copies checked × 20‰ stale → **600** repair writes/s.",
+      "starter": "export function repairWritesPerSec(readQps, replicasChecked, stalePermille) {\n  // TODO: stale checks that turn into repair writes\n}\n\nexport function repairSharePermille(readQps, replicasChecked, stalePermille, writeQps) {\n  // TODO: repair writes as a per-mille of the real writes\n}\n",
+      "solution": "export function repairWritesPerSec(readQps, replicasChecked, stalePermille) {\n  return (readQps * replicasChecked * stalePermille) / 1000;\n}\n\nexport function repairSharePermille(readQps, replicasChecked, stalePermille, writeQps) {\n  return (repairWritesPerSec(readQps, replicasChecked, stalePermille) * 1000) / writeQps;\n}\n",
+      "tests": [
+        {
+          "name": "10,000 reads x 3 copies at 20 permille stale -> 600 repairs/s",
+          "code": "assert.equal(typeof mod.repairWritesPerSec, 'function', 'export a function named repairWritesPerSec');\nassert.equal(mod.repairWritesPerSec(10000, 3, 20), 600);",
+          "input": [
+            10000,
+            3,
+            20
+          ]
+        },
+        {
+          "name": "nothing stale -> 0 repairs (boundary)",
+          "code": "assert.equal(typeof mod.repairWritesPerSec, 'function', 'export a function named repairWritesPerSec');\nassert.equal(mod.repairWritesPerSec(10000, 3, 0), 0);",
+          "input": [
+            10000,
+            3,
+            0
+          ]
+        },
+        {
+          "name": "5,000 reads x 2 copies at 50 permille stale -> 500 repairs/s",
+          "code": "assert.equal(typeof mod.repairWritesPerSec, 'function', 'export a function named repairWritesPerSec');\nassert.equal(mod.repairWritesPerSec(5000, 2, 50), 500);",
+          "input": [
+            5000,
+            2,
+            50
+          ]
+        },
+        {
+          "name": "600 repairs vs 2,000 writes/s -> 300 permille",
+          "code": "assert.equal(typeof mod.repairSharePermille, 'function', 'export a function named repairSharePermille');\nassert.equal(mod.repairSharePermille(10000, 3, 20, 2000), 300);",
+          "input": [
+            10000,
+            3,
+            20,
+            2000
+          ]
+        },
+        {
+          "name": "repairs equal the real write load -> 1000 permille (boundary)",
+          "code": "assert.equal(typeof mod.repairSharePermille, 'function', 'export a function named repairSharePermille');\nassert.equal(mod.repairSharePermille(5000, 2, 50, 500), 1000);",
+          "input": [
+            5000,
+            2,
+            50,
+            500
+          ]
+        },
+        {
+          "name": "8,000 reads x 5 copies at 10 permille vs 4,000 writes/s -> 100 permille",
+          "code": "assert.equal(typeof mod.repairSharePermille, 'function', 'export a function named repairSharePermille');\nassert.equal(mod.repairSharePermille(8000, 5, 10, 4000), 100);",
+          "input": [
+            8000,
+            5,
+            10,
+            4000
+          ]
+        }
+      ],
+      "explanation": "Read repair turns a stale-read rate into write load.\n\nFor `repairSharePermille(10000, 3, 20, 2000)`:\n- checks: 10,000 reads × 3 copies = 30,000/s\n- repairs: 30,000 × 20 ÷ 1000 = 600 writes/s\n- share: 600 × 1000 ÷ 2,000 = **300‰**\n\nRead traffic quietly adds 30% to the write path — module 02's `missesPerSecond` applies one per-mille to reads, while here the replica fan-out multiplies the checks and the result lands on the WRITE side.",
+      "hints": [
+        "Every read compares several copies, and each stale copy it finds is written back — those are writes your read traffic generates.",
+        "repairs = readQps × replicasChecked × stale‰ ÷ 1000; share‰ = repairs × 1000 ÷ writeQps.",
+        "Each read checks replicasChecked copies and the stale per-mille of those checks becomes a repair write — compare that repair stream to the real write rate by scaling with 1000 ÷ writeQps"
+      ]
+    },
+    {
+      "slug": "04-anti-entropy-sync",
+      "title": "Anti-entropy: full compare vs Merkle trees",
+      "difficulty": 2,
+      "skills": [
+        "replication",
+        "bandwidth"
+      ],
+      "instructions": "**Interview prompt.** \"Each replica holds 1 GB and we keep 3 replicas. A nightly anti-entropy job reconciles every replica with its peers. How many bytes cross the network if it streams the full data set — and how many with Merkle trees, when only 0.5% of the key ranges actually diverge?\"\n\n**Why it works.** A naive full compare streams the data to each of the other replicas − 1 peers on every sync. Merkle (hash) trees let replicas exchange hashes first and stream only the ranges whose hashes differ, so the traffic shrinks to the divergent per-mille slice (‰ = x/1000). Conversions: 1 GB = 1,000,000,000 bytes. The tests choose inputs that divide exactly, so every answer is a whole number.\n\n**Your task.** Export two functions:\n- `fullSyncBytesPerDay(dataBytes, replicas, syncsPerDay)` → `dataBytes × (replicas − 1) × syncsPerDay`\n- `merkleSyncBytesPerDay(dataBytes, replicas, syncsPerDay, divergentPermille)` → `fullSyncBytesPerDay(dataBytes, replicas, syncsPerDay) × divergentPermille ÷ 1000`\n\n**Worked example.** 1 GB on 3 replicas synced once a day → 1,000,000,000 × 2 × 1 = **2,000,000,000 bytes** a day for the full compare.",
+      "starter": "export function fullSyncBytesPerDay(dataBytes, replicas, syncsPerDay) {\n  // TODO: stream the data to every peer on every sync\n}\n\nexport function merkleSyncBytesPerDay(dataBytes, replicas, syncsPerDay, divergentPermille) {\n  // TODO: only the divergent slice crosses the wire\n}\n",
+      "solution": "export function fullSyncBytesPerDay(dataBytes, replicas, syncsPerDay) {\n  return dataBytes * (replicas - 1) * syncsPerDay;\n}\n\nexport function merkleSyncBytesPerDay(dataBytes, replicas, syncsPerDay, divergentPermille) {\n  return (fullSyncBytesPerDay(dataBytes, replicas, syncsPerDay) * divergentPermille) / 1000;\n}\n",
+      "tests": [
+        {
+          "name": "1 GB, 3 replicas, 1 sync/day -> 2,000,000,000 bytes",
+          "code": "assert.equal(typeof mod.fullSyncBytesPerDay, 'function', 'export a function named fullSyncBytesPerDay');\nassert.equal(mod.fullSyncBytesPerDay(1000000000, 3, 1), 2000000000);",
+          "input": [
+            1000000000,
+            3,
+            1
+          ]
+        },
+        {
+          "name": "RF 1 has nothing to compare -> 0 bytes (boundary)",
+          "code": "assert.equal(typeof mod.fullSyncBytesPerDay, 'function', 'export a function named fullSyncBytesPerDay');\nassert.equal(mod.fullSyncBytesPerDay(1000000000, 1, 4), 0);",
+          "input": [
+            1000000000,
+            1,
+            4
+          ]
+        },
+        {
+          "name": "500 MB, 4 replicas, 2 syncs/day -> 3,000,000,000 bytes",
+          "code": "assert.equal(typeof mod.fullSyncBytesPerDay, 'function', 'export a function named fullSyncBytesPerDay');\nassert.equal(mod.fullSyncBytesPerDay(500000000, 4, 2), 3000000000);",
+          "input": [
+            500000000,
+            4,
+            2
+          ]
+        },
+        {
+          "name": "Merkle at 5 permille divergent -> 10,000,000 bytes",
+          "code": "assert.equal(typeof mod.merkleSyncBytesPerDay, 'function', 'export a function named merkleSyncBytesPerDay');\nassert.equal(mod.merkleSyncBytesPerDay(1000000000, 3, 1, 5), 10000000);",
+          "input": [
+            1000000000,
+            3,
+            1,
+            5
+          ]
+        },
+        {
+          "name": "fully divergent -> the trees save nothing (boundary)",
+          "code": "assert.equal(typeof mod.merkleSyncBytesPerDay, 'function', 'export a function named merkleSyncBytesPerDay');\nassert.equal(mod.merkleSyncBytesPerDay(1000000000, 3, 1, 1000), 2000000000);",
+          "input": [
+            1000000000,
+            3,
+            1,
+            1000
+          ]
+        },
+        {
+          "name": "500 MB, 4 replicas, 2 syncs at 10 permille -> 30,000,000 bytes",
+          "code": "assert.equal(typeof mod.merkleSyncBytesPerDay, 'function', 'export a function named merkleSyncBytesPerDay');\nassert.equal(mod.merkleSyncBytesPerDay(500000000, 4, 2, 10), 30000000);",
+          "input": [
+            500000000,
+            4,
+            2,
+            10
+          ]
+        }
+      ],
+      "explanation": "Replication factor multiplies repair traffic; divergence divides it.\n\nFor `merkleSyncBytesPerDay(1000000000, 3, 1, 5)`:\n- naive compare: 1,000,000,000 bytes × 2 peers × 1 sync = 2,000,000,000 bytes/day\n- Merkle slice: 2,000,000,000 × 5 ÷ 1000 = **10,000,000 bytes** (~10 MB)\n\nHash trees narrow repair to the divergent ranges — unlike module 10's `physicalGb`, where RF multiplies storage at rest, here RF − 1 multiplies repair traffic and the Merkle factor cuts it back down.",
+      "hints": [
+        "A replica reconciles against every other replica, and a full compare ships the whole data set each time — hash trees let it ship only what differs.",
+        "full = dataBytes × (replicas − 1) × syncs/day; merkle = full × divergent‰ ÷ 1000.",
+        "A full compare streams the data to each of the replicas − 1 peers every sync, so multiply those three — merkle trees cut that to the divergent per-mille slice, another ÷ 1000"
+      ]
+    },
+    {
+      "slug": "05-pitr-restore-time",
+      "title": "Point-in-time restore: snapshot copy plus WAL replay",
+      "difficulty": 3,
+      "skills": [
+        "durability",
+        "operations"
+      ],
+      "instructions": "**Interview prompt.** \"The database is 600 GB, snapshotted every 12 hours, and takes 500 writes/s. Worst case, it dies just before the next snapshot. A restore copies at 200 MB/s and the write-ahead log replays at 12,000 events/s. How long until we are back?\"\n\n**Why it works.** Point-in-time recovery runs two phases one after the other: copy the last snapshot, then replay every write-ahead-log (WAL) event recorded since it. The WAL grows at the write rate for every second since the snapshot, so a 12-hour cadence (43,200 s) leaves writesPerSec × 43,200 events to replay in the worst case. Conversions: 1 GB = 1,000,000,000 bytes, so 600 GB = 600,000,000,000 bytes and 200 MB/s = 200,000,000 bytes/s. The tests choose inputs that divide exactly, so every answer is a whole number.\n\n**Your task.** Export two functions:\n- `walEventsToReplay(writesPerSec, secondsSinceSnapshot)` → `writesPerSec × secondsSinceSnapshot`\n- `restoreSeconds(snapshotBytes, restoreBytesPerSec, walEvents, replayPerSec)` → `snapshotBytes ÷ restoreBytesPerSec + walEvents ÷ replayPerSec`\n\n**Worked example.** 500 writes/s for 43,200 s since the snapshot → **21,600,000** WAL events to replay.",
+      "starter": "export function walEventsToReplay(writesPerSec, secondsSinceSnapshot) {\n  // TODO: how far the log grew since the snapshot\n}\n\nexport function restoreSeconds(snapshotBytes, restoreBytesPerSec, walEvents, replayPerSec) {\n  // TODO: copy phase plus replay phase\n}\n",
+      "solution": "export function walEventsToReplay(writesPerSec, secondsSinceSnapshot) {\n  return writesPerSec * secondsSinceSnapshot;\n}\n\nexport function restoreSeconds(snapshotBytes, restoreBytesPerSec, walEvents, replayPerSec) {\n  return snapshotBytes / restoreBytesPerSec + walEvents / replayPerSec;\n}\n",
+      "tests": [
+        {
+          "name": "500 writes/s for 12 hours -> 21,600,000 events",
+          "code": "assert.equal(typeof mod.walEventsToReplay, 'function', 'export a function named walEventsToReplay');\nassert.equal(mod.walEventsToReplay(500, 43200), 21600000);",
+          "input": [
+            500,
+            43200
+          ]
+        },
+        {
+          "name": "crash right after the snapshot -> 0 events (boundary)",
+          "code": "assert.equal(typeof mod.walEventsToReplay, 'function', 'export a function named walEventsToReplay');\nassert.equal(mod.walEventsToReplay(500, 0), 0);",
+          "input": [
+            500,
+            0
+          ]
+        },
+        {
+          "name": "2,000 writes/s for 1 hour -> 7,200,000 events",
+          "code": "assert.equal(typeof mod.walEventsToReplay, 'function', 'export a function named walEventsToReplay');\nassert.equal(mod.walEventsToReplay(2000, 3600), 7200000);",
+          "input": [
+            2000,
+            3600
+          ]
+        },
+        {
+          "name": "600 GB at 200 MB/s + 21,600,000 events at 12,000/s -> 4,800 s",
+          "code": "assert.equal(typeof mod.restoreSeconds, 'function', 'export a function named restoreSeconds');\nassert.equal(mod.restoreSeconds(600000000000, 200000000, 21600000, 12000), 4800);",
+          "input": [
+            600000000000,
+            200000000,
+            21600000,
+            12000
+          ]
+        },
+        {
+          "name": "snapshot only -> 3,000 s (boundary)",
+          "code": "assert.equal(typeof mod.restoreSeconds, 'function', 'export a function named restoreSeconds');\nassert.equal(mod.restoreSeconds(600000000000, 200000000, 0, 12000), 3000);",
+          "input": [
+            600000000000,
+            200000000,
+            0,
+            12000
+          ]
+        },
+        {
+          "name": "100 GB at 100 MB/s + 3,000,000 events at 10,000/s -> 1,300 s",
+          "code": "assert.equal(typeof mod.restoreSeconds, 'function', 'export a function named restoreSeconds');\nassert.equal(mod.restoreSeconds(100000000000, 100000000, 3000000, 10000), 1300);",
+          "input": [
+            100000000000,
+            100000000,
+            3000000,
+            10000
+          ]
+        }
+      ],
+      "explanation": "Recovery time is two derived phases added together.\n\nFor `restoreSeconds(600000000000, 200000000, 21600000, 12000)`:\n- copy: 600,000,000,000 bytes ÷ 200,000,000 bytes/s = 3,000 s\n- replay: 21,600,000 events ÷ 12,000/s = 1,800 s\n- total: 3,000 + 1,800 = **4,800 s** (80 minutes)\n\nThat is the real RTO behind \"we have backups\", and the snapshot cadence sets the second term — module 06's `pipelineLatencyMs` sums stage times it is given, while here both phases are derived from sizes and rates.",
+      "hints": [
+        "A restore first copies the snapshot back, then re-applies every logged write since that snapshot — the two phases run in sequence.",
+        "walEvents = writes/s × seconds since snapshot; restore = snapshotBytes ÷ restoreBytes/s + walEvents ÷ replay/s.",
+        "Recovery is two phases added together: snapshot bytes ÷ restore throughput, plus WAL events ÷ replay rate — and the WAL grew at writesPerSec for every second since the snapshot"
+      ]
+    },
+    {
+      "slug": "06-quorum-cluster-sizing",
+      "title": "Consensus cluster sizing: 2f + 1",
+      "difficulty": 1,
+      "skills": [
+        "replication",
+        "quorums"
+      ],
+      "instructions": "**Interview prompt.** \"Our coordination service (etcd or ZooKeeper style) must keep working through two simultaneous node failures. How many nodes do we run, what is the quorum, and why does nobody run four?\"\n\n**Why it works.** A consensus cluster only makes progress while a majority of its nodes is alive. To lose f nodes and still hold a majority, the survivors must outnumber the failed: n − f > f, so the smallest cluster is n = 2f + 1. The majority quorum of any cluster of n nodes is ⌊n ÷ 2⌋ + 1 — which is why an even-sized cluster pays for an extra node without tolerating an extra failure.\n\n**Your task.** Export two functions:\n- `minReplicasForFailures(failures)` → `2 × failures + 1`\n- `quorumSize(replicas)` → `Math.floor(replicas ÷ 2) + 1`\n\n**Worked example.** A 5-node cluster → ⌊5 ÷ 2⌋ + 1 = **3** nodes form a quorum.",
+      "starter": "export function minReplicasForFailures(failures) {\n  // TODO: smallest cluster that keeps a majority after the failures\n}\n\nexport function quorumSize(replicas) {\n  // TODO: the majority of the cluster\n}\n",
+      "solution": "export function minReplicasForFailures(failures) {\n  return 2 * failures + 1;\n}\n\nexport function quorumSize(replicas) {\n  return Math.floor(replicas / 2) + 1;\n}\n",
+      "tests": [
+        {
+          "name": "survive 1 failure -> 3 nodes",
+          "code": "assert.equal(typeof mod.minReplicasForFailures, 'function', 'export a function named minReplicasForFailures');\nassert.equal(mod.minReplicasForFailures(1), 3);",
+          "input": [
+            1
+          ]
+        },
+        {
+          "name": "survive 2 failures -> 5 nodes",
+          "code": "assert.equal(typeof mod.minReplicasForFailures, 'function', 'export a function named minReplicasForFailures');\nassert.equal(mod.minReplicasForFailures(2), 5);",
+          "input": [
+            2
+          ]
+        },
+        {
+          "name": "tolerate nothing -> a single node (boundary)",
+          "code": "assert.equal(typeof mod.minReplicasForFailures, 'function', 'export a function named minReplicasForFailures');\nassert.equal(mod.minReplicasForFailures(0), 1);",
+          "input": [
+            0
+          ]
+        },
+        {
+          "name": "3 nodes -> quorum 2",
+          "code": "assert.equal(typeof mod.quorumSize, 'function', 'export a function named quorumSize');\nassert.equal(mod.quorumSize(3), 2);",
+          "input": [
+            3
+          ]
+        },
+        {
+          "name": "5 nodes -> quorum 3",
+          "code": "assert.equal(typeof mod.quorumSize, 'function', 'export a function named quorumSize');\nassert.equal(mod.quorumSize(5), 3);",
+          "input": [
+            5
+          ]
+        },
+        {
+          "name": "4 nodes -> quorum 3, one node paid for no extra tolerance",
+          "code": "assert.equal(typeof mod.quorumSize, 'function', 'export a function named quorumSize');\nassert.equal(mod.quorumSize(4), 3);",
+          "input": [
+            4
+          ]
+        }
+      ],
+      "explanation": "A majority must survive, so failures set the cluster size.\n\nFor `minReplicasForFailures(2)`:\n- after 2 failures the survivors must still be a majority: n − 2 > 2\n- smallest such n = 2 × 2 + 1 = **5** nodes (quorum ⌊5 ÷ 2⌋ + 1 = 3)\n\nThat is why etcd and ZooKeeper run 3 or 5 nodes, never 4 — module 03's `tolerableFailures` maps (n, r, w) to failures, and this is the planning inverse from failures to the smallest n.",
+      "hints": [
+        "Consensus needs a majority alive; ask how many nodes you need so that losing f of them still leaves more than half.",
+        "n − f > f ⇒ n = 2f + 1; quorum(n) = ⌊n ÷ 2⌋ + 1.",
+        "Surviving f failures needs a majority left, so the cluster is 2 × f + 1 nodes — and any cluster's quorum is floor of half plus one"
+      ]
+    },
+    {
+      "slug": "07-lag-breach-eta",
+      "title": "Replica lag: how long until the SLA breaks",
+      "difficulty": 2,
+      "skills": [
+        "replication",
+        "slo"
+      ],
+      "instructions": "**Interview prompt.** \"The primary writes 5,000 events/s but one replica only replays 4,200/s. It is already 100,000 events behind, and the staleness SLA breaks at 500,000. How long before it breaches — how much warning does the lag alert actually buy us?\"\n\n**Why it works.** Replication lag changes every second by the difference between what arrives and what the replica can replay: writeQps − replayQps. A positive difference grows the lag linearly, zero holds it steady, and a negative one means the replica is catching up. While it grows, the time until the lag hits the ceiling is the remaining headroom divided by that deficit. `breachSeconds` is only called with writeQps > replayQps and maxLagEvents > currentLagEvents. The tests choose inputs that divide exactly, so every answer is a whole number.\n\n**Your task.** Export two functions:\n- `lagGrowthPerSec(writeQps, replayQps)` → `writeQps − replayQps` (may be negative: catching up)\n- `breachSeconds(currentLagEvents, maxLagEvents, writeQps, replayQps)` → `(maxLagEvents − currentLagEvents) ÷ (writeQps − replayQps)`\n\n**Worked example.** 5,000 writes/s against 4,200 replayed/s → the lag grows by **800** events every second.",
+      "starter": "export function lagGrowthPerSec(writeQps, replayQps) {\n  // TODO: how much the lag changes each second\n}\n\nexport function breachSeconds(currentLagEvents, maxLagEvents, writeQps, replayQps) {\n  // TODO: headroom divided by the deficit\n}\n",
+      "solution": "export function lagGrowthPerSec(writeQps, replayQps) {\n  return writeQps - replayQps;\n}\n\nexport function breachSeconds(currentLagEvents, maxLagEvents, writeQps, replayQps) {\n  return (maxLagEvents - currentLagEvents) / (writeQps - replayQps);\n}\n",
+      "tests": [
+        {
+          "name": "5,000 writes vs 4,200 replayed -> lag grows 800/s",
+          "code": "assert.equal(typeof mod.lagGrowthPerSec, 'function', 'export a function named lagGrowthPerSec');\nassert.equal(mod.lagGrowthPerSec(5000, 4200), 800);",
+          "input": [
+            5000,
+            4200
+          ]
+        },
+        {
+          "name": "treading water -> 0 growth (boundary)",
+          "code": "assert.equal(typeof mod.lagGrowthPerSec, 'function', 'export a function named lagGrowthPerSec');\nassert.equal(mod.lagGrowthPerSec(3000, 3000), 0);",
+          "input": [
+            3000,
+            3000
+          ]
+        },
+        {
+          "name": "replica faster than the writes -> -600/s, catching up",
+          "code": "assert.equal(typeof mod.lagGrowthPerSec, 'function', 'export a function named lagGrowthPerSec');\nassert.equal(mod.lagGrowthPerSec(2000, 2600), -600);",
+          "input": [
+            2000,
+            2600
+          ]
+        },
+        {
+          "name": "100,000 behind, ceiling 500,000, deficit 800/s -> 500 s",
+          "code": "assert.equal(typeof mod.breachSeconds, 'function', 'export a function named breachSeconds');\nassert.equal(mod.breachSeconds(100000, 500000, 5000, 4200), 500);",
+          "input": [
+            100000,
+            500000,
+            5000,
+            4200
+          ]
+        },
+        {
+          "name": "starting even, ceiling 360,000, deficit 600/s -> 600 s (boundary)",
+          "code": "assert.equal(typeof mod.breachSeconds, 'function', 'export a function named breachSeconds');\nassert.equal(mod.breachSeconds(0, 360000, 3000, 2400), 600);",
+          "input": [
+            0,
+            360000,
+            3000,
+            2400
+          ]
+        },
+        {
+          "name": "40,000 behind, ceiling 100,000, deficit 120/s -> 500 s",
+          "code": "assert.equal(typeof mod.breachSeconds, 'function', 'export a function named breachSeconds');\nassert.equal(mod.breachSeconds(40000, 100000, 4000, 3880), 500);",
+          "input": [
+            40000,
+            100000,
+            4000,
+            3880
+          ]
+        }
+      ],
+      "explanation": "A replica that cannot keep up turns a rate gap into a countdown.\n\nFor `breachSeconds(100000, 500000, 5000, 4200)`:\n- deficit: 5,000 − 4,200 = 800 events/s\n- headroom: 500,000 − 100,000 = 400,000 events\n- time to breach: 400,000 ÷ 800 = **500 s**\n\nRoughly eight minutes of warning before the staleness SLA dies — module 06's `drainSeconds` is the surplus case where a backlog shrinks to zero, and this is its deficit mirror: time until a growing lag hits a ceiling.",
+      "hints": [
+        "Each second the primary adds writeQps events and the replica removes replayQps of them — the lag moves by the difference.",
+        "growth = writeQps − replayQps; t = (maxLag − currentLag) ÷ (writeQps − replayQps).",
+        "The lag grows at writeQps − replayQps each second, so divide the remaining headroom (maxLag − currentLag) by that deficit for the seconds until breach"
+      ]
+    },
+    {
+      "slug": "08-stale-read-share",
+      "title": "Stale reads: lag over update interval",
+      "difficulty": 2,
+      "skills": [
+        "consistency",
+        "staleness"
+      ],
+      "instructions": "**Interview prompt.** \"A product price is rewritten every 10 seconds and the replicas lag the primary by 200 ms. What share of replica reads return the old price? And if product tolerates at most 5% stale reads on a value updated once a minute, how much lag may we accept?\"\n\n**Why it works.** After each write a replica keeps serving the old value for lagMs, then holds the new one until the next write. With reads spread evenly over time, the stale share is lagMs out of every updateIntervalMs — in per-mille (‰ = x/1000), lagMs × 1000 ÷ updateIntervalMs. Inverting that turns a staleness budget into the largest lag you may tolerate. The lag is never longer than the update interval. The tests choose inputs that divide exactly, so every answer is a whole number.\n\n**Your task.** Export two functions:\n- `stalePermilleOfReads(lagMs, updateIntervalMs)` → `lagMs × 1000 ÷ updateIntervalMs`\n- `maxLagMsForBudget(budgetPermille, updateIntervalMs)` → `budgetPermille × updateIntervalMs ÷ 1000`\n\n**Worked example.** A 50‰ budget on a value updated every 60,000 ms → 50 × 60,000 ÷ 1000 = **3,000 ms** of tolerable lag.",
+      "starter": "export function stalePermilleOfReads(lagMs, updateIntervalMs) {\n  // TODO: the stale slice of each update cycle, per mille\n}\n\nexport function maxLagMsForBudget(budgetPermille, updateIntervalMs) {\n  // TODO: invert the share into a lag budget\n}\n",
+      "solution": "export function stalePermilleOfReads(lagMs, updateIntervalMs) {\n  return (lagMs * 1000) / updateIntervalMs;\n}\n\nexport function maxLagMsForBudget(budgetPermille, updateIntervalMs) {\n  return (budgetPermille * updateIntervalMs) / 1000;\n}\n",
+      "tests": [
+        {
+          "name": "200 ms lag on a 10 s update cycle -> 20 permille stale",
+          "code": "assert.equal(typeof mod.stalePermilleOfReads, 'function', 'export a function named stalePermilleOfReads');\nassert.equal(mod.stalePermilleOfReads(200, 10000), 20);",
+          "input": [
+            200,
+            10000
+          ]
+        },
+        {
+          "name": "no lag -> 0 permille (boundary)",
+          "code": "assert.equal(typeof mod.stalePermilleOfReads, 'function', 'export a function named stalePermilleOfReads');\nassert.equal(mod.stalePermilleOfReads(0, 5000), 0);",
+          "input": [
+            0,
+            5000
+          ]
+        },
+        {
+          "name": "lag equals the update interval -> every read window stale (boundary)",
+          "code": "assert.equal(typeof mod.stalePermilleOfReads, 'function', 'export a function named stalePermilleOfReads');\nassert.equal(mod.stalePermilleOfReads(5000, 5000), 1000);",
+          "input": [
+            5000,
+            5000
+          ]
+        },
+        {
+          "name": "50 permille budget on 60 s updates -> 3,000 ms of lag",
+          "code": "assert.equal(typeof mod.maxLagMsForBudget, 'function', 'export a function named maxLagMsForBudget');\nassert.equal(mod.maxLagMsForBudget(50, 60000), 3000);",
+          "input": [
+            50,
+            60000
+          ]
+        },
+        {
+          "name": "1000 permille budget on 2 s updates -> 2,000 ms of lag",
+          "code": "assert.equal(typeof mod.maxLagMsForBudget, 'function', 'export a function named maxLagMsForBudget');\nassert.equal(mod.maxLagMsForBudget(1000, 2000), 2000);",
+          "input": [
+            1000,
+            2000
+          ]
+        },
+        {
+          "name": "10 permille budget on 30 s updates -> 300 ms of lag",
+          "code": "assert.equal(typeof mod.maxLagMsForBudget, 'function', 'export a function named maxLagMsForBudget');\nassert.equal(mod.maxLagMsForBudget(10, 30000), 300);",
+          "input": [
+            10,
+            30000
+          ]
+        }
+      ],
+      "explanation": "The stale share is the lag's slice of each update cycle.\n\nFor `stalePermilleOfReads(200, 10000)`:\n- each 10,000 ms cycle is stale for its first 200 ms\n- 200 × 1000 ÷ 10,000 = **20‰** of uniformly spread reads see the old value\n\nRun it backwards and a staleness budget becomes a lag SLO — module 03's `replication-staleness` counts one lag window's reads through the quorum check, while here the steady-state share comes from lag ÷ update interval.",
+      "hints": [
+        "Picture one update cycle: the replica is wrong only for the lag right after each write and right for the rest of the cycle.",
+        "stale‰ = lagMs × 1000 ÷ intervalMs; maxLag = budget‰ × intervalMs ÷ 1000.",
+        "A value updated every interval is stale on the replica for lagMs after each write, so the stale share of reads is lag × 1000 ÷ interval — invert it to turn a staleness budget into the lag you may tolerate"
+      ]
+    }
+  ]
+}
