@@ -363,6 +363,24 @@ describe('Review: demotions and shortcut gating', () => {
     expect(within(status).queryByTestId('next-due')).toBeNull();
   });
 
+  it('the session tally shows in the progress bar once a grade lands, counting each grade (plain text, not a status region)', async () => {
+    const base = createMockApi();
+    const items = (await base.getReviewQueue()).items.slice(0, 3);
+    const { user } = renderApp('/review', { ...base, getReviewQueue: async () => ({ count: items.length, items }) });
+    await screen.findByRole('button', { name: /Show answer/ });
+    expect(screen.queryByTestId('session-tally')).toBeNull();
+    await user.keyboard(' ');
+    await user.keyboard('3');
+    expect(await screen.findByTestId('session-tally')).toHaveTextContent('Again 0 · Hard 0 · Good 1 · Easy 0');
+    await user.keyboard(' ');
+    await user.keyboard('1');
+    await waitFor(() => expect(screen.getByTestId('session-tally')).toHaveTextContent('Again 1 · Hard 0 · Good 1 · Easy 0'));
+    const tally = screen.getByTestId('session-tally');
+    expect(tally.closest('.review-progress')).not.toBeNull();
+    expect(tally).not.toHaveAttribute('role');
+    expect(screen.queryByRole('status')).toBeNull(); // role=status stays the done panel's alone
+  });
+
   it('1-4 do nothing while a dialog is open, on auto-repeat, or when already handled', async () => {
     const base = createMockApi();
     const gradeReview = vi.fn(base.gradeReview);
