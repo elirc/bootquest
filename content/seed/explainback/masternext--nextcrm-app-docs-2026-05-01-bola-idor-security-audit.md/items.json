@@ -1,0 +1,182 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "masternext--nextcrm-app-docs-2026-05-01-bola-idor-security-audit.md",
+ "items": [
+  {
+   "key": "seed:explainback:masternext/explain-back/5b892890bbfbca59",
+   "provenance": {
+    "repo": "masternext",
+    "sha": "ae124777f5cbf2eb4db66e40379526f4d5f3a985",
+    "path": "nextcrm-app/docs/2026-05-01-bola-idor-security-audit.md",
+    "lines": {
+     "start": 1,
+     "end": 482
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "The 2026-05-01 audit confirmed advisory GHSA-mg5f-m89f-4gmc against PATCH /api/crm/contacts/[id] in NextCRM. Explain what made that handler a BOLA/IDOR, then walk through what the handler does at this commit, step by step, for a signed-in user with the plain user role who sends someone else's contact id.",
+     "keyPoints": [
+      {
+       "text": "[w3] The original flaw: a valid session was the only gate, and the update's where clause held nothing but the id from the URL, so knowing a UUID was enough to edit any contact.",
+       "quote": "The route checks `getSession()`, but the `where` clause only scopes by the path `id`."
+      },
+      {
+       "text": "[w2] There is no tenant column to lean on, so object-level authorization has to be application policy built from roles and ownership fields such as assignee and creator.",
+       "quote": "authorization must currently be enforced as application policy using roles and ownership fields"
+      },
+      {
+       "text": "[w2] At the pin the handler first calls requireAuthenticated, which re-reads the user row from the database and derives the role from the stored value (legacy admin/member/viewer mapped to admin/manager/user), rather than trusting a role claim carried in the session.",
+       "cite": {
+        "path": "nextcrm-app/lib/authz/session.ts",
+        "lineStart": 11,
+        "lineEnd": 23
+       }
+      },
+      {
+       "text": "[w2] Only allowlisted enrichment keys survive FIELD_MAP; anything else in the body is ignored, and a body with no mappable key is answered 400 before any database write.",
+       "cite": {
+        "path": "nextcrm-app/app/api/crm/contacts/[id]/route.ts",
+        "lineStart": 36,
+        "lineEnd": 49
+       }
+      },
+      {
+       "text": "[w3] The authorization is folded into the write itself: tryScopedUpdateContact runs updateMany whose where adds OR(assigned_to = me, createdBy = me) for the user role (admins and managers get the bare id), and success means count > 0, so there is no gap between a check and the mutation.",
+       "cite": {
+        "path": "nextcrm-app/lib/authz/scopes/crm.ts",
+        "lineStart": 12,
+        "lineEnd": 43
+       }
+      },
+      {
+       "text": "[w3] A zero count is answered with the same 404 'Not found' body a missing row gets, so a forbidden caller cannot tell an id that exists from one that does not.",
+       "cite": {
+        "path": "nextcrm-app/lib/authz/route.ts",
+        "lineStart": 11,
+        "lineEnd": 13
+       }
+      },
+      {
+       "text": "[w1] This is the first of the audit's two suggested shapes for by-id mutations, the atomic one, as opposed to a separate permission lookup before the write.",
+       "quote": "atomic scoped mutation with `updateMany` and a scoped `where`, returning `404` or `403` when `count === 0`"
+      }
+     ]
+    },
+    {
+     "prompt": "The audit's scope covered both app/api route handlers and every file marked \"use server\". Explain why a server action needs the same object-level check as a route handler, and walk through which of the audited actions check ownership at this commit and which still act on whatever id they are handed.",
+     "keyPoints": [
+      {
+       "text": "[w3] A server action takes its id as an ordinary argument from the client just as a route takes a path segment, so an action that only checks for a session has the same caller-controlled-key flaw; the pattern the audit generalised from the advisory applies to both.",
+       "quote": "perform mutations using caller-controlled IDs without object-level authorization"
+      },
+      {
+       "text": "[w3] deleteContact is still session-only at the pin: it returns Unauthorized without a session, then soft-deletes with update where { id: contactId } and writes an audit row, so any signed-in user can delete any contact from the table's row action.",
+       "cite": {
+        "path": "nextcrm-app/actions/crm/contacts/delete-contact.ts",
+        "lineStart": 7,
+        "lineEnd": 26
+       }
+      },
+      {
+       "text": "[w2] The admin settings actions are now gated by a shared ensureAdmin helper that calls requireRole(['admin']) and every export throws on denial, reads included, closing the audit's no-session finding.",
+       "cite": {
+        "path": "nextcrm-app/app/[locale]/(routes)/admin/crm-settings/_actions/crm-settings.ts",
+        "lineStart": 8,
+        "lineEnd": 24
+       }
+      },
+      {
+       "text": "[w2] sendCampaignNow layers two checks before it flips status and emits the Inngest event: a role gate (manager or admin) and then a campaign read-scope lookup whose failure is reported as Not found.",
+       "cite": {
+        "path": "nextcrm-app/actions/campaigns/send-campaign-now.ts",
+        "lineStart": 11,
+        "lineEnd": 37
+       }
+      },
+      {
+       "text": "[w2] duplicateInvoice uses the pre-check shape instead: it loads the source invoice, asks canReadInvoice, then requires write access to the source account, and only then creates the draft copy.",
+       "cite": {
+        "path": "nextcrm-app/actions/invoices/duplicate-invoice.ts",
+        "lineStart": 13,
+        "lineEnd": 43
+       }
+      },
+      {
+       "text": "[w1] getUserById still returns the id, name and avatar of any ACTIVE user to any signed-in caller; the audit marked that as policy-dependent on whether a user directory is intended.",
+       "cite": {
+        "path": "nextcrm-app/actions/user/get-user-by-id.ts",
+        "lineStart": 6,
+        "lineEnd": 15
+       }
+      },
+      {
+       "text": "[w1] Actions have no HTTP status to return, so denials surface as { error } objects or thrown Errors, which each caller has to interpret; the route helpers' 401/404 contract does not carry over.",
+       "cite": {
+        "path": "nextcrm-app/actions/campaigns/send-campaign-now.ts",
+        "lineStart": 12,
+        "lineEnd": 26
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "Defend or indict the claim that a CRM contact is governed by one authorization policy at this commit. Compare the contact read scope, the PATCH write scope, the UI delete action and the MCP delete tool, and say what soft delete changes in that comparison.",
+     "keyPoints": [
+      {
+       "text": "[w2] The read scope for the user role is assignee, creator, or access through a linked account (its assignee, creator or a watcher), always with deletedAt null; admins and managers see every non-deleted contact.",
+       "cite": {
+        "path": "nextcrm-app/lib/authz/scopes/crm.ts",
+        "lineStart": 218,
+        "lineEnd": 302
+       }
+      },
+      {
+       "text": "[w3] The write scope is narrower and differently shaped: assignee or creator only, no linked-account path, and no deletedAt condition, so an owner's PATCH can still land on a contact that is already soft-deleted and invisible to every read.",
+       "cite": {
+        "path": "nextcrm-app/lib/authz/scopes/crm.ts",
+        "lineStart": 12,
+        "lineEnd": 24
+       }
+      },
+      {
+       "text": "[w3] The UI soft-delete path applies no ownership rule at all, so the most destructive contact operation has the weakest gate of the four.",
+       "cite": {
+        "path": "nextcrm-app/actions/crm/contacts/delete-contact.ts",
+        "lineStart": 13,
+        "lineEnd": 17
+       }
+      },
+      {
+       "text": "[w2] The MCP crm_delete_contact tool has yet another rule: assigned_to equals the token's user and not already deleted, so a creator, a manager or an admin gets Not found through MCP for a delete the UI would let anyone perform.",
+       "cite": {
+        "path": "nextcrm-app/lib/mcp/tools/crm-contacts.ts",
+        "lineStart": 146,
+        "lineEnd": 159
+       }
+      },
+      {
+       "text": "[w1] The audit explicitly left MCP tools unreviewed, so the divergence sits in its declared blind spot rather than contradicting a finding.",
+       "quote": "MCP tool authorization review"
+      },
+      {
+       "text": "[w2] The soft-delete report calls contacts 'aligned', but that column tracks whether an MCP delete tool and a frontend action both exist, not whether they enforce the same permission.",
+       "cite": {
+        "path": "nextcrm-app/docs/soft-delete-gaps.md",
+        "lineStart": 3,
+        "lineEnd": 10
+       }
+      },
+      {
+       "text": "[w2] The audit's own remedy is one helper per resource family applied before every read and mutation, which is exactly what four hand-written predicates for one entity fail to be.",
+       "quote": "Define one authorization helper per resource family and use it before all reads and mutations"
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}
