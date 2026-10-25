@@ -136,6 +136,13 @@ function Session({ cards }: { cards: ReviewQueueItem[] }) {
         </span>
         <ProgressBar value={index} max={cards.length} label="Review progress" tone="info" />
         <span className="muted">+{xp} XP</span>
+        {/* the running grade tally once a grade has landed (the done panel shows the final one).
+            Plain text, never a live region: role=status belongs to the done panel */}
+        {GRADES.some((g) => tally[g.grade] > 0) && (
+          <span className="review-tally muted small" data-testid="session-tally">
+            {GRADES.map((g) => `${g.label} ${tally[g.grade]}`).join(' · ')}
+          </span>
+        )}
       </div>
 
       <article className={`card${revealed ? ' card-revealed' : ''}`} aria-live="polite">

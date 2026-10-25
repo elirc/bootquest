@@ -114,6 +114,8 @@ describe('track units: campaign-less track (primary)', () => {
     it('count line, kind-button counts, 136 [data-unit] rows, done/revealed chips, locked row is a non-link', async () => {
       const { count, kinds, groupHeads } = await open136();
       expect(count).toHaveTextContent(`Showing 136 of 136 units · ${GENERATED_DONE} done`);
+      // the count line is a live region, so filter results are announced
+      expect(count).toHaveAttribute('role', 'status');
       expect(rows()).toHaveLength(136);
       expect(groupHeads()).toHaveLength(10 + 29);
       expect(kinds.getByRole('button', { name: 'All (136)' })).toHaveAttribute('aria-pressed', 'true');
@@ -155,6 +157,15 @@ describe('track units: campaign-less track (primary)', () => {
       expect([...rows()].map((r) => r.dataset.unit)).toEqual([String(BAZAAR_A), String(BAZAAR_B)]);
       expect(groupHeads()).toEqual(['bazaar (1/2)']);
       expect(within(row(BAZAAR_B)!).getByText(/\(set B\)$/)).toBeInTheDocument();
+    });
+
+    it('group headers keep their UNFILTERED done/total under Hide done + a query (agree with the count line)', async () => {
+      const { user, count, toolbar, groupHeads } = await open136();
+      await user.click(toolbar.getByRole('button', { name: 'Hide done' }));
+      await user.type(toolbar.getByRole('searchbox', { name: 'Filter units' }), 'bazaar');
+      expect(count).toHaveTextContent(`Showing 1 of 136 units · ${GENERATED_DONE} done`);
+      expect([...rows()].map((r) => r.dataset.unit)).toEqual([String(BAZAAR_B)]);
+      expect(groupHeads()).toEqual(['bazaar (1/2)']);
     });
 
     it('Hide done removes every data-state="done" row; a no-match filter offers Clear filters', async () => {

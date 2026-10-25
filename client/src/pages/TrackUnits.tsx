@@ -11,7 +11,7 @@ import { useApi } from '../api/context';
 import type { TrackId, UnitSummary } from '../api/types';
 import { Icon } from '../components/Icon';
 import { Chip, LoadState } from '../components/ui';
-import { NO_FILTER, SECTION_LABEL, groupUnits, sectionCounts, type UnitFilter, type UnitSection } from '../lib/trackunits';
+import { NO_FILTER, SECTION_LABEL, groupTotals, groupUnits, sectionCounts, type UnitFilter, type UnitSection } from '../lib/trackunits';
 import { useAsync } from '../lib/useAsync';
 
 type Variant = 'primary' | 'secondary';
@@ -57,6 +57,8 @@ function UnitBrowser({ units }: { units: UnitSummary[] }) {
   const [filter, setFilter] = useState<UnitFilter>(NO_FILTER);
   const groups = useMemo(() => groupUnits(units, filter), [units, filter]);
   const counts = useMemo(() => sectionCounts(units), [units]);
+  // headers show each group's UNFILTERED done/total, so they agree with the count line below
+  const totals = useMemo(() => groupTotals(units), [units]);
   const done = useMemo(() => units.filter((u) => u.state === 'done').length, [units]);
   const shown = groups.reduce((n, g) => n + g.units.length, 0);
   const set = (over: Partial<UnitFilter>) => setFilter((f) => ({ ...f, ...over }));
@@ -87,7 +89,8 @@ function UnitBrowser({ units }: { units: UnitSummary[] }) {
           Hide done
         </button>
       </div>
-      <p className="tu-count muted small" data-testid="track-units-count">
+      {/* a live region: filter results are announced as the count changes */}
+      <p className="tu-count muted small" data-testid="track-units-count" role="status">
         Showing {shown} of {units.length} units · {done} done
       </p>
       {groups.length === 0 ? (
@@ -103,7 +106,7 @@ function UnitBrowser({ units }: { units: UnitSummary[] }) {
             <h3>
               {g.label}{' '}
               <span className="muted">
-                ({g.done}/{g.units.length})
+                ({totals.get(g.label)!.done}/{totals.get(g.label)!.total})
               </span>
             </h3>
             <ul className="tu-list">

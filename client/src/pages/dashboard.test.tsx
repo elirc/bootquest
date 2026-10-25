@@ -363,6 +363,24 @@ describe('Review: demotions and shortcut gating', () => {
     expect(within(status).queryByTestId('next-due')).toBeNull();
   });
 
+  it('the session tally shows in the progress bar once a grade lands, counting each grade (plain text, not a status region)', async () => {
+    const base = createMockApi();
+    const items = (await base.getReviewQueue()).items.slice(0, 3);
+    const { user } = renderApp('/review', { ...base, getReviewQueue: async () => ({ count: items.length, items }) });
+    await screen.findByRole('button', { name: /Show answer/ });
+    expect(screen.queryByTestId('session-tally')).toBeNull();
+    await user.keyboard(' ');
+    await user.keyboard('3');
+    expect(await screen.findByTestId('session-tally')).toHaveTextContent('Again 0 · Hard 0 · Good 1 · Easy 0');
+    await user.keyboard(' ');
+    await user.keyboard('1');
+    await waitFor(() => expect(screen.getByTestId('session-tally')).toHaveTextContent('Again 1 · Hard 0 · Good 1 · Easy 0'));
+    const tally = screen.getByTestId('session-tally');
+    expect(tally.closest('.review-progress')).not.toBeNull();
+    expect(tally).not.toHaveAttribute('role');
+    expect(screen.queryByRole('status')).toBeNull(); // role=status stays the done panel's alone
+  });
+
   it('1-4 do nothing while a dialog is open, on auto-repeat, or when already handled', async () => {
     const base = createMockApi();
     const gradeReview = vi.fn(base.gradeReview);
@@ -493,6 +511,36 @@ describe('evidence deep link', () => {
     await user.click(btn); // open again
     expect(await screen.findByTestId('attempt-8811')).toHaveTextContent('signalpost U01');
     expect(within(screen.getByTestId('attempt-8811')).queryByRole('alert')).toBeNull();
+  });
+});
+
+describe('Next up: browse all', () => {
+  const nextUp = () => document.querySelector<HTMLElement>('section[aria-labelledby="p-next"] .nextup')!;
+
+  it('every track card carries a Browse all link to its campaign page, null-unit tracks included', async () => {
+    renderApp('/');
+    await screen.findByRole('table');
+    const browse = within(nextUp()).getAllByRole('link', { name: /^Browse all/ });
+    expect(browse.map((a) => a.getAttribute('href'))).toEqual(['/campaign/js', '/campaign/csharp', '/campaign/agentic', '/campaign/java', '/campaign/sysdesign']);
+    // the accessible names are distinct per track (the arrow is aria-hidden)
+    expect(browse.map((a) => a.textContent)).toContain('Browse all System design units →');
+    expect(within(nextUp()).getByRole('link', { name: 'Browse all System design units' })).toHaveAttribute('href', '/campaign/sysdesign');
+    expect(new Set(browse.map((a) => a.textContent)).size).toBe(5);
+    // the null-unit cards (java, sysdesign) stay inert; their only action is the browse link
+    const javaItem = within(nextUp()).getByRole('link', { name: 'Browse all Java units' }).closest('li')!;
+    expect(within(javaItem).getAllByRole('link')).toHaveLength(1);
+    expect(javaItem.querySelector('.nextup-locked')).toHaveTextContent('Nothing available');
+  });
+
+  it('the unit card link is unchanged and never nests the browse link', async () => {
+    renderApp('/');
+    await screen.findByRole('table');
+    const card = within(nextUp()).getByRole('link', { name: /signalpost U04/ });
+    expect(card).toHaveAttribute('href', '/play/107');
+    expect(card.querySelector('a')).toBeNull();
+    expect(card.closest('li')!.querySelector('.nextup-browse')).toHaveAttribute('href', '/campaign/js');
+    expect(screen.getAllByRole('link', { name: /Clear the review queue/ })).toHaveLength(1);
+    expect(screen.getByRole('heading', { name: 'Next up' })).toBeInTheDocument();
   });
 });
 

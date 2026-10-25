@@ -12,13 +12,21 @@
 //   - a line ending in two spaces is a hard break; other single newlines are soft wraps
 //   - "- item" / "* item" / "+ item" bullet lines (≤3 leading spaces): one <li> per line; a
 //     bullet line interrupts a paragraph (the sysdrills "Steps:\n- a\n- b" shape). 4-space
-//     indented and fenced bullets stay code. Ordered "1." lists are not parsed (literal text).
+//     indented and fenced bullets stay code.
+//   - "1. item" / "1) item" ordered lines (≤3 leading spaces): one <li> per line in an <ol>
+//     (start kept when ≠ 1). Same discipline as bullets, except an ordered line interrupts a
+//     paragraph only when it starts at 1 (CommonMark), so "12. see the appendix" mid-paragraph
+//     stays prose. "1 app.patch(" (space after the number) is the numbered LISTING, not a list.
 // It builds React nodes only (never innerHTML), so every character of the source is rendered
 // as text. No markdown library: anything it does not understand stays literal text.
 
 import { Fragment, type ReactNode } from 'react';
 
-export type ProseBlock = { kind: 'p'; lines: string[] } | { kind: 'code'; text: string; lang: string | null } | { kind: 'list'; items: string[] };
+export type ProseBlock =
+  | { kind: 'p'; lines: string[] }
+  | { kind: 'code'; text: string; lang: string | null }
+  | { kind: 'list'; items: string[] }
+  | { kind: 'olist'; items: string[]; start: number };
 
 const FENCE_RE = /^\s{0,3}(```+|~~~+)\s*([\w#+.-]*)\s*$/;
 const INDENT_RE = /^( {4}|\t)/;
@@ -27,6 +35,9 @@ const NUMBER_PREFIX_RE = /^\d{1,3} +/;
 const CLOSE_FENCE_RE = /^\s{0,3}(```+|~~~+)\s*$/;
 const CODE_CHAR_RE = /[({;=]/;
 const LIST_RE = /^\s{0,3}[-*+] +(\S.*)$/;
+// an ordered-list item: "1. x" / "2) x". Provably disjoint from NUMBERED_RE (the listing): a
+// listing line has a SPACE directly after the digits, a list item has "." or ")" there.
+const OLIST_RE = /^\s{0,3}(\d{1,3})[.)] +(\S.*)$/;
 
 /** W10: does `line` close a fence opened with `marker` (same character, same or longer run)? */
 export function closesFence(line: string, marker: string): boolean {
@@ -83,6 +94,25 @@ export function parseProse(src: string): ProseBlock[] {
         i++;
       }
       out.push({ kind: 'list', items });
+      continue;
+    }
+    // an ordered list: "1. item" / "2) item". Same discipline as bullets (after the fence / blank /
+    // indented-code branches). It interrupts a paragraph only when it starts at 1 (CommonMark), so a
+    // prose line like "12. see the appendix" mid-paragraph stays prose. Disjoint from the numbered
+    // LISTING heuristic below: a listing line has a SPACE after the number ("1 app.patch("), a list
+    // item has "." or ")".
+    const ol = OLIST_RE.exec(line);
+    if (ol && (para.length === 0 || ol[1] === '1')) {
+      flush();
+      const start = Number(ol[1]);
+      const items: string[] = [];
+      while (i < lines.length) {
+        const m = OLIST_RE.exec(lines[i]!);
+        if (!m) break;
+        items.push(m[2]!.trimEnd());
+        i++;
+      }
+      out.push({ kind: 'olist', items, start });
       continue;
     }
     // a numbered listing: "1 …", "2 …" … on consecutive lines. W10: code only when the run has
@@ -168,6 +198,14 @@ function renderBlock(b: ProseBlock, key: number): ReactNode {
           ))}
         </ul>
       );
+    case 'olist':
+      return (
+        <ol key={key} className="prose-list" {...(b.start !== 1 ? { start: b.start } : {})}>
+          {b.items.map((t, j) => (
+            <li key={j}>{renderInline(t)}</li>
+          ))}
+        </ol>
+      );
     case 'p':
       return <p key={key}>{renderLines(b.lines)}</p>;
     default: {
@@ -177,7 +215,7 @@ function renderBlock(b: ProseBlock, key: number): ReactNode {
   }
 }
 
-/** Already-parsed blocks: paragraphs (<p>), bullet lists (<ul class="prose-list">) and code blocks (<pre class="code-block">). */
+/** Already-parsed blocks: paragraphs (<p>), bullet lists (<ul class="prose-list">), ordered lists (<ol class="prose-list">) and code blocks (<pre class="code-block">). */
 export function ProseBlocks({ blocks }: { blocks: ProseBlock[] }) {
   return <>{blocks.map(renderBlock)}</>;
 }
