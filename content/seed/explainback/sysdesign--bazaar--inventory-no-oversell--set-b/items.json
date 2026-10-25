@@ -1,0 +1,187 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "bazaar--docs-adr-0007-inventory-consistency.md--set-b",
+ "items": [
+  {
+   "key": "seed:explainback:bazaar/explain-back/5dd9b1d6fde77c01",
+   "provenance": {
+    "repo": "bazaar",
+    "sha": "5dc2dd6e342b4eae57689ed5fa8a0d7ab9420b91",
+    "path": "docs/adr/0007-inventory-consistency.md",
+    "lines": {
+     "start": 1,
+     "end": 24
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "DESIGN IT — [senior] a limited-drop lottery with bot defense and blast isolation (bazaar, docs/adr/0007-inventory-consistency.md). Scenario: a sneaker-style drop of 5,000 units meets 800,000 registered buyers. Marketing wants pre-registration and a lottery draw instead of a raw race; the fraud team estimates that about 60% of the sign-ups are bots; winners get 48 hours to pay; and the store's everyday checkout must not slow down while the drop runs. Write your design before you look: how entries are deduplicated and screened, how the draw turns into inventory claims without allocating stock that is not there, what a winner actually holds for those 48 hours, what happens to wins that go unpaid, and how the drop is isolated from everyday shopping. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "keyPoints": [
+      {
+       "text": "[w3] One entry per identity the system can trust: a uniqueness rule on the entries table covers both the verified account and the payment fingerprint, because an account by itself is cheap; the existing limited-offer claim already turns away anonymous callers but keys on the customer id alone, so a farm of accounts would be a farm of valid identities.",
+       "cite": {
+        "path": "apps/api/src/discounts.ts",
+        "lineStart": 54,
+        "lineEnd": 61
+       }
+      },
+      {
+       "text": "[w2] Screening happens before the draw, not after it: registration runs through rate limits and risk checks (velocity, device, reuse of a card or address), and the draw only considers entries that cleared, since the browser's identity and retry behaviour are untrusted inputs.",
+       "cite": {
+        "path": "docs/security/flash-sale-threat-model.md",
+        "lineStart": 17,
+        "lineEnd": 25
+       }
+      },
+      {
+       "text": "[w3] The draw is one batch allocation guarded by the stock row: a seeded, recorded shuffle of the cleared entries picks exactly as many winners as units, and the batch takes each warehouse's share through the existing claim call, which accepts a quantity and answers yes or no, so a draw that finds less free stock than it planned (an adjustment landed mid-draw) shrinks its winner list instead of allocating units that do not exist.",
+       "cite": {
+        "path": "apps/api/src/inventory.ts",
+        "lineStart": 23,
+        "lineEnd": 26
+       }
+      },
+      {
+       "text": "[w3] A winner holds a claim row naming the entrant, the unit count and a 48-hour deadline, written in the same transaction as the batch claim; paying converts it and the deadline expires it, and both moves start from the active state only, so a payment and an expiry racing at the deadline cannot both succeed.",
+       "quote": "active-only transitions make release/commit idempotent"
+      },
+      {
+       "text": "[w3] Unpaid wins go to a waitlist drawn from the same seeded order, each offer with its own shorter deadline, rather than back into open stock where the fastest automation would take them; today's hold record points at a cart, with a status and an expiry, so a claim for a named entrant needs its own reference column.",
+       "cite": {
+        "path": "packages/db/prisma/schema.prisma",
+        "lineStart": 223,
+        "lineEnd": 232
+       }
+      },
+      {
+       "text": "[w3] The drop runs in its own bulkhead: its units sit in their own stock rows, its claims and expiries in their own worker lane, and its traffic behind its own limits, and because stateful capacity arrives slowly the database and connection pool are pre-scaled for the announced drop instead of shared on the day with ordinary checkout.",
+       "cite": {
+        "path": "docs/CAPACITY_PLAN.md",
+        "lineStart": 5,
+        "lineEnd": 7
+       }
+      },
+      {
+       "text": "[w1] Winning is a server-issued fact: the win token is minted by the server and checked at payment, and a client that merely claims to be a winner is ignored, keeping the draw's outcome inside the authoritative boundary.",
+       "cite": {
+        "path": "docs/security/flash-sale-threat-model.md",
+        "lineStart": 5,
+        "lineEnd": 8
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "PRE-MORTEM — the drop runs and three things go wrong. Some 10,000 bot accounts that share just 900 card fingerprints win 14% of the draw; 18% of winners never pay, so at hour 49 the waitlist re-allocation hits the site as a second stampede; and because the drop's expiring claims and the everyday cart holds are released by the same expiry sweep, which frees only a bounded batch per run, abandoned everyday carts keep their units hidden long after their TTL. What breaks, how does each show up, and what in your design prevents it?",
+     "keyPoints": [
+      {
+       "text": "[w3] The fingerprint rule was applied per account instead of across accounts: 10,000 accounts on 900 cards should have collapsed to at most 900 entries, so uniqueness sits on the fingerprint itself, and any win sharing a card with another win is voided before winners are told; 700 bot wins out of 5,000 is what a stable-identity requirement exists to stop.",
+       "cite": {
+        "path": "docs/security/flash-sale-threat-model.md",
+        "lineStart": 20,
+        "lineEnd": 20
+       }
+      },
+      {
+       "text": "[w2] Catch it in the draw's own data before anyone pays: count wins per card, device and shipping-address cluster, treat a cluster as hostile input, and refill voided wins from the waitlist.",
+       "cite": {
+        "path": "docs/curriculum/sprint-13.md",
+        "lineStart": 7,
+        "lineEnd": 7
+       }
+      },
+      {
+       "text": "[w3] The hour-49 wave is self-inflicted: a hold's deadline is its creation time plus the TTL, and the draw created all 5,000 claims in one batch, so all 900 unpaid ones expire together; staggered deadlines and waitlist offers sent in waves, each entrant notified directly, keep the release gradual and stop people refreshing the product page.",
+       "cite": {
+        "path": "apps/api/src/inventory.ts",
+        "lineStart": 41,
+        "lineEnd": 46
+       }
+      },
+      {
+       "text": "[w3] Two hold populations starve each other: the sweep asks only for expired holds up to a limit, with no notion of which population a hold belongs to, so when 900 drop claims expire together they fill run after run ahead of carts abandoned a few minutes later; the drop gets its own sweep, or a per-population limit, so one population's churn cannot delay the other's release.",
+       "cite": {
+        "path": "apps/worker/src/reservation-expiry.ts",
+        "lineStart": 3,
+        "lineEnd": 6
+       }
+      },
+      {
+       "text": "[w2] A payment arriving in the deadline's last second must ask the claim first: the hold transition reports whether it moved, so the payment path charges only when its move from active succeeded, and a payment that lost to the expiry is refunded automatically instead of becoming an order with no unit.",
+       "cite": {
+        "path": "apps/api/src/inventory.ts",
+        "lineStart": 28,
+        "lineEnd": 31
+       }
+      },
+      {
+       "text": "[w2] Between waves, reconcile the drop's rows: the reconciler compares active held units with recorded reserved per item and alerts on any difference, and the next wave of offers waits until that difference is zero.",
+       "cite": {
+        "path": "apps/worker/src/inventory-reconciler.ts",
+        "lineStart": 12,
+        "lineEnd": 20
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "TRADE-OFF HANDBACK — defend your drop design against the alternatives: a lottery versus a FIFO queue versus a raw race; claim rows created for each winner at draw time versus a guarded decrement when each winner pays; sending expired wins to a waitlist versus back into open stock; and a separate stock pool or service for drops versus the shared inventory rows. For each, say what you bought and what it cost.",
+     "keyPoints": [
+      {
+       "text": "[w3] A raw race rewards the fastest client and recreates the three-way collision (stale 'in stock', one hot row, retries when responses slow); a FIFO queue is fair by arrival but still rewards automation at opening and is a new system to run; a lottery removes the timing edge and spreads load across the registration window, at the cost of an auditable draw and two days before revenue is known.",
+       "cite": {
+        "path": "docs/security/flash-sale-threat-model.md",
+        "lineStart": 10,
+        "lineEnd": 15
+       }
+      },
+      {
+       "text": "[w3] Claim rows at the draw guarantee that a winner never finds the item gone and give each win a natural deadline, at the cost of 5,000 units parked for up to two days and a sweep to keep honest; a guarded decrement at payment parks nothing but can tell a winner 'sold out' after they won, which breaks the promise the lottery made.",
+       "cite": {
+        "path": "docs/sprints/sprint-07.md",
+        "lineStart": 20,
+        "lineEnd": 20
+       }
+      },
+      {
+       "text": "[w2] A waitlist keeps the fairness and bot screening for re-offered units and lets them out in measured waves, at the cost of another round of notices and deadlines and perhaps a few units unsold at the end; dumping them into open stock sells faster but creates a sudden excess that invites both bots and retry storms.",
+       "cite": {
+        "path": "docs/CAPACITY_PLAN.md",
+        "lineStart": 23,
+        "lineEnd": 25
+       }
+      },
+      {
+       "text": "[w3] A separate pool isolates the hot row, the claim churn and the sweep, and lets the drop be paused or scaled alone; the cost is moving units in and out through audited, keyed transfers (the effect service knows only ship, cancel and return today, so a pool transfer is a new effect) and reconciling two places that hold one variant's stock. Shared rows are simpler and put the drop squarely in the storefront's path.",
+       "cite": {
+        "path": "apps/api/src/inventory-effects.ts",
+        "lineStart": 19,
+        "lineEnd": 29
+       }
+      },
+      {
+       "text": "[w2] Stricter identity rules cost real buyers: one entry per card blocks families sharing a card, and device checks misfire on VPNs and shared computers; a review queue for suspicious clusters trades operator time for fewer false positives, and the course's one-per-customer race exercise already shows identity is the weak link.",
+       "cite": {
+        "path": "docs/curriculum/sprint-13.md",
+        "lineStart": 29,
+        "lineEnd": 33
+       }
+      },
+      {
+       "text": "[w1] Whatever the mechanism, the drop's invariant (winners never exceed units, and every unit ends paid, re-offered or returned) gets its own exact test, kept apart from any load measurement.",
+       "cite": {
+        "path": "docs/security/flash-sale-threat-model.md",
+        "lineStart": 15,
+        "lineEnd": 15
+       }
+      }
+     ]
+    }
+   ],
+   "set": "b"
+  }
+ ]
+}
