@@ -470,6 +470,510 @@
    ],
    "front": "What does the scope guard NOT prove?",
    "back": "It is not concurrency control: a conflict query followed by a write can still race. It does not prove availability membership, timezone correctness, atomic reservation or delivery of domain events."
+  },
+  {
+   "id": "q13-overlapping-validation",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 3,
+     "end": 11
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 5,
+     "lineEnd": 11
+    }
+   ],
+   "prompt": "Booking input passes through CreateBookingValidator, Booking.Create() and database constraints, and some checks repeat across them. How does the upskill guide describe that overlap?",
+   "answer": "Deliberate defense-in-depth: the domain doesn't trust the validator ran",
+   "distractors": [
+    "Accidental duplication that a later refactor is meant to collapse again",
+    "Needed only because the database cannot enforce a unique cancel token",
+    "A stopgap until FluentValidation can check every business rule as well"
+   ],
+   "explanation": "03-validation-auth-and-permissions.md lines 5-11: HTTP input checks format, Booking.Create() checks business rules such as start < end and not in the past, and the database enforces the unique cancellation token and FKs. The layers are intentionally overlapping: the domain doesn't trust that the validator ran, and the validator doesn't trust that domain rules match. The database does enforce the unique token."
+  },
+  {
+   "id": "q14-no-auth-server",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 15,
+     "end": 29
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 27,
+     "lineEnd": 27
+    }
+   ],
+   "prompt": "NetCalendy's API expects a JWT carrying sub, tenant_id and tenant_slug. Which part of the repository issues those tokens to real users?",
+   "answer": "None; an external identity provider must issue them",
+   "distractors": [
+    "The /api/auth/login endpoint, which signs them itself",
+    "TenantResolutionMiddleware, after it resolves the slug",
+    "A seeded admin user, through the users controller"
+   ],
+   "explanation": "03-validation-auth-and-permissions.md line 27: there is no auth server in this repo, no login endpoint and no token generation; an external identity provider (Auth0, Keycloak, custom) must issue tokens with the right claims. JwtTokenFactory only mints test tokens for integration tests, and the middleware stores a tenant id in HttpContext.Items without issuing anything."
+  },
+  {
+   "id": "q15-inline-resource-authz",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 33,
+     "end": 45
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 37,
+     "lineEnd": 45
+    }
+   ],
+   "prompt": "Where does NetCalendy decide resource-level questions such as \"may this user modify this event type?\"",
+   "answer": "Inline in each handler, e.g. UpdateEventTypeHandler's owner check",
+   "distractors": [
+    "In IAuthorizationHandler policies registered once in Program.cs",
+    "In FluentValidation validators that run in the MediatR pipeline",
+    "In the [Authorize] attribute's role list on each controller class"
+   ],
+   "explanation": "03-validation-auth-and-permissions.md lines 37-45: no ASP.NET Core IAuthorizationHandler or policies exist; resource-level authorization is done inline in handlers, as in UpdateEventTypeHandler comparing et.OwnerId with the current user. The guide calls it correct but scattered rather than centralized. [Authorize] is only the coarse-grained layer, and treating FluentValidation as authorization is listed as a junior mistake."
+  },
+  {
+   "id": "q16-scoped-dbcontext",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/02-data-model-and-persistence.md",
+    "lines": {
+     "start": 83,
+     "end": 90
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/02-data-model-and-persistence.md",
+     "lineStart": 85,
+     "lineEnd": 90
+    }
+   ],
+   "prompt": "AppDbContext is registered as scoped. What goes wrong, per the persistence guide, if it is injected into a singleton service instead?",
+   "answer": "It becomes a captive dependency that builds up entities and goes stale",
+   "distractors": [
+    "Each repository gets its own context, so one save no longer covers both",
+    "The context is disposed after the first request, so later calls throw",
+    "Connection pooling is disabled, so every query opens a new connection"
+   ],
+   "explanation": "02-data-model-and-persistence.md lines 85-90: scoped means one context per request, so repositories in one request share a change tracker and one SaveChangesAsync flushes both adds in one transaction. Injecting it into a singleton creates a captive dependency: the context lives forever, accumulates entities and eventually throws or returns stale data."
+  },
+  {
+   "id": "q17-full-update-pattern",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/02-data-model-and-persistence.md",
+    "lines": {
+     "start": 94,
+     "end": 101
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/02-data-model-and-persistence.md",
+     "lineStart": 101,
+     "lineEnd": 101
+    }
+   ],
+   "prompt": "A handler changes one property of an aggregate and calls repository.Update(aggregate) before saving. Which columns does the resulting UPDATE write?",
+   "answer": "Every column, since Update marks the entire entity modified",
+   "distractors": [
+    "Only the changed column, as the change tracker diffs values",
+    "Only the key and concurrency columns, as a version bump",
+    "None at all, since the entity was not loaded as tracked"
+   ],
+   "explanation": "02-data-model-and-persistence.md line 101: repository.Update(aggregate) calls db.Set<T>().Update(aggregate), which marks the entire entity as modified, a full-update pattern that writes every column even if only one changed; explicit property tracking could improve it for high write volume. Only-changed-columns is what tracked modifications get without that call."
+  },
+  {
+   "id": "q18-two-deploy-column-drop",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/02-data-model-and-persistence.md",
+    "lines": {
+     "start": 105,
+     "end": 119
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/02-data-model-and-persistence.md",
+     "lineStart": 116,
+     "lineEnd": 119
+    }
+   ],
+   "prompt": "Per the persistence guide's safe schema change checklist, how should a column be removed from a table under rolling deployment?",
+   "answer": "Two deploys: stop reading it first, drop it in a later migration",
+   "distractors": [
+    "One deploy: drop it in a migration that runs before the new code",
+    "Two deploys: drop it first, then remove it from the EF config",
+    "One deploy: make it nullable, and let EF ignore it from then on"
+   ],
+   "explanation": "02-data-model-and-persistence.md lines 116-119: first deploy stops reading the column (remove it from the EF config), the second deploy adds a migration that drops it; the two-step process prevents downtime from rolling deployment. Dropping first would break the old code still running."
+  },
+  {
+   "id": "q19-include-string-fragile",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/02-data-model-and-persistence.md",
+    "lines": {
+     "start": 123,
+     "end": 127
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/02-data-model-and-persistence.md",
+     "lineStart": 127,
+     "lineEnd": 127
+    }
+   ],
+   "prompt": "ScheduleRepository.GetDefaultByUserAsync uses .Include(\"_rules\"), a string naming the private backing field. Why does the persistence guide call it fragile?",
+   "answer": "Renaming the field makes the include fail silently and load nothing",
+   "distractors": [
+    "Renaming the field makes the build fail until the string is updated too",
+    "String includes run one extra query per schedule, an N+1 query pattern",
+    "String includes bypass the shadow key, so rules load in the wrong order"
+   ],
+   "explanation": "02-data-model-and-persistence.md line 127: the string-based include for the shadow backing field should work but is fragile; if the backing field name changes, the include silently fails and Rules returns empty, so the guide says to verify the name matches the field in Schedule.cs. A string is not checked by the compiler, so nothing fails at build time."
+  },
+  {
+   "id": "q20-second-save-red-flag",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/02-data-model-and-persistence.md",
+    "lines": {
+     "start": 131,
+     "end": 135
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/02-data-model-and-persistence.md",
+     "lineStart": 133,
+     "lineEnd": 135
+    }
+   ],
+   "prompt": "Why does the persistence guide call two uow.SaveChangesAsync() calls in one handler a code review red flag?",
+   "answer": "The first save commits for good even if the second one fails",
+   "distractors": [
+    "The second save re-inserts the rows that the first one added",
+    "EF Core refuses a second save on the same scoped context",
+    "The two saves deadlock on the shared change tracker's lock"
+   ],
+   "explanation": "02-data-model-and-persistence.md lines 133-135: each writing handler calls SaveChangesAsync once at the end, which EF wraps in an implicit transaction so everything succeeds or fails together. With two calls, the first save commits permanently even if the second fails. The guide notes the repo does not currently have this pattern."
+  },
+  {
+   "id": "q21-windows-timezone-ids",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/06-architecture-critique.md",
+    "lines": {
+     "start": 41,
+     "end": 46
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/06-architecture-critique.md",
+     "lineStart": 42,
+     "lineEnd": 46
+    }
+   ],
+   "prompt": "RISK-002: timezone strings are accepted as any non-empty text. What breaks when a host stored \"Eastern Standard Time\" and the API runs on Linux?",
+   "answer": "FindSystemTimeZoneById throws, so available-slots answers a 400",
+   "distractors": [
+    "The id is silently read as UTC, so every slot shifts five hours",
+    "The id is mapped to America/New_York, but without daylight saving",
+    "Booking.Create refuses it, so the host can no longer take bookings"
+   ],
+   "explanation": "06-architecture-critique.md lines 42-46: User.Create() and Invitee.Create() accept any non-empty timezone, and GetAvailableSlotsHandler calls TimeZoneInfo.FindSystemTimeZoneById, which throws on Linux for Windows ids, so the available-slots endpoint returns a 400 for such hosts. The suggested fix is TimeZoneConverter (TZConvert.GetTimeZoneInfo) plus validating the zone on input."
+  },
+  {
+   "id": "q22-authorize-breaks-public-page",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/06-architecture-critique.md",
+    "lines": {
+     "start": 72,
+     "end": 77
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/06-architecture-critique.md",
+     "lineStart": 73,
+     "lineEnd": 77
+    }
+   ],
+   "prompt": "RISK-005: EventTypesController has a class-level [Authorize], and GET /api/event-types/{id} carries no [AllowAnonymous]. What is the impact?",
+   "answer": "Visitors get a 401 loading the event type, so public booking breaks",
+   "distractors": [
+    "Hosts get a 403 on their own event types, so editing them breaks entirely",
+    "Visitors can read any tenant's event types, an IDOR on that very route",
+    "The booking POST inherits it, so invitees must sign in before booking"
+   ],
+   "explanation": "06-architecture-critique.md lines 73-77: the public booking page (BookPage.tsx) calls GET /api/event-types/{id} to load the event type, and with class-level [Authorize] and no [AllowAnonymous] it fails with 401 for unauthenticated visitors, so the public booking flow is broken. The fix is [AllowAnonymous] on GetById or a separate public slug endpoint. The booking POST is [AllowAnonymous] (RISK-006 lists it)."
+  },
+  {
+   "id": "q23-global-filter-remediation",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/06-architecture-critique.md",
+    "lines": {
+     "start": 104,
+     "end": 111
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/06-architecture-critique.md",
+     "lineStart": 107,
+     "lineEnd": 111
+    }
+   ],
+   "prompt": "The critique sketches EF global query filters as defense-in-depth for tenant isolation. Which plumbing note and which risk does it record?",
+   "answer": "The tenant service is already in AppDbContext; misses read as not found",
+   "distractors": [
+    "A new tenant service must be added to AppDbContext; misses become 403s",
+    "Filters need raw SQL views per table; admin queries lose all access",
+    "The tenant service is already in AppDbContext; filters cannot be skipped"
+   ],
+   "explanation": "06-architecture-critique.md lines 107-111: add HasQueryFilter to each tenant-scoped configuration; ICurrentTenantService is already injected into AppDbContext; admin queries opt out with IgnoreQueryFilters(); test with two tenants that a cross-tenant query returns empty; and the documented risk is that an existing GetById returning null now looks like \"not found\" rather than a 403."
+  },
+  {
+   "id": "q24-public-rate-limit",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/06-architecture-critique.md",
+    "lines": {
+     "start": 81,
+     "end": 86
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/06-architecture-critique.md",
+     "lineStart": 82,
+     "lineEnd": 86
+    }
+   ],
+   "prompt": "RISK-006 concerns the two [AllowAnonymous] endpoints, POST /api/bookings and GET /api/schedules/available-slots. What does the critique say is missing, and what does it suggest?",
+   "answer": "Rate limiting; add AddRateLimiter with a sliding window on them",
+   "distractors": [
+    "Input validation; add FluentValidation rules to each of the requests",
+    "A CAPTCHA step; add a challenge before every anonymous booking request",
+    "Caching; add response caching to the available-slots endpoint for bots"
+   ],
+   "explanation": "06-architecture-critique.md lines 82-86: both endpoints are [AllowAnonymous] with no rate limiting middleware visible in Program.cs, so scrapers can enumerate slots, bots can create bookings and slot flooding is possible. The suggested fix is AddRateLimiter() in Program.cs with a sliding window policy on the public endpoints. The risk is marked low impact now and a hypothesis."
+  },
+  {
+   "id": "q25-dependency-rule-payoff",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/06-architecture-critique.md",
+    "lines": {
+     "start": 9,
+     "end": 10
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/06-architecture-critique.md",
+     "lineStart": 10,
+     "lineEnd": 10
+    }
+   ],
+   "prompt": "The critique confirms that Domain has no EF Core, HTTP or MediatR handler imports and Application has no HttpContext. What concrete consequence does it draw?",
+   "answer": "You can swap Postgres for SQLite or controllers for gRPC freely",
+   "distractors": [
+    "You can deploy Domain and Application as separate microservices",
+    "You can skip integration tests, as each layer is tested alone",
+    "You can share one DbContext across Domain and Application code"
+   ],
+   "explanation": "06-architecture-critique.md line 10: with the inward dependency rule enforced and every boundary crossing behind an interface, you can replace PostgreSQL with SQLite for tests, replace the MediatR pipeline with a raw handler call, or swap controllers for gRPC without touching domain or application logic. Separate deployment and skipping integration tests are not claimed; the critique values its Testcontainers tests."
+  },
+  {
+   "id": "q26-testcontainers-catch",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/06-architecture-critique.md",
+    "lines": {
+     "start": 15,
+     "end": 16
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/06-architecture-critique.md",
+     "lineStart": 16,
+     "lineEnd": 16
+    }
+   ],
+   "prompt": "NetCalendy's integration tests start a real Postgres container instead of mocking the database. What does the critique say that catches?",
+   "answer": "EF query issues, missing indexes, migration errors, SQL constraints",
+   "distractors": [
+    "Race conditions, deadlocks, lock waits and isolation-level anomalies",
+    "UI regressions, layout drift, client routing errors and broken links",
+    "Token expiry, claim mapping, CORS failures and login redirect loops"
+   ],
+   "explanation": "06-architecture-critique.md line 16: the integration tests start a real Postgres container with no mocking of the database layer, which catches EF Core query issues, missing indexes, migration errors and SQL-level constraint violations that mock-based tests miss entirely. Concurrency bugs are a separate risk (RISK-003) whose parallel test is still a ticket to write."
+  },
+  {
+   "id": "f05-strongest-choices",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/06-architecture-critique.md",
+    "lines": {
+     "start": 7,
+     "end": 23
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/06-architecture-critique.md",
+     "lineStart": 18,
+     "lineEnd": 22
+    }
+   ],
+   "front": "NetCalendy's five confirmed strongest architecture choices",
+   "back": "1) The Clean Architecture dependency rule. 2) The Result<T> railway pattern. 3) Testcontainers integration tests. 4) Strong-typed IDs: a record wrapper per id prevents argument-order bugs at compile time, low overhead, mapped to Guid columns by value converters. 5) Colocated CQRS feature folders: each feature's command, handler and validator live in one folder, so finding 'create event type' means opening one folder, which scales as features grow."
+  },
+  {
+   "id": "f06-three-month-ladder",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/06-architecture-critique.md",
+    "lines": {
+     "start": 90,
+     "end": 100
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/06-architecture-critique.md",
+     "lineStart": 92,
+     "lineEnd": 100
+    }
+   ],
+   "front": "The critique's 'if I owned this for 3 months' priority ladder (headlines)",
+   "back": "P1, before any external users: RISK-001 (IDOR on GetById) and RISK-005. P2, before production traffic: RISK-003 (double-booking). P3, first 30 days: RISK-002. P4, month 2: RISK-004 (a durable path for domain-event side effects such as email). P5, month 3: RISK-006, plus global.json SDK pinning, an UpdateEventTypeCommand validator and EF global query filters for defense-in-depth."
+  },
+  {
+   "id": "f07-bookings-table",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/02-data-model-and-persistence.md",
+    "lines": {
+     "start": 29,
+     "end": 49
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/02-data-model-and-persistence.md",
+     "lineStart": 31,
+     "lineEnd": 49
+    }
+   ],
+   "front": "The bookings table: notable columns and its three indexes",
+   "back": "id (uuid PK via a BookingId value converter); tenant_id deliberately not declared as an EF foreign key, to avoid cross-aggregate constraints; event_type_id, host_id; invitee_name/email/timezone/notes from the owned Invitee; start_time and end_time as timestamptz; status as an int enum; cancellation_token varchar(16); cancellation_reason nullable. Indexes: UNIQUE (cancellation_token), (host_id, start_time) for conflict queries, (tenant_id, start_time) for tenant-scoped lists."
+  },
+  {
+   "id": "f08-ef-mapping-concepts",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/02-data-model-and-persistence.md",
+    "lines": {
+     "start": 53,
+     "end": 79
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/02-data-model-and-persistence.md",
+     "lineStart": 55,
+     "lineEnd": 79
+    }
+   ],
+   "front": "Three EF Core mapping techniques NetCalendy relies on",
+   "back": "Value converters for strong ids: HasConversion(id => id.Value, v => TenantId.From(v)) maps record TenantId(Guid Value) to a raw Guid at the database boundary. OwnsOne for value objects: Invitee has no table; its properties are columns on bookings. OwnsMany for collections: AvailabilityRule rows live in schedule_rules, linked by schedule_id, keyed by a shadow 'id' property that is not on the C# class."
+  },
+  {
+   "id": "f09-senior-review-checks",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 88,
+     "end": 99
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 95,
+     "lineEnd": 99
+    }
+   ],
+   "front": "Four questions a senior reviewer asks about auth changes in NetCalendy",
+   "back": "Every new get-by-id endpoint: does it check tenant and ownership? Every [AllowAnonymous] endpoint: what is the blast radius if its data is publicly enumerable? JWTs expire: what happens when a token expires mid-session, and does the 401 interceptor handle it gracefully? Tenant and user id in the JWT: who issues them, are they mutable, and can a user change tenants?"
+  },
+  {
+   "id": "f10-permissions-checklist",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 103,
+     "end": 109
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+     "lineStart": 106,
+     "lineEnd": 108
+    }
+   ],
+   "front": "Permissions pre-merge checklist: what to verify for new data endpoints",
+   "back": "A new get-by-id: does the handler verify tenant scope after loading? A new update or delete: does the handler verify ownership? A new public endpoint: has it been analyzed for enumeration and scraping risk?"
+  },
+  {
+   "id": "f11-testcontainers-lifecycle",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/upskill/01-codebase-cartography/05-key-flows.md",
+    "lines": {
+     "start": 135,
+     "end": 157
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/upskill/01-codebase-cartography/05-key-flows.md",
+     "lineStart": 143,
+     "lineEnd": 155
+    }
+   ],
+   "front": "Key flow 5: the lifecycle of one NetCalendy integration test class",
+   "back": "IntegrationTestWebAppFactory.InitializeAsync starts a PostgreSqlContainer through Docker; ConfigureWebHost swaps the real DbContextOptions registration for one pointing at the container; SeedData writes entities straight through AppDbContext, bypassing domain invariants; factory.CreateClient sends real HTTP through the full middleware stack with a JWT from JwtTokenFactory; DisposeAsync removes the container. The database is not reset between test methods in a class, so isolation relies on unique slugs and emails."
   }
  ]
 }
