@@ -1,0 +1,37 @@
+{
+ "lines": { "start": 45, "end": 45 },
+ "questions": [
+  {
+   "prompt": "G2 BRIEF — netgum (Gumroad-style digital storefront: ASP.NET Core minimal API + EF Core on SQL Server, xUnit tests on EF InMemory). Verified finding: `CheckoutService.CompleteOrderAsync` loads the order, asks the provider for the intent's status, calls `order.MarkPaid`, saves, then sends the purchase receipt. Two completion requests for the same pending order, each in its own scoped DbContext, both load Pending, both mark it paid, both saves succeed (the order mapping has no concurrency check), and the buyer gets two receipts. The sequential repeat is already safe; the simultaneous one is not. You will delegate the fix to a coding agent. Write the brief: goal, allowed files, boundaries, test command, stop condition. Commit to your brief first, then tick the checkpoints you covered and add up the weights.",
+   "keyPoints": [
+    { "text": "[w3] Goal: of two simultaneous completions of one pending order, exactly one commits the paid transition and sends the receipt; the other returns the stored paid receipt with no email and no error to its caller.", "cite": { "path": "src/Netgum.Application/Checkout/CheckoutService.cs", "lineStart": 114, "lineEnd": 140 } },
+    { "text": "[w3] Guarded form: the Pending-to-Paid write only lands while the stored status is still Pending (the existing PaymentStatus column mapped as a concurrency token, so EF puts the original value in the UPDATE's WHERE); the losing save's DbUpdateConcurrencyException is caught in CompleteOrderAsync alone, the order is re-read, and the email stays behind the save that won.", "cite": { "path": "src/Netgum.Infrastructure/Persistence/NetgumDbContext.cs", "lineStart": 176, "lineEnd": 176 } },
+    { "text": "[w2] Scope includes the failure branch: Pending-to-Failed goes through the same guarded write, so a racing success and failure cannot both commit, since each domain method only checks its own loaded copy.", "cite": { "path": "src/Netgum.Domain/Orders/Order.cs", "lineStart": 157, "lineEnd": 166 } },
+    { "text": "[w2] Allowed files: CheckoutService.cs, the OrderConfiguration block of NetgumDbContext.cs, and new cases in tests/Netgum.Tests/Application/CheckoutServiceTests.cs.", "cite": { "path": "src/Netgum.Infrastructure/Persistence/NetgumDbContext.cs", "lineStart": 164, "lineEnd": 181 } },
+    { "text": "[w3] Boundary: CreateSessionAsync with its stock and coupon writes, the payment-gateway abstraction and the global exception mapping stay untouched, and no column or migration is added; the oversell lost update and the missing idempotency key on checkout are separate follow-ups.", "cite": { "path": "src/Netgum.Api/Program.cs", "lineStart": 52, "lineEnd": 57 } },
+    { "text": "[w2] Test command: `dotnet test tests/Netgum.Tests/Netgum.Tests.csproj --configuration Release --filter FullyQualifiedName~CheckoutServiceTests`, with DOTNET_ROLL_FORWARD=Major where only the .NET 10 runtime exists; the race case builds two NetgumDbContext instances over one named InMemory store, because the fixture today mints a fresh database per context.", "cite": { "path": "astraupskill/VERIFICATION.md", "lineStart": 29, "lineEnd": 29 } },
+    { "text": "[w2] Stop condition: the two-context case (both contexts load Pending, both complete) ends with one receipt and one Paid row, red on the original and green on the fix, and the full suite still passes; if the InMemory provider cannot surface the conflict, the agent stops and says a relational run is needed instead of reporting green.", "quote": "it does not replace an idempotency key for two simultaneous pending requests." }
+   ]
+  },
+  {
+   "prompt": "G2 PRE-MORTEM — same delegation. What will an agent most likely get wrong here, and which line of your brief prevents it?",
+   "keyPoints": [
+    { "text": "[w3] It adds one more status check on the loaded order before marking it paid, a read-then-write that both requests pass because each sees its own Pending copy (the domain method already returns early on Paid); the guarded-form line puts the condition in the write itself.", "cite": { "path": "src/Netgum.Domain/Orders/Order.cs", "lineStart": 139, "lineEnd": 155 } },
+    { "text": "[w3] Over-broad catch: it wraps the save in a catch of DbUpdateException or Exception and returns a receipt, which also swallows the case where money moved but the paid row failed to save, the one failure that needs a 500 and a retry.", "cite": { "path": "src/Netgum.Application/Checkout/CheckoutService.cs", "lineStart": 127, "lineEnd": 128 } },
+    { "text": "[w2] Wrong layer: a process-local lock or semaphore keyed by intent id, which passes a single-process test and does nothing once two API instances share the SQL Server database.", "cite": { "path": "src/Netgum.Infrastructure/DependencyInjection.cs", "lineStart": 19, "lineEnd": 20 } },
+    { "text": "[w2] Feature creep: it also guards the stock and coupon writes or adds an outbox for the email in the same diff; the boundary keeps those as named follow-ups.", "quote": "Those are explicit follow-up designs requiring an outbox, transaction, or database conditional update." },
+    { "text": "[w1] False green: it points at the existing double-completion test, which runs both calls on one context in sequence, so the second simply takes the early paid return and proves nothing about a race.", "cite": { "path": "tests/Netgum.Tests/Application/CheckoutServiceTests.cs", "lineStart": 141, "lineEnd": 161 } }
+   ]
+  },
+  {
+   "prompt": "G2 HANDBACK REVIEW — the agent hands back a diff and a green run. What do you check before accepting it?",
+   "keyPoints": [
+    { "text": "[w3] The receipt is sent only after a save that only the winner can complete; the losing path neither emails nor rethrows, and the catch names the concurrency exception alone.", "cite": { "path": "src/Netgum.Application/Checkout/CheckoutService.cs", "lineStart": 127, "lineEnd": 138 } },
+    { "text": "[w3] The new test really uses two contexts over one store, and the handback shows it failing on the original (two receipt calls) before passing.", "cite": { "path": "tests/Netgum.Tests/Application/CheckoutServiceTests.cs", "lineStart": 188, "lineEnd": 195 } },
+    { "text": "[w2] The mapping change is a concurrency check on an existing column: no new property, no migration, and the unique index on the intent id is unchanged.", "cite": { "path": "src/Netgum.Infrastructure/Persistence/NetgumDbContext.cs", "lineStart": 176, "lineEnd": 181 } },
+    { "text": "[w2] The output names the runner, the Release configuration, the roll-forward runtime actually used and a test count above the recorded baseline, so it can be compared with the verification record.", "cite": { "path": "astraupskill/VERIFICATION.md", "lineStart": 12, "lineEnd": 18 } },
+    { "text": "[w1] Follow-ups are listed, not fixed: the oversell lost update, a crash between the paid save and the email, and domain events that the save override clears without anything publishing them.", "cite": { "path": "src/Netgum.Infrastructure/Persistence/NetgumDbContext.cs", "lineStart": 35, "lineEnd": 45 } }
+   ]
+  }
+ ]
+}
