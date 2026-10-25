@@ -1,0 +1,182 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "masteroutline-outline--fabledocs-03-architecture-and-patterns-02-data-model-and-persistence.md",
+ "items": [
+  {
+   "key": "seed:explainback:masteroutline-outline/explain-back/74c457b44b90d3ea",
+   "provenance": {
+    "repo": "masteroutline-outline",
+    "sha": "6511cbb6da848428cf552bfa7eb106dacd4e0c57",
+    "path": "fabledocs/03-architecture-and-patterns/02-data-model-and-persistence.md",
+    "lines": {
+     "start": 1,
+     "end": 54
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "Explain how Outline keeps one team's documents apart from another's, and how it stores a document's body: where is isolation actually enforced, what does a plain Document query return and leave out, and why does a document carry three representations of its content?",
+     "keyPoints": [
+      {
+       "text": "[w3] Tenancy is a teamId column on nearly every table, not a schema or database per tenant; each query adds the filter itself, e.g. documents.list seeds its where clause with the caller's teamId before any other condition.",
+       "cite": {
+        "path": "server/routes/api/documents/documents.ts",
+        "lineStart": 118,
+        "lineEnd": 132
+       }
+      },
+      {
+       "text": "[w2] The price of column tenancy: operations stay cheap, but isolation is only as good as every query remembering the filter, so scopes, policy checks and tests are the mitigation.",
+       "quote": "cheap ops, but one forgotten filter = cross-tenant leak"
+      },
+      {
+       "text": "[w2] Document's default scope returns only published, non-trial, non-template rows and pulls in the creating and updating users even if they are deleted; drafts are invisible to a plain find unless a withDrafts-style scope is chosen.",
+       "cite": {
+        "path": "server/models/Document.ts",
+        "lineStart": 99,
+        "lineEnd": 127
+       }
+      },
+      {
+       "text": "[w3] The three forms are the title column, content as ProseMirror JSON, and state as the Yjs binary used by real-time collaboration; state is heavy, so ordinary reads select it only through a CASE that returns it when content is NULL.",
+       "cite": {
+        "path": "server/models/Document.ts",
+        "lineStart": 84,
+        "lineEnd": 86
+       }
+      },
+      {
+       "text": "[w2] withState resets the attribute list so the real state column is loaded, and only routes that need collaborative state ask for it (documents.update passes includeState: true; export asks for it unless markdown is requested).",
+       "cite": {
+        "path": "server/routes/api/documents/documents.ts",
+        "lineStart": 1264,
+        "lineEnd": 1268
+       }
+      },
+      {
+       "text": "[w2] The invariant to defend is that content and state describe the same document, and the collaborative pipeline owns keeping them converged.",
+       "quote": "the collaborative pipeline is responsible for keeping them converged"
+      },
+      {
+       "text": "[w1] Heavy list reads avoid COUNT for the app's own client: when the x-client-version header is present, paginateQuery fetches limit + 1 rows and infers whether a next page exists instead of counting the table.",
+       "cite": {
+        "path": "server/routes/api/middlewares/pagination.ts",
+        "lineStart": 21,
+        "lineEnd": 47
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "Walk through how an Outline document moves between draft, published, archived and deleted in the data model, how the policy layer reads that state when deciding who may edit, and what finally happens to a deleted document.",
+     "keyPoints": [
+      {
+       "text": "[w3] There is no status enum: nullable timestamps publishedAt, archivedAt and deletedAt each say both which state the row is in and since when.",
+       "quote": "encode state machine + audit-when in one field"
+      },
+      {
+       "text": "[w2] The states are read through derived getters: isDraft is a missing publishedAt, isActive is neither archived nor deleted; Document inherits archivedAt and isArchived from ArchivableModel, which itself extends the paranoid base.",
+       "cite": {
+        "path": "server/models/Document.ts",
+        "lineStart": 894,
+        "lineEnd": 905
+       }
+      },
+      {
+       "text": "[w3] The update ability starts from isActive, so an archived or deleted document is read-only to everyone; then it needs read access plus a ReadWrite/Admin membership, collection-level updateDocument, or being the creator of a draft.",
+       "cite": {
+        "path": "server/policies/document.ts",
+        "lineStart": 86,
+        "lineEnd": 102
+       }
+      },
+      {
+       "text": "[w2] Listing excludes deleted rows unconditionally and archived rows unless the caller passes a status filter, so archive is a reversible 'hide' while delete leaves normal reads entirely.",
+       "cite": {
+        "path": "server/routes/api/documents/documents.ts",
+        "lineStart": 125,
+        "lineEnd": 137
+       }
+      },
+      {
+       "text": "[w2] Soft delete comes from the @DeletedAt column on the shared base model, which makes ordinary finds skip deleted rows; code that must see them (revision creation, purges) passes paranoid: false explicitly.",
+       "cite": {
+        "path": "server/models/base/ParanoidModel.ts",
+        "lineStart": 4,
+        "lineEnd": 19
+       }
+      },
+      {
+       "text": "[w3] Deletion becomes permanent later: an hourly cron task loads unscoped, paranoid-off documents whose deletedAt is more than 30 days old, in limited, partitioned batches, and hands them to documentPermanentDeleter with a single attempt.",
+       "cite": {
+        "path": "server/queues/tasks/CleanupDeletedDocumentsTask.ts",
+        "lineStart": 11,
+        "lineEnd": 44
+       }
+      },
+      {
+       "text": "[w1] A senior check on soft delete: a hidden row can still occupy a unique index slot, so 'deleted' data can block a new row with the same key.",
+       "quote": "soft-deleted row still holds the unique slot?"
+      }
+     ]
+    },
+    {
+     "prompt": "Defend or indict the chapter's claim that the only explicit row lock in Outline's main flows is comment anchoring and that everything else accepts last-write-wins: test it at this commit, using the collection's sidebar tree, collaborative saves and revision history as evidence.",
+     "keyPoints": [
+      {
+       "text": "[w2] The sidebar tree is a denormalization stored as one JSON value on the collection, and the chapter's own rule applies: it needs an owner and an invalidation story.",
+       "quote": "a denormalization is a cache; every cache needs an owner and an invalidation story."
+      },
+      {
+       "text": "[w3] Indict: changing that tree is a read-modify-write of a single value, so concurrent edits would drop each other's nodes; documentMover therefore loads the source and destination collections with LOCK.UPDATE before touching either structure.",
+       "cite": {
+        "path": "server/commands/documentMover.ts",
+        "lineStart": 44,
+        "lineEnd": 58
+       }
+      },
+      {
+       "text": "[w2] The Document model does the same in its hooks and lifecycle methods: renaming or re-iconing a published document, unpublishing and archiving each re-read the collection FOR UPDATE before rewriting its structure.",
+       "cite": {
+        "path": "server/models/Document.ts",
+        "lineStart": 452,
+        "lineEnd": 476
+       }
+      },
+      {
+       "text": "[w2] Collaborative persistence locks the document row FOR UPDATE before writing the Yjs state and the canonicalised ProseMirror content, so two collaboration servers cannot interleave a state/content pair.",
+       "cite": {
+        "path": "server/commands/documentCollaborativeUpdater.ts",
+        "lineStart": 39,
+        "lineEnd": 65
+       }
+      },
+      {
+       "text": "[w1] One structure path does not join its caller's transaction: the AfterCreate hook that inserts a published document into the tree opens a fresh transaction of its own, so that insert commits independently of the document insert.",
+       "cite": {
+        "path": "server/models/Document.ts",
+        "lineStart": 478,
+        "lineEnd": 497
+       }
+      },
+      {
+       "text": "[w3] Revision history is eventually consistent by design: RevisionsProcessor reacts to publish, finished update and debounced update events, drains the collaborator ids from a Redis set, and skips writing when title and content equal the latest revision.",
+       "cite": {
+        "path": "server/queues/processors/RevisionsProcessor.ts",
+        "lineStart": 10,
+        "lineEnd": 58
+       }
+      },
+      {
+       "text": "[w2] So the honest summary: last-write-wins holds for plain column updates inside one request transaction, while merged artifacts (the JSON tree, the Yjs state, comment anchors) are guarded by row locks, and derived records like revisions trail behind events.",
+       "quote": "cross-service effects (revisions, search, notifications) are *eventually consistent by design*"
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}
