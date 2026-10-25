@@ -1,0 +1,167 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "organized-experiment-internal-case-management-system--docs-learning-flow-traces.md--set-b",
+ "items": [
+  {
+   "key": "seed:explainback:organized-experiment-internal-case-management-system/explain-back/ccde00cfa6457319",
+   "provenance": {
+    "repo": "organized-experiment-internal-case-management-system",
+    "sha": "4bbcf27bf35796029c957aa1ab5801143755ab0b",
+    "path": "docs/learning/flow-traces.md",
+    "lines": {
+     "start": 1,
+     "end": 132
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "DESIGN IT — [senior] seven years of audit trail: archive, legal hold, export and redaction (organized-experiment-internal-case-management-system, docs/learning/flow-traces.md). Scenario: the desk records about 20,000 case changes a day and must keep the trail for 7 years. Compliance adds three demands: a subpoena export of one case's complete history, delivered as a bundle a court can verify, with restricted content under seal; legal holds that override any purge; and a cleanup that redacts confidential text already copied into audit metadata. Write your design before you look: how big the trail gets and how it is tiered, what an export bundle contains and how it is proven complete, what a legal hold is and what it blocks, how redaction is performed and recorded, what happens at the 7-year mark, and where attachments fit. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "keyPoints": [
+      {
+       "text": "[w3] Size first: 20,000 a day for 7 years is about 51 million rows, so the trail is range-partitioned by month on its creation time (84 partitions), keeping a per-case index in each; partitions older than a year or two move to a cheaper archive tier but stay attached and queryable, and expiry later becomes dropping whole partitions.",
+       "cite": {
+        "path": "prisma/schema.prisma",
+        "lineStart": 194,
+        "lineEnd": 208
+       }
+      },
+      {
+       "text": "[w3] An export is one case's complete record read from a single consistent snapshot: the case, every audit entry across live and archive partitions, all notes with restricted ones in a separately sealed section, attachment metadata, and a manifest; built inside one transaction, because separate reads can describe different moments.",
+       "quote": "They are not in one transaction, so the three numbers can come from slightly different moments."
+      },
+      {
+       "text": "[w3] Completeness is proven with a per-case hash chain: each new audit row stores a per-case sequence number and the hash of the previous row plus its own canonical content, and the bundle ships the chain with its head hash, signed; today a row carries only a random id and a timestamp, so neither gaps nor edits can be detected.",
+       "cite": {
+        "path": "prisma/schema.prisma",
+        "lineStart": 195,
+        "lineEnd": 202
+       }
+      },
+      {
+       "text": "[w3] A legal hold is a row (case or matter scope, reason, who placed it, placed and released times) that every destructive job checks in the same transaction as its delete. Purge must also be explicit, table by table: deleting a case row would cascade away its notes, attachments, deadlines and escalations while merely unlinking its audit rows, destroying exactly what the trail points to.",
+       "cite": {
+        "path": "docs/architecture/domain-model.md",
+        "lineStart": 69,
+        "lineEnd": 69
+       }
+      },
+      {
+       "text": "[w3] Redaction is a privileged, audited operation: a dedicated permission plus a second approver, a bulk pass over every escalating transition row (each has carried the reason in its comment field since launch) that replaces the text with a pointer to the restricted note, and for each row a tombstone audit entry naming who redacted what, when, why, and the hash of the removed value.",
+       "cite": {
+        "path": "src/services/caseService.ts",
+        "lineStart": 436,
+        "lineEnd": 440
+       }
+      },
+      {
+       "text": "[w2] At 7 years, purge what identifies people and keep what counts: requester name and email live on the case row, not in the audit table, so anonymizing those and the actor references keeps volume and timing statistics while dropping personal data; anything under hold is skipped and listed.",
+       "cite": {
+        "path": "prisma/schema.prisma",
+        "lineStart": 103,
+        "lineEnd": 104
+       }
+      },
+      {
+       "text": "[w2] Attachments are the weak link: the storage key is free text from the client and no storage integration exists, so an export cannot fetch or prove the files; real evidence needs server-side upload, a content hash recorded on the row and in its audit entry, and purge that deletes the stored object as well as the row.",
+       "cite": {
+        "path": "docs/architecture/domain-model.md",
+        "lineStart": 71,
+        "lineEnd": 71
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "PRE-MORTEM — the program runs for a year and four things go wrong. The archive job moves old rows and integrity checks start failing for archived cases; a legal hold arrives after the monthly purge already removed part of the period it covers; a redaction removes the only record an open investigation needed; and the first export bundle was produced by reusing the case-detail loading code, and the auditor who requested it got an incomplete answer. What breaks, how does each show up, and what in your design prevents it?",
+     "keyPoints": [
+      {
+       "text": "[w3] The chain broke because its anchor moved: rows link to their case only through a nullable reference that is cleared if the case is deleted, and the verifier read only the live table; carry an immutable chain key (the case number) on every row, verify across live and archive together, and have the archive write a signed checkpoint of each case's head hash at the cut.",
+       "cite": {
+        "path": "prisma/schema.prisma",
+        "lineStart": 204,
+        "lineEnd": 204
+       }
+      },
+      {
+       "text": "[w3] A late hold can only promise what still exists: data from a dropped partition is gone (backups age out on their own schedule), so the honest answer is the purge ledger: since no delete path exists today, the purge is built new and records for every run the period, the case ids, row counts and the chain heads it removed, which is what the hold report then cites.",
+       "cite": {
+        "path": "docs/architecture/README.md",
+        "lineStart": 64,
+        "lineEnd": 64
+       }
+      },
+      {
+       "text": "[w3] Redact or seal: redaction is irreversible, sealing (encrypt and restrict, keep the content) preserves evidence, so redaction runs only after a hold and investigation check and otherwise seals; and 'open investigation' cannot be read off escalation status, because nothing in the code ever moves an escalation out of its starting state.",
+       "quote": "no code path ever changes an escalation's status"
+      },
+      {
+       "text": "[w3] Reusing the detail loader also reuses its scoping: it looks the case up through the requester's visibility rules and reports anything outside them as not found, so an auditor outside the owning team gets a 404 or a partial view; the export needs its own audit-export permission and a loader with no team scope and no row cap.",
+       "cite": {
+        "path": "src/services/caseService.ts",
+        "lineStart": 65,
+        "lineEnd": 74
+       }
+      },
+      {
+       "text": "[w2] An export proves itself before it leaves: the generator re-verifies the chain from sequence one to the head, checks the manifest's counts against the rows it actually included, validates each row's metadata against a declared per-action shape (today it is untyped JSON decided at each call site), and refuses to sign a bundle with a gap.",
+       "cite": {
+        "path": "docs/architecture/domain-model.md",
+        "lineStart": 70,
+        "lineEnd": 70
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "TRADE-OFF HANDBACK — defend your audit-operations choices against the alternatives: a hash chain per case versus one global chain versus simply trusting database privileges; purging versus anonymizing at expiry; a sealed server-side export bundle versus giving auditors access to the UI; and redaction in place versus sealed superseding versions. For each, say what you bought and what it cost.",
+     "keyPoints": [
+      {
+       "text": "[w3] A per-case chain lets one case's export prove itself alone and lets different cases append in parallel, but cannot show that a whole case vanished, so publish a periodic root over all case heads; a global chain proves total order but makes every audit write in the system wait on one predecessor; privileges alone cost nothing and prove nothing to an outsider.",
+       "cite": {
+        "path": "prisma/schema.prisma",
+        "lineStart": 195,
+        "lineEnd": 195
+       }
+      },
+      {
+       "text": "[w2] Chaining adds a per-case serialization point: the predecessor's hash must be read in the writing transaction, and the overdue sweep opens its own transaction per deadline alongside users' changes to the same case, so two writers must not chain off one predecessor; a unique (case, sequence) pair or a lock on the case row decides it.",
+       "cite": {
+        "path": "src/services/escalationService.ts",
+        "lineStart": 29,
+        "lineEnd": 31
+       }
+      },
+      {
+       "text": "[w2] Purging minimizes what can leak and what you must defend, but ends all statistics and any later proof; anonymizing keeps trends, yet metadata is untyped JSON decided per call site, so anonymization needs per-action knowledge of which fields hold personal data, or free text re-identifies people.",
+       "cite": {
+        "path": "docs/architecture/domain-model.md",
+        "lineStart": 70,
+        "lineEnd": 70
+       }
+      },
+      {
+       "text": "[w3] A sealed bundle is a point-in-time, signed artifact a court can check offline, at the cost of regeneration whenever the record grows; UI access is always current but every screen must enforce the seal rules and nothing proves what the auditor did or did not see.",
+       "cite": {
+        "path": "docs/architecture/domain-model.md",
+        "lineStart": 71,
+        "lineEnd": 71
+       }
+      },
+      {
+       "text": "[w2] Redacting at read time (dropping the comment for viewers without restricted-note rights) is reversible and leaves the chain intact but keeps the text at rest; redacting in place removes it but invalidates hashes unless the chain committed to a hash of the field; a sealed superseding version keeps the original encrypted and allows true erasure later by destroying its key.",
+       "cite": {
+        "path": "docs/learning/guided-reading-path.md",
+        "lineStart": 121,
+        "lineEnd": 121
+       }
+      }
+     ]
+    }
+   ],
+   "set": "b"
+  }
+ ]
+}
