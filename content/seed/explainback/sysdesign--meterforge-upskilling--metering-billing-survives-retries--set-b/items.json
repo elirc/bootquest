@@ -1,0 +1,179 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "meterforge-upskilling--astra-docs-notes-04-distributed-reliability.md--set-b",
+ "items": [
+  {
+   "key": "seed:explainback:meterforge-upskilling/explain-back/3b3c2a1be37d7165",
+   "provenance": {
+    "repo": "meterforge-upskilling",
+    "sha": "c71962c62dea5883c3735ba3360b38c42fe14e1a",
+    "path": "astra docs/notes/04-distributed-reliability.md",
+    "lines": {
+     "start": 1,
+     "end": 41
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "DESIGN IT — [senior] payment-provider cutover and a re-rating correction (meterforge-upskilling, astra docs/notes/04-distributed-reliability.md). Scenario: MeterForge moves collections from provider A to provider B over two weeks while about 1,500 invoices a month keep collecting, and at the moment a tenant switches, roughly 40 of its collections may be sitting on A with no answer yet. In the same fortnight a mispriced SKU is found: about 50,000 usage events across 80 tenants were rated at the wrong unit price, and the overcharged tenants are owed credits. Write your design before you look: which provider owns each invoice during the cutover and where that decision is recorded, what happens to collections still outstanding on A, how a correction reaches the books without being applied twice, how the corrected price enters rating, and how the month is closed across two providers. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "keyPoints": [
+      {
+       "text": "[w3] Ownership is a fact stored on the collection, not a lookup at send time: today an attempt holds tenant, invoice, amount, key, status, attempt count and the provider's reference but no provider identity, so the cutover adds one, fixed when the attempt is created and never re-pointed; moving a tenant's cohort to B changes only collections created after the move.",
+       "cite": {
+        "path": "src/MeterForge.Domain/Payments/PaymentAttempt.cs",
+        "lineStart": 22,
+        "lineEnd": 29
+       }
+      },
+      {
+       "text": "[w3] The service is constructed around one injected provider and every send goes to it, so the cutover needs a router keyed by tenant cohort for new collections, while any further send of an existing attempt goes to the provider written on that attempt rather than the tenant's current one.",
+       "cite": {
+        "path": "src/MeterForge.Application/Payments/PaymentService.cs",
+        "lineStart": 14,
+        "lineEnd": 34
+       }
+      },
+      {
+       "text": "[w3] A collection left hanging on A is settled on A: its key only means something inside the provider that received it, and B has never seen it, so A stays reachable until each such collection is confirmed or ruled out there; only one that A confirms it never took may be issued again on B, as a brand-new operation.",
+       "quote": "A stable string becomes a reliability guarantee only when the surrounding storage and provider contracts enforce the intended meaning."
+      },
+      {
+       "text": "[w3] Corrections never touch the issued invoice: a finalized invoice refuses further lines and no line may be negative, so the re-rate produces a separate, positive credit per affected invoice that names the invoice and carries a mandatory reason.",
+       "cite": {
+        "path": "src/MeterForge.Domain/Invoicing/Invoice.cs",
+        "lineStart": 37,
+        "lineEnd": 45
+       }
+      },
+      {
+       "text": "[w3] Each credit gets an identity derived from the correction and the invoice (for example the re-rate run plus invoice id) instead of a random new id, so a second run of the job proposes the very same credits and a uniqueness rule on that id refuses them; the message announcing a credit already must carry an id, tenant, event type and a positive schema version, so the consumer can deduplicate on that same identity.",
+       "cite": {
+        "path": "src/MeterForge.Domain/Integrations/IntegrationModels.cs",
+        "lineStart": 7,
+        "lineEnd": 12
+       }
+      },
+      {
+       "text": "[w2] The affected lines are found through the price version each invoice line records, and the fix enters rating as a clean boundary (end the wrong version, start the corrected one), because price selection refuses a date that matches zero versions or more than one.",
+       "cite": {
+        "path": "src/MeterForge.Domain/Pricing/PriceVersion.cs",
+        "lineStart": 27,
+        "lineEnd": 37
+       }
+      },
+      {
+       "text": "[w2] The month closes provider by provider: each provider's settlement is matched against the internal payments it owns by amount and currency, a non-zero difference is a reported mismatch, and the books close only when both A's and B's lists agree with no payment claimed by both.",
+       "cite": {
+        "path": "src/MeterForge.Domain/Reconciliation/Reconciliation.cs",
+        "lineStart": 7,
+        "lineEnd": 17
+       }
+      },
+      {
+       "text": "[w1] B's own rules for keys (deduplication window, retention, scope) are checked against its documentation before the first cohort moves, rather than assumed to match A's.",
+       "quote": "For a real integration, verify those details in that provider's current documentation."
+      }
+     ]
+    },
+    {
+     "prompt": "PRE-MORTEM — cutover week goes wrong three ways. A collection that timed out on A is pushed through B by a well-meaning operator, and days later both providers settle it. The re-rate job is killed at 70% and someone starts it again from the top, so about 18,000 credits go out a second time. And a failure notice from A arrives for a tenant that already moved, after B collected the same invoice. What breaks, how does it show up, and what in your design stops it?",
+     "keyPoints": [
+      {
+       "text": "[w3] Pushing the A collection through B is a second charge, not a retry: the silence from A said nothing about whether A took the money, and B cannot recognise A's key, so the customer pays twice and it surfaces only when reconciliation looks at both providers' settlements for the same invoice.",
+       "quote": "A timeout describes what the caller observed, not what the provider committed."
+      },
+      {
+       "text": "[w3] Nothing today refuses a second collection for one invoice: each call to start a collection builds a new attempt with a new id, so the guard has to be added in storage, at most one open attempt per invoice across all providers, checked before any send.",
+       "cite": {
+        "path": "src/MeterForge.Application/Payments/PaymentService.cs",
+        "lineStart": 16,
+        "lineEnd": 21
+       }
+      },
+      {
+       "text": "[w3] The doubled credits pass every domain check: a credit is only required to be positive and to name an invoice, with no ceiling against what was overcharged, so the restart needs stable credit ids or a per-invoice correction marker, and a cap of credits per invoice at the computed overcharge.",
+       "cite": {
+        "path": "src/MeterForge.Domain/Adjustments/Adjustments.cs",
+        "lineStart": 21,
+        "lineEnd": 34
+       }
+      },
+      {
+       "text": "[w3] The late notice from A can flip a settled payment back: marking an attempt failed has no state check at all, and a failed attempt is exactly what the retry method accepts, so a stale A message can reopen an invoice B already collected; failure must be legal only from pending, and notices are matched by provider and reference.",
+       "cite": {
+        "path": "src/MeterForge.Domain/Payments/PaymentAttempt.cs",
+        "lineStart": 39,
+        "lineEnd": 46
+       }
+      },
+      {
+       "text": "[w2] The re-rate job is written so a kill at any point is resumable: each invoice's credit and its done-marker commit together, and the restart skips what is marked, which is the crash list the note asks you to walk applied to a batch job.",
+       "quote": "Enumerate crashes before commit, after commit, before send, after send, and before acknowledgment."
+      },
+      {
+       "text": "[w2] Triage sorts the three by kind (provider ambiguity, a duplicate side effect, a stale message), and each affected workflow, the B router for that cohort or the re-rate job, is paused before anyone repairs money by hand.",
+       "cite": {
+        "path": "docs/operations/RUNBOOK.md",
+        "lineStart": 16,
+        "lineEnd": 18
+       }
+      },
+      {
+       "text": "[w1] A double-charged customer may dispute at either provider, and a dispute carries that provider's case id, so disputes are tracked per provider like every other collection fact.",
+       "cite": {
+        "path": "src/MeterForge.Domain/Reconciliation/Reconciliation.cs",
+        "lineStart": 44,
+        "lineEnd": 44
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "TRADE-OFF HANDBACK — defend your cutover and correction choices against the alternatives: switching every tenant to B in one night versus moving cohorts while both providers run; correcting with credits against the issued invoices versus voiding them and issuing replacements; keeping A open read-only for a reconciliation window versus ending the contract on cutover day; and re-rating in one bulk job versus per-tenant batches that each finish before the next begins. For each, say what you bought and what it cost.",
+     "keyPoints": [
+      {
+       "text": "[w3] One night buys a single code path the next morning, but every in-flight collection crosses the boundary at once, B takes the full load on its first day, and backing out means moving everyone again; cohorts cap the blast radius and let you stop, at the cost of routing by tenant and reconciling two providers for weeks.",
+       "quote": "Adding delay without bounding concurrency can still overwhelm a provider."
+      },
+      {
+       "text": "[w3] Credits are append-only and keep the issued invoice as evidence, which is what the runbook demands of finalized history; the cost is a customer who sees the original plus a credit, and reports that must net the two.",
+       "cite": {
+        "path": "docs/operations/RUNBOOK.md",
+        "lineStart": 20,
+        "lineEnd": 20
+       }
+      },
+      {
+       "text": "[w2] Void-and-reissue gives a clean replacement document, but the invoice model knows only draft and finalized, so it needs a new voided state that every report, payment and credit must then respect, plus a rule for payments already taken against the voided one.",
+       "cite": {
+        "path": "src/MeterForge.Domain/Invoicing/Invoice.cs",
+        "lineStart": 5,
+        "lineEnd": 5
+       }
+      },
+      {
+       "text": "[w2] A read-only window keeps late notices, settlement files, disputes and refunds of A-collected money resolvable on A, since a refund is tied to the original payment and bounded by it; ending A at once saves fees but leaves no path to refund or confirm anything A took.",
+       "cite": {
+        "path": "src/MeterForge.Domain/Reconciliation/Reconciliation.cs",
+        "lineStart": 20,
+        "lineEnd": 27
+       }
+      },
+      {
+       "text": "[w2] A bulk job finishes sooner but a failure leaves a mix nobody can describe; per-tenant batches can be checked, announced and resumed at a tenant boundary, costing elapsed time and a progress record that is visible to operators.",
+       "quote": "Keep recovery observable and avoid silent infinite loops."
+      },
+      {
+       "text": "[w1] Whatever the rollout, the evidence that B behaves is gathered before relying on it, not inferred from A or from a stand-in provider.",
+       "quote": "Explain what would need verification before replacing a fake with a real provider."
+      }
+     ]
+    }
+   ],
+   "set": "b"
+  }
+ ]
+}
