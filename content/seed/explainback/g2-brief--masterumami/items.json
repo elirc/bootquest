@@ -1,0 +1,170 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "masterumami--umami-fabledocs-upskill-03-architecture-and-patterns-03-validation-auth-and-permissions.md",
+ "items": [
+  {
+   "key": "seed:explainback:masterumami/explain-back/fba4300972ed3165",
+   "provenance": {
+    "repo": "masterumami",
+    "sha": "0a09dbb42c1efc74206f9569053a4553087ebb0f",
+    "path": "umami/fabledocs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 31,
+     "end": 31
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "G2 BRIEF — masterumami (Umami web analytics: Next.js route handlers, Prisma or ClickHouse, vitest). Verified finding: on POST /api/send, which runs with authentication skipped, an `ip` or `userAgent` in the JSON payload overrides the request's own headers (getClientInfo, umami/src/lib/detect.ts:126-129), so any caller chooses the address that feeds the IGNORE_IP check and the session hash, and the user agent the bot filter sees. You will delegate the fix to a coding agent. Write the brief: goal, allowed files, boundaries, test command, stop condition. Commit to your brief first, then tick the checkpoints you covered and add up the weights.",
+     "keyPoints": [
+      {
+       "text": "[w3] Goal: for a send without verified user credentials, ip and userAgent come only from the request (the configured IP headers and the user-agent header) and payload values are ignored, so the bot check, IGNORE_IP and the session hash all judge the same request-derived values.",
+       "quote": "the public collection payload can't be fully trusted."
+      },
+      {
+       "text": "[w3] Guarded form: overrides survive only as an explicit opt-in, a trusted flag on getClientInfo that defaults to false and that the send route sets only after checkAuth resolves a real user allowed to update that website; a share token, which authenticates with no user, never qualifies.",
+       "cite": {
+        "path": "umami/src/lib/auth.ts",
+        "lineStart": 37,
+        "lineEnd": 48
+       }
+      },
+      {
+       "text": "[w2] Scope includes the geo lookup's skip-headers flag, which today follows the payload ip and must follow the same trust decision, and the batch route, which forwards each item through send's POST with the original headers and so needs a case of its own.",
+       "cite": {
+        "path": "umami/src/app/api/batch/route.ts",
+        "lineStart": 21,
+        "lineEnd": 36
+       }
+      },
+      {
+       "text": "[w2] Allowed files: umami/src/lib/detect.ts, umami/src/app/api/send/route.ts, umami/src/lib/detect.test.ts and one new test file under src/ that matches vitest's include glob.",
+       "cite": {
+        "path": "umami/vitest.config.ts",
+        "lineStart": 10,
+        "lineEnd": 14
+       }
+      },
+      {
+       "text": "[w3] Boundaries: the session-id formula (site, ip, user agent, period salt, and the distinct-id branch) and the visit-expiry block stay byte-identical; IGNORE_IP keeps its exact and CIDR matching, only fed the request IP; the schema still accepts ip and userAgent so existing senders get no new 400s; /api/record is untouched; the visit-expiry finding is reported, not fixed.",
+       "cite": {
+        "path": "umami/src/app/api/send/route.ts",
+        "lineStart": 143,
+        "lineEnd": 175
+       }
+      },
+      {
+       "text": "[w2] Test command: `pnpm test` in umami/ (vitest run under jsdom); tests use loopback addresses so the location lookup returns before opening the GeoLite database, and a route-level case vi.mocks the website lookup and the session and event writers.",
+       "cite": {
+        "path": "umami/package.json",
+        "lineStart": 42,
+        "lineEnd": 42
+       }
+      },
+      {
+       "text": "[w2] Stop condition: a test whose payload ip differs from the forwarded-header ip, with IGNORE_IP listing the header address, gets the 403, red on the original and green on the fix, plus a test that an authenticated owner's override still applies; spoofable forwarding headers are reported, not fixed.",
+       "cite": {
+        "path": "umami/src/app/api/send/route.ts",
+        "lineStart": 124,
+        "lineEnd": 138
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "G2 PRE-MORTEM — same delegation. What will an agent most likely get wrong here, and which line of your brief prevents it?",
+     "keyPoints": [
+      {
+       "text": "[w3] It treats any non-null checkAuth result as trusted, so a public share token sent in share context unlocks the overrides; the brief's 'real user allowed to update this website' line prevents it.",
+       "cite": {
+        "path": "umami/src/permissions/website.ts",
+        "lineStart": 58,
+        "lineEnd": 60
+       }
+      },
+      {
+       "text": "[w3] It rejects payloads that carry ip or userAgent with a 400, breaking every existing tracker or server-side sender that sets them; the brief says ignore and keeps the schema.",
+       "cite": {
+        "path": "umami/src/app/api/send/route.ts",
+        "lineStart": 40,
+        "lineEnd": 41
+       }
+      },
+      {
+       "text": "[w2] It touches the session hash while it is there (normalising the user agent, reordering inputs), which changes every visitor's session id mid-period and splits unique counts; the boundary freezes that formula.",
+       "cite": {
+        "path": "umami/src/app/api/send/route.ts",
+        "lineStart": 143,
+        "lineEnd": 147
+       }
+      },
+      {
+       "text": "[w2] It fixes only ip and leaves the userAgent override, so the bot filter can still be dodged, or leaves the geo skip flag keyed on the payload; the goal names both values and the scope names the flag.",
+       "cite": {
+        "path": "umami/src/lib/detect.ts",
+        "lineStart": 126,
+        "lineEnd": 135
+       }
+      },
+      {
+       "text": "[w1] It reports that IP spoofing is closed; the header list includes client-settable forwarding headers unless CLIENT_IP_HEADER pins one, so that stays a deployment follow-up, not a claim of this diff.",
+       "cite": {
+        "path": "umami/src/lib/ip.ts",
+        "lineStart": 3,
+        "lineEnd": 17
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "G2 HANDBACK REVIEW — the agent hands back a diff and a green run. What do you check before accepting it?",
+     "keyPoints": [
+      {
+       "text": "[w3] The new test is red on the original route (the payload ip wins and the request passes) and green on the fix, and it asserts behaviour, the 403 or the values handed to the mocked writers, not only getClientInfo's return.",
+       "cite": {
+        "path": "umami/src/app/api/send/route.ts",
+        "lineStart": 135,
+        "lineEnd": 138
+       }
+      },
+      {
+       "text": "[w3] The trust decision is made in one place, and /api/record, which calls getClientInfo with an empty payload, behaves exactly as before.",
+       "cite": {
+        "path": "umami/src/app/api/record/route.ts",
+        "lineStart": 79,
+        "lineEnd": 88
+       }
+      },
+      {
+       "text": "[w2] The existing getIpAddress tests still pass and the session-id and visit lines do not appear in the diff.",
+       "cite": {
+        "path": "umami/src/lib/detect.test.ts",
+        "lineStart": 1,
+        "lineEnd": 22
+       }
+      },
+      {
+       "text": "[w2] The pasted output is a vitest run that lists the new file, not a Cypress run or a type-check passed off as tests.",
+       "cite": {
+        "path": "umami/vitest.config.ts",
+        "lineStart": 11,
+        "lineEnd": 12
+       }
+      },
+      {
+       "text": "[w1] The handback lists, without fixing, the visit that ends 30 minutes after it began (and never for timestamped sends), the CIDR check that throws on a non-IP string, and forwarding-header trust.",
+       "cite": {
+        "path": "umami/src/app/api/send/route.ts",
+        "lineStart": 167,
+        "lineEnd": 175
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

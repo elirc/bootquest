@@ -1,0 +1,170 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "pulse--docs-audits-sprint-13-audit.md",
+ "items": [
+  {
+   "key": "seed:explainback:pulse/explain-back/1d2dffde246ff58f",
+   "provenance": {
+    "repo": "pulse",
+    "sha": "924aae022779b65f8fe38895a73e11bd1fbf2ee4",
+    "path": "docs/audits/sprint-13-audit.md",
+    "lines": {
+     "start": 60,
+     "end": 63
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "G2 BRIEF — pulse (TypeScript monorepo: Fastify ingest, Redis Streams, vitest). Verified finding on the S13 PII fix: scrubProps only looks at the top-level keys of an event's props, so `props.user.email` or `props.contacts[0].phone` reaches the stream readable, and the HASH rule is a plain unsalted sha256, so anyone holding a list of candidate addresses can hash it and match. You will delegate the fix to a coding agent. Write the brief: goal, allowed files, boundaries, test command, stop condition. Commit to your brief first, then tick the checkpoints you covered and add up the weights.",
+     "keyPoints": [
+      {
+       "text": "[w3] Goal: every DENY and HASH rule applies at any depth of props, inside nested objects and arrays, before the event is added to the stream; HASH values become a keyed hash (HMAC-SHA256 with a server-held secret), still stable and joinable inside Pulse but no longer matchable by hashing a guessed list.",
+       "cite": {
+        "path": "packages/shared/src/pii.ts",
+        "lineStart": 33,
+        "lineEnd": 57
+       }
+      },
+      {
+       "text": "[w3] Guarded form: the walk is bounded (a fixed maximum depth, and a subtree beyond it is dropped, failing closed, never passed through), because props is an unbounded record of unknown values; the secret comes from validated env and production refuses to start without it instead of falling back to an unkeyed hash.",
+       "cite": {
+        "path": "packages/shared/src/index.ts",
+        "lineStart": 31,
+        "lineEnd": 32
+       }
+      },
+      {
+       "text": "[w2] Scope includes keeping scrubProps pure and hash-injectable, with ingest receiving the keyed hasher through IngestServerOptions the way the rate limiter and quota check are injected, so tests control the key.",
+       "cite": {
+        "path": "apps/ingest/src/server.ts",
+        "lineStart": 34,
+        "lineEnd": 47
+       }
+      },
+      {
+       "text": "[w2] Allowed files: packages/shared/src/pii.ts and its test, apps/ingest/src/server.ts (the hasher at the scrub call), apps/ingest/src/env.ts (the secret), apps/ingest/src/index.ts (wiring) and apps/ingest/src/pii.test.ts.",
+       "cite": {
+        "path": "apps/ingest/src/server.ts",
+        "lineStart": 163,
+        "lineEnd": 170
+       }
+      },
+      {
+       "text": "[w3] Boundaries: backpressure, quota and rate-limit checks and their 429s stay exactly as they are; the rule names in DEFAULT_SCRUB_RULES do not change (no substring or pattern matching); no re-hashing or backfill of events already stored; the key-in-URL log redaction is not touched.",
+       "cite": {
+        "path": "apps/ingest/src/server.ts",
+        "lineStart": 126,
+        "lineEnd": 160
+       }
+      },
+      {
+       "text": "[w2] Test command: `pnpm --filter @pulse/shared test` and `pnpm --filter @pulse/ingest test` (each is vitest run); the ingest tests build the server on InMemoryKeyStore and InMemoryEventStream, so neither Redis nor Postgres is needed.",
+       "cite": {
+        "path": "apps/ingest/src/pii.test.ts",
+        "lineStart": 7,
+        "lineEnd": 13
+       }
+      },
+      {
+       "text": "[w2] Stop condition: a new ingest test posts nested and array-held email and password values and asserts on what lands in the stream, red on the original and green on the fix, plus a test that one email hashes identically under one key and differently under another; the quota overshoot and the silent fallback for an unparseable ts are reported, not fixed.",
+       "cite": {
+        "path": "apps/ingest/src/index.ts",
+        "lineStart": 19,
+        "lineEnd": 25
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "G2 PRE-MORTEM — same delegation. What will an agent most likely get wrong here, and which line of your brief prevents it?",
+     "keyPoints": [
+      {
+       "text": "[w3] It recurses without a bound, so a deeply nested hostile payload overflows the stack, the error handler answers 500 for the whole batch and an availability bug replaces a privacy bug; the bounded, fail-closed walk prevents it.",
+       "cite": {
+        "path": "apps/ingest/src/server.ts",
+        "lineStart": 99,
+        "lineEnd": 105
+       }
+      },
+      {
+       "text": "[w3] It reads the secret with a default (an empty string or a constant) so a misconfigured deploy silently ships an unkeyed or publicly known hash; the 'validated env, refuse to start in production' line prevents it.",
+       "cite": {
+        "path": "apps/ingest/src/env.ts",
+        "lineStart": 3,
+        "lineEnd": 18
+       }
+      },
+      {
+       "text": "[w2] It scrubs in the consumer or at query time, so raw values still sit in the Redis stream; the goal says before the stream add, which is the whole point of the S13 remediation.",
+       "cite": {
+        "path": "docs/threat-model.md",
+        "lineStart": 39,
+        "lineEnd": 39
+       }
+      },
+      {
+       "text": "[w2] It 'improves' the rules in the same diff (matching any key containing 'email', lowercasing addresses before hashing), which changes which properties survive and which hashes join; the boundary freezes the rule names.",
+       "cite": {
+        "path": "packages/shared/src/pii.ts",
+        "lineStart": 22,
+        "lineEnd": 26
+       }
+      },
+      {
+       "text": "[w1] It keeps plain sha256 and points at the API-key ADR as precedent; that argument rests on 140-bit key entropy, which an email address does not have.",
+       "cite": {
+        "path": "docs/adr/0003-api-key-model.md",
+        "lineStart": 21,
+        "lineEnd": 22
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "G2 HANDBACK REVIEW — the agent hands back a diff and a green run. What do you check before accepting it?",
+     "keyPoints": [
+      {
+       "text": "[w3] The nested-scrub test reads the entry back off the in-memory stream (not scrubProps' return value) and is shown red on the original server and green on the fix.",
+       "cite": {
+        "path": "apps/ingest/src/pii.test.ts",
+        "lineStart": 27,
+        "lineEnd": 36
+       }
+      },
+      {
+       "text": "[w3] One implementation: ingest still calls scrubProps once per event before the stream add, with no second ad-hoc scrub inlined in server.ts.",
+       "cite": {
+        "path": "apps/ingest/src/server.ts",
+        "lineStart": 163,
+        "lineEnd": 180
+       }
+      },
+      {
+       "text": "[w2] The original scrub tests still pass unchanged, including case-insensitive matching and a null value on a hash key staying null.",
+       "cite": {
+        "path": "packages/shared/src/pii.test.ts",
+        "lineStart": 19,
+        "lineEnd": 30
+       }
+      },
+      {
+       "text": "[w2] The pasted output names both packages' vitest runs; the root `test` script goes through turbo, so a replayed cache hit is not evidence that the new tests ran.",
+       "cite": {
+        "path": "package.json",
+        "lineStart": 11,
+        "lineEnd": 11
+       }
+      },
+      {
+       "text": "[w1] The handback lists, without fixing, the quota read-then-increment overshoot, the unflagged ts fallback, keys like user_email that exact names miss, and that hashes stored before the switch will not join new ones.",
+       "quote": "What lands unscrubbed can leak later."
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

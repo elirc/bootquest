@@ -1,0 +1,41 @@
+{
+ "lines": { "start": 5, "end": 24 },
+ "questions": [
+  {
+   "prompt": "Walk through one run of ww39's escalation sweep for a single overdue ticket, from the cron request to the durable record. For each decision, say which layer makes it: the route, the service, or the database write.",
+   "keyPoints": [
+    { "text": "Route: with CRON_SECRET unset it answers 500 MISCONFIGURED, with a non-matching x-cron-secret header 401; only then does it build the service and run the sweep. The caller is authorised by a shared secret, not a user role.", "cite": { "path": "src/app/api/cron/escalations/route.ts", "lineStart": 11, "lineEnd": 23 } },
+    { "text": "Repository candidate query: NEW/OPEN/PENDING tickets that have never been escalated and whose resolution deadline has passed, or whose first-response deadline has passed while still unanswered.", "cite": { "path": "src/repositories/ticketRepository.ts", "lineStart": 93, "lineEnd": 106 } },
+    { "text": "Service, which clock: an unanswered ticket is measured against the earlier of its two deadlines; after firstResponseAt is set only resolutionDueAt is considered; a ticket with no deadline or one not yet due is skipped.", "cite": { "path": "src/services/escalationService.ts", "lineStart": 36, "lineEnd": 44 } },
+    { "text": "Service, which rule: active rules for the ticket's group and priority (or any priority) are eligible once their afterMins fits inside the breached whole minutes, the largest such threshold is taken, and ties go to the lower id.", "cite": { "path": "src/services/escalationService.ts", "lineStart": 46, "lineEnd": 56 } },
+    { "text": "Service, validate the target before writing: a rule's target user must exist and not be a CUSTOMER, and the resulting group must exist; otherwise the ticket is left untouched for this run.", "cite": { "path": "src/services/escalationService.ts", "lineStart": 58, "lineEnd": 72 } },
+    { "text": "Database condition: the claim is an updateMany whose WHERE repeats the ticket id, a still-empty escalatedAt and the status the sweep read; it moves group and assignee and stamps escalatedAt in the same statement.", "cite": { "path": "src/repositories/ticketRepository.ts", "lineStart": 121, "lineEnd": 130 } },
+    { "text": "The audit row is written inside the same transaction and only when exactly one row was claimed, so a lost claim leaves no audit behind.", "cite": { "path": "src/repositories/ticketRepository.ts", "lineStart": 131, "lineEnd": 143 } }
+   ]
+  },
+  {
+   "prompt": "Explain what 'escalate once' means in ww39: what makes the escalation claim single-use, what that design costs when several rules could apply to the same ticket, and what the sweep does when a claim is lost or its write fails.",
+   "keyPoints": [
+    { "text": "The guide states the policy plainly: the timestamp itself is the one-time token.", "quote": "A ticket is claimed once because `escalatedAt` is a durable one-escalation policy." },
+    { "text": "Once escalatedAt is set the candidate query filters the ticket out, so later sweeps never evaluate its rules again.", "cite": { "path": "src/repositories/ticketRepository.ts", "lineStart": 96, "lineEnd": 98 } },
+    { "text": "The ticket carries no escalation level: escalatedAt is the only marker, so a rule with a larger threshold can never fire after a smaller one has claimed the ticket.", "cite": { "path": "prisma/schema.prisma", "lineStart": 95, "lineEnd": 95 } },
+    { "text": "Because the largest eligible threshold is chosen at sweep time, a sweep that resumes after an outage jumps straight to the top tier for an old breach and the lower tiers are never seen.", "cite": { "path": "src/services/escalationService.ts", "lineStart": 50, "lineEnd": 53 } },
+    { "text": "The audit metadata records the source group, the destination group and the target user, but not the rule id or the breached minutes, so the reason for an escalation cannot be read back from the log.", "cite": { "path": "src/services/escalationService.ts", "lineStart": 74, "lineEnd": 78 } },
+    { "text": "A claim that matches no row comes back null and the loop simply moves on, writing nothing.", "cite": { "path": "src/services/escalationService.ts", "lineStart": 84, "lineEnd": 84 } },
+    { "text": "There is no per-ticket error isolation: an exception from the claim transaction escapes runSweep, the cron call fails, and every ticket after it waits for the next run.", "cite": { "path": "src/services/escalationService.ts", "lineStart": 79, "lineEnd": 90 } }
+   ]
+  },
+  {
+   "prompt": "Explain the repository seam ww39 uses for the sweep: how src/server/container.ts wires it for production, how the tests substitute fakes, and where the faked path and the production path diverge enough that a green test says less than it seems to.",
+   "keyPoints": [
+    { "text": "container.ts builds one Prisma-backed instance of each repository and createEscalationService hands them to the service, so routes and jobs share a single composition.", "cite": { "path": "src/server/container.ts", "lineStart": 21, "lineEnd": 66 } },
+    { "text": "In the repository contract the transactional claim-plus-audit method is optional while the plain claim is required.", "cite": { "path": "src/repositories/contracts.ts", "lineStart": 94, "lineEnd": 95 } },
+    { "text": "The service branches on that: with the optional method it claims and audits in one transaction; without it, it claims and then writes the audit as a second, separate call.", "cite": { "path": "src/services/escalationService.ts", "lineStart": 79, "lineEnd": 87 } },
+    { "text": "The shared test harness's fake omits the optional method, so most escalation tests drive the two-write fallback that the production Prisma adapter never takes.", "cite": { "path": "src/tests/escalation-service.test.ts", "lineStart": 14, "lineEnd": 27 } },
+    { "text": "The 'audit failure leaves no routing mutation' test asserts on a committed object that nothing ever writes to, so its assertions would pass whatever the service did; real rollback needs the Prisma adapter against a database.", "cite": { "path": "src/tests/escalation-service.test.ts", "lineStart": 31, "lineEnd": 51 } },
+    { "text": "A comment in the rule repository says the ascending order lets the service choose the earliest breached rule, but the service re-sorts descending and takes the largest; the service's sort is what decides.", "cite": { "path": "src/repositories/escalationRuleRepository.ts", "lineStart": 12, "lineEnd": 21 } },
+    { "text": "That is why the guide insists the rules live below the UI and get boundary cases that differ in their audit outcome.", "quote": "These cases have different audit expectations and show why domain invariants belong in services and repositories rather than only in a dashboard form." }
+   ]
+  }
+ ]
+}

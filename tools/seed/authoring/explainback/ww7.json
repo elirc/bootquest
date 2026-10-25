@@ -1,0 +1,40 @@
+{
+ "lines": { "start": 3, "end": 14 },
+ "questions": [
+  {
+   "prompt": "Walk through ww7's transitionWorkflowStatus for a request that names a target status: which checks run, in what order, and why is that order the right one?",
+   "keyPoints": [
+    { "text": "The workflow is loaded unscoped and a missing id answers 404 WORKFLOW_NOT_FOUND before anything else is decided.", "cite": { "path": "src/services/workflow-definition-service.ts", "lineStart": 94, "lineEnd": 98 } },
+    { "text": "Ownership comes next: an ADMIN passes, any other actor must be the workflow's creator or gets 403 WORKFLOW_SCOPE_VIOLATION.", "cite": { "path": "src/lib/auth/permissions.ts", "lineStart": 40, "lineEnd": 52 } },
+    { "text": "The legal edges live in one table: DRAFT may go to ACTIVE or ARCHIVED, ACTIVE and PAUSED may swap or be archived, and ARCHIVED has no way out; any other edge is refused as a conflict carrying INVALID_WORKFLOW_TRANSITION.", "cite": { "path": "src/lib/workflow/status-machine.ts", "lineStart": 15, "lineEnd": 35 } },
+    { "text": "The machine deliberately lets an equal pair through, which hands the policy decision for repeats to the service.", "quote": "The workflow status machine treats current equal next status as valid, so the service must decide whether repetition is a no-op or a fresh audit event." },
+    { "text": "The service's equality return sits after both checks, so the no-op branch is not a way around ownership.", "quote": "Equality is checked after authorization and state lookup, so an unauthorized actor does not receive a free read path through the no-op branch." },
+    { "text": "Only a genuine move into ACTIVE runs the readiness rules (at least one step, an event name for EVENT, a cron for SCHEDULE, each a 422) and computes the next scheduled time.", "cite": { "path": "src/lib/workflow/status-machine.ts", "lineStart": 37, "lineEnd": 55 } },
+    { "text": "The write comes last: updateStatus, then an audit event recording previousStatus and nextStatus.", "cite": { "path": "src/services/workflow-definition-service.ts", "lineStart": 118, "lineEnd": 130 } }
+   ]
+  },
+  {
+   "prompt": "Explain how a workflow's status decides whether ww7 ever runs it on its own, and what the status-change audit trail is meant to say. Use pausing and re-activating a scheduled workflow as your example.",
+   "keyPoints": [
+    { "text": "The scheduler's due query only returns workflows that are ACTIVE, of trigger type SCHEDULE, with nextScheduledAt at or before now.", "cite": { "path": "src/repositories/workflow-repository.ts", "lineStart": 185, "lineEnd": 200 } },
+    { "text": "Event-triggered dispatch filters on ACTIVE in the same way, so a paused or draft workflow is invisible to both automatic paths.", "cite": { "path": "src/repositories/workflow-repository.ts", "lineStart": 170, "lineEnd": 183 } },
+    { "text": "A move to anything but ACTIVE writes nextScheduledAt as null, so pausing clears the schedule; the runtime test asserts the PAUSED update carries null.", "cite": { "path": "tests/runtime-workflow-same-status.test.mjs", "lineStart": 24, "lineEnd": 28 } },
+    { "text": "Moving back to ACTIVE recomputes the next time from the cron expression rather than restoring the old one.", "cite": { "path": "src/services/workflow-definition-service.ts", "lineStart": 112, "lineEnd": 116 } },
+    { "text": "An audit entry of this kind is a claim that something actually moved.", "quote": "For operational workflows, a `status.changed` event should describe an actual state change." },
+    { "text": "Recording a repeat as a move pollutes the history and whatever consumes it.", "quote": "Auditing ACTIVE to ACTIVE as a change distorts timelines and can trigger downstream reporting confusion." },
+    { "text": "For every status, a same-status request returns the loaded record and the only recorded call is the lookup: no update, no audit, no schedule computation.", "cite": { "path": "tests/runtime-workflow-same-status.test.mjs", "lineStart": 17, "lineEnd": 19 } }
+   ]
+  },
+  {
+   "prompt": "Defend or indict this claim: \"Now that ACTIVE to ACTIVE is idempotent, ww7's workflow status is safe under concurrent callers and every status move is audited.\"",
+   "keyPoints": [
+    { "text": "The no-op rule is a decision made in application code from a value read earlier; it holds no lock.", "quote": "This is an application-level idempotency rule, not a database lock." },
+    { "text": "Two callers that both read the same starting status can each write a different target, because the write is not conditional on what was read.", "quote": "Two concurrent callers can still race on different transitions because the repository update does not carry an old-status predicate" },
+    { "text": "The scheduler's advance step also goes through updateStatus and writes ACTIVE explicitly, so a pause that lands between its due read and that write is silently turned back on, with no audit entry for the reversal.", "cite": { "path": "src/services/workflow-dispatch-service.ts", "lineStart": 87, "lineEnd": 99 } },
+    { "text": "The status write and the audit insert are two separate calls with no transaction; the test pins an audit failure after a completed update, which leaves a moved workflow with no audit record.", "cite": { "path": "tests/runtime-workflow-same-status.test.mjs", "lineStart": 35, "lineEnd": 36 } },
+    { "text": "The repair direction is a conditional write that names the expected current status (id plus status in the WHERE) and treats zero affected rows as a conflict, with the audit row in the same transaction.", "cite": { "path": "src/repositories/workflow-repository.ts", "lineStart": 159, "lineEnd": 168 } },
+    { "text": "The evidence shipped with the change cannot settle this: it is call-order proof with test doubles.", "quote": "The runtime evidence proves call ordering with doubles; a live database test is needed for isolation claims." }
+   ]
+  }
+ ]
+}
