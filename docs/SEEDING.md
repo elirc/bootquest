@@ -209,6 +209,48 @@ network, filesystem or timing races), bump `CSDRILLS_EXPECTED` in
 commit the authoring file, the pack files and the new `validation.json` together. A
 quarantined exercise blocks the stamp at this bank size: fix the authoring, never the test.
 
+#### javadrills (the Java track's authored drill bank)
+
+`javadrills` has no upstream repo either: its source is hand-written JSON committed in this
+repo, one file per module, under `tools/seed/authoring/javadrills/<NN-module>.json` (format
+`javadrills-authoring@1`, Zod-validated `.strict()` by `tools/seed/src/javadrills/source.ts`;
+UTF-8 without BOM, LF). Each exercise carries a `starter` and a `solution` that are complete
+single-file `Exercise.java` programs in the javabootcamp grammar (one top-level
+`class Exercise`, no package, `import static bootcamp.Check.*;`, the tests between the
+`// ─── tests ───` and `// ─── end tests ───` marker lines, then the class's closing brace),
+plus instructions, an explanation and EXACTLY 3 hints (schema-enforced). There is no `tests`
+array: the importer splits the starter at the markers and maps every exercise to a
+`drill-java` unit `{ files: { tests, tail }, className: 'Exercise', timeoutMs: 10000 }` on
+the **java** track (competency `language-fluency`, key `javadrills/<module>/<slug>`), one
+course per module, into `content/packs/javadrills/` with manifest `{ track: 'java' }` and NO
+`grader` field (track java derives kind `java`, exactly like javabootcamp). It refuses —
+before writing anything — a starter or solution without both markers, a solution whose tests
+block differs from the starter's by even one byte, a missing `class Exercise` or a `package`
+statement, a tests block without `test(` / `report()` / a literal test name, and a census other
+than `JAVADRILLS_EXPECTED`. The drills join the java track's existing daily `drill:java` slate
+pool with no migration (the slot is sized from live drill units per track).
+
+```sh
+# authoring JSON -> content/packs/javadrills/{<module>.json, manifest.json} (refuses on any
+# format problem or a census other than JAVADRILLS_EXPECTED; writes nothing then)
+npm run seed:import:javadrills
+npm run seed:import:javadrills -- --authoring tools/seed/authoring/javadrills --out content/packs/javadrills
+# stamp: every reference solution passes and every starter fails under the REAL Java runner
+# (~2.6 s per grade; run per module with --course <module> first, then the full run)
+npm run seed:validate -- --source javadrills
+```
+
+Append a module: add `tools/seed/authoring/javadrills/NN-topic.json` (next free `NN`; slugs
+`NN-name`, 4-7 uniquely named tests per drill, difficulty 1-3, 3 hints), bump
+`JAVADRILLS_EXPECTED` in `tools/seed/src/javadrills/source.ts`, then re-import, re-validate
+(the journal resumes) and commit the authoring file, the pack files and the new
+`validation.json` together. Every starter must COMPILE: all types, records and signatures are
+present and the learner edits method bodies only. Stubs throw
+`UnsupportedOperationException("TODO: …")` (the message must start with `TODO`, which the
+harness reports as `todo` — a test verdict); a starter that fails to compile, times out or
+crashes is quarantined. A quarantined exercise blocks the stamp: fix the authoring, never the
+test.
+
 ### The import gate: `seed:validate`
 
 `seed:validate` executes EVERY imported reference solution under BootQuest's own
@@ -1005,6 +1047,14 @@ resolved); quiz variety `concept` and flashcard shape `hand-authored`;
   drills in modules 08/09 use the authoring format's optional `solutionTail`; per-drill nearest-existing-unit distinctness vs
   csbootcamp/jstrain-cs recorded in the wave brief; hint 3 never pasteable (no ;, =>,
   return); no migration (csharp slate_drills=1 since 002), no fingerprinted file touched.
+- **javadrills wave 1 — DONE (2026-10-23):** new authored Java drill bank, modules 01-10
+  (collections behavior, equality & ordering, streams execution, collectors, Optional
+  discipline, strings & text, exception flow, money math, instants & zones, CompletableFuture
+  composition), 80 drill-java drills complementing javabootcamp's 168 (per-module avoidance
+  recorded in the wave brief); JAVADRILLS_EXPECTED 80; 80/80 validated (solution passes +
+  starter fails-as-test-verdict under the real Java runner), 0 quarantined; every expected
+  value recomputed by the cross-reviewer; hint 3 never pasteable (no return/semicolon/paren);
+  zero fingerprinted files touched — no estate restamp.
 - **fundamentals wave — DONE (2026-10-21):** interview + real-SWE-fundamentals content, zero
   shared/factory edits (no estate restamp). 9 new DESIGN IT primaries → 47 items / 29 repos;
   11 fundamentals explain-backs on repos with no prior EB pack → EB packs 150 → 170, strict
