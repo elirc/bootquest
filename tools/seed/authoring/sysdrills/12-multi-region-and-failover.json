@@ -1,0 +1,564 @@
+{
+  "format": "sysdrills-authoring@1",
+  "module": "12-multi-region-and-failover",
+  "title": "Multi-region & failover math",
+  "description": "Multi-region and failover reps for the disaster-recovery part of a system-design interview: how much acknowledged data a regional failover loses (RPO), the stages that make up the outage (RTO) and how many failovers a monthly budget affords, N+1 region capacity, the error budget one failover burns, the egress bill of a replication mesh, the user time an in-region replica wins back, hot-hot versus pilot-light standby cost, and the commit-throughput cap that cross-region consensus imposes. Every drill is whole-number arithmetic with the conversions named (per-mille = parts per thousand = x/1000; a 30-day billing month; money in integer cents), so you practise the reasoning, not the calculator.",
+  "exercises": [
+    {
+      "slug": "01-failover-rpo",
+      "title": "Failover RPO: what the lag window loses",
+      "difficulty": 1,
+      "skills": [
+        "replication",
+        "durability"
+      ],
+      "instructions": "**Interview prompt.** \"The primary region takes 2,000 writes/s of 500 bytes each and replicates to the standby region asynchronously, running 30 seconds behind. The primary region dies. How much acknowledged data is gone?\"\n\n**Why it works.** With asynchronous cross-region replication a write is acknowledged before the other region has it. Everything acknowledged inside the lag window is lost when the primary region dies — that loss is the recovery point objective (RPO). Writes lost = writes per second × lag seconds; bytes lost = that × bytes per write. Synchronous replication drives the lag, and the RPO, to zero at the price of write latency.\n\n**Your task.** Export two functions:\n- `rpoEvents(writePerSec, lagSec)` → `writePerSec × lagSec`\n- `rpoBytes(writePerSec, bytesPerWrite, lagSec)` → `writePerSec × bytesPerWrite × lagSec`\n\n**Worked example.** 2,000 writes/s × 30 s of lag → **60,000** acknowledged writes lost.",
+      "starter": "export function rpoEvents(writePerSec, lagSec) {\n  // TODO: writes acknowledged inside the lag window\n}\n\nexport function rpoBytes(writePerSec, bytesPerWrite, lagSec) {\n  // TODO: the same window in bytes\n}\n",
+      "solution": "export function rpoEvents(writePerSec, lagSec) {\n  return writePerSec * lagSec;\n}\n\nexport function rpoBytes(writePerSec, bytesPerWrite, lagSec) {\n  return writePerSec * bytesPerWrite * lagSec;\n}\n",
+      "tests": [
+        {
+          "name": "2,000 writes/s x 30 s lag -> 60,000 lost writes",
+          "code": "assert.equal(typeof mod.rpoEvents, 'function', 'export a function named rpoEvents');\nassert.equal(mod.rpoEvents(2000, 30), 60000);",
+          "input": [
+            2000,
+            30
+          ]
+        },
+        {
+          "name": "synchronous replication -> nothing lost (boundary)",
+          "code": "assert.equal(typeof mod.rpoEvents, 'function', 'export a function named rpoEvents');\nassert.equal(mod.rpoEvents(2000, 0), 0);",
+          "input": [
+            2000,
+            0
+          ]
+        },
+        {
+          "name": "150 writes/s x 600 s lag -> 90,000 lost writes",
+          "code": "assert.equal(typeof mod.rpoEvents, 'function', 'export a function named rpoEvents');\nassert.equal(mod.rpoEvents(150, 600), 90000);",
+          "input": [
+            150,
+            600
+          ]
+        },
+        {
+          "name": "2,000 writes/s x 500 B x 30 s -> 30,000,000 bytes",
+          "code": "assert.equal(typeof mod.rpoBytes, 'function', 'export a function named rpoBytes');\nassert.equal(mod.rpoBytes(2000, 500, 30), 30000000);",
+          "input": [
+            2000,
+            500,
+            30
+          ]
+        },
+        {
+          "name": "100 writes/s x 2,000 B x 5 s -> 1,000,000 bytes",
+          "code": "assert.equal(typeof mod.rpoBytes, 'function', 'export a function named rpoBytes');\nassert.equal(mod.rpoBytes(100, 2000, 5), 1000000);",
+          "input": [
+            100,
+            2000,
+            5
+          ]
+        },
+        {
+          "name": "no writes in flight -> 0 bytes (boundary)",
+          "code": "assert.equal(typeof mod.rpoBytes, 'function', 'export a function named rpoBytes');\nassert.equal(mod.rpoBytes(0, 800, 120), 0);",
+          "input": [
+            0,
+            800,
+            120
+          ]
+        }
+      ],
+      "explanation": "The replication lag is the data you agree to lose.\n\nFor `rpoBytes(2000, 500, 30)`:\n- 2,000 writes/s × 500 bytes = 1,000,000 bytes/s\n- × 30 s of lag = **30,000,000 bytes** (~30 MB) of acknowledged-but-unreplicated data gone\n\nThat is the RPO line in a DR plan — module 03's `staleWindowReads` counts the READS exposed in one lag window, while this counts the WRITES lost at failover.",
+      "hints": [
+        "An async replica is always some seconds behind; ask what the primary acknowledged during those seconds that the standby never received.",
+        "events = writes/s × lagSec; bytes = writes/s × bytesPerWrite × lagSec.",
+        "Everything acknowledged inside the replication lag window is lost when the primary region dies: multiply writes per second by the lag seconds, and by bytes per write for the byte count"
+      ]
+    },
+    {
+      "slug": "02-failover-rto",
+      "title": "Failover RTO: detection, promotion, DNS",
+      "difficulty": 2,
+      "skills": [
+        "availability",
+        "operations"
+      ],
+      "instructions": "**Interview prompt.** \"Health checks fire every 5 s and we fail over after 3 missed beats; promoting the standby takes 45 s; clients cache DNS for 60 s. How long does each regional failover take — and how many of them fit in a 99.9% month?\"\n\n**Why it works.** A failover outage is a pipeline of stages that run in sequence: detection (heartbeat interval × missed beats before the region is declared dead), promotion of the standby, and the DNS TTL during which clients keep calling the old address. The month's downtime budget — about 43 minutes at 99.9%, about 4 minutes at 99.99% — converts to seconds (× 60); dividing by the per-failover RTO and rounding down gives how many failovers you can afford.\n\n**Your task.** Export two functions:\n- `rtoSeconds(heartbeatSec, missedBeats, promoteSec, dnsTtlSec)` → `heartbeatSec × missedBeats + promoteSec + dnsTtlSec`\n- `failoversWithinBudget(budgetMinutesPerMonth, rtoSec)` → `Math.floor(budgetMinutesPerMonth × 60 ÷ rtoSec)`\n\n**Worked example.** A 43-minute budget is 43 × 60 = 2,580 s; with 120 s failovers, 2,580 ÷ 120 = 21.5 → **21** failovers a month.",
+      "starter": "export function rtoSeconds(heartbeatSec, missedBeats, promoteSec, dnsTtlSec) {\n  // TODO: detection plus promotion plus DNS\n}\n\nexport function failoversWithinBudget(budgetMinutesPerMonth, rtoSec) {\n  // TODO: whole failovers that fit in the budget\n}\n",
+      "solution": "export function rtoSeconds(heartbeatSec, missedBeats, promoteSec, dnsTtlSec) {\n  return heartbeatSec * missedBeats + promoteSec + dnsTtlSec;\n}\n\nexport function failoversWithinBudget(budgetMinutesPerMonth, rtoSec) {\n  return Math.floor((budgetMinutesPerMonth * 60) / rtoSec);\n}\n",
+      "tests": [
+        {
+          "name": "5 s beats x 3 missed + 45 s promote + 60 s TTL -> 120 s",
+          "code": "assert.equal(typeof mod.rtoSeconds, 'function', 'export a function named rtoSeconds');\nassert.equal(mod.rtoSeconds(5, 3, 45, 60), 120);",
+          "input": [
+            5,
+            3,
+            45,
+            60
+          ]
+        },
+        {
+          "name": "anycast / zero-TTL cutover -> 60 s (boundary)",
+          "code": "assert.equal(typeof mod.rtoSeconds, 'function', 'export a function named rtoSeconds');\nassert.equal(mod.rtoSeconds(5, 3, 45, 0), 60);",
+          "input": [
+            5,
+            3,
+            45,
+            0
+          ]
+        },
+        {
+          "name": "10 s beats x 6 missed + 120 s promote + 300 s TTL -> 480 s",
+          "code": "assert.equal(typeof mod.rtoSeconds, 'function', 'export a function named rtoSeconds');\nassert.equal(mod.rtoSeconds(10, 6, 120, 300), 480);",
+          "input": [
+            10,
+            6,
+            120,
+            300
+          ]
+        },
+        {
+          "name": "43-minute budget with 120 s failovers -> 21",
+          "code": "assert.equal(typeof mod.failoversWithinBudget, 'function', 'export a function named failoversWithinBudget');\nassert.equal(mod.failoversWithinBudget(43, 120), 21);",
+          "input": [
+            43,
+            120
+          ]
+        },
+        {
+          "name": "one 480 s failover already blows a 99.99% month -> 0 (boundary)",
+          "code": "assert.equal(typeof mod.failoversWithinBudget, 'function', 'export a function named failoversWithinBudget');\nassert.equal(mod.failoversWithinBudget(4, 480), 0);",
+          "input": [
+            4,
+            480
+          ]
+        },
+        {
+          "name": "43-minute budget with 480 s failovers -> 5",
+          "code": "assert.equal(typeof mod.failoversWithinBudget, 'function', 'export a function named failoversWithinBudget');\nassert.equal(mod.failoversWithinBudget(43, 480), 5);",
+          "input": [
+            43,
+            480
+          ]
+        }
+      ],
+      "explanation": "RTO is the sum of the stages, and detection is derived, not given.\n\nFor `rtoSeconds(5, 3, 45, 60)`:\n- detection: 5 s × 3 missed beats = 15 s\n- promotion: 45 s\n- DNS TTL: 60 s\n- total: 15 + 45 + 60 = **120 s** per failover\n\n43 minutes is 99.9%'s monthly budget — module 03's `error-budget` drill grants those minutes, and this failover pipeline spends them stage by stage.",
+      "hints": [
+        "Walk the outage on a timeline: first nobody knows the region is dead, then the standby is being promoted, then clients still hold the old DNS answer.",
+        "RTO = heartbeat × missed + promote + TTL; failovers = ⌊budgetMin × 60 ÷ RTO⌋.",
+        "The outage is the sum of the stages: heartbeat × missed beats to detect, plus promotion, plus the DNS TTL clients keep caching — divide the month's downtime budget in seconds by that total and round down for how many failovers you can afford"
+      ]
+    },
+    {
+      "slug": "03-region-loss-capacity",
+      "title": "N+1 regions: surviving the loss of one",
+      "difficulty": 2,
+      "skills": [
+        "capacity",
+        "availability"
+      ],
+      "instructions": "**Interview prompt.** \"We serve 120,000 QPS spread evenly across 4 regions, and one region can carry 40,000 QPS. What does each survivor carry when a region dies — and how many regions do we need so that losing any one is a non-event?\"\n\n**Why it works.** When a region dies its share is redistributed over the survivors, so each one carries totalQps ÷ (regions − 1). The N+1 planning rule turns that around: deploy enough regions to carry the whole load at capacity, ⌈totalQps ÷ perRegionCapacityQps⌉, plus one spare so any single region can fail. `perRegionQpsAfterLoss` is only called with regions ≥ 2, and the tests choose inputs that divide exactly, so every answer is a whole number.\n\n**Your task.** Export two functions:\n- `perRegionQpsAfterLoss(totalQps, regions)` → `totalQps ÷ (regions − 1)`\n- `regionsToDeploy(totalQps, perRegionCapacityQps)` → `Math.ceil(totalQps ÷ perRegionCapacityQps) + 1`\n\n**Worked example.** 120,000 QPS over 4 regions, one lost → 120,000 ÷ 3 = **40,000** QPS per survivor — exactly at capacity.",
+      "starter": "export function perRegionQpsAfterLoss(totalQps, regions) {\n  // TODO: the survivors split the whole load\n}\n\nexport function regionsToDeploy(totalQps, perRegionCapacityQps) {\n  // TODO: regions for the load plus one spare\n}\n",
+      "solution": "export function perRegionQpsAfterLoss(totalQps, regions) {\n  return totalQps / (regions - 1);\n}\n\nexport function regionsToDeploy(totalQps, perRegionCapacityQps) {\n  return Math.ceil(totalQps / perRegionCapacityQps) + 1;\n}\n",
+      "tests": [
+        {
+          "name": "120,000 QPS over 4 regions, one lost -> 40,000 per survivor",
+          "code": "assert.equal(typeof mod.perRegionQpsAfterLoss, 'function', 'export a function named perRegionQpsAfterLoss');\nassert.equal(mod.perRegionQpsAfterLoss(120000, 4), 40000);",
+          "input": [
+            120000,
+            4
+          ]
+        },
+        {
+          "name": "lose one of two -> the survivor eats all 120,000 (boundary)",
+          "code": "assert.equal(typeof mod.perRegionQpsAfterLoss, 'function', 'export a function named perRegionQpsAfterLoss');\nassert.equal(mod.perRegionQpsAfterLoss(120000, 2), 120000);",
+          "input": [
+            120000,
+            2
+          ]
+        },
+        {
+          "name": "90,000 QPS over 3 regions, one lost -> 45,000 per survivor",
+          "code": "assert.equal(typeof mod.perRegionQpsAfterLoss, 'function', 'export a function named perRegionQpsAfterLoss');\nassert.equal(mod.perRegionQpsAfterLoss(90000, 3), 45000);",
+          "input": [
+            90000,
+            3
+          ]
+        },
+        {
+          "name": "120,000 QPS at 40,000 per region -> 4, exact fit plus the spare (boundary)",
+          "code": "assert.equal(typeof mod.regionsToDeploy, 'function', 'export a function named regionsToDeploy');\nassert.equal(mod.regionsToDeploy(120000, 40000), 4);",
+          "input": [
+            120000,
+            40000
+          ]
+        },
+        {
+          "name": "90,000 QPS at 40,000 per region -> 4 regions",
+          "code": "assert.equal(typeof mod.regionsToDeploy, 'function', 'export a function named regionsToDeploy');\nassert.equal(mod.regionsToDeploy(90000, 40000), 4);",
+          "input": [
+            90000,
+            40000
+          ]
+        },
+        {
+          "name": "30,000 QPS at 40,000 per region -> 2 regions",
+          "code": "assert.equal(typeof mod.regionsToDeploy, 'function', 'export a function named regionsToDeploy');\nassert.equal(mod.regionsToDeploy(30000, 40000), 2);",
+          "input": [
+            30000,
+            40000
+          ]
+        }
+      ],
+      "explanation": "Plan for the day one region is gone.\n\nFor `regionsToDeploy(120000, 40000)`:\n- regions to carry the load: ⌈120,000 ÷ 40,000⌉ = 3\n- plus one spare so any region can die → **4** regions (N+1)\n\nWith only 2 regions every region needs 100% headroom — module 07's `keysPerSurvivor` is the same survivor division for cache keys, and here it becomes the N+1 planning rule and a fleet size.",
+      "hints": [
+        "Losing a region does not lose its traffic — the survivors absorb it, so size them for the day one is missing.",
+        "after loss = total ÷ (regions − 1); deploy = ⌈total ÷ capacity⌉ + 1.",
+        "After one region dies the survivors split the whole load, totalQps ÷ (regions − 1) — so deploy ceil(totalQps ÷ perRegionCapacity) regions for the load plus one spare for the failure"
+      ]
+    },
+    {
+      "slug": "04-failover-error-burn",
+      "title": "One failover, how much error budget",
+      "difficulty": 2,
+      "skills": [
+        "slo",
+        "availability"
+      ],
+      "instructions": "**Interview prompt.** \"A region serving 30,000 QPS goes dark for the 120 s our failover takes. The SLO allows 7,200,000 failed requests a month. How much of the month's error budget did that single incident burn?\"\n\n**Why it works.** During the RTO every request the dead region would have served fails, so one incident costs regionQps × rtoSec failed requests. Expressed against the month's allowed failures in per-mille (‰ = x/1000), it shows how many such incidents the SLO can survive. The tests choose inputs that divide exactly, so every answer is a whole number.\n\n**Your task.** Export two functions:\n- `failedRequests(regionQps, rtoSec)` → `regionQps × rtoSec`\n- `budgetBurnPermille(failedRequests, allowedFailuresPerMonth)` → `failedRequests × 1000 ÷ allowedFailuresPerMonth`\n\n**Worked example.** 30,000 QPS dark for 120 s → **3,600,000** failed requests.",
+      "starter": "export function failedRequests(regionQps, rtoSec) {\n  // TODO: every request the dead region would have served\n}\n\nexport function budgetBurnPermille(failedRequests, allowedFailuresPerMonth) {\n  // TODO: the incident as a per-mille of the month\n}\n",
+      "solution": "export function failedRequests(regionQps, rtoSec) {\n  return regionQps * rtoSec;\n}\n\nexport function budgetBurnPermille(failedRequests, allowedFailuresPerMonth) {\n  return (failedRequests * 1000) / allowedFailuresPerMonth;\n}\n",
+      "tests": [
+        {
+          "name": "30,000 QPS dark for 120 s -> 3,600,000 failures",
+          "code": "assert.equal(typeof mod.failedRequests, 'function', 'export a function named failedRequests');\nassert.equal(mod.failedRequests(30000, 120), 3600000);",
+          "input": [
+            30000,
+            120
+          ]
+        },
+        {
+          "name": "instant failover -> 0 failures (boundary)",
+          "code": "assert.equal(typeof mod.failedRequests, 'function', 'export a function named failedRequests');\nassert.equal(mod.failedRequests(30000, 0), 0);",
+          "input": [
+            30000,
+            0
+          ]
+        },
+        {
+          "name": "5,000 QPS dark for 480 s -> 2,400,000 failures",
+          "code": "assert.equal(typeof mod.failedRequests, 'function', 'export a function named failedRequests');\nassert.equal(mod.failedRequests(5000, 480), 2400000);",
+          "input": [
+            5000,
+            480
+          ]
+        },
+        {
+          "name": "3,600,000 of 7,200,000 allowed -> 500 permille",
+          "code": "assert.equal(typeof mod.budgetBurnPermille, 'function', 'export a function named budgetBurnPermille');\nassert.equal(mod.budgetBurnPermille(3600000, 7200000), 500);",
+          "input": [
+            3600000,
+            7200000
+          ]
+        },
+        {
+          "name": "the whole month's budget in one incident -> 1000 permille (boundary)",
+          "code": "assert.equal(typeof mod.budgetBurnPermille, 'function', 'export a function named budgetBurnPermille');\nassert.equal(mod.budgetBurnPermille(2400000, 2400000), 1000);",
+          "input": [
+            2400000,
+            2400000
+          ]
+        },
+        {
+          "name": "90,000 of 9,000,000 allowed -> 10 permille",
+          "code": "assert.equal(typeof mod.budgetBurnPermille, 'function', 'export a function named budgetBurnPermille');\nassert.equal(mod.budgetBurnPermille(90000, 9000000), 10);",
+          "input": [
+            90000,
+            9000000
+          ]
+        }
+      ],
+      "explanation": "An incident's cost is its traffic times its duration.\n\nFor `budgetBurnPermille(3600000, 7200000)`:\n- a 120 s outage at 30,000 QPS fails 3,600,000 requests\n- 3,600,000 × 1000 ÷ 7,200,000 = **500‰**\n\nHalf the month's error budget goes in one failover, chained straight from 12/02's RTO — module 04's `latency-slo-budget` is a daily slow-request allowance, while this is a single incident's bite out of the monthly failure allowance.",
+      "hints": [
+        "While the failover runs, the traffic aimed at the dead region has nowhere to go — count it.",
+        "failed = regionQps × rtoSec; burn‰ = failed × 1000 ÷ allowedPerMonth.",
+        "Every request the dead region would have served during the RTO fails, regionQps × rtoSec — scale by 1000 ÷ the month's allowed failures to see the budget share one incident burns"
+      ]
+    },
+    {
+      "slug": "05-replication-mesh-egress",
+      "title": "Replication mesh: the cross-region egress bill",
+      "difficulty": 2,
+      "skills": [
+        "cost",
+        "bandwidth"
+      ],
+      "instructions": "**Interview prompt.** \"The application writes 200 GB a day in total; each write lands in its home region and is replicated to every other region. We run 4 regions and cross-region transfer costs 2¢ per GB. What is the monthly replication bill, and what does adding a fifth region do to it?\"\n\n**Why it works.** In an all-to-all mesh every write leaves its home region once per peer, so daily replication egress is writeGbPerDay × (regions − 1). The bill uses a 30-day billing month and money in integer cents. Every region you add re-bills the whole write stream one more time.\n\n**Your task.** Export two functions:\n- `meshEgressGbPerDay(writeGbPerDay, regions)` → `writeGbPerDay × (regions − 1)`\n- `meshMonthlyCents(writeGbPerDay, regions, centsPerGb)` → `writeGbPerDay × (regions − 1) × 30 × centsPerGb`\n\n**Worked example.** 200 GB/day across 4 regions → 200 × 3 = **600 GB** of replication egress a day.",
+      "starter": "export function meshEgressGbPerDay(writeGbPerDay, regions) {\n  // TODO: each write leaves once per peer region\n}\n\nexport function meshMonthlyCents(writeGbPerDay, regions, centsPerGb) {\n  // TODO: a 30-day month of that egress, in cents\n}\n",
+      "solution": "export function meshEgressGbPerDay(writeGbPerDay, regions) {\n  return writeGbPerDay * (regions - 1);\n}\n\nexport function meshMonthlyCents(writeGbPerDay, regions, centsPerGb) {\n  return writeGbPerDay * (regions - 1) * 30 * centsPerGb;\n}\n",
+      "tests": [
+        {
+          "name": "200 GB/day across 4 regions -> 600 GB/day",
+          "code": "assert.equal(typeof mod.meshEgressGbPerDay, 'function', 'export a function named meshEgressGbPerDay');\nassert.equal(mod.meshEgressGbPerDay(200, 4), 600);",
+          "input": [
+            200,
+            4
+          ]
+        },
+        {
+          "name": "single region -> no replication egress (boundary)",
+          "code": "assert.equal(typeof mod.meshEgressGbPerDay, 'function', 'export a function named meshEgressGbPerDay');\nassert.equal(mod.meshEgressGbPerDay(200, 1), 0);",
+          "input": [
+            200,
+            1
+          ]
+        },
+        {
+          "name": "50 GB/day across 3 regions -> 100 GB/day",
+          "code": "assert.equal(typeof mod.meshEgressGbPerDay, 'function', 'export a function named meshEgressGbPerDay');\nassert.equal(mod.meshEgressGbPerDay(50, 3), 100);",
+          "input": [
+            50,
+            3
+          ]
+        },
+        {
+          "name": "200 GB/day, 4 regions, 2 cents/GB -> 36,000 cents/month",
+          "code": "assert.equal(typeof mod.meshMonthlyCents, 'function', 'export a function named meshMonthlyCents');\nassert.equal(mod.meshMonthlyCents(200, 4, 2), 36000);",
+          "input": [
+            200,
+            4,
+            2
+          ]
+        },
+        {
+          "name": "50 GB/day, 3 regions, 9 cents/GB -> 27,000 cents/month",
+          "code": "assert.equal(typeof mod.meshMonthlyCents, 'function', 'export a function named meshMonthlyCents');\nassert.equal(mod.meshMonthlyCents(50, 3, 9), 27000);",
+          "input": [
+            50,
+            3,
+            9
+          ]
+        },
+        {
+          "name": "1,000 GB/day, 2 regions, 2 cents/GB -> 60,000 cents/month",
+          "code": "assert.equal(typeof mod.meshMonthlyCents, 'function', 'export a function named meshMonthlyCents');\nassert.equal(mod.meshMonthlyCents(1000, 2, 2), 60000);",
+          "input": [
+            1000,
+            2,
+            2
+          ]
+        }
+      ],
+      "explanation": "Regions − 1 multiplies the write stream itself.\n\nFor `meshMonthlyCents(200, 4, 2)`:\n- daily egress: 200 GB × 3 peers = 600 GB\n- monthly: 600 × 30 = 18,000 GB\n- bill: 18,000 × 2¢ = **36,000¢** ($360/month)\n\nEvery region you add re-bills the whole write stream — module 10's `monthlyBillCents` prices USER-facing egress, while this is the internal mesh where the region count multiplies the writes.",
+      "hints": [
+        "A write is born in one region and must reach every other one — count how many times it crosses a region boundary.",
+        "egress/day = writeGb × (regions − 1); cents/month = writeGb × (regions − 1) × 30 × centsPerGb.",
+        "Every write leaves its home region once per peer, writeGb × (regions − 1) per day — multiply by 30 days and the per-GB cents for the monthly replication bill"
+      ]
+    },
+    {
+      "slug": "06-locality-latency-win",
+      "title": "Locality: the user time an in-region replica wins",
+      "difficulty": 1,
+      "skills": [
+        "latency",
+        "networking"
+      ],
+      "instructions": "**Interview prompt.** \"Our European users read from a US database 180 ms away; an in-region replica would answer in 20 ms. They do 3,000,000 reads a day. How much waiting does the replica remove — per read and per day?\"\n\n**Why it works.** Each read served locally saves the difference between the remote and the local round trip. Summed over a day's reads and converted from milliseconds to minutes (1 minute = 60,000 ms), it gives the aggregate user time won — the business case for geo-replication. The tests choose inputs that divide exactly, so every answer is a whole number.\n\n**Your task.** Export two functions:\n- `msSavedPerRead(remoteRttMs, localRttMs)` → `remoteRttMs − localRttMs`\n- `userMinutesSavedPerDay(readsPerDay, remoteRttMs, localRttMs)` → `readsPerDay × (remoteRttMs − localRttMs) ÷ 60000`\n\n**Worked example.** 180 ms remote vs 20 ms local → **160 ms** saved on every read.",
+      "starter": "export function msSavedPerRead(remoteRttMs, localRttMs) {\n  // TODO: the round trip a local replica removes\n}\n\nexport function userMinutesSavedPerDay(readsPerDay, remoteRttMs, localRttMs) {\n  // TODO: a day of savings, in minutes\n}\n",
+      "solution": "export function msSavedPerRead(remoteRttMs, localRttMs) {\n  return remoteRttMs - localRttMs;\n}\n\nexport function userMinutesSavedPerDay(readsPerDay, remoteRttMs, localRttMs) {\n  return (readsPerDay * (remoteRttMs - localRttMs)) / 60000;\n}\n",
+      "tests": [
+        {
+          "name": "180 ms remote vs 20 ms local -> 160 ms saved",
+          "code": "assert.equal(typeof mod.msSavedPerRead, 'function', 'export a function named msSavedPerRead');\nassert.equal(mod.msSavedPerRead(180, 20), 160);",
+          "input": [
+            180,
+            20
+          ]
+        },
+        {
+          "name": "already local -> 0 ms saved (boundary)",
+          "code": "assert.equal(typeof mod.msSavedPerRead, 'function', 'export a function named msSavedPerRead');\nassert.equal(mod.msSavedPerRead(60, 60), 0);",
+          "input": [
+            60,
+            60
+          ]
+        },
+        {
+          "name": "240 ms remote vs 30 ms local -> 210 ms saved",
+          "code": "assert.equal(typeof mod.msSavedPerRead, 'function', 'export a function named msSavedPerRead');\nassert.equal(mod.msSavedPerRead(240, 30), 210);",
+          "input": [
+            240,
+            30
+          ]
+        },
+        {
+          "name": "3,000,000 reads saving 160 ms -> 8,000 user-minutes/day",
+          "code": "assert.equal(typeof mod.userMinutesSavedPerDay, 'function', 'export a function named userMinutesSavedPerDay');\nassert.equal(mod.userMinutesSavedPerDay(3000000, 180, 20), 8000);",
+          "input": [
+            3000000,
+            180,
+            20
+          ]
+        },
+        {
+          "name": "600,000 reads already local -> 0 minutes (boundary)",
+          "code": "assert.equal(typeof mod.userMinutesSavedPerDay, 'function', 'export a function named userMinutesSavedPerDay');\nassert.equal(mod.userMinutesSavedPerDay(600000, 60, 60), 0);",
+          "input": [
+            600000,
+            60,
+            60
+          ]
+        },
+        {
+          "name": "1,200,000 reads saving 210 ms -> 4,200 user-minutes/day",
+          "code": "assert.equal(typeof mod.userMinutesSavedPerDay, 'function', 'export a function named userMinutesSavedPerDay');\nassert.equal(mod.userMinutesSavedPerDay(1200000, 240, 30), 4200);",
+          "input": [
+            1200000,
+            240,
+            30
+          ]
+        }
+      ],
+      "explanation": "Small per-read savings add up to a business case.\n\nFor `userMinutesSavedPerDay(3000000, 180, 20)`:\n- per read: 180 − 20 = 160 ms\n- per day: 160 × 3,000,000 = 480,000,000 ms\n- in minutes: 480,000,000 ÷ 60,000 = **8,000 user-minutes** of waiting removed every day\n\nThat aggregate is what justifies the in-region replica — module 04's `rtt-to-first-byte` counts one request's round trips, while this sums the win across a day of traffic.",
+      "hints": [
+        "A local replica does not make the read cheaper to execute — it removes distance from every round trip.",
+        "saved/read = remoteRtt − localRtt; minutes/day = reads × (remoteRtt − localRtt) ÷ 60,000.",
+        "Each localized read saves remote RTT minus local RTT milliseconds — multiply by the day's reads and divide by 60,000 to turn milliseconds into human minutes"
+      ]
+    },
+    {
+      "slug": "07-standby-cost",
+      "title": "Hot-hot vs pilot light: what DR costs",
+      "difficulty": 1,
+      "skills": [
+        "cost",
+        "availability"
+      ],
+      "instructions": "**Interview prompt.** \"One region of our stack costs $4,000 a month. Running hot-hot in two regions doubles that. A pilot-light standby keeps the second region 10% warm and scales it up only during a disaster. What does each DR topology cost per month?\"\n\n**Why it works.** Hot-hot (active-active) pays the full regional price in every region. Pilot light pays one full region plus a warm per-mille slice of a second (‰ = x/1000) — data replicated and a skeleton fleet running. Money is in integer cents: $4,000 = 400,000¢. The tests choose inputs that divide exactly, so every answer is a whole number.\n\n**Your task.** Export two functions:\n- `hotHotMonthlyCents(perRegionCents, regions)` → `perRegionCents × regions`\n- `pilotLightMonthlyCents(perRegionCents, warmPermille)` → `perRegionCents + perRegionCents × warmPermille ÷ 1000`\n\n**Worked example.** 400,000¢ per region × 2 regions → **800,000¢** a month hot-hot.",
+      "starter": "export function hotHotMonthlyCents(perRegionCents, regions) {\n  // TODO: full price in every region\n}\n\nexport function pilotLightMonthlyCents(perRegionCents, warmPermille) {\n  // TODO: one full region plus a warm slice of another\n}\n",
+      "solution": "export function hotHotMonthlyCents(perRegionCents, regions) {\n  return perRegionCents * regions;\n}\n\nexport function pilotLightMonthlyCents(perRegionCents, warmPermille) {\n  return perRegionCents + (perRegionCents * warmPermille) / 1000;\n}\n",
+      "tests": [
+        {
+          "name": "400,000 cents x 2 regions -> 800,000 cents hot-hot",
+          "code": "assert.equal(typeof mod.hotHotMonthlyCents, 'function', 'export a function named hotHotMonthlyCents');\nassert.equal(mod.hotHotMonthlyCents(400000, 2), 800000);",
+          "input": [
+            400000,
+            2
+          ]
+        },
+        {
+          "name": "one region -> no DR at all, 400,000 cents (boundary)",
+          "code": "assert.equal(typeof mod.hotHotMonthlyCents, 'function', 'export a function named hotHotMonthlyCents');\nassert.equal(mod.hotHotMonthlyCents(400000, 1), 400000);",
+          "input": [
+            400000,
+            1
+          ]
+        },
+        {
+          "name": "250,000 cents x 3 regions -> 750,000 cents",
+          "code": "assert.equal(typeof mod.hotHotMonthlyCents, 'function', 'export a function named hotHotMonthlyCents');\nassert.equal(mod.hotHotMonthlyCents(250000, 3), 750000);",
+          "input": [
+            250000,
+            3
+          ]
+        },
+        {
+          "name": "pilot light at 100 permille warm -> 440,000 cents",
+          "code": "assert.equal(typeof mod.pilotLightMonthlyCents, 'function', 'export a function named pilotLightMonthlyCents');\nassert.equal(mod.pilotLightMonthlyCents(400000, 100), 440000);",
+          "input": [
+            400000,
+            100
+          ]
+        },
+        {
+          "name": "fully warm standby -> the hot-hot price, 800,000 cents (boundary)",
+          "code": "assert.equal(typeof mod.pilotLightMonthlyCents, 'function', 'export a function named pilotLightMonthlyCents');\nassert.equal(mod.pilotLightMonthlyCents(400000, 1000), 800000);",
+          "input": [
+            400000,
+            1000
+          ]
+        },
+        {
+          "name": "250,000 cents at 200 permille warm -> 300,000 cents",
+          "code": "assert.equal(typeof mod.pilotLightMonthlyCents, 'function', 'export a function named pilotLightMonthlyCents');\nassert.equal(mod.pilotLightMonthlyCents(250000, 200), 300000);",
+          "input": [
+            250000,
+            200
+          ]
+        }
+      ],
+      "explanation": "The standby's warmth is the dial between cost and recovery time.\n\nFor `pilotLightMonthlyCents(400000, 100)`:\n- primary region: 400,000¢\n- standby at 100‰ warm: 400,000 × 100 ÷ 1000 = 40,000¢\n- total: **440,000¢** against 800,000¢ hot-hot\n\nPilot light saves 45% and pays for it in RTO, because the standby must scale up mid-outage (12/02) — module 01's `cost-per-month` bills one fleet, while this compares DR topologies.",
+      "hints": [
+        "Hot-hot runs two full copies all the time; pilot light keeps the second copy mostly switched off until it is needed.",
+        "hotHot = perRegion × regions; pilotLight = perRegion + perRegion × warm‰ ÷ 1000.",
+        "Hot-hot pays the full region price times the region count — pilot light pays one full region plus the warm per-mille slice of a second, per × warm‰ ÷ 1000 added on"
+      ]
+    },
+    {
+      "slug": "08-consensus-rtt-cap",
+      "title": "Cross-region consensus: the speed-of-light cap",
+      "difficulty": 3,
+      "skills": [
+        "consensus",
+        "throughput"
+      ],
+      "instructions": "**Interview prompt.** \"Our globally consistent database runs consensus across regions 100 ms apart, and every commit needs one quorum round. How many commits per second can it do one at a time — and with group commit packing 500 commits into each round?\"\n\n**Why it works.** If each commit needs its own consensus round and rounds run one after another, the inter-region round trip behaves like a critical section: at most 1000 ÷ rttMs rounds fit in a second (1 s = 1,000 ms). This is module 06's lock-serialization math with the WAN round trip as the hold time — and module 06's batching lesson is the escape hatch: pack commitsPerRound commits into every round and the cap multiplies by the batch size. The tests choose inputs that divide exactly, so every answer is a whole number.\n\n**Your task.** Export two functions:\n- `consensusCommitsPerSec(interRegionRttMs)` → `1000 ÷ interRegionRttMs`\n- `batchedCommitsPerSec(interRegionRttMs, commitsPerRound)` → `commitsPerRound × 1000 ÷ interRegionRttMs`\n\n**Worked example.** A 100 ms inter-region RTT → 1000 ÷ 100 = **10** commits/s, one round at a time.",
+      "starter": "export function consensusCommitsPerSec(interRegionRttMs) {\n  // TODO: sequential rounds per second\n}\n\nexport function batchedCommitsPerSec(interRegionRttMs, commitsPerRound) {\n  // TODO: rounds per second times the batch\n}\n",
+      "solution": "export function consensusCommitsPerSec(interRegionRttMs) {\n  return 1000 / interRegionRttMs;\n}\n\nexport function batchedCommitsPerSec(interRegionRttMs, commitsPerRound) {\n  return (commitsPerRound * 1000) / interRegionRttMs;\n}\n",
+      "tests": [
+        {
+          "name": "100 ms RTT -> 10 commits/s",
+          "code": "assert.equal(typeof mod.consensusCommitsPerSec, 'function', 'export a function named consensusCommitsPerSec');\nassert.equal(mod.consensusCommitsPerSec(100), 10);",
+          "input": [
+            100
+          ]
+        },
+        {
+          "name": "a 1-second RTT -> one round per second (boundary)",
+          "code": "assert.equal(typeof mod.consensusCommitsPerSec, 'function', 'export a function named consensusCommitsPerSec');\nassert.equal(mod.consensusCommitsPerSec(1000), 1);",
+          "input": [
+            1000
+          ]
+        },
+        {
+          "name": "8 ms RTT -> 125 commits/s",
+          "code": "assert.equal(typeof mod.consensusCommitsPerSec, 'function', 'export a function named consensusCommitsPerSec');\nassert.equal(mod.consensusCommitsPerSec(8), 125);",
+          "input": [
+            8
+          ]
+        },
+        {
+          "name": "100 ms RTT, 500 commits per round -> 5,000 commits/s",
+          "code": "assert.equal(typeof mod.batchedCommitsPerSec, 'function', 'export a function named batchedCommitsPerSec');\nassert.equal(mod.batchedCommitsPerSec(100, 500), 5000);",
+          "input": [
+            100,
+            500
+          ]
+        },
+        {
+          "name": "unbatched = the raw cap, 10 commits/s (boundary)",
+          "code": "assert.equal(typeof mod.batchedCommitsPerSec, 'function', 'export a function named batchedCommitsPerSec');\nassert.equal(mod.batchedCommitsPerSec(100, 1), 10);",
+          "input": [
+            100,
+            1
+          ]
+        },
+        {
+          "name": "40 ms RTT, 200 commits per round -> 5,000 commits/s",
+          "code": "assert.equal(typeof mod.batchedCommitsPerSec, 'function', 'export a function named batchedCommitsPerSec');\nassert.equal(mod.batchedCommitsPerSec(40, 200), 5000);",
+          "input": [
+            40,
+            200
+          ]
+        }
+      ],
+      "explanation": "The round trip caps the rounds; the batch multiplies what each round carries.\n\nFor `batchedCommitsPerSec(100, 500)`:\n- one quorum round costs 100 ms → 1000 ÷ 100 = 10 rounds/s\n- 500 commits share each round → 10 × 500 = **5,000 commits/s**\n\nGroup commit is how global databases survive the speed of light — a declared re-skin of module 06's `lock-serialization` (the same 1000 ÷ ms for a local critical section), extended with 06's batching so the WAN round trip is amortized.",
+      "hints": [
+        "If rounds cannot overlap, the round trip is a lock you hold — ask how many such holds fit in one second.",
+        "rounds/s = 1000 ÷ rttMs; batched = commitsPerRound × 1000 ÷ rttMs.",
+        "Each consensus round costs one inter-region RTT, so sequential rounds cap at 1000 ÷ rttMs per second — packing commitsPerRound into every round multiplies that cap by the batch size"
+      ]
+    }
+  ]
+}
