@@ -174,13 +174,18 @@ CRUD endpoint logic) authored as a jstrain-harness console-check program in thre
 NotImplementedException();`, so an untouched starter reports todo), `solutionHead` (the same
 with the bodies implemented), ONE canonical `tests` block opening with the
 `// ─── tests ───` divider, and an optional `tail` opening with a labelled divider such as
-`// ─── types ───` (enum/class/record declarations after the top-level statements); plus
-instructions, an explanation and exactly three hints (hint 3 is approach in words — never
+`// ─── types ───` (enum/class/record declarations after the top-level statements), plus an
+optional `solutionTail` for drills whose learner work is a CLASS (types must follow the
+top-level statements, so the stubbed class lives in `tail` and the implemented one in
+`solutionTail`; it requires `tail`, must differ from it, open with a labelled divider and
+carry no NotImplementedException); plus instructions, an explanation and exactly three hints (hint 3 is approach in words — never
 `;`, `=>` or `return`). The importer maps every exercise to a `drill-cs` unit on the
 **csharp** track (competency `language-fluency`, key `csdrills/<module>/<slug>`, spec
 `{ shape: 'console-check', harness: 'jstrain', files: { tests, tail, frozen: [] },
 timeoutMs: 20000 }` — the jstrain-cs shape), starter = starterHead + tests + tail and
-solution = solutionHead + tests + tail, one course per module, into
+solution = solutionHead + tests + (solutionTail ?? tail) — `spec.files.tail` is always the
+starter's tail (jstrain-cs precedent: the grader composes the learner's head + the canonical
+tests + the learner's own tail) — one course per module, into
 `content/packs/csdrills/` with manifest `{ track: 'csharp', grader: 'csharp' }`. No
 migration: csharp has had a daily slate drill slot since migration 002 (`slate_drills=1`),
 and the slate counts csharp drills from every pack.
@@ -996,7 +1001,8 @@ resolved); quiz variety `concept` and flashcard shape `hand-authored`;
 - **csdrills wave 1 — DONE (2026-10-23):** new authored C# drill bank, 10 modules × 8 = 80
   drill-cs drills (harness jstrain, grader csharp, track csharp); CSDRILLS_EXPECTED 80; 80/80
   validated (solution passes + starter fails as todo/failed verdicts under the real C#
-  runner), 0 quarantined; per-drill nearest-existing-unit distinctness vs
+  runner), 0 quarantined, audit re-executed 20 journaled passes with 0 mismatches; 14 class
+  drills in modules 08/09 use the authoring format's optional `solutionTail`; per-drill nearest-existing-unit distinctness vs
   csbootcamp/jstrain-cs recorded in the wave brief; hint 3 never pasteable (no ;, =>,
   return); no migration (csharp slate_drills=1 since 002), no fingerprinted file touched.
 - **fundamentals wave — DONE (2026-10-21):** interview + real-SWE-fundamentals content, zero

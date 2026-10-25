@@ -1,0 +1,436 @@
+{
+ "format": "bootquest-pack@1",
+ "source": "csdrills",
+ "course": {
+  "id": "02-async-composition",
+  "order": 2,
+  "title": "Async composition without the clock",
+  "description": "The Task plumbing a web service lives on — cache fast paths, caching the in-flight Task, first-wins races, strictly sequential pipelines, bridging callbacks with TaskCompletionSource, eager argument validation, selective failure funnels and TaskStatus snapshots. Every test is deterministic: pre-completed tasks and TaskCompletionSource drive completion order, never the wall clock. Nearest existing units: jstrain-cs 08/01-04 (await/WhenAll timing, cancellation, WhenAll aggregation + async void, async streams) — none of those are re-taught here.",
+  "prerequisites": []
+ },
+ "modules": [
+  {
+   "id": "02-async-composition",
+   "title": "Async composition without the clock",
+   "lessons": [
+    {
+     "id": "drills",
+     "title": "Async composition without the clock",
+     "explanation": "The Task plumbing a web service lives on — cache fast paths, caching the in-flight Task, first-wins races, strictly sequential pipelines, bridging callbacks with TaskCompletionSource, eager argument validation, selective failure funnels and TaskStatus snapshots. Every test is deterministic: pre-completed tasks and TaskCompletionSource drive completion order, never the wall clock. Nearest existing units: jstrain-cs 08/01-04 (await/WhenAll timing, cancellation, WhenAll aggregation + async void, async streams) — none of those are re-taught here."
+    }
+   ]
+  }
+ ],
+ "units": [
+  {
+   "unit": {
+    "key": "csdrills/02-async-composition/01-cache-fast-path",
+    "track": "csharp",
+    "kind": "drill",
+    "title": "Cache fast path: hit without loading",
+    "phase": "02-async-composition",
+    "difficulty": 1,
+    "competencies": [
+     "language-fluency"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-cs",
+       "shape": "console-check",
+       "files": {
+        "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"a hit returns the cached 7 and never calls the loader\", async () =>\n{\n    var cache = new Dictionary<string, int> { [\"users\"] = 7 };\n    int loads = 0;\n    var got = await GetCountAsync(cache, \"users\", () => { loads++; return Task.FromResult(99); });\n    Eq(got, 7);\n    Eq(loads, 0, \"a cache hit must not call the loader\");\n});\n\nTest(\"a miss loads 9 once and stores it\", async () =>\n{\n    var cache = new Dictionary<string, int>();\n    int loads = 0;\n    var got = await GetCountAsync(cache, \"orders\", () => { loads++; return Task.FromResult(9); });\n    Eq(got, 9);\n    Eq(loads, 1);\n    Eq(cache[\"orders\"], 9, \"the loaded value must be remembered\");\n});\n\nTest(\"the second call after a miss is a hit (boundary)\", async () =>\n{\n    var cache = new Dictionary<string, int>();\n    int loads = 0;\n    Func<Task<int>> load = () => { loads++; return Task.FromResult(9); };\n    await GetCountAsync(cache, \"orders\", load);\n    var again = await GetCountAsync(cache, \"orders\", load);\n    Eq(again, 9);\n    Eq(loads, 1, \"the loader runs once per key\");\n});\n\nTest(\"distinct keys load independently\", async () =>\n{\n    var cache = new Dictionary<string, int>();\n    int loads = 0;\n    var a = await GetCountAsync(cache, \"a\", () => { loads++; return Task.FromResult(1); });\n    var b = await GetCountAsync(cache, \"b\", () => { loads++; return Task.FromResult(2); });\n    Eq((a, b), (1, 2));\n    Eq(loads, 2);\n});\n",
+        "tail": "",
+        "frozen": []
+       },
+       "harness": "jstrain",
+       "timeoutMs": 20000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "02-async-composition/01-cache-fast-path",
+    "type": "code",
+    "module": "02-async-composition",
+    "lesson": "drills",
+    "position": 0,
+    "skills": [
+     "Task.FromResult",
+     "cache-aside"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "csdrills/02-async-composition/02-memoize-the-task",
+    "track": "csharp",
+    "kind": "drill",
+    "title": "Memoize the Task, not the result",
+    "phase": "02-async-composition",
+    "difficulty": 3,
+    "competencies": [
+     "language-fluency"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-cs",
+       "shape": "console-check",
+       "files": {
+        "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"two calls before completion return the very same Task\", () =>\n{\n    var tcs = new TaskCompletionSource<string>();\n    var f = Once(() => tcs.Task);\n    var t1 = f();\n    var t2 = f();\n    Ok(ReferenceEquals(t1, t2), \"both callers must share one in-flight Task\");\n});\n\nTest(\"the factory runs once while the load is still in flight (boundary)\", () =>\n{\n    var tcs = new TaskCompletionSource<string>();\n    int calls = 0;\n    var f = Once(() => { calls++; return tcs.Task; });\n    var t1 = f();\n    var t2 = f();\n    Ok(!t1.IsCompleted, \"nothing has completed yet\");\n    Eq(calls, 1);\n});\n\nTest(\"completing the source completes every caller with its value\", async () =>\n{\n    var tcs = new TaskCompletionSource<string>();\n    var f = Once(() => tcs.Task);\n    var t1 = f();\n    var t2 = f();\n    tcs.SetResult(\"v\");\n    Eq(await t1, \"v\");\n    Eq(await t2, \"v\");\n});\n\nTest(\"a call after completion still reuses the first load\", async () =>\n{\n    var tcs = new TaskCompletionSource<string>();\n    int calls = 0;\n    var f = Once(() => { calls++; return tcs.Task; });\n    f();\n    tcs.SetResult(\"v\");\n    var t3 = f();\n    Eq(await t3, \"v\");\n    Eq(calls, 1);\n});\n",
+        "tail": "",
+        "frozen": []
+       },
+       "harness": "jstrain",
+       "timeoutMs": 20000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "02-async-composition/02-memoize-the-task",
+    "type": "code",
+    "module": "02-async-composition",
+    "lesson": "drills",
+    "position": 1,
+    "skills": [
+     "task caching",
+     "stampede prevention"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "csdrills/02-async-composition/03-whenany-first-wins",
+    "track": "csharp",
+    "kind": "drill",
+    "title": "First replica to answer wins",
+    "phase": "02-async-composition",
+    "difficulty": 2,
+    "competencies": [
+     "language-fluency"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-cs",
+       "shape": "console-check",
+       "files": {
+        "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"a already done, b pending -> a's value\", async () =>\n{\n    var pending = new TaskCompletionSource<string>();\n    Eq(await FirstReadyAsync(Task.FromResult(\"a\"), pending.Task), \"a\");\n});\n\nTest(\"b completes first -> \\\"b\\\"\", async () =>\n{\n    var a = new TaskCompletionSource<string>();\n    var b = new TaskCompletionSource<string>();\n    var first = FirstReadyAsync(a.Task, b.Task);\n    b.SetResult(\"b\");\n    a.SetResult(\"a\");\n    Eq(await first, \"b\");\n});\n\nTest(\"a completes first -> \\\"a\\\"\", async () =>\n{\n    var a = new TaskCompletionSource<string>();\n    var b = new TaskCompletionSource<string>();\n    var first = FirstReadyAsync(a.Task, b.Task);\n    a.SetResult(\"a\");\n    b.SetResult(\"b\");\n    Eq(await first, \"a\");\n});\n\nTest(\"both already done -> the first argument wins (boundary)\", async () =>\n    Eq(await FirstReadyAsync(Task.FromResult(\"a\"), Task.FromResult(\"b\")), \"a\"));\n",
+        "tail": "",
+        "frozen": []
+       },
+       "harness": "jstrain",
+       "timeoutMs": 20000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "02-async-composition/03-whenany-first-wins",
+    "type": "code",
+    "module": "02-async-composition",
+    "lesson": "drills",
+    "position": 2,
+    "skills": [
+     "WhenAny",
+     "hedged reads"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "csdrills/02-async-composition/04-sync-throw-vs-faulted",
+    "track": "csharp",
+    "kind": "drill",
+    "title": "Validate eagerly: throw before the Task",
+    "phase": "02-async-composition",
+    "difficulty": 3,
+    "competencies": [
+     "language-fluency"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-cs",
+       "shape": "console-check",
+       "files": {
+        "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"a non-numeric id throws synchronously, before any Task exists (boundary)\", () =>\n    Throws<ArgumentException>(() => { _ = ParseAndLoadAsync(\"abc\", n => Task.FromResult(0)); }));\n\nTest(\"\\\"7\\\" loads 70\", async () =>\n    Eq(await ParseAndLoadAsync(\"7\", n => Task.FromResult(n * 10)), 70));\n\nTest(\"\\\"0\\\" is a valid id (boundary)\", async () =>\n    Eq(await ParseAndLoadAsync(\"0\", n => Task.FromResult(n + 1)), 1));\n\nTest(\"a bad id never reaches the loader\", () =>\n{\n    int loads = 0;\n    Throws<ArgumentException>(() => { _ = ParseAndLoadAsync(\"x1\", n => { loads++; return Task.FromResult(n); }); });\n    Eq(loads, 0);\n});\n",
+        "tail": "",
+        "frozen": []
+       },
+       "harness": "jstrain",
+       "timeoutMs": 20000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "02-async-composition/04-sync-throw-vs-faulted",
+    "type": "code",
+    "module": "02-async-composition",
+    "lesson": "drills",
+    "position": 3,
+    "skills": [
+     "eager validation",
+     "async local functions"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "csdrills/02-async-composition/05-sequential-pipeline",
+    "track": "csharp",
+    "kind": "drill",
+    "title": "Strictly one at a time, in order",
+    "phase": "02-async-composition",
+    "difficulty": 2,
+    "competencies": [
+     "language-fluency"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-cs",
+       "shape": "console-check",
+       "files": {
+        "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"[1,2,3] -> [2,4,6] in input order\", async () =>\n    Eq(await LoadAllAsync([1, 2, 3], id => Task.FromResult(id * 2)), new[] { 2, 4, 6 }));\n\nTest(\"fetch is called in input order\", async () =>\n{\n    var calls = new List<int>();\n    await LoadAllAsync([1, 2, 3], id => { calls.Add(id); return Task.FromResult(id * 2); });\n    Eq(calls, new[] { 1, 2, 3 });\n});\n\nTest(\"no ids -> [] and zero calls (boundary)\", async () =>\n{\n    int calls = 0;\n    var got = await LoadAllAsync([], id => { calls++; return Task.FromResult(id); });\n    Eq(got, Array.Empty<int>());\n    Eq(calls, 0);\n});\n\nTest(\"a single id -> one result\", async () =>\n    Eq(await LoadAllAsync([21], id => Task.FromResult(id * 2)), new[] { 42 }));\n\nTest(\"the next fetch does not start until the previous one finished\", async () =>\n{\n    var gates = new List<TaskCompletionSource<int>>();\n    var all = LoadAllAsync([1, 2], id => { var g = new TaskCompletionSource<int>(); gates.Add(g); return g.Task; });\n    if (all.IsFaulted) await all;\n    Eq(gates.Count, 1, \"only the first fetch may be in flight\");\n    gates[0].SetResult(10);\n    Eq(gates.Count, 2, \"finishing the first fetch starts the second\");\n    gates[1].SetResult(20);\n    Eq(await all, new[] { 10, 20 });\n});\n",
+        "tail": "",
+        "frozen": []
+       },
+       "harness": "jstrain",
+       "timeoutMs": 20000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "02-async-composition/05-sequential-pipeline",
+    "type": "code",
+    "module": "02-async-composition",
+    "lesson": "drills",
+    "position": 4,
+    "skills": [
+     "ordered awaits",
+     "sequential pipelines"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "csdrills/02-async-composition/06-tcs-bridge",
+    "track": "csharp",
+    "kind": "drill",
+    "title": "Bridge a callback into a Task",
+    "phase": "02-async-composition",
+    "difficulty": 2,
+    "competencies": [
+     "language-fluency"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-cs",
+       "shape": "console-check",
+       "files": {
+        "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"nothing fired yet -> the task is still pending (boundary)\", () =>\n{\n    Action<string>? handler = null;\n    var next = NextMessageAsync(cb => handler = cb);\n    Ok(handler is not null, \"subscribe must receive a handler\");\n    Ok(!next.IsCompleted, \"no message has arrived yet\");\n});\n\nTest(\"firing the handler completes the task with the message\", async () =>\n{\n    Action<string>? handler = null;\n    var next = NextMessageAsync(cb => handler = cb);\n    handler!(\"hi\");\n    Eq(await next, \"hi\");\n});\n\nTest(\"a second event keeps the first value\", async () =>\n{\n    Action<string>? handler = null;\n    var next = NextMessageAsync(cb => handler = cb);\n    handler!(\"first\");\n    handler!(\"second\");\n    Eq(await next, \"first\");\n});\n\nTest(\"subscribe is invoked exactly once\", () =>\n{\n    int subscriptions = 0;\n    NextMessageAsync(cb => subscriptions++);\n    Eq(subscriptions, 1);\n});\n",
+        "tail": "",
+        "frozen": []
+       },
+       "harness": "jstrain",
+       "timeoutMs": 20000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "02-async-composition/06-tcs-bridge",
+    "type": "code",
+    "module": "02-async-composition",
+    "lesson": "drills",
+    "position": 5,
+    "skills": [
+     "TaskCompletionSource",
+     "callback bridging"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "csdrills/02-async-composition/07-try-load-funnel",
+    "track": "csharp",
+    "kind": "drill",
+    "title": "Catch the expected failure only",
+    "phase": "02-async-composition",
+    "difficulty": 2,
+    "competencies": [
+     "language-fluency"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-cs",
+       "shape": "console-check",
+       "files": {
+        "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"success -> (true, value, \\\"\\\")\", async () =>\n    Eq(await TryLoadAsync(() => Task.FromResult(\"data\")), (true, \"data\", \"\")));\n\nTest(\"an InvalidOperationException becomes (false, \\\"\\\", message)\", async () =>\n    Eq(await TryLoadAsync(() => throw new InvalidOperationException(\"boom\")), (false, \"\", \"boom\")));\n\nTest(\"an unexpected exception type escapes\", async () =>\n    await ThrowsAsync<ArgumentException>(async () => await TryLoadAsync(() => throw new ArgumentException(\"bad\")), \"bad\"));\n\nTest(\"an empty value is still a success (boundary)\", async () =>\n    Eq(await TryLoadAsync(() => Task.FromResult(\"\")), (true, \"\", \"\")));\n",
+        "tail": "",
+        "frozen": []
+       },
+       "harness": "jstrain",
+       "timeoutMs": 20000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "02-async-composition/07-try-load-funnel",
+    "type": "code",
+    "module": "02-async-composition",
+    "lesson": "drills",
+    "position": 6,
+    "skills": [
+     "expected vs unexpected failure",
+     "selective catch"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "csdrills/02-async-composition/08-task-status-snapshot",
+    "track": "csharp",
+    "kind": "drill",
+    "title": "Health endpoint: describe a Task",
+    "phase": "02-async-composition",
+    "difficulty": 1,
+    "competencies": [
+     "language-fluency"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-cs",
+       "shape": "console-check",
+       "files": {
+        "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"a completed task -> ok\", () =>\n    Eq(Describe(Task.CompletedTask), \"ok\"));\n\nTest(\"a faulted task -> failed\", () =>\n    Eq(Describe(Task.FromException(new InvalidOperationException(\"x\"))), \"failed\"));\n\nTest(\"a canceled task -> canceled\", () =>\n    Eq(Describe(Task.FromCanceled(new CancellationToken(true))), \"canceled\"));\n\nTest(\"a never-completed task -> pending (boundary)\", () =>\n    Eq(Describe(new TaskCompletionSource<int>().Task), \"pending\"));\n",
+        "tail": "",
+        "frozen": []
+       },
+       "harness": "jstrain",
+       "timeoutMs": 20000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "02-async-composition/08-task-status-snapshot",
+    "type": "code",
+    "module": "02-async-composition",
+    "lesson": "drills",
+    "position": 7,
+    "skills": [
+     "TaskStatus flags",
+     "terminal states"
+    ]
+   }
+  }
+ ],
+ "content": {
+  "csdrills/02-async-composition/01-cache-fast-path": {
+   "instructions": "**Skills:** Task.FromResult · cache-aside  \n**Level:** ★☆☆\n\n**Interview prompt.** \"Wrap this expensive `COUNT(*)` in a cache. What does your method do on a hit, and does a hit still pay for an async state machine round-trip to the database?\"\n\n**Contract.** Look the key up first. On a **hit**, return the cached value and do not call `load` at all. On a **miss**, await `load()` exactly once, store the result under the key, and return it — so the next call for that key is a hit. Different keys are cached independently.\n\n**Your task.** Implement the stubbed local function:\n- `async Task<int> GetCountAsync(Dictionary<string, int> cache, string key, Func<Task<int>> load)`\n\n**Worked example.** Cache `{ \"users\": 7 }`, key `\"users\"` → **7**, and the loader's call count stays **0**.\n",
+   "starter": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · cache fast path                                        ★☆☆ warm-up\n//  concepts: Task.FromResult · cache-aside\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  A hot endpoint counts rows behind a cache. A hit must return at once\n//  without touching the loader; a miss loads once and remembers.\n\nusing static Bootcamp.Check;\n\nasync Task<int> GetCountAsync(Dictionary<string, int> cache, string key, Func<Task<int>> load)\n{\n    // TODO: hit -> cached value (loader untouched); miss -> await load, store, return\n    throw new NotImplementedException();\n}\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"a hit returns the cached 7 and never calls the loader\", async () =>\n{\n    var cache = new Dictionary<string, int> { [\"users\"] = 7 };\n    int loads = 0;\n    var got = await GetCountAsync(cache, \"users\", () => { loads++; return Task.FromResult(99); });\n    Eq(got, 7);\n    Eq(loads, 0, \"a cache hit must not call the loader\");\n});\n\nTest(\"a miss loads 9 once and stores it\", async () =>\n{\n    var cache = new Dictionary<string, int>();\n    int loads = 0;\n    var got = await GetCountAsync(cache, \"orders\", () => { loads++; return Task.FromResult(9); });\n    Eq(got, 9);\n    Eq(loads, 1);\n    Eq(cache[\"orders\"], 9, \"the loaded value must be remembered\");\n});\n\nTest(\"the second call after a miss is a hit (boundary)\", async () =>\n{\n    var cache = new Dictionary<string, int>();\n    int loads = 0;\n    Func<Task<int>> load = () => { loads++; return Task.FromResult(9); };\n    await GetCountAsync(cache, \"orders\", load);\n    var again = await GetCountAsync(cache, \"orders\", load);\n    Eq(again, 9);\n    Eq(loads, 1, \"the loader runs once per key\");\n});\n\nTest(\"distinct keys load independently\", async () =>\n{\n    var cache = new Dictionary<string, int>();\n    int loads = 0;\n    var a = await GetCountAsync(cache, \"a\", () => { loads++; return Task.FromResult(1); });\n    var b = await GetCountAsync(cache, \"b\", () => { loads++; return Task.FromResult(2); });\n    Eq((a, b), (1, 2));\n    Eq(loads, 2);\n});\n",
+   "solution": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · cache fast path                                        ★☆☆ warm-up\n//  concepts: Task.FromResult · cache-aside\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  A hot endpoint counts rows behind a cache. A hit must return at once\n//  without touching the loader; a miss loads once and remembers.\n\nusing static Bootcamp.Check;\n\nasync Task<int> GetCountAsync(Dictionary<string, int> cache, string key, Func<Task<int>> load)\n{\n    if (cache.TryGetValue(key, out var hit)) return hit;\n    var value = await load();\n    cache[key] = value;\n    return value;\n}\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"a hit returns the cached 7 and never calls the loader\", async () =>\n{\n    var cache = new Dictionary<string, int> { [\"users\"] = 7 };\n    int loads = 0;\n    var got = await GetCountAsync(cache, \"users\", () => { loads++; return Task.FromResult(99); });\n    Eq(got, 7);\n    Eq(loads, 0, \"a cache hit must not call the loader\");\n});\n\nTest(\"a miss loads 9 once and stores it\", async () =>\n{\n    var cache = new Dictionary<string, int>();\n    int loads = 0;\n    var got = await GetCountAsync(cache, \"orders\", () => { loads++; return Task.FromResult(9); });\n    Eq(got, 9);\n    Eq(loads, 1);\n    Eq(cache[\"orders\"], 9, \"the loaded value must be remembered\");\n});\n\nTest(\"the second call after a miss is a hit (boundary)\", async () =>\n{\n    var cache = new Dictionary<string, int>();\n    int loads = 0;\n    Func<Task<int>> load = () => { loads++; return Task.FromResult(9); };\n    await GetCountAsync(cache, \"orders\", load);\n    var again = await GetCountAsync(cache, \"orders\", load);\n    Eq(again, 9);\n    Eq(loads, 1, \"the loader runs once per key\");\n});\n\nTest(\"distinct keys load independently\", async () =>\n{\n    var cache = new Dictionary<string, int>();\n    int loads = 0;\n    var a = await GetCountAsync(cache, \"a\", () => { loads++; return Task.FromResult(1); });\n    var b = await GetCountAsync(cache, \"b\", () => { loads++; return Task.FromResult(2); });\n    Eq((a, b), (1, 2));\n    Eq(loads, 2);\n});\n",
+   "explanation": "The whole drill is one branch placed BEFORE the await: a hit returns synchronously (the returned task is already complete), a miss pays for the load once.\n\nFor cache `{ \"users\": 7 }` and key `\"users\"`:\n- `TryGetValue` finds 7 → return it; `load` is never invoked → result **7**, loads 0\n- a miss on `\"orders\"` awaits the loader (9), stores it, and the second call for `\"orders\"` takes the hit branch → loads stays 1\n\nCache-aside is \"check, load on miss, remember\" — and the check must come before any work you are trying to avoid.",
+   "hints": [
+    "The cheapest call is the one you never make: decide what to look at before awaiting anything.",
+    "TryGetValue → return the hit; otherwise value = await load(); cache[key] = value; return value.",
+    "Check the dictionary first and hand the stored value straight back, and only on a miss await the loader once, remembering its answer before returning it"
+   ]
+  },
+  "csdrills/02-async-composition/02-memoize-the-task": {
+   "instructions": "**Skills:** task caching · stampede prevention  \n**Level:** ★★★\n\n**Interview prompt.** \"Your config loader is memoized, but under a cold-start burst the backing store still sees dozens of identical reads. Why, and what do you cache instead?\"\n\n**Contract.** `Once(factory)` returns a function. The FIRST time that function is called it invokes `factory()` and remembers the returned `Task<string>`; EVERY call — before the task completes and after — returns that same `Task` object. The factory therefore runs exactly once, even while its first task is still pending. (Single-threaded callers here; making it thread-safe is a module 09 topic.)\n\n**Your task.** Implement the stubbed local function:\n- `Func<Task<string>> Once(Func<Task<string>> factory)` → a closure over a `Task<string>?` variable, filled on first call\n\n**Worked example.** Two calls before anything completes → `ReferenceEquals(t1, t2)` is **true** and the factory ran **1** time.\n",
+   "starter": "// ─────────────────────────────────────────────────────────────────────────\n//  02 · memoize the task                                       ★★★ stretch\n//  concepts: task caching · stampede prevention\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Ten requests arrive while the first load is still running. Caching the\n//  RESULT means ten loads. Cache the in-flight TASK and they all share one.\n\nusing static Bootcamp.Check;\n\nFunc<Task<string>> Once(Func<Task<string>> factory)\n{\n    // TODO: call factory on the first call only and hand every caller that same Task\n    throw new NotImplementedException();\n}\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"two calls before completion return the very same Task\", () =>\n{\n    var tcs = new TaskCompletionSource<string>();\n    var f = Once(() => tcs.Task);\n    var t1 = f();\n    var t2 = f();\n    Ok(ReferenceEquals(t1, t2), \"both callers must share one in-flight Task\");\n});\n\nTest(\"the factory runs once while the load is still in flight (boundary)\", () =>\n{\n    var tcs = new TaskCompletionSource<string>();\n    int calls = 0;\n    var f = Once(() => { calls++; return tcs.Task; });\n    var t1 = f();\n    var t2 = f();\n    Ok(!t1.IsCompleted, \"nothing has completed yet\");\n    Eq(calls, 1);\n});\n\nTest(\"completing the source completes every caller with its value\", async () =>\n{\n    var tcs = new TaskCompletionSource<string>();\n    var f = Once(() => tcs.Task);\n    var t1 = f();\n    var t2 = f();\n    tcs.SetResult(\"v\");\n    Eq(await t1, \"v\");\n    Eq(await t2, \"v\");\n});\n\nTest(\"a call after completion still reuses the first load\", async () =>\n{\n    var tcs = new TaskCompletionSource<string>();\n    int calls = 0;\n    var f = Once(() => { calls++; return tcs.Task; });\n    f();\n    tcs.SetResult(\"v\");\n    var t3 = f();\n    Eq(await t3, \"v\");\n    Eq(calls, 1);\n});\n",
+   "solution": "// ─────────────────────────────────────────────────────────────────────────\n//  02 · memoize the task                                       ★★★ stretch\n//  concepts: task caching · stampede prevention\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Ten requests arrive while the first load is still running. Caching the\n//  RESULT means ten loads. Cache the in-flight TASK and they all share one.\n\nusing static Bootcamp.Check;\n\nFunc<Task<string>> Once(Func<Task<string>> factory)\n{\n    Task<string>? cached = null;\n    return () => cached ??= factory();\n}\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"two calls before completion return the very same Task\", () =>\n{\n    var tcs = new TaskCompletionSource<string>();\n    var f = Once(() => tcs.Task);\n    var t1 = f();\n    var t2 = f();\n    Ok(ReferenceEquals(t1, t2), \"both callers must share one in-flight Task\");\n});\n\nTest(\"the factory runs once while the load is still in flight (boundary)\", () =>\n{\n    var tcs = new TaskCompletionSource<string>();\n    int calls = 0;\n    var f = Once(() => { calls++; return tcs.Task; });\n    var t1 = f();\n    var t2 = f();\n    Ok(!t1.IsCompleted, \"nothing has completed yet\");\n    Eq(calls, 1);\n});\n\nTest(\"completing the source completes every caller with its value\", async () =>\n{\n    var tcs = new TaskCompletionSource<string>();\n    var f = Once(() => tcs.Task);\n    var t1 = f();\n    var t2 = f();\n    tcs.SetResult(\"v\");\n    Eq(await t1, \"v\");\n    Eq(await t2, \"v\");\n});\n\nTest(\"a call after completion still reuses the first load\", async () =>\n{\n    var tcs = new TaskCompletionSource<string>();\n    int calls = 0;\n    var f = Once(() => { calls++; return tcs.Task; });\n    f();\n    tcs.SetResult(\"v\");\n    var t3 = f();\n    Eq(await t3, \"v\");\n    Eq(calls, 1);\n});\n",
+   "explanation": "Caching a result can only happen after the result exists; until then, every caller misses and starts its own load (a cache stampede). The Task exists the instant the load starts, so caching it closes that window.\n\nFor `var t1 = f(); var t2 = f();` with a pending source:\n- call 1: `cached` is null → `factory()` runs (calls = 1) → its Task is stored and returned\n- call 2: `cached` is set → the same Task is returned → `ReferenceEquals(t1, t2)` is **true**, calls stays **1**\n\nSharing the in-flight Task turns N concurrent misses into one load and N awaiters.",
+   "hints": [
+    "A Task is a handle you have before the work finishes — what if that handle is the thing you remember?",
+    "Capture a Task<string>? variable in the returned lambda; on first call assign factory() to it, then always return it (??= does both).",
+    "Store the Task itself in a captured variable on the first call and hand that same Task to every caller, so later callers await the in-flight work instead of starting it again"
+   ]
+  },
+  "csdrills/02-async-composition/03-whenany-first-wins": {
+   "instructions": "**Skills:** WhenAny · hedged reads  \n**Level:** ★★☆\n\n**Interview prompt.** \"p99 latency is dominated by one slow replica. You fire the read at two replicas — how do you return the first answer?\"\n\n**Contract.** Return the value of whichever task completes FIRST. `Task.WhenAny(a, b)` completes with the winning **task** (a `Task<Task<string>>`), so its result must be awaited a second time to get the string. When both tasks are already complete at the call, `WhenAny` picks the first argument — the tests pin that.\n\n**Your task.** Implement the stubbed local function:\n- `async Task<string> FirstReadyAsync(Task<string> a, Task<string> b)` → `await await Task.WhenAny(a, b)`\n\n**Worked example.** `a` pending, `b` completed with \"b\", then `a` completed → **\"b\"**.\n",
+   "starter": "// ─────────────────────────────────────────────────────────────────────────\n//  03 · whenany first wins                                     ★★☆ core\n//  concepts: WhenAny · hedged reads\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Two replicas are asked the same question; serve whichever answers\n//  first. WhenAny tells you WHICH task finished — not its value.\n\nusing static Bootcamp.Check;\n\nasync Task<string> FirstReadyAsync(Task<string> a, Task<string> b)\n{\n    // TODO: await whichever of a and b completes first and return its value\n    throw new NotImplementedException();\n}\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"a already done, b pending -> a's value\", async () =>\n{\n    var pending = new TaskCompletionSource<string>();\n    Eq(await FirstReadyAsync(Task.FromResult(\"a\"), pending.Task), \"a\");\n});\n\nTest(\"b completes first -> \\\"b\\\"\", async () =>\n{\n    var a = new TaskCompletionSource<string>();\n    var b = new TaskCompletionSource<string>();\n    var first = FirstReadyAsync(a.Task, b.Task);\n    b.SetResult(\"b\");\n    a.SetResult(\"a\");\n    Eq(await first, \"b\");\n});\n\nTest(\"a completes first -> \\\"a\\\"\", async () =>\n{\n    var a = new TaskCompletionSource<string>();\n    var b = new TaskCompletionSource<string>();\n    var first = FirstReadyAsync(a.Task, b.Task);\n    a.SetResult(\"a\");\n    b.SetResult(\"b\");\n    Eq(await first, \"a\");\n});\n\nTest(\"both already done -> the first argument wins (boundary)\", async () =>\n    Eq(await FirstReadyAsync(Task.FromResult(\"a\"), Task.FromResult(\"b\")), \"a\"));\n",
+   "solution": "// ─────────────────────────────────────────────────────────────────────────\n//  03 · whenany first wins                                     ★★☆ core\n//  concepts: WhenAny · hedged reads\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Two replicas are asked the same question; serve whichever answers\n//  first. WhenAny tells you WHICH task finished — not its value.\n\nusing static Bootcamp.Check;\n\nasync Task<string> FirstReadyAsync(Task<string> a, Task<string> b)\n{\n    return await await Task.WhenAny(a, b);\n}\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"a already done, b pending -> a's value\", async () =>\n{\n    var pending = new TaskCompletionSource<string>();\n    Eq(await FirstReadyAsync(Task.FromResult(\"a\"), pending.Task), \"a\");\n});\n\nTest(\"b completes first -> \\\"b\\\"\", async () =>\n{\n    var a = new TaskCompletionSource<string>();\n    var b = new TaskCompletionSource<string>();\n    var first = FirstReadyAsync(a.Task, b.Task);\n    b.SetResult(\"b\");\n    a.SetResult(\"a\");\n    Eq(await first, \"b\");\n});\n\nTest(\"a completes first -> \\\"a\\\"\", async () =>\n{\n    var a = new TaskCompletionSource<string>();\n    var b = new TaskCompletionSource<string>();\n    var first = FirstReadyAsync(a.Task, b.Task);\n    a.SetResult(\"a\");\n    b.SetResult(\"b\");\n    Eq(await first, \"a\");\n});\n\nTest(\"both already done -> the first argument wins (boundary)\", async () =>\n    Eq(await FirstReadyAsync(Task.FromResult(\"a\"), Task.FromResult(\"b\")), \"a\"));\n",
+   "explanation": "`WhenAny` answers \"which one finished?\", and awaiting the winner answers \"with what?\".\n\nFor `b.SetResult(\"b\")` before `a.SetResult(\"a\")`:\n- `await Task.WhenAny(a, b)` → the task `b` (the first to complete)\n- `await b` → **\"b\"** (and if the winner had faulted, this second await is what rethrows its exception)\n\nThe double await is not a typo: the outer one unwraps the race, the inner one unwraps the winner.",
+   "hints": [
+    "WhenAny does not give you the string — look at its return type.",
+    "Task.WhenAny(a, b) is a Task<Task<string>>: the first await yields the winning task, a second await yields its value.",
+    "WhenAny yields the first task to finish and that task still has to be awaited for its value, which is why the double await appears"
+   ]
+  },
+  "csdrills/02-async-composition/04-sync-throw-vs-faulted": {
+   "instructions": "**Skills:** eager validation · async local functions  \n**Level:** ★★★\n\n**Interview prompt.** \"`async Task<int> LoadAsync(string id) { if (bad) throw ...; await ...; }` — when does the caller see that exception? Fix it so argument errors surface at the call.\"\n\n**Contract.** In an `async` method EVERY exception, even one thrown before the first await, is captured into the returned Task: the call itself never throws. Argument validation should be eager instead. `ParseAndLoadAsync` is a plain (non-async) method that parses `id` with the invariant culture and throws `ArgumentException` immediately when it is not an integer — before any Task is created and before `load` is called. A valid id is handed to a private `async` local function that awaits `load(parsed)` and returns its value.\n\n**Your task.** Implement the stubbed local function (keep it non-async):\n- `Task<int> ParseAndLoadAsync(string id, Func<int, Task<int>> load)` → validate, then `return LoadCore(parsed);` with a nested `async Task<int> LoadCore(int value)`\n\n**Worked example.** `ParseAndLoadAsync(\"7\", n => Task.FromResult(n * 10))` → **70**; `ParseAndLoadAsync(\"abc\", …)` throws at the call.\n",
+   "starter": "// ─────────────────────────────────────────────────────────────────────────\n//  04 · sync throw vs faulted                                  ★★★ stretch\n//  concepts: eager validation · async local functions\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Bad arguments should explode at the call site, not inside a Task that\n//  someone may never await. An async method can't do that — split it.\n\nusing System.Globalization;\nusing static Bootcamp.Check;\n\nTask<int> ParseAndLoadAsync(string id, Func<int, Task<int>> load)\n{\n    // TODO: throw ArgumentException NOW for a non-numeric id; otherwise hand off to an async local function\n    throw new NotImplementedException();\n}\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"a non-numeric id throws synchronously, before any Task exists (boundary)\", () =>\n    Throws<ArgumentException>(() => { _ = ParseAndLoadAsync(\"abc\", n => Task.FromResult(0)); }));\n\nTest(\"\\\"7\\\" loads 70\", async () =>\n    Eq(await ParseAndLoadAsync(\"7\", n => Task.FromResult(n * 10)), 70));\n\nTest(\"\\\"0\\\" is a valid id (boundary)\", async () =>\n    Eq(await ParseAndLoadAsync(\"0\", n => Task.FromResult(n + 1)), 1));\n\nTest(\"a bad id never reaches the loader\", () =>\n{\n    int loads = 0;\n    Throws<ArgumentException>(() => { _ = ParseAndLoadAsync(\"x1\", n => { loads++; return Task.FromResult(n); }); });\n    Eq(loads, 0);\n});\n",
+   "solution": "// ─────────────────────────────────────────────────────────────────────────\n//  04 · sync throw vs faulted                                  ★★★ stretch\n//  concepts: eager validation · async local functions\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Bad arguments should explode at the call site, not inside a Task that\n//  someone may never await. An async method can't do that — split it.\n\nusing System.Globalization;\nusing static Bootcamp.Check;\n\nTask<int> ParseAndLoadAsync(string id, Func<int, Task<int>> load)\n{\n    if (!int.TryParse(id, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))\n        throw new ArgumentException($\"id '{id}' is not a number\", nameof(id));\n    return LoadCore(parsed);\n\n    async Task<int> LoadCore(int value) => await load(value);\n}\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"a non-numeric id throws synchronously, before any Task exists (boundary)\", () =>\n    Throws<ArgumentException>(() => { _ = ParseAndLoadAsync(\"abc\", n => Task.FromResult(0)); }));\n\nTest(\"\\\"7\\\" loads 70\", async () =>\n    Eq(await ParseAndLoadAsync(\"7\", n => Task.FromResult(n * 10)), 70));\n\nTest(\"\\\"0\\\" is a valid id (boundary)\", async () =>\n    Eq(await ParseAndLoadAsync(\"0\", n => Task.FromResult(n + 1)), 1));\n\nTest(\"a bad id never reaches the loader\", () =>\n{\n    int loads = 0;\n    Throws<ArgumentException>(() => { _ = ParseAndLoadAsync(\"x1\", n => { loads++; return Task.FromResult(n); }); });\n    Eq(loads, 0);\n});\n",
+   "explanation": "The `async` keyword turns a method body into a state machine whose exceptions land in the Task. Splitting the method moves validation outside that machine.\n\nFor `ParseAndLoadAsync(\"7\", n => Task.FromResult(n * 10))`:\n- the wrapper parses \"7\" → 7, no throw\n- `LoadCore(7)` awaits `load(7)` → 70 → result **70**\n\nFor `\"abc\"`: `TryParse` fails and the wrapper throws right there — `Throws<ArgumentException>` sees it even though nobody awaited anything. Same rule the BCL follows: argument exceptions are thrown eagerly, operational failures travel in the Task.",
+   "hints": [
+    "Ask where an exception thrown inside an async method actually goes — into the call, or into the returned Task?",
+    "A non-async wrapper can throw synchronously; put the awaiting part in a nested async local function and return its Task.",
+    "Split the method in two, a plain wrapper that validates and throws immediately, then hands off to a private async local function that does the awaiting"
+   ]
+  },
+  "csdrills/02-async-composition/05-sequential-pipeline": {
+   "instructions": "**Skills:** ordered awaits · sequential pipelines  \n**Level:** ★★☆\n\n**Interview prompt.** \"This partner API rejects concurrent requests from one client. Load every id through it, results in the original order.\"\n\n**Contract.** Start `fetch(id)` for the first id, await it, append the result, and only then start the next id. Results are in input order; an empty list yields an empty result and makes no calls. (Firing every fetch first and awaiting them together would be concurrent — exactly what this downstream forbids; the last test controls completion with `TaskCompletionSource` and checks that the second fetch starts only after the first finished.)\n\n**Your task.** Implement the stubbed local function:\n- `async Task<List<int>> LoadAllAsync(List<int> ids, Func<int, Task<int>> fetch)` → a `foreach` with the `await` inside the loop body\n\n**Worked example.** `[1, 2, 3]` with `fetch = id => id * 2` → **[2, 4, 6]**, called in order 1, 2, 3.\n",
+   "starter": "// ─────────────────────────────────────────────────────────────────────────\n//  05 · sequential pipeline                                    ★★☆ core\n//  concepts: ordered awaits · sequential pipelines\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  The downstream API allows one request at a time (rate limits, or each\n//  call depends on the previous one). Await each fetch before the next.\n\nusing static Bootcamp.Check;\n\nasync Task<List<int>> LoadAllAsync(List<int> ids, Func<int, Task<int>> fetch)\n{\n    // TODO: await each fetch before starting the next; results in input order\n    throw new NotImplementedException();\n}\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"[1,2,3] -> [2,4,6] in input order\", async () =>\n    Eq(await LoadAllAsync([1, 2, 3], id => Task.FromResult(id * 2)), new[] { 2, 4, 6 }));\n\nTest(\"fetch is called in input order\", async () =>\n{\n    var calls = new List<int>();\n    await LoadAllAsync([1, 2, 3], id => { calls.Add(id); return Task.FromResult(id * 2); });\n    Eq(calls, new[] { 1, 2, 3 });\n});\n\nTest(\"no ids -> [] and zero calls (boundary)\", async () =>\n{\n    int calls = 0;\n    var got = await LoadAllAsync([], id => { calls++; return Task.FromResult(id); });\n    Eq(got, Array.Empty<int>());\n    Eq(calls, 0);\n});\n\nTest(\"a single id -> one result\", async () =>\n    Eq(await LoadAllAsync([21], id => Task.FromResult(id * 2)), new[] { 42 }));\n\nTest(\"the next fetch does not start until the previous one finished\", async () =>\n{\n    var gates = new List<TaskCompletionSource<int>>();\n    var all = LoadAllAsync([1, 2], id => { var g = new TaskCompletionSource<int>(); gates.Add(g); return g.Task; });\n    if (all.IsFaulted) await all;\n    Eq(gates.Count, 1, \"only the first fetch may be in flight\");\n    gates[0].SetResult(10);\n    Eq(gates.Count, 2, \"finishing the first fetch starts the second\");\n    gates[1].SetResult(20);\n    Eq(await all, new[] { 10, 20 });\n});\n",
+   "solution": "// ─────────────────────────────────────────────────────────────────────────\n//  05 · sequential pipeline                                    ★★☆ core\n//  concepts: ordered awaits · sequential pipelines\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  The downstream API allows one request at a time (rate limits, or each\n//  call depends on the previous one). Await each fetch before the next.\n\nusing static Bootcamp.Check;\n\nasync Task<List<int>> LoadAllAsync(List<int> ids, Func<int, Task<int>> fetch)\n{\n    var results = new List<int>();\n    foreach (var id in ids)\n        results.Add(await fetch(id));\n    return results;\n}\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"[1,2,3] -> [2,4,6] in input order\", async () =>\n    Eq(await LoadAllAsync([1, 2, 3], id => Task.FromResult(id * 2)), new[] { 2, 4, 6 }));\n\nTest(\"fetch is called in input order\", async () =>\n{\n    var calls = new List<int>();\n    await LoadAllAsync([1, 2, 3], id => { calls.Add(id); return Task.FromResult(id * 2); });\n    Eq(calls, new[] { 1, 2, 3 });\n});\n\nTest(\"no ids -> [] and zero calls (boundary)\", async () =>\n{\n    int calls = 0;\n    var got = await LoadAllAsync([], id => { calls++; return Task.FromResult(id); });\n    Eq(got, Array.Empty<int>());\n    Eq(calls, 0);\n});\n\nTest(\"a single id -> one result\", async () =>\n    Eq(await LoadAllAsync([21], id => Task.FromResult(id * 2)), new[] { 42 }));\n\nTest(\"the next fetch does not start until the previous one finished\", async () =>\n{\n    var gates = new List<TaskCompletionSource<int>>();\n    var all = LoadAllAsync([1, 2], id => { var g = new TaskCompletionSource<int>(); gates.Add(g); return g.Task; });\n    if (all.IsFaulted) await all;\n    Eq(gates.Count, 1, \"only the first fetch may be in flight\");\n    gates[0].SetResult(10);\n    Eq(gates.Count, 2, \"finishing the first fetch starts the second\");\n    gates[1].SetResult(20);\n    Eq(await all, new[] { 10, 20 });\n});\n",
+   "explanation": "An `await` inside a loop body suspends the loop itself, so the next iteration — and the next `fetch` — cannot begin until the current task has completed.\n\nFor `[1, 2, 3]` with `id => Task.FromResult(id * 2)`:\n- iteration 1: fetch(1) → 2, appended\n- iteration 2: fetch(2) → 4, appended\n- iteration 3: fetch(3) → 6, appended → **[2, 4, 6]**\n\nSequential-by-construction is the correct answer when the callee forbids concurrency; reach for WhenAll only when it allows it.",
+   "hints": [
+    "Where the await sits decides whether calls overlap — inside the loop, or after starting them all?",
+    "foreach (var id in ids) results.Add(await fetch(id)); — each await finishes before the loop advances.",
+    "Loop over the ids and await each fetch inside the loop body before the next iteration starts, appending each answer so results keep the input order"
+   ]
+  },
+  "csdrills/02-async-composition/06-tcs-bridge": {
+   "instructions": "**Skills:** TaskCompletionSource · callback bridging  \n**Level:** ★★☆\n\n**Interview prompt.** \"This SDK only offers `OnMessage(Action<string> handler)`. Expose it as `Task<string> NextMessageAsync()`.\"\n\n**Contract.** Create a `TaskCompletionSource<string>`, call `subscribe` exactly once with a handler that completes it, and return `tcs.Task` immediately (still pending until the event fires). The first message completes the task; later messages must be ignored without throwing — use `TrySetResult`, because `SetResult` throws on a second completion. (`TaskCreationOptions.RunContinuationsAsynchronously` is a good habit so awaiters do not run inside the SDK's callback; it is not asserted.)\n\n**Your task.** Implement the stubbed local function:\n- `Task<string> NextMessageAsync(Action<Action<string>> subscribe)`\n\n**Worked example.** Fire \"first\" then \"second\" → the task's result is **\"first\"**.\n",
+   "starter": "// ─────────────────────────────────────────────────────────────────────────\n//  06 · tcs bridge                                             ★★☆ core\n//  concepts: TaskCompletionSource · callback bridging\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  An old SDK pushes messages through a callback. Your code wants\n//  `await NextMessageAsync(...)`. TaskCompletionSource is the adapter.\n\nusing static Bootcamp.Check;\n\nTask<string> NextMessageAsync(Action<Action<string>> subscribe)\n{\n    // TODO: subscribe a handler that completes a TaskCompletionSource with the first message\n    throw new NotImplementedException();\n}\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"nothing fired yet -> the task is still pending (boundary)\", () =>\n{\n    Action<string>? handler = null;\n    var next = NextMessageAsync(cb => handler = cb);\n    Ok(handler is not null, \"subscribe must receive a handler\");\n    Ok(!next.IsCompleted, \"no message has arrived yet\");\n});\n\nTest(\"firing the handler completes the task with the message\", async () =>\n{\n    Action<string>? handler = null;\n    var next = NextMessageAsync(cb => handler = cb);\n    handler!(\"hi\");\n    Eq(await next, \"hi\");\n});\n\nTest(\"a second event keeps the first value\", async () =>\n{\n    Action<string>? handler = null;\n    var next = NextMessageAsync(cb => handler = cb);\n    handler!(\"first\");\n    handler!(\"second\");\n    Eq(await next, \"first\");\n});\n\nTest(\"subscribe is invoked exactly once\", () =>\n{\n    int subscriptions = 0;\n    NextMessageAsync(cb => subscriptions++);\n    Eq(subscriptions, 1);\n});\n",
+   "solution": "// ─────────────────────────────────────────────────────────────────────────\n//  06 · tcs bridge                                             ★★☆ core\n//  concepts: TaskCompletionSource · callback bridging\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  An old SDK pushes messages through a callback. Your code wants\n//  `await NextMessageAsync(...)`. TaskCompletionSource is the adapter.\n\nusing static Bootcamp.Check;\n\nTask<string> NextMessageAsync(Action<Action<string>> subscribe)\n{\n    var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);\n    subscribe(msg => tcs.TrySetResult(msg));\n    return tcs.Task;\n}\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"nothing fired yet -> the task is still pending (boundary)\", () =>\n{\n    Action<string>? handler = null;\n    var next = NextMessageAsync(cb => handler = cb);\n    Ok(handler is not null, \"subscribe must receive a handler\");\n    Ok(!next.IsCompleted, \"no message has arrived yet\");\n});\n\nTest(\"firing the handler completes the task with the message\", async () =>\n{\n    Action<string>? handler = null;\n    var next = NextMessageAsync(cb => handler = cb);\n    handler!(\"hi\");\n    Eq(await next, \"hi\");\n});\n\nTest(\"a second event keeps the first value\", async () =>\n{\n    Action<string>? handler = null;\n    var next = NextMessageAsync(cb => handler = cb);\n    handler!(\"first\");\n    handler!(\"second\");\n    Eq(await next, \"first\");\n});\n\nTest(\"subscribe is invoked exactly once\", () =>\n{\n    int subscriptions = 0;\n    NextMessageAsync(cb => subscriptions++);\n    Eq(subscriptions, 1);\n});\n",
+   "explanation": "A TaskCompletionSource is a Task whose completion you control by hand — the bridge from push (callbacks) to pull (await).\n\nFor two events \"first\" then \"second\":\n- `subscribe` received `msg => tcs.TrySetResult(msg)`\n- \"first\" → `TrySetResult` succeeds → the task completes with \"first\"\n- \"second\" → `TrySetResult` returns false, nothing throws → result stays **\"first\"**\n\nAlways complete a TaskCompletionSource with the Try- variants when the event source can fire more than once.",
+   "hints": [
+    "You need a Task you can finish yourself, from inside someone else's callback.",
+    "new TaskCompletionSource<string>(); subscribe(msg => tcs.TrySetResult(msg)); return tcs.Task.",
+    "A TaskCompletionSource turns a push callback into an awaitable pull, complete it from inside the handler with the try-variant so a second event cannot throw"
+   ]
+  },
+  "csdrills/02-async-composition/07-try-load-funnel": {
+   "instructions": "**Skills:** expected vs unexpected failure · selective catch  \n**Level:** ★★☆\n\n**Interview prompt.** \"Code review: `try { ... } catch (Exception) { return null; }` around a repository call. What is wrong, and what should it look like?\"\n\n**Contract.** Await `load()`. On success return `(true, value, \"\")` — an empty string is still a successful value. When it throws `InvalidOperationException` (the one EXPECTED failure in this domain), return `(false, \"\", ex.Message)`. Every other exception type must propagate unchanged: catching it would turn a bug into a silent \"not found\".\n\n**Your task.** Implement the stubbed local function:\n- `async Task<(bool Ok, string Value, string Error)> TryLoadAsync(Func<Task<string>> load)` → `try { return (true, await load(), \"\"); } catch (InvalidOperationException ex) { … }`\n\n**Worked example.** A loader throwing `new InvalidOperationException(\"boom\")` → **(false, \"\", \"boom\")**; one throwing `ArgumentException` escapes.\n",
+   "starter": "// ─────────────────────────────────────────────────────────────────────────\n//  07 · try load funnel                                        ★★☆ core\n//  concepts: expected vs unexpected failure · selective catch\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  \"Not found\" is an outcome; a NullReferenceException is a bug. Turn the\n//  expected failure into a soft result and let everything else stay loud.\n\nusing static Bootcamp.Check;\n\nasync Task<(bool Ok, string Value, string Error)> TryLoadAsync(Func<Task<string>> load)\n{\n    // TODO: success -> (true, value, \"\"); InvalidOperationException -> (false, \"\", message); anything else propagates\n    throw new NotImplementedException();\n}\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"success -> (true, value, \\\"\\\")\", async () =>\n    Eq(await TryLoadAsync(() => Task.FromResult(\"data\")), (true, \"data\", \"\")));\n\nTest(\"an InvalidOperationException becomes (false, \\\"\\\", message)\", async () =>\n    Eq(await TryLoadAsync(() => throw new InvalidOperationException(\"boom\")), (false, \"\", \"boom\")));\n\nTest(\"an unexpected exception type escapes\", async () =>\n    await ThrowsAsync<ArgumentException>(async () => await TryLoadAsync(() => throw new ArgumentException(\"bad\")), \"bad\"));\n\nTest(\"an empty value is still a success (boundary)\", async () =>\n    Eq(await TryLoadAsync(() => Task.FromResult(\"\")), (true, \"\", \"\")));\n",
+   "solution": "// ─────────────────────────────────────────────────────────────────────────\n//  07 · try load funnel                                        ★★☆ core\n//  concepts: expected vs unexpected failure · selective catch\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  \"Not found\" is an outcome; a NullReferenceException is a bug. Turn the\n//  expected failure into a soft result and let everything else stay loud.\n\nusing static Bootcamp.Check;\n\nasync Task<(bool Ok, string Value, string Error)> TryLoadAsync(Func<Task<string>> load)\n{\n    try\n    {\n        return (true, await load(), \"\");\n    }\n    catch (InvalidOperationException ex)\n    {\n        return (false, \"\", ex.Message);\n    }\n}\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"success -> (true, value, \\\"\\\")\", async () =>\n    Eq(await TryLoadAsync(() => Task.FromResult(\"data\")), (true, \"data\", \"\")));\n\nTest(\"an InvalidOperationException becomes (false, \\\"\\\", message)\", async () =>\n    Eq(await TryLoadAsync(() => throw new InvalidOperationException(\"boom\")), (false, \"\", \"boom\")));\n\nTest(\"an unexpected exception type escapes\", async () =>\n    await ThrowsAsync<ArgumentException>(async () => await TryLoadAsync(() => throw new ArgumentException(\"bad\")), \"bad\"));\n\nTest(\"an empty value is still a success (boundary)\", async () =>\n    Eq(await TryLoadAsync(() => Task.FromResult(\"\")), (true, \"\", \"\")));\n",
+   "explanation": "A catch clause is a statement about which failures you understand. Naming exactly one type keeps every other failure visible.\n\nFor a loader that throws `new InvalidOperationException(\"boom\")`:\n- `await load()` throws inside the `try`\n- the `catch (InvalidOperationException ex)` clause matches → **(false, \"\", \"boom\")**\n\nAn `ArgumentException` does not match that clause, so it leaves the method — and the caller's logs show a real bug instead of a quiet \"Ok = false\". Catch what you can handle; let the rest fly.",
+   "hints": [
+    "Which exceptions are outcomes your caller should branch on, and which are bugs that must stay loud?",
+    "Wrap the await in try; catch only InvalidOperationException and build the soft tuple from ex.Message.",
+    "Catch only the one exception type that is an expected outcome and translate it into the soft tuple, letting every other exception fly so real bugs stay loud"
+   ]
+  },
+  "csdrills/02-async-composition/08-task-status-snapshot": {
+   "instructions": "**Skills:** TaskStatus flags · terminal states  \n**Level:** ★☆☆\n\n**Interview prompt.** \"The `/health` endpoint says `warmup: done` whenever `task.IsCompleted` — even when warm-up crashed. Fix the status mapping.\"\n\n**Contract.** Map a Task to one word: `\"ok\"` when it completed successfully, `\"failed\"` when it faulted, `\"canceled\"` when it was canceled, and `\"pending\"` otherwise. `IsCompleted` is true for ALL three terminal states, which is why `IsCompletedSuccessfully` exists — check the specific flags.\n\n**Your task.** Implement the stubbed local function:\n- `string Describe(Task t)` → `IsCompletedSuccessfully` → \"ok\", `IsFaulted` → \"failed\", `IsCanceled` → \"canceled\", else \"pending\"\n\n**Worked example.** `Task.FromException(new InvalidOperationException(\"x\"))` → **\"failed\"** (its `IsCompleted` is true).\n",
+   "starter": "// ─────────────────────────────────────────────────────────────────────────\n//  08 · task status snapshot                                   ★☆☆ warm-up\n//  concepts: TaskStatus flags · terminal states\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  A health endpoint reports on a background warm-up Task. A Task can end\n//  three ways — and plain IsCompleted is true for all three.\n\nusing static Bootcamp.Check;\n\nstring Describe(Task t)\n{\n    // TODO: \"ok\" / \"failed\" / \"canceled\" for the three endings, else \"pending\"\n    throw new NotImplementedException();\n}\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"a completed task -> ok\", () =>\n    Eq(Describe(Task.CompletedTask), \"ok\"));\n\nTest(\"a faulted task -> failed\", () =>\n    Eq(Describe(Task.FromException(new InvalidOperationException(\"x\"))), \"failed\"));\n\nTest(\"a canceled task -> canceled\", () =>\n    Eq(Describe(Task.FromCanceled(new CancellationToken(true))), \"canceled\"));\n\nTest(\"a never-completed task -> pending (boundary)\", () =>\n    Eq(Describe(new TaskCompletionSource<int>().Task), \"pending\"));\n",
+   "solution": "// ─────────────────────────────────────────────────────────────────────────\n//  08 · task status snapshot                                   ★☆☆ warm-up\n//  concepts: TaskStatus flags · terminal states\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  A health endpoint reports on a background warm-up Task. A Task can end\n//  three ways — and plain IsCompleted is true for all three.\n\nusing static Bootcamp.Check;\n\nstring Describe(Task t)\n{\n    if (t.IsCompletedSuccessfully) return \"ok\";\n    if (t.IsFaulted) return \"failed\";\n    if (t.IsCanceled) return \"canceled\";\n    return \"pending\";\n}\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"a completed task -> ok\", () =>\n    Eq(Describe(Task.CompletedTask), \"ok\"));\n\nTest(\"a faulted task -> failed\", () =>\n    Eq(Describe(Task.FromException(new InvalidOperationException(\"x\"))), \"failed\"));\n\nTest(\"a canceled task -> canceled\", () =>\n    Eq(Describe(Task.FromCanceled(new CancellationToken(true))), \"canceled\"));\n\nTest(\"a never-completed task -> pending (boundary)\", () =>\n    Eq(Describe(new TaskCompletionSource<int>().Task), \"pending\"));\n",
+   "explanation": "A Task has one success ending and two failure endings; `IsCompleted` only tells you it ended.\n\nFor `Task.FromException(new InvalidOperationException(\"x\"))`:\n- `IsCompletedSuccessfully` → false\n- `IsFaulted` → true → **\"failed\"**\n\nReading the specific terminal flag (or `t.Status`) is the difference between a health check and a health lie.",
+   "hints": [
+    "IsCompleted answers \"did it end?\", not \"did it succeed?\".",
+    "Test IsCompletedSuccessfully, then IsFaulted, then IsCanceled; anything else has not finished.",
+    "Check the specific terminal flags in order, successful completion first, then faulted, then canceled, and treat anything not yet completed as pending — plain IsCompleted is true for all three endings"
+   ]
+  }
+ }
+}
