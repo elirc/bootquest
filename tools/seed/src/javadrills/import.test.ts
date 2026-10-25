@@ -283,9 +283,7 @@ describe('import-time refusals (write nothing)', () => {
   });
 });
 
-// PHASE A (modules 01-05 only, no pack yet): the committed-pack identity check runs once all
-// 10 modules exist and content/packs/javadrills is generated — phase B removes this .skip.
-describe.skip('committed javadrills authoring + pack (content/packs/javadrills)', () => {
+describe('committed javadrills authoring + pack (content/packs/javadrills)', () => {
   it('the authoring imports to the pinned census and its course files match the committed pack byte-for-byte', () => {
     const out = join(dir, 'pack');
     const { manifest } = importJavadrills({ authoringDir: DEFAULT_AUTHORING_DIR, outDir: out, expected: JAVADRILLS_EXPECTED });
