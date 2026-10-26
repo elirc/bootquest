@@ -130,10 +130,10 @@ describe.skipIf(!HAVE_CHECKOUT)('W7 real ladder content end to end (temp DB, no 
     // ordinary explain-back set's repo is a campaign quest -> linked for display
     const eb = l.units.filter((u) => u.family === 'explain-back');
     const designItems = ebItems.filter((i) => /^DESIGN IT\b/.test(i.questions[0]!.prompt));
-    expect(designItems.length).toBe(58); // 6 javabootcamp + 16 sysdesign-wave + 8 second-scenario + 8 set-B alternates + 9 fundamentals-wave primaries + 11 spaced-repetition alternates
+    expect(designItems.length).toBe(72); // 6 javabootcamp + 16 sysdesign-wave + 8 second-scenario + 8 set-B alternates + 9 fundamentals-wave primaries + 11 spaced-repetition alternates + 9 mega-wave alternates + 5 mega-wave primaries
     const designRepos = [...new Set(designItems.map((i) => i.provenance.repo))].sort();
     expect(designRepos).toContain('javabootcamp');
-    expect(designRepos.length).toBe(29);
+    expect(designRepos.length).toBe(33);
     const design = eb.filter((u) => u.trackId === 'sysdesign');
     expect(design.length).toBe(designItems.length);
     expect(design.every((u) => u.quest === null)).toBe(true);
@@ -147,7 +147,7 @@ describe.skipIf(!HAVE_CHECKOUT)('W7 real ladder content end to end (temp DB, no 
     const designTitles = design.map((u) => u.title);
     expect(designTitles).toContain('DESIGN IT: bazaar — cache coherence across layers for a storefront');
     expect(designTitles).toContain('DESIGN IT: bazaar — personalized pricing on a cached storefront (set B)');
-    expect(design.filter((u) => / \(set [BC]\)$/.test(u.title)).length).toBe(19);
+    expect(design.filter((u) => / \(set [BC]\)$/.test(u.title)).length).toBe(28);
   });
 
   it('a REAL explain-back set plays end to end: questions only -> immutable answer -> key -> self-score (20 XP)', async () => {
