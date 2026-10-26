@@ -452,6 +452,580 @@
    ],
    "front": "Why are review findings 1, 3 and 10 invisible to Relay's CI?",
    "back": "No test issues concurrent requests (no Task.WhenAll anywhere in Relay.Tests), so check-then-insert, import concurrency and scheduler double-fire are never exercised."
+  },
+  {
+   "id": "q15-unparseable-cron-drops-out",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0002-cron-over-a-clock-port.md",
+    "lines": {
+     "start": 35,
+     "end": 39
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0002-cron-over-a-clock-port.md",
+     "lineStart": 38,
+     "lineEnd": 38
+    },
+    {
+     "path": "server/Relay.Infrastructure/Scheduling/ScheduleDispatcher.cs",
+     "lineStart": 34,
+     "lineEnd": 38
+    }
+   ],
+   "prompt": "A schedule's cron expression is saved in a form CronExpression cannot parse. What does the dispatcher do with that schedule from then on?",
+   "answer": "It never runs again: NextRunAtUtc becomes null and the due query skips it",
+   "distractors": [
+    "It runs every tick, since a null next-run time counts as already due",
+    "It falls back to a once-a-day default until someone fixes the expression",
+    "It throws on every tick, so the hosted loop logs an error every 30 seconds"
+   ],
+   "explanation": "ADR-0002 (line 38): ComputeNextRun returns null for an unparseable expression, and the due query only selects schedules with NextRunAtUtc != null, so the schedule leaves scheduling permanently. Nothing treats null as due, no default cadence exists, and no exception is raised on later ticks because the schedule is simply never selected."
+  },
+  {
+   "id": "q16-hosted-loop-not-in-tests",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0002-cron-over-a-clock-port.md",
+    "lines": {
+     "start": 14,
+     "end": 39
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0002-cron-over-a-clock-port.md",
+     "lineStart": 21,
+     "lineEnd": 24
+    },
+    {
+     "path": "docs/adr/0002-cron-over-a-clock-port.md",
+     "lineStart": 28,
+     "lineEnd": 29
+    }
+   ],
+   "prompt": "How do Relay's scheduling tests exercise ScheduleDispatcher, given how the 30-second background loop is registered?",
+   "answer": "They set a FakeClock and call RunDueSchedulesAsync; the loop is not hosted in Testing",
+   "distractors": [
+    "They start the hosted loop and wait for its 30-second tick on the system clock",
+    "They shorten the loop's interval to one second through the test configuration file",
+    "They host the loop in tests but swap its PeriodicTimer for a manual trigger"
+   ],
+   "explanation": "ADR-0002 lines 21-24: ScheduleHostedService ticks the dispatcher every 30s and is registered only outside the test host, while FakeClock backs tests. Lines 28-29: tests set the clock, call RunDueSchedulesAsync and assert the run count and re-armed NextRunAtUtc. No test waits on the real loop, reconfigures its interval, or hosts it with a swapped timer."
+  },
+  {
+   "id": "q17-missed-slots-fire-once",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0002-cron-over-a-clock-port.md",
+    "lines": {
+     "start": 26,
+     "end": 33
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0002-cron-over-a-clock-port.md",
+     "lineStart": 30,
+     "lineEnd": 31
+    }
+   ],
+   "prompt": "A daily schedule's process was down for five days. On the first tick after the restart, how many runs does that schedule trigger?",
+   "answer": "One run, and its next run time is re-armed to the next future slot",
+   "distractors": [
+    "Five runs, one for each missed day, executed in order on that tick",
+    "Five runs, spread one per tick until the schedule has caught up",
+    "No run: missed slots are skipped and only the next future slot fires"
+   ],
+   "explanation": "ADR-0002 lines 30-31: advancing first means a schedule that missed many slots fires once per tick and catches up to a future slot. So the first tick triggers exactly one run and moves NextRunAtUtc past now; it neither replays each missed day (all at once or spread over ticks) nor skips the overdue run entirely."
+  },
+  {
+   "id": "q18-master-key-fallback",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0003-envelope-encryption-over-a-kms-port.md",
+    "lines": {
+     "start": 25,
+     "end": 51
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0003-envelope-encryption-over-a-kms-port.md",
+     "lineStart": 32,
+     "lineEnd": 37
+    },
+    {
+     "path": "docs/adr/0003-envelope-encryption-over-a-kms-port.md",
+     "lineStart": 51,
+     "lineEnd": 51
+    }
+   ],
+   "prompt": "Relay starts in production with no Secrets:MasterKey configured at all. What happens to secret encryption?",
+   "answer": "It silently derives the key from the constant relay-dev-master-key and starts",
+   "distractors": [
+    "Startup fails, because the KMS rejects a master key that is not 32 bytes long",
+    "Startup fails, because a guard refuses default master keys outside Development",
+    "It generates a random master key per process, so old secrets become unreadable"
+   ],
+   "explanation": "ADR-0003 lines 32-37: the master key is always SHA-256(Secrets:MasterKey), so it is always 32 bytes and the size check can never fail; if the key is missing the code silently falls back to the constant \"relay-dev-master-key\". Line 51: no startup guard rejects the default outside Development. Nothing generates a random per-process key."
+  },
+  {
+   "id": "q19-no-aad-envelope-swap",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0003-envelope-encryption-over-a-kms-port.md",
+    "lines": {
+     "start": 41,
+     "end": 51
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0003-envelope-encryption-over-a-kms-port.md",
+     "lineStart": 49,
+     "lineEnd": 49
+    },
+    {
+     "path": "docs/adr/0003-envelope-encryption-over-a-kms-port.md",
+     "lineStart": 43,
+     "lineEnd": 44
+    }
+   ],
+   "prompt": "Someone with database write access copies one connection's encrypted secret envelope into another connection's row. What happens when the second connection's secret is revealed?",
+   "answer": "It decrypts fine, since AES-GCM runs with no associated data binding the row",
+   "distractors": [
+    "It fails the GCM tag check, since the nonce is derived from the row's id",
+    "It fails to unwrap, since every connection row has its own separate master key",
+    "It decrypts to garbage, since the envelope version no longer matches"
+   ],
+   "explanation": "ADR-0003 line 49: AES-GCM is called without associated data, so an envelope copied from one connection row to another decrypts fine; binding the row id as AAD would make swaps detectable. Lines 43-44: the nonce is 12 random bytes, and one master key wraps every data key, so neither the nonce nor the master key ties an envelope to a row."
+  },
+  {
+   "id": "q20-reveal-managed-string",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0003-envelope-encryption-over-a-kms-port.md",
+    "lines": {
+     "start": 11,
+     "end": 51
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0003-envelope-encryption-over-a-kms-port.md",
+     "lineStart": 50,
+     "lineEnd": 50
+    },
+    {
+     "path": "docs/adr/0003-envelope-encryption-over-a-kms-port.md",
+     "lineStart": 13,
+     "lineEnd": 18
+    }
+   ],
+   "prompt": "Reveal zeroes the unwrapped data key and the plaintext byte buffer in a finally block. Why can the plaintext secret still linger in memory afterwards?",
+   "answer": "Reveal returns a managed string, and that immutable copy cannot be zeroed",
+   "distractors": [
+    "The finally block runs only on errors, so successful reveals skip zeroing",
+    "The KMS port caches every unwrapped data key in memory for later reuse",
+    "The envelope JSON keeps a plaintext copy of the secret beside the cipher"
+   ],
+   "explanation": "ADR-0003 line 50: Reveal returns a managed string, and zeroing the byte buffer does not erase that immutable string copy. A finally block runs on success as well as failure; the KMS only wraps and unwraps data keys; and the envelope (lines 13-18) holds V, WrappedKey, Nonce, Tag and Cipher, never the plaintext."
+  },
+  {
+   "id": "q21-replay-without-key",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0005-webhook-hmac-timestamp-idempotency.md",
+    "lines": {
+     "start": 57,
+     "end": 62
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0005-webhook-hmac-timestamp-idempotency.md",
+     "lineStart": 60,
+     "lineEnd": 60
+    },
+    {
+     "path": "docs/adr/0005-webhook-hmac-timestamp-idempotency.md",
+     "lineStart": 16,
+     "lineEnd": 22
+    }
+   ],
+   "prompt": "Signing is on. An attacker captures a valid signed webhook request that carried no Idempotency-Key header. What can they do with it?",
+   "answer": "Replay it for new runs until the five-minute timestamp window closes",
+   "distractors": [
+    "Nothing: the signature check rejects any request it has already seen",
+    "Replay it forever, since the timestamp is not covered by the signature",
+    "Replay it once only, because the delivery log blocks a repeated body"
+   ],
+   "explanation": "ADR-0005 line 60: the timestamp bounds replay to 5 minutes but does not prevent it, so a captured signed request without an Idempotency-Key can be replayed for a new run until the window closes; a nonce store or a mandatory key would close it. Lines 16-22: the timestamp is part of the signed payload, and nothing remembers seen signatures or bodies."
+  },
+  {
+   "id": "q22-global-rate-partition",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0005-webhook-hmac-timestamp-idempotency.md",
+    "lines": {
+     "start": 57,
+     "end": 62
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0005-webhook-hmac-timestamp-idempotency.md",
+     "lineStart": 62,
+     "lineEnd": 62
+    },
+    {
+     "path": "server/Relay.Api/Program.cs",
+     "lineStart": 69,
+     "lineEnd": 78
+    }
+   ],
+   "prompt": "One misbehaving webhook sender exhausts the fixed window of the triggers rate-limit policy. Who else is throttled until the window resets?",
+   "answer": "Every webhook and every manual run, since all share one global partition",
+   "distractors": [
+    "Only that webhook's own token, since each token gets its own partition key",
+    "Only that workspace's webhooks, since partitions are keyed by workspace",
+    "No one else, since manual runs and other webhooks bypass this limiter"
+   ],
+   "explanation": "ADR-0005 line 62: the triggers policy partitions on the constant \"global\", so one noisy webhook consumes the budget of every webhook and every manual run. Program.cs builds the fixed-window limiter with the literal partition key \"global\" rather than a token or workspace key, and both the hook trigger and the manual run endpoint carry the triggers policy."
+  },
+  {
+   "id": "q23-step-replacement-atomic",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0006-executedelete-step-replacement.md",
+    "lines": {
+     "start": 12,
+     "end": 30
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0006-executedelete-step-replacement.md",
+     "lineStart": 14,
+     "lineEnd": 26
+    },
+    {
+     "path": "docs/adr/0006-executedelete-step-replacement.md",
+     "lineStart": 30,
+     "lineEnd": 30
+    }
+   ],
+   "prompt": "During a flow PUT, inserting the new step list fails after ExecuteDeleteAsync has already removed the old steps. What does the flow end up with?",
+   "answer": "Its original steps, since delete and inserts share one uncommitted transaction",
+   "distractors": [
+    "No steps at all, because ExecuteDeleteAsync commits its DELETE by itself",
+    "Its original steps, because the change tracker re-adds the deleted rows",
+    "A mix of both lists, as the inserts that succeeded before the failure persist"
+   ],
+   "explanation": "ADR-0006 lines 14-26: the direct DELETE, the inserts with fresh orders and the save all run inside one transaction, so a failure rolls back to the original steps; ExecuteDeleteAsync bypasses the change tracker, which is why the delete, insert, save and commit order must be explicit. Line 30: an uncommitted transaction is disposed and the delete rolls back with it."
+  },
+  {
+   "id": "q24-step-ids-regenerated",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0006-executedelete-step-replacement.md",
+    "lines": {
+     "start": 34,
+     "end": 36
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0006-executedelete-step-replacement.md",
+     "lineStart": 36,
+     "lineEnd": 36
+    }
+   ],
+   "prompt": "Every flow save deletes and re-inserts the whole step list. Why don't existing run logs break when the steps get new ids?",
+   "answer": "Run logs point at steps by their StepOrder, never by the step id",
+   "distractors": [
+    "Run logs copy each step's full config instead of pointing at it",
+    "Step ids survive the save, as the inserts reuse the old rows' ids",
+    "Run logs are deleted along with the steps whenever a flow is saved"
+   ],
+   "explanation": "ADR-0006 line 36: step ids are regenerated on every save, so anything that referenced a step by id would break; run logs reference steps by StepOrder, which is why the replacement is safe today. The ids are not reused, and run history is kept rather than deleted or snapshotted with each step's config."
+  },
+  {
+   "id": "q25-utc-ticks-converter",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0008-utc-ticks-datetimeoffset-converter.md",
+    "lines": {
+     "start": 5,
+     "end": 20
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0008-utc-ticks-datetimeoffset-converter.md",
+     "lineStart": 9,
+     "lineEnd": 11
+    },
+    {
+     "path": "docs/adr/0008-utc-ticks-datetimeoffset-converter.md",
+     "lineStart": 15,
+     "lineEnd": 20
+    }
+   ],
+   "prompt": "Why does Relay store every DateTimeOffset in SQLite through a global UTC-ticks converter instead of SQLite's default storage?",
+   "answer": "Default text storage does not sort as instants; ticks make ORDER BY and ranges correct",
+   "distractors": [
+    "SQLite cannot store DateTimeOffset values at all, so every save would throw without it",
+    "Ticks use less disk space, and the default storage overflowed on long-running flows",
+    "The converter keeps each value's original offset, which the cron parser needs later"
+   ],
+   "explanation": "ADR-0008 lines 9-11: SQLite has no native DateTimeOffset type and its default text storage does not sort correctly as instants, so range and order queries would silently go wrong. Lines 15-20: UtcTicks are monotonic with the instant, so ORDER BY and range predicates are correct. Saves did not throw, space was not the motive, and values come back as UTC, not with their offset."
+  },
+  {
+   "id": "q26-offset-lost",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0008-utc-ticks-datetimeoffset-converter.md",
+    "lines": {
+     "start": 22,
+     "end": 40
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0008-utc-ticks-datetimeoffset-converter.md",
+     "lineStart": 25,
+     "lineEnd": 26
+    },
+    {
+     "path": "docs/adr/0008-utc-ticks-datetimeoffset-converter.md",
+     "lineStart": 39,
+     "lineEnd": 39
+    }
+   ],
+   "prompt": "A client stores a run timestamp carrying a +02:00 offset. What comes back when Relay later reads that value from SQLite?",
+   "answer": "The same instant as UTC with a zero offset; the +02:00 is not recoverable",
+   "distractors": [
+    "The same instant with the +02:00 offset restored from a separate companion column",
+    "A local server-time value, shifted by the database host's own time zone",
+    "The wall-clock time with +02:00 dropped, so the instant moves two hours"
+   ],
+   "explanation": "ADR-0008 lines 25-26: round-tripped values are always UTC with a zero offset. Line 39: values written with a non-zero offset come back as UTC, and a feature needing the sender's original offset cannot recover it. The ticks preserve the instant, so nothing shifts by the offset or by the host's zone, and no column stores the offset."
+  },
+  {
+   "id": "q27-token-optional",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0009-optimistic-concurrency-on-flows.md",
+    "lines": {
+     "start": 37,
+     "end": 41
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0009-optimistic-concurrency-on-flows.md",
+     "lineStart": 39,
+     "lineEnd": 39
+    },
+    {
+     "path": "server/Relay.Api/Controllers/FlowsController.cs",
+     "lineStart": 102,
+     "lineEnd": 104
+    }
+   ],
+   "prompt": "A flow PUT arrives with no expectedConcurrencyToken at all, while another admin saved the flow a minute earlier. What happens to the edit?",
+   "answer": "It is applied, because without a token the early check is skipped",
+   "distractors": [
+    "It is rejected with 409, since a missing token counts as a mismatch",
+    "It is rejected with 400, since the token is a required request field",
+    "It is merged with the earlier save, step by step, using each Order"
+   ],
+   "explanation": "ADR-0009 line 39: the token is optional; the early check only runs when ExpectedConcurrencyToken is present, so a client that omits it gets last-write-wins. FlowsController guards the comparison with a pattern match on a present token. Nothing treats absence as a mismatch or a validation error, and step lists are replaced wholesale, never merged."
+  },
+  {
+   "id": "q28-migration-drift-falsified",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/testing.md",
+    "lines": {
+     "start": 51,
+     "end": 67
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/testing.md",
+     "lineStart": 64,
+     "lineEnd": 66
+    }
+   ],
+   "prompt": "How was MigrationDriftTests shown to detect real model drift rather than pass vacuously?",
+   "answer": "An unmapped property was added once, all three tests failed, then the probe was removed",
+   "distractors": [
+    "A migration file was deleted once, and only the pending-changes test failed on it",
+    "It runs nightly against the production database, where it caught one real drift",
+    "Its three tests were mutation-tested in CI, and each of them killed every planted mutant"
+   ],
+   "explanation": "docs/testing.md lines 64-66: the guard was falsified once by adding an unmapped property, which made all three tests fail (EF Core 10's Migrate() also rejects pending model changes), and then the probe was removed, confirming it detects drift rather than passing vacuously. It was not a deleted migration, a production run, or mutation testing."
+  },
+  {
+   "id": "f05-server-test-taxonomy",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/testing.md",
+    "lines": {
+     "start": 21,
+     "end": 28
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/testing.md",
+     "lineStart": 23,
+     "lineEnd": 28
+    }
+   ],
+   "front": "Relay server tests: name the four kinds in docs/testing.md, what each covers, and an example class.",
+   "back": "Domain/unit: pure logic, no DB or HTTP (CronExpressionTests, WebhookSignatureTests). Executor: runs over in-memory SQLite with a fake dispatcher (FlowExecutorTests, RetriesExecutorTests). Persistence: migrations, seeder, converters, indexes (PersistenceTests, DateTimeOffsetOrderingTests). API integration: the full HTTP pipeline over WebApplicationFactory (FlowsApiTests, AuthorizationMatrixTests)."
+  },
+  {
+   "id": "f06-test-harnesses",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/testing.md",
+    "lines": {
+     "start": 30,
+     "end": 49
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/testing.md",
+     "lineStart": 32,
+     "lineEnd": 49
+    }
+   ],
+   "front": "What does each of Relay's server test harnesses give a test?",
+   "back": "RelayApiFactory: the real API over a private in-memory SQLite kept alive by an open connection, with SeedAsync, WithDbAsync and AuthenticateAsync, and per-test service overrides via WithWebHostBuilder. SqliteTestDatabase: a schema built from the real migrations; CreateContext hands out fresh contexts to defeat the identity map. FakeClock: settable, advanceable time. FakeKms: XOR-wrapped data keys. FakeActionDispatcher: a per-request Handler plus a Calls counter. FakeDelayer: records backoff delays without sleeping."
+  },
+  {
+   "id": "f07-envelope-anatomy",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0003-envelope-encryption-over-a-kms-port.md",
+    "lines": {
+     "start": 11,
+     "end": 45
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0003-envelope-encryption-over-a-kms-port.md",
+     "lineStart": 13,
+     "lineEnd": 23
+    },
+    {
+     "path": "docs/adr/0003-envelope-encryption-over-a-kms-port.md",
+     "lineStart": 43,
+     "lineEnd": 44
+    }
+   ],
+   "front": "Relay envelope encryption: what is inside an envelope, and how is a wrapped data key laid out?",
+   "back": "Envelope JSON {V, WrappedKey, Nonce, Tag, Cipher} (the default PascalCase names of the private Envelope record). Each secret gets a fresh data key, a 12-byte random nonce and AES-GCM with a 16-byte tag; Protect zeroes the plaintext data key after use. Wrapped key layout: nonce(12) | tag(16) | cipher. Tests use FakeKms, which XORs against a fixed mask yet still runs the full round trip and rotation."
+  },
+  {
+   "id": "f08-openapi-removal",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0010-remove-openapi-package.md",
+    "lines": {
+     "start": 5,
+     "end": 28
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0010-remove-openapi-package.md",
+     "lineStart": 13,
+     "lineEnd": 28
+    }
+   ],
+   "front": "ADR-0010: why was Microsoft.OpenApi removed, and what describes the API now?",
+   "back": "Its 2.x line brought build and behavior churn on .NET 10 for little value on a small, stable surface. The API is documented by hand in docs/api-reference.md, while the validated C# request/response records stay the single source of truth, so the reference must be kept in sync by hand. There is no live Swagger UI. A different, stable generator may come later: the ban is specifically on Microsoft.OpenApi 2.x."
+  },
+  {
+   "id": "f09-clock-port-reach",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0002-cron-over-a-clock-port.md",
+    "lines": {
+     "start": 26,
+     "end": 45
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0002-cron-over-a-clock-port.md",
+     "lineStart": 32,
+     "lineEnd": 33
+    },
+    {
+     "path": "docs/adr/0002-cron-over-a-clock-port.md",
+     "lineStart": 45,
+     "lineEnd": 45
+    }
+   ],
+   "front": "ADR-0002: beyond the schedule loop, what does the IClock port buy, how is cron evaluated, and what still bypasses the port?",
+   "back": "The same IClock makes webhook timestamp windows and metrics windows testable. Cron is evaluated in pure UTC, so DST is a display concern, not a scheduling one. Not all time goes through IClock yet: executor timestamps (ADR-0001's gaps) and FlowsController still read DateTimeOffset.UtcNow directly."
+  },
+  {
+   "id": "f10-concurrency-ux",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0009-optimistic-concurrency-on-flows.md",
+    "lines": {
+     "start": 12,
+     "end": 29
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0009-optimistic-concurrency-on-flows.md",
+     "lineStart": 14,
+     "lineEnd": 16
+    },
+    {
+     "path": "docs/adr/0009-optimistic-concurrency-on-flows.md",
+     "lineStart": 21,
+     "lineEnd": 29
+    }
+   ],
+   "front": "ADR-0009: what does a 409 on a flow save tell the user, what must clients carry, and how far does the check reach?",
+   "back": "409 means 'changed elsewhere, reload and retry'; the flow editor surfaces it with reconciliation guidance. Clients read concurrencyToken and echo it back as expectedConcurrencyToken through the edit round trip, and the token rotates on every successful update. The check is per-flow only: it does not coordinate edits to unrelated resources."
+  },
+  {
+   "id": "f11-webhook-separability",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0005-webhook-hmac-timestamp-idempotency.md",
+    "lines": {
+     "start": 29,
+     "end": 38
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0005-webhook-hmac-timestamp-idempotency.md",
+     "lineStart": 31,
+     "lineEnd": 38
+    }
+   ],
+   "front": "ADR-0005: how do signing, the timestamp window and the idempotency key relate, and what happens when the signing secret rotates?",
+   "back": "They are separable: signing works with or without a caller idempotency key, and the timestamp window only means something when signing is on. Rotating the signing secret invalidates old signatures immediately. The 5-minute window is a fixed policy constant, so senders with large clock skew must correct their clocks."
   }
  ]
 }
