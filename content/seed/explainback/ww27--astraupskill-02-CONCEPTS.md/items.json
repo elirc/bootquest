@@ -1,0 +1,186 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "ww27--astraupskill-02-CONCEPTS.md",
+ "items": [
+  {
+   "key": "seed:explainback:ww27/explain-back/136e0d11005b12e3",
+   "provenance": {
+    "repo": "ww27",
+    "sha": "2402d8907c72b15922a8a21619d6a7fcf794d128",
+    "path": "astraupskill/02-CONCEPTS.md",
+    "lines": {
+     "start": 3,
+     "end": 16
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "Walk through how ww27 decides which API contract a request is served under: where the version can come from, how live rollout settings are applied, who is let through, and what the code does with a version string it does not recognise.",
+     "keyPoints": [
+      {
+       "text": "Resolution order is an explicit (path) version, then the x-api-version header, then the ?version query parameter, and only then the registry's default.",
+       "cite": {
+        "path": "src/lib/http/api-context.ts",
+        "lineStart": 26,
+        "lineEnd": 34
+       }
+      },
+      {
+       "text": "An unregistered string makes getRequestedVersion throw badRequest instead of quietly serving the default; but the profile routes' error path re-resolves the version from the same request, so the senior review records that the caller actually sees a framework 500, not the intended 400.",
+       "cite": {
+        "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+        "lineStart": 59,
+        "lineEnd": 59
+       }
+      },
+      {
+       "text": "buildApiContext resolves the session, then the requested version, then the EFFECTIVE definition, and only then checks access, so a runtime rollout change actually takes effect.",
+       "cite": {
+        "path": "src/lib/http/api-context.ts",
+        "lineStart": 45,
+        "lineEnd": 55
+       }
+      },
+      {
+       "text": "The effective definition is the static registry entry with its rollout replaced by the catalog's runtime record when one exists.",
+       "cite": {
+        "path": "src/services/api-version-service.ts",
+        "lineStart": 92,
+        "lineEnd": 105
+       }
+      },
+      {
+       "text": "Access: ADMIN, SUPPORT and ANALYST always pass; otherwise an allowlisted client passes; otherwise the client's deterministic bucket must fall below the rollout percentage, or the request is refused with 403.",
+       "cite": {
+        "path": "src/lib/versioning/version-rollout.ts",
+        "lineStart": 19,
+        "lineEnd": 34
+       }
+      },
+      {
+       "text": "The rollout route narrows its raw path segment with toApiVersionId before building context, because a typed parameter is still just a string at runtime.",
+       "quote": "Runtime version checks protect the same boundary for path parameters, which are strings even when the function signature narrows them."
+      },
+      {
+       "text": "Types and runtime checks do different jobs: the union narrows code paths, the check stops a bad string before anything is written.",
+       "quote": "A discriminated version contract lets TypeScript narrow v1 and v2 safely; a runtime version check rejects unknown strings before an operational write."
+      }
+     ]
+    },
+    {
+     "prompt": "Explain how ww27's adapters serve two public contracts from one canonical customer profile: what each direction of translation does, where the legacy contract cannot carry the canonical state, and how errors are kept version-neutral. Name one place where the adapter and the schema disagree.",
+     "keyPoints": [
+      {
+       "text": "Version vocabulary stops at the adapter; services and repositories only ever see canonical fields.",
+       "quote": "The canonical model is the stable seam: version-specific names and statuses should not leak into repository or service policy."
+      },
+      {
+       "text": "A v1 create cannot express consent at all, so the adapter stores marketingOptIn as false, and the legacy inactive status is stored as SUSPENDED.",
+       "cite": {
+        "path": "src/lib/versioning/customer-profile-contracts.ts",
+        "lineStart": 99,
+        "lineEnd": 124
+       }
+      },
+      {
+       "text": "On the way out, the four canonical lifecycle states are collapsed into two legacy words, so a v1 reader cannot tell SUSPENDED from ARCHIVED.",
+       "cite": {
+        "path": "src/lib/versioning/customer-profile-contracts.ts",
+        "lineStart": 95,
+        "lineEnd": 97
+       }
+      },
+      {
+       "text": "Each version has its own strict zod schema, selected by the resolved version, so a field from the other contract is rejected instead of silently ignored.",
+       "cite": {
+        "path": "src/lib/validation/customer-profile-schemas.ts",
+        "lineStart": 18,
+        "lineEnd": 58
+       }
+      },
+      {
+       "text": "Failures are the one shape both versions share.",
+       "quote": "A malformed v1 request should receive the same safe error envelope as a malformed v2 request, while the success body differs by version."
+      },
+      {
+       "text": "toErrorResponse renders a ZodError as 400 VALIDATION_ERROR and anything unrecognised as 500, both through jsonWithVersionHeaders.",
+       "cite": {
+        "path": "src/lib/http/route-utils.ts",
+        "lineStart": 21,
+        "lineEnd": 54
+       }
+      },
+      {
+       "text": "Disagreement: isV2Update only recognises a v2 patch by name, lifecycleState or marketingOptIn, so a schema-valid v2 patch carrying only email or externalReference is refused by the adapter with a plain Error, which the error mapper turns into a 500.",
+       "cite": {
+        "path": "src/lib/versioning/customer-profile-contracts.ts",
+        "lineStart": 76,
+        "lineEnd": 78
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "Defend or indict this claim: \"ww27 tells v1 clients they are on a deprecated contract, and operators can tell when it is safe to retire it.\" Cover the response signals, the telemetry, the rollout controls and the client side.",
+     "keyPoints": [
+      {
+       "text": "Every response carries x-api-version and x-api-lifecycle; a DEPRECATED version also gets Deprecation: true and a 299 Warning naming the sunset date.",
+       "cite": {
+        "path": "src/lib/http/api-response.ts",
+        "lineStart": 17,
+        "lineEnd": 34
+       }
+      },
+      {
+       "text": "Error responses get the same headers, because toErrorResponse builds them with jsonWithVersionHeaders too.",
+       "cite": {
+        "path": "src/lib/http/route-utils.ts",
+        "lineStart": 21,
+        "lineEnd": 31
+       }
+      },
+      {
+       "text": "The Sunset header is the registry's bare date rather than an HTTP-date, and the stored deprecation date is never sent, so a strict client may miss both.",
+       "cite": {
+        "path": "docs/api/v1.md",
+        "lineStart": 12,
+        "lineEnd": 12
+       }
+      },
+      {
+       "text": "recordVersionUsage writes a usage row for successes and failures alike, with deprecationFired set for a deprecated version; those rows are the evidence for who still calls v1.",
+       "cite": {
+        "path": "src/lib/http/route-utils.ts",
+        "lineStart": 56,
+        "lineEnd": 71
+       }
+      },
+      {
+       "text": "A rollout change is ADMIN-only, validated (integer percentage 0-100, non-empty unique allowlist ids, known version) before the write, and audited; if the audit write fails the previous rollout is restored, though a crash between the two writes still leaves an unaudited change.",
+       "cite": {
+        "path": "src/services/api-version-service.ts",
+        "lineStart": 107,
+        "lineEnd": 143
+       }
+      },
+      {
+       "text": "Rollout input is checked before anything is persisted, not discovered later at override time.",
+       "quote": "Rollout validation similarly belongs before repository writes"
+      },
+      {
+       "text": "Client side, fetchJson parses every success body as JSON; the codebase map's rule that a 204 must not be parsed means a future no-content endpoint would break this helper.",
+       "cite": {
+        "path": "src/hooks/use-api-versions.ts",
+        "lineStart": 34,
+        "lineEnd": 43
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

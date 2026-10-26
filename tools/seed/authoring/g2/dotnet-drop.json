@@ -1,0 +1,37 @@
+{
+ "lines": { "start": 17, "end": 19 },
+ "questions": [
+  {
+   "prompt": "G2 BRIEF — dotnet-drop (Dropbox-style file service: ASP.NET Core + MediatR + EF Core/PostgreSQL, chunked resumable uploads, hosted background workers). Verified finding: `CompleteUploadHandler` saves the completion (`SaveChangesAsync`) and only on the next line deletes the session's chunk files; no code anywhere deletes `upload_chunks` rows; and `JanitorWorker` only selects sessions that are still Open and past their deadline. A process that dies between the commit and the file delete leaves that session's chunk files on disk for good, and every completed session keeps its chunk rows for ever. You will delegate the fix to a coding agent. Write the brief: goal, allowed files, boundaries, test command, stop condition. Commit to your brief first, then tick the checkpoints you covered and add up the weights.",
+   "keyPoints": [
+    { "text": "[w3] Goal: once a session has left Open (completed or expired), its chunk files and its chunk rows are both gone by the end of the next janitor sweep at the latest, including when the process died right after the completion commit.", "cite": { "path": "src/NetDropbox.Application/Uploads/CompleteUpload.cs", "lineStart": 83, "lineEnd": 87 } },
+    { "text": "[w3] Guarded form: the chunk rows are the durable marker that files may remain. Completion commits first, then deletes the files, then deletes the rows; the janitor selects sessions that are no longer Open and still have chunk rows, deletes their files (a no-op when already gone) and only then their rows, so every crash point is retried and nothing is swept twice.", "cite": { "path": "src/NetDropbox.Infrastructure/Processing/JanitorWorker.cs", "lineStart": 37, "lineEnd": 44 } },
+    { "text": "[w2] Scope includes the expired path: the sweep already deletes an expired session's files but leaves its rows, so the same rows-after-files rule covers it, and the existing (session, index) unique index already leads with the session id the new lookup filters on.", "cite": { "path": "src/NetDropbox.Infrastructure/Persistence/NetDropboxDbContext.cs", "lineStart": 77, "lineEnd": 82 } },
+    { "text": "[w2] Allowed files: CompleteUpload.cs, JanitorWorker.cs (its sweep may be extracted so a test can call it directly), and new cases beside tests/NetDropbox.Tests/Uploads/UploadHandlerTests.cs, reusing its fake chunk storage.", "cite": { "path": "tests/NetDropbox.Tests/Uploads/UploadHandlerTests.cs", "lineStart": 150, "lineEnd": 168 } },
+    { "text": "[w3] Boundary: no new column or status, because the app creates its schema with EnsureCreated and an added column would never reach an existing database; IChunkStorage keeps its three methods; blob reference counts, the trash purge and the post-commit scan enqueue are reported follow-ups.", "quote": "That makes first-run easy but is not migration discipline." },
+    { "text": "[w2] Test command: the pin does not build from a clone, because DependencyInjection.cs registers FileSystemChunkStorage, LocalBlobStorage and S3CompatibleBlobStorage, whose sources under Infrastructure/Storage/ are not in git; the runnable check is a throwaway harness that links the Domain, Application, Persistence and JanitorWorker sources (not DependencyInjection.cs) on EF InMemory with fake storage, plus `dotnet build` of the Domain and Application projects.", "cite": { "path": "src/NetDropbox.Infrastructure/DependencyInjection.cs", "lineStart": 30, "lineEnd": 52 } },
+    { "text": "[w2] Stop condition: harness cases for 'commit succeeds, file delete throws, next sweep cleans files then rows' (red on the original, whose janitor ignores Completed sessions) and for a normal completion ending with no rows and no files both pass; the report says the 22-test project was not run and why, instead of citing the old recorded run as current.", "cite": { "path": "astraupskill/VERIFICATION.md", "lineStart": 51, "lineEnd": 51 } }
+   ]
+  },
+  {
+   "prompt": "G2 PRE-MORTEM — same delegation. What will an agent most likely get wrong here, and which line of your brief prevents it?",
+   "keyPoints": [
+    { "text": "[w3] It moves the file delete (or the row delete) ahead of SaveChangesAsync, so a completion whose save then fails can no longer be retried because its chunks are gone; the commit-first order in the guarded form prevents it.", "cite": { "path": "src/NetDropbox.Application/Uploads/CompleteUpload.cs", "lineStart": 83, "lineEnd": 86 } },
+    { "text": "[w3] It widens the janitor's filter to every Completed session with no marker, so each 15-minute sweep re-deletes the chunk directories of every upload ever finished, work that grows with history for ever.", "cite": { "path": "src/NetDropbox.Infrastructure/Processing/JanitorWorker.cs", "lineStart": 26, "lineEnd": 39 } },
+    { "text": "[w2] It adds a ChunksPurged flag or a CompletedAt column to drive the sweep; with no migrations, existing databases never receive the column, and the dev seeder hides that on a fresh install.", "cite": { "path": "src/NetDropbox.Infrastructure/Persistence/DbSeeder.cs", "lineStart": 14, "lineEnd": 14 } },
+    { "text": "[w2] Feature creep: it starts decrementing blob reference counts or releasing quota in the trash purge, a different collector with its own races.", "cite": { "path": "src/NetDropbox.Domain/BlobObject.cs", "lineStart": 35, "lineEnd": 40 } },
+    { "text": "[w1] False green: it quotes the recorded 22-test pass, or a successful build of the Domain project alone, as proof that the change works.", "cite": { "path": "astraupskill/VERIFICATION.md", "lineStart": 45, "lineEnd": 51 } }
+   ]
+  },
+  {
+   "prompt": "G2 HANDBACK REVIEW — the agent hands back a diff and a green run. What do you check before accepting it?",
+   "keyPoints": [
+    { "text": "[w3] The order is visible in both places: commit, then files, then rows in the handler; files, then rows in the sweep; and deleting an already-missing directory does not throw.", "cite": { "path": "src/NetDropbox.Application/Uploads/CompleteUpload.cs", "lineStart": 85, "lineEnd": 86 } },
+    { "text": "[w3] The sweep's query reads 'not Open and still has chunk rows', so a fully cleaned session is never selected again.", "cite": { "path": "src/NetDropbox.Infrastructure/Processing/JanitorWorker.cs", "lineStart": 37, "lineEnd": 39 } },
+    { "text": "[w2] The handback names exactly what ran: which harness project, which source files it linked, how many cases, with the crash-between case shown failing on the original code and InMemory named as the provider.", "cite": { "path": "astraupskill/VERIFICATION.md", "lineStart": 7, "lineEnd": 7 } },
+    { "text": "[w2] IChunkStorage is unchanged, and the existing completion rules (missing chunks, size and checksum checks before any blob write) are untouched in the diff.", "cite": { "path": "src/NetDropbox.Application/Abstractions/IChunkStorage.cs", "lineStart": 9, "lineEnd": 20 } },
+    { "text": "[w1] Follow-ups are listed, not fixed: blob counts that never go down, a trash purge that frees neither blobs nor quota, a scan message lost after the commit, and the storage adapters missing from the repository.", "cite": { "path": "src/NetDropbox.Infrastructure/Processing/JanitorWorker.cs", "lineStart": 46, "lineEnd": 51 } }
+   ]
+  }
+ ]
+}

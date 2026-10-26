@@ -1,0 +1,186 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "mastermorphic--morphic-fabledocs-03-architecture-and-patterns-04-side-effects-async-and-reliability.md",
+ "items": [
+  {
+   "key": "seed:explainback:mastermorphic/explain-back/a70ededb1856165e",
+   "provenance": {
+    "repo": "mastermorphic",
+    "sha": "c9b8310208022f9d8293ddf9bfe31ac291759ede",
+    "path": "morphic/fabledocs/03-architecture-and-patterns/04-side-effects-async-and-reliability.md",
+    "lines": {
+     "start": 1,
+     "end": 47
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "Walk through what survives when the serverless instance running an authenticated Morphic answer is killed: before the first save of a brand-new chat resolves, while the model is still streaming, and inside the stream's completion callback before the answer is written. What does the user find after a refresh in each case, and why does nothing re-drive the lost work?",
+     "keyPoints": [
+      {
+       "text": "[w3] Every effect here is a promise that lives and dies with the request: there is no queue, cron, webhook or outbox, so when the instance goes away mid-answer the pending writes simply never happen and nobody is told.",
+       "quote": "if the serverless instance dies mid-stream, in-flight effects are lost silently."
+      },
+      {
+       "text": "[w2] For a new chat, the chat row and the first user message are written optimistically: the create promise is started, parked on the stream context and NOT awaited before the model is called; only the completion callback awaits it.",
+       "cite": {
+        "path": "morphic/lib/streaming/helpers/prepare-messages.ts",
+        "lineStart": 91,
+        "lineEnd": 116
+       }
+      },
+      {
+       "text": "[w3] The answer is persisted from the onFinish callback after the model stream completes, so the route's maxDuration of 300 seconds is the deadline for the whole pipeline: generation, tool calls and the database write all have to fit inside it.",
+       "cite": {
+        "path": "morphic/lib/streaming/create-chat-stream-response.ts",
+        "lineStart": 196,
+        "lineEnd": 218
+       }
+      },
+      {
+       "text": "[w2] Killed before the optimistic create lands: the chat never exists, so a refresh shows nothing; killed mid-stream: the question may be stored but there is no assistant row.",
+       "cite": {
+        "path": "morphic/lib/streaming/helpers/persist-stream-results.ts",
+        "lineStart": 35,
+        "lineEnd": 79
+       }
+      },
+      {
+       "text": "[w2] Killed inside onFinish after the initial save but before the response upsert: the refresh shows a chat still carrying its placeholder name, the user's question, and no reply, the drill's 'strong' answer.",
+       "quote": "chat with the user message but no answer"
+      },
+      {
+       "text": "[w2] The upgrade is to make the intent durable before the work starts: write an outbox row in the same transaction as the user's message (or enqueue to a durable queue) and let a drainer re-drive it, at-least-once into an idempotent consumer.",
+       "quote": "durable queue or an outbox table written in the same transaction as the user's message"
+      },
+      {
+       "text": "[w1] Analytics is a fire-and-forget async IIFE started after the response is built; for existing chats it reloads the whole chat just to count turns, and any failure is logged and swallowed.",
+       "cite": {
+        "path": "morphic/app/api/chat/route.ts",
+        "lineStart": 173,
+        "lineEnd": 206
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "Explain how the final save of an assistant answer is made safe to repeat: exactly what is retried, how many attempts and what waits happen, which property of the write makes a repeat harmless, and what condition that property silently depends on. Then name the write on the regenerate path that has no such protection.",
+     "keyPoints": [
+      {
+       "text": "[w3] Only the response upsert is retried: one direct attempt, and on failure retryDatabaseOperation (maxRetries 2, 200 ms initial delay, doubling, 2 s cap), so up to four attempts with waits of 200 ms and 400 ms between the retried ones.",
+       "cite": {
+        "path": "morphic/lib/utils/retry.ts",
+        "lineStart": 11,
+        "lineEnd": 68
+       }
+      },
+      {
+       "text": "[w3] The write converges instead of duplicating: inside one transaction it inserts the message with ON CONFLICT (id) DO UPDATE, deletes that message's parts and re-inserts them, so running it twice leaves the same rows.",
+       "cite": {
+        "path": "morphic/lib/db/actions.ts",
+        "lineStart": 86,
+        "lineEnd": 125
+       }
+      },
+      {
+       "text": "[w2] Retry and idempotency are a pair: the retry loop is only acceptable because a repeated save cannot create a second answer.",
+       "quote": "Retrying is only safe"
+      },
+      {
+       "text": "[w2] The hidden dependency is the message id: the action wrapper substitutes generateId() when the message has none, on every call, so an id-less message would get a fresh primary key per attempt and a retried save could store the answer twice.",
+       "cite": {
+        "path": "morphic/lib/actions/chat.ts",
+        "lineStart": 179,
+        "lineEnd": 200
+       }
+      },
+      {
+       "text": "[w2] When every attempt fails the error ends in console.error and the callback returns normally to keep the stream intact: the user has already read the answer, but no row and no pending record exist to recover it from.",
+       "cite": {
+        "path": "morphic/lib/streaming/helpers/persist-stream-results.ts",
+        "lineStart": 81,
+        "lineEnd": 98
+       }
+      },
+      {
+       "text": "[w3] Regenerating an assistant reply deletes it and everything after it BEFORE the replacement stream exists, with no compensation; if the new stream then dies, the original answer is gone. The fix is to reorder (delete after success) or soft-delete.",
+       "cite": {
+        "path": "morphic/lib/streaming/helpers/prepare-messages.ts",
+        "lineStart": 57,
+        "lineEnd": 64
+       }
+      },
+      {
+       "text": "[w1] If the requested message id is not found, the code falls back to the newest user or assistant message by position, so a stale client id still triggers a delete of the latest messages.",
+       "cite": {
+        "path": "morphic/lib/streaming/helpers/prepare-messages.ts",
+        "lineStart": 39,
+        "lineEnd": 60
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "Defend or indict Morphic's timeout and failure policies on the external calls an answer depends on: the Redis usage counters, the page-fetch tool's backends, the vendor search tool and the title model. For each, what happens when the dependency is slow or down, and who would notice?",
+     "keyPoints": [
+      {
+       "text": "[w3] Each limiter races redis.incr against a 3-second timer and its catch returns allowed: true with infinite remaining, so a Redis outage or stall removes the daily cap rather than blocking chat: availability is chosen over enforcement.",
+       "cite": {
+        "path": "morphic/lib/rate-limit/chat-limits.ts",
+        "lineStart": 45,
+        "lineEnd": 77
+       }
+      },
+      {
+       "text": "[w2] INCR and EXPIRE are two separate calls (EXPIRE only when the count is 1), so a failure between them leaves a key with no TTL; because the UTC date is part of the key, that leaks a key rather than locking the user out the next day.",
+       "cite": {
+        "path": "morphic/lib/rate-limit/chat-limits.ts",
+        "lineStart": 51,
+        "lineEnd": 64
+       }
+      },
+      {
+       "text": "[w2] Timeout discipline is inconsistent: the direct page fetch aborts after 10 seconds via AbortController, but the Jina reader and Tavily extract calls pass no signal at all, so a hung vendor holds that tool step open toward the function deadline.",
+       "cite": {
+        "path": "morphic/lib/tools/fetch.ts",
+        "lineStart": 90,
+        "lineEnd": 133
+       }
+      },
+      {
+       "text": "[w2] The search tool has no explicit timeout either; errors are re-thrown so the AI SDK can show the tool call in its error state rather than the route failing.",
+       "cite": {
+        "path": "morphic/lib/tools/search.ts",
+        "lineStart": 84,
+        "lineEnd": 142
+       }
+      },
+      {
+       "text": "[w2] Title generation is a replaceable effect: an abort or model error is caught and a fallback title is returned, so a flaky title model degrades the chat name and never the answer.",
+       "cite": {
+        "path": "morphic/lib/agents/title-generator.ts",
+        "lineStart": 61,
+        "lineEnd": 74
+       }
+      },
+      {
+       "text": "[w2] Tracing flushes on both the success and the error path (finally in onFinish, and the outer catch), so a failed answer still leaves its trace.",
+       "cite": {
+        "path": "morphic/lib/streaming/create-chat-stream-response.ts",
+        "lineStart": 213,
+        "lineEnd": 227
+       }
+      },
+      {
+       "text": "[w2] Who notices: every swallowed failure is a console.error or console.warn, which works on a single self-hosted box and disappears in serverless log volume; none of these catch blocks emits a metric or raises an alert.",
+       "quote": "adequate for self-host, invisible at scale"
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

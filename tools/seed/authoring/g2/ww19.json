@@ -1,0 +1,37 @@
+{
+ "lines": { "start": 24, "end": 38 },
+ "questions": [
+  {
+   "prompt": "G2 BRIEF — ww19 (temporal-lite workflow orchestrator: Next.js + Prisma + PostgreSQL, a durable task queue drained by a polling worker). Verified finding: `claimNextAvailableTask()` only considers tasks whose status is AVAILABLE; a claim flips the row to LEASED and writes a `leaseExpiresAt`, but nothing ever reads that expiry again. A worker that is killed after claiming leaves the task LEASED forever, so its step never finishes and the run never advances. You will delegate the fix to a coding agent. Write the brief: goal, allowed files, boundaries, test command, stop condition. Commit to your brief first, then tick the checkpoints you covered and add up the weights.",
+   "keyPoints": [
+    { "text": "[w3] Goal: a LEASED task whose lease has passed becomes claimable again through the SAME claim statement, while a task whose lease is still live is never handed to a second worker.", "cite": { "path": "src/repositories/task-repository.ts", "lineStart": 55, "lineEnd": 74 } },
+    { "text": "[w3] Guarded form: the expired-lease branch goes inside the candidate CTE next to the AVAILABLE branch, under the existing FOR UPDATE SKIP LOCKED, and every reclaim mints a fresh leaseToken; then completion and failure writes are made conditional on the token the worker was handed, because today they update the task by id alone.", "cite": { "path": "src/repositories/task-repository.ts", "lineStart": 79, "lineEnd": 88 } },
+    { "text": "[w2] Scope includes the attempt budget: execution start already increments attemptCount, so a reclaimed task whose step has used up maxAttempts must be failed through the normal failure path instead of re-run, or a task that crashes its worker every time is reclaimed forever.", "cite": { "path": "src/services/workflow-engine-service.ts", "lineStart": 391, "lineEnd": 401 } },
+    { "text": "[w2] Allowed files: src/repositories/task-repository.ts, src/services/workflow-engine-service.ts (the token-conditional complete/fail writes), src/services/worker-service.ts if the token has to be threaded through, and one new tests/*.test.mjs.", "cite": { "path": "src/services/worker-service.ts", "lineStart": 69, "lineEnd": 123 } },
+    { "text": "[w3] Boundary: prisma/schema.prisma and the migrations stay untouched (the lease columns already exist, @@unique([workflowRunId, stepKey]) and the task's unique stepRunId stay exactly as they are, no new TaskStatus value); the run-creation findings in the senior review are out of scope.", "cite": { "path": "prisma/schema.prisma", "lineStart": 203, "lineEnd": 226 } },
+    { "text": "[w2] Test command: `node --experimental-vm-modules --test` on the new file plus tests/workflow-run-idempotency.test.mjs, loading the real source with the loadTypeScript helper and stubbing @/lib/db and the repositories; `npm test` (vitest) is not the runner the repo has ever executed.", "cite": { "path": "tests/helpers/load-typescript.mjs", "lineStart": 1, "lineEnd": 8 } },
+    { "text": "[w2] Stop condition: a new test where a stale token's completion leaves the reclaimed task and its step unchanged is red on the original and green on the fix, the five existing cases still pass, and the claim SQL against a real PostgreSQL is either run or reported as not run.", "quote": "None was reproduced against a database." }
+   ]
+  },
+  {
+   "prompt": "G2 PRE-MORTEM — same delegation. What will an agent most likely get wrong here, and which line of your brief prevents it?",
+   "keyPoints": [
+    { "text": "[w3] It writes a separate 'find expired leases, then update them' query (or a sweeper doing the same), a read-then-write that lets two workers reclaim one task; the 'same claim statement, under SKIP LOCKED' line prevents it.", "cite": { "path": "src/repositories/task-repository.ts", "lineStart": 8, "lineEnd": 9 } },
+    { "text": "[w3] It makes reclaim work and stops there, so the slow original worker that was only paused still completes by task id after the reclaim: the handler's result lands twice and the run tries to create the next step a second time.", "cite": { "path": "src/services/workflow-engine-service.ts", "lineStart": 470, "lineEnd": 496 } },
+    { "text": "[w2] It meets that second next-step insert with a schema edit, relaxing the unique (run, step key) pair so the duplicate goes through; the schema-untouched boundary forbids it and points back at the token check.", "cite": { "path": "prisma/schema.prisma", "lineStart": 203, "lineEnd": 203 } },
+    { "text": "[w2] Feature creep: heartbeats, lease extension, a new RECLAIMED status or a separate reaper process, none of which the goal needs, and the new enum value alone would mean a migration.", "cite": { "path": "prisma/schema.prisma", "lineStart": 54, "lineEnd": 59 } },
+    { "text": "[w1] False green: it reports `npm test` passing, which runs the colocated vitest files and says nothing about the worker or the claim; the brief names the node --test command and the not-run database check.", "cite": { "path": "astraupskill/VERIFICATION.md", "lineStart": 27, "lineEnd": 31 } }
+   ]
+  },
+  {
+   "prompt": "G2 HANDBACK REVIEW — the agent hands back a diff and a green run. What do you check before accepting it?",
+   "keyPoints": [
+    { "text": "[w3] There is still exactly one claim query: the expired-lease predicate sits in the candidate CTE that carries FOR UPDATE SKIP LOCKED, and the reclaim path sets a new leaseToken rather than reusing the dead worker's.", "cite": { "path": "src/repositories/task-repository.ts", "lineStart": 54, "lineEnd": 73 } },
+    { "text": "[w3] The COMPLETED write and the retry write both carry the lease token in their condition, and the pasted run includes the stale-completion test failing on the original code.", "cite": { "path": "src/services/workflow-engine-service.ts", "lineStart": 557, "lineEnd": 564 } },
+    { "text": "[w2] The five original idempotency cases still pass, and the output shows node's test runner executed them, not vitest.", "cite": { "path": "astraupskill/VERIFICATION.md", "lineStart": 7, "lineEnd": 8 } },
+    { "text": "[w2] Re-running a handler after a reclaim is shown to be safe only for side effects wrapped in runOnce, whose record is keyed by step run and action type; the handback says so instead of claiming exactly-once execution.", "cite": { "path": "src/services/worker-service.ts", "lineStart": 32, "lineEnd": 45 } },
+    { "text": "[w1] The schema and migrations are absent from the diff, and the run-creation findings are listed as follow-ups, not fixed here.", "quote": "A seed failure leaves a permanently `PENDING` run with no steps." }
+   ]
+  }
+ ]
+}

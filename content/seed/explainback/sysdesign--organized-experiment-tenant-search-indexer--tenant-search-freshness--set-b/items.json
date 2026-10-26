@@ -1,0 +1,175 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "organized-experiment-tenant-search-indexer--docs-learning-concepts-demonstrated.md--set-b",
+ "items": [
+  {
+   "key": "seed:explainback:organized-experiment-tenant-search-indexer/explain-back/e08c1d82868b44ac",
+   "provenance": {
+    "repo": "organized-experiment-tenant-search-indexer",
+    "sha": "0c15ff9db8ebd08d79d93e3f5ec6d02ebdc4b8eb",
+    "path": "docs/learning/concepts-demonstrated.md",
+    "lines": {
+     "start": 1,
+     "end": 106
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "DESIGN IT — [senior] query-side scale and ranking quality for a whale tenant's search (organized-experiment-tenant-search-indexer, docs/learning/concepts-demonstrated.md). Scenario: the largest tenant grows from 400,000 to 4,000,000 documents and complains on two counts: search is slow (p95 around 3 seconds) and wrong (tickets whose title matches the query are buried under body matches). Agents page deep and expect a total count. Write your design before you look: how the text representation and its index change, how you migrate 4,000,000 existing documents onto it, how pages are cut and how totals are counted, how recency enters the ranking, and whether the whale earns a physical partition of its own. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "keyPoints": [
+      {
+       "text": "[w3] Titles are buried because title and body are glued into one unweighted text before matching, so a hit in a 220-character title scores like a hit anywhere in the body; store setweight(title, 'A') || setweight(body, 'B') instead, which needs no source change because each document already keeps title and body as separate fields.",
+       "cite": {
+        "path": "src/repositories/searchDocumentRepository.ts",
+        "lineStart": 71,
+        "lineEnd": 71
+       }
+      },
+      {
+       "text": "[w3] The weighted vector becomes a stored column with a GIN index: today the only secondary indexes are on tenant plus generation and tenant plus entity type, so every match is evaluated row by row across the tenant's whole active generation, 4,000,000 rows for the whale.",
+       "cite": {
+        "path": "src/db/schema.ts",
+        "lineStart": 149,
+        "lineEnd": 150
+       }
+      },
+      {
+       "text": "[w3] Migrate in tenant-sized batches, never with one UPDATE: add the column as nullable, fill it on every new write, then backfill per tenant in keyset-ordered chunks of a few thousand rows per transaction; or let each tenant's next generation rebuild write rows that already carry the vector. The rebuild today reads the whole tenant snapshot and upserts it in a single statement, which at 4,000,000 rows must be chunked as well.",
+       "cite": {
+        "path": "src/services/indexingJobRunner.ts",
+        "lineStart": 105,
+        "lineEnd": 112
+       }
+      },
+      {
+       "text": "[w3] Deep pages move to a cursor (search-after): order by rank then a stable id for relevance, or by update time then id for recency, and hand back the last pair; today the relevance order has no tie-breaker at all, so documents with equal rank come back in any order and neighbouring pages can overlap or skip rows.",
+       "cite": {
+        "path": "src/repositories/searchDocumentRepository.ts",
+        "lineStart": 99,
+        "lineEnd": 107
+       }
+      },
+      {
+       "text": "[w2] Depth has to be capped: input validation limits page size to 25 but sets no upper bound on the page number, so any caller can request a page that makes the database produce and discard millions of rows; allow numbered pages up to a fixed depth and require the cursor beyond it.",
+       "cite": {
+        "path": "src/lib/validation/searchSchemas.ts",
+        "lineStart": 17,
+        "lineEnd": 18
+       }
+      },
+      {
+       "text": "[w2] Totals become an estimate past a threshold: the service returns a total with every page, so the full match is recounted on every page turn; count only up to a cap (say 1,000, shown as '1,000+') or only on the first page.",
+       "cite": {
+        "path": "src/services/searchService.ts",
+        "lineStart": 26,
+        "lineEnd": 30
+       }
+      },
+      {
+       "text": "[w2] Recency enters as a tie-breaker or a gentle decay on the update time every document already carries, for example rank divided by one plus age in months, applied to tickets; directory entries are reference data and should not decay.",
+       "cite": {
+        "path": "src/lib/search/document-builder.ts",
+        "lineStart": 29,
+        "lineEnd": 41
+       }
+      },
+      {
+       "text": "[w2] The whale earns its own partition: list-partition the documents table by tenant with the whale in its own partition, so its index builds, vacuum and rebuilds never touch other tenants; the unique key already leads with tenant, which partitioning requires.",
+       "cite": {
+        "path": "src/db/schema.ts",
+        "lineStart": 143,
+        "lineEnd": 148
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "PRE-MORTEM — the whale migration ships and three tickets follow. The backfill ran as one UPDATE across all 4,000,000 of the whale's documents and the table bloated while agents' edits stalled; an agent paging through results lands on page 7 just after a rebuild flipped the generation and gets rows that no longer exist; and the weighted ranking went live in the middle of a working day, so 'the same search moved' tickets spiked. What breaks, how does each problem show up, and what in your design prevents it?",
+     "keyPoints": [
+      {
+       "text": "[w3] One giant UPDATE writes a new version of every row in one transaction: the table and its indexes roughly double until vacuum catches up, the WAL burst lags replicas, and each row stays locked until commit, so the per-change upserts for that tenant, which update the same rows on conflict, queue behind it; a failure throws all of it away. Batch, commit and throttle instead.",
+       "cite": {
+        "path": "src/repositories/searchDocumentRepository.ts",
+        "lineStart": 26,
+        "lineEnd": 51
+       }
+      },
+      {
+       "text": "[w3] A cursor must not point at row ids: every document row gets a fresh random id, so the same ticket has a different id in generation N+1, and the flip deleted generation N; build cursors from the entity id plus the sort value, carry the generation in the cursor, and on a mismatch either continue on the new generation from the sort value or tell the user the results were refreshed.",
+       "cite": {
+        "path": "src/db/schema.ts",
+        "lineStart": 127,
+        "lineEnd": 133
+       }
+      },
+      {
+       "text": "[w2] A flip can also land between two reads: the service reads the tenant's active generation and then runs the search as separate statements, so a query issued in that gap targets a generation that was just deleted and returns an empty page; read both inside one snapshot, or retry once when nothing comes back and the generation has changed.",
+       "cite": {
+        "path": "src/services/searchService.ts",
+        "lineStart": 22,
+        "lineEnd": 30
+       }
+      },
+      {
+       "text": "[w3] Ranking changes are releases: ship the new weights per tenant behind a switch, roll each tenant over at its generation flip so its results change all at once rather than mid-session, schedule the whale outside working hours, announce it, and compare a saved set of queries before and after.",
+       "quote": "Search reads only `generation = activeGeneration`"
+      },
+      {
+       "text": "[w2] Disk has to budget for two copies: a rebuild writes a complete new generation beside the live one (the unique key includes the generation), so for the whale the documents and the new GIN index exist twice until the flip deletes the old set.",
+       "cite": {
+        "path": "src/db/schema.ts",
+        "lineStart": 143,
+        "lineEnd": 148
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "TRADE-OFF HANDBACK — defend your query-side choices against the alternatives: a stored weighted vector with a GIN index versus computing ts_rank per query; numbered pages with exact counts versus cursors with estimates; one documents table versus a partition for the whale; plain web-search queries versus prefix or trigram matching; and a recency boost versus pure text relevance. For each, say what you bought and what it cost.",
+     "keyPoints": [
+      {
+       "text": "[w3] The stored vector buys sub-linear matching and the title weighting, paid for in disk, write cost on every document change and a migration; computing per query keeps the schema trivial and the vector always in step with the text, but its CPU cost grows with the tenant, and at 4,000,000 rows the whale settles the question.",
+       "cite": {
+        "path": "src/db/schema.ts",
+        "lineStart": 134,
+        "lineEnd": 135
+       }
+      },
+      {
+       "text": "[w3] Numbered pages give 'page 37 of 412' and jumping around, at a cost that grows with the offset and a recount on every request; cursors cost the same at any depth but offer only next and previous, and estimates feel less precise to users who expect exact numbers.",
+       "cite": {
+        "path": "src/lib/search/query.ts",
+        "lineStart": 17,
+        "lineEnd": 21
+       }
+      },
+      {
+       "text": "[w2] A whale partition isolates maintenance and lets its indexes be tuned separately, at the cost of DDL for each new whale and a planner that must prune correctly; one table stays simple until a single tenant dominates the statistics and every vacuum.",
+       "cite": {
+        "path": "src/db/schema.ts",
+        "lineStart": 149,
+        "lineEnd": 149
+       }
+      },
+      {
+       "text": "[w2] Web-search syntax gives users quoted phrases, OR and exclusions, but no partial words, so 'pass' never finds 'password'; prefix or trigram matching serves type-ahead at the price of larger indexes and noisier matches.",
+       "quote": "so quotes, `OR` and `-term` in user input are interpreted as web-search syntax, not SQL."
+      },
+      {
+       "text": "[w2] A recency boost favours live tickets but can bury an old canonical answer, while pure relevance ignores staleness; a per-type policy (tickets decay, directory entries do not) keeps both, at the cost of a ranking rule someone has to own and test.",
+       "cite": {
+        "path": "src/lib/search/document-builder.ts",
+        "lineStart": 44,
+        "lineEnd": 67
+       }
+      }
+     ]
+    }
+   ],
+   "set": "b"
+  }
+ ]
+}

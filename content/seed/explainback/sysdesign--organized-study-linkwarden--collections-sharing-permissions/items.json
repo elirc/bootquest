@@ -1,0 +1,182 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "organized-study-linkwarden--linkwarden-fabledocs-upskill-03-architecture-and-patterns-03-validation-auth-and-permissions.md",
+ "items": [
+  {
+   "key": "seed:explainback:organized-study-linkwarden/explain-back/a2638ac92777cb5d",
+   "provenance": {
+    "repo": "organized-study-linkwarden",
+    "sha": "d98206e1829b15821d97e2555db7c269ba806d09",
+    "path": "linkwarden/fabledocs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 1,
+     "end": 52
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "DESIGN IT — [senior] object-level sharing and permissions for collections of saved links (organized-study-linkwarden, linkwarden/fabledocs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md). Scenario: a bookmarking and web-archiving service has 25,000 users, 40,000 collections and 6 million saved links, each link with preserved copies (screenshot, PDF, single-file HTML) stored on disk. One team collection is shared with 30 members at mixed capability levels; some collections are flipped public on the open web; and when an owner removes a member, the removal must take effect within a minute. Write your design before you look: how membership and capabilities are stored, how each link or collection operation decides whether the caller may proceed, what making a collection public exposes, whose rights govern moving a link between collections, how removing a member takes effect, and how the preserved files on disk are protected. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "keyPoints": [
+      {
+       "text": "[w3] Membership is one row per user and collection carrying three capability booleans (create, update, delete), while the owner is a column on the collection itself and holds every right without a membership row.",
+       "cite": {
+        "path": "linkwarden/packages/prisma/schema.prisma",
+        "lineStart": 151,
+        "lineEnd": 164
+       }
+      },
+      {
+       "text": "[w3] Every decision starts from the same lookup, the collection plus its member rows, and the lookup by link does not filter on the requesting user at all, so each controller must apply its own test (any member may read, update needs canUpdate, delete needs canDelete); one forgotten test is a leak.",
+       "cite": {
+        "path": "linkwarden/apps/web/lib/api/getPermission.ts",
+        "lineStart": 14,
+        "lineEnd": 26
+       }
+      },
+      {
+       "text": "[w2] Bulk operations decide per object and fail as a whole: a bulk delete resolves the collection of every link and refuses the entire request if any one link is outside the caller's owner-or-canDelete rights, before deleting anything.",
+       "cite": {
+        "path": "linkwarden/apps/web/lib/api/controllers/links/bulk/deleteLinksById.ts",
+        "lineStart": 21,
+        "lineEnd": 33
+       }
+      },
+      {
+       "text": "[w3] Public is a single flag, and archive access is owner OR member OR public, so flipping it exposes every preserved copy ever captured in that collection, including pages archived while it was private; treat publishing as a deliberate, recorded act that says how many snapshots it will expose.",
+       "cite": {
+        "path": "linkwarden/apps/web/lib/api/archives/resolveAccessibleArchive.ts",
+        "lineStart": 30,
+        "lineEnd": 45
+       }
+      },
+      {
+       "text": "[w3] A link has no rights of its own; it takes its collection's, so a move changes who can see it, and the code allows a move only for someone who owns the source collection and can reach the destination, while plain editors may change a link in place but not relocate it.",
+       "cite": {
+        "path": "linkwarden/apps/web/lib/api/controllers/links/linkId/updateLinkById.ts",
+        "lineStart": 88,
+        "lineEnd": 101
+       }
+      },
+      {
+       "text": "[w3] Removal bites on the next request for the API, because membership is re-read from the database on every call and API tokens belong to a user, not a collection; the gap is the signed archive URL, which names a link and a file, lives 300 seconds and is checked only for signature and expiry, so a one-minute promise needs a TTL under a minute or a membership re-check at view time.",
+       "cite": {
+        "path": "linkwarden/apps/web/lib/api/preserved/createPreservedFormatUrl.ts",
+        "lineStart": 65,
+        "lineEnd": 79
+       }
+      },
+      {
+       "text": "[w2] Files on disk carry no access control: preserved copies sit under a path keyed by collection id, so the database check in front of every read is the only gate, and the files are served from a separate user-content domain so an archived page cannot run script on the app's origin.",
+       "cite": {
+        "path": "linkwarden/apps/web/lib/api/archives/resolveAccessibleArchive.ts",
+        "lineStart": 70,
+        "lineEnd": 72
+       }
+      },
+      {
+       "text": "[w2] The capability triplet needs rules: the update schema accepts any combination of the three booleans, so a member can hold delete without update; define an order (view, create, update, delete) or a role, and reject combinations outside it when members are saved.",
+       "cite": {
+        "path": "linkwarden/packages/lib/schemaValidation.ts",
+        "lineStart": 230,
+        "lineEnd": 236
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "PRE-MORTEM — six months in, four incidents. A link archived while it sat in a private collection is moved into the shared team collection; an owner flips a large collection public to share one link; an owner removes a departing member and worries that their API token still works; and an audit finds membership rows with delete but not update, and a member who can read links through the API while the UI shows them no access. What breaks, how does each show up, and what in your design prevents it?",
+     "keyPoints": [
+      {
+       "text": "[w3] The move carries the snapshots across the boundary: the row is reassigned and the files follow afterwards, outside any transaction, so copies captured under private visibility become readable by all 30 members, and a crash between the two steps leaves files under the old collection's folder where the archive reader no longer looks. Ask for confirmation of what becomes visible and make the file move and the row change recoverable together.",
+       "cite": {
+        "path": "linkwarden/apps/web/lib/api/controllers/links/linkId/updateLinkById.ts",
+        "lineStart": 146,
+        "lineEnd": 197
+       }
+      },
+      {
+       "text": "[w3] Publishing one link published everything: the public flag is just another field on the collection update, nothing records who flipped it or when, and every snapshot in the collection becomes anonymously readable at once; offer per-link sharing for that need, and audit visibility changes.",
+       "cite": {
+        "path": "linkwarden/apps/web/lib/api/controllers/collections/collectionId/updateCollectionById.ts",
+        "lineStart": 131,
+        "lineEnd": 141
+       }
+      },
+      {
+       "text": "[w3] The departed member's token cannot keep reading the collection through the link and collection routes, since each request re-checks membership; what still works is any archive URL issued before the removal, because the view route trusts the signed token and its expiry alone. Bind those URLs to the user and re-check, or keep their lifetime shorter than the revocation promise.",
+       "cite": {
+        "path": "linkwarden/apps/web/pages/api/v1/preserved/view.ts",
+        "lineStart": 122,
+        "lineEnd": 131
+       }
+      },
+      {
+       "text": "[w2] Membership edits replace the whole list (delete every row, then recreate from the request), and although wrapped in a transaction call, the callback issues its queries on the global client rather than the transaction handle, so the steps are not atomic: a failure after the delete leaves the team collection with no members, and two owners editing at once overwrite each other's lists.",
+       "cite": {
+        "path": "linkwarden/apps/web/lib/api/controllers/collections/collectionId/updateCollectionById.ts",
+        "lineStart": 67,
+        "lineEnd": 131
+       }
+      },
+      {
+       "text": "[w2] UI and API disagree on view-only members: the client hook treats a member whose three flags are all false as having no permission, while the server lets any member read; and for several collections the hook overwrites its answer in a loop, reporting only the last collection's rights.",
+       "cite": {
+        "path": "linkwarden/apps/web/hooks/useCollectivePermissions.ts",
+        "lineStart": 12,
+        "lineEnd": 31
+       }
+      },
+      {
+       "text": "[w1] Catch drift with tests and a query: an access matrix per endpoint (stranger, each capability, owner, anonymous on a public collection) and a periodic scan for impossible flag combinations, because with checks spread across controllers each new route is a fresh chance to get it wrong.",
+       "quote": "every new endpoint is a chance to forget"
+      }
+     ]
+    },
+    {
+     "prompt": "TRADE-OFF HANDBACK — defend your sharing model against the alternatives: per-member capability booleans versus a role enum versus an ACL table of grants; public by an unguessable link versus public by a flag; permission checks in every controller versus a central policy layer; copying permissions onto a link when it moves versus deriving them from the destination; and short-lived signed archive URLs versus session-checked file serving. For each, say what you bought and what it cost.",
+     "keyPoints": [
+      {
+       "text": "[w3] Booleans are flexible and cheap to query, but allow nonsense combinations and need a column per new capability; a role enum (viewer, contributor, editor, manager) is a clear ladder users understand, at the cost of custom mixes; an ACL table of grants supports per-link shares, groups and expiry, at the cost of heavier queries and harder reasoning.",
+       "cite": {
+        "path": "linkwarden/packages/prisma/schema.prisma",
+        "lineStart": 156,
+        "lineEnd": 158
+       }
+      },
+      {
+       "text": "[w3] A share link (a random, rotatable token, optionally expiring and scoped to one link or collection) limits exposure to whoever holds the URL and can be revoked by rotation; the public flag is simpler but publishes to the whole web, search engines included, for as long as it stays on.",
+       "cite": {
+        "path": "linkwarden/apps/web/lib/api/archives/resolveAccessibleArchive.ts",
+        "lineStart": 38,
+        "lineEnd": 42
+       }
+      },
+      {
+       "text": "[w2] Checks in each controller are local and greppable but must be repeated for every route; a central can(user, action, object) policy is one place to test and audit, at the cost of a refactor and the discipline of sending every caller through it.",
+       "quote": "There is no central policy engine."
+      },
+      {
+       "text": "[w2] Deriving rights from the destination is the only coherent choice in this model, since the link simply joins the new collection and has no rights of its own; copying permissions onto the link would require a per-link ACL that does not exist and would make 'who can see this?' depend on history.",
+       "cite": {
+        "path": "linkwarden/apps/web/lib/api/controllers/links/linkId/updateLinkById.ts",
+        "lineStart": 164,
+        "lineEnd": 168
+       }
+      },
+      {
+       "text": "[w2] Signed, short-lived URLs let a separate content domain serve files without the app's session cookie, which isolates archived pages from the app, but cannot be withdrawn before they expire; session-checked serving revokes instantly but needs authentication on the content origin and a database check per file.",
+       "cite": {
+        "path": "linkwarden/apps/web/lib/api/preserved/createPreservedFormatUrl.ts",
+        "lineStart": 6,
+        "lineEnd": 7
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

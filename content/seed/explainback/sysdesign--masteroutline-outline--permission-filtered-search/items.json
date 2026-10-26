@@ -1,0 +1,190 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "masteroutline-outline--fabledocs2-03-data-access.md",
+ "items": [
+  {
+   "key": "seed:explainback:masteroutline-outline/explain-back/b1d71051a21ade14",
+   "provenance": {
+    "repo": "masteroutline-outline",
+    "sha": "6511cbb6da848428cf552bfa7eb106dacd4e0c57",
+    "path": "fabledocs2/03-data-access.md",
+    "lines": {
+     "start": 1,
+     "end": 123
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "DESIGN IT — [senior] permission-filtered full-text search over private documents (masteroutline-outline, fabledocs2/03-data-access.md). Scenario: one workspace holds 1.2M documents across 900 collections; visibility is per person — private collections, documents shared directly with a user or a group, and personal drafts; peak load is 50 searches/s with p95 under 400 ms; and a result list must never reveal a document the caller cannot open, not even its title or a snippet. Write your design before you look: where the access filter runs relative to ranking and pagination, which fields are indexed and how they are weighted, what decides the order of results, how the total count is produced without doubling the cost of every query, what happens to quoted phrases and pasted URLs, whether a dedicated search engine is needed and how you keep that option open, and what you record about queries to tune quality. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "keyPoints": [
+      {
+       "text": "[w3] Filter inside the query, before ranking and paging: the WHERE clause pins the team and requires a direct document membership, a group membership, or a collection from the caller's accessible list (plus the caller's own collection-less drafts when drafts are requested), so LIMIT and OFFSET only ever count documents the caller may see.",
+       "cite": {
+        "path": "plugins/search-postgres/server/PostgresSearchProvider.ts",
+        "lineStart": 613,
+        "lineEnd": 667
+       }
+      },
+      {
+       "text": "[w3] That SQL is a hand-maintained copy of the read policy (membership, own draft, or read access through the collection); name the duplication and pin it with a test that every search hit passes the policy check, because the two drift independently.",
+       "cite": {
+        "path": "server/policies/document.ts",
+        "lineStart": 21,
+        "lineEnd": 34
+       }
+      },
+      {
+       "text": "[w3] Index a weighted vector kept by a row trigger: title at weight A, earlier titles at C, and body text at D, with the body truncated to its first million characters, so a title hit outranks the same word deep in a long page.",
+       "cite": {
+        "path": "server/migrations/20231227040129-update-tsvector-trigger.js",
+        "lineStart": 4,
+        "lineEnd": 13
+       }
+      },
+      {
+       "text": "[w2] Order by relevance, then recency: ts_rank is multiplied by a logarithmic popularity boost, 1 + 0.25 × ln(1 + popularity), and ties fall back to most recently updated, so recency only breaks ties unless the caller picks a sort.",
+       "cite": {
+        "path": "plugins/search-postgres/server/PostgresSearchProvider.ts",
+        "lineStart": 530,
+        "lineEnd": 544
+       }
+      },
+      {
+       "text": "[w2] Avoid the second query when the answer is known: if the first page comes back shorter than the limit, its length IS the total, so the separate count query runs only for full or later pages.",
+       "cite": {
+        "path": "plugins/search-postgres/server/PostgresSearchProvider.ts",
+        "lineStart": 442,
+        "lineEnd": 453
+       }
+      },
+      {
+       "text": "[w2] Quoted phrases and URLs bypass the stemmed index: up to three of them become case-insensitive substring matches on title and text, and a query made only of a quote drops the text-vector match entirely, so at 1.2M documents such a search leans on the access filter alone; a trigram index or a phrase query is the fix.",
+       "cite": {
+        "path": "plugins/search-postgres/server/PostgresSearchProvider.ts",
+        "lineStart": 764,
+        "lineEnd": 799
+       }
+      },
+      {
+       "text": "[w2] Keep the engine choice behind an interface rather than buying one now: the shipped provider is Postgres, whose index, remove and metadata methods are no-ops because triggers maintain the vector, so a dedicated engine is an option the seam reserves, not a component that exists.",
+       "cite": {
+        "path": "plugins/search-postgres/server/PostgresSearchProvider.ts",
+        "lineStart": 37,
+        "lineEnd": 43
+       }
+      },
+      {
+       "text": "[w1] Record first-page searches for tuning: query text, source, result count and duration go into a search-query row (later pages are not recorded again), which is enough to find zero-result and slow queries.",
+       "cite": {
+        "path": "server/routes/api/documents/documents.ts",
+        "lineStart": 1172,
+        "lineEnd": 1185
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "PRE-MORTEM — the same workspace six months on: the team wires an external search engine in behind the provider interface; a collection holding HR documents is switched from team-wide to private; a contractor who can open only 2 of the 900 collections says search is slow; a page renamed from 'Layoffs plan' to 'Q3 planning' still turns up for the old words; and an engineer's edit to a runbook cannot be found for several minutes. What breaks, how would you notice, and what is the repair?",
+     "keyPoints": [
+      {
+       "text": "[w3] An engine that stores access data goes stale on permission changes: the index processor reacts to publish, delayed update, archive, delete, move and collection create/update/delete, and for documents pushes only archived, deleted and collection fields, so no event carries a membership change and the HR pages keep matching for their old audience. Re-check access at query time against the live tables, or add membership events that re-push access metadata.",
+       "cite": {
+        "path": "server/queues/processors/SearchIndexProcessor.ts",
+        "lineStart": 21,
+        "lineEnd": 92
+       }
+      },
+      {
+       "text": "[w3] With the shipped Postgres provider there is no second copy to go stale: the search query joins the caller's document and group memberships on every request, so making the collection private bites on the next search. Filtering after the fact would be worse for the contractor: a user who can see 2 of 900 collections would get almost nothing on a 15-hit page.",
+       "cite": {
+        "path": "plugins/search-postgres/server/PostgresSearchProvider.ts",
+        "lineStart": 393,
+        "lineEnd": 432
+       }
+      },
+      {
+       "text": "[w2] The contractor's slowness comes from the shape of the filter: access is an OR across document memberships, group memberships and the collection list, which no single index can drive, so the planner likely matches the text across the whole team and lets the OR discard nearly all of it. Narrow by the caller's collections first, or precompute a per-user visible set.",
+       "cite": {
+        "path": "plugins/search-postgres/server/PostgresSearchProvider.ts",
+        "lineStart": 636,
+        "lineEnd": 667
+       }
+      },
+      {
+       "text": "[w2] The old title matching is a feature, not lag: every title change is appended to a list of previous titles that the index keeps at weight C, so renamed pages stay findable by former names; for a sensitive rename you need a way to purge that list.",
+       "cite": {
+        "path": "server/models/Document.ts",
+        "lineStart": 513,
+        "lineEnd": 525
+       }
+      },
+      {
+       "text": "[w3] Edits lag because the indexed body is the markdown text column, and that column is regenerated by a task the revision processor schedules only when it cuts a revision; until then each save re-triggers the vector from the old text. Watch revision cadence, or index the content projection the collaborative save already writes.",
+       "cite": {
+        "path": "server/queues/processors/RevisionsProcessor.ts",
+        "lineStart": 36,
+        "lineEnd": 46
+       }
+      },
+      {
+       "text": "[w1] The authors accept the lag as known behaviour; the design review should put a real number on it, because the code ties it to revision cadence rather than a fixed minute.",
+       "quote": "\"search shows the old text for a minute\" is a known, accepted anomaly"
+      }
+     ]
+    },
+    {
+     "prompt": "TRADE-OFF HANDBACK — defend your search design against the alternatives: storing access lists in the index versus filtering at query time, Postgres full-text search versus a dedicated search engine, title weight versus recency in ranking, building snippets in the application versus letting the engine highlight, and recording users' search queries versus their privacy. For each, say what you bought, what it cost, and which requirement put you on that side.",
+     "keyPoints": [
+      {
+       "text": "[w3] Filtering at query time is always correct, at the cost of joins on every search; access lists stored in the index make queries cheap, but every permission change must re-push every affected document, and one collection going private can mean thousands of writes. The interface already has a metadata-update hook that such a design would depend on.",
+       "cite": {
+        "path": "server/utils/BaseSearchProvider.ts",
+        "lineStart": 136,
+        "lineEnd": 148
+       }
+      },
+      {
+       "text": "[w3] Postgres full-text search keeps one database, and the vector updates in the same row write, so there is no sync pipeline; a dedicated engine buys relevance tooling and scale but adds a second copy fed by events. Choosing the provider by configuration from registered plugins is the hedge that lets you switch later without touching callers.",
+       "cite": {
+        "path": "server/utils/SearchProviderManager.ts",
+        "lineStart": 20,
+        "lineEnd": 41
+       }
+      },
+      {
+       "text": "[w2] The single-store constraint is deliberate here, so a second datastore has to earn its operations cost.",
+       "quote": "Postgres is the only database."
+      },
+      {
+       "text": "[w2] Relevance-first ordering can bury a fresh incident note under an older page that matches better; the product lets the caller pick an explicit sort such as last updated, and then ranking becomes the tiebreaker instead.",
+       "cite": {
+        "path": "plugins/search-postgres/server/PostgresSearchProvider.ts",
+        "lineStart": 545,
+        "lineEnd": 561
+       }
+      },
+      {
+       "text": "[w2] Snippets are cut in the application from each result document fetched by id after the filtered query, so a snippet can only quote a document that passed the filter; the cost is app CPU per hit and hand-rolled highlighting instead of the engine's.",
+       "cite": {
+        "path": "plugins/search-postgres/server/PostgresSearchProvider.ts",
+        "lineStart": 805,
+        "lineEnd": 832
+       }
+      },
+      {
+       "text": "[w1] Stored queries tune ranking, but people search for names and salaries; users can delete their own history, by id or by exact query, so give history a retention period as well as the delete button.",
+       "cite": {
+        "path": "server/routes/api/searches/searches.ts",
+        "lineStart": 69,
+        "lineEnd": 88
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

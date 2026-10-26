@@ -1,0 +1,198 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "masteroutline-outline--fabledocs3-adr-007-crdt-triple-representation.md",
+ "items": [
+  {
+   "key": "seed:explainback:masteroutline-outline/explain-back/0a9fb5970d1cdc38",
+   "provenance": {
+    "repo": "masteroutline-outline",
+    "sha": "6511cbb6da848428cf552bfa7eb106dacd4e0c57",
+    "path": "fabledocs3/adr-007-crdt-triple-representation.md",
+    "lines": {
+     "start": 1,
+     "end": 91
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "DESIGN IT — [senior] real-time collaborative document editing (masteroutline-outline, fabledocs3/adr-007-crdt-triple-representation.md). Scenario: a 40,000-user company wiki; during an outage 60 engineers edit one incident-review page at once and expect every keystroke to reach the others within 300 ms at p95; the collaboration service runs on 3 pods and the daily deploy restarts them mid-session; the API, exports and search keep reading documents while they are being edited; and someone tries to paste a 10 MB log export into the page. Write your design before you look: which stored form of a document is the source of truth and what the other forms are for, how often edits reach Postgres and what a crashed pod can lose, how any of the 3 pods can serve the page, how each socket is authenticated and capped, what happens to the 10 MB paste, when revision history gets a snapshot, and what a deploy does to editors whose tabs run an older editor. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "keyPoints": [
+      {
+       "text": "[w3] Treat the binary Yjs state as the truth and the JSON as a projection written WITH it: every collaborative save rewrites state and the canonicalised Prosemirror content in the same update, so API readers of content trail a live session only by the save cadence, not by a background job.",
+       "cite": {
+        "path": "server/commands/documentCollaborativeUpdater.ts",
+        "lineStart": 99,
+        "lineEnd": 113
+       }
+      },
+      {
+       "text": "[w3] Keystrokes travel peer to peer through the sockets and never wait on the database; Postgres only sees a debounced store, 3 seconds after a pause and at most 10 seconds apart under continuous typing, which bounds what an unflushed pod can be holding.",
+       "cite": {
+        "path": "server/services/collaboration.ts",
+        "lineStart": 44,
+        "lineEnd": 47
+       }
+      },
+      {
+       "text": "[w3] Any pod can host the page only when collaboration has its own Redis: without REDIS_COLLABORATION_URL the Y.Doc lives in one process's memory and the server clamps the collaboration process count to 1, because two unsynced processes would fork the document; with it, the Redis extension merges updates across pods.",
+       "cite": {
+        "path": "server/index.ts",
+        "lineStart": 35,
+        "lineEnd": 48
+       }
+      },
+      {
+       "text": "[w2] Authenticate each socket on join: the JWT must be valid for a session or collaboration, the user must be allowed to read the document, and a user without update rights is joined read-only so their changes are neither accepted nor synced.",
+       "cite": {
+        "path": "server/collaboration/AuthenticationExtension.ts",
+        "lineStart": 22,
+        "lineEnd": 35
+       }
+      },
+      {
+       "text": "[w2] Cap fan-out per document: the server refuses connections beyond a per-document client limit that defaults to 100, so 60 editors fit with headroom, and the limit is the knob to lower if one hot page starts eating a pod.",
+       "cite": {
+        "path": "server/env.ts",
+        "lineStart": 276,
+        "lineEnd": 284
+       }
+      },
+      {
+       "text": "[w2] Size is bounded, not unbounded: a document's collaborative state may not exceed 1,500 KB, so the 10 MB paste cannot be stored in one page; the design answer is to refuse it with a clear message and steer the log into an attachment or a new document.",
+       "cite": {
+        "path": "shared/validations.ts",
+        "lineStart": 62,
+        "lineEnd": 63
+       }
+      },
+      {
+       "text": "[w2] Snapshot history on quiet, not on keystrokes: every update schedules a delayed check five minutes out in production, and that check is dropped if the document changed again in the meantime, so a page under constant editing gets no new revision until the session calms down.",
+       "cite": {
+        "path": "server/queues/processors/DebounceProcessor.ts",
+        "lineStart": 15,
+        "lineEnd": 48
+       }
+      },
+      {
+       "text": "[w1] Deploys that change the editor schema must evict stale tabs: a client that sends no editor version, or one whose major version is behind the server's, is dropped at connect and has to reload instead of merging edits made against an old schema.",
+       "cite": {
+        "path": "server/collaboration/EditorVersionExtension.ts",
+        "lineStart": 18,
+        "lineEnd": 44
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "PRE-MORTEM — the incident page a week later: after a load-balancer change the 60 editors land on two different collaboration pods; one pod is SIGKILLed by the orchestrator in the middle of a burst of typing; a contractor is removed from the collection while still typing in the page; the page's state has grown to 1.4 MB and all 60 editors reconnect within the same minute after the deploy; and a save that waits on the row lock starts failing. What breaks, how would you notice, and what is the repair?",
+     "keyPoints": [
+      {
+       "text": "[w3] Two pods on one page do not fork it (the Redis extension merges), but per-pod bookkeeping lies: the update event is marked done when the saving pod has no clients left, so one pod's last leaver declares the session finished and a revision is cut while editors on the other pod keep typing. Derive 'last connection' from a shared count, not the local one.",
+       "cite": {
+        "path": "server/commands/documentCollaborativeUpdater.ts",
+        "lineStart": 115,
+        "lineEnd": 127
+       }
+      },
+      {
+       "text": "[w2] The connection cap is also per pod: the counts live in an in-memory map inside each process, so with two pods the page can hold twice the configured limit, and the limit silently stops meaning 'per document'.",
+       "cite": {
+        "path": "server/collaboration/ConnectionLimitExtension.ts",
+        "lineStart": 16,
+        "lineEnd": 73
+       }
+      },
+      {
+       "text": "[w3] A hard kill loses whatever was not yet stored, up to the debounce ceiling; recovery depends on a client that still holds those edits reconnecting and resending them, which is safe under CRDT merge but impossible if that browser closed first. Prefer graceful drains on deploy and alert on lost-store errors.",
+       "quote": "Debounced persistence = a durability gap on hard crash, mitigated (not closed) by client resend."
+      },
+      {
+       "text": "[w3] Access is checked once, when the collaboration socket joins; removing a member only asks that user's realtime clients to leave the collection channel, and nothing closes an already-open collaboration socket, so the contractor keeps sending and receiving edits until they disconnect. The repair is to close that user's collaboration connections on membership-removal events.",
+       "cite": {
+        "path": "server/queues/processors/WebsocketsProcessor.ts",
+        "lineStart": 424,
+        "lineEnd": 452
+       }
+      },
+      {
+       "text": "[w2] Every joiner receives the whole document state, and the websocket accepts payloads up to the state cap: 60 reconnects of a 1.4 MB state is roughly 84 MB pushed by one pod in a minute, right when it is cold. Stagger reconnects with jittered backoff and watch per-document state size.",
+       "cite": {
+        "path": "server/services/collaboration.ts",
+        "lineStart": 29,
+        "lineEnd": 33
+       }
+      },
+      {
+       "text": "[w2] The collaboration throttle is configured only with a request count, a window and a 5-minute ban, with nothing that identifies the user, so a whole office reconnecting through one address after a deploy can be banned together. Key the collaboration throttle on the authenticated user, or raise it for known egress addresses.",
+       "cite": {
+        "path": "server/services/collaboration.ts",
+        "lineStart": 56,
+        "lineEnd": 61
+       }
+      },
+      {
+       "text": "[w2] Persistence decides whether there is anything to save from a Redis set of session collaborators, added to on each change and drained by RevisionsProcessor when it cuts a revision; an edit that lands just before that drain is skipped by the next store as 'no changes' until someone edits again. Track dirtiness per pod, not in a set another subsystem empties.",
+       "cite": {
+        "path": "server/collaboration/PersistenceExtension.ts",
+        "lineStart": 99,
+        "lineEnd": 128
+       }
+      },
+      {
+       "text": "[w1] A store that fails (for example on the row-lock timeout) is logged and swallowed, so editors see nothing while the database falls behind; alert on that log line and on the age of the last successful store per open document.",
+       "cite": {
+        "path": "server/collaboration/PersistenceExtension.ts",
+        "lineStart": 138,
+        "lineEnd": 143
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "TRADE-OFF HANDBACK — defend your collaboration design against the alternatives: a CRDT versus operational transformation versus pessimistic document locks, debounced versus per-update persistence, Redis pub/sub fan-out across pods versus pinning every editor of a page to one pod, keeping a binary CRDT blob plus readable projections versus one canonical format, and leaning on one Redis for all of it. For each, say what you bought, what it cost, and which requirement put you on that side.",
+     "keyPoints": [
+      {
+       "text": "[w3] A CRDT converges no matter which replica applies an edit first, so pods that restart daily and laptops that go offline need no central ordering service; operational transformation would make one server the ordering authority for each page, which is the thing a multi-pod, kill-on-deploy fleet cannot promise.",
+       "cite": {
+        "path": "fabledocs3/adr-007-crdt-triple-representation.md",
+        "lineStart": 39,
+        "lineEnd": 42
+       }
+      },
+      {
+       "text": "[w2] A pessimistic lock ('X is editing') is simple and needs no merge math, but it fails the requirement outright: 60 people editing during an incident is the use case.",
+       "quote": "the product's demo *is* two cursors in one paragraph"
+      },
+      {
+       "text": "[w3] Debounced persistence buys sane database load at the price of a bounded durability gap; writing on every update would close the gap but turn each keystroke into a multi-megabyte row write. An append-only log of small updates is the middle road, at the cost of compaction work.",
+       "quote": "Debounce keeps write amplification sane (multi-MB blobs not written per keystroke)"
+      },
+      {
+       "text": "[w3] Pinning a page's editors to one pod avoids cross-pod sync, but deploys and rebalances break the pinning and other users' broadcasts still need cross-process reach; pub/sub fan-out lets any pod serve any socket at the cost of a hard dependency on Redis.",
+       "cite": {
+        "path": "fabledocs3/adr-008-redis-horizontal-scale.md",
+        "lineStart": 47,
+        "lineEnd": 49
+       }
+      },
+      {
+       "text": "[w2] One Redis for collaboration sync, websockets, queues, cache and rate limits keeps self-hosting to one extra dependency, but an outage degrades all of them at once; a dedicated collaboration Redis (its own URL) narrows that blast radius.",
+       "cite": {
+        "path": "fabledocs3/adr-008-redis-horizontal-scale.md",
+        "lineStart": 60,
+        "lineEnd": 63
+       }
+      },
+      {
+       "text": "[w2] Keeping the blob plus projections lets search, export and the public API read cheap, readable forms instead of decoding a CRDT on every read; the cost is that each consumer must declare which copy it reads and how far behind that copy may be.",
+       "quote": "every reader must know which representation it reads and how stale it may be"
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

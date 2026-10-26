@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { UnitKind, UnitSummary } from '../api/types';
-import { NO_FILTER, SECTION_LABEL, groupLabelOf, groupUnits, sectionCounts, sectionOf, type UnitFilter } from './trackunits';
+import { NO_FILTER, SECTION_LABEL, groupLabelOf, groupTotals, groupUnits, sectionCounts, sectionOf, type UnitFilter } from './trackunits';
 
 let nextId = 9000;
 function unit(over: Partial<UnitSummary> = {}): UnitSummary {
@@ -76,16 +76,45 @@ describe('groupLabelOf', () => {
   });
 });
 
-describe('groupUnits', () => {
-  const units = [
-    unit({ id: 1, key: 'ladder/explain-back/zeta/h1', kind: 'explain-back', title: 'Explain back: zeta — a', state: 'done' }),
-    unit({ id: 2, key: 'sysdrills/02-caching/01-ttl', kind: 'drill', title: 'TTL math', difficulty: 2 }),
-    unit({ id: 3, key: 'ladder/explain-back/bazaar/h2', kind: 'explain-back', title: 'DESIGN IT: bazaar — cache coherence across layers for a storefront' }),
-    unit({ id: 4, key: 'sysdrills/02-caching/02-hit', kind: 'drill', title: 'Hit ratio', state: 'done' }),
-    unit({ id: 5, key: 'ladder/explain-back/bazaar/h3', kind: 'explain-back', title: 'DESIGN IT: bazaar — personalized pricing (set B)', state: 'locked' }),
-    unit({ id: 6, key: 'agentic/harness-u01', kind: 'program-unit', title: 'Agent harness U01' }),
-  ];
+const units = [
+  unit({ id: 1, key: 'ladder/explain-back/zeta/h1', kind: 'explain-back', title: 'Explain back: zeta — a', state: 'done' }),
+  unit({ id: 2, key: 'sysdrills/02-caching/01-ttl', kind: 'drill', title: 'TTL math', difficulty: 2 }),
+  unit({ id: 3, key: 'ladder/explain-back/bazaar/h2', kind: 'explain-back', title: 'DESIGN IT: bazaar — cache coherence across layers for a storefront' }),
+  unit({ id: 4, key: 'sysdrills/02-caching/02-hit', kind: 'drill', title: 'Hit ratio', state: 'done' }),
+  unit({ id: 5, key: 'ladder/explain-back/bazaar/h3', kind: 'explain-back', title: 'DESIGN IT: bazaar — personalized pricing (set B)', state: 'locked' }),
+  unit({ id: 6, key: 'agentic/harness-u01', kind: 'program-unit', title: 'Agent harness U01' }),
+];
 
+/** A 136-unit track: 78 drills in 10 modules (20 done) + 58 EBs over 29 repos (12 done). */
+function bigTrack(): UnitSummary[] {
+  const big: UnitSummary[] = [];
+  for (let i = 0; i < 78; i++) {
+    const m = i % 10;
+    big.push(
+      unit({
+        key: `sysdrills/${String(m + 1).padStart(2, '0')}-module-${m}/${String(i).padStart(2, '0')}-drill`,
+        kind: 'drill',
+        title: `Drill ${i}`,
+        difficulty: 1 + (i % 3),
+        state: i % 4 === 0 ? 'done' : 'available',
+      }),
+    );
+  }
+  for (let i = 0; i < 58; i++) {
+    const r = i % 29;
+    big.push(
+      unit({
+        key: `ladder/explain-back/repo-${String(r).padStart(2, '0')}/h${i}`,
+        kind: 'explain-back',
+        title: `DESIGN IT: repo-${r} — topic ${i}${i >= 29 ? ' (set B)' : ''}`,
+        state: i % 5 === 0 ? 'done' : i % 7 === 0 ? 'locked' : 'available',
+      }),
+    );
+  }
+  return big;
+}
+
+describe('groupUnits', () => {
   it('groups by label, sorted, keeping served unit order and counting done', () => {
     const groups = groupUnits(units, NO_FILTER);
     expect(groups.map((g) => g.label)).toEqual(['bazaar', 'caching', 'Other', 'zeta']);
@@ -128,30 +157,7 @@ describe('groupUnits', () => {
   });
 
   it('a 136-unit track (78 drills in 10 modules + 58 EBs over 29 repos) totals correctly', () => {
-    const big: UnitSummary[] = [];
-    for (let i = 0; i < 78; i++) {
-      const m = i % 10;
-      big.push(
-        unit({
-          key: `sysdrills/${String(m + 1).padStart(2, '0')}-module-${m}/${String(i).padStart(2, '0')}-drill`,
-          kind: 'drill',
-          title: `Drill ${i}`,
-          difficulty: 1 + (i % 3),
-          state: i % 4 === 0 ? 'done' : 'available',
-        }),
-      );
-    }
-    for (let i = 0; i < 58; i++) {
-      const r = i % 29;
-      big.push(
-        unit({
-          key: `ladder/explain-back/repo-${String(r).padStart(2, '0')}/h${i}`,
-          kind: 'explain-back',
-          title: `DESIGN IT: repo-${r} — topic ${i}${i >= 29 ? ' (set B)' : ''}`,
-          state: i % 5 === 0 ? 'done' : i % 7 === 0 ? 'locked' : 'available',
-        }),
-      );
-    }
+    const big = bigTrack();
     expect(sectionCounts(big)).toEqual({ all: 136, drill: 78, 'explain-back': 58, other: 0 });
 
     const groups = groupUnits(big, NO_FILTER);
@@ -175,5 +181,30 @@ describe('groupUnits', () => {
     const repo3 = groupUnits(big, filter({ query: 'repo-03' }));
     expect(repo3.map((g) => g.label)).toEqual(['repo-03']);
     expect(repo3[0]?.units).toHaveLength(2);
+  });
+});
+
+describe('groupTotals', () => {
+  it('per-group done/total over the unfiltered list, keyed by the groupUnits label', () => {
+    const totals = groupTotals(units);
+    expect(Object.fromEntries(totals)).toEqual({
+      zeta: { done: 1, total: 1 },
+      caching: { done: 1, total: 2 },
+      bazaar: { done: 0, total: 2 },
+      Other: { done: 0, total: 1 },
+    });
+    // every label a filtered grouping can produce has a total (the page's safe `!`)
+    for (const g of groupUnits(units, filter({ hideDone: true, query: 'a' }))) expect(totals.has(g.label), g.label).toBe(true);
+  });
+
+  it('sums to the whole track on the 136-unit fixture (136 units, 32 done)', () => {
+    const totals = [...groupTotals(bigTrack()).values()];
+    expect(totals).toHaveLength(39);
+    expect(totals.reduce((n, t) => n + t.total, 0)).toBe(136);
+    expect(totals.reduce((n, t) => n + t.done, 0)).toBe(32);
+  });
+
+  it('empty input -> no totals', () => {
+    expect(groupTotals([]).size).toBe(0);
   });
 });

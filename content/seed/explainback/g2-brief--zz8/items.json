@@ -1,0 +1,166 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "zz8--astraupskill-07-TRACE-LAB.md",
+ "items": [
+  {
+   "key": "seed:explainback:zz8/explain-back/6df1886c3ad747d7",
+   "provenance": {
+    "repo": "zz8",
+    "sha": "ae8c8234428271147fda7d136e3936acf3c4c692",
+    "path": "astraupskill/07-TRACE-LAB.md",
+    "lines": {
+     "start": 39,
+     "end": 39
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "G2 BRIEF — zz8 (multi-tenant people/performance app: Next.js route handlers + Zod + Prisma, tested with Vitest and in-memory doubles). Verified finding: every route parses its body with `schema.parse(await request.json())` inside its try, and `handleRouteError()` converts only `AppError`; a body that fails the schema, a body that is not JSON at all, and a second employee created with an employee number the tenant already uses (a unique-index violation nobody catches) all reach the client as the generic 500. The trace lab's description of the validator promises a 4xx for bad input; the code does not deliver it. You will delegate the fix to a coding agent. Write the brief: goal, allowed files, boundaries, test command, stop condition. Commit to your brief first, then tick the checkpoints you covered and add up the weights.",
+     "keyPoints": [
+      {
+       "text": "[w3] Goal: schema failures and unreadable bodies answer 400 inside the existing { error: { message, details } } envelope (the Zod issues as details), a duplicate employee number answers 409, and anything the code did not anticipate still answers the same generic 500.",
+       "cite": {
+        "path": "src/lib/http/api-response.ts",
+        "lineStart": 19,
+        "lineEnd": 41
+       }
+      },
+      {
+       "text": "[w3] Guarded form, one narrow rule per error: the handler gains a single instanceof ZodError branch; an unparseable body becomes an AppError(400) where the body is read, through one shared reader; and the employee repository's create translates only a P2002 whose target is the (tenantId, employeeNumber) index into AppError(409). No catch-all on Error, SyntaxError or every Prisma error.",
+       "cite": {
+        "path": "prisma/schema.prisma",
+        "lineStart": 201,
+        "lineEnd": 201
+       }
+      },
+      {
+       "text": "[w2] Scope: all six routes that read a JSON body move to the shared reader, not only the employee route the finding names, because each of them parses inside the same try and hands the same handler the same failure.",
+       "cite": {
+        "path": "src/app/api/employees/route.ts",
+        "lineStart": 22,
+        "lineEnd": 31
+       }
+      },
+      {
+       "text": "[w2] Allowed files: src/lib/http/api-response.ts, src/repositories/employee-repository.ts, the six route files (the body-read line only) and new test files under src/tests/, the only folder the Vitest config includes.",
+       "cite": {
+        "path": "vitest.config.ts",
+        "lineStart": 5,
+        "lineEnd": 8
+       }
+      },
+      {
+       "text": "[w3] Boundary: the AppError class and every status the services already throw stay exactly as they are, including the not-found answer the job retry gives when its guarded write matches nothing; employee create and update writing the row and the audit entry as separate statements is reported, not fixed.",
+       "cite": {
+        "path": "src/services/integration-service.ts",
+        "lineStart": 95,
+        "lineEnd": 102
+       }
+      },
+      {
+       "text": "[w2] Test command: `npm test -- run --maxWorkers=1`, no database: call the real handleRouteError with a ZodError produced by the real schema, and drive the real repository's create with the db module replaced by vi.mock throwing a P2002-shaped error, the way the atomicity suite swaps in its in-memory Prisma double.",
+       "cite": {
+        "path": "astraupskill/VERIFICATION.md",
+        "lineStart": 16,
+        "lineEnd": 17
+       }
+      },
+      {
+       "text": "[w2] Stop condition: the schema-failure, malformed-body and duplicate-number cases are red on the original (all 500) and green on the fix, a plain thrown Error still gets the generic body, the existing five test files and `npx tsc --noEmit` pass, and a P2002 from a real PostgreSQL is reported as not exercised.",
+       "quote": "No Prisma error text ever reaches the client."
+      }
+     ]
+    },
+    {
+     "prompt": "G2 PRE-MORTEM — same delegation. What will an agent most likely get wrong here, and which line of your brief prevents it?",
+     "keyPoints": [
+      {
+       "text": "[w3] The blanket catch: it answers every non-AppError with a 400, or every Prisma known-request error with a 409, so a dropped database connection or a code bug is reported to the client as the client's mistake; the one-rule-per-error line forbids it.",
+       "cite": {
+        "path": "src/lib/http/api-response.ts",
+        "lineStart": 32,
+        "lineEnd": 40
+       }
+      },
+      {
+       "text": "[w3] It maps P2002 to the employee-number conflict without reading the violated target, so the other unique key on the same table (the linked user id) would also come back as 'employee number already in use'.",
+       "cite": {
+        "path": "prisma/schema.prisma",
+        "lineStart": 175,
+        "lineEnd": 175
+       }
+      },
+      {
+       "text": "[w2] Wrong layer: it swaps parse for safeParse in each route and hand-writes the 400 body six times, so the error contract now lives in seven places instead of the one shared handler.",
+       "cite": {
+        "path": "src/app/api/review-cycles/[cycleId]/submit-self-review/route.ts",
+        "lineStart": 16,
+        "lineEnd": 28
+       }
+      },
+      {
+       "text": "[w2] Feature creep: it starts filling the details slot at every throw site, adds error codes, or re-decides which service failures are 404 and which 409; the boundary keeps every existing service status out of this diff.",
+       "cite": {
+        "path": "src/lib/http/app-error.ts",
+        "lineStart": 7,
+        "lineEnd": 17
+       }
+      },
+      {
+       "text": "[w1] False green: its new test asserts that safeParse fails, exactly like the shipped schema test, which proves the schema rejects the payload but says nothing about the status the client receives.",
+       "cite": {
+        "path": "src/tests/validation-boundaries.test.ts",
+        "lineStart": 11,
+        "lineEnd": 28
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "G2 HANDBACK REVIEW — the agent hands back a diff and a green run. What do you check before accepting it?",
+     "keyPoints": [
+      {
+       "text": "[w3] One translation point per error kind: a single ZodError branch in the handler, a single P2002 check in the employee repository, a single body reader, and no new try/catch inside any route.",
+       "cite": {
+        "path": "src/lib/http/api-response.ts",
+        "lineStart": 19,
+        "lineEnd": 31
+       }
+      },
+      {
+       "text": "[w3] A test throws an ordinary Error through the handler and gets the fixed 'Unexpected server error.' body with a 500, so the narrow branches did not widen the fallback.",
+       "quote": "and anything else into a generic 500"
+      },
+      {
+       "text": "[w2] The pasted output shows the three new cases failing on the original code, then the whole suite and the typecheck passing with the commands the verification chapter gives.",
+       "cite": {
+        "path": "astraupskill/VERIFICATION.md",
+        "lineStart": 16,
+        "lineEnd": 20
+       }
+      },
+      {
+       "text": "[w2] The duplicate case asserts on the target check: a P2002 naming a different unique key is not turned into the employee-number 409.",
+       "cite": {
+        "path": "src/repositories/employee-repository.ts",
+        "lineStart": 118,
+        "lineEnd": 133
+       }
+      },
+      {
+       "text": "[w1] The handback lists the follow-ups instead of fixing them (row and audit outside one transaction, the lost-race not-found answers) and notes that the lab's 4xx sentence becomes true only with this diff, without editing the course text.",
+       "cite": {
+        "path": "astraupskill/07-TRACE-LAB.md",
+        "lineStart": 57,
+        "lineEnd": 57
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

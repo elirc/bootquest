@@ -179,6 +179,11 @@ function DashboardBody({ d, comp }: { d: DashboardData; comp: Loaded<Competencie
                   <span className="nextup-meta">locked, or every unit is done</span>
                 </div>
               )}
+              {/* a sibling of the card (never a nested anchor): the track's whole unit list, so a
+                  null-unit card has an action too (sysdesign lands on its Practice-units browser) */}
+              <Link to={`/campaign/${n.trackId}`} className="nextup-browse small">
+                Browse all<span className="sr-only"> {TRACK_LABEL[n.trackId]} units</span> <span aria-hidden="true">→</span>
+              </Link>
             </li>
           ))}
         </ul>

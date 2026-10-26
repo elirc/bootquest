@@ -1,0 +1,187 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "harbor--docs-adr-0007-sla-clock-and-escalation.md--set-b",
+ "items": [
+  {
+   "key": "seed:explainback:harbor/explain-back/d82740897b828941",
+   "provenance": {
+    "repo": "harbor",
+    "sha": "383b296196d5912fa9ed57893bea1de8ba5f394b",
+    "path": "docs/adr/0007-sla-clock-and-escalation.md",
+    "lines": {
+     "start": 1,
+     "end": 55
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "DESIGN IT — [senior] SLA attainment under an enterprise contract with follow-the-sun support (harbor, docs/adr/0007-sla-clock-and-escalation.md). Scenario: Harbor signs its first enterprise customer. The contract promises round-the-clock coverage, a first response to every P1 within one business hour, 99% attainment per priority tier in each calendar month, and a 5% service credit on that month's fee for every tier that misses. Support is reorganized into three teams, New York, London and Manila, each handing its open conversations to the next team when its shift ends. The customer opens about 9,000 conversations a month, roughly 600 of them P1. Write your design before you look: what 'business hours' means for a promise that never closes while ownership keeps moving, which calendar each SLA window is measured against and where that is recorded, what happens to windows already open when someone edits the policy, how the monthly attainment report decides which windows count in which month, and how a credit is derived from breach records so that it can be audited. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "keyPoints": [
+      {
+       "text": "[w3] The clock follows the contract's calendar, not the shift rota: a promise that never closes is a schedule with a full-day window (minute 0 to 1440) on all seven weekdays, and the day-by-day walk then counts every minute, so one business hour is sixty real minutes and a handoff neither stops nor restarts it; the team rotas decide only who gets warned.",
+       "cite": {
+        "path": "packages/shared/src/sla.ts",
+        "lineStart": 24,
+        "lineEnd": 33
+       }
+      },
+      {
+       "text": "[w3] A window records which terms and which calendar it is measured on: today the row holds a budget number, a start time and its pauses, but no reference to the policy or the calendar that produced them, so the design writes a policy version and a calendar id onto the window when it opens.",
+       "cite": {
+        "path": "packages/db/prisma/schema.prisma",
+        "lineStart": 277,
+        "lineEnd": 283
+       }
+      },
+      {
+       "text": "[w3] That reference is not optional: the only calendar the API actually has is a hard-coded UTC Monday-to-Friday 09:00-17:00 demo schedule (real workspaces are meant to carry their own), so measured that way a round-the-clock P1 would stop accruing every night and every weekend and look healthy long after it was due.",
+       "cite": {
+        "path": "apps/api/src/routes/reporting.ts",
+        "lineStart": 12,
+        "lineEnd": 16
+       }
+      },
+      {
+       "text": "[w3] A policy edit does not reach windows already open: the budget is copied into the window at the moment it opens (today the open endpoint takes it straight from the request body and never reads a policy row), so the design derives it from the policy version current at open time, and an edit creates a new version that governs only windows opened after it.",
+       "cite": {
+        "path": "apps/api/src/routes/reporting.ts",
+        "lineStart": 59,
+        "lineEnd": 64
+       }
+      },
+      {
+       "text": "[w2] The weekly schedule has no dated exceptions, so a London bank holiday or a Manila public holiday cannot be expressed; the rota needs dated overrides that hand the holiday to another team, and the contract must say whether such days count at all for the round-the-clock tiers.",
+       "cite": {
+        "path": "docs/curriculum/sprint-07.md",
+        "lineStart": 36,
+        "lineEnd": 38
+       }
+      },
+      {
+       "text": "[w3] Attainment comes from window outcomes, not from today's overview report, which measures first response as the wall-clock gap from a conversation's creation to its first outbound message, with no tier, calendar or month; each window is counted exactly once, in the month its outcome became final, and windows still running at month end carry forward.",
+       "cite": {
+        "path": "apps/api/src/routes/reporting.ts",
+        "lineStart": 19,
+        "lineEnd": 35
+       }
+      },
+      {
+       "text": "[w2] A credit is computed by the month-close job from the breached-at and satisfied-at instants each window keeps: met divided by counted per tier, and below 99% the credit is 5% of the month's fee in integer cents (600 P1s tolerate 6 breaches; the seventh costs the credit); it carries a unique key of contract, tier and month, so a re-run cannot issue it twice, and lists the breached window ids it rests on.",
+       "cite": {
+        "path": "packages/db/prisma/schema.prisma",
+        "lineStart": 284,
+        "lineEnd": 285
+       }
+      },
+      {
+       "text": "[w1] Warnings go to whoever holds the conversation at the moment they fire: the conversation stores its current assignee and assigned team, and those are read at dispatch time, so a warning that comes due after a shift change reaches the team now working it instead of an agent who has logged off.",
+       "cite": {
+        "path": "packages/db/prisma/schema.prisma",
+        "lineStart": 78,
+        "lineEnd": 81
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "PRE-MORTEM — three tickets land in the first quarter. In February someone raises the P1 target from one hour to ninety minutes and back-fills the change to January 1 to keep things consistent, and the January attainment report already sent to the customer quietly changes. A P1 that arrives at 16:50 New York time passes to Manila at 17:00, and its window goes on being measured on New York's calendar while Manila works it. And a February credit was issued for a P1 that, once a support lead entered a pause that had been missed, turns out never to have breached. What breaks, how does each show up, and what in your design prevents it?",
+     "keyPoints": [
+      {
+       "text": "[w3] The back-fill changes history only because terms are being re-read at report time; January's windows must keep January's terms, so a back-dated version is refused for any month already closed, and a published report is a snapshot written at close, with anything learned later shown as a dated adjustment in the next report.",
+       "quote": "We need a clock that reflects the promise actually made"
+      },
+      {
+       "text": "[w2] The clock reads its budget from the window record itself, never from a policy, so the realistic way history moves is a script that rewrites budgets on old windows; that field is write-once after open, and a correction becomes a new version plus an adjustment, not an update.",
+       "cite": {
+        "path": "packages/shared/src/sla.ts",
+        "lineStart": 39,
+        "lineEnd": 39
+       }
+      },
+      {
+       "text": "[w3] A window that carries no calendar is measured on whatever calendar the caller passes, and today the live status call passes one fixed calendar for every window; measured on New York's hours the 16:50 P1 stops accruing at 17:00, so it shows ten minutes used while the customer waits through Manila's shift. Recording the contract calendar on the window at open fixes it.",
+       "cite": {
+        "path": "apps/api/src/routes/reporting.ts",
+        "lineStart": 45,
+        "lineEnd": 57
+       }
+      },
+      {
+       "text": "[w3] The un-breached credit comes from editable evidence: pauses live as a JSON list on the window and can be rewritten in place with no history, so a late correction silently changes the result a credit was based on. Pause edits need an actor, a reason and a timestamp, and an edit after the month closed flows through the adjustment path (a reversal in the next statement), never into the issued credit.",
+       "cite": {
+        "path": "packages/db/prisma/schema.prisma",
+        "lineStart": 283,
+        "lineEnd": 283
+       }
+      },
+      {
+       "text": "[w2] A breach is a recorded fact, not a recomputation: the original plan already gave each window a breached-at column, so it is written the first time the monitor sees the budget run out, and reports and credits read that column instead of recomputing from whatever the pauses say today.",
+       "cite": {
+        "path": "docs/sprints/sprint-07.md",
+        "lineStart": 16,
+        "lineEnd": 16
+       }
+      },
+      {
+       "text": "[w2] The job wrapper that would load windows and send the notices is still only a comment, so who counts as the owner at send time is undecided; resolve the current holder when dispatching, so the warnings at 45 and 54 minutes into the 16:50 P1's hour reach Manila rather than the New York agent who has gone home.",
+       "cite": {
+        "path": "apps/worker/src/sla-monitor.ts",
+        "lineStart": 51,
+        "lineEnd": 54
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "TRADE-OFF HANDBACK — defend your contract-SLA choices against the alternatives: freezing policy terms into each window when it opens versus always evaluating the live policy; counting attainment by the month a window finished versus the month it was due; issuing credits automatically versus routing them through a manual review queue; and one global calendar with shift rotas versus per-team calendars with ownership transfer. For each, say what you bought and what it cost.",
+     "keyPoints": [
+      {
+       "text": "[w3] Freezing buys a past that cannot drift and a month that recomputes identically, at the cost of a deliberate new version for every fix and of two windows opened a minute apart carrying different terms; evaluating live makes a fix instant, but a policy row has a created-at and no version or effective date, so 'live' means whatever the row says today, and every edit rewrites the past.",
+       "cite": {
+        "path": "packages/db/prisma/schema.prisma",
+        "lineStart": 264,
+        "lineEnd": 275
+       }
+      },
+      {
+       "text": "[w3] 'Due in month' sounds natural, but the due instant is not fixed in advance: a pause whose end is still open pushes the deadline out for as long as it lasts, so a month could not be closed until every window due in it finished; counting by the month the outcome became final lets the report close on time, at the cost of a contract clause explaining it.",
+       "cite": {
+        "path": "packages/shared/src/sla.ts",
+        "lineStart": 41,
+        "lineEnd": 42
+       }
+      },
+      {
+       "text": "[w2] Automatic credits are fast, consistent and cheap, but every data error becomes money paid out; a review queue catches the corrected-pause cases at the cost of delay and a person in the loop; a middle path pays automatically unless a window behind the credit had its pauses edited, and every credit lists its windows so the customer can check the arithmetic.",
+       "cite": {
+        "path": "docs/curriculum/sprint-07.md",
+        "lineStart": 13,
+        "lineEnd": 16
+       }
+      },
+      {
+       "text": "[w3] One contract calendar with rotas gives one clock per conversation and simple attainment, at the cost of modelling rotas and holiday cover separately; per-team calendars measure each team on its own hours but must stitch a conversation's clock across transfers from the ownership history, and any gap between shifts silently pauses the customer's promise.",
+       "cite": {
+        "path": "packages/db/prisma/schema.prisma",
+        "lineStart": 95,
+        "lineEnd": 105
+       }
+      },
+      {
+       "text": "[w2] Follow-the-sun turns 'the owner went offline' into an event that happens at every shift end, so the offline rule that moves ownership automatically would reassign every open conversation three times a day; a shift handoff has to be a planned transfer with notes, kept apart from escalation.",
+       "quote": "ownership only changes automatically when the owner is"
+      },
+      {
+       "text": "[w1] Whatever model wins, the contract annex spells out which hours count, when the clock stops and which month a window lands in, because the customer's instinct is the plain stopwatch.",
+       "quote": "counts nights, weekends, and the hours a ticket sits"
+      }
+     ]
+    }
+   ],
+   "set": "b"
+  }
+ ]
+}

@@ -1,0 +1,190 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "mastertwenty--twenty-fabledocs3-adr-002-metadata-driven-data-model.md",
+ "items": [
+  {
+   "key": "seed:explainback:mastertwenty/explain-back/84a4fa1a58640950",
+   "provenance": {
+    "repo": "mastertwenty",
+    "sha": "02ca682a3ae8b42b20b49241bb9fc21d0926c347",
+    "path": "twenty/fabledocs3/adr-002-metadata-driven-data-model.md",
+    "lines": {
+     "start": 1,
+     "end": 66
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "Explain what 'the data model is data' means mechanically in Twenty's server: when a workspace admin adds a custom field, which rows get written, what physical change happens in Postgres, in what order and under which transaction, and what stops the change before anything is written?",
+     "keyPoints": [
+      {
+       "text": "[w2] The motivation: with a compile-time model, customer-defined fields end up as generic spare columns or a blob, and every filter, sort, permission and webhook treats them worse than built-in data.",
+       "quote": "data as a second-class citizen"
+      },
+      {
+       "text": "[w3] The field service does not write anything directly: it turns the input into a desired flat entity and calls validateBuildAndRunWorkspaceMigration; the builder diffs desired against current flat maps, and a failed validation returns status 'fail', which the service throws as a WorkspaceMigrationBuilderException before the runner is ever called.",
+       "cite": {
+        "path": "twenty/packages/twenty-server/src/engine/workspace-manager/workspace-migration/services/workspace-migration-validate-build-and-run-service.ts",
+        "lineStart": 358,
+        "lineEnd": 408
+       }
+      },
+      {
+       "text": "[w3] The create-field handler has two halves run on the same queryRunner: executeForMetadata inserts the fieldMetadata rows, and executeForWorkspaceSchema resolves the workspace's schema and table and issues the column DDL there, so the row and the column commit or roll back together.",
+       "cite": {
+        "path": "twenty/packages/twenty-server/src/engine/workspace-manager/workspace-migration/workspace-migration-runner/action-handlers/field/services/create-field-action-handler.service.ts",
+        "lineStart": 92,
+        "lineEnd": 160
+       }
+      },
+      {
+       "text": "[w2] A relation field is one action that creates both sides: the action carries the related field's definition, and ids are minted for both before they are written.",
+       "cite": {
+        "path": "twenty/packages/twenty-server/src/engine/workspace-manager/workspace-migration/workspace-migration-runner/action-handlers/field/services/create-field-action-handler.service.ts",
+        "lineStart": 47,
+        "lineEnd": 90
+       }
+      },
+      {
+       "text": "[w2] The runner opens one transaction for all actions of the migration and folds each handler's partial optimistic cache into its working maps, so later actions in the same run see what earlier ones created.",
+       "cite": {
+        "path": "twenty/packages/twenty-server/src/engine/workspace-manager/workspace-migration/workspace-migration-runner/services/workspace-migration-runner.service.ts",
+        "lineStart": 241,
+        "lineEnd": 272
+       }
+      },
+      {
+       "text": "[w2] An operator switch, WORKSPACE_SCHEMA_DDL_LOCKED, makes the runner refuse every metadata migration (used during hot upgrades), because each one is also schema DDL.",
+       "cite": {
+        "path": "twenty/packages/twenty-server/src/engine/workspace-manager/workspace-migration/workspace-migration-runner/services/workspace-migration-runner.service.ts",
+        "lineStart": 181,
+        "lineEnd": 187
+       }
+      },
+      {
+       "text": "[w1] When the diff produces no actions the call returns success without opening a transaction, so re-submitting an already-applied definition is a no-op.",
+       "cite": {
+        "path": "twenty/packages/twenty-server/src/engine/workspace-manager/workspace-migration/services/workspace-migration-validate-build-and-run-service.ts",
+        "lineStart": 396,
+        "lineEnd": 402
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "Walk through how a GraphQL request for workspace records learns what that workspace's schema looks like right now, and how a committed metadata change reaches every server instance. Where can a request still be answered from an outdated picture of the metadata?",
+     "keyPoints": [
+      {
+       "text": "[w3] The executable schema is assembled per request: SDL text plus resolvers generated from the flat object and field maps, combined with makeExecutableSchema; nothing about a workspace's types exists at build time.",
+       "cite": {
+        "path": "twenty/packages/twenty-server/src/engine/api/graphql/workspace-schema.factory.ts",
+        "lineStart": 23,
+        "lineEnd": 68
+       }
+      },
+      {
+       "text": "[w3] The SDL itself is cached under (workspace, metadataVersion, application) and regenerated from the flat maps only on a miss; the version is read from cache storage and seeded from the workspace row when absent.",
+       "cite": {
+        "path": "twenty/packages/twenty-server/src/engine/api/graphql/workspace-graphql-schema-sdl/workspace-graphql-schema-sdl.service.ts",
+        "lineStart": 115,
+        "lineEnd": 164
+       }
+      },
+      {
+       "text": "[w2] After a run touching object or field maps, the runner increments the metadata version (so the next SDL lookup misses), flushes the cached find-all-views operation, and invalidates and recomputes the role, permission and ORM-entity caches.",
+       "cite": {
+        "path": "twenty/packages/twenty-server/src/engine/workspace-manager/workspace-migration/workspace-migration-runner/services/workspace-migration-runner.service.ts",
+        "lineStart": 42,
+        "lineEnd": 111
+       }
+      },
+      {
+       "text": "[w3] getOrRecompute is tiered: an in-process entry is trusted for 100 ms, then its hash is compared with the Redis hash; a mismatch pulls data from Redis, and a Redis miss recomputes from the provider and stores the result under a fresh random UUID hash, which is how other instances detect the change.",
+       "cite": {
+        "path": "twenty/packages/twenty-server/src/engine/workspace-cache/services/workspace-cache.service.ts",
+        "lineStart": 99,
+        "lineEnd": 161
+       }
+      },
+      {
+       "text": "[w2] invalidateAndRecompute flushes Redis and the local entry, recomputes, and clears the promise memoizer both before and after, so readers that raced the flush window do not keep an old result on this instance.",
+       "cite": {
+        "path": "twenty/packages/twenty-server/src/engine/workspace-cache/services/workspace-cache.service.ts",
+        "lineStart": 163,
+        "lineEnd": 175
+       }
+      },
+      {
+       "text": "[w3] If invalidation fails after the transaction has committed, the runner only logs it: the field exists in Postgres and in the metadata rows, the caller is told success, and the caches can keep describing the previous schema until something else refreshes them.",
+       "cite": {
+        "path": "twenty/packages/twenty-server/src/engine/workspace-manager/workspace-migration/workspace-migration-runner/services/workspace-migration-runner.service.ts",
+        "lineStart": 323,
+        "lineEnd": 333
+       }
+      },
+      {
+       "text": "[w1] As written, the memoizer keeps a resolved result for 10 s measured from its LAST use, so on an instance that did not run the invalidation, an entry read continuously can keep being returned without reaching the 100 ms hash check.",
+       "cite": {
+        "path": "twenty/packages/twenty-server/src/engine/twenty-orm/storage/promise-memoizer.storage.ts",
+        "lineStart": 19,
+        "lineEnd": 67
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "Defend or indict the decision to make Twenty's data model runtime data rather than a fixed schema with a JSONB custom-fields column or a per-tenant code-generation-and-redeploy pipeline. Use what a metadata change costs and what a failed one leaves behind at this commit.",
+     "keyPoints": [
+      {
+       "text": "[w3] Against the JSONB column: custom values would lose real column types, real foreign keys and per-field indexes, so they could never be filtered or aggregated as well as built-in fields.",
+       "quote": "no typed columns, no honest FKs, no cheap per-field indexes"
+      },
+      {
+       "text": "[w2] Against generate-and-redeploy: editing a field must feel like editing a spreadsheet, not wait minutes for a build, and the product would depend on a build farm at runtime.",
+       "quote": "a build farm as a hard runtime dependency"
+      },
+      {
+       "text": "[w2] The payoff: standard and custom objects travel through one implementation, so no feature can work for one kind and not the other.",
+       "quote": "One implementation serves standard and custom objects, so features can't fork."
+      },
+      {
+       "text": "[w3] A failed run is contained: the runner rolls back the transaction, then executes each action's rollback handler in reverse order, invalidates the caches it loaded, and rethrows as a WorkspaceMigrationRunnerException (INTERNAL_SERVER_ERROR for unknown causes).",
+       "cite": {
+        "path": "twenty/packages/twenty-server/src/engine/workspace-manager/workspace-migration/workspace-migration-runner/services/workspace-migration-runner.service.ts",
+        "lineStart": 275,
+        "lineEnd": 321
+       }
+      },
+      {
+       "text": "[w2] Because metadata inserts and DDL share that one transaction on the field path, half-applied DDL is not the usual failure here; the gaps sit outside it, in cache invalidation and in the metadata events emitted after the run.",
+       "cite": {
+        "path": "twenty/packages/twenty-server/src/engine/workspace-manager/workspace-migration/services/workspace-migration-validate-build-and-run-service.ts",
+        "lineStart": 404,
+        "lineEnd": 419
+       }
+      },
+      {
+       "text": "[w2] The cost is bespoke infrastructure that a compile-time model would not need: its own ORM, a GraphQL schema generator and a migration engine.",
+       "quote": "a triple mortgage of bespoke infrastructure"
+      },
+      {
+       "text": "[w1] Changes cascade through metadata, not just columns: deleting a field also deletes or updates the indexes that use it and deletes page-layout widgets configured on that field, all in the same migration request.",
+       "cite": {
+        "path": "twenty/packages/twenty-server/src/engine/metadata-modules/field-metadata/services/field-metadata.service.ts",
+        "lineStart": 111,
+        "lineEnd": 183
+       }
+      },
+      {
+       "text": "[w1] Debugging always has two sources of truth to reconcile: the metadata's description and the physical tables.",
+       "quote": "what does Postgres actually have"
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

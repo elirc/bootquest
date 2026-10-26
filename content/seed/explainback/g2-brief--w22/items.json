@@ -1,0 +1,166 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "w22--docs-learning-flow-traces.md",
+ "items": [
+  {
+   "key": "seed:explainback:w22/explain-back/a865fb8bf1e418af",
+   "provenance": {
+    "repo": "w22",
+    "sha": "a0d6e0d96e72867c149937f1ad5bb66d1f254b8e",
+    "path": "docs/learning/flow-traces.md",
+    "lines": {
+     "start": 24,
+     "end": 34
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "G2 BRIEF — w22 (payments console: Next.js route handlers + Prisma + PostgreSQL, with a simulated provider that queues outbound webhook deliveries). Verified finding: when a delivery attempt throws, `markWebhookDeliveryFailed()` sets the row to FAILED and writes a `nextAttemptAt` one minute out, but `listPendingWebhookDeliveries()`, the only query the deliver pass uses, selects PENDING rows only; a delivery that failed once is never attempted again, whatever its next-attempt time says. You will delegate the fix to a coding agent. Write the brief: goal, allowed files, boundaries, test command, stop condition. Commit to your brief first, then tick the checkpoints you covered and add up the weights.",
+     "keyPoints": [
+      {
+       "text": "[w3] Goal: a deliver pass picks up FAILED rows whose next-attempt time has passed alongside the PENDING ones, and leaves FAILED rows that are not yet due where they are, so the time the failure path already records finally means something.",
+       "cite": {
+        "path": "src/repositories/webhookRepository.ts",
+        "lineStart": 29,
+        "lineEnd": 37
+       }
+      },
+      {
+       "text": "[w3] Guarded form: the retry branch of the selection is conditional on both the due time and an attempt ceiling read from the existing attempts counter, so a delivery that keeps failing stops being selected instead of coming back every minute for ever.",
+       "cite": {
+        "path": "src/repositories/webhookRepository.ts",
+        "lineStart": 53,
+        "lineEnd": 64
+       }
+      },
+      {
+       "text": "[w2] Scope includes proving a re-send is harmless: the consumer short-circuits an event already marked PROCESSED, so a retry of a delivery whose apply succeeded but whose DELIVERED mark failed must come back as a duplicate and be marked delivered, not applied twice.",
+       "cite": {
+        "path": "src/services/webhookService.ts",
+        "lineStart": 30,
+        "lineEnd": 37
+       }
+      },
+      {
+       "text": "[w2] Allowed files: src/repositories/webhookRepository.ts, src/services/providerSimulatorService.ts (only if the pass itself has to change) and one new tests/*.test.mjs; nothing under src/app.",
+       "cite": {
+        "path": "src/services/providerSimulatorService.ts",
+        "lineStart": 157,
+        "lineEnd": 179
+       }
+      },
+      {
+       "text": "[w3] Boundary: the webhook consumer (processProviderWebhook) and the reconciliation service stay byte-identical, prisma/schema.prisma gets no new status value or column, and the deliver route's permission and limit are untouched; the payment status write keyed by id alone is named as a separate follow-up.",
+       "cite": {
+        "path": "prisma/schema.prisma",
+        "lineStart": 196,
+        "lineEnd": 212
+       }
+      },
+      {
+       "text": "[w2] Test command: `npm test` for the shipped .test.ts suites, plus an explicit `node --test` on the new .mjs file, which loads the real repository through the loadTypeScript helper with ../lib/db stubbed so the findMany arguments can be asserted without a database, the way the refund-scope test stubs its repositories.",
+       "cite": {
+        "path": "tests/runtime-refund-scope.test.mjs",
+        "lineStart": 1,
+        "lineEnd": 12
+       }
+      },
+      {
+       "text": "[w2] Stop condition: a new case where a due FAILED delivery is selected is red on the original and green on the fix, cases for a not-yet-due row and a row at the ceiling stay unselected, and the run against a real PostgreSQL is reported as not run rather than claimed.",
+       "quote": "loads pending deliveries"
+      }
+     ]
+    },
+    {
+     "prompt": "G2 PRE-MORTEM — same delegation. What will an agent most likely get wrong here, and which line of your brief prevents it?",
+     "keyPoints": [
+      {
+       "text": "[w3] It widens the filter to every FAILED row and ignores the due time, so each click of the deliver button re-fires all past failures at once; the goal's 'not yet due stays put' line prevents it.",
+       "cite": {
+        "path": "src/repositories/webhookRepository.ts",
+        "lineStart": 31,
+        "lineEnd": 33
+       }
+      },
+      {
+       "text": "[w3] It retries without a ceiling, so a delivery that can never succeed (an unknown provider payment answered with a 404, a status move the state machine refuses) burns a slot in every pass; the guarded-form line demands the cap.",
+       "cite": {
+        "path": "src/services/webhookService.ts",
+        "lineStart": 39,
+        "lineEnd": 49
+       }
+      },
+      {
+       "text": "[w2] Wrong layer: it makes the failure path write PENDING again instead of FAILED, which retries immediately, discards the next-attempt time and erases the failure from anyone reading the status column.",
+       "cite": {
+        "path": "src/repositories/webhookRepository.ts",
+        "lineStart": 56,
+        "lineEnd": 62
+       }
+      },
+      {
+       "text": "[w2] Feature creep into the boundary: it 'hardens' the consumer's duplicate check or teaches reconciliation about failed deliveries in the same diff; the byte-identical boundary on both services prevents it.",
+       "cite": {
+        "path": "src/services/reconciliationService.ts",
+        "lineStart": 60,
+        "lineEnd": 72
+       }
+      },
+      {
+       "text": "[w1] False green: it pastes a passing `npm test` in which the new .mjs case never appears, because that script is pointed at .test.ts files; the brief's second, explicit command is the one whose output must show the new case.",
+       "cite": {
+        "path": "package.json",
+        "lineStart": 10,
+        "lineEnd": 10
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "G2 HANDBACK REVIEW — the agent hands back a diff and a green run. What do you check before accepting it?",
+     "keyPoints": [
+      {
+       "text": "[w3] There is still one selection function and it reads as PENDING, or FAILED and due and under the ceiling, in a single query whose status-then-time shape the existing (status, nextAttemptAt) index can serve.",
+       "cite": {
+        "path": "prisma/schema.prisma",
+        "lineStart": 211,
+        "lineEnd": 211
+       }
+      },
+      {
+       "text": "[w3] webhookService.ts and reconciliationService.ts do not appear in the diff, and neither does the schema or a migration.",
+       "cite": {
+        "path": "src/services/webhookService.ts",
+        "lineStart": 28,
+        "lineEnd": 37
+       }
+      },
+      {
+       "text": "[w2] The output shows node's runner executing the new file with the due, not-due and capped cases, and the due case shown failing on the original repository code.",
+       "cite": {
+        "path": "src/repositories/webhookRepository.ts",
+        "lineStart": 29,
+        "lineEnd": 37
+       }
+      },
+      {
+       "text": "[w2] The shipped suites still pass, and the existing refund-scope .mjs is run too, so the stubbed-loader pattern the new test copies is known to work on this machine.",
+       "cite": {
+        "path": "tests/runtime-refund-scope.test.mjs",
+        "lineStart": 4,
+        "lineEnd": 7
+       }
+      },
+      {
+       "text": "[w1] The handback lists what it saw but did not fix: two deliver passes started together read the same rows with no claim, so both send the same delivery; that is a follow-up, not part of this diff.",
+       "quote": "`markWebhookEventProcessed()` and `markWebhookDeliveryDelivered()` finalize the async path"
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

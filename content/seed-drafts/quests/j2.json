@@ -491,6 +491,530 @@
    ],
    "front": "What capacity limits does the file store enforce, and why state them?",
    "back": "Files are bounded to 10 MiB and each collection to 10,000 records. Clear limits make a small project easy to reason about and give concrete reasons for a later SQL migration."
+  },
+  {
+   "id": "q13-ef-receipt-columns",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/08-TRANSLATION.md",
+    "lines": {
+     "start": 5,
+     "end": 16
+    }
+   },
+   "cites": [
+    {
+     "path": "astraupskill/08-TRANSLATION.md",
+     "lineStart": 8,
+     "lineEnd": 8
+    },
+    {
+     "path": "astraupskill/08-TRANSLATION.md",
+     "lineStart": 16,
+     "lineEnd": 16
+    }
+   ],
+   "prompt": "In the EF Core translation, how is a loan's receipt (book title and borrower name) modelled, and why not with a join to Books?",
+   "answer": "As columns copied onto the loan row in the same SaveChanges; a join would show the current title",
+   "distractors": [
+    "As a navigation to Books loaded with Include; copied columns would duplicate data needlessly",
+    "As a JSON column on Books holding past titles; a join on it recovers the title at loan time",
+    "As a database view over Books and Borrowers refreshed whenever either record gets renamed"
+   ],
+   "explanation": "08-TRANSLATION line 8: the receipt becomes denormalised accepted columns on the Loans table (BookTitleAtLoan, BorrowerNameAtLoan) written in the same SaveChanges as the loan, because a join to Books would show the current title, the wrong answer for a receipt. Line 16 adds that in EF Core this is a plain column, not a navigation property, so Include, a title-history column or a view are all off the table."
+  },
+  {
+   "id": "q14-ef-version-check",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/08-TRANSLATION.md",
+    "lines": {
+     "start": 5,
+     "end": 12
+    }
+   },
+   "cites": [
+    {
+     "path": "astraupskill/08-TRANSLATION.md",
+     "lineStart": 9,
+     "lineEnd": 9
+    }
+   ],
+   "prompt": "How does the EF Core translation carry the per-record version check, and what does EF do when the version no longer matches?",
+   "answer": "A concurrency token in the UPDATE's WHERE; zero matched rows throw DbUpdateConcurrencyException",
+   "distractors": [
+    "A version read in a separate SELECT first; a mismatch makes EF retry the save with the new value",
+    "A whole-table lock taken by SaveChanges; a second writer waits until the first one commits",
+    "A trigger that bumps the version column; EF overwrites the row and logs a warning on mismatch"
+   ],
+   "explanation": "08-TRANSLATION line 9: the per-record version becomes a row-version concurrency token ([Timestamp] byte[] RowVersion or [ConcurrencyCheck] int Version); EF issues UPDATE ... WHERE Id = @p AND Version = @expected and throws DbUpdateConcurrencyException when zero rows match. It does not pre-read and retry, lock the table, or silently overwrite."
+  },
+  {
+   "id": "q15-ef-checkout-one-save",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/08-TRANSLATION.md",
+    "lines": {
+     "start": 5,
+     "end": 12
+    }
+   },
+   "cites": [
+    {
+     "path": "astraupskill/08-TRANSLATION.md",
+     "lineStart": 10,
+     "lineEnd": 10
+    }
+   ],
+   "prompt": "How does the translation table express checkout (replace the book, append the loan) so that both rows change or neither does?",
+   "answer": "Two tracked changes in one DbContext and one SaveChangesAsync, which is already a transaction",
+   "distractors": [
+    "Two SaveChangesAsync calls inside an explicit BeginTransaction that the code must commit",
+    "A stored procedure that updates the book and inserts the loan, called through FromSqlRaw",
+    "Two DbContexts, one per table, coordinated by a distributed transaction across the two"
+   ],
+   "explanation": "08-TRANSLATION line 10: checkout is one DbContext with two tracked changes (the book update and the loan insert) and one SaveChangesAsync(); a single SaveChanges call is already wrapped in a transaction, so either both rows change or neither does. No explicit transaction, stored procedure or second context is involved."
+  },
+  {
+   "id": "q16-ef-archival-filter",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/08-TRANSLATION.md",
+    "lines": {
+     "start": 5,
+     "end": 12
+    }
+   },
+   "cites": [
+    {
+     "path": "astraupskill/08-TRANSLATION.md",
+     "lineStart": 11,
+     "lineEnd": 11
+    }
+   ],
+   "prompt": "How does the translation table carry archival (instead of deletion) into EF Core, and what happens to the loans that point at an archived book?",
+   "answer": "A nullable ArchivedAt plus a global query filter; loans keep their foreign key to the row",
+   "distractors": [
+    "An IsArchived flag that a migration later turns into a real delete; loans move to history",
+    "An IsArchived column checked in each query by hand; loans have their foreign key set to null",
+    "Moving the row into an Archive table; loans are re-pointed at the copy through a trigger"
+   ],
+   "explanation": "08-TRANSLATION line 11: archival becomes ArchivedAt DateTime? plus a global query filter HasQueryFilter(b => b.ArchivedAt == null), and loans keep their foreign key. Nothing is deleted or moved, the filter is global rather than repeated by hand, and the loans' references are left intact."
+  },
+  {
+   "id": "q17-ef-id-mapping",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/08-TRANSLATION.md",
+    "lines": {
+     "start": 5,
+     "end": 12
+    }
+   },
+   "cites": [
+    {
+     "path": "astraupskill/08-TRANSLATION.md",
+     "lineStart": 12,
+     "lineEnd": 12
+    }
+   ],
+   "prompt": "The translation table notes that the Java store and SQL identity columns number records differently. What does it recommend for the import path?",
+   "answer": "Map each source id to a new key and keep the source id in a separate column",
+   "distractors": [
+    "Force identity columns to start at the source's first id so every key carries over",
+    "Drop the source ids and rebuild the loans' references from book titles and names",
+    "Keep the source ids as primary keys and switch identity generation off everywhere"
+   ],
+   "explanation": "08-TRANSLATION line 12: identity columns usually start at 1, unlike the Java store, so the import path maps source ids to new keys and stores the source id in a separate column. It neither reseeds identity to match nor discards the ids, and it does not disable identity generation."
+  },
+  {
+   "id": "q18-cli-success-message-lies",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/onboarding/02-review-checklists.md",
+    "lines": {
+     "start": 38,
+     "end": 68
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/onboarding/02-review-checklists.md",
+     "lineStart": 64,
+     "lineEnd": 68
+    }
+   ],
+   "prompt": "The Entry Points checklist lists subtle bugs a junior might miss at the CLI. Which one concerns the messages the user sees?",
+   "answer": "Showing a result that sounds successful even though persistence failed",
+   "distractors": [
+    "Printing error messages in English while the menu labels are localized",
+    "Repeating the success message twice when the menu loop redraws itself",
+    "Hiding stack traces from users, which makes their bug reports useless"
+   ],
+   "explanation": "The Entry Points checklist (lines 64-68) lists three subtle bugs: forgetting that Scanner.nextLine() interactions are stateful and order-sensitive, adding formatting that assumes consistency storage may not guarantee, and displaying a result that sounds successful even when persistence failed. Localization, duplicated messages and hidden stack traces are not on the list."
+  },
+  {
+   "id": "q19-last-record-separator",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/onboarding/02-review-checklists.md",
+    "lines": {
+     "start": 70,
+     "end": 100
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/onboarding/02-review-checklists.md",
+     "lineStart": 96,
+     "lineEnd": 100
+    }
+   ],
+   "prompt": "Which subtle persistence bug does the review checklist warn can change how the file's final record is read?",
+   "answer": "A trailing or missing record separator changing how the last record parses",
+   "distractors": [
+    "A byte-order mark at the start of the file shifting every field over by one",
+    "A missing newline at the top of the file hiding the header from the parser",
+    "A record longer than the buffer size being split across two separate reads"
+   ],
+   "explanation": "The Persistence checklist's subtle bugs (lines 96-100) are a trailing or missing record separator changing how the last record is parsed, date parsing failures that break startup, and clean-up logic that changes the durable format. Byte-order marks, header newlines and buffer splits are not mentioned."
+  },
+  {
+   "id": "q20-visibility-not-security",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/onboarding/02-review-checklists.md",
+    "lines": {
+     "start": 163,
+     "end": 185
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/onboarding/02-review-checklists.md",
+     "lineStart": 169,
+     "lineEnd": 185
+    }
+   ],
+   "prompt": "The repo has no authentication yet. If a restricted operation is added later, what does the checklist name as the junior trap, and what question exposes it?",
+   "answer": "Treating visibility as security; ask whether the rule holds when a caller bypasses the UI",
+   "distractors": [
+    "Checking roles in the service layer; ask whether the menu still hides options from guests",
+    "Logging every denied attempt; ask whether each refusal is written to the audit file",
+    "Encrypting the data files; ask whether a copied file can still be read on another machine"
+   ],
+   "explanation": "The security section (lines 169-185) says to enforce rules in the service layer, not only hide them in the UI, with one obvious enforcement point; its review question is 'if a caller bypasses the UI, does the restriction still hold', and the subtle junior bug is treating visibility as security. Service-layer checks are the recommendation, not the trap, and auditing and encryption are not discussed."
+  },
+  {
+   "id": "q21-blank-vs-malformed",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/onboarding/02-review-checklists.md",
+    "lines": {
+     "start": 187,
+     "end": 210
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/onboarding/02-review-checklists.md",
+     "lineStart": 207,
+     "lineEnd": 210
+    }
+   ],
+   "prompt": "Which pair of subtle error-handling bugs does the review checklist list for this repo?",
+   "answer": "Treating blank and malformed values as one, and handling missing files but not malformed ones",
+   "distractors": [
+    "Retrying failed saves forever, and printing raw exceptions instead of user-facing messages",
+    "Validating input only in storage, and accepting dates outside the range the parser handles",
+    "Catching every exception at the top, and exiting with code 0 after a failed startup run"
+   ],
+   "explanation": "The Error Handling section's subtle bugs (lines 207-210) are assuming blank values and malformed values are the same thing, and handling missing files but not malformed files. Endless save retries, storage-only validation and exit codes after failed startup are not what it lists."
+  },
+  {
+   "id": "q22-highest-value-tests",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/onboarding/02-review-checklists.md",
+    "lines": {
+     "start": 212,
+     "end": 234
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/onboarding/02-review-checklists.md",
+     "lineStart": 218,
+     "lineEnd": 223
+    }
+   ],
+   "prompt": "The checklist's tests section names the highest-value tests to add first. Which list is it?",
+   "answer": "checkOutBook and returnBook success and failure paths, save-then-load round trip, due dates",
+   "distractors": [
+    "Menu numbering, every prompt's wording, the process exit code and the startup banner text",
+    "Email normalisation, ISBN format checks, title length limits and borrower phone parsing",
+    "A 10,000-record load test, a two-session concurrency test and a disk-full write test"
+   ],
+   "explanation": "The tests section (lines 218-223) lists LibraryManager.checkOutBook success and failure paths, LibraryManager.returnBook success and failure paths, FileStorage.save followed by load round-trip behavior, and overdue display and due-date handling. Presentation details, field validators and load or concurrency tests are not on that list."
+  },
+  {
+   "id": "q23-practice-harness-contract",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/05-PRACTICE.md",
+    "lines": {
+     "start": 1,
+     "end": 5
+    }
+   },
+   "cites": [
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 5,
+     "lineEnd": 5
+    }
+   ],
+   "prompt": "What does the 05-PRACTICE harness contract say about where the checks live and how they exercise the app?",
+   "answer": "Outside the repo, compiling src into a temp folder each run and driving the real CLI via stdin",
+   "distractors": [
+    "Inside test/, compiled once by the build tool and calling the LibraryManager methods directly",
+    "Outside the repo, using a mocked FileStorage so no data directory is ever written to disk",
+    "Inside the repo's scripts folder, replaying recorded CLI transcripts without running Java"
+   ],
+   "explanation": "05-PRACTICE line 5: the checks are dependency-free node --test files kept outside the repo (for example ../j2-practice/); the shared helper compiles src/ into the OS temp folder on every run and then drives the real CLI through stdin. They do not live in test/, do not mock storage, and do run Java."
+  },
+  {
+   "id": "q24-write-snapshot-reason",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/05-PRACTICE.md",
+    "lines": {
+     "start": 42,
+     "end": 60
+    }
+   },
+   "cites": [
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 60,
+     "lineEnd": 60
+    }
+   ],
+   "prompt": "Why does the practice helper include writeSnapshot instead of creating every scenario through the CLI?",
+   "answer": "Checkout uses today's clock and rejects a past due date, so the CLI cannot make an overdue loan",
+   "distractors": [
+    "The CLI cannot add books in bulk, so the larger scenarios would take far too long to type",
+    "The CLI writes the legacy two-file format, so a snapshot file must be written by hand",
+    "LibraryData skips validation for files it did not write itself, so tests can plant bad states"
+   ],
+   "explanation": "05-PRACTICE line 60: writeSnapshot exists because checkout always uses today's clock and the Book constructor rejects a due date before checkout, so no CLI script can create an overdue loan; the helper writes a valid LIBRARY2 file instead and LibraryData still validates it at startup. Speed and file format are not the reason, and validation is not skipped."
+  },
+  {
+   "id": "q25-partial-unique-index",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/05-PRACTICE.md",
+    "lines": {
+     "start": 226,
+     "end": 230
+    }
+   },
+   "cites": [
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 228,
+     "lineEnd": 228
+    }
+   ],
+   "prompt": "In exercise 4's table sketch, what replaces the one-active-loan-per-copy check that LibraryData enforces in code?",
+   "answer": "A partial unique index on loans(book_id) WHERE returned_at IS NULL",
+   "distractors": [
+    "A unique index on loans(book_id) covering every loan the copy ever had",
+    "A CHECK constraint on books comparing checked_out with the loan count",
+    "A trigger on loans that deletes older loans when a new one is inserted"
+   ],
+   "explanation": "05-PRACTICE line 228: the sketched tables keep book_title and borrower_name as accepted text on each loans row, and a partial unique index on loans(book_id) WHERE returned_at IS NULL replaces the one-active-loan-per-copy check. A plain unique index would forbid a copy's second loan ever, and neither a CHECK nor a deleting trigger is proposed."
+  },
+  {
+   "id": "q26-base64-not-control-chars",
+   "kind": "quiz",
+   "source": {
+    "path": "astraupskill/05-PRACTICE.md",
+    "lines": {
+     "start": 262,
+     "end": 264
+    }
+   },
+   "cites": [
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 264,
+     "lineEnd": 264
+    }
+   ],
+   "prompt": "A librarian types a real TAB character in the middle of a book title. What happens, and what does the snapshot's Base64 encoding actually protect?",
+   "answer": "Values.text rejects it as a control character; Base64 guards |, = and non-ASCII text",
+   "distractors": [
+    "Base64 stores the TAB safely, since the encoding protects every character in a title",
+    "The TAB is replaced by a space on save; Base64 only guards the ISBN and the email",
+    "The TAB splits the row into extra fields, and the next startup refuses the snapshot"
+   ],
+   "explanation": "05-PRACTICE line 264: a real TAB typed into a title never reaches the file, because Values.text rejects ISO control characters and the CLI answers Change not accepted; Base64 protects |, = and non-ASCII text, not control characters. The TAB is neither stored, replaced nor written into the row."
+  },
+  {
+   "id": "f05-layer-ownership",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/onboarding/00-codebase-map.md",
+    "lines": {
+     "start": 16,
+     "end": 85
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/onboarding/00-codebase-map.md",
+     "lineStart": 16,
+     "lineEnd": 85
+    }
+   ],
+   "front": "Onboarding codebase map (onboarding docs, pre-Loan): name the four layers, the file that owns each, and why each exists.",
+   "back": "CLI/presentation (App.java): menu loop, Scanner input, messages and formatting; keeps user interaction apart from rules and file I/O. Domain models (Book.java, Borrower.java): the entities plus a little behavior; a stable vocabulary for what a book and a borrower are. Service (LibraryManager.java): collections, core rules, relationships, stable IDs, delegating persistence; centralizes the rules. Persistence (FileStorage.java): the data directory and reading/writing records; isolates file-format concerns from business logic."
+  },
+  {
+   "id": "f06-business-logic-review",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/onboarding/02-review-checklists.md",
+    "lines": {
+     "start": 5,
+     "end": 30
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/onboarding/02-review-checklists.md",
+     "lineStart": 11,
+     "lineEnd": 16
+    },
+    {
+     "path": "docs/onboarding/02-review-checklists.md",
+     "lineStart": 25,
+     "lineEnd": 30
+    }
+   ],
+   "front": "Review checklist, Business Logic: what should a reviewer look for, and which questions should they ask?",
+   "back": "Look for: domain rules still centralized in the service layer; stable ID generation preserved; checkout and return keeping related fields in sync; list-returning methods safe and unsurprising for callers. Ask: should this rule live in LibraryManager instead of the caller; what state must change together; what invariants should hold after success; is the state unchanged after a failure."
+  },
+  {
+   "id": "f07-side-effects-review",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/onboarding/02-review-checklists.md",
+    "lines": {
+     "start": 132,
+     "end": 157
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/onboarding/02-review-checklists.md",
+     "lineStart": 136,
+     "lineEnd": 157
+    }
+   ],
+   "front": "Review checklist, Async Code And Side Effects: why does a repo with no async framework still need the section, and what does it check?",
+   "back": "There is no async framework or concurrency model, but side effects already exist through file I/O and time access. Look for where the code touches disk, where it depends on the current date/time, and constructors doing surprising work. Ask: does this change introduce a side effect; can this logic be tested deterministically; is there a better boundary for this time or I/O dependency."
+  },
+  {
+   "id": "f08-practice-exercise-goals",
+   "kind": "flashcard",
+   "source": {
+    "path": "astraupskill/05-PRACTICE.md",
+    "lines": {
+     "start": 62,
+     "end": 230
+    }
+   },
+   "cites": [
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 62,
+     "lineEnd": 64
+    },
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 189,
+     "lineEnd": 191
+    },
+    {
+     "path": "astraupskill/05-PRACTICE.md",
+     "lineStart": 226,
+     "lineEnd": 228
+    }
+   ],
+   "front": "05-PRACTICE: what is the goal of each of exercises 0 to 4?",
+   "back": "0: pin baseline facts of the delivered code with the harness before changing anything. 1: an overdue projection as menu 19. 2: loan renewal as menu 20. 3: port LibraryData's aggregate rules into a validateLibrary module for a web/SQL version. 4: a dry-run importer that reads the snapshot without changing it, the first step of a SQL migration."
+  },
+  {
+   "id": "f09-reading-order",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/onboarding/01-reading-order.md",
+    "lines": {
+     "start": 1,
+     "end": 120
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/onboarding/01-reading-order.md",
+     "lineStart": 7,
+     "lineEnd": 108
+    }
+   ],
+   "front": "Onboarding reading order (onboarding docs, pre-Loan): the five stages and the file(s) each stage reads.",
+   "back": "1 Domain vocabulary: Book.java and Borrower.java (the nouns; available versus checked out). 2 Rules: LibraryManager.java (ids, checkout/return rules, related lookups). 3 Runtime flow: App.java (menu options mapped to service calls, CLI validation). 4 Persistence and failure modes: FileStorage.java. 5 Judgment: the codebase map, the review checklists and the per-file explainers."
+  },
+  {
+   "id": "f10-tests-review-questions",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/onboarding/02-review-checklists.md",
+    "lines": {
+     "start": 212,
+     "end": 234
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/onboarding/02-review-checklists.md",
+     "lineStart": 225,
+     "lineEnd": 234
+    }
+   ],
+   "front": "Review checklist, Tests And Missing Coverage: which review questions does it suggest, and which subtle gaps?",
+   "back": "Ask: what behavior would be easy to break accidentally; is there a rule or parsing path that exists in only one place and deserves a test; if a future contributor changed this, which regression would we most want caught. Subtle gaps: relying on manual testing for persistence changes, and not testing both in-memory and persisted behavior for the same feature."
+  },
+  {
+   "id": "f11-translation-exercise",
+   "kind": "flashcard",
+   "source": {
+    "path": "astraupskill/08-TRANSLATION.md",
+    "lines": {
+     "start": 14,
+     "end": 20
+    }
+   },
+   "cites": [
+    {
+     "path": "astraupskill/08-TRANSLATION.md",
+     "lineStart": 18,
+     "lineEnd": 20
+    }
+   ],
+   "front": "08-TRANSLATION: what does the exercise ask you to build and prove?",
+   "back": "Model the three entities and the checkout action in EF Core on an in-memory SQLite provider, then write a test with two contexts: load the same book in both, check it out in the first, and assert that the second context's checkout is rejected as a concurrency conflict."
   }
  ]
 }

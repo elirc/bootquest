@@ -407,6 +407,540 @@
    ],
    "front": "The three experiment result states, and why one is worded carefully",
    "back": "collecting / significant / \"no effect detected\". Never \"no effect\": reaching the horizon without significance only means no effect large enough to detect was found, not that the variants are equivalent (that needs an equivalence/TOST design)."
+  },
+  {
+   "id": "q13-pg-exit-criteria",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0002-postgres-first-with-exit-criteria.md",
+    "lines": {
+     "start": 19,
+     "end": 30
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0002-postgres-first-with-exit-criteria.md",
+     "lineStart": 21,
+     "lineEnd": 26
+    }
+   ],
+   "prompt": "ADR-0002 keeps events on Postgres until an exit criterion is crossed. Which of these is one of its three written criteria?",
+   "answer": "A trends/funnel query over ~50M events exceeding ~2 s p95",
+   "distractors": [
+    "The Event table passing ~50 GB on disk for a single project",
+    "Insert p95 exceeding ~2 s once ingest reaches ~500 events/sec",
+    "A funnel query over ~5M events exceeding ~200 ms p95 for a day"
+   ],
+   "explanation": "ADR-0002 lines 21-26 list exactly three: sustained ingest above ~2,000 events/sec driving insert p95 above 50 ms; a trends/funnel query over > ~50M events exceeding ~2 s p95; and the events table dominating DB size/vacuum/backup so OLTP metadata is harmed. There is no raw-size threshold, and the other numbers are mixed up from the real ones."
+  },
+  {
+   "id": "q14-deliberately-underoptimized",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0002-postgres-first-with-exit-criteria.md",
+    "lines": {
+     "start": 32,
+     "end": 43
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0002-postgres-first-with-exit-criteria.md",
+     "lineStart": 40,
+     "lineEnd": 41
+    }
+   ],
+   "prompt": "ADR-0002 leaves the Postgres Event table with a single btree on (projectId, ts): no partitioning, no BRIN, no columnar layout. Why?",
+   "answer": "Optimizing it now would blunt the planned S07 migration lesson",
+   "distractors": [
+    "Partitioning needs a Postgres version the course does not ship",
+    "Extra indexes would break the dedupe on the unique uuid column",
+    "BRIN indexes cannot serve the GROUP BY that trends depend on"
+   ],
+   "explanation": "ADR-0002 lines 40-41: the Event table is deliberately under-optimized, and optimizing it now would blunt the S07 lesson, where the team drives Pulse across the exit criteria and migrates. The ADR gives no version, dedupe or BRIN-capability reason."
+  },
+  {
+   "id": "q15-guard-wraps-reporter",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0004-sdk-design-principles.md",
+    "lines": {
+     "start": 14,
+     "end": 16
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0004-sdk-design-principles.md",
+     "lineStart": 14,
+     "lineEnd": 16
+    }
+   ],
+   "prompt": "Pulse's SDK runs every public entry point inside a never-throw guard and can report swallowed errors via onError. What does ADR-0004 add about that reporter?",
+   "answer": "The reporting call is wrapped too, so a broken reporter can't throw",
+   "distractors": [
+    "The reporter is called only in development builds, never on live pages",
+    "The reporter rethrows after logging, so the host page can see the error",
+    "The reporter batches errors and sends them along with the next flush"
+   ],
+   "explanation": "ADR-0004 lines 14-16: errors are swallowed and optionally reported via onError, and the reporting is itself wrapped, so a broken reporter can't re-break the page; a bug in analytics must never take down checkout. Rethrowing would break the first principle, and nothing limits the reporter to development or batches it."
+  },
+  {
+   "id": "q16-uuid-minted-in-browser",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0004-sdk-design-principles.md",
+    "lines": {
+     "start": 20,
+     "end": 22
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0004-sdk-design-principles.md",
+     "lineStart": 20,
+     "lineEnd": 22
+    }
+   ],
+   "prompt": "ADR-0004 says the event uuid is minted in the browser at capture time. What goes wrong if it were minted downstream instead?",
+   "answer": "A network retry would become a duplicate nothing can collapse",
+   "distractors": [
+    "Two browsers could mint the same id and overwrite each other",
+    "The beacon path could not deliver an event without a header",
+    "The consumer would need a second lookup to find the person id"
+   ],
+   "explanation": "ADR-0004 lines 20-22: the uuid is the idempotency key the whole pipeline relies on (S04 dedupes on it, S07 backfill stays idempotent because of it); mint it downstream and a network retry becomes an uncollapsible duplicate, because the retried send would get a fresh id. Collisions, beacon headers and person lookups are not the stated risk."
+  },
+  {
+   "id": "q17-sdk-priority-order",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0004-sdk-design-principles.md",
+    "lines": {
+     "start": 32,
+     "end": 36
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0004-sdk-design-principles.md",
+     "lineStart": 34,
+     "lineEnd": 36
+    }
+   ],
+   "prompt": "ADR-0004 derives every SDK principle from one ordering of priorities. What is it, and why?",
+   "answer": "Page safety > delivery > size > features; a throw costs more than a gap",
+   "distractors": [
+    "Delivery > page safety > size > features; a lost event is unrecoverable",
+    "Size > page safety > delivery > features; the bundle budget is enforced",
+    "Page safety > size > delivery > features; the script must load quickly"
+   ],
+   "explanation": "ADR-0004 lines 34-36: the failure modes are asymmetric, since a dropped event is a data gap while a thrown exception is a customer outage and a churned account, so the order is don't break the page > deliver the event > be small > be featureful. Size is enforced in CI but ranks third, below delivery."
+  },
+  {
+   "id": "q18-good-citizen-patching",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0004-sdk-design-principles.md",
+    "lines": {
+     "start": 28,
+     "end": 29
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0004-sdk-design-principles.md",
+     "lineStart": 28,
+     "lineEnd": 29
+    }
+   ],
+   "prompt": "Pulse's auto-pageview patches the host page's history API. Which three properties does ADR-0004 require of that patch?",
+   "answer": "It composes with the original, is idempotent, and is reversible",
+   "distractors": [
+    "It replaces the original, is lazy, and is removed after one call",
+    "It wraps the original in a Proxy, is async, and is sandboxed",
+    "It runs before the original, is cached, and is never torn down"
+   ],
+   "explanation": "ADR-0004 lines 28-29: good-citizen monkey-patching composes with the original (call it first, return its result), is idempotent (no double-patch), and is reversible (teardown restores it exactly). It neither replaces the original nor stays installed forever."
+  },
+  {
+   "id": "q19-hot-path-dumb",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0005-redis-streams-ingestion.md",
+    "lines": {
+     "start": 35,
+     "end": 39
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0005-redis-streams-ingestion.md",
+     "lineStart": 37,
+     "lineEnd": 39
+    }
+   ],
+   "prompt": "Under ADR-0005's rule \"place correctness where state already lives; keep the hot path dumb\", where do dedup, enrichment and batching run?",
+   "answer": "In the stream consumer, next to the database and the batch",
+   "distractors": [
+    "In the ingest handler, before the event is put on the stream",
+    "In the browser SDK, before an event is ever sent to ingest",
+    "In the query layer, when a trend is read from the event store"
+   ],
+   "explanation": "ADR-0005 lines 37-39: the hot path does the least possible (validate + append), and everything stateful (dedup against a unique index, enrichment, batching) happens in the consumer, where the database and the batch already are. Ingest stays dumb, the SDK only mints ids, and query time is not where dedup lives."
+  },
+  {
+   "id": "q20-at-least-once-pair",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0005-redis-streams-ingestion.md",
+    "lines": {
+     "start": 41,
+     "end": 44
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0005-redis-streams-ingestion.md",
+     "lineStart": 41,
+     "lineEnd": 44
+    }
+   ],
+   "prompt": "ADR-0005 accepts that a consumer which crashes after inserting a batch but before XACK will see those entries redelivered. What makes that redelivery harmless?",
+   "answer": "An idempotent apply: a unique uuid plus ON CONFLICT DO NOTHING",
+   "distractors": [
+    "The consumer XACKs each entry before inserting it into Postgres",
+    "Redis drops a redelivered entry whose id it has already seen",
+    "The SDK stops resending once ingest has answered with a 202"
+   ],
+   "explanation": "ADR-0005 lines 41-44: Redis Streams gives at-least-once, so redelivery after a crash between insert and XACK is the contract, not a bug to engineer away in the transport. The apply is made idempotent (unique uuid + ON CONFLICT DO NOTHING), and at-least-once delivery plus idempotent apply is effectively exactly-once. Acking before inserting would lose events on a crash, Redis does not dedupe redeliveries, and the SDK is not involved."
+  },
+  {
+   "id": "q21-pel-role",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0005-redis-streams-ingestion.md",
+    "lines": {
+     "start": 22,
+     "end": 33
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0005-redis-streams-ingestion.md",
+     "lineStart": 29,
+     "lineEnd": 29
+    }
+   ],
+   "prompt": "In ADR-0005's Streams-to-Kafka concept map, the pending entries list (PEL) maps to delivered-but-uncommitted offsets. What role does the map give it in Pulse?",
+   "answer": "It is where redelivery, and with it duplicates, comes from",
+   "distractors": [
+    "It holds events that failed schema validation at ingest",
+    "It holds entries that ingest has not yet appended to Redis",
+    "It holds entries waiting for a consumer group to be made"
+   ],
+   "explanation": "ADR-0005 line 29: the pending entries list is delivered-but-uncommitted offsets, and its role in Pulse is \"where redelivery — and duplicates — come from\": entries delivered to a consumer but not yet XACKed. Invalid events are refused before XADD, and an entry is only pending after a group has delivered it."
+  },
+  {
+   "id": "q22-merge-fixes-future",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0006-identity-resolution-at-write-time.md",
+    "lines": {
+     "start": 14,
+     "end": 20
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0006-identity-resolution-at-write-time.md",
+     "lineStart": 17,
+     "lineEnd": 20
+    }
+   ],
+   "prompt": "Pulse freezes personId onto each event row at write time (ADR-0006). When two persons are later merged, what changes?",
+   "answer": "Only DistinctIdMapping, so new lookups go to the survivor",
+   "distractors": [
+    "The old event rows get their personId updated to the survivor",
+    "Both persons' events are copied into one new combined person",
+    "The frozen ids are recomputed by a nightly backfill of events"
+   ],
+   "explanation": "ADR-0006 lines 17-20: the event log is immutable and identity is a view over it via the mapping table. A merge changes DistinctIdMapping, never event rows, so it fixes the future (new lookups resolve to the survivor) while the past stays exactly as recorded; history is never UPDATEd."
+  },
+  {
+   "id": "q23-oldest-person-wins",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0006-identity-resolution-at-write-time.md",
+    "lines": {
+     "start": 22,
+     "end": 26
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0006-identity-resolution-at-write-time.md",
+     "lineStart": 22,
+     "lineEnd": 26
+    }
+   ],
+   "prompt": "How does ADR-0006 make an identify merge safe under concurrency and under replay?",
+   "answer": "A per-user-id advisory lock, and the oldest person always wins",
+   "distractors": [
+    "A table-wide lock, and the person with more events always wins",
+    "An optimistic version check, and the newest person always wins",
+    "A per-device lock, and the identified person always wins merges"
+   ],
+   "explanation": "ADR-0006 lines 22-26: the merge runs under a lock keyed on the user id (pg_advisory_xact_lock in prod), serializing concurrent identifies for that user, and the oldest person wins, which is deterministic, so a replayed identify is idempotent. Create-on-first-sight takes the lock only on its create path, so the common paths stay lock-free."
+  },
+  {
+   "id": "q24-no-probabilistic-matching",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0006-identity-resolution-at-write-time.md",
+    "lines": {
+     "start": 42,
+     "end": 50
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0006-identity-resolution-at-write-time.md",
+     "lineStart": 48,
+     "lineEnd": 50
+    }
+   ],
+   "prompt": "ADR-0006 declines cross-device probabilistic matching \"probably forever\". What reason does it give?",
+   "answer": "A wrong guess silently corrupts the count of how many users",
+   "distractors": [
+    "Matching models are too slow to run on the write path today",
+    "Fingerprinting devices breaks the browser privacy rules",
+    "The merge lock cannot be held across two separate devices"
+   ],
+   "explanation": "ADR-0006 lines 48-50: guessing that two ids are the same person silently corrupts \"how many users?\", the one number analytics must not lie about. Speed, privacy rules and lock scope are not the stated reason."
+  },
+  {
+   "id": "q25-rollups-named-questions",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0007-clickhouse-columnar-events.md",
+    "lines": {
+     "start": 17,
+     "end": 27
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0007-clickhouse-columnar-events.md",
+     "lineStart": 21,
+     "lineEnd": 21
+    },
+    {
+     "path": "docs/adr/0007-clickhouse-columnar-events.md",
+     "lineStart": 25,
+     "lineEnd": 27
+    }
+   ],
+   "prompt": "ADR-0007 publishes the losing options. Partitioned Postgres with rollups did ~3.1 s on some queries. Why was it still rejected?",
+   "answer": "Rollups only answer questions named in advance, not ad-hoc filters",
+   "distractors": [
+    "Rollups double the write load, so ingest at 5k/s fell further behind",
+    "Rollups need a nightly rebuild, so trends were always a day out of date",
+    "Rollups cannot count distinct persons, only raw totals of events"
+   ],
+   "explanation": "ADR-0007 lines 21 and 25-27: partitioning + rollups got ~3.1 s on rollup-able queries but ~9 s on arbitrary-filter distinct, because rollups can only precompute the questions you named in advance, and the product's superpower is arbitrary filters and breakdowns. The table records improved ingest for that option, and no nightly-rebuild claim is made."
+  },
+  {
+   "id": "q26-uuid-last-order-by",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/adr/0007-clickhouse-columnar-events.md",
+    "lines": {
+     "start": 35,
+     "end": 43
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0007-clickhouse-columnar-events.md",
+     "lineStart": 35,
+     "lineEnd": 37
+    },
+    {
+     "path": "docs/adr/0007-clickhouse-columnar-events.md",
+     "lineStart": 41,
+     "lineEnd": 43
+    }
+   ],
+   "prompt": "The ClickHouse events table orders by (projectId, name, ts, uuid). Why does ADR-0007 put uuid last?",
+   "answer": "So ReplacingMergeTree can collapse exact re-deliveries at merge",
+   "distractors": [
+    "So a query can look up one event by uuid without a full scan",
+    "So uuid becomes the partition key for each monthly partition",
+    "So ClickHouse enforces a unique index on uuid at insert time"
+   ],
+   "explanation": "ADR-0007 lines 35-37: (projectId, name, ts) leads because nearly every insight filters on them, and uuid is last so ReplacingMergeTree can collapse exact re-deliveries. Lines 41-43: no unique index exists in ClickHouse; dedupe happens eventually at merge, plus an in-memory insert-window set in the consumer. Partitioning is by toYYYYMM(ts)."
+  },
+  {
+   "id": "f05-streams-kafka-map",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0005-redis-streams-ingestion.md",
+    "lines": {
+     "start": 22,
+     "end": 33
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0005-redis-streams-ingestion.md",
+     "lineStart": 24,
+     "lineEnd": 33
+    }
+   ],
+   "front": "Redis Streams terms and their Kafka equivalents (ADR-0005 concept map)",
+   "back": "XADD = produce to a topic (ingest appends an event). Consumer group = consumer group (each entry goes to one consumer). Stream entry id = offset (position/ordering). XACK = commit offset (mark an entry done). XAUTOCLAIM = partition reassignment/rebalance (rescue a dead consumer's stuck entries). XLEN/backlog = lag. Dead-letter stream = dead-letter topic (poison events, out of the main flow)."
+  },
+  {
+   "id": "f06-sdk-budget-and-losses",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0004-sdk-design-principles.md",
+    "lines": {
+     "start": 17,
+     "end": 41
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0004-sdk-design-principles.md",
+     "lineStart": 17,
+     "lineEnd": 19
+    },
+    {
+     "path": "docs/adr/0004-sdk-design-principles.md",
+     "lineStart": 40,
+     "lineEnd": 41
+    }
+   ],
+   "front": "Pulse SDK: bundle budget and the events it loses on purpose",
+   "back": "Zero runtime dependencies; the gzipped script-tag build must stay under 6 KB, enforced in CI by scripts/check-size.mjs (about 2.1 KB today). Lost by design: events in private mode without persistence, a hard crash mid-batch, and overflow drops. Completeness is traded for safety and size, and the ADR says so."
+  },
+  {
+   "id": "f07-approximate-distinct",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0007-clickhouse-columnar-events.md",
+    "lines": {
+     "start": 44,
+     "end": 46
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0007-clickhouse-columnar-events.md",
+     "lineStart": 44,
+     "lineEnd": 46
+    }
+   ],
+   "front": "How Pulse counts distinct users on ClickHouse (ADR-0007)",
+   "back": "uniq() (HyperLogLog) replaces exact count(distinct) for scale, with documented error bounds and golden tests that carry a defined tolerance; uniqExact is still available when exactness is worth the cost."
+  },
+  {
+   "id": "f08-compute-vs-precompute",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0008-materialize-behavioral-inline-property-cohorts.md",
+    "lines": {
+     "start": 11,
+     "end": 36
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0008-materialize-behavioral-inline-property-cohorts.md",
+     "lineStart": 15,
+     "lineEnd": 19
+    },
+    {
+     "path": "docs/adr/0008-materialize-behavioral-inline-property-cohorts.md",
+     "lineStart": 34,
+     "lineEnd": 35
+    }
+   ],
+   "front": "ADR-0008's grid for compute-on-read vs precompute",
+   "back": "Three axes. Output size: compute when small; precompute when small and reused by many callers. Scan cost: compute when tolerable per request; precompute when high and paid repeatedly. Freshness need: compute when analysts want it live; precompute when minutes/hours of staleness is acceptable. Rule: precompute is a debt against freshness and correctness, taken on only when frequency x scan cost justifies it."
+  },
+  {
+   "id": "f09-audit-evidence-probes",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/audits/sprint-13-audit.md",
+    "lines": {
+     "start": 7,
+     "end": 16
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/audits/sprint-13-audit.md",
+     "lineStart": 8,
+     "lineEnd": 16
+    }
+   ],
+   "front": "Sprint 13 audit: the six ways evidence was gathered",
+   "back": "1) Chaos harness: loadgen emitting duplicate, reordered and clock-skewed events (1970 and 2031) at 500 evt/s for 2 min. 2) SDK outage sim: 503s for 10 minutes with 200 simulated tabs, arrival rate sampled per second through recovery. 3) Write-key abuse probe: one key replayed at 5,000 evt/s from one origin. 4) PII sweep of a 10k-event sample and the logs. 5) Share-token probe: reuse after 90 days plus sequential-prefix enumeration. 6) pnpm audit + gitleaks over full history."
+  },
+  {
+   "id": "f10-three-adversaries",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/audits/sprint-13-audit.md",
+    "lines": {
+     "start": 75,
+     "end": 87
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/audits/sprint-13-audit.md",
+     "lineStart": 76,
+     "lineEnd": 85
+    },
+    {
+     "path": "docs/audits/sprint-13-audit.md",
+     "lineStart": 87,
+     "lineEnd": 87
+    }
+   ],
+   "front": "Sprint 13 remediation map: severities, commits and the three adversaries",
+   "back": "P1: F1 SDK herd (commit 2), F2 client ts (commit 3), a chaos suite as a permanent CI stage for both (commit 4), F3 deletion (commits 8-9: person-delete API + completeness test). P2: F5 rate limit (5), F4 share tokens (6: expiry + revocation + enumeration monitor), F6 PII (7). P3: F7 CI gates (10: gitleaks + dependency gates). Three adversaries recur: the network (F1, F5), the clock (F2) and the law (F3, F4, F6)."
+  },
+  {
+   "id": "f11-eventstream-port",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/adr/0012-stay-on-redis-streams-kafka-triggers.md",
+    "lines": {
+     "start": 34,
+     "end": 44
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/adr/0012-stay-on-redis-streams-kafka-triggers.md",
+     "lineStart": 34,
+     "lineEnd": 36
+    },
+    {
+     "path": "docs/adr/0012-stay-on-redis-streams-kafka-triggers.md",
+     "lineStart": 42,
+     "lineEnd": 44
+    }
+   ],
+   "front": "Why a future Kafka move would be cheap for Pulse (ADR-0012)",
+   "back": "The EventStream port (S04) makes the transport injectable: a KafkaEventStream implementing the same interface is the shape of the move, and no code outside the index.ts entries assumes Redis. ADR-0005's concept map means the team already reasons in Kafka terms, so it is a transport swap, not a re-education. Lesson: the migration you prepared for and didn't need is preparation, not waste."
   }
  ]
 }

@@ -162,6 +162,95 @@ Append a module: add `tools/seed/authoring/sysdrills/NN-topic.json` (next free `
 `validation.json` together. A quarantined exercise blocks the stamp at this bank size: fix
 the authoring, never the test.
 
+#### csdrills (the csharp track's authored drill bank)
+
+`csdrills` has no upstream repo either: its source is hand-written JSON committed in this
+repo, one file per module, under `tools/seed/authoring/csdrills/<NN-module>.json` (format
+`csdrills-authoring@1`, Zod-validated `.strict()` by `tools/seed/src/csdrills/source.ts`).
+Each exercise is an interview-shaped C# rep (LINQ set reconciliation, async composition,
+flags, money, time, edge strings, hashing, hand-built data structures, thread safety,
+CRUD endpoint logic) authored as a jstrain-harness console-check program in three parts:
+`starterHead` (usings + stub local functions: `// TODO` + `throw new
+NotImplementedException();`, so an untouched starter reports todo), `solutionHead` (the same
+with the bodies implemented), ONE canonical `tests` block opening with the
+`// ─── tests ───` divider, and an optional `tail` opening with a labelled divider such as
+`// ─── types ───` (enum/class/record declarations after the top-level statements), plus an
+optional `solutionTail` for drills whose learner work is a CLASS (types must follow the
+top-level statements, so the stubbed class lives in `tail` and the implemented one in
+`solutionTail`; it requires `tail`, must differ from it, open with a labelled divider and
+carry no NotImplementedException); plus instructions, an explanation and exactly three hints (hint 3 is approach in words — never
+`;`, `=>` or `return`). The importer maps every exercise to a `drill-cs` unit on the
+**csharp** track (competency `language-fluency`, key `csdrills/<module>/<slug>`, spec
+`{ shape: 'console-check', harness: 'jstrain', files: { tests, tail, frozen: [] },
+timeoutMs: 20000 }` — the jstrain-cs shape), starter = starterHead + tests + tail and
+solution = solutionHead + tests + (solutionTail ?? tail) — `spec.files.tail` is always the
+starter's tail (jstrain-cs precedent: the grader composes the learner's head + the canonical
+tests + the learner's own tail) — one course per module, into
+`content/packs/csdrills/` with manifest `{ track: 'csharp', grader: 'csharp' }`. No
+migration: csharp has had a daily slate drill slot since migration 002 (`slate_drills=1`),
+and the slate counts csharp drills from every pack.
+
+```sh
+# authoring JSON -> content/packs/csdrills/{<module>.json, manifest.json} (refuses on any
+# format problem or a census other than CSDRILLS_EXPECTED; writes nothing then)
+npm run seed:import:csdrills
+npm run seed:import:csdrills -- --authoring tools/seed/authoring/csdrills --out content/packs/csdrills
+# stamp: every reference solution passes and every starter fails as a todo/failed test
+# verdict (never a compile error) under the REAL warm C# runner
+npm run seed:validate -- --source csdrills
+npm run seed:validate -- --source csdrills --course 01-linq-set-reconciliation   # dev loop
+```
+
+Append a module: add `tools/seed/authoring/csdrills/NN-topic.json` (next free `NN`; slugs
+`NN-name`, unique plain-literal `Test("…")` names, at least one `(boundary)` test,
+difficulty 1-3, no `#:` directives, deterministic tests: no clock, culture, `Random`,
+network, filesystem or timing races), bump `CSDRILLS_EXPECTED` in
+`tools/seed/src/csdrills/source.ts`, then re-import, re-validate (the journal resumes) and
+commit the authoring file, the pack files and the new `validation.json` together. A
+quarantined exercise blocks the stamp at this bank size: fix the authoring, never the test.
+
+#### javadrills (the Java track's authored drill bank)
+
+`javadrills` has no upstream repo either: its source is hand-written JSON committed in this
+repo, one file per module, under `tools/seed/authoring/javadrills/<NN-module>.json` (format
+`javadrills-authoring@1`, Zod-validated `.strict()` by `tools/seed/src/javadrills/source.ts`;
+UTF-8 without BOM, LF). Each exercise carries a `starter` and a `solution` that are complete
+single-file `Exercise.java` programs in the javabootcamp grammar (one top-level
+`class Exercise`, no package, `import static bootcamp.Check.*;`, the tests between the
+`// ─── tests ───` and `// ─── end tests ───` marker lines, then the class's closing brace),
+plus instructions, an explanation and EXACTLY 3 hints (schema-enforced). There is no `tests`
+array: the importer splits the starter at the markers and maps every exercise to a
+`drill-java` unit `{ files: { tests, tail }, className: 'Exercise', timeoutMs: 10000 }` on
+the **java** track (competency `language-fluency`, key `javadrills/<module>/<slug>`), one
+course per module, into `content/packs/javadrills/` with manifest `{ track: 'java' }` and NO
+`grader` field (track java derives kind `java`, exactly like javabootcamp). It refuses —
+before writing anything — a starter or solution without both markers, a solution whose tests
+block differs from the starter's by even one byte, a missing `class Exercise` or a `package`
+statement, a tests block without `test(` / `report()` / a literal test name, and a census other
+than `JAVADRILLS_EXPECTED`. The drills join the java track's existing daily `drill:java` slate
+pool with no migration (the slot is sized from live drill units per track).
+
+```sh
+# authoring JSON -> content/packs/javadrills/{<module>.json, manifest.json} (refuses on any
+# format problem or a census other than JAVADRILLS_EXPECTED; writes nothing then)
+npm run seed:import:javadrills
+npm run seed:import:javadrills -- --authoring tools/seed/authoring/javadrills --out content/packs/javadrills
+# stamp: every reference solution passes and every starter fails under the REAL Java runner
+# (~2.6 s per grade; run per module with --course <module> first, then the full run)
+npm run seed:validate -- --source javadrills
+```
+
+Append a module: add `tools/seed/authoring/javadrills/NN-topic.json` (next free `NN`; slugs
+`NN-name`, 4-7 uniquely named tests per drill, difficulty 1-3, 3 hints), bump
+`JAVADRILLS_EXPECTED` in `tools/seed/src/javadrills/source.ts`, then re-import, re-validate
+(the journal resumes) and commit the authoring file, the pack files and the new
+`validation.json` together. Every starter must COMPILE: all types, records and signatures are
+present and the learner edits method bodies only. Stubs throw
+`UnsupportedOperationException("TODO: …")` (the message must start with `TODO`, which the
+harness reports as `todo` — a test verdict); a starter that fails to compile, times out or
+crashes is quarantined. A quarantined exercise blocks the stamp: fix the authoring, never the
+test.
+
 ### The import gate: `seed:validate`
 
 `seed:validate` executes EVERY imported reference solution under BootQuest's own
@@ -951,6 +1040,30 @@ resolved); quiz variety `concept` and flashcard shape `hand-authored`;
   every expected integer recomputed by the cross-reviewer; hint 3 is approach+formula only
   (never pasteable code); per-drill nearest-existing-drill distinctness recorded in the wave
   brief.
+- **csdrills wave 1 — DONE (2026-10-23):** new authored C# drill bank, 10 modules × 8 = 80
+  drill-cs drills (harness jstrain, grader csharp, track csharp); CSDRILLS_EXPECTED 80; 80/80
+  validated (solution passes + starter fails as todo/failed verdicts under the real C#
+  runner), 0 quarantined, audit re-executed 20 journaled passes with 0 mismatches; 14 class
+  drills in modules 08/09 use the authoring format's optional `solutionTail`; per-drill nearest-existing-unit distinctness vs
+  csbootcamp/jstrain-cs recorded in the wave brief; hint 3 never pasteable (no ;, =>,
+  return); no migration (csharp slate_drills=1 since 002), no fingerprinted file touched.
+- **javadrills wave 1 — DONE (2026-10-23):** new authored Java drill bank, modules 01-10
+  (collections behavior, equality & ordering, streams execution, collectors, Optional
+  discipline, strings & text, exception flow, money math, instants & zones, CompletableFuture
+  composition), 80 drill-java drills complementing javabootcamp's 168 (per-module avoidance
+  recorded in the wave brief); JAVADRILLS_EXPECTED 80; 80/80 validated (solution passes +
+  starter fails-as-test-verdict under the real Java runner), 0 quarantined; every expected
+  value is exercised against the reference solution by that validation (an independent
+  by-hand recompute of the vectors is still an open review item, see the mx wave record);
+  hint 3 never pasteable (no return/semicolon/paren); zero fingerprinted files touched — no
+  estate restamp.
+- **sysdrills wave 4 — DONE (2026-10-25):** modules 11-14 (replication & consistency, multi-region
+  & failover, search & indexing, observability & telemetry), 32 new drill-js drills, 110 total;
+  SYSDRILLS_EXPECTED 78 → 110; 110/110 validated (solution passes + starter fails under the real
+  drill-js runner), 0 quarantined; all 96 expected integers of modules 13-14 recomputed by
+  hand-formula in the integration pass (modules 11-12: validation only, recompute open); hint 3
+  never contains `return` or `;` (13/03's brief hint "must return" reworded "must send back" to
+  honour that rule).
 - **fundamentals wave — DONE (2026-10-21):** interview + real-SWE-fundamentals content, zero
   shared/factory edits (no estate restamp). 9 new DESIGN IT primaries → 47 items / 29 repos;
   11 fundamentals explain-backs on repos with no prior EB pack → EB packs 150 → 170, strict
@@ -1217,3 +1330,82 @@ resolved); quiz variety `concept` and flashcard shape `hand-authored`;
   explanations state an old generator goal-check's expected answer (the pack's own reading
   material states it openly); drill notes 09-08/10-01 re-skin existing formula shapes with new
   teaching content.
+- **mega expansion wave (mx) — DONE (2026-10-26):** 2-3x content per track + small app wins, zero
+  shared/src, tools/seed/src/factory and server/src edits (no estate restamp; strict pins 629 →
+  667, restamp dry-run 676/676 fresh). Orchestration: Fable architects (6 briefs) → Opus
+  implementers in isolated clones (`bq-mx-*`), resumed across several usage-limit pauses → Opus
+  cross-review (see review bullet below; landed on the owner's "land changes" order before the
+  drill-math recompute, the EB/G2 cite audit and the Fable high-level review completed).
+  - **New code banks:** csdrills (C#, 80) and javadrills (Java, 80) — bullets above; sysdrills
+    78 → 110 (bullet above). C# authored code items 112 → 192; Java 168 → 248.
+  - **Explain-back packs 185 → 223:** 12 classic JS explain-backs on master-/ww-repos (masterstore,
+    masternext, mastermorphic, masteroutline-outline, masteridur, mastertwenty, stockade, ww4, ww7,
+    ww27, ww39, helios-interplanetary); 11 G2 delegation briefs (pulse, masterumami, w22, ww19,
+    zz8, gitjira, relay, organized-build-analytics, netgum, netcalendy, dotnet-drop) — G2 briefs
+    20 total; 10 sysdesign alternate sets (9 DESIGN IT set-B: meterforge-upskilling, masteropen,
+    harbor, bazaar, scedulingpyjs, masterumami, cal-com, tenant-search-indexer, icms; 1
+    fundamentals set-B: atlas ADR-0007 clock-as-dependency); 5 DESIGN IT primaries on uncovered
+    staples (masteroutline-outline real-time collaborative editing + permission-filtered search,
+    mastertwenty metadata-generated GraphQL, enterprise-billing subscription invoicing & dunning,
+    linkwarden object-level sharing & permissions). ladder-real pins: designItems 58 → 72,
+    designRepos 29 → 33, set-B/C titles 19 → 28.
+  - **Quiz layer batch 3:** 10 packs +140 quizzes / +70 flashcards / +150 notes (140 after + 10
+    before): tracer 12→26q/4→11fc, pulse 12→26/4→11, zz8 12→28/3→11, jsdrillv2 12→28/4→12,
+    dotnet-drop 13→27/3→10, netcalendy 12→26/4→11, relay-app 14→28/4→11, j2 12→26/4→11, j5
+    13→25/4→10, j7 12→24/4→10 — j2/j5/j7 are the FIRST Java quiz layers. Old items byte-identical
+    everywhere; historical quarantine/review keys unchanged.
+  - **App (client only, no wire changes):** ordered (`1.`) lists render as real `<ol>` in prose;
+    dashboard "Browse all N units" link to the track browser; unit-browser group headers show
+    unfiltered per-group totals; the count line is a `role=status` live region; the review
+    session shows a running grade tally. Client 344 → 361 tests.
+  - Cross-stream discipline: pulse, zz8, dotnet-drop and netcalendy got BOTH a new G2 brief and a
+    new quiz layer in parallel — quiz keys were routed around the G2 delegation facts (quiz side
+    reworded; integrated-tree leak lint 223 packs / 0 leaks, EB_LEAK_EXEMPT empty). relay-app
+    (quest pack) ≠ relay (G2 repo).
+  - Accepted prompt-demanded overlaps (token guard passes; flashcard ones are unguarded):
+    masteropen-b q1.kp7 vs 1a664f8e, q1.kp8 vs 74848a10; bazaar-b q1.kp4 vs d9d69862;
+    enterprise-billing q2.kp2 vs 1b74685a, q2.kp4 vs 44f1be33, q1.kp5 vs fc f03-invoice-order,
+    q2.kp7 vs fc f04-outbox-gaps; linkwarden q1.kp5 vs b9a8f2c1, q1.kp2 vs 5522bf13; cal-com-b
+    q1.kp2+q2.kp1 vs 38aadc53; masteroutline P1 q1.kp1+q3.kp6 vs fc f01-three-representations,
+    q3.kp1 vs fc f04-crdt-not-ot; P2 q1.kp2 vs fc f02-rls-rejected. (+ EB/G2 stream acceptances
+    per pack in the mx ledger.)
+  - Code-truth corrections (sets state the CODE, not the brief/docs): masteroutline collab state
+    is capped at 1,500 KB (a 10 MB doc is a refused paste); only a Postgres search provider ships
+    (`server/utils/opensearch.ts` is the browser description XML); `content` is written in-tx with
+    `state`, only `text` lags; enterprise-billing's per-period invoice guard lives in the worker,
+    `idempotency.ts` only hashes payloads, no proration path (declared supposition); masterumami
+    has no ClickHouse deletion at all.
+  - Upstream findings (owner follow-ups; mirrors untouched; full list in the handoff
+    `briefs/mx-agent-reports-2026-10-25.md` + `mx-ledger.md`): organized-build-analytics public
+    register accepts role=SYSTEM_ADMIN and validate() never writes back the parsed body;
+    masternext BOLA remediation partial (deleteContact/getUserById); mastertwenty non-atomic
+    metadataVersion bump, GraphQL `first` unclamped; ww7 dispatch re-activates paused workflows;
+    ww39 audit test can never fail; w22 concurrent deliver double-sends; linkwarden collection
+    update/delete use the global client inside `$transaction` (not atomic) and preserved-format
+    URLs never re-check access; enterprise-billing invoices lack period columns (late job
+    double-bills) and count+1 invoice numbers collide with no retry; masterumami website delete
+    leaves ClickHouse data; masteropen SMS quota compares seconds to ms (never resets); harbor
+    SLA status hard-codes a UTC 9-17 calendar and takes targetMs from the request body;
+    tenant-search-indexer whole-tenant single-statement rebuild; masteroutline per-pod
+    connection cap + per-pod "done" flag cuts revisions while other pods edit, revocation leaves
+    sockets joined; netcalendy critique's partial-index snippet lacks `.IsUnique()` and its
+    `Booking.TimeConflict` returns 400 not 409; j5 08-SAME-RULES cites the wrong exercise
+    number; j2 onboarding docs describe an older codebase.
+  - Tooling gotcha: PowerShell 5.1 drops the `--` in `npm run <x> -- --flag`, so flags never reach
+    the script (a `seed:validate -- --source sysdrills` silently fell back to bootforge) — run
+    flagged seed/test commands from Git Bash or via `npx`.
+- **mx wave — review fixes (2026-10-26):** Opus-A reviewed the 10 quiz packs (keys + flashcard
+  xleaks, whole packs) and the mx-app client code: 0 high, 1 medium, 9 low quiz findings; app 0
+  bugs. Fixed (branch mx-fix-qa, item keys unchanged, notes re-seeded): j7 q14 (medium — Order.restore
+  also refuses a non-DRAFT order with no lines, so the stem now asks for the two refusals the worked
+  change describes); j2 q26 TAB stem (a TAB at the ends is trimmed, not rejected) + f05/f09 fronts
+  marked "(onboarding docs, pre-Loan)"; netcalendy f06 back trimmed to priority/risk ids; zz8
+  q23/q24, j5 q23/q24 and jsdrillv2 q27 after-notes no longer restate older keys. Accepted/open:
+  pulse q26 after-note and relay-app f07 vs q19 D1 (low); app nits A1 group "(3/5)" ambiguity, A2
+  chatty `role=status` on every keystroke, A3 Browse-all lands on a collapsed disclosure, A4.
+  OPEN review items: by-hand recompute of javadrills/csdrills/sysdrills 11-12 vectors, cite/house-
+  form audit of the 23 EB/G2 packs and 15 sysdesign sets, Fable high-level review of the
+  integrated diff. Post-fix gates: leaks 223/0, answers OK, seed:pins 667/667, restamp dry-run
+  676/676 fresh, seed 2244/2244, server 640/640 (pre-fix battery at 101b1d16 also: selfrun 20/20,
+  test:csharp 46/46, test:java 23/23, typechecks 0, client 361/361, smoke 76/76, demo:promotion
+  39/39, demo:planted 48/48, campaign --check OK).

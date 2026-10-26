@@ -410,6 +410,637 @@
    ],
    "front": "Why the audit row is written inside the transaction",
    "back": "An audit entry can then never exist for a change that did not commit, and a committed change always has its audit row: if the audit insert throws, the status change and response are discarded too."
+  },
+  {
+   "id": "q13-headerless-is-hr-admin",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/auth-and-permissions.md",
+    "lines": {
+     "start": 155,
+     "end": 159
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 59,
+     "lineEnd": 66
+    },
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 157,
+     "lineEnd": 158
+    }
+   ],
+   "prompt": "A script sends POST /api/employees with a valid body and no demo headers at all. Per finding A1, what happens?",
+   "answer": "It runs as the HR admin and passes the createEmployee gate",
+   "distractors": [
+    "It runs as the least-privileged employee and is refused 403",
+    "It is refused with 403 because no tenant header was supplied",
+    "It is refused at the route before any session is resolved"
+   ],
+   "explanation": "auth-and-permissions.md lines 59-66: resolveSession reads x-demo-user-id with `?? \"user_hr_admin\"` and the tenant with `?? \"tenant_northstar\"`. Finding A1 (lines 157-158): a curl POST with a valid body and no headers passes the createEmployee gate, so any caller that forgets the headers acts as HR. Defaulting to the least-privileged session is only the fix sketch, and an absent tenant header falls back to northstar instead of being refused."
+  },
+  {
+   "id": "q14-empty-header-kept",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/auth-and-permissions.md",
+    "lines": {
+     "start": 59,
+     "end": 89
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 66,
+     "lineEnd": 68
+    },
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 89,
+     "lineEnd": 89
+    }
+   ],
+   "prompt": "A request sends x-demo-user-id with an empty value (\"\") instead of leaving the header out. How does resolveSession treat it?",
+   "answer": "The \"\" is kept, matches nothing in the directory, and gets a 401",
+   "distractors": [
+    "The \"\" is replaced by user_hr_admin, just as for a missing header",
+    "The \"\" is trimmed to null, so the tenant check then answers 403",
+    "The \"\" is ignored, and the stored browser session is used instead"
+   ],
+   "explanation": "auth-and-permissions.md line 66: `??` only replaces null, so a header that is present but empty is kept as \"\". Line 68: demoSessions[\"\"] matches nothing, so it throws AppError(401, \"Unknown demo session.\"); the truth table (line 89) records the empty-header row as 401 because an empty string is not nullish. Only an absent header falls back to user_hr_admin, and the localStorage fallback lives in the browser client, not in resolveSession."
+  },
+  {
+   "id": "q15-require-session-dead-401",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/auth-and-permissions.md",
+    "lines": {
+     "start": 193,
+     "end": 197
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 74,
+     "lineEnd": 74
+    },
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 195,
+     "lineEnd": 196
+    }
+   ],
+   "prompt": "requireSession() would throw AppError(401, \"Authentication required.\") when session.userId is empty. Per finding A7, when does that branch fire?",
+   "answer": "It is unreachable: each session it gets has a non-empty userId",
+   "distractors": [
+    "Whenever the x-demo-user-id header is left out of a request",
+    "Whenever a user header names someone from a different tenant",
+    "Whenever the stored demo session in the browser has been cleared"
+   ],
+   "explanation": "auth-and-permissions.md line 74 and finding A7 (lines 195-196): resolveSession only returns entries from demoSessions, all of which have a non-empty userId (test S8), so the check cannot fire and no path yields \"Authentication required.\". A missing header falls back to the HR admin (A1), a foreign tenant gets 403, and the browser's storage is never consulted here."
+  },
+  {
+   "id": "q16-admin-names-any-tenant",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/auth-and-permissions.md",
+    "lines": {
+     "start": 169,
+     "end": 173
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 93,
+     "lineEnd": 93
+    },
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 171,
+     "lineEnd": 173
+    }
+   ],
+   "prompt": "As user_platform_admin, a request sends x-demo-tenant-id: tenant_does_not_exist. What does the session layer do with it?",
+   "answer": "Accepts any such string, and tenant queries return empty lists",
+   "distractors": [
+    "Refuses it with 404, since no Tenant row carries that tenant id",
+    "Refuses it with 403, the same as any mismatched tenant header",
+    "Replaces it with tenant_northstar, the default tenant for admins"
+   ],
+   "explanation": "auth-and-permissions.md line 93 (truth table) and finding A3 (lines 171-173): the tenant check is skipped for PLATFORM_ADMIN and the header value is copied into activeTenantId, so even tenant_does_not_exist is accepted and queries simply return empty lists. A findUnique + 404 is only the fix sketch, the 403 applies to ordinary users, and the northstar default applies only when the header is absent."
+  },
+  {
+   "id": "q17-roles-from-demo-sessions",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/auth-and-permissions.md",
+    "lines": {
+     "start": 175,
+     "end": 179
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 177,
+     "lineEnd": 178
+    }
+   ],
+   "prompt": "An operator changes a user's role in the TenantMembership table of the database. What effect does that have on what the user may do in the app?",
+   "answer": "Nothing changes, as roles come from the hard-coded demoSessions",
+   "distractors": [
+    "It applies on the next request, since every call reloads roles",
+    "It applies once the user signs out and then signs back in again",
+    "It applies as soon as the repository role cache is refreshed"
+   ],
+   "explanation": "Finding A4 (auth-and-permissions.md lines 177-178): no db call in src/ touches tenant, tenantMembership or user; roles come only from the hard-coded demoSessions object, so changing TenantMembership.role has no effect, and if the two drift the code wins silently. There is no per-request reload, sign-in flow or role cache."
+  },
+  {
+   "id": "q18-platform-role-call-noop",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/auth-and-permissions.md",
+    "lines": {
+     "start": 181,
+     "end": 185
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 21,
+     "lineEnd": 21
+    },
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 183,
+     "lineEnd": 184
+    }
+   ],
+   "prompt": "Finding A5 says the only assertPlatformRole call, inside processQueuedJobs, cannot fail. Why can it never throw?",
+   "answer": "It runs inside a branch that already confirmed that role",
+   "distractors": [
+    "It sits inside a try/catch that swallows the thrown 403",
+    "Its allowed list includes every platform role, even NONE",
+    "It checks the tenant role, which every session always has"
+   ],
+   "explanation": "auth-and-permissions.md line 21 and finding A5 (lines 183-184): processQueuedJobs calls assertPlatformRole(session, [\"PLATFORM_ADMIN\", \"PLATFORM_SUPPORT\"]) only after checking that platformRole is one of those two values, so the call cannot fail and the function is effectively unused. There is no swallowing catch, NONE is not in the list and the guard compares platformRole, not the tenant role."
+  },
+  {
+   "id": "q19-manager-sees-compensation",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/auth-and-permissions.md",
+    "lines": {
+     "start": 187,
+     "end": 191
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 189,
+     "lineEnd": 190
+    }
+   ],
+   "prompt": "Per finding A6, why does a manager's GET /api/employees response carry every employee's compensationCents, though the UI never shows it?",
+   "answer": "Prisma include returns the full row and mapEmployee passes it on",
+   "distractors": [
+    "assertTenantRole grants managers the HR field set on purpose here",
+    "The page hides the column, but the server renders it into the HTML",
+    "The query adds compensation only for the manager's own direct reports"
+   ],
+   "explanation": "Finding A6 (auth-and-permissions.md lines 189-190): the repository query uses include for manager and orgUnit, which in Prisma returns all scalar fields of the employee including compensationCents; mapEmployee is an identity function; and the where is tenantId only, with no reporting-line filter. The value is visible in the JSON in the network tab, not in rendered HTML, and no role grants a field set."
+  },
+  {
+   "id": "q20-composite-tenant-fk",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/domain-model.md",
+    "lines": {
+     "start": 133,
+     "end": 135
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture/domain-model.md",
+     "lineStart": 135,
+     "lineEnd": 135
+    },
+    {
+     "path": "docs/architecture/domain-model.md",
+     "lineStart": 229,
+     "lineEnd": 229
+    }
+   ],
+   "prompt": "Employee.managerId references Employee.id alone. What would make the database itself, not the service, reject a manager from another tenant?",
+   "answer": "A composite @@unique([tenantId, id]) plus a composite relation",
+   "distractors": [
+    "A CHECK constraint that compares managerId with the row's own id",
+    "An index on managerId with onDelete: Cascade on the relationship",
+    "A unique index on Employee.managerId taken across all tenants"
+   ],
+   "explanation": "domain-model.md line 135: foreign keys are not tenant-composite, so the database will store a manager from another tenant; only a service-side read-then-write check prevents it. The exercise answer (line 229) is a composite unique @@unique([tenantId, id]) on Employee and a composite relation fields [tenantId, managerId] references [tenantId, id]. A self-comparison CHECK, a cascade or a global unique on managerId would not tie the manager to the same tenant."
+  },
+  {
+   "id": "q21-self-manager-allowed",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/domain-model.md",
+    "lines": {
+     "start": 133,
+     "end": 136
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture/domain-model.md",
+     "lineStart": 136,
+     "lineEnd": 136
+    }
+   ],
+   "prompt": "Scratch test G3 calls updateEmployee to set emp_sam's manager to emp_sam. What happens?",
+   "answer": "It succeeds, as nothing guards self-reference or longer cycles",
+   "distractors": [
+    "It is refused with 400 by the tenant reference check that runs first",
+    "It is refused by a CHECK constraint declared in the Prisma schema",
+    "It succeeds, but the next read of emp_sam quietly clears the loop"
+   ],
+   "explanation": "domain-model.md line 136: there is no self-reference guard; the service only checks that the manager exists in the tenant, which emp_sam does, and test G3 succeeds. Longer cycles (A manages B manages A) are equally possible. No schema constraint or read-time repair exists."
+  },
+  {
+   "id": "q22-duplicate-self-assignments",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/domain-model.md",
+    "lines": {
+     "start": 133,
+     "end": 139
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture/domain-model.md",
+     "lineStart": 139,
+     "lineEnd": 139
+    }
+   ],
+   "prompt": "What prevents two SELF review assignments for the same person in the same cycle, and what happens if two exist?",
+   "answer": "Nothing does, and findFirst then picks one of them arbitrarily",
+   "distractors": [
+    "A unique index on cycle, subject, reviewer and type prevents it",
+    "The seed script skips them, and the app never creates more",
+    "The submit deletes the extra copy before it writes the response row"
+   ],
+   "explanation": "domain-model.md line 139: there is no uniqueness on ReviewAssignment for (reviewCycleId, subjectEmployeeId, reviewerUserId, type), so two SELF assignments for one person in one cycle are allowed, and findFirst would then pick one arbitrarily. No unique index exists, and nothing in the submit path deletes rows."
+  },
+  {
+   "id": "q23-statuses-nobody-writes",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/domain-model.md",
+    "lines": {
+     "start": 145,
+     "end": 154
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture/domain-model.md",
+     "lineStart": 153,
+     "lineEnd": 154
+    },
+    {
+     "path": "docs/architecture/domain-model.md",
+     "lineStart": 228,
+     "lineEnd": 228
+    }
+   ],
+   "prompt": "In the IntegrationJob status table, which code writes RETRY_REQUIRED and CANCELLED, and which of the two would make a job retryable if set by hand?",
+   "answer": "Nobody writes either, and RETRY_REQUIRED alone would be retryable",
+   "distractors": [
+    "completeJob writes both, and CANCELLED alone would be retryable then",
+    "The sweep writes RETRY_REQUIRED, and both of them would be retryable",
+    "queueRetry writes CANCELLED, and neither one of them would be retryable"
+   ],
+   "explanation": "domain-model.md lines 153-154: RETRY_REQUIRED is written by nobody (it is only accepted as a retry source) and CANCELLED by nobody. The exercise answer (line 228): setting RETRY_REQUIRED by hand makes a job retryable but CANCELLED does not, because retryJob allows exactly FAILED and RETRY_REQUIRED. completeJob writes SUCCEEDED or FAILED and queueRetry writes QUEUED."
+  },
+  {
+   "id": "q24-cycle-dates-unchecked",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/domain-model.md",
+    "lines": {
+     "start": 185,
+     "end": 187
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture/domain-model.md",
+     "lineStart": 187,
+     "lineEnd": 187
+    }
+   ],
+   "prompt": "The seeded ACTIVE review cycle ended on 2026-05-15. Does it still accept self-review submissions after that date?",
+   "answer": "Yes, while its status still says ACTIVE, whatever the end date",
+   "distractors": [
+    "No, the app flips its status to CLOSED as soon as endDate passes",
+    "No, a submission after endDate is refused and kept as a late draft",
+    "Yes, but only for the assignments that were already IN_PROGRESS"
+   ],
+   "explanation": "domain-model.md line 187: cycle status is never written by the app, submission requires ACTIVE, and startDate/endDate are not checked, so the seeded ACTIVE cycle that ended on 2026-05-15 still accepts submissions as long as its status says ACTIVE. Nothing closes cycles on a date, and no IN_PROGRESS-only rule exists."
+  },
+  {
+   "id": "q25-audit-action-coverage",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/architecture/domain-model.md",
+    "lines": {
+     "start": 193,
+     "end": 201
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture/domain-model.md",
+     "lineStart": 198,
+     "lineEnd": 198
+    },
+    {
+     "path": "docs/architecture/domain-model.md",
+     "lineStart": 201,
+     "lineEnd": 201
+    }
+   ],
+   "prompt": "What does an employee-update audit entry record about the change, and is the INTEGRATION_JOB_PROCESSED action ever emitted?",
+   "answer": "Changed field names, and PROCESSED is not emitted anywhere",
+   "distractors": [
+    "Old and new values, and PROCESSED follows every sweep",
+    "Changed field names, and PROCESSED is written once per job",
+    "The whole employee row, and PROCESSED marks failed jobs"
+   ],
+   "explanation": "domain-model.md line 198: EMPLOYEE_UPDATED metadata lists the field names only, not old/new values. Line 201: INTEGRATION_JOB_PROCESSED is never emitted (test J12, run). Neither old/new values nor full rows are recorded, and no processing step emits the PROCESSED action."
+  },
+  {
+   "id": "q26-isolation-test-own-class",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/testing-rationale.md",
+    "lines": {
+     "start": 18,
+     "end": 23
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/testing-rationale.md",
+     "lineStart": 23,
+     "lineEnd": 23
+    },
+    {
+     "path": "docs/learning/testing-rationale.md",
+     "lineStart": 140,
+     "lineEnd": 140
+    }
+   ],
+   "prompt": "In a scratch copy you delete the tenantId filter from EmployeeRepository.findById. Which existing test fails?",
+   "answer": "Not one, as tenant-isolation tests its own in-file class",
+   "distractors": [
+    "tenant-isolation, since it reads through the real repository",
+    "auth-permissions, since it lists employees as each demo role",
+    "workflow-atomicity, as its Prisma double asserts on tenantId"
+   ],
+   "explanation": "testing-rationale.md line 23: tenant-isolation.test.ts defines its own InMemoryEmployeeRepository inside the test file and imports nothing from src/repositories/, so deleting tenantId from the real repository still passes: it documents the contract but does not test the code. Exercise 1 (line 140) confirms that no existing test fails; auth-permissions only checks a 403 on create, and the atomicity suite never reaches the employee repository."
+  },
+  {
+   "id": "q27-three-bad-fields",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/testing-rationale.md",
+    "lines": {
+     "start": 50,
+     "end": 53
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/testing-rationale.md",
+     "lineStart": 53,
+     "lineEnd": 53
+    },
+    {
+     "path": "docs/learning/testing-rationale.md",
+     "lineStart": 142,
+     "lineEnd": 142
+    }
+   ],
+   "prompt": "You remove .email() from workEmail in employeeSchemas.ts. Does validation-boundaries.test.ts fail, and why?",
+   "answer": "It passes, as its other two bad fields still make safeParse fail",
+   "distractors": [
+    "It fails, as it asserts that workEmail is the path that failed",
+    "It fails, as its snapshot of the error shape no longer matches",
+    "It is skipped, as it runs only when a real database is reachable"
+   ],
+   "explanation": "testing-rationale.md line 53: the test feeds one payload with three bad fields at once (workEmail, compensationCents -10, startDate \"not-a-date\") and only checks that safeParse fails, not which field failed. Exercise 3 (line 142): removing .email() leaves compensationCents and startDate failing, so the test still passes. There is no path assertion or snapshot, and the suite needs no database."
+  },
+  {
+   "id": "q28-claim-test-fake-repo",
+   "kind": "quiz",
+   "source": {
+    "path": "docs/learning/testing-rationale.md",
+    "lines": {
+     "start": 25,
+     "end": 34
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/testing-rationale.md",
+     "lineStart": 34,
+     "lineEnd": 34
+    }
+   ],
+   "prompt": "The workflow-atomicity test \"completes only the worker holding the immutable claim token\" is rated weak for the repository. Why?",
+   "answer": "Its fake repository implements the whole token rule itself",
+   "distractors": [
+    "It runs the two workers one after another, never in parallel",
+    "It asserts only on log lines, never on the job's final status",
+    "It uses the seeded job, whose claim token is never cleared"
+   ],
+   "explanation": "testing-rationale.md line 34: the test drives the real processQueuedIntegrationJobs loop with a hand-written fake repository whose claimQueuedJobs and completeJob implement the token rule themselves, so it proves only that the worker passes claimToken through and logs on success; deleting status \"QUEUED\" or claimToken from the real IntegrationRepository would not fail it. Sequencing, log-only assertions and seeded jobs are not the stated weakness."
+  },
+  {
+   "id": "f04-demo-directory",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/architecture/auth-and-permissions.md",
+    "lines": {
+     "start": 95,
+     "end": 103
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 97,
+     "lineEnd": 103
+    }
+   ],
+   "front": "zz8's five demo sessions (tenantRole / platformRole / employeeId)",
+   "back": "user_platform_admin: TENANT_ADMIN / PLATFORM_ADMIN / no employee. user_hr_admin: HR_ADMIN / NONE / emp_alex. user_manager: MANAGER / NONE / emp_morgan. user_employee: EMPLOYEE / NONE / emp_sam. user_integration_admin: INTEGRATION_ADMIN / NONE / emp_ivy. All are hard-coded in src/lib/demo/demo-sessions.ts."
+  },
+  {
+   "id": "f05-three-guards",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/architecture/auth-and-permissions.md",
+    "lines": {
+     "start": 107,
+     "end": 113
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 109,
+     "lineEnd": 113
+    }
+   ],
+   "front": "The three permission guards in permissions.ts: when each passes and what it throws",
+   "back": "assertTenantRole(session, roles, action): passes when platformRole is PLATFORM_ADMIN or tenantRole is in roles; else 403 \"The <tenantRole> role cannot <action>.\" assertPlatformRole(session, roles, action): passes when platformRole is in roles; else 403 \"The caller cannot <action>.\" assertEmployeeContext(session): passes when session.employeeId is truthy; else 403 \"This action requires an employee-linked tenant membership.\""
+  },
+  {
+   "id": "f06-route-gate-table",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/architecture/auth-and-permissions.md",
+    "lines": {
+     "start": 117,
+     "end": 131
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 121,
+     "lineEnd": 131
+    }
+   ],
+   "front": "zz8 route gates: which guard and roles protect each API family",
+   "back": "Employees: list/get allow TENANT_ADMIN, HR_ADMIN, MANAGER; create/update allow TENANT_ADMIN, HR_ADMIN (assertTenantRole). Review cycles: list and self-review submit allow TENANT_ADMIN, HR_ADMIN, MANAGER, EMPLOYEE; submit also runs assertEmployeeContext. Integration configs/jobs/retry: assertIntegrationAccess (platform ADMIN/SUPPORT, else TENANT_ADMIN, INTEGRATION_ADMIN); queueJob does not check the config's isActive. Process: platform ADMIN/SUPPORT, else assertTenantRole TENANT_ADMIN, INTEGRATION_ADMIN; batch size 1-20."
+  },
+  {
+   "id": "f07-permission-matrix",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/architecture/auth-and-permissions.md",
+    "lines": {
+     "start": 133,
+     "end": 149
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture/auth-and-permissions.md",
+     "lineStart": 137,
+     "lineEnd": 149
+    }
+   ],
+   "front": "What zz8's run permission matrix (5 sessions x 11 service methods) makes obvious",
+   "back": "The platform admin passes every gate except self-review (it has no employeeId). The HR admin passes all employee and review methods but gets 403 on every integration method, so the Integrations page shows three errors for that role. The manager may read but not write employees; the employee may only list cycles and submit a self-review. The integration admin, though also an employee (emp_ivy), cannot even list review cycles."
+  },
+  {
+   "id": "f08-dead-schema",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/architecture/domain-model.md",
+    "lines": {
+     "start": 115,
+     "end": 127
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture/domain-model.md",
+     "lineStart": 119,
+     "lineEnd": 125
+    }
+   ],
+   "front": "zz8 models the app barely uses (domain-model.md usage table)",
+   "back": "CalibrationSession: never read or written (never seeded either). MappingRule: seed only. Goal and FeedbackRequest: only counted (_count). AuditLog: write-only, with no audit viewer. IntegrationConfig is read, but its lastSuccessfulSyncAt is never updated. The doc's summary: the schema describes more product than the code implements."
+  },
+  {
+   "id": "f09-seed-at-a-glance",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/architecture/domain-model.md",
+    "lines": {
+     "start": 203,
+     "end": 216
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/architecture/domain-model.md",
+     "lineStart": 207,
+     "lineEnd": 216
+    }
+   ],
+   "front": "zz8 seed data at a glance",
+   "back": "Two tenants: tenant_northstar (Northstar Health) and tenant_atlas (Atlas Manufacturing). Five northstar users matching the demo sessions, plus user_atlas_hr. Employees: emp_alex (HR Director), emp_morgan and emp_ivy reporting to Alex, emp_sam reporting to Morgan, plus emp_atlas_hr. Cycles: cycle_2026_h1 (ACTIVE) and cycle_2026_calibration_prep (DRAFT). Assignments: Sam SELF in h1, Morgan reviewing Sam, Sam SELF in the draft cycle. Jobs: job_failed_workday (FAILED, payload simulateFailure: true) and job_queued_greenhouse (QUEUED)."
+  },
+  {
+   "id": "f10-atomicity-suite",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/learning/testing-rationale.md",
+    "lines": {
+     "start": 25,
+     "end": 33
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/testing-rationale.md",
+     "lineStart": 29,
+     "lineEnd": 33
+    }
+   ],
+   "front": "workflow-atomicity.test.ts: the first three tests and what each exercises",
+   "back": "1) Audit insert fails: the real ReviewService and ReviewRepository against an in-memory Prisma double (vi.mock(\"@/lib/db\")) whose $transaction snapshots and restores the tables; strong for grouping the three writes. 2) Two parallel submitSelfReview calls: pins the conditional updateMany, as far as the double evaluates where like Prisma. 3) A mismatched subjectEmployeeId writes nothing: pins one of the new identity predicates."
+  },
+  {
+   "id": "f11-scratch-harness",
+   "kind": "flashcard",
+   "source": {
+    "path": "docs/learning/testing-rationale.md",
+    "lines": {
+     "start": 59,
+     "end": 121
+    }
+   },
+   "cites": [
+    {
+     "path": "docs/learning/testing-rationale.md",
+     "lineStart": 61,
+     "lineEnd": 78
+    },
+    {
+     "path": "docs/learning/testing-rationale.md",
+     "lineStart": 121,
+     "lineEnd": 121
+    }
+   ],
+   "front": "How zz8's docs checked the code without installed dependencies",
+   "back": "src/ was copied with git archive into a scratch folder outside the repo; a Node resolve hook mapped @/ imports and replaced four modules: @/lib/db (in-memory store, one setImmediate per call so parallel callers interleave), the Prisma packages (empty stand-ins), next/server (NextResponse.json = Response.json); zod was not provided, so routes and schemas were not run. Command: node --experimental-transform-types (constructor parameter properties need it) --import ./register.mjs --test. Result 38/38 pass. Limits: no PostgreSQL isolation or locking modelled."
   }
  ]
 }

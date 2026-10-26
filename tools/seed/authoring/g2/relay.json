@@ -1,0 +1,37 @@
+{
+ "lines": { "start": 15, "end": 22 },
+ "questions": [
+  {
+   "prompt": "G2 BRIEF — relay (Zapier-style automation platform: Fastify API + BullMQ engine + Prisma, pnpm/turbo monorepo, Vitest). Verified finding: ADR-0008 says the engine enforces trigger dedupe with a TTL window and every trigger definition carries a `dedupeKey`, but no production code ever calls a trigger's `dedupeKey` or constructs the `Deduper` (only `triggers.test.ts` does). The managed-webhook receiver `/hooks/t/:bindingId` creates and enqueues a new Run for every request that passes signature verification, so a vendor that re-delivers the same event with a fresh signature runs the customer's automation twice. You will delegate the fix to a coding agent. Write the brief: goal, allowed files, boundaries, test command, stop condition. Commit to your brief first, then tick the checkpoints you covered and add up the weights.",
+   "keyPoints": [
+    { "text": "[w3] Goal: a second delivery of the same item to the same binding inside the window creates no Run and enqueues nothing, and is still answered with a 2xx so the vendor stops retrying; a different item on that binding still gets its own run.", "cite": { "path": "apps/api/src/routes/webhooks.ts", "lineStart": 41, "lineEnd": 50 } },
+    { "text": "[w3] Guarded order: the identity check runs after the binding lookup and the signature verdict and before the Run is created, so a forged or unsigned request can never claim an item's key and silence the real delivery that follows.", "cite": { "path": "apps/api/src/routes/webhooks.ts", "lineStart": 32, "lineEnd": 40 } },
+    { "text": "[w2] Scope: resolve the binding's trigger definition from the registry the way the publish route already does, compute the item's identity with that definition's own key function, and refuse an item whose key cannot be computed with a 400 instead of firing it.", "cite": { "path": "apps/api/src/routes/relays.ts", "lineStart": 107, "lineEnd": 111 } },
+    { "text": "[w2] Allowed files: apps/api/src/routes/webhooks.ts, one small dedupe seam under apps/api/src/lib/ (the existing Deduper reused, or relocated unchanged to a package both apps can import), and new tests under apps/api/src/.", "cite": { "path": "apps/engine/src/triggers/dedupe.ts", "lineStart": 14, "lineEnd": 29 } },
+    { "text": "[w3] Boundary: action-side idempotency stays out (deriveIdempotencyKey, the per-action window strategy, replays and their run ids), as do the circuit breaker, the HMAC check with its signature replay guard, the demo hook and the Prisma schema; the per-action window that is declared but never enforced is reported, not built.", "cite": { "path": "apps/engine/src/idempotency.ts", "lineStart": 28, "lineEnd": 31 } },
+    { "text": "[w2] Test command: `pnpm --filter @relay/api test` (vitest run) driving the route with Fastify's inject, as the health test does, with @relay/db and ../queue replaced by vi.mock so no Postgres or Redis is needed; plus `pnpm --filter @relay/engine test` so the Deduper's own cases still run.", "cite": { "path": "apps/api/src/server.test.ts", "lineStart": 1, "lineEnd": 8 } },
+    { "text": "[w2] Stop condition: a test that posts one item twice, signed afresh each time, records one run.create and one enqueue (red on the original, green on the fix), a second distinct item still fires, a bad-signature request leaves the key unclaimed, and the store's TTL bound is asserted rather than assumed.", "quote": "Dedupe state is bounded (TTL eviction) — it must never grow forever." }
+   ]
+  },
+  {
+   "prompt": "G2 PRE-MORTEM — same delegation. What will an agent most likely get wrong here, and which line of your brief prevents it?",
+   "keyPoints": [
+    { "text": "[w3] It keys the check on the signature header or a hash of the whole body, the engine-owned identity the ADR rejected; a re-signed redelivery then looks new, and a vendor that mutates an irrelevant field defeats it. The scope line names the trigger definition's key function as the only identity.", "quote": "two genuinely different events can hash-collide on irrelevant fields" },
+    { "text": "[w3] It runs the check before verification, so anyone who can reach the URL can pre-claim item keys and make the platform drop the vendor's genuine event; the guarded-order line prevents it.", "cite": { "path": "apps/api/src/lib/webhook-verify.ts", "lineStart": 38, "lineEnd": 50 } },
+    { "text": "[w2] It wanders into the action path, building the engine-side seen-set for the per-action window strategy or changing how replays derive their keys, a different mechanism with its own design history; the boundary keeps idempotency.ts out of the diff.", "cite": { "path": "packages/connector-sdk/src/connector.ts", "lineStart": 13, "lineEnd": 19 } },
+    { "text": "[w2] It stores seen keys in a plain Set or a new table with no expiry, which the ADR names as the rejected option.", "quote": "Correct but a memory leak" },
+    { "text": "[w1] It answers the duplicate with a 409 or another non-2xx, so the vendor keeps retrying an event that was already handled and shows the endpoint as failing; the goal says a duplicate is acknowledged.", "cite": { "path": "apps/api/src/routes/webhooks.ts", "lineStart": 49, "lineEnd": 50 } }
+   ]
+  },
+  {
+   "prompt": "G2 HANDBACK REVIEW — the agent hands back a diff and a green run. What do you check before accepting it?",
+   "keyPoints": [
+    { "text": "[w3] There is exactly one identity check in the receiver, sitting between the signature verdict and the Run insert, and the Deduper's own behaviour and tests are unchanged.", "cite": { "path": "apps/engine/src/triggers.test.ts", "lineStart": 7, "lineEnd": 28 } },
+    { "text": "[w3] The pasted run shows the duplicate case failing on the original receiver (two runs) and passing on the fix (one), with the mocked database and queue counting the calls rather than a test that only exercises the Deduper directly.", "cite": { "path": "apps/api/src/routes/webhooks.ts", "lineStart": 41, "lineEnd": 49 } },
+    { "text": "[w2] Keys are namespaced by binding, so the same vendor item delivered to two different relays' bindings still fires each relay once.", "cite": { "path": "packages/db/prisma/schema.prisma", "lineStart": 127, "lineEnd": 144 } },
+    { "text": "[w2] webhook-verify.ts, idempotency.ts and the schema are absent from the diff, and the existing signature and replay-guard tests still pass.", "cite": { "path": "apps/api/src/lib/webhook-verify.test.ts", "lineStart": 1, "lineEnd": 10 } },
+    { "text": "[w1] The handback lists the limits it did not fix: an in-memory window per API process does not span instances although the module comment speaks of a Redis backing, the per-action window is still unenforced, and the demo hook is not deduped.", "cite": { "path": "apps/engine/src/triggers/dedupe.ts", "lineStart": 11, "lineEnd": 12 } }
+   ]
+  }
+ ]
+}

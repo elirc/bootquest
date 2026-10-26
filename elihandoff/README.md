@@ -1,4 +1,6 @@
-> **Newest (2026-10-16):** read `JAVA-SYSDESIGN-REPORT-2026-10-16.md` (Java System Design section), then `JAVA-TRACK-REPORT-2026-10-16.md` (Java track), then `WAVE4-REPORT-2026-10-15.md` (wave 4). It covers wave 4 (192 packs, every study quest covered), the crash recovery, all gates, and open owner items. The rest of this folder dates from 2026-10-09 and is historical.
+> **LIVE HANDOFF (2026-10-25): this folder is HISTORICAL. Read `C:\Users\Owner\Desktop\bootquest-handoff\README.md` first** — mega expansion wave (mx) paused mid-integration on local branch `mx-wave` (checked out in this repo, not pushed); remaining: P1/P2 masteroutline primaries (bq-mx-sd2), quiz set C j5/j7 (bq-mx-q3), then pins + full battery + review + land + push, then wave 2 + final report.
+>
+> **Older (2026-10-16):** read `JAVA-SYSDESIGN-REPORT-2026-10-16.md` (Java System Design section), then `JAVA-TRACK-REPORT-2026-10-16.md` (Java track), then `WAVE4-REPORT-2026-10-15.md` (wave 4). It covers wave 4 (192 packs, every study quest covered), the crash recovery, all gates, and open owner items. The rest of this folder dates from 2026-10-09 and is historical.
 
 # BootQuest handoff — START HERE
 

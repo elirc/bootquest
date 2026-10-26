@@ -1,0 +1,187 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "masteropen--openstatus-fabledocs3-adr-009-idempotency-over-outbox.md--set-b",
+ "items": [
+  {
+   "key": "seed:explainback:masteropen/explain-back/712117d8741e1917",
+   "provenance": {
+    "repo": "masteropen",
+    "sha": "7fb603aa0838cab1ab711b40577937cfd0f27cf2",
+    "path": "openstatus/fabledocs3/adr-009-idempotency-over-outbox.md",
+    "lines": {
+     "start": 1,
+     "end": 30
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "DESIGN IT — [senior] uptime checks at 10x growth with alert-fatigue controls (masteropen, openstatus/fabledocs3/adr-009-idempotency-over-outbox.md). Scenario: over two quarters the monitor count grows roughly 7.5-fold to 150,000, all on one-minute checks, a seventh probe region is added, and everything stays on the same managed task queue. Customers have started scheduling maintenance windows, and one flapping monitor paged its owner 40 times last night. Write your design before you look: how many probe tasks a minute that is and who enqueues them, how each region's checker fleet is sized, what the seventh region does to the agreement rule that flips a monitor's status, what the queue has to sustain at that volume, how planned downtime is kept from paging, and how a flapping monitor is kept from paging all night. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "keyPoints": [
+      {
+       "text": "[w3] Fan-out is one task per monitor per region per tick (a 30-second monitor gets two per region), so 150,000 monitors in 7 regions is 1,050,000 probe tasks a minute, about 17,500 a second, and every one is a queue operation the quota and the bill count.",
+       "cite": {
+        "path": "openstatus/apps/workflows/src/cron/checker.ts",
+        "lineStart": 153,
+        "lineEnd": 183
+       }
+      },
+      {
+       "text": "[w3] The enqueue itself becomes the wall: one cron invocation creates every task, 100 at a time with retries, so fitting 1,050,000 creations into a minute needs each call to average under about 5.7 ms; split the enqueue across invocations (by monitor range or region) and alarm when one tick's enqueue runs longer than the tick.",
+       "cite": {
+        "path": "openstatus/apps/workflows/src/cron/checker.ts",
+        "lineStart": 185,
+        "lineEnd": 212
+       }
+      },
+      {
+       "text": "[w2] Each region's checkers must absorb all 150,000 probes a minute (2,500 a second), and a probe can hold a slot up to the monitor's timeout, 45 seconds by default, so fleet size follows rate times probe duration, sized for slow targets rather than the average one.",
+       "cite": {
+        "path": "openstatus/packages/db/src/schema/monitors/monitor.ts",
+        "lineStart": 39,
+        "lineEnd": 40
+       }
+      },
+      {
+       "text": "[w3] With seven regions the existing rule needs 4 agreeing reports (at least 3.5), a strict majority, so a three-three split can no longer flip a monitor; but the rule divides by each monitor's own region list, so any monitor still configured with an even number of regions keeps its tie.",
+       "cite": {
+        "path": "openstatus/apps/workflows/src/checker/index.ts",
+        "lineStart": 216,
+        "lineEnd": 216
+       }
+      },
+      {
+       "text": "[w2] Probes report changes, not results: each task carries the region's last known status and the checker posts to the alerting path only when its result differs, so status-update traffic scales with transitions rather than with probes, and a flapping monitor is what loads it.",
+       "cite": {
+        "path": "openstatus/apps/checker/handlers/checker.go",
+        "lineStart": 205,
+        "lineEnd": 253
+       }
+      },
+      {
+       "text": "[w3] Maintenance is applied only when tasks are created: the cron skips monitors attached, through status-page components, to a window open at that instant, and nothing later in the pipeline looks at the window again; the design re-checks the window where the verdict and the page are decided, and gives monitors that sit on no status page a way into maintenance.",
+       "cite": {
+        "path": "openstatus/apps/workflows/src/cron/checker.ts",
+        "lineStart": 77,
+        "lineEnd": 106
+       }
+      },
+      {
+       "text": "[w3] Nothing bounds pages per monitor: the page record's uniqueness includes the tick, so every new flip is a new page, and each fresh failure opens a new incident once the last one auto-resolved; a cooldown keyed on monitor and incident reopens a recently resolved incident instead of starting another, and holds the recovery page until the monitor has stayed healthy for several ticks.",
+       "cite": {
+        "path": "openstatus/packages/db/src/schema/notifications/notification.ts",
+        "lineStart": 44,
+        "lineEnd": 52
+       }
+      },
+      {
+       "text": "[w1] The per-workspace SMS allowance counts page records, but its one-month cutoff is computed in seconds while the stored tick is in milliseconds, so it actually counts all history; at 10x volume that allowance runs out and never comes back.",
+       "cite": {
+        "path": "openstatus/apps/workflows/src/checker/alerting.ts",
+        "lineStart": 88,
+        "lineEnd": 121
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "PRE-MORTEM — the ramp goes wrong on three nights. The probe queue hits its dispatch limit, so probes start minutes late and some regions' checkers saturate; while region 7 rolls out, half the monitors list seven regions and half still list six; and a customer whose maintenance window begins at 02:00:15 is paged at 02:00:30 for a 30-second monitor. What breaks, how does each show up, and what in your design catches it?",
+     "keyPoints": [
+      {
+       "text": "[w3] Saturation looks exactly like the target being down: a probe that cannot finish inside its timeout is retried and then reported as an error, and once that happens in half of a monitor's regions the verdict flips and pages for a healthy site; the checkers need to tell their own overload apart from a failing target before they report.",
+       "cite": {
+        "path": "openstatus/apps/checker/handlers/checker.go",
+        "lineStart": 276,
+        "lineEnd": 312
+       }
+      },
+      {
+       "text": "[w3] A late report overwrites a newer one: the per-region evidence row is upserted with whatever status arrives plus the current time, and no probe tick is stored or compared, so a delayed result from an old tick can replace the latest one; store the tick with the evidence and refuse anything older.",
+       "cite": {
+        "path": "openstatus/apps/workflows/src/checker/alerting.ts",
+        "lineStart": 276,
+        "lineEnd": 302
+       }
+      },
+      {
+       "text": "[w2] A task the cron still fails to create after its retries is logged, counted into one error message per run and never re-created, so that monitor simply goes unprobed for that tick; at 10x a missed probe needs its own per-monitor metric, or a throttled queue reads as one vague alert.",
+       "cite": {
+        "path": "openstatus/apps/workflows/src/cron/checker.ts",
+        "lineStart": 214,
+        "lineEnd": 242
+       }
+      },
+      {
+       "text": "[w3] There is no old-worker versus new-worker split: every report re-reads the monitor's region list and counts only evidence from regions on it, so the split is per monitor; monitors on six regions still flip on three of six, those on seven need four, and evidence from a region removed from the list stops counting.",
+       "cite": {
+        "path": "openstatus/apps/workflows/src/checker/index.ts",
+        "lineStart": 128,
+        "lineEnd": 151
+       }
+      },
+      {
+       "text": "[w3] The 02:00:30 page is the second task of a 30-second monitor, created by the 02:00 tick and scheduled 30 seconds later, so the enqueue-time maintenance filter never saw the window; the judging route then flips and pages because it never consults maintenance.",
+       "cite": {
+        "path": "openstatus/apps/workflows/src/cron/checker.ts",
+        "lineStart": 173,
+        "lineEnd": 181
+       }
+      },
+      {
+       "text": "[w2] The hop that carries status reports has no deterministic identity of its own: the checker creates the alerting task without a name, on a single alerting queue in one location, so a duplicate creation is not suppressed there and every region's reports funnel through that one queue.",
+       "cite": {
+        "path": "openstatus/apps/checker/checker/update.go",
+        "lineStart": 67,
+        "lineEnd": 90
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "TRADE-OFF HANDBACK — defend your growth choices against the alternatives: adaptive per-monitor probe intervals versus one fixed minute for everyone; an alert cooldown versus escalation that repeats until someone acknowledges; one shared queue per check interval versus a queue per region; and raising the agreement threshold versus adding regions. For each, say what you bought and what it cost.",
+     "keyPoints": [
+      {
+       "text": "[w3] Adaptive intervals save tasks on stable monitors and tighten detection after a failure, but the interval is one stored per-monitor value from a short fixed list (30 seconds up to an hour), so variable intervals mean new list values or per-task schedule times and capacity that is harder to predict; a fixed minute keeps the arithmetic trivial.",
+       "cite": {
+        "path": "openstatus/packages/db/src/schema/monitors/monitor.ts",
+        "lineStart": 20,
+        "lineEnd": 22
+       }
+      },
+      {
+       "text": "[w3] A cooldown ends the 40-page night but can mute a genuine second outage inside its window; escalation until acknowledgement stays loud and moves to the next responder, and the incident already has acknowledged-at and acknowledged-by columns for that escalation to stop on.",
+       "cite": {
+        "path": "openstatus/packages/db/src/schema/incidents/incident.ts",
+        "lineStart": 44,
+        "lineEnd": 50
+       }
+      },
+      {
+       "text": "[w2] One queue per interval is one quota and one dashboard, but a throttle there delays every region at once, and correlated lateness across regions is precisely what defeats an agreement rule; a queue per region keeps each region's evidence independent, at the cost of more queues, quotas and alarms.",
+       "cite": {
+        "path": "openstatus/apps/workflows/src/cron/checker.ts",
+        "lineStart": 69,
+        "lineEnd": 73
+       }
+      },
+      {
+       "text": "[w2] Raising the threshold on today's lists removes ties with no new infrastructure but slows detection and makes a two-region monitor need both; adding a region makes a strict majority natural and adds independent evidence, at the cost of another checker fleet and a seventh more probe tasks every minute.",
+       "quote": "per-region `monitor_status` rows accumulate evidence"
+      },
+      {
+       "text": "[w2] Each new piece of state the growth design adds (a tick on the evidence row, a cooldown key) has to be deterministic too, because the 10x pipeline still retries at every hop.",
+       "quote": "Retries exist at every layer — and retries without idempotency multiply effects."
+      },
+      {
+       "text": "[w1] At 10x the notification vendors become the narrow end: a widespread outage triggers thousands of monitors' channels at once, so sends need pacing per provider rather than a burst.",
+       "quote": "runs at firehose volume across process and vendor boundaries"
+      }
+     ]
+    }
+   ],
+   "set": "b"
+  }
+ ]
+}
