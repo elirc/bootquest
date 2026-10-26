@@ -1053,8 +1053,17 @@ resolved); quiz variety `concept` and flashcard shape `hand-authored`;
   composition), 80 drill-java drills complementing javabootcamp's 168 (per-module avoidance
   recorded in the wave brief); JAVADRILLS_EXPECTED 80; 80/80 validated (solution passes +
   starter fails-as-test-verdict under the real Java runner), 0 quarantined; every expected
-  value recomputed by the cross-reviewer; hint 3 never pasteable (no return/semicolon/paren);
-  zero fingerprinted files touched — no estate restamp.
+  value is exercised against the reference solution by that validation (an independent
+  by-hand recompute of the vectors is still an open review item, see the mx wave record);
+  hint 3 never pasteable (no return/semicolon/paren); zero fingerprinted files touched — no
+  estate restamp.
+- **sysdrills wave 4 — DONE (2026-10-25):** modules 11-14 (replication & consistency, multi-region
+  & failover, search & indexing, observability & telemetry), 32 new drill-js drills, 110 total;
+  SYSDRILLS_EXPECTED 78 → 110; 110/110 validated (solution passes + starter fails under the real
+  drill-js runner), 0 quarantined; all 96 expected integers of modules 13-14 recomputed by
+  hand-formula in the integration pass (modules 11-12: validation only, recompute open); hint 3
+  never contains `return` or `;` (13/03's brief hint "must return" reworded "must send back" to
+  honour that rule).
 - **fundamentals wave — DONE (2026-10-21):** interview + real-SWE-fundamentals content, zero
   shared/factory edits (no estate restamp). 9 new DESIGN IT primaries → 47 items / 29 repos;
   11 fundamentals explain-backs on repos with no prior EB pack → EB packs 150 → 170, strict
@@ -1321,3 +1330,82 @@ resolved); quiz variety `concept` and flashcard shape `hand-authored`;
   explanations state an old generator goal-check's expected answer (the pack's own reading
   material states it openly); drill notes 09-08/10-01 re-skin existing formula shapes with new
   teaching content.
+- **mega expansion wave (mx) — DONE (2026-10-26):** 2-3x content per track + small app wins, zero
+  shared/src, tools/seed/src/factory and server/src edits (no estate restamp; strict pins 629 →
+  667, restamp dry-run 676/676 fresh). Orchestration: Fable architects (6 briefs) → Opus
+  implementers in isolated clones (`bq-mx-*`), resumed across several usage-limit pauses → Opus
+  cross-review (see review bullet below; landed on the owner's "land changes" order before the
+  drill-math recompute, the EB/G2 cite audit and the Fable high-level review completed).
+  - **New code banks:** csdrills (C#, 80) and javadrills (Java, 80) — bullets above; sysdrills
+    78 → 110 (bullet above). C# authored code items 112 → 192; Java 168 → 248.
+  - **Explain-back packs 185 → 223:** 12 classic JS explain-backs on master-/ww-repos (masterstore,
+    masternext, mastermorphic, masteroutline-outline, masteridur, mastertwenty, stockade, ww4, ww7,
+    ww27, ww39, helios-interplanetary); 11 G2 delegation briefs (pulse, masterumami, w22, ww19,
+    zz8, gitjira, relay, organized-build-analytics, netgum, netcalendy, dotnet-drop) — G2 briefs
+    20 total; 10 sysdesign alternate sets (9 DESIGN IT set-B: meterforge-upskilling, masteropen,
+    harbor, bazaar, scedulingpyjs, masterumami, cal-com, tenant-search-indexer, icms; 1
+    fundamentals set-B: atlas ADR-0007 clock-as-dependency); 5 DESIGN IT primaries on uncovered
+    staples (masteroutline-outline real-time collaborative editing + permission-filtered search,
+    mastertwenty metadata-generated GraphQL, enterprise-billing subscription invoicing & dunning,
+    linkwarden object-level sharing & permissions). ladder-real pins: designItems 58 → 72,
+    designRepos 29 → 33, set-B/C titles 19 → 28.
+  - **Quiz layer batch 3:** 10 packs +140 quizzes / +70 flashcards / +150 notes (140 after + 10
+    before): tracer 12→26q/4→11fc, pulse 12→26/4→11, zz8 12→28/3→11, jsdrillv2 12→28/4→12,
+    dotnet-drop 13→27/3→10, netcalendy 12→26/4→11, relay-app 14→28/4→11, j2 12→26/4→11, j5
+    13→25/4→10, j7 12→24/4→10 — j2/j5/j7 are the FIRST Java quiz layers. Old items byte-identical
+    everywhere; historical quarantine/review keys unchanged.
+  - **App (client only, no wire changes):** ordered (`1.`) lists render as real `<ol>` in prose;
+    dashboard "Browse all N units" link to the track browser; unit-browser group headers show
+    unfiltered per-group totals; the count line is a `role=status` live region; the review
+    session shows a running grade tally. Client 344 → 361 tests.
+  - Cross-stream discipline: pulse, zz8, dotnet-drop and netcalendy got BOTH a new G2 brief and a
+    new quiz layer in parallel — quiz keys were routed around the G2 delegation facts (quiz side
+    reworded; integrated-tree leak lint 223 packs / 0 leaks, EB_LEAK_EXEMPT empty). relay-app
+    (quest pack) ≠ relay (G2 repo).
+  - Accepted prompt-demanded overlaps (token guard passes; flashcard ones are unguarded):
+    masteropen-b q1.kp7 vs 1a664f8e, q1.kp8 vs 74848a10; bazaar-b q1.kp4 vs d9d69862;
+    enterprise-billing q2.kp2 vs 1b74685a, q2.kp4 vs 44f1be33, q1.kp5 vs fc f03-invoice-order,
+    q2.kp7 vs fc f04-outbox-gaps; linkwarden q1.kp5 vs b9a8f2c1, q1.kp2 vs 5522bf13; cal-com-b
+    q1.kp2+q2.kp1 vs 38aadc53; masteroutline P1 q1.kp1+q3.kp6 vs fc f01-three-representations,
+    q3.kp1 vs fc f04-crdt-not-ot; P2 q1.kp2 vs fc f02-rls-rejected. (+ EB/G2 stream acceptances
+    per pack in the mx ledger.)
+  - Code-truth corrections (sets state the CODE, not the brief/docs): masteroutline collab state
+    is capped at 1,500 KB (a 10 MB doc is a refused paste); only a Postgres search provider ships
+    (`server/utils/opensearch.ts` is the browser description XML); `content` is written in-tx with
+    `state`, only `text` lags; enterprise-billing's per-period invoice guard lives in the worker,
+    `idempotency.ts` only hashes payloads, no proration path (declared supposition); masterumami
+    has no ClickHouse deletion at all.
+  - Upstream findings (owner follow-ups; mirrors untouched; full list in the handoff
+    `briefs/mx-agent-reports-2026-10-25.md` + `mx-ledger.md`): organized-build-analytics public
+    register accepts role=SYSTEM_ADMIN and validate() never writes back the parsed body;
+    masternext BOLA remediation partial (deleteContact/getUserById); mastertwenty non-atomic
+    metadataVersion bump, GraphQL `first` unclamped; ww7 dispatch re-activates paused workflows;
+    ww39 audit test can never fail; w22 concurrent deliver double-sends; linkwarden collection
+    update/delete use the global client inside `$transaction` (not atomic) and preserved-format
+    URLs never re-check access; enterprise-billing invoices lack period columns (late job
+    double-bills) and count+1 invoice numbers collide with no retry; masterumami website delete
+    leaves ClickHouse data; masteropen SMS quota compares seconds to ms (never resets); harbor
+    SLA status hard-codes a UTC 9-17 calendar and takes targetMs from the request body;
+    tenant-search-indexer whole-tenant single-statement rebuild; masteroutline per-pod
+    connection cap + per-pod "done" flag cuts revisions while other pods edit, revocation leaves
+    sockets joined; netcalendy critique's partial-index snippet lacks `.IsUnique()` and its
+    `Booking.TimeConflict` returns 400 not 409; j5 08-SAME-RULES cites the wrong exercise
+    number; j2 onboarding docs describe an older codebase.
+  - Tooling gotcha: PowerShell 5.1 drops the `--` in `npm run <x> -- --flag`, so flags never reach
+    the script (a `seed:validate -- --source sysdrills` silently fell back to bootforge) — run
+    flagged seed/test commands from Git Bash or via `npx`.
+- **mx wave — review fixes (2026-10-26):** Opus-A reviewed the 10 quiz packs (keys + flashcard
+  xleaks, whole packs) and the mx-app client code: 0 high, 1 medium, 9 low quiz findings; app 0
+  bugs. Fixed (branch mx-fix-qa, item keys unchanged, notes re-seeded): j7 q14 (medium — Order.restore
+  also refuses a non-DRAFT order with no lines, so the stem now asks for the two refusals the worked
+  change describes); j2 q26 TAB stem (a TAB at the ends is trimmed, not rejected) + f05/f09 fronts
+  marked "(onboarding docs, pre-Loan)"; netcalendy f06 back trimmed to priority/risk ids; zz8
+  q23/q24, j5 q23/q24 and jsdrillv2 q27 after-notes no longer restate older keys. Accepted/open:
+  pulse q26 after-note and relay-app f07 vs q19 D1 (low); app nits A1 group "(3/5)" ambiguity, A2
+  chatty `role=status` on every keystroke, A3 Browse-all lands on a collapsed disclosure, A4.
+  OPEN review items: by-hand recompute of javadrills/csdrills/sysdrills 11-12 vectors, cite/house-
+  form audit of the 23 EB/G2 packs and 15 sysdesign sets, Fable high-level review of the
+  integrated diff. Post-fix gates: leaks 223/0, answers OK, seed:pins 667/667, restamp dry-run
+  676/676 fresh, seed 2244/2244, server 640/640 (pre-fix battery at 101b1d16 also: selfrun 20/20,
+  test:csharp 46/46, test:java 23/23, typechecks 0, client 361/361, smoke 76/76, demo:promotion
+  39/39, demo:planted 48/48, campaign --check OK).
