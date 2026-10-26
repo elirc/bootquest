@@ -27,7 +27,7 @@ export const JAVADRILLS_FORMAT = 'javadrills-authoring@1';
  * Census of the committed authoring files (10 modules: 8 × 10 drill-java exercises).
  * Appending a module = add its JSON, bump this, re-import, re-validate.
  */
-export const JAVADRILLS_EXPECTED: PackCounts = { total: 80, code: 80, quiz: 0, output: 0, written: 0 };
+export const JAVADRILLS_EXPECTED: PackCounts = { total: 86, code: 86, quiz: 0, output: 0, written: 0 };
 
 /** module ids and exercise slugs: NN-kebab-case */
 export const ID_RE = /^[0-9]{2}-[a-z0-9-]+$/;

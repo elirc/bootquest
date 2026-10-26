@@ -170,8 +170,8 @@ describe('manifest', () => {
     expect(m.expected).toEqual({ total: 2, code: 2, quiz: 0, output: 0, written: 0 });
   });
 
-  it('JAVADRILLS_EXPECTED pins the committed census (80 drill-java units)', () => {
-    expect(JAVADRILLS_EXPECTED).toEqual({ total: 80, code: 80, quiz: 0, output: 0, written: 0 });
+  it('JAVADRILLS_EXPECTED pins the committed census (86 drill-java units)', () => {
+    expect(JAVADRILLS_EXPECTED).toEqual({ total: 86, code: 86, quiz: 0, output: 0, written: 0 });
   });
 });
 

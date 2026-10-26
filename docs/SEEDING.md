@@ -1409,3 +1409,14 @@ resolved); quiz variety `concept` and flashcard shape `hand-authored`;
   676/676 fresh, seed 2244/2244, server 640/640 (pre-fix battery at 101b1d16 also: selfrun 20/20,
   test:csharp 46/46, test:java 23/23, typechecks 0, client 361/361, smoke 76/76, demo:promotion
   39/39, demo:planted 48/48, campaign --check OK).
+- **javadrills module 11 cross-language bugs — DONE (mx2 T4 Java half, 2026-10-26):** 6 drill-java
+  drills (01-rounding-mode, 02-idempotency-replay, 03-dst-arithmetic, 04-overflow-aggregate,
+  05-shared-default-state, 06-pagination-bounds), each the Java side of a "same bug, three
+  languages" triple whose C# sibling (csdrills 11, same slugs/vectors) is the next task; each
+  instruction names the trap that differs in the other language. JAVADRILLS_EXPECTED 80 → 86;
+  86/86 validated under the real Java runner, 0 quarantined, audit 0 mismatches; every vector
+  derived by hand in the T4 brief (handoff `briefs/mx2-triples-brief.md`) and re-checked at
+  authoring. Starters are TODO stubs (bank convention) rather than the brief's buggy starters;
+  03 was re-scoped to calendar-day vs elapsed-hour arithmetic + DST gap/overlap resolution
+  because 09/05 already counts DST day length. No fingerprinted file touched (pins 667/667,
+  restamp dry-run 676/676 fresh).
