@@ -5,8 +5,8 @@
 // Honesty: renders ONLY TrackUnitsResponse fields (title, kind, difficulty, state, revealed) and
 // never fetches a unit's detail. A locked unit is never a link.
 
-import { useId, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { Link, useLocation } from 'react-router-dom';
 import { useApi } from '../api/context';
 import type { TrackId, UnitSummary } from '../api/types';
 import { Icon } from '../components/Icon';
@@ -26,14 +26,32 @@ function TrackUnitsBody({ trackId, variant }: { trackId: TrackId; variant: Varia
   const api = useApi();
   const res = useAsync(() => api.getTrackUnits(trackId), [api, trackId]);
   const headingId = useId();
-  const [open, setOpen] = useState(false);
+  // `#units` (the dashboard's "Browse all" link) arrives with the browser already open
+  const deepLinked = useLocation().hash === '#units';
+  const [open, setOpen] = useState(deepLinked);
   const units = res.status === 'ready' ? res.data.units : undefined;
   const expanded = variant === 'primary' || open;
+  const sectionRef = useRef<HTMLElement>(null);
+  const arrived = useRef(false);
+  const ready = res.status === 'ready';
+  // the browser cannot jump to #units itself (the section renders after the campaign loads), and
+  // its header is focused only once the units are there to read
+  useEffect(() => {
+    if (!deepLinked || !ready || arrived.current) return;
+    arrived.current = true;
+    const sec = sectionRef.current;
+    if (!sec) return;
+    sec.scrollIntoView?.({ block: 'start' });
+    // the secondary header's toggle button, else the primary heading (tabIndex -1)
+    (sec.querySelector<HTMLElement>('.tu-head button') ?? sec.querySelector<HTMLElement>('h2'))?.focus({ preventScroll: true });
+  }, [deepLinked, ready]);
 
   return (
-    <section className="track-units" data-testid="track-units" aria-labelledby={headingId}>
+    <section className="track-units" id="units" ref={sectionRef} data-testid="track-units" aria-labelledby={headingId}>
       {variant === 'primary' ? (
-        <h2 id={headingId}>Practice units</h2>
+        <h2 id={headingId} tabIndex={-1}>
+          Practice units
+        </h2>
       ) : (
         <h2 className="tu-head" id={headingId}>
           <button type="button" aria-expanded={open} onClick={() => setOpen((o) => !o)}>

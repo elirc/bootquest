@@ -314,3 +314,47 @@ describe('track units: honesty', () => {
     r.unmount();
   });
 });
+
+describe('track units: #units deep link (the dashboard "Browse all" link)', () => {
+  const proto = Element.prototype as unknown as { scrollIntoView?: (arg?: unknown) => void };
+  let scrolled: Element[] = [];
+  beforeEach(() => {
+    scrolled = [];
+    proto.scrollIntoView = function (this: Element) {
+      scrolled.push(this);
+    };
+  });
+  afterEach(() => {
+    delete proto.scrollIntoView;
+  });
+
+  it('/campaign/js#units arrives with the collapsed browser open, scrolled to and its header focused', async () => {
+    const n = (await createMockApi().getTrackUnits('js')).units.length;
+    renderApp('/campaign/js#units');
+    const sec = await section();
+    expect(sec).toHaveAttribute('id', 'units');
+    const toggle = await within(sec).findByRole('button', { name: `Practice units (${n})` });
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    await waitFor(() => expect(rows()).toHaveLength(n));
+    await waitFor(() => expect(document.activeElement).toBe(toggle));
+    expect(scrolled).toEqual([sec]);
+  });
+
+  it('/campaign/sysdesign#units focuses the primary heading', async () => {
+    renderApp('/campaign/sysdesign#units');
+    const sec = await section();
+    await waitFor(() => expect(row(501)).not.toBeNull());
+    const heading = within(sec).getByRole('heading', { level: 2, name: 'Practice units' });
+    await waitFor(() => expect(document.activeElement).toBe(heading));
+    expect(scrolled).toEqual([sec]);
+  });
+
+  it('without the hash nothing is scrolled or focused, and the secondary browser stays collapsed', async () => {
+    renderApp('/campaign/js');
+    const sec = await section();
+    const toggle = await within(sec).findByRole('button', { name: /^Practice units \(\d+\)$/ });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(document.activeElement).not.toBe(toggle);
+    expect(scrolled).toEqual([]);
+  });
+});

@@ -521,10 +521,10 @@ describe('Next up: browse all', () => {
     renderApp('/');
     await screen.findByRole('table');
     const browse = within(nextUp()).getAllByRole('link', { name: /^Browse all/ });
-    expect(browse.map((a) => a.getAttribute('href'))).toEqual(['/campaign/js', '/campaign/csharp', '/campaign/agentic', '/campaign/java', '/campaign/sysdesign']);
+    expect(browse.map((a) => a.getAttribute('href'))).toEqual(['/campaign/js#units', '/campaign/csharp#units', '/campaign/agentic#units', '/campaign/java#units', '/campaign/sysdesign#units']);
     // the accessible names are distinct per track (the arrow is aria-hidden)
     expect(browse.map((a) => a.textContent)).toContain('Browse all System design units →');
-    expect(within(nextUp()).getByRole('link', { name: 'Browse all System design units' })).toHaveAttribute('href', '/campaign/sysdesign');
+    expect(within(nextUp()).getByRole('link', { name: 'Browse all System design units' })).toHaveAttribute('href', '/campaign/sysdesign#units');
     expect(new Set(browse.map((a) => a.textContent)).size).toBe(5);
     // the null-unit cards (java, sysdesign) stay inert; their only action is the browse link
     const javaItem = within(nextUp()).getByRole('link', { name: 'Browse all Java units' }).closest('li')!;
@@ -538,7 +538,7 @@ describe('Next up: browse all', () => {
     const card = within(nextUp()).getByRole('link', { name: /signalpost U04/ });
     expect(card).toHaveAttribute('href', '/play/107');
     expect(card.querySelector('a')).toBeNull();
-    expect(card.closest('li')!.querySelector('.nextup-browse')).toHaveAttribute('href', '/campaign/js');
+    expect(card.closest('li')!.querySelector('.nextup-browse')).toHaveAttribute('href', '/campaign/js#units');
     expect(screen.getAllByRole('link', { name: /Clear the review queue/ })).toHaveLength(1);
     expect(screen.getByRole('heading', { name: 'Next up' })).toBeInTheDocument();
   });
