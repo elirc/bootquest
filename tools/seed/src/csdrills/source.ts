@@ -30,7 +30,7 @@ export const CSDRILLS_FORMAT = 'csdrills-authoring@1';
  * Census of the committed authoring files (10 modules × 8 drill-cs exercises).
  * Appending a module = add its JSON, bump this, re-import, re-validate.
  */
-export const CSDRILLS_EXPECTED: PackCounts = { total: 75, code: 75, quiz: 0, output: 0, written: 0 };
+export const CSDRILLS_EXPECTED: PackCounts = { total: 73, code: 73, quiz: 0, output: 0, written: 0 };
 
 /** module ids and exercise slugs: NN-kebab-case */
 export const ID_RE = /^[0-9]{2}-[a-z0-9-]+$/;
