@@ -37,11 +37,11 @@
        }
       },
       {
-       "text": "[w3] Each foreign key or check goes on in two steps: added NOT VALID, which checks every new write from that moment but skips the rows already there, then validated in a later step that scans the table without blocking writes. Added this way, the constraint stops new violations at once, and the old rows are repaired behind it before the validation runs.",
+       "text": "[w3] Each foreign key or check goes on in two steps: added NOT VALID, which checks every new write from that moment but skips the rows already there, then validated in a later step that scans the table without blocking writes. Added this way (PostgreSQL ALTER TABLE semantics), the constraint stops new violations at once while the old rows are repaired behind it. Under the default MATCH SIMPLE a row whose organisation is null is not checked at all, and the organisation backfill is itself an UPDATE the new key checks, so the order is: repair those rows' foreign assignees, backfill the organisation, then VALIDATE.",
        "cite": {
-        "path": "batch1report/projects/netdrop.md",
-        "lineStart": 66,
-        "lineEnd": 66
+        "path": "batch6report/projects/grokbuildmultitenantproject.md",
+        "lineStart": 43,
+        "lineEnd": 43
        }
       },
       {
@@ -60,7 +60,7 @@
        "text": "[w2] Old binaries keep serving after the migration runs, so each enforcement step ships only once no running machine and no rollback target can still produce the violation it forbids: the code that always sets the organisation, and that checks the assignee, goes out one full release before the rule it relies on.",
        "cite": {
         "path": "apprenticeship/curriculum/07-zero-downtime-migrations.md",
-        "lineStart": 47,
+        "lineStart": 50,
         "lineEnd": 50
        }
       },
@@ -86,19 +86,19 @@
      "prompt": "PRE-MORTEM — the constraint release goes out like this: the compound foreign key is added fully validated inside the release-phase migration while about 3,800 cross-organisation assignees are still in the table; the duplicate-number cleanup ran on Friday and the unique index build started on Monday; the NOT NULL is a plain SET NOT NULL in the same migration; old machines keep creating tasks through a path that leaves the organisation empty for twenty minutes; and the API now answers 409 when someone picks an assignee from another organisation. What breaks, who notices first, and what in your plan prevents it?",
      "keyPoints": [
       {
-       "text": "[w3] Adding the key fully validated on dirty data makes the release-phase migration hold locks that stop inserts and updates on the task and membership tables for a full scan, and then fail on the first bad row: the deploy aborts, but only after it has stalled writes. NOT VALID first, then a validation after the repair, shrinks that to a brief lock plus a scan that lets writes through.",
+       "text": "[w3] On dirty data the validated add cannot succeed: after its write-blocking scan it meets the first of the 3,800 bad rows and the release-phase migration fails, which aborts the whole deploy. The release that was meant to ship the writer fix and the repair ships nothing, and new cross-organisation assignments keep landing meanwhile; adding the key NOT VALID in that release would have stopped them at once.",
        "cite": {
-        "path": "apprenticeship/curriculum/19-rls-defense-in-depth.md",
-        "lineStart": 59,
-        "lineEnd": 63
+        "path": "apprenticeship/curriculum/07-zero-downtime-migrations.md",
+        "lineStart": 49,
+        "lineEnd": 49
        }
       },
       {
-       "text": "[w3] Between Friday and Monday the race that produced the duplicates kept running, so the index build fails on a fresh duplicate and leaves an invalid index behind. Close the source first (allocate numbers from a per-organisation counter updated in one atomic statement), then clean up, then build, close together in time.",
+       "text": "[w3] Between Friday and Monday the race that produced the duplicates kept running, so the index build fails on a fresh duplicate and leaves an invalid index behind. Close the race at its source first (number allocation done atomically by the database, not read-then-write in the service), then clean up, then build, close together in time; a failed online build is dropped before the retry (PostgreSQL CREATE INDEX semantics).",
        "cite": {
-        "path": "apprenticeship/curriculum/07-zero-downtime-migrations.md",
-        "lineStart": 92,
-        "lineEnd": 92
+        "path": "apprenticeship/curriculum/03-concurrency-races.md",
+        "lineStart": 11,
+        "lineEnd": 11
        }
       },
       {
@@ -129,9 +129,9 @@
       {
        "text": "[w3] Repairing first puts the constraint on clean data in one step, but new violations keep arriving while the repair runs; NOT VALID first stops them immediately, at the cost of refusing writes from any code path that still produces them, which is why it waits until those paths are gone.",
        "cite": {
-        "path": "batch6report/projects/grokbuildmultitenantproject.md",
-        "lineStart": 43,
-        "lineEnd": 43
+        "path": "batch1report/projects/netdrop.md",
+        "lineStart": 66,
+        "lineEnd": 66
        }
       },
       {
