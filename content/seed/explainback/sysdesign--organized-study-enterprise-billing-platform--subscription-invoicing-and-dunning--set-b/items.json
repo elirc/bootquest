@@ -32,8 +32,8 @@
        "text": "[w3] Giving money back is a refund of a payment, not a change to the invoice: today a payment's status ends at succeeded or failed, with no refunded amount and no refund record, so the design adds refunds that point at a payment, are capped by what that payment captured minus what was already returned, and are tracked apart from any credit note, because either can exist without the other.",
        "cite": {
         "path": "packages/db/prisma/schema.prisma",
-        "lineStart": 39,
-        "lineEnd": 44
+        "lineStart": 251,
+        "lineEnd": 269
        }
       },
       {
@@ -86,8 +86,12 @@
      "prompt": "PRE-MORTEM — the correction features have been live for a quarter. A support agent 'fixes' a paid invoice by flipping it to void in the database and issuing a new one; a refund call to the payment provider times out and the agent presses refund again; the Los Angeles tenant's October revenue report is missing the invoices for its 1 November renewals; a customer's accountant adds up the per-line VAT and lands one cent away from the invoice's tax; and a full credit note issued against a 665-cent line taxed at 10% leaves the customer owing one cent. What breaks, how does each show up, and what in your design prevents it?",
      "keyPoints": [
       {
-       "text": "[w3] Status edits outside the transition rules are the root of the void-a-paid-invoice fix: nothing in the running code consults the declared moves, so any writer can set any status, and a voided paid invoice leaves a successful payment pointing at a dead document. Route every status change through one correction service that applies the transition table, and make a paid invoice correctable only by issuing a credit note.",
-       "quote": "State machine helpers are unused"
+       "text": "[w3] Make the transition table unavoidable: one correction service is the only writer of invoice status (or a database check refuses moving a paid invoice), it applies the declared moves, and a paid invoice is corrected only by a credit note; a paid invoice flipped to void leaves a successful payment pointing at a dead document.",
+       "cite": {
+        "path": "packages/domain/src/billing-state.ts",
+        "lineStart": 23,
+        "lineEnd": 23
+       }
       },
       {
        "text": "[w3] The second refund press is a second refund unless the first attempt has an identity: today the provider reference on a payment is minted from the clock at each attempt, so nothing stable ties a retry to the first try. Create the refund row before calling the provider, pass its id as the provider's idempotency key, and let a retry reuse that row and key instead of making another.",
@@ -106,7 +110,7 @@
        }
       },
       {
-       "text": "[w2] The one-cent VAT gap is a rounding-rule mismatch: the calculator produces one tax amount for the whole invoice while the accountant sums rounded line amounts, so with per-line VAT the invoice's tax must be the sum of the rounded line taxes, and the rule printed on the document must be the one its totals obey.",
+       "text": "[w2] The one-cent VAT gap is a rounding-rule mismatch: the document and its reader round in different places, so with per-line VAT the invoice's tax must be the sum of the rounded line taxes, and the rule printed on the document must be the one its totals obey.",
        "cite": {
         "path": "packages/domain/src/invoice-calculator.ts",
         "lineStart": 34,
@@ -123,12 +127,16 @@
       },
       {
        "text": "[w1] Reconcile money and documents daily per tenant: invoices minus credit notes must equal payments minus refunds plus what is still open, and any tenant whose two sides disagree goes to a review list before month end.",
-       "quote": "Integer cents for money."
+       "cite": {
+        "path": "packages/db/prisma/schema.prisma",
+        "lineStart": 216,
+        "lineEnd": 269
+       }
       }
      ]
     },
     {
-     "prompt": "TRADE-OFF HANDBACK — defend your correction design against the alternatives: voiding and reissuing versus issuing credit notes; rounding tax per line versus once per invoice; billing on each tenant's local calendar versus one UTC calendar for everyone; a counter row versus a database sequence versus allocating at issue for legal numbers; and refunding to the card versus leaving an account credit. For each, say what you bought and what it cost.",
+     "prompt": "TRADE-OFF HANDBACK — defend your correction design against the alternatives: voiding and reissuing versus issuing credit notes; rounding tax per line versus once per invoice; billing on each tenant's local calendar versus one UTC calendar for everyone; a database sequence versus a gap-free allocator taken only at issue for legal numbers; and refunding to the card versus leaving an account credit. For each, say what you bought and what it cost.",
      "keyPoints": [
       {
        "text": "[w3] Void and reissue gives the customer one clean document and suits an open invoice nobody has paid, which the declared moves already allow; once paid, or once a jurisdiction forbids altering issued documents, a credit note is the only honest path, at the cost of two documents the customer must read together and reports that net them.",
@@ -139,11 +147,15 @@
        }
       },
       {
-       "text": "[w3] Per-line rounding matches what customers' accounting and many VAT rules expect and makes every line self-explanatory, at the cost of totals a few cents away from whole-invoice arithmetic; rounding once is closest to the exact amount, but its line amounts no longer add up. Either way the rule is a stored property of the invoice, chosen per jurisdiction, just as tax rates themselves must stop being one setting per tenant.",
-       "quote": "Coupons and taxes are organization-wide"
+       "text": "[w3] Per-line rounding matches what customers' accounting and many VAT rules expect and makes every line self-explanatory, at the cost of totals a few cents away from whole-invoice arithmetic; rounding once is closest to the exact amount, but its line amounts no longer add up. Either way the rule is a stored property of the invoice, chosen per jurisdiction.",
+       "cite": {
+        "path": "packages/db/prisma/schema.prisma",
+        "lineStart": 224,
+        "lineEnd": 227
+       }
       },
       {
-       "text": "[w2] Local calendars bill each tenant at its own midnight, which also spreads the 1st-of-month peak across the world's time zones; one UTC calendar is a single batch at a single instant and simpler to test, at the cost of dates that look wrong to everyone far from UTC. Either is new work, since a subscription period is only a count of days today; local calendars also cost a stored zone per tenant and boundaries that respect daylight saving.",
+       "text": "[w2] Local calendars bill each tenant at its own midnight, which also spreads the 1st-of-month peak across the world's time zones; one UTC calendar is a single batch at a single instant and simpler to test, at the cost of dates that look wrong to everyone far from UTC. Local calendars also cost a stored zone per tenant and boundaries that respect daylight saving.",
        "cite": {
         "path": "apps/api/src/modules/billing.routes.ts",
         "lineStart": 355,
@@ -151,7 +163,7 @@
        }
       },
       {
-       "text": "[w2] A counter row incremented in the issuing transaction rolls back with it, so it never skips a number, but every issue for that tenant waits on that row; a database sequence never waits, yet a rolled-back transaction leaves a hole a legal series cannot have; allocating only at issue keeps drafts from consuming numbers whichever mechanism hands them out.",
+       "text": "[w2] A database sequence never waits, yet a rolled-back or failed issue leaves a hole a legal series cannot have, so it suits internal ids, not legal numbers; allocating only at issue keeps drafts out of the series, at the cost of drafts and previews that carry no legal number and must be labelled as such.",
        "cite": {
         "path": "packages/db/prisma/schema.prisma",
         "lineStart": 216,
