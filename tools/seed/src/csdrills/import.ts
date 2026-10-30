@@ -44,8 +44,9 @@ import { CSDRILLS_EXPECTED, ID_RE, ImportError, readModules, type CsdrillsExerci
  * further section divider, a tests divider in a head or the tail, a tail that does
  * not open with a section divider, a solutionTail without a tail / identical to it /
  * still throwing NotImplementedException / not opening with a section divider (with a
- * solutionTail the TODO marker may sit in starterHead or tail), fewer than 3 literal Test("…") names or a
- * duplicate one, a pasteable hint 3 (`;`, `=>` or `return`), and a census that
+ * solutionTail the TODO marker may sit in starterHead or tail), a duplicate literal Test("…") name,
+ * fewer than 4 or more than 8 of them, none containing "(boundary", a pasteable hint 3
+ * (`;`, `=>`, `return` or parentheses), and a census that
  * differs from the expected counts. Output is deterministic: same authoring bytes →
  * same pack bytes (the manifest's importedFrom.path / gitHead / dirty record where
  * it came from).
@@ -59,6 +60,9 @@ export const AUTHORING_SUBPATH = 'tools/seed/authoring/csdrills';
 /** per graded run (the jstrain-cs value: compile + run under the warm runner) */
 export const DRILL_TIMEOUT_MS = 20000;
 export const LESSON_ID = 'drills';
+/** every drill registers 4-8 literal Test("…") names, at least one of them containing "(boundary" */
+export const MIN_TESTS = 4;
+export const MAX_TESTS = 8;
 
 const REPO = resolve(import.meta.dirname, '..', '..', '..', '..');
 export const DEFAULT_AUTHORING_DIR = join(REPO, ...AUTHORING_SUBPATH.split('/'));
@@ -145,14 +149,17 @@ export function mapExercise(module: string, ex: CsdrillsExercise, position: numb
   if (ex.tail !== undefined && !SECTION_FIRST_LINE.test(ex.tail.split('\n', 1)[0]!)) fail('tail must start (first line) with a labelled section divider such as `// ─── types ───`');
   if (ex.solutionTail !== undefined && !SECTION_FIRST_LINE.test(ex.solutionTail.split('\n', 1)[0]!)) fail('solutionTail must start (first line) with a labelled section divider such as `// ─── types ───`');
   const names = literalTestNames(ex.tests);
-  if (names.length < 3) fail(`tests register ${names.length} literal Test("…") name(s); at least 3 required`);
   const seen = new Set<string>();
   for (const n of names) {
     if (seen.has(n)) fail(`duplicate test name ${JSON.stringify(n)}`);
     seen.add(n);
   }
+  if (names.length < MIN_TESTS || names.length > MAX_TESTS) {
+    fail(`tests register ${names.length} literal Test("…") name(s); ${MIN_TESTS}-${MAX_TESTS} required`);
+  }
+  if (!names.some((n) => n.includes('(boundary'))) fail('no test name contains "(boundary": every drill needs at least one boundary test');
   const h3 = ex.hints[2]!;
-  if (/;|=>|\breturn\b/.test(h3)) fail('hint 3 must be approach in words, never pasteable code (no `;`, `=>` or `return`)');
+  if (/;|=>|\breturn\b|[()]/.test(h3)) fail('hint 3 must be approach in words, never pasteable code (no `;`, `=>`, `return` or parentheses)');
 
   const tail = ex.tail ?? '';
   const key = stableKey(module, ex.slug);
