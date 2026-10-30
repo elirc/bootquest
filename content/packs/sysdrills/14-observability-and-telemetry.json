@@ -5,7 +5,7 @@
   "id": "14-observability-and-telemetry",
   "order": 14,
   "title": "Observability & telemetry math",
-  "description": "Observability reps for the operate-it part of a system-design interview: solving a trace-sampling rate inversely from a storage budget, the metric-cardinality product that turns one unbounded label into a budget incident, tiering log retention by age, error-budget burn rates and the hours until the budget is gone, the on-call toil that false pages burn, instrumentation overhead as a share of request latency, how scrape resolution drives the points a time-series database must hold, and which traces head versus tail sampling actually keep. Every drill is whole-number arithmetic with the conversions named (86,400 s/day; 720 h in a 30-day month; money in integer cents; per-mille = parts per thousand = x/1000), so you practise the reasoning, not the calculator.",
+  "description": "Observability reps for the operate-it part of a system-design interview: solving a trace-sampling rate inversely from a storage budget, the metric-cardinality product that turns one unbounded label into a budget incident, tiering log retention by age, error-budget burn rates and the hours until the budget is gone, the multi-window burn-rate thresholds that decide when to page, the on-call toil that false pages burn, instrumentation overhead as a share of request latency, how scrape resolution drives the points a time-series database must hold, and which traces head versus tail sampling actually keep. Every drill is whole-number arithmetic with the conversions named (86,400 s/day; 720 h in a 30-day month; money in integer cents; per-mille = parts per thousand = x/1000), so you practise the reasoning, not the calculator.",
   "prerequisites": []
  },
  "modules": [
@@ -16,7 +16,7 @@
     {
      "id": "drills",
      "title": "Observability & telemetry math",
-     "explanation": "Observability reps for the operate-it part of a system-design interview: solving a trace-sampling rate inversely from a storage budget, the metric-cardinality product that turns one unbounded label into a budget incident, tiering log retention by age, error-budget burn rates and the hours until the budget is gone, the on-call toil that false pages burn, instrumentation overhead as a share of request latency, how scrape resolution drives the points a time-series database must hold, and which traces head versus tail sampling actually keep. Every drill is whole-number arithmetic with the conversions named (86,400 s/day; 720 h in a 30-day month; money in integer cents; per-mille = parts per thousand = x/1000), so you practise the reasoning, not the calculator."
+     "explanation": "Observability reps for the operate-it part of a system-design interview: solving a trace-sampling rate inversely from a storage budget, the metric-cardinality product that turns one unbounded label into a budget incident, tiering log retention by age, error-budget burn rates and the hours until the budget is gone, the multi-window burn-rate thresholds that decide when to page, the on-call toil that false pages burn, instrumentation overhead as a share of request latency, how scrape resolution drives the points a time-series database must hold, and which traces head versus tail sampling actually keep. Every drill is whole-number arithmetic with the conversions named (86,400 s/day; 720 h in a 30-day month; money in integer cents; per-mille = parts per thousand = x/1000), so you practise the reasoning, not the calculator."
     }
    ]
   }
@@ -728,6 +728,118 @@
      "debugging"
     ]
    }
+  },
+  {
+   "unit": {
+    "key": "sysdrills/14-observability-and-telemetry/09-multi-window-burn-alert",
+    "track": "sysdesign",
+    "kind": "drill",
+    "title": "Burn-rate alerts: threshold and two windows",
+    "phase": "14-observability-and-telemetry",
+    "difficulty": 3,
+    "competencies": [
+     "system-design"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-js",
+       "language": "js",
+       "tests": [
+        {
+         "name": "6x for 6 hours -> 50 permille of the month",
+         "code": "assert.equal(typeof mod.budgetPermilleSpent, 'function', 'export a function named budgetPermilleSpent');\nassert.equal(mod.budgetPermilleSpent(6, 6), 50);",
+         "input": [
+          6,
+          6
+         ]
+        },
+        {
+         "name": "144x for 5 hours -> the whole budget, 1000 permille (boundary)",
+         "code": "assert.equal(typeof mod.budgetPermilleSpent, 'function', 'export a function named budgetPermilleSpent');\nassert.equal(mod.budgetPermilleSpent(144, 5), 1000);",
+         "input": [
+          144,
+          5
+         ]
+        },
+        {
+         "name": "5% of the budget in 6 hours -> a 6x threshold",
+         "code": "assert.equal(typeof mod.burnRateThreshold, 'function', 'export a function named burnRateThreshold');\nassert.equal(mod.burnRateThreshold(50, 6), 6);",
+         "input": [
+          50,
+          6
+         ]
+        },
+        {
+         "name": "10% in 3 days -> 1x, burning exactly at budget (boundary)",
+         "code": "assert.equal(typeof mod.burnRateThreshold, 'function', 'export a function named burnRateThreshold');\nassert.equal(mod.burnRateThreshold(100, 72), 1);",
+         "input": [
+          100,
+          72
+         ]
+        },
+        {
+         "name": "5% of the budget in 1 hour -> a 36x threshold",
+         "code": "assert.equal(typeof mod.burnRateThreshold, 'function', 'export a function named burnRateThreshold');\nassert.equal(mod.burnRateThreshold(50, 1), 36);",
+         "input": [
+          50,
+          1
+         ]
+        },
+        {
+         "name": "long 40x and short 45x against 36x -> page",
+         "code": "assert.equal(typeof mod.shouldPage, 'function', 'export a function named shouldPage');\nassert.equal(mod.shouldPage(40, 45, 36), true);",
+         "input": [
+          40,
+          45,
+          36
+         ]
+        },
+        {
+         "name": "long window still high but the short one has recovered -> no page",
+         "code": "assert.equal(typeof mod.shouldPage, 'function', 'export a function named shouldPage');\nassert.equal(mod.shouldPage(40, 2, 36), false);",
+         "input": [
+          40,
+          2,
+          36
+         ]
+        },
+        {
+         "name": "a short spike the long window does not confirm -> no page",
+         "code": "assert.equal(typeof mod.shouldPage, 'function', 'export a function named shouldPage');\nassert.equal(mod.shouldPage(10, 90, 36), false);",
+         "input": [
+          10,
+          90,
+          36
+         ]
+        },
+        {
+         "name": "both windows exactly at 36x -> page, the threshold counts (boundary)",
+         "code": "assert.equal(typeof mod.shouldPage, 'function', 'export a function named shouldPage');\nassert.equal(mod.shouldPage(36, 36, 36), true);",
+         "input": [
+          36,
+          36,
+          36
+         ]
+        }
+       ],
+       "timeoutMs": 8000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "14-observability-and-telemetry/09-multi-window-burn-alert",
+    "type": "code",
+    "module": "14-observability-and-telemetry",
+    "lesson": "drills",
+    "position": 8,
+    "skills": [
+     "slo",
+     "alerting"
+    ]
+   }
   }
  ],
  "content": {
@@ -817,6 +929,17 @@
     "Ask WHEN the keep-or-drop decision is made: before the outcome is known, or after the trace has finished.",
     "head = errors × p ÷ 1000; tail = errors + (total − errors) × p ÷ 1000.",
     "Head sampling keeps only the sampled per-mille of errors, errors × p ÷ 1000 — tail sampling keeps every error and adds the per-mille slice of the remaining (total − errors) traffic"
+   ]
+  },
+  "sysdrills/14-observability-and-telemetry/09-multi-window-burn-alert": {
+   "instructions": "**Skills:** slo · alerting  \n**Level:** ★★★\n\n**Interview prompt.** \"We want to page when the last 6 hours burned 5% of our 30-day error budget. What burn rate is that threshold — and why do SRE teams require a short window to agree before they page?\"\n\n**Why it works.** At 1× a 30-day budget lasts 720 hours (30 × 24), so burning at B× for w hours spends B × w of those 720 budget-hours: in per-mille of the budget, B × w × 1000 ÷ 720. Solving that for B turns \"this share of the budget in this window\" into a burn-rate threshold. A single long window is slow to clear — it keeps paging long after the incident ended — and a single short window pages on blips. So the alert fires only when the long window AND a short window (typically 1/12 of it) both burn at or above the threshold. The tests choose inputs that divide exactly, so every answer is a whole number.\n\n**Your task.** Export three functions:\n- `budgetPermilleSpent(burnRateX, windowHours)` → the per-mille of a 30-day budget that burning at `burnRateX` for `windowHours` spends\n- `burnRateThreshold(budgetPermille, windowHours)` → the burn rate that spends `budgetPermille` of the budget in `windowHours`\n- `shouldPage(longBurnX, shortBurnX, thresholdX)` → `true` only when both windows are at or above the threshold\n\n**Worked example.** Burning at 6× for 6 hours spends 6 × 6 = 36 of 720 budget-hours → **50‰** (5%) of the month.\n",
+   "starter": "export function budgetPermilleSpent(burnRateX, windowHours) {\n  // TODO: budget-hours burned out of 720, in per-mille\n}\n\nexport function burnRateThreshold(budgetPermille, windowHours) {\n  // TODO: invert the spend for a target share\n}\n\nexport function shouldPage(longBurnX, shortBurnX, thresholdX) {\n  // TODO: both windows must agree\n}\n",
+   "solution": "export function budgetPermilleSpent(burnRateX, windowHours) {\n  return (burnRateX * windowHours * 1000) / 720;\n}\n\nexport function burnRateThreshold(budgetPermille, windowHours) {\n  return (budgetPermille * 720) / (windowHours * 1000);\n}\n\nexport function shouldPage(longBurnX, shortBurnX, thresholdX) {\n  return longBurnX >= thresholdX && shortBurnX >= thresholdX;\n}\n",
+   "explanation": "An alert threshold is a budget share divided by a window.\n\nFor `burnRateThreshold(50, 6)`:\n- 50‰ of a 720-hour budget is 50 × 720 ÷ 1000 = 36 budget-hours\n- spending 36 budget-hours in 6 hours means burning at 36 ÷ 6 = **6×**\n\nThe same algebra gives the SRE workbook's fast-burn page (2% in 1 hour = 14.4×), and the AND with a short window is what lets the page stop soon after the incident does. Drill 14/04 `error-budget-burn-rate` turns one multiplier into hours left; this drill turns a budget share into the multiplier an alert should fire at.",
+   "hints": [
+    "Think in budget-hours: at 1× the month holds 720 of them, and burning at B× for w hours uses up B × w.",
+    "spent‰ = B × w × 1000 ÷ 720; threshold B = spent‰ × 720 ÷ (w × 1000); page ⇔ long ≥ B and short ≥ B.",
+    "Burning B times the allowed rate for w hours spends B times w of the 720 budget-hours — solve that for B to get the threshold, and page only when the long and the short window both sit at or above it"
    ]
   }
  }
