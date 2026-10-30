@@ -20,7 +20,7 @@ const exercise = (over: Partial<CsdrillsExercise> = {}): CsdrillsExercise => ({
   instructions: 'Implement `int DoubleIt(int n)` returning n × 2.',
   starterHead: 'using static Bootcamp.Check;\n\nint DoubleIt(int n)\n{\n    // TODO: double it\n    throw new NotImplementedException();\n}\n\n',
   solutionHead: 'using static Bootcamp.Check;\n\nint DoubleIt(int n)\n{\n    return n * 2;\n}\n\n',
-  tests: `${MARKER}\n\nTest("DoubleIt(2) -> 4", () =>\n    Eq(DoubleIt(2), 4));\n\nTest("DoubleIt(0) -> 0 (boundary)", () =>\n    Eq(DoubleIt(0), 0));\n\nTest("DoubleIt(-3) -> -6", () =>\n    Eq(DoubleIt(-3), -6));\n`,
+  tests: `${MARKER}\n\nTest("DoubleIt(2) -> 4", () =>\n    Eq(DoubleIt(2), 4));\n\nTest("DoubleIt(0) -> 0 (boundary)", () =>\n    Eq(DoubleIt(0), 0));\n\nTest("DoubleIt(-3) -> -6", () =>\n    Eq(DoubleIt(-3), -6));\n\nTest("DoubleIt(50) -> 100", () =>\n    Eq(DoubleIt(50), 100));\n`,
   explanation: '2 × 2 = **4**.',
   hints: ['Multiply.', 'n * 2.', 'Multiply the input by two'],
   ...over,
@@ -61,7 +61,7 @@ const twoExercises = () =>
         skills: ['enums', 'comparison'],
         starterHead: 'using static Bootcamp.Check;\n\nSign SignOf(int n)\n{\n    // TODO\n    throw new NotImplementedException();\n}\n\n',
         solutionHead: 'using static Bootcamp.Check;\n\nSign SignOf(int n)\n{\n    return (Sign)Math.Sign(n);\n}\n\n',
-        tests: `${MARKER}\n\nTest("SignOf(5) -> Pos", () => Eq(SignOf(5), Sign.Pos));\nTest("SignOf(0) -> Zero (boundary)", () => Eq(SignOf(0), Sign.Zero));\nTest("SignOf(-2) -> Neg", () => Eq(SignOf(-2), Sign.Neg));\n\n`,
+        tests: `${MARKER}\n\nTest("SignOf(5) -> Pos", () => Eq(SignOf(5), Sign.Pos));\nTest("SignOf(0) -> Zero (boundary)", () => Eq(SignOf(0), Sign.Zero));\nTest("SignOf(-2) -> Neg", () => Eq(SignOf(-2), Sign.Neg));\nTest("SignOf(9) -> Pos", () => Eq(SignOf(9), Sign.Pos));\n\n`,
         tail: TAIL,
       }),
     ]),
@@ -268,19 +268,24 @@ describe('import-time refusals (write nothing)', () => {
     ]);
   });
 
-  it('refuses fewer than 3 literal test names and a duplicate literal test name', () => {
+  it('refuses fewer than 4 or more than 8 literal test names, a duplicate one, and no (boundary) test', () => {
+    const nine = Array.from({ length: 9 }, (_, i) => `Test("t${i} (boundary)", () => Eq(DoubleIt(${i}), ${2 * i}));`).join('\n');
     refuseEach([
       [{ tests: `${MARKER}\n\nTest("one", () => Eq(DoubleIt(1), 2));\nTest("two", () => Eq(DoubleIt(2), 4));\n` }, /register 2 literal Test/],
       [{ tests: `${MARKER}\n\nTest("one", () => Eq(DoubleIt(1), 2));\n// Test("two", () => Eq(DoubleIt(2), 4));\nTest($"three", () => Eq(DoubleIt(3), 6));\n` }, /register 1 literal Test/],
       [{ tests: `${MARKER}\n\nTest("same", () => Eq(DoubleIt(1), 2));\nTest("other", () => Eq(DoubleIt(2), 4));\nTest("same", () => Eq(DoubleIt(3), 6));\n` }, /duplicate test name "same"/],
+      [{ tests: `${MARKER}\n\nTest("one", () => Eq(DoubleIt(1), 2));\nTest("two", () => Eq(DoubleIt(2), 4));\nTest("three (boundary)", () => Eq(DoubleIt(3), 6));\n` }, /register 3 literal Test.*4-8 required/],
+      [{ tests: `${MARKER}\n\n${nine}\n` }, /register 9 literal Test.*4-8 required/],
+      [{ tests: `${MARKER}\n\nTest("a", () => Eq(DoubleIt(1), 2));\nTest("b", () => Eq(DoubleIt(2), 4));\nTest("c", () => Eq(DoubleIt(3), 6));\nTest("d", () => Eq(DoubleIt(4), 8));\n` }, /no test name contains "\(boundary"/],
     ]);
   });
 
-  it('refuses a pasteable hint 3 (`;`, `=>` or `return`)', () => {
+  it('refuses a pasteable hint 3 (`;`, `=>`, `return` or parentheses)', () => {
     refuseEach([
       [{ hints: ['a', 'b', 'n * 2;'] }, /hint 3 must be approach in words/],
       [{ hints: ['a', 'b', 'x => x * 2'] }, /hint 3 must be approach in words/],
       [{ hints: ['a', 'b', 'return the doubled value'] }, /hint 3 must be approach in words/],
+      [{ hints: ['a', 'b', 'call DoubleIt(n) and multiply'] }, /hint 3 must be approach in words/],
     ]);
   });
 
@@ -303,7 +308,7 @@ const classExercise = (over: Partial<CsdrillsExercise> = {}): CsdrillsExercise =
     title: 'Counter',
     starterHead: 'using static Bootcamp.Check;\n\n// TODO: implement Counter in the types section below\n\n',
     solutionHead: 'using static Bootcamp.Check;\n\n// Counter is implemented in the types section below\n\n',
-    tests: `${MARKER}\n\nTest("first Next -> 1 (boundary)", () => Eq(new Counter().Next(), 1));\nTest("second Next -> 2", () => { var c = new Counter(); c.Next(); Eq(c.Next(), 2); });\nTest("counters are independent", () => { new Counter().Next(); Eq(new Counter().Next(), 1); });\n\n`,
+    tests: `${MARKER}\n\nTest("first Next -> 1 (boundary)", () => Eq(new Counter().Next(), 1));\nTest("second Next -> 2", () => { var c = new Counter(); c.Next(); Eq(c.Next(), 2); });\nTest("counters are independent", () => { new Counter().Next(); Eq(new Counter().Next(), 1); });\nTest("third Next -> 3", () => { var c = new Counter(); c.Next(); c.Next(); Eq(c.Next(), 3); });\n\n`,
     tail: STUB_TAIL,
     solutionTail: IMPL_TAIL,
     ...over,
