@@ -297,8 +297,8 @@ describe('import-time refusals (write nothing)', () => {
     refuse([both((s) => s.replace('test("twice(1) is 2"', 'test("twice(2) is 4"'))], /duplicate test name "twice\(2\) is 4"/);
   });
 
-  it('refuses a pasteable hint 3: a semicolon, return or parentheses', () => {
-    for (const h3 of ['return n times two', 'n * 2;', 'call twice(n)', 'double it ) then stop']) {
+  it('refuses a pasteable hint 3: a semicolon, a lambda arrow, return or parentheses', () => {
+    for (const h3 of ['return n times two', 'n * 2;', 'call twice(n)', 'double it ) then stop', 'map n -> n times two']) {
       refuse([exercise({ hints: ['Multiply.', 'The * operator.', h3] })], /hint 3 must be the approach in words/);
       clean();
     }
