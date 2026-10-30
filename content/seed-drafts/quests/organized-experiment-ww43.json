@@ -438,6 +438,451 @@
    ],
    "front": "Summarize the session lifecycle in Collab Notes.",
    "back": "32 random bytes as a hex token; only sha256(token:SESSION_SECRET) is stored; fixed 14-day expiry (lastSeenAt is updated but never extends it); every API request looks the session up and reads the user role; expired rows are never cleaned up, and logout needs a live session."
+  },
+  {
+   "id": "q13-save-response-pre-save",
+   "kind": "quiz",
+   "source": {
+    "path": "src/services/note-service.ts",
+    "lines": {
+     "start": 263,
+     "end": 314
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/note-service.ts",
+     "lineStart": 263,
+     "lineEnd": 293
+    },
+    {
+     "path": "src/repositories/note-repository.ts",
+     "lineStart": 103,
+     "lineEnd": 108
+    },
+    {
+     "path": "src/features/notes/components/notes-workspace.tsx",
+     "lineStart": 196,
+     "lineEnd": 209
+    }
+   ],
+   "prompt": "An editor saves a note whose currentVersionNumber is 3, and the save commits as version 4. Which message does the editor show right after the PUT returns 200?",
+   "answer": "Saved version 3., as the response is read outside the transaction",
+   "distractors": [
+    "Saved version 4., as the response is read on the transaction client",
+    "Saved version 4., as the hook refetches the note before the message",
+    "A newer revision already exists, as the response looks out of date"
+   ],
+   "explanation": "updateNote runs the conditional update and the audit insert on the transaction client db, then returns noteRepository.findAccessibleById(...) from inside the callback (note-service.ts:263-293). That method takes no db argument and queries the global prisma client (note-repository.ts:103-108), so it runs on another pooled connection and, under PostgreSQL's default READ COMMITTED, cannot see the uncommitted update: it reads version 3. A probe with Prisma 6.19.3 (the lockfile version) on PostgreSQL 18 returned 3 through the global client and 4 through the transaction client inside the same callback. The workspace builds its message from that response (notes-workspace.tsx:196-209). A refetch shortly afterwards brings version 4 into the cache, but the message is already set; a 200 never enters the conflict branch."
+  },
+  {
+   "id": "q14-conflict-shows-cached-version",
+   "kind": "quiz",
+   "source": {
+    "path": "src/features/notes/components/notes-workspace.tsx",
+    "lines": {
+     "start": 73,
+     "end": 229
+    }
+   },
+   "cites": [
+    {
+     "path": "src/features/notes/components/notes-workspace.tsx",
+     "lineStart": 74,
+     "lineEnd": 91
+    },
+    {
+     "path": "src/features/notes/components/notes-workspace.tsx",
+     "lineStart": 210,
+     "lineEnd": 228
+    },
+    {
+     "path": "src/features/notes/hooks/use-notes.ts",
+     "lineStart": 64,
+     "lineEnd": 91
+    },
+    {
+     "path": "src/features/notes/components/note-editor.tsx",
+     "lineStart": 44,
+     "lineEnd": 44
+    }
+   ],
+   "prompt": "A user edits version 5 of a note while a teammate saves version 6. The user's save gets 409 VERSION_CONFLICT with details.latestNote. Nothing has refetched the note. What does the editor show next?",
+   "answer": "The cached version 5 text, with the user's typed edits gone",
+   "distractors": [
+    "The version 6 text, loaded into the editor from latestNote's data",
+    "The user's typed edits, kept under a newer-revision banner",
+    "A merge of the user's edits into the version 6 text"
+   ],
+   "explanation": "The conflict branch overwrites the draft with latestNote and sets draft.versionNumber to 6 (notes-workspace.tsx:210-228). The editor shows the draft only while draft.versionNumber equals the cached note's currentVersionNumber (notes-workspace.tsx:74-91), and the cache still holds version 5: the save hook has no onError and nothing in the branch invalidates the detail (use-notes.ts:64-91). So the editor falls back to the cached version 5 title and body. The typed edits were replaced, version 6 is not displayed even though the message says the latest version was reloaded, and with title and body equal to the cached note the editor is not dirty (note-editor.tsx:44). A re-save after typing again still sends base version 5 and is refused again."
+  },
+  {
+   "id": "q15-share-prefix-refetch",
+   "kind": "quiz",
+   "source": {
+    "path": "src/features/notes/hooks/use-notes.ts",
+    "lines": {
+     "start": 15,
+     "end": 112
+    }
+   },
+   "cites": [
+    {
+     "path": "src/features/notes/hooks/use-notes.ts",
+     "lineStart": 15,
+     "lineEnd": 19
+    },
+    {
+     "path": "src/features/notes/hooks/use-notes.ts",
+     "lineStart": 107,
+     "lineEnd": 110
+    }
+   ],
+   "prompt": "With a note open, the owner adds a collaborator. The share hook writes the response into [\"notes\", id] and then invalidates [\"notes\"]. Which of that note's queries refetch?",
+   "answer": "The detail and its revisions, under the shared prefix",
+   "distractors": [
+    "Only the revisions, as the detail was written just now",
+    "Neither, as only the list has the key [\"notes\"] itself",
+    "Only the detail, as revisions have their own query key"
+   ],
+   "explanation": "The key factory nests every note query under one root: all is [\"notes\"], detail is [\"notes\", id] and revisions is [\"notes\", id, \"revisions\"] (use-notes.ts:15-19). invalidateQueries matches by prefix, so invalidating [\"notes\"] (use-notes.ts:107-110) marks the list, the detail and the revisions stale and refetches every one that is mounted. A probe with @tanstack/query-core 5.99.0 (the lockfile version) refetched list, detail and revisions after exactly this onSuccess. Writing the response with setQueryData first does not exempt the detail: the invalidation flags it again. So the open note's detail is fetched a second time and its revisions are fetched although sharing never changes them."
+  },
+  {
+   "id": "q16-shared-dto-ripple",
+   "kind": "quiz",
+   "source": {
+    "path": "src/types/note.ts",
+    "lines": {
+     "start": 50,
+     "end": 72
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/note-service.ts",
+     "lineStart": 89,
+     "lineEnd": 125
+    },
+    {
+     "path": "src/features/notes/hooks/use-notes.ts",
+     "lineStart": 28,
+     "lineEnd": 35
+    },
+    {
+     "path": "src/lib/http/fetcher.ts",
+     "lineStart": 44,
+     "lineEnd": 44
+    }
+   ],
+   "prompt": "A developer adds a required wordCount: number field to the NoteDetail type in src/types/note.ts and changes nothing else. Where does tsc report an error?",
+   "answer": "In toDetailDto, the one place that builds a NoteDetail object",
+   "distractors": [
+    "In use-notes.ts, where apiFetch is typed with NoteDetail",
+    "Nowhere, since the type only describes JSON on the wire",
+    "In the note routes, which hand ok({ note }) the service result"
+   ],
+   "explanation": "NoteDetail is shared: the service returns it and the hooks and components consume it. The only code that constructs one is toDetailDto, whose object literal is annotated as NoteDetail (note-service.ts:89-125), so a missing required property is error TS2741 there; a probe with TypeScript 5.9.3 reported exactly that. The hooks only name the type in apiFetch's generic (use-notes.ts:28-35), and apiFetch ends with return data as T (fetcher.ts:44), a cast that checks nothing. The routes hand the service result to ok() without naming the type. So the server side is forced to supply the field, while nothing verifies that the JSON the browser receives has it."
+  },
+  {
+   "id": "q17-email-check-before-trim",
+   "kind": "quiz",
+   "source": {
+    "path": "src/lib/validation/note-schemas.ts",
+    "lines": {
+     "start": 26,
+     "end": 29
+    }
+   },
+   "cites": [
+    {
+     "path": "src/lib/validation/note-schemas.ts",
+     "lineStart": 27,
+     "lineEnd": 27
+    },
+    {
+     "path": "src/app/api/notes/[noteId]/share/route.ts",
+     "lineStart": 25,
+     "lineEnd": 26
+    },
+    {
+     "path": "src/lib/validation/parse-schema.ts",
+     "lineStart": 12,
+     "lineEnd": 20
+    }
+   ],
+   "prompt": "A script, not the browser form, POSTs to /api/notes/:id/share as the owner with the email \" editor@notes.local\" (one leading space) for an existing user. What comes back?",
+   "answer": "422 VALIDATION_ERROR, as the email check runs before trim",
+   "distractors": [
+    "200, as the schema trims the address before it checks the format",
+    "404 USER_NOT_FOUND, as the stored email has no space",
+    "200, as the repository trims the address before lookup"
+   ],
+   "explanation": "shareNoteSchema declares the email as z.email().trim().toLowerCase() (note-schemas.ts:27). In zod 4 those steps run in the order written, so the email-format check sees the raw value with its space and fails; trim and lowercase only apply to a value that already passed. A probe with zod 4.3.6 (the lockfile version) failed \" dana@example.com\" with invalid_format and accepted \"Dana@Example.COM\" as dana@example.com. parseSchema turns the failure into 422 VALIDATION_ERROR (parse-schema.ts:12-20) before the service runs (share/route.ts:25-26), so no lookup happens. The browser form avoids this only because an input of type email strips surrounding whitespace itself."
+  },
+  {
+   "id": "q18-expired-session-no-redirect",
+   "kind": "quiz",
+   "source": {
+    "path": "src/app/notes/page.tsx",
+    "lines": {
+     "start": 13,
+     "end": 20
+    }
+   },
+   "cites": [
+    {
+     "path": "src/app/notes/page.tsx",
+     "lineStart": 13,
+     "lineEnd": 19
+    },
+    {
+     "path": "src/lib/middleware/with-auth.ts",
+     "lineStart": 32,
+     "lineEnd": 41
+    },
+    {
+     "path": "src/features/notes/components/notes-workspace.tsx",
+     "lineStart": 182,
+     "lineEnd": 256
+    }
+   ],
+   "prompt": "A user's session row expires while /notes stays open. They click a note they have not opened in this tab. What do they see?",
+   "answer": "The Choose a note panel, with nothing redirecting to /login",
+   "distractors": [
+    "A redirect to /login, from the notes page's server-side session check",
+    "The note's text, served from cache until staleTime ends",
+    "A 401 message in the editor's banner, from the hook"
+   ],
+   "explanation": "The /notes page is a server component that checks the session and redirects only while it renders (page.tsx:13-19). After that, data comes from React Query in the client. The new note's detail request reaches withAuth, which answers 401 UNAUTHENTICATED as JSON (with-auth.ts:32-41); apiFetch throws, the query errors and its data stays undefined, and the workspace renders the editor only when noteQuery.data exists, otherwise the Choose a note to start editing panel (notes-workspace.tsx:182-256). No code reads a query error or reacts to 401, so nothing navigates. A note never opened in this tab has no cached data, and the editor banner shows only messages that save, create and status handlers set."
+  },
+  {
+   "id": "q19-history-panel-fetches-all",
+   "kind": "quiz",
+   "source": {
+    "path": "src/repositories/note-repository.ts",
+    "lines": {
+     "start": 37,
+     "end": 129
+    }
+   },
+   "cites": [
+    {
+     "path": "src/repositories/note-repository.ts",
+     "lineStart": 60,
+     "lineEnd": 64
+    },
+    {
+     "path": "src/repositories/note-repository.ts",
+     "lineStart": 110,
+     "lineEnd": 128
+    },
+    {
+     "path": "src/features/notes/components/notes-workspace.tsx",
+     "lineStart": 267,
+     "lineEnd": 270
+    }
+   ],
+   "prompt": "A note has 500 revisions. A user opens it in the workspace. Where do the entries in the Version history panel come from, and how many are there?",
+   "answer": "All 500, from the revisions route; the detail's 8 go unused",
+   "distractors": [
+    "The newest 8, from the revisions embedded in the detail",
+    "All 500, from the detail, which embeds the whole revision history",
+    "The newest 8, from the revisions route's take of eight"
+   ],
+   "explanation": "The detail include embeds revisions with take: 8, newest first (note-repository.ts:60-64), and every detail response carries them. The panel never reads them: the workspace passes revisionsQuery.data (notes-workspace.tsx:267-270), which comes from GET /api/notes/:id/revisions, and listAccessibleRevisions there has no take at all (note-repository.ts:110-128). So opening the note loads eight revisions nobody shows plus all 500 that the panel renders, and both payloads grow with the history. A cursor-paginated revisions route, with the detail dropping its embedded copy, would bound both."
+  },
+  {
+   "id": "q20-logout-clears-cache",
+   "kind": "quiz",
+   "source": {
+    "path": "src/features/auth/hooks/use-logout-mutation.ts",
+    "lines": {
+     "start": 7,
+     "end": 19
+    }
+   },
+   "cites": [
+    {
+     "path": "src/features/auth/hooks/use-logout-mutation.ts",
+     "lineStart": 15,
+     "lineEnd": 17
+    },
+    {
+     "path": "src/features/notes/components/notes-workspace.tsx",
+     "lineStart": 153,
+     "lineEnd": 157
+    },
+    {
+     "path": "src/components/providers/app-providers.tsx",
+     "lineStart": 15,
+     "lineEnd": 24
+    }
+   ],
+   "prompt": "User A signs out successfully, and user B signs in from the same tab and lands on /notes. Before B's first list request returns, what does the sidebar show?",
+   "answer": "No notes yet, as logout emptied the whole query cache",
+   "distractors": [
+    "A's notes, until the list's 15 s staleTime runs out",
+    "A's notes, until the sign-in refetches the list query",
+    "B's notes, as the server page embeds them in its HTML"
+   ],
+   "explanation": "One QueryClient lives for the whole tab (app-providers.tsx:15-24), so cached data would survive client-side navigation between users. The logout hook prevents that: its onSuccess awaits queryClient.clear() (use-logout-mutation.ts:15-17), which removes every query, and only then does the workspace push to /login and refresh (notes-workspace.tsx:153-157). A probe with @tanstack/query-core 5.99.0 left zero cached queries after clear(). When B lands on /notes the list query starts empty and shows nothing until its fetch returns. The server page passes only the session to the client component; it does not fetch notes."
+  },
+  {
+   "id": "q21-created-note-seeded-detail",
+   "kind": "quiz",
+   "source": {
+    "path": "src/features/notes/hooks/use-notes.ts",
+    "lines": {
+     "start": 48,
+     "end": 62
+    }
+   },
+   "cites": [
+    {
+     "path": "src/features/notes/hooks/use-notes.ts",
+     "lineStart": 57,
+     "lineEnd": 60
+    },
+    {
+     "path": "src/features/notes/components/notes-workspace.tsx",
+     "lineStart": 171,
+     "lineEnd": 178
+    }
+   ],
+   "prompt": "A user clicks Create while another note is open. The create succeeds and the workspace selects the new note. Which requests does the browser send for the new note?",
+   "answer": "Only its revisions, as the hook seeded the new note's detail",
+   "distractors": [
+    "Its detail and revisions, as a new key always fetches once",
+    "Only its detail, as revisions come inside the detail data",
+    "None, as the create response seeds detail and revisions"
+   ],
+   "explanation": "onSuccess first awaits the invalidation of [\"notes\"] and then calls setQueryData for [\"notes\", newId] with the created note (use-notes.ts:57-60). The workspace awaits mutateAsync and then selects the new id (notes-workspace.tsx:171-178). The new detail query mounts onto fresh seeded data inside its 15 s staleTime, so it does not fetch; its revisions key was never seeded, so that query fetches. A probe with @tanstack/query-core 5.99.0 showed only the revisions fetch for the new note after this sequence."
+  },
+  {
+   "id": "q22-list-query-count",
+   "kind": "quiz",
+   "source": {
+    "path": "src/repositories/note-repository.ts",
+    "lines": {
+     "start": 78,
+     "end": 101
+    }
+   },
+   "cites": [
+    {
+     "path": "src/repositories/note-repository.ts",
+     "lineStart": 78,
+     "lineEnd": 100
+    }
+   ],
+   "prompt": "The sidebar list returns 200 notes, each including its owner and the caller's collaborator row. How many SELECT statements does Prisma send for that one findMany?",
+   "answer": "Three: notes, then owners and collaborators by IN lists",
+   "distractors": [
+    "401: the notes, then two separate lookups for each one of the notes",
+    "One: Prisma joins both relations into a single query",
+    "201: the notes, then one owner query for every note"
+   ],
+   "explanation": "listAccessibleForUser is one findMany with two includes, owner and a collaborators relation filtered to the caller (note-repository.ts:78-100). Prisma's default relation strategy loads each included relation with one extra query that selects by an IN list of the parent keys, so the cost is one query per relation level, not per row. A probe with Prisma 6.19.3 (the lockfile version, no relationJoins preview in the schema) on PostgreSQL 18 logged exactly three SELECTs for 200 notes: Note (with the collaborators-some filter as a subquery), User by id IN (...), and the collaborator rows by note id. An N+1 would appear only if code looped over notes and queried each one."
+  },
+  {
+   "id": "f05-api-fetch-contract",
+   "kind": "flashcard",
+   "source": {
+    "path": "src/lib/http/fetcher.ts",
+    "lines": {
+     "start": 7,
+     "end": 45
+    }
+   },
+   "cites": [
+    {
+     "path": "src/lib/http/fetcher.ts",
+     "lineStart": 22,
+     "lineEnd": 44
+    }
+   ],
+   "front": "What does apiFetch guarantee to every hook, and how does it treat a body that is not JSON?",
+   "back": "It sends JSON with cache: \"no-store\" (React Query is the cache, not the browser's HTTP cache). It parses with json().catch(() => null), so a non-JSON body becomes null rather than a parse error. On a non-2xx status it throws ApiClientError carrying the status, the body's message or \"Request failed.\", and the whole payload for callers that need details; otherwise it returns the body cast to T."
+  },
+  {
+   "id": "f06-create-note-nested-write",
+   "kind": "flashcard",
+   "source": {
+    "path": "src/repositories/note-repository.ts",
+    "lines": {
+     "start": 131,
+     "end": 162
+    }
+   },
+   "cites": [
+    {
+     "path": "src/repositories/note-repository.ts",
+     "lineStart": 139,
+     "lineEnd": 161
+    },
+    {
+     "path": "src/services/note-service.ts",
+     "lineStart": 155,
+     "lineEnd": 175
+    }
+   ],
+   "front": "What does creating a note write, and what commits together?",
+   "back": "One nested note.create on the transaction client writes the note, an OWNER collaborator row for the creator and revision 1 (\"Initial version\"), and returns it with the detail include. The service then writes a NOTE_CREATED audit row on the same transaction client, so note, membership, first revision and audit commit or roll back together. Ownership comes from the session, never from the body."
+  },
+  {
+   "id": "f07-conflict-response-contract",
+   "kind": "flashcard",
+   "source": {
+    "path": "src/services/note-service.ts",
+    "lines": {
+     "start": 127,
+     "end": 139
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/note-service.ts",
+     "lineStart": 127,
+     "lineEnd": 139
+    },
+    {
+     "path": "src/lib/http/api-response.ts",
+     "lineStart": 15,
+     "lineEnd": 25
+    },
+    {
+     "path": "src/types/note.ts",
+     "lineStart": 74,
+     "lineEnd": 81
+    }
+   ],
+   "front": "What does a 409 VERSION_CONFLICT response body contain, and which type describes it?",
+   "back": "apiError's envelope { error: \"VERSION_CONFLICT\", message, details }, where details is { latestNote: { id, title, currentBody, currentVersionNumber, updatedAt, lastEditedAt, status } } from buildConflictDetails. The ConflictPayload type in types/note.ts describes a flat shape with latestNote at the top level, and nothing imports it; the workspace reads details.latestNote through its own local type."
+  },
+  {
+   "id": "f08-filtered-include-permission",
+   "kind": "flashcard",
+   "source": {
+    "path": "src/services/note-service.ts",
+    "lines": {
+     "start": 70,
+     "end": 87
+    }
+   },
+   "cites": [
+    {
+     "path": "src/repositories/note-repository.ts",
+     "lineStart": 90,
+     "lineEnd": 98
+    },
+    {
+     "path": "src/services/note-service.ts",
+     "lineStart": 85,
+     "lineEnd": 86
+    }
+   ],
+   "front": "How does each sidebar row get the caller's own permission without loading every collaborator?",
+   "back": "The list include filters the collaborators relation to where: { userId: sessionUserId } and selects only userId and permission, so each note brings at most the caller's row. toSummaryDto reads collaborators[0]?.permission. An APP_ADMIN often has no row; the fallback is ownerId ? \"OWNER\" : \"VIEWER\", and since ownerId is always set, admins see OWNER."
   }
  ]
 }

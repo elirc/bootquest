@@ -306,6 +306,247 @@
     }
    ],
    "readMore": []
+  },
+  {
+   "id": "r04-client-cache-and-transactions",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: what the browser caches and what a transaction sees",
+   "body": "The later questions in this pack follow one request further than the route: into the transaction on the server, and back out into the React Query cache in the browser.\n\nOn the server, open `src/services/note-service.ts` and find each `$transaction(async (db) => ...)`. For every repository call inside a callback, check whether it receives `db` or falls back to the shared client.\n\nIn the browser, start with the key factory at the top of `src/features/notes/hooks/use-notes.ts`, then write down, for each mutation, what its `onSuccess` writes and what it invalidates, in order. Then read `src/features/notes/components/notes-workspace.tsx`: how the draft is tied to a note id and a version number, and what each `catch` branch changes. Finally read the zod schemas in `src/lib/validation/note-schemas.ts` field by field.",
+   "excerpts": [
+    {
+     "path": "src/features/notes/hooks/use-notes.ts",
+     "lineStart": 16,
+     "lineEnd": 18,
+     "quote": "all: [\"notes\"] as const, detail: (noteId: string) => [\"notes\", noteId] as const,"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/repositories/note-repository.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Which repository methods accept a transaction client and which do not."
+    },
+    {
+     "path": "src/lib/http/fetcher.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "How every hook turns a response into data or an ApiClientError."
+    }
+   ]
+  },
+  {
+   "id": "x-q13",
+   "target": "seed:quests:organized-experiment-ww43/quiz/ee527cb36739197d",
+   "phase": "after",
+   "title": "A read outside the transaction cannot see the write inside it",
+   "body": "Inside the save callback, the conditional update and the audit row go through `db`, the transaction client. The re-read that becomes the response goes through `findAccessibleById`, which has no `db` parameter and always uses the shared client. That query runs on a different pooled connection, and under PostgreSQL's READ COMMITTED it sees only committed rows, so it returns version 3. The workspace prints the response's version number, so the user reads Saved version 3. even though version 4 is in the database. A refetch a moment later brings version 4 into the cache, which hides the bug everywhere except the message.\n\n- *Version 4 from the transaction client* is what passing `db` would give.\n- *Version 4 after a refetch* gets the order wrong: the message is set from the response first.\n- *The conflict message* belongs to the 409 branch; this was a 200.",
+   "excerpts": [
+    {
+     "path": "src/services/note-service.ts",
+     "lineStart": 292,
+     "lineEnd": 292,
+     "quote": "return deps.noteRepository.findAccessibleById(noteId, session.user.id, session.user.role);"
+    },
+    {
+     "path": "src/repositories/note-repository.ts",
+     "lineStart": 104,
+     "lineEnd": 104,
+     "quote": "return prisma.note.findFirst({"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/learning/concepts-demonstrated.md",
+     "lineStart": 64,
+     "lineEnd": 66,
+     "why": "The repo's own finding about this method and the transaction."
+    }
+   ]
+  },
+  {
+   "id": "x-q14",
+   "target": "seed:quests:organized-experiment-ww43/quiz/aa68be72305dbe56",
+   "phase": "after",
+   "title": "A draft keyed to a version the cache does not have",
+   "body": "The editor shows the draft only while the draft's version number equals the cached note's. The conflict branch replaces the draft with `latestNote` and gives it version 6, but nothing updates the cached detail, which still says version 5: the save hook has no `onError`, and the branch invalidates nothing. The two numbers no longer match, so the editor falls back to the cached version 5 text. The user's typing is gone, version 6 is not on screen despite the message, and Save is disabled because the editor is not dirty. Typing again starts a new draft from version 5, so the next save is refused again.\n\nThe fix is one line in the branch: write `latestNote` into the cache, or invalidate the detail, before resetting the draft.\n\n- Nothing loads version 6, keeps the typed text or merges the two.",
+   "excerpts": [
+    {
+     "path": "src/features/notes/components/notes-workspace.tsx",
+     "lineStart": 76,
+     "lineEnd": 77,
+     "quote": "draft.noteId === activeNote.id && draft.versionNumber === activeNote.currentVersionNumber"
+    },
+    {
+     "path": "src/features/notes/components/notes-workspace.tsx",
+     "lineStart": 216,
+     "lineEnd": 218,
+     "quote": "setDraft({ noteId: noteQuery.data.id, versionNumber: latestNote.currentVersionNumber,"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q15",
+   "target": "seed:quests:organized-experiment-ww43/quiz/969be44cd1c40a23",
+   "phase": "after",
+   "title": "One root key means one invalidation reaches everything",
+   "body": "Every note query key starts with `\"notes\"`: the list is `[\"notes\"]`, a detail is `[\"notes\", id]` and its revisions are `[\"notes\", id, \"revisions\"]`. React Query's filters match by prefix, so invalidating `[\"notes\"]` marks all three stale and refetches each one that is mounted. The share hook's `setQueryData` puts the server's answer into the detail first, but the invalidation flags the detail again, so it is fetched anyway, and the revisions are fetched although sharing does not touch them.\n\nTo refresh only the list after writing the detail, the hook could invalidate with `exact: true`, or give the list its own sub-key such as `[\"notes\", \"list\"]`.\n\n- *Only the revisions* assumes a fresh `setQueryData` protects the detail; it does not.\n- *Neither* assumes exact matching, which is not the default.\n- *Only the detail* ignores that the revisions key starts with the same prefix.",
+   "excerpts": [
+    {
+     "path": "src/features/notes/hooks/use-notes.ts",
+     "lineStart": 108,
+     "lineEnd": 109,
+     "quote": "queryClient.setQueryData(noteKeys.detail(note.id), note); await queryClient.invalidateQueries({ queryKey: noteKeys.all });"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q16",
+   "target": "seed:quests:organized-experiment-ww43/quiz/82899c9ae5cd17f8",
+   "phase": "after",
+   "title": "A shared DTO type checks the producer, not the wire",
+   "body": "`NoteDetail` lives in `src/types/note.ts` and is used on both sides. The compiler can only enforce it where an object of that type is built, and in this repo that is `toDetailDto`, whose returned literal is annotated as `NoteDetail`. A new required field is therefore a compile error there and nowhere else. The browser side never builds a `NoteDetail`: it names the type in `apiFetch`'s generic, and `apiFetch` returns the parsed body with `as T`, a cast. If the server and client were deployed from different commits, the client would trust a shape nobody checked.\n\nRuntime validation of responses (a zod parse in `apiFetch`) or a shared schema would close that gap.\n\n- *use-notes.ts* only names the type.\n- *Nowhere* forgets the annotated literal in the service.\n- *The routes* pass the result to `ok()`, which accepts any type.",
+   "excerpts": [
+    {
+     "path": "src/services/note-service.ts",
+     "lineStart": 89,
+     "lineEnd": 89,
+     "quote": "const toDetailDto = ("
+    },
+    {
+     "path": "src/features/notes/hooks/use-notes.ts",
+     "lineStart": 32,
+     "lineEnd": 32,
+     "quote": "apiFetch<{ note: NoteDetail }>(`/api/notes/${noteId}`).then((data) => data.note),"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q17",
+   "target": "seed:quests:organized-experiment-ww43/quiz/e4c95e2effe76d70",
+   "phase": "after",
+   "title": "In zod 4, normalizers run where you write them",
+   "body": "The share schema writes `z.email().trim().toLowerCase()`. In zod 4, `trim` and `toLowerCase` are steps in the same chain as the format check and run in the written order, so the email check sees the raw input. A leading space makes it fail, and `parseSchema` answers **422 VALIDATION_ERROR** before the service or the user lookup runs. Upper-case letters pass the check and are then lowered, so `Editor@Notes.Local` would work. Writing `z.string().trim().toLowerCase().pipe(z.email())`, or putting `trim()` before the format check, normalizes first.\n\nThe browser form never hits this, because an input of type email strips leading and trailing whitespace itself; any other client of the API does.\n\n- *200 after trimming* assumes normalize-then-validate.\n- *404 USER_NOT_FOUND* needs the request to reach the lookup.\n- *The repository* does no trimming.",
+   "excerpts": [
+    {
+     "path": "src/lib/validation/note-schemas.ts",
+     "lineStart": 27,
+     "lineEnd": 27,
+     "quote": "email: z.email().trim().toLowerCase(),"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/lib/validation/parse-schema.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "How a failed safeParse becomes a 422 with flattened issues."
+    }
+   ]
+  },
+  {
+   "id": "x-q18",
+   "target": "seed:quests:organized-experiment-ww43/quiz/35f904e94cba9c11",
+   "phase": "after",
+   "title": "A server-side page guard runs once, at render",
+   "body": "The `/notes` page checks the session on the server and redirects anonymous visitors, which keeps protected HTML from ever being sent. That check runs when the page renders. Afterwards the page is a client app, and every note it loads comes from API calls. When the session expires, `withAuth` answers those calls with a 401 JSON body, `apiFetch` throws, and the new detail query ends in an error with no data. The workspace shows the editor only when it has data, so the user gets the Choose a note panel, and no code in the client treats 401 as a reason to go to `/login`.\n\nA global `onError` on the query cache that redirects on 401 is the usual fix.\n\n- *The redirect* would need the page to render again.\n- *Cached text* needs a note opened earlier in this tab.\n- *The banner* shows only save, create and status messages.",
+   "excerpts": [
+    {
+     "path": "src/app/notes/page.tsx",
+     "lineStart": 15,
+     "lineEnd": 16,
+     "quote": "if (!session) { redirect(\"/login\");"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/lib/middleware/with-auth.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "What every API route answers when the session is gone."
+    }
+   ]
+  },
+  {
+   "id": "x-q19",
+   "target": "seed:quests:organized-experiment-ww43/quiz/2d268f8df34aee83",
+   "phase": "after",
+   "title": "Two copies of the history, one unbounded and one unused",
+   "body": "Each detail response embeds the eight newest revisions, because the shared detail include says `take: 8`. The history panel ignores them. It renders the separate revisions query, whose repository method has no limit, so a note with 500 revisions sends all 500 to the browser every time that query runs, and every detail response, including the response to each save and share, still carries eight revisions nobody reads.\n\nThe usual design is one paged endpoint for history (cursor on versionNumber, a page size such as 20) and a detail payload that leaves history out.\n\n- *The newest 8 from the detail* is what the include holds, not what the panel renders.\n- *All 500 from the detail* contradicts `take: 8`.\n- *The revisions route's take* does not exist.",
+   "excerpts": [
+    {
+     "path": "src/repositories/note-repository.ts",
+     "lineStart": 60,
+     "lineEnd": 61,
+     "quote": "revisions: { take: 8,"
+    },
+    {
+     "path": "src/features/notes/components/notes-workspace.tsx",
+     "lineStart": 268,
+     "lineEnd": 268,
+     "quote": "revisions={revisionsQuery.data}"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q20",
+   "target": "seed:quests:organized-experiment-ww43/quiz/c612982c82f25574",
+   "phase": "after",
+   "title": "Clearing the cache is part of signing out",
+   "body": "The QueryClient is created once per tab and survives client-side navigation, so without care user A's cached notes would still be there when user B arrives. The logout hook handles it: `onSuccess` awaits `queryClient.clear()`, which drops every cached query, and the workspace navigates to `/login` only after the mutation resolves. B's workspace therefore mounts with an empty cache, and the sidebar is empty until B's own list request returns.\n\nThe safeguard depends on the logout request succeeding. If it fails, `onSuccess` never runs and the cache is not cleared.\n\n- *A's notes until staleTime ends* would need the cache to survive.\n- *A's notes until a refetch* has the same flaw.\n- *Server-embedded notes*: the server page passes only the session.",
+   "excerpts": [
+    {
+     "path": "src/features/auth/hooks/use-logout-mutation.ts",
+     "lineStart": 16,
+     "lineEnd": 16,
+     "quote": "await queryClient.clear();"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q21",
+   "target": "seed:quests:organized-experiment-ww43/quiz/caad46f550ab28b6",
+   "phase": "after",
+   "title": "Seeding the cache from a mutation response",
+   "body": "The create hook does two things on success. It first awaits an invalidation of `[\"notes\"]`, then writes the created note into `[\"notes\", newId]` with `setQueryData`. When the workspace selects the new note a moment later, its detail query finds fresh data, younger than the 15 s staleTime, and does not fetch. Its revisions query has nothing cached, so it fetches once.\n\nSeeding from a response is the cheap way to make a just-created resource appear instantly; it only covers the keys you seed.\n\n- *Detail and revisions* ignores the seed.\n- *Only the detail* has it backwards, and revisions are a separate query.\n- *None* assumes the revisions key was seeded too.",
+   "excerpts": [
+    {
+     "path": "src/features/notes/hooks/use-notes.ts",
+     "lineStart": 59,
+     "lineEnd": 59,
+     "quote": "queryClient.setQueryData(noteKeys.detail(note.id), note);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q22",
+   "target": "seed:quests:organized-experiment-ww43/quiz/771e6596f4a4447d",
+   "phase": "after",
+   "title": "Includes cost one query per relation, not per row",
+   "body": "With its default relation strategy, Prisma answers a `findMany` with includes in stages: one query for the notes, then one query per included relation that selects by an `IN` list of the parent keys. This list has two includes, the owner and the caller's collaborator row, so 200 notes cost three queries however many rows come back. The collaborators-some filter that scopes the list runs inside the first query as a subquery.\n\nN+1 appears when code loops over the results and queries per row, for example calling `findAccessibleById` for each note in a list. Nothing in this repo does that.\n\n- *401* and *201* count per-row lookups that Prisma does not issue.\n- *One* would need the join relation strategy (the relationJoins preview), which this schema does not enable.",
+   "excerpts": [
+    {
+     "path": "src/repositories/note-repository.ts",
+     "lineStart": 91,
+     "lineEnd": 93,
+     "quote": "where: { userId: sessionUserId, },"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/repositories/note-repository.ts",
+     "lineStart": 78,
+     "lineEnd": 100,
+     "why": "The list query and its two includes."
+    }
+   ]
   }
  ]
 }
