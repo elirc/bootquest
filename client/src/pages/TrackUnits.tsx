@@ -13,6 +13,7 @@ import { Icon } from '../components/Icon';
 import { Chip, LoadState } from '../components/ui';
 import { NO_FILTER, SECTION_LABEL, groupTotals, groupUnits, sectionCounts, type UnitFilter, type UnitSection } from '../lib/trackunits';
 import { useAsync } from '../lib/useAsync';
+import { useDebouncedValue } from '../lib/useDebouncedValue';
 
 type Variant = 'primary' | 'secondary';
 
@@ -62,6 +63,9 @@ function UnitBrowser({ units }: { units: UnitSummary[] }) {
   const totals = useMemo(() => groupTotals(units), [units]);
   const done = useMemo(() => units.filter((u) => u.state === 'done').length, [units]);
   const shown = groups.reduce((n, g) => n + g.units.length, 0);
+  const countText = `Showing ${shown} of ${units.length} units · ${done} done`;
+  // the screen-reader announcement waits for a pause in typing (the visible line updates at once)
+  const announced = useDebouncedValue(countText, 500);
   const set = (over: Partial<UnitFilter>) => setFilter((f) => ({ ...f, ...over }));
 
   if (units.length === 0) {
@@ -90,9 +94,12 @@ function UnitBrowser({ units }: { units: UnitSummary[] }) {
           Hide done
         </button>
       </div>
-      {/* a live region: filter results are announced as the count changes */}
-      <p className="tu-count muted small" data-testid="track-units-count" role="status">
-        Showing {shown} of {units.length} units · {done} done
+      <p className="tu-count muted small" data-testid="track-units-count">
+        {countText}
+      </p>
+      {/* the live region: filter results are announced once the count settles, not per keystroke */}
+      <p className="sr-only" role="status" data-testid="track-units-status">
+        {announced}
       </p>
       {groups.length === 0 ? (
         <div className="tu-nomatch" data-testid="track-units-nomatch">

@@ -36,6 +36,7 @@ function withUnits(trackId: TrackId, units: UnitSummary[], base: BootQuestApi = 
 const section = () => screen.findByTestId('track-units');
 const row = (id: number) => document.querySelector<HTMLElement>(`[data-unit="${id}"]`);
 const rows = () => document.querySelectorAll<HTMLElement>('[data-unit]');
+const status = () => screen.getByTestId('track-units-status');
 
 const MODULES = ['01-estimation', '02-caching', '03-queues', '04-sharding', '05-replication', '06-consistency', '07-rate-limiting', '08-storage', '09-search', '10-observability'];
 const LOCKED_DRILL = 1001;
@@ -114,8 +115,10 @@ describe('track units: campaign-less track (primary)', () => {
     it('count line, kind-button counts, 136 [data-unit] rows, done/revealed chips, locked row is a non-link', async () => {
       const { count, kinds, groupHeads } = await open136();
       expect(count).toHaveTextContent(`Showing 136 of 136 units · ${GENERATED_DONE} done`);
-      // the count line is a live region, so filter results are announced
-      expect(count).toHaveAttribute('role', 'status');
+      // the visible count line is not itself a live region; a separate sr-only status region is
+      expect(count).not.toHaveAttribute('role');
+      expect(status()).toHaveAttribute('role', 'status');
+      expect(status()).toHaveTextContent(`Showing 136 of 136 units · ${GENERATED_DONE} done`);
       expect(rows()).toHaveLength(136);
       expect(groupHeads()).toHaveLength(10 + 29);
       expect(kinds.getByRole('button', { name: 'All (136)' })).toHaveAttribute('aria-pressed', 'true');
@@ -148,6 +151,16 @@ describe('track units: campaign-less track (primary)', () => {
       expect(groupHeads().some((h) => h?.startsWith('estimation'))).toBe(true);
       await user.click(kinds.getByRole('button', { name: 'All (136)' }));
       expect(rows()).toHaveLength(136);
+    });
+
+    it('the status region announces the settled count once typing pauses, not per keystroke', async () => {
+      const { user, count, toolbar } = await open136();
+      await user.type(toolbar.getByRole('searchbox', { name: 'Filter units' }), 'baz');
+      // the visible line follows every keystroke; the live region has not spoken yet
+      expect(count).toHaveTextContent(`Showing 2 of 136 units · ${GENERATED_DONE} done`);
+      expect(status()).toHaveTextContent(`Showing 136 of 136 units · ${GENERATED_DONE} done`);
+      // ~500 ms after the last keystroke it holds the final count
+      await waitFor(() => expect(status()).toHaveTextContent(`Showing 2 of 136 units · ${GENERATED_DONE} done`), { timeout: 2000 });
     });
 
     it('typing bazaar narrows the list to the bazaar repo', async () => {
