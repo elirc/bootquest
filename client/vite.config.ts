@@ -10,6 +10,7 @@ import react from '@vitejs/plugin-react';
 const sharedApi = fileURLToPath(new URL('../shared/src/api.ts', import.meta.url));
 // ab wave extensions (types only, not fingerprinted; see the header of shared/src/api-ext.ts).
 const sharedApiExt = fileURLToPath(new URL('../shared/src/api-ext.ts', import.meta.url));
+const sharedEbWeight = fileURLToPath(new URL('../shared/src/eb-weight.ts', import.meta.url));
 // The one RUNTIME import: the pass-mark constants (a zod-free module, see its header), so the
 // self-score previews use the server's own numbers.
 const sharedThresholds = fileURLToPath(new URL('../shared/src/thresholds.ts', import.meta.url));
@@ -17,7 +18,7 @@ const sharedThresholds = fileURLToPath(new URL('../shared/src/thresholds.ts', im
 export default defineConfig({
   plugins: [react()],
   resolve: {
-    alias: { '@bootquest/shared/api': sharedApi, '@bootquest/shared/api-ext': sharedApiExt, '@bootquest/shared/thresholds': sharedThresholds },
+    alias: { '@bootquest/shared/api': sharedApi, '@bootquest/shared/api-ext': sharedApiExt, '@bootquest/shared/eb-weight': sharedEbWeight, '@bootquest/shared/thresholds': sharedThresholds },
   },
   server: {
     port: 5173,
