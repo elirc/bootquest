@@ -21,7 +21,7 @@
      "prompt": "DESIGN IT — [senior] nested folder sharing, public links and a shared-with-me view at scale (organized-study-linkwarden, linkwarden/fabledocs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md). Scenario: two years on the service has 400,000 users and 900,000 collections, nested up to eight levels deep. A design agency wants to share one client's folder tree (a sub-collection with 60 descendants) with 12 client contacts who must see that subtree and nothing above or beside it; marketing wants per-link share URLs that expire after a week; a consultant who belongs to 1,500 collections waits 9 seconds for the list of collections shared with her; and last month an owner deleted a parent folder and 40 sub-collections created by other members went with it. Write your design before you look: how rights flow down a tree and how a check reads them, how a subtree is shared with outsiders, what a public or share URL identifies and how it is revoked or expires, how the shared-with-me list is served for someone in 1,500 collections, what deleting or moving a folder does to what other people created inside it, and what a public page reveals about the people in a collection. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
      "keyPoints": [
       {
-       "text": "[w3] Inherit at read, from an indexed ancestry: the code already walks up the parent chain one query per level to merge owners and members, so at eight levels a single check is eight round trips; store each collection's ancestor ids (a closure table or materialized path) so 'may this user read it' is one indexed query over memberships on the collection or any ancestor.",
+       "text": "[w3] Inherit at read, from an indexed ancestry: the only ancestry walk today, run when a sub-collection is created, climbs the parent chain one query per level, so reusing it for every inherited check would cost eight round trips at eight levels; store each collection's ancestor ids (a closure table or materialized path) so 'may this user read it' is one indexed query over memberships on the collection or any ancestor.",
        "cite": {
         "path": "linkwarden/apps/web/lib/api/getCollectionRootOwnerAndMembers.ts",
         "lineStart": 28,
@@ -69,11 +69,11 @@
        }
       },
       {
-       "text": "[w3] Deleting a parent deletes everything under it: sub-collections cascade with their parent and links cascade with their collection, so one owner's delete removed work other members created. Make deletion a soft delete with a restore window, list what will go (and who created it) before confirming, and offer to move other people's sub-collections out first.",
+       "text": "[w3] Deleting a parent deletes everything under it: the delete walks every sub-collection and removes its members, links, search entries and archive folders (the schema cascades the same way), so one owner's delete removed work other members created. Make deletion a soft delete with a restore window, list what will go (and who created it) before confirming, and offer to move other people's sub-collections out first.",
        "cite": {
-        "path": "linkwarden/packages/prisma/schema.prisma",
-        "lineStart": 133,
-        "lineEnd": 135
+        "path": "linkwarden/apps/web/lib/api/controllers/collections/collectionId/deleteCollectionById.ts",
+        "lineStart": 104,
+        "lineEnd": 146
        }
       },
       {
@@ -114,11 +114,11 @@
        }
       },
       {
-       "text": "[w3] The hang is a cycle: the re-parent check compares the new parent's own parent with the new parent id instead of with the folder being moved, so making a folder a child of its own descendant (or of itself) passes; the ancestor walk used when creating sub-collections then loops with no visited set. Refuse any move whose new parent has the folder among its ancestors, and give every tree walk a visited set and a depth cap.",
+       "text": "[w3] The hang is a cycle: the re-parent check compares the new parent's own parent with the new parent id instead of with the folder being moved, so making a folder a child of its own descendant (or of itself) passes; the ancestor walk used when creating sub-collections then loops with no visited set, and the walk behind apply-to-sub-collections tracks seen ids but still feeds every child back into its frontier, so the next propagating save on that folder spins too. Refuse any move whose new parent has the folder among its ancestors, and give every tree walk a visited set and a depth cap.",
        "cite": {
         "path": "linkwarden/apps/web/lib/api/controllers/collections/collectionId/updateCollectionById.ts",
         "lineStart": 37,
-        "lineEnd": 58
+        "lineEnd": 92
        }
       }
      ]
@@ -127,15 +127,15 @@
      "prompt": "TRADE-OFF HANDBACK — defend your nested-sharing design against the alternatives: inheriting rights at read time versus copying member rows down the tree versus per-object grants; a public flag versus random share tokens versus signed expiring URLs; cascading deletes versus soft deletes versus re-homing other people's children; embedding members in the collections list versus paging with counts; and a closure table versus a materialized path versus a recursive query at read time. For each, say what you bought and what it cost.",
      "keyPoints": [
       {
-       "text": "[w3] Inheriting at read keeps one source of truth and makes a removal effective everywhere below at once, at the cost of an ancestry lookup on every check; copying rows down (the existing apply-to-sub-collections save) makes checks a single row read but drifts with every later change and every new sub-collection; per-object grants allow exceptions such as one hidden sub-folder, at the cost of rules users struggle to predict.",
+       "text": "[w3] Inheriting at read keeps one source of truth and makes a removal effective everywhere below at once, at the cost of an ancestry lookup on every check; copying rows down (the existing apply-to-sub-collections save) deletes every descendant's member rows and recreates them from the parent's list, so a contact added to one sub-folder only is silently dropped on the next save, and 12 contacts on a 61-folder subtree is 732 rows rewritten per change; per-object grants allow exceptions such as one hidden sub-folder, at the cost of rules users struggle to predict.",
        "cite": {
         "path": "linkwarden/apps/web/lib/api/controllers/collections/collectionId/updateCollectionById.ts",
-        "lineStart": 67,
-        "lineEnd": 120
+        "lineStart": 100,
+        "lineEnd": 119
        }
       },
       {
-       "text": "[w3] A public flag is one click and one boolean but publishes to anyone who finds or counts the id, forever; random share tokens are revocable, scoped and can expire, at the cost of a table and a management screen; signed expiring URLs need no table but cannot be revoked before they expire, so they suit short-lived file links rather than week-long shares.",
+       "text": "[w3] A public flag needs no table but, on integer ids, is found by counting, and each public collection's links are fetchable by their own ids; a share token scoped to a subtree must be resolved against the ancestry on every request and checked for expiry and revocation, at the cost of a lookup per view and a management screen; a per-link token avoids the ancestry lookup but cannot follow a folder's growth.",
        "cite": {
         "path": "linkwarden/apps/web/lib/api/controllers/public/links/linkId/getLinkById.ts",
         "lineStart": 3,
@@ -152,7 +152,11 @@
       },
       {
        "text": "[w2] Embedding members makes the sidebar a single request and is fine for a handful of collections; paging with counts keeps the list fast at 1,500 memberships and stops shipping everyone's names to every client, at the cost of extra requests when a collection is opened.",
-       "quote": "Subjects: owner / member (3 capability booleans) / anonymous."
+       "cite": {
+        "path": "linkwarden/apps/web/lib/api/controllers/collections/getCollections.ts",
+        "lineStart": 21,
+        "lineEnd": 31
+       }
       },
       {
        "text": "[w2] A closure table answers ancestry with one indexed join and handles moves as a bounded rewrite of the moved subtree's rows; a materialized path is one column and fast prefix matches, but every move rewrites the path of every descendant; a recursive query needs no extra storage but repeats the walk on every check, which is the cost the current code already pays one level at a time.",
