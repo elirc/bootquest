@@ -53,7 +53,7 @@
        }
       },
       {
-       "text": "[w3] Quiet hours need a channel, a phone number and the customer's zone: notifications go to an email address only, while the customer profile holds an optional phone and an optional timezone, so SMS rows carry a channel, an SMS due inside 21:00-08:00 local is held until 08:00 or switched to email, and a profile with no zone falls back to the salon's.",
+       "text": "[w3] Quiet hours need a channel, a phone number and the customer's zone: notifications go to an email address only, while the customer profile holds an optional phone and an optional timezone, so SMS rows carry a channel, an SMS due inside 21:00-08:00 local is held until 08:00 or switched to email, and a profile with no zone falls back to the timezone the appointment itself records.",
        "cite": {
         "path": "backend/prisma/schema.prisma",
         "lineStart": 42,
@@ -74,7 +74,7 @@
      "prompt": "PRE-MORTEM — the first busy Monday at the new volume. The provider starts answering 429 halfway through the 08:00 wave; the held overnight SMS are released at 08:00 at the same moment as the weekly job that extends recurring series; and at the top of the hour two zones' waves overlap at the cap while a single first-in-first-out lane sends 24-hour reminders ahead of one-hour reminders for visits starting within the hour. What breaks, how does each problem show up, and what in your design prevents it?",
      "keyPoints": [
       {
-       "text": "[w3] Every 429 becomes a lost reminder: any error from the send call ends in the catch that writes a final failure, and nothing reads failed rows again, so a capacity problem turns straight into thousands of reminders that never go out, and adding workers loses more. Provider replies must be classified: 429 and 5xx go back with a delay, a bad address fails for good.",
+       "text": "[w3] Every 429 becomes a lost reminder: any error from the send call takes the failure path that writes a final status, and nothing reads failed rows again, so a capacity problem turns straight into thousands of reminders that never go out, and adding workers loses more. Provider replies must be classified: 429 and 5xx go back with a delay, a bad address fails for good.",
        "cite": {
         "path": "backend/src/modules/notifications/notifications.service.ts",
         "lineStart": 78,
@@ -82,8 +82,12 @@
        }
       },
       {
-       "text": "[w2] The queue's own retry never fires, because the handler returns normally after recording the failure; but switching on immediate retries at the cap only adds load at the worst moment, so requeue with exponential backoff and jitter under the shared limiter.",
-       "quote": "marks the row `SENT` or `FAILED`"
+       "text": "[w2] A 429 speaks for the whole account, not for one job: the queue is created with no default job options, so nothing backs off globally; pause the shared limiter for the provider's Retry-After instead of letting each job retry on its own clock, and remember that a send retried after a timeout may already have been delivered, so the provider needs a deduplication key or the retry doubles a reminder.",
+       "cite": {
+        "path": "backend/src/jobs/queue.ts",
+        "lineStart": 5,
+        "lineEnd": 8
+       }
       },
       {
        "text": "[w3] The 08:00 pile-up is a scheduling choice: the series-extension job is still a placeholder that only logs, so nothing forces it to run at 08:00; run it off-peak (03:00), have it write reminder rows with their own spread times instead of enqueuing sends, and release held SMS spread over the first minutes after 08:00.",
