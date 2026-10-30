@@ -29,7 +29,7 @@
        }
       },
       {
-       "text": "[w3] Keystrokes travel peer to peer through the sockets and never wait on the database; Postgres only sees a debounced store, 3 seconds after a pause and at most 10 seconds apart under continuous typing, which bounds what an unflushed pod can be holding.",
+       "text": "[w3] Keystrokes are relayed through the collaboration server (and across pods through Redis) without ever waiting on the database; Postgres only sees a debounced store, 3 seconds after a pause and at most 10 seconds apart under continuous typing, which bounds what an unflushed pod can be holding.",
        "cite": {
         "path": "server/services/collaboration.ts",
         "lineStart": 44,
@@ -87,7 +87,7 @@
      ]
     },
     {
-     "prompt": "PRE-MORTEM — the incident page a week later: after a load-balancer change the 60 editors land on two different collaboration pods; one pod is SIGKILLed by the orchestrator in the middle of a burst of typing; a contractor is removed from the collection while still typing in the page; the page's state has grown to 1.4 MB and all 60 editors reconnect within the same minute after the deploy; and a save that waits on the row lock starts failing. What breaks, how would you notice, and what is the repair?",
+     "prompt": "PRE-MORTEM — the incident page a week later: after a load-balancer change the 60 editors land on two different collaboration pods; one pod is SIGKILLed by the orchestrator in the middle of a burst of typing; a contractor is removed from the collection while still typing in the page; the page's state has grown to 1.4 MB and all 60 editors reconnect within the same minute after the deploy; one editor finds that the last sentence they typed before a quiet spell is missing the next morning; and a save that waits on the row lock starts failing. What breaks, how would you notice, and what is the repair?",
      "keyPoints": [
       {
        "text": "[w3] Two pods on one page do not fork it (the Redis extension merges), but per-pod bookkeeping lies: the update event is marked done when the saving pod has no clients left, so one pod's last leaver declares the session finished and a revision is cut while editors on the other pod keep typing. Derive 'last connection' from a shared count, not the local one.",
@@ -118,15 +118,15 @@
        }
       },
       {
-       "text": "[w2] Every joiner receives the whole document state, and the websocket accepts payloads up to the state cap: 60 reconnects of a 1.4 MB state is roughly 84 MB pushed by one pod in a minute, right when it is cold. Stagger reconnects with jittered backoff and watch per-document state size.",
+       "text": "[w2] The reconnect wave is cheap, the size is not: a rejoining tab exchanges state vectors and receives only the updates it lacks, so the cold pod pays one load of the 1.4 MB state. The danger is that 1.4 MB sits about 100 KB under the 1,500 KB limit and the state only grows; once it crosses, the model's length check refuses every store, the failure is only logged, and 60 people keep typing into a page that will never persist again. Alert on state size as it nears the limit and split the page before it gets there.",
        "cite": {
-        "path": "server/services/collaboration.ts",
-        "lineStart": 29,
-        "lineEnd": 33
+        "path": "server/models/Document.ts",
+        "lineStart": 361,
+        "lineEnd": 367
        }
       },
       {
-       "text": "[w2] The collaboration throttle is configured only with a request count, a window and a 5-minute ban, with nothing that identifies the user, so a whole office reconnecting through one address after a deploy can be banned together. Key the collaboration throttle on the authenticated user, or raise it for known egress addresses.",
+       "text": "[w2] The collaboration throttle is configured only with a request count, a window and a ban (50 connection attempts per 60 seconds by default, then 5 minutes out), with nothing that identifies the user, so a whole office reconnecting through one address after a deploy can be banned together. Key the collaboration throttle on the authenticated user, or raise it for known egress addresses.",
        "cite": {
         "path": "server/services/collaboration.ts",
         "lineStart": 56,
@@ -134,7 +134,7 @@
        }
       },
       {
-       "text": "[w2] Persistence decides whether there is anything to save from a Redis set of session collaborators, added to on each change and drained by RevisionsProcessor when it cuts a revision; an edit that lands just before that drain is skipped by the next store as 'no changes' until someone edits again. Track dirtiness per pod, not in a set another subsystem empties.",
+       "text": "[w2] A store can conclude there is nothing to save: persistence skips the write when its list of this session's collaborators is empty, and that list lives in shared Redis where the revision step may already have cleared it, so a sentence typed just before a quiet spell can sit unsaved until somebody edits again. Track dirtiness inside the persisting process, tied to the update itself, not in shared session bookkeeping.",
        "cite": {
         "path": "server/collaboration/PersistenceExtension.ts",
         "lineStart": 99,
@@ -142,7 +142,7 @@
        }
       },
       {
-       "text": "[w1] A store that fails (for example on the row-lock timeout) is logged and swallowed, so editors see nothing while the database falls behind; alert on that log line and on the age of the last successful store per open document.",
+       "text": "[w1] A store that fails, for example by hitting the row-lock timeout (15 seconds, which the ADR records as the scar of a pool-exhaustion incident), is logged and swallowed, so editors see nothing while the database falls behind; alert on that log line and on the age of the last successful store per open document.",
        "cite": {
         "path": "server/collaboration/PersistenceExtension.ts",
         "lineStart": 138,
@@ -155,12 +155,8 @@
      "prompt": "TRADE-OFF HANDBACK — defend your collaboration design against the alternatives: a CRDT versus operational transformation versus pessimistic document locks, debounced versus per-update persistence, Redis pub/sub fan-out across pods versus pinning every editor of a page to one pod, keeping a binary CRDT blob plus readable projections versus one canonical format, and leaning on one Redis for all of it. For each, say what you bought, what it cost, and which requirement put you on that side.",
      "keyPoints": [
       {
-       "text": "[w3] A CRDT converges no matter which replica applies an edit first, so pods that restart daily and laptops that go offline need no central ordering service; operational transformation would make one server the ordering authority for each page, which is the thing a multi-pod, kill-on-deploy fleet cannot promise.",
-       "cite": {
-        "path": "fabledocs3/adr-007-crdt-triple-representation.md",
-        "lineStart": 39,
-        "lineEnd": 42
-       }
+       "text": "[w3] A CRDT buys convergence without a sequencer: whichever replica applies an edit first, pods that restart daily and laptops that go offline still agree, where operational transformation would need one ordering authority per page. The bill is metadata that never shrinks: the state carries the history of every edit, so blob size is a permanent watch item, and the 1,500 KB limit is where that cost finally lands.",
+       "quote": "Yjs state grows monotonically with edit history; blob size is a permanent operational watch-item."
       },
       {
        "text": "[w2] A pessimistic lock ('X is editing') is simple and needs no merge math, but it fails the requirement outright: 60 people editing during an incident is the use case.",

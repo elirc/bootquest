@@ -1,0 +1,186 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "organized-study-dub-monorepo--dub-fable-docs-upskill-01-codebase-cartography-05-key-flows.md",
+ "items": [
+  {
+   "key": "seed:explainback:organized-study-dub-monorepo/explain-back/8607e33e2cdcf92c",
+   "provenance": {
+    "repo": "organized-study-dub-monorepo",
+    "sha": "2a6ffa1022ac201473d1df154a5b2f52ccc56686",
+    "path": "dub/fable docs/upskill/01-codebase-cartography/05-key-flows.md",
+    "lines": {
+     "start": 1,
+     "end": 270
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "DESIGN IT — [senior] a click-analytics pipeline for a link shortener: dedupe, bots, counters, limits (organized-study-dub-monorepo, dub/fable docs/upskill/01-codebase-cartography/05-key-flows.md). Scenario: 120,000 workspaces generate about 2 billion clicks a month, and a link posted by a celebrity can take 20,000 clicks a second for ten minutes; free workspaces may record 1,000 events a month; dashboards show hourly and daily charts in the viewer's own time zone; customers are billed on what the platform counted and sometimes dispute it; and leads and sales reported minutes later must be tied back to the click that caused them. Write your design before you look: what one click becomes and which store is the truth, how repeat clicks and bots are kept out of the numbers, how a click survives the analytics store being slow or down, how per-link and per-workspace counters are maintained at that volume, how charts are answered, and what happens when a workspace goes over its limit. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "keyPoints": [
+      {
+       "text": "[w3] Each click becomes one immutable event row (click id, link, workspace, time, geography, device, referrer, QR and bot flags) appended to a columnar event store partitioned by month and sorted for tenant-scoped scans; counts and charts are queries over those events, while the per-link and per-workspace numbers in the relational database are derived read models. 2 billion a month is about 770 events a second on average, with peaks far above that.",
+       "quote": "Tinybird (source of truth for events), MySQL (denormalized counters — read models for the dashboard)"
+      },
+      {
+       "text": "[w3] Repeat clicks are collapsed per link and visitor for an hour: the key combines domain, link key and a hash of IP and user agent, with a one-hour expiry. As built, the existence check runs first and the key is written later in the background with a plain set, so two simultaneous clicks from one visitor both count; make the conditional set with expiry the check itself.",
+       "cite": {
+        "path": "dub/apps/web/lib/api/links/record-click-cache.ts",
+        "lineStart": 3,
+        "lineEnd": 36
+       }
+      },
+      {
+       "text": "[w3] Bots are dropped at ingest by heuristics (a bot query flag, HEAD requests, the user-agent parser's verdict and broad substrings such as 'bot', 'curl' and 'fetch'), and nothing on the query side filters the stored bot column, so a missed bot is counted forever and a better rule can never be applied to history. Keep the verdict on the event and filter at query time as well.",
+       "cite": {
+        "path": "dub/apps/web/lib/middleware/utils/detect-bot.ts",
+        "lineStart": 6,
+        "lineEnd": 47
+       }
+      },
+      {
+       "text": "[w3] The event write is retried hard (up to 10 attempts with a 5-second timeout each and a growing delay) and then only logged, with no dead-letter path, and no idempotency key goes with it, so a timeout after the store accepted the row can insert it twice. Spool events to a durable queue first and deduplicate on click id at storage.",
+       "cite": {
+        "path": "dub/packages/utils/src/functions/fetch-with-retry.ts",
+        "lineStart": 1,
+        "lineEnd": 37
+       }
+      },
+      {
+       "text": "[w3] Workspace usage is batched: each click appends to a Redis stream, and a once-a-minute job reads up to 10,000 entries and issues one update per workspace. The reader uses a plain range read and a delete with no consumer group or lock, and a failed delete is ignored, so overlapping runs or a lost delete count the same clicks twice; use a consumer group with acknowledgements, or apply entries idempotently by id.",
+       "cite": {
+        "path": "dub/apps/web/lib/upstash/redis-streams/client.ts",
+        "lineStart": 30,
+        "lineEnd": 66
+       }
+      },
+      {
+       "text": "[w2] The per-link counter is not batched: every click issues its own single-row update on the link, so a link taking 20,000 clicks a second makes one row the hottest in the database. Route link counts through the same stream as workspace usage, or serve them from the event store with a short cache.",
+       "cite": {
+        "path": "dub/apps/web/lib/tinybird/record-click.ts",
+        "lineStart": 193,
+        "lineEnd": 199
+       }
+      },
+      {
+       "text": "[w2] Charts bucket in the caller's time zone with granularity chosen by range (up to two days hourly, beyond 180 days monthly, daily in between, with bounds snapped to day starts in that zone), and only the all-time total for a link is answered from the relational counter instead of the event store.",
+       "cite": {
+        "path": "dub/apps/web/lib/analytics/utils/get-start-end-dates.ts",
+        "lineStart": 18,
+        "lineEnd": 50
+       }
+      },
+      {
+       "text": "[w2] Over the limit, links keep redirecting and clicks keep being recorded; what stops is the read side, where the analytics API refuses with a 403 once usage exceeds the limit, while click webhooks stop at reaching it, so the two gates disagree by one event. Decide the policy deliberately: never break customers' links, and bill or block reads, not redirects.",
+       "cite": {
+        "path": "dub/apps/web/lib/api/links/usage-checks.ts",
+        "lineStart": 5,
+        "lineEnd": 17
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "PRE-MORTEM — the first big month. A celebrity's link takes 20,000 clicks a second and unrelated dashboard writes start timing out; a customer's billing page shows 9,400 events while the platform blocks their analytics for exceeding 10,000; a workspace's headline click count and the sum of its daily chart disagree after an ingestion hiccup; partner rewards for yesterday leave out clicks that were backfilled this morning; and a sign-up reported 30 seconds after its click is rejected as 'click not found', and every retry after that is silently ignored. What breaks, how does each show up, and what in your design prevents it?",
+     "keyPoints": [
+      {
+       "text": "[w3] The viral link is a row-lock convoy: every click updates the same link row while connections pile up behind it, so unrelated writes time out even though the event store is fine. Count that link in memory or in the stream and flush periodically; the event store already holds the truth for exact numbers.",
+       "cite": {
+        "path": "dub/apps/web/lib/tinybird/record-click.ts",
+        "lineStart": 193,
+        "lineEnd": 199
+       }
+      },
+      {
+       "text": "[w3] The dispute comes from two sources of truth: the billing chart recomputes usage from the event store per day, while enforcement reads the relational counter fed by the at-least-once stream, so double-applied batches push the counter above what the chart shows. Bill and enforce from one source, and reconcile the two nightly with an alert on drift.",
+       "cite": {
+        "path": "dub/packages/tinybird/pipes/v3_usage.pipe",
+        "lineStart": 27,
+        "lineEnd": 55
+       }
+      },
+      {
+       "text": "[w2] The headline total counts every row while the chart counts distinct click ids, so duplicates from a retried insert show up in one and not the other. Pick one counting rule for every view, and remove duplicates at storage by click id so the rule never matters.",
+       "cite": {
+        "path": "dub/packages/tinybird/pipes/v4_count.pipe",
+        "lineStart": 77,
+        "lineEnd": 85
+       }
+      },
+      {
+       "text": "[w2] The reward job aggregates the previous calendar day once, in server time, so events that land for that day afterwards, from backfills or late retries, are never counted. Aggregate by event time with an allowed-lateness window and re-run affected days, or compute rewards incrementally from a watermark.",
+       "cite": {
+        "path": "dub/apps/web/app/(ee)/api/cron/aggregate-clicks/route.ts",
+        "lineStart": 51,
+        "lineEnd": 61
+       }
+      },
+      {
+       "text": "[w3] The lost sign-up is a dedupe key claimed too early: the one-week 'only once' key for a lead is set before the click is looked up, so when the click is not yet readable the request fails but the key stays, and every retry is treated as a duplicate. Claim the key only after the lead is recorded, or release it on failure; the five-minute click cache exists to bridge exactly this ingestion lag.",
+       "cite": {
+        "path": "dub/apps/web/lib/api/conversions/track-lead.ts",
+        "lineStart": 78,
+        "lineEnd": 116
+       }
+      },
+      {
+       "text": "[w1] You notice through the failure log rate of the background writes, the stream's length and the oldest unprocessed entry, and a scheduled drift report between counters and events; for every background write, know what users would see if it failed for an hour.",
+       "quote": "Drill: write the failure matrix"
+      }
+     ]
+    },
+    {
+     "prompt": "TRADE-OFF HANDBACK — defend your analytics design against the alternatives: dropping bots at ingest versus tagging them and filtering at query time; an hourly per-visitor dedupe window versus counting raw hits; relational counters updated per click versus batched through a stream versus derived from the event store on read; recording clicks after the redirect has returned versus writing them durably before it returns; blocking redirects, blocking recording or blocking reads when a workspace exceeds its limit; and keeping click events forever versus a retention limit. For each, say what you bought and what it cost.",
+     "keyPoints": [
+      {
+       "text": "[w3] Dropping bots at ingest saves storage and keeps every query simple, but the verdict is final and a heuristic miss can never be corrected; tagging and filtering at query keeps history repairable and lets customers see bot volume, at the cost of storing the junk and a filter on every query.",
+       "cite": {
+        "path": "dub/apps/web/lib/tinybird/record-click.ts",
+        "lineStart": 72,
+        "lineEnd": 86
+       }
+      },
+      {
+       "text": "[w3] An hourly per-visitor window makes 'clicks' mean people-ish visits and blunts refresh spam, at the cost of undercounting shared networks (one office behind one address counts once per hour) and of storing a hash of address and agent; raw hits are simple and honest about traffic but inflate with every reload and retry.",
+       "cite": {
+        "path": "dub/apps/web/lib/middleware/utils/get-identity-hash.ts",
+        "lineStart": 5,
+        "lineEnd": 12
+       }
+      },
+      {
+       "text": "[w2] Per-click counter updates are always current and trivial to write, until one hot row melts; batching through a stream turns thousands of writes into one per minute at the cost of a minute's staleness and an at-least-once consumer to make idempotent; deriving counts from the event store needs no counters at all but costs a query per view, which caching must absorb.",
+       "cite": {
+        "path": "dub/apps/web/app/(ee)/api/cron/streams/update-workspace-clicks/route.ts",
+        "lineStart": 92,
+        "lineEnd": 131
+       }
+      },
+      {
+       "text": "[w2] Recording after the response keeps the redirect fast and makes analytics unable to break a link, at the cost of losing clicks whenever the background write fails; a durable write before responding (to a local queue, not the analytics store) closes that gap for a few milliseconds of latency.",
+       "quote": "click recording is fire-and-forget: user never waits for analytics"
+      },
+      {
+       "text": "[w2] Blocking redirects enforces a limit instantly and breaks customers' printed and shared links, the worst outcome for a link product; blocking recording keeps links alive but silently loses data the customer may later pay to see; blocking reads (the code's choice) keeps links and data intact and turns the limit into an upgrade prompt, at the cost of storing traffic nobody is paying for.",
+       "cite": {
+        "path": "dub/apps/web/app/api/analytics/route.ts",
+        "lineStart": 19,
+        "lineEnd": 22
+       }
+      },
+      {
+       "text": "[w1] Click events carry no retention limit and history is capped only at query time by plan (30 days on free, a year on pro), which keeps upgrades retroactive at the cost of storing everything for everyone indefinitely.",
+       "cite": {
+        "path": "dub/apps/web/lib/analytics/utils/valid-date-range-for-plan.ts",
+        "lineStart": 29,
+        "lineEnd": 53
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}
