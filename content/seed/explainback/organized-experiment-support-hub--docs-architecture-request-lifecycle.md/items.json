@@ -1,0 +1,214 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "organized-experiment-support-hub--docs-architecture-request-lifecycle.md",
+ "items": [
+  {
+   "key": "seed:explainback:organized-experiment-support-hub/explain-back/c7d107676f22ebe0",
+   "provenance": {
+    "repo": "organized-experiment-support-hub",
+    "sha": "cb836235987a4fc717b6ff656629c6514ac15a6d",
+    "path": "docs/architecture/request-lifecycle.md",
+    "lines": {
+     "start": 96,
+     "end": 103
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "Walk through what happens when an agent types \"refund\" into Support Hub's search box, from the keystroke to the rows in the ticket table: how the client turns it into a request and a cache entry, what the server validates, how it scopes the rows, what the list query asks the database for, and what shape comes back.",
+     "keyPoints": [
+      {
+       "text": "[w2] The box is local state read through useDeferredValue; useBootstrapData puts the trimmed term into the URL as ?search= and into the query key [\"bootstrap\", term], so every distinct term is its own cache entry (fresh for 15 s) and nothing debounces the typing.",
+       "cite": {
+        "path": "src/hooks/use-support-hub.ts",
+        "lineStart": 22,
+        "lineEnd": 36
+       }
+      },
+      {
+       "text": "[w2] The request goes to GET /api/bootstrap, not /api/tickets: after the session check the route builds the filters from five URL params only (page, pageSize, sortBy, sortDirection, search) and runs them through ticketFiltersSchema.",
+       "cite": {
+        "path": "src/app/api/bootstrap/route.ts",
+        "lineStart": 11,
+        "lineEnd": 19
+       }
+      },
+      {
+       "text": "[w2] The schema coerces page and pageSize to integers with defaults 1 and 10, caps pageSize at 100 and allows only four sort columns, so an out-of-range value comes back as a 400 VALIDATION_ERROR instead of reaching orderBy or take.",
+       "cite": {
+        "path": "src/lib/validation/ticket-schemas.ts",
+        "lineStart": 36,
+        "lineEnd": 39
+       }
+      },
+      {
+       "text": "[w2] Beside the list, the route runs four more reads in parallel and getBootstrapData adds queue summaries and the dashboard; none of them depends on the term, so each new search re-fetches the whole workspace payload, not just the list.",
+       "cite": {
+        "path": "src/app/api/bootstrap/route.ts",
+        "lineStart": 21,
+        "lineEnd": 27
+       }
+      },
+      {
+       "text": "[w3] Row scope lives in the query, not in a filter after it: listTickets passes a requester constraint only for CUSTOMER_PORTAL sessions, and the repository merges it into the same where object as the user's filters.",
+       "cite": {
+        "path": "src/services/ticket-service.ts",
+        "lineStart": 246,
+        "lineEnd": 249
+       }
+      },
+      {
+       "text": "[w3] The term becomes one OR of four case-insensitive contains filters: subject, description, and the joined requester's name and email.",
+       "cite": {
+        "path": "src/repositories/ticket-repository.ts",
+        "lineStart": 110,
+        "lineEnd": 119
+       }
+      },
+      {
+       "text": "[w2] A findMany and a count with that where run side by side in Promise.all: one orderBy column, skip (page - 1) * pageSize, take pageSize, and a select of list columns plus queue, requester and assignee names, tags and the two SLA states, not the detail include graph.",
+       "cite": {
+        "path": "src/repositories/ticket-repository.ts",
+        "lineStart": 138,
+        "lineEnd": 170
+       }
+      },
+      {
+       "text": "[w2] Each row is mapped to a hand-declared TicketListItem: dates become ISO strings, nested names are flattened and one slaState is rolled up. The mapper's input type is inferred from the repository's return type, so a column dropped from the select fails type-checking instead of rendering undefined.",
+       "cite": {
+        "path": "src/services/ticket-service.ts",
+        "lineStart": 42,
+        "lineEnd": 67
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "Explain how saved views work in Support Hub end to end: what a saved view stores and what validates it, who can share one and who sees a shared one, and what actually happens to the ticket list when a user clicks one, such as the seeded \"My open tickets\" view. Then explain why the feature drifted and where one fix would have to land.",
+     "keyPoints": [
+      {
+       "text": "[w2] A saved view is a row with a name, an owner, an optional queue, isShared and a Json filters column, and POST /api/saved-views validates the filters with the same ticketFiltersSchema the list routes use, so a stored view holds only accepted values, with the page, size and sort defaults filled in.",
+       "cite": {
+        "path": "src/lib/validation/saved-view-schemas.ts",
+        "lineStart": 5,
+        "lineEnd": 10
+       }
+      },
+      {
+       "text": "[w2] Sharing is settled on the server without an error: createSavedView keeps isShared only for leads and managers and quietly stores false for anyone else, and the listing adds other users' shared views only for those same two roles, so an agent never sees a lead's shared view.",
+       "cite": {
+        "path": "src/services/saved-view-service.ts",
+        "lineStart": 6,
+        "lineEnd": 28
+       }
+      },
+      {
+       "text": "[w1] No client code posts to /api/saved-views; the three views that exist are written by the seed script.",
+       "cite": {
+        "path": "prisma/seed.ts",
+        "lineStart": 412,
+        "lineEnd": 433
+       }
+      },
+      {
+       "text": "[w3] On the client the filters arrive as Record<string, unknown>, and the click handler copies only a string filters.search into the search box; status, assignee, escalated and every other stored filter is dropped, so \"My open tickets\" clears the box and shows the default list.",
+       "cite": {
+        "path": "src/components/support-hub-client.tsx",
+        "lineStart": 223,
+        "lineEnd": 231
+       }
+      },
+      {
+       "text": "[w3] Forwarding them would not help yet: the list routes read only page, pageSize, sortBy, sortDirection and search from the URL, so the schema's array filters (status, priority, queue, assignee, tag and the rest) cannot be reached over HTTP.",
+       "cite": {
+        "path": "src/app/api/tickets/route.ts",
+        "lineStart": 8,
+        "lineEnd": 15
+       }
+      },
+      {
+       "text": "[w2] One stored filter has no implementation at all: the schema accepts slaState, but the repository's where never reads it, so the seeded shared \"Breached SLA tickets\" view could not work even with the plumbing fixed.",
+       "cite": {
+        "path": "src/repositories/ticket-repository.ts",
+        "lineStart": 84,
+        "lineEnd": 136
+       }
+      },
+      {
+       "text": "[w2] The drift comes from one contract kept in three copies with nothing tying them: the zod schema, the hand-written TicketFilterState type, and the five-key object in each route. One fix is to infer the type from the schema and parse the whole query string in a single helper that both routes share.",
+       "cite": {
+        "path": "src/types/support.ts",
+        "lineStart": 59,
+        "lineEnd": 78
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "Defend or indict this claim about Support Hub's ticket list: \"It is paginated, indexed and cached, so it will hold up when a support org has 200,000 tickets.\" Use the list query, the Prisma schema and the client as evidence, and say what you would change first.",
+     "keyPoints": [
+      {
+       "text": "[w3] It is paginated, but by offset: skip (page - 1) * pageSize means page N makes the database walk past every earlier matching row, and a full count over the same filter runs on every request, including every new search term.",
+       "cite": {
+        "path": "src/repositories/ticket-repository.ts",
+        "lineStart": 138,
+        "lineEnd": 170
+       }
+      },
+      {
+       "text": "[w3] The order is one non-unique column (updatedAt by default) with no id tiebreaker. Because updatedAt is @updatedAt, any write moves a ticket to the top while someone is paging, so rows can repeat or be skipped between pages, and tied rows have no stable order.",
+       "cite": {
+        "path": "src/repositories/ticket-repository.ts",
+        "lineStart": 141,
+        "lineEnd": 145
+       }
+      },
+      {
+       "text": "[w3] It is indexed for other access paths: Ticket's only indexes are (queueId, status), (assigneeId, status) and (requesterId, createdAt). None of them leads with updatedAt, so the default sort cannot be read in index order, and a substring match that is not anchored at the start cannot use a B-tree index.",
+       "cite": {
+        "path": "prisma/schema.prisma",
+        "lineStart": 176,
+        "lineEnd": 181
+       }
+      },
+      {
+       "text": "[w2] It is cached per search string and only for 15 s, and every successful mutation invalidates the [\"bootstrap\"] prefix (every cached search variant) plus the session, so the cache mostly absorbs re-renders, not load.",
+       "cite": {
+        "path": "src/hooks/use-support-hub.ts",
+        "lineStart": 51,
+        "lineEnd": 63
+       }
+      },
+      {
+       "text": "[w2] The UI never asks for a second page: the bootstrap URL carries only the search term and the table renders bootstrap.tickets.items, so whatever the table holds, a user sees the ten most recently updated matches, and the returned total goes unused.",
+       "cite": {
+        "path": "src/hooks/use-support-hub.ts",
+        "lineStart": 22,
+        "lineEnd": 30
+       }
+      },
+      {
+       "text": "[w1] What can be defended: the list selects list columns rather than the detail graph, pageSize is capped at 100, and sortBy is an enum, so the computed orderBy key cannot name an arbitrary column.",
+       "cite": {
+        "path": "src/lib/validation/ticket-schemas.ts",
+        "lineStart": 36,
+        "lineEnd": 39
+       }
+      },
+      {
+       "text": "[w2] Verdict: indict. Change first: keyset pagination on (updatedAt, id) with a matching composite index, a trigram or full-text index (or a search service) for the text match, and a debounced search against the list endpoint instead of the whole bootstrap.",
+       "cite": {
+        "path": "prisma/schema.prisma",
+        "lineStart": 141,
+        "lineEnd": 182
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}
