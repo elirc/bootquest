@@ -89,7 +89,7 @@ describe('track units: campaign-less track (primary)', () => {
     const sec = await section();
     expect(within(sec).getByRole('heading', { level: 2, name: 'Practice units' })).toBeInTheDocument();
     await waitFor(() => expect(row(501)).not.toBeNull());
-    expect(within(sec).getByRole('heading', { level: 3, name: 'opusorganize (0/2)' })).toBeInTheDocument();
+    expect(within(sec).getByRole('heading', { level: 3, name: 'opusorganize 0/2 done' })).toBeInTheDocument();
     expect(row(501)!.tagName).toBe('A');
     expect(row(501)).toHaveAttribute('href', '/play/501');
     expect(row(502)).toHaveAttribute('href', '/play/502');
@@ -155,17 +155,24 @@ describe('track units: campaign-less track (primary)', () => {
       await user.type(toolbar.getByRole('searchbox', { name: 'Filter units' }), 'bazaar');
       expect(count).toHaveTextContent(`Showing 2 of 136 units · ${GENERATED_DONE} done`);
       expect([...rows()].map((r) => r.dataset.unit)).toEqual([String(BAZAAR_A), String(BAZAAR_B)]);
-      expect(groupHeads()).toEqual(['bazaar (1/2)']);
+      expect(groupHeads()).toEqual(['bazaar 1/2 done']);
       expect(within(row(BAZAAR_B)!).getByText(/\(set B\)$/)).toBeInTheDocument();
     });
 
-    it('group headers keep their UNFILTERED done/total under Hide done + a query (agree with the count line)', async () => {
+    it('group headers keep their UNFILTERED done/total under Hide done + a query, and say how many are shown', async () => {
       const { user, count, toolbar, groupHeads } = await open136();
       await user.click(toolbar.getByRole('button', { name: 'Hide done' }));
       await user.type(toolbar.getByRole('searchbox', { name: 'Filter units' }), 'bazaar');
       expect(count).toHaveTextContent(`Showing 1 of 136 units · ${GENERATED_DONE} done`);
       expect([...rows()].map((r) => r.dataset.unit)).toEqual([String(BAZAAR_B)]);
-      expect(groupHeads()).toEqual(['bazaar (1/2)']);
+      expect(groupHeads()).toEqual(['bazaar 1/2 done · 1 shown']);
+    });
+
+    it('a header reads done and shown separately when they differ (query only: 8 done, 1 shown)', async () => {
+      const { user, toolbar, groupHeads } = await open136();
+      await user.type(toolbar.getByRole('searchbox', { name: 'Filter units' }), 'Drill 1');
+      // estimation holds drills 0, 10, ..., 70 (all done); only "Drill 10" matches the query
+      expect(groupHeads().find((h) => h?.startsWith('estimation'))).toBe('estimation 8/8 done · 1 shown');
     });
 
     it('Hide done removes every data-state="done" row; a no-match filter offers Clear filters', async () => {

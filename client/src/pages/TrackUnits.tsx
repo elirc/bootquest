@@ -57,7 +57,8 @@ function UnitBrowser({ units }: { units: UnitSummary[] }) {
   const [filter, setFilter] = useState<UnitFilter>(NO_FILTER);
   const groups = useMemo(() => groupUnits(units, filter), [units, filter]);
   const counts = useMemo(() => sectionCounts(units), [units]);
-  // headers show each group's UNFILTERED done/total, so they agree with the count line below
+  // headers show each group's UNFILTERED done/total (so they agree with the count line below),
+  // plus how many of the group are shown when a filter hides some
   const totals = useMemo(() => groupTotals(units), [units]);
   const done = useMemo(() => units.filter((u) => u.state === 'done').length, [units]);
   const shown = groups.reduce((n, g) => n + g.units.length, 0);
@@ -101,23 +102,24 @@ function UnitBrowser({ units }: { units: UnitSummary[] }) {
           </button>
         </div>
       ) : (
-        groups.map((g) => (
-          <section className="tu-group" key={g.label}>
-            <h3>
-              {g.label}{' '}
-              <span className="muted">
-                ({totals.get(g.label)!.done}/{totals.get(g.label)!.total})
-              </span>
-            </h3>
-            <ul className="tu-list">
-              {g.units.map((u) => (
-                <li key={u.id}>
-                  <UnitRow unit={u} />
-                </li>
-              ))}
-            </ul>
-          </section>
-        ))
+        groups.map((g) => {
+          const t = totals.get(g.label)!;
+          return (
+            <section className="tu-group" key={g.label}>
+              <h3>
+                {g.label}{' '}
+                <span className="muted">{`${t.done}/${t.total} done${g.units.length < t.total ? ` · ${g.units.length} shown` : ''}`}</span>
+              </h3>
+              <ul className="tu-list">
+                {g.units.map((u) => (
+                  <li key={u.id}>
+                    <UnitRow unit={u} />
+                  </li>
+                ))}
+              </ul>
+            </section>
+          );
+        })
       )}
     </>
   );
