@@ -29,7 +29,7 @@
        }
       },
       {
-       "text": "[w3] Keep group and collection membership out of the documents: store each document's collection id and its direct shares, and at query time pass the caller's reachable collection ids, which the app already computes per user, as a filter. With per-document user lists instead, adding one person to Engineering means rewriting every document in its 400 collections, about 800,000 at 2,000 per collection; with the collection filter it rewrites none.",
+       "text": "[w3] Keep group and collection membership out of the documents: store each document's collection id and its direct shares, and at query time pass the caller's reachable collection ids, which the app already computes per user, and the caller's group ids as filters. With per-document user lists instead, adding one person to Engineering means rewriting every document in its 400 collections, about 800,000 at 2,000 per collection; with the collection filter it rewrites none.",
        "cite": {
         "path": "server/models/User.ts",
         "lineStart": 490,
@@ -37,7 +37,7 @@
        }
       },
       {
-       "text": "[w3] The triggers already exist as events: users and groups joining or leaving a collection or a document, group membership changes and a collection's permission changing are all emitted by the app, so the indexer consumes them: a document share re-pushes one document, a collection's permission change re-pushes that collection's documents in bulk batches, and a group change re-pushes nothing under the collection filter.",
+       "text": "[w3] Map each access event to its re-index cost and consume it: a document share re-pushes one document, a collection's permission change re-pushes that collection's documents in bulk batches, and a group membership change re-pushes nothing under the collection filter.",
        "cite": {
         "path": "server/types.ts",
         "lineStart": 289,
@@ -61,7 +61,7 @@
        }
       },
       {
-       "text": "[w3] Only one provider is ever active, picked from configuration and cached, so dual writing needs a composite provider that writes to both stores and reads from one behind a switch. Start consuming events first, backfill in id order with a checkpoint, compare the two stores' top results for a sample of logged real queries, and keep writing to Postgres for the whole two-week rollback window.",
+       "text": "[w3] Only one provider is ever active, picked from configuration and cached, so the cut-over needs a composite provider that forwards index calls to the engine and serves reads from one store behind a switch; Postgres needs no provider writes, because a database trigger keeps its vector current whatever provider is configured. Start consuming events first, backfill in id order with a checkpoint, compare the two stores' top results for a sample of logged real queries, and keep that trigger in place for the whole two-week rollback window.",
        "cite": {
         "path": "server/utils/SearchProviderManager.ts",
         "lineStart": 20,
@@ -77,7 +77,7 @@
        }
       },
       {
-       "text": "[w1] The engine stays a projection of the transactional event stream: every mutation already writes its event row inside the same transaction as the change, which is what makes event-driven re-indexing trustworthy.",
+       "text": "[w1] The event row is written in the same transaction as the change, so a rolled-back mutation never triggers a re-index; that is all the event stream promises, so the indexer still needs the drift check rather than treating events as complete.",
        "quote": "writes the `Event` row, and returns"
       }
      ]
@@ -96,9 +96,9 @@
       {
        "text": "[w3] The 40-minute lag is fan-out sharing one queue with content updates: each of the 40 joins became a re-push of 800,000 documents ahead of every edit. Measure a change's fan-out before enqueueing it, send large fan-outs to their own low-priority lane in bulk batches, and keep content updates on a lane that fan-out cannot block.",
        "cite": {
-        "path": "server/queues/processors/SearchIndexProcessor.ts",
-        "lineStart": 21,
-        "lineEnd": 35
+        "path": "server/services/worker.ts",
+        "lineStart": 62,
+        "lineEnd": 77
        }
       },
       {
@@ -135,7 +135,7 @@
      "prompt": "TRADE-OFF HANDBACK — defend your migration against the alternatives: per-document user and group lists in the index versus collection ids plus the caller's collection list at query time versus no access data in the index at all; dual writing through the provider seam versus change data capture from the database log versus a full rebuild followed by a switch; versioned writes versus one serial consumer per document; trusting the engine's filter versus re-checking every hit; and keeping Postgres search as a standing fallback versus removing it once the engine is proven. For each, say what you bought and what it cost.",
      "keyPoints": [
       {
-       "text": "[w3] Per-document lists make a query a single simple filter but turn every group or collection change into a fan-out write; collection ids plus a per-user list at query time keep writes tiny at the cost of a large filter for users who reach thousands of collections; no access data at all means the engine returns team-wide candidates that post-filtering must thin out, which empties pages for narrowly-scoped users.",
+       "text": "[w3] Per-document lists make a query a single simple filter but turn every group or collection change into a fan-out write; collection ids plus a per-user list at query time keep writes tiny at the cost of a large filter for users who reach thousands of collections; no access data at all means the engine ranks and counts team-wide, so post-filtering must over-fetch and the reported total counts documents the caller cannot see.",
        "cite": {
         "path": "server/models/User.ts",
         "lineStart": 555,
@@ -143,7 +143,7 @@
        }
       },
       {
-       "text": "[w3] Dual writing through the seam reuses the events the app already emits and is easy to roll back, at the cost of a composite provider and two stores to keep honest; capturing changes from the database log sees every write, including ones that bypass events, but needs new infrastructure and re-derives access outside the app's code; rebuild-then-switch is simplest but has no rollback once Postgres stops being written.",
+       "text": "[w3] Dual writing through the seam reuses the events the app already emits and is easy to roll back, at the cost of a composite provider and two stores to keep honest; capturing changes from the database log sees every write, including ones that bypass events, but needs new infrastructure and re-derives access outside the app's code; rebuild-then-switch is simplest but has no rollback once the trigger and vector are dropped.",
        "cite": {
         "path": "server/utils/SearchProviderManager.ts",
         "lineStart": 10,
@@ -153,9 +153,9 @@
       {
        "text": "[w2] Versioned writes let any number of workers index in parallel and make replays harmless, at the cost of carrying a version on every path that writes; one serial consumer per document avoids versions but needs partitioned queues and still gets the backfill race wrong.",
        "cite": {
-        "path": "server/queues/processors/SearchIndexProcessor.ts",
-        "lineStart": 37,
-        "lineEnd": 47
+        "path": "server/queues/index.ts",
+        "lineStart": 18,
+        "lineEnd": 30
        }
       },
       {
@@ -175,8 +175,12 @@
        }
       },
       {
-       "text": "[w1] Whatever the engine, a reader must still know which stored body was indexed and how old it may be, because the indexed text is a projection that lags the live document.",
-       "quote": "every consumer must ask \"which representation am I reading, and how stale is it?\""
+       "text": "[w1] Either store needs a re-index plan for ranking changes: the last weight change here (body from B to D) only replaced the trigger function, with no update of existing rows, so documents keep the old weights until they are next written; an engine mapping change likewise needs a rebuild into a new index behind an alias.",
+       "cite": {
+        "path": "server/migrations/20231227040129-update-tsvector-trigger.js",
+        "lineStart": 4,
+        "lineEnd": 30
+       }
       }
      ]
     }
