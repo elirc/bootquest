@@ -37,7 +37,9 @@ import { ID_RE, ImportError, JAVADRILLS_EXPECTED, readModules, type JavadrillsEx
  * a starter without TODO, difficulty outside 1..3, a starter or solution without
  * the tests / end-tests markers, a solution whose tests block differs from the
  * starter's by even one byte, no `class Exercise` or a `package` statement, a tests
- * block without test(...) / report() / a literal test name, and a census that
+ * block without test(...) / report() / a literal test name, fewer than 4 or more
+ * than 8 literally named tests, a duplicate test name, no test named with "(boundary)", a pasteable
+ * hint 3 (`;`, `->`, `return` or a parenthesis — hint 3 is the approach in words), and a census that
  * differs from the expected counts. Output is deterministic: same authoring bytes →
  * same pack bytes (the manifest's importedFrom.path / gitHead / dirty record where it
  * came from).
@@ -82,6 +84,7 @@ export function mapExercise(module: string, ex: JavadrillsExercise, position: nu
   if (ex.solution === ex.starter) fail('solution is identical to the starter');
   if (!/\bTODO\b/.test(ex.starter)) fail('starter has no TODO marker (the learner must see what to write)');
   if (ex.hints.length !== 3) fail(`needs exactly 3 hints (has ${ex.hints.length})`);
+  if (/;|->|\breturn\b|[()]/.test(ex.hints[2]!)) fail('hint 3 must be the approach in words, never pasteable code (no `;`, `->`, `return` or parentheses)');
 
   let exSplit: SplitFile | undefined;
   let solSplit: SplitFile | undefined;
@@ -98,7 +101,12 @@ export function mapExercise(module: string, ex: JavadrillsExercise, position: nu
   if (solSplit.tests !== exSplit.tests) fail('the solution does not repeat the starter tests byte-for-byte');
   if (!/^\s*test\(/m.test(exSplit.tests)) fail('tests block has no test(...) call');
   if (!/\breport\(\)/.test(exSplit.tests)) fail('tests block never calls report()');
-  if (literalTestNames(exSplit.tests).length === 0) fail('tests block names no test with a string literal');
+  const testNames = literalTestNames(exSplit.tests);
+  if (testNames.length === 0) fail('tests block names no test with a string literal');
+  const dup = testNames.find((n, i) => testNames.indexOf(n) !== i);
+  if (dup !== undefined) fail(`duplicate test name ${JSON.stringify(dup)}`);
+  if (testNames.length < 4 || testNames.length > 8) fail(`needs 4-8 literally named tests (has ${testNames.length})`);
+  if (!testNames.some((n) => n.includes('(boundary)'))) fail('needs at least one test named with "(boundary)"');
   for (const [which, src] of [['starter', ex.starter], ['solution', ex.solution]] as const) {
     if (!new RegExp(`^\\s*(?:final\\s+)?class\\s+${CLASS_NAME}\\b`, 'm').test(src)) fail(`${which} does not declare \`class ${CLASS_NAME}\``);
     if (/^\s*package\s+[\w.]+\s*;/m.test(src)) fail(`${which} declares a package (exercises live in the default package)`);

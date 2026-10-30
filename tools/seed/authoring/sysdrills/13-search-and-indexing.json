@@ -2,7 +2,7 @@
   "format": "sysdrills-authoring@1",
   "module": "13-search-and-indexing",
   "title": "Search & indexing at scale",
-  "description": "Search and indexing reps for the retrieval part of a system-design interview: sizing an inverted index from documents and unique terms, what a multi-term AND merge walks and why the rarest posting list caps its hits, the candidate overfetch behind fan-out top-K and deep pages, how the refresh interval sets visibility lag, the physical writes segment merges add on top of ingest, budgeting two-phase (cascade) ranking, why fan-out multiplies replicas per shard when you size a search cluster, and how much RAM a vector index needs. Every drill is whole-number arithmetic with the conversions named (1 GB = 1,000,000,000 bytes; per-mille = parts per thousand = x/1000), so you practise the reasoning, not the calculator.",
+  "description": "Search and indexing reps for the retrieval part of a system-design interview: sizing an inverted index from documents and unique terms, what a multi-term AND merge walks, why the rarest posting list caps its hits and how leading with it cuts the work to a few probes, the candidate overfetch behind fan-out top-K and deep pages, how the refresh interval sets visibility lag, the physical writes segment merges add on top of ingest, budgeting two-phase (cascade) ranking, why fan-out multiplies replicas per shard when you size a search cluster, and how much RAM a vector index needs. Every drill is whole-number arithmetic with the conversions named (1 GB = 1,000,000,000 bytes; per-mille = parts per thousand = x/1000), so you practise the reasoning, not the calculator.",
   "exercises": [
     {
       "slug": "01-inverted-index-size",
@@ -68,7 +68,7 @@
           ]
         }
       ],
-      "explanation": "Text indexes are sized by postings, and postings multiply documents by terms.\n\nFor `invertedIndexBytes(10000000, 120, 10)`:\n- postings: 10,000,000 docs × 120 unique terms = 1,200,000,000\n- × 10 bytes each → **12,000,000,000 bytes** (12 GB)\n\nThe index is often bigger than the text it covers, so posting compression sets the budget — module 05's `index-memory-fit` sizes a B-tree as rows × bytes per entry, while here the inverted multiplier is documents × TERMS.",
+      "explanation": "Text indexes are sized by postings, and postings multiply documents by terms.\n\nFor `invertedIndexBytes(10000000, 120, 10)`:\n- postings: 10,000,000 docs × 120 unique terms = 1,200,000,000\n- × 10 bytes each → **12,000,000,000 bytes** (12 GB)\n\nThe index can rival the text it covers, so posting compression sets the budget — module 05's `index-memory-fit` sizes a B-tree as rows × bytes per entry, while here the inverted multiplier is documents × TERMS.",
       "hints": [
         "Count (document, distinct term) pairs, not documents — every pair is one entry in some term's posting list.",
         "postings = docs × uniqueTermsPerDoc; bytes = docs × uniqueTermsPerDoc × bytesPerPosting.",
@@ -83,9 +83,9 @@
         "search",
         "query"
       ],
-      "instructions": "**Interview prompt.** \"A user searches for `the kubernetes sidecar` as an AND query. The three posting lists hold 2,000,000, 40,000 and 300 documents. How many postings does a naive merge walk, and what is the largest number of documents that can match?\"\n\n**Why it works.** An AND query intersects sorted posting lists. A naive merge advances through every list once, so its work is the sum of the list lengths. A match must appear in every list, so the intersection can never be larger than the shortest list — which is why engines lead with the rarest term and skip through the long lists instead of walking them. `listLengths` is always a non-empty array of positive integers.\n\n**Your task.** Export two functions:\n- `mergeOps(listLengths)` → the sum of the array's lengths\n- `maxPossibleHits(listLengths)` → `Math.min(...listLengths)`\n\n**Worked example.** Lists of 2,000,000, 40,000 and 300 → at most **300** documents can match.",
-      "starter": "export function mergeOps(listLengths) {\n  // TODO: a naive merge walks every list once\n}\n\nexport function maxPossibleHits(listLengths) {\n  // TODO: the intersection is capped by the shortest list\n}\n",
-      "solution": "export function mergeOps(listLengths) {\n  return listLengths.reduce((sum, n) => sum + n, 0);\n}\n\nexport function maxPossibleHits(listLengths) {\n  return Math.min(...listLengths);\n}\n",
+      "instructions": "**Interview prompt.** \"A user searches for `the kubernetes sidecar` as an AND query. The three posting lists hold 2,000,000, 40,000 and 300 documents. How many postings does a naive merge walk, what is the largest number of documents that can match — and at most how many lookups does it take if the engine leads with the rarest list?\"\n\n**Why it works.** An AND query intersects sorted posting lists. A naive merge advances through every list once, so its work is the sum of the list lengths. A match must appear in every list, so the intersection can never be larger than the shortest list — which is why engines lead with the rarest term and skip through the long lists instead of walking them: each posting of the rarest list is looked up in the other lists (a skip-list or block seek, not a walk), and a candidate missing from one list need not be looked up in the rest, so in the worst case, when every candidate has to be checked in every list, the work is the shortest length times the number of other lists. `listLengths` is always a non-empty array of positive integers.\n\n**Your task.** Export three functions:\n- `mergeOps(listLengths)` → the sum of the array's lengths\n- `maxPossibleHits(listLengths)` → the largest number of documents that can match all lists\n- `skipProbes(listLengths)` → the most probes a rarest-first intersection can make into the other lists (every posting of the rarest list looked up in every other list)\n\n**Worked example.** Lists of 2,000,000, 40,000 and 300 → at most **300** documents can match.",
+      "starter": "export function mergeOps(listLengths) {\n  // TODO: a naive merge walks every list once\n}\n\nexport function maxPossibleHits(listLengths) {\n  // TODO: the intersection is capped by the shortest list\n}\n\nexport function skipProbes(listLengths) {\n  // TODO: lead with the rarest list and probe the others\n}\n",
+      "solution": "export function mergeOps(listLengths) {\n  return listLengths.reduce((sum, n) => sum + n, 0);\n}\n\nexport function maxPossibleHits(listLengths) {\n  return Math.min(...listLengths);\n}\n\nexport function skipProbes(listLengths) {\n  return Math.min(...listLengths) * (listLengths.length - 1);\n}\n",
       "tests": [
         {
           "name": "the + kubernetes + sidecar -> 2,040,300 postings walked",
@@ -148,13 +148,43 @@
               60
             ]
           ]
+        },
+        {
+          "name": "rarest-first over the + kubernetes + sidecar -> at most 300 x 2 = 600 probes",
+          "code": "assert.equal(typeof mod.skipProbes, 'function', 'export a function named skipProbes');\nassert.equal(mod.skipProbes([2000000,40000,300]), 600);",
+          "input": [
+            [
+              2000000,
+              40000,
+              300
+            ]
+          ]
+        },
+        {
+          "name": "single term -> nothing to probe, 0 (boundary)",
+          "code": "assert.equal(typeof mod.skipProbes, 'function', 'export a function named skipProbes');\nassert.equal(mod.skipProbes([500000]), 0);",
+          "input": [
+            [
+              500000
+            ]
+          ]
+        },
+        {
+          "name": "5,000,000 vs 60 -> at most 60 probes",
+          "code": "assert.equal(typeof mod.skipProbes, 'function', 'export a function named skipProbes');\nassert.equal(mod.skipProbes([5000000,60]), 60);",
+          "input": [
+            [
+              5000000,
+              60
+            ]
+          ]
         }
       ],
-      "explanation": "The merge pays for the common words; the rare word decides the answer.\n\nFor `mergeOps([2000000, 40000, 300])` — an AND over \"the\" (2,000,000), \"kubernetes\" (40,000) and \"sidecar\" (300):\n- naive merge: 2,000,000 + 40,000 + 300 = **2,040,300** postings walked\n- but `maxPossibleHits` is min(2,000,000, 40,000, 300) = 300 documents\n\nLead with the rarest list and skip through the rest — module 08's `map-vs-nested-scan` compares n + q against n × q over two collections; here it is k sorted lists and the min-list ceiling that drives query planning.",
+      "explanation": "The merge pays for the common words; the rare word decides the answer.\n\nFor `mergeOps([2000000, 40000, 300])` — an AND over \"the\" (2,000,000), \"kubernetes\" (40,000) and \"sidecar\" (300):\n- naive merge: 2,000,000 + 40,000 + 300 = **2,040,300** postings walked\n- but `maxPossibleHits` is min(2,000,000, 40,000, 300) = 300 documents\n- rarest first: at most 300 postings × 2 other lists = **600** probes instead of 2,040,300 steps\n\nLead with the rarest list and skip through the rest — module 08's `map-vs-nested-scan` compares n + q against n × q over two collections; here it is k sorted lists and the min-list ceiling that drives query planning.",
       "hints": [
         "A document matches only if it appears in every list — think about which list caps the answer, and what a merge that touches every entry costs.",
-        "ops = Σ listLengths; hits ≤ min(listLengths).",
-        "A multi-term AND walks every posting list once, so add the list lengths — and the intersection can never exceed the shortest list, which is why engines iterate the rarest term first"
+        "ops = Σ listLengths; hits ≤ min(listLengths). worst-case probes = min(listLengths) × (lists − 1).",
+        "A multi-term AND walks every posting list once, so add the list lengths — and the intersection can never exceed the shortest list, which is why engines iterate the rarest term first: at worst each of its postings is looked up in every other list, the shortest length times one less than the number of lists"
       ]
     },
     {
@@ -236,12 +266,12 @@
         "search",
         "freshness"
       ],
-      "instructions": "**Interview prompt.** \"Our search cluster refreshes every 30 seconds and a refresh takes about 5 seconds to commit. Product wants to promise that new tickets are searchable 'right away'. What is the worst-case delay — and at 400 writes/s, how many documents does each refresh publish?\"\n\n**Why it works.** A near-real-time engine buffers new documents and only makes them visible at a refresh, which opens a new searchable segment. The unluckiest document arrives just after a refresh, so it waits the whole interval and then the commit. Each refresh publishes every write that arrived during one interval.\n\n**Your task.** Export two functions:\n- `maxVisibilityLagSec(refreshIntervalSec, commitSec)` → `refreshIntervalSec + commitSec`\n- `docsBufferedAtRefresh(writesPerSec, refreshIntervalSec)` → `writesPerSec × refreshIntervalSec`\n\n**Worked example.** 400 writes/s × a 30 s interval = **12,000** documents published per refresh.",
+      "instructions": "**Interview prompt.** \"Our search cluster refreshes every 30 seconds and publishing each refresh takes about 5 seconds. Product wants to promise that new tickets are searchable 'right away'. What is the worst-case delay — and at 400 writes/s, how many documents does each refresh publish?\"\n\n**Why it works.** A near-real-time engine buffers new documents and only makes them visible at a refresh, which opens a new searchable segment. The unluckiest document arrives just after a refresh, so it waits the whole interval and then the time the refresh itself takes to publish the new segment (`commitSec`). A durable commit (flush/fsync) is a separate step and is not on the visibility path. Each refresh publishes every write that arrived during one interval.\n\n**Your task.** Export two functions:\n- `maxVisibilityLagSec(refreshIntervalSec, commitSec)` → `refreshIntervalSec + commitSec`\n- `docsBufferedAtRefresh(writesPerSec, refreshIntervalSec)` → `writesPerSec × refreshIntervalSec`\n\n**Worked example.** 400 writes/s × a 30 s interval = **12,000** documents published per refresh.",
       "starter": "export function maxVisibilityLagSec(refreshIntervalSec, commitSec) {\n  // TODO: the document that just missed a refresh\n}\n\nexport function docsBufferedAtRefresh(writesPerSec, refreshIntervalSec) {\n  // TODO: writes that arrive during one interval\n}\n",
       "solution": "export function maxVisibilityLagSec(refreshIntervalSec, commitSec) {\n  return refreshIntervalSec + commitSec;\n}\n\nexport function docsBufferedAtRefresh(writesPerSec, refreshIntervalSec) {\n  return writesPerSec * refreshIntervalSec;\n}\n",
       "tests": [
         {
-          "name": "30 s refresh + 5 s commit -> 35 s worst case",
+          "name": "30 s refresh + 5 s to publish -> 35 s worst case",
           "code": "assert.equal(typeof mod.maxVisibilityLagSec, 'function', 'export a function named maxVisibilityLagSec');\nassert.equal(mod.maxVisibilityLagSec(30, 5), 35);",
           "input": [
             30,
@@ -257,7 +287,7 @@
           ]
         },
         {
-          "name": "5-minute refresh + 20 s commit -> 320 s",
+          "name": "5-minute refresh + 20 s to publish -> 320 s",
           "code": "assert.equal(typeof mod.maxVisibilityLagSec, 'function', 'export a function named maxVisibilityLagSec');\nassert.equal(mod.maxVisibilityLagSec(300, 20), 320);",
           "input": [
             300,
@@ -289,11 +319,11 @@
           ]
         }
       ],
-      "explanation": "Freshness is set by the refresh cadence, not by the write.\n\nFor `maxVisibilityLagSec(30, 5)`:\n- the unluckiest document lands just after a refresh and waits the full 30 s interval\n- plus the 5 s commit → **35 s** before it is searchable\n\nThe freshness promise is the interval, not zero — module 09's `backlog-sla-threshold` turns a rate × SLA into a queue alert, while here the refresh CADENCE itself sets both the staleness and the batch size.",
+      "explanation": "Freshness is set by the refresh cadence, not by the write.\n\nFor `maxVisibilityLagSec(30, 5)`:\n- the unluckiest document lands just after a refresh and waits the full 30 s interval\n- plus the 5 s the refresh takes to publish → **35 s** before it is searchable\n\nThe freshness promise is the interval, not zero — module 09's `backlog-sla-threshold` turns a rate × SLA into a queue alert, while here the refresh CADENCE itself sets both the staleness and the batch size.",
       "hints": [
         "Searchability happens at refresh boundaries, not at write time — picture the document that arrives a moment after one.",
-        "max lag = interval + commit; buffered = writes/s × interval.",
-        "The unluckiest document lands just after a refresh, so its worst-case lag is the whole refresh interval plus the commit time — and the buffer at each refresh holds writesPerSec × interval docs"
+        "max lag = interval + publish time; buffered = writes/s × interval.",
+        "The unluckiest document lands just after a refresh, so its worst-case lag is the whole refresh interval plus the time the refresh takes to publish — and the buffer at each refresh holds writesPerSec × interval docs"
       ]
     },
     {
@@ -304,7 +334,7 @@
         "search",
         "io"
       ],
-      "instructions": "**Interview prompt.** \"We ingest 50 GB of new documents a day into a segment-based index, and each document is rewritten by about 3 merge passes over its life. How many bytes hit the SSDs per day — and how much free disk does merging the largest 30 GB segment need?\"\n\n**Why it works.** Segment-based (LSM-style) indexes write new data into small immutable segments and later merge them into larger ones; every merge pass rewrites the data once more, so physical writes are ingest × (1 + passes). A merge writes the new segment before it deletes the inputs, so for a while both copies sit on disk — scratch space of twice the largest segment (1 GB = 1,000,000,000 bytes).\n\n**Your task.** Export two functions:\n- `mergeWriteBytesPerDay(ingestBytesPerDay, mergePasses)` → `ingestBytesPerDay × (1 + mergePasses)`\n- `mergeScratchBytes(largestSegmentBytes)` → `2 × largestSegmentBytes`\n\n**Worked example.** Merging a 30,000,000,000-byte segment needs **60,000,000,000** bytes (60 GB) on disk at once.",
+      "instructions": "**Interview prompt.** \"We ingest 50 GB of new documents a day into a segment-based index, and each document is rewritten by about 3 merge passes over its life. How many bytes hit the SSDs per day — and how much disk does a merge that produces our largest, 30 GB segment occupy at its peak?\"\n\n**Why it works.** Segment-based (LSM-style) indexes write new data into small immutable segments and later merge them into larger ones; every merge pass rewrites the data once more, so physical writes are ingest × (1 + passes). A merge writes the new segment before it deletes the inputs, so for a while the inputs and the output both sit on disk — a peak footprint of twice the merged data, of which the inputs already occupy half (the free space the merge needs on top is 1×) (1 GB = 1,000,000,000 bytes).\n\n**Your task.** Export two functions:\n- `mergeWriteBytesPerDay(ingestBytesPerDay, mergePasses)` → `ingestBytesPerDay × (1 + mergePasses)`\n- `mergeScratchBytes(largestSegmentBytes)` → `2 × largestSegmentBytes`\n\n**Worked example.** Merging a 30,000,000,000-byte segment occupies **60,000,000,000** bytes (60 GB) on disk at its peak.",
       "starter": "export function mergeWriteBytesPerDay(ingestBytesPerDay, mergePasses) {\n  // TODO: the first write plus one rewrite per merge pass\n}\n\nexport function mergeScratchBytes(largestSegmentBytes) {\n  // TODO: old and new copies on disk at once\n}\n",
       "solution": "export function mergeWriteBytesPerDay(ingestBytesPerDay, mergePasses) {\n  return ingestBytesPerDay * (1 + mergePasses);\n}\n\nexport function mergeScratchBytes(largestSegmentBytes) {\n  return 2 * largestSegmentBytes;\n}\n",
       "tests": [
@@ -333,7 +363,7 @@
           ]
         },
         {
-          "name": "30 GB largest segment -> 60,000,000,000 bytes of scratch",
+          "name": "30 GB largest segment -> 60,000,000,000 bytes at the peak",
           "code": "assert.equal(typeof mod.mergeScratchBytes, 'function', 'export a function named mergeScratchBytes');\nassert.equal(mod.mergeScratchBytes(30000000000), 60000000000);",
           "input": [
             30000000000
@@ -347,18 +377,18 @@
           ]
         },
         {
-          "name": "5 GB largest segment -> 10,000,000,000 bytes of scratch",
+          "name": "5 GB largest segment -> 10,000,000,000 bytes at the peak",
           "code": "assert.equal(typeof mod.mergeScratchBytes, 'function', 'export a function named mergeScratchBytes');\nassert.equal(mod.mergeScratchBytes(5000000000), 10000000000);",
           "input": [
             5000000000
           ]
         }
       ],
-      "explanation": "The disks see the merges, not just the ingest.\n\nFor `mergeWriteBytesPerDay(50000000000, 3)`:\n- 50 GB is written once on ingest\n- and rewritten by each of 3 merge passes → 50 × (1 + 3)\n- = **200,000,000,000 bytes** (200 GB) of physical writes per day\n\nSize SSD endurance for the merges, not the ingest — module 05's `index-write-amplification` counts per-insert row × index writes, while here whole-corpus REWRITE passes plus the 2× scratch headroom set the hardware.",
+      "explanation": "The disks see the merges, not just the ingest.\n\nFor `mergeWriteBytesPerDay(50000000000, 3)`:\n- 50 GB is written once on ingest\n- and rewritten by each of 3 merge passes → 50 × (1 + 3)\n- = **200,000,000,000 bytes** (200 GB) of physical writes per day\n\nSize SSD endurance for the merges, not the ingest — module 05's `index-write-amplification` counts per-insert row × index writes, while here whole-corpus REWRITE passes plus the 2× peak footprint of each merge set the hardware.",
       "hints": [
         "Immutable segments never change in place — combining them means writing the data again, and the inputs stay until the output is complete.",
         "physical = ingest × (1 + passes); scratch = 2 × largest segment.",
-        "Each merge pass rewrites the data once more, so physical writes are ingest × (1 + passes) — and merging a segment needs the old and new copies on disk at once, twice its size in scratch"
+        "Each merge pass rewrites the data once more, so physical writes are ingest × (1 + passes) — and merging a segment needs the old and new copies on disk at once, twice its size on disk at the peak"
       ]
     },
     {
@@ -576,11 +606,11 @@
           ]
         }
       ],
-      "explanation": "A vector index has no cold tail — the whole set must be resident.\n\nFor `vectorNodesNeeded(100000000, 768, 4, 64000000000)`:\n- 100,000,000 × 768 × 4 B = 307,200,000,000 bytes (307.2 GB)\n- ÷ 64,000,000,000 bytes of RAM = 4.8\n- rounded up → **5 nodes** — or quantize to 1 byte per dimension and run 2\n\nModule 01's `cache-working-set` keeps only the hot per-mille slice resident; here the WHOLE vector set must fit and quantization is the only discount.",
+      "explanation": "An in-memory graph index has no cold tail — the whole set must be resident.\n\nFor `vectorNodesNeeded(100000000, 768, 4, 64000000000)`:\n- 100,000,000 × 768 × 4 B = 307,200,000,000 bytes (307.2 GB)\n- ÷ 64,000,000,000 bytes of RAM = 4.8\n- rounded up → **5 nodes** — or quantize to 1 byte per dimension and run 2\n\nModule 01's `cache-working-set` keeps only the hot per-mille slice resident; here the WHOLE vector set must fit and quantization is the only discount.",
       "hints": [
-        "Unlike a cache, an ANN index cannot leave cold vectors on disk — size for all of them, and remember nodes come whole.",
+        "Unlike a cache, a graph-based ANN index such as HNSW keeps every vector resident — size for all of them, and remember nodes come whole.",
         "bytes = vectors × dims × bytesPerDim; nodes = ⌈bytes ÷ nodeRam⌉.",
-        "An embedding costs dims × bytesPerDim and the index must hold every vector in RAM, so multiply the three — divide by a node's RAM and round up for the fleet"
+        "An embedding costs dims × bytesPerDim and an in-memory graph index holds every vector in RAM, so multiply the three — divide by a node's RAM and round up for the fleet"
       ]
     }
   ]

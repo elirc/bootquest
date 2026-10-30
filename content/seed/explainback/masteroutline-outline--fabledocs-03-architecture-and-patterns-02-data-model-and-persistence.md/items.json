@@ -18,7 +18,7 @@
    "kind": "explain-back",
    "questions": [
     {
-     "prompt": "Explain how Outline keeps one team's documents apart from another's, and how it stores a document's body: where is isolation actually enforced, what does a plain Document query return and leave out, and why does a document carry three representations of its content?",
+     "prompt": "Explain how Outline keeps one team's documents apart from another's, and how it stores a document's body: where is isolation actually enforced, what does a plain Document query or a by-id load return and leave out, and why does a document carry several representations of its content?",
      "keyPoints": [
       {
        "text": "[w3] Tenancy is a teamId column on nearly every table, not a schema or database per tenant; each query adds the filter itself, e.g. documents.list seeds its where clause with the caller's teamId before any other condition.",
@@ -33,18 +33,18 @@
        "quote": "cheap ops, but one forgotten filter = cross-tenant leak"
       },
       {
-       "text": "[w2] Document's default scope returns only published, non-trial, non-template rows and pulls in the creating and updating users even if they are deleted; drafts are invisible to a plain find unless a withDrafts-style scope is chosen.",
+       "text": "[w2] Document's default scope returns only published, non-trial, non-template rows and pulls in the creating and updating users even if they are deleted, so list queries built on it skip drafts; the overridden findByPk, which almost every endpoint uses, always switches to withDrafts (and to withoutState unless includeState is asked for).",
        "cite": {
         "path": "server/models/Document.ts",
-        "lineStart": 99,
-        "lineEnd": 127
+        "lineStart": 776,
+        "lineEnd": 797
        }
       },
       {
-       "text": "[w3] The three forms are the title column, content as ProseMirror JSON, and state as the Yjs binary used by real-time collaboration; state is heavy, so ordinary reads select it only through a CASE that returns it when content is NULL.",
+       "text": "[w3] The body lives on one row in several forms: the title, content as ProseMirror JSON, a markdown text column, and state as the Yjs binary used by real-time collaboration; state is the heavy one, so ordinary reads select it only through a CASE that returns it when content is NULL (an older document not yet backfilled).",
        "cite": {
         "path": "server/models/Document.ts",
-        "lineStart": 84,
+        "lineStart": 80,
         "lineEnd": 86
        }
       },
@@ -57,15 +57,19 @@
        }
       },
       {
-       "text": "[w2] The invariant to defend is that content and state describe the same document, and the collaborative pipeline owns keeping them converged.",
-       "quote": "the collaborative pipeline is responsible for keeping them converged"
+       "text": "[w2] By-id isolation is not in the query: findByPk looks a row up by id alone, so a cross-team id still loads the document, and the boundary is the read policy's isTeamModel check comparing the actor's teamId with the row's.",
+       "cite": {
+        "path": "server/policies/utils.ts",
+        "lineStart": 30,
+        "lineEnd": 45
+       }
       },
       {
-       "text": "[w1] Heavy list reads avoid COUNT for the app's own client: when the x-client-version header is present, paginateQuery fetches limit + 1 rows and infers whether a next page exists instead of counting the table.",
+       "text": "[w1] findByPk also accepts a urlId slug as well as a uuid, so the public short URL and the primary key resolve through the same scoped lookup.",
        "cite": {
-        "path": "server/routes/api/middlewares/pagination.ts",
-        "lineStart": 21,
-        "lineEnd": 47
+        "path": "server/models/Document.ts",
+        "lineStart": 813,
+        "lineEnd": 825
        }
       }
      ]
@@ -118,8 +122,12 @@
        }
       },
       {
-       "text": "[w1] A senior check on soft delete: a hidden row can still occupy a unique index slot, so 'deleted' data can block a new row with the same key.",
-       "quote": "soft-deleted row still holds the unique slot?"
+       "text": "[w1] The permanent deleter guards shared and restored data: an attachment is scheduled for deletion only when a full-text query finds no other document in the team referencing its id, and deletedAt is re-checked in the database so a document restored after the cron's read is neither purged nor detached from its children.",
+       "cite": {
+        "path": "server/commands/documentPermanentDeleter.ts",
+        "lineStart": 20,
+        "lineEnd": 93
+       }
       }
      ]
     },

@@ -1,0 +1,174 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "stockade--docs-ARCHITECTURE.md",
+ "items": [
+  {
+   "key": "seed:explainback:stockade/explain-back/5e5154473c1511bb",
+   "provenance": {
+    "repo": "stockade",
+    "sha": "1cfc5dd7f8926ca02d296a80ff25ebf2ec024e3c",
+    "path": "docs/ARCHITECTURE.md",
+    "lines": {
+     "start": 12,
+     "end": 15
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "Walk through what Fulfil's Transactions.Command does with a command and its Idempotency-Key: what is hashed and with what, where the receipt is looked up and stored relative to the action's own writes, and what a retry with the same key gets, with the same payload and with a different one.",
+     "keyPoints": [
+      {
+       "text": "[w1] The key itself is checked first: anything shorter than 8 or longer than 150 characters is refused with a 400 idempotency_key error before any work starts.",
+       "cite": {
+        "path": "services/Fulfil/Data/Transactions.cs",
+        "lineStart": 24,
+        "lineEnd": 26
+       }
+      },
+      {
+       "text": "[w3] The receipt's digest is a SHA-256 over the actor's id, the operation name and the payload's JSON, while the lookup is by merchant and key, so one receipt binds who sent the command, what it was and with which input.",
+       "cite": {
+        "path": "services/Fulfil/Data/Transactions.cs",
+        "lineStart": 27,
+        "lineEnd": 31
+       }
+      },
+      {
+       "text": "[w3] Lookup, action and receipt all run inside one Run, a single serializable transaction: the receipt and an audit row naming the command key are added after the action and commit with its writes or not at all.",
+       "cite": {
+        "path": "services/Fulfil/Data/Transactions.cs",
+        "lineStart": 29,
+        "lineEnd": 42
+       }
+      },
+      {
+       "text": "[w2] Same key with the same operation and payload returns the stored result JSON: the action does not run again and no second audit row is written.",
+       "quote": "Replaying the same key/payload returns the result; changed payload conflicts."
+      },
+      {
+       "text": "[w2] Same key with a different payload or operation is a 409 idempotency_conflict, and because the actor's id is inside the digest, a colleague in the same merchant who reuses someone else's key also gets the conflict, not a replay.",
+       "cite": {
+        "path": "services/Fulfil/Data/Transactions.cs",
+        "lineStart": 31,
+        "lineEnd": 35
+       }
+      },
+      {
+       "text": "[w2] Two first sends of one key that race both miss the receipt; the unique (MerchantId, Key) index then fails one insert with 23505, which Run treats as retryable, so the loser starts again, finds the winner's receipt and replays it.",
+       "cite": {
+        "path": "services/Fulfil/Data/Transactions.cs",
+        "lineStart": 12,
+        "lineEnd": 23
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "Explain how Fulfil's background worker keeps the payment provider call for a refund outside any database transaction, and why a refund is not applied twice when two workers pick it up, when the follow-up write fails, or when the worker dies between the call and the write.",
+     "keyPoints": [
+      {
+       "text": "[w3] Each refund is claimed with a session-level advisory lock, pg_try_advisory_lock(hashtextextended('refund:' + id)) on a connection opened just for it; a worker that does not get the lock skips that refund this tick.",
+       "cite": {
+        "path": "services/Fulfil/Services/Worker.cs",
+        "lineStart": 37,
+        "lineEnd": 43
+       }
+      },
+      {
+       "text": "[w2] The lock belongs to that dedicated connection: it is released with pg_advisory_unlock_all when the lease is disposed, and it disappears with the connection if the worker dies, so a crash cannot wedge the refund.",
+       "cite": {
+        "path": "services/Fulfil/Services/Worker.cs",
+        "lineStart": 44,
+        "lineEnd": 56
+       }
+      },
+      {
+       "text": "[w2] Holding the lease, the worker re-reads the refund with no transaction open and stops if it is no longer pending.",
+       "cite": {
+        "path": "services/Fulfil/Services/Worker.cs",
+        "lineStart": 138,
+        "lineEnd": 144
+       }
+      },
+      {
+       "text": "[w3] The provider call happens with no transaction open and carries the stable Idempotency-Key 'refund:' + refund id, so every repeat for the same refund presents the same key and the design relies on the provider to recognise it.",
+       "cite": {
+        "path": "services/Fulfil/Services/Payments.cs",
+        "lineStart": 50,
+        "lineEnd": 57
+       }
+      },
+      {
+       "text": "[w2] The provider's answer is checked before it counts: the amount must equal the refund's amount, the currency must be the hard-coded usd and the status must be succeeded, and anything else throws an exception that asks for investigation or reconciliation.",
+       "cite": {
+        "path": "services/Fulfil/Services/Payments.cs",
+        "lineStart": 53,
+        "lineEnd": 55
+       }
+      },
+      {
+       "text": "[w3] The outcome is written in a separate serializable Run that loads the refund again and returns at once if it already shows succeeded, so a second worker or a repeated tick cannot apply the same outcome twice.",
+       "cite": {
+        "path": "services/Fulfil/Services/Worker.cs",
+        "lineStart": 145,
+        "lineEnd": 148
+       }
+      },
+      {
+       "text": "[w2] A crash between the provider call and that write leaves a refund the provider has paid but Fulfil still shows as pending; the next tick calls the provider again with the same key, which is exactly why the key must be derived from the refund id.",
+       "quote": "calls the provider with a stable ID-derived key"
+      }
+     ]
+    },
+    {
+     "prompt": "Defend or indict the architecture doc's claim that serializable transactions and constraints remain the correctness boundary now that every command first passes in-process admission gates and PostgreSQL session locks. What does admission add, what does it cost, and what still holds without it?",
+     "keyPoints": [
+      {
+       "text": "[w2] Admission turns the payload into resources (each product id, the record id, each promotion code, or the operation itself when there are none) and hashes each with the merchant into one of 256 stripes.",
+       "cite": {
+        "path": "services/Fulfil/Data/Admission.cs",
+        "lineStart": 12,
+        "lineEnd": 21
+       }
+      },
+      {
+       "text": "[w3] The stripes are sorted and taken in that order, first an in-process semaphore and then a PostgreSQL advisory lock per stripe, so commands on different API replicas queue for the same resource and two commands never lock in opposite orders.",
+       "cite": {
+        "path": "services/Fulfil/Data/Admission.cs",
+        "lineStart": 21,
+        "lineEnd": 33
+       }
+      },
+      {
+       "text": "[w3] The session locks are taken before the transaction begins and released only after it commits, so a waiter's serializable snapshot starts after the previous holder's commit instead of being doomed to a serialization failure.",
+       "quote": "plus ordered PostgreSQL session locks before opening the transaction snapshot"
+      },
+      {
+       "text": "[w2] The doc records why it was added: the first 500-request test exhausted the serializable retries, with most requests ending as server errors.",
+       "quote": "The first 500-request test exhausted serializable retries (30 accepted, 470 server errors)."
+      },
+      {
+       "text": "[w2] What it costs: 256 stripes mean unrelated products can share a stripe and wait for each other, and each command holds an extra connection for its locks on top of the one its transaction uses.",
+       "cite": {
+        "path": "services/Fulfil/Data/Admission.cs",
+        "lineStart": 9,
+        "lineEnd": 33
+       }
+      },
+      {
+       "text": "[w3] What still holds without it: Run is serializable and retries serialization failures, deadlocks and unique violations up to 16 times with bounded jitter, and the background worker calls Run directly without admission, so for it the transaction and the constraints are the only protection.",
+       "cite": {
+        "path": "services/Fulfil/Data/Transactions.cs",
+        "lineStart": 12,
+        "lineEnd": 23
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

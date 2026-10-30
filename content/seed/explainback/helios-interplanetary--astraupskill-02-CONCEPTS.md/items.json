@@ -29,11 +29,11 @@
        }
       },
       {
-       "text": "principalFromRequest is evaluated before the body is touched: the session cookie's HMAC is compared timing-safe, the expiry and persona are checked, and anything off is UNAUTHENTICATED (401).",
+       "text": "The route reads the session before the body only because principalFromRequest is the first argument to executeOperation: the session cookie's HMAC is compared timing-safe, the expiry and persona are checked, and anything off is UNAUTHENTICATED (401) before readJson runs.",
        "cite": {
-        "path": "src/server/identity.ts",
-        "lineStart": 81,
-        "lineEnd": 118
+        "path": "src/app/api/operations/commands/route.ts",
+        "lineStart": 5,
+        "lineEnd": 10
        }
       },
       {
@@ -45,15 +45,15 @@
        }
       },
       {
-       "text": "executeOperation parses the body against a strict discriminated union keyed on action, with a uuid commandId on every variant; a ZodError becomes 400 VALIDATION_FAILED with field paths.",
+       "text": "executeOperation parses the body against a strict discriminated union keyed on action, with a uuid commandId on every variant; the route wrapper turns the ZodError into 400 VALIDATION_FAILED listing each field path.",
        "cite": {
-        "path": "src/domain/operations.ts",
-        "lineStart": 3,
-        "lineEnd": 49
+        "path": "src/server/http.ts",
+        "lineStart": 67,
+        "lineEnd": 100
        }
       },
       {
-       "text": "Only then does idempotentCommand run its first statement, the role check: a persona whose role is not operator is refused as FORBIDDEN while no pool client has been borrowed yet.",
+       "text": "Only then does idempotentCommand check the role, so a persona whose role is not operator is refused as FORBIDDEN (403) after the parse.",
        "cite": {
         "path": "src/server/operations.ts",
         "lineStart": 13,
@@ -82,8 +82,12 @@
      "prompt": "Explain why helios keeps the schema parse and the operator check outside the database transaction but the receipt lookup inside it, behind a lock. For each, say what would change if it moved.",
      "keyPoints": [
       {
-       "text": "Parsing first means a malformed body never takes one of the pool's ten connections or a lock, and the receipt compares the parsed object rather than raw bytes.",
-       "quote": "the compared input is the zod-parsed object from `executeOperation`, not the raw request body."
+       "text": "Parsing first means a malformed body never takes one of the pool's ten connections or a lock, and because every variant is strict, an unknown extra field is refused up front instead of becoming part of the stored payload.",
+       "cite": {
+        "path": "src/server/operations.ts",
+        "lineStart": 47,
+        "lineEnd": 54
+       }
       },
       {
        "text": "Checking the role before any lookup keeps a read-only caller from learning anything about stored commands: moved after the lookup, an existing command id would answer differently from a new one, and the caller would hold a connection and the lock while finding out.",
@@ -118,16 +122,20 @@
        }
       },
       {
-       "text": "Receipts are keyed by organization and command id and remember the actor, so a stored receipt from another operator or with different input is refused as IDEMPOTENCY_CONFLICT rather than handed back.",
+       "text": "The lock key is a 64-bit hash of organization:command:id, so a hash collision can only make two unrelated commands wait for each other; correctness still comes from the exact (organization_id, id) receipt lookup, not from the lock.",
        "cite": {
         "path": "src/server/operations.ts",
-        "lineStart": 30,
-        "lineEnd": 36
+        "lineStart": 20,
+        "lineEnd": 29
        }
       },
       {
-       "text": "Putting the lookup, the work and the receipt in one transaction is what makes a receipt mean 'this committed'.",
-       "quote": "ties the replay decision to durable success."
+       "text": "The lock is held until COMMIT, through the whole work, so a slow command only blocks retries of its own id; the shared limit is the pool itself, ten connections each held for an entire command.",
+       "cite": {
+        "path": "src/server/db.ts",
+        "lineStart": 5,
+        "lineEnd": 13
+       }
       }
      ]
     },
@@ -143,8 +151,12 @@
        }
       },
       {
-       "text": "That makes 'at most once' true for committed effects only; a failed attempt's outcome is not cached, so a retry can succeed where the first try was refused, or the reverse.",
-       "quote": "A retry after a rollback is this case, not a replay."
+       "text": "Nothing but the replayed flag tells the client it is looking at an old result: a replay and a fresh run come back with the same status code and the same shape.",
+       "cite": {
+        "path": "src/server/operations.ts",
+        "lineStart": 37,
+        "lineEnd": 44
+       }
       },
       {
        "text": "A replay hands back the result stored at first commit, a snapshot that does not reflect anything that has changed since.",
@@ -159,8 +171,12 @@
        "quote": "A function can throw after some independent writes have committed (for example, writes made through a different pool connection)."
       },
       {
-       "text": "Which is why the test reads the tables after the failure instead of trusting the thrown error.",
-       "quote": "The regression checks database state after the exception instead of assuming that a rejected promise proves rollback."
+       "text": "Helios has such an independent write itself: request spans are exported in batches on their own pool connection once the request span ends, so a rolled-back command still leaves its request_spans row.",
+       "cite": {
+        "path": "src/server/observability.ts",
+        "lineStart": 5,
+        "lineEnd": 28
+       }
       },
       {
        "text": "operation_commands keeps every receipt with only a created_at column and nothing in the code prunes it, so command ids are remembered forever and the table only grows.",

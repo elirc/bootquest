@@ -36,6 +36,7 @@ function withUnits(trackId: TrackId, units: UnitSummary[], base: BootQuestApi = 
 const section = () => screen.findByTestId('track-units');
 const row = (id: number) => document.querySelector<HTMLElement>(`[data-unit="${id}"]`);
 const rows = () => document.querySelectorAll<HTMLElement>('[data-unit]');
+const status = () => screen.getByTestId('track-units-status');
 
 const MODULES = ['01-estimation', '02-caching', '03-queues', '04-sharding', '05-replication', '06-consistency', '07-rate-limiting', '08-storage', '09-search', '10-observability'];
 const LOCKED_DRILL = 1001;
@@ -89,7 +90,7 @@ describe('track units: campaign-less track (primary)', () => {
     const sec = await section();
     expect(within(sec).getByRole('heading', { level: 2, name: 'Practice units' })).toBeInTheDocument();
     await waitFor(() => expect(row(501)).not.toBeNull());
-    expect(within(sec).getByRole('heading', { level: 3, name: 'opusorganize (0/2)' })).toBeInTheDocument();
+    expect(within(sec).getByRole('heading', { level: 3, name: 'opusorganize 0/2 done' })).toBeInTheDocument();
     expect(row(501)!.tagName).toBe('A');
     expect(row(501)).toHaveAttribute('href', '/play/501');
     expect(row(502)).toHaveAttribute('href', '/play/502');
@@ -114,8 +115,10 @@ describe('track units: campaign-less track (primary)', () => {
     it('count line, kind-button counts, 136 [data-unit] rows, done/revealed chips, locked row is a non-link', async () => {
       const { count, kinds, groupHeads } = await open136();
       expect(count).toHaveTextContent(`Showing 136 of 136 units · ${GENERATED_DONE} done`);
-      // the count line is a live region, so filter results are announced
-      expect(count).toHaveAttribute('role', 'status');
+      // the visible count line is not itself a live region; a separate sr-only status region is
+      expect(count).not.toHaveAttribute('role');
+      expect(status()).toHaveAttribute('role', 'status');
+      expect(status()).toHaveTextContent(`Showing 136 of 136 units · ${GENERATED_DONE} done`);
       expect(rows()).toHaveLength(136);
       expect(groupHeads()).toHaveLength(10 + 29);
       expect(kinds.getByRole('button', { name: 'All (136)' })).toHaveAttribute('aria-pressed', 'true');
@@ -150,22 +153,39 @@ describe('track units: campaign-less track (primary)', () => {
       expect(rows()).toHaveLength(136);
     });
 
+    it('the status region settles on the final count after typing', async () => {
+      const { user, count, toolbar } = await open136();
+      await user.type(toolbar.getByRole('searchbox', { name: 'Filter units' }), 'baz');
+      // the visible line follows every keystroke (the per-keystroke silence is unit-tested with fake
+      // timers in useDebouncedValue.test.ts; on real timers only the settled text is asserted)
+      expect(count).toHaveTextContent(`Showing 2 of 136 units · ${GENERATED_DONE} done`);
+      // after the debounce the region holds the final count
+      await waitFor(() => expect(status()).toHaveTextContent(`Showing 2 of 136 units · ${GENERATED_DONE} done`), { timeout: 2000 });
+    });
+
     it('typing bazaar narrows the list to the bazaar repo', async () => {
       const { user, count, toolbar, groupHeads } = await open136();
       await user.type(toolbar.getByRole('searchbox', { name: 'Filter units' }), 'bazaar');
       expect(count).toHaveTextContent(`Showing 2 of 136 units · ${GENERATED_DONE} done`);
       expect([...rows()].map((r) => r.dataset.unit)).toEqual([String(BAZAAR_A), String(BAZAAR_B)]);
-      expect(groupHeads()).toEqual(['bazaar (1/2)']);
+      expect(groupHeads()).toEqual(['bazaar 1/2 done']);
       expect(within(row(BAZAAR_B)!).getByText(/\(set B\)$/)).toBeInTheDocument();
     });
 
-    it('group headers keep their UNFILTERED done/total under Hide done + a query (agree with the count line)', async () => {
+    it('group headers keep their UNFILTERED done/total under Hide done + a query, and say how many are shown', async () => {
       const { user, count, toolbar, groupHeads } = await open136();
       await user.click(toolbar.getByRole('button', { name: 'Hide done' }));
       await user.type(toolbar.getByRole('searchbox', { name: 'Filter units' }), 'bazaar');
       expect(count).toHaveTextContent(`Showing 1 of 136 units · ${GENERATED_DONE} done`);
       expect([...rows()].map((r) => r.dataset.unit)).toEqual([String(BAZAAR_B)]);
-      expect(groupHeads()).toEqual(['bazaar (1/2)']);
+      expect(groupHeads()).toEqual(['bazaar 1/2 done · 1 shown']);
+    });
+
+    it('a header reads done and shown separately when they differ (query only: 8 done, 1 shown)', async () => {
+      const { user, toolbar, groupHeads } = await open136();
+      await user.type(toolbar.getByRole('searchbox', { name: 'Filter units' }), 'Drill 1');
+      // estimation holds drills 0, 10, ..., 70 (all done); only "Drill 10" matches the query
+      expect(groupHeads().find((h) => h?.startsWith('estimation'))).toBe('estimation 8/8 done · 1 shown');
     });
 
     it('Hide done removes every data-state="done" row; a no-match filter offers Clear filters', async () => {
@@ -292,5 +312,49 @@ describe('track units: honesty', () => {
     expect(js.calls).toContain('getTrackUnits');
     expect(js.calls).not.toContain('getUnit');
     r.unmount();
+  });
+});
+
+describe('track units: #units deep link (the dashboard "Browse all" link)', () => {
+  const proto = Element.prototype as unknown as { scrollIntoView?: (arg?: unknown) => void };
+  let scrolled: Element[] = [];
+  beforeEach(() => {
+    scrolled = [];
+    proto.scrollIntoView = function (this: Element) {
+      scrolled.push(this);
+    };
+  });
+  afterEach(() => {
+    delete proto.scrollIntoView;
+  });
+
+  it('/campaign/js#units arrives with the collapsed browser open, scrolled to and its header focused', async () => {
+    const n = (await createMockApi().getTrackUnits('js')).units.length;
+    renderApp('/campaign/js#units');
+    const sec = await section();
+    expect(sec).toHaveAttribute('id', 'units');
+    const toggle = await within(sec).findByRole('button', { name: `Practice units (${n})` });
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    await waitFor(() => expect(rows()).toHaveLength(n));
+    await waitFor(() => expect(document.activeElement).toBe(toggle));
+    expect(scrolled).toEqual([sec]);
+  });
+
+  it('/campaign/sysdesign#units focuses the primary heading', async () => {
+    renderApp('/campaign/sysdesign#units');
+    const sec = await section();
+    await waitFor(() => expect(row(501)).not.toBeNull());
+    const heading = within(sec).getByRole('heading', { level: 2, name: 'Practice units' });
+    await waitFor(() => expect(document.activeElement).toBe(heading));
+    expect(scrolled).toEqual([sec]);
+  });
+
+  it('without the hash nothing is scrolled or focused, and the secondary browser stays collapsed', async () => {
+    renderApp('/campaign/js');
+    const sec = await section();
+    const toggle = await within(sec).findByRole('button', { name: /^Practice units \(\d+\)$/ });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(document.activeElement).not.toBe(toggle);
+    expect(scrolled).toEqual([]);
   });
 });

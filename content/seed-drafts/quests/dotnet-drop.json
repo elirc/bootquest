@@ -681,7 +681,7 @@
     "The validator range, the user quota, the blob store's max size",
     "The exact index size, the user quota, the 64 MB blob ceiling"
    ],
-   "explanation": "Chapter 14 lines 17-19: the chunk action declares a 64 MB request-size limit, StartUploadValidator permits a smaller configured chunk-size range, and the filesystem adapter enforces the session's exact expected size for that index: transport ceiling, accepted session configuration and exact content length. Quota is checked elsewhere and is not one of these three."
+   "explanation": "Chapter 14 lines 17-19: the chunk action declares a 64 MB request-size limit, StartUploadValidator permits a smaller configured chunk-size range, and the chunk adapter enforces the session's exact expected size for that index: transport ceiling, accepted session configuration and exact content length. The handler passes that size through IChunkStorage.StoreAsync's expectedSize parameter (IChunkStorage.cs line 16); the filesystem adapter itself is not in git at this pin and survives only as a snapshot under astraupskill/snapshots/. Quota is checked elsewhere and is not one of these three."
   },
   {
    "id": "q21-singleasync-not-404",
@@ -698,16 +698,26 @@
      "path": "astraupskill/extended-course/14-http-validation-and-error-evidence.md",
      "lineStart": 25,
      "lineEnd": 27
+    },
+    {
+     "path": "src/NetDropbox.Api/Controllers/UploadsController.cs",
+     "lineStart": 26,
+     "lineEnd": 26
+    },
+    {
+     "path": "src/NetDropbox.Api/Support/ExceptionMiddleware.cs",
+     "lineStart": 17,
+     "lineEnd": 29
     }
    ],
    "prompt": "The upload Status action queries with SingleAsync, and the row is missing. Why does chapter 14 warn against assuming the client gets a 404?",
-   "answer": "It raises a different exception from the explicit not-found branch",
+   "answer": "SingleAsync throws an InvalidOperationException, so the client gets a 500",
    "distractors": [
     "SingleAsync returns null, which the controller maps to a 204",
     "The middleware maps every EF exception to a 409 Conflict reply",
     "Missing rows raise a DomainException, which always maps to 404"
    ],
-   "explanation": "Chapter 14 lines 25-27: ExceptionMiddleware maps AppException to its chosen status, DomainException to 400, UnauthorizedAccessException to 401 and anything else to a 500 with hidden detail; a SingleAsync missing row raises a different exception from the explicit not-found AppException branch, so absence must not be renamed 404 without following the actual branch."
+   "explanation": "Chapter 14 lines 25-27 warn that a SingleAsync missing row raises a different exception from the explicit not-found AppException branch. In code, the Status action calls SingleAsync (UploadsController.cs line 26), which throws InvalidOperationException when no row matches. ExceptionMiddleware (lines 17-29) maps AppException to its own status, DomainException to 400 and UnauthorizedAccessException to 401; everything else, this exception included, becomes a 500 with the detail hidden. SingleAsync never returns null, there is no EF-to-409 rule, and no DomainException is involved."
   },
   {
    "id": "q22-return-is-not-delivery",
@@ -730,62 +740,10 @@
    "answer": "That the client got every byte, since streaming comes later",
    "distractors": [
     "That the caller was authorized, as File results skip auth",
-    "Which stream the service opened for the requested file",
+    "That the service returned a stream, as File wraps nulls",
     "That the file's scan status was checked before the return"
    ],
    "explanation": "Chapter 14 lines 33-37: the action's successful return does not mean the client received all bytes; result execution, stream reads, transport and client cancellation come later. A service test can prove which stream was opened but not completed delivery, the middleware has no Response.HasStarted guard, and AccessCount cannot tell complete from partial transfers."
-  },
-  {
-   "id": "q23-partial-blob-kept",
-   "kind": "quiz",
-   "source": {
-    "path": "astraupskill/extended-course/15-local-and-object-storage-contracts.md",
-    "lines": {
-     "start": 7,
-     "end": 13
-    }
-   },
-   "cites": [
-    {
-     "path": "astraupskill/extended-course/15-local-and-object-storage-contracts.md",
-     "lineStart": 9,
-     "lineEnd": 13
-    }
-   ],
-   "prompt": "LocalBlobStorage receives a stream whose second read throws after the final blob file was created. What can a later retry of the same save do?",
-   "answer": "See the file exists and skip the copy, keeping the partial blob",
-   "distractors": [
-    "Spot the length mismatch and rewrite the blob with the full bytes",
-    "Find the pending temp file and publish it to the final path",
-    "Throw, because the first save still holds a lock on that path"
-   ],
-   "explanation": "Chapter 15 lines 9-13: LocalBlobStorage checks existence and copies straight into the final file, without the pending-file publication protocol used for chunks. If the second read throws, an existence query can return true for a file holding only the first bytes, and a retry sees existence and skips the copy, preserving the incomplete artifact. No length check or per-key lock is described."
-  },
-  {
-   "id": "q24-weak-adapter-test",
-   "kind": "quiz",
-   "source": {
-    "path": "astraupskill/extended-course/15-local-and-object-storage-contracts.md",
-    "lines": {
-     "start": 17,
-     "end": 25
-    }
-   },
-   "cites": [
-    {
-     "path": "astraupskill/extended-course/15-local-and-object-storage-contracts.md",
-     "lineStart": 23,
-     "lineEnd": 25
-    }
-   ],
-   "prompt": "Why does chapter 15 call \"both adapters passed save then read\" a weak compatibility test for LocalBlobStorage and S3CompatibleBlobStorage?",
-   "answer": "It exercises none of the cases where the two adapters diverge",
-   "distractors": [
-    "S3 reads are eventually consistent, so the test flakes in CI",
-    "The local save is buffered, so the read only hits the cache",
-    "It reuses one key, so the second adapter's save never runs"
-   ],
-   "explanation": "Chapter 15 lines 23-25: the local adapter skips the write when the key exists while the S3 adapter simply issues PutObject with no conditional rule; a save-then-read happy path does not compare existing-key behavior, cancellation, stream ownership, partial writes, concurrent saves or deleting an absent object. A shared suite should name those cases."
   },
   {
    "id": "q25-offset-page-repeat",
@@ -889,26 +847,6 @@
    ],
    "front": "Netdrop testing: which kind of test supplies evidence for which boundary",
    "back": "Domain tests for pure decisions (UploadSession rounding, strict SHA-256, overflow, final-chunk size, terminal states; UserStorageAccount quota and overflow): use concrete values and inspect state after the rejection, since a bare exception check would miss a method that mutates before throwing. Real filesystem tests for publication (FileSystemChunkStorageTests in unique temp directories): the winner is the actual accepted file, not a mock call count, and cleanup targets only the fixture's own directory."
-  },
-  {
-   "id": "f05-test-case-table",
-   "kind": "flashcard",
-   "source": {
-    "path": "astraupskill/04-TESTING-AND-DEBUGGING.md",
-    "lines": {
-     "start": 11,
-     "end": 22
-    }
-   },
-   "cites": [
-    {
-     "path": "astraupskill/04-TESTING-AND-DEBUGGING.md",
-     "lineStart": 13,
-     "lineEnd": 22
-    }
-   ],
-   "front": "Netdrop's 22 recorded test cases, file by file",
-   "back": "20 facts + one theory with 2 rows = 22 cases in 21 methods. Domain/FileNodeTests 3 (pure domain). Domain/UploadSessionTests 7 (rounding, invalid hashes, unrepresentable count, exact remainder, terminal transitions). Domain/UserStorageAccountTests 3 (quota, overflow, preflight doesn't mutate). Uploads/FileSystemChunkStorageTests 4 (real temp files). Uploads/UploadHandlerTests 5 (real handlers + EF InMemory + FakeChunkStorage/FakeBlobStorage)."
   },
   {
    "id": "f06-diagnostic-design",
@@ -1019,6 +957,83 @@
    ],
    "front": "Chapter 09: how to centralize file-operation guards without breaking behavior",
    "back": "First write a matrix of the owner, parent, name, deletion and scan checks each operation needs (create, rename, move, copy, delete, restore, upload completion), marking absent checks as source observations rather than confirmed remote defects. Then find missing or inconsistent rules. A shared destination policy must fit each operation (creating a child cannot form a cycle the way moving an ancestor can; a copied file has no subtree), and a helper should implement an agreed policy, not hide differences behind a generic ValidateNode."
+  },
+  {
+   "id": "q28-copy-destination-unchecked",
+   "kind": "quiz",
+   "source": {
+    "path": "src/NetDropbox.Application/Files/FileService.cs",
+    "lines": {
+     "start": 52,
+     "end": 80
+    }
+   },
+   "cites": [
+    {
+     "path": "src/NetDropbox.Application/Files/FileService.cs",
+     "lineStart": 52,
+     "lineEnd": 62
+    },
+    {
+     "path": "src/NetDropbox.Application/Files/FileService.cs",
+     "lineStart": 64,
+     "lineEnd": 79
+    },
+    {
+     "path": "astraupskill/extended-course/09-folder-graphs-names-and-operation-specific-guards.md",
+     "lineStart": 25,
+     "lineEnd": 25
+    }
+   ],
+   "prompt": "In the delivered code, user A copies one of their own files with parentId set to the id of a folder owned by user B. Which check refuses the copy?",
+   "answer": "None: CopyAsync never loads or checks the destination folder",
+   "distractors": [
+    "GetOwnedNode on the destination, as in MoveAsync, returns a 404",
+    "FileNode.CreateFile rejects a parent folder with another owner",
+    "SaveChanges fails on a foreign key from parent to the owner id"
+   ],
+   "explanation": "FileService.cs lines 64-79: CopyAsync loads the source file under A's owner id, bumps the blob reference and calls FileNode.CreateFile(userId, parentId, ...) with the supplied parentId untouched, then saves. Only MoveAsync (lines 52-62) loads the destination through GetOwnedNode and requires a Folder. CreateFile (FileNode.cs lines 35-36) just constructs the node, and the model configures no parent foreign key, so a node owned by A is saved under B's folder id. Chapter 09 line 25 notes that copy does not validate its destination."
+  },
+  {
+   "id": "q29-start-validation-status",
+   "kind": "quiz",
+   "source": {
+    "path": "src/NetDropbox.Application/Common/ValidationBehavior.cs",
+    "lines": {
+     "start": 1,
+     "end": 22
+    }
+   },
+   "cites": [
+    {
+     "path": "src/NetDropbox.Api/Program.cs",
+     "lineStart": 28,
+     "lineEnd": 30
+    },
+    {
+     "path": "src/NetDropbox.Application/Common/ValidationBehavior.cs",
+     "lineStart": 17,
+     "lineEnd": 18
+    },
+    {
+     "path": "src/NetDropbox.Application/Common/AppException.cs",
+     "lineStart": 5,
+     "lineEnd": 5
+    },
+    {
+     "path": "src/NetDropbox.Api/Support/ExceptionMiddleware.cs",
+     "lineStart": 17,
+     "lineEnd": 23
+    }
+   ],
+   "prompt": "A client POSTs a start-upload request with ChunkSize 1024 to the delivered API, a size its validator rejects. What would the response be, and what produces it?",
+   "answer": "400: ValidationBehavior throws an AppException with its default status",
+   "distractors": [
+    "200: the session is created, since only the domain checks the chunk size",
+    "422: the ApiController filter reports the failed rule as a model error",
+    "500: FluentValidation's own exception falls to the middleware's last arm"
+   ],
+   "explanation": "Program.cs lines 28-30 register MediatR, the FluentValidation validators and ValidationBehavior as a pipeline behavior, and the Start action sends its command through the mediator. When StartUploadValidator's chunk-size rule fails, ValidationBehavior (lines 17-18) throws new AppException(messages) instead of FluentValidation's ValidationException; AppException's status defaults to BadRequest (AppException.cs line 5), and ExceptionMiddleware maps an AppException to its own status (lines 17-23). The handler never runs, there is no 422 path, and nothing reaches the 500 arm. The pin does not build (the storage adapters are not in git), so this is what the delivered code would answer."
   }
  ]
 }

@@ -17,6 +17,12 @@
 //     (start kept when ≠ 1). Same discipline as bullets, except an ordered line interrupts a
 //     paragraph only when it starts at 1 (CommonMark), so "12. see the appendix" mid-paragraph
 //     stays prose. "1 app.patch(" (space after the number) is the numbered LISTING, not a list.
+//   - qw: a list item may wrap: a following line indented by 1 to (marker width + 3) spaces that
+//     is not itself a list or fence line joins the item ("1. **x**\n   more"). Any other non-blank
+//     run (unindented, or deeper than that cap) joins an ORDERED item only when the list's next
+//     item follows before a blank line (a lazy continuation); otherwise it ends the list as
+//     before, so the width + 3 cap binds only when no next item follows. Ordered lists
+//     separated only by blank lines merge when the numbering continues ("1. a\n\n2. b" = one <ol>).
 // It builds React nodes only (never innerHTML), so every character of the source is rendered
 // as text. No markdown library: anything it does not understand stays literal text.
 
@@ -87,10 +93,17 @@ export function parseProse(src: string): ProseBlock[] {
     if (LIST_RE.test(line)) {
       flush();
       const items: string[] = [];
+      let width = 0;
       while (i < lines.length) {
         const m = LIST_RE.exec(lines[i]!);
-        if (!m) break;
-        items.push(m[1]!.trimEnd());
+        if (m) {
+          items.push(m[1]!.trimEnd());
+          width = lines[i]!.length - m[1]!.length;
+        } else {
+          const more = continuation(lines[i]!, width);
+          if (more === null) break;
+          items[items.length - 1] += ` ${more}`;
+        }
         i++;
       }
       out.push({ kind: 'list', items });
@@ -106,13 +119,34 @@ export function parseProse(src: string): ProseBlock[] {
       flush();
       const start = Number(ol[1]);
       const items: string[] = [];
+      let width = 0;
       while (i < lines.length) {
         const m = OLIST_RE.exec(lines[i]!);
-        if (!m) break;
-        items.push(m[2]!.trimEnd());
+        if (m) {
+          items.push(m[2]!.trimEnd());
+          width = lines[i]!.length - m[2]!.length;
+        } else {
+          const more = continuation(lines[i]!, width);
+          if (more !== null) {
+            items[items.length - 1] += ` ${more}`;
+          } else {
+            // a LAZY (unindented) continuation joins the item only when the next item of this
+            // list follows before any blank line; otherwise the line ends the list
+            const j = lazyRun(lines, i, start + items.length);
+            if (j === i) break;
+            items[items.length - 1] += ` ${lines.slice(i, j).map((l) => l.trim()).join(' ')}`;
+            i = j;
+            continue;
+          }
+        }
         i++;
       }
-      out.push({ kind: 'olist', items, start });
+      // a loose list ("1. a", blank, "2. b"): only blank lines can separate it from the previous
+      // ordered list (any other line would have produced a block in between), and its numbering
+      // continues that list, so it is the same <ol>
+      const prev = out[out.length - 1];
+      if (prev?.kind === 'olist' && start === prev.start + prev.items.length) prev.items.push(...items);
+      else out.push({ kind: 'olist', items, start });
       continue;
     }
     // a numbered listing: "1 …", "2 …" … on consecutive lines. W10: code only when the run has
@@ -132,6 +166,32 @@ export function parseProse(src: string): ProseBlock[] {
   }
   flush();
   return out;
+}
+
+/**
+ * qw: a wrapped list item's next line ("1. **x**\n   more text"). A non-blank line indented by 1 to
+ * (marker width + 3) spaces continues the current item, unless it is itself a list item or a fence
+ * line; `width` is the column where the item's text starts. Returns the trimmed text, or null.
+ */
+function continuation(line: string, width: number): string | null {
+  if (line.trim() === '' || LIST_RE.test(line) || OLIST_RE.test(line) || FENCE_RE.test(line)) return null;
+  const indent = /^ */.exec(line)![0].length;
+  return indent >= 1 && indent <= width + 3 ? line.trim() : null;
+}
+
+/**
+ * Lines i..j-1 (at any indent: the width + 3 cap does not apply here) are a lazy continuation of an
+ * ordered item when they are non-blank, start no list or
+ * fence, and line j is the list's NEXT item (numbered `next`). Returns j, or i when that is not so.
+ */
+function lazyRun(lines: string[], i: number, next: number): number {
+  let j = i;
+  while (j < lines.length && lines[j]!.trim() !== '' && !LIST_RE.test(lines[j]!) && !FENCE_RE.test(lines[j]!)) {
+    const m = OLIST_RE.exec(lines[j]!);
+    if (m) return j > i && Number(m[1]) === next ? j : i;
+    j++;
+  }
+  return i;
 }
 
 function numberAt(line: string): number | null {

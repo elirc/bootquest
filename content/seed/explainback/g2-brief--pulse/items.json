@@ -18,10 +18,10 @@
    "kind": "explain-back",
    "questions": [
     {
-     "prompt": "G2 BRIEF — pulse (TypeScript monorepo: Fastify ingest, Redis Streams, vitest). Verified finding on the S13 PII fix: scrubProps only looks at the top-level keys of an event's props, so `props.user.email` or `props.contacts[0].phone` reaches the stream readable, and the HASH rule is a plain unsalted sha256, so anyone holding a list of candidate addresses can hash it and match. You will delegate the fix to a coding agent. Write the brief: goal, allowed files, boundaries, test command, stop condition. Commit to your brief first, then tick the checkpoints you covered and add up the weights.",
+     "prompt": "G2 BRIEF — pulse (TypeScript monorepo: Fastify ingest, Redis Streams, vitest). Verified finding on the S13 PII fix: scrubProps only looks at the top-level keys of an event's props, so `props.user.email` or `props.contacts[0].phone` reaches the stream readable, and the HASH rule is a plain unsalted sha256, so the stored value of a known address is reproducible by anyone who can run sha256. You will delegate the fix to a coding agent. Write the brief: goal, allowed files, boundaries, test command, stop condition. Commit to your brief first, then tick the checkpoints you covered and add up the weights.",
      "keyPoints": [
       {
-       "text": "[w3] Goal: every DENY and HASH rule applies at any depth of props, inside nested objects and arrays, before the event is added to the stream; HASH values become a keyed hash (HMAC-SHA256 with a server-held secret), still stable and joinable inside Pulse but no longer matchable by hashing a guessed list.",
+       "text": "[w3] Goal: every DENY and HASH rule applies at any depth of props, inside nested objects and arrays, before the event is added to the stream, and HASH values come from a keyed hash under a server-held secret, so one input still maps to one stored value inside Pulse.",
        "cite": {
         "path": "packages/shared/src/pii.ts",
         "lineStart": 33,
@@ -69,7 +69,7 @@
        }
       },
       {
-       "text": "[w2] Stop condition: a new ingest test posts nested and array-held email and password values and asserts on what lands in the stream, red on the original and green on the fix, plus a test that one email hashes identically under one key and differently under another; the quota overshoot and the silent fallback for an unparseable ts are reported, not fixed.",
+       "text": "[w2] Stop condition: a new ingest test posts nested and array-held email and password values and asserts on what lands in the stream, red on the original and green on the fix, plus a test that one email hashes identically under one key and differently under another; the audit's quota and timestamp findings are reported, not fixed.",
        "cite": {
         "path": "apps/ingest/src/index.ts",
         "lineStart": 19,
@@ -82,7 +82,7 @@
      "prompt": "G2 PRE-MORTEM — same delegation. What will an agent most likely get wrong here, and which line of your brief prevents it?",
      "keyPoints": [
       {
-       "text": "[w3] It recurses without a bound, so a deeply nested hostile payload overflows the stack, the error handler answers 500 for the whole batch and an availability bug replaces a privacy bug; the bounded, fail-closed walk prevents it.",
+       "text": "[w3] It recurses without a bound, so a deeply nested hostile payload overflows the stack and the error handler answers 500 after part of the batch is already queued, an availability bug in place of a privacy bug; the bounded, fail-closed walk prevents it.",
        "cite": {
         "path": "apps/ingest/src/server.ts",
         "lineStart": 99,
@@ -127,7 +127,7 @@
      "prompt": "G2 HANDBACK REVIEW — the agent hands back a diff and a green run. What do you check before accepting it?",
      "keyPoints": [
       {
-       "text": "[w3] The nested-scrub test reads the entry back off the in-memory stream (not scrubProps' return value) and is shown red on the original server and green on the fix.",
+       "text": "[w3] The nested-scrub test goes through the ingest server, not just a unit call of scrubProps, and is shown red on the original server and green on the fix.",
        "cite": {
         "path": "apps/ingest/src/pii.test.ts",
         "lineStart": 27,
@@ -153,14 +153,18 @@
       {
        "text": "[w2] The pasted output names both packages' vitest runs; the root `test` script goes through turbo, so a replayed cache hit is not evidence that the new tests ran.",
        "cite": {
-        "path": "package.json",
-        "lineStart": 11,
-        "lineEnd": 11
+        "path": "turbo.json",
+        "lineStart": 12,
+        "lineEnd": 12
        }
       },
       {
-       "text": "[w1] The handback lists, without fixing, the quota read-then-increment overshoot, the unflagged ts fallback, keys like user_email that exact names miss, and that hashes stored before the switch will not join new ones.",
-       "quote": "What lands unscrubbed can leak later."
+       "text": "[w1] The handback lists, without fixing, the audit findings the brief put out of scope, any sensitive key the exact rule names still miss, and the fact that hashes stored before the switch will not join new ones.",
+       "cite": {
+        "path": "packages/shared/src/pii.ts",
+        "lineStart": 22,
+        "lineEnd": 26
+       }
       }
      ]
     }

@@ -26,6 +26,8 @@ class Exercise {
     public static void main(String[] args) {
         test("twice(2) is 4", () -> eq(twice(2), 4));
         test("twice(0) is 0 (boundary)", () -> eq(twice(0), 0));
+        test("twice(1) is 2", () -> eq(twice(1), 2));
+        test("twice(-3) is -6", () -> eq(twice(-3), -6));
         System.exit(report());
     }
     // ─── end tests ───────────────────────────────────────────────────────
@@ -68,7 +70,8 @@ function writeAuthoring(files: Record<string, unknown>): string {
   return root;
 }
 
-const TRIPLE_STARTER = STARTER.replace(/twice/g, 'thrice').replace('multiply by two', 'multiply by three').replace('eq(thrice(2), 4)', 'eq(thrice(2), 6)').replace('thrice(2) is 4', 'thrice(2) is 6');
+const TRIPLE_STARTER = STARTER.replace(/twice/g, 'thrice').replace('multiply by two', 'multiply by three').replace('eq(thrice(2), 4)', 'eq(thrice(2), 6)').replace('thrice(2) is 4', 'thrice(2) is 6')
+  .replace('eq(thrice(1), 2)', 'eq(thrice(1), 3)').replace('thrice(1) is 2', 'thrice(1) is 3').replace('eq(thrice(-3), -6)', 'eq(thrice(-3), -9)').replace('thrice(-3) is -6', 'thrice(-3) is -9');
 const TRIPLE_SOLUTION = TRIPLE_STARTER.replace('throw new UnsupportedOperationException("TODO: multiply by three");', 'return n * 3;');
 
 const twoExercises = () =>
@@ -170,8 +173,8 @@ describe('manifest', () => {
     expect(m.expected).toEqual({ total: 2, code: 2, quiz: 0, output: 0, written: 0 });
   });
 
-  it('JAVADRILLS_EXPECTED pins the committed census (86 drill-java units)', () => {
-    expect(JAVADRILLS_EXPECTED).toEqual({ total: 86, code: 86, quiz: 0, output: 0, written: 0 });
+  it('JAVADRILLS_EXPECTED pins the committed census (80 drill-java units)', () => {
+    expect(JAVADRILLS_EXPECTED).toEqual({ total: 80, code: 80, quiz: 0, output: 0, written: 0 });
   });
 });
 
@@ -279,7 +282,27 @@ describe('import-time refusals (write nothing)', () => {
     clean();
     refuse([both((s) => s.replace(/^ {8}test\(.*\n/gm, '        check();\n'))], /no test\(\.\.\.\) call/);
     clean();
-    refuse([both((s) => s.replace('test("twice(2) is 4",', 'test(NAME,').replace('test("twice(0) is 0 (boundary)",', 'test(NAME + "0",'))], /names no test with a string literal/);
+    refuse([both((s) => s.replace(/test\("[^"]*",/g, 'test(NAME,'))], /names no test with a string literal/);
+  });
+
+  it('refuses fewer than 4 or more than 8 named tests, a duplicate name, and no "(boundary)" test', () => {
+    const both = (f: (s: string) => string) => exercise({ starter: f(STARTER), solution: f(SOLUTION) });
+    refuse([both((s) => s.replace(/^ {8}test\("twice\((1|-3)\).*\n/gm, ''))], /needs 4-8 literally named tests \(has 2\)/);
+    clean();
+    const extra = Array.from({ length: 5 }, (_, i) => `        test("extra ${i}", () -> eq(twice(${i}), ${2 * i}));\n`).join('');
+    refuse([both((s) => s.replace('        System.exit(report());', `${extra}        System.exit(report());`))], /needs 4-8 literally named tests \(has 9\)/);
+    clean();
+    refuse([both((s) => s.replace(' (boundary)"', '"'))], /at least one test named with "\(boundary\)"/);
+    clean();
+    refuse([both((s) => s.replace('test("twice(1) is 2"', 'test("twice(2) is 4"'))], /duplicate test name "twice\(2\) is 4"/);
+  });
+
+  it('refuses a pasteable hint 3: a semicolon, a lambda arrow, return or parentheses', () => {
+    for (const h3 of ['return n times two', 'n * 2;', 'call twice(n)', 'double it ) then stop', 'map n -> n times two']) {
+      refuse([exercise({ hints: ['Multiply.', 'The * operator.', h3] })], /hint 3 must be the approach in words/);
+      clean();
+    }
+    expect(() => mapExercise('01-alpha', exercise({ hints: ['a', 'b', 'multiply by two, then hand back the product'] }), 0)).not.toThrow();
   });
 });
 

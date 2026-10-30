@@ -7,10 +7,10 @@
     { "text": "The organisation role is checked first: ORG_OWNER and ORG_ADMIN pass every project permission whether or not they hold a membership in that project.", "cite": { "path": "src/lib/permissions/permissions.ts", "lineStart": 66, "lineEnd": 69 } },
     { "text": "Anyone else needs a project membership row; with no project role the check answers false outright.", "cite": { "path": "src/lib/permissions/permissions.ts", "lineStart": 71, "lineEnd": 73 } },
     { "text": "With a project role, the answer is a lookup in the role's permission list, and the OBSERVER list carries view, comment and filter creation but not issue:create.", "cite": { "path": "src/lib/permissions/permissions.ts", "lineStart": 53, "lineEnd": 75 } },
-    { "text": "The project role is read from the membership filtered to the current user, on a project lookup that also filters by the URL's organisation, so another tenant's project id resolves to nothing.", "cite": { "path": "src/lib/auth/request-context.ts", "lineStart": 37, "lineEnd": 54 } },
+    { "text": "Both roles are captured once per request into a ProjectAccessContext (the org role from the session's memberships, the project role from the user's membership row), and createIssue takes that object as given, so its own re-check reads the same snapshot rather than the database.", "cite": { "path": "src/lib/auth/request-context.ts", "lineStart": 37, "lineEnd": 54 } },
     { "text": "The route demands issue:create through requireProjectAccess before it even parses the request body.", "cite": { "path": "src/app/api/organizations/[organizationId]/projects/[projectId]/issues/route.ts", "lineStart": 22, "lineEnd": 27 } },
     { "text": "createIssue asserts the same permission again as its first statement, so a caller that reaches the service without the route still gets refused.", "cite": { "path": "src/services/issues/issueService.ts", "lineStart": 148, "lineEnd": 148 } },
-    { "text": "Permission is one question and project configuration is another; the service keeps them as separate failures.", "quote": "Authorization and configuration validation answer different questions." }
+    { "text": "The project-role grants are a constant in code, not data: changing what an OBSERVER may do is a deploy, and no database row can grant issue:create beyond the roles the table lists.", "cite": { "path": "src/lib/permissions/permissions.ts", "lineStart": 31, "lineEnd": 54 } }
    ]
   },
   {
@@ -22,7 +22,7 @@
     { "text": "A second pass over the definitions catches a required field the client omitted entirely, which the per-value loop can never see.", "cite": { "path": "src/services/issues/issueService.ts", "lineStart": 100, "lineEnd": 110 } },
     { "text": "An assignee must be a member of this project, checked with an organisation- and project-scoped member query.", "cite": { "path": "src/services/issues/issueService.ts", "lineStart": 113, "lineEnd": 131 } },
     { "text": "The starting status is not a client field at all; the server takes it from the workflow.", "quote": "the client does not choose the initial workflow status; project configuration supplies it." },
-    { "text": "requireInitialWorkflowStatus looks for the status flagged isInitial and throws ConflictError, a misconfiguration signal, when the workflow has none.", "cite": { "path": "src/services/workflows/workflowService.ts", "lineStart": 25, "lineEnd": 33 } }
+    { "text": "Nothing in the database guarantees exactly one initial status: the rule is a superRefine on the project payload, and requireInitialWorkflowStatus takes the first flagged status with .find, so a second flagged status written outside that schema is silently ignored.", "cite": { "path": "src/services/workflows/workflowService.ts", "lineStart": 25, "lineEnd": 33 } }
    ]
   },
   {
@@ -31,10 +31,10 @@
     { "text": "A refused request never reaches the transaction, so it allocates no sequence number and writes no partial issue; the transaction only opens after the initial status is resolved.", "cite": { "path": "src/services/issues/issueService.ts", "lineStart": 148, "lineEnd": 170 } },
     { "text": "The runtime test pins that: the permission refusal records no calls at all, and the missing-workflow and no-initial-status refusals record only the setup read.", "cite": { "path": "tests/issue-service-runtime.test.mjs", "lineStart": 26, "lineEnd": 28 } },
     { "text": "Inside the transaction sit only writes: sequence, issue row, custom values, the ISSUE_CREATED activity and the automation event, all on the same tx client.", "cite": { "path": "src/services/issues/issueService.ts", "lineStart": 170, "lineEnd": 241 } },
-    { "text": "Each failure keeps its own HTTP status through typed AppError subclasses, so a caller can tell 'not allowed' from 'not configured' from 'bad input'.", "quote": "Keeping these real errors visible teaches callers how to respond." },
-    { "text": "Using a transaction is not the same claim as having shown it is atomic.", "quote": "Grouping writes under a transaction is distinct from proving atomicity." },
-    { "text": "What the adapter test can see is limited to which client each write used and in what order.", "quote": "The test observes client identity and call ordering." },
-    { "text": "The cost of checking first: the membership and setup reads happen outside the transaction and may be out of date by the time the writes run.", "quote": "Pre-transaction membership and setup reads can become stale; the lab does not resolve that concurrency question." }
+    { "text": "Sequence allocation is MAX(sequenceNumber) + 1 read inside the transaction at the default isolation level (no isolationLevel is set anywhere in src), so two concurrent creates in one project can both read the same maximum.", "cite": { "path": "src/repositories/issueRepository.ts", "lineStart": 152, "lineEnd": 164 } },
+    { "text": "The loser then hits @@unique([projectId, sequenceNumber]) with Prisma's P2002, and handleRouteError only recognises ZodError and AppError, so the caller gets the generic 500 instead of a retry or a 409.", "cite": { "path": "src/lib/http/responses.ts", "lineStart": 19, "lineEnd": 51 } },
+    { "text": "The repo's own review lists the fixes: a per-project counter row updated with UPDATE ... RETURNING, a retry on P2002, or SERIALIZABLE isolation with retry; none is in the code at this commit.", "cite": { "path": "docs/architecture/domain-model.md", "lineStart": 97, "lineEnd": 97 } },
+    { "text": "The assignee's membership is checked before the transaction opens and never re-read on the transaction client, so a member removed in between can still be assigned the new issue.", "cite": { "path": "src/services/issues/issueService.ts", "lineStart": 155, "lineEnd": 170 } }
    ]
   }
  ]

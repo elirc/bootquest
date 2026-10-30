@@ -29,15 +29,15 @@
        }
       },
       {
-       "text": "[w3] Guarded form: the Pending-to-Paid write only lands while the stored status is still Pending (the existing PaymentStatus column mapped as a concurrency token, so EF puts the original value in the UPDATE's WHERE); the losing save's DbUpdateConcurrencyException is caught in CompleteOrderAsync alone, the order is re-read, and the email stays behind the save that won.",
+       "text": "[w3] Guarded form: the Pending-to-Paid write only lands while the stored status is still Pending (the existing PaymentStatus column mapped as a concurrency token, so EF puts the original value in the UPDATE's WHERE); the persistence layer's IUnitOfWork save turns EF's concurrency exception into one application-owned conflict exception, CompleteOrderAsync alone catches that and reloads the order before it answers, and the email stays behind the save that won.",
        "cite": {
         "path": "src/Netgum.Infrastructure/Persistence/NetgumDbContext.cs",
-        "lineStart": 176,
-        "lineEnd": 176
+        "lineStart": 35,
+        "lineEnd": 48
        }
       },
       {
-       "text": "[w2] Scope includes the failure branch: Pending-to-Failed goes through the same guarded write, so a racing success and failure cannot both commit, since each domain method only checks its own loaded copy.",
+       "text": "[w2] Scope includes the failure branch: Pending-to-Failed goes through the same guarded write, so a racing success and failure cannot both commit and MarkFailed does not stay a second, unguarded way to end a pending order.",
        "cite": {
         "path": "src/Netgum.Domain/Orders/Order.cs",
         "lineStart": 157,
@@ -45,11 +45,11 @@
        }
       },
       {
-       "text": "[w2] Allowed files: CheckoutService.cs, the OrderConfiguration block of NetgumDbContext.cs, and new cases in tests/Netgum.Tests/Application/CheckoutServiceTests.cs.",
+       "text": "[w2] Allowed files: CheckoutService.cs, NetgumDbContext.cs (the OrderConfiguration block and the IUnitOfWork save), one new conflict-exception file under src/Netgum.Application/Abstractions/, and new cases in tests/Netgum.Tests/Application/CheckoutServiceTests.cs; Netgum.Application.csproj gains no EF Core reference.",
        "cite": {
-        "path": "src/Netgum.Infrastructure/Persistence/NetgumDbContext.cs",
-        "lineStart": 164,
-        "lineEnd": 181
+        "path": "src/Netgum.Application/Netgum.Application.csproj",
+        "lineStart": 1,
+        "lineEnd": 8
        }
       },
       {
@@ -70,7 +70,11 @@
       },
       {
        "text": "[w2] Stop condition: the two-context case (both contexts load Pending, both complete) ends with one receipt and one Paid row, red on the original and green on the fix, and the full suite still passes; if the InMemory provider cannot surface the conflict, the agent stops and says a relational run is needed instead of reporting green.",
-       "quote": "it does not replace an idempotency key for two simultaneous pending requests."
+       "cite": {
+        "path": "astraupskill/VERIFICATION.md",
+        "lineStart": 27,
+        "lineEnd": 27
+       }
       }
      ]
     },
@@ -78,7 +82,7 @@
      "prompt": "G2 PRE-MORTEM — same delegation. What will an agent most likely get wrong here, and which line of your brief prevents it?",
      "keyPoints": [
       {
-       "text": "[w3] It adds one more status check on the loaded order before marking it paid, a read-then-write that both requests pass because each sees its own Pending copy (the domain method already returns early on Paid); the guarded-form line puts the condition in the write itself.",
+       "text": "[w3] It adds one more status check on the loaded order before marking it paid, a read-then-write that both requests pass because both loads happened before either save (the domain method already returns early on Paid); the guarded-form line puts the condition in the write itself.",
        "cite": {
         "path": "src/Netgum.Domain/Orders/Order.cs",
         "lineStart": 139,
@@ -86,7 +90,7 @@
        }
       },
       {
-       "text": "[w3] Over-broad catch: it wraps the save in a catch of DbUpdateException or Exception and returns a receipt, which also swallows the case where money moved but the paid row failed to save, the one failure that needs a 500 and a retry.",
+       "text": "[w3] Over-broad catch: it catches every save failure and returns a receipt, which also turns a genuine save failure after the provider has taken the payment into a success answer, the one case that needs a 500 and a retry; the guarded-form line limits the catch to the translated conflict.",
        "cite": {
         "path": "src/Netgum.Application/Checkout/CheckoutService.cs",
         "lineStart": 127,
@@ -119,7 +123,7 @@
      "prompt": "G2 HANDBACK REVIEW — the agent hands back a diff and a green run. What do you check before accepting it?",
      "keyPoints": [
       {
-       "text": "[w3] The receipt is sent only after a save that only the winner can complete; the losing path neither emails nor rethrows, and the catch names the concurrency exception alone.",
+       "text": "[w3] The receipt is sent only after a save that only the winner can complete; the losing path neither emails nor rethrows, CompleteOrderAsync catches only the translated conflict exception, and no EF type appears in the Application project.",
        "cite": {
         "path": "src/Netgum.Application/Checkout/CheckoutService.cs",
         "lineStart": 127,
@@ -151,7 +155,7 @@
        }
       },
       {
-       "text": "[w1] Follow-ups are listed, not fixed: the oversell lost update, a crash between the paid save and the email, and domain events that the save override clears without anything publishing them.",
+       "text": "[w1] Follow-ups are listed, not fixed: the oversell lost update, the receipt email that still runs outside any transaction, and OrderPaidEvent, which nothing publishes.",
        "cite": {
         "path": "src/Netgum.Infrastructure/Persistence/NetgumDbContext.cs",
         "lineStart": 35,

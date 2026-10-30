@@ -179,7 +179,8 @@ optional `solutionTail` for drills whose learner work is a CLASS (types must fol
 top-level statements, so the stubbed class lives in `tail` and the implemented one in
 `solutionTail`; it requires `tail`, must differ from it, open with a labelled divider and
 carry no NotImplementedException); plus instructions, an explanation and exactly three hints (hint 3 is approach in words — never
-`;`, `=>` or `return`). The importer maps every exercise to a `drill-cs` unit on the
+`;`, `=>`, `return` or parentheses), 4-8 uniquely named tests and at least one test whose name contains `(boundary` — e.g. `(boundary)` or
+`(boundary: …)` (all importer-enforced since qw; javadrills requires the exact `(boundary)`). The importer maps every exercise to a `drill-cs` unit on the
 **csharp** track (competency `language-fluency`, key `csdrills/<module>/<slug>`, spec
 `{ shape: 'console-check', harness: 'jstrain', files: { tests, tail, frozen: [] },
 timeoutMs: 20000 }` — the jstrain-cs shape), starter = starterHead + tests + tail and
@@ -226,7 +227,8 @@ course per module, into `content/packs/javadrills/` with manifest `{ track: 'jav
 `grader` field (track java derives kind `java`, exactly like javabootcamp). It refuses —
 before writing anything — a starter or solution without both markers, a solution whose tests
 block differs from the starter's by even one byte, a missing `class Exercise` or a `package`
-statement, a tests block without `test(` / `report()` / a literal test name, and a census other
+statement, a tests block without `test(` / `report()` / a literal test name, fewer than 4 or more than 8
+tests, a duplicate test name, no `(boundary)` test, a hint 3 containing `;`, `return`, `->` or parentheses (qw), and a census other
 than `JAVADRILLS_EXPECTED`. The drills join the java track's existing daily `drill:java` slate
 pool with no migration (the slot is sized from live drill units per track).
 
@@ -241,7 +243,7 @@ npm run seed:validate -- --source javadrills
 ```
 
 Append a module: add `tools/seed/authoring/javadrills/NN-topic.json` (next free `NN`; slugs
-`NN-name`, 4-7 uniquely named tests per drill, difficulty 1-3, 3 hints), bump
+`NN-name`, 4-8 uniquely named tests per drill with at least one `(boundary)`, difficulty 1-3, 3 hints), bump
 `JAVADRILLS_EXPECTED` in `tools/seed/src/javadrills/source.ts`, then re-import, re-validate
 (the journal resumes) and commit the authoring file, the pack files and the new
 `validation.json` together. Every starter must COMPILE: all types, records and signatures are
@@ -1045,23 +1047,26 @@ resolved); quiz variety `concept` and flashcard shape `hand-authored`;
   validated (solution passes + starter fails as todo/failed verdicts under the real C#
   runner), 0 quarantined, audit re-executed 20 journaled passes with 0 mismatches; 14 class
   drills in modules 08/09 use the authoring format's optional `solutionTail`; per-drill nearest-existing-unit distinctness vs
-  csbootcamp/jstrain-cs recorded in the wave brief; hint 3 never pasteable (no ;, =>,
+  csbootcamp/jstrain-cs recorded in the wave brief (corrected in qw: three were no-fly duplicates —
+  08/08 = jstrain-cs 03/06, 02/01 = jstrain-cs 20/01, the 05/05 Nights half = csbootcamp 04/04 — retired or replaced); hint 3 never pasteable (no ;, =>,
   return); no migration (csharp slate_drills=1 since 002), no fingerprinted file touched.
 - **javadrills wave 1 — DONE (2026-10-23):** new authored Java drill bank, modules 01-10
   (collections behavior, equality & ordering, streams execution, collectors, Optional
   discipline, strings & text, exception flow, money math, instants & zones, CompletableFuture
   composition), 80 drill-java drills complementing javabootcamp's 168 (per-module avoidance
-  recorded in the wave brief); JAVADRILLS_EXPECTED 80; 80/80 validated (solution passes +
+  recorded in the wave brief; corrected in qw: 05/06+05/07 duplicated jb 08/01, 08/04 jb 07/01+07/04, 08/05 jb 01/06,
+  10/02 jb 17/06 — all retired); JAVADRILLS_EXPECTED 80; 80/80 validated (solution passes +
   starter fails-as-test-verdict under the real Java runner), 0 quarantined; every expected
-  value is exercised against the reference solution by that validation (an independent
-  by-hand recompute of the vectors is still an open review item, see the mx wave record);
+  value is exercised against the reference solution by that validation (the independent
+  by-hand recompute was CLOSED in qw: 0 mismatches across 86);
   hint 3 never pasteable (no return/semicolon/paren); zero fingerprinted files touched — no
   estate restamp.
 - **sysdrills wave 4 — DONE (2026-10-25):** modules 11-14 (replication & consistency, multi-region
   & failover, search & indexing, observability & telemetry), 32 new drill-js drills, 110 total;
   SYSDRILLS_EXPECTED 78 → 110; 110/110 validated (solution passes + starter fails under the real
   drill-js runner), 0 quarantined; all 96 expected integers of modules 13-14 recomputed by
-  hand-formula in the integration pass (modules 11-12: validation only, recompute open); hint 3
+  hand-formula in the integration pass (modules 11-12 recompute CLOSED in qw: 96/96 — 192/192 across
+  modules 11-14 — by hand and by an independent implementation); hint 3
   never contains `return` or `;` (13/03's brief hint "must return" reworded "must send back" to
   honour that rule).
 - **fundamentals wave — DONE (2026-10-21):** interview + real-SWE-fundamentals content, zero
@@ -1336,8 +1341,9 @@ resolved); quiz variety `concept` and flashcard shape `hand-authored`;
   implementers in isolated clones (`bq-mx-*`), resumed across several usage-limit pauses → Opus
   cross-review (see review bullet below; landed on the owner's "land changes" order before the
   drill-math recompute, the EB/G2 cite audit and the Fable high-level review completed).
-  - **New code banks:** csdrills (C#, 80) and javadrills (Java, 80) — bullets above; sysdrills
-    78 → 110 (bullet above). C# authored code items 112 → 192; Java 168 → 248.
+  - **New code banks:** csdrills (C#, 80) and javadrills (Java, 80; 86 with module 11) — bullets above; sysdrills
+    78 → 110 (bullet above). C# authored code items 112 → 192; Java 168 → 248 (254 with module 11).
+    After qw: csdrills 72, javadrills 80, sysdrills 111; C# authored 184, Java 248 (see the qw bullet).
   - **Explain-back packs 185 → 223:** 12 classic JS explain-backs on master-/ww-repos (masterstore,
     masternext, mastermorphic, masteroutline-outline, masteridur, mastertwenty, stockade, ww4, ww7,
     ww27, ww39, helios-interplanetary); 11 G2 delegation briefs (pulse, masterumami, w22, ww19,
@@ -1353,22 +1359,25 @@ resolved); quiz variety `concept` and flashcard shape `hand-authored`;
     before): tracer 12→26q/4→11fc, pulse 12→26/4→11, zz8 12→28/3→11, jsdrillv2 12→28/4→12,
     dotnet-drop 13→27/3→10, netcalendy 12→26/4→11, relay-app 14→28/4→11, j2 12→26/4→11, j5
     13→25/4→10, j7 12→24/4→10 — j2/j5/j7 are the FIRST Java quiz layers. Old items byte-identical
-    everywhere; historical quarantine/review keys unchanged.
-  - **App (client only, no wire changes):** ordered (`1.`) lists render as real `<ol>` in prose;
-    dashboard "Browse all N units" link to the track browser; unit-browser group headers show
+    everywhere; historical quarantine/review keys unchanged. (qw pruned and replaced part of this layer; see the qw bullet.)
+  - **App (client only, no wire changes):** ordered (`1.`) lists render as real `<ol>` in prose
+    (corrected in qw: wrapped list items broke the list after item 1 in 13 values — bullets had the same
+    pre-mx defect in 11 — fixed in qw H3); dashboard "Browse all" link (no count; corrected in qw) to the track browser; unit-browser group headers show
     unfiltered per-group totals; the count line is a `role=status` live region; the review
     session shows a running grade tally. Client 344 → 361 tests.
   - Cross-stream discipline: pulse, zz8, dotnet-drop and netcalendy got BOTH a new G2 brief and a
     new quiz layer in parallel — quiz keys were routed around the G2 delegation facts (quiz side
-    reworded; integrated-tree leak lint 223 packs / 0 leaks, EB_LEAK_EXEMPT empty). relay-app
+    reworded; integrated-tree leak lint 223 packs / 0 leaks, EB_LEAK_EXEMPT empty). Corrected in qw: zz8 G2 Q3.5
+    still restated quiz 7c0d2daf (fixed in qw), and the lint is token-based — qw found paraphrase leaks it cannot see
+    in 8 classic EBs, 8 G2 briefs and 3 design sets, all reworded. relay-app
     (quest pack) ≠ relay (G2 repo).
   - Accepted prompt-demanded overlaps (token guard passes; flashcard ones are unguarded):
     masteropen-b q1.kp7 vs 1a664f8e, q1.kp8 vs 74848a10; bazaar-b q1.kp4 vs d9d69862;
-    enterprise-billing q2.kp2 vs 1b74685a, q2.kp4 vs 44f1be33, q1.kp5 vs fc f03-invoice-order,
-    q2.kp7 vs fc f04-outbox-gaps; linkwarden q1.kp5 vs b9a8f2c1, q1.kp2 vs 5522bf13; cal-com-b
+    enterprise-billing q2.kp2 vs 1b74685a; linkwarden q1.kp5 vs b9a8f2c1, q1.kp2 vs 5522bf13; cal-com-b
     q1.kp2+q2.kp1 vs 38aadc53; masteroutline P1 q1.kp1+q3.kp6 vs fc f01-three-representations,
-    q3.kp1 vs fc f04-crdt-not-ot; P2 q1.kp2 vs fc f02-rls-rejected. (+ EB/G2 stream acceptances
-    per pack in the mx ledger.)
+    q3.kp1 vs fc f04-crdt-not-ot (reduced to one subclause in qw). (+ EB/G2 stream acceptances
+    per pack in the mx ledger.) qw removed the avoidable ones: P4 q2.kp4, q2.kp7, q1.kp5, P2 q1.kp2 and
+    masteropen-b q1.kp8 (reworded).
   - Code-truth corrections (sets state the CODE, not the brief/docs): masteroutline collab state
     is capped at 1,500 KB (a 10 MB doc is a refused paste); only a Postgres search provider ships
     (`server/utils/opensearch.ts` is the browser description XML); `content` is written in-tx with
@@ -1378,15 +1387,18 @@ resolved); quiz variety `concept` and flashcard shape `hand-authored`;
   - Upstream findings (owner follow-ups; mirrors untouched; full list in the handoff
     `briefs/mx-agent-reports-2026-10-25.md` + `mx-ledger.md`): organized-build-analytics public
     register accepts role=SYSTEM_ADMIN and validate() never writes back the parsed body;
-    masternext BOLA remediation partial (deleteContact/getUserById); mastertwenty non-atomic
-    metadataVersion bump, GraphQL `first` unclamped; ww7 dispatch re-activates paused workflows;
-    ww39 audit test can never fail; w22 concurrent deliver double-sends; linkwarden collection
+    masternext BOLA remediation partial (deleteContact/getUserById; corrected in qw: also updateContact mass
+    assignment of assigned_to and session-only deleteAccount/updateAccount/deleteOpportunity/updateOpportunity/
+    deleteLead, plus the legacy member→manager mapping); mastertwenty non-atomic
+    metadataVersion bump, GraphQL `first` unclamped; ww7 dispatch can re-activate a workflow paused or archived during a sweep (a race; status + audit are
+    non-transactional; corrected in qw); ww39 audit-rollback test's two `committed` assertions are vacuous (the
+    rejects assertion still works; corrected in qw); w22 concurrent deliver double-sends; linkwarden collection
     update/delete use the global client inside `$transaction` (not atomic) and preserved-format
-    URLs never re-check access; enterprise-billing invoices lack period columns (late job
-    double-bills) and count+1 invoice numbers collide with no retry; masterumami website delete
+    URLs never re-check access; enterprise-billing invoices lack period columns (corrected in qw: a run after period end and before
+    the window advances is never deduped) and count+1 invoice numbers collide with no retry; masterumami website delete
     leaves ClickHouse data; masteropen SMS quota compares seconds to ms (never resets); harbor
     SLA status hard-codes a UTC 9-17 calendar and takes targetMs from the request body;
-    tenant-search-indexer whole-tenant single-statement rebuild; masteroutline per-pod
+    tenant-search-indexer whole-tenant single-statement rebuild; masteroutline per-process (corrected in qw)
     connection cap + per-pod "done" flag cuts revisions while other pods edit, revocation leaves
     sockets joined; netcalendy critique's partial-index snippet lacks `.IsUnique()` and its
     `Booking.TimeConflict` returns 400 not 409; j5 08-SAME-RULES cites the wrong exercise
@@ -1405,18 +1417,244 @@ resolved); quiz variety `concept` and flashcard shape `hand-authored`;
   chatty `role=status` on every keystroke, A3 Browse-all lands on a collapsed disclosure, A4.
   OPEN review items: by-hand recompute of javadrills/csdrills/sysdrills 11-12 vectors, cite/house-
   form audit of the 23 EB/G2 packs and 15 sysdesign sets, Fable high-level review of the
-  integrated diff. Post-fix gates: leaks 223/0, answers OK, seed:pins 667/667, restamp dry-run
+  integrated diff. (qw closed the recompute — 0 wrong values across 198 drills — and the cite audit —
+  0 of 187 G2 cites wrong; O4/O5 fixed in qw; the high-level review: see the qw bullet.) Post-fix gates: leaks 223/0, answers OK, seed:pins 667/667, restamp dry-run
   676/676 fresh, seed 2244/2244, server 640/640 (pre-fix battery at 101b1d16 also: selfrun 20/20,
   test:csharp 46/46, test:java 23/23, typechecks 0, client 361/361, smoke 76/76, demo:promotion
   39/39, demo:planted 48/48, campaign --check OK).
 - **javadrills module 11 cross-language bugs — DONE (mx2 T4 Java half, 2026-10-26):** 6 drill-java
   drills (01-rounding-mode, 02-idempotency-replay, 03-dst-arithmetic, 04-overflow-aggregate,
   05-shared-default-state, 06-pagination-bounds), each the Java side of a "same bug, three
-  languages" triple whose C# sibling (csdrills 11, same slugs/vectors) is the next task; each
+  languages" triple whose C# sibling (csdrills 11, same slugs/vectors) is the next task (superseded in qw:
+  the triples were dropped, 11/02-06 retired as javabootcamp duplicates; the module is now "Cross-language traps"); each
   instruction names the trap that differs in the other language. JAVADRILLS_EXPECTED 80 → 86;
   86/86 validated under the real Java runner, 0 quarantined, audit 0 mismatches; every vector
   derived by hand in the T4 brief (handoff `briefs/mx2-triples-brief.md`) and re-checked at
-  authoring. Starters are TODO stubs (bank convention) rather than the brief's buggy starters;
+  authoring. Starters are TODO stubs ("bank convention" was wrong: the importer only needs a `TODO` marker; 11/01
+  ships a buggy starter since qw);
   03 was re-scoped to calendar-day vs elapsed-hour arithmetic + DST gap/overlap resolution
   because 09/05 already counts DST day length. No fingerprinted file touched (pins 667/667,
   restamp dry-run 676/676 fresh).
+- **quality wave (qw) — DONE (2026-10-30):** the owner ordered a review of the mx content, which a weaker model
+  wrote: improve it, add where it is thin, remove the weak parts.
+  - **Process.** 7 Opus audits (A1-A7), then an orchestrator plan, then a 7-member council (all approved with changes;
+    42 rulings), then 7 Opus implementer streams in isolated clones (`bq-qw-s1..s7`), then a cross-review ring plus an
+    orchestrator review. The orchestrator was an Opus stand-in for Fable, which the owner approved. The final
+    high-level review was done by an independent Opus stand-in (Fable's quota was exhausted: three 429s); verdict
+    LAND AFTER FIXES; the fixes were applied before landing. A Fable review is still owed to the owner if wanted.
+  - **Footprint.** No edits to shared/src, tools/seed/src/factory or server/src, so no estate restamp. The bank
+    importers (`tools/seed/src/{csdrills,javadrills,sysdrills}`, not fingerprinted) gained gates.
+  - **Policies:**
+    - Pre-mx items stay byte-identical.
+    - mx items are edited in place (same key) only when the taught outcome is unchanged:
+      - quiz: same correct slot AND same choice order, checked against 02b22dad with the seeder's ordering;
+      - EB: kp count, order and weights frozen;
+      - drill: lesson and title kept, at most one function replaced.
+    - A wrong outcome is retired and gets a new key. Retired slugs and numbers are never reused.
+    - A re-seeded EB supersedes a stored answer: the learner re-answers before the key is shown
+      (`ladder-service.ts:174-181`).
+    - A quiz may key a behaviour or an upstream bug only if all of these hold:
+      - it is code-true at the pin;
+      - it is phrased as behaviour;
+      - it is listed below;
+      - no frozen key of the same pack contradicts it (otherwise it goes in a note);
+      - when it is framework truth, a probe at the stated framework version backs it.
+    - xleak checks run both ways and against both ages, EB-vs-EB included. When old and new text collide, the new
+      text yields.
+  - **Drill banks.** Every expected value of the mx drills was recomputed: 0 wrong across 80 C#, 86 Java and 32
+    sysdrills.
+    - **csdrills 80 → 72:**
+      - Retired 02/01 03/01 04/04 04/06 04/08 05/02 06/01 07/05 07/08 08/06 08/08 09/06 10/07: duplicates of
+        jstrain-cs/csbootcamp, internal duplicates, recall or trivial.
+      - Added 05/09 dst-wall-clock, 06/09 utf8-byte-budget, 09/09 bounded Channel inbox, 09/10 SemaphoreSlim
+        N-limiter, 10/09 conditional create.
+      - 34 "Your task" sections no longer contain the solution expression.
+      - 03/04 now refuses comma lists, because Enum.TryParse ORs them into a defined value.
+      - The module-09 race tests were rebuilt with gated threads. The naive bugs used to be caught in 33/8/1/0 of 40
+        runs; now 40/40.
+      - No csdrills module 11. Ruling: its C# legs were duplicates.
+    - **javadrills 86 → 80:**
+      - Retired 05/02 05/06 05/07 07/06 08/04 08/05 10/02 11/02-06: javabootcamp duplicates (jb 10/08, 19/02, 19/04,
+        19/08, 01/06, 08/01, 07/01, 07/04, 17/06) or sibling repeats.
+      - Added 02/09 mutable-hashmap-key, 07/09 finally-traps, 10/09 settle-all, 10/10 whencomplete-vs-handle, 11/07
+        double-equality-traps, and 11/08 utf8-byte-budget (twin of csdrills 06/09, shared vectors).
+      - About 40 drills improved in place, so every drill named after a trap has a test the naive answer fails (e.g.
+        01/06 heap order, 10/04 laziness, 08/08 half-up).
+      - Module 11 is now "Cross-language traps". The "same bug, three languages" triples were dropped.
+    - **sysdrills 110 → 111:**
+      - Retired 11/06 (recall) and 12/06 (busywork).
+      - Added 11/09 quorum-zone-placement, 12/09 chatty-cross-region, 14/09 multi-window-burn-alert.
+      - 13/02 gained skipProbes; 7 text fixes.
+      - Convention kept as a report item: a sysdrills hint 2 may state the formula.
+    - **Authored code items:** C# 192 → 184 (csbootcamp 31 + csdrills 72 + jstrain-cs 81); Java 254 → 248
+      (javabootcamp 168 + javadrills 80).
+  - **Explain-backs 223 → 231 packs** (designItems 72 → 78, designRepos 33 → 35, set-B/C titles 28 → 32):
+    - **11 G2 briefs fixed in place** (G2 stays at 20): the w22 test command, the netgum translation layer,
+      overclaims, xleaks (zz8 Q3.5 restated a quiz key), and ~26 weak cites.
+    - **12 classic JS EBs:**
+      - 11 were fixed in place. mastertwenty q2 was re-angled onto post-commit cache propagation; the old kp said
+        record queries run through makeExecutableSchema. masteridur's "payments get a Joi schema" was false.
+      - stockade's EB on astraupskill/02-CONCEPTS was retired (it re-served its quest pack kp for kp) and replaced on
+        docs/ARCHITECTURE.md.
+      - New EBs: the helios-interplanetary outbox delivery worker, and mastermorphic fetch-tool security.
+    - **Design sets:** 15 fixed in place. New:
+      - primaries: dify RAG ingestion; dub click-analytics;
+      - set-Bs: P2-b (external search engine with ACLs), P3-b (generated schema as a public API), P4-b (correcting
+        issued invoices), P5-b (nested sharing).
+  - **Quiz layer** (10 mx packs; quizzes 264 → 257, flashcards 108 → 104; one after-note per live quiz):
+
+    | pack | q/fc after | changes |
+    |---|---|---|
+    | tracer | 26/11 | q18 and q26 retired as doc-over-code; 2 code-truth replacements |
+    | pulse | 26/11 | q21 retired; CH-primary XACK quiz added; q22 edited in place |
+    | zz8 | 28/10 | f09 trivia retired |
+    | jsdrillv2 | 28/12 | q25 retired (an older note gave it away); truefalse-retry quiz added |
+    | dotnet-drop | 27/9 | q23 and q24 (on absent adapters) and f05 retired; CopyAsync destination and validator-400 quizzes added |
+    | netcalendy | 23/10 | 10148a2e (false Include key), e94af96e (outdated RISK-002), 4d8ec774, 50a74534 and f06 retired; anonymous-booking quiz added |
+    | relay-app | 28/11 | O4 text fixes |
+    | j2 | 23/10 | 6 onboarding-checklist recall quizzes and f09 retired; 3 code-grounded quizzes added |
+    | j5 | 26/10 | |
+    | j7 | 22/10 | |
+  - **App (client):**
+    - Prose lists keep wrapped and lazy continuation lines inside their item, for both ordered and bullet lists. 36
+      corpus values now render as intended. A corpus guard test covers content/packs, content/units and the quest
+      packs.
+    - The unit-browser header reads "{done}/{total} done · {shown} shown".
+    - The count's live region is debounced (500 ms).
+    - Dashboard "Browse all" lands on `#units`, opened and focused.
+    - Client tests 361 → 377.
+  - **Accepted prompt-demanded overlaps** (recorded, not leaks):
+    - **G2 premises vs sibling EBs:**
+      - w22 set-B 6bc59e2f q2.kp6;
+      - ww19 dbb6db69 q3.kp1;
+      - gitjira 67422181 q1.kp6/kp7 and q3.kp2/kp4;
+      - relay quiz 96822f6d;
+      - netgum f3c62b94 q3.kp4/kp5 + set-B q1.kp5;
+      - masterumami 609d8fce bot-filter kp;
+      - pulse a8e1e94a q2.kp3/kp4;
+      - zz8 bf9bd412 q1.kp1/q3.kp5 + set-B 3e871c97 q3.kp3;
+      - dotnet-drop set-B kp3/kp8 + PRE-MORTEM kp6;
+      - netcalendy set A PRE-MORTEM kp2.
+    - **w22 G2:** the Q1 test-command kp and the Q2 false-green kp vs note x-q22-mjs-harness-scope.
+    - **Classic EB kps vs same-repo quiz keys, flashcards and notes:**
+      - ww27 q1.kp2 ~ fc 4bac3dfb;
+      - ww39 q2.kp1 ~ fc bbc8caeb;
+      - helios q1.kp5 ~ 83345b8d, and q3.kp1 ~ aabcb09d/fc 0bd8c04f;
+      - masterstore q2.kp2 ~ 5150a7b4;
+      - masteroutline q1.kp4 ~ fc 22b1860a / P1 q3.kp6;
+      - masteridur q2.kp1 ~ fc 723f0362;
+      - ww4 q1 kps ~ notes x-q13/x-q06/x-q07;
+      - mastertwenty q3.kp2 ~ 70e15ba5.
+    - **Quiz vs quiz:**
+      - zz8 q23 (its second half follows from old q06);
+      - pulse q27's stem vs q19;
+      - j2 cf03c7b9 vs q09;
+      - j5 05e0d54b vs baecf04f.
+    - **Declared design doctrine echoes:**
+      - P4-b numbering vs P4 q1.kp4;
+      - P2-b vs P2 q2.kp1/q3.kp1;
+      - P5-b vs P5 q1.kp8/q3.kp2;
+      - dub q3.kp4 vs the javabootcamp url-shortener G2 q1.kp8;
+      - cal-com-b q1.kp7 vs its primary's q2.kp2.
+  - **Upstream findings** (mirrors untouched; file:line for each is in the qw stream reports, archived in the handoff folder `bootquest-handoff/qw/reports/`):
+    - **tracer:**
+      - The live client applies deltas in arrival order and tracks lastSeq as a max. An older delta overwrites a newer
+        one, and a gap below the max is never replayed. The Sprint-13 convergence holds only for the test-only
+        reduceDeltas.
+      - ADR-0009's equivalence test does not exist; compileFilter is untested.
+      - The retrospective's virtualization/perf-budget claim is not in the code.
+      - ADR-0010 says ~80 lines; fuzzy.ts is 48.
+    - **pulse:**
+      - With EVENTS_PRIMARY=ch, the worker XACKs once BufferedColumnStore.insert returns, but insert only buffers.
+        Flush happens at 10,000 rows, never on idle or drain.
+      - Flush clears the buffer before inserting, so a failed insert drops the batch.
+      - The PII scrub is top-level only, and the hash is unsalted sha256.
+    - **dotnet-drop:**
+      - CopyAsync never validates the destination parentId, and it copies trashed sources.
+      - upload_chunks rows are never deleted; the janitor selects Open sessions only.
+      - The pin does not build: Storage/ is gitignored.
+    - **zz8:**
+      - demoSessions is a plain-object lookup, so `constructor`/`__proto__` give 403 instead of 401.
+      - handleRouteError maps only AppError, so Zod errors, bad JSON and P2002 become 500.
+    - **netcalendy:**
+      - `Include("_rules")` names no navigation, so available-slots answers 500 for every request that passes the
+        event-type checks (GetAvailableSlotsHandler.cs:23-30; EF Core 10.0.12 probe). Guide 02-data-model:127 is wrong: owned rules load without an Include.
+      - RISK-002 ("Windows tz ids throw on Linux") is outdated since .NET 6 with ICU.
+      - No rate limiter, and bookings are `[AllowAnonymous]`.
+      - Only the first rule per weekday is used (Schedule.cs:55).
+      - **Owner item:** pre-mx quiz 298d7218 ("no schedule → empty list") holds at the handler level only. At runtime
+        the Include throws first. The key is frozen.
+    - **j2:** 05-PRACTICE:264's Base64 sentence is misleading; Values.text is the guard.
+    - **relay-app:** Protect never zeroes plainBytes.
+    - **relay:** the ADR-0008 trigger dedupe is never called in production, and id-keyed dedupe keys give
+      `<conn>:undefined`.
+    - **w22:** a FAILED delivery is never retried.
+    - **ww19:** leaseExpiresAt is never compared with the clock.
+    - **gitjira:** the move transaction takes no lock.
+    - **organized-build-analytics:** as listed in the mx bullet.
+    - **masternext, ww7, ww39, enterprise-billing, masteroutline:** as corrected in the mx bullet.
+    - **masteridur:**
+      - /download is unauthenticated and skips removed:false. Soft-deleted invoice and payment PDFs leak; for other
+        models it is an existence oracle.
+      - The payment controller has no Joi.
+    - **mastertwenty:**
+      - The field-path runner shares the tx.
+      - Every action handler inherits a no-op rollbackForMetadata.
+      - The API token bucket is per workspace, and API calls are never metered.
+      - Deactivated fields stay in the schema.
+      - OpenAPI documents max 60, but the code clamps at 200.
+      - Zapier webhooks are unsigned.
+    - **ww27:** a v2 PATCH of {email}/{externalReference}/{}, and the service-only rollout checks, throw a plain Error →
+      500.
+    - **ww39:** the cron secret is compared with `!==`.
+    - **stockade:** RetryRefund requires a reason but never stores it.
+    - **helios:** the standalone worker drains 2 hard-coded orgs and exits on any escaped error.
+    - **mastermorphic** (candidate, deployment-dependent): the fetch tool has no private-range denylist, and the search
+      self-call base URL comes from request headers when BASE_URL is unset.
+    - **enterprise-billing:**
+      - Trials are billed in full at creation.
+      - Nothing changes a subscription's status after creation.
+      - Math.round rounds halves toward +∞, so a negated credit note misses by a cent.
+    - **linkwarden:**
+      - postCollection never writes the parent's members, so sub-collections don't inherit.
+      - A move needs only some membership in the destination.
+      - The re-parent check compares the wrong ids, and the ancestor walk has no visited set (inference).
+      - Public collections are reachable by auto-increment id and list members' names.
+    - **masteroutline:**
+      - SearchIndexProcessor ignores membership and permission events.
+      - The 10 s collection-id cache is cleared only by UserMembership hooks.
+      - The read policy and the search SQL disagree on drafts.
+    - **tsi:**
+      - A partial entityTypes rebuild deletes the other type's docs.
+      - A >~7,281-doc rebuild exceeds 65,535 bind parameters (inference).
+    - **masteropen:**
+      - The monitor_status upsert stores no tick.
+      - A maintenance window can open between a 30 s monitor's two tasks.
+      - Trigger rows are never pruned; they are removed only by cascade when their monitor or notification is deleted.
+    - **atlas:** the payroll-correction runbook names states that don't exist.
+    - **dify:**
+      - Chunk "max_tokens" is measured in characters.
+      - A NaN embedding re-pairs the rest by position, and the misaligned vectors are cached across tenants.
+      - The update task leaves old chunks when vector cleanup fails.
+      - Dataset permission levels are not enforced at retrieval.
+    - **dub:**
+      - detect-bot.ts:21-23 never reaches its referrer/IP checks.
+      - fetchWithRetry retries 4xx.
+      - v3_usage `uniq(*)` runs over timestamps only.
+      - A dedupe check is followed by a non-NX SET.
+      - The usage page and enforcement read two different sources.
+    - **Pre-mx owner items** (frozen, report only):
+      - masteropen quiz 74848a10's explanation "since one month ago" is false (seconds vs ms).
+      - masteroutline fc 22b1860a "projections refreshed asynchronously" is false for `content`.
+      - mastertwenty note x-retry-is-repair contradicts the field-path code.
+      - linkwarden note x-member-cannot-move overstates "owns both".
+  - **Report items** (later waves):
+    - an EB-vs-EB leak lint;
+    - the JS leg of the cross-language traps;
+    - javadrills: 03/07's task text still dictates the op order; 10/08 "without thenCombine", 07/08 "same instance"
+      and 04/04 "one pass" are untestable;
+    - 27 near-code hint 2s remain in older csdrills drills (qw thinned 8: 07/03, 04/02, 05/06, 03/04, 05/09, 09/09,
+      09/10, 10/09);
+    - old sysdrills hint 3s with parentheses (11/07, 12/03, 14/03);
+    - set-Bs for dotnet-auth and tracer;
+    - the prose parser renders a code block inside a list item between two `<ol>`s (numbering kept).

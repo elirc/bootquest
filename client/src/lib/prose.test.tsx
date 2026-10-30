@@ -162,3 +162,68 @@ describe('Prose: rendering an ordered list', () => {
     expect(document.querySelector('img')).toBeNull();
   });
 });
+
+// qw H3: authored list items wrap onto indented continuation lines (jstrain 23-node-drills,
+// csbootcamp/javabootcamp explanations, jstrain-cs instructions). Before, the first item kept only
+// its first line and the rest of the list ran on inside a paragraph as literal "2. …" text.
+describe('parseProse: wrapped and loose list items', () => {
+  it('an indented continuation joins its ordered item, and the next item continues the list', () => {
+    expect(parseProse('Pitfalls:\n1. **int / int** is integer division.\n   `7 / 2` is 3.\n2. **Capture** copies\n   the variable.\n3. Third.')).toEqual([
+      { kind: 'p', lines: ['Pitfalls:'] },
+      { kind: 'olist', items: ['**int / int** is integer division. `7 / 2` is 3.', '**Capture** copies the variable.', 'Third.'], start: 1 },
+    ]);
+  });
+
+  it('an indented continuation joins its bullet item', () => {
+    expect(parseProse('- `pack(data)` wraps the payload\n- `unpack(text)` returns it.\n  Return `null` on bad JSON.\nAfter.')).toEqual([
+      { kind: 'list', items: ['`pack(data)` wraps the payload', '`unpack(text)` returns it. Return `null` on bad JSON.'] },
+      { kind: 'p', lines: ['After.'] },
+    ]);
+  });
+
+  it('a line deeper than marker width + 3 with no next item is not absorbed: after "1. " a 7-space line is indented code, as before', () => {
+    expect(parseProse('1. item\n       deep')).toEqual([
+      { kind: 'olist', items: ['item'], start: 1 },
+      { kind: 'code', text: '   deep', lang: null },
+    ]);
+  });
+
+  it('a loose ordered list (blank lines between items, numbering continues) is ONE list; indented code after a blank stays code', () => {
+    expect(parseProse('Build:\n\n1. one\n   wraps\n\n2. two\n\n       run(1) → 2\n\nafter')).toEqual([
+      { kind: 'p', lines: ['Build:'] },
+      { kind: 'olist', items: ['one wraps', 'two'], start: 1 },
+      { kind: 'code', text: '   run(1) → 2', lang: null },
+      { kind: 'p', lines: ['after'] },
+    ]);
+  });
+
+  it('ordered lists whose numbering does not continue stay separate', () => {
+    expect(parseProse('1. a\n\n3. c')).toEqual([
+      { kind: 'olist', items: ['a'], start: 1 },
+      { kind: 'olist', items: ['c'], start: 3 },
+    ]);
+  });
+
+  it('an unindented (lazy) line joins an ordered item only when the next item follows; otherwise it ends the list', () => {
+    expect(parseProse('1) A codec: encode writes "\\" as\n"\\\\" and ";" as "\;".\n2) findCounterexample(enc, dec)')).toEqual([
+      { kind: 'olist', items: ['A codec: encode writes "\\" as "\\\\" and ";" as "\;".', 'findCounterexample(enc, dec)'], start: 1 },
+    ]);
+    // unchanged pins: a plain line after the list is a paragraph, and so is one before an unrelated number
+    expect(parseProse('Steps:\n1. alpha\n2. beta\nafter')).toEqual([
+      { kind: 'p', lines: ['Steps:'] },
+      { kind: 'olist', items: ['alpha', 'beta'], start: 1 },
+      { kind: 'p', lines: ['after'] },
+    ]);
+    expect(parseProse('1. alpha\nafter\n5. five')).toEqual([
+      { kind: 'olist', items: ['alpha'], start: 1 },
+      { kind: 'p', lines: ['after', '5. five'] },
+    ]);
+  });
+
+  it('renders a wrapped item as ONE <li> carrying all of its text', () => {
+    render(<Prose text={'1. `upperOrFail(poison)` pushes\n   `chunk.toUpperCase()` for each record.\n2. `runPipeline(items)` reports.'} />);
+    const items = within(screen.getByRole('list')).getAllByRole('listitem');
+    expect(items).toHaveLength(2);
+    expect(items[0]).toHaveTextContent('upperOrFail(poison) pushes chunk.toUpperCase() for each record.');
+  });
+});

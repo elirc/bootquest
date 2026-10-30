@@ -29,11 +29,11 @@
        }
       },
       {
-       "text": "[w3] That SQL is a hand-maintained copy of the read policy (membership, own draft, or read access through the collection); name the duplication and pin it with a test that every search hit passes the policy check, because the two drift independently.",
+       "text": "[w3] Results and the open check come from two different pieces of code, and at this commit they already disagree on drafts: the read rule lets a draft's creator open it wherever it sits, while search admits the caller's own drafts only when they belong to no collection, so a draft in a collection its creator can no longer reach opens but never appears in results. Disagreement in that direction hides hits; in the other it leaks titles, so pin both with a test that every hit passes the read check.",
        "cite": {
-        "path": "server/policies/document.ts",
-        "lineStart": 21,
-        "lineEnd": 34
+        "path": "plugins/search-postgres/server/PostgresSearchProvider.ts",
+        "lineStart": 642,
+        "lineEnd": 652
        }
       },
       {
@@ -61,7 +61,7 @@
        }
       },
       {
-       "text": "[w2] Quoted phrases and URLs bypass the stemmed index: up to three of them become case-insensitive substring matches on title and text, and a query made only of a quote drops the text-vector match entirely, so at 1.2M documents such a search leans on the access filter alone; a trigram index or a phrase query is the fix.",
+       "text": "[w2] Quoted phrases and URLs bypass the stemmed index: up to three of them become case-insensitive substring matches on title OR text, and a query made only of a quote drops the text-vector match entirely, so at 1.2M documents such a search leans on the access filter alone. A trigram index on the title already exists, but the OR with a body ILIKE keeps the planner from using it; match the body through a phrase query, or give the body its own trigram index.",
        "cite": {
         "path": "plugins/search-postgres/server/PostgresSearchProvider.ts",
         "lineStart": 764,
@@ -90,7 +90,7 @@
      "prompt": "PRE-MORTEM — the same workspace six months on: the team wires an external search engine in behind the provider interface; a collection holding HR documents is switched from team-wide to private; a contractor who can open only 2 of the 900 collections says search is slow; a page renamed from 'Layoffs plan' to 'Q3 planning' still turns up for the old words; and an engineer's edit to a runbook cannot be found for several minutes. What breaks, how would you notice, and what is the repair?",
      "keyPoints": [
       {
-       "text": "[w3] An engine that stores access data goes stale on permission changes: the index processor reacts to publish, delayed update, archive, delete, move and collection create/update/delete, and for documents pushes only archived, deleted and collection fields, so no event carries a membership change and the HR pages keep matching for their old audience. Re-check access at query time against the live tables, or add membership events that re-push access metadata.",
+       "text": "[w3] An engine that stores access data goes stale on permission changes: the index processor reacts to publish, delayed update, archive, delete, move and collection create/update/delete; its metadata pushes carry only archive and delete times and the collection id, and it subscribes to none of the membership or permission events the app already emits (users or groups added to or removed from a collection or document, a collection's permission changing), so the HR pages keep matching for their old audience. Re-check access at query time against the live tables, or add membership events that re-push access metadata.",
        "cite": {
         "path": "server/queues/processors/SearchIndexProcessor.ts",
         "lineStart": 21,
@@ -98,11 +98,11 @@
        }
       },
       {
-       "text": "[w3] With the shipped Postgres provider there is no second copy to go stale: the search query joins the caller's document and group memberships on every request, so making the collection private bites on the next search. Filtering after the fact would be worse for the contractor: a user who can see 2 of 900 collections would get almost nothing on a 15-hit page.",
+       "text": "[w3] With the shipped Postgres provider there is no second copy to go stale: the search query joins the caller's document and group memberships on every request, but the caller's list of reachable collections is cached in Redis for 10 seconds and only membership rows clear it, so a collection flipped to private stops surfacing within about 10 seconds rather than on the very next search. Filtering after the fact would be worse for the contractor: a user who can see 2 of 900 collections would get almost nothing on a 15-hit page.",
        "cite": {
-        "path": "plugins/search-postgres/server/PostgresSearchProvider.ts",
-        "lineStart": 393,
-        "lineEnd": 432
+        "path": "server/models/User.ts",
+        "lineStart": 490,
+        "lineEnd": 566
        }
       },
       {
@@ -130,7 +130,7 @@
        }
       },
       {
-       "text": "[w1] The authors accept the lag as known behaviour; the design review should put a real number on it, because the code ties it to revision cadence rather than a fixed minute.",
+       "text": "[w1] The authors call the lag 'a minute', but the code ties it to revision cadence: the indexed body changes only when a revision is cut, which in production means after five quiet minutes or as soon as the last editor leaves, so a page under steady editing can stay unfindable by its new words for the whole session.",
        "quote": "\"search shows the old text for a minute\" is a known, accepted anomaly"
       }
      ]
@@ -155,14 +155,14 @@
        }
       },
       {
-       "text": "[w2] The single-store constraint is deliberate here, so a second datastore has to earn its operations cost.",
+       "text": "[w2] At this scale one database is enough: 50 searches a second against a team-scoped weighted vector is within Postgres full-text reach, so a second datastore has to earn its operations cost with relevance features the product actually needs, not with headroom it does not yet use.",
        "quote": "Postgres is the only database."
       },
       {
-       "text": "[w2] Relevance-first ordering can bury a fresh incident note under an older page that matches better; the product lets the caller pick an explicit sort such as last updated, and then ranking becomes the tiebreaker instead.",
+       "text": "[w2] A popularity-boosted score favours pages people already read, so a well-read old runbook can bury this morning's incident note on the same words; a recency decay inside the score would fix that for everyone at the cost of sinking evergreen references, while an explicit sort, the code's choice, leaves the default ranking alone and lets the searcher opt into freshness.",
        "cite": {
         "path": "plugins/search-postgres/server/PostgresSearchProvider.ts",
-        "lineStart": 545,
+        "lineStart": 538,
         "lineEnd": 561
        }
       },

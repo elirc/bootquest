@@ -45,7 +45,7 @@
        }
       },
       {
-       "text": "[w3] Numbers cannot come from counting: the number is the organization's invoice count plus one, under a unique rule per organization, so two invoices generated at once for a large tenant compute the same number and one transaction fails; a per-organization counter row incremented inside the generating transaction gives gap-free numbers that cannot collide.",
+       "text": "[w3] Numbers cannot come from counting: the number is the organization's invoice count plus one, under a unique rule per organization, so two invoices generated at once for a large tenant compute the same number and one transaction fails; a per-organization counter row incremented inside the generating transaction gives gap-free numbers that cannot collide, at the price of serialising that tenant's generation on one row, which is cheap at about 12 invoices a second across the fleet.",
        "cite": {
         "path": "packages/db/prisma/schema.prisma",
         "lineStart": 237,
@@ -53,11 +53,11 @@
        }
       },
       {
-       "text": "[w3] Totals are computed once, in integer cents, and frozen on the document: line amount is unit price times an integer seat count, the percentage discount applies to the summed lines, tax in basis points applies to the discounted amount, each step rounds to whole cents, and the resulting lines and totals are written onto the invoice so later price changes never reprice it.",
+       "text": "[w3] Totals are computed once, in integer cents, and frozen on the document: the worker writes each line and the subtotal, discount, tax and total onto the invoice row at generation, so a later price, coupon or tax-rate change never reprices an invoice that has already been issued.",
        "cite": {
-        "path": "packages/domain/src/invoice-calculator.ts",
-        "lineStart": 28,
-        "lineEnd": 49
+        "path": "apps/worker/src/jobs.ts",
+        "lineStart": 59,
+        "lineEnd": 82
        }
       },
       {
@@ -86,7 +86,7 @@
      "prompt": "PRE-MORTEM — the first month at full volume. The 1st's backlog drains slowly and some invoice jobs run after midnight, on the 2nd; one subscription's generation job runs twice for the same period; a tenant deactivates a coupon after its customer has seen an invoice preview but before the invoice is generated; and a subscriber suspended by dunning pays the open invoice on day 12. What breaks, how does each problem show up, and what in your design prevents it?",
      "keyPoints": [
       {
-       "text": "[w3] Late jobs drift because the invoice holds no period: the duplicate check compares the invoice's creation time with the subscription's current window, so once the sweep has advanced the window, a late job for the old period finds nothing and bills again, stamped with the new date; with period columns, the job carries the period it was created for and the unique rule settles it.",
+       "text": "[w3] The period guard is only as good as the window it reads at run time: it compares the invoice's creation time, which is the wall clock, with the subscription's current window, so a job draining onto the 2nd still lands inside its window, but a job that runs after the period has ended and before the window advances writes an invoice no later check can ever match, so every rerun bills again, and no invoice records which period it billed. With period columns, the job carries the period it was created for and the unique rule settles it.",
        "cite": {
         "path": "packages/db/prisma/schema.prisma",
         "lineStart": 216,
@@ -94,7 +94,7 @@
        }
       },
       {
-       "text": "[w3] Two runs both pass a check-then-insert: each transaction reads 'no invoice yet' before either inserts, and nothing locks the subscription or rejects the second row; the manual endpoint does not check the period or the subscription's status at all, so even a trialing subscription is billed in full at once. The unique rule turns the second run into a conflict that the job treats as already done.",
+       "text": "[w3] Two runs both pass a check-then-insert: each transaction reads 'no invoice yet' before either inserts, and nothing locks the subscription or rejects the second row; the manual endpoint has no period check at all, and neither path looks at the subscription's status, so a subscription that starts in its trial (the default) is billed in full as soon as it is created. The unique rule turns the second run into a conflict that the job treats as already done.",
        "cite": {
         "path": "apps/api/src/modules/billing.routes.ts",
         "lineStart": 252,
@@ -110,11 +110,11 @@
        }
       },
       {
-       "text": "[w3] Paying during suspension must be a legal path back, not an accident: the declared moves allow uncollectible to paid and past due to active, but today the payment job skips only invoices already paid and writes the paid status without consulting any transition, so it would just as readily settle a voided invoice.",
+       "text": "[w3] Paying during suspension must be a legal path back, not an accident: the declared moves allow uncollectible to paid and past due to active, so the payment path should apply both in one step; at this commit nothing in the code ever changes a subscription's status after it is created, so a subscriber who pays on day 12 would stay suspended until someone intervenes by hand.",
        "cite": {
         "path": "apps/worker/src/jobs.ts",
-        "lineStart": 116,
-        "lineEnd": 118
+        "lineStart": 107,
+        "lineEnd": 166
        }
       },
       {
@@ -130,11 +130,11 @@
        }
       },
       {
-       "text": "[w1] Dunning emails go through the outbox, and its processor marks a row as in progress with an update that is not conditional on the row still being pending, so two worker processes reading one batch would both send the same reminder; claim conditionally and give each reminder an id the mail provider can deduplicate.",
+       "text": "[w1] Dunning reminders are a delivery problem of their own: give each reminder an id derived from the invoice and the attempt number and hand it to the mail provider as an idempotency key, so a reminder replayed after a worker crash is suppressed downstream instead of reaching the customer twice; the failed-payment event already carries the payment and invoice ids that key is built from.",
        "cite": {
-        "path": "apps/worker/src/outbox-processor.ts",
-        "lineStart": 13,
-        "lineEnd": 20
+        "path": "apps/worker/src/jobs.ts",
+        "lineStart": 155,
+        "lineEnd": 162
        }
       }
      ]
