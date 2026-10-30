@@ -1,0 +1,190 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "organized-experiment-ww48--docs-architecture-domain-model.md",
+ "items": [
+  {
+   "key": "seed:explainback:organized-experiment-ww48/explain-back/f96ce1ba7c48805b",
+   "provenance": {
+    "repo": "organized-experiment-ww48",
+    "sha": "2504441fbff0d2890e0c3d1bb444457e1faac878",
+    "path": "docs/architecture/domain-model.md",
+    "lines": {
+     "start": 1,
+     "end": 199
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "DESIGN IT — [senior] a CRM pipeline board and lead list at scale: pages, search, counts and URL state (organized-experiment-ww48, docs/architecture/domain-model.md). Scenario: the lead pipeline grows to 300 reps and 25 managers in one company, about 1.5 million leads (some 5,000 per rep); the board shows six stage columns ordered by next follow-up; managers search company, contact and email across everyone as they type; the board must answer in under 300 ms at p95; and managers paste links to a filtered board into chat for their team. Write your design before you look: the list API contract (what one request asks for and gets back), how a column is paged and what makes the order stable, which index serves each access path, how search works at this size, how the per-stage totals are produced, what the board's one big request should become, where the filter state lives in the React app, and how typing in the search box turns into requests. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "keyPoints": [
+      {
+       "text": "[w3] As built one request returns every lead that matches the filters and that the viewer may see, each with its owner and a count of its notes and follow-ups, with no limit at all; the board then splits that array into the six columns in the browser. The contract becomes one bounded page per column, for example a stage, a limit of 25 and an opaque cursor, so the first screen costs six small queries and each column loads more on scroll.",
+       "cite": {
+        "path": "src/repositories/leadRepository.ts",
+        "lineStart": 71,
+        "lineEnd": 81
+       }
+      },
+      {
+       "text": "[w3] Pages are keyset, not offset: the board sorts by next follow-up ascending then creation time descending, and neither is unique, so add the id as a final tie-breaker and hand back the last row's three values as the cursor; the next page asks for rows strictly after that triple. The follow-up date is nullable and Postgres sorts nulls last in ascending order, so the cursor must also say when it has reached the tail of leads with no follow-up.",
+       "cite": {
+        "path": "src/repositories/leadRepository.ts",
+        "lineStart": 76,
+        "lineEnd": 80
+       }
+      },
+      {
+       "text": "[w3] One index per access path, matching filter then full sort: a rep's column needs owner, stage, follow-up date, creation time (descending) and id; a manager's column needs the same without owner. The schema has an owner-and-stage index that filters a rep's column but cannot deliver its order, a stage-and-follow-up index with no tie-breaker, and a standalone creation-time index that no query sorted by follow-up date first can use.",
+       "cite": {
+        "path": "prisma/schema.prisma",
+        "lineStart": 97,
+        "lineEnd": 99
+       }
+      },
+      {
+       "text": "[w3] Substring search over three columns cannot use any of those indexes, so every keystroke scans the leads the other filters leave, up to all 1.5 million for a manager. Add trigram GIN indexes (pg_trgm, through a SQL migration) on company, contact and email, and give the search parameter a minimum length of 3 and a maximum of about 100; today the zod schema only trims it.",
+       "quote": "which Postgres runs as `ILIKE '%term%'`"
+      },
+      {
+       "text": "[w2] The per-stage totals are a separate grouped count that reuses the same where builder minus the stage filter, so a stage's total reflects the current search and owner scope even while the list is narrowed: the right facet behaviour. As built only the first three stage cards show it; the column headers count the loaded leads. At this size it is a second scan of everything the search matches on every request, so cache it briefly per scope and search, cap it ('1,000+'), and do not recount when a column loads more.",
+       "cite": {
+        "path": "src/services/dashboardService.ts",
+        "lineStart": 35,
+        "lineEnd": 38
+       }
+      },
+      {
+       "text": "[w2] The single dashboard request also re-reads the upcoming follow-ups and the roster of assignable users, neither of which depends on the search text, so each keystroke runs four queries when only two of them, the list and the counts, depend on what was typed. Split it into separate endpoints (or at least separate React Query keys) with their own freshness: the roster can be stale for minutes, the column pages for seconds.",
+       "cite": {
+        "path": "src/services/dashboardService.ts",
+        "lineStart": 32,
+        "lineEnd": 40
+       }
+      },
+      {
+       "text": "[w2] The filter state belongs in the URL: today search, stage and 'only mine' are component state (the last defaulting from the viewer's role), so a reload, the back button or a pasted link all lose them. Keep them in the query string, update it with a replace while typing so history is not flooded, derive the query key from it, and have the server parse the same keys with the same zod schema.",
+       "cite": {
+        "path": "src/components/dashboard/dashboard-page.tsx",
+        "lineStart": 22,
+        "lineEnd": 31
+       }
+      },
+      {
+       "text": "[w2] Typing has to be throttled on purpose. The query key holds the whole filter object, so every distinct value is a new cache entry and a new request; useDeferredValue only lowers the priority of a render and has no delay; with no placeholder data a new key starts empty, so the board drops to its loading panel; and the query function never passes React Query's abort signal to fetch, so superseded requests run to completion. Debounce about 250 ms, keep the previous data while the next arrives, and pass the signal.",
+       "cite": {
+        "path": "src/hooks/use-dashboard.ts",
+        "lineStart": 106,
+        "lineEnd": 111
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "PRE-MORTEM — paging and search ship, and the first week brings six tickets. A manager scrolling the Qualified column sees one lead twice and never sees another; searching for the single letter 'a' takes four seconds and database CPU hits 90% while the 25 managers type at once; the Proposal column header says 25 while the Proposal card above the board says 312, and the Open pipeline card's value total drops by 90% overnight; a link a manager pasted to 'Won, Dana's leads' opens everyone's full board for the team; choosing two stages in the new multi-select shows only the second; and, after a short-lived count cache goes in, a rep sees a column total that includes other reps' leads. What breaks, how does each show up, and what in your design prevents it?",
+     "keyPoints": [
+      {
+       "text": "[w3] The duplicate and the missing lead come from paging over a key that moves: logging or completing a follow-up rewrites the lead's next follow-up date, so while someone scrolls, the lead jumps to another place in the order and offsets shift under the reader. Keyset pages stop inserts and deletes ahead of the cursor from shifting later pages, but a row whose own key changes can still reappear or be passed, so the client also de-duplicates by id.",
+       "cite": {
+        "path": "src/repositories/leadRepository.ts",
+        "lineStart": 183,
+        "lineEnd": 192
+       }
+      },
+      {
+       "text": "[w3] The one-letter search matches most of the table in each of three columns, the count query scans the same rows again, and 25 managers typing produce dozens of these at once. Validation is where it stops: the search field accepts any trimmed string with no minimum or maximum; set both, debounce the box, and give the endpoint a statement timeout so a slow query fails instead of piling up.",
+       "cite": {
+        "path": "src/lib/validation/leadSchemas.ts",
+        "lineStart": 16,
+        "lineEnd": 24
+       }
+      },
+      {
+       "text": "[w2] The numbers disagree because some are computed from whatever the browser holds: the column header and the Open pipeline card count, and the card sums, the loaded leads, while the stage cards read the server's grouped count. Once columns are paged the loaded set is page size times pages, so every headline number must come from the server, including a summed pipeline value.",
+       "cite": {
+        "path": "src/components/dashboard/summary-cards.tsx",
+        "lineStart": 12,
+        "lineEnd": 26
+       }
+      },
+      {
+       "text": "[w2] The link loses Dana because the client cannot even express 'another owner': the API accepts an owner filter (gated to managers and admins), but the hook's filter type and URL builder only know stage, search and 'only mine', and nothing puts the board's state in the address. Make every filter the API accepts a URL parameter the page reads.",
+       "cite": {
+        "path": "src/hooks/use-dashboard.ts",
+        "lineStart": 87,
+        "lineEnd": 104
+       }
+      },
+      {
+       "text": "[w2] Two stages collapse to one because the query string is turned into an object with Object.fromEntries, which keeps only the last value of a repeated key, and the schema's stage is a single enum value. Multi-select needs getAll for that key and an array schema.",
+       "cite": {
+        "path": "src/lib/http/request.ts",
+        "lineStart": 18,
+        "lineEnd": 25
+       }
+      },
+      {
+       "text": "[w1] The leaking total is a cache keyed without the viewer's scope. As built the owner scope is ANDed into the shared where builder for both the list and the grouped count, which is what keeps a rep's totals to their own leads; a cache, a precomputed count or a cursor must carry that scope in its key, never be shared across it.",
+       "cite": {
+        "path": "src/repositories/leadRepository.ts",
+        "lineStart": 43,
+        "lineEnd": 51
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "TRADE-OFF HANDBACK — defend your list design against the alternatives: numbered pages with offsets versus keyset cursors; exact totals on every request versus capped, cached or estimated totals; substring matching with trigram indexes versus Postgres full-text search versus a separate search engine; one dashboard endpoint versus a query per widget; filter state in the URL versus component state versus a client store; and paging each column on the server versus fetching one sorted list and grouping it in the browser. For each, say what you bought and what it cost.",
+     "keyPoints": [
+      {
+       "text": "[w3] Offsets give page numbers and 'jump to page 40', and cost grows with the offset because the database reads and throws away every skipped row, while inserts ahead of the reader shift what each page contains; keyset cursors cost the same at any depth and stay stable under inserts, but only go next and previous and need an index that matches the whole sort including the tie-breaker. A board that scrolls wants cursors; a numbered admin table may not.",
+       "cite": {
+        "path": "src/repositories/leadRepository.ts",
+        "lineStart": 79,
+        "lineEnd": 79
+       }
+      },
+      {
+       "text": "[w3] Exact totals are honest and cost a scan of the matching rows on every request, the most expensive part of a filtered list; capping ('1,000+') bounds that work, a short cache trades freshness for it, and planner estimates are only usable when no filter applies. Pick per screen what number a user actually acts on.",
+       "cite": {
+        "path": "src/repositories/leadRepository.ts",
+        "lineStart": 83,
+        "lineEnd": 95
+       }
+      },
+      {
+       "text": "[w2] Trigram indexes make substring matches on short fields like names and email addresses fast, at the cost of large indexes and slower writes; full-text search ranks whole words and word prefixes well but does not match fragments inside an email or a company name; a separate engine adds relevance tuning, a sync lag and a second place where visibility must be enforced.",
+       "quote": "None of these indexes help that; it is a sequential scan inside whatever the other filters leave."
+      },
+      {
+       "text": "[w2] One endpoint is one round trip with list and counts computed together (as built they are separate queries in a Promise.all, so not one snapshot unless run in a single REPEATABLE READ transaction); separate queries let each widget cache, refresh and fail on its own and let one column page without recomputing the rest, at the cost of more requests and a moment where a count and a list disagree.",
+       "cite": {
+        "path": "src/services/dashboardService.ts",
+        "lineStart": 42,
+        "lineEnd": 49
+       }
+      },
+      {
+       "text": "[w2] The URL makes a view shareable, reloadable and back-button friendly and lets a server component render the first page; it costs parsing and validating every parameter as untrusted input and keeping history clean. Component state is trivial and vanishes on reload; a client store shares filters between components but vanishes too.",
+       "cite": {
+        "path": "src/components/dashboard/dashboard-page.tsx",
+        "lineStart": 23,
+        "lineEnd": 31
+       }
+      },
+      {
+       "text": "[w1] One sorted list grouped in the browser is a single query only while the whole set fits in a response; per-column pages cost six queries for the first screen but each is bounded, and a single SQL statement with one window function partitioned by stage can return the top 25 of every column at once, which needs a raw query because Prisma's query builder cannot express it.",
+       "cite": {
+        "path": "src/components/dashboard/pipeline-board.tsx",
+        "lineStart": 7,
+        "lineEnd": 11
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

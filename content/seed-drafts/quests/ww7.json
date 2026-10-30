@@ -423,6 +423,364 @@
    ],
    "front": "How can one scheduled tick produce two runs?",
    "back": "The scheduler loop and the internal dispatch route can run dispatchScheduledRuns concurrently; it reads due workflows, enqueues, then advances nextScheduledAt with no lock. Fix: claim with a conditional update on nextScheduledAt and enqueue only if one row changed."
+  },
+  {
+   "id": "q13-edit-after-runs-500",
+   "kind": "quiz",
+   "source": {
+    "path": "src/repositories/workflow-repository.ts",
+    "lines": {
+     "start": 133,
+     "end": 157
+    }
+   },
+   "cites": [
+    {
+     "path": "src/repositories/workflow-repository.ts",
+     "lineStart": 134,
+     "lineEnd": 136
+    },
+    {
+     "path": "prisma/schema.prisma",
+     "lineStart": 160,
+     "lineEnd": 160
+    },
+    {
+     "path": "src/lib/http/route-helpers.ts",
+     "lineStart": 48,
+     "lineEnd": 62
+    },
+    {
+     "path": "src/services/workflow-definition-service.ts",
+     "lineStart": 84,
+     "lineEnd": 87
+    }
+   ],
+   "prompt": "An operator renames their own ACTIVE workflow, which has already run twice, and saves the form unchanged otherwise. What does PATCH /api/workflows/:id return?",
+   "answer": "500, as deleting its steps hits a Restrict foreign key",
+   "distractors": [
+    "200, with new steps and the old runs' history deleted",
+    "500, as the activation re-check rejects the edited workflow",
+    "409, as a workflow that has runs is locked from edits"
+   ],
+   "explanation": "updateWorkflow replaces the steps wholesale: inside a transaction it calls tx.workflowStep.deleteMany({ where: { workflowId } }) and then recreates them (workflow-repository.ts:134-136 and on). Every run left WorkflowStepRun rows that point at the old steps, and that relation is onDelete: Restrict (schema.prisma:160), so PostgreSQL refuses the delete and the whole transaction rolls back. Prisma's error is not an AppError, so executeRoute answers 500 with its generic message (route-helpers.ts:48-62). A probe with Prisma 6.19.3 (package.json allows ^6.6.0; there is no lockfile) on PostgreSQL 18 rejected the same deleteMany with a foreign-key error and left the steps untouched. The activation re-check passes for a rename, and when it does fail it throws a 422 AppError (workflow-definition-service.ts:84-87), not a 500. Nothing cascades the history away or returns 409; in effect a workflow that has run can no longer be edited."
+  },
+  {
+   "id": "q14-status-change-resets-form",
+   "kind": "quiz",
+   "source": {
+    "path": "src/components/workflows/workflow-builder.tsx",
+    "lines": {
+     "start": 79,
+     "end": 159
+    }
+   },
+   "cites": [
+    {
+     "path": "src/components/workflows/workflow-builder.tsx",
+     "lineStart": 79,
+     "lineEnd": 101
+    },
+    {
+     "path": "src/components/workflows/workflow-builder.tsx",
+     "lineStart": 155,
+     "lineEnd": 158
+    }
+   ],
+   "prompt": "In the builder, an operator changes the cron expression of an ACTIVE scheduled workflow but does not save. They click Move to PAUSED and the pause succeeds. What does the cron field show afterwards?",
+   "answer": "The saved cron again, as the refetch re-runs the form sync",
+   "distractors": [
+    "The edited cron, as unsaved form state is kept apart",
+    "The edited cron, now saved along with the status change",
+    "The edited cron, as the form sync only runs on the first load"
+   ],
+   "explanation": "The status mutation invalidates [\"workflow\", id] on success (workflow-builder.tsx:155-158), so the workflow is refetched. The builder copies server data into its form state in a useEffect keyed on workflowQuery.data (workflow-builder.tsx:79-101), and the refetched workflow differs (its status is now PAUSED), so React Query hands back a new data object and the effect runs, overwriting name, cron, event name and steps with the saved values. A probe with @tanstack/query-core 5.73.3 (the package.json floor) returned the same reference for an identical refetch and a new one after a status change. The publish request carries only the status, so the edit is not saved anywhere, and the effect has no first-load-only guard."
+  },
+  {
+   "id": "q15-runs-panel-stays-queued",
+   "kind": "quiz",
+   "source": {
+    "path": "src/hooks/use-workflow.ts",
+    "lines": {
+     "start": 14,
+     "end": 20
+    }
+   },
+   "cites": [
+    {
+     "path": "src/hooks/use-workflow.ts",
+     "lineStart": 14,
+     "lineEnd": 20
+    },
+    {
+     "path": "src/components/workflows/workflow-builder.tsx",
+     "lineStart": 161,
+     "lineEnd": 171
+    },
+    {
+     "path": "src/components/providers/app-providers.tsx",
+     "lineStart": 8,
+     "lineEnd": 17
+    },
+    {
+     "path": "src/repositories/workflow-run-repository.ts",
+     "lineStart": 39,
+     "lineEnd": 48
+    }
+   ],
+   "prompt": "An operator clicks Trigger in the builder; the run is created QUEUED and the worker finishes it 5 s later. The operator then watches the page for two minutes without clicking anything. What does the run's badge show?",
+   "answer": "QUEUED, as nothing refetches the runs after the trigger",
+   "distractors": [
+    "SUCCEEDED, as the runs query polls every 30 seconds",
+    "SUCCEEDED, as the worker pushes the change to the page",
+    "RUNNING, as the badge follows the step that is active"
+   ],
+   "explanation": "A run is created QUEUED (workflow-run-repository.ts:39-48). The trigger mutation then invalidates [\"workflow-runs\", id] once (workflow-builder.tsx:161-171), so the panel fetches the run while it is still QUEUED. After that the runs query has no refetchInterval (use-workflow.ts:14-20), the client sets refetchOnWindowFocus false and a 30 s staleTime (app-providers.tsx:8-17), and there is no socket or server push. Staleness never starts a request by itself: only a mount, a network reconnect or an invalidation does, and none happens while the operator watches. So the badge stays QUEUED until the page remounts or another mutation invalidates the key. A refetchInterval while any run is QUEUED or RUNNING would fix it."
+  },
+  {
+   "id": "q16-status-error-not-shown",
+   "kind": "quiz",
+   "source": {
+    "path": "src/components/workflows/workflow-builder.tsx",
+    "lines": {
+     "start": 149,
+     "end": 159
+    }
+   },
+   "cites": [
+    {
+     "path": "src/components/workflows/workflow-builder.tsx",
+     "lineStart": 149,
+     "lineEnd": 159
+    },
+    {
+     "path": "src/components/workflows/workflow-builder.tsx",
+     "lineStart": 292,
+     "lineEnd": 292
+    },
+    {
+     "path": "src/components/workflows/workflow-builder.tsx",
+     "lineStart": 297,
+     "lineEnd": 301
+    },
+    {
+     "path": "src/lib/http/api-client.ts",
+     "lineStart": 10,
+     "lineEnd": 14
+    }
+   ],
+   "prompt": "An operator clicks Move to ACTIVE on a draft, and the publish request comes back 422 with a readiness message. What does the builder show?",
+   "answer": "No message, as nothing renders the status mutation error",
+   "distractors": [
+    "The readiness message, in the form's red error line",
+    "The readiness message, under the Trigger workflow button",
+    "A generic Request failed. message above the status buttons"
+   ],
+   "explanation": "apiRequest turns the 422 into a thrown Error carrying the server's message (api-client.ts:10-14), so the status mutation does fail. But that mutation has only an onSuccess (workflow-builder.tsx:149-159): no onError sets formError, and nothing in the JSX reads statusMutation.error. The red line renders formError, which only the save mutation's onError sets (workflow-builder.tsx:292), and the message under the Trigger button reads triggerMutation.error. The status buttons (workflow-builder.tsx:297-301) just call mutate, so the click appears to do nothing and the workflow stays DRAFT."
+  },
+  {
+   "id": "q17-event-ingest-crosses-owners",
+   "kind": "quiz",
+   "source": {
+    "path": "src/services/workflow-dispatch-service.ts",
+    "lines": {
+     "start": 62,
+     "end": 85
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/workflow-dispatch-service.ts",
+     "lineStart": 62,
+     "lineEnd": 68
+    },
+    {
+     "path": "src/repositories/workflow-repository.ts",
+     "lineStart": 170,
+     "lineEnd": 183
+    },
+    {
+     "path": "src/app/api/events/ingest/route.ts",
+     "lineStart": 6,
+     "lineEnd": 10
+    }
+   ],
+   "prompt": "Operator A posts order.created to /api/events/ingest. Operator B owns an ACTIVE EVENT workflow listening for order.created; A cannot see it. What happens to B's workflow?",
+   "answer": "It gets a run too, as event matching ignores the caller's scope",
+   "distractors": [
+    "Nothing, as the ingest only matches the caller's workflows",
+    "Nothing, as B's workflow answers 404 for A, as a manual run does",
+    "It gets a run only if A has been made an admin or an analyst"
+   ],
+   "explanation": "The ingest route requires only workflow:execute, which OPERATOR has, and passes the actor along (ingest/route.ts:6-10). ingestEvent calls listActiveEventWorkflows(eventName) (workflow-dispatch-service.ts:62-68), whose where clause is just ACTIVE, EVENT and the event name, with no scope or owner parameter (workflow-repository.ts:170-183). Every matching workflow in the system gets a run, B's included, and the run is credited to A. The manual trigger path loads the workflow through the caller's visibility scope first; the event path never does. Authorization sits on that read path but not on the event fan-out."
+  },
+  {
+   "id": "q18-event-fanout-partial-failure",
+   "kind": "quiz",
+   "source": {
+    "path": "src/services/workflow-dispatch-service.ts",
+    "lines": {
+     "start": 62,
+     "end": 85
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/workflow-dispatch-service.ts",
+     "lineStart": 66,
+     "lineEnd": 79
+    },
+    {
+     "path": "src/repositories/workflow-run-repository.ts",
+     "lineStart": 37,
+     "lineEnd": 90
+    }
+   ],
+   "prompt": "An event matches three workflows. Creating the third workflow's run fails with a database error, and the client retries the same event. How many runs do the first two workflows end up with?",
+   "answer": "Two each, as their first runs committed before the failure",
+   "distractors": [
+    "One each, as the whole ingest ran in a single transaction",
+    "One each, as the retry is deduplicated by the event name",
+    "None, as the failure rolls back every run of that event"
+   ],
+   "explanation": "ingestEvent loops over the matched workflows and, for each one, awaits createRunForWorkflow and then writes a workflow.event.dispatched audit row (workflow-dispatch-service.ts:66-79). Each createRunForWorkflow is its own $transaction (workflow-run-repository.ts:37-90), so runs one and two are committed before the third is attempted. The third failure propagates out of the loop and executeRoute answers 500, but nothing undoes the earlier runs. The event carries no idempotency key and nothing records that it was processed, so the retry matches all three workflows again and enqueues new runs for the first two. One transaction around the fan-out, or an event id stored under a unique key, would make the retry safe."
+  },
+  {
+   "id": "q19-dashboard-loads-all-runs",
+   "kind": "quiz",
+   "source": {
+    "path": "src/services/workflow-monitoring-service.ts",
+    "lines": {
+     "start": 19,
+     "end": 43
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/workflow-monitoring-service.ts",
+     "lineStart": 22,
+     "lineEnd": 31
+    },
+    {
+     "path": "src/repositories/workflow-run-repository.ts",
+     "lineStart": 93,
+     "lineEnd": 109
+    }
+   ],
+   "prompt": "The most recently updated workflow on an operator's dashboard has 50,000 runs. To build the dashboard's recentRuns list of eight, how many of that workflow's runs does the server load?",
+   "answer": "All 50,000, before it sorts in memory and keeps eight",
+   "distractors": [
+    "Eight, as the run query takes the newest eight rows",
+    "Five, the newest runs that listWorkflows already loads",
+    "Two, its fair share of the eight after the merge step"
+   ],
+   "explanation": "getDashboard calls listRunsForWorkflow for each workflow it samples (workflow-monitoring-service.ts:22-31). That repository method has a where, an include and an orderBy, but no take (workflow-run-repository.ts:93-109), so it returns every run of the workflow. The service then flattens the four arrays, sorts them by createdAt in JavaScript and slices eight. So one busy workflow drags its whole history over the wire on every dashboard load. listWorkflows already includes the five newest runs per workflow, but the dashboard does not use them; a single query with orderBy createdAt desc and take 8 would do the job."
+  },
+  {
+   "id": "q20-recent-failures-tile-scope",
+   "kind": "quiz",
+   "source": {
+    "path": "src/services/workflow-monitoring-service.ts",
+    "lines": {
+     "start": 19,
+     "end": 43
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/workflow-monitoring-service.ts",
+     "lineStart": 24,
+     "lineEnd": 25
+    },
+    {
+     "path": "src/services/workflow-monitoring-service.ts",
+     "lineStart": 40,
+     "lineEnd": 40
+    },
+    {
+     "path": "src/components/workflows/workflow-dashboard.tsx",
+     "lineStart": 49,
+     "lineEnd": 49
+    }
+   ],
+   "prompt": "An operator owns six workflows. The one updated longest ago has failed 20 times today; the other five have no failures. How many does the Recent Failures tile count from that workflow?",
+   "answer": "None, as only the four latest-updated workflows count",
+   "distractors": [
+    "All 20, as the tile counts every failed run of the day",
+    "Five, the failures among its five newest included runs",
+    "Eight, as the tile caps the count at the list length"
+   ],
+   "explanation": "The tile shows stats.failedRuns (workflow-dashboard.tsx:49), and that number counts FAILED runs inside recentRuns only (workflow-monitoring-service.ts:40). recentRuns is built from the runs of the first four workflows, which listWorkflows orders by updatedAt descending (workflow-monitoring-service.ts:24-25), so a workflow outside the four most recently updated contributes nothing, however often it fails. Even inside the four, only the eight newest runs are counted. The tile is therefore a count over a display sample, not a failure metric; a separate count query filtered by status and time would be."
+  },
+  {
+   "id": "f05-run-creation-transaction",
+   "kind": "flashcard",
+   "source": {
+    "path": "src/repositories/workflow-run-repository.ts",
+    "lines": {
+     "start": 29,
+     "end": 91
+    }
+   },
+   "cites": [
+    {
+     "path": "src/repositories/workflow-run-repository.ts",
+     "lineStart": 37,
+     "lineEnd": 90
+    }
+   ],
+   "front": "What does createRunForWorkflow write, and why in one transaction?",
+   "back": "A QUEUED run, one PENDING step-run per step, a single job row for the first step only, and a workflow.run.created audit row, all inside one $transaction. The job table is the queue, so enqueueing commits with the run: there is never a run without its first job, or a job without its run. Later steps get their jobs from the worker as each step finishes."
+  },
+  {
+   "id": "f06-internal-token-guard",
+   "kind": "flashcard",
+   "source": {
+    "path": "src/lib/auth/internal-token.ts",
+    "lines": {
+     "start": 14,
+     "end": 25
+    }
+   },
+   "cites": [
+    {
+     "path": "src/lib/auth/internal-token.ts",
+     "lineStart": 14,
+     "lineEnd": 25
+    },
+    {
+     "path": "src/app/api/internal/scheduler/dispatch/route.ts",
+     "lineStart": 6,
+     "lineEnd": 11
+    }
+   ],
+   "front": "How are the internal scheduler and worker routes authenticated?",
+   "back": "They declare no user permission. Inside the handler, assertInternalToken compares the x-internal-token header with INTERNAL_WORKER_TOKEN using a plain !== (not constant-time): missing or wrong gives 401 INVALID_INTERNAL_TOKEN. If the env var is unset it throws a plain Error instead of an AppError. Machine auth is kept apart from user sessions on purpose."
+  },
+  {
+   "id": "f07-json-fields-fail-before-request",
+   "kind": "flashcard",
+   "source": {
+    "path": "src/components/workflows/workflow-builder.tsx",
+    "lines": {
+     "start": 56,
+     "end": 147
+    }
+   },
+   "cites": [
+    {
+     "path": "src/components/workflows/workflow-builder.tsx",
+     "lineStart": 56,
+     "lineEnd": 62
+    },
+    {
+     "path": "src/components/workflows/workflow-builder.tsx",
+     "lineStart": 103,
+     "lineEnd": 147
+    }
+   ],
+   "front": "What happens when a step's config text in the builder is not valid JSON?",
+   "back": "The save mutation's mutationFn builds the payload first, and parseJsonField throws \"Step N config must contain valid JSON.\" while doing so. The throw rejects the mutation before any request is sent, React Query calls onError, and setFormError puts that sentence in the form's red error line. The server's schema never sees the bad value."
   }
  ]
 }

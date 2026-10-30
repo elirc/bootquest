@@ -1,0 +1,179 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "opusorganize--apprenticeship-curriculum-14-load-backpressure-timeouts.md--set-c",
+ "items": [
+  {
+   "key": "seed:explainback:opusorganize/explain-back/1707b50f13722908",
+   "provenance": {
+    "repo": "opusorganize",
+    "sha": "6a6e84522bd58c88ccec72421a15b8dbef797602",
+    "path": "apprenticeship/curriculum/14-load-backpressure-timeouts.md",
+    "lines": {
+     "start": 1,
+     "end": 76
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "DESIGN IT — [senior] riding out a dependency outage and the recovery storm after it (opusorganize, apprenticeship/curriculum/14). No ticket drop this time: on an ordinary Saturday evening two events are checking people in at the door and about 1,800 buyers are in checkout when the payment provider goes down at 19:02 for 7 minutes. The mobile app retries a failed checkout every 2 seconds; each reservation is held for 10 minutes before an expiry job releases it; when the provider comes back it redelivers about 3,000 webhooks within a minute; and the same Node process that serves the API also renders QR codes and checks passwords with bcrypt. Write your design before you look: what the API does while the provider is down, how clients retry, what happens to holds whose payment state is unknown, how the recovery burst is absorbed, which work must leave the request process, what the health checks test, what you alert on, and what pages show while degraded. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "keyPoints": [
+      {
+       "text": "[w3] While the provider is down, checkout fails fast instead of waiting: a short timeout plus a circuit breaker that opens after a run of failures, so the API answers 503 with Retry-After within milliseconds and no connection is held for a call that cannot succeed; in the half-open state a few probe calls detect the recovery.",
+       "cite": {
+        "path": "batch4report/projects/buildevent.md",
+        "lineStart": 76,
+        "lineEnd": 77
+       }
+      },
+      {
+       "text": "[w3] Clients are part of the retry budget: the app honours Retry-After, adds random jitter, backs off and stops after a few attempts, and the Pay button guards against a double submit, so 1,800 buyers do not all retry on the same 2-second beat.",
+       "cite": {
+        "path": "batch4report/projects/buildevent.md",
+        "lineStart": 68,
+        "lineEnd": 68
+       }
+      },
+      {
+       "text": "[w3] A hold whose payment outcome is unknown is not released on the timer, because the provider may already have taken the money: holds with a payment attempt in flight during the outage are extended or parked as unknown and settled against the provider first. Before any of that, check that expiry runs at all; in the lab app the expiry jobs are never imported.",
+       "cite": {
+        "path": "batch4report/REPORT.md",
+        "lineStart": 101,
+        "lineEnd": 101
+       }
+      },
+      {
+       "text": "[w3] The webhook burst is acknowledged quickly and processed from a queue at a bounded concurrency, so the provider sees fast answers and stops redelivering; sizing that concurrency is what decides how late the last ticket arrives (the lab, at concurrency 1, acknowledged 400 webhooks in 8.4 s but issued the last QR code at about 31 s).",
+       "cite": {
+        "path": "batch4report/projects/buildevent.md",
+        "lineStart": 41,
+        "lineEnd": 41
+       }
+      },
+      {
+       "text": "[w3] Event-loop time is a scarce resource like connections: CPU-heavy steps (rendering QR codes, hashing passwords) running in the request process stall every request that process is serving, so they move to a separate worker process or to worker threads with their own concurrency limit.",
+       "quote": "(DB connections, workers, event-loop time)"
+      },
+      {
+       "text": "[w2] Liveness tests only the process itself, readiness tests what this instance needs right now, and a dashboard status shows everything else: the payment provider belongs in none of the routing checks, so its outage cannot restart or unroute the instances that still serve door check-in.",
+       "cite": {
+        "path": "apprenticeship/curriculum/13-release-safety.md",
+        "lineStart": 5,
+        "lineEnd": 10
+       }
+      },
+      {
+       "text": "[w2] Alerts also fire on absent signals, because an outage of work that should be happening raises no error at all: no expiry run in the last few minutes, or checkouts being attempted while not a single webhook arrives.",
+       "cite": {
+        "path": "batch4report/projects/buildevent.md",
+        "lineStart": 64,
+        "lineEnd": 64
+       }
+      },
+      {
+       "text": "[w2] Degraded pages say so: a page that silently swaps in demo data on any error shows buyers invented availability, so serve cached data labelled with its age, or a clear 'temporarily unavailable'.",
+       "cite": {
+        "path": "batch4report/REPORT.md",
+        "lineStart": 105,
+        "lineEnd": 105
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "PRE-MORTEM — the outage on a build where the expiry jobs have finally been wired in and little else has changed: the mobile app retries every 2 seconds with no jitter; the expiry sweeper keeps releasing holds at its fixed rate while payments are unconfirmed; at 19:09 the webhook burst is processed inline, with QR codes rendered inside those requests; the liveness check calls the payment provider; an engineer restarts every API instance at 19:05 'to clear it'; the dashboard shows queue length as healthy all evening; and when the provider returns, thousands of users whose sessions lapsed sign in again at once. What breaks, how does each show up, and what in your design prevents it?",
+     "keyPoints": [
+      {
+       "text": "[w3] Retries without jitter arrive in waves: every client that failed at 19:02 retries on the same beat, so the API sees synchronised peaks instead of a steady flow, and the first wave after recovery lands at full height on a provider that has only just come back. Jitter and a server-chosen Retry-After spread that wave.",
+       "quote": "a ticket drop, a retry storm, a slow dependency"
+      },
+      {
+       "text": "[w3] The sweeper resells paid seats: holds released while their payment was unconfirmed go back on sale, and the redelivered webhooks then confirm the original payments, so two buyers have paid for one seat. The same sweeper also releases only 100 holds a minute, so if the 1,800 holds from the outage all go through the sweeper, the last truly abandoned seats stay off sale for some 18 minutes after it.",
+       "cite": {
+        "path": "apprenticeship/curriculum/18-durable-execution.md",
+        "lineStart": 103,
+        "lineEnd": 103
+       }
+      },
+      {
+       "text": "[w3] Inline webhooks with QR rendering on the same event loop make every acknowledgement slow: requests queue behind CPU work and behind the pool, the lab saw 100 concurrent webhooks end in pool timeouts (P2028), and the provider treats each slow or failed acknowledgement as a reason to deliver again, adding load to the backlog it caused.",
+       "cite": {
+        "path": "batch4report/projects/buildevent.md",
+        "lineStart": 51,
+        "lineEnd": 53
+       }
+      },
+      {
+       "text": "[w3] A provider check inside liveness restarts every instance at the same moment, so a 7-minute payment outage becomes a full outage, door check-in included; the manual restart at 19:05 does the same thing by hand, with cold pools, lost in-flight work and every socket and client reconnecting together.",
+       "cite": {
+        "path": "apprenticeship/curriculum/13-release-safety.md",
+        "lineStart": 12,
+        "lineEnd": 12
+       }
+      },
+      {
+       "text": "[w2] The queue looked short because it counts jobs waiting, not jobs stuck: handlers that call the provider through a client built with no timeout sit on each dead call for the SDK's long default, still marked active, so few jobs wait while almost none complete. Completions per minute, and handlers running past their time budget, are what show it.",
+       "quote": "constructs Stripe with no `timeout` or `maxNetworkRetries`"
+      },
+      {
+       "text": "[w2] The sign-in wave after recovery is CPU, not I/O: the lab measured 1.3 s per bcrypt compare at cost 12 on a slow laptop, and a pure-JavaScript hash spends that time on the thread that serves requests, so a few dozen concurrent logins stall the whole process. Hash on worker threads or a dedicated service, and rate-limit sign-in separately from checkout.",
+       "cite": {
+        "path": "batch4report/REPORT.md",
+        "lineStart": 108,
+        "lineEnd": 108
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "TRADE-OFF HANDBACK — defend your outage design against the alternatives: failing fast behind a breaker versus letting checkouts wait out the outage; releasing holds on the timer versus pausing expiry for payments in an unknown state; processing webhooks inline versus acknowledging and queueing them; CPU-heavy work in the API process versus a separate worker; and showing stale data versus an explicit error while degraded. For each, say what you bought, what it cost, and which requirement put you on that side.",
+     "keyPoints": [
+      {
+       "text": "[w3] A breaker protects connections and the provider's recovery, and costs some buyers who would have succeeded after a short blip, plus thresholds to tune (a breaker that opens too eagerly causes its own outage); letting checkouts wait keeps those buyers but ties up connections and workers for calls that cannot succeed, which is how one slow dependency turns into every route failing.",
+       "quote": "Fix by moving the external call out of the transaction and giving it a bulkhead."
+      },
+      {
+       "text": "[w3] Pausing expiry for unknown payments means no paid seat is ever resold, at the cost of seats held off sale for longer and a settlement step against the provider; releasing on the timer keeps inventory fresh and risks selling one seat twice and refunding by hand. Treating 'unknown' as a stored state with its own retry schedule is what makes the pause safe.",
+       "cite": {
+        "path": "apprenticeship/curriculum/16-sagas-vs-2pc-vs-outbox.md",
+        "lineStart": 40,
+        "lineEnd": 43
+       }
+      },
+      {
+       "text": "[w2] Acknowledging and queueing absorbs a burst and stops the provider's redelivery clock, and costs a durable queue, idempotent consumers and a delay between payment and ticket; inline processing is simpler and issues tickets at once, but it ties the provider's retry clock to your slowest step.",
+       "quote": "size worker concurrency to throughput"
+      },
+      {
+       "text": "[w2] A separate worker keeps request latency independent of CPU-heavy work and lets each scale on its own, at the price of a second deployable, a queue hop and QR codes that arrive a little later; worker threads avoid the new deployable but still share the machine's cores and memory with the API.",
+       "cite": {
+        "path": "portfolio-audit/projects/batch-14.md",
+        "lineStart": 470,
+        "lineEnd": 470
+       }
+      },
+      {
+       "text": "[w2] Stale data labelled with its age keeps pages useful but can show a sold-out tier as available, so it suits browsing and never the final checkout step; an explicit error is honest and loses the moment; silently substituting demo data is a correctness bug, not a degradation strategy.",
+       "cite": {
+        "path": "batch4report/projects/buildevent.md",
+        "lineStart": 50,
+        "lineEnd": 50
+       }
+      },
+      {
+       "text": "[w1] Rehearsing the outage on purpose (a test or staging run that takes the dependency away for minutes and then brings it back) costs a production-like environment and a scheduled hour; waiting for the real outage is free until it comes on a busy evening, with the breaker thresholds and the hold policy never exercised.",
+       "cite": {
+        "path": "apprenticeship/curriculum/13-release-safety.md",
+        "lineStart": 24,
+        "lineEnd": 24
+       }
+      }
+     ]
+    }
+   ],
+   "set": "c"
+  }
+ ]
+}

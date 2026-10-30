@@ -1,0 +1,182 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "organized-build-ecom--docs-upskill-03-architecture-and-patterns-03-validation-auth-and-permissions.md",
+ "items": [
+  {
+   "key": "seed:explainback:organized-build-ecom/explain-back/24169aae987afdcb",
+   "provenance": {
+    "repo": "organized-build-ecom",
+    "sha": "24cf00e6b6ca42243e50979245cd5b39a1798dc0",
+    "path": "docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md",
+    "lines": {
+     "start": 1,
+     "end": 73
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "DESIGN IT — [senior] roles and permissions for a multi-seller marketplace: shop staff, support and moderation (organized-build-ecom, docs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md). Scenario: MarketForge reaches 4,000 sellers and 2 million buyers. Sellers want staff accounts, up to 20 per shop, as owner, catalog editor, fulfilment clerk or read-only finance; the platform adds support agents who can see any order and refund up to $200 but never moderate sellers, a trust-and-safety team that moderates sellers, and finance admins who can refund anything; one order often holds items from three shops; a seller suspended for fraud must lose every write within one minute; and every privileged action must be explainable afterwards. Write your design before you look: the data model for who may do what (roles, permissions, and how a staff member is tied to one shop), what a route checks versus what the service checks versus what the query itself enforces, how a check works when one order belongs to several shops, which facts about the actor or the resource (status, amount) enter a decision, how a role or status change reaches users who are already logged in, and how you prove the whole matrix with tests. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "keyPoints": [
+      {
+       "text": "[w3] Staff need roles scoped to a shop, so the model becomes a membership row per user and shop carrying a shop role, next to a small set of platform roles for support, trust and safety and finance. As built a user has exactly one global role from an enum, and a seller profile has exactly one owner (a unique owner id), so there is nowhere to say 'Dana is a fulfilment clerk at shop 12'.",
+       "cite": {
+        "path": "prisma/schema.prisma",
+        "lineStart": 115,
+        "lineEnd": 118
+       }
+      },
+      {
+       "text": "[w3] Code checks permissions, and roles are only named bundles of them, so adding 'support agent' edits one map instead of every route. As built every protected route calls a guard with a list of role names, while the permission map (cart:write, orders:refund, products:write:self and the rest) and the throwing role assertion beside it are never called anywhere: the matrix documents intent but enforces nothing.",
+       "cite": {
+        "path": "src/server/auth/rbac.ts",
+        "lineStart": 5,
+        "lineEnd": 23
+       }
+      },
+      {
+       "text": "[w3] Each layer answers its own question: the route asks 'is this caller authenticated and do they hold the permission'; the service asks 'may they do it to this resource' (this split is their shop's, this refund is within their limit, their shop is approved); and the query scopes what can be returned at all. The catalog already shows the third layer: only active products of approved sellers can come out of its where clause, whatever the caller asks for.",
+       "cite": {
+        "path": "src/server/catalog/queries.ts",
+        "lineStart": 108,
+        "lineEnd": 116
+       }
+      },
+      {
+       "text": "[w3] Authorise at the granularity of what the write changes. One order holds several shops' splits but has a single status, and as built a seller who owns any one split passes the scope check and moves the whole order, so shop A can mark shop B's goods as delivered. Move fulfilment state onto the split (or a shipment) and derive the order's status from its parts; then the ownership check and the write cover the same rows.",
+       "cite": {
+        "path": "src/server/orders/service.ts",
+        "lineStart": 20,
+        "lineEnd": 47
+       }
+      },
+      {
+       "text": "[w2] Decisions need attributes, not only roles: a seller's moderation status, a refund's amount against the actor's limit and the order total, an account's status. As built a policy that only approved sellers may list products exists as a pure function and is never called, the fulfilment update never looks at the seller's status, and the refund body accepts any positive amount.",
+       "cite": {
+        "path": "src/domain/sellers/seller-policy.ts",
+        "lineStart": 1,
+        "lineEnd": 15
+       }
+      },
+      {
+       "text": "[w2] Role, email and seller id are signed into a 15-minute access token and trusted until it expires, so a change reaches a logged-in user only at the next refresh; the refresh does reload role and seller id from the database, but it never looks at the account status, which only login checks, and each refresh issues a new refresh token with a fresh 30-day expiry, so a locked account that keeps its session alive never has to sign in again. Check status on refresh, revoke the refresh family on suspension, and read status live for the writes that must stop within a minute.",
+       "cite": {
+        "path": "app/api/v1/auth/refresh/route.ts",
+        "lineStart": 18,
+        "lineEnd": 44
+       }
+      },
+      {
+       "text": "[w2] A field that moderation owns must only change through moderation. As built the seller onboarding upsert writes the status back to PENDING on every resubmission, so a form the seller controls edits the moderation state; self-service writes should touch profile fields only, and a status change should exist only as an audited moderation action.",
+       "cite": {
+        "path": "src/server/sellers/service.ts",
+        "lineStart": 19,
+        "lineEnd": 40
+       }
+      },
+      {
+       "text": "[w1] Prove the matrix, do not assume it: a table-driven test of every route against every role, with an own resource and a foreign one, asserting the exact status code, plus cross-shop cases. The repo has unit tests for pricing and the order state machine, an integration test for checkout and an end-to-end buyer checkout spec, and no test of any permission.",
+       "quote": "Strong: proposes tests for seller A attempting to update seller B's order."
+      }
+     ]
+    },
+    {
+     "prompt": "PRE-MORTEM — staff accounts and the support role have shipped. A fulfilment clerk at one shop marks a three-shop order delivered and the buyer gets a 'delivered' email while two parcels have not left; trust and safety suspends a fraudulent seller at 14:00, at 14:10 that seller is still marking orders shipped, and its locked owner account is still signed in a week later; a support agent with a $200 limit refunds $2,000; the day the access-token secret is rotated, every signed-in user sees server errors instead of being asked to sign in again; and a curious seller finds out which order ids exist by probing the status endpoint. What breaks, how does each show up, and what in your design prevents it?",
+     "keyPoints": [
+      {
+       "text": "[w3] The early 'delivered' email is the order-level write followed by an order-level notification: the update and its audit row commit for the whole order, then the buyer is told the order's new status, so one shop's click speaks for all three. Per-split fulfilment with an order status derived from all splits (delivered only when every split is) stops both the false status and the false email.",
+       "cite": {
+        "path": "src/server/orders/service.ts",
+        "lineStart": 34,
+        "lineEnd": 71
+       }
+      },
+      {
+       "text": "[w3] The ten minutes and the week are two separate gaps: verifying an access token reads no database at all, so suspension cannot bite before the token expires, and the refresh path never checks whether the account is still active. Fixes in order of cost: check status and revoke refresh tokens at suspension, a per-user token version compared on sensitive writes, or a short-cached status read on every write.",
+       "cite": {
+        "path": "src/server/auth/session.ts",
+        "lineStart": 59,
+        "lineEnd": 72
+       }
+      },
+      {
+       "text": "[w2] The $2,000 refund passes because limits are not part of the decision: the route checks only the admin role, the body accepts any positive integer amount, and the service checks the order's state, never the amount against the order total or the actor's limit. A limit is an attribute check in the service, where the actor, the order and the amount meet.",
+       "cite": {
+        "path": "src/server/orders/service.ts",
+        "lineStart": 76,
+        "lineEnd": 87
+       }
+      },
+      {
+       "text": "[w2] The rotation outage is an error-mapping gap: jose throws its own error classes for a bad signature, an expired token or a malformed one, and the error mapper turns every Error that is not an ApiError, a ZodError or a known prefix into a 500, so a client never sees the 401 that would send it to refresh or sign in. Catch verification failures in the session helper and throw unauthorized.",
+       "cite": {
+        "path": "src/server/api/errors.ts",
+        "lineStart": 14,
+        "lineEnd": 30
+       }
+      },
+      {
+       "text": "[w2] The probe works because the order is loaded by id before any scope check: a foreign order exists and answers 403, while an unknown id makes the lookup throw a database not-found error that maps to 500. Load through the scope (the order with a split of the caller's shop) and answer 404 for both cases.",
+       "quote": "`findUnique` is not authorization."
+      },
+      {
+       "text": "[w1] You notice through the audit trail and denial metrics: privileged writes already record actor, action, entity, request id and before-and-after in the same transaction as the change; add a counted, sampled record of denied attempts per actor, because a burst of 403s from one seller is the probe in progress.",
+       "cite": {
+        "path": "src/server/sellers/service.ts",
+        "lineStart": 76,
+        "lineEnd": 100
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "TRADE-OFF HANDBACK — defend your authorisation design against the alternatives: checking role names versus permissions versus per-resource grants; enforcing in Next.js middleware versus route guards versus the service layer versus Postgres row-level security; trusting claims in a signed token versus looking the user up on every request; policy as functions in the codebase versus an external policy engine; answering 403 versus 404 for a resource the caller may not see; and auditing only privileged writes versus every decision. For each, say what you bought and what it cost.",
+     "keyPoints": [
+      {
+       "text": "[w3] Role checks read clearly while the org chart is small and turn every new role into edits across many routes; permission checks decouple routes from roles at the cost of a map to maintain; per-resource grants (shop memberships) are the only way one person can hold different rights in different shops, and they cost a lookup on every check and an admin screen to manage them.",
+       "cite": {
+        "path": "prisma/schema.prisma",
+        "lineStart": 63,
+        "lineEnd": 68
+       }
+      },
+      {
+       "text": "[w3] Middleware runs before every route and suits coarse gates (signed in or not, redirects), but it cannot see the resource; as built it only sets security headers and a request id, so every handler must guard itself. Route guards are explicit and easy to forget; service checks sit next to the data; row-level security is the backstop for a forgotten where clause, but with one database user behind Prisma it needs a per-transaction session setting for the current user, which pooling and every raw query must respect.",
+       "cite": {
+        "path": "middleware.ts",
+        "lineStart": 3,
+        "lineEnd": 14
+       }
+      },
+      {
+       "text": "[w2] Claims in a short-lived signed token cost no database read per request and buy a staleness window equal to the token life; a lookup per request (or a cache of seconds) makes revocation immediate for one indexed read; a token version per user sits between them.",
+       "quote": "Token claims should not become stale after role or seller status changes."
+      },
+      {
+       "text": "[w2] Policy as pure functions in the codebase is typed, unit-testable and close to the data it needs; an external engine centralises and audits policy across services and languages, at the cost of a network hop and of shipping every attribute the decision needs to it. For one Next.js app the functions win, provided they are actually called.",
+       "cite": {
+        "path": "src/domain/sellers/seller-policy.ts",
+        "lineStart": 5,
+        "lineEnd": 15
+       }
+      },
+      {
+       "text": "[w2] 403 for a foreign resource is honest and easy to debug, but confirms the resource exists; 404 for both 'missing' and 'not yours' hides existence at the cost of support asking 'is it gone or do I lack access'. A guard that throws on any failed check fails closed, which is the right default either way.",
+       "cite": {
+        "path": "src/server/auth/guards.ts",
+        "lineStart": 11,
+        "lineEnd": 19
+       }
+      },
+      {
+       "text": "[w1] Auditing privileged writes in the same transaction is cheap and answers 'who did this'; recording every decision, allows and denials, answers 'who tried', at a volume that needs sampling or a separate log store.",
+       "quote": "Admin actions must be audited."
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

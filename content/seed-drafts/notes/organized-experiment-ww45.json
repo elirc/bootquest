@@ -586,6 +586,205 @@
     }
    ],
    "readMore": []
+  },
+  {
+   "id": "r04-client-cache-and-search-sql",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: the client cache, the wire and the search query",
+   "body": "The newer questions in this pack leave the permission rules and look at three other layers.\n\n**The browser cache.** Read `src/components/providers/app-providers.tsx` for the client defaults, then every hook in `src/hooks/`. Write down each query key, and for each mutation in `useEntryMutations.ts` the keys it invalidates. Then find, in `search-dashboard.tsx`, exactly what feeds the search hook's key.\n\n**The wire.** Compare the types in `src/types/knowledge.ts` with what `apiOk` and `apiClient` in `src/lib/http/` actually put on and take off the network.\n\n**The SQL.** Read `searchPublishedEntries` in the entry repository slowly, from the tag filter down to the object it returns. Then read the server pages in `src/app/` and the create path in `src/services/knowledgeEntryService.ts`.",
+   "excerpts": [
+    {
+     "path": "src/hooks/useKnowledgeSearch.ts",
+     "lineStart": 31,
+     "lineEnd": 31,
+     "quote": "queryKey: [\"knowledge-search\", filters],"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/repositories/knowledgeEntryRepository.ts",
+     "lineStart": 158,
+     "lineEnd": 264,
+     "why": "The ranked search query and how its rows become the response."
+    },
+    {
+     "path": "src/lib/http/client.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The fetch wrapper every hook uses."
+    }
+   ]
+  },
+  {
+   "id": "x-q13-search-request-per-keystroke",
+   "target": "seed:quests:organized-experiment-ww45/quiz/25be6ce45c383658",
+   "phase": "after",
+   "title": "Every keystroke is a new query key",
+   "body": "The search box writes straight into React state, and that state becomes part of the query key `[\"knowledge-search\", filters]`. Each letter makes a new key, so typing vpn starts three queries. A new key has no cached data, and the hook sets no `placeholderData`, so each one begins with `isLoading` true and the list shows its loading state until the response lands. Keys already fetched within the 30 s staleTime are served from cache, which is why deleting back to an earlier string sends nothing.\n\nThe usual fixes are a debounced value in the key (for example 250 ms) and `placeholderData: keepPreviousData`, so old results stay visible while the next ones load.\n\n- *Debounced* and *one shared key* describe code this repo does not have.\n- *Previous results kept* needs `placeholderData`.",
+   "excerpts": [
+    {
+     "path": "src/components/knowledge/search-dashboard.tsx",
+     "lineStart": 48,
+     "lineEnd": 48,
+     "quote": "onChange={(event) => setQuery(event.target.value)}"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q14-new-tag-missing-from-filters",
+   "target": "seed:quests:organized-experiment-ww45/quiz/7772470dab5539a8",
+   "phase": "after",
+   "title": "A query nobody invalidates refreshes only when it goes stale",
+   "body": "Creating a draft can create tags, but none of the entry mutations invalidates `[\"tags\"]`; they invalidate the workspace list, the search results and the edited entry. The tag chips were cached when the editor first opened search, and with a 30 s staleTime they are still fresh 10 s later. Mounting the search page again therefore reuses the cached list without a request, and Payments is missing. It appears after the list goes stale and something triggers a refetch, such as a remount or a window focus after 30 s.\n\nThe fix is one more line in the create and update hooks: invalidate `[\"tags\"]` on success.\n\n- No mutation touches `[\"tags\"]`.\n- A fresh query does not refetch on mount.\n- *Server-rendered tags*: the page passes only the session; the chips come from the client query.",
+   "excerpts": [
+    {
+     "path": "src/hooks/useTags.ts",
+     "lineStart": 15,
+     "lineEnd": 16,
+     "quote": "queryKey: [\"tags\"], queryFn: () => apiClient<TagSummary[]>(\"/api/tags\"),"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/hooks/useEntryMutations.ts",
+     "lineStart": 14,
+     "lineEnd": 30,
+     "why": "What the create hook invalidates on success."
+    }
+   ]
+  },
+  {
+   "id": "x-q15-date-type-over-json",
+   "target": "seed:quests:organized-experiment-ww45/quiz/2cf97c45089e18f7",
+   "phase": "after",
+   "title": "A Date in a shared type becomes a string on the wire",
+   "body": "On the server, `mapWorkspaceEntry` really does return Date objects, so the shared `WorkspaceEntry` type is true there. `apiOk` serializes with `NextResponse.json`, JSON has no date type, and the browser receives ISO strings. `apiClient` returns `payload.data as T`, a cast that converts nothing, so the client code still believes it holds a Date. The sort compiles, then `getTime` turns out to be undefined on a string and calling it throws a TypeError.\n\nThe existing components survive only because they wrap the value in `new Date(...)`. A separate wire type with `string` dates, or a parse step that revives them, would let the compiler catch this.\n\n- *tsc fails* would need the client type to say string.\n- *Revived dates* would need a reviver in `apiClient`.\n- *NaN* would need a call that returns; this one throws.",
+   "excerpts": [
+    {
+     "path": "src/types/knowledge.ts",
+     "lineStart": 31,
+     "lineEnd": 32,
+     "quote": "publishedAt: Date | null; updatedAt: Date;"
+    },
+    {
+     "path": "src/lib/http/client.ts",
+     "lineStart": 19,
+     "lineEnd": 19,
+     "quote": "return payload.data as T;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q16-validation-message-generic",
+   "target": "seed:quests:organized-experiment-ww45/quiz/4887fc272959b486",
+   "phase": "after",
+   "title": "The fetch wrapper keeps the message and drops the rest",
+   "body": "The server does its part: a failed parse becomes a 400 whose body carries a code, a generic message and the flattened zod issues, which name the summary field and its minimum. `apiClient` keeps only `payload.error.message` and throws a plain `Error` with it. The status, the code and the issues are gone before the component sees anything, so the form can only print the generic sentence, and it cannot highlight the summary field or tell a 400 from a 409.\n\nA richer client error (status, code and details, as an `ApiError` class) would let the form map issues onto fields.\n\n- *A field message* exists only inside the dropped issues.\n- *Request failed* is the fallback when the body has no message; this one has one.\n- *Unable to save entry* is for a thrown non-Error.",
+   "excerpts": [
+    {
+     "path": "src/lib/http/client.ts",
+     "lineStart": 16,
+     "lineEnd": 16,
+     "quote": "throw new Error(payload.error?.message ?? \"Request failed\");"
+    },
+    {
+     "path": "src/lib/http/responses.ts",
+     "lineStart": 28,
+     "lineEnd": 28,
+     "quote": "message: \"The request payload is invalid\","
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q17-republish-resets-published-at",
+   "target": "seed:quests:organized-experiment-ww45/quiz/0ee7027a0c58cf58",
+   "phase": "after",
+   "title": "publishedAt means last published, not first",
+   "body": "The status update writes `publishedAt` on every transition: the current time when the new status is PUBLISHED, otherwise null. Archiving on 1 April cleared it. The admin's restore to DRAFT left it null, and the publish on 1 May set it to that moment. Nothing keeps the original March date on the entry; only the audit row written for that first status change still records when it happened.\n\nThis is a data-model choice worth noticing. Search breaks score ties by `publishedAt`, so a republished entry sorts as if it were new, and a UI that labels the column as the first publication date would be wrong. Keeping `firstPublishedAt` separately would preserve both meanings.\n\n- *1 March* would need the column to be written once.\n- *null* forgets the second publish.\n- *1 April* would need it to track every status change.",
+   "excerpts": [
+    {
+     "path": "src/repositories/knowledgeEntryRepository.ts",
+     "lineStart": 352,
+     "lineEnd": 352,
+     "quote": "publishedAt: status === EntryStatus.PUBLISHED ? new Date() : null,"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q18-concurrent-same-slug-500",
+   "target": "seed:quests:organized-experiment-ww45/quiz/45180ed42963de10",
+   "phase": "after",
+   "title": "A pre-check is a message; the unique index is the guard",
+   "body": "`createDraftEntry` looks the slug up on the shared client before its transaction opens. When two requests interleave so that both look-ups run first, both see no row and both go on to insert. PostgreSQL's unique index on the slug lets one insert commit and rejects the other, and Prisma reports that as a known request error with code P2002. The route's `apiError` recognises only application errors and zod errors, so the loser gets a logged 500 rather than the 409 the pre-check would have produced a moment later.\n\nThe robust pattern is to treat the database constraint as the rule: catch P2002 on the slug and map it to the same 409, keeping the pre-check only for a friendly early answer.\n\n- *409 from the pre-check* needs the first insert to commit before the second look-up.\n- Nothing suffixes slugs or maps P2002.",
+   "excerpts": [
+    {
+     "path": "src/services/knowledgeEntryService.ts",
+     "lineStart": 88,
+     "lineEnd": 92,
+     "quote": "const existingEntry = await findEntryBySlug(input.slug); if (existingEntry) { throw new ConflictError(\"That slug is already in use\");"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/lib/http/responses.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "Which errors keep their status and which become 500."
+    }
+   ]
+  },
+  {
+   "id": "x-q19-entry-page-error-as-404",
+   "target": "seed:quests:organized-experiment-ww45/quiz/8736ac7cd86db179",
+   "phase": "after",
+   "title": "Catching every error turns an outage into a 404",
+   "body": "The entry page wants two outcomes, show the entry or show not-found, and gets there with `.catch(() => null)` around the lookup. The service already signals a missing entry with its own `NotFoundError`, but the catch does not look at what it caught, so a dropped connection, a timeout or a bug in the mapper all become null and then `notFound()`. The reader sees a 404 page for an entry that exists, and nothing reaches the error boundary or the logs.\n\nCatching only `NotFoundError` and rethrowing the rest keeps the two failure modes apart: a real 404 for missing content and the error page (plus a log line) for an outage.\n\n- *The error page* is what the code would show without the catch.\n- *A cached copy* does not exist for a page that reads cookies on each request.\n- *A redirect* comes only from the session check, which already passed.",
+   "excerpts": [
+    {
+     "path": "src/app/entries/[slug]/page.tsx",
+     "lineStart": 26,
+     "lineEnd": 26,
+     "quote": "const entry = await getPublishedEntryBySlug(slug).catch(() => null);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q20-multi-tag-filter-any",
+   "target": "seed:quests:organized-experiment-ww45/quiz/0a6eb21c65709914",
+   "phase": "after",
+   "title": "An IN list inside one EXISTS means any, not all",
+   "body": "All selected tag slugs go into a single `EXISTS` subquery with `slug IN (...)`. That subquery is true as soon as the entry has one matching tag row, so selecting runbooks and security returns entries tagged with either. Each extra chip therefore widens the results.\n\nIf the product wants each chip to narrow, as most facet filters do, the condition must require every tag: one `EXISTS` per selected slug, or a grouped subquery whose `HAVING count(DISTINCT slug)` equals the number of chips. It is worth deciding which semantics the UI promises before writing the SQL, because both are one line apart.\n\n- *Both tags* and *exactly these tags* describe AND or equality semantics.\n- *The first chip only* misreads the IN list, which takes every selected slug.",
+   "excerpts": [
+    {
+     "path": "src/repositories/knowledgeEntryRepository.ts",
+     "lineStart": 170,
+     "lineEnd": 170,
+     "quote": "AND tag_filter.\"slug\" IN (${Prisma.join(input.tagSlugs)})"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q21-total-count-past-last-page",
+   "target": "seed:quests:organized-experiment-ww45/quiz/23ae4b59cad35d6e",
+   "phase": "after",
+   "title": "A window count only exists on rows you return",
+   "body": "`COUNT(*) OVER()` is evaluated before `LIMIT` and `OFFSET`, so every returned row carries the full match count, 12 here. That makes one query enough for pages 1 and 2. The value lives on the rows, though. Page 3 skips all twelve matches, no row comes back, and the mapper's fallback reports 0. The schema bounds page only from below, so the request is accepted.\n\nA client that renders \"page 3 of N\" from this response would show zero results and zero pages. A separate count query, as the workspace list uses, keeps the total correct for any page; so does clamping the page to the last one before querying.\n\n- *12* is true for pages 1 and 2 only.\n- *2* confuses the remainder on page 2 with the total.\n- *400* would need an upper bound on page.",
+   "excerpts": [
+    {
+     "path": "src/repositories/knowledgeEntryRepository.ts",
+     "lineStart": 262,
+     "lineEnd": 262,
+     "quote": "totalCount: rows.length > 0 ? Number(rows[0].totalCount) : 0,"
+    }
+   ],
+   "readMore": []
   }
  ]
 }

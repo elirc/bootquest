@@ -1656,5 +1656,75 @@ resolved); quiz variety `concept` and flashcard shape `hand-authored`;
     - 27 near-code hint 2s remain in older csdrills drills (qw thinned 8: 07/03, 04/02, 05/06, 03/04, 05/09, 09/09,
       09/10, 10/09);
     - old sysdrills hint 3s with parentheses (11/07, 12/03, 14/03);
-    - set-Bs for dotnet-auth and tracer;
+    - set-Bs for dotnet-auth and tracer (tracer set-B landed in cw);
     - the prose parser renders a code block inside a list item between two `<ol>`s (numbering kept).
+- **CRUD wave (cw) — DONE (2026-10-30):** owner order: "add more system design and architecture content focusing on
+  CRUD webapp dev, specifics to Node, React, TypeScript". 5 Opus streams in clones (cw-c1..c5), repo claims kept
+  disjoint, ring review (C1→C2→C3→C4→C5→C1) with fixes as new commits, hub integration on `cw-wave`. Content only:
+  no shared/src, factory, validate or server/src edits, so no estate restamp.
+  - **sysdrills 111 → 129 (C1):** 4 new modules, 18 drill-js units, each 8 tests incl. a boundary test:
+    15 node-service-runtime (event-loop stall + setImmediate slicing, libuv threadpool starvation, the 65,535
+    bind-parameter cap on bulk INSERT, keep-alive timeouts that must grow inward, rolling-deploy drain budget);
+    16 data-access-and-integrity (soft delete vs unique index, optimistic-lock retry cost on a hot row, an
+    expand/contract checker across live app versions, JOIN row multiplication, backfill pacing vs replica replay);
+    17 client-data-layer (fetch waterfalls and hoisting, TanStack staleTime/gcTime decisions, visibility-gated
+    polling, the 6-connections-per-domain limit with SSE across tabs); 18 web-authz-and-sessions (deny-overrides with
+    implicit deny, tenant filter scoping incl. the OR-precedence leak, idle + absolute session timeouts, access-token
+    lifetime vs refresh load). All 144 expected values recomputed independently (simulation, real SQLite, brute
+    force); 67 naive variants each fail a named test; framework facts probed (Node 22.16, node:sqlite 3.49.1,
+    @tanstack/query-core 5.90.2, knex 3.1.0). About 20 suggested topics were dropped as already owned (cursors,
+    If-Match, merge patch, idempotency keys, N+1, lost updates, optimistic updates, debounce, JWT exp/nbf, CSRF, ...).
+  - **DESIGN IT primaries +4 (C2), designRepos 35 → 39:** organized-experiment-zz7 async report exports;
+    organized-experiment-ww48 pipeline board / list view at scale (keyset paging per column, an index per access path,
+    search, counts, URL state, React Query key churn); organized-build-ecom marketplace roles & permissions
+    (shop-scoped roles, permission checks by layer, stale token claims); master offline edits / optimistic UI / sync
+    conflicts. zz7 and ww48 have no quest pack (stamped `--allow-no-quests`; sysdesign units are campaign-exempt).
+  - **DESIGN IT alternates +5 (C3):** set-B on jsprojectlearn crud-product (collaborative board, offline edits),
+    groktuts listing-catalog-cache (the write side: workflow, permissions, bulk, audit, erasure) and tracer
+    auth-session-design (invites, roles, guests); set-C on opusorganize web-app-at-10x-load (provider outage and
+    recovery storm) and zero-downtime-schema-change (repair, then constrain: NOT VALID, MATCH SIMPLE ordering).
+    caching-that-stays-correct set-C deliberately not built (its angles are owned elsewhere).
+  - **ladder-real pins:** designItems 78 → 87, designRepos 35 → 39, set-B/C titles 32 → 37 (counted).
+  - **Classic architecture explain-backs +4 (C4), all campaign-linked:** organized-experiment-support-hub (ticket list
+    view, keystroke to rows), ww29 (notification batch create: outcomes by layer, atomic but not retry-safe), ww18
+    (invoice payment write path: every ZodError is a 500; a READ COMMITTED lost update with numbers) and
+    organized-study-nextcrm-app (server-action input boundary; the Decimal type lie across the RSC boundary). A ww16
+    pack was built then reverted (5adb024f, an amended unpushed revert commit): ww16 is not campaign-linked, so the
+    ladder-real:141 invariant (no unlinked classic EB) stays.
+  - **Explain-back packs 231 → 244** (C2 +4, C3 +5, C4 +4).
+  - **Architecture quiz layer (C5):** organized-experiment-ww10 12q/4fc → 23/10, ww43 12/4 → 22/8, ww45 20/3 → 29/7,
+    ww7 12/4 → 20/7 (+38 quizzes, +17 flashcards, +42 notes); old items byte-identical, historical quarantine/review
+    keys unchanged. Scenario questions on validation boundaries, transaction scope, React Query invalidation, TS type
+    ripple, error mapping and authz placement; framework facts probed (query-core, Prisma, embedded PostgreSQL 18.4).
+  - **Accepted overlaps (related, not restating):** ecom q1.kp4 vs fc d6718bda, q1.kp7 vs quiz ce52ee9f / note x-q11,
+    q2.kp4 vs quiz 7780dd89 / note r02; jsprojectlearn-B q2.kp2/q2.kp3/q3.kp1/q3.kp6 vs the master primary (client
+    ids, device-clock LWW, per-field merge: cross-repo doctrine); zero-downtime-C q2.kp2 vs fc 997f22e1 (remedy mention
+    only); tracer-B q3.kp1/kp3/kp5 and groktuts-B q3.kp2 vs the ecom authz trade-offs (cross-repo doctrine); nextcrm
+    q2.kp3/kp4 vs masternext q2.kp7 + quiz 5e82c2d0 (mass assignment vs BOLA); ww7 q13 vs fc f01 (the deciding
+    Restrict-FK fact is new).
+  - **Upstream findings (mirrors untouched; keyed as behaviour where used):**
+    - tracer: invite accept never compares the signed-in user with the invited email; the raw invite token is logged;
+      double-accept race (used-check before the tx); dev OAuth routes registered unconditionally (made-up users in
+      production, open redirect); My Issues unscoped; PATCH accepts any assignee id; no route changes roles.
+    - jsprojectlearn collab-todo keeps its event log in memory (versions restart at 1 and clients ignore new events);
+      groktuts' "Express + Zod" doc sample validates nothing.
+    - zz7: the runner reads the live report definition, not the queued snapshot, and no file is written; ANALYST can
+      export purchase orders without purchaseOrder read permission. ww48: the hook cannot send the owner filter; the
+      query function ignores the abort signal.
+    - organized-build-ecom: the permission map, role assertion and "can list products" policy are never called; a
+      seller owning one split can change the whole order's status; refresh never checks account status; any JWT
+      verification failure is a 500; order-id probing reveals which exist (500 vs 403).
+    - master: mutation ids are never stored server-side (a resent create inserts twice); an offline "extend block" is
+      dropped; LWW skips are reported as applied; the browser queue survives sign-out.
+    - ww18: getErrorResponse maps ZodErrors to 500 and echoes raw messages; applyPayment lost update;
+      Payment.reference not unique. ww29: an unknown templateId gives empty-bodied deliveries, the batch templateId is
+      never written, a duplicate channel → 500. support-hub: saved-view filters ignored (its docs' F11). ww16 (not
+      shipped): the leaderboard ignores the session; apiFetch never sends x-demo-user-id.
+    - ww10: no component renders query/mutation errors (flow-traces.md:22 says the 403 reaches the UI); a 404 detail
+      page loads forever. ww43: flow-traces.md:72 is wrong about the stale draft (the cache shows the pre-edit row).
+      ww45: lookup errors all become 404; totalCount is 0 past the last page; tag chips filter as OR; ["tags"] is
+      never invalidated; Date fields arrive as strings. ww7: event ingest is not scoped to the caller and is neither
+      atomic nor idempotent; the dashboard loads every run; Recent Failures counts a display sample; publish errors
+      are never shown; the runs panel never refreshes; a status change resets unsaved builder edits.
+  - **Report items:** a typeahead load drill and login-lockout math (C1 dropped them as marginal); data history /
+    GDPR erase as a DESIGN IT topic; set-Bs for the 4 new cw primaries.
