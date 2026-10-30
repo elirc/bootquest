@@ -146,8 +146,8 @@ describe('manifest', () => {
     expect(m.expected).toEqual({ total: 2, code: 2, quiz: 0, output: 0, written: 0 });
   });
 
-  it('SYSDRILLS_EXPECTED pins the committed census (125 drill-js units)', () => {
-    expect(SYSDRILLS_EXPECTED).toEqual({ total: 125, code: 125, quiz: 0, output: 0, written: 0 });
+  it('SYSDRILLS_EXPECTED pins the committed census (129 drill-js units)', () => {
+    expect(SYSDRILLS_EXPECTED).toEqual({ total: 129, code: 129, quiz: 0, output: 0, written: 0 });
   });
 });
 
