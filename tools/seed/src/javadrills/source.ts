@@ -24,10 +24,12 @@ import type { PackCounts } from '@bootquest/shared';
 export const JAVADRILLS_FORMAT = 'javadrills-authoring@1';
 
 /**
- * Census of the committed authoring files (10 modules: 8 × 10 drill-java exercises).
- * Appending a module = add its JSON, bump this, re-import, re-validate.
+ * Census of the committed authoring files (11 modules, 80 drill-java exercises: 01-04,
+ * 06 and 09 have 8, 02 and 10 have 9, 07 has 8, 08 has 6, 05 has 5, 11 has 3 — the qw
+ * wave retired 12 drills and added 6). Appending a drill or module = add it, bump this,
+ * re-import, re-validate.
  */
-export const JAVADRILLS_EXPECTED: PackCounts = { total: 86, code: 86, quiz: 0, output: 0, written: 0 };
+export const JAVADRILLS_EXPECTED: PackCounts = { total: 80, code: 80, quiz: 0, output: 0, written: 0 };
 
 /** module ids and exercise slugs: NN-kebab-case */
 export const ID_RE = /^[0-9]{2}-[a-z0-9-]+$/;
