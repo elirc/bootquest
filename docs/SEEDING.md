@@ -228,7 +228,7 @@ course per module, into `content/packs/javadrills/` with manifest `{ track: 'jav
 before writing anything — a starter or solution without both markers, a solution whose tests
 block differs from the starter's by even one byte, a missing `class Exercise` or a `package`
 statement, a tests block without `test(` / `report()` / a literal test name, fewer than 4 or more than 8
-tests, a duplicate test name, no `(boundary)` test, a hint 3 containing `;`, `return` or parentheses (qw), and a census other
+tests, a duplicate test name, no `(boundary)` test, a hint 3 containing `;`, `return`, `->` or parentheses (qw), and a census other
 than `JAVADRILLS_EXPECTED`. The drills join the java track's existing daily `drill:java` slate
 pool with no migration (the slot is sized from live drill units per track).
 
@@ -1065,8 +1065,8 @@ resolved); quiz variety `concept` and flashcard shape `hand-authored`;
   & failover, search & indexing, observability & telemetry), 32 new drill-js drills, 110 total;
   SYSDRILLS_EXPECTED 78 → 110; 110/110 validated (solution passes + starter fails under the real
   drill-js runner), 0 quarantined; all 96 expected integers of modules 13-14 recomputed by
-  hand-formula in the integration pass (modules 11-12 recompute CLOSED in qw: 192/192 by hand and by an
-  independent implementation); hint 3
+  hand-formula in the integration pass (modules 11-12 recompute CLOSED in qw: 96/96 — 192/192 across
+  modules 11-14 — by hand and by an independent implementation); hint 3
   never contains `return` or `;` (13/03's brief hint "must return" reworded "must send back" to
   honour that rule).
 - **fundamentals wave — DONE (2026-10-21):** interview + real-SWE-fundamentals content, zero
@@ -1439,8 +1439,9 @@ resolved); quiz variety `concept` and flashcard shape `hand-authored`;
   wrote: improve it, add where it is thin, remove the weak parts.
   - **Process.** 7 Opus audits (A1-A7), then an orchestrator plan, then a 7-member council (all approved with changes;
     42 rulings), then 7 Opus implementer streams in isolated clones (`bq-qw-s1..s7`), then a cross-review ring plus an
-    orchestrator review. The orchestrator was an Opus stand-in for Fable, which the owner approved. The Fable high-level
-    review is pending and follows the landing.
+    orchestrator review. The orchestrator was an Opus stand-in for Fable, which the owner approved. The final
+    high-level review was done by an independent Opus stand-in (Fable's quota was exhausted: three 429s); verdict
+    LAND AFTER FIXES; the fixes were applied before landing. A Fable review is still owed to the owner if wanted.
   - **Footprint.** No edits to shared/src, tools/seed/src/factory or server/src, so no estate restamp. The bank
     importers (`tools/seed/src/{csdrills,javadrills,sysdrills}`, not fingerprinted) gained gates.
   - **Policies:**
@@ -1576,8 +1577,8 @@ resolved); quiz variety `concept` and flashcard shape `hand-authored`;
       - demoSessions is a plain-object lookup, so `constructor`/`__proto__` give 403 instead of 401.
       - handleRouteError maps only AppError, so Zod errors, bad JSON and P2002 become 500.
     - **netcalendy:**
-      - `Include("_rules")` names no navigation, so available-slots answers 500 for every host (EF Core 10.0.12
-        probe). Guide 02-data-model:127 is wrong: owned rules load without an Include.
+      - `Include("_rules")` names no navigation, so available-slots answers 500 for every request that passes the
+        event-type checks (GetAvailableSlotsHandler.cs:23-30; EF Core 10.0.12 probe). Guide 02-data-model:127 is wrong: owned rules load without an Include.
       - RISK-002 ("Windows tz ids throw on Linux") is outdated since .NET 6 with ICU.
       - No rate limiter, and bookings are `[AllowAnonymous]`.
       - Only the first rule per weekday is used (Schedule.cs:55).
@@ -1629,7 +1630,7 @@ resolved); quiz variety `concept` and flashcard shape `hand-authored`;
     - **masteropen:**
       - The monitor_status upsert stores no tick.
       - A maintenance window can open between a 30 s monitor's two tasks.
-      - Trigger rows are never deleted (they cascade on delete).
+      - Trigger rows are never pruned; they are removed only by cascade when their monitor or notification is deleted.
     - **atlas:** the payroll-correction runbook names states that don't exist.
     - **dify:**
       - Chunk "max_tokens" is measured in characters.
@@ -1652,7 +1653,8 @@ resolved); quiz variety `concept` and flashcard shape `hand-authored`;
     - the JS leg of the cross-language traps;
     - javadrills: 03/07's task text still dictates the op order; 10/08 "without thenCombine", 07/08 "same instance"
       and 04/04 "one pass" are untestable;
-    - 27 csdrills hint 2s are near-code;
+    - 27 near-code hint 2s remain in older csdrills drills (qw thinned 8: 07/03, 04/02, 05/06, 03/04, 05/09, 09/09,
+      09/10, 10/09);
     - old sysdrills hint 3s with parentheses (11/07, 12/03, 14/03);
     - set-Bs for dotnet-auth and tracer;
     - the prose parser renders a code block inside a list item between two `<ol>`s (numbering kept).
