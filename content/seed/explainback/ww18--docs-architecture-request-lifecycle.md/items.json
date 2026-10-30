@@ -1,0 +1,210 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "ww18--docs-architecture-request-lifecycle.md",
+ "items": [
+  {
+   "key": "seed:explainback:ww18/explain-back/bd5298c5906184e0",
+   "provenance": {
+    "repo": "ww18",
+    "sha": "d032dc72c858b75d920b7605ec0ebbafcd7e1758",
+    "path": "docs/architecture/request-lifecycle.md",
+    "lines": {
+     "start": 27,
+     "end": 56
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "Walk through what happens in ww18 when finance@acme.io applies a 2,500-cent CARD payment to an ISSUED invoice whose balance is 10,000 cents: how the caller and the tenant are resolved, what runs before the body is read, every check, every row the transaction writes and why those rows belong together, and what comes back.",
+     "keyPoints": [
+      {
+       "text": "[w2] Identity comes from the x-demo-user-email header, falling back to the default demo user, and is looked up in an in-code DEMO_SESSIONS map; an email that is well formed but unknown gets a 401.",
+       "cite": {
+        "path": "src/lib/auth/session.ts",
+        "lineStart": 18,
+        "lineEnd": 36
+       }
+      },
+      {
+       "text": "[w3] The tenant is pinned for everyone but platform admins: a non-admin who names another tenant in x-active-tenant-id gets 403, and one who names none gets their own. A platform admin must name a tenant (401 without one), and any tenant id is accepted.",
+       "cite": {
+        "path": "src/lib/auth/session.ts",
+        "lineStart": 38,
+        "lineEnd": 57
+       }
+      },
+      {
+       "text": "[w2] withRouteContext resolves the session, checks invoice:applyPayment and builds the tenant context before the handler runs; only then does the route await params and parse the body with applyPaymentSchema: positive integer cents, a method enum and a reference of at least 2 characters.",
+       "cite": {
+        "path": "src/lib/http/with-route-context.ts",
+        "lineStart": 17,
+        "lineEnd": 32
+       }
+      },
+      {
+       "text": "[w3] The whole service body is one interactive transaction whose first read is tenant-scoped: findFirst on { tenantId, id }, so another tenant's invoice is a 404 like a missing one. Then comes a 409 unless the status is ISSUED or PARTIALLY_PAID, and a 422 if the amount exceeds the balance.",
+       "cite": {
+        "path": "src/services/invoice-service.ts",
+        "lineStart": 26,
+        "lineEnd": 39
+       }
+      },
+      {
+       "text": "[w3] It then writes five things: the payment; the invoice moved from 10,000 to 7,500 and PARTIALLY_PAID; a PENDING PAYMENT_RECEIVED revenue event (READY_FOR_RECOGNITION only when the balance reaches 0); a PENDING REVENUE_RECOGNITION job; and an audit row.",
+       "cite": {
+        "path": "src/services/invoice-service.ts",
+        "lineStart": 41,
+        "lineEnd": 83
+       }
+      },
+      {
+       "text": "[w2] Writing the job row in the same transaction as the money is what makes the async hand-off trustworthy: recognition work exists exactly when the payment committed, with no dual write to a queue.",
+       "cite": {
+        "path": "src/services/invoice-service.ts",
+        "lineStart": 63,
+        "lineEnd": 71
+       }
+      },
+      {
+       "text": "[w1] Every repository function takes the executor and the tenantId as explicit parameters and stamps tenantId into the data it writes, so no finance row can be written without a tenant.",
+       "cite": {
+        "path": "src/repositories/invoice-repository.ts",
+        "lineStart": 44,
+        "lineEnd": 55
+       }
+      },
+      {
+       "text": "[w1] The route answers 200, not 201, with { data: { invoiceId, paymentId, balanceCents, revenueEventId } }, and no UI page calls it (only its route test does).",
+       "cite": {
+        "path": "src/app/api/invoices/[invoiceId]/apply-payment/route.ts",
+        "lineStart": 17,
+        "lineEnd": 27
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "Explain the status and body ww18 returns on the payment route, and which line decides each, for: an x-demo-user-email of \"bob\"; a SALES caller; a body with amountCents 25.5; an invoice id that belongs to another tenant; a payment larger than the balance; and an error thrown by the database. Then say what a browser caller using demoFetch would see.",
+     "keyPoints": [
+      {
+       "text": "[w3] getErrorResponse knows only two cases: an AppError keeps its statusCode, and any other Error becomes 500 with its own message. There is no validation branch.",
+       "cite": {
+        "path": "src/lib/errors.ts",
+        "lineStart": 21,
+        "lineEnd": 31
+       }
+      },
+      {
+       "text": "[w3] \"bob\" fails the email rule of sessionHeaderSchema, and a ZodError is an ordinary Error to that helper, so a malformed identity header is a 500 carrying zod's issue JSON, raised before any permission check runs.",
+       "cite": {
+        "path": "src/lib/auth/session.ts",
+        "lineStart": 18,
+        "lineEnd": 28
+       }
+      },
+      {
+       "text": "[w2] A SALES caller lacks invoice:applyPayment, so assertCan throws AppError(403, \"Role SALES cannot perform invoice:applyPayment.\") inside withRouteContext, before the body is read.",
+       "cite": {
+        "path": "src/lib/auth/permissions.ts",
+        "lineStart": 65,
+        "lineEnd": 70
+       }
+      },
+      {
+       "text": "[w3] amountCents 25.5 fails .int(), which is again a ZodError, so a bad body is reported as a 500 server error, not a 400, with the issues as a JSON string in error: a client cannot tell its own mistake from an outage.",
+       "cite": {
+        "path": "src/lib/validation/invoice-schemas.ts",
+        "lineStart": 14,
+        "lineEnd": 19
+       }
+      },
+      {
+       "text": "[w2] Another tenant's invoice id finds nothing under the tenant-scoped findFirst and becomes 404 \"Invoice ... was not found.\", exactly like an id that does not exist.",
+       "cite": {
+        "path": "src/repositories/invoice-repository.ts",
+        "lineStart": 29,
+        "lineEnd": 42
+       }
+      },
+      {
+       "text": "[w2] Overpayment is a 422 thrown inside the transaction before any write, so the rollback has nothing to undo.",
+       "cite": {
+        "path": "src/services/invoice-service.ts",
+        "lineStart": 37,
+        "lineEnd": 39
+       }
+      },
+      {
+       "text": "[w2] A database error is an Error too, so it becomes a 500 whose body is the raw error message, which can expose query and constraint details. demoFetch then throws new Error(payload.error), so the caller keeps only that text and never the status.",
+       "cite": {
+        "path": "src/lib/api/demo-fetch.ts",
+        "lineStart": 30,
+        "lineEnd": 36
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "Defend or indict this claim about ww18's applyPayment: \"It is safe because the status check, the overpayment check, the payment insert and the balance update all run inside one database transaction.\" Use two concurrent 6,000-cent payments on an invoice with a 10,000-cent balance, and a client that retries after a timeout, as evidence. Say what you would change.",
+     "keyPoints": [
+      {
+       "text": "[w3] One transaction gives atomicity, not isolation from a concurrent payer: the invoice is read with a plain findFirst and no row lock, so under PostgreSQL's default READ COMMITTED both transactions read 10,000 and both pass the 6,000 <= 10,000 check.",
+       "cite": {
+        "path": "src/services/invoice-service.ts",
+        "lineStart": 26,
+        "lineEnd": 39
+       }
+      },
+      {
+       "text": "[w3] The balance update writes an absolute value computed from that read, guarded only by id and tenant. The second update waits for the first one's row lock and then writes the same 4,000, so 12,000 is collected and the invoice still shows 4,000 owed and PARTIALLY_PAID.",
+       "cite": {
+        "path": "src/repositories/invoice-repository.ts",
+        "lineStart": 57,
+        "lineEnd": 74
+       }
+      },
+      {
+       "text": "[w2] Each run also commits its own PAYMENT_RECEIVED event and recognition job, so downstream revenue work sees 12,000 of payments against a 10,000 invoice.",
+       "cite": {
+        "path": "src/services/invoice-service.ts",
+        "lineStart": 54,
+        "lineEnd": 71
+       }
+      },
+      {
+       "text": "[w3] A retry after a timeout is simply a second payment: Payment.reference has no unique constraint, and the service never compares it with the payments that getInvoiceById already loads for exactly that future check.",
+       "cite": {
+        "path": "prisma/schema.prisma",
+        "lineStart": 361,
+        "lineEnd": 373
+       }
+      },
+      {
+       "text": "[w1] What can be defended: money is integer cents end to end (an int zod rule and Int columns), a throw anywhere leaves no half-applied payment, and the recognition job cannot exist without its payment.",
+       "cite": {
+        "path": "src/lib/validation/invoice-schemas.ts",
+        "lineStart": 14,
+        "lineEnd": 19
+       }
+      },
+      {
+       "text": "[w2] Change: apply the payment as one guarded decrement (update only where the balance still covers the amount, decrement it, and answer 409 when no row matched) or lock the invoice row first; and make the processor reference the natural key with a unique (tenantId, invoiceId, reference), so a repeated reference finds and returns the payment that already exists.",
+       "cite": {
+        "path": "src/repositories/invoice-repository.ts",
+        "lineStart": 57,
+        "lineEnd": 74
+       }
+      },
+      {
+       "text": "[w2] Verdict: indict. The transaction makes each payment all-or-nothing, but it is not isolated from a concurrent payer: two payers can both pass the balance check and leave the books wrong (12,000 recorded against a 10,000 invoice that still shows 4,000 owed), and the retry records one real payment twice.",
+       "quote": "`applyPayment()` loads the invoice, rejects invalid states or overpayment, inserts the payment, updates the invoice balance, creates a revenue event, enqueues a workflow job, and writes an audit log in one transaction."
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}
