@@ -1,5 +1,5 @@
-// qw H3 corpus guard: every Prose-rendered field shipped in content/packs/** and content/units/**
-// must parse without a list that breaks off mid-item. The defect this pins: an authored item that
+// qw H3 corpus guard: every Prose-rendered field shipped in content/packs/**, content/units/** and
+// content/seed/quests/** (quiz prompts, flashcard fronts and backs) must parse without a list that breaks off mid-item. The defect this pins: an authored item that
 // wraps onto an indented line ("1. **x**\n   more") used to end its list after the first line, so
 // the rest of the item, and every later item, ran on inside a paragraph as literal "2. …" text.
 // New content is held to the same rule: wrapped list items are indented by at least one space.
@@ -44,8 +44,8 @@ function brokenLists(src: string): string[] {
   return bad;
 }
 
-describe('prose corpus guard (content/packs, content/units)', () => {
-  const files = ['packs', 'units'].flatMap((d) => jsonFiles(join(CONTENT, d)));
+describe('prose corpus guard (content/packs, content/units, content/seed/quests)', () => {
+  const files = ['packs', 'units', 'seed/quests'].flatMap((d) => jsonFiles(join(CONTENT, d)));
 
   it('finds the content (the guard is not vacuous)', () => {
     expect(files.length).toBeGreaterThan(50);

@@ -18,9 +18,10 @@
 //     paragraph only when it starts at 1 (CommonMark), so "12. see the appendix" mid-paragraph
 //     stays prose. "1 app.patch(" (space after the number) is the numbered LISTING, not a list.
 //   - qw: a list item may wrap: a following line indented by 1 to (marker width + 3) spaces that
-//     is not itself a list or fence line joins the item ("1. **x**\n   more"); an UNindented line
-//     joins an ordered item only when the list's next item follows before a blank line (a lazy
-//     continuation), otherwise it ends the list as before. Ordered lists
+//     is not itself a list or fence line joins the item ("1. **x**\n   more"). Any other non-blank
+//     run (unindented, or deeper than that cap) joins an ORDERED item only when the list's next
+//     item follows before a blank line (a lazy continuation); otherwise it ends the list as
+//     before, so the width + 3 cap binds only when no next item follows. Ordered lists
 //     separated only by blank lines merge when the numbering continues ("1. a\n\n2. b" = one <ol>).
 // It builds React nodes only (never innerHTML), so every character of the source is rendered
 // as text. No markdown library: anything it does not understand stays literal text.
@@ -179,7 +180,8 @@ function continuation(line: string, width: number): string | null {
 }
 
 /**
- * Lines i..j-1 are a lazy continuation of an ordered item when they are non-blank, start no list or
+ * Lines i..j-1 (at any indent: the width + 3 cap does not apply here) are a lazy continuation of an
+ * ordered item when they are non-blank, start no list or
  * fence, and line j is the list's NEXT item (numbered `next`). Returns j, or i when that is not so.
  */
 function lazyRun(lines: string[], i: number, next: number): number {

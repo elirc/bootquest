@@ -181,7 +181,7 @@ describe('parseProse: wrapped and loose list items', () => {
     ]);
   });
 
-  it('a line deeper than marker width + 3 is not absorbed: after "1. " a 7-space line is indented code, as before', () => {
+  it('a line deeper than marker width + 3 with no next item is not absorbed: after "1. " a 7-space line is indented code, as before', () => {
     expect(parseProse('1. item\n       deep')).toEqual([
       { kind: 'olist', items: ['item'], start: 1 },
       { kind: 'code', text: '   deep', lang: null },
