@@ -1,91 +1,62 @@
-> **LIVE HANDOFF (2026-10-25): this folder is HISTORICAL. Read `C:\Users\Owner\Desktop\bootquest-handoff\README.md` first** — mega expansion wave (mx) paused mid-integration on local branch `mx-wave` (checked out in this repo, not pushed); remaining: P1/P2 masteroutline primaries (bq-mx-sd2), quiz set C j5/j7 (bq-mx-q3), then pins + full battery + review + land + push, then wave 2 + final report.
->
-> **Older (2026-10-16):** read `JAVA-SYSDESIGN-REPORT-2026-10-16.md` (Java System Design section), then `JAVA-TRACK-REPORT-2026-10-16.md` (Java track), then `WAVE4-REPORT-2026-10-15.md` (wave 4). It covers wave 4 (192 packs, every study quest covered), the crash recovery, all gates, and open owner items. The rest of this folder dates from 2026-10-09 and is historical.
+# BootQuest handoff — START HERE (updated 2026-10-30)
 
-# BootQuest handoff — START HERE
+BootQuest is the owner's single-user, local-first gamified upskilling app (npm workspaces `server/`, `client/`, `cli/`,
+`shared/`, `tools/seed/`). This folder is the one current handoff. Everything older lives in git history and in
+[`docs/SEEDING.md`](../docs/SEEDING.md) §8 (the wave log, newest bullets at the end).
 
-Written 2026-10-09 by the outgoing orchestrator (Fable) at session pause.
-The owner switched subscriptions mid-flight; you are the successor session.
+## Read in this order
+1. [`AGENTS.md`](../AGENTS.md): the contract for every agent (ground rules, Windows shell, content discipline,
+   the gate battery, stop reports).
+2. This file: current state, open items, next ideas.
+3. [`OPERATIONS.md`](OPERATIONS.md): how waves are run on this machine (audit → plan → clones → ring review →
+   integrate), and the lessons behind each rule.
+4. [`docs/SEEDING.md`](../docs/SEEDING.md): §3 for the CLI of the content type you touch, §8 for the latest wave
+   bullets ("quality wave (qw)", "CRUD wave (cw)").
+5. [`README.md`](../README.md) for running the app.
 
-## 30-second orientation
+## Run it locally
+```bat
+set BOOTQUEST_DB=C:\Users\Owner\bootquest\bootquest.db
+npm run serve                        & rem API on http://127.0.0.1:4178
+npm run dev -w @bootquest/client     & rem UI on http://localhost:5173 (second terminal)
+```
+The server refuses to start on a stale stamp or a busy port, and backs up the DB before it serves.
 
-- **App**: BootQuest, the owner's single-user gamified upskilling platform.
-  Spec of record: `Desktop\bootquest-final-prompt.md`. Repo: THIS repo
-  (`Desktop\selfboot`), local git only, branch `main`.
-- **V1 is COMPLETE and verified** at commit `3795a39` (24 commits): spec
-  M1–M7 + study-quest gates + act-1 content; 931 tests, smoke 56/56,
-  demo:promotion 38/38, demo:campaign 24/24, 4 stamped code packs
-  (~4,000 exercises), 77 seed packs. Nothing on main is broken or pending.
-- **A second campaign ("improve app, fix UI, more content, new features",
-  owner-authorized at 15-agent scale) was MID-FLIGHT at pause.** 8 agents
-  were running (Phase A); 7 more were planned (Phase B). The running agents
-  received stop orders to commit consistent work and report; whatever they
-  left is on disk at the paths in `AGENTS-IN-FLIGHT.md`.
+## State
+- `main` = `origin/main` on GitHub (`elirc/bootquest`, **public**). Recent waves: mx (2026-10-23..26, bulk content),
+  qw (2026-10-30, review and pruning of mx), cw (2026-10-30, CRUD web-app system design and architecture).
+- Content census (count again before trusting a number; `C:\Users\Owner\Desktop\bootquest-handoff\tools\census.mjs`
+  is a read-only counter):
 
-## Reading order
+| Area | Count |
+|---|---|
+| Drill banks (authored, runnable) | csdrills 72 (C#), javadrills 80 (Java), sysdrills 129 (system design, 18 modules) |
+| Quest packs (quizzes, flashcards, reading) | 204, every one with a Learn-more notes pack |
+| Explain-back packs | 244: classic 137, G2 delegation briefs 20, DESIGN IT 87 (39 repos; 50 primaries + 37 set-B/C retakes) |
+| Patch katas / variants | 31 / 5 |
 
-1. This file.
-2. `STATE.md` — repo state, gate commands, machine gotchas digest.
-3. `AGENTS-IN-FLIGHT.md` — the 8 Phase-A agents: what each was doing,
-   where its work lives, how to harvest or relaunch it.
-4. `PHASE-B-PLAN.md` — the 7 not-yet-launched agents with ready briefs.
-5. `RECIPES.md` — the proven orchestration mechanics (transplant, restamp,
-   gates, commit format). Follow these exactly; they encode hard lessons.
-6. Deep background only as needed: `../LEARNING.md` (every decision with
-   its why, newest items under the 2026-10-08/09 headers),
-   `../docs/SEEDING.md` (content runbook + backlog),
-   `../docs/BUILD-PLAN.md` (original wave plan), `../docs/recon/*` (audits).
+- Gates at the cw landing are recorded in SEEDING §8. The battery itself is listed in AGENTS.md.
 
-## How to resume (suggested)
+## Open owner decisions
+- **Fable review:** both 2026-10-30 waves were orchestrated and reviewed by Opus agents because the Fable quota was
+  exhausted. A Fable high-level review of qw and cw is still owed if the owner wants one.
+- **Frozen pre-mx items that are wrong** (content rules keep old items byte-identical; the owner decides):
+  masteropen quiz 74848a10 explanation (seconds vs ms), masteroutline fc 22b1860a, mastertwenty note
+  x-retry-is-repair, linkwarden note x-member-cannot-move, netcalendy quiz 298d7218 (true only at the handler level).
+- **Upstream bugs** found in the pinned source repos are listed per wave in SEEDING §8 (mirrors are never edited).
+- **Housekeeping:** the stray remote branch `origin/mx-wave` is identical to what landed and can be deleted
+  (`git push origin --delete mx-wave`) once the owner OKs it. The working clones `C:\Users\Owner\Desktop\bq-qw-s1..s7`
+  and older `bq-mx-*` / `bq-*` folders are merged and can be deleted to free disk.
 
-1. Verify main is clean and green: `git status`, then the gate battery in
-   `STATE.md` §Gates (fast subset first: typecheck + smoke).
-2. Harvest Phase A per `AGENTS-IN-FLIGHT.md`: for each workspace, check
-   `git log` for a (possibly WIP) commit; green, complete work → transplant
-   per `RECIPES.md`; partial/absent → relaunch that agent with the brief
-   included there.
-3. Launch Phase B per `PHASE-B-PLAN.md` (UI-FIX needs the UI audit's
-   report; if the audit died incomplete, relaunch it first).
-4. Keep the orchestration discipline: you (orchestrator) re-run every gate
-   yourself before committing; fresh-context review for every wave; owner's
-   standing instruction this campaign was "15 fable agents".
-5. Delete this folder when it has served its purpose (it is committed on
-   main for safekeeping).
+## Next ideas (highest value first)
+1. Retake sets (set-B) for the DESIGN IT primaries that have none (17, incl. the 4 new cw primaries and dotnet-auth).
+2. An explain-back vs explain-back leak lint (the token lint misses paraphrase across EBs on one repo).
+3. 27 older csdrills hints (hint 2) still show near-code; thin them to API names.
+4. Classic architecture explain-backs on the 43 JS/TS repos with no explain-back (must be campaign-linked).
+5. An authored JS drill bank (`jsdrills`), the missing JS leg of the cross-language traps.
+6. Quiz layers on the remaining 12-question packs (122 packs have ≤ 12 hand quizzes).
 
-## Owner-facing context
-
-- The post-V1 roadmap was published as a private artifact (owner has the
-  link; a copy of its substance lives in `../docs/SEEDING.md` backlog +
-  LEARNING). Owner to-dos surfaced there: fine-grained read-only GitHub
-  PAT, node ≥22.18 upgrade, 4 policy decisions (explain-back retakes,
-  demotion cap, quiz oracle, two-strikes rule), upstream guide errata,
-  revoke the old Shopify token, delete 8 locked old worktree dirs under
-  `~\.claude\worktrees` (plus possibly new ones from this campaign).
-- Persistent memory: `~\.claude\projects\C--Users-Owner\memory\
-  bootquest-gamified-platform.md` (update it when you reach a milestone).
-
-## Addendum (2026-10-09, second pause — usage limit)
-
-The 8 Phase-A agents were RELAUNCHED from their prepared baselines and then
-cut off again by a usage limit shortly after. Stop orders were sent but may
-not have been processed. Consequence: unlike the first pause, the
-workspaces may now hold PARTIAL UNCOMMITTED work or WIP: commits on top of
-3795a39. Before resuming each one, run `git -C <workspace> log --oneline -3`
-and `git status --short`: a clean tree at 3795a39 = relaunch per its §;
-a WIP commit = read its message for done/not-done; uncommitted changes =
-inspect before trusting, prefer regenerating content via the deterministic
-tools over salvaging half-authored drafts. Everything else in this handoff
-remains accurate.
-
-Update before cut-off: 5 of 8 confirmed CLEAN stops (FACTORY, OPS, ACT2-A,
-KATA-2 all pristine @ 3795a39; ACT2-B also clean, and note its
-.cache/checkouts now ALSO holds organized-js-training-jstrain2@d8a8a4f7 —
-integrity unverified, re-extract if in doubt). Unconfirmed at cut-off:
-UI (main workspace — check docs/recon/ui-audit.md for appended sections +
-stray processes on ports 4178/5173), RUNNER (kata-cs-tests worktree),
-VARIANTS (bq-variants clone) — inspect per the addendum above.
-
-Final update: UI agent ALSO confirmed clean (6/8) — main workspace
-untouched @ 185d175+handoff commits, ports 4178/5173/4173 verified free,
-ui-audit.md unchanged (still PARTIAL and accurate). Only RUNNER and
-VARIANTS remained unconfirmed at cut-off.
+## Where else things live
+- `C:\Users\Owner\Desktop\bootquest-handoff\` (outside the repo): wave-1 briefs, the Codex guide and task queue, and
+  the qw stream reports (`qw\`). Reference material only; this README supersedes its status sections.
+- Agent memory for Claude sessions: `~\.claude\projects\C--Users-Owner-Desktop-selfboot\memory\`.
