@@ -513,27 +513,11 @@
    "readMore": []
   },
   {
-   "id": "x-q21-pel-role",
-   "target": "seed:quests:pulse/quiz/96590eb7e0c91998",
-   "phase": "after",
-   "title": "The pending entries list is where duplicates are born",
-   "body": "In ADR-0005's concept map, the pending entries list (PEL) is the Redis equivalent of Kafka's delivered-but-uncommitted offsets: entries a consumer has received but not yet acknowledged. Its role in Pulse is flagged in bold: it is where redelivery, and therefore duplicates, come from. XAUTOCLAIM is how a dead consumer's stuck entries get rescued and delivered again.\n\n- Invalid events are rejected before anything is appended, so they never reach the PEL.\n- An entry must already be in the stream and delivered to a consumer before it can be pending.\n- Entries wait in the stream itself until a group reads them; that is not the PEL.",
-   "excerpts": [
-    {
-     "path": "docs/adr/0005-redis-streams-ingestion.md",
-     "lineStart": 29,
-     "lineEnd": 29,
-     "quote": "**where redelivery — and duplicates — come from**"
-    }
-   ],
-   "readMore": []
-  },
-  {
    "id": "x-q22-merge-fixes-future",
    "target": "seed:quests:pulse/quiz/8fcd9ff4f09d9ee8",
    "phase": "after",
    "title": "A merge fixes the future and leaves history alone",
-   "body": "ADR-0006 resolves identity at write time: the consumer freezes `personId` onto each event row. The event log is immutable, and identity is a view over it through the `DistinctIdMapping` table. So a merge changes only the mapping. New lookups resolve to the surviving person, while the past stays exactly as recorded. The ADR calls this the same append-only instinct as the stream and every ledger.\n\n- Updating old event rows is exactly what the ADR forbids: history is never UPDATEd.\n- No new combined person is created; one of the two survives.\n- There is no nightly backfill that recomputes frozen ids.",
+   "body": "ADR-0006 resolves identity at write time: the consumer freezes `personId` onto each event row. The event log is immutable, and identity is a view over it through the `DistinctIdMapping` table. When `identify` merges two persons, the consumer moves the loser's mappings to the survivor, folds the loser's properties into it and deletes the loser's Person row. New lookups resolve to the survivor, while old event rows keep the personId they were written with. The ADR calls this the same append-only instinct as the stream and every ledger.\n\n- Updating old event rows is exactly what the ADR forbids: history is never UPDATEd.\n- No new combined person is created; one of the two survives.\n- There is no nightly backfill that recomputes frozen ids.",
    "excerpts": [
     {
      "path": "docs/adr/0006-identity-resolution-at-write-time.md",
@@ -597,13 +581,41 @@
    "target": "seed:quests:pulse/quiz/4c79729f365581c7",
    "phase": "after",
    "title": "The ORDER BY spine, and why uuid comes last",
-   "body": "In ClickHouse, ADR-0007 says, the ORDER BY is the primary index, the locality and the compression all at once. `(projectId, name, ts)` comes first because nearly every insight filters on project, usually on name, and always on a time window. `uuid` comes last so `ReplacingMergeTree` can collapse exact re-deliveries.\n\nDedupe is re-solved rather than ported: no unique index exists, merges dedupe eventually, the consumer keeps an in-memory insert-window set, and queries avoid FINAL.\n\n- Single-event lookup by uuid is not the goal.\n- Partitions are by month of ts, not by uuid.\n- ClickHouse enforces no unique index at insert time.",
+   "body": "In ClickHouse, ADR-0007 says, the ORDER BY is the primary index, the locality and the compression all at once. `(projectId, name, ts)` comes first because nearly every insight filters on project, usually on name, and always on a time window.\n\nWhy uuid has to be in the key at all: `ReplacingMergeTree` treats rows that share the whole sorting key as copies of one row and keeps only one of them when parts merge. Without uuid, two genuinely different events with the same project, name and millisecond would be merged into one. With uuid last, only a true re-delivery of the same event shares the whole key. Merges are eventual, so the consumer also skips repeats it saw recently, with a bounded window of the last 100,000 uuids.\n\n- Single-event lookup by uuid is not the goal; it is the last column of the spine.\n- Partitions are by month of ts, not by uuid.\n- ClickHouse enforces no unique index at insert time.",
    "excerpts": [
     {
      "path": "docs/adr/0007-clickhouse-columnar-events.md",
      "lineStart": 36,
      "lineEnd": 37,
      "quote": "`uuid` last so `ReplacingMergeTree` can collapse exact re-deliveries."
+    },
+    {
+     "path": "packages/db/clickhouse/schema.sql",
+     "lineStart": 10,
+     "lineEnd": 10,
+     "quote": "the same sorting key at MERGE time (eventually), keeping the max `ingestedAt`."
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q27-ch-primary-ack-before-flush",
+   "target": "seed:quests:pulse/quiz/2175e671b83309f5",
+   "phase": "after",
+   "title": "Acknowledged before it is stored: the buffered column store",
+   "body": "Pulse's pipeline rests on one ordering: a consumer acknowledges a stream entry only after the event is stored, so a crash means redelivery rather than loss. Read the consumer as it runs after the ClickHouse cutover (`EVENTS_PRIMARY=ch`, no dual-write) and the order looks right: it awaits the column store's `insert`, then XACKs.\n\nBut the column store it was handed is a buffering wrapper. Its `insert` appends to an in-memory array and writes to ClickHouse only once 10,000 rows have piled up, and nothing in the consumer calls `flush` when the stream goes idle or the process drains for a deploy. A small batch is therefore acknowledged while it lives only in process memory. A crash or rollover before the buffer fills loses it for good, and on a quiet project the events may never reach ClickHouse at all.\n\n- The awaited insert returns before ClickHouse has the rows.\n- Postgres is not written in this mode.\n- The XACK has already taken the entries off the pending list.",
+   "excerpts": [
+    {
+     "path": "apps/consumer/src/columnstore.ts",
+     "lineStart": 113,
+     "lineEnd": 113,
+     "quote": "for (const e of events) if (this.isFreshUuid(e.uuid)) this.buffer.push(e); // insert-window dedupe"
+    },
+    {
+     "path": "apps/consumer/src/worker.ts",
+     "lineStart": 90,
+     "lineEnd": 90,
+     "quote": "Post-decommission: ClickHouse IS the source of truth now"
     }
    ],
    "readMore": []

@@ -5,14 +5,15 @@
 // Honesty: renders ONLY TrackUnitsResponse fields (title, kind, difficulty, state, revealed) and
 // never fetches a unit's detail. A locked unit is never a link.
 
-import { useId, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { Link, useLocation } from 'react-router-dom';
 import { useApi } from '../api/context';
 import type { TrackId, UnitSummary } from '../api/types';
 import { Icon } from '../components/Icon';
 import { Chip, LoadState } from '../components/ui';
 import { NO_FILTER, SECTION_LABEL, groupTotals, groupUnits, sectionCounts, type UnitFilter, type UnitSection } from '../lib/trackunits';
 import { useAsync } from '../lib/useAsync';
+import { useDebouncedValue } from '../lib/useDebouncedValue';
 
 type Variant = 'primary' | 'secondary';
 
@@ -25,14 +26,32 @@ function TrackUnitsBody({ trackId, variant }: { trackId: TrackId; variant: Varia
   const api = useApi();
   const res = useAsync(() => api.getTrackUnits(trackId), [api, trackId]);
   const headingId = useId();
-  const [open, setOpen] = useState(false);
+  // `#units` (the dashboard's "Browse all" link) arrives with the browser already open
+  const deepLinked = useLocation().hash === '#units';
+  const [open, setOpen] = useState(deepLinked);
   const units = res.status === 'ready' ? res.data.units : undefined;
   const expanded = variant === 'primary' || open;
+  const sectionRef = useRef<HTMLElement>(null);
+  const arrived = useRef(false);
+  const ready = res.status === 'ready';
+  // the browser cannot jump to #units itself (the section renders after the campaign loads), and
+  // its header is focused only once the units are there to read
+  useEffect(() => {
+    if (!deepLinked || !ready || arrived.current) return;
+    arrived.current = true;
+    const sec = sectionRef.current;
+    if (!sec) return;
+    sec.scrollIntoView?.({ block: 'start' });
+    // the secondary header's toggle button, else the primary heading (tabIndex -1)
+    (sec.querySelector<HTMLElement>('.tu-head button') ?? sec.querySelector<HTMLElement>('h2'))?.focus({ preventScroll: true });
+  }, [deepLinked, ready]);
 
   return (
-    <section className="track-units" data-testid="track-units" aria-labelledby={headingId}>
+    <section className="track-units" id="units" ref={sectionRef} data-testid="track-units" aria-labelledby={headingId}>
       {variant === 'primary' ? (
-        <h2 id={headingId}>Practice units</h2>
+        <h2 id={headingId} tabIndex={-1}>
+          Practice units
+        </h2>
       ) : (
         <h2 className="tu-head" id={headingId}>
           <button type="button" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
@@ -57,10 +76,14 @@ function UnitBrowser({ units }: { units: UnitSummary[] }) {
   const [filter, setFilter] = useState<UnitFilter>(NO_FILTER);
   const groups = useMemo(() => groupUnits(units, filter), [units, filter]);
   const counts = useMemo(() => sectionCounts(units), [units]);
-  // headers show each group's UNFILTERED done/total, so they agree with the count line below
+  // headers show each group's UNFILTERED done/total (so they agree with the count line below),
+  // plus how many of the group are shown when a filter hides some
   const totals = useMemo(() => groupTotals(units), [units]);
   const done = useMemo(() => units.filter((u) => u.state === 'done').length, [units]);
   const shown = groups.reduce((n, g) => n + g.units.length, 0);
+  const countText = `Showing ${shown} of ${units.length} units · ${done} done`;
+  // the screen-reader announcement waits for a pause in typing (the visible line updates at once)
+  const announced = useDebouncedValue(countText, 500);
   const set = (over: Partial<UnitFilter>) => setFilter((f) => ({ ...f, ...over }));
 
   if (units.length === 0) {
@@ -89,9 +112,12 @@ function UnitBrowser({ units }: { units: UnitSummary[] }) {
           Hide done
         </button>
       </div>
-      {/* a live region: filter results are announced as the count changes */}
-      <p className="tu-count muted small" data-testid="track-units-count" role="status">
-        Showing {shown} of {units.length} units · {done} done
+      <p className="tu-count muted small" data-testid="track-units-count">
+        {countText}
+      </p>
+      {/* the live region: filter results are announced once the count settles, not per keystroke */}
+      <p className="sr-only" role="status" data-testid="track-units-status">
+        {announced}
       </p>
       {groups.length === 0 ? (
         <div className="tu-nomatch" data-testid="track-units-nomatch">
@@ -101,23 +127,24 @@ function UnitBrowser({ units }: { units: UnitSummary[] }) {
           </button>
         </div>
       ) : (
-        groups.map((g) => (
-          <section className="tu-group" key={g.label}>
-            <h3>
-              {g.label}{' '}
-              <span className="muted">
-                ({totals.get(g.label)!.done}/{totals.get(g.label)!.total})
-              </span>
-            </h3>
-            <ul className="tu-list">
-              {g.units.map((u) => (
-                <li key={u.id}>
-                  <UnitRow unit={u} />
-                </li>
-              ))}
-            </ul>
-          </section>
-        ))
+        groups.map((g) => {
+          const t = totals.get(g.label)!;
+          return (
+            <section className="tu-group" key={g.label}>
+              <h3>
+                {g.label}{' '}
+                <span className="muted">{`${t.done}/${t.total} done${g.units.length < t.total ? ` · ${g.units.length} shown` : ''}`}</span>
+              </h3>
+              <ul className="tu-list">
+                {g.units.map((u) => (
+                  <li key={u.id}>
+                    <UnitRow unit={u} />
+                  </li>
+                ))}
+              </ul>
+            </section>
+          );
+        })
       )}
     </>
   );

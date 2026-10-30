@@ -471,22 +471,6 @@
    "readMore": []
   },
   {
-   "id": "x-q18-filter-equivalence-test",
-   "target": "seed:quests:tracer/quiz/a477a202e16f35c1",
-   "phase": "after",
-   "title": "One spec, two evaluators, one equivalence test",
-   "body": "ADR-0009 compiles the filter AST twice: a pure client `evaluate` that runs over local issues, and a server `compileFilter` that builds a Prisma where. Its consequences admit that two implementations of one spec will drift unless a test forces them together, so an equivalence test runs both on the same fixtures and expects the same answers.\n\n- Neither side is generated from the other; they are separate code paths.\n- Re-running saved views after a sync is not described anywhere.\n- There is no paired-file lint rule. Instead, adding a filterable field means extending the enum in one place, then both evaluators, and the test catches a missed side.",
-   "excerpts": [
-    {
-     "path": "docs/adr/0009-dual-evaluation-filters.md",
-     "lineStart": 30,
-     "lineEnd": 31,
-     "quote": "Two implementations of one spec will drift unless a test forces them together"
-    }
-   ],
-   "readMore": []
-  },
-  {
    "id": "x-q19-palette-two-systems",
    "target": "seed:quests:tracer/quiz/30eb4eef6cd99f48",
    "phase": "after",
@@ -605,17 +589,45 @@
    "readMore": []
   },
   {
-   "id": "x-q26-chaos-order-independence",
-   "target": "seed:quests:tracer/quiz/93c5dbb1683aa035",
+   "id": "x-q27-filter-tests-cover-one-side",
+   "target": "seed:quests:tracer/quiz/1f6078ab5c58b7a8",
    "phase": "after",
-   "title": "Why transport chaos cannot change the converged state",
-   "body": "The Sprint 13 audit documents the chaos guarantee. `applyServerDelta` is idempotent, so applying a duplicate changes nothing, and clients reduce deltas in seq order, so the order of arrival does not matter. Together, reordering and duplication cannot change the converged state; a shuffle property test in `store.test.ts` proves it. Delay and drop are a different problem, handled by lastSeq catch-up.\n\n- No delta is discarded for a stale timestamp; ordering comes from seq.\n- Tracer uses no vector clocks; it uses a single per-workspace sequence.\n- The server does not resend snapshots after duplicates; duplicates are harmless.",
+   "title": "The equivalence test the ADR promises is not in the tree",
+   "body": "ADR-0009 admits that two implementations of one filter spec will drift unless a test forces them together. Read the pinned tests and that test is missing. `filter.test.ts` imports `evaluate` and nothing else, and both of its cases exercise the client evaluator. `compileFilter`, the function that turns the same AST into a Prisma where for `GET /issues`, is never called from any test.\n\nThat is the code-truth habit this quest keeps asking for: a decision record states an intention, and the tree shows whether it was kept. Here the drift guard exists only in prose, so a new filterable field wired into one evaluator would ship without a failing test.\n\n- No fixture file is shared between the shared package and the api tests.\n- The saved-views route has no test of its own.\n- The only e2e spec is about the keyboard.",
    "excerpts": [
     {
-     "path": "docs/audits/sprint-13-security.md",
-     "lineStart": 29,
-     "lineEnd": 30,
-     "quote": "arrival-order chaos (reorder, duplication) cannot change the converged state"
+     "path": "packages/shared/src/filter.test.ts",
+     "lineStart": 2,
+     "lineEnd": 2,
+     "quote": "import { evaluate, type FilterNode, type FilterableIssue } from \"./filter\";"
+    },
+    {
+     "path": "docs/adr/0009-dual-evaluation-filters.md",
+     "lineStart": 30,
+     "lineEnd": 31,
+     "quote": "Two implementations of one spec will drift unless a test forces them together"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q28-live-delta-arrival-order",
+   "target": "seed:quests:tracer/quiz/9da3a7918a05e58d",
+   "phase": "after",
+   "title": "The live delta path applies deltas in arrival order",
+   "body": "The shared store package has a reducer that sorts deltas by seq before applying them, and a property test proves that shuffled input converges. The live client does not use it. In `useTeamIssues`, each delta from the socket is applied on the spot with `applyServerDelta`, which simply writes the delta's value for that entity. So if seq 7 arrives before seq 6, the older value is written last and stays.\n\nThe client also tracks `lastSeq` as the highest seq it has seen, so the late delta does not look like a gap and nothing asks the server again. The Sprint 13 audit's convergence guarantee is true of the tested reducer; the delivered live path has no seq check.\n\n- There is no sort on the live path.\n- No delta is skipped for being older.\n- No re-bootstrap is triggered by out-of-order arrival.",
+   "excerpts": [
+    {
+     "path": "packages/shared/src/store.ts",
+     "lineStart": 46,
+     "lineEnd": 46,
+     "quote": "Reduce a batch of deltas to committed state, applied in seq order regardless of arrival order."
+    },
+    {
+     "path": "apps/web/src/lib/useTeamIssues.ts",
+     "lineStart": 67,
+     "lineEnd": 67,
+     "quote": "Live deltas: patch committed truth, ack our own pending, persist to disk."
     }
    ],
    "readMore": []
