@@ -1,0 +1,873 @@
+{
+  "format": "sysdrills-authoring@1",
+  "module": "16-data-access-and-integrity",
+  "title": "Data access & integrity",
+  "description": "Data-access reps for the database behind a CRUD app: which unique index survives soft deletes, the quadratic retry bill of optimistic locking on a hot row, checking an expand/contract migration against every app version live during a rolling deploy, the row explosion when an ORM joins two sibling collections, and pacing a backfill so the replica keeps up. Drills are whole-number arithmetic or yes/no decisions with the conversions named (1,000 ms in a second), and every database behaviour in them was checked against a real SQLite.",
+  "exercises": [
+    {
+      "slug": "01-soft-delete-unique",
+      "title": "Soft delete vs the unique index",
+      "difficulty": 2,
+      "skills": [
+        "sql",
+        "data-modeling"
+      ],
+      "instructions": "**Interview prompt.** \"Users are soft-deleted (deleted_at is set, the row stays). A deleted user must be able to sign up again with the same email, but two live accounts must never share one. Which unique index do you create — and what goes wrong with the obvious ones?\"\n\n**Why it works.** Three designs are on the table:\n- `unique-email`: UNIQUE(email). A soft-deleted row still holds its email, so the person can never sign up again.\n- `unique-email-deleted-at`: UNIQUE(email, deleted_at). Live rows have deleted_at NULL, and a unique index treats NULLs as distinct, so two live rows with the same email never collide — the duplicate it was meant to stop slips in.\n- `partial-live-only`: a partial unique index on email WHERE deleted_at IS NULL. Only live rows take part, so deleted rows never block a sign-up and two live rows always collide.\n\nRestoring a soft-deleted row makes it live again, so the index checks it as if it had just been inserted. Each row is `{ email, deleted }`, where `deleted` means deleted_at is set; the rows given are always a state the design allows.\n\n**Your task.** Export two functions:\n- `insertConflicts(rows, email, design)` → `true` when inserting a new live row with `email` violates the design's unique index\n- `restoreConflicts(rows, index, design)` → `true` when un-deleting `rows[index]` violates it\n\n**Worked example.** One soft-deleted ada@example.com under `unique-email` → a new sign-up conflicts (**true**); under `partial-live-only` it does not.",
+      "starter": "export function insertConflicts(rows, email, design) {\n  // TODO: which existing rows take part in this index?\n}\n\nexport function restoreConflicts(rows, index, design) {\n  // TODO: the restored row becomes live again\n}\n",
+      "solution": "function blocks(row, email, design) {\n  if (row.email !== email) return false;\n  if (design === 'unique-email') return true;\n  if (design === 'partial-live-only') return !row.deleted;\n  return false; // unique-email-deleted-at: a live row's NULL deleted_at never equals another NULL\n}\n\nexport function insertConflicts(rows, email, design) {\n  return rows.some((row) => blocks(row, email, design));\n}\n\nexport function restoreConflicts(rows, index, design) {\n  const others = rows.filter((row, i) => i !== index);\n  return others.some((row) => blocks(row, rows[index].email, design));\n}\n",
+      "tests": [
+        {
+          "name": "UNIQUE(email): a live duplicate is refused",
+          "code": "assert.equal(typeof mod.insertConflicts, 'function', 'export a function named insertConflicts');\nassert.equal(mod.insertConflicts([{\"email\":\"ada@example.com\",\"deleted\":false}], \"ada@example.com\", \"unique-email\"), true);",
+          "input": [
+            [
+              {
+                "email": "ada@example.com",
+                "deleted": false
+              }
+            ],
+            "ada@example.com",
+            "unique-email"
+          ]
+        },
+        {
+          "name": "UNIQUE(email): a soft-deleted row still blocks the re-signup",
+          "code": "assert.equal(typeof mod.insertConflicts, 'function', 'export a function named insertConflicts');\nassert.equal(mod.insertConflicts([{\"email\":\"ada@example.com\",\"deleted\":true}], \"ada@example.com\", \"unique-email\"), true);",
+          "input": [
+            [
+              {
+                "email": "ada@example.com",
+                "deleted": true
+              }
+            ],
+            "ada@example.com",
+            "unique-email"
+          ]
+        },
+        {
+          "name": "UNIQUE(email, deleted at): two live duplicates slip through",
+          "code": "assert.equal(typeof mod.insertConflicts, 'function', 'export a function named insertConflicts');\nassert.equal(mod.insertConflicts([{\"email\":\"ada@example.com\",\"deleted\":false}], \"ada@example.com\", \"unique-email-deleted-at\"), false);",
+          "input": [
+            [
+              {
+                "email": "ada@example.com",
+                "deleted": false
+              }
+            ],
+            "ada@example.com",
+            "unique-email-deleted-at"
+          ]
+        },
+        {
+          "name": "partial index: a soft-deleted row does not block the re-signup",
+          "code": "assert.equal(typeof mod.insertConflicts, 'function', 'export a function named insertConflicts');\nassert.equal(mod.insertConflicts([{\"email\":\"ada@example.com\",\"deleted\":true}], \"ada@example.com\", \"partial-live-only\"), false);",
+          "input": [
+            [
+              {
+                "email": "ada@example.com",
+                "deleted": true
+              }
+            ],
+            "ada@example.com",
+            "partial-live-only"
+          ]
+        },
+        {
+          "name": "partial index: a live duplicate is refused",
+          "code": "assert.equal(typeof mod.insertConflicts, 'function', 'export a function named insertConflicts');\nassert.equal(mod.insertConflicts([{\"email\":\"ada@example.com\",\"deleted\":false}], \"ada@example.com\", \"partial-live-only\"), true);",
+          "input": [
+            [
+              {
+                "email": "ada@example.com",
+                "deleted": false
+              }
+            ],
+            "ada@example.com",
+            "partial-live-only"
+          ]
+        },
+        {
+          "name": "empty table -> no conflict (boundary)",
+          "code": "assert.equal(typeof mod.insertConflicts, 'function', 'export a function named insertConflicts');\nassert.equal(mod.insertConflicts([], \"ada@example.com\", \"partial-live-only\"), false);",
+          "input": [
+            [],
+            "ada@example.com",
+            "partial-live-only"
+          ]
+        },
+        {
+          "name": "partial index: restoring the old account after a re-signup conflicts",
+          "code": "assert.equal(typeof mod.restoreConflicts, 'function', 'export a function named restoreConflicts');\nassert.equal(mod.restoreConflicts([{\"email\":\"ada@example.com\",\"deleted\":true},{\"email\":\"ada@example.com\",\"deleted\":false}], 0, \"partial-live-only\"), true);",
+          "input": [
+            [
+              {
+                "email": "ada@example.com",
+                "deleted": true
+              },
+              {
+                "email": "ada@example.com",
+                "deleted": false
+              }
+            ],
+            0,
+            "partial-live-only"
+          ]
+        },
+        {
+          "name": "UNIQUE(email, deleted at): the restore creates a second live account",
+          "code": "assert.equal(typeof mod.restoreConflicts, 'function', 'export a function named restoreConflicts');\nassert.equal(mod.restoreConflicts([{\"email\":\"ada@example.com\",\"deleted\":true},{\"email\":\"ada@example.com\",\"deleted\":false}], 0, \"unique-email-deleted-at\"), false);",
+          "input": [
+            [
+              {
+                "email": "ada@example.com",
+                "deleted": true
+              },
+              {
+                "email": "ada@example.com",
+                "deleted": false
+              }
+            ],
+            0,
+            "unique-email-deleted-at"
+          ]
+        }
+      ],
+      "explanation": "Only live rows should take part in \"one account per email\".\n\nFor `restoreConflicts([deleted ada, live ada], 0, 'unique-email-deleted-at')`:\n- the old row's deleted_at becomes NULL, and the live row's is already NULL\n- (ada, NULL) never equals (ada, NULL) in a unique index → **false**, and the app now has two live accounts for one email\n\nIn production the PostgreSQL docs say that \"null values in a unique column are not considered equal\" unless the index is declared NULLS NOT DISTINCT, and give the partial unique index (CREATE UNIQUE INDEX … WHERE …) as the way to constrain only some rows. A probe with Node's built-in SQLite reproduced all three designs: UNIQUE(email, deleted_at) accepted a second live duplicate, and the partial index refused restoring a deleted account after its email was taken again — the conflict the support tooling must handle, usually with a 409 and a merge step. ORM schema files that can only declare plain composite uniques make the broken (email, deleted_at) design the easy one to write; put the partial index in a raw SQL migration.",
+      "hints": [
+        "Ask which existing rows the index looks at, and remember that NULL never equals NULL inside a unique index.",
+        "unique-email: any row with the email blocks; (email, deleted_at): a new live row never collides; partial: only live rows with the email block.",
+        "Decide per design which existing rows can collide with a live row carrying the email, and for a restore leave the restored row itself out of the comparison"
+      ]
+    },
+    {
+      "slug": "02-optimistic-contention",
+      "title": "Optimistic locking on a hot row",
+      "difficulty": 2,
+      "skills": [
+        "concurrency",
+        "transactions"
+      ],
+      "instructions": "**Interview prompt.** \"Every edit of a shared document does UPDATE … WHERE id = ? AND version = ? and retries on 0 rows changed, up to 3 attempts. At launch 10 editors save at the same moment. How many UPDATEs does the database run, and how many editors still fail?\"\n\n**Why it works.** Optimistic concurrency lets everyone read the same version, but only one conditional UPDATE per version can match: the first commit bumps the version, and every other writer changes 0 rows, re-reads and tries again. Model the worst case as lock-step rounds: in each round every writer still pending attempts once and exactly one wins. The rounds stop when everyone has won or the attempt limit is reached; writers still pending then give up with a conflict error. The attempts add up round by round, so under contention the work grows with the square of the writers, not linearly.\n\n**Your task.** Export two functions:\n- `totalAttempts(writers, maxAttempts)` → how many conditional UPDATEs run in total\n- `failedWriters(writers, maxAttempts)` → how many writers give up without saving\n\n**Worked example.** 4 writers with plenty of attempts → 4 + 3 + 2 + 1 = **10 UPDATEs** for 4 saves.",
+      "starter": "export function totalAttempts(writers, maxAttempts) {\n  // TODO: every pending writer tries once per round, one wins\n}\n\nexport function failedWriters(writers, maxAttempts) {\n  // TODO: who is still pending when attempts run out\n}\n",
+      "solution": "export function totalAttempts(writers, maxAttempts) {\n  const rounds = Math.min(writers, maxAttempts);\n  return rounds * writers - (rounds * (rounds - 1)) / 2;\n}\n\nexport function failedWriters(writers, maxAttempts) {\n  return Math.max(0, writers - maxAttempts);\n}\n",
+      "tests": [
+        {
+          "name": "4 writers, plenty of attempts -> 10 UPDATEs",
+          "code": "assert.equal(typeof mod.totalAttempts, 'function', 'export a function named totalAttempts');\nassert.equal(mod.totalAttempts(4, 10), 10);",
+          "input": [
+            4,
+            10
+          ]
+        },
+        {
+          "name": "10 writers, 3 attempts each -> 10 + 9 + 8 = 27",
+          "code": "assert.equal(typeof mod.totalAttempts, 'function', 'export a function named totalAttempts');\nassert.equal(mod.totalAttempts(10, 3), 27);",
+          "input": [
+            10,
+            3
+          ]
+        },
+        {
+          "name": "10 writers, 10 attempts -> 55",
+          "code": "assert.equal(typeof mod.totalAttempts, 'function', 'export a function named totalAttempts');\nassert.equal(mod.totalAttempts(10, 10), 55);",
+          "input": [
+            10,
+            10
+          ]
+        },
+        {
+          "name": "100 writers on one row -> 5,050 UPDATEs",
+          "code": "assert.equal(typeof mod.totalAttempts, 'function', 'export a function named totalAttempts');\nassert.equal(mod.totalAttempts(100, 100), 5050);",
+          "input": [
+            100,
+            100
+          ]
+        },
+        {
+          "name": "a single writer -> 1 UPDATE (boundary)",
+          "code": "assert.equal(typeof mod.totalAttempts, 'function', 'export a function named totalAttempts');\nassert.equal(mod.totalAttempts(1, 5), 1);",
+          "input": [
+            1,
+            5
+          ]
+        },
+        {
+          "name": "10 writers, 3 attempts -> 7 give up",
+          "code": "assert.equal(typeof mod.failedWriters, 'function', 'export a function named failedWriters');\nassert.equal(mod.failedWriters(10, 3), 7);",
+          "input": [
+            10,
+            3
+          ]
+        },
+        {
+          "name": "4 writers, 10 attempts -> nobody fails (boundary)",
+          "code": "assert.equal(typeof mod.failedWriters, 'function', 'export a function named failedWriters');\nassert.equal(mod.failedWriters(4, 10), 0);",
+          "input": [
+            4,
+            10
+          ]
+        },
+        {
+          "name": "5 writers, 5 attempts -> the last one wins on its last try (boundary)",
+          "code": "assert.equal(typeof mod.failedWriters, 'function', 'export a function named failedWriters');\nassert.equal(mod.failedWriters(5, 5), 0);",
+          "input": [
+            5,
+            5
+          ]
+        }
+      ],
+      "explanation": "One winner per round turns contention into a triangle of attempts.\n\nFor `totalAttempts(10, 3)`:\n- round 1: 10 attempts, 1 wins\n- round 2: 9 attempts, 1 wins\n- round 3: 8 attempts, 1 wins → **27 UPDATEs** for 3 saves, and 7 editors see a conflict\n\nA probe against SQLite with 4 lock-step writers recorded rounds of 1-0-0-0, 1-0-0, 1-0 and 1 changed rows — 10 attempts. In production, optimistic locking is right when collisions are rare; on a hot row (a counter, a shared document at launch) prefer a single atomic statement such as UPDATE … SET likes = likes + 1, a row lock with SELECT … FOR UPDATE so waiters queue instead of retrying, or merging edits on the server. Drill 06/03 `lock-serialization` is the pessimistic side: one holder at a time, no wasted work, but a hard throughput ceiling. The triangle sum is drill 08/05 `loop-op-counts`'s pairs arithmetic in a new place.",
+      "hints": [
+        "Every round, all pending writers pay one attempt and only one of them leaves the queue.",
+        "rounds = min(writers, maxAttempts); attempts = writers + (writers − 1) + … over those rounds; failed = max(0, writers − maxAttempts).",
+        "Add one attempt per still-pending writer for each round, removing one winner per round, until the writers or the attempts run out — whoever is left pending has failed"
+      ]
+    },
+    {
+      "slug": "03-expand-contract-phases",
+      "title": "Expand/contract: every live version, every phase",
+      "difficulty": 3,
+      "skills": [
+        "migrations",
+        "deploys"
+      ],
+      "instructions": "**Interview prompt.** \"We are renaming users.email to contactEmail in a Node API that ships by rolling update, so old and new versions serve traffic side by side for minutes. How do you prove a migration plan has no broken moment?\"\n\n**Why it works.** During a rolling deploy every live app version must work against the schema in force at that moment. A version breaks against a schema when it reads or writes a column the schema does not have, or when the schema has a NOT NULL column without a default that the version's INSERT leaves out — the database rejects the row. Expand/contract (parallel change) is the recipe that keeps every phase compatible; the step teams forget is relaxing the old column's NOT NULL before shipping the code that stops writing it. Each column is `{ name, required }`, where required means NOT NULL with no default. Each app version is `{ reads, writes }`: the columns it selects and the columns its INSERT lists (every version inserts rows). A phase is `{ schema, apps }`: the schema in force and every version live during it.\n\n**Your task.** Export two functions:\n- `compatible(schema, app)` → `true` when the version can run against the schema: every column it reads or writes exists, and it writes every required column\n- `firstBrokenPhase(phases)` → the index of the first phase in which some live version is not compatible with that phase's schema, or −1 when the plan is safe\n\n**Worked example.** The one-step rename — schema `[contactEmail required]` while the old version (reads and writes email) is still live next to the new one → phase **0** is broken.",
+      "starter": "export function compatible(schema, app) {\n  // TODO: missing columns, and required columns the INSERT leaves out\n}\n\nexport function firstBrokenPhase(phases) {\n  // TODO: every live version against that phase's schema\n}\n",
+      "solution": "export function compatible(schema, app) {\n  const names = new Set(schema.map((c) => c.name));\n  const used = [...app.reads, ...app.writes];\n  if (!used.every((name) => names.has(name))) return false;\n  return schema.filter((c) => c.required).every((c) => app.writes.includes(c.name));\n}\n\nexport function firstBrokenPhase(phases) {\n  return phases.findIndex((phase) => phase.apps.some((app) => !compatible(phase.schema, app)));\n}\n",
+      "tests": [
+        {
+          "name": "old code against the original schema -> works",
+          "code": "assert.equal(typeof mod.compatible, 'function', 'export a function named compatible');\nassert.equal(mod.compatible([{\"name\":\"email\",\"required\":true}], {\"reads\":[\"email\"],\"writes\":[\"email\"]}), true);",
+          "input": [
+            [
+              {
+                "name": "email",
+                "required": true
+              }
+            ],
+            {
+              "reads": [
+                "email"
+              ],
+              "writes": [
+                "email"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "a new NOT NULL column the old INSERT leaves out -> broken",
+          "code": "assert.equal(typeof mod.compatible, 'function', 'export a function named compatible');\nassert.equal(mod.compatible([{\"name\":\"email\",\"required\":true},{\"name\":\"contactEmail\",\"required\":true}], {\"reads\":[\"email\"],\"writes\":[\"email\"]}), false);",
+          "input": [
+            [
+              {
+                "name": "email",
+                "required": true
+              },
+              {
+                "name": "contactEmail",
+                "required": true
+              }
+            ],
+            {
+              "reads": [
+                "email"
+              ],
+              "writes": [
+                "email"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "the new column added as nullable -> old code still works",
+          "code": "assert.equal(typeof mod.compatible, 'function', 'export a function named compatible');\nassert.equal(mod.compatible([{\"name\":\"email\",\"required\":true},{\"name\":\"contactEmail\",\"required\":false}], {\"reads\":[\"email\"],\"writes\":[\"email\"]}), true);",
+          "input": [
+            [
+              {
+                "name": "email",
+                "required": true
+              },
+              {
+                "name": "contactEmail",
+                "required": false
+              }
+            ],
+            {
+              "reads": [
+                "email"
+              ],
+              "writes": [
+                "email"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "old code after the old column is gone -> broken",
+          "code": "assert.equal(typeof mod.compatible, 'function', 'export a function named compatible');\nassert.equal(mod.compatible([{\"name\":\"contactEmail\",\"required\":true}], {\"reads\":[\"email\"],\"writes\":[\"email\"]}), false);",
+          "input": [
+            [
+              {
+                "name": "contactEmail",
+                "required": true
+              }
+            ],
+            {
+              "reads": [
+                "email"
+              ],
+              "writes": [
+                "email"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "final code that stops writing a still-required email -> broken",
+          "code": "assert.equal(typeof mod.compatible, 'function', 'export a function named compatible');\nassert.equal(mod.compatible([{\"name\":\"email\",\"required\":true},{\"name\":\"contactEmail\",\"required\":false}], {\"reads\":[\"contactEmail\"],\"writes\":[\"contactEmail\"]}), false);",
+          "input": [
+            [
+              {
+                "name": "email",
+                "required": true
+              },
+              {
+                "name": "contactEmail",
+                "required": false
+              }
+            ],
+            {
+              "reads": [
+                "contactEmail"
+              ],
+              "writes": [
+                "contactEmail"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "one-step rename while old and new run side by side -> phase 0 (boundary)",
+          "code": "assert.equal(typeof mod.firstBrokenPhase, 'function', 'export a function named firstBrokenPhase');\nassert.equal(mod.firstBrokenPhase([{\"schema\":[{\"name\":\"contactEmail\",\"required\":true}],\"apps\":[{\"reads\":[\"email\"],\"writes\":[\"email\"]},{\"reads\":[\"contactEmail\"],\"writes\":[\"contactEmail\"]}]}]), 0);",
+          "input": [
+            [
+              {
+                "schema": [
+                  {
+                    "name": "contactEmail",
+                    "required": true
+                  }
+                ],
+                "apps": [
+                  {
+                    "reads": [
+                      "email"
+                    ],
+                    "writes": [
+                      "email"
+                    ]
+                  },
+                  {
+                    "reads": [
+                      "contactEmail"
+                    ],
+                    "writes": [
+                      "contactEmail"
+                    ]
+                  }
+                ]
+              }
+            ]
+          ]
+        },
+        {
+          "name": "full expand/contract with NOT NULL relaxed first -> -1",
+          "code": "assert.equal(typeof mod.firstBrokenPhase, 'function', 'export a function named firstBrokenPhase');\nassert.equal(mod.firstBrokenPhase([{\"schema\":[{\"name\":\"email\",\"required\":true},{\"name\":\"contactEmail\",\"required\":false}],\"apps\":[{\"reads\":[\"email\"],\"writes\":[\"email\"]}]},{\"schema\":[{\"name\":\"email\",\"required\":true},{\"name\":\"contactEmail\",\"required\":false}],\"apps\":[{\"reads\":[\"email\"],\"writes\":[\"email\"]},{\"reads\":[\"email\"],\"writes\":[\"email\",\"contactEmail\"]}]},{\"schema\":[{\"name\":\"email\",\"required\":true},{\"name\":\"contactEmail\",\"required\":false}],\"apps\":[{\"reads\":[\"email\"],\"writes\":[\"email\",\"contactEmail\"]},{\"reads\":[\"contactEmail\"],\"writes\":[\"email\",\"contactEmail\"]}]},{\"schema\":[{\"name\":\"email\",\"required\":false},{\"name\":\"contactEmail\",\"required\":true}],\"apps\":[{\"reads\":[\"contactEmail\"],\"writes\":[\"email\",\"contactEmail\"]},{\"reads\":[\"contactEmail\"],\"writes\":[\"contactEmail\"]}]},{\"schema\":[{\"name\":\"contactEmail\",\"required\":true}],\"apps\":[{\"reads\":[\"contactEmail\"],\"writes\":[\"contactEmail\"]}]}]), -1);",
+          "input": [
+            [
+              {
+                "schema": [
+                  {
+                    "name": "email",
+                    "required": true
+                  },
+                  {
+                    "name": "contactEmail",
+                    "required": false
+                  }
+                ],
+                "apps": [
+                  {
+                    "reads": [
+                      "email"
+                    ],
+                    "writes": [
+                      "email"
+                    ]
+                  }
+                ]
+              },
+              {
+                "schema": [
+                  {
+                    "name": "email",
+                    "required": true
+                  },
+                  {
+                    "name": "contactEmail",
+                    "required": false
+                  }
+                ],
+                "apps": [
+                  {
+                    "reads": [
+                      "email"
+                    ],
+                    "writes": [
+                      "email"
+                    ]
+                  },
+                  {
+                    "reads": [
+                      "email"
+                    ],
+                    "writes": [
+                      "email",
+                      "contactEmail"
+                    ]
+                  }
+                ]
+              },
+              {
+                "schema": [
+                  {
+                    "name": "email",
+                    "required": true
+                  },
+                  {
+                    "name": "contactEmail",
+                    "required": false
+                  }
+                ],
+                "apps": [
+                  {
+                    "reads": [
+                      "email"
+                    ],
+                    "writes": [
+                      "email",
+                      "contactEmail"
+                    ]
+                  },
+                  {
+                    "reads": [
+                      "contactEmail"
+                    ],
+                    "writes": [
+                      "email",
+                      "contactEmail"
+                    ]
+                  }
+                ]
+              },
+              {
+                "schema": [
+                  {
+                    "name": "email",
+                    "required": false
+                  },
+                  {
+                    "name": "contactEmail",
+                    "required": true
+                  }
+                ],
+                "apps": [
+                  {
+                    "reads": [
+                      "contactEmail"
+                    ],
+                    "writes": [
+                      "email",
+                      "contactEmail"
+                    ]
+                  },
+                  {
+                    "reads": [
+                      "contactEmail"
+                    ],
+                    "writes": [
+                      "contactEmail"
+                    ]
+                  }
+                ]
+              },
+              {
+                "schema": [
+                  {
+                    "name": "contactEmail",
+                    "required": true
+                  }
+                ],
+                "apps": [
+                  {
+                    "reads": [
+                      "contactEmail"
+                    ],
+                    "writes": [
+                      "contactEmail"
+                    ]
+                  }
+                ]
+              }
+            ]
+          ]
+        },
+        {
+          "name": "the same plan without relaxing email -> phase 3",
+          "code": "assert.equal(typeof mod.firstBrokenPhase, 'function', 'export a function named firstBrokenPhase');\nassert.equal(mod.firstBrokenPhase([{\"schema\":[{\"name\":\"email\",\"required\":true},{\"name\":\"contactEmail\",\"required\":false}],\"apps\":[{\"reads\":[\"email\"],\"writes\":[\"email\"]}]},{\"schema\":[{\"name\":\"email\",\"required\":true},{\"name\":\"contactEmail\",\"required\":false}],\"apps\":[{\"reads\":[\"email\"],\"writes\":[\"email\"]},{\"reads\":[\"email\"],\"writes\":[\"email\",\"contactEmail\"]}]},{\"schema\":[{\"name\":\"email\",\"required\":true},{\"name\":\"contactEmail\",\"required\":false}],\"apps\":[{\"reads\":[\"email\"],\"writes\":[\"email\",\"contactEmail\"]},{\"reads\":[\"contactEmail\"],\"writes\":[\"email\",\"contactEmail\"]}]},{\"schema\":[{\"name\":\"email\",\"required\":true},{\"name\":\"contactEmail\",\"required\":true}],\"apps\":[{\"reads\":[\"contactEmail\"],\"writes\":[\"email\",\"contactEmail\"]},{\"reads\":[\"contactEmail\"],\"writes\":[\"contactEmail\"]}]},{\"schema\":[{\"name\":\"contactEmail\",\"required\":true}],\"apps\":[{\"reads\":[\"contactEmail\"],\"writes\":[\"contactEmail\"]}]}]), 3);",
+          "input": [
+            [
+              {
+                "schema": [
+                  {
+                    "name": "email",
+                    "required": true
+                  },
+                  {
+                    "name": "contactEmail",
+                    "required": false
+                  }
+                ],
+                "apps": [
+                  {
+                    "reads": [
+                      "email"
+                    ],
+                    "writes": [
+                      "email"
+                    ]
+                  }
+                ]
+              },
+              {
+                "schema": [
+                  {
+                    "name": "email",
+                    "required": true
+                  },
+                  {
+                    "name": "contactEmail",
+                    "required": false
+                  }
+                ],
+                "apps": [
+                  {
+                    "reads": [
+                      "email"
+                    ],
+                    "writes": [
+                      "email"
+                    ]
+                  },
+                  {
+                    "reads": [
+                      "email"
+                    ],
+                    "writes": [
+                      "email",
+                      "contactEmail"
+                    ]
+                  }
+                ]
+              },
+              {
+                "schema": [
+                  {
+                    "name": "email",
+                    "required": true
+                  },
+                  {
+                    "name": "contactEmail",
+                    "required": false
+                  }
+                ],
+                "apps": [
+                  {
+                    "reads": [
+                      "email"
+                    ],
+                    "writes": [
+                      "email",
+                      "contactEmail"
+                    ]
+                  },
+                  {
+                    "reads": [
+                      "contactEmail"
+                    ],
+                    "writes": [
+                      "email",
+                      "contactEmail"
+                    ]
+                  }
+                ]
+              },
+              {
+                "schema": [
+                  {
+                    "name": "email",
+                    "required": true
+                  },
+                  {
+                    "name": "contactEmail",
+                    "required": true
+                  }
+                ],
+                "apps": [
+                  {
+                    "reads": [
+                      "contactEmail"
+                    ],
+                    "writes": [
+                      "email",
+                      "contactEmail"
+                    ]
+                  },
+                  {
+                    "reads": [
+                      "contactEmail"
+                    ],
+                    "writes": [
+                      "contactEmail"
+                    ]
+                  }
+                ]
+              },
+              {
+                "schema": [
+                  {
+                    "name": "contactEmail",
+                    "required": true
+                  }
+                ],
+                "apps": [
+                  {
+                    "reads": [
+                      "contactEmail"
+                    ],
+                    "writes": [
+                      "contactEmail"
+                    ]
+                  }
+                ]
+              }
+            ]
+          ]
+        }
+      ],
+      "explanation": "Check every version that is live, not just the newest one.\n\nFor the plan that forgets to relax email's NOT NULL:\n- phases 0-2: contactEmail is nullable while old and dual-writing versions run → fine\n- phase 3: contactEmail becomes required (both live versions write it), but email is still required and the final version no longer writes it → its INSERTs fail → **3**\n\nIn production the pattern is Danilo Sato's ParallelChange (on Martin Fowler's bliki): expand, migrate, contract. A Kubernetes rolling update keeps old pods serving while new ones start, and a migration tool such as Prisma Migrate or Knex runs the DDL at one moment in that window, so the plan has to be valid for every overlap. A check like this can run in CI: for each migration, the app versions it will overlap with. The vectors were cross-checked against a real SQLite: create the phase's table with its NOT NULL columns, run each version's INSERT and SELECT, and see which fail. bootforge's is-destructive drill flags DROP and RENAME in SQL text; this drill checks the live versions against each schema.",
+      "hints": [
+        "During a rolling deploy two versions run at once, and an INSERT that leaves out a NOT NULL column with no default is rejected.",
+        "compatible ⇔ every read and written column exists and every required column ⊆ writes; firstBrokenPhase = first i where some app of phase i is incompatible, else −1.",
+        "Test every live version of every phase against that phase’s schema, failing a version that touches a missing column or leaves a required one out of its writes, and report the first phase where any version fails"
+      ]
+    },
+    {
+      "slug": "04-sibling-include-explosion",
+      "title": "Two includes, one JOIN: the row explosion",
+      "difficulty": 2,
+      "skills": [
+        "orm",
+        "sql"
+      ],
+      "instructions": "**Interview prompt.** \"The order page loads 50 orders, each with about 20 lines and 10 status events, through an ORM include of both collections, and the ORM builds it as one query with two LEFT JOINs. How many rows come back — and what would separate queries return?\"\n\n**Why it works.** A LEFT JOIN emits one row per matching child, and joining a second one-to-many collection pairs every line with every event of the same order, so the rows multiply instead of adding (a cartesian explosion). A parent with no children in a collection still comes back once, padded with NULLs, so an empty collection counts as one row in the product. Loading each collection with its own query (split queries) returns the parents once and each collection once — a sum — at the cost of extra round trips. Every parent here has the same number of children.\n\n**Your task.** Export two functions:\n- `joinedRows(parents, perParentA, perParentB)` → rows returned by one query that LEFT JOINs both collections onto the parents\n- `splitQueryRows(parents, perParentA, perParentB)` → rows returned in total by three queries: the parents, then each collection\n\n**Worked example.** 50 orders × 20 lines × 10 events → **10,000 rows** from the join, against 50 + 1,000 + 500 = 1,550 rows split.",
+      "starter": "export function joinedRows(parents, perParentA, perParentB) {\n  // TODO: siblings multiply; an empty side still pads one row\n}\n\nexport function splitQueryRows(parents, perParentA, perParentB) {\n  // TODO: parents plus each collection\n}\n",
+      "solution": "export function joinedRows(parents, perParentA, perParentB) {\n  return parents * Math.max(perParentA, 1) * Math.max(perParentB, 1);\n}\n\nexport function splitQueryRows(parents, perParentA, perParentB) {\n  return parents + parents * perParentA + parents * perParentB;\n}\n",
+      "tests": [
+        {
+          "name": "50 orders x 20 lines x 10 events -> 10,000 rows",
+          "code": "assert.equal(typeof mod.joinedRows, 'function', 'export a function named joinedRows');\nassert.equal(mod.joinedRows(50, 20, 10), 10000);",
+          "input": [
+            50,
+            20,
+            10
+          ]
+        },
+        {
+          "name": "the same data in three queries -> 1,550 rows",
+          "code": "assert.equal(typeof mod.splitQueryRows, 'function', 'export a function named splitQueryRows');\nassert.equal(mod.splitQueryRows(50, 20, 10), 1550);",
+          "input": [
+            50,
+            20,
+            10
+          ]
+        },
+        {
+          "name": "no events -> NULL-padded, 1,000 rows, not 0 (boundary)",
+          "code": "assert.equal(typeof mod.joinedRows, 'function', 'export a function named joinedRows');\nassert.equal(mod.joinedRows(50, 20, 0), 1000);",
+          "input": [
+            50,
+            20,
+            0
+          ]
+        },
+        {
+          "name": "no events -> 1,050 rows, the split costs more here",
+          "code": "assert.equal(typeof mod.splitQueryRows, 'function', 'export a function named splitQueryRows');\nassert.equal(mod.splitQueryRows(50, 20, 0), 1050);",
+          "input": [
+            50,
+            20,
+            0
+          ]
+        },
+        {
+          "name": "orders with no children at all -> one row each (boundary)",
+          "code": "assert.equal(typeof mod.joinedRows, 'function', 'export a function named joinedRows');\nassert.equal(mod.joinedRows(3, 0, 0), 3);",
+          "input": [
+            3,
+            0,
+            0
+          ]
+        },
+        {
+          "name": "4 parents x 5 x 5 -> 100 rows",
+          "code": "assert.equal(typeof mod.joinedRows, 'function', 'export a function named joinedRows');\nassert.equal(mod.joinedRows(4, 5, 5), 100);",
+          "input": [
+            4,
+            5,
+            5
+          ]
+        },
+        {
+          "name": "4 parents x 5 x 5 split -> 44 rows",
+          "code": "assert.equal(typeof mod.splitQueryRows, 'function', 'export a function named splitQueryRows');\nassert.equal(mod.splitQueryRows(4, 5, 5), 44);",
+          "input": [
+            4,
+            5,
+            5
+          ]
+        },
+        {
+          "name": "one child each -> 3 rows split against 1 joined",
+          "code": "assert.equal(typeof mod.splitQueryRows, 'function', 'export a function named splitQueryRows');\nassert.equal(mod.splitQueryRows(1, 1, 1), 3);",
+          "input": [
+            1,
+            1,
+            1
+          ]
+        }
+      ],
+      "explanation": "Sibling collections multiply in a join and add up when split.\n\nFor `joinedRows(50, 20, 0)`:\n- each order has 20 lines and no events\n- the events join pads each line row with NULLs → 20 × 1 = 20 rows per order\n- 50 × 20 = **1,000 rows** — a plain product with the 0 would claim no rows, but a LEFT JOIN never drops a parent\n\nA probe with Node's built-in SQLite returned exactly these counts for every vector. In production the EF Core docs call this \"cartesian explosion\" (10 posts and 10 contributors return 100 rows for one blog) and offer split queries; in Node, Sequelize's `separate: true` on a hasMany include runs the collection as its own query. The trade is visible in the vectors: split queries win as soon as both collections are large, and lose a little when one is empty or tiny, because the parents travel in their own query. Each joined row also repeats the order's columns, so the bytes grow faster than the row count. jstrain 22/07 shows the padded LEFT JOIN row inflating COUNT(*); here it keeps the product from collapsing to zero.",
+      "hints": [
+        "Two sibling collections joined in one query pair every child of one with every child of the other, and a parent with no children still comes back once.",
+        "joined = parents × max(a, 1) × max(b, 1); split = parents + parents × a + parents × b.",
+        "Multiply the per-parent counts for the joined query, treating an empty collection as one padded row, and add the three result sets for the split queries"
+      ]
+    },
+    {
+      "slug": "05-backfill-pacing",
+      "title": "Pacing a backfill so the replica keeps up",
+      "difficulty": 2,
+      "skills": [
+        "migrations",
+        "replication"
+      ],
+      "instructions": "**Interview prompt.** \"We must backfill 40 million rows for a new column on Postgres with one read replica. Each UPDATE batch of 10,000 rows takes 800 ms and we sleep 200 ms between batches. How long does it run — and does the replica keep up while the app keeps writing 4,000 rows/s and the replica can replay at most 15,000 rows/s?\"\n\n**Why it works.** A backfill runs in batches so that no statement holds its locks for long, and the pause between batches leaves room for live traffic. Its duration is the number of batches — rounded up, because the last one is partial — times the batch time plus the pause. On average it changes one batch of rows per cycle of batch time plus pause, and every changed row must also be replayed on the replica, on top of the live writes. If the two together exceed what the replica can replay, replication lag grows for as long as the backfill runs. The tests choose inputs that give whole seconds.\n\n**Your task.** Export two functions:\n- `backfillSeconds(rows, batchRows, batchMs, pauseMs)` → how long the backfill runs, in seconds\n- `replicaKeepsUp(batchRows, batchMs, pauseMs, liveRowsPerSec, replayRowsPerSec)` → `true` when the backfill's average row rate plus the live writes stays within what the replica replays per second\n\n**Worked example.** 4,000 batches × (800 + 200) ms → **4,000 s** (about 67 minutes); 10,000 rows per 1,000 ms cycle is 10,000 rows/s, plus 4,000 live is 14,000 ≤ 15,000, so the replica keeps up.",
+      "starter": "export function backfillSeconds(rows, batchRows, batchMs, pauseMs) {\n  // TODO: batches times their cycle\n}\n\nexport function replicaKeepsUp(batchRows, batchMs, pauseMs, liveRowsPerSec, replayRowsPerSec) {\n  // TODO: backfill rate plus live writes against replay\n}\n",
+      "solution": "export function backfillSeconds(rows, batchRows, batchMs, pauseMs) {\n  return (Math.ceil(rows / batchRows) * (batchMs + pauseMs)) / 1000;\n}\n\nexport function replicaKeepsUp(batchRows, batchMs, pauseMs, liveRowsPerSec, replayRowsPerSec) {\n  const cycleMs = batchMs + pauseMs;\n  return batchRows * 1000 + liveRowsPerSec * cycleMs <= replayRowsPerSec * cycleMs;\n}\n",
+      "tests": [
+        {
+          "name": "40 M rows in 10,000-row batches at 800 + 200 ms -> 4,000 s",
+          "code": "assert.equal(typeof mod.backfillSeconds, 'function', 'export a function named backfillSeconds');\nassert.equal(mod.backfillSeconds(40000000, 10000, 800, 200), 4000);",
+          "input": [
+            40000000,
+            10000,
+            800,
+            200
+          ]
+        },
+        {
+          "name": "one row more -> a partial batch adds a whole cycle, 4,001 s",
+          "code": "assert.equal(typeof mod.backfillSeconds, 'function', 'export a function named backfillSeconds');\nassert.equal(mod.backfillSeconds(40000001, 10000, 800, 200), 4001);",
+          "input": [
+            40000001,
+            10000,
+            800,
+            200
+          ]
+        },
+        {
+          "name": "fewer rows than one batch -> 1 cycle, 1 s (boundary)",
+          "code": "assert.equal(typeof mod.backfillSeconds, 'function', 'export a function named backfillSeconds');\nassert.equal(mod.backfillSeconds(5000, 10000, 300, 700), 1);",
+          "input": [
+            5000,
+            10000,
+            300,
+            700
+          ]
+        },
+        {
+          "name": "nothing to backfill -> 0 s (boundary)",
+          "code": "assert.equal(typeof mod.backfillSeconds, 'function', 'export a function named backfillSeconds');\nassert.equal(mod.backfillSeconds(0, 10000, 800, 200), 0);",
+          "input": [
+            0,
+            10000,
+            800,
+            200
+          ]
+        },
+        {
+          "name": "10,000 rows/s backfill + 4,000 live under 15,000 replay -> keeps up",
+          "code": "assert.equal(typeof mod.replicaKeepsUp, 'function', 'export a function named replicaKeepsUp');\nassert.equal(mod.replicaKeepsUp(10000, 800, 200, 4000, 15000), true);",
+          "input": [
+            10000,
+            800,
+            200,
+            4000,
+            15000
+          ]
+        },
+        {
+          "name": "drop the pause -> 12,500 + 4,000 rows/s, falls behind",
+          "code": "assert.equal(typeof mod.replicaKeepsUp, 'function', 'export a function named replicaKeepsUp');\nassert.equal(mod.replicaKeepsUp(10000, 800, 0, 4000, 15000), false);",
+          "input": [
+            10000,
+            800,
+            0,
+            4000,
+            15000
+          ]
+        },
+        {
+          "name": "live writes at 6,000 rows/s -> 16,000, falls behind",
+          "code": "assert.equal(typeof mod.replicaKeepsUp, 'function', 'export a function named replicaKeepsUp');\nassert.equal(mod.replicaKeepsUp(10000, 800, 200, 6000, 15000), false);",
+          "input": [
+            10000,
+            800,
+            200,
+            6000,
+            15000
+          ]
+        },
+        {
+          "name": "exactly at the replay rate -> keeps up, lag stays flat (boundary)",
+          "code": "assert.equal(typeof mod.replicaKeepsUp, 'function', 'export a function named replicaKeepsUp');\nassert.equal(mod.replicaKeepsUp(10000, 800, 200, 5000, 15000), true);",
+          "input": [
+            10000,
+            800,
+            200,
+            5000,
+            15000
+          ]
+        }
+      ],
+      "explanation": "The pause is the dial that keeps the replica level.\n\nFor `replicaKeepsUp(10000, 800, 0, 4000, 15000)`:\n- no pause → one 10,000-row batch every 800 ms = 12,500 rows/s\n- plus 4,000 live rows/s = 16,500 > 15,000 → **false**\n- the lag grows by 1,500 rows every second; the run takes 40,000,000 ÷ 12,500 = 3,200 s, so the replica ends 4,800,000 rows behind\n\nIn production, watch replay_lag in pg_stat_replication while the backfill runs and lengthen the pause when it climbs; drive each batch by primary-key range so every UPDATE is an index range scan. Drill 11/07 `lag-breach-eta` turns a replay deficit into the seconds until a staleness SLA breaks; this drill decides whether there is a deficit at all.",
+      "hints": [
+        "A backfill does one batch per cycle of batch time plus pause, and the replica has to replay those rows on top of the live writes.",
+        "seconds = ⌈rows ÷ batch⌉ × (batchMs + pauseMs) ÷ 1000; keeps up ⇔ batch × 1000 ÷ (batchMs + pauseMs) + live ≤ replay.",
+        "Count the batches rounded up and charge each one its run time plus its pause, then turn one batch per cycle into rows per second and add the live writes before comparing with the replay rate"
+      ]
+    }
+  ]
+}

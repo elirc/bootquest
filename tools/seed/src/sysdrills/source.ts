@@ -20,10 +20,10 @@ import type { PackCounts } from '@bootquest/shared';
 export const SYSDRILLS_FORMAT = 'sysdrills-authoring@1';
 
 /**
- * Census of the committed authoring files (15 modules: 8 + 6 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 9 + 5 drill-js exercises).
+ * Census of the committed authoring files (16 modules: 8 + 6 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 9 + 5 + 5 drill-js exercises).
  * Appending a module = add its JSON, bump this, re-import, re-validate.
  */
-export const SYSDRILLS_EXPECTED: PackCounts = { total: 116, code: 116, quiz: 0, output: 0, written: 0 };
+export const SYSDRILLS_EXPECTED: PackCounts = { total: 121, code: 121, quiz: 0, output: 0, written: 0 };
 
 /** module ids and exercise slugs: NN-kebab-case */
 export const ID_RE = /^[0-9]{2}-[a-z0-9-]+$/;
