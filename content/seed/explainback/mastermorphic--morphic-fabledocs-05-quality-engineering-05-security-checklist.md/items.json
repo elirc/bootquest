@@ -1,0 +1,154 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "mastermorphic--morphic-fabledocs-05-quality-engineering-05-security-checklist.md",
+ "items": [
+  {
+   "key": "seed:explainback:mastermorphic/explain-back/404d650b6cb66df1",
+   "provenance": {
+    "repo": "mastermorphic",
+    "sha": "c9b8310208022f9d8293ddf9bfe31ac291759ede",
+    "path": "morphic/fabledocs/05-quality-engineering/05-security-checklist.md",
+    "lines": {
+     "start": 14,
+     "end": 16
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "Walk through what happens when Morphic's research agent calls its fetch tool with a URL such as http://169.254.169.254/latest/meta-data/: what checks the URL passes, where the request is made from, what can stop it, and what comes back into the model's context.",
+     "keyPoints": [
+      {
+       "text": "[w3] The URL is model-controlled and barely checked: the tool's schema accepts any string as url, with no URL shape, scheme or host rule.",
+       "cite": {
+        "path": "morphic/lib/schema/fetch.tsx",
+        "lineStart": 4,
+        "lineEnd": 12
+       }
+      },
+      {
+       "text": "[w3] With the default regular type the server itself fetches the URL from its own network, so a private address, localhost or a cloud metadata endpoint is reachable if the host can reach it; nothing in the code denies such ranges.",
+       "quote": "with no visible private-IP/localhost/metadata-endpoint denylist"
+      },
+      {
+       "text": "[w2] What does stop a request is incidental: a 10-second abort, a non-2xx status, or a content type that is neither text/html nor text/plain, so a plain-text internal endpoint passes.",
+       "cite": {
+        "path": "morphic/lib/tools/fetch.ts",
+        "lineStart": 9,
+        "lineEnd": 35
+       }
+      },
+      {
+       "text": "[w2] The response body comes back as model context: scripts, styles and tags are stripped, and up to 50,000 characters of text plus the page title are returned as the tool result.",
+       "cite": {
+        "path": "morphic/lib/tools/fetch.ts",
+        "lineStart": 37,
+        "lineEnd": 80
+       }
+      },
+      {
+       "text": "[w2] The api type moves the fetch off the server's network to Jina Reader or Tavily Extract, which removes the internal-network reach but hands the full URL, query string included, to a third party.",
+       "cite": {
+        "path": "morphic/lib/tools/fetch.ts",
+        "lineStart": 90,
+        "lineEnd": 132
+       }
+      },
+      {
+       "text": "[w1] The only rule about when to fetch is in the system prompt (use fetch only for a URL the user gave), which steers the model but is not enforced by any code.",
+       "cite": {
+        "path": "morphic/lib/agents/prompts/search-mode-prompts.ts",
+        "lineStart": 65,
+        "lineEnd": 70
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "Explain how text inside a fetched page can steer Morphic's next tool call, and which boundaries in this code could stop it at this commit.",
+     "keyPoints": [
+      {
+       "text": "[w3] Fetched text and the user's request reach the model through the same context, so instructions planted in a page can ask the agent to fetch another URL; the tool loop runs that call like any other.",
+       "cite": {
+        "path": "morphic/lib/agents/researcher.ts",
+        "lineStart": 116,
+        "lineEnd": 130
+       }
+      },
+      {
+       "text": "[w2] The loop's reach is bounded only by its step budget: 20 steps in quick mode and 50 in adaptive mode, each of which may be another fetch.",
+       "cite": {
+        "path": "morphic/lib/agents/researcher.ts",
+        "lineStart": 92,
+        "lineEnd": 112
+       }
+      },
+      {
+       "text": "[w2] Stripping scripts and tags removes markup, not instructions: any visible text, including text written for a model, survives into the tool result.",
+       "cite": {
+        "path": "morphic/lib/tools/fetch.ts",
+        "lineStart": 47,
+        "lineEnd": 62
+       }
+      },
+      {
+       "text": "[w2] The search self-call is a second egress point: when no BASE_URL is configured, its target is built from request headers (x-base-url, x-url or x-host), and the proxy derives its own copy from x-forwarded-host, so whoever controls those headers can point the server's POST elsewhere.",
+       "cite": {
+        "path": "morphic/lib/utils/url.ts",
+        "lineStart": 7,
+        "lineEnd": 57
+       }
+      },
+      {
+       "text": "[w2] No boundary in the tool code distinguishes a URL the user typed from one the model found; enforcing the prompt's rule would mean checking the URL against the user's message before fetching.",
+       "quote": "Does any new code fetch a URL the user/model controls?"
+      }
+     ]
+    },
+    {
+     "prompt": "Defend or indict the claim \"network egress rules make Morphic's fetch tool safe\": what would you verify before calling it a vulnerability, and what is the smallest code fix?",
+     "keyPoints": [
+      {
+       "text": "[w3] Egress rules help only where they exist: the code ships no denylist, so safety depends entirely on the deployment, and the checklist itself rates it as unresolved.",
+       "quote": "possible risk / investigate"
+      },
+      {
+       "text": "[w2] Before calling it a vulnerability, verify it on the real deployment: whether the host can reach metadata or internal addresses, and whether a guest can trigger it (guest chat is off unless ENABLE_GUEST_CHAT is true).",
+       "cite": {
+        "path": "morphic/app/api/chat/route.ts",
+        "lineStart": 58,
+        "lineEnd": 84
+       }
+      },
+      {
+       "text": "[w3] The smallest fix sits in fetchRegularData before the request: parse the URL, allow only http and https, resolve the host and refuse private, loopback, link-local and metadata ranges, and re-check after every redirect, since no redirect policy is set today.",
+       "cite": {
+        "path": "morphic/lib/tools/fetch.ts",
+        "lineStart": 14,
+        "lineEnd": 21
+       }
+      },
+      {
+       "text": "[w2] A check on the host name alone is not enough: the name has to be resolved and the connection pinned to the checked address, or a DNS answer that changes between check and fetch slips through.",
+       "cite": {
+        "path": "morphic/lib/tools/fetch.ts",
+        "lineStart": 9,
+        "lineEnd": 21
+       }
+      },
+      {
+       "text": "[w2] Tightening the schema helps the error, not the defence: z.string().url() would reject non-URLs early, but a well-formed internal URL still passes.",
+       "cite": {
+        "path": "morphic/lib/schema/fetch.tsx",
+        "lineStart": 4,
+        "lineEnd": 6
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

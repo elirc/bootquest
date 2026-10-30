@@ -1,0 +1,190 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "helios-interplanetary--upskilling-retrospective-03-durability-and-recovery.md",
+ "items": [
+  {
+   "key": "seed:explainback:helios-interplanetary/explain-back/6ab70995d797602d",
+   "provenance": {
+    "repo": "helios-interplanetary",
+    "sha": "4e043bdee9b29558651376740d9953d73c0b6ffc",
+    "path": "upskilling/retrospective/03-durability-and-recovery.md",
+    "lines": {
+     "start": 9,
+     "end": 25
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "Walk through one outbox event in helios's worker from claim to DELIVERED: how a worker claims it, what the lease records, what the delivery transaction checks before it does anything, and what makes a second delivery of the same event harmless.",
+     "keyPoints": [
+      {
+       "text": "[w3] The claim picks one row that is PENDING and due, or RUNNING with an expired lease, below its attempt limit, ordered by available_at then id, with FOR UPDATE SKIP LOCKED, so concurrent workers pass over each other's rows instead of queueing on them.",
+       "cite": {
+        "path": "src/server/worker.ts",
+        "lineStart": 33,
+        "lineEnd": 38
+       }
+      },
+      {
+       "text": "[w2] In the same short transaction the row becomes RUNNING with a fresh random lease token and a lease that ends 30 seconds later, and its attempt counter goes up by one.",
+       "cite": {
+        "path": "src/server/worker.ts",
+        "lineStart": 22,
+        "lineEnd": 46
+       }
+      },
+      {
+       "text": "[w2] Because attempts are counted at claim time, a worker that dies right after claiming has still used up one of the event's attempts.",
+       "cite": {
+        "path": "src/server/worker.ts",
+        "lineStart": 40,
+        "lineEnd": 45
+       }
+      },
+      {
+       "text": "[w3] Delivery is a second transaction that first re-selects the row FOR UPDATE with the same token and a lease still in the future; if either has changed it answers 409 LEASE_LOST and writes nothing.",
+       "cite": {
+        "path": "src/server/worker.ts",
+        "lineStart": 53,
+        "lineEnd": 65
+       }
+      },
+      {
+       "text": "[w2] That row lock is held until the delivery commits, so even if the lease runs out mid-delivery, another worker's SKIP LOCKED claim skips the row instead of taking it over.",
+       "cite": {
+        "path": "src/server/worker.ts",
+        "lineStart": 53,
+        "lineEnd": 59
+       }
+      },
+      {
+       "text": "[w3] The business effects sit behind a consumer receipt: the insert into event_receipts uses ON CONFLICT DO NOTHING RETURNING, only a fresh receipt writes the notification and the workflow projection, and a repeat is still marked DELIVERED and reported as duplicate.",
+       "cite": {
+        "path": "src/server/worker.ts",
+        "lineStart": 80,
+        "lineEnd": 142
+       }
+      },
+      {
+       "text": "[w2] The projection reads the status of the current authoritative row rather than trusting the event, so a late or out-of-order event cannot move a workflow back to an older status.",
+       "cite": {
+        "path": "src/server/worker.ts",
+        "lineStart": 102,
+        "lineEnd": 128
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "Explain what happens in helios when delivering an outbox event keeps failing: how the next attempt is scheduled, when retrying stops, what an operator must do to send it again, and what a worker that has lost its lease is prevented from doing.",
+     "keyPoints": [
+      {
+       "text": "[w3] A failed delivery goes back to PENDING with available_at set to now plus LEAST(300, 5 * 2^(attempts - 1)) seconds, or becomes DEAD once attempts has reached max_attempts; with the default of 3 that is a 5 s wait, a 10 s wait, then DEAD.",
+       "cite": {
+        "path": "src/server/worker.ts",
+        "lineStart": 146,
+        "lineEnd": 156
+       }
+      },
+      {
+       "text": "[w1] max_attempts defaults to 3 and the schema only allows 1 to 10, so no event can retry without limit.",
+       "cite": {
+        "path": "db/migrations/003-clock-and-durable-workflows.sql",
+        "lineStart": 38,
+        "lineEnd": 39
+       }
+      },
+      {
+       "text": "[w3] The failure update only applies while the row is still RUNNING under the same lease token, so a worker that lost its lease can neither reschedule nor dead-letter an event that another worker now owns.",
+       "cite": {
+        "path": "src/server/worker.ts",
+        "lineStart": 152,
+        "lineEnd": 155
+       }
+      },
+      {
+       "text": "[w2] processNextEvent treats LEASE_LOST as nobody's failure: it reports LEASE_LOST without recording an error, while every other exception goes through the failure update and reports RETRY_SCHEDULED.",
+       "cite": {
+        "path": "src/server/worker.ts",
+        "lineStart": 157,
+        "lineEnd": 173
+       }
+      },
+      {
+       "text": "[w2] A worker that crashes during the last attempt cannot leave the event RUNNING forever: the next claim first turns expired RUNNING rows at their limit into DEAD.",
+       "cite": {
+        "path": "src/server/worker.ts",
+        "lineStart": 28,
+        "lineEnd": 32
+       }
+      },
+      {
+       "text": "[w3] Redrive accepts only a DEAD event (anything else is 409 NOT_DEAD), resets attempts to 0, makes it due now and writes an EventRedriven audit row, all in one transaction under a row lock.",
+       "cite": {
+        "path": "src/server/worker.ts",
+        "lineStart": 175,
+        "lineEnd": 201
+       }
+      },
+      {
+       "text": "[w1] For the poison exercise the resolution is part of that redrive: it records the override row that the delivery checks, so the event stops failing only after an operator acted.",
+       "quote": "An operator records resolution before redrive."
+      }
+     ]
+    },
+    {
+     "prompt": "Defend or indict this claim about helios's outbox: \"The lease means only one worker ever delivers an event, and the receipt makes delivery exactly-once.\" Use the lease, the receipt and the failure paths as evidence.",
+     "keyPoints": [
+      {
+       "text": "[w3] The lease promises ownership at commit time, not that only one worker ever runs the work: expiry exists precisely so that a second worker can take over abandoned work.",
+       "quote": "The token prevents an old owner from committing after a new owner has taken over."
+      },
+      {
+       "text": "[w3] Exactly-once holds for the recorded effects of one consumer only: the receipt's primary key is (organization, event, consumer) and the effects are written in the same transaction as the receipt, so a re-delivery of a committed event changes nothing.",
+       "cite": {
+        "path": "db/migrations/003-clock-and-durable-workflows.sql",
+        "lineStart": 44,
+        "lineEnd": 47
+       }
+      },
+      {
+       "text": "[w2] The consumer name is hard-coded as operations-projection-v1, so the guarantee is tied to that name: a new consumer or a renamed version starts with no receipts at all.",
+       "cite": {
+        "path": "src/server/worker.ts",
+        "lineStart": 80,
+        "lineEnd": 83
+       }
+      },
+      {
+       "text": "[w2] The failure write is a plain pool query run after the delivery transaction has rolled back, so a crash in between leaves the row RUNNING until its lease expires; the next claim retries it, and that crash has still cost an attempt.",
+       "cite": {
+        "path": "src/server/worker.ts",
+        "lineStart": 157,
+        "lineEnd": 173
+       }
+      },
+      {
+       "text": "[w2] Ordering is not promised either: claims go by available_at and then id, and backoff pushes a failing event behind later ones, which is why the projection reads current state instead of replaying events in order.",
+       "cite": {
+        "path": "src/server/worker.ts",
+        "lineStart": 33,
+        "lineEnd": 38
+       }
+      },
+      {
+       "text": "[w1] The standalone worker drains only the two demo organisations it hard-codes, at most 20 events each per tick, and an error that escapes processNextEvent ends the whole process rather than one tick.",
+       "cite": {
+        "path": "scripts/worker.ts",
+        "lineStart": 17,
+        "lineEnd": 48
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}
