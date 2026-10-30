@@ -39,7 +39,7 @@ import { ID_RE, ImportError, JAVADRILLS_EXPECTED, readModules, type JavadrillsEx
  * starter's by even one byte, no `class Exercise` or a `package` statement, a tests
  * block without test(...) / report() / a literal test name, fewer than 4 or more
  * than 8 literally named tests, a duplicate test name, no test named with "(boundary)", a pasteable
- * hint 3 (`;`, `return` or a parenthesis — hint 3 is the approach in words), and a census that
+ * hint 3 (`;`, `->`, `return` or a parenthesis — hint 3 is the approach in words), and a census that
  * differs from the expected counts. Output is deterministic: same authoring bytes →
  * same pack bytes (the manifest's importedFrom.path / gitHead / dirty record where it
  * came from).
@@ -84,7 +84,7 @@ export function mapExercise(module: string, ex: JavadrillsExercise, position: nu
   if (ex.solution === ex.starter) fail('solution is identical to the starter');
   if (!/\bTODO\b/.test(ex.starter)) fail('starter has no TODO marker (the learner must see what to write)');
   if (ex.hints.length !== 3) fail(`needs exactly 3 hints (has ${ex.hints.length})`);
-  if (/;|\breturn\b|[()]/.test(ex.hints[2]!)) fail('hint 3 must be the approach in words, never pasteable code (no `;`, `return` or parentheses)');
+  if (/;|->|\breturn\b|[()]/.test(ex.hints[2]!)) fail('hint 3 must be the approach in words, never pasteable code (no `;`, `->`, `return` or parentheses)');
 
   let exSplit: SplitFile | undefined;
   let solSplit: SplitFile | undefined;
