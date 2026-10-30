@@ -130,10 +130,10 @@ describe.skipIf(!HAVE_CHECKOUT)('W7 real ladder content end to end (temp DB, no 
     // ordinary explain-back set's repo is a campaign quest -> linked for display
     const eb = l.units.filter((u) => u.family === 'explain-back');
     const designItems = ebItems.filter((i) => /^DESIGN IT\b/.test(i.questions[0]!.prompt));
-    expect(designItems.length).toBe(72); // 6 javabootcamp + 16 sysdesign-wave + 8 second-scenario + 8 set-B alternates + 9 fundamentals-wave primaries + 11 spaced-repetition alternates + 9 mega-wave alternates + 5 mega-wave primaries
+    expect(designItems.length).toBe(78); // 6 javabootcamp + 16 sysdesign-wave + 8 second-scenario + 8 set-B alternates + 9 fundamentals-wave primaries + 11 spaced-repetition alternates + 9 mega-wave alternates + 5 mega-wave primaries + 2 quality-wave primaries + 4 quality-wave alternates
     const designRepos = [...new Set(designItems.map((i) => i.provenance.repo))].sort();
     expect(designRepos).toContain('javabootcamp');
-    expect(designRepos.length).toBe(33);
+    expect(designRepos.length).toBe(35);
     const design = eb.filter((u) => u.trackId === 'sysdesign');
     expect(design.length).toBe(designItems.length);
     expect(design.every((u) => u.quest === null)).toBe(true);
@@ -142,12 +142,12 @@ describe.skipIf(!HAVE_CHECKOUT)('W7 real ladder content end to end (temp DB, no 
     // the sysdesign track holds exactly the DESIGN IT units (no kata/g2/study strays)
     expect(l.units.filter((u) => u.trackId === 'sysdesign').map((u) => u.id).sort()).toEqual(design.map((u) => u.id).sort());
     // DESIGN IT titles come from each set's Q1 topic (store/ladder.ts designTopic); every real
-    // prompt parses, and the 19 set-B/C alternates keep their sibling suffix
+    // prompt parses, and the set-B/C alternates keep their sibling suffix
     expect(design.every((u) => u.title.startsWith('DESIGN IT: '))).toBe(true);
     const designTitles = design.map((u) => u.title);
     expect(designTitles).toContain('DESIGN IT: bazaar — cache coherence across layers for a storefront');
     expect(designTitles).toContain('DESIGN IT: bazaar — personalized pricing on a cached storefront (set B)');
-    expect(design.filter((u) => / \(set [BC]\)$/.test(u.title)).length).toBe(28);
+    expect(design.filter((u) => / \(set [BC]\)$/.test(u.title)).length).toBe(32);
   });
 
   it('a REAL explain-back set plays end to end: questions only -> immutable answer -> key -> self-score (20 XP)', async () => {
