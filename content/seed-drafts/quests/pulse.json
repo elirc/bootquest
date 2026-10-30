@@ -617,32 +617,6 @@
    "explanation": "ADR-0005 lines 41-44: Redis Streams gives at-least-once, so redelivery after a crash between insert and XACK is the contract, not a bug to engineer away in the transport. The apply is made idempotent (unique uuid + ON CONFLICT DO NOTHING), and at-least-once delivery plus idempotent apply is effectively exactly-once. Acking before inserting would lose events on a crash, Redis does not dedupe redeliveries, and the SDK is not involved."
   },
   {
-   "id": "q21-pel-role",
-   "kind": "quiz",
-   "source": {
-    "path": "docs/adr/0005-redis-streams-ingestion.md",
-    "lines": {
-     "start": 22,
-     "end": 33
-    }
-   },
-   "cites": [
-    {
-     "path": "docs/adr/0005-redis-streams-ingestion.md",
-     "lineStart": 29,
-     "lineEnd": 29
-    }
-   ],
-   "prompt": "In ADR-0005's Streams-to-Kafka concept map, the pending entries list (PEL) maps to delivered-but-uncommitted offsets. What role does the map give it in Pulse?",
-   "answer": "It is where redelivery, and with it duplicates, comes from",
-   "distractors": [
-    "It holds events that failed schema validation at ingest",
-    "It holds entries that ingest has not yet appended to Redis",
-    "It holds entries waiting for a consumer group to be made"
-   ],
-   "explanation": "ADR-0005 line 29: the pending entries list is delivered-but-uncommitted offsets, and its role in Pulse is \"where redelivery — and duplicates — come from\": entries delivered to a consumer but not yet XACKed. Invalid events are refused before XADD, and an entry is only pending after a group has delivered it."
-  },
-  {
    "id": "q22-merge-fixes-future",
    "kind": "quiz",
    "source": {
@@ -657,16 +631,21 @@
      "path": "docs/adr/0006-identity-resolution-at-write-time.md",
      "lineStart": 17,
      "lineEnd": 20
+    },
+    {
+     "path": "apps/consumer/src/identity.ts",
+     "lineStart": 101,
+     "lineEnd": 117
     }
    ],
    "prompt": "Pulse freezes personId onto each event row at write time (ADR-0006). When two persons are later merged, what changes?",
-   "answer": "Only DistinctIdMapping, so new lookups go to the survivor",
+   "answer": "Mappings move to the survivor; event rows are never rewritten",
    "distractors": [
     "The old event rows get their personId updated to the survivor",
     "Both persons' events are copied into one new combined person",
     "The frozen ids are recomputed by a nightly backfill of events"
    ],
-   "explanation": "ADR-0006 lines 17-20: the event log is immutable and identity is a view over it via the mapping table. A merge changes DistinctIdMapping, never event rows, so it fixes the future (new lookups resolve to the survivor) while the past stays exactly as recorded; history is never UPDATEd."
+   "explanation": "ADR-0006 lines 17-20: the event log is immutable and identity is a view over it via the mapping table, so a merge fixes the future (new lookups resolve to the survivor) while the past stays exactly as recorded. The consumer's identify (apps/consumer/src/identity.ts lines 101-117) remaps the loser's distinct ids to the winner, folds the loser's properties into the winner, deletes the loser person and re-primes the cache; it never updates an event row. No combined person is created and no backfill recomputes frozen ids."
   },
   {
    "id": "q23-oldest-person-wins",
@@ -822,10 +801,15 @@
      "path": "docs/adr/0004-sdk-design-principles.md",
      "lineStart": 40,
      "lineEnd": 41
+    },
+    {
+     "path": "packages/sdk/package.json",
+     "lineStart": 15,
+     "lineEnd": 15
     }
    ],
    "front": "Pulse SDK: bundle budget and the events it loses on purpose",
-   "back": "Zero runtime dependencies; the gzipped script-tag build must stay under 6 KB, enforced in CI by scripts/check-size.mjs (about 2.1 KB today). Lost by design: events in private mode without persistence, a hard crash mid-batch, and overflow drops. Completeness is traded for safety and size, and the ADR says so."
+   "back": "Zero runtime dependencies; the gzipped script-tag build must stay under 6 KB, enforced in CI by the SDK's budget script, packages/sdk/scripts/check-size.mjs (about 2.1 KB today). Lost by design: events in private mode without persistence, a hard crash mid-batch, and overflow drops. Completeness is traded for safety and size, and the ADR says so."
   },
   {
    "id": "f07-approximate-distinct",
@@ -914,8 +898,8 @@
      "lineEnd": 87
     }
    ],
-   "front": "Sprint 13 remediation map: severities, commits and the three adversaries",
-   "back": "P1: F1 SDK herd (commit 2), F2 client ts (commit 3), a chaos suite as a permanent CI stage for both (commit 4), F3 deletion (commits 8-9: person-delete API + completeness test). P2: F5 rate limit (5), F4 share tokens (6: expiry + revocation + enumeration monitor), F6 PII (7). P3: F7 CI gates (10: gitleaks + dependency gates). Three adversaries recur: the network (F1, F5), the clock (F2) and the law (F3, F4, F6)."
+   "front": "Sprint 13 remediation map: severities, fixes and the three adversaries",
+   "back": "P1: F1 SDK retry herd, F2 client timestamps, F3 deletion (a person-delete API plus a completeness test), and a chaos suite made a permanent CI stage for F1 and F2. P2: F4 share tokens (expiry, revocation, enumeration monitor), F5 rate limit, F6 PII. P3: F7 CI gates (gitleaks plus dependency gates). Three adversaries recur: the network (F1, F5), the clock (F2) and the law (F3, F4, F6)."
   },
   {
    "id": "f11-eventstream-port",
@@ -941,6 +925,42 @@
    ],
    "front": "Why a future Kafka move would be cheap for Pulse (ADR-0012)",
    "back": "The EventStream port (S04) makes the transport injectable: a KafkaEventStream implementing the same interface is the shape of the move, and no code outside the index.ts entries assumes Redis. ADR-0005's concept map means the team already reasons in Kafka terms, so it is a transport swap, not a re-education. Lesson: the migration you prepared for and didn't need is preparation, not waste."
+  },
+  {
+   "id": "q27-ch-primary-ack-before-flush",
+   "kind": "quiz",
+   "source": {
+    "path": "apps/consumer/src/worker.ts",
+    "lines": {
+     "start": 78,
+     "end": 97
+    }
+   },
+   "cites": [
+    {
+     "path": "apps/consumer/src/index.ts",
+     "lineStart": 35,
+     "lineEnd": 41
+    },
+    {
+     "path": "apps/consumer/src/worker.ts",
+     "lineStart": 89,
+     "lineEnd": 96
+    },
+    {
+     "path": "apps/consumer/src/columnstore.ts",
+     "lineStart": 112,
+     "lineEnd": 115
+    }
+   ],
+   "prompt": "In the delivered consumer with EVENTS_PRIMARY=ch and DUAL_WRITE off, processNewBatch inserts a 50-event batch and then XACKs it. Where are those 50 events at the moment of the XACK?",
+   "answer": "In the column store's in-memory buffer, not yet in ClickHouse",
+   "distractors": [
+    "In ClickHouse, as insert awaits the write before the XACK runs",
+    "In Postgres, which stays the source of truth until the cutover",
+    "In the pending entries list, until the next flush acks them all"
+   ],
+   "explanation": "apps/consumer/src/index.ts lines 35-41: with EVENTS_PRIMARY \"ch\" there is no Postgres store, and the column store is a BufferedColumnStore wrapping the ClickHouse store. worker.ts lines 89-96 await columnStore.insert(good) and then XACK. BufferedColumnStore.insert (columnstore.ts lines 112-115) only pushes fresh uuids into an in-memory buffer and flushes when it reaches maxRows, 10,000 by default; nothing else in the consumer calls flush. So the 50 events are acknowledged while they exist only in process memory, Postgres is not written in this mode, and the XACK has already removed them from the pending entries list."
   }
  ]
 }
