@@ -1,0 +1,652 @@
+{
+ "format": "bootquest-pack@1",
+ "source": "sysdrills",
+ "course": {
+  "id": "15-node-service-runtime",
+  "order": 15,
+  "title": "Node service runtime limits",
+  "description": "Runtime reps for running a CRUD API on Node: how much of each second a synchronous JSON.stringify takes from every other request and how partitioning bounds the stall, why a login burst on the 4-thread libuv pool also stalls DNS lookups, the bind-parameter cap that splits a bulk INSERT into statements, the keep-alive idle timeouts that must grow inward behind a load balancer, and the drain budget a Kubernetes rolling deploy has to fit. Every drill is whole-number arithmetic or a yes/no decision with the conversions named (1,000 ms in a second; per-mille = parts per thousand = x/1000), so you practise the reasoning, not the calculator.",
+  "prerequisites": []
+ },
+ "modules": [
+  {
+   "id": "15-node-service-runtime",
+   "title": "Node service runtime limits",
+   "lessons": [
+    {
+     "id": "drills",
+     "title": "Node service runtime limits",
+     "explanation": "Runtime reps for running a CRUD API on Node: how much of each second a synchronous JSON.stringify takes from every other request and how partitioning bounds the stall, why a login burst on the 4-thread libuv pool also stalls DNS lookups, the bind-parameter cap that splits a bulk INSERT into statements, the keep-alive idle timeouts that must grow inward behind a load balancer, and the drain budget a Kubernetes rolling deploy has to fit. Every drill is whole-number arithmetic or a yes/no decision with the conversions named (1,000 ms in a second; per-mille = parts per thousand = x/1000), so you practise the reasoning, not the calculator."
+    }
+   ]
+  }
+ ],
+ "units": [
+  {
+   "unit": {
+    "key": "sysdrills/15-node-service-runtime/01-event-loop-stall",
+    "track": "sysdesign",
+    "kind": "drill",
+    "title": "One synchronous call stalls every request",
+    "phase": "15-node-service-runtime",
+    "difficulty": 2,
+    "competencies": [
+     "system-design"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-js",
+       "language": "js",
+       "tests": [
+        {
+         "name": "two 240 ms exports a second -> 480 permille",
+         "code": "assert.equal(typeof mod.blockedPermille, 'function', 'export a function named blockedPermille');\nassert.equal(mod.blockedPermille(2, 240), 480);",
+         "input": [
+          2,
+          240
+         ]
+        },
+        {
+         "name": "no exports -> the loop is never blocked (boundary)",
+         "code": "assert.equal(typeof mod.blockedPermille, 'function', 'export a function named blockedPermille');\nassert.equal(mod.blockedPermille(0, 240), 0);",
+         "input": [
+          0,
+          240
+         ]
+        },
+        {
+         "name": "four 250 ms calls a second -> 1000 permille, nothing else runs (boundary)",
+         "code": "assert.equal(typeof mod.blockedPermille, 'function', 'export a function named blockedPermille');\nassert.equal(mod.blockedPermille(4, 250), 1000);",
+         "input": [
+          4,
+          250
+         ]
+        },
+        {
+         "name": "240 ms in 12 slices -> 20 ms worst stall",
+         "code": "assert.equal(typeof mod.worstStallMs, 'function', 'export a function named worstStallMs');\nassert.equal(mod.worstStallMs(240, 12), 20);",
+         "input": [
+          240,
+          12
+         ]
+        },
+        {
+         "name": "one slice is the unpartitioned call -> 240 ms (boundary)",
+         "code": "assert.equal(typeof mod.worstStallMs, 'function', 'export a function named worstStallMs');\nassert.equal(mod.worstStallMs(240, 1), 240);",
+         "input": [
+          240,
+          1
+         ]
+        },
+        {
+         "name": "250 ms with a 20 ms budget -> 13 slices, not 12",
+         "code": "assert.equal(typeof mod.chunksForStall, 'function', 'export a function named chunksForStall');\nassert.equal(mod.chunksForStall(250, 20), 13);",
+         "input": [
+          250,
+          20
+         ]
+        },
+        {
+         "name": "205 ms with a 20 ms budget -> 11 slices, a partial slice still counts",
+         "code": "assert.equal(typeof mod.chunksForStall, 'function', 'export a function named chunksForStall');\nassert.equal(mod.chunksForStall(205, 20), 11);",
+         "input": [
+          205,
+          20
+         ]
+        },
+        {
+         "name": "15 ms already fits a 20 ms budget -> 1 slice (boundary)",
+         "code": "assert.equal(typeof mod.chunksForStall, 'function', 'export a function named chunksForStall');\nassert.equal(mod.chunksForStall(15, 20), 1);",
+         "input": [
+          15,
+          20
+         ]
+        }
+       ],
+       "timeoutMs": 8000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "15-node-service-runtime/01-event-loop-stall",
+    "type": "code",
+    "module": "15-node-service-runtime",
+    "lesson": "drills",
+    "position": 0,
+    "skills": [
+     "node",
+     "latency"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "sysdrills/15-node-service-runtime/02-threadpool-starvation",
+    "track": "sysdesign",
+    "kind": "drill",
+    "title": "A login burst on the libuv threadpool",
+    "phase": "15-node-service-runtime",
+    "difficulty": 2,
+    "competencies": [
+     "system-design"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-js",
+       "language": "js",
+       "tests": [
+        {
+         "name": "4 threads, 8 cores, 100 ms hashes -> 40 per second",
+         "code": "assert.equal(typeof mod.hashesPerSec, 'function', 'export a function named hashesPerSec');\nassert.equal(mod.hashesPerSec(4, 8, 100), 40);",
+         "input": [
+          4,
+          8,
+          100
+         ]
+        },
+        {
+         "name": "16 threads on 8 cores -> capped at 80 per second (boundary)",
+         "code": "assert.equal(typeof mod.hashesPerSec, 'function', 'export a function named hashesPerSec');\nassert.equal(mod.hashesPerSec(16, 8, 100), 80);",
+         "input": [
+          16,
+          8,
+          100
+         ]
+        },
+        {
+         "name": "4 threads but only 2 cores, 50 ms hashes -> 40 per second",
+         "code": "assert.equal(typeof mod.hashesPerSec, 'function', 'export a function named hashesPerSec');\nassert.equal(mod.hashesPerSec(4, 2, 50), 40);",
+         "input": [
+          4,
+          2,
+          50
+         ]
+        },
+        {
+         "name": "40 logins on 4 threads -> the last finishes at 1,000 ms",
+         "code": "assert.equal(typeof mod.burstFinishMs, 'function', 'export a function named burstFinishMs');\nassert.equal(mod.burstFinishMs(40, 4, 100), 1000);",
+         "input": [
+          40,
+          4,
+          100
+         ]
+        },
+        {
+         "name": "one more login -> a whole extra wave, 1,100 ms",
+         "code": "assert.equal(typeof mod.burstFinishMs, 'function', 'export a function named burstFinishMs');\nassert.equal(mod.burstFinishMs(41, 4, 100), 1100);",
+         "input": [
+          41,
+          4,
+          100
+         ]
+        },
+        {
+         "name": "a burst that fills the pool once -> 100 ms (boundary)",
+         "code": "assert.equal(typeof mod.burstFinishMs, 'function', 'export a function named burstFinishMs');\nassert.equal(mod.burstFinishMs(4, 4, 100), 100);",
+         "input": [
+          4,
+          4,
+          100
+         ]
+        },
+        {
+         "name": "a DNS lookup behind 40 hashes on 4 threads -> starts at 1,000 ms",
+         "code": "assert.equal(typeof mod.queuedJobStartMs, 'function', 'export a function named queuedJobStartMs');\nassert.equal(mod.queuedJobStartMs(40, 4, 100), 1000);",
+         "input": [
+          40,
+          4,
+          100
+         ]
+        },
+        {
+         "name": "only 3 hashes ahead on 4 threads -> a thread is free at once (boundary)",
+         "code": "assert.equal(typeof mod.queuedJobStartMs, 'function', 'export a function named queuedJobStartMs');\nassert.equal(mod.queuedJobStartMs(3, 4, 100), 0);",
+         "input": [
+          3,
+          4,
+          100
+         ]
+        }
+       ],
+       "timeoutMs": 8000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "15-node-service-runtime/02-threadpool-starvation",
+    "type": "code",
+    "module": "15-node-service-runtime",
+    "lesson": "drills",
+    "position": 1,
+    "skills": [
+     "node",
+     "capacity"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "sysdrills/15-node-service-runtime/03-bind-parameter-cap",
+    "track": "sysdesign",
+    "kind": "drill",
+    "title": "Bulk INSERT and the bind-parameter cap",
+    "phase": "15-node-service-runtime",
+    "difficulty": 2,
+    "competencies": [
+     "system-design"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-js",
+       "language": "js",
+       "tests": [
+        {
+         "name": "12 columns under 65,535 -> 5,461 rows",
+         "code": "assert.equal(typeof mod.rowsPerStatement, 'function', 'export a function named rowsPerStatement');\nassert.equal(mod.rowsPerStatement(12, 65535), 5461);",
+         "input": [
+          12,
+          65535
+         ]
+        },
+        {
+         "name": "7 columns under SQLite's 32,766 -> 4,680 rows",
+         "code": "assert.equal(typeof mod.rowsPerStatement, 'function', 'export a function named rowsPerStatement');\nassert.equal(mod.rowsPerStatement(7, 32766), 4680);",
+         "input": [
+          7,
+          32766
+         ]
+        },
+        {
+         "name": "a single column -> one row per parameter (boundary)",
+         "code": "assert.equal(typeof mod.rowsPerStatement, 'function', 'export a function named rowsPerStatement');\nassert.equal(mod.rowsPerStatement(1, 65535), 65535);",
+         "input": [
+          1,
+          65535
+         ]
+        },
+        {
+         "name": "100,000 rows of 12 columns -> 19 statements",
+         "code": "assert.equal(typeof mod.statementsForImport, 'function', 'export a function named statementsForImport');\nassert.equal(mod.statementsForImport(100000, 12, 65535), 19);",
+         "input": [
+          100000,
+          12,
+          65535
+         ]
+        },
+        {
+         "name": "10 rows of 30 columns under a 100 cap -> 4, not 300 / 100",
+         "code": "assert.equal(typeof mod.statementsForImport, 'function', 'export a function named statementsForImport');\nassert.equal(mod.statementsForImport(10, 30, 100), 4);",
+         "input": [
+          10,
+          30,
+          100
+         ]
+        },
+        {
+         "name": "5,461 rows fit exactly -> 1 statement (boundary)",
+         "code": "assert.equal(typeof mod.statementsForImport, 'function', 'export a function named statementsForImport');\nassert.equal(mod.statementsForImport(5461, 12, 65535), 1);",
+         "input": [
+          5461,
+          12,
+          65535
+         ]
+        },
+        {
+         "name": "5,462 rows -> 2 statements",
+         "code": "assert.equal(typeof mod.statementsForImport, 'function', 'export a function named statementsForImport');\nassert.equal(mod.statementsForImport(5462, 12, 65535), 2);",
+         "input": [
+          5462,
+          12,
+          65535
+         ]
+        },
+        {
+         "name": "an empty file -> 0 statements (boundary)",
+         "code": "assert.equal(typeof mod.statementsForImport, 'function', 'export a function named statementsForImport');\nassert.equal(mod.statementsForImport(0, 12, 65535), 0);",
+         "input": [
+          0,
+          12,
+          65535
+         ]
+        }
+       ],
+       "timeoutMs": 8000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "15-node-service-runtime/03-bind-parameter-cap",
+    "type": "code",
+    "module": "15-node-service-runtime",
+    "lesson": "drills",
+    "position": 2,
+    "skills": [
+     "sql",
+     "batching"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "sysdrills/15-node-service-runtime/04-keepalive-idle-chain",
+    "track": "sysdesign",
+    "kind": "drill",
+    "title": "Keep-alive idle timeouts must grow inward",
+    "phase": "15-node-service-runtime",
+    "difficulty": 2,
+    "competencies": [
+     "system-design"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-js",
+       "language": "js",
+       "tests": [
+        {
+         "name": "ALB 60 s in front of Node 5 s -> hop 0 is unsafe",
+         "code": "assert.equal(typeof mod.firstUnsafeHop, 'function', 'export a function named firstUnsafeHop');\nassert.equal(mod.firstUnsafeHop([[60000,5000]]), 0);",
+         "input": [
+          [
+           [
+            60000,
+            5000
+           ]
+          ]
+         ]
+        },
+        {
+         "name": "Node raised to 65 s -> every hop safe, -1",
+         "code": "assert.equal(typeof mod.firstUnsafeHop, 'function', 'export a function named firstUnsafeHop');\nassert.equal(mod.firstUnsafeHop([[60000,65000]]), -1);",
+         "input": [
+          [
+           [
+            60000,
+            65000
+           ]
+          ]
+         ]
+        },
+        {
+         "name": "equal timeouts still race -> hop 0 (boundary)",
+         "code": "assert.equal(typeof mod.firstUnsafeHop, 'function', 'export a function named firstUnsafeHop');\nassert.equal(mod.firstUnsafeHop([[60000,60000]]), 0);",
+         "input": [
+          [
+           [
+            60000,
+            60000
+           ]
+          ]
+         ]
+        },
+        {
+         "name": "a proxy pooling 90 s in front of a 30 s service -> hop 1",
+         "code": "assert.equal(typeof mod.firstUnsafeHop, 'function', 'export a function named firstUnsafeHop');\nassert.equal(mod.firstUnsafeHop([[60000,65000],[90000,30000]]), 1);",
+         "input": [
+          [
+           [
+            60000,
+            65000
+           ],
+           [
+            90000,
+            30000
+           ]
+          ]
+         ]
+        },
+        {
+         "name": "a 4 s client pool calling a 5 s Node server -> safe, -1",
+         "code": "assert.equal(typeof mod.firstUnsafeHop, 'function', 'export a function named firstUnsafeHop');\nassert.equal(mod.firstUnsafeHop([[60000,65000],[4000,5000]]), -1);",
+         "input": [
+          [
+           [
+            60000,
+            65000
+           ],
+           [
+            4000,
+            5000
+           ]
+          ]
+         ]
+        },
+        {
+         "name": "Node behind a 60 s ALB with a 5 s margin -> 65,000",
+         "code": "assert.equal(typeof mod.raiseCalleeTimeouts, 'function', 'export a function named raiseCalleeTimeouts');\nassert.deepStrictEqual(mod.raiseCalleeTimeouts([[60000,5000]], 5000), [65000]);",
+         "input": [
+          [
+           [
+            60000,
+            5000
+           ]
+          ],
+          5000
+         ]
+        },
+        {
+         "name": "a callee already well past its caller keeps its value",
+         "code": "assert.equal(typeof mod.raiseCalleeTimeouts, 'function', 'export a function named raiseCalleeTimeouts');\nassert.deepStrictEqual(mod.raiseCalleeTimeouts([[60000,120000],[90000,30000]], 1000), [120000,91000]);",
+         "input": [
+          [
+           [
+            60000,
+            120000
+           ],
+           [
+            90000,
+            30000
+           ]
+          ],
+          1000
+         ]
+        },
+        {
+         "name": "equal timeouts get the margin on top (boundary)",
+         "code": "assert.equal(typeof mod.raiseCalleeTimeouts, 'function', 'export a function named raiseCalleeTimeouts');\nassert.deepStrictEqual(mod.raiseCalleeTimeouts([[60000,60000]], 1000), [61000]);",
+         "input": [
+          [
+           [
+            60000,
+            60000
+           ]
+          ],
+          1000
+         ]
+        }
+       ],
+       "timeoutMs": 8000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "15-node-service-runtime/04-keepalive-idle-chain",
+    "type": "code",
+    "module": "15-node-service-runtime",
+    "lesson": "drills",
+    "position": 3,
+    "skills": [
+     "networking",
+     "node"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "sysdrills/15-node-service-runtime/05-rolling-deploy-drain",
+    "track": "sysdesign",
+    "kind": "drill",
+    "title": "Rolling deploys: the drain budget",
+    "phase": "15-node-service-runtime",
+    "difficulty": 2,
+    "competencies": [
+     "system-design"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-js",
+       "language": "js",
+       "tests": [
+        {
+         "name": "no sleep, 5 s lag at 300 req/s -> 1,500 refused",
+         "code": "assert.equal(typeof mod.refusedPerPod, 'function', 'export a function named refusedPerPod');\nassert.equal(mod.refusedPerPod(300, 5, 0), 1500);",
+         "input": [
+          300,
+          5,
+          0
+         ]
+        },
+        {
+         "name": "a 3 s sleep against 8 s of lag at 200 req/s -> 1,000 refused",
+         "code": "assert.equal(typeof mod.refusedPerPod, 'function', 'export a function named refusedPerPod');\nassert.equal(mod.refusedPerPod(200, 8, 3), 1000);",
+         "input": [
+          200,
+          8,
+          3
+         ]
+        },
+        {
+         "name": "a sleep longer than the lag -> 0, never negative (boundary)",
+         "code": "assert.equal(typeof mod.refusedPerPod, 'function', 'export a function named refusedPerPod');\nassert.equal(mod.refusedPerPod(300, 5, 10), 0);",
+         "input": [
+          300,
+          5,
+          10
+         ]
+        },
+        {
+         "name": "30 s grace, 20 s slowest request -> 10 s of sleep",
+         "code": "assert.equal(typeof mod.maxPreStopSleepSec, 'function', 'export a function named maxPreStopSleepSec');\nassert.equal(mod.maxPreStopSleepSec(30, 20), 10);",
+         "input": [
+          30,
+          20
+         ]
+        },
+        {
+         "name": "a request longer than the grace period -> 0 (boundary)",
+         "code": "assert.equal(typeof mod.maxPreStopSleepSec, 'function', 'export a function named maxPreStopSleepSec');\nassert.equal(mod.maxPreStopSleepSec(30, 45), 0);",
+         "input": [
+          30,
+          45
+         ]
+        },
+        {
+         "name": "5 s sleep, 5 s lag, 20 s request, 30 s grace -> safe",
+         "code": "assert.equal(typeof mod.drainIsSafe, 'function', 'export a function named drainIsSafe');\nassert.equal(mod.drainIsSafe(30, 5, 20, 5), true);",
+         "input": [
+          30,
+          5,
+          20,
+          5
+         ]
+        },
+        {
+         "name": "no sleep -> requests refused, not safe",
+         "code": "assert.equal(typeof mod.drainIsSafe, 'function', 'export a function named drainIsSafe');\nassert.equal(mod.drainIsSafe(30, 0, 20, 5), false);",
+         "input": [
+          30,
+          0,
+          20,
+          5
+         ]
+        },
+        {
+         "name": "a 12 s sleep pushes the slowest request past SIGKILL -> not safe",
+         "code": "assert.equal(typeof mod.drainIsSafe, 'function', 'export a function named drainIsSafe');\nassert.equal(mod.drainIsSafe(30, 12, 20, 5), false);",
+         "input": [
+          30,
+          12,
+          20,
+          5
+         ]
+        }
+       ],
+       "timeoutMs": 8000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "15-node-service-runtime/05-rolling-deploy-drain",
+    "type": "code",
+    "module": "15-node-service-runtime",
+    "lesson": "drills",
+    "position": 4,
+    "skills": [
+     "operations",
+     "availability"
+    ]
+   }
+  }
+ ],
+ "content": {
+  "sysdrills/15-node-service-runtime/01-event-loop-stall": {
+   "instructions": "**Skills:** node · latency  \n**Level:** ★★☆\n\n**Interview prompt.** \"Our Express API answers most requests with about 2 ms of CPU, but the export endpoint builds its whole response with JSON.stringify — 240 ms on the main thread — and it runs twice a second at peak. What does that do to every other request, and how do you bound the damage without a new service?\"\n\n**Why it works.** Node runs all of your JavaScript on one thread. While a synchronous call such as JSON.stringify runs, no other callback, timer or incoming request is handled. Blocked milliseconds per second are already a per-mille of time (1,000 ms in a second), and because requests arrive spread over the second, the same per-mille of requests land behind a block and wait for it — up to its full length, on top of their own 2 ms. Partitioning splits the work into equal slices that yield to the event loop between them (setImmediate), so a waiting request is held for at most one slice. A partial slice still needs a turn of its own, so the slice count rounds up. The tests choose inputs that divide exactly wherever a time is returned.\n\n**Your task.** Export three functions:\n- `blockedPermille(blockingCallsPerSec, blockMs)` → the per-mille of each second during which the event loop is busy with the blocking calls (the tests never exceed 1000)\n- `worstStallMs(blockMs, chunks)` → the longest a waiting request is held once the work is split into `chunks` equal slices that yield between them\n- `chunksForStall(blockMs, maxStallMs)` → the fewest equal slices that keep every slice within `maxStallMs`\n\n**Worked example.** Two 240 ms exports per second keep the loop busy for 480 of every 1,000 ms → **480‰**; split into 12 slices, no request waits more than **20 ms** behind an export.\n",
+   "starter": "export function blockedPermille(blockingCallsPerSec, blockMs) {\n  // TODO: blocked milliseconds in one second, as per-mille\n}\n\nexport function worstStallMs(blockMs, chunks) {\n  // TODO: the longest single slice\n}\n\nexport function chunksForStall(blockMs, maxStallMs) {\n  // TODO: fewest slices that each fit the budget\n}\n",
+   "solution": "export function blockedPermille(blockingCallsPerSec, blockMs) {\n  return blockingCallsPerSec * blockMs;\n}\n\nexport function worstStallMs(blockMs, chunks) {\n  return blockMs / chunks;\n}\n\nexport function chunksForStall(blockMs, maxStallMs) {\n  return Math.ceil(blockMs / maxStallMs);\n}\n",
+   "explanation": "Partition until the longest slice fits the stall budget.\n\nFor `chunksForStall(250, 20)`:\n- 12 slices would be 250 ÷ 12 ≈ 20.8 ms each, over the budget\n- 13 slices are 250 ÷ 13 ≈ 19.2 ms each → **13 slices**\n\nIn production the Node.js guide \"Don't Block the Event Loop\" names JSON.parse and JSON.stringify on large inputs as event-loop blockers and offers two exits: partition the work with setImmediate as here, or offload it to a Worker Pool (worker_threads). For an export the usual fix is to stream: read rows with a cursor and write JSON or CSV chunks to the response, so no 40 MB string ever exists. A probe on Node 22.16 measured a 261 ms stringify of 300,000 rows holding a 0 ms timer for 267 ms; the same work in 10 setImmediate slices let a 1 ms interval run with a worst gap of 43 ms, because slicing has overhead of its own. Drill 06/03 `lock-serialization` caps a whole fleet at one lock holder; here the event loop is the lock inside one process, and the bill arrives as everyone else's latency.",
+   "hints": [
+    "Milliseconds blocked per 1,000 ms are already a per-mille, and partitioning divides one long stall into equal shorter ones.",
+    "busy‰ = calls × blockMs; worst stall = blockMs ÷ chunks; slices = ⌈blockMs ÷ maxStallMs⌉.",
+    "Add up the blocked milliseconds in one second for the per-mille, divide the block by the slice count for the stall, and round the slice count up whenever the block does not split evenly into the budget"
+   ]
+  },
+  "sysdrills/15-node-service-runtime/02-threadpool-starvation": {
+   "instructions": "**Skills:** node · capacity  \n**Level:** ★★☆\n\n**Interview prompt.** \"Login hashes passwords with Node's async crypto.scrypt, the libuv threadpool is at its default size, and each hash costs 100 ms of CPU on an 8-core box. A marketing email lands and 40 logins arrive at once. When does the last one finish — and why does an unrelated outbound call, which starts with a DNS lookup, stall behind them?\"\n\n**Why it works.** Node runs async crypto (pbkdf2, scrypt), most fs calls, zlib and dns.lookup on libuv's threadpool, which has 4 threads unless the UV_THREADPOOL_SIZE environment variable says otherwise. All of those jobs wait in one first-in-first-out queue. Each thread runs one job at a time, and for CPU-bound work such as hashing, threads beyond the number of cores add no throughput. A burst therefore drains in waves of one job per thread, and a job queued behind the burst — such as the DNS lookup an HTTP client does before it connects to a host name — waits until a thread frees up. For the burst and queue functions, assume the machine has at least as many cores as pool threads.\n\n**Your task.** Export three functions:\n- `hashesPerSec(threadpoolSize, cores, hashMs)` → sustained hashes per second when threads run in parallel but never more of them than there are cores\n- `burstFinishMs(burst, threadpoolSize, hashMs)` → when the last job of a burst queued all at once finishes\n- `queuedJobStartMs(jobsAhead, threadpoolSize, hashMs)` → when a job queued behind `jobsAhead` hashes finally gets a thread\n\n**Worked example.** 4 threads and 100 ms hashes → 40 hashes/s; 40 logins drain in 10 waves → the last finishes at **1,000 ms**, and the DNS lookup queued behind them only starts then.\n",
+   "starter": "export function hashesPerSec(threadpoolSize, cores, hashMs) {\n  // TODO: parallel threads, capped by cores\n}\n\nexport function burstFinishMs(burst, threadpoolSize, hashMs) {\n  // TODO: waves of one job per thread\n}\n\nexport function queuedJobStartMs(jobsAhead, threadpoolSize, hashMs) {\n  // TODO: when does a thread free up for the next job\n}\n",
+   "solution": "export function hashesPerSec(threadpoolSize, cores, hashMs) {\n  return (Math.min(threadpoolSize, cores) * 1000) / hashMs;\n}\n\nexport function burstFinishMs(burst, threadpoolSize, hashMs) {\n  return Math.ceil(burst / threadpoolSize) * hashMs;\n}\n\nexport function queuedJobStartMs(jobsAhead, threadpoolSize, hashMs) {\n  return Math.floor(jobsAhead / threadpoolSize) * hashMs;\n}\n",
+   "explanation": "A burst drains in whole waves, one job per thread.\n\nFor `burstFinishMs(41, 4, 100)`:\n- 41 jobs on 4 threads = 10 full waves plus 1 job left over\n- the leftover needs an 11th wave → 11 × 100 = **1,100 ms**\n\nIn production the Node docs warn that dns.lookup runs getaddrinfo on the threadpool and can have \"surprising negative performance implications\", and that async pbkdf2 and scrypt use the same pool. A probe on Node 22.16 queued 8 async pbkdf2 hashes and then a dns.lookup: the hashes finished in two waves of 4, and the lookup completed only after the second wave had started. Setting UV_THREADPOOL_SIZE=8 when the process starts doubles login throughput on 8 real cores; on hyperthreads the gain is smaller (the probe's 8 parallel hashes each ran about 2.3× slower). The synchronous scryptSync is worse still: it does the same work on the event loop and stalls every request (drill 15/01). Drill 06/04 `littles-law-worker-pool` gives the same ceiling for any fixed pool; the Node-specific parts are the core cap and the one shared queue that makes hashing starve unrelated I/O.",
+   "hints": [
+    "Parallel threads only help while each has a core to run on, and the queue is first-in-first-out, so work drains in waves of one job per thread.",
+    "rate = min(threads, cores) × 1000 ÷ hashMs; last finish = ⌈burst ÷ threads⌉ × hashMs; queued start = ⌊jobsAhead ÷ threads⌋ × hashMs.",
+    "Cap the threads at the core count for throughput, count whole waves rounded up for the last finisher, and count only the waves completed ahead of it, rounded down, for when the queued job starts"
+   ]
+  },
+  "sysdrills/15-node-service-runtime/03-bind-parameter-cap": {
+   "instructions": "**Skills:** sql · batching  \n**Level:** ★★☆\n\n**Interview prompt.** \"We import a 100,000-row CSV with node-postgres, building one multi-row INSERT … VALUES ($1, …, $12), ($13, …) per batch. Each row has 12 columns. How many rows can one statement carry, and how many statements does the import need?\"\n\n**Why it works.** A parameterized query reaches PostgreSQL through the extended protocol's Bind message, which counts its parameter values in a 16-bit field, so one statement carries at most 65,535 parameters (SQLite's default cap is 32,766). Every row spends one parameter per column, and a row cannot be split across two statements, so only whole rows fit, and any leftover rows need one more statement. Dividing the total parameter count by the cap undercounts, because every statement wastes the parameters that would only have held part of a row.\n\n**Your task.** Export two functions:\n- `rowsPerStatement(columns, maxParams)` → the most whole rows one statement can carry\n- `statementsForImport(rows, columns, maxParams)` → how many statements an import of `rows` rows needs\n\n**Worked example.** 65,535 parameters at 12 columns a row → **5,461 rows** per statement (65,532 parameters used); 100,000 rows → 19 statements.\n",
+   "starter": "export function rowsPerStatement(columns, maxParams) {\n  // TODO: whole rows under the parameter cap\n}\n\nexport function statementsForImport(rows, columns, maxParams) {\n  // TODO: statements for every row\n}\n",
+   "solution": "export function rowsPerStatement(columns, maxParams) {\n  return Math.floor(maxParams / columns);\n}\n\nexport function statementsForImport(rows, columns, maxParams) {\n  return Math.ceil(rows / rowsPerStatement(columns, maxParams));\n}\n",
+   "explanation": "Fit whole rows first, then count statements.\n\nFor `statementsForImport(10, 30, 100)`:\n- one statement holds 3 rows (90 of its 100 parameters)\n- 10 rows need 3 + 3 + 3 + 1 → **4 statements**\n- dividing parameters instead, 300 ÷ 100 = 3, misses the 10 parameters each statement cannot use\n\nIn production the PostgreSQL protocol docs type the Bind message's parameter count as an Int16, which is where the 65,535 ceiling comes from, and node-postgres sends every parameterized query that way. A probe with Node's built-in SQLite prepared a 7-column INSERT of 4,680 rows and refused 4,681 with \"too many SQL variables\". For big imports, stop spending a parameter per value: `INSERT … SELECT * FROM unnest($1::int[], $2::text[], …)` sends one array per column — 12 parameters for any number of rows — and COPY FROM STDIN (for example through pg-copy-streams) streams rows with no parameters at all. Drill 08/04 `page-math` has the same round-down-then-round-up shape for rows on pages; the trap here is the tempting total-parameter division.",
+   "hints": [
+    "Each row costs one parameter per column, and a statement can only hold whole rows.",
+    "rows per statement = ⌊maxParams ÷ columns⌋; statements = ⌈rows ÷ rows per statement⌉.",
+    "Round down when fitting whole rows under the cap, then round up when counting statements, because a last partial batch is still a statement of its own"
+   ]
+  },
+  "sysdrills/15-node-service-runtime/04-keepalive-idle-chain": {
+   "instructions": "**Skills:** networking · node  \n**Level:** ★★☆\n\n**Interview prompt.** \"Behind an AWS Application Load Balancer our Node API returns a trickle of 502s — a few an hour, never reproducible on a laptop. The ALB keeps idle connections for 60 s; Node's server.keepAliveTimeout is still the 5 s default. Which side is wrong, and what is the rule for every hop in a chain?\"\n\n**Why it works.** A caller that pools keep-alive connections reuses an idle one for its next request. If the callee's idle timeout is shorter, the callee closes the connection while the caller still believes it is usable, and a request sent on it at that moment hits a closed socket: the ALB answers 502, a Node client sees ECONNRESET. A hop is safe only when the callee keeps idle connections strictly longer than its caller; equal timeouts race too, because both ends give up at about the same moment. So idle timeouts must grow as you move inward — the mirror of request deadlines, which shrink inward (drill 04/06). Each pair below is [how long the caller keeps an idle connection, how long the callee keeps it], listed from the outermost hop inward.\n\n**Your task.** Export two functions:\n- `firstUnsafeHop(pairs)` → the index of the first pair whose callee does not outlast its caller, or −1 when every hop is safe\n- `raiseCalleeTimeouts(pairs, marginMs)` → the callee timeouts after the fix, in order: each becomes the larger of its current value and the caller's timeout plus `marginMs`\n\n**Worked example.** `[[60000, 5000]]` → hop **0** is unsafe; with a 5,000 ms margin, Node's keepAliveTimeout becomes 65,000 ms.\n",
+   "starter": "export function firstUnsafeHop(pairs) {\n  // TODO: first callee that does not outlast its caller\n}\n\nexport function raiseCalleeTimeouts(pairs, marginMs) {\n  // TODO: lift each callee past its caller\n}\n",
+   "solution": "export function firstUnsafeHop(pairs) {\n  return pairs.findIndex(([callerIdleMs, calleeIdleMs]) => calleeIdleMs <= callerIdleMs);\n}\n\nexport function raiseCalleeTimeouts(pairs, marginMs) {\n  return pairs.map(([callerIdleMs, calleeIdleMs]) => Math.max(calleeIdleMs, callerIdleMs + marginMs));\n}\n",
+   "explanation": "Each callee must hang up after its caller does.\n\nFor `raiseCalleeTimeouts([[60000, 120000], [90000, 30000]], 1000)`:\n- hop 0: 120,000 already exceeds 60,000 + 1,000 → keep **120,000**\n- hop 1: 30,000 is below 90,000 + 1,000 → raise to **91,000**\n\nIn production AWS's ALB documentation sets the default idle timeout at 60 s and recommends an application idle timeout larger than the load balancer's, \"otherwise\" the load balancer answers 502. In Node that means setting server.keepAliveTimeout above it, for example 65000; a probe on Node 22.16 showed the 5000 ms default and the `Keep-Alive: timeout=5` header it advertises (Node 22.19 and 24.6 add a 1 s buffer on top, which still loses to 60 s). Node's own fetch (undici) keeps idle connections 4 s by default and honours a server's Keep-Alive hint minus 2 s, so Node-to-Node calls over fetch are already on the safe side; hand-tuned proxies and connection pools are where this goes wrong. Drill 04/06 `timeout-cascade` shrinks request deadlines inward; idle timeouts run the other way.",
+   "hints": [
+    "A callee that hangs up first leaves the caller holding a connection it thinks is alive, so each callee must keep idle connections longer than its caller.",
+    "unsafe ⇔ callee ≤ caller; fixed callee = max(callee, caller + margin).",
+    "Walk the pairs from the outside in and stop at the first callee whose idle timeout is not strictly longer than its caller’s — the fix lifts each callee to at least the caller’s timeout plus the margin and leaves longer ones alone"
+   ]
+  },
+  "sysdrills/15-node-service-runtime/05-rolling-deploy-drain": {
+   "instructions": "**Skills:** operations · availability  \n**Level:** ★★☆\n\n**Interview prompt.** \"Kubernetes rolls our Node API one pod at a time. On SIGTERM the app calls server.close() straight away, but for about 5 s after a pod starts terminating the load balancer still sends it new connections. Each pod serves 300 req/s, the slowest request takes 20 s, and terminationGracePeriodSeconds is the default 30. How many requests does each pod refuse per rollout, and how long a preStop sleep can we afford?\"\n\n**Why it works.** When a pod starts terminating, Kubernetes marks its endpoint not-ready at the same time as it begins the shutdown, not before, so traffic keeps arriving until every load balancer and proxy has caught up — call that the endpoint lag. A preStop hook runs before SIGTERM is sent, so a preStop sleep keeps the server accepting during the lag; every second of lag the sleep does not cover refuses that second's traffic. The grace period counts from the start of termination and includes the preStop hook, and when it runs out the kubelet sends SIGKILL. A request admitted just before close() still needs its full duration, so the sleep plus the slowest request must fit inside the grace period. A drain is safe only when both conditions hold.\n\n**Your task.** Export three functions:\n- `refusedPerPod(podQps, endpointLagSec, preStopSleepSec)` → requests one pod refuses because they arrive after it stopped accepting but before traffic moved away\n- `maxPreStopSleepSec(graceSec, longestRequestSec)` → the longest sleep that still lets the slowest request finish before SIGKILL, never below 0\n- `drainIsSafe(graceSec, preStopSleepSec, longestRequestSec, endpointLagSec)` → `true` only when nothing is refused and the slowest request still finishes\n\n**Worked example.** No preStop sleep, 5 s of lag at 300 req/s → **1,500 refused requests** per pod per rollout; a 30 s grace period and a 20 s slowest request leave room for a 10 s sleep.\n",
+   "starter": "export function refusedPerPod(podQps, endpointLagSec, preStopSleepSec) {\n  // TODO: traffic in the lag the sleep does not cover\n}\n\nexport function maxPreStopSleepSec(graceSec, longestRequestSec) {\n  // TODO: grace left after the slowest request\n}\n\nexport function drainIsSafe(graceSec, preStopSleepSec, longestRequestSec, endpointLagSec) {\n  // TODO: nothing refused and nothing killed\n}\n",
+   "solution": "export function refusedPerPod(podQps, endpointLagSec, preStopSleepSec) {\n  return podQps * Math.max(0, endpointLagSec - preStopSleepSec);\n}\n\nexport function maxPreStopSleepSec(graceSec, longestRequestSec) {\n  return Math.max(0, graceSec - longestRequestSec);\n}\n\nexport function drainIsSafe(graceSec, preStopSleepSec, longestRequestSec, endpointLagSec) {\n  return preStopSleepSec >= endpointLagSec && preStopSleepSec + longestRequestSec <= graceSec;\n}\n",
+   "explanation": "A drain has two edges: the lag before traffic leaves, and the grace before SIGKILL.\n\nFor `drainIsSafe(30, 12, 20, 5)`:\n- 12 s of sleep covers the 5 s lag → nothing is refused\n- but 12 + 20 = 32 s is past the 30 s grace period → SIGKILL lands mid-request → **false**\n\nIn production the Kubernetes pod-lifecycle docs state that the grace countdown begins before the preStop hook runs, that the hook must finish before TERM is sent, that terminating endpoints are marked not-ready rather than removed first, and that the default grace period is 30 s. On the Node side, server.close() stops accepting connections and, since Node 19, also closes idle keep-alive connections (a probe on Node 22.16 confirmed it), so pooled clients stop reusing a closing pod. When the numbers do not fit, cap request time below the grace period minus the sleep (server.requestTimeout) or raise terminationGracePeriodSeconds. Drill 12/02 `failover-rto` adds up the stages of an outage; here the stages are a budget the deploy must fit inside.",
+   "hints": [
+    "Traffic keeps arriving for the endpoint lag after termination starts, only the preStop sleep keeps the server listening during it, and everything shares one grace period.",
+    "refused = qps × max(0, lag − sleep); max sleep = max(0, grace − longest); safe ⇔ sleep ≥ lag and sleep + longest ≤ grace.",
+    "Charge the pod every second of lag the sleep leaves uncovered, give the sleep whatever grace the slowest request does not need, and call it safe only when the sleep covers the lag and still fits beside the slowest request"
+   ]
+  }
+ }
+}
