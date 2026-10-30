@@ -433,6 +433,542 @@
    ],
    "front": "Why is it a problem that recordDecision and disburseApplication run their guards before prisma.$transaction?",
    "back": "The guard reads state outside the transaction, so a concurrent write can change the facts between the check and the update. The transaction makes the writes atomic, but not the decision to allow them; there is no optimistic locking on stateVersion."
+  },
+  {
+   "id": "q13-role-switch-keeps-detail",
+   "kind": "quiz",
+   "source": {
+    "path": "src/hooks/use-session.ts",
+    "lines": {
+     "start": 37,
+     "end": 53
+    }
+   },
+   "cites": [
+    {
+     "path": "src/hooks/use-session.ts",
+     "lineStart": 46,
+     "lineEnd": 51
+    },
+    {
+     "path": "src/hooks/use-application-detail.ts",
+     "lineStart": 125,
+     "lineEnd": 131
+    },
+    {
+     "path": "src/components/applications/application-detail-client.tsx",
+     "lineStart": 115,
+     "lineEnd": 115
+    },
+    {
+     "path": "src/components/providers/query-provider.tsx",
+     "lineStart": 17,
+     "lineEnd": 22
+    }
+   ],
+   "prompt": "A loan officer is on an application's detail page and uses the role switcher shown there to become a borrower who is not a party to that file. The switch succeeds. What does the page show next?",
+   "answer": "The file as the officer loaded it, as its detail key is not invalidated",
+   "distractors": [
+    "A not-found state, as the login refetches every cached application key",
+    "An empty page, as the new session cookie clears the whole query cache",
+    "The borrower's view of the file, as the detail key refetches on login"
+   ],
+   "explanation": "useLoginMutation's onSuccess (use-session.ts:46-51) invalidates [\"session\"] and [\"applications\"] only. React Query matches a filter key against a query key element by element from the front, so [\"applications\"] does not match [\"application\", id] (use-application-detail.ts:127): a probe with @tanstack/query-core 5.97.0, the version in the lockfile, refetched only the session query and left the detail query not even marked invalidated. The client has staleTime 15 s and refetchOnWindowFocus off (query-provider.tsx:17-22), so the page keeps rendering the officer-fetched file while the buttons recompute from the new role. A cookie change does not touch the cache, and no 404 is fetched."
+  },
+  {
+   "id": "q14-underwriter-verification-button",
+   "kind": "quiz",
+   "source": {
+    "path": "src/components/applications/application-detail-client.tsx",
+    "lines": {
+     "start": 82,
+     "end": 91
+    }
+   },
+   "cites": [
+    {
+     "path": "src/components/applications/application-detail-client.tsx",
+     "lineStart": 85,
+     "lineEnd": 86
+    },
+    {
+     "path": "src/app/api/applications/[applicationId]/verifications/route.ts",
+     "lineStart": 12,
+     "lineEnd": 14
+    },
+    {
+     "path": "src/lib/auth/permissions.ts",
+     "lineStart": 36,
+     "lineEnd": 46
+    },
+    {
+     "path": "src/lib/http/route-handler.ts",
+     "lineStart": 79,
+     "lineEnd": 81
+    }
+   ],
+   "prompt": "An UNDERWRITER opens a file's detail page and finds the Request verification button enabled. They click it. What does the POST return?",
+   "answer": "403 from the route wrapper, as the role lacks that permission",
+   "distractors": [
+    "201 with the new check, as underwriters may manage verifications",
+    "404 from the service, as underwriters cannot see the file here",
+    "400 from the schema, as an underwriter must omit the reference"
+   ],
+   "explanation": "The page enables the button from its own copy of the rules: canManageVerifications is LOAN_OFFICER or UNDERWRITER (application-detail-client.tsx:85-86). The route declares application:manage-verifications (verifications/route.ts:12-14), and the role table grants it to LOAN_OFFICER only; UNDERWRITER has view-pipeline, record-decision and manage-conditions (permissions.ts:36-46). createRouteHandler asserts the permission before the handler runs (route-handler.ts:79-81), so the answer is 403 before any visibility lookup or body parse. The UI gate is a hand-written duplicate of the matrix and has drifted; the server's table is the authority."
+  },
+  {
+   "id": "q15-workflow-refetch-after-decision",
+   "kind": "quiz",
+   "source": {
+    "path": "src/hooks/use-application-detail.ts",
+    "lines": {
+     "start": 103,
+     "end": 131
+    }
+   },
+   "cites": [
+    {
+     "path": "src/hooks/use-application-detail.ts",
+     "lineStart": 110,
+     "lineEnd": 121
+    },
+    {
+     "path": "src/app/api/applications/[applicationId]/decision/route.ts",
+     "lineStart": 25,
+     "lineEnd": 27
+    }
+   ],
+   "prompt": "An underwriter browses from the dashboard to a file and records a decision. The POST returns 200 with the updated application in its body. Which GET requests does the browser then send?",
+   "answer": "One, for the detail; the list is only marked stale for later",
+   "distractors": [
+    "Two, for the detail and then for the application list query",
+    "None; the page writes the POST body into the detail cache entry",
+    "One, for the list; the detail page reads the new stage from it"
+   ],
+   "explanation": "useWorkflowMutation ignores the response body: onSuccess just invalidates [\"application\", id] and [\"applications\"] (use-application-detail.ts:110-121), and no hook calls setQueryData. invalidateQueries refetches only active queries by default. On the detail page the detail query has an observer, so it refetches; the list query's observer unmounted with the dashboard, so it is only marked invalidated and refetches when the dashboard mounts again. A probe with @tanstack/query-core 5.97.0 showed exactly one refetch (the detail) and the list flagged isInvalidated. The decision route already returns the full detail (decision/route.ts:25-27), so that GET repeats work the server just did."
+  },
+  {
+   "id": "q16-invisible-file-loading",
+   "kind": "quiz",
+   "source": {
+    "path": "src/components/applications/application-detail-client.tsx",
+    "lines": {
+     "start": 36,
+     "end": 80
+    }
+   },
+   "cites": [
+    {
+     "path": "src/components/applications/application-detail-client.tsx",
+     "lineStart": 72,
+     "lineEnd": 80
+    },
+    {
+     "path": "src/app/applications/[applicationId]/page.tsx",
+     "lineStart": 3,
+     "lineEnd": 11
+    },
+    {
+     "path": "src/lib/api/fetcher.ts",
+     "lineStart": 29,
+     "lineEnd": 31
+    }
+   ],
+   "prompt": "A borrower pastes the URL of an application they are not linked to. The detail API answers 404 Application not found. What does the page render?",
+   "answer": "Loading application..., as nothing renders the query error",
+   "distractors": [
+    "A not-found message, built from the ApiClientError's text",
+    "A redirect to the pipeline, from the server page component",
+    "The file with parties hidden, as the presenter strips them"
+   ],
+   "explanation": "The server page only awaits params and renders the client component (page.tsx:3-11); it fetches nothing and checks no session. The detail query's apiFetch throws ApiClientError(404) (fetcher.ts:29-31). A failed first fetch leaves the query's data undefined (probe with @tanstack/query-core 5.97.0: status error, data undefined), and the component returns the Loading application... block whenever application is undefined (application-detail-client.tsx:72-80). No component in src/ reads a query or mutation error, so the 404 is never shown, there is no redirect, and the presenter never runs for a file the borrower cannot see."
+  },
+  {
+   "id": "q17-public-id-collision",
+   "kind": "quiz",
+   "source": {
+    "path": "src/lib/utils/public-id.ts",
+    "lines": {
+     "start": 9,
+     "end": 13
+    }
+   },
+   "cites": [
+    {
+     "path": "src/lib/utils/public-id.ts",
+     "lineStart": 12,
+     "lineEnd": 12
+    },
+    {
+     "path": "prisma/schema.prisma",
+     "lineStart": 91,
+     "lineEnd": 91
+    },
+    {
+     "path": "src/services/application-command-service.ts",
+     "lineStart": 174,
+     "lineEnd": 176
+    },
+    {
+     "path": "src/lib/http/route-handler.ts",
+     "lineStart": 56,
+     "lineEnd": 63
+    }
+   ],
+   "prompt": "The table already holds about 4,500 applications. A borrower submits a valid create request. What happens on roughly half of such requests?",
+   "answer": "500, from a unique-index clash on the generated publicId",
+   "distractors": [
+    "201, after the service retries with another random publicId",
+    "409, from the wrapper mapping the unique violation for you",
+    "201, with a numeric suffix added so the publicId stays unique"
+   ],
+   "explanation": "createApplicationPublicId returns `APP-${randomInt(1000, 9999)}` (public-id.ts:12). randomInt's max is exclusive, so there are only 8,999 ids, and publicId is @unique (schema.prisma:91). With about 4,500 taken, a fresh draw hits a used id about half the time. The insert inside the transaction (application-command-service.ts:174-176) then fails with Prisma's unique-constraint error, which is neither a ZodError nor an AppError, so the wrapper logs it and returns 500 Internal server error (route-handler.ts:56-63); the transaction rolls back. Nothing retries, maps it to 409 or suffixes the id. build-journal.md:148 lists the same risk."
+  },
+  {
+   "id": "q18-retried-create-duplicates",
+   "kind": "quiz",
+   "source": {
+    "path": "src/components/dashboard/create-application-form.tsx",
+    "lines": {
+     "start": 23,
+     "end": 66
+    }
+   },
+   "cites": [
+    {
+     "path": "src/components/dashboard/create-application-form.tsx",
+     "lineStart": 43,
+     "lineEnd": 66
+    },
+    {
+     "path": "src/services/application-command-service.ts",
+     "lineStart": 174,
+     "lineEnd": 231
+    },
+    {
+     "path": "src/lib/validation/application-schemas.ts",
+     "lineStart": 21,
+     "lineEnd": 27
+    }
+   ],
+   "prompt": "A borrower's create POST commits on the server, but the connection drops before the response arrives. The form still holds the same values, so they press Create Application again. What is stored?",
+   "answer": "Two applications, each one with its own random publicId",
+   "distractors": [
+    "One; the service matches the new request on its parties",
+    "One; the form resends the idempotency key it sent first",
+    "One; a unique index on purpose and amount refuses it"
+   ],
+   "explanation": "The form never resets: it disables the button only while the mutation is pending and re-enables it once the mutation settles, success or failure (create-application-form.tsx:43-66). The create schema has no request id or idempotency key (application-schemas.ts:21-27), and createApplication always inserts a new row with a freshly drawn publicId plus its parties and an audit entry (application-command-service.ts:174-231). The only unique columns on an application are id and publicId, so nothing recognises the second POST as a retry. Each successful POST is a new file; a client-generated key stored under a unique index would make the retry safe."
+  },
+  {
+   "id": "q19-required-field-ripple",
+   "kind": "quiz",
+   "source": {
+    "path": "src/lib/validation/application-schemas.ts",
+    "lines": {
+     "start": 13,
+     "end": 27
+    }
+   },
+   "cites": [
+    {
+     "path": "src/app/api/applications/route.ts",
+     "lineStart": 27,
+     "lineEnd": 28
+    },
+    {
+     "path": "src/services/application-command-service.ts",
+     "lineStart": 152,
+     "lineEnd": 173
+    },
+    {
+     "path": "src/hooks/use-applications.ts",
+     "lineStart": 36,
+     "lineEnd": 54
+    }
+   ],
+   "prompt": "A developer adds a required number field, termMonths, to createApplicationSchema and changes nothing else. What does that change do?",
+   "answer": "tsc passes, and each create from the form now gets a 400",
+   "distractors": [
+    "tsc fails in the form, which is typed from the zod schema",
+    "tsc fails in the service, whose input type lacks the field",
+    "tsc passes, and the API stores termMonths as null for now"
+   ],
+   "explanation": "The route parses into the schema's inferred type and passes it on (route.ts:27-28), but the service's input type is written out by hand (application-command-service.ts:152-173). Passing an object with an extra property where a narrower type is expected is legal TypeScript (excess-property checks apply only to object literals), and the client's CreateApplicationInput is a third hand-written copy (use-applications.ts:36-54). A probe with zod 4.3.6 and TypeScript 5.9.3 compiled that shape with exit 0. At runtime the form's body has no termMonths, so parse throws a ZodError and the wrapper answers 400 Validation failed. The service would ignore the field anyway, and there is no column to store it."
+  },
+  {
+   "id": "q20-enum-ripple",
+   "kind": "quiz",
+   "source": {
+    "path": "src/lib/validation/application-schemas.ts",
+    "lines": {
+     "start": 10,
+     "end": 27
+    }
+   },
+   "cites": [
+    {
+     "path": "src/lib/validation/application-schemas.ts",
+     "lineStart": 22,
+     "lineEnd": 22
+    },
+    {
+     "path": "src/hooks/use-applications.ts",
+     "lineStart": 37,
+     "lineEnd": 37
+    },
+    {
+     "path": "src/components/dashboard/create-application-form.tsx",
+     "lineStart": 82,
+     "lineEnd": 85
+    },
+    {
+     "path": "prisma/schema.prisma",
+     "lineStart": 36,
+     "lineEnd": 41
+    }
+   ],
+   "prompt": "A developer adds JUMBO to the LoanProductType enum in schema.prisma, pushes the schema and regenerates the client, with no other edits. Which layer now accepts JUMBO?",
+   "answer": "The API schema, which builds its enum from Prisma's enum",
+   "distractors": [
+    "The form, whose product list is read from Prisma's enum",
+    "Neither, until someone extends the zod enum by hand as well",
+    "Both, as the client type is imported from @prisma/client"
+   ],
+   "explanation": "createApplicationSchema validates productType with z.enum(LoanProductType), and LoanProductType is imported from @prisma/client (application-schemas.ts:10, :22), so regenerating the client widens validation by itself; a zod 4.3.6 probe accepted the added member. The browser side is hand-written: CreateApplicationInput spells out four products (use-applications.ts:37) and the select has four hard-coded options (create-application-form.tsx:82-85). The API therefore accepts and stores JUMBO, while the form can never send it and tsc reports nothing either way."
+  },
+  {
+   "id": "q21-role-change-next-request",
+   "kind": "quiz",
+   "source": {
+    "path": "src/lib/auth/session.ts",
+    "lines": {
+     "start": 27,
+     "end": 80
+    }
+   },
+   "cites": [
+    {
+     "path": "src/lib/auth/session.ts",
+     "lineStart": 27,
+     "lineEnd": 30
+    },
+    {
+     "path": "src/lib/auth/session.ts",
+     "lineStart": 67,
+     "lineEnd": 79
+    },
+    {
+     "path": "src/lib/http/route-handler.ts",
+     "lineStart": 71,
+     "lineEnd": 73
+    }
+   ],
+   "prompt": "An operator changes a signed-in user's role from LOAN_OFFICER to SERVICING_AGENT directly in the database. The user's cookie is untouched. When do the API routes start applying the new role?",
+   "answer": "On the user's next request, as each one reloads the user row",
+   "distractors": [
+    "At the next login, as the signed cookie carries the old role",
+    "Never, as the cookie's HMAC no longer matches the new role",
+    "Once the browser's session query refetches the new role"
+   ],
+   "explanation": "The cookie value is the user id plus an HMAC of that id (session.ts:27-30); the role is not in it. getSessionFromRequest verifies the signature, then loads the user by id and builds the session's role from that row (session.ts:67-79), and createRouteHandler resolves the session on every request (route-handler.ts:71-73). So the very next API call is authorized with SERVICING_AGENT's permissions and visibility. The signature covers only the id, so a role change cannot break it, and the browser's session query only affects what the UI displays, not what the server enforces."
+  },
+  {
+   "id": "q22-non-json-error-body",
+   "kind": "quiz",
+   "source": {
+    "path": "src/lib/api/fetcher.ts",
+    "lines": {
+     "start": 18,
+     "end": 34
+    }
+   },
+   "cites": [
+    {
+     "path": "src/lib/api/fetcher.ts",
+     "lineStart": 27,
+     "lineEnd": 31
+    }
+   ],
+   "prompt": "A proxy in front of the app answers a detail-page mutation with 502 and an HTML error page. What error does the mutation end up holding?",
+   "answer": "A SyntaxError from parsing the HTML, with the 502 lost",
+   "distractors": [
+    "An ApiClientError with status 502 and Request failed.",
+    "An ApiClientError whose message is the HTML page text",
+    "No error, as apiFetch reads a non-JSON body as empty"
+   ],
+   "explanation": "apiFetch awaits response.json() on line 27 before it checks response.ok on line 29. Parsing an HTML body rejects with a SyntaxError (probe on Node 22.16's fetch Response, which follows the Fetch standard like browsers do), so the ApiClientError branch on lines 29-31 never runs and the 502 status never reaches the hook. The same thing would happen to any reply without a JSON body. The app's own routes always answer JSON through the wrapper, which is why this only shows up when something in front of them answers instead; checking ok and the content type before parsing would keep the status."
+  },
+  {
+   "id": "q23-rerequest-passed-verification",
+   "kind": "quiz",
+   "source": {
+    "path": "src/repositories/application-repository.ts",
+    "lines": {
+     "start": 161,
+     "end": 182
+    }
+   },
+   "cites": [
+    {
+     "path": "src/repositories/application-repository.ts",
+     "lineStart": 166,
+     "lineEnd": 181
+    },
+    {
+     "path": "src/services/application-command-service.ts",
+     "lineStart": 281,
+     "lineEnd": 288
+    },
+    {
+     "path": "prisma/schema.prisma",
+     "lineStart": 152,
+     "lineEnd": 152
+    }
+   ],
+   "prompt": "CREDIT_PULL is PASSED at providerSequence 5. A loan officer requests CREDIT_PULL again with a new provider reference. What does that verification row hold afterwards?",
+   "answer": "PASSED at sequence 5 still, with the new provider reference",
+   "distractors": [
+    "PENDING at sequence 0 again, as a fresh request resets it",
+    "Two CREDIT_PULL rows, with a new PENDING one beside the old one",
+    "Its old values, as the second request is refused with 409"
+   ],
+   "explanation": "requestVerification passes status PENDING and providerSequence 0 to createVerificationRequest (application-command-service.ts:281-288), but that is an upsert on the (applicationId, type) unique key (application-repository.ts:166-181; schema.prisma:152). PENDING and 0 are used only by the create branch. The update branch writes providerReference and startedAt and nothing else, so status and providerSequence stay PASSED and 5. The unique key rules out a second row, and nothing refuses the request: it also writes a VERIFICATION_REQUESTED audit entry and re-runs the reconcile, which leaves the stage as it was."
+  },
+  {
+   "id": "f05-query-client-freshness",
+   "kind": "flashcard",
+   "source": {
+    "path": "src/components/providers/query-provider.tsx",
+    "lines": {
+     "start": 13,
+     "end": 27
+    }
+   },
+   "cites": [
+    {
+     "path": "src/components/providers/query-provider.tsx",
+     "lineStart": 14,
+     "lineEnd": 24
+    }
+   ],
+   "front": "How is the browser's QueryClient created, and what keeps its data fresh?",
+   "back": "One QueryClient per tab, made in a useState initializer so re-renders keep the same cache. Its defaults are staleTime 15 s and refetchOnWindowFocus off, and no query sets a polling interval. So nothing pushes or polls another user's change into an open page: the tab sees it only after a refetch that its own activity triggers."
+  },
+  {
+   "id": "f06-prisma-client-singleton",
+   "kind": "flashcard",
+   "source": {
+    "path": "src/lib/db/prisma.ts",
+    "lines": {
+     "start": 9,
+     "end": 37
+    }
+   },
+   "cites": [
+    {
+     "path": "src/lib/db/prisma.ts",
+     "lineStart": 21,
+     "lineEnd": 37
+    }
+   ],
+   "front": "Why does prisma.ts keep the client and its pg Pool on globalThis outside production?",
+   "back": "next dev re-evaluates modules on hot reload; a fresh PrismaClient per reload would open a new pool each time and leak connections. So the module reuses globalThis.prisma and globalThis.prismaPool when present, and stores them only when NODE_ENV is not production. Prisma 7 talks to Postgres through the @prisma/adapter-pg driver adapter wrapping that one pg Pool."
+  },
+  {
+   "id": "f07-presenter-boundary",
+   "kind": "flashcard",
+   "source": {
+    "path": "src/lib/presenters/application-presenters.ts",
+    "lines": {
+     "start": 16,
+     "end": 62
+    }
+   },
+   "cites": [
+    {
+     "path": "src/lib/presenters/application-presenters.ts",
+     "lineStart": 16,
+     "lineEnd": 26
+    },
+    {
+     "path": "src/repositories/application-repository.ts",
+     "lineStart": 25,
+     "lineEnd": 77
+    }
+   ],
+   "front": "What does the presenter layer do, and how are its input types tied to the queries?",
+   "back": "It turns Prisma records into JSON-safe view shapes: Decimal amounts to strings, Dates to ISO strings, and an explicit field list per view, so a new column does not reach the browser by accident. Its input types are Prisma.LoanApplicationGetPayload over typeof applicationSummaryInclude and applicationDetailInclude, so editing an include changes the presenter's type and tsc flags any field that disappeared."
+  },
+  {
+   "id": "f08-command-transaction-scope",
+   "kind": "flashcard",
+   "source": {
+    "path": "src/services/application-command-service.ts",
+    "lines": {
+     "start": 440,
+     "end": 473
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/application-command-service.ts",
+     "lineStart": 449,
+     "lineEnd": 470
+    },
+    {
+     "path": "src/services/application-command-service.ts",
+     "lineStart": 104,
+     "lineEnd": 149
+    }
+   ],
+   "front": "Take createCondition. What runs before its transaction, and what runs inside it?",
+   "back": "Before: the visibility lookup on the shared client. Inside one interactive transaction: insert the OPEN condition, write the CONDITION_CREATED audit row, then reconcileAndPersistStage, which re-reads the aggregate on the transaction client, recomputes and persists the stage, and loads the full detail for the response. Fact, audit and stage commit together or not at all."
+  },
+  {
+   "id": "f09-detail-payload-growth",
+   "kind": "flashcard",
+   "source": {
+    "path": "src/repositories/application-repository.ts",
+    "lines": {
+     "start": 34,
+     "end": 77
+    }
+   },
+   "cites": [
+    {
+     "path": "src/repositories/application-repository.ts",
+     "lineStart": 58,
+     "lineEnd": 76
+    },
+    {
+     "path": "src/repositories/application-repository.ts",
+     "lineStart": 147,
+     "lineEnd": 152
+    }
+   ],
+   "front": "What does applicationDetailInclude load, and why does its cost grow with a file's age?",
+   "back": "Every party, verification and condition, plus every transition, external event (with its JSON payload) and audit row, each with no take. History tables only grow, and every workflow command loads this include inside its write transaction via loadApplicationDetailById, so response size and in-transaction read time rise with each action. A paged history endpoint, or a take on the history relations, would cap it."
+  },
+  {
+   "id": "f10-nested-create",
+   "kind": "flashcard",
+   "source": {
+    "path": "src/services/application-command-service.ts",
+    "lines": {
+     "start": 152,
+     "end": 234
+    }
+   },
+   "cites": [
+    {
+     "path": "src/services/application-command-service.ts",
+     "lineStart": 174,
+     "lineEnd": 231
+    }
+   ],
+   "front": "How does createApplication write an application and its applicants?",
+   "back": "One nested Prisma create inside an interactive transaction: loanApplication.create connects createdBy to the session user, connects assignedOfficer only when a LOAN_OFFICER creates it, and creates the PRIMARY party plus an optional CO_APPLICANT through parties.create. An APPLICATION_CREATED audit row follows in the same transaction, and the record comes back with the detail include for the presenter."
   }
  ]
 }

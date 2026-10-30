@@ -330,6 +330,287 @@
     }
    ],
    "readMore": []
+  },
+  {
+   "id": "r04-browser-data-layer",
+   "target": "pack",
+   "phase": "before",
+   "title": "Concept: the browser half of every request",
+   "body": "The server side of this app is carefully layered: route wrapper, zod schema, service, repository, presenter. The browser side has its own layers, and the later questions in this pack are about them and about how a change in one layer reaches the others.\n\nRead `src/components/providers/query-provider.tsx` first and note the client's default options. Then open every file in `src/hooks/`. Make two lists: each `queryKey` a query defines, and each key a mutation invalidates when it succeeds. Next to each query, write which page mounts it. Then read `src/lib/api/fetcher.ts` line by line and note the order of its steps.\n\nIn `src/components/applications/application-detail-client.tsx`, list the `can...` flags that enable each button and set them beside the role table in `src/lib/auth/permissions.ts`. Finally, follow one field from `prisma/schema.prisma` through `src/lib/validation/application-schemas.ts`, the service's input type and the hook types, and mark each type as generated, inferred or written by hand.",
+   "excerpts": [
+    {
+     "path": "src/hooks/use-application-detail.ts",
+     "lineStart": 103,
+     "lineEnd": 107,
+     "quote": "function useWorkflowMutation( applicationId: string, path: string, method = \"POST\", ) {"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/hooks/use-session.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The session query and the role-switch mutation."
+    },
+    {
+     "path": "src/lib/api/fetcher.ts",
+     "lineStart": null,
+     "lineEnd": null,
+     "why": "The one function every hook calls to reach the API."
+    }
+   ]
+  },
+  {
+   "id": "x-q13",
+   "target": "seed:quests:organized-experiment-ww10/quiz/affb63f1672f67fd",
+   "phase": "after",
+   "title": "Why a role switch leaves the old detail on screen",
+   "body": "The switch's `onSuccess` invalidates two keys, `[\"session\"]` and `[\"applications\"]`. React Query compares a filter key with each cached key element by element from the front, so `[\"applications\"]` matches the list and nothing else: the detail lives under `[\"application\", id]`, whose first element is a different string. The detail query is not refetched and not even marked stale. Nothing else asks for it again, so the page keeps rendering the data fetched with the officer's cookie, while the buttons recompute from the new role.\n\n- *A not-found state* would need the detail to refetch under the borrower's cookie.\n- *An empty page* would need the cache cleared; a new cookie does not touch it.\n- *The borrower's view* is what a correct invalidation (or `queryClient.clear()` on login) would produce.",
+   "excerpts": [
+    {
+     "path": "src/hooks/use-session.ts",
+     "lineStart": 48,
+     "lineEnd": 49,
+     "quote": "queryClient.invalidateQueries({ queryKey: [\"session\"] }), queryClient.invalidateQueries({ queryKey: [\"applications\"] }),"
+    },
+    {
+     "path": "src/hooks/use-application-detail.ts",
+     "lineStart": 127,
+     "lineEnd": 127,
+     "quote": "queryKey: [\"application\", applicationId],"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q14",
+   "target": "seed:quests:organized-experiment-ww10/quiz/d1cf3d4a8c54d52d",
+   "phase": "after",
+   "title": "The page's button rules are a drifted copy of the role table",
+   "body": "The detail page decides which buttons to enable from its own flags, and `canManageVerifications` lets UNDERWRITER in. The server decides from the role table, where only LOAN_OFFICER holds `application:manage-verifications`. The verifications route declares that permission, and `createRouteHandler` asserts it before the handler runs, so the underwriter's click comes back **403** without the service ever being called.\n\nThe lesson is about where authority lives. UI gating is a convenience; the route's declared permission is the rule. Two hand-maintained copies of one matrix drift, which is why the build journal lists this mismatch.\n\n- *201* would need UNDERWRITER in the role table, not just in the page's flag.\n- *404* would come from the visibility lookup, which never runs after the 403.\n- *400* would come from the body schema, which is parsed inside the handler, after the permission check.",
+   "excerpts": [
+    {
+     "path": "src/components/applications/application-detail-client.tsx",
+     "lineStart": 85,
+     "lineEnd": 86,
+     "quote": "const canManageVerifications = session?.role === \"LOAN_OFFICER\" || session?.role === \"UNDERWRITER\";"
+    },
+    {
+     "path": "src/app/api/applications/[applicationId]/verifications/route.ts",
+     "lineStart": 13,
+     "lineEnd": 13,
+     "quote": "permission: \"application:manage-verifications\","
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/lib/auth/permissions.ts",
+     "lineStart": 34,
+     "lineEnd": 54,
+     "why": "The role table the server actually enforces."
+    }
+   ]
+  },
+  {
+   "id": "x-q15",
+   "target": "seed:quests:organized-experiment-ww10/quiz/69ed3d385effa735",
+   "phase": "after",
+   "title": "Invalidation refetches what is on screen, and only that",
+   "body": "The workflow hook throws the POST's response away: its `onSuccess` only invalidates the detail key and the list key. By default `invalidateQueries` marks every matching query stale but refetches only the **active** ones, those with a mounted observer. On the detail page that is the detail query, so the browser sends one GET for it. The list's observer unmounted with the dashboard, so the list is just flagged and refetches when the dashboard mounts again.\n\nThe decision route had already returned the full detail, so a `setQueryData` with the response would have saved that GET.\n\n- *Two GETs* would need the list query to be mounted on the detail page.\n- *None* describes `setQueryData`, which no hook calls.\n- *One for the list* reverses which query is active; the detail page never reads the list.",
+   "excerpts": [
+    {
+     "path": "src/hooks/use-application-detail.ts",
+     "lineStart": 116,
+     "lineEnd": 120,
+     "quote": "onSuccess: async () => { await Promise.all([ queryClient.invalidateQueries({ queryKey: [\"application\", applicationId] }),"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "docs/learning/concepts-demonstrated.md",
+     "lineStart": 81,
+     "lineEnd": 87,
+     "why": "The repo's own review of the React Query boundary."
+    }
+   ]
+  },
+  {
+   "id": "x-q16",
+   "target": "seed:quests:organized-experiment-ww10/quiz/d01b3cfeecd52d7e",
+   "phase": "after",
+   "title": "A detail page with no error state shows loading forever",
+   "body": "The App Router page is a server component that only awaits `params` and renders the client component; it loads no data and checks no session. All data comes from the client query. When the API answers 404, `apiFetch` throws, the query ends in its error state, and its data stays undefined because it never succeeded. The component has one branch for that case, the Loading block, and no component in `src/` reads a query error. So the borrower sees Loading application... indefinitely.\n\n- *A not-found message* would need the component to read `detailQuery.error`.\n- *A redirect* would need the server page to fetch or check access, and it does neither.\n- *Hidden parties* would need the presenter to run, but the service refuses before presenting.",
+   "excerpts": [
+    {
+     "path": "src/components/applications/application-detail-client.tsx",
+     "lineStart": 76,
+     "lineEnd": 76,
+     "quote": "Loading application..."
+    },
+    {
+     "path": "src/app/applications/[applicationId]/page.tsx",
+     "lineStart": 10,
+     "lineEnd": 10,
+     "quote": "return <ApplicationDetailClient applicationId={applicationId} />;"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q17",
+   "target": "seed:quests:organized-experiment-ww10/quiz/fbfe62113d51f3ef",
+   "phase": "after",
+   "title": "An 8,999-value id space under a unique index",
+   "body": "Public ids are `APP-` plus `randomInt(1000, 9999)`, and `randomInt` excludes its upper bound, so there are 8,999 possible ids. The column is unique. Once about half the space is used, a random draw lands on a taken id about half the time; even at 112 rows the chance that some pair has collided is already near 50%. The insert then fails with Prisma's unique-constraint error, which the wrapper does not recognise, so it logs it and answers 500. The transaction rolls back, so no half-created file or audit row is left.\n\n- *A retry* would need a loop around the insert; there is none.\n- *409* would need the wrapper to map Prisma's P2002; it maps only ZodError and AppError.\n- *A suffix* would need id generation that checks the table first.",
+   "excerpts": [
+    {
+     "path": "src/lib/utils/public-id.ts",
+     "lineStart": 12,
+     "lineEnd": 12,
+     "quote": "return `APP-${randomInt(1000, 9999)}`;"
+    },
+    {
+     "path": "prisma/schema.prisma",
+     "lineStart": 91,
+     "lineEnd": 91,
+     "quote": "publicId String @unique"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q18",
+   "target": "seed:quests:organized-experiment-ww10/quiz/c57d03dd8e7925c2",
+   "phase": "after",
+   "title": "A retried create is a second create",
+   "body": "The create flow has no way to recognise a retry. The form disables its button only while the mutation is pending and never clears its fields, so after a dropped response the same values can be sent again. The schema carries no request id, and the service always inserts a new application with a newly drawn public id, its parties and an audit row. The only unique columns on an application are its id and public id, so the database has nothing to refuse either. The result is two files.\n\nThe usual fix is an idempotency key: the client generates it once per form, sends it with every attempt, and the server stores it under a unique index and returns the first result on a repeat.\n\n- No step matches on parties, no key is sent, and no index covers purpose or amount.",
+   "excerpts": [
+    {
+     "path": "src/components/dashboard/create-application-form.tsx",
+     "lineStart": 62,
+     "lineEnd": 62,
+     "quote": "disabled={createMutation.isPending}"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/services/application-command-service.ts",
+     "lineStart": 174,
+     "lineEnd": 231,
+     "why": "The create transaction: application, parties and audit row."
+    }
+   ]
+  },
+  {
+   "id": "x-q19",
+   "target": "seed:quests:organized-experiment-ww10/quiz/117fc227feef70d9",
+   "phase": "after",
+   "title": "Three copies of one input type, and only one of them checked",
+   "body": "The create payload is described three times: the zod schema (whose inferred type the route gets from `parse`), the service's hand-written `input` type, and the client's `CreateApplicationInput`. Adding a required field to the schema changes only the first. Passing the wider parsed object to the service's narrower parameter is legal TypeScript, because excess-property checks apply to object literals only, and the form is typed by its own copy, so `tsc` reports nothing. At runtime the form's body lacks the field, `parse` throws, and every create gets a 400.\n\nDeriving the other two from the schema with `z.infer` would turn this into a compile error in the form.\n\n- *tsc fails in the form*: the form never imports the schema.\n- *tsc fails in the service*: a wider argument is allowed.\n- *Stored as null*: parse rejects first, and there is no column.",
+   "excerpts": [
+    {
+     "path": "src/app/api/applications/route.ts",
+     "lineStart": 27,
+     "lineEnd": 27,
+     "quote": "const body = createApplicationSchema.parse(await request.json());"
+    },
+    {
+     "path": "src/services/application-command-service.ts",
+     "lineStart": 152,
+     "lineEnd": 154,
+     "quote": "async createApplication( session: AppSession, input: {"
+    }
+   ],
+   "readMore": [
+    {
+     "path": "src/hooks/use-applications.ts",
+     "lineStart": 36,
+     "lineEnd": 54,
+     "why": "The client's own copy of the create payload type."
+    }
+   ]
+  },
+  {
+   "id": "x-q20",
+   "target": "seed:quests:organized-experiment-ww10/quiz/72e2de1ae658547d",
+   "phase": "after",
+   "title": "Generated types flow to the server, not to the browser",
+   "body": "The create schema validates `productType` with `z.enum(LoanProductType)`, and `LoanProductType` is imported from the generated Prisma client. Regenerating after adding JUMBO therefore widens server validation with no further edit, and the pushed schema lets the insert store it. The browser does not import `@prisma/client`: its payload type spells out four products and the select renders four hard-coded options. So the API accepts JUMBO while the form can never send it, and nothing fails to compile.\n\nThis is the mirror image of the previous ripple: generated types keep the server honest automatically, while hand-written client copies go quietly out of date.\n\n- *The form* is not built from the enum.\n- *Neither* ignores the import on the schema line.\n- *Both* assumes client code imports Prisma's types; it does not.",
+   "excerpts": [
+    {
+     "path": "src/lib/validation/application-schemas.ts",
+     "lineStart": 22,
+     "lineEnd": 22,
+     "quote": "productType: z.enum(LoanProductType),"
+    },
+    {
+     "path": "src/hooks/use-applications.ts",
+     "lineStart": 37,
+     "lineEnd": 37,
+     "quote": "productType: \"CONVENTIONAL\" | \"FHA\" | \"VA\" | \"HELOC\";"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q21",
+   "target": "seed:quests:organized-experiment-ww10/quiz/4158930d8356efb0",
+   "phase": "after",
+   "title": "The cookie names the user, the database names the role",
+   "body": "The session cookie holds only the user id and an HMAC of that id. On every request the route wrapper resolves the session again: it checks the signature, loads the user row by id and builds the session from that row, role included. A role edited in the database therefore applies to the very next API call, with the new permissions and the new visibility filter.\n\nThat is the trade against a token that embeds claims: one primary-key lookup per request buys instant role changes and revocation by deleting the user.\n\n- *At the next login* would be true of a token that carries the role.\n- *Never* misreads the signature, which covers the id alone.\n- *The browser's session query* changes what the UI displays, not what the server enforces.",
+   "excerpts": [
+    {
+     "path": "src/lib/auth/session.ts",
+     "lineStart": 28,
+     "lineEnd": 29,
+     "quote": "const signature = createSignature(userId); return `${userId}.${signature}`;"
+    },
+    {
+     "path": "src/lib/auth/session.ts",
+     "lineStart": 67,
+     "lineEnd": 67,
+     "quote": "const user = await userRepository.findById(userId);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q22",
+   "target": "seed:quests:organized-experiment-ww10/quiz/46deb1c794585725",
+   "phase": "after",
+   "title": "Parse first, check status second loses the status",
+   "body": "`apiFetch` calls `response.json()` before it looks at `response.ok`. The app's own routes always answer JSON, so this works for every error they produce. A proxy's HTML 502 page is not JSON: `json()` rejects with a SyntaxError, the function exits there, and the `ApiClientError` that would carry the status is never built. The hook's error is a parse error with no status, so a caller cannot tell a gateway failure from a broken response.\n\nChecking `ok` and the content type before parsing, and falling back to the status text, keeps the 502.\n\n- *ApiClientError with 502* is what the code would produce if it checked `ok` first.\n- *The HTML as the message* would need a text fallback; there is none.\n- *No error* would need a catch around `json()`.",
+   "excerpts": [
+    {
+     "path": "src/lib/api/fetcher.ts",
+     "lineStart": 27,
+     "lineEnd": 27,
+     "quote": "const payload = (await response.json()) as { error?: string };"
+    },
+    {
+     "path": "src/lib/api/fetcher.ts",
+     "lineStart": 30,
+     "lineEnd": 30,
+     "quote": "throw new ApiClientError(payload.error ?? \"Request failed.\", response.status);"
+    }
+   ],
+   "readMore": []
+  },
+  {
+   "id": "x-q23",
+   "target": "seed:quests:organized-experiment-ww10/quiz/e5a2cbaed4c51e71",
+   "phase": "after",
+   "title": "An upsert's update branch decides what a repeat request changes",
+   "body": "The command hands PENDING and sequence 0 to the repository, but the repository writes them through an upsert keyed on the (application, type) unique index. Those values are used only when no row exists. When CREDIT_PULL already exists, the update branch runs, and it sets `providerReference` and `startedAt` and nothing else. The verification stays PASSED at sequence 5 with the new reference. The command still writes its audit row and re-runs the reconcile, which finds nothing new.\n\nThat makes the request safe to repeat, but it also means re-requesting a check cannot restart it; only a provider event with a high enough sequence can change its status.\n\n- *PENDING at 0* is the create branch, which does not run.\n- *Two rows* are ruled out by the unique index.\n- *409* would need a refusal; the upsert simply updates.",
+   "excerpts": [
+    {
+     "path": "src/repositories/application-repository.ts",
+     "lineStart": 177,
+     "lineEnd": 180,
+     "quote": "update: { providerReference: data.providerReference, startedAt: data.startedAt, },"
+    }
+   ],
+   "readMore": []
   }
  ]
 }
