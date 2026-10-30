@@ -18,7 +18,7 @@
    "kind": "explain-back",
    "questions": [
     {
-     "prompt": "DESIGN IT — [senior] object-level sharing and permissions for collections of saved links (organized-study-linkwarden, linkwarden/fabledocs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md). Scenario: a bookmarking and web-archiving service has 25,000 users, 40,000 collections and 6 million saved links, each link with preserved copies (screenshot, PDF, single-file HTML) stored on disk. One team collection is shared with 30 members at mixed capability levels; some collections are flipped public on the open web; and when an owner removes a member, the removal must take effect within a minute. Write your design before you look: how membership and capabilities are stored, how each link or collection operation decides whether the caller may proceed, what making a collection public exposes, whose rights govern moving a link between collections, how removing a member takes effect, and how the preserved files on disk are protected. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "prompt": "DESIGN IT — [senior] object-level sharing and permissions for collections of saved links (organized-study-linkwarden, linkwarden/fabledocs/upskill/03-architecture-and-patterns/03-validation-auth-and-permissions.md). Scenario: a bookmarking and web-archiving service has 25,000 users, 40,000 collections and 6 million saved links, each link with preserved copies (screenshot, PDF, single-file HTML) stored on disk. One team collection, which holds a dozen nested sub-collections, is shared with 30 members at mixed capability levels; some collections are flipped public on the open web; and when an owner removes a member, the removal must take effect within a minute. Write your design before you look: how membership and capabilities are stored, how each link or collection operation decides whether the caller may proceed, how rights reach nested collections, what making a collection public exposes, whose rights govern moving a link between collections, how removing a member takes effect, and how the preserved files on disk are protected. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
      "keyPoints": [
       {
        "text": "[w3] Membership is one row per user and collection carrying three capability booleans (create, update, delete), while the owner is a column on the collection itself and holds every right without a membership row.",
@@ -53,11 +53,11 @@
        }
       },
       {
-       "text": "[w3] A link has no rights of its own; it takes its collection's, so a move changes who can see it, and the code allows a move only for someone who owns the source collection and can reach the destination, while plain editors may change a link in place but not relocate it.",
+       "text": "[w3] A link has no rights of its own; it takes its collection's, so a move changes who can see it. The code lets only the source collection's owner relocate a link, and on the destination side it checks no more than some membership there (the owner id the request carries is not compared once an id is given), so an owner can drop links into a collection where they hold no create right; plain editors may change a link in place but not move it. The design requires the create capability on the destination.",
        "cite": {
         "path": "linkwarden/apps/web/lib/api/controllers/links/linkId/updateLinkById.ts",
-        "lineStart": 88,
-        "lineEnd": 101
+        "lineStart": 66,
+        "lineEnd": 96
        }
       },
       {
@@ -77,11 +77,11 @@
        }
       },
       {
-       "text": "[w2] The capability triplet needs rules: the update schema accepts any combination of the three booleans, so a member can hold delete without update; define an order (view, create, update, delete) or a role, and reject combinations outside it when members are saved.",
+       "text": "[w2] Nested collections copy rights down rather than inherit them: a sub-collection belongs to the root's owner, and members reach it only through rows of their own, which an owner's 'apply to sub-collections' save rewrites by copying the parent's list. At creation the code even merges the member lists of every ancestor and then never writes them, so a new sub-collection is visible only to the root owner and its creator. Choose between copy-down (cheap checks, drift on every later change) and inherit-at-read (a walk up the tree per check).",
        "cite": {
-        "path": "linkwarden/packages/lib/schemaValidation.ts",
-        "lineStart": 230,
-        "lineEnd": 236
+        "path": "linkwarden/apps/web/lib/api/controllers/collections/postCollection.ts",
+        "lineStart": 61,
+        "lineEnd": 105
        }
       }
      ]
@@ -139,11 +139,11 @@
      "prompt": "TRADE-OFF HANDBACK — defend your sharing model against the alternatives: per-member capability booleans versus a role enum versus an ACL table of grants; public by an unguessable link versus public by a flag; permission checks in every controller versus a central policy layer; copying permissions onto a link when it moves versus deriving them from the destination; and short-lived signed archive URLs versus session-checked file serving. For each, say what you bought and what it cost.",
      "keyPoints": [
       {
-       "text": "[w3] Booleans are flexible and cheap to query, but allow nonsense combinations and need a column per new capability; a role enum (viewer, contributor, editor, manager) is a clear ladder users understand, at the cost of custom mixes; an ACL table of grants supports per-link shares, groups and expiry, at the cost of heavier queries and harder reasoning.",
+       "text": "[w3] Booleans are flexible and cheap to query, but accept nonsense combinations (the member schema takes delete without update) and need a column per new capability; a role enum (viewer, contributor, editor, manager) is a clear ladder users understand, at the cost of custom mixes; an ACL table of grants supports per-link shares, groups and expiry, at the cost of heavier queries and harder reasoning.",
        "cite": {
-        "path": "linkwarden/packages/prisma/schema.prisma",
-        "lineStart": 156,
-        "lineEnd": 158
+        "path": "linkwarden/packages/lib/schemaValidation.ts",
+        "lineStart": 230,
+        "lineEnd": 236
        }
       },
       {
