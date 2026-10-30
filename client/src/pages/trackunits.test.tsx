@@ -153,13 +153,13 @@ describe('track units: campaign-less track (primary)', () => {
       expect(rows()).toHaveLength(136);
     });
 
-    it('the status region announces the settled count once typing pauses, not per keystroke', async () => {
+    it('the status region settles on the final count after typing', async () => {
       const { user, count, toolbar } = await open136();
       await user.type(toolbar.getByRole('searchbox', { name: 'Filter units' }), 'baz');
-      // the visible line follows every keystroke; the live region has not spoken yet
+      // the visible line follows every keystroke (the per-keystroke silence is unit-tested with fake
+      // timers in useDebouncedValue.test.ts; on real timers only the settled text is asserted)
       expect(count).toHaveTextContent(`Showing 2 of 136 units · ${GENERATED_DONE} done`);
-      expect(status()).toHaveTextContent(`Showing 136 of 136 units · ${GENERATED_DONE} done`);
-      // ~500 ms after the last keystroke it holds the final count
+      // after the debounce the region holds the final count
       await waitFor(() => expect(status()).toHaveTextContent(`Showing 2 of 136 units · ${GENERATED_DONE} done`), { timeout: 2000 });
     });
 
