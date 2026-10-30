@@ -1,4 +1,4 @@
-# Quarantine — explainback/stockade--astraupskill-02-CONCEPTS.md
+# Quarantine — explainback/stockade--docs-ARCHITECTURE.md
 
 Written by the seed factory. These candidates FAILED their deterministic validator and are
 never shipped. Never fix them by weakening the validator; fix the source and re-seed.
