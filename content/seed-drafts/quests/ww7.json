@@ -449,16 +449,21 @@
      "path": "src/lib/http/route-helpers.ts",
      "lineStart": 48,
      "lineEnd": 62
+    },
+    {
+     "path": "src/services/workflow-definition-service.ts",
+     "lineStart": 84,
+     "lineEnd": 87
     }
    ],
    "prompt": "An operator renames their own ACTIVE workflow, which has already run twice, and saves the form unchanged otherwise. What does PATCH /api/workflows/:id return?",
    "answer": "500, as deleting its steps hits a Restrict foreign key",
    "distractors": [
     "200, with new steps and the old runs' history deleted",
-    "200, with the steps updated in place by their positions",
+    "500, as the activation re-check rejects the edited workflow",
     "409, as a workflow that has runs is locked from edits"
    ],
-   "explanation": "updateWorkflow replaces the steps wholesale: inside a transaction it calls tx.workflowStep.deleteMany({ where: { workflowId } }) and then recreates them (workflow-repository.ts:134-136 and on). Every run left WorkflowStepRun rows that point at the old steps, and that relation is onDelete: Restrict (schema.prisma:160), so PostgreSQL refuses the delete and the whole transaction rolls back. Prisma's error is not an AppError, so executeRoute answers 500 with its generic message (route-helpers.ts:48-62). A probe with Prisma 6.19.3 (package.json allows ^6.6.0; there is no lockfile) on PostgreSQL 18 rejected the same deleteMany with a foreign-key error and left the steps untouched. Nothing updates steps in place, cascades the history away, or returns 409; in effect a workflow that has run can no longer be edited."
+   "explanation": "updateWorkflow replaces the steps wholesale: inside a transaction it calls tx.workflowStep.deleteMany({ where: { workflowId } }) and then recreates them (workflow-repository.ts:134-136 and on). Every run left WorkflowStepRun rows that point at the old steps, and that relation is onDelete: Restrict (schema.prisma:160), so PostgreSQL refuses the delete and the whole transaction rolls back. Prisma's error is not an AppError, so executeRoute answers 500 with its generic message (route-helpers.ts:48-62). A probe with Prisma 6.19.3 (package.json allows ^6.6.0; there is no lockfile) on PostgreSQL 18 rejected the same deleteMany with a foreign-key error and left the steps untouched. The activation re-check passes for a rename, and when it does fail it throws a 422 AppError (workflow-definition-service.ts:84-87), not a 500. Nothing cascades the history away or returns 409; in effect a workflow that has run can no longer be edited."
   },
   {
    "id": "q14-status-change-resets-form",
@@ -530,7 +535,7 @@
     "SUCCEEDED, as the worker pushes the change to the page",
     "RUNNING, as the badge follows the step that is active"
    ],
-   "explanation": "A run is created QUEUED (workflow-run-repository.ts:39-48). The trigger mutation then invalidates [\"workflow-runs\", id] once (workflow-builder.tsx:161-171), so the panel fetches the run while it is still QUEUED. After that the runs query has no refetchInterval (use-workflow.ts:14-20), the client sets refetchOnWindowFocus false and a 30 s staleTime (app-providers.tsx:8-17), and there is no socket or server push. Staleness only allows a refetch on the next mount; it never starts one. So the badge stays QUEUED until the page remounts or another mutation invalidates the key. A refetchInterval while any run is QUEUED or RUNNING would fix it."
+   "explanation": "A run is created QUEUED (workflow-run-repository.ts:39-48). The trigger mutation then invalidates [\"workflow-runs\", id] once (workflow-builder.tsx:161-171), so the panel fetches the run while it is still QUEUED. After that the runs query has no refetchInterval (use-workflow.ts:14-20), the client sets refetchOnWindowFocus false and a 30 s staleTime (app-providers.tsx:8-17), and there is no socket or server push. Staleness never starts a request by itself: only a mount, a network reconnect or an invalidation does, and none happens while the operator watches. So the badge stays QUEUED until the page remounts or another mutation invalidates the key. A refetchInterval while any run is QUEUED or RUNNING would fix it."
   },
   {
    "id": "q16-status-error-not-shown",
@@ -607,7 +612,7 @@
     "Nothing, as B's workflow answers 404 for A, as a manual run does",
     "It gets a run only if A has been made an admin or an analyst"
    ],
-   "explanation": "The ingest route requires only workflow:execute, which OPERATOR has, and passes the actor along (ingest/route.ts:6-10). ingestEvent calls listActiveEventWorkflows(eventName) (workflow-dispatch-service.ts:62-68), whose where clause is just ACTIVE, EVENT and the event name, with no scope or owner parameter (workflow-repository.ts:170-183). Every matching workflow in the system gets a run, B's included, and the run is credited to A. The manual trigger path is different: it loads with the caller's visibility scope first and answers 404 for another operator's workflow. Authorization sits on that read path but not on the event fan-out."
+   "explanation": "The ingest route requires only workflow:execute, which OPERATOR has, and passes the actor along (ingest/route.ts:6-10). ingestEvent calls listActiveEventWorkflows(eventName) (workflow-dispatch-service.ts:62-68), whose where clause is just ACTIVE, EVENT and the event name, with no scope or owner parameter (workflow-repository.ts:170-183). Every matching workflow in the system gets a run, B's included, and the run is credited to A. The manual trigger path loads the workflow through the caller's visibility scope first; the event path never does. Authorization sits on that read path but not on the event fan-out."
   },
   {
    "id": "q18-event-fanout-partial-failure",
