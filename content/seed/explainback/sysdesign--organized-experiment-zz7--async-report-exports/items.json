@@ -37,7 +37,7 @@
        }
       },
       {
-       "text": "[w3] The job runs from its own copy of the definition, re-parsed through the same zod filter schema that validated the save. A Json column does not keep types: the schema coerces the dates to Date objects, but what comes back from the database is text, so a runner that trusts a TypeScript cast is filtering with strings.",
+       "text": "[w3] The job should run from its own copy of the definition, re-parsed through the same zod filter schema that validated the save; as built the runner ignores the copy, reads the live report's filters and only casts them. A Json column does not keep types: the schema coerces the dates to Date objects, but what comes back from the database is text, so a runner that trusts a TypeScript cast is filtering with strings.",
        "quote": "JSON has no date type, so the `Date` objects are stored as ISO strings."
       },
       {
@@ -49,7 +49,7 @@
        }
       },
       {
-       "text": "[w2] Success must mean a file exists. As built a finished job records a generated file name, the row count and a 10-row preview, and that preview overwrites the definition copy, so there is no file and no record of what was asked for. Write the file to object storage under a tenant-and-job key, keep size and checksum on the job, hand out a short-lived signed URL only after re-checking the downloader's rights, and let a lifecycle rule delete it after 7 days. The storage piece is a supposition: the repo has none.",
+       "text": "[w2] Success must mean a file exists. As built a finished job records a generated file name, the row count and a 10-row preview, and that preview overwrites the definition copy, so there is no file, and the job no longer records which filters, dimensions and metrics it was queued with. Write the file to object storage under a tenant-and-job key, keep size and checksum on the job, hand out a short-lived signed URL only after re-checking the downloader's rights, and let a lifecycle rule delete it after 7 days. The storage piece is a supposition: the repo has none.",
        "cite": {
         "path": "src/services/exportJobService.ts",
         "lineStart": 89,
@@ -65,7 +65,7 @@
        }
       },
       {
-       "text": "[w2] The file has to survive Excel. Amounts leave Prisma's decimal type as JavaScript numbers, and the vendor-performance report adds them up as floats, so a total of 0.10 and 0.20 lands in the file as 0.30000000000000004: sum in SQL or with a decimal type and write amounts as strings. Quote fields that hold commas, quotes or line breaks, and neutralise any user-typed cell that begins with =, +, - or @, because vendor names are user input and a spreadsheet executes them as formulas.",
+       "text": "[w2] The file has to survive Excel. Amounts leave Prisma's decimal type as JavaScript numbers, and the vendor-performance report adds them up as floats, so a total of 0.10 and 0.20 lands in the export as 0.30000000000000004: sum in SQL or with a decimal type and write amounts as strings. Quote fields that hold commas, quotes or line breaks, and neutralise any user-typed cell that begins with =, +, - or @, because vendor names are user input and a spreadsheet executes them as formulas.",
        "cite": {
         "path": "src/repositories/dashboardRepository.ts",
         "lineStart": 171,
@@ -83,7 +83,7 @@
      ]
     },
     {
-     "prompt": "PRE-MORTEM — month-end close, first hour. Two analysts trigger the runner within a second of each other and the auditor finds two 'completed' records for one export, both crediting someone who never asked for it; finance's March-only spend export contains five years of orders; a report edited at 09:05 changes what an export queued at 09:00 contains; a deploy at 09:10 leaves 40 jobs showing RUNNING forever and the dashboard's pending count never drops; the 900,000-order tenant's export makes the web instance stall for everyone on it; and a failed job shows a raw database error to every report reader. What breaks, how does each show up, and what in your design prevents it?",
+     "prompt": "PRE-MORTEM — month-end close, first hour. Two analysts trigger the runner within a second of each other and the auditor finds two 'completed' records for one export, both crediting someone who never asked for it; finance's March-only spend export contains five years of orders; a report edited at 09:05 changes what an export queued at 09:00 contains; a deploy at 09:10 leaves 40 jobs showing RUNNING forever and the dashboard's 'exports running' count never drops; the 900,000-order tenant's export makes the web instance stall for everyone on it; and a failed job shows a raw database error to every report reader. What breaks, how does each show up, and what in your design prevents it?",
      "keyPoints": [
       {
        "text": "[w3] The double run is the missing claim seen from the audit trail: both runners mark the same rows RUNNING and SUCCEEDED by id with no status condition, so each job completes twice and gets two completion audit rows, and those rows name the runner as actor rather than the person who queued it. The conditional claim fixes the duplicate; record the requester on the job's audit rows and the runner separately.",
@@ -110,7 +110,7 @@
        }
       },
       {
-       "text": "[w2] The 40 stuck jobs have nothing that notices them: RUNNING is set with a start time, no lease, heartbeat or timeout exists, and nothing ever moves a RUNNING job back. The dashboard counts PENDING and RUNNING together as 'pending', so the number never drops. A sweeper re-queues jobs whose lease expired, up to a retry limit, then fails them.",
+       "text": "[w2] The 40 stuck jobs have nothing that notices them: RUNNING is set with a start time, no lease, heartbeat or timeout exists, and nothing ever moves a RUNNING job back. The dashboard counts PENDING and RUNNING together and shows them as 'exports running', so the number never drops. A sweeper re-queues jobs whose lease expired, up to a retry limit, then fails them.",
        "cite": {
         "path": "src/repositories/dashboardRepository.ts",
         "lineStart": 99,
@@ -167,7 +167,7 @@
        }
       },
       {
-       "text": "[w2] A runner each tenant triggers for itself can never let one tenant delay another and keeps every run inside one tenant's scope, but nothing runs unless someone triggers it. One shared worker runs everything promptly, but needs fair scheduling (round-robin across tenants, a per-tenant concurrency cap) or a tenant that queues 300 exports at close pushes every other tenant's exports behind its own.",
+       "text": "[w2] A runner each tenant triggers for itself never queues one tenant's jobs behind another's (though, run inside the web tier, they still share its CPU and memory) and keeps every run inside one tenant's scope, but nothing runs unless someone triggers it. One shared worker runs everything promptly, but needs fair scheduling (round-robin across tenants, a per-tenant concurrency cap) or a tenant that queues 300 exports at close pushes every other tenant's exports behind its own.",
        "cite": {
         "path": "src/repositories/exportJobRepository.ts",
         "lineStart": 44,
@@ -175,7 +175,7 @@
        }
       },
       {
-       "text": "[w1] As built deleting a saved report cascades to its export jobs, so the record of who exported what disappears with it. Keeping history (a nullable report link or a soft-deleted report) preserves the audit answer at the cost of rows that point at a report nobody can open; the files themselves still expire on their own schedule.",
+       "text": "[w1] As built the schema cascades a saved report's deletion to its export jobs (no route deletes reports yet), so the job rows, with their requester and filter copy, would go with it; only the audit rows (actor, job id, format) would survive, without the filters. Keeping history (a nullable report link or a soft-deleted report) preserves the audit answer at the cost of rows that point at a report nobody can open; the files themselves still expire on their own schedule.",
        "cite": {
         "path": "prisma/schema.prisma",
         "lineStart": 352,
