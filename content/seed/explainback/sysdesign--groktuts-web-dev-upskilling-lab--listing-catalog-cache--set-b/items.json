@@ -1,0 +1,171 @@
+{
+ "format": "bootquest-seed-pack@1",
+ "generator": "explainback",
+ "name": "groktuts-web-dev-upskilling-lab--system-design-deep-dives.md--set-b",
+ "items": [
+  {
+   "key": "seed:explainback:groktuts-web-dev-upskilling-lab/explain-back/90cd5722062338a9",
+   "provenance": {
+    "repo": "groktuts-web-dev-upskilling-lab",
+    "sha": "abb2d7ba56c1f7534f7ff08054fcb5e055522f73",
+    "path": "system-design-deep-dives.md",
+    "lines": {
+     "start": 1,
+     "end": 658
+    }
+   },
+   "citations": [],
+   "kind": "explain-back",
+   "questions": [
+    {
+     "prompt": "DESIGN IT — [mid] the write side of a ticket dashboard: workflow, permissions, bulk changes and an audit trail (groktuts-web-dev-upskilling-lab, system-design-deep-dives.md). Scenario: the Support Ticket Dashboard is sold to a regulated customer, a 300-agent support organisation with team leads and read-only auditors. The contract says: tickets move only along an agreed workflow (open, in progress, resolved, and a reopen within 14 days that needs a reason); agents change only tickets assigned to them or their team's unassigned queue, leads may reassign within their team, auditors only read; every change is recorded with who, when, and the values before and after, and kept for 7 years; a lead can reassign up to 5,000 tickets at once when an agent leaves; and a customer's erasure request must be honoured within 30 days. Before you look, design the API for changes, where validation and permission checks live, how the audit record is written, how a bulk reassignment runs, and how erasure coexists with a 7-year audit trail. Then tick the checkpoints you covered and add up the weights (suggested pass: 70% with every [w3] hit)",
+     "keyPoints": [
+      {
+       "text": "[w3] The workflow is a rule the server owns: an explicit table of allowed moves (resolved back to open only within 14 days and with a reason). The current dashboard has no such rule at all: its status action overwrites the status with whatever value it is given, from any status.",
+       "cite": {
+        "path": "projects/support-ticket-dashboard/src/ticketReducer.ts",
+        "lineStart": 22,
+        "lineEnd": 27
+       }
+      },
+      {
+       "text": "[w3] Changes go through named commands (a transition with its target and reason, an assignment, a reassignment) rather than one endpoint that patches any field, so each command carries its own permission rule and its own validation, and its audit entry says what happened in domain words.",
+       "quote": "The ticket domain cares deeply about status workflows."
+      },
+      {
+       "text": "[w3] Every command is validated with a schema at the server boundary. The project's only validation today is the form's three-character title check, which is user experience: the reducer, an integration script or a hand-made request never passes through that form.",
+       "cite": {
+        "path": "projects/support-ticket-dashboard/src/components/TicketForm.tsx",
+        "lineStart": 14,
+        "lineEnd": 21
+       }
+      },
+      {
+       "text": "[w3] Permission is decided per action on the server, from the signed-in actor's role and their relation to the ticket (an agent's own or team-queue ticket, a lead's team, an auditor never), in one shared policy function that every handler calls, so the database's tenant filter is a backstop and not the only check.",
+       "cite": {
+        "path": "system-design-deep-dives.md",
+        "lineStart": 204,
+        "lineEnd": 212
+       }
+      },
+      {
+       "text": "[w3] The audit entry is written in the same transaction as the change it describes, with the actor taken from the session, the time, and the before and after values; an entry written later by a job can be lost or arrive out of order, and then the trail is no longer evidence.",
+       "cite": {
+        "path": "system-design-deep-dives.md",
+        "lineStart": 447,
+        "lineEnd": 450
+       }
+      },
+      {
+       "text": "[w3] A bulk reassignment is a background job, not one request: the API stores the request (who asked, the filter, the target, the list of ticket ids) and returns at once; a worker then works through it in chunks of a few hundred, each chunk its own transaction with one audit entry per ticket, records its progress so it can resume, and sends each new assignee one digest instead of hundreds of notifications.",
+       "quote": "Use a job queue (BullMQ with Redis in Node, Celery in Python, Hangfire or MassTransit in .NET)."
+      },
+      {
+       "text": "[w2] Each ticket is re-checked when the worker reaches it, not only when the lead pressed the button: a ticket resolved or moved to another team since then is skipped and listed in the job's result rather than overwritten.",
+       "quote": "are perfect background job candidates"
+      },
+      {
+       "text": "[w2] Erasure and a 7-year trail coexist when the trail stores references rather than personal data: the customer's name and email live in one place, which erasure deletes or pseudonymises, while audit entries keep only ids and field changes; encrypting each customer's personal data under its own key, and deleting that key, also reaches copies in backups.",
+       "quote": "Compliance requirements (GDPR data export, audit logs for every ticket change)."
+      }
+     ]
+    },
+    {
+     "prompt": "PRE-MORTEM — the first quarter after launch: an agent leaves on a Friday and a lead reassigns 4,800 tickets in a single request that times out after 30 seconds; an integration script posts tickets straight to the API and tickets with empty titles get saved; an auditor discovers they can move tickets, because the UI hid the controls but the API never checked; one agent has the dashboard open in two tabs and resolves a ticket in one while editing it in the other; the audit export lists changes with no actor; and a customer's erasure request is closed as done while their email still appears in old audit entries. What breaks, how does each show up, and what in your design prevents it?",
+     "keyPoints": [
+      {
+       "text": "[w3] The single 4,800-ticket request holds one transaction and its row locks for the whole run, blocks agents editing those tickets, and then times out without telling the lead which part committed, so a retry may double the notifications. As a chunked job, each chunk is idempotent: reassigning a ticket that already has the target assignee changes nothing and writes no second audit entry, so re-running after a crash is safe.",
+       "quote": "Design for at-least-once or exactly-once semantics."
+      },
+      {
+       "text": "[w3] Hiding a control is not authorization: every row of the current list offers every status to whoever is looking, and any request that reaches the API is decided only by the API. The server refuses the auditor's command, and it can also send each ticket's allowed actions so the UI greys out what the policy would refuse.",
+       "cite": {
+        "path": "projects/support-ticket-dashboard/src/components/TicketList.tsx",
+        "lineStart": 21,
+        "lineEnd": 33
+       }
+      },
+      {
+       "text": "[w3] The empty titles came in through a door with no schema. The document's own Node sample is labelled Express plus Zod, yet it takes the query string apart and hands the raw values to the service without parsing anything; every command needs a schema that rejects bad input with a 400 and field-level errors before any service code runs.",
+       "cite": {
+        "path": "system-design-deep-dives.md",
+        "lineStart": 104,
+        "lineEnd": 113
+       }
+      },
+      {
+       "text": "[w2] Two tabs today overwrite each other: each copies its whole ticket array into local storage after every change, so the tab that writes last silently erases the other's edit. On the server, make every transition conditional on the status it starts from, so the stale tab's command matches nothing and gets a conflict saying the ticket has moved on.",
+       "cite": {
+        "path": "projects/support-ticket-dashboard/src/SupportTicketDashboard.tsx",
+        "lineStart": 12,
+        "lineEnd": 15
+       }
+      },
+      {
+       "text": "[w2] Changes with no actor are what the current action shapes produce: an add, a status change or a delete carries the ticket data and nothing about who did it. The actor comes from the authenticated session on the server, never from a field in the request body.",
+       "cite": {
+        "path": "projects/support-ticket-dashboard/src/ticketReducer.ts",
+        "lineStart": 3,
+        "lineEnd": 6
+       }
+      },
+      {
+       "text": "[w2] The email survived erasure because before-and-after snapshots of free-text fields copied it into the trail. Erasure has to reach every copy (audit entries, the search index, caches, exports), and the audit design should store changes to personal fields as references so that a new copy never exists.",
+       "quote": "Audit logs for compliance."
+      },
+      {
+       "text": "[w1] Deletion today removes the ticket from the array outright, so its history disappears with it; in the regulated product a delete becomes a closed or archived state that keeps the audit trail intact.",
+       "cite": {
+        "path": "projects/support-ticket-dashboard/src/ticketReducer.ts",
+        "lineStart": 28,
+        "lineEnd": 31
+       }
+      }
+     ]
+    },
+    {
+     "prompt": "TRADE-OFF HANDBACK — defend your write-side design against the alternatives: named commands versus a generic PATCH of any field; checks written into each handler versus one policy function every handler calls versus database row-level security alone; an audit entry written in the same transaction versus an audit log fed from published events versus full event sourcing; a bulk change as one transaction versus a chunked background job; and deleting personal data versus pseudonymising it versus encrypting it per customer and destroying the key. For each, say what you bought, what it cost, and which requirement put you on that side.",
+     "keyPoints": [
+      {
+       "text": "[w3] Named commands put the workflow rule and the permission rule at one door each and make the trail read as domain events, at the cost of more endpoints and a client that must know which command it is sending; a generic PATCH is one endpoint, but every combination of changed fields needs its own check, and the trail can only say that fields changed.",
+       "cite": {
+        "path": "system-design-deep-dives.md",
+        "lineStart": 89,
+        "lineEnd": 91
+       }
+      },
+      {
+       "text": "[w3] One policy function of (actor, action, ticket) can be tested as a table and shared with the UI, while checks copied into handlers drift apart; row-level security is a strong backstop for tenant boundaries, but rules like 'a lead may reassign within the team' or 'reopen within 14 days' are awkward to express there, and a refusal comes back as an empty result instead of a clear 403.",
+       "quote": "is excellent for enforcing this at the database layer"
+      },
+      {
+       "text": "[w3] An audit entry in the same transaction cannot miss a change, at the cost of an extra write on every update and a trail coupled to the schema; an audit fed from published events decouples them but can lag or lose entries unless the event is stored with the change; event sourcing makes the history itself the truth and replayable, at the price of projections and of evolving event schemas for years.",
+       "quote": "Event sourcing for the ticket history (replay all events to rebuild state)."
+      },
+      {
+       "text": "[w2] One transaction for a bulk change is all-or-nothing and easy to reason about, but it locks thousands of rows that agents are working on and fails as a whole; a chunked job makes progress visible and resumable, and costs a job record, a progress view, and a stated rule for tickets that changed while it ran.",
+       "cite": {
+        "path": "system-design-deep-dives.md",
+        "lineStart": 218,
+        "lineEnd": 228
+       }
+      },
+      {
+       "text": "[w2] Deleting personal data is simple and certain but leaves gaps in history; pseudonymising keeps the analytics but must find every copy; per-customer encryption with key destruction makes erasure a single key deletion that also covers backups, at the cost of key management and of decrypting on every read.",
+       "quote": "Secrets rotation and key management."
+      },
+      {
+       "text": "[w1] Optimistic updates suit single commands: show the change, roll it back if the server refuses, and say which rule refused it. Bulk jobs and erasure stay pessimistic with visible progress, because a rollback of thousands of rows cannot be painted honestly.",
+       "cite": {
+        "path": "system-design-deep-dives.md",
+        "lineStart": 513,
+        "lineEnd": 527
+       }
+      }
+     ]
+    }
+   ],
+   "set": "b"
+  }
+ ]
+}
