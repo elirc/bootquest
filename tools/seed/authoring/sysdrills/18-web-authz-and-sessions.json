@@ -1,0 +1,617 @@
+{
+  "format": "sysdrills-authoring@1",
+  "module": "18-web-authz-and-sessions",
+  "title": "Web authorization & sessions",
+  "description": "Authorization and session reps for a web CRUD app: deny-overrides policy evaluation with an implicit deny, checking that a feature’s filter cannot leak another tenant’s rows, idle plus absolute session timeouts and the store writes a sliding session costs, and the access-token lifetime trade between refresh load, revocation exposure and denylist size. Whole-number arithmetic and decisions with the conversions named (times in seconds; 900 s = 15 minutes; 28,800 s = 8 hours).",
+  "exercises": [
+    {
+      "slug": "01-deny-overrides",
+      "title": "Deny overrides, and nothing matched means no",
+      "difficulty": 2,
+      "skills": [
+        "authz",
+        "security"
+      ],
+      "instructions": "**Interview prompt.** \"Our Node API grew an ad-hoc permission check per route. We want one policy engine: roles grant allow rules, and compliance adds deny rules such as 'nobody touches invoice 7 during the audit'. In what order are rules evaluated — and what happens when nothing matches?\"\n\n**Why it works.** A deny-overrides policy has no order. Collect every rule that matches the request: if any of them denies, the answer is deny, whatever else allowed it; otherwise, if any allows, the answer is allow; and if nothing matches at all the request is still refused — the implicit deny, so a forgotten rule fails closed. A rule is `{ effect, actions, resources }`. It matches when its actions list the action or `'*'`, and one of its resource patterns matches: `'*'` matches everything, a pattern ending in `*` matches any resource that starts with the text before the `*`, and any other pattern must equal the resource exactly.\n\n**Your task.** Export one function:\n- `decide(policies, action, resource)` → `'deny'` when a matching rule denies, `'allow'` when a matching rule allows and none denies, and `'implicit-deny'` when no rule matches\n\n**Worked example.** Allow read on `invoices/*` plus deny everything on `invoices/7` → reading `invoices/7` is **'deny'**, in whichever order the two rules are listed.",
+      "starter": "export function decide(policies, action, resource) {\n  // TODO: every matching rule counts, and a deny wins\n}\n",
+      "solution": "function resourceMatches(pattern, resource) {\n  if (pattern.endsWith('*')) return resource.startsWith(pattern.slice(0, -1));\n  return pattern === resource;\n}\n\nfunction ruleMatches(rule, action, resource) {\n  const actionOk = rule.actions.includes('*') || rule.actions.includes(action);\n  return actionOk && rule.resources.some((pattern) => resourceMatches(pattern, resource));\n}\n\nexport function decide(policies, action, resource) {\n  const matching = policies.filter((rule) => ruleMatches(rule, action, resource));\n  if (matching.some((rule) => rule.effect === 'deny')) return 'deny';\n  if (matching.some((rule) => rule.effect === 'allow')) return 'allow';\n  return 'implicit-deny';\n}\n",
+      "tests": [
+        {
+          "name": "allow read on invoices/* -> reading invoices/42 is allowed",
+          "code": "assert.equal(typeof mod.decide, 'function', 'export a function named decide');\nassert.equal(mod.decide([{\"effect\":\"allow\",\"actions\":[\"read\"],\"resources\":[\"invoices/*\"]}], \"read\", \"invoices/42\"), \"allow\");",
+          "input": [
+            [
+              {
+                "effect": "allow",
+                "actions": [
+                  "read"
+                ],
+                "resources": [
+                  "invoices/*"
+                ]
+              }
+            ],
+            "read",
+            "invoices/42"
+          ]
+        },
+        {
+          "name": "a deny listed after the allow still wins",
+          "code": "assert.equal(typeof mod.decide, 'function', 'export a function named decide');\nassert.equal(mod.decide([{\"effect\":\"allow\",\"actions\":[\"read\"],\"resources\":[\"invoices/*\"]},{\"effect\":\"deny\",\"actions\":[\"*\"],\"resources\":[\"invoices/7\"]}], \"read\", \"invoices/7\"), \"deny\");",
+          "input": [
+            [
+              {
+                "effect": "allow",
+                "actions": [
+                  "read"
+                ],
+                "resources": [
+                  "invoices/*"
+                ]
+              },
+              {
+                "effect": "deny",
+                "actions": [
+                  "*"
+                ],
+                "resources": [
+                  "invoices/7"
+                ]
+              }
+            ],
+            "read",
+            "invoices/7"
+          ]
+        },
+        {
+          "name": "a deny listed before the allow wins too",
+          "code": "assert.equal(typeof mod.decide, 'function', 'export a function named decide');\nassert.equal(mod.decide([{\"effect\":\"deny\",\"actions\":[\"*\"],\"resources\":[\"invoices/7\"]},{\"effect\":\"allow\",\"actions\":[\"read\"],\"resources\":[\"invoices/*\"]}], \"read\", \"invoices/7\"), \"deny\");",
+          "input": [
+            [
+              {
+                "effect": "deny",
+                "actions": [
+                  "*"
+                ],
+                "resources": [
+                  "invoices/7"
+                ]
+              },
+              {
+                "effect": "allow",
+                "actions": [
+                  "read"
+                ],
+                "resources": [
+                  "invoices/*"
+                ]
+              }
+            ],
+            "read",
+            "invoices/7"
+          ]
+        },
+        {
+          "name": "the allow covers read only -> delete is an implicit deny",
+          "code": "assert.equal(typeof mod.decide, 'function', 'export a function named decide');\nassert.equal(mod.decide([{\"effect\":\"allow\",\"actions\":[\"read\"],\"resources\":[\"invoices/*\"]}], \"delete\", \"invoices/42\"), \"implicit-deny\");",
+          "input": [
+            [
+              {
+                "effect": "allow",
+                "actions": [
+                  "read"
+                ],
+                "resources": [
+                  "invoices/*"
+                ]
+              }
+            ],
+            "delete",
+            "invoices/42"
+          ]
+        },
+        {
+          "name": "invoices/* does not match the collection invoices itself (boundary)",
+          "code": "assert.equal(typeof mod.decide, 'function', 'export a function named decide');\nassert.equal(mod.decide([{\"effect\":\"allow\",\"actions\":[\"read\"],\"resources\":[\"invoices/*\"]}], \"read\", \"invoices\"), \"implicit-deny\");",
+          "input": [
+            [
+              {
+                "effect": "allow",
+                "actions": [
+                  "read"
+                ],
+                "resources": [
+                  "invoices/*"
+                ]
+              }
+            ],
+            "read",
+            "invoices"
+          ]
+        },
+        {
+          "name": "no policies at all -> implicit deny (boundary)",
+          "code": "assert.equal(typeof mod.decide, 'function', 'export a function named decide');\nassert.equal(mod.decide([], \"read\", \"invoices/1\"), \"implicit-deny\");",
+          "input": [
+            [],
+            "read",
+            "invoices/1"
+          ]
+        },
+        {
+          "name": "a prefix is not a substring -> archive/invoices/1 escapes the deny",
+          "code": "assert.equal(typeof mod.decide, 'function', 'export a function named decide');\nassert.equal(mod.decide([{\"effect\":\"deny\",\"actions\":[\"*\"],\"resources\":[\"invoices/*\"]},{\"effect\":\"allow\",\"actions\":[\"*\"],\"resources\":[\"*\"]}], \"read\", \"archive/invoices/1\"), \"allow\");",
+          "input": [
+            [
+              {
+                "effect": "deny",
+                "actions": [
+                  "*"
+                ],
+                "resources": [
+                  "invoices/*"
+                ]
+              },
+              {
+                "effect": "allow",
+                "actions": [
+                  "*"
+                ],
+                "resources": [
+                  "*"
+                ]
+              }
+            ],
+            "read",
+            "archive/invoices/1"
+          ]
+        },
+        {
+          "name": "a deny on delete does not touch reads",
+          "code": "assert.equal(typeof mod.decide, 'function', 'export a function named decide');\nassert.equal(mod.decide([{\"effect\":\"allow\",\"actions\":[\"read\"],\"resources\":[\"invoices/*\"]},{\"effect\":\"deny\",\"actions\":[\"delete\"],\"resources\":[\"invoices/*\"]}], \"read\", \"invoices/9\"), \"allow\");",
+          "input": [
+            [
+              {
+                "effect": "allow",
+                "actions": [
+                  "read"
+                ],
+                "resources": [
+                  "invoices/*"
+                ]
+              },
+              {
+                "effect": "deny",
+                "actions": [
+                  "delete"
+                ],
+                "resources": [
+                  "invoices/*"
+                ]
+              }
+            ],
+            "read",
+            "invoices/9"
+          ]
+        }
+      ],
+      "explanation": "Gather every match; one deny decides.\n\nFor `decide([deny * invoices/*, allow * *], 'read', 'archive/invoices/1')`:\n- the deny's pattern needs a resource starting with \"invoices/\", and archive/invoices/1 does not → no deny matches\n- allow * * matches → **'allow'**\n- a substring check would have denied it — the same bug, reversed, lets a crafted id slip past a deny\n\nIn production this is the model AWS IAM documents: \"By default, all requests are implicitly denied\" and \"An explicit deny overrides an explicit allow\"; Casbin, popular in Node, calls the same rule its allow-and-deny effect, `some(where (p.eft == allow)) && !some(where (p.eft == deny))`. Keeping 'implicit-deny' apart from 'deny' pays off in audit logs: \"no rule matched\" points at a missing grant, \"denied\" at a deliberate exception. Order-free evaluation is what lets you grant broad roles and carve narrow exceptions without worrying where in the list they sit. bootforge's require-role, has-at-least-role and can-access-resource drills check one role or one owner; this drill combines many rules.",
+      "hints": [
+        "Order never matters: gather every rule that matches, and let a single deny win.",
+        "match ⇔ (the action or '*' is in actions) and some resource pattern matches; deny if a matching rule denies, else allow if one allows, else implicit-deny.",
+        "Collect the rules whose actions and resource patterns both match, answer deny if any of them denies, allow if any of them allows, and fall back to the implicit deny when none match"
+      ]
+    },
+    {
+      "slug": "02-tenant-scope-filter",
+      "title": "Tenant scoping: one OR away from a leak",
+      "difficulty": 3,
+      "skills": [
+        "multitenancy",
+        "security"
+      ],
+      "instructions": "**Interview prompt.** \"Every table carries tenantId, and our query builder lets features add their own filters. Support found tenant 9's public documents in tenant 7's search, yet the code does add the tenant predicate. How did they leak, and how would you check a filter mechanically?\"\n\n**Why it works.** SQL binds AND tighter than OR, so `tenantId = 7 AND status = 'open' OR visibility = 'public'` means \"(tenant 7 and open) or public\": every tenant's public rows come back. A filter is scoped to a tenant only if no row of another tenant can pass it. Structurally: an equality on tenantId with this tenant's id is scoped; an AND is scoped when at least one of its parts is, because that part already shuts other tenants out; an OR is scoped only when every branch is, because one unscoped branch lets other tenants in on its own. Filters are trees of `{ eq: [field, value] }`, `{ and: [...] }` and `{ or: [...] }`, and the lists are never empty. The safe fix does not trust the feature's filter at all: it wraps it in an AND with the tenant equality first.\n\n**Your task.** Export two functions:\n- `isTenantScoped(filter, tenantId)` → `true` when, by the rule above, the filter can only match rows of `tenantId`\n- `withTenant(filter, tenantId)` → a new filter: an AND whose first part is the tenantId equality and whose second part is the original filter\n\n**Worked example.** `or[and[tenantId 7, status open], visibility public]` → **false**: the public branch matches rows of any tenant.",
+      "starter": "export function isTenantScoped(filter, tenantId) {\n  // TODO: eq, and, or each have their own rule\n}\n\nexport function withTenant(filter, tenantId) {\n  // TODO: pin the tenant in front of the whole filter\n}\n",
+      "solution": "export function isTenantScoped(filter, tenantId) {\n  if (filter.eq) return filter.eq[0] === 'tenantId' && filter.eq[1] === tenantId;\n  if (filter.and) return filter.and.some((part) => isTenantScoped(part, tenantId));\n  return filter.or.every((branch) => isTenantScoped(branch, tenantId));\n}\n\nexport function withTenant(filter, tenantId) {\n  return { and: [{ eq: ['tenantId', tenantId] }, filter] };\n}\n",
+      "tests": [
+        {
+          "name": "the tenant equality alone -> scoped",
+          "code": "assert.equal(typeof mod.isTenantScoped, 'function', 'export a function named isTenantScoped');\nassert.equal(mod.isTenantScoped({\"eq\":[\"tenantId\",7]}, 7), true);",
+          "input": [
+            {
+              "eq": [
+                "tenantId",
+                7
+              ]
+            },
+            7
+          ]
+        },
+        {
+          "name": "another tenant's id -> not scoped (boundary)",
+          "code": "assert.equal(typeof mod.isTenantScoped, 'function', 'export a function named isTenantScoped');\nassert.equal(mod.isTenantScoped({\"eq\":[\"tenantId\",9]}, 7), false);",
+          "input": [
+            {
+              "eq": [
+                "tenantId",
+                9
+              ]
+            },
+            7
+          ]
+        },
+        {
+          "name": "tenant AND status -> scoped",
+          "code": "assert.equal(typeof mod.isTenantScoped, 'function', 'export a function named isTenantScoped');\nassert.equal(mod.isTenantScoped({\"and\":[{\"eq\":[\"tenantId\",7]},{\"eq\":[\"status\",\"open\"]}]}, 7), true);",
+          "input": [
+            {
+              "and": [
+                {
+                  "eq": [
+                    "tenantId",
+                    7
+                  ]
+                },
+                {
+                  "eq": [
+                    "status",
+                    "open"
+                  ]
+                }
+              ]
+            },
+            7
+          ]
+        },
+        {
+          "name": "(tenant AND open) OR public -> the precedence leak",
+          "code": "assert.equal(typeof mod.isTenantScoped, 'function', 'export a function named isTenantScoped');\nassert.equal(mod.isTenantScoped({\"or\":[{\"and\":[{\"eq\":[\"tenantId\",7]},{\"eq\":[\"status\",\"open\"]}]},{\"eq\":[\"visibility\",\"public\"]}]}, 7), false);",
+          "input": [
+            {
+              "or": [
+                {
+                  "and": [
+                    {
+                      "eq": [
+                        "tenantId",
+                        7
+                      ]
+                    },
+                    {
+                      "eq": [
+                        "status",
+                        "open"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "eq": [
+                    "visibility",
+                    "public"
+                  ]
+                }
+              ]
+            },
+            7
+          ]
+        },
+        {
+          "name": "an OR whose every branch pins the tenant -> scoped",
+          "code": "assert.equal(typeof mod.isTenantScoped, 'function', 'export a function named isTenantScoped');\nassert.equal(mod.isTenantScoped({\"or\":[{\"and\":[{\"eq\":[\"tenantId\",7]},{\"eq\":[\"status\",\"open\"]}]},{\"and\":[{\"eq\":[\"tenantId\",7]},{\"eq\":[\"visibility\",\"public\"]}]}]}, 7), true);",
+          "input": [
+            {
+              "or": [
+                {
+                  "and": [
+                    {
+                      "eq": [
+                        "tenantId",
+                        7
+                      ]
+                    },
+                    {
+                      "eq": [
+                        "status",
+                        "open"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "and": [
+                    {
+                      "eq": [
+                        "tenantId",
+                        7
+                      ]
+                    },
+                    {
+                      "eq": [
+                        "visibility",
+                        "public"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            7
+          ]
+        },
+        {
+          "name": "an AND whose only tenant part is a leaky OR -> not scoped",
+          "code": "assert.equal(typeof mod.isTenantScoped, 'function', 'export a function named isTenantScoped');\nassert.equal(mod.isTenantScoped({\"and\":[{\"eq\":[\"status\",\"open\"]},{\"or\":[{\"eq\":[\"tenantId\",7]},{\"eq\":[\"visibility\",\"public\"]}]}]}, 7), false);",
+          "input": [
+            {
+              "and": [
+                {
+                  "eq": [
+                    "status",
+                    "open"
+                  ]
+                },
+                {
+                  "or": [
+                    {
+                      "eq": [
+                        "tenantId",
+                        7
+                      ]
+                    },
+                    {
+                      "eq": [
+                        "visibility",
+                        "public"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            7
+          ]
+        },
+        {
+          "name": "wrapping puts the tenant equality first",
+          "code": "assert.equal(typeof mod.withTenant, 'function', 'export a function named withTenant');\nassert.deepStrictEqual(mod.withTenant({\"eq\":[\"visibility\",\"public\"]}, 7), {\"and\":[{\"eq\":[\"tenantId\",7]},{\"eq\":[\"visibility\",\"public\"]}]});",
+          "input": [
+            {
+              "eq": [
+                "visibility",
+                "public"
+              ]
+            },
+            7
+          ]
+        },
+        {
+          "name": "the leaky filter, wrapped -> scoped",
+          "code": "assert.equal(typeof mod.withTenant, 'function', 'export a function named withTenant');\nassert.equal(typeof mod.isTenantScoped, 'function', 'export a function named isTenantScoped');\nassert.equal(mod.isTenantScoped(mod.withTenant({\"or\":[{\"and\":[{\"eq\":[\"tenantId\",7]},{\"eq\":[\"status\",\"open\"]}]},{\"eq\":[\"visibility\",\"public\"]}]}, 7), 7), true);",
+          "input": [
+            {
+              "or": [
+                {
+                  "and": [
+                    {
+                      "eq": [
+                        "tenantId",
+                        7
+                      ]
+                    },
+                    {
+                      "eq": [
+                        "status",
+                        "open"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "eq": [
+                    "visibility",
+                    "public"
+                  ]
+                }
+              ]
+            },
+            7
+          ]
+        }
+      ],
+      "explanation": "An AND needs one guard; an OR needs a guard on every branch.\n\nFor `and[status open, or[tenantId 7, visibility public]]`:\n- the status part says nothing about tenants\n- the OR has an unscoped branch (public), so it is not scoped\n- no part of the AND is scoped → **false**: an open public document of tenant 9 passes\n\nA probe with Node's built-in SQLite ran the unparenthesised SQL from the prompt and got rows 1 and 3, row 3 being tenant 9's public document; with parentheses around the OR only row 1 came back. In production the leak usually comes from chained query builders: in Knex, `.where('tenantId', 7).andWhere('status', 'open').orWhere('visibility', 'public')` produces exactly that unparenthesised SQL. Apply the tenant predicate in one place that wraps whatever the feature built, as `withTenant` does, and treat database row-level security (CREATE POLICY in PostgreSQL) as a second layer, not the only one. jstrain 26/04 hunts an IDOR on one record; this drill checks the filter every list query is built from.",
+      "hints": [
+        "An AND is safe if any one part pins the tenant; an OR is only as safe as its weakest branch.",
+        "eq: field = 'tenantId' and value = id; and: some part scoped; or: every branch scoped; withTenant = { and: [tenant equality, filter] }.",
+        "Recurse through the tree: a tenant equality with the right id is scoped, an AND needs one scoped part, an OR needs every branch scoped — and the fix puts the tenant equality in front of the whole filter under a new AND"
+      ]
+    },
+    {
+      "slug": "03-session-idle-absolute",
+      "title": "Sessions: idle timeout, absolute cap, store writes",
+      "difficulty": 2,
+      "skills": [
+        "sessions",
+        "security"
+      ],
+      "instructions": "**Interview prompt.** \"Our Express app uses express-session with rolling: true and a 30-minute cookie maxAge, so an active user stays signed in forever. Security wants an 8-hour absolute cap as well, and ops wants to know why the session store takes a write on every request. When does a session end, and how many store writes per second should we expect?\"\n\n**Why it works.** An idle timeout ends a session that has seen no request for idleSec, and sliding it on every request keeps active users signed in. An absolute timeout ends the session absoluteSec after it was created, however active the user is, so a stolen session cookie cannot live forever. A session therefore ends at the earlier of the two deadlines, and at that instant it is already over. A store that re-saves the session on every request writes once per request; a store that touches lazily writes each session at most once per touch interval, so with enough traffic the writes settle at one per active session per interval — and never more than the requests themselves. Times are in seconds (1,800 s = 30 minutes; 28,800 s = 8 hours). The tests choose inputs that divide exactly.\n\n**Your task.** Export three functions:\n- `sessionExpiresAt(createdAtSec, lastSeenAtSec, idleSec, absoluteSec)` → when the session ends\n- `isSessionLive(nowSec, createdAtSec, lastSeenAtSec, idleSec, absoluteSec)` → `true` while the session has not reached its end\n- `storeWritesPerSec(requestsPerSec, activeSessions, touchAfterSec)` → store writes per second with lazy touching, never more than the requests\n\n**Worked example.** Created at 0, last seen at 3,000 s, 30-minute idle, 8-hour cap → the session ends at **4,800 s** (idle wins); last seen at 28,000 s instead → 28,800 s (the cap wins).",
+      "starter": "export function sessionExpiresAt(createdAtSec, lastSeenAtSec, idleSec, absoluteSec) {\n  // TODO: two deadlines, the earlier one wins\n}\n\nexport function isSessionLive(nowSec, createdAtSec, lastSeenAtSec, idleSec, absoluteSec) {\n  // TODO: before the end, not at it\n}\n\nexport function storeWritesPerSec(requestsPerSec, activeSessions, touchAfterSec) {\n  // TODO: at most one write per session per touch interval\n}\n",
+      "solution": "export function sessionExpiresAt(createdAtSec, lastSeenAtSec, idleSec, absoluteSec) {\n  return Math.min(lastSeenAtSec + idleSec, createdAtSec + absoluteSec);\n}\n\nexport function isSessionLive(nowSec, createdAtSec, lastSeenAtSec, idleSec, absoluteSec) {\n  return nowSec < sessionExpiresAt(createdAtSec, lastSeenAtSec, idleSec, absoluteSec);\n}\n\nexport function storeWritesPerSec(requestsPerSec, activeSessions, touchAfterSec) {\n  return Math.min(requestsPerSec, activeSessions / touchAfterSec);\n}\n",
+      "tests": [
+        {
+          "name": "last seen at 3,000 s -> the idle deadline, 4,800 s",
+          "code": "assert.equal(typeof mod.sessionExpiresAt, 'function', 'export a function named sessionExpiresAt');\nassert.equal(mod.sessionExpiresAt(0, 3000, 1800, 28800), 4800);",
+          "input": [
+            0,
+            3000,
+            1800,
+            28800
+          ]
+        },
+        {
+          "name": "last seen at 28,000 s -> the 8-hour cap, 28,800 s, not 29,800",
+          "code": "assert.equal(typeof mod.sessionExpiresAt, 'function', 'export a function named sessionExpiresAt');\nassert.equal(mod.sessionExpiresAt(0, 28000, 1800, 28800), 28800);",
+          "input": [
+            0,
+            28000,
+            1800,
+            28800
+          ]
+        },
+        {
+          "name": "one second before the idle deadline -> live",
+          "code": "assert.equal(typeof mod.isSessionLive, 'function', 'export a function named isSessionLive');\nassert.equal(mod.isSessionLive(4799, 0, 3000, 1800, 28800), true);",
+          "input": [
+            4799,
+            0,
+            3000,
+            1800,
+            28800
+          ]
+        },
+        {
+          "name": "at the deadline itself -> over (boundary)",
+          "code": "assert.equal(typeof mod.isSessionLive, 'function', 'export a function named isSessionLive');\nassert.equal(mod.isSessionLive(4800, 0, 3000, 1800, 28800), false);",
+          "input": [
+            4800,
+            0,
+            3000,
+            1800,
+            28800
+          ]
+        },
+        {
+          "name": "an active user past the absolute cap -> signed out",
+          "code": "assert.equal(typeof mod.isSessionLive, 'function', 'export a function named isSessionLive');\nassert.equal(mod.isSessionLive(28900, 0, 28000, 1800, 28800), false);",
+          "input": [
+            28900,
+            0,
+            28000,
+            1800,
+            28800
+          ]
+        },
+        {
+          "name": "60,000 sessions touched once a minute at 2,000 req/s -> 1,000 writes/s",
+          "code": "assert.equal(typeof mod.storeWritesPerSec, 'function', 'export a function named storeWritesPerSec');\nassert.equal(mod.storeWritesPerSec(2000, 60000, 60), 1000);",
+          "input": [
+            2000,
+            60000,
+            60
+          ]
+        },
+        {
+          "name": "fewer requests than the throttle allows -> one write per request (boundary)",
+          "code": "assert.equal(typeof mod.storeWritesPerSec, 'function', 'export a function named storeWritesPerSec');\nassert.equal(mod.storeWritesPerSec(500, 60000, 60), 500);",
+          "input": [
+            500,
+            60000,
+            60
+          ]
+        },
+        {
+          "name": "touch every 10 minutes -> 100 writes/s",
+          "code": "assert.equal(typeof mod.storeWritesPerSec, 'function', 'export a function named storeWritesPerSec');\nassert.equal(mod.storeWritesPerSec(2000, 60000, 600), 100);",
+          "input": [
+            2000,
+            60000,
+            600
+          ]
+        }
+      ],
+      "explanation": "Two clocks end a session; only one of them slides.\n\nFor `sessionExpiresAt(0, 28000, 1800, 28800)`:\n- idle deadline: 28,000 + 1,800 = 29,800 s\n- absolute deadline: 0 + 28,800 = 28,800 s\n- the earlier one → **28,800 s** — the user is signed out mid-session, which is the point of the cap\n\nIn production the OWASP Session Management Cheat Sheet asks for both: \"All sessions should implement an idle or inactivity timeout\" and \"an absolute timeout, regardless of session activity\". express-session's rolling option (\"The expiration is reset to the original maxAge\") implements only the idle side, and its README has no absolute-timeout option: store the creation time in the session and destroy the session in middleware once it is past the cap. The write load comes from saving or touching on every request; connect-mongo's touchAfter (\"updated only one time in a period\", default 0) is the lazy version, and the price is that a store-side idle expiry can be up to one touch interval early. bootforge's session-expired drill checks a single expiresAt; here the deadline itself is computed from two.",
+      "hints": [
+        "Two deadlines run at once — one slides with activity, one never moves — and lazy touching caps the writes per session.",
+        "expires = min(lastSeen + idle, created + absolute); live ⇔ now < expires; writes = min(rps, sessions ÷ touchAfter).",
+        "Take the earlier of the sliding idle deadline and the fixed absolute one, treat the deadline itself as already expired, and cap the store writes at one per session per touch interval without exceeding the request rate"
+      ]
+    },
+    {
+      "slug": "04-access-token-lifetime",
+      "title": "Access-token lifetime: refresh load vs exposure",
+      "difficulty": 2,
+      "skills": [
+        "auth",
+        "capacity"
+      ],
+      "instructions": "**Interview prompt.** \"We issue 15-minute JWT access tokens plus refresh tokens to 900,000 active sessions, and our verifiers allow 60 s of clock skew. Security asks for 5-minute tokens. What does that cost the auth service, how long can a revoked token still be used, and how big is a denylist that closes the gap?\"\n\n**Why it works.** An access token is checked by its signature and expiry alone, so revoking a user does not stop the tokens already issued: a token minted just before the revocation keeps working until its exp, plus the leeway verifiers allow for clock skew. Every active session trades its refresh token for a new access token once per token lifetime, so the refresh rate is the sessions spread over one lifetime: a shorter lifetime buys a shorter exposure with proportionally more refresh traffic. A denylist of revoked token ids (the jti claim) closes the gap, and it only has to remember each id until that token would be rejected anyway — by Little's law its size is the revocation rate times that window. Times are in seconds (900 s = 15 minutes). The tests choose inputs that divide exactly.\n\n**Your task.** Export three functions:\n- `refreshesPerSec(activeSessions, accessTtlSec)` → refresh calls per second the auth service must serve\n- `revokedTokenUsableSec(accessTtlSec, leewaySec)` → the longest a revoked access token is still accepted when there is no denylist\n- `denylistEntries(revocationsPerSec, accessTtlSec, leewaySec)` → entries the denylist holds at once if each stays only until its token could no longer pass anyway\n\n**Worked example.** 900,000 sessions on 900 s tokens → **1,000 refreshes/s**; 300 s tokens → 3,000/s.",
+      "starter": "export function refreshesPerSec(activeSessions, accessTtlSec) {\n  // TODO: every session refreshes once per lifetime\n}\n\nexport function revokedTokenUsableSec(accessTtlSec, leewaySec) {\n  // TODO: worst case for a token minted just before revocation\n}\n\nexport function denylistEntries(revocationsPerSec, accessTtlSec, leewaySec) {\n  // TODO: Little's law over the window an id must be kept\n}\n",
+      "solution": "export function refreshesPerSec(activeSessions, accessTtlSec) {\n  return activeSessions / accessTtlSec;\n}\n\nexport function revokedTokenUsableSec(accessTtlSec, leewaySec) {\n  return accessTtlSec + leewaySec;\n}\n\nexport function denylistEntries(revocationsPerSec, accessTtlSec, leewaySec) {\n  return revocationsPerSec * revokedTokenUsableSec(accessTtlSec, leewaySec);\n}\n",
+      "tests": [
+        {
+          "name": "900,000 sessions on 15-minute tokens -> 1,000 refreshes/s",
+          "code": "assert.equal(typeof mod.refreshesPerSec, 'function', 'export a function named refreshesPerSec');\nassert.equal(mod.refreshesPerSec(900000, 900), 1000);",
+          "input": [
+            900000,
+            900
+          ]
+        },
+        {
+          "name": "5-minute tokens -> 3,000 refreshes/s",
+          "code": "assert.equal(typeof mod.refreshesPerSec, 'function', 'export a function named refreshesPerSec');\nassert.equal(mod.refreshesPerSec(900000, 300), 3000);",
+          "input": [
+            900000,
+            300
+          ]
+        },
+        {
+          "name": "no active sessions -> 0 (boundary)",
+          "code": "assert.equal(typeof mod.refreshesPerSec, 'function', 'export a function named refreshesPerSec');\nassert.equal(mod.refreshesPerSec(0, 900), 0);",
+          "input": [
+            0,
+            900
+          ]
+        },
+        {
+          "name": "15-minute token with 60 s leeway -> 960 s of exposure",
+          "code": "assert.equal(typeof mod.revokedTokenUsableSec, 'function', 'export a function named revokedTokenUsableSec');\nassert.equal(mod.revokedTokenUsableSec(900, 60), 960);",
+          "input": [
+            900,
+            60
+          ]
+        },
+        {
+          "name": "no leeway -> exactly the lifetime (boundary)",
+          "code": "assert.equal(typeof mod.revokedTokenUsableSec, 'function', 'export a function named revokedTokenUsableSec');\nassert.equal(mod.revokedTokenUsableSec(900, 0), 900);",
+          "input": [
+            900,
+            0
+          ]
+        },
+        {
+          "name": "2 revocations/s kept 960 s -> 1,920 entries",
+          "code": "assert.equal(typeof mod.denylistEntries, 'function', 'export a function named denylistEntries');\nassert.equal(mod.denylistEntries(2, 900, 60), 1920);",
+          "input": [
+            2,
+            900,
+            60
+          ]
+        },
+        {
+          "name": "no revocations -> an empty denylist (boundary)",
+          "code": "assert.equal(typeof mod.denylistEntries, 'function', 'export a function named denylistEntries');\nassert.equal(mod.denylistEntries(0, 900, 60), 0);",
+          "input": [
+            0,
+            900,
+            60
+          ]
+        },
+        {
+          "name": "5 revocations/s on 5-minute tokens, no leeway -> 1,500 entries",
+          "code": "assert.equal(typeof mod.denylistEntries, 'function', 'export a function named denylistEntries');\nassert.equal(mod.denylistEntries(5, 300, 0), 1500);",
+          "input": [
+            5,
+            300,
+            0
+          ]
+        }
+      ],
+      "explanation": "A revoked id only needs remembering for as long as its token could still pass.\n\nFor `denylistEntries(2, 900, 60)`:\n- an id revoked right after minting must be kept for 900 + 60 = 960 s\n- 2 revocations/s × 960 s = **1,920 entries** at any moment — small enough to keep in memory or in Redis\n\nIn production RFC 7519 lets implementers allow \"some small leeway, usually no more than a few minutes\" on exp, and node's jsonwebtoken exposes it as clockTolerance in seconds, so the exposure is the lifetime plus that tolerance. Store each denylisted jti with a time-to-live of its token's remaining lifetime plus the leeway and the list empties itself. The trade in the prompt: 5-minute tokens cut the exposure from 960 s to 360 s and triple the refresh load from 1,000 to 3,000 calls/s; a denylist checked on every request closes the gap at any lifetime, at the price of one lookup per request. Drill 01/07 `littles-law` is the same L = λ × W; bootforge's token-remaining and should-refresh drills look at one token at a time.",
+      "hints": [
+        "Every session refreshes once per token lifetime, and a revoked token only stops working once its exp plus the leeway has passed.",
+        "refresh/s = sessions ÷ ttl; usable = ttl + leeway; entries = revocations/s × (ttl + leeway).",
+        "Spread the sessions over one token lifetime for the refresh rate, add the leeway to the lifetime for the exposure, and multiply the revocation rate by that same window for the denylist size"
+      ]
+    }
+  ]
+}

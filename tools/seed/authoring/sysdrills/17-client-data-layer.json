@@ -1,0 +1,500 @@
+{
+  "format": "sysdrills-authoring@1",
+  "module": "17-client-data-layer",
+  "title": "React client data layer",
+  "description": "Client-side data reps for a React CRUD app: the critical path through nested fetches and what hoisting them saves, what a mount or a window focus does under TanStack Query’s staleTime and gcTime, the request rate and the waste of visibility-gated polling, and the browser’s six HTTP/1.1 connections per domain that turn API calls into waves and let SSE streams lock a tab out. Whole-number arithmetic and decisions with the conversions named (1,000 ms in a second; per-mille = parts per thousand = x/1000); the library behaviour was probed against @tanstack/query-core 5.90.2.",
+  "exercises": [
+    {
+      "slug": "01-fetch-waterfall",
+      "title": "Nested fetches: the critical path",
+      "difficulty": 2,
+      "skills": [
+        "react",
+        "latency"
+      ],
+      "instructions": "**Interview prompt.** \"The dashboard shows a user card, the user's projects, a notifications panel and a sidebar. Each component fetches in its own effect when it mounts, and the projects list and the notifications panel only mount once the user request returns, because they sit inside the user card; the sidebar sits inside the notifications panel. Projects really need the user id; notifications and the sidebar don't. How long until the page has all its data, and what does hoisting the fetches buy?\"\n\n**Why it works.** A component that fetches when it mounts cannot start before its parent has rendered it, so nesting becomes a chain: each fetch starts when the fetch it waits on finishes, while siblings run in parallel. The page is ready when the last fetch finishes — the longest chain of durations, not the sum of all fetches and not the slowest single one. Some links are real data dependencies (projects need the user id); others are only render nesting. Hoisting — starting every fetch that does not need its parent's data from the route or the page (a loader, a prefetch, parallel queries) — removes the accidental links and keeps the real ones. Each fetch is `{ ms, after, needsParent }`: its duration, the index of the earlier fetch it waits on today (−1 means it starts on mount), and whether it truly needs that fetch's response.\n\n**Your task.** Export two functions:\n- `readyMs(fetches)` → when the last fetch finishes with today's nesting\n- `hoistedMs(fetches)` → the same once every fetch that does not need its parent's data starts on mount\n\n**Worked example.** The dashboard: user 100 ms → notifications 150 ms → sidebar 120 ms is the longest chain → **370 ms**; hoisted, only projects still wait for the user → 300 ms.",
+      "starter": "export function readyMs(fetches) {\n  // TODO: each fetch starts when the one it waits on finishes\n}\n\nexport function hoistedMs(fetches) {\n  // TODO: keep only the real data dependencies\n}\n",
+      "solution": "function lastFinish(fetches, waitsOn) {\n  const finish = [];\n  fetches.forEach((fetch, i) => {\n    const parent = waitsOn(fetch);\n    const start = parent < 0 ? 0 : finish[parent];\n    finish[i] = start + fetch.ms;\n  });\n  return Math.max(...finish);\n}\n\nexport function readyMs(fetches) {\n  return lastFinish(fetches, (fetch) => fetch.after);\n}\n\nexport function hoistedMs(fetches) {\n  return lastFinish(fetches, (fetch) => (fetch.needsParent ? fetch.after : -1));\n}\n",
+      "tests": [
+        {
+          "name": "a single fetch on mount -> 120 ms (boundary)",
+          "code": "assert.equal(typeof mod.readyMs, 'function', 'export a function named readyMs');\nassert.equal(mod.readyMs([{\"ms\":120,\"after\":-1,\"needsParent\":false}]), 120);",
+          "input": [
+            [
+              {
+                "ms": 120,
+                "after": -1,
+                "needsParent": false
+              }
+            ]
+          ]
+        },
+        {
+          "name": "a chain of three -> 100 + 150 + 80 = 330 ms",
+          "code": "assert.equal(typeof mod.readyMs, 'function', 'export a function named readyMs');\nassert.equal(mod.readyMs([{\"ms\":100,\"after\":-1,\"needsParent\":false},{\"ms\":150,\"after\":0,\"needsParent\":true},{\"ms\":80,\"after\":1,\"needsParent\":true}]), 330);",
+          "input": [
+            [
+              {
+                "ms": 100,
+                "after": -1,
+                "needsParent": false
+              },
+              {
+                "ms": 150,
+                "after": 0,
+                "needsParent": true
+              },
+              {
+                "ms": 80,
+                "after": 1,
+                "needsParent": true
+              }
+            ]
+          ]
+        },
+        {
+          "name": "the longest chain is not the slowest fetch -> 450 ms, not 650 or 300",
+          "code": "assert.equal(typeof mod.readyMs, 'function', 'export a function named readyMs');\nassert.equal(mod.readyMs([{\"ms\":100,\"after\":-1,\"needsParent\":false},{\"ms\":200,\"after\":0,\"needsParent\":true},{\"ms\":50,\"after\":0,\"needsParent\":true},{\"ms\":300,\"after\":2,\"needsParent\":true}]), 450);",
+          "input": [
+            [
+              {
+                "ms": 100,
+                "after": -1,
+                "needsParent": false
+              },
+              {
+                "ms": 200,
+                "after": 0,
+                "needsParent": true
+              },
+              {
+                "ms": 50,
+                "after": 0,
+                "needsParent": true
+              },
+              {
+                "ms": 300,
+                "after": 2,
+                "needsParent": true
+              }
+            ]
+          ]
+        },
+        {
+          "name": "two independent fetches on mount -> the slower, 300 ms",
+          "code": "assert.equal(typeof mod.readyMs, 'function', 'export a function named readyMs');\nassert.equal(mod.readyMs([{\"ms\":300,\"after\":-1,\"needsParent\":false},{\"ms\":200,\"after\":-1,\"needsParent\":false}]), 300);",
+          "input": [
+            [
+              {
+                "ms": 300,
+                "after": -1,
+                "needsParent": false
+              },
+              {
+                "ms": 200,
+                "after": -1,
+                "needsParent": false
+              }
+            ]
+          ]
+        },
+        {
+          "name": "the dashboard as nested today -> 370 ms",
+          "code": "assert.equal(typeof mod.readyMs, 'function', 'export a function named readyMs');\nassert.equal(mod.readyMs([{\"ms\":100,\"after\":-1,\"needsParent\":false},{\"ms\":200,\"after\":0,\"needsParent\":true},{\"ms\":150,\"after\":0,\"needsParent\":false},{\"ms\":120,\"after\":2,\"needsParent\":false}]), 370);",
+          "input": [
+            [
+              {
+                "ms": 100,
+                "after": -1,
+                "needsParent": false
+              },
+              {
+                "ms": 200,
+                "after": 0,
+                "needsParent": true
+              },
+              {
+                "ms": 150,
+                "after": 0,
+                "needsParent": false
+              },
+              {
+                "ms": 120,
+                "after": 2,
+                "needsParent": false
+              }
+            ]
+          ]
+        },
+        {
+          "name": "the dashboard hoisted -> only projects wait for the user, 300 ms",
+          "code": "assert.equal(typeof mod.hoistedMs, 'function', 'export a function named hoistedMs');\nassert.equal(mod.hoistedMs([{\"ms\":100,\"after\":-1,\"needsParent\":false},{\"ms\":200,\"after\":0,\"needsParent\":true},{\"ms\":150,\"after\":0,\"needsParent\":false},{\"ms\":120,\"after\":2,\"needsParent\":false}]), 300);",
+          "input": [
+            [
+              {
+                "ms": 100,
+                "after": -1,
+                "needsParent": false
+              },
+              {
+                "ms": 200,
+                "after": 0,
+                "needsParent": true
+              },
+              {
+                "ms": 150,
+                "after": 0,
+                "needsParent": false
+              },
+              {
+                "ms": 120,
+                "after": 2,
+                "needsParent": false
+              }
+            ]
+          ]
+        },
+        {
+          "name": "every link a real dependency -> hoisting changes nothing, 330 ms (boundary)",
+          "code": "assert.equal(typeof mod.hoistedMs, 'function', 'export a function named hoistedMs');\nassert.equal(mod.hoistedMs([{\"ms\":100,\"after\":-1,\"needsParent\":false},{\"ms\":150,\"after\":0,\"needsParent\":true},{\"ms\":80,\"after\":1,\"needsParent\":true}]), 330);",
+          "input": [
+            [
+              {
+                "ms": 100,
+                "after": -1,
+                "needsParent": false
+              },
+              {
+                "ms": 150,
+                "after": 0,
+                "needsParent": true
+              },
+              {
+                "ms": 80,
+                "after": 1,
+                "needsParent": true
+              }
+            ]
+          ]
+        },
+        {
+          "name": "no real dependencies -> everything in parallel, 150 ms",
+          "code": "assert.equal(typeof mod.hoistedMs, 'function', 'export a function named hoistedMs');\nassert.equal(mod.hoistedMs([{\"ms\":100,\"after\":-1,\"needsParent\":false},{\"ms\":150,\"after\":0,\"needsParent\":false},{\"ms\":80,\"after\":1,\"needsParent\":false}]), 150);",
+          "input": [
+            [
+              {
+                "ms": 100,
+                "after": -1,
+                "needsParent": false
+              },
+              {
+                "ms": 150,
+                "after": 0,
+                "needsParent": false
+              },
+              {
+                "ms": 80,
+                "after": 1,
+                "needsParent": false
+              }
+            ]
+          ]
+        }
+      ],
+      "explanation": "The page waits for its longest chain.\n\nFor `readyMs` on fetches 100 ms → {200 ms, 50 ms → 300 ms}:\n- path through the 200 ms fetch: 100 + 200 = 300 ms\n- path through the 50 ms fetch: 100 + 50 + 300 = **450 ms**\n- adding everything (650 ms) overstates it; the slowest branch's first fetch (300 ms) understates it\n\nIn production react.dev's \"Synchronizing with Effects\" warns that fetching directly in Effects \"makes it easy to create network waterfalls\": the parent fetches, renders its children, and only then do they start fetching. The fixes start independent requests together: a route loader, a prefetch (TanStack Query's queryClient.prefetchQuery) or parallel queries (useQueries), keeping only the links where a request truly needs another's response. Drill 12/09 `chatty-cross-region` adds up strictly sequential round trips; here siblings overlap and only the dependency tree decides.",
+      "hints": [
+        "Each fetch starts when the fetch it waits on finishes; siblings run side by side, so the page waits for the longest chain.",
+        "finish(i) = finish(after) + ms, or ms when after = −1; ready = max finish; hoisted: treat after as −1 whenever needsParent is false.",
+        "Work out every fetch’s finish time from the one it waits on, take the latest, and for hoisting let any fetch that does not need its parent’s data start at zero"
+      ]
+    },
+    {
+      "slug": "02-query-freshness",
+      "title": "staleTime and gcTime: what a mount really does",
+      "difficulty": 2,
+      "skills": [
+        "react",
+        "caching"
+      ],
+      "instructions": "**Interview prompt.** \"Our React app uses TanStack Query with mostly default options. Users complain that every tab switch fires a burst of requests, and product asks why the project list flashes a spinner after lunch but not after a coffee break. What do a mount and a window focus actually do?\"\n\n**Why it works.** TanStack Query keeps each query's last data in a cache. Data is fresh until it is staleTime old and stale from then on — the default staleTime is 0, so data is stale the moment it arrives. Mounting a component whose query has cached data shows that data at once, and if it is stale a background refetch starts as well. A query with no mounted observers for gcTime (5 minutes by default) is removed from the cache, so the next mount has nothing to show and loads with a spinner. When the window regains focus, every query that has at least one mounted observer and is stale refetches; queries with no observers do not. The tests never mount at the exact moment of collection.\n\n**Your task.** Export two functions:\n- `onMount(ageMs, staleTimeMs, unobservedMs, gcTimeMs)` → `'load'` when the entry has been collected, `'serve-and-refetch'` when cached data is shown and refetched because it is stale, and `'serve'` when cached fresh data is shown with no request\n- `focusRefetches(queries, staleTimeMs)` → how many of the cached queries (each `{ ageMs, observers }`) refetch when the window regains focus\n\n**Worked example.** Data 70 s old, a 60 s staleTime, off screen for 70 s → **'serve-and-refetch'**: the list appears at once and refreshes in the background.",
+      "starter": "export function onMount(ageMs, staleTimeMs, unobservedMs, gcTimeMs) {\n  // TODO: collected, stale or fresh?\n}\n\nexport function focusRefetches(queries, staleTimeMs) {\n  // TODO: stale queries something on screen still observes\n}\n",
+      "solution": "function isStale(ageMs, staleTimeMs) {\n  return ageMs >= staleTimeMs;\n}\n\nexport function onMount(ageMs, staleTimeMs, unobservedMs, gcTimeMs) {\n  if (unobservedMs >= gcTimeMs) return 'load';\n  return isStale(ageMs, staleTimeMs) ? 'serve-and-refetch' : 'serve';\n}\n\nexport function focusRefetches(queries, staleTimeMs) {\n  return queries.filter((query) => query.observers > 0 && isStale(query.ageMs, staleTimeMs)).length;\n}\n",
+      "tests": [
+        {
+          "name": "back after 10 s with a 60 s staleTime -> serve from cache, no request",
+          "code": "assert.equal(typeof mod.onMount, 'function', 'export a function named onMount');\nassert.equal(mod.onMount(10000, 60000, 10000, 300000), \"serve\");",
+          "input": [
+            10000,
+            60000,
+            10000,
+            300000
+          ]
+        },
+        {
+          "name": "back after 70 s -> serve and refetch in the background",
+          "code": "assert.equal(typeof mod.onMount, 'function', 'export a function named onMount');\nassert.equal(mod.onMount(70000, 60000, 70000, 300000), \"serve-and-refetch\");",
+          "input": [
+            70000,
+            60000,
+            70000,
+            300000
+          ]
+        },
+        {
+          "name": "exactly staleTime old -> already stale (boundary)",
+          "code": "assert.equal(typeof mod.onMount, 'function', 'export a function named onMount');\nassert.equal(mod.onMount(30000, 30000, 0, 300000), \"serve-and-refetch\");",
+          "input": [
+            30000,
+            30000,
+            0,
+            300000
+          ]
+        },
+        {
+          "name": "off screen for 6 minutes with a 5 minute gcTime -> collected, spinner",
+          "code": "assert.equal(typeof mod.onMount, 'function', 'export a function named onMount');\nassert.equal(mod.onMount(400000, 60000, 360000, 300000), \"load\");",
+          "input": [
+            400000,
+            60000,
+            360000,
+            300000
+          ]
+        },
+        {
+          "name": "default staleTime 0 -> every mount refetches",
+          "code": "assert.equal(typeof mod.onMount, 'function', 'export a function named onMount');\nassert.equal(mod.onMount(5000, 0, 5000, 300000), \"serve-and-refetch\");",
+          "input": [
+            5000,
+            0,
+            5000,
+            300000
+          ]
+        },
+        {
+          "name": "staleTime 0: two observed queries refetch, the unobserved one does not",
+          "code": "assert.equal(typeof mod.focusRefetches, 'function', 'export a function named focusRefetches');\nassert.equal(mod.focusRefetches([{\"ageMs\":5000,\"observers\":1},{\"ageMs\":5000,\"observers\":0},{\"ageMs\":5000,\"observers\":2}], 0), 2);",
+          "input": [
+            [
+              {
+                "ageMs": 5000,
+                "observers": 1
+              },
+              {
+                "ageMs": 5000,
+                "observers": 0
+              },
+              {
+                "ageMs": 5000,
+                "observers": 2
+              }
+            ],
+            0
+          ]
+        },
+        {
+          "name": "staleTime 60 s: only the 90 s old query refetches",
+          "code": "assert.equal(typeof mod.focusRefetches, 'function', 'export a function named focusRefetches');\nassert.equal(mod.focusRefetches([{\"ageMs\":5000,\"observers\":1},{\"ageMs\":90000,\"observers\":1}], 60000), 1);",
+          "input": [
+            [
+              {
+                "ageMs": 5000,
+                "observers": 1
+              },
+              {
+                "ageMs": 90000,
+                "observers": 1
+              }
+            ],
+            60000
+          ]
+        },
+        {
+          "name": "an empty cache -> no requests (boundary)",
+          "code": "assert.equal(typeof mod.focusRefetches, 'function', 'export a function named focusRefetches');\nassert.equal(mod.focusRefetches([], 0), 0);",
+          "input": [
+            [],
+            0
+          ]
+        }
+      ],
+      "explanation": "Collection first, then staleness; focus only wakes observed queries.\n\nFor `onMount(400000, 60000, 360000, 300000)`:\n- the query has had no observers for 360 s, past the 300 s gcTime → it was removed from the cache\n- there is nothing to serve, so staleness never comes up → **'load'** — the after-lunch spinner\n\nIn production this matches @tanstack/query-core 5.90.2, probed in Node: staleness is `timeUntilStale = max(updatedAt + staleTime − now, 0)` with \"stale\" meaning that value is 0 (utils.js and query.js `isStaleByTime`), so data 29,999 ms old under a 30,000 ms staleTime was fresh and 30,000 ms old was stale; on focus only the observed stale query refetched; an inactive query left the cache after gcTime (default 300,000 ms in a browser). The TanStack docs list the defaults (stale queries refetch on mount, focus and reconnect; inactive queries are collected after 5 minutes), and the SSR guide sets staleTime above 0 so hydrated data is not refetched the moment the page loads. To calm tab-switch bursts, raise staleTime for slow-changing data or turn off refetchOnWindowFocus per query. bootforge's is-fresh drill checks one TTL; here two clocks and the observer count decide.",
+      "hints": [
+        "Collection beats staleness: a removed entry has nothing to serve. Otherwise compare the age with staleTime — and only mounted queries listen for focus.",
+        "load ⇔ unobserved ≥ gcTime; stale ⇔ age ≥ staleTime; focus refetches = number of queries with observers ≥ 1 and age ≥ staleTime.",
+        "First ask whether the entry outlived gcTime without observers, then whether its age has reached staleTime, and on focus count only the stale queries that something on screen still observes"
+      ]
+    },
+    {
+      "slug": "03-visibility-gated-polling",
+      "title": "Polling dashboards: rate and waste",
+      "difficulty": 2,
+      "skills": [
+        "react",
+        "load"
+      ],
+      "instructions": "**Interview prompt.** \"10,000 users keep the ops dashboard open. The widget polls with refetchInterval every 5 s, but at any moment only 60% of those tabs are visible, and the underlying data changes about once every 50 s. What request rate does the API see, and how many of those polls are wasted?\"\n\n**Why it works.** TanStack Query's refetchInterval pauses while a tab is in the background unless refetchIntervalInBackground is set, so only the visible share of clients polls, each sending one request per interval. When the data changes once per change period and a client polls every interval, at most one poll per change finds something new; the rest bring back what the client already has. If polls are slower than changes, every poll finds something new and nothing is wasted — but the screen is then up to one interval behind. Shares are in per-mille (‰ = x/1000). The tests choose inputs that divide exactly.\n\n**Your task.** Export two functions:\n- `pollQps(clients, visiblePermille, intervalSec)` → requests per second from the clients whose tab is visible\n- `emptyPollPermille(intervalSec, changeEverySec)` → the per-mille of polls that find nothing new\n\n**Worked example.** 10,000 tabs at 600‰ visible = 6,000 polling tabs, one request each per 5 s → **1,200 requests/s**; with a change every 50 s, 9 of every 10 polls come back empty → 900‰.",
+      "starter": "export function pollQps(clients, visiblePermille, intervalSec) {\n  // TODO: only visible tabs poll\n}\n\nexport function emptyPollPermille(intervalSec, changeEverySec) {\n  // TODO: polls per change that bring nothing new\n}\n",
+      "solution": "export function pollQps(clients, visiblePermille, intervalSec) {\n  return (clients * visiblePermille) / 1000 / intervalSec;\n}\n\nexport function emptyPollPermille(intervalSec, changeEverySec) {\n  if (intervalSec >= changeEverySec) return 0;\n  return ((changeEverySec - intervalSec) * 1000) / changeEverySec;\n}\n",
+      "tests": [
+        {
+          "name": "10,000 tabs, 600 permille visible, every 5 s -> 1,200 requests/s",
+          "code": "assert.equal(typeof mod.pollQps, 'function', 'export a function named pollQps');\nassert.equal(mod.pollQps(10000, 600, 5), 1200);",
+          "input": [
+            10000,
+            600,
+            5
+          ]
+        },
+        {
+          "name": "every tab visible or polling in the background -> 2,000 requests/s (boundary)",
+          "code": "assert.equal(typeof mod.pollQps, 'function', 'export a function named pollQps');\nassert.equal(mod.pollQps(10000, 1000, 5), 2000);",
+          "input": [
+            10000,
+            1000,
+            5
+          ]
+        },
+        {
+          "name": "all tabs hidden -> polling stops (boundary)",
+          "code": "assert.equal(typeof mod.pollQps, 'function', 'export a function named pollQps');\nassert.equal(mod.pollQps(10000, 0, 5), 0);",
+          "input": [
+            10000,
+            0,
+            5
+          ]
+        },
+        {
+          "name": "3,000 tabs, half visible, every 30 s -> 50 requests/s",
+          "code": "assert.equal(typeof mod.pollQps, 'function', 'export a function named pollQps');\nassert.equal(mod.pollQps(3000, 500, 30), 50);",
+          "input": [
+            3000,
+            500,
+            30
+          ]
+        },
+        {
+          "name": "polling every 5 s, changes every 50 s -> 900 permille empty",
+          "code": "assert.equal(typeof mod.emptyPollPermille, 'function', 'export a function named emptyPollPermille');\nassert.equal(mod.emptyPollPermille(5, 50), 900);",
+          "input": [
+            5,
+            50
+          ]
+        },
+        {
+          "name": "polling every 10 s, changes every 40 s -> 750 permille empty",
+          "code": "assert.equal(typeof mod.emptyPollPermille, 'function', 'export a function named emptyPollPermille');\nassert.equal(mod.emptyPollPermille(10, 40), 750);",
+          "input": [
+            10,
+            40
+          ]
+        },
+        {
+          "name": "polling exactly as often as the data changes -> 0 (boundary)",
+          "code": "assert.equal(typeof mod.emptyPollPermille, 'function', 'export a function named emptyPollPermille');\nassert.equal(mod.emptyPollPermille(60, 60), 0);",
+          "input": [
+            60,
+            60
+          ]
+        },
+        {
+          "name": "polling slower than the data changes -> 0, but the screen lags",
+          "code": "assert.equal(typeof mod.emptyPollPermille, 'function', 'export a function named emptyPollPermille');\nassert.equal(mod.emptyPollPermille(60, 30), 0);",
+          "input": [
+            60,
+            30
+          ]
+        }
+      ],
+      "explanation": "Polling cost follows the clients and the interval; news follows the data.\n\nFor `emptyPollPermille(10, 40)`:\n- one change period of 40 s holds 40 ÷ 10 = 4 polls\n- only the first poll after the change brings news; 3 come back empty\n- 3 of 4 = **750‰**\n\nIn production a probe of @tanstack/query-core 5.90.2 with a 20 ms refetchInterval made 5 requests in 135 ms in a visible tab, 1 (the mount) in a hidden tab, and 5 again with refetchIntervalInBackground: true, matching the useQuery docs. Conditional requests (ETag and 304) make empty polls cheaper but not free — each still costs a request and a lookup. When the waste is high, push the change instead: one Server-Sent Events message per change per client, at the price of a connection held open per tab (drill 17/04). Drill 14/07 `metrics-resolution` turns a scrape interval into points with the same rate arithmetic; the visible share and the empty-poll share are what this drill adds.",
+      "hints": [
+        "Only visible tabs poll by default, and at most one poll per change can bring news.",
+        "qps = clients × visible‰ ÷ 1000 ÷ interval; empty‰ = (change − interval) × 1000 ÷ change when interval < change, else 0.",
+        "Scale the clients by the visible per-mille and divide by the interval for the rate, then count the polls in one change period and treat all but one as empty — none are empty when polls are slower than changes"
+      ]
+    },
+    {
+      "slug": "04-six-connections-per-domain",
+      "title": "HTTP/1.1: six connections per domain",
+      "difficulty": 1,
+      "skills": [
+        "networking",
+        "browser"
+      ],
+      "instructions": "**Interview prompt.** \"Locally the dashboard fires 24 API calls on load through a dev server that speaks HTTP/1.1, each taking about 200 ms, and the page crawls; in production behind HTTP/2 it is fast. Support also reports that with six tabs of the live-updates page open, a seventh tab never loads. What is going on?\"\n\n**Why it works.** Over HTTP/1.1 a browser opens about 6 connections per domain, and each carries one request at a time, so extra requests queue and the page loads in waves of up to 6. HTTP/2 multiplexes many streams over one connection (100 by default), so the waves disappear. A Server-Sent Events stream (EventSource) holds its connection for as long as the page is open, and over HTTP/1.1 the limit is per browser and domain, shared by every tab: once the streams hold every connection, every other request to that domain, from any tab, waits.\n\n**Your task.** Export two functions:\n- `requestWaves(requests, perDomainLimit)` → how many rounds the requests need when only `perDomainLimit` can be in flight at once\n- `apiSlotsLeft(perDomainLimit, openStreams)` → connections still free for ordinary requests, never below 0\n\n**Worked example.** 24 calls over 6 connections → **4 waves**, about 4 × 200 = 800 ms, against one 200 ms wave over HTTP/2.",
+      "starter": "export function requestWaves(requests, perDomainLimit) {\n  // TODO: rounds of at most perDomainLimit requests\n}\n\nexport function apiSlotsLeft(perDomainLimit, openStreams) {\n  // TODO: connections the streams leave free\n}\n",
+      "solution": "export function requestWaves(requests, perDomainLimit) {\n  return Math.ceil(requests / perDomainLimit);\n}\n\nexport function apiSlotsLeft(perDomainLimit, openStreams) {\n  return Math.max(0, perDomainLimit - openStreams);\n}\n",
+      "tests": [
+        {
+          "name": "24 calls over 6 connections -> 4 waves",
+          "code": "assert.equal(typeof mod.requestWaves, 'function', 'export a function named requestWaves');\nassert.equal(mod.requestWaves(24, 6), 4);",
+          "input": [
+            24,
+            6
+          ]
+        },
+        {
+          "name": "exactly 6 calls -> 1 wave (boundary)",
+          "code": "assert.equal(typeof mod.requestWaves, 'function', 'export a function named requestWaves');\nassert.equal(mod.requestWaves(6, 6), 1);",
+          "input": [
+            6,
+            6
+          ]
+        },
+        {
+          "name": "a seventh call -> a second wave",
+          "code": "assert.equal(typeof mod.requestWaves, 'function', 'export a function named requestWaves');\nassert.equal(mod.requestWaves(7, 6), 2);",
+          "input": [
+            7,
+            6
+          ]
+        },
+        {
+          "name": "no calls -> 0 waves (boundary)",
+          "code": "assert.equal(typeof mod.requestWaves, 'function', 'export a function named requestWaves');\nassert.equal(mod.requestWaves(0, 6), 0);",
+          "input": [
+            0,
+            6
+          ]
+        },
+        {
+          "name": "one live-updates tab -> 5 connections left",
+          "code": "assert.equal(typeof mod.apiSlotsLeft, 'function', 'export a function named apiSlotsLeft');\nassert.equal(mod.apiSlotsLeft(6, 1), 5);",
+          "input": [
+            6,
+            1
+          ]
+        },
+        {
+          "name": "six tabs with a stream each -> 0 left, the next request hangs (boundary)",
+          "code": "assert.equal(typeof mod.apiSlotsLeft, 'function', 'export a function named apiSlotsLeft');\nassert.equal(mod.apiSlotsLeft(6, 6), 0);",
+          "input": [
+            6,
+            6
+          ]
+        },
+        {
+          "name": "nine streams -> still 0, never negative",
+          "code": "assert.equal(typeof mod.apiSlotsLeft, 'function', 'export a function named apiSlotsLeft');\nassert.equal(mod.apiSlotsLeft(6, 9), 0);",
+          "input": [
+            6,
+            9
+          ]
+        },
+        {
+          "name": "no streams -> all 6 free",
+          "code": "assert.equal(typeof mod.apiSlotsLeft, 'function', 'export a function named apiSlotsLeft');\nassert.equal(mod.apiSlotsLeft(6, 0), 6);",
+          "input": [
+            6,
+            0
+          ]
+        }
+      ],
+      "explanation": "Connections, not bandwidth, set the pace on HTTP/1.1.\n\nFor `apiSlotsLeft(6, 6)`:\n- six tabs each hold one EventSource connection to the domain\n- 6 − 6 = **0** free → the seventh tab's first fetch queues behind streams that never end\n\nIn production MDN's EventSource page warns that when not used over HTTP/2, SSE \"suffers from a limitation to the maximum number of open connections\", per browser and domain and \"set to a very low number (6)\", and MDN's HTTP/1.x connection guide gives 6 parallel connections per domain as the common default. The fixes: serve the API and the stream over HTTP/2, share one stream between tabs (a BroadcastChannel or a SharedWorker relays its events), or batch the 24 calls into fewer requests. Drill 04/01 `rtt-to-first-byte` prices each new connection; this drill counts how many requests can use one at a time.",
+      "hints": [
+        "Over HTTP/1.1 each connection carries one request at a time and the browser opens only a handful per domain, so the rest wait in line.",
+        "waves = ⌈requests ÷ limit⌉; free = max(0, limit − streams).",
+        "Round the requests up into groups the size of the connection limit for the waves, and subtract the long-lived streams from the limit without going below zero"
+      ]
+    }
+  ]
+}
