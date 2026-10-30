@@ -34,7 +34,9 @@ The server refuses to start on a stale stamp or a busy port, and backs up the DB
 - **The owner has not used the app yet** (checked 2026-10-30: 0 attempts, 0 XP, 0 review cards, 15 "missed" days on
   the heatmap since 10-15). REVIEW-2026-10-30 §1 explains why that puts the "day one" app wave first. Re-check with
   `GET /api/dashboard` before planning.
-- Nothing from the 2026-10-30 review is implemented. No wave is in flight.
+- **ab wave PAUSED 2026-10-30 (out of usage): resume from [`ab-wave/STATUS.md`](ab-wave/STATUS.md).** The council
+  ruled, the hub contracts landed on branch `ab-wave` (green), the 7 stream briefs are written; no stream work is
+  committed yet. selfboot is checked out on `ab-wave`: do not `npm run serve` from it against the real DB.
 - Content census (count again before trusting a number; `C:\Users\Owner\Desktop\bootquest-handoff\tools\census.mjs`
   is a read-only counter):
 
