@@ -38,7 +38,7 @@ import { ID_RE, ImportError, JAVADRILLS_EXPECTED, readModules, type JavadrillsEx
  * the tests / end-tests markers, a solution whose tests block differs from the
  * starter's by even one byte, no `class Exercise` or a `package` statement, a tests
  * block without test(...) / report() / a literal test name, fewer than 4 or more
- * than 8 literally named tests, no test named with "(boundary)", a pasteable
+ * than 8 literally named tests, a duplicate test name, no test named with "(boundary)", a pasteable
  * hint 3 (`;`, `return` or a parenthesis — hint 3 is the approach in words), and a census that
  * differs from the expected counts. Output is deterministic: same authoring bytes →
  * same pack bytes (the manifest's importedFrom.path / gitHead / dirty record where it
@@ -103,6 +103,8 @@ export function mapExercise(module: string, ex: JavadrillsExercise, position: nu
   if (!/\breport\(\)/.test(exSplit.tests)) fail('tests block never calls report()');
   const testNames = literalTestNames(exSplit.tests);
   if (testNames.length === 0) fail('tests block names no test with a string literal');
+  const dup = testNames.find((n, i) => testNames.indexOf(n) !== i);
+  if (dup !== undefined) fail(`duplicate test name ${JSON.stringify(dup)}`);
   if (testNames.length < 4 || testNames.length > 8) fail(`needs 4-8 literally named tests (has ${testNames.length})`);
   if (!testNames.some((n) => n.includes('(boundary)'))) fail('needs at least one test named with "(boundary)"');
   for (const [which, src] of [['starter', ex.starter], ['solution', ex.solution]] as const) {

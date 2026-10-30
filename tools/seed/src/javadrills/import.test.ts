@@ -285,7 +285,7 @@ describe('import-time refusals (write nothing)', () => {
     refuse([both((s) => s.replace(/test\("[^"]*",/g, 'test(NAME,'))], /names no test with a string literal/);
   });
 
-  it('refuses fewer than 4 or more than 8 named tests, and no "(boundary)" test', () => {
+  it('refuses fewer than 4 or more than 8 named tests, a duplicate name, and no "(boundary)" test', () => {
     const both = (f: (s: string) => string) => exercise({ starter: f(STARTER), solution: f(SOLUTION) });
     refuse([both((s) => s.replace(/^ {8}test\("twice\((1|-3)\).*\n/gm, ''))], /needs 4-8 literally named tests \(has 2\)/);
     clean();
@@ -293,6 +293,8 @@ describe('import-time refusals (write nothing)', () => {
     refuse([both((s) => s.replace('        System.exit(report());', `${extra}        System.exit(report());`))], /needs 4-8 literally named tests \(has 9\)/);
     clean();
     refuse([both((s) => s.replace(' (boundary)"', '"'))], /at least one test named with "\(boundary\)"/);
+    clean();
+    refuse([both((s) => s.replace('test("twice(1) is 2"', 'test("twice(2) is 4"'))], /duplicate test name "twice\(2\) is 4"/);
   });
 
   it('refuses a pasteable hint 3: a semicolon, return or parentheses', () => {
