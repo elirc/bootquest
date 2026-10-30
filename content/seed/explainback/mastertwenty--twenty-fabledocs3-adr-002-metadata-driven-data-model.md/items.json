@@ -75,26 +75,26 @@
      ]
     },
     {
-     "prompt": "Walk through how a GraphQL request for workspace records learns what that workspace's schema looks like right now, and how a committed metadata change reaches every server instance. Where can a request still be answered from an outdated picture of the metadata?",
+     "prompt": "Walk through how a committed metadata change in Twenty reaches the caches of every server instance: what the runner refreshes and in what order, how another instance notices, and where a request, or the next migration, can still work from an outdated picture of the metadata.",
      "keyPoints": [
       {
-       "text": "[w3] The executable schema is assembled per request: SDL text plus resolvers generated from the flat object and field maps, combined with makeExecutableSchema; nothing about a workspace's types exists at build time.",
+       "text": "[w3] The refresh happens only after COMMIT, never inside the transaction: the runner first flushes the flat-entity maps the run touched and then fires the dependent refreshes, so for a moment the database is ahead of every cache.",
        "cite": {
-        "path": "twenty/packages/twenty-server/src/engine/api/graphql/workspace-schema.factory.ts",
-        "lineStart": 23,
-        "lineEnd": 68
+        "path": "twenty/packages/twenty-server/src/engine/workspace-manager/workspace-migration/workspace-migration-runner/services/workspace-migration-runner.service.ts",
+        "lineStart": 123,
+        "lineEnd": 145
        }
       },
       {
-       "text": "[w3] The SDL itself is cached under (workspace, metadataVersion, application) and regenerated from the flat maps only on a miss; the version is read from cache storage and seeded from the workspace row when absent.",
+       "text": "[w3] The next migration also starts from the cache: the runner loads the flat maps for the actions' metadata, plus their related, relation and validation-related names, through getOrRecompute before it opens its transaction, so a change can be validated and applied against a picture this instance has not refreshed yet.",
        "cite": {
-        "path": "twenty/packages/twenty-server/src/engine/api/graphql/workspace-graphql-schema-sdl/workspace-graphql-schema-sdl.service.ts",
-        "lineStart": 115,
-        "lineEnd": 164
+        "path": "twenty/packages/twenty-server/src/engine/workspace-manager/workspace-migration/workspace-migration-runner/services/workspace-migration-runner.service.ts",
+        "lineStart": 194,
+        "lineEnd": 218
        }
       },
       {
-       "text": "[w2] After a run touching object or field maps, the runner increments the metadata version (so the next SDL lookup misses), flushes the cached find-all-views operation, and invalidates and recomputes the role, permission and ORM-entity caches.",
+       "text": "[w2] After a run touching object or field maps, the runner increments the metadata version, flushes the cached find-all-views operation, and invalidates and recomputes the role, permission, ORM-entity and resolver-name caches.",
        "cite": {
         "path": "twenty/packages/twenty-server/src/engine/workspace-manager/workspace-migration/workspace-migration-runner/services/workspace-migration-runner.service.ts",
         "lineStart": 42,
@@ -126,11 +126,11 @@
        }
       },
       {
-       "text": "[w1] As written, the memoizer keeps a resolved result for 10 s measured from its LAST use, so on an instance that did not run the invalidation, an entry read continuously can keep being returned without reaching the 100 ms hash check.",
+       "text": "[w1] The dependent refreshes run side by side under Promise.allSettled, so one failing cache does not stop the others; the runner then raises a single error counting the failures, which the post-commit path only logs.",
        "cite": {
-        "path": "twenty/packages/twenty-server/src/engine/twenty-orm/storage/promise-memoizer.storage.ts",
-        "lineStart": 19,
-        "lineEnd": 67
+        "path": "twenty/packages/twenty-server/src/engine/workspace-manager/workspace-migration/workspace-migration-runner/services/workspace-migration-runner.service.ts",
+        "lineStart": 140,
+        "lineEnd": 160
        }
       }
      ]
@@ -139,23 +139,35 @@
      "prompt": "Defend or indict the decision to make Twenty's data model runtime data rather than a fixed schema with a JSONB custom-fields column or a per-tenant code-generation-and-redeploy pipeline. Use what a metadata change costs and what a failed one leaves behind at this commit.",
      "keyPoints": [
       {
-       "text": "[w3] Against the JSONB column: custom values would lose real column types, real foreign keys and per-field indexes, so they could never be filtered or aggregated as well as built-in fields.",
-       "quote": "no typed columns, no honest FKs, no cheap per-field indexes"
-      },
-      {
-       "text": "[w2] Against generate-and-redeploy: editing a field must feel like editing a spreadsheet, not wait minutes for a build, and the product would depend on a build farm at runtime.",
-       "quote": "a build farm as a hard runtime dependency"
-      },
-      {
-       "text": "[w2] The payoff: standard and custom objects travel through one implementation, so no feature can work for one kind and not the other.",
-       "quote": "One implementation serves standard and custom objects, so features can't fork."
-      },
-      {
-       "text": "[w3] A failed run is contained: the runner rolls back the transaction, then executes each action's rollback handler in reverse order, invalidates the caches it loaded, and rethrows as a WorkspaceMigrationRunnerException (INTERNAL_SERVER_ERROR for unknown causes).",
+       "text": "[w3] Against the JSONB column, the code buys real types per field: a select, multi-select or rating field first gets its own Postgres enum type, and then every column is generated from the field definition and added to that workspace's table, in the same transaction.",
        "cite": {
-        "path": "twenty/packages/twenty-server/src/engine/workspace-manager/workspace-migration/workspace-migration-runner/services/workspace-migration-runner.service.ts",
-        "lineStart": 275,
-        "lineEnd": 321
+        "path": "twenty/packages/twenty-server/src/engine/workspace-manager/workspace-migration/workspace-migration-runner/action-handlers/field/services/create-field-action-handler.service.ts",
+        "lineStart": 162,
+        "lineEnd": 205
+       }
+      },
+      {
+       "text": "[w2] Against generate-and-redeploy: a change to the standard model still reaches each workspace as data, because the standard application's sync diffs its code-defined maps against that workspace's maps and runs the result as a migration with isSystemBuild switched on, so a deploy ships definitions, not DDL.",
+       "cite": {
+        "path": "twenty/packages/twenty-server/src/engine/workspace-manager/twenty-standard-application/services/twenty-standard-application.service.ts",
+        "lineStart": 55,
+        "lineEnd": 80
+       }
+      },
+      {
+       "text": "[w2] Ordinary edits run with isSystemBuild off, so a system object accepts only standardOverrides and isActive changes from an admin; only the standard sync may rewrite it.",
+       "cite": {
+        "path": "twenty/packages/twenty-server/src/engine/workspace-manager/workspace-migration/workspace-migration-builder/validators/services/flat-object-metadata-validator.service.ts",
+        "lineStart": 63,
+        "lineEnd": 75
+       }
+      },
+      {
+       "text": "[w3] A failed run is contained by the database rollback alone: the runner rolls the transaction back and then calls each action's rollback handler in reverse order, but at this commit every handler inherits a no-op rollbackForMetadata, and the error is rethrown as a WorkspaceMigrationRunnerException (INTERNAL_SERVER_ERROR for unknown causes).",
+       "cite": {
+        "path": "twenty/packages/twenty-server/src/engine/workspace-manager/workspace-migration/workspace-migration-runner/interfaces/workspace-migration-runner-action-handler-service.interface.ts",
+        "lineStart": 193,
+        "lineEnd": 200
        }
       },
       {
@@ -167,8 +179,12 @@
        }
       },
       {
-       "text": "[w2] The cost is bespoke infrastructure that a compile-time model would not need: its own ORM, a GraphQL schema generator and a migration engine.",
-       "quote": "a triple mortgage of bespoke infrastructure"
+       "text": "[w2] The standard sync also deletes: it runs with inferDeletionFromMissingEntities over the entities the standard application owns, so whatever the code stops defining becomes delete actions in every workspace on its next sync, while custom entities are outside the comparison.",
+       "cite": {
+        "path": "twenty/packages/twenty-server/src/engine/workspace-manager/workspace-migration/universal-flat-entity/utils/universal-flat-entity-deleted-created-updated-matrix-dispatcher.util.ts",
+        "lineStart": 51,
+        "lineEnd": 66
+       }
       },
       {
        "text": "[w1] Changes cascade through metadata, not just columns: deleting a field also deletes or updates the indexes that use it and deletes page-layout widgets configured on that field, all in the same migration request.",
@@ -179,8 +195,12 @@
        }
       },
       {
-       "text": "[w1] Debugging always has two sources of truth to reconcile: the metadata's description and the physical tables.",
-       "quote": "what does Postgres actually have"
+       "text": "[w1] Even a refused change costs a cache flush: after a rollback the runner invalidates the same cache keys it would after a commit, and only logs if that fails, so a failed edit can still evict the warm metadata other instances were using.",
+       "cite": {
+        "path": "twenty/packages/twenty-server/src/engine/workspace-manager/workspace-migration/workspace-migration-runner/services/workspace-migration-runner.service.ts",
+        "lineStart": 299,
+        "lineEnd": 310
+       }
       }
      ]
     }
