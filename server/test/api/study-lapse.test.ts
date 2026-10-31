@@ -3,6 +3,7 @@
  *   - quiz-miss and flashcard cards carry the quest unit's competency (code-reading);
  *   - a lapse (Again on a Review-state card) demotes at most once per competency per local day,
  *     and never writes a demotion row at the rating floor (1);
+ *   - a quiz item missed AGAIN re-grades its card as 'again' (no review, no XP, no demotion).
  * The real grok-js quest pack on a one-quest campaign fixture (as test/api/study-quests.test.ts).
  */
 import { readFileSync } from 'node:fs';
@@ -17,7 +18,7 @@ import { createApp } from '../../src/api/app.ts';
 import { defaultRunners } from '../../src/api/runners.ts';
 import { DAY_MS, fixedClock } from '../../src/engines/clock.ts';
 import { getRating } from '../../src/engines/evidence.ts';
-import { deserializeCard, getReviewItem } from '../../src/engines/fsrs.ts';
+import { deserializeCard, getReviewItem, review } from '../../src/engines/fsrs.ts';
 import { loadCampaignIntoDb, readCampaign } from '../../src/store/campaign.ts';
 import { loadSeedItemStore, type SeedItemStore } from '../../src/store/seed-items.ts';
 import { loadStudyQuestsIntoDb } from '../../src/store/study-quests.ts';
@@ -164,5 +165,50 @@ describe('study-quiz cards carry the quest competency; a lapse demotes once per 
     expect(rows).toHaveLength(2 + pass.studyQuiz!.flashcardsEnrolled);
     expect(rows.filter((r) => r.kind === 'card')).toHaveLength(pass.studyQuiz!.flashcardsEnrolled);
     for (const r of rows) expect(r.c).toBe('code-reading');
+  });
+});
+
+describe('a quiz item missed again re-grades its card as again (R4 L3)', { timeout: 60_000 }, () => {
+  const ctx = useLapseApi();
+
+  it('a not-yet-due Review card: lapse counted, due pulled in to tomorrow; an already-due card stays due; no review, XP or demotion; once per attempt', async () => {
+    promoteTo(ctx.tmp.db, ctx.clock, 'code-reading', 2);
+    expect((await submitQuiz(ctx, 3)).verdict).toBe('fail'); // a fail: no XP, no flashcards
+    const [a, b] = [cardId(ctx, 0), cardId(ctx, 1)];
+    graduate(ctx.tmp.db, ctx.clock, a);
+    review(ctx.tmp.db, a, 'good', ctx.clock); // a longer interval: due well after tomorrow
+    const before = getReviewItem(ctx.tmp.db, a);
+    const card0 = deserializeCard(before.fsrs_state);
+    const t = ctx.clock().getTime();
+    expect(card0.state).toBe(State.Review);
+    expect(before.due_at).toBeGreaterThan(t + 2 * DAY_MS);
+    const bBefore = getReviewItem(ctx.tmp.db, b); // still New and due (never reviewed)
+    expect(bBefore.due_at).toBeLessThanOrEqual(t);
+    const ledger = () => [
+      count(ctx, 'SELECT COUNT(*) AS n FROM review_log'),
+      count(ctx, 'SELECT COUNT(*) AS n FROM xp_event'),
+      count(ctx, `SELECT COUNT(*) AS n FROM evidence WHERE kind IN ('review', 'demotion')`),
+    ];
+    const ledger0 = ledger();
+
+    const again = await submitQuiz(ctx, 3);
+    expect(again.verdict).toBe('fail');
+    expect(again.studyQuiz!.reviewCards).toMatchObject({ created: 0, alreadyQueued: 3 });
+    const after = getReviewItem(ctx.tmp.db, a);
+    const card1 = deserializeCard(after.fsrs_state);
+    expect(card1.state).toBe(State.Relearning);
+    expect(card1.lapses).toBe(card0.lapses + 1);
+    expect(card1.reps).toBe(card0.reps + 1); // exactly one re-grade for this attempt
+    expect(card1.stability).toBeLessThan(card0.stability);
+    expect(after.due_at).toBe(t + DAY_MS); // shortened, never before a new miss card's next-day due
+    expect(card1.due.getTime()).toBe(after.due_at); // the FSRS state agrees with the row
+    // an already-due card keeps its due time (it stays due); its FSRS memory takes the again
+    const bAfter = getReviewItem(ctx.tmp.db, b);
+    expect(bAfter.due_at).toBe(bBefore.due_at);
+    expect(deserializeCard(bAfter.fsrs_state).reps).toBe(deserializeCard(bBefore.fsrs_state).reps + 1);
+    expect(again.studyQuiz!.reviewCards.dueAt).toBe(bBefore.due_at);
+    // not a review: no review_log, no XP, no review/demotion evidence; the rating is untouched
+    expect(ledger()).toEqual(ledger0);
+    expect(getRating(ctx.tmp.db, 'code-reading')).toBe(2);
   });
 });

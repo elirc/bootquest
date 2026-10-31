@@ -3,7 +3,7 @@ import type { Db } from '../db/database.ts';
 import { DAY_MS, nowMs, type Clock } from './clock.ts';
 import { meetsCorePct } from './campaign.ts';
 import { unitCompetencies } from '../store/queries.ts';
-import { addReviewItem, reviveRetiredCard } from './fsrs.ts';
+import { addReviewItem, regradeMissedCard, reviveRetiredCard } from './fsrs.ts';
 
 /**
  * W8 study-quest quiz gate (spec §4 "Study quest": reading steps + pre-seeded quiz gate,
@@ -14,7 +14,8 @@ import { addReviewItem, reviveRetiredCard } from './fsrs.ts';
  *                    up to 80%), the same rule as the campaign's act gate.
  *   queueQuizMisses  each missed item becomes ONE review_item (kind 'quiz-miss', card key
  *                    'quiz-miss:<item key>') due the next day; a re-attempt that misses it
- *                    again finds the existing card and leaves its schedule alone (dedup).
+ *                    again finds the existing card (dedup) and re-grades it as 'again'
+ *                    (ab-wave R4 L3, fsrs.ts regradeMissedCard): once per card per attempt.
  *   enrollFlashcards the quest's seeded flashcards become review cards (kind 'card',
  *                    'flashcard:<item key>') on the quest's first pass, due the next day.
  * Both card kinds carry the quest unit's first competency (unitCompetencies order; ab-wave
@@ -76,6 +77,8 @@ function enqueue(db: Db, unitId: number, cardKeys: readonly string[], kind: 'qui
       // re-seed (store/review-cards.ts) is live again with its FSRS memory, but a due time that went
       // stale while it was retired moves to `dueAt` like a new card's (F7b: never instantly due)
       reviveRetiredCard(db, cardKey, dueAt, now);
+      // a quiz item missed again is an honest 'again' on its card (R4 L3); a re-enrolled flashcard is not
+      if (kind === 'quiz-miss') regradeMissedCard(db, cardKey, dueAt, now);
       alreadyQueued++;
       continue;
     }
@@ -85,12 +88,12 @@ function enqueue(db: Db, unitId: number, cardKeys: readonly string[], kind: 'qui
   return { created, alreadyQueued };
 }
 
-/** Misses -> FSRS cards due the next day (deduped by card key). Call inside the submit transaction. */
+/** Misses -> FSRS cards due the next day (deduped by card key; a re-miss re-grades). Call inside the submit transaction. */
 export function queueQuizMisses(db: Db, unitId: number, missedItemKeys: readonly string[], now: Clock): { created: number; alreadyQueued: number; dueAt: number | null } {
   if (missedItemKeys.length === 0) return { created: 0, alreadyQueued: 0, dueAt: null };
   const keys = missedItemKeys.map((k) => `${QUIZ_MISS_CARD_PREFIX}${k}`);
   const counts = enqueue(db, unitId, keys, 'quiz-miss', nowMs(now) + DAY_MS, now);
-  // the earliest due time among these misses' cards (a deduped card keeps its own schedule)
+  // the earliest due time among these misses' cards (a re-missed card: its re-graded due time)
   const row = db.get<{ d: number | null }>(`SELECT MIN(due_at) AS d FROM review_item WHERE card_key IN (${keys.map(() => '?').join(', ')})`, ...keys);
   return { ...counts, dueAt: row?.d ?? null };
 }

@@ -110,6 +110,27 @@ export function reviveRetiredCard(db: Db, cardKey: string, dueFloor: number, now
   return true;
 }
 
+/**
+ * ab-wave R4 L3: a study-quest quiz item missed AGAIN re-grades its live card as 'again' (the
+ * learner just failed it): the FSRS memory moves as for a failed review (stability drops; a
+ * Review-state card becomes Relearning and counts a lapse), and the due time only ever moves
+ * EARLIER, never to before `dueFloor` (what a brand-new miss card gets: the next day, F7b)
+ * unless the card was already due sooner:  due = min(current due, max(FSRS 'again' due, dueFloor)).
+ * It is NOT a review: no review_log row, no XP, no review evidence, no demotion (grading Again
+ * on the Review page stays the one path that demotes). A due time that changes stays > now and
+ * never moves later, so dueAsOf (streak.ts) reads every past moment exactly as before.
+ * A retired card or a retest schedule is left alone. Returns true when the card was re-graded.
+ */
+export function regradeMissedCard(db: Db, cardKey: string, dueFloor: number, now: Clock): boolean {
+  const item = db.get<ReviewItemRow>('SELECT * FROM review_item WHERE card_key = ?', cardKey);
+  if (!item || item.retired_at !== null || item.kind === 'retest') return false;
+  const next = schedule(deserializeCard(item.fsrs_state), 'again', now);
+  const due = Math.min(item.due_at, Math.max(next.due.getTime(), dueFloor));
+  next.due = new Date(due);
+  db.run('UPDATE review_item SET fsrs_state = ?, due_at = ?, updated_at = ? WHERE id = ?', serializeCard(next), due, nowMs(now), item.id);
+  return true;
+}
+
 export function getReviewItem(db: Db, id: number): ReviewItemRow {
   const row = db.get<ReviewItemRow>('SELECT * FROM review_item WHERE id = ?', id);
   if (!row) throw new Error(`review_item ${id} not found`);

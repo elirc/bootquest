@@ -33,13 +33,16 @@ describe('study-quest enqueue revives a retired card on a sensible schedule', ()
     expect(dueCount(ctx.db, ctx.clock)).toBe(1);
   });
 
-  it('a LIVE card keeps its own schedule (dedup unchanged); a revived card is due at the LATER of its own due time and a new card\'s', () => {
+  it('a LIVE card keeps its due time (dedup; a re-miss re-grades it); a revived card is due at the LATER of its own due time and a new card\'s', () => {
     const unit = makeUnit(ctx.db, ctx.clock, { kind: 'study' });
     queueQuizMisses(ctx.db, unit, ['seed:quiz:b'], ctx.clock);
     const before = card('quiz-miss:seed:quiz:b');
     ctx.clock.advance(60_000);
     queueQuizMisses(ctx.db, unit, ['seed:quiz:b'], ctx.clock);
-    expect(card('quiz-miss:seed:quiz:b')).toEqual(before);
+    // ab-wave R4 L3: the re-miss re-grades the live card as 'again'; its next-day due time stays
+    const after = card('quiz-miss:seed:quiz:b');
+    expect(after.due_at).toBe(before.due_at);
+    expect(deserializeCard(after.fsrs_state).reps).toBe(deserializeCard(before.fsrs_state).reps + 1);
     // flashcard enrolled, retired an hour later, re-enrolled an hour after that
     enrollFlashcards(ctx.db, unit, ['seed:flash:c'], ctx.clock);
     const due = card('flashcard:seed:flash:c').due_at;
