@@ -2,10 +2,12 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { API_MODE } from '../api/client';
 import { useApi } from '../api/context';
-import { CHORD_WINDOW_MS, GO_CHORDS, hasModifier, isEditableTarget, useKeydown } from '../lib/keys';
+import { CHORD_WINDOW_MS, GO_CHORDS, hasModifier, isEditableTarget, isPaletteKey, useKeydown } from '../lib/keys';
+import { overlayOpen } from '../lib/shortcuts';
 import { useAsync } from '../lib/useAsync';
 import { TracksProvider, useTracks } from '../lib/tracks';
 import { progressLabel, progressTitle, TRACK_PLACEHOLDER, TRACK_SHORT } from '../lib/view';
+import { CommandPalette } from './CommandPalette';
 import { Icon, type IconName } from './Icon';
 import { ShortcutHelp } from './ShortcutHelp';
 import { Kbd } from './ui';
@@ -38,6 +40,7 @@ function Shell({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   const { pathname, hash } = useLocation();
   const [helpOpen, setHelpOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [pendingG, setPendingG] = useState(false);
   const gAt = useRef(0);
 
@@ -47,11 +50,21 @@ function Shell({ children }: { children: ReactNode }) {
   const due = useAsync(() => api.getReviewQueue(1), [api, pathname]);
   // a live count reported on this page (W11); a navigation re-reads the server count instead
   const [reported, setReported] = useState<{ path: string; n: number } | null>(null);
+  const closePalette = useCallback(() => setPaletteOpen(false), []);
   const reportDue = useCallback((n: number) => setReported({ path: pathname, n }), [pathname]);
   useEffect(() => setReported(null), [pathname]); // leaving and coming back re-reads the server count
   const dueCount = reported && reported.path === pathname ? reported.n : due.data?.count;
 
   useKeydown((e) => {
+    // ab S4: Ctrl+K / Cmd+K opens the unit palette from anywhere (a text field included), unless
+    // another dialog owns the keyboard; the open palette handles its own Ctrl+K (close)
+    if (isPaletteKey(e)) {
+      if (e.defaultPrevented || e.repeat || paletteOpen || overlayOpen()) return;
+      e.preventDefault();
+      setPendingG(false);
+      setPaletteOpen(true);
+      return;
+    }
     if (e.defaultPrevented || hasModifier(e) || isEditableTarget(e.target)) return;
     if (e.key === '?') {
       e.preventDefault();
@@ -167,6 +180,10 @@ function Shell({ children }: { children: ReactNode }) {
         </div>
 
         <div className="side-foot">
+          <button type="button" className="linkish" onClick={() => setPaletteOpen(true)} data-testid="open-palette">
+            <Icon name="search" /> Find a unit <Kbd>Ctrl</Kbd>
+            <Kbd>K</Kbd>
+          </button>
           <button type="button" className="linkish" onClick={() => setHelpOpen(true)}>
             <Icon name="keyboard" /> Shortcuts <Kbd>?</Kbd>
           </button>
@@ -196,6 +213,7 @@ function Shell({ children }: { children: ReactNode }) {
       </div>
 
       {helpOpen && <ShortcutHelp onClose={() => setHelpOpen(false)} />}
+      {paletteOpen && <CommandPalette onClose={closePalette} />}
     </div>
   );
 }

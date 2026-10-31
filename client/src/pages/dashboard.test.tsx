@@ -211,9 +211,10 @@ describe('slate routing and variants', () => {
     await waitFor(() => expect(within(slateRow('drill:js')!).getByRole('link')).toHaveAttribute('href', '/play/102'));
     // java: no drill unit at all -> the track page
     expect(within(slateRow('drill:java')!).getByRole('link')).toHaveAttribute('href', '/campaign/java');
-    // campaign: the in-progress quest of the first track with an actionable one
-    await waitFor(() => expect(within(slateRow('campaign')!).getByRole('link')).toHaveAttribute('href', '/campaign/js?unit=102'));
-    expect(slateRow('campaign')).toHaveTextContent('Campaign step JS/TS');
+    // campaign: the in-progress quest of the first track with an actionable one (ab S4: the
+    // server's targetUnitId, straight to the unit page)
+    await waitFor(() => expect(within(slateRow('campaign')!).getByRole('link')).toHaveAttribute('href', '/play/102'));
+    expect(slateRow('campaign')).toHaveTextContent('Campaign step');
     expect(slateRow('drill:js')).toHaveTextContent('JS/TS drill set (5 drills)');
   });
 

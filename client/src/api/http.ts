@@ -34,6 +34,8 @@ import {
   type UnitNotesResponse,
   type RefContentResponse,
   type WrittenAnswerResponse,
+  type DrillNextResponse,
+  type UnitSearchResponse,
 } from './types';
 
 type Init = { method: 'POST'; body: unknown };
@@ -135,5 +137,12 @@ export function createHttpApi(baseUrl = '/api', fetchImpl: typeof fetch = (...a)
     getCampaignProgress: () => call<CampaignProgressResponse>('/stats/campaign'),
     getUnitNotes: (id) => call<UnitNotesResponse>(`${unit(id)}/notes`),
     getRefContent: (refId) => call<RefContentResponse>(`/refs/${encodeURIComponent(String(refId))}/content`),
+    // ab S4 find things
+    searchUnits: (q, limit) => {
+      const params = new URLSearchParams({ q });
+      if (limit !== undefined) params.set('limit', String(limit));
+      return call<UnitSearchResponse>(`/units/search?${params.toString()}`);
+    },
+    getNextDrill: (tracks) => call<DrillNextResponse>(`/drills/next?${new URLSearchParams({ tracks: tracks.join(','), mode: 'mixed' }).toString()}`),
   };
 }

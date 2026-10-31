@@ -58,7 +58,6 @@ import type {
   RevealResponse,
   RunResponse as RunResponseSchema,
   SelfAttestResponse,
-  SlateItemDto,
   StudyQuestPublic,
   StudyQuizOutcome,
   SubmitResponse,
@@ -74,6 +73,8 @@ import type {
   WrittenAnswerResponse,
   XpOutcome as XpOutcomeSchema,
 } from '@bootquest/shared/api';
+// ab S4: the dashboard's slate items carry targetUnitId; unit search + mixed drills (api-ext)
+import type { DashboardResponseExt, DrillNextResponse, SlateItemDtoExt, UnitSearchHit, UnitSearchResponse } from '@bootquest/shared/api-ext';
 
 // ---------------------------------------------------------------- re-exported wire types
 
@@ -127,6 +128,9 @@ export type {
   UnitLockState,
   UnitSummary,
   WrittenAnswerResponse,
+  DrillNextResponse,
+  UnitSearchHit,
+  UnitSearchResponse,
 };
 
 // shared/src/api.ts exports these schemas without a sibling type alias; infer them here.
@@ -139,7 +143,7 @@ export type XpOutcome = z.infer<typeof XpOutcomeSchema>;
 export type ReviewQueueItem = z.infer<typeof ReviewQueueItemSchema>;
 export type ReviewQueueResponse = z.infer<typeof ReviewQueueResponseSchema>;
 export type GradeResponse = z.infer<typeof GradeResponseSchema>;
-export type SlateItem = z.infer<typeof SlateItemDto>;
+export type SlateItem = SlateItemDtoExt;
 /** explain-back retakes: one practice attempt (the key was already read; 0 XP; feedback only) */
 export type PracticeAttempt = z.infer<typeof PracticeAttemptDto>;
 /** explain-back retakes: the practice state of the loaded version (unit detail) */
@@ -160,7 +164,7 @@ export type CheckType = PublicCheck['type'];
 export type RunFailure = CanonicalRunResult['failures'][number];
 
 // Dashboard parts.
-export type Dashboard = DashboardResponse;
+export type Dashboard = DashboardResponseExt;
 export type HeatmapDay = DashboardResponse['heatmap'][number];
 export type DayStatus = HeatmapDay['status'];
 export type CompetencyRow = DashboardResponse['competencies'][number];
@@ -300,6 +304,15 @@ export interface BootQuestApi {
   getUnitNotes(unitId: number): Promise<UnitNotesResponse>;
   /** GET /api/refs/:id/content — the markdown of ONE registered ref (the refs viewer). */
   getRefContent(refId: number): Promise<RefContentResponse>;
+
+  // ---- ab S4 find things (read-only)
+  /**
+   * GET /api/units/search?q=&limit= — every live unit (campaign quest units included) matched on key +
+   * title only; a unit behind a locked act comes back `locked` (its page still enforces the act gate).
+   */
+  searchUnits(q: string, limit?: number): Promise<UnitSearchResponse>;
+  /** GET /api/drills/next?tracks=a,b&mode=mixed — the next passable drill, rotating deterministically over the tracks. */
+  getNextDrill(tracks: readonly TrackId[]): Promise<DrillNextResponse>;
 }
 
 /** Codes the client can raise itself on top of the server's envelope codes. */
