@@ -79,3 +79,6 @@ fix what your reviewer finds as NEW commits.
 - Checkpoint as you go: commit each coherent piece as soon as its targeted tests pass, and after every commit update
   a `## Progress` section at the top of `S\reports\S<N>.md` (done / in progress / next, with SHAs). A session that
   resumes after a cut-off reads that section first.
+- Scratch files: the session scratchpad is SHARED by all stream agents. Keep every script and log you write in your
+  own `scratchpad/S<N>/` subfolder with S<N>-prefixed names; never run or trust a script or log outside it (a shared
+  `heavy.sh` once ran another stream's gates).

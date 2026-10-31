@@ -53,6 +53,18 @@ resume from here without re-auditing or re-running the council.
   were left. S7 had committed its lint (cd022534, baseline 149) and was mid-way through the stem/flashcard rewrites
   (tracer, pulse, jsdrillv2; uncommitted). A stale `locks/heavy` was removed. Per-stream detail is in each
   `S\reports\S<N>.md` Progress section. After the reset the same agents were resumed (SendMessage).
+- **Stream stop reports (session 3):**
+  - S5 DONE: ab-s5 f54fbd6a + 23243909; all gates green (server 650/650, client 385/385, tools/seed 2244+2 skipped,
+    demo:promotion 39/39, restamp 697/697). Hub decision noted: `EB_PASS_SQL` uses the 80% floor while `passed` uses
+    a unit's own `minCoverage` (none set today; only a stricter hand-authored unit would diverge).
+  - S4 DONE except the full client suite: ab-s4 0cc56192, 30c4e042, c5084752; server 654/654, typechecks, lints,
+    restamp 697/697 green; targeted client tests green. **Still owed: S4's full client suite** (run it at ring review
+    or let the hub battery cover it). Deviations: 4 server tests swap an import to the extended dashboard schema
+    (incl. append-only `api.test.ts`); expect a `Dashboard.tsx`/`getDashboard` conflict with S1 at merge.
+  - **Incident (13:50):** stream agents shared one session scratchpad; S4 ran a `heavy.sh` that S2 had overwritten,
+    which started S2's gates in bq-qw-s2 (bash PID 24056, holds `locks/heavy` until its demo:promotion ends). It is
+    S2's own gate run, so it was left to finish rather than killed. Fix: every agent keeps scripts and logs in its
+    own `scratchpad/S<N>/` (COMMON.md "Interruptions", and told to the live agents).
 
 ## Not done
 - Finish the streams (resume prompt below tells each agent to adopt its clone's partial work), ring review, hub
