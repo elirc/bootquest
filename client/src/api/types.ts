@@ -11,6 +11,9 @@
 // - the server computes every number (XP, level, streak); the client never derives them.
 
 import type { z } from 'zod';
+// ab S1: slate settings (the learner's daily slate shape; shared/src/api-ext.ts S1 section)
+import type { SlateSettingsBody, SlateSettingsResponse, SlateTrackShape } from '@bootquest/shared/api-ext';
+export type { SlateSettingsBody, SlateSettingsResponse, SlateTrackShape };
 import type {
   AnswerRecordedResponse,
   AttemptDetailResponse,
@@ -300,6 +303,14 @@ export interface BootQuestApi {
   getUnitNotes(unitId: number): Promise<UnitNotesResponse>;
   /** GET /api/refs/:id/content — the markdown of ONE registered ref (the refs viewer). */
   getRefContent(refId: number): Promise<RefContentResponse>;
+  // ---- ab S1: slate settings
+  /** GET /api/settings/slate — today's and tomorrow's slate shape; `configured` once any choice was saved. */
+  getSlateSettings(): Promise<SlateSettingsResponse>;
+  /**
+   * PUT /api/settings/slate — appends the learner's choice, effective TOMORROW (today's slate never
+   * moves). 400 VALIDATION for a track with no drill slot, a duplicate, a size outside 1-10, or every track off.
+   */
+  putSlateSettings(body: SlateSettingsBody): Promise<SlateSettingsResponse>;
 }
 
 /** Codes the client can raise itself on top of the server's envelope codes. */
