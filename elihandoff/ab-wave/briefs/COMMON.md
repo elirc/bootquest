@@ -70,3 +70,12 @@ paste the tails.
 by counting, gates with tails, deviations from RULINGS/brief, upstream findings, draft SEEDING §8 bullet, what's left.
 Reply to the orchestrator in ≤ 30 lines. Later you will ring-review one other stream (`H\templates\RING-brief.md`) and
 fix what your reviewer finds as NEW commits.
+
+## Interruptions (added 2026-10-31, session 3: two sessions were cut off mid-stream by usage limits)
+- Your clone may already hold work from an earlier, interrupted run of your stream (commits on `ab-s<N>` and/or
+  uncommitted changes). Start with `git log --oneline origin/ab-wave..HEAD`, `git status`, `git diff`. Review that
+  work against your brief like a reviewer: keep and finish what is right, fix what is wrong, discard only what is
+  clearly broken (say so in your report). Never `git reset --hard` or `git clean` blindly.
+- Checkpoint as you go: commit each coherent piece as soon as its targeted tests pass, and after every commit update
+  a `## Progress` section at the top of `S\reports\S<N>.md` (done / in progress / next, with SHAs). A session that
+  resumes after a cut-off reads that section first.

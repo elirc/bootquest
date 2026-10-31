@@ -42,7 +42,11 @@ resume from here without re-auditing or re-running the council.
 | S6 sysdrills | none | authoring 01-08 edits + importer gates in import.ts |
 | S7 leaks/stems | none | tracer/pulse quest+notes re-seed (pulse validation.json deleted mid-run), xleak-lint.ts |
 
-- **Session 3 (2026-10-31):** see the next log entry (written as it goes).
+- **Session 3 (2026-10-31):** recorded the state above (b082f41e); added the "Interruptions" section to
+  COMMON.md (adopt partial work, checkpoint commits, a `## Progress` section at the top of each `Seports\S<N>.md`);
+  re-dispatched the 7 streams with the resume prompt (step 4). **If this session is cut off too:** read each
+  `Seports\S<N>.md` Progress section plus `git -C bq-qw-s<N> log/status`, then re-dispatch only the unfinished
+  streams with the same prompt.
 
 ## Not done
 - Finish the streams (resume prompt below tells each agent to adopt its clone's partial work), ring review, hub
@@ -63,6 +67,7 @@ resume from here without re-auditing or re-running the council.
    > per logical change, run the gates, write your stop report to ...\ab\reports\S<N>.md, reply in ≤ 30 lines. Never
    > push, never touch selfboot or another clone, never POST to or restart the server on :4178, never edit the
    > forbidden fingerprinted files. If blocked on an orchestrator decision, say so instead of guessing.
+   > Your clone holds partial work from an interrupted earlier run: follow COMMON.md "Interruptions" first.
 5. Ring review after all 7 stop reports: S1→S2→S3→S4→S5→S6→S7→S1, using `../templates/RING-brief.md` with S paths.
    Fixes land as NEW commits.
 6. Integrate on `ab-wave`: `git fetch C:/Users/Owner/Desktop/bq-qw-s<N> ab-s<N>:ab-s<N>`, then
