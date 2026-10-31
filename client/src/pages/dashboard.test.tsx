@@ -342,7 +342,8 @@ describe('Review: demotions and shortcut gating', () => {
     const api: BootQuestApi = {
       ...base,
       getReviewQueue: async () => ({ count: items.length, items }),
-      gradeReview: async (id, g) => ({ ...(await base.gradeReview(id, g)), nextDueAt: due[n++]! }),
+      // remainingDue follows this 3-card queue (ab wave S2: "Queue cleared" needs the server's 0 due)
+      gradeReview: async (id, g) => ({ ...(await base.gradeReview(id, g)), nextDueAt: due[n++]!, remainingDue: items.length - n }),
     };
     const { user } = renderApp('/review', api);
     await screen.findByRole('button', { name: /Show answer/ });
