@@ -96,7 +96,7 @@ resume from here without re-auditing or re-running the council.
 - **Ring review (session 3):** brief `briefs/RING.md` (app-code checks for S1-S5, content checks for S6-S7). Pairs:
   S1 reviews S2, S2→S3, S3→S4, S4→S5, S5→S6, S6→S7, S7→S1. Started the 5 pairs that do not involve S1 (S1 was still
   re-running its server suite); S4 was also asked to run its owed full client suite first. Reviews land in
-  `Seview\S<you>-on-S<t>.md`; then each target fixes BLOCKING + SHOULD as new commits.
+  `S\review\S<you>-on-S<t>.md`; then each target fixes BLOCKING + SHOULD as new commits.
 
 ## Not done
 - Finish the streams (resume prompt below tells each agent to adopt its clone's partial work), ring review, hub
