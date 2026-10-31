@@ -175,8 +175,8 @@
    "kind": "flashcard",
    "shape": "hand-authored",
    "label": "f05-run-creation-transaction",
-   "front": "What does createRunForWorkflow write, and why in one transaction?",
-   "back": "A QUEUED run, one PENDING step-run per step, a single job row for the first step only, and a workflow.run.created audit row, all inside one $transaction. The job table is the queue, so enqueueing commits with the run: there is never a run without its first job, or a job without its run. Later steps get their jobs from the worker as each step finishes.",
+   "front": "A FlowForge process crashes right after a run is created. Why can it not leave a run whose first step never gets a job?",
+   "back": "createRunForWorkflow writes the QUEUED run, its step-runs, the first step's job row and an audit row in one $transaction. The job table is the queue, so enqueueing commits with the run.",
    "observation": "read-derived",
    "aiTag": false
   },
@@ -838,7 +838,7 @@
      "SUCCEEDED, as the worker pushes the change to the page"
     ]
    },
-   "explanation": "A run is created QUEUED (workflow-run-repository.ts:39-48). The trigger mutation then invalidates [\"workflow-runs\", id] once (workflow-builder.tsx:161-171), so the panel fetches the run while it is still QUEUED. After that the runs query has no refetchInterval (use-workflow.ts:14-20), the client sets refetchOnWindowFocus false and a 30 s staleTime (app-providers.tsx:8-17), and there is no socket or server push. Staleness never starts a request by itself: only a mount, a network reconnect or an invalidation does, and none happens while the operator watches. So the badge stays QUEUED until the page remounts or another mutation invalidates the key. A refetchInterval while any run is QUEUED or RUNNING would fix it."
+   "explanation": "The trigger invalidates the runs key once, while the run is still QUEUED (workflow-builder.tsx:161-171). After that the runs query has no refetchInterval (use-workflow.ts:14-20), focus refetching is off and a stale entry does not fetch by itself (app-providers.tsx:8-17), and nothing pushes updates, so the badge stays QUEUED."
   },
   {
    "key": "seed:quests:ww7/quiz/8b5036cd8bc261c3",
@@ -1104,7 +1104,7 @@
      "Two each, as their first runs committed before the failure"
     ]
    },
-   "explanation": "ingestEvent loops over the matched workflows and, for each one, awaits createRunForWorkflow and then writes a workflow.event.dispatched audit row (workflow-dispatch-service.ts:66-79). Each createRunForWorkflow is its own $transaction (workflow-run-repository.ts:37-90), so runs one and two are committed before the third is attempted. The third failure propagates out of the loop and executeRoute answers 500, but nothing undoes the earlier runs. The event carries no idempotency key and nothing records that it was processed, so the retry matches all three workflows again and enqueues new runs for the first two. One transaction around the fan-out, or an event id stored under a unique key, would make the retry safe."
+   "explanation": "ingestEvent awaits createRunForWorkflow for each matched workflow in turn (workflow-dispatch-service.ts:66-79), and each call is its own $transaction (workflow-run-repository.ts:37-90), so the first two runs commit before the third fails. The event carries no id, so the retry matches all three again and adds a second run to the first two."
   },
   {
    "key": "seed:quests:ww7/quiz/9f736e46b2a37df6",
@@ -1613,7 +1613,7 @@
      "500, as deleting its steps hits a Restrict foreign key"
     ]
    },
-   "explanation": "updateWorkflow replaces the steps wholesale: inside a transaction it calls tx.workflowStep.deleteMany({ where: { workflowId } }) and then recreates them (workflow-repository.ts:134-136 and on). Every run left WorkflowStepRun rows that point at the old steps, and that relation is onDelete: Restrict (schema.prisma:160), so PostgreSQL refuses the delete and the whole transaction rolls back. Prisma's error is not an AppError, so executeRoute answers 500 with its generic message (route-helpers.ts:48-62). A probe with Prisma 6.19.3 (package.json allows ^6.6.0; there is no lockfile) on PostgreSQL 18 rejected the same deleteMany with a foreign-key error and left the steps untouched. The activation re-check passes for a rename, and when it does fail it throws a 422 AppError (workflow-definition-service.ts:84-87), not a 500. Nothing cascades the history away or returns 409; in effect a workflow that has run can no longer be edited."
+   "explanation": "updateWorkflow deletes every step and recreates them (workflow-repository.ts:134-136), but each run's step-run rows point at the old steps with onDelete: Restrict (schema.prisma:160). PostgreSQL refuses the delete (probed with Prisma 6.19.3 on PostgreSQL 18), and that non-AppError becomes executeRoute's generic 500 (route-helpers.ts:48-62)."
   },
   {
    "key": "seed:quests:ww7/reading-step/2f6b5ec44e94bd97",
