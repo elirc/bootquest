@@ -2,6 +2,7 @@ import type { SeedQuizItem } from '@bootquest/shared';
 import type { Db } from '../db/database.ts';
 import { DAY_MS, nowMs, type Clock } from './clock.ts';
 import { meetsCorePct } from './campaign.ts';
+import { unitCompetencies } from '../store/queries.ts';
 import { addReviewItem, reviveRetiredCard } from './fsrs.ts';
 
 /**
@@ -16,6 +17,8 @@ import { addReviewItem, reviveRetiredCard } from './fsrs.ts';
  *                    again finds the existing card and leaves its schedule alone (dedup).
  *   enrollFlashcards the quest's seeded flashcards become review cards (kind 'card',
  *                    'flashcard:<item key>') on the quest's first pass, due the next day.
+ * Both card kinds carry the quest unit's first competency (unitCompetencies order; ab-wave
+ * R3.2), so a lapse on them can demote it (fsrs.ts review); a unit with none stays NULL.
  * Card TEXT is never stored: the review queue resolves it from the stamped pack by card key.
  */
 
@@ -66,7 +69,8 @@ export function gradeStudyQuiz(items: readonly SeedQuizItem[], answers: readonly
 function enqueue(db: Db, unitId: number, cardKeys: readonly string[], kind: 'quiz-miss' | 'card', dueAt: number, now: Clock) {
   let created = 0;
   let alreadyQueued = 0;
-  for (const cardKey of cardKeys) {
+  const competencyId = unitCompetencies(db, unitId)[0];
+  for (const cardKey of new Set(cardKeys)) {
     if (db.get('SELECT 1 AS x FROM review_item WHERE card_key = ?', cardKey)) {
       // the item is being graded / enrolled, so it exists again: a card retired by an earlier
       // re-seed (store/review-cards.ts) is live again with its FSRS memory, but a due time that went
@@ -75,7 +79,7 @@ function enqueue(db: Db, unitId: number, cardKeys: readonly string[], kind: 'qui
       alreadyQueued++;
       continue;
     }
-    addReviewItem(db, { cardKey, kind, unitId, dueAt }, now);
+    addReviewItem(db, { cardKey, kind, unitId, dueAt, ...(competencyId !== undefined ? { competencyId } : {}) }, now);
     created++;
   }
   return { created, alreadyQueued };
