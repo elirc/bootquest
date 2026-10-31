@@ -65,6 +65,11 @@ resume from here without re-auditing or re-running the council.
     client 385/385, typechecks, lints, restamp 697/697 green; launcher live-checked on a DB copy (4391/5391).
     Deviations: weak spots live in a new `weak-service.ts`; one added `export` on `explanationRelease` in
     `notes-service.ts`; a stale comment in `Dashboard.tsx` about Due now waiting on `/competencies` (fix at merge).
+  - S6 DONE: ab-s6 ea90e361, 34258321, 9a76dd7b (importer gates), 8b1b5546 (manifest + validation stamp);
+    taskformula 95/111 → 0/111, recompute 129/129, 8 naive variants each fail only their trap test; sysdrills 129
+    unchanged, tests 767 → 776; server 640/640, tools/seed 2250+2 skipped, restamp 697/697, lints green; boot proof on
+    a DB copy (:4199) loaded 129. Deviations: 13/02 and 14/09 keep 9 tests; cs/java twins not declared (outside S6
+    files); optional csdrills hint 2s not done.
   - **Hub ruling (request count):** with S3 + S4 the dashboard mount makes dashboard + competencies + tracks + `/due` +
     `/stats/weak`. Accepted (the cap's purpose was killing the 11-request fan-out; folding weak rows into `/due` would
     mix concerns). At merge, update S4's "≤ 3 requests" mock test to the merged set, by counting.
