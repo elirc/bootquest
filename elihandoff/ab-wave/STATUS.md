@@ -70,6 +70,16 @@ resume from here without re-auditing or re-running the council.
     unchanged, tests 767 → 776; server 640/640, tools/seed 2250+2 skipped, restamp 697/697, lints green; boot proof on
     a DB copy (:4199) loaded 129. Deviations: 13/02 and 14/09 keep 9 tests; cs/java twins not declared (outside S6
     files); optional csdrills hint 2s not done.
+  - S7 DONE: ab-s7 11 commits (cd022534 xleak lint; cb3c7dc9 tracer, 9f3510ea pulse, 5b562500 jsdrillv2, 1f27ed5d
+    dotnet-drop, ec7bfd7d j2, f189b828 netcalendy, 28912fbd j7, b63dade4 ww7; e8df084a EB markers; 3b457c21 baseline
+    test fix). Doc-recall stems 61 → 2 (all packs < 5%), flashcard backs > 60 words 28 → 0, baseline 149 → 147 (143
+    frozen-both-sides + 4 accepted), lint precision 17/20 on a hand sample, slotcheck 0 BAD; tools/seed 2260, server
+    640/640, scoped seed:check 19/19, restamp 697/697, lints green. `seed:pins` must run at the hub (clone lacks the
+    mirrors). Pulse re-seeded with `--allow-quarantine` (pre-existing quarantined reading step; keys unchanged).
+  - **Hub ruling (S7's 4 accepted pairs):** helios q0.kp5/kp6, ww7 q1.kp0, masterstore q1.kp1 stay in the baseline as
+    reviewed false positives (related, not restating; masterstore's prompt asks for that overlap), although R3.3 says
+    frozen-only. Rewriting correct kps to dodge the lint would make content worse. The S7 ring reviewer checks these 4;
+    the SEEDING §8 bullet records the exception.
   - **Hub ruling (request count):** with S3 + S4 the dashboard mount makes dashboard + competencies + tracks + `/due` +
     `/stats/weak`. Accepted (the cap's purpose was killing the 11-request fan-out; folding weak rows into `/due` would
     mix concerns). At merge, update S4's "≤ 3 requests" mock test to the merged set, by counting.
