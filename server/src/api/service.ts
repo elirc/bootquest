@@ -3,7 +3,6 @@ import {
   toPublicCheck,
   type CampaignResponse,
   type CanonicalRunResult,
-  type DashboardResponse,
   type ModelAnswerResponse,
   type RevealResponse,
   type SelfAttestResponse,
@@ -57,6 +56,8 @@ import { uncoveredLegsFor } from '../sync/carve-outs.ts';
 import { CacheMissError, CachePathError } from '../sync/cache.ts';
 import { NetworkUnavailableError } from '../sync/github.ts';
 import type { RefContentResponse, RefLink } from '@bootquest/shared/sync';
+import type { DashboardResponseExt as DashboardResponse } from '@bootquest/shared/api-ext';
+import { findCtx, withSlateTargets } from './find-service.ts';
 
 /**
  * API service layer: orchestrates the W1a engines. No XP / streak / FSRS /
@@ -104,8 +105,9 @@ function requireCheck(db: Db, unit: UnitRecord): CheckRecord {
   return check;
 }
 
-function lockStateFor(
-  unit: UnitRecord,
+/** A unit's lock state (track lock, then pass, then prerequisites); find-service.ts (ab S4) reuses it. */
+export function lockStateFor(
+  unit: Pick<UnitRecord, 'id'>,
   trackLocked: boolean,
   passed: Set<number>,
   prereqs: Map<number, number[]>,
@@ -799,7 +801,8 @@ export function getDashboard(deps: ServiceDeps): DashboardResponse {
       heatmap,
       xp: { total: lp.xp, level: lp.level, intoLevel: lp.intoLevel, levelSpan: lp.levelSpan, nextAt: lp.nextAt },
       competencies: competencyRowsWithPromotion(db, clock),
-      slate: { day: slate.day, status: slate.status, items: slate.items },
+      // ab S4: each row's link target (response only; the stored slate row never gains it)
+      slate: { day: slate.day, status: slate.status, items: withSlateTargets(findCtx(db, passed, prereqs), slate.items) },
       reviewQueue: { due: dueCount(db, clock) },
       nextUp,
     };

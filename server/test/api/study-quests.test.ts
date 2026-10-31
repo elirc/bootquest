@@ -13,7 +13,9 @@ import request from 'supertest';
 import type { Express } from 'express';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { CAMPAIGN_FORMAT, SeedQuizItem, type SeedQuizItem as QuizItem } from '@bootquest/shared';
-import { CampaignResponse, DashboardResponse, ReviewQueueResponse, SubmitResponse, UnitDetailResponse } from '@bootquest/shared/api';
+import { CampaignResponse, ReviewQueueResponse, SubmitResponse, UnitDetailResponse } from '@bootquest/shared/api';
+// ab S4: the dashboard's slate items carry targetUnitId (api-ext), so the strict parse uses the extended schema
+import { DashboardResponseExt as DashboardResponse } from '@bootquest/shared/api-ext';
 import { createApp } from '../../src/api/app.ts';
 import { defaultRunners } from '../../src/api/runners.ts';
 import { DAY_MS, fixedClock } from '../../src/engines/clock.ts';

@@ -198,3 +198,28 @@ export function ledgerCounts(db: Db): { attempt: number; run: number; xp_event: 
   const n = (t: string) => db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM ${t}`)?.n ?? 0;
   return { attempt: n('attempt'), run: n('run'), xp_event: n('xp_event'), evidence: n('evidence') };
 }
+
+// ---------------------------------------------------------------- ab S4: find things
+
+export interface UnitSearchRow {
+  id: number;
+  key: string;
+  trackId: TrackId;
+  kind: UnitKind;
+  title: string;
+}
+
+/**
+ * GET /units/search: live units (campaign quest units included) whose key OR title contains every
+ * token (case-insensitive; `tokens` must already be lower-case). Reads ONLY the unit table's key and
+ * title: prompts, key points, notes and every other seed-item text are never searched or returned.
+ * `instr` (not LIKE) so `%` / `_` in a query are literal. SQLite's lower() folds ASCII only.
+ */
+export function searchUnitRows(db: Db, tokens: readonly string[]): UnitSearchRow[] {
+  if (tokens.length === 0) return [];
+  const where = tokens.map(() => '(instr(lower(key), ?) > 0 OR instr(lower(title), ?) > 0)').join(' AND ');
+  return db.all<UnitSearchRow>(
+    `SELECT id, key, track_id AS trackId, kind, title FROM unit WHERE retired_at IS NULL AND ${where} ORDER BY id`,
+    ...tokens.flatMap((t) => [t, t]),
+  );
+}

@@ -2,7 +2,6 @@ import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 import {
   ApiErrorBody,
-  DashboardResponse,
   GradeResponse,
   HealthResponse,
   ModelAnswerResponse,
@@ -16,6 +15,8 @@ import {
   UnitDetailResponse,
   WrittenAnswerResponse,
 } from '@bootquest/shared/api';
+// ab S4: the dashboard's slate items carry targetUnitId (api-ext), so the strict parse uses the extended schema
+import { DashboardResponseExt as DashboardResponse } from '@bootquest/shared/api-ext';
 import { createApp } from '../../src/api/app.ts';
 import { mapContentStore } from '../../src/api/content-store.ts';
 import { DAY_MS } from '../../src/engines/clock.ts';
