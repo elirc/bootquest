@@ -76,6 +76,12 @@ resume from here without re-auditing or re-running the council.
     frozen-both-sides + 4 accepted), lint precision 17/20 on a hand sample, slotcheck 0 BAD; tools/seed 2260, server
     640/640, scoped seed:check 19/19, restamp 697/697, lints green. `seed:pins` must run at the hub (clone lacks the
     mirrors). Pulse re-seeded with `--allow-quarantine` (pre-existing quarantined reading step; keys unchanged).
+  - S2 DONE: ab-s2 fe8c2d3b, 5d27c51a, 42978194, 228f916f (Review paging), 90474337 (README rule); server 646/646,
+    client 381/381, demo:promotion 39/39, restamp 697/697, lints green (all re-run by S2 itself after the incident).
+    Hub accepted its 3 deviations: "Queue cleared" only when the server due count is 0 (else "Session done" + "Review
+    the N due"); a repeat quiz miss reschedules but never demotes (only Again on Review demotes); any demotion uses up
+    the competency's daily cap. Owner item: every study quest declares only `code-reading` (206 entries, up to 3,956
+    cards on one competency); the owner may want a per-promotion-window cap.
   - **Hub ruling (S7's 4 accepted pairs):** helios q0.kp5/kp6, ww7 q1.kp0, masterstore q1.kp1 stay in the baseline as
     reviewed false positives (related, not restating; masterstore's prompt asks for that overlap), although R3.3 says
     frozen-only. Rewriting correct kps to dodge the lint would make content worse. The S7 ring reviewer checks these 4;
