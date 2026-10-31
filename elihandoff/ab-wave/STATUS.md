@@ -47,6 +47,12 @@ resume from here without re-auditing or re-running the council.
   re-dispatched the 7 streams with the resume prompt (step 4). **If this session is cut off too:** read each
   `S\reports\S<N>.md` Progress section plus `git -C bq-qw-s<N> log/status`, then re-dispatch only the unfinished
   streams with the same prompt.
+- **Session 3, 2026-10-31 ~08:30:** all 7 agents hit the 5-hour usage limit at once (reset 12:50 PT). By then every
+  stream had checkpointed. S1-S6 were code-complete with targeted tests, the medium gates and their commits done; only
+  the HEAVY gates (server/client/tools-seed suites, demo:promotion, seed:validate, boot proof) and the final report
+  were left. S7 had committed its lint (cd022534, baseline 149) and was mid-way through the stem/flashcard rewrites
+  (tracer, pulse, jsdrillv2; uncommitted). A stale `locks/heavy` was removed. Per-stream detail is in each
+  `S\reports\S<N>.md` Progress section. After the reset the same agents were resumed (SendMessage).
 
 ## Not done
 - Finish the streams (resume prompt below tells each agent to adopt its clone's partial work), ring review, hub
