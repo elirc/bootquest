@@ -10,7 +10,8 @@ import {
 import type { Db } from '../db/database.ts';
 import { findVariation, getAttempt, HonestyRuleError, revealedInVariationChain, VERIFIED_PASS_SQL } from './attempts.ts';
 import { DAY_MS, nowMs, type Clock } from './clock.ts';
-import { evaluatePromotion, isVariationOf, lastRatingChangeAt, PROMOTION_MIN_COVERAGE, RETEST_MIN_DELAY_MS } from './evidence.ts';
+import { EB_PASS_SQL } from './eb-score.ts';
+import { evaluatePromotion, isVariationOf, lastRatingChangeAt, RETEST_MIN_DELAY_MS } from './evidence.ts';
 
 /**
  * W6 competency-ladder flow helpers on top of the W1a/W1c engines:
@@ -264,15 +265,17 @@ export function promotionProgress(db: Db, competency: CompetencyId, now: Clock):
     // the newest UNASSISTED explain-back in the window: a sub-80% self-score is a visible
     // "failed" leg. Assisted self-scores (practice retakes, prior-key answers) can never anchor
     // leg (b), so a weak one is feedback, never a failed promotion leg.
-    const last = db.get<{ id: number; score: number | null }>(
-      `SELECT id, score FROM evidence WHERE competency_id = ? AND kind = 'explain-back' AND assistance = 'none' AND created_at > ? AND created_at <= ?
-        ORDER BY created_at DESC, id DESC LIMIT 1`,
+    // A5: "failed" uses the same pass predicate as leg (b) (a weighted set with a [w3] missed fails at any score)
+    const last = db.get<{ id: number; score: number | null; passes: number | null }>(
+      `SELECT e.id AS id, e.score AS score, ${EB_PASS_SQL} AS passes FROM evidence e
+        WHERE e.competency_id = ? AND e.kind = 'explain-back' AND e.assistance = 'none' AND e.created_at > ? AND e.created_at <= ?
+        ORDER BY e.created_at DESC, e.id DESC LIMIT 1`,
       competency,
       since,
       t,
     );
     explainBack =
-      last && (last.score ?? 0) < PROMOTION_MIN_COVERAGE
+      last && !last.passes
         ? { state: 'failed', evidenceId: last.id, coverage: last.score }
         : { state: 'pending', evidenceId: null, coverage: null };
   }
