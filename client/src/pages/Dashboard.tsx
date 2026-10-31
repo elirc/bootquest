@@ -7,13 +7,14 @@ import type {
   Dashboard as DashboardData,
   PromotionLegState,
   PromotionProgress,
-  RetestListItemDto,
   SlateItem,
   TrackId,
 } from '../api/types';
+import { DueNowPanel } from '../components/DueNow';
 import { Heatmap } from '../components/Heatmap';
 import { Icon } from '../components/Icon';
 import { Chip, Kbd, LoadState, PageHeader, Panel, ProgressBar, RatingPips } from '../components/ui';
+import { WeakSpotsTeaser } from '../components/WeakSpots';
 import { fmtInt, fmtRelative, fmtShortDate, fmtWhen, plural } from '../lib/format';
 import { useTracks } from '../lib/tracks';
 import { useAsync, type AsyncState } from '../lib/useAsync';
@@ -147,7 +148,7 @@ function DashboardBody({ d, comp }: { d: DashboardData; comp: Loaded<Competencie
         </section>
       </div>
 
-      <DueNowPanel q={comp} retests={retests} />
+      <DueNowPanel />
 
       <div className="dash-row">
         <Panel title="Activity" labelledBy="p-activity" className="dash-heat" aside={<span className="muted">last {d.heatmap.length} days</span>}>
@@ -188,60 +189,10 @@ function DashboardBody({ d, comp }: { d: DashboardData; comp: Loaded<Competencie
           ))}
         </ul>
       </Panel>
+
+      {/* ab wave S3: last on the page, so its late arrival never pushes anything down; absent without data */}
+      <WeakSpotsTeaser />
     </div>
-  );
-}
-
-// ---------------------------------------------------------------- due now (open retests)
-
-/** Due first (oldest opening first), then the upcoming ones by opening time. */
-const byUrgency = (a: RetestListItemDto, b: RetestListItemDto) => Number(b.due) - Number(a.due) || a.dueAt - b.dueAt;
-
-/**
- * fix/client-dash: the changed-example retests (promotion leg c). They are excluded from the
- * review queue by design, so this panel is where a due one is seen at all.
- */
-function DueNowPanel({ q, retests }: { q: Loaded<CompetenciesResponse>; retests: RetestListItemDto[] }) {
-  const due = retests.filter((r) => r.due).length;
-  const sorted = [...retests].sort(byUrgency);
-  return (
-    <Panel
-      title={
-        <>
-          Due now{due > 0 && <span className="due-count"> · {plural(due, 'retest')} open</span>}
-        </>
-      }
-      labelledBy="p-due"
-      className={`due-now${due > 0 ? ' due-now-hot' : ''}`}
-      aside={<span className="muted small">retests are not in the review queue</span>}
-    >
-      <div data-testid="due-now">
-        {q.status !== 'ready' ? (
-          // an error (with Retry), or the reload that Retry started: never "No retests" while unknown
-          <LoadState error={q.error} onRetry={q.reload} minHeight={64} />
-        ) : sorted.length === 0 ? (
-          <p className="muted small due-empty" data-testid="due-empty">
-            No retests scheduled. A passing explain-back (≥80% coverage) on an artifact with a seeded changed example schedules a retest at least 2 days later; units without a seeded variation rotate alternate question sets instead — the next fresh set opens from the unit page.
-          </p>
-        ) : (
-          <ul className="due-list">
-            {sorted.map((r) => (
-              <li key={r.reviewItemId} className={`due-row${r.due ? ' due-row-open' : ''}`} data-retest={r.unitId} data-due={r.due}>
-                {r.due ? <Chip tone="accent">open now</Chip> : <Chip tone="info">opens {fmtShortDate(r.dueAt)}</Chip>}
-                <Link to={`/play/${r.unitId}`} className="due-title">
-                  {r.due ? 'Take the retest: ' : 'Retest: '}
-                  {r.title}
-                </Link>
-                <span className="due-meta muted small">
-                  {r.due ? `opened ${fmtWhen(r.dueAt)}` : `opens ${fmtWhen(r.dueAt)}`} · changed example of{' '}
-                  <Link to={`/play/${r.artifactUnitId}`}>artifact unit #{r.artifactUnitId}</Link> · solo, no help
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-    </Panel>
   );
 }
 

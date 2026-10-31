@@ -34,6 +34,8 @@ import {
   type UnitNotesResponse,
   type RefContentResponse,
   type WrittenAnswerResponse,
+  type DueResponse,
+  type WeakSpotsResponse,
 } from './types';
 
 type Init = { method: 'POST'; body: unknown };
@@ -135,5 +137,8 @@ export function createHttpApi(baseUrl = '/api', fetchImpl: typeof fetch = (...a)
     getCampaignProgress: () => call<CampaignProgressResponse>('/stats/campaign'),
     getUnitNotes: (id) => call<UnitNotesResponse>(`${unit(id)}/notes`),
     getRefContent: (refId) => call<RefContentResponse>(`/refs/${encodeURIComponent(String(refId))}/content`),
+    // ---- ab wave S3
+    getWeakSpots: () => call<WeakSpotsResponse>('/stats/weak'),
+    getDue: () => call<DueResponse>('/due'),
   };
 }
