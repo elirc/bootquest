@@ -31,9 +31,11 @@ import { ID_RE, ImportError, readModules, SYSDRILLS_EXPECTED, type SysdrillsExer
  * Import-time refusals (throw ImportError, write nothing): ids not NN-kebab,
  * duplicate slug, empty instructions / starter / solution / tests, duplicate test
  * names, solution === starter, a starter without TODO, a test whose code never
- * touches `mod.`, difficulty outside 1..3, and a census that differs from the
- * expected counts. Output is deterministic: same authoring bytes → same pack bytes
- * (the manifest's importedFrom.path / gitHead / dirty record where it came from).
+ * touches `mod.`, difficulty outside 1..3, a hint 3 that reads as code (see
+ * hintThreeCode), a "Your task" section that hands over the formula in backticks
+ * (see taskFormulaSpans), and a census that differs from the expected counts.
+ * Output is deterministic: same authoring bytes → same pack bytes (the
+ * manifest's importedFrom.path / gitHead / dirty record where it came from).
  */
 
 export const SOURCE_KEY = 'sysdrills';
@@ -56,6 +58,49 @@ export const stableKey = (module: string, slug: string): string => `${SOURCE_KEY
 export interface MappedExercise {
   packUnit: PackUnit;
   content: UnitContentEntry;
+}
+
+/**
+ * Arithmetic inside one backtick span: a × ÷ or ceil/floor bracket, a spaced or
+ * glued operator between operands (an ASCII hyphen only when spaced, so kebab
+ * names such as `01-estimation` pass), Math.*, or a call to a math helper. Plain
+ * signatures (`fn(a, b)`) and identifiers (`latencyMs`) do not match.
+ */
+export const ARITHMETIC_RE = /[×÷⌈⌉⌊⌋]|\s[-−+*/%]\s|[\w)]\s*[+−]\s*[\w(]|\w\s*\*\s*\w|[\w)]\/\d|\d\s*\^\s*\d|\bMath\.|\b(?:ceil|floor|max|min|round|log2?|sqrt|pow|abs)\(/;
+
+/** tokens that make a hint pasteable code (the cs/java hint-3 rule, with JS's `=>`) */
+const HINT_CODE_RE = /;|=>|\breturn\b|[()]/;
+
+/**
+ * Why hint 3 reads as code, or null. Hint 3 is the approach in words (SEEDING §3
+ * sysdrills): no `;`, `=>`, `return`, parentheses, or arithmetic inside backticks.
+ */
+export function hintThreeCode(hint: string): string | null {
+  const tok = HINT_CODE_RE.exec(hint);
+  if (tok) return `contains ${JSON.stringify(tok[0])}`;
+  const span = (hint.match(/`[^`]*`/g) ?? []).find((s) => ARITHMETIC_RE.test(s));
+  return span ? `has arithmetic in backticks ${span}` : null;
+}
+
+/**
+ * The "Your task" section of an exercise's instructions: from the `**Your task`
+ * marker to the next bold paragraph header (`**Worked example.**` etc.) or the end.
+ * Empty when the instructions have no such section.
+ */
+export function taskSection(instructions: string): string {
+  const i = instructions.indexOf('**Your task');
+  if (i < 0) return '';
+  const rest = instructions.slice(i);
+  const end = rest.slice(2).search(/\n\n\*\*[A-Z][^*\n]*\.\*\*/);
+  return end < 0 ? rest : rest.slice(0, end + 2);
+}
+
+/**
+ * Backtick spans in the "Your task" section that hold arithmetic or a formula.
+ * The task states semantics, units and rounding; the formula belongs in hint 2.
+ */
+export function taskFormulaSpans(instructions: string): string[] {
+  return (taskSection(instructions).match(/`[^`]*`/g) ?? []).filter((s) => ARITHMETIC_RE.test(s));
 }
 
 const stars = (d: number): string => `${'★'.repeat(d)}${'☆'.repeat(3 - d)}`;
@@ -83,6 +128,13 @@ export function mapExercise(module: string, ex: SysdrillsExercise, position: num
     if (!t.code.trim()) fail(`test ${JSON.stringify(t.name)} has empty code`);
     if (!t.code.includes('mod.')) fail(`test ${JSON.stringify(t.name)} never touches the learner module (no \`mod.\`)`);
   }
+  const formula = taskFormulaSpans(ex.instructions);
+  if (formula.length > 0) {
+    fail(`"Your task" hands over the formula in backticks (${formula.slice(0, 3).join(', ')}): state semantics, units and rounding there and move the formula to hint 2`);
+  }
+  const h3 = ex.hints?.[2];
+  const code = h3 === undefined ? null : hintThreeCode(h3);
+  if (code !== null) fail(`hint 3 must be the approach in words, never pasteable code (no \`;\`, \`=>\`, \`return\`, parentheses or arithmetic in backticks): it ${code}`);
 
   const key = stableKey(module, ex.slug);
   const spec = CheckSpec.parse({ type: 'drill-js', language: 'js', tests: ex.tests, timeoutMs: DRILL_TIMEOUT_MS });

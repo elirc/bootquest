@@ -5,7 +5,18 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { PackCourseFile, PackManifest } from '@bootquest/shared';
 import { readPack } from '@bootquest/server/packs';
-import { DEFAULT_AUTHORING_DIR, DEFAULT_OUT_DIR, ImportError, importSysdrills, mapExercise, stableKey, SYSDRILLS_EXPECTED } from './import.ts';
+import {
+  DEFAULT_AUTHORING_DIR,
+  DEFAULT_OUT_DIR,
+  hintThreeCode,
+  ImportError,
+  importSysdrills,
+  mapExercise,
+  stableKey,
+  SYSDRILLS_EXPECTED,
+  taskFormulaSpans,
+  taskSection,
+} from './import.ts';
 import { readModules, SYSDRILLS_FORMAT, type SysdrillsExercise } from './source.ts';
 
 const exercise = (over: Partial<SysdrillsExercise> = {}): SysdrillsExercise => ({
@@ -221,6 +232,93 @@ describe('import-time refusals (write nothing)', () => {
       rmSync(join(dir, 'src'), { recursive: true });
     }
     expect(() => mapExercise('01-alpha', exercise({ difficulty: 5 }), 0)).toThrow(ImportError);
+  });
+});
+
+describe('seed:import:sysdrills shape gates (task line and hint 3)', () => {
+  const task = (yourTask: string) =>
+    [
+      '**Interview prompt.** "How many requests are in flight?"',
+      '**Why it works.** In flight = rate × time, so `qps × latencyMs / 1000` is the classic form.',
+      `**Your task.** ${yourTask}`,
+      '**Worked example.** 200 QPS × 50 ms → `200 × 50 / 1000` = **10**.',
+    ].join('\n\n');
+  const hinted = (h3: string) => exercise({ hints: ['Rate times time.', 'inFlight = qps × latencyMs ÷ 1000.', h3] });
+
+  it('taskSection runs from the Your task marker to the next bold paragraph header', () => {
+    const t = taskSection(task('Export `inFlight(qps, latencyMs)` → requests in flight.'));
+    expect(t.startsWith('**Your task.**')).toBe(true);
+    expect(t).toContain('requests in flight.');
+    expect(t).not.toContain('Worked example');
+    expect(t).not.toContain('Why it works');
+    expect(taskSection('Export `double(n)`.')).toBe('');
+  });
+
+  it('refuses a "Your task" that hands over the formula in backticks, and writes nothing', () => {
+    refuse([exercise({ instructions: task('Export `inFlight(qps, latencyMs)` → `qps × latencyMs / 1000`.') })], /"Your task" hands over the formula in backticks .*move the formula to hint 2/);
+    const formulas = [
+      '`qps × latencyMs ÷ 1000`',
+      '`Math.ceil(items / batchSize)`',
+      '`ceil(backlog / rate)`',
+      '`max(0, arrive - capacity)`',
+      '`qps * latencyMs`',
+      '`n − w + 1`',
+      '`sortedAckMs[k−1]`',
+      '`bytes/8`',
+      '`base × 2^attempt`',
+      '`⌈rows ÷ perPage⌉`',
+    ];
+    for (const f of formulas) {
+      expect(() => mapExercise('01-alpha', exercise({ instructions: task(`Export \`inFlight(qps, latencyMs)\` → ${f}.`) }), 0), f).toThrow(/hands over the formula/);
+    }
+  });
+
+  it('accepts signatures, names and values in the task, and arithmetic outside it', () => {
+    const ok = [
+      'Export `inFlight(qps, latencyMs)` → the average number of requests in flight, **rounded UP**.',
+      'Export `backoffMs(baseMs, capMs, attempt)`: reuse 03/04 `exponential-backoff` and `01-estimation`; return `{ min, max }` or `[50, 100]`; `true` when `r` and `w` overlap.',
+    ];
+    for (const yourTask of ok) {
+      expect(taskFormulaSpans(task(yourTask)), yourTask).toEqual([]);
+      expect(() => mapExercise('01-alpha', exercise({ instructions: task(yourTask) }), 0)).not.toThrow();
+    }
+    expect(taskFormulaSpans('No task section, only `a × b` in prose.')).toEqual([]);
+  });
+
+  it('refuses a hint 3 that reads as code, and writes nothing', () => {
+    refuse([hinted('return (qps * latencyMs) / 1000;')], /hint 3 must be the approach in words, never pasteable code.*contains/);
+    const code: [string, RegExp][] = [
+      ['Multiply the rate by the time; then divide by 1,000', /contains ";"/],
+      ['parts.reduce of acc => acc times p', /contains "=>"/],
+      ['Just return the product of the two inputs', /contains "return"/],
+      ['Multiply the rate by the time (in seconds)', /contains "\("/],
+      ['Use `qps × latencyMs ÷ 1000` and you are done', /has arithmetic in backticks/],
+    ];
+    for (const [h3, re] of code) {
+      expect(hintThreeCode(h3), h3).not.toBeNull();
+      expect(() => mapExercise('01-alpha', hinted(h3), 0), h3).toThrow(re);
+    }
+  });
+
+  it('accepts a prose hint 3, a hint 2 with the formula, and drills with fewer than three hints', () => {
+    const prose = 'Convert the latency from milliseconds to seconds, then multiply it by the arrival rate for the in-flight count, rounding any fraction up.';
+    expect(hintThreeCode(prose)).toBeNull();
+    expect(hintThreeCode('Reuse the `latencyMs` input and the 03/04 `exponential-backoff` rule.')).toBeNull();
+    expect(() => mapExercise('01-alpha', hinted(prose), 0)).not.toThrow();
+    expect(() => mapExercise('01-alpha', exercise({ hints: ['a', 'x = (a + b) × 2;'] }), 0)).not.toThrow();
+    expect(() => mapExercise('01-alpha', exercise({ hints: undefined }), 0)).not.toThrow();
+  });
+
+  it('every committed sysdrill passes both gates (no task formula, hint 3 in words)', () => {
+    const flagged: string[] = [];
+    for (const m of readModules(DEFAULT_AUTHORING_DIR)) {
+      for (const ex of m.exercises) {
+        if (taskFormulaSpans(ex.instructions).length > 0) flagged.push(`${m.module}/${ex.slug}: task formula`);
+        const h3 = ex.hints?.[2];
+        if (h3 !== undefined && hintThreeCode(h3) !== null) flagged.push(`${m.module}/${ex.slug}: hint 3 code`);
+      }
+    }
+    expect(flagged).toEqual([]);
   });
 });
 
