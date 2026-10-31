@@ -1,5 +1,6 @@
 import type { CanonicalRunResult, DashboardResponse, SubmitResponse, UnitDetailResponse } from '@bootquest/shared/api';
 import type { SeedQueueResponse, SyncReport } from '@bootquest/shared/sync';
+import type { SlateSettingsResponse } from '@bootquest/shared/api-ext';
 import { ApiError, BadResponseError, ServerTimeoutError, ServerUnreachableError, UsageError } from './client.ts';
 import { ConfigError } from './config.ts';
 
@@ -192,6 +193,28 @@ export function formatToday(d: DashboardResponse, server: string): string {
   for (const n of d.nextUp) {
     lines.push(n.unit ? `  ${n.trackId.padEnd(9)} ${n.unit.title} [${n.unit.kind}] id ${n.unit.id}` : `  ${n.trackId.padEnd(9)} (nothing available)`);
   }
+  return lines.join('\n');
+}
+
+/**
+ * `bootquest slate` (ab A1): the daily slate shape today and from tomorrow, as the server reports it
+ * (GET/PUT /api/settings/slate). A track asks for fewer drills when it has fewer new ones left.
+ */
+export function formatSlateSettings(s: SlateSettingsResponse, server: string, saved = false): string {
+  const shape = (tracks: SlateSettingsResponse['todayTracks']): string[] => {
+    if (tracks.length === 0) return ['  (no track has a daily drill slot)'];
+    return tracks.map((t) => {
+      const what = t.enabled ? `on   ${t.size} drill${t.size === 1 ? '' : 's'}` : 'off';
+      return `  ${t.trackId.padEnd(10)} ${what}${t.configured ? '' : '  (default)'}`;
+    });
+  };
+  const lines = [`BootQuest daily slate settings  (${server})`];
+  if (saved) lines.push(`Saved. It takes effect tomorrow (${s.effectiveDay}); today's slate stays as it is.`);
+  else if (!s.configured) lines.push(`Not chosen yet: every track gives ${s.defaultSize} drill${s.defaultSize === 1 ? '' : 's'} a day (the default).`);
+  lines.push(`Today (${s.today}):`, ...shape(s.todayTracks), `From tomorrow (${s.effectiveDay}):`, ...shape(s.tomorrowTracks));
+  lines.push(
+    `Change it (takes effect tomorrow): bootquest slate --tracks <a,b> [--size ${s.minSize}-${s.maxSize}] | --preset default|full (full = ${s.fullSize} per track)`,
+  );
   return lines.join('\n');
 }
 

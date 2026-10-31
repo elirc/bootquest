@@ -342,7 +342,7 @@ describe('reset (W7): delegates to the server-side guarded reset', () => {
   });
 });
 
-describe('today (B4): read-only daily summary, always exit 0', () => {
+describe('today (B4): read-only daily summary; exit 2 when the server could not be read (ab A1)', () => {
   const slateDash = () => ({
     ...dashboard(),
     streak: { current: 1, longest: 5, tokens: 2, slateDaysBanked: 0, todayComplete: true },
@@ -394,28 +394,147 @@ describe('today (B4): read-only daily summary, always exit 0', () => {
     }
   });
 
-  it('server down: honest message, exit 0, no stack trace', async () => {
+  it('server down: honest message, exit 2 (not swallowed), no stack trace', async () => {
     const io = captureIo(proj, (async () => {
       throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } });
     }) as never);
-    expect(await runCli(['today'], io)).toBe(EXIT.OK);
+    expect(await runCli(['today'], io)).toBe(EXIT.ERROR);
     expect(io.stdout.join('\n')).toMatch(/Today: unavailable - the server could not be read/);
     expect(io.stdout.join('\n')).not.toMatch(/Slate:|Streak:/);
     expect(io.stderr.join('\n')).toMatch(/Cannot reach the BootQuest server at http:\/\/127\.0\.0\.1:4178 \(ECONNREFUSED\)/);
     expect(io.stderr.join('\n')).not.toMatch(/\n\s+at /);
   });
 
-  it('a refusing / non-BootQuest server or a bad --server URL also exits 0 with the reason', async () => {
+  it('a refusing / non-BootQuest server or a bad --server URL also exits 2 with the reason', async () => {
     const refusing = captureIo(proj, fakeFetch({ 'GET /api/dashboard': { status: 500, body: { error: { code: 'INTERNAL', message: 'boom' } } } }).fetch);
-    expect(await runCli(['today'], refusing)).toBe(EXIT.OK);
+    expect(await runCli(['today'], refusing)).toBe(EXIT.ERROR);
     expect(refusing.stderr.join('\n')).toMatch(/Server refused \(INTERNAL, HTTP 500\): boom/);
     const html = captureIo(proj, fakeFetch({ 'GET /api/dashboard': { status: 200, body: '<html>' } }).fetch);
-    expect(await runCli(['today'], html)).toBe(EXIT.OK);
+    expect(await runCli(['today'], html)).toBe(EXIT.ERROR);
     expect(html.stderr.join('\n')).toMatch(/non-JSON/);
     const { fetch, calls } = fakeFetch({});
     const badUrl = captureIo(proj, fetch);
-    expect(await runCli(['today', '--server', 'ftp://x'], badUrl)).toBe(EXIT.OK);
+    expect(await runCli(['today', '--server', 'ftp://x'], badUrl)).toBe(EXIT.ERROR);
     expect(badUrl.stderr.join('\n')).toMatch(/must be http\(s\)/);
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe('slate (ab A1): show / choose the daily slate, effective tomorrow', () => {
+  const track = (trackId: string, enabled: boolean, size: number, configured: boolean) => ({ trackId, name: trackId, enabled, size, configured });
+  const settings = (tomorrow = ['js', 'csharp', 'java', 'sysdesign'].map((t) => track(t, true, 1, false)), configured = false) => ({
+    configured,
+    today: '2026-10-07',
+    effectiveDay: '2026-10-08',
+    defaultSize: 1,
+    fullSize: 5,
+    minSize: 1,
+    maxSize: 10,
+    todayTracks: ['js', 'csharp', 'java', 'sysdesign'].map((t) => track(t, true, 1, false)),
+    tomorrowTracks: tomorrow,
+  });
+  const routes = (onPut: (body: unknown) => unknown = () => settings()) => ({
+    'GET /api/settings/slate': { status: 200, body: settings() },
+    'PUT /api/settings/slate': (c: { body: unknown }) => ({ status: 200, body: onPut(c.body) }),
+  });
+  const sent = (calls: { method: string; body: unknown }[]) => calls.filter((c) => c.method === 'PUT').map((c) => c.body);
+
+  it('no options: shows today and tomorrow from ONE GET, writes nothing', async () => {
+    const { fetch, calls } = fakeFetch(routes());
+    const io = captureIo(proj, fetch);
+    expect(await runCli(['slate'], io)).toBe(EXIT.OK);
+    const out = io.stdout.join('\n');
+    expect(out).toContain('Not chosen yet: every track gives 1 drill a day (the default).');
+    expect(out).toMatch(/Today \(2026-10-07\):\n {2}js {9}on {3}1 drill {2}\(default\)/);
+    expect(out).toContain('From tomorrow (2026-10-08):');
+    expect(out).toContain('bootquest slate --tracks <a,b> [--size 1-10] | --preset default|full (full = 5 per track)');
+    expect(calls.map((c) => `${c.method} ${new URL(c.url).pathname}`)).toEqual(['GET /api/settings/slate']);
+  });
+
+  it('--tracks java,sysdesign --size 3: listed tracks on with size 3, every other slate track off', async () => {
+    const after = settings([track('js', false, 1, true), track('csharp', false, 1, true), track('java', true, 3, true), track('sysdesign', true, 3, true)], true);
+    const { fetch, calls } = fakeFetch(routes(() => after));
+    const io = captureIo(proj, fetch);
+    expect(await runCli(['slate', '--tracks', 'java,sysdesign', '--size', '3'], io)).toBe(EXIT.OK);
+    expect(sent(calls)).toEqual([
+      {
+        tracks: [
+          { trackId: 'js', enabled: false },
+          { trackId: 'csharp', enabled: false },
+          { trackId: 'java', enabled: true, size: 3 },
+          { trackId: 'sysdesign', enabled: true, size: 3 },
+        ],
+      },
+    ]);
+    const out = io.stdout.join('\n');
+    expect(out).toContain("Saved. It takes effect tomorrow (2026-10-08); today's slate stays as it is.");
+    expect(out).toMatch(/From tomorrow \(2026-10-08\):\n {2}js {9}off\n {2}csharp {5}off\n {2}java {7}on {3}3 drills\n/);
+  });
+
+  it('--size alone resizes the tracks that are on; --tracks alone keeps a chosen size; --preset sends the preset', async () => {
+    const chosen = [track('js', false, 2, true), track('csharp', true, 4, true), track('java', true, 1, false), track('sysdesign', false, 1, true)];
+    const r1 = fakeFetch({ ...routes(), 'GET /api/settings/slate': { status: 200, body: settings(chosen, true) } });
+    expect(await runCli(['slate', '--size', '2'], captureIo(proj, r1.fetch))).toBe(EXIT.OK);
+    expect(sent(r1.calls)).toEqual([
+      {
+        tracks: [
+          { trackId: 'js', enabled: false, size: 2 },
+          { trackId: 'csharp', enabled: true, size: 2 },
+          { trackId: 'java', enabled: true, size: 2 },
+          { trackId: 'sysdesign', enabled: false, size: 1 },
+        ],
+      },
+    ]);
+    const r2 = fakeFetch({ ...routes(), 'GET /api/settings/slate': { status: 200, body: settings(chosen, true) } });
+    expect(await runCli(['slate', '--tracks', ' csharp, js ,js'], captureIo(proj, r2.fetch))).toBe(EXIT.OK);
+    expect(sent(r2.calls)).toEqual([
+      {
+        tracks: [
+          { trackId: 'js', enabled: true, size: 2 },
+          { trackId: 'csharp', enabled: true, size: 4 },
+          { trackId: 'java', enabled: false },
+          { trackId: 'sysdesign', enabled: false, size: 1 },
+        ],
+      },
+    ]);
+    for (const preset of ['full', 'default']) {
+      const r = fakeFetch(routes());
+      expect(await runCli(['slate', '--preset', preset], captureIo(proj, r.fetch))).toBe(EXIT.OK);
+      expect(r.calls.map((c) => c.method)).toEqual(['PUT']); // no GET needed
+      expect(sent(r.calls)).toEqual([{ preset }]);
+    }
+  });
+
+  it('usage errors exit 2 before any PUT; a server refusal exits 2 with the reason', async () => {
+    const bad: string[][] = [
+      ['slate', '--size', '0'],
+      ['slate', '--size', '11'],
+      ['slate', '--size', '2.5'],
+      ['slate', '--tracks', ' , '],
+      ['slate', '--preset', 'huge'],
+      ['slate', '--preset', 'full', '--size', '3'],
+      ['slate', '--tracks', 'java,rust'],
+    ];
+    for (const args of bad) {
+      const { fetch, calls } = fakeFetch(routes());
+      const io = captureIo(proj, fetch);
+      expect(await runCli(args, io)).toBe(EXIT.ERROR);
+      expect(sent(calls)).toEqual([]);
+      expect(io.stderr.join('\n')).not.toMatch(/\n\s+at /);
+    }
+    const unknown = captureIo(proj, fakeFetch(routes()).fetch);
+    await runCli(['slate', '--tracks', 'java,rust'], unknown);
+    expect(unknown.stderr.join('\n')).toContain('not a slate track: rust. Slate tracks: js, csharp, java, sysdesign');
+    const refusing = fakeFetch({
+      ...routes(),
+      'PUT /api/settings/slate': { status: 400, body: { error: { code: 'VALIDATION', message: 'at least one track must stay on the daily slate', issues: [] } } },
+    });
+    const io = captureIo(proj, refusing.fetch);
+    expect(await runCli(['slate', '--preset', 'full'], io)).toBe(EXIT.ERROR);
+    expect(io.stderr.join('\n')).toMatch(/Server refused \(VALIDATION, HTTP 400\): at least one track must stay on the daily slate/);
+    const down = captureIo(proj, (async () => {
+      throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } });
+    }) as never);
+    expect(await runCli(['slate'], down)).toBe(EXIT.ERROR);
   });
 });
