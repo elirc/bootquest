@@ -192,7 +192,7 @@ describe('xleak lint on the shipped estate (content/seed + xleak-baseline.json)'
   }, 120_000);
 
   it('every entry says why: frozen at 9b7f0ea3 on both sides, or a recorded acceptance; sorted, no duplicates', () => {
-    for (const e of baseline.entries) expect(e.why).toMatch(/^(frozen@9b7f0ea3|accepted ab-S7|PENDING ab-S7)/);
+    for (const e of baseline.entries) expect(e.why).toMatch(/^(frozen@9b7f0ea3|accepted ab-S7)/);
     const ids = baseline.entries.map(pairId);
     expect(new Set(ids).size).toBe(ids.length);
     expect([...ids].sort()).toEqual(ids);
