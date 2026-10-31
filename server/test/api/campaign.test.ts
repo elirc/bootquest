@@ -14,6 +14,7 @@ import { insertCheck, insertUnit } from '../../src/store/content.ts';
 import { writeCampaignFixture } from '../campaign-fixture.ts';
 import { localNoon, makeTempDb, type TempDb } from '../helpers.ts';
 import { fakeDrillJs } from './harness.ts';
+import { legacySlate } from '../slate-fixtures.ts';
 
 /** study-quiz stand-in: passes iff the answer is "pass" (the real quiz gate arrives with seed:quests). */
 const fakeStudyQuiz: Runner = async (_spec, sub) =>
@@ -183,6 +184,7 @@ describe('campaign slate slot, end to end through the API', { timeout: 30_000 },
   });
 
   it('a full slate day (5 drills per track + a campaign reading step + clear queue) is streak day 1', async () => {
+    legacySlate(ctx.db); // ab A1: the full preset (5 per track) and a card on file before today (not due)
     for (const track of ['js', 'csharp', 'java']) {
       for (let i = 0; i < 5; i++) {
         const id = insertUnit(

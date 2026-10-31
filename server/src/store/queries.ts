@@ -1,6 +1,7 @@
 import { CheckSpec, type CompetencyId, type TrackId, type UnitKind } from '@bootquest/shared';
 import type { Db } from '../db/database.ts';
 import { READING_ATTEST_SQL, VERIFIED_PASS_SQL } from '../engines/attempts.ts';
+import { dayKey } from '../engines/clock.ts';
 
 /**
  * Read-side queries for the HTTP API (W1b). Pure SQL reads mapped to camelCase
@@ -161,12 +162,25 @@ export function competencyTable(db: Db): CompetencyRow[] {
   }));
 }
 
-/** daily_slate statuses in an inclusive day range (for the heatmap). */
+/**
+ * daily_slate statuses in an inclusive day range (for the heatmap). Display-only remap (ab R3.1): a
+ * `missed` day before the learner's first action (earliest attempt, review_log or xp_event) is left
+ * out, so the heatmap renders it `none`. Those rows exist only because opening the dashboard starts
+ * the day ledger; they are never changed here (closed days stay immune).
+ */
 export function slateStatuses(db: Db, fromDay: string, toDay: string): Map<string, string> {
+  const r = db.get<{ a: number | null; rl: number | null; x: string | null }>(
+    `SELECT (SELECT MIN(created_at) FROM attempt) AS a, (SELECT MIN(reviewed_at) FROM review_log) AS rl,
+            (SELECT MIN(day) FROM xp_event) AS x`,
+  );
+  const days = [r?.a, r?.rl].filter((v): v is number => typeof v === 'number').map(dayKey);
+  if (typeof r?.x === 'string') days.push(r.x);
+  const firstAction = days.length === 0 ? null : days.reduce((m, d) => (d < m ? d : m));
   return new Map(
     db
       .all<{ day: string; status: string }>('SELECT day, status FROM daily_slate WHERE day BETWEEN ? AND ?', fromDay, toDay)
-      .map((r) => [r.day, r.status]),
+      .filter((row) => !(row.status === 'missed' && (firstAction === null || row.day < firstAction)))
+      .map((row) => [row.day, row.status]),
   );
 }
 

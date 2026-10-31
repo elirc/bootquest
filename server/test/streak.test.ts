@@ -7,6 +7,7 @@ import * as streakEngine from '../src/engines/streak.ts';
 import { closeElapsedDays, composeSlate, drillUnitsRemaining, getSlate, streakStatus } from '../src/engines/streak.ts';
 import { awardXp } from '../src/engines/xp.ts';
 import { makeUnit, submit, unitKey, useTempDb } from './helpers.ts';
+import { legacySlate } from './slate-fixtures.ts';
 
 const TRACKS = ['js', 'csharp', 'java'] as const;
 
@@ -43,6 +44,7 @@ function slot(db: Db, clock: () => Date, name: string) {
 
 describe('daily slate composition', () => {
   const ctx = useTempDb();
+  beforeEach(() => legacySlate(ctx.db)); // ab A1: these suites pin the pre-ab shape (5 per track + review slot)
   beforeEach(() => stockAllTracks(ctx.db, ctx.clock));
 
   it('with no campaign quests seeded: one 5-drill set per active track + review clear (no campaign slot)', () => {
@@ -85,6 +87,7 @@ describe('daily slate composition', () => {
 
 describe('slot completion is derived from the ledger', () => {
   const ctx = useTempDb();
+  beforeEach(() => legacySlate(ctx.db)); // ab A1: these suites pin the pre-ab shape (5 per track + review slot)
   beforeEach(() => stockAllTracks(ctx.db, ctx.clock));
 
   it('drill slot: 5 first-ever drill passes on the track today; 4 is not enough; failures do not count', () => {
@@ -137,6 +140,7 @@ describe('slot completion is derived from the ledger', () => {
 
 describe('streak engine', () => {
   const ctx = useTempDb();
+  beforeEach(() => legacySlate(ctx.db)); // ab A1: these suites pin the pre-ab shape (5 per track + review slot)
   beforeEach(() => stockAllTracks(ctx.db, ctx.clock));
 
   it('a full drill + review day (no campaign seeded) earns a streak day', () => {
@@ -263,6 +267,7 @@ function drillSlot(db: Db, clock: () => Date, track: string) {
 
 describe('drill-slot exhaustion (fix/slate): a track that runs out of new drills never blocks the slate', () => {
   const ctx = useTempDb();
+  beforeEach(() => legacySlate(ctx.db)); // ab A1: these suites pin the pre-ab shape (5 per track + review slot)
   /** csharp is the only drill track unless a test says otherwise */
   const csharpOnly = () => ctx.db.run(`UPDATE track SET slate_drills = 0 WHERE id IN ('js', 'java')`);
 
