@@ -93,6 +93,10 @@ resume from here without re-auditing or re-running the council.
     which started S2's gates in bq-qw-s2 (bash PID 24056, holds `locks/heavy` until its demo:promotion ends). It is
     S2's own gate run, so it was left to finish rather than killed. Fix: every agent keeps scripts and logs in its
     own `scratchpad/S<N>/` (COMMON.md "Interruptions", and told to the live agents).
+- **Ring review (session 3):** brief `briefs/RING.md` (app-code checks for S1-S5, content checks for S6-S7). Pairs:
+  S1 reviews S2, S2→S3, S3→S4, S4→S5, S5→S6, S6→S7, S7→S1. Started the 5 pairs that do not involve S1 (S1 was still
+  re-running its server suite); S4 was also asked to run its owed full client suite first. Reviews land in
+  `Seview\S<you>-on-S<t>.md`; then each target fixes BLOCKING + SHOULD as new commits.
 
 ## Not done
 - Finish the streams (resume prompt below tells each agent to adopt its clone's partial work), ring review, hub
