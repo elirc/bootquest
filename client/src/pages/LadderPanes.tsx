@@ -32,6 +32,7 @@ import {
 import { Icon } from '../components/Icon';
 import { Chip } from '../components/ui';
 import { contentHash, useDirtyGuard, useJsonDraft } from '../lib/draft';
+import { ebMeetsGate, ebTally, kpWeight, stripKpWeight, type EbTally } from '../lib/eb-weights';
 import { fmtWhen } from '../lib/format';
 import { InlineProse } from '../lib/prose';
 import { useTracksRefresh } from '../lib/tracks';
@@ -283,6 +284,64 @@ function ScorePreview({ hit, marked, total, verb, gatePct, gateName }: { hit: nu
   );
 }
 
+/**
+ * A5: an explain-back key point. A `[wN]` prefix renders as a weight chip and the text without it
+ * (display only: the served and stored text keep the prefix).
+ */
+function KpText({ text }: { text: string }) {
+  const w = kpWeight(text);
+  return (
+    <>
+      {w !== null && (
+        <span className="kp-weight" title={w === 3 ? 'weight 3: must be covered to pass' : `weight ${w}`} data-testid="kp-weight">
+          <Chip tone={w === 3 ? 'accent' : w === 2 ? 'info' : 'neutral'}>w{w}</Chip>{' '}
+        </span>
+      )}
+      <InlineProse text={w !== null ? stripKpWeight(text) : text} />
+    </>
+  );
+}
+
+/** "q1k3, q2k1" for [w3] ids */
+const idList = (ids: readonly string[]) => ids.join(', ');
+
+/**
+ * The explain-back live preview: plain covered/total for a legacy set (exactly the old preview);
+ * weighted coverage plus the "every [w3] needed" rule for a weighted set.
+ */
+function EbScorePreview({ t, gatePct, gateName }: { t: EbTally; gatePct: number; gateName: string }) {
+  if (!t.weighted) return <ScorePreview hit={t.covered} marked={t.marked} total={t.total} verb="covered" gatePct={gatePct} gateName={gateName} />;
+  const ok = ebMeetsGate(t, gatePct);
+  const unmarked = t.total - t.marked;
+  const w3 = t.w3Missed.length
+    ? `[w3] missed: ${idList(t.w3Missed)} (every [w3] is needed to pass)`
+    : t.w3Unmarked.length
+      ? `every [w3] needed (${t.w3Unmarked.length} [w3] still unmarked)`
+      : 'every [w3] covered';
+  return (
+    <span className={`score-preview ${ok ? 'is-pass' : 'is-fail'}`} data-testid="score-preview" aria-live="polite">
+      <strong>
+        weighted {t.hitWeight}/{t.allWeight} = {fmtPct(t.coverage)}
+      </strong>{' '}
+      ({t.covered}/{t.total} key points) — {ok ? 'meets' : 'below'} the {gatePct}% {gateName}; {w3}
+      {unmarked > 0 ? ` (${unmarked} still unmarked)` : ''}
+    </span>
+  );
+}
+
+/** The [w3] key points (id + display text) of a weighted key response among `missed`. */
+function w3MissedOf(keyResp: ExplainBackKeyResponse, missed: readonly string[]): { id: string; text: string }[] {
+  if (!isWeightedKey(keyResp)) return [];
+  return keyResp.questions
+    .flatMap((q) => q.keyPoints)
+    .filter((k) => missed.includes(k.id) && kpWeight(k.text) === 3)
+    .map((k) => ({ id: k.id, text: stripKpWeight(k.text) }));
+}
+
+function isWeightedKey(keyResp: ExplainBackKeyResponse): boolean {
+  return ebTally(keyResp.questions.flatMap((q) => q.keyPoints), {}).weighted;
+}
+
 function ScoreConfirm({
   id,
   title,
@@ -393,6 +452,21 @@ function SetGateLock({ label, opensAt }: { label: string; opensAt: number | null
   );
 }
 
+const BLIND_MARKER = 'Write your design before you look:';
+
+/**
+ * A5 blind mode (client-only, display only): a `[senior]` DESIGN IT prompt that carries the marker
+ * sentence can hide everything after it (the section list) until the answer is stored. Prompts
+ * without the marker get no toggle (no guessing). Returns null when the prompt is not blindable.
+ */
+export function blindSplit(prompt: string): { head: string; rest: string } | null {
+  if (!prompt.includes('[senior]')) return null;
+  const i = prompt.indexOf(BLIND_MARKER);
+  if (i < 0) return null;
+  const end = i + BLIND_MARKER.length;
+  return { head: prompt.slice(0, end), rest: prompt.slice(end) };
+}
+
 export function ExplainBackPane({ detail }: { detail: UnitDetail }) {
   const api = useApi();
   const id = detail.unit.id;
@@ -414,6 +488,7 @@ export function ExplainBackPane({ detail }: { detail: UnitDetail }) {
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [blind, setBlind] = useState(false);
   const { answers, assisted } = draft.value;
 
   // the server holds the answer once its key is readable: the draft is spent
@@ -525,28 +600,38 @@ export function ExplainBackPane({ detail }: { detail: UnitDetail }) {
           <SupersededNote notice={ks.notice} />
           {artifacts.length > 0 && <ArtifactLock artifacts={artifacts} />}
           {setGate && <SetGateLock label={setGate.label} opensAt={setGate.opensAt} />}
+          {pub.questions.some((q) => blindSplit(q.prompt) !== null) && (
+            <label className="blind-toggle small">
+              <input type="checkbox" checked={blind} onChange={(e) => setBlind(e.target.checked)} aria-label="Blind mode" />{' '}
+              Blind mode: hide the section list after &ldquo;{BLIND_MARKER}&rdquo; until your answer is stored (interview conditions).
+            </label>
+          )}
           <ol className="eb-questions">
-            {pub.questions.map((q, i) => (
-              <li key={i} className="eb-question">
-                <label>
-                  <span className="eb-prompt">
-                    <InlineProse text={q.prompt} />
-                  </span>
-                  <textarea
-                    className="answer-text eb-answer"
-                    rows={4}
-                    value={answers[i] ?? ''}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      draft.set((d) => ({ ...d, answers: d.answers.map((a, j) => (j === i ? v : a)) }));
-                    }}
-                    aria-label={`Answer ${i + 1}`}
-                    disabled={frozen}
-                    readOnly={locked}
-                  />
-                </label>
-              </li>
-            ))}
+            {pub.questions.map((q, i) => {
+              const split = blind ? blindSplit(q.prompt) : null;
+              return (
+                <li key={i} className="eb-question">
+                  <label>
+                    <span className="eb-prompt" data-testid={`eb-prompt-${i + 1}`}>
+                      <InlineProse text={split ? split.head : q.prompt} />
+                      {split && <span className="muted small"> (sections hidden: blind mode)</span>}
+                    </span>
+                    <textarea
+                      className="answer-text eb-answer"
+                      rows={4}
+                      value={answers[i] ?? ''}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        draft.set((d) => ({ ...d, answers: d.answers.map((a, j) => (j === i ? v : a)) }));
+                      }}
+                      aria-label={`Answer ${i + 1}`}
+                      disabled={frozen}
+                      readOnly={locked}
+                    />
+                  </label>
+                </li>
+              );
+            })}
           </ol>
           <div className="toolbar">
             <HelpBox checked={assisted} onChange={(v) => draft.set((d) => ({ ...d, assisted: v }))} disabled={frozen} />
@@ -606,9 +691,10 @@ function ExplainBackKeyView({
   const scoredBefore = keyResp.scored;
   const done = result !== null || scoredBefore !== null;
   const ready = allIds.every((k) => marks[k] !== undefined);
-  const covered = allIds.filter((k) => marks[k] === 'covered').length;
-  const marked = allIds.filter((k) => marks[k] !== undefined).length;
-  const passes = meetsGate(covered, allIds.length, gatePct);
+  // A5: weighted coverage + every [w3] for a weighted set; plain covered/total otherwise
+  const tally = ebTally(keyResp.questions.flatMap((q) => q.keyPoints), marks);
+  const { covered } = tally;
+  const passes = ebMeetsGate(tally, gatePct);
 
   const send = async () => {
     setBusy(true);
@@ -651,7 +737,7 @@ function ExplainBackKeyView({
                 {q.keyPoints.map((kp) => (
                   <li key={kp.id} className={`checklist-item${marks[kp.id] ? ` is-${marks[kp.id]}` : ''}`}>
                     <span className="checklist-text">
-                      <InlineProse text={kp.text} />
+                      <KpText text={kp.text} />
                     </span>
                     {kp.quote && <q className="checklist-quote">{kp.quote}</q>}
                     {kp.cite && (
@@ -684,7 +770,7 @@ function ExplainBackKeyView({
       </ol>
       {!done && (
         <div className="toolbar">
-          <ScorePreview hit={covered} marked={marked} total={allIds.length} verb="covered" gatePct={gatePct} gateName="promotion gate" />
+          <EbScorePreview t={tally} gatePct={gatePct} gateName="promotion gate" />
           <span className="toolbar-spacer" />
           <button type="button" className="btn btn-primary" disabled={!ready || busy || confirming} onClick={() => setConfirming(true)}>
             <Icon name="check" /> Submit self-score
@@ -695,7 +781,11 @@ function ExplainBackKeyView({
         <ScoreConfirm
           id="eb-score-confirm"
           title="File this self-score?"
-          summary={`${covered}/${allIds.length} covered = ${fmtPct(covered / allIds.length)}: ${passes ? 'meets' : 'below'} the ${gatePct}% promotion gate.`}
+          summary={
+            tally.weighted
+              ? `Weighted ${tally.hitWeight}/${tally.allWeight} = ${fmtPct(tally.coverage)} (${covered}/${allIds.length} key points): ${passes ? 'meets' : 'below'} the ${gatePct}% promotion gate${tally.w3Missed.length ? `; [w3] missed: ${idList(tally.w3Missed)} (every [w3] is needed)` : ', every [w3] covered'}.`
+              : `${covered}/${allIds.length} covered = ${fmtPct(covered / allIds.length)}: ${passes ? 'meets' : 'below'} the ${gatePct}% promotion gate.`
+          }
           consequence={
             passes
               ? 'It counts toward promotion leg (b) only when this set is linked to an artifact you passed solo and your answers were unassisted.'
@@ -709,10 +799,10 @@ function ExplainBackKeyView({
       )}
       <div className="results" aria-live="polite" data-testid="results">
         <ErrorLine error={error} />
-        {result && <ExplainBackResult r={result} hasAltSets={altSets !== null && altSets.siblings.length > 1} />}
+        {result && <ExplainBackResult r={result} keyResp={keyResp} hasAltSets={altSets !== null && altSets.siblings.length > 1} />}
         {!result && scoredBefore && (
           <div className="verdict verdict-todo">
-            <Icon name="check" /> Already self-scored: {fmtPct(scoredBefore.score)} coverage (evidence #{scoredBefore.evidenceIds.join(', #')}).
+            <Icon name="check" /> Already self-scored: {fmtPct(scoredBefore.score)} {tally.weighted ? 'weighted ' : ''}coverage (evidence #{scoredBefore.evidenceIds.join(', #')}).
           </div>
         )}
       </div>
@@ -784,7 +874,7 @@ function PracticeSection({ unitId, keyResp, gatePct }: { unitId: number; keyResp
             <li key={p.attemptId} className="practice-attempt" data-testid={`practice-${p.attemptId}`}>
               <p className="muted small">
                 Practice attempt {i + 1} · stored {fmtWhen(p.answeredAt)}
-                {p.scored ? ` — self-scored ${fmtPct(p.scored.score)} coverage (practice: 0 XP).` : ' — not scored yet.'}
+                {p.scored ? ` — self-scored ${fmtPct(p.scored.score)} ${isWeightedKey(keyResp) ? 'weighted ' : ''}coverage (practice: 0 XP).` : ' — not scored yet.'}
               </p>
               {p.scored ? (
                 <ol className="practice-answers">
@@ -863,21 +953,23 @@ function PracticeSection({ unitId, keyResp, gatePct }: { unitId: number; keyResp
           </div>
         </>
       )}
-      {lastResult && <PracticeResult r={lastResult} />}
+      {lastResult && <PracticeResult r={lastResult} keyResp={keyResp} />}
       <ErrorLine error={error} />
     </div>
   );
 }
 
-function PracticeResult({ r }: { r: ExplainBackScoreResponse }) {
+function PracticeResult({ r, keyResp }: { r: ExplainBackScoreResponse; keyResp: ExplainBackKeyResponse }) {
+  const weighted = isWeightedKey(keyResp);
+  const w3 = w3MissedOf(keyResp, r.missed);
   return (
     <div className={`verdict verdict-${r.passed ? 'pass' : 'fail'}`} data-testid="practice-result">
       <Icon name={r.passed ? 'check' : 'warn'} />
       <strong>
-        Practice coverage {fmtPct(r.coverage)} ({r.covered}/{r.total})
+        {weighted ? `Practice weighted coverage ${fmtPct(r.coverage)} (${r.covered}/${r.total} key points)` : `Practice coverage ${fmtPct(r.coverage)} (${r.covered}/${r.total})`}
       </strong>
       <span className="muted">
-        {r.passed ? 'meets' : 'below'} the {r.minCoveragePct}% mark — feedback only: 0 XP, no retest, never a promotion leg
+        {r.passed ? 'meets' : w3.length ? `[w3] missed: ${idList(w3.map((k) => k.id))}, so below` : 'below'} the {r.minCoveragePct}% mark — feedback only: 0 XP, no retest, never a promotion leg
       </span>
     </div>
   );
@@ -902,9 +994,8 @@ function PracticeScorer({
   const [marks, setMarks] = useState<Record<string, 'covered' | 'missed'>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const covered = allIds.filter((k) => marks[k] === 'covered').length;
-  const marked = allIds.filter((k) => marks[k] !== undefined).length;
-  const ready = marked === allIds.length;
+  const tally = ebTally(keyResp.questions.flatMap((q) => q.keyPoints), marks);
+  const ready = tally.marked === allIds.length;
 
   const send = async () => {
     setBusy(true);
@@ -937,7 +1028,7 @@ function PracticeScorer({
                 {q.keyPoints.map((kp) => (
                   <li key={kp.id} className={`checklist-item${marks[kp.id] ? ` is-${marks[kp.id]}` : ''}`}>
                     <span className="checklist-text">
-                      <InlineProse text={kp.text} />
+                      <KpText text={kp.text} />
                     </span>
                     <span className="seg" role="radiogroup" aria-label={`practice ${kp.id} coverage`}>
                       {(['covered', 'missed'] as const).map((m) => (
@@ -962,7 +1053,7 @@ function PracticeScorer({
         ))}
       </ol>
       <div className="toolbar">
-        <ScorePreview hit={covered} marked={marked} total={allIds.length} verb="covered" gatePct={gatePct} gateName="pass mark (practice: feedback only)" />
+        <EbScorePreview t={tally} gatePct={gatePct} gateName="pass mark (practice: feedback only)" />
         <span className="toolbar-spacer" />
         <button type="button" className="btn btn-primary" disabled={!ready || busy} onClick={() => void send()}>
           <Icon name="check" /> File practice score
@@ -978,19 +1069,36 @@ function PracticeScorer({
  * changed-example retest by design — its spaced repetition is the next fresh set, so a passing
  * score with no retest names that path instead of "no variation is seeded yet".
  */
-function ExplainBackResult({ r, hasAltSets }: { r: ExplainBackScoreResponse; hasAltSets: boolean }) {
+function ExplainBackResult({ r, keyResp, hasAltSets }: { r: ExplainBackScoreResponse; keyResp: ExplainBackKeyResponse; hasAltSets: boolean }) {
+  // A5: `r.coverage` is the score of record (weighted for a weighted set); a weighted set also fails on any missed [w3]
+  const weighted = isWeightedKey(keyResp);
+  const w3 = w3MissedOf(keyResp, r.missed);
+  const verdictText = r.passed
+    ? `meets the ${r.minCoveragePct}% promotion threshold${weighted ? ', every [w3] covered' : ''}`
+    : w3.length
+      ? `not a pass: every [w3] key point is needed, whatever the coverage (the ${r.minCoveragePct}% threshold applies to the weighted coverage)`
+      : `below the ${r.minCoveragePct}% promotion threshold`;
   return (
     <>
       <div className={`verdict verdict-${r.passed ? 'pass' : 'fail'}`} data-testid="coverage-result">
         <Icon name={r.passed ? 'check' : 'warn'} />
         <strong>
-          Coverage {fmtPct(r.coverage)} ({r.covered}/{r.total})
+          {weighted ? `Weighted coverage ${fmtPct(r.coverage)} (${r.covered}/${r.total} key points)` : `Coverage ${fmtPct(r.coverage)} (${r.covered}/${r.total})`}
         </strong>
-        <span className="muted">
-          {r.passed ? `meets the ${r.minCoveragePct}% promotion threshold` : `below the ${r.minCoveragePct}% promotion threshold`}
-        </span>
+        <span className="muted">{verdictText}</span>
         <span className="verdict-xp">{r.xp ? (r.xp.amount > 0 ? `+${r.xp.amount} XP` : `0 XP${r.xp.reason ? ` (${r.xp.reason})` : ''}`) : '0 XP'}</span>
       </div>
+      {w3.length > 0 && (
+        <div className="verdict verdict-fail" data-testid="w3-missed">
+          <Icon name="warn" /> Missed [w3] key point{w3.length > 1 ? 's' : ''}:{' '}
+          {w3.map((k, i) => (
+            <Fragment key={k.id}>
+              {i > 0 && '; '}
+              <strong>{k.id}</strong> <InlineProse text={k.text} />
+            </Fragment>
+          ))}
+        </div>
+      )}
       {r.retests.length > 0 ? (
         r.retests.map((t) => (
           <div key={t.reviewItemId} className="verdict verdict-todo" data-testid="retest-notice">
@@ -1004,7 +1112,7 @@ function ExplainBackResult({ r, hasAltSets }: { r: ExplainBackScoreResponse; has
       ) : (
         <div className="verdict verdict-todo" data-testid="retest-notice">
           <Icon name="warn" /> No retest scheduled
-          {r.passed ? ' (no changed-example variation is seeded for this artifact yet).' : ' — coverage is below the promotion threshold.'}
+          {r.passed ? ' (no changed-example variation is seeded for this artifact yet).' : w3.length ? ' — a [w3] key point was missed.' : ' — coverage is below the promotion threshold.'}
         </div>
       )}
       {r.promotions.map((p) => (
