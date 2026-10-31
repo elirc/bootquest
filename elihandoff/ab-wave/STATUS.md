@@ -61,6 +61,13 @@ resume from here without re-auditing or re-running the council.
     restamp 697/697 green; targeted client tests green. **Still owed: S4's full client suite** (run it at ring review
     or let the hub battery cover it). Deviations: 4 server tests swap an import to the extended dashboard schema
     (incl. append-only `api.test.ts`); expect a `Dashboard.tsx`/`getDashboard` conflict with S1 at merge.
+  - S3 DONE: ab-s3 306c7a0f, 6a69bf11, 1f3aa61c (`npm run app` launcher on the Vite dev server); server 654/654,
+    client 385/385, typechecks, lints, restamp 697/697 green; launcher live-checked on a DB copy (4391/5391).
+    Deviations: weak spots live in a new `weak-service.ts`; one added `export` on `explanationRelease` in
+    `notes-service.ts`; a stale comment in `Dashboard.tsx` about Due now waiting on `/competencies` (fix at merge).
+  - **Hub ruling (request count):** with S3 + S4 the dashboard mount makes dashboard + competencies + tracks + `/due` +
+    `/stats/weak`. Accepted (the cap's purpose was killing the 11-request fan-out; folding weak rows into `/due` would
+    mix concerns). At merge, update S4's "≤ 3 requests" mock test to the merged set, by counting.
   - **Incident (13:50):** stream agents shared one session scratchpad; S4 ran a `heavy.sh` that S2 had overwritten,
     which started S2's gates in bq-qw-s2 (bash PID 24056, holds `locks/heavy` until its demo:promotion ends). It is
     S2's own gate run, so it was left to finish rather than killed. Fix: every agent keeps scripts and logs in its
