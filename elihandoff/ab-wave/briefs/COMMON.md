@@ -34,6 +34,10 @@ amend a reported commit, never `--no-verify`. Git Bash for every npm command wit
   seed:validate, seed:check, seed:quests/notes/explainback re-seeds of more than one pack, test:csharp/java.
 - MEDIUM lock, two holders (`locks/med1` or `locks/med2`): `npm run typecheck`, client typecheck, the lints,
   `restamp:all -- --dry-run`. Targeted single test files need no lock.
+- Free-RAM gate (0.5 GB free at re-dispatch): before taking HEAVY check free memory with
+  `powershell -c "(Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory/1MB"` (GB). HEAVY needs >= 2.5 GB,
+  MEDIUM >= 1.5 GB; below that, wait (Monitor/until loop, 2-minute checks) and retry. Never kill processes you did
+  not start (the owner's browsers and server are resident). If you wait more than 45 minutes, report what you have.
 - Never hold a lock while thinking or writing code. Hold it only for the command. vitest `--maxWorkers=2`.
 - Never start, restart or POST to the owner's server on :4178. Tests use their own temp DBs.
 - Run anything longer than ~2 minutes with `run_in_background` and wait for the notification.

@@ -25,12 +25,28 @@ resume from here without re-auditing or re-running the council.
 4. **Briefs** for the 7 stream agents in `briefs/`: COMMON.md (shared rules, machine locks, gates, stop report) plus
    S1-S7.md.
 
-## Not done (paused)
-- The 7 stream agents were dispatched and then stopped within minutes. **Nothing was committed in any clone.**
-  - Branches `ab-s1..ab-s7` exist in `C:\Users\Owner\Desktop\bq-qw-s1..s7`, each at `origin/ab-wave`.
-  - Only bq-qw-s2 has an uncommitted partial edit, to `server/src/engines/fsrs.ts`. Review it or discard it with
-    `git -C C:/Users/Owner/Desktop/bq-qw-s2 checkout -- server/src/engines/fsrs.ts`.
-- Still to do: run the streams, ring review, hub integration, the battery, the SEEDING §8 bullet, and the README census.
+## Progress log (newest last; every session appends here before and after each phase)
+- **Session 1 (2026-10-30, to ~14:40):** council, rulings, hub contracts and briefs. The 7 stream agents were
+  dispatched and stopped within minutes, with nothing committed.
+- **Session 2 (2026-10-30, ~18:30-19:07):** re-dispatched the 7 streams; they were cut off at ~19:07 (out of
+  usage), with no stop reports and no locks left. COMMON.md gained the free-RAM gate (uncommitted until session 3).
+  State each clone was left in (`C:\Users\Owner\Desktop\bq-qw-s<N>`, branch `ab-s<N>`):
+
+| Stream | Commits on top of ab-wave | Uncommitted work left behind |
+|---|---|---|
+| S1 slate | none | settings routes/service, streak.ts, queries.ts, api-ext.ts, 4 test files (WIP) |
+| S2 review | fe8c2d3b demotion cap, 5d27c51a competency on cards, 42978194 repeat miss = again | client Review.tsx paging + test |
+| S3 weak/due | 306c7a0f GET /stats/weak + GET /due | client WeakSpots, DueNow, Stats, Dashboard |
+| S4 find | 0cc56192 unit search, targetUnitId, mixed drills | client api types/http/mock |
+| S5 EB weights | f54fbd6a [wN] weights + eb_score_detail | client LadderPanes, eb-weights lib |
+| S6 sysdrills | none | authoring 01-08 edits + importer gates in import.ts |
+| S7 leaks/stems | none | tracer/pulse quest+notes re-seed (pulse validation.json deleted mid-run), xleak-lint.ts |
+
+- **Session 3 (2026-10-31):** see the next log entry (written as it goes).
+
+## Not done
+- Finish the streams (resume prompt below tells each agent to adopt its clone's partial work), ring review, hub
+  integration, the battery, the SEEDING §8 bullet, and the README census.
 
 ## Resume (new session)
 1. Read `../../AGENTS.md`, then this file, then `RULINGS.md`, then `briefs/COMMON.md`. Do not re-run the council.
