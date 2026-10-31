@@ -189,8 +189,10 @@ Content is not in the DB, so the next `npm run serve` loads all of it again. Exi
   runs, evidence, XP events and review logs. `competency_rating` changes must be tied to
   promotion or demotion evidence.
 - **Three-leg promotion** (spec §6.2). A competency moves up one notch only after all
-  three legs below, all linked and timed on attempt time. A lapse on a Review-state FSRS
-  card for that competency demotes it one notch.
+  three legs below, all linked and timed on attempt time. A lapse (Again on a Review-state
+  FSRS card linked to that competency: study-quest missed-question and flashcard cards carry
+  their quest's competency) demotes it one notch, at most once per competency per local day
+  and never below 1. A capped lapse is still an ordinary review.
   - (a) an independent, run-verified, solo artifact: a project-kind unit;
   - (b) *its* explain-back with ≥80% key-point coverage;
   - (c) a changed-example retest of that unit, passed solo ≥2 days later.
@@ -283,7 +285,9 @@ Each gate is a real command that must exit 0. Run them in the foreground.
   `seed:check -- --restamp`.
 - **Revoke the leaked Shopify token** (andie `VERIFICATION.md`).
 - Decide the **quiz-oracle** policy (G6: repeated recorded submits can find quiz
-  answers) and the **demotion cap** (at most one demotion per competency per day?).
+  answers). The **demotion cap** is one demotion per competency per day (ab wave); every
+  study quest declares only `code-reading`, so decide whether that competency also needs a
+  per-promotion-window cap.
   Also decide the retake policy for one-shot explain-back and kata items.
 - Fix the **upstream guide errors** listed in [docs/SEEDING.md](docs/SEEDING.md#8-backlog)
   in the source repos.
