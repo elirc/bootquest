@@ -55,6 +55,7 @@ import { getRefContent } from './service.ts';
 import { getUnitNotes } from './notes-service.ts';
 import { reviewCardText } from './study-service.ts';
 import { campaignProgress, passRates, reviewStats, xpStats } from './stats-service.ts';
+import { registerS3Routes } from './s3-routes.ts';
 import { defaultRunners, type RunnerRegistry } from './runners.ts';
 import { emptySeedItemStore, type SeedItemStore } from '../store/seed-items.ts';
 import { ladderUnits } from '../store/ladder.ts';
@@ -380,6 +381,8 @@ export function createApp(opts: AppOptions): Express {
     validate(EmptyQuery, req.query, 'query');
     sendJson(res, 200, CampaignProgressResponse.parse(campaignProgress(deps)));
   }));
+
+  registerS3Routes(router, ladder); // ab wave S3: GET /stats/weak, GET /due
 
   // W7: the ladder units (explain-back / G2 / kata bank / retests / authored G3-G4) with campaign links
   router.get('/ladder', asyncRoute((req, res) => {
