@@ -37,6 +37,10 @@ const section = () => screen.findByTestId('track-units');
 const row = (id: number) => document.querySelector<HTMLElement>(`[data-unit="${id}"]`);
 const rows = () => document.querySelectorAll<HTMLElement>('[data-unit]');
 const status = () => screen.getByTestId('track-units-status');
+// ab S4: groups start collapsed; a group header is a disclosure button, "Expand all" opens every group
+const groupButton = (name: string) => screen.getByRole('button', { name });
+const groupButtons = () => document.querySelectorAll('.tu-group > h3 > button');
+const expandAll = () => screen.getByTestId('track-units-all');
 
 const MODULES = ['01-estimation', '02-caching', '03-queues', '04-sharding', '05-replication', '06-consistency', '07-rate-limiting', '08-storage', '09-search', '10-observability'];
 const LOCKED_DRILL = 1001;
@@ -83,14 +87,19 @@ const GENERATED_DONE = 17;
 
 describe('track units: campaign-less track (primary)', () => {
   it('/campaign/sysdesign keeps campaign-empty and lists the alt-set units under their repo', async () => {
-    renderApp('/campaign/sysdesign');
+    const { user } = renderApp('/campaign/sysdesign');
     const empty = await screen.findByTestId('campaign-empty');
     expect(empty).toHaveTextContent('No campaign acts are seeded for this track yet.');
     expect(empty).toHaveTextContent('Every practice unit on this track is browsable below.');
     const sec = await section();
     expect(within(sec).getByRole('heading', { level: 2, name: 'Practice units' })).toBeInTheDocument();
-    await waitFor(() => expect(row(501)).not.toBeNull());
-    expect(within(sec).getByRole('heading', { level: 3, name: 'opusorganize 0/2 done' })).toBeInTheDocument();
+    expect(await within(sec).findByRole('heading', { level: 3, name: 'opusorganize 0/2 done' })).toBeInTheDocument();
+    // ab S4: the group starts collapsed (no rows rendered) and opens from its header
+    const group = groupButton('opusorganize 0/2 done');
+    expect(group).toHaveAttribute('aria-expanded', 'false');
+    expect(row(501)).toBeNull();
+    await user.click(group);
+    expect(group).toHaveAttribute('aria-expanded', 'true');
     expect(row(501)!.tagName).toBe('A');
     expect(row(501)).toHaveAttribute('href', '/play/501');
     expect(row(502)).toHaveAttribute('href', '/play/502');
@@ -109,6 +118,9 @@ describe('track units: campaign-less track (primary)', () => {
       const toolbar = within(sec.querySelector<HTMLElement>('.tu-toolbar')!);
       const kinds = within(toolbar.getByRole('group', { name: 'Filter by kind' }));
       const groupHeads = () => [...sec.querySelectorAll('h3')].map((h) => h.textContent);
+      // ab S4: groups start collapsed; these tests read the rows, so open every group first
+      expect(rows()).toHaveLength(0);
+      await r.user.click(expandAll());
       return { ...r, sec, count, toolbar, kinds, groupHeads };
     }
 
@@ -209,7 +221,7 @@ describe('track units: campaign-less track (primary)', () => {
     });
   });
 
-  it('keyboard: j focuses the first available row, and rows are anchors', async () => {
+  it('keyboard: j/k walk group headers and rows; j starts at the first available row; rows are anchors', async () => {
     const units: UnitSummary[] = [
       { id: 901, key: 'ladder/explain-back/aaa/h1', trackId: 'sysdesign', kind: 'explain-back', title: 'First (done)', difficulty: null, state: 'done', revealed: false, prerequisites: [] },
       { id: 902, key: 'ladder/explain-back/aaa/h2', trackId: 'sysdesign', kind: 'explain-back', title: 'Second (available)', difficulty: null, state: 'available', revealed: false, prerequisites: [] },
@@ -217,17 +229,34 @@ describe('track units: campaign-less track (primary)', () => {
     ];
     const { user } = renderApp('/campaign/sysdesign', withUnits('sysdesign', units));
     await section();
-    await waitFor(() => expect(rows()).toHaveLength(3));
+    await waitFor(() => expect(groupButtons()).toHaveLength(2));
+    expect(rows()).toHaveLength(0);
+    // ab S4: collapsed, the group headers are the stops; Enter opens one
+    await user.keyboard('j');
+    expect(document.activeElement).toBe(groupButton('aaa 1/2 done'));
+    await user.keyboard('{Enter}');
+    expect(rows()).toHaveLength(2);
+    await user.keyboard('j');
+    expect(document.activeElement).toBe(row(901));
     await user.keyboard('j');
     expect(document.activeElement).toBe(row(902));
     expect(row(902)!.tagName).toBe('A');
     expect(row(902)).toHaveAttribute('href', '/play/902');
     await user.keyboard('j');
+    expect(document.activeElement).toBe(groupButton('bbb 0/1 done'));
+    await user.keyboard('{Enter}');
+    await user.keyboard('j');
     expect(document.activeElement).toBe(row(903));
     await user.keyboard('k');
     await user.keyboard('k');
+    expect(document.activeElement).toBe(row(902));
+    await user.keyboard('k');
     expect(document.activeElement).toBe(row(901));
     expect(row(901)!.tagName).toBe('A');
+    // with nothing focused, j still starts at the first available row
+    (document.activeElement as HTMLElement).blur();
+    await user.keyboard('j');
+    expect(document.activeElement).toBe(row(902));
   });
 
   it('a failed load shows an alert with Retry, and Retry renders the list', async () => {
@@ -244,7 +273,7 @@ describe('track units: campaign-less track (primary)', () => {
     // the campaign-empty note is unaffected by the browser's failure
     expect(screen.getByTestId('campaign-empty')).toBeInTheDocument();
     await user.click(within(alert).getByRole('button', { name: 'Retry' }));
-    await waitFor(() => expect(row(501)).not.toBeNull());
+    await user.click(await within(sec).findByRole('button', { name: 'opusorganize 0/2 done' }));
     expect(within(sec).queryByRole('alert')).toBeNull();
     expect(row(501)).toHaveAttribute('href', '/play/501');
   });
@@ -284,6 +313,10 @@ describe('track units: campaign track (collapsed secondary)', () => {
 
     await user.click(toggle);
     expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    // ab S4: the browser opens with its groups collapsed (headers only)
+    expect(groupButtons().length).toBeGreaterThan(0);
+    expect(rows()).toHaveLength(0);
+    await user.click(expandAll());
     expect(rows()).toHaveLength(n);
     expect(within(sec).getByTestId('track-units-count')).toHaveTextContent(`of ${n} units`);
     // the acts are untouched by the expanded browser
@@ -298,16 +331,18 @@ describe('track units: campaign track (collapsed secondary)', () => {
 describe('track units: honesty', () => {
   it('the list renders from the units payload alone and never fetches a unit detail', async () => {
     const { api, calls } = spyApi();
-    const { unmount } = renderApp('/campaign/sysdesign', api);
-    await waitFor(() => expect(row(501)).not.toBeNull());
+    const first = renderApp('/campaign/sysdesign', api);
+    await first.user.click(await screen.findByRole('button', { name: 'opusorganize 0/2 done' }));
+    expect(row(501)).not.toBeNull();
     expect(calls).toContain('getTrackUnits');
     expect(calls).not.toContain('getUnit');
-    unmount();
+    first.unmount();
 
     const js = spyApi();
     const r = renderApp('/campaign/js', js.api);
     const sec = await section();
     await r.user.click(await within(sec).findByRole('button', { name: /^Practice units \(\d+\)$/ }));
+    await r.user.click(await within(sec).findByTestId('track-units-all'));
     await waitFor(() => expect(rows().length).toBeGreaterThan(0));
     expect(js.calls).toContain('getTrackUnits');
     expect(js.calls).not.toContain('getUnit');
@@ -335,7 +370,10 @@ describe('track units: #units deep link (the dashboard "Browse all" link)', () =
     expect(sec).toHaveAttribute('id', 'units');
     const toggle = await within(sec).findByRole('button', { name: `Practice units (${n})` });
     expect(toggle).toHaveAttribute('aria-expanded', 'true');
-    await waitFor(() => expect(rows()).toHaveLength(n));
+    // ab S4: open browser, collapsed groups
+    await waitFor(() => expect(groupButtons().length).toBeGreaterThan(0));
+    expect(rows()).toHaveLength(0);
+    expect(n).toBeGreaterThan(0);
     await waitFor(() => expect(document.activeElement).toBe(toggle));
     expect(scrolled).toEqual([sec]);
   });
@@ -343,7 +381,7 @@ describe('track units: #units deep link (the dashboard "Browse all" link)', () =
   it('/campaign/sysdesign#units focuses the primary heading', async () => {
     renderApp('/campaign/sysdesign#units');
     const sec = await section();
-    await waitFor(() => expect(row(501)).not.toBeNull());
+    await within(sec).findByRole('button', { name: 'opusorganize 0/2 done' });
     const heading = within(sec).getByRole('heading', { level: 2, name: 'Practice units' });
     await waitFor(() => expect(document.activeElement).toBe(heading));
     expect(scrolled).toEqual([sec]);
