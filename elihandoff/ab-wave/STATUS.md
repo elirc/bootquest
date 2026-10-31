@@ -43,9 +43,9 @@ resume from here without re-auditing or re-running the council.
 | S7 leaks/stems | none | tracer/pulse quest+notes re-seed (pulse validation.json deleted mid-run), xleak-lint.ts |
 
 - **Session 3 (2026-10-31):** recorded the state above (b082f41e); added the "Interruptions" section to
-  COMMON.md (adopt partial work, checkpoint commits, a `## Progress` section at the top of each `Seports\S<N>.md`);
+  COMMON.md (adopt partial work, checkpoint commits, a `## Progress` section at the top of each `S\reports\S<N>.md`);
   re-dispatched the 7 streams with the resume prompt (step 4). **If this session is cut off too:** read each
-  `Seports\S<N>.md` Progress section plus `git -C bq-qw-s<N> log/status`, then re-dispatch only the unfinished
+  `S\reports\S<N>.md` Progress section plus `git -C bq-qw-s<N> log/status`, then re-dispatch only the unfinished
   streams with the same prompt.
 
 ## Not done
