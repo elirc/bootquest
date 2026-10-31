@@ -1,9 +1,10 @@
 import { createEmptyCard, fsrs, generatorParameters, Rating, State, type Card, type Grade } from 'ts-fsrs';
 import { ReviewGrade, type CompetencyId } from '@bootquest/shared';
 import type { Db } from '../db/database.ts';
-import { nowMs, type Clock } from './clock.ts';
+import { dayKey, nowMs, type Clock } from './clock.ts';
 import { HonestyRuleError } from './attempts.ts';
-import { demote, writeReviewEvidence, type RatingChange } from './evidence.ts';
+import { demote, getRating, MIN_RATING, writeReviewEvidence, type RatingChange } from './evidence.ts';
+import { dayBounds } from './streak.ts';
 import { awardReviewXp, type XpAward } from './xp.ts';
 
 /**
@@ -146,12 +147,35 @@ export interface ReviewOptions {
 }
 
 /**
+ * ab-wave demotion guard (RULINGS R3.2): a lapse demotes its competency only when
+ *   - the rating is above the floor: a 1 -> 1 "demotion" row would be noise, and a floor
+ *     demotion never moves the promotion window anyway (evidence.ts lastRatingChangeAt);
+ *   - no demotion of that competency was written yet on the lapse's LOCAL day (cap: one
+ *     per competency per day, so a bad review session costs one notch, not one per card).
+ * A capped or floored lapse is still an ordinary review: FSRS reschedule, review_log
+ * (demotion_evidence_id NULL), review evidence, XP.
+ */
+function lapseMayDemote(db: Db, competency: CompetencyId, t: number): boolean {
+  if (getRating(db, competency) <= MIN_RATING) return false;
+  const [start, end] = dayBounds(dayKey(t));
+  return (
+    db.get(
+      `SELECT 1 AS x FROM evidence WHERE kind = 'demotion' AND competency_id = ? AND created_at >= ? AND created_at < ? LIMIT 1`,
+      competency,
+      start,
+      end,
+    ) === undefined
+  );
+}
+
+/**
  * Grade one review: reschedule via FSRS, append review_log, award 1 XP
  * (capped 30/day), write a 'review' evidence row for a competency-linked item
  * (spec §6.2: every review writes evidence), and — only on a LAPSE, i.e.
  * 'again' on a card that was in FSRS Review state before this grade — demote
- * that competency one notch. Again on a New/Learning/Relearning card is not
- * forgetting learned material and does not demote (W1a audit #7).
+ * that competency one notch, at most once per competency per local day and
+ * never below the floor (lapseMayDemote). Again on a New/Learning/Relearning
+ * card is not forgetting learned material and does not demote (W1a audit #7).
  * Cards that are not due yet are refused (no early-review XP farming).
  */
 export function review(db: Db, itemId: number, grade: ReviewGrade, now: Clock, opts: ReviewOptions = {}): ReviewOutcome {
@@ -183,7 +207,7 @@ export function review(db: Db, itemId: number, grade: ReviewGrade, now: Clock, o
         { competency: item.competency_id, unitId: item.unit_id, cardKey: item.card_key, grade: g, prevDueAt: item.due_at, nextDueAt: next.due.getTime() },
         t,
       );
-      if (g === 'again' && before.state === State.Review) {
+      if (g === 'again' && before.state === State.Review && lapseMayDemote(db, item.competency_id, t)) {
         demotion = demote(db, item.competency_id, now, `lapse: failed FSRS review of ${item.card_key}`);
       }
     }
