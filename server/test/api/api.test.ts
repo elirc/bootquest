@@ -26,6 +26,7 @@ import { insertUnit } from '../../src/store/content.ts';
 import { ledgerCounts } from '../../src/store/queries.ts';
 import { graduate, promoteTo } from '../helpers.ts';
 import { fixture, servedQuizAnswer, useApi } from './harness.ts';
+import { cardOnFile, legacySlate } from '../slate-fixtures.ts';
 
 /** An unpassed drill unit (stub drill-js check) — a track with no drills left has no slate slot (fix/slate). */
 function seedDrill(ctx: { db: Parameters<typeof insertUnit>[0]; clock: Parameters<typeof insertUnit>[2] }, key: string, track: string): number {
@@ -544,6 +545,7 @@ describe('reviews', () => {
   const ctx = useApi();
 
   it('queue lists due items; grading moves due_at forward and logs', async () => {
+    cardOnFile(ctx.db); // ab A1: the review slot is shown once a card existed before today (this one is not due)
     const item = addReviewItem(ctx.db, { cardKey: 'card:a' }, ctx.clock);
     const q = ReviewQueueResponse.parse((await request(ctx.app).get('/api/reviews/queue')).body);
     expect(q.count).toBe(1);
@@ -639,7 +641,9 @@ describe('GET /api/dashboard', () => {
     expect(d.competencies.find((c) => c.id === 'communication')!.lastEvidence).toBeNull();
     expect(d.reviewQueue.due).toBe(1);
     // no campaign quests are seeded: the campaign slot is absent rather than impossible
-    expect(d.slate.items.map((i) => i.slot)).toEqual(['drill:js', 'drill:csharp', 'drill:java', 'review']);
+    // ab A1: no review slot yet (the only card was created today); 1 drill per track by default
+    expect(d.slate.items.map((i) => i.slot)).toEqual(['drill:js', 'drill:csharp', 'drill:java']);
+    expect(d.slate.items.map((i) => (i.kind === 'drill-set' ? i.size : null))).toEqual([1, 1, 1]);
     expect(d.nextUp.map((n) => n.trackId)).toEqual(['js', 'csharp', 'java', 'agentic', 'sysdesign']); // every unlocked track
     expect(d.nextUp.find((n) => n.trackId === 'js')!.unit!.key).toBe('fixture:quiz-typeof');
     expect(d.streak).toMatchObject({ current: 0, tokens: 0, todayComplete: false });
@@ -657,6 +661,7 @@ describe('GET /api/dashboard', () => {
   });
 
   it('a full drill + review day (no campaign seeded) is a slate day: streak 1 the next day', async () => {
+    legacySlate(ctx.db); // ab A1: the full preset (5 per track) and a card on file before today
     const card = addReviewItem(ctx.db, { cardKey: 'card:streak' }, ctx.clock);
     for (const track of ['js', 'csharp', 'java']) {
       for (let i = 0; i < 5; i++) {

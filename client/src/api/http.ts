@@ -34,9 +34,10 @@ import {
   type UnitNotesResponse,
   type RefContentResponse,
   type WrittenAnswerResponse,
+  type SlateSettingsResponse,
 } from './types';
 
-type Init = { method: 'POST'; body: unknown };
+type Init = { method: 'POST' | 'PUT'; body: unknown };
 
 /** Reads the `{error:{code,message,issues?}}` envelope; tolerates non-JSON bodies (proxies, crashes). */
 async function toApiError(res: Response, path: string): Promise<ApiError> {
@@ -135,5 +136,15 @@ export function createHttpApi(baseUrl = '/api', fetchImpl: typeof fetch = (...a)
     getCampaignProgress: () => call<CampaignProgressResponse>('/stats/campaign'),
     getUnitNotes: (id) => call<UnitNotesResponse>(`${unit(id)}/notes`),
     getRefContent: (refId) => call<RefContentResponse>(`/refs/${encodeURIComponent(String(refId))}/content`),
+    // ---- ab S1: slate settings. Whitelisted body: the preset, or per track only trackId / enabled / size.
+    getSlateSettings: () => call<SlateSettingsResponse>('/settings/slate'),
+    putSlateSettings: (b) =>
+      call<SlateSettingsResponse>('/settings/slate', {
+        method: 'PUT',
+        body:
+          'preset' in b
+            ? { preset: b.preset }
+            : { tracks: b.tracks.map((t) => ({ trackId: t.trackId, enabled: t.enabled, ...(t.size !== undefined ? { size: t.size } : {}) })) },
+      }),
   };
 }

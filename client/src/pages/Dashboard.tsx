@@ -13,6 +13,7 @@ import type {
 } from '../api/types';
 import { Heatmap } from '../components/Heatmap';
 import { Icon } from '../components/Icon';
+import { SlateFocus } from '../components/SlateFocus';
 import { Chip, Kbd, LoadState, PageHeader, Panel, ProgressBar, RatingPips } from '../components/ui';
 import { fmtInt, fmtRelative, fmtShortDate, fmtWhen, plural } from '../lib/format';
 import { useTracks } from '../lib/tracks';
@@ -148,6 +149,9 @@ function DashboardBody({ d, comp }: { d: DashboardData; comp: Loaded<Competencie
       </div>
 
       <DueNowPanel q={comp} retests={retests} />
+
+      {/* ab S1: "Choose your focus" until a slate choice is saved, then a summary + Change link */}
+      <SlateFocus />
 
       <div className="dash-row">
         <Panel title="Activity" labelledBy="p-activity" className="dash-heat" aside={<span className="muted">last {d.heatmap.length} days</span>}>

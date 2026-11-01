@@ -44,6 +44,7 @@ import {
   studyQuestFixtures,
 } from './fixtures/ladder';
 import { writtenFixtures } from './fixtures/written';
+import { createMockSlateSettings } from './mock-slate';
 import {
   ApiError,
   type BootQuestApi,
@@ -145,6 +146,8 @@ export interface MockApiOptions {
    * `lockedCampaignFixtures[id]` when one exists (a statically locked act, inert quests).
    */
   lockedTracks?: readonly TrackId[];
+  /** ab S1: 'full' (default, the fixture learner's 5-drill sets) or 'unconfigured' (day one: no slate_setting row). */
+  slateSettings?: 'full' | 'unconfigured';
 }
 
 // ---- pass rates: mirrors server/src/engines/stats.ts passRate / passRatesBy and the
@@ -438,6 +441,12 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
     spec.type === 'quiz' ? 2 : spec.type === 'predict-output' ? 4 : 10 * (u.difficulty ?? 1);
 
   const queue = () => fx.reviewQueue.filter((c) => !graded.has(c.id) && c.dueAt <= NOW);
+
+  const slateSettings = createMockSlateSettings({
+    today: fx.dashboard.today,
+    tracks: trackList.filter((t) => !t.locked && t.id !== 'agentic'),
+    start: opts.slateSettings,
+  });
 
   const wrap = <T>(fn: () => T): Promise<T> => {
     try {
@@ -1287,6 +1296,10 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
       wrap((): RefContentResponse => {
         throw err(404, 'NOT_FOUND', `content ref ${refId} not found`);
       }),
+
+    // ---- ab S1: slate settings (client/src/api/mock-slate.ts; drill-slot tracks = js, csharp, java, sysdesign)
+    getSlateSettings: () => wrap(() => slateSettings.get()),
+    putSlateSettings: (body) => wrap(() => slateSettings.put(body)),
 
     reseedItem: (unitId) => {
       itemVersion.set(unitId, versionOf(unitId) + 1);

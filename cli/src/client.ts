@@ -10,12 +10,14 @@ import type {
   UnitSummary,
 } from '@bootquest/shared/api';
 import type { SeedQueueResponse, SyncReport } from '@bootquest/shared/sync';
+import type { SlateSettingsBody, SlateSettingsResponse } from '@bootquest/shared/api-ext';
 
 /**
- * Thin HTTP client for the BootQuest API (contract: shared/src/api.ts; the
+ * Thin HTTP client for the BootQuest API (contract: shared/src/api.ts + api-ext.ts; the
  * imports above are TYPE-ONLY, so zod never loads in the CLI). Every write the
  * CLI does goes through POST /units/:id/run|submit — the server derives XP,
- * evidence and verification; the CLI never computes them.
+ * evidence and verification; the CLI never computes them. The one settings
+ * write, PUT /settings/slate (ab A1), only appends the learner's slate choice.
  *
  * Deliberately absent: /reveal, /solution, /model-answer. The CLI never
  * fetches or prints solutions (cli/test/no-solutions.test.ts guards this).
@@ -167,7 +169,7 @@ export class ApiClient {
    * `opts.timeoutMs` overrides the client's timeout (never shortens it below it);
    * `opts.recorded` marks a write the server records, for the timeout message.
    */
-  async request<T>(method: 'GET' | 'POST', path: string, body?: unknown, opts: { timeoutMs?: number; recorded?: boolean } = {}): Promise<T> {
+  async request<T>(method: 'GET' | 'POST' | 'PUT', path: string, body?: unknown, opts: { timeoutMs?: number; recorded?: boolean } = {}): Promise<T> {
     const url = `${this.server}/api${path}`;
     const timeoutMs = Math.max(this.timeoutMs, opts.timeoutMs ?? 0);
     let res: Awaited<ReturnType<FetchLike>>;
@@ -244,5 +246,13 @@ export class ApiClient {
   }
   seedQueue(limit = 20): Promise<SeedQueueResponse> {
     return this.request('GET', `/sync/queue?limit=${limit}`);
+  }
+  /** ab A1: the daily slate shape (today's and tomorrow's) */
+  slateSettings(): Promise<SlateSettingsResponse> {
+    return this.request('GET', '/settings/slate');
+  }
+  /** ab A1: appends slate_setting rows; the server makes them effective TOMORROW */
+  putSlateSettings(body: SlateSettingsBody): Promise<SlateSettingsResponse> {
+    return this.request('PUT', '/settings/slate', body, { recorded: true });
   }
 }

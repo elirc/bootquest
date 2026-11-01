@@ -8,15 +8,32 @@ import { xpOnDay } from './xp.ts';
  * Daily slate + streak engine (spec §6.1).
  *
  * Slate composition: at most one drill set per active track (track.locked=0 AND
- * track.slate_drills=1) that still has drills to give (see "Drill-slot size"),
- * one campaign step ONLY when a campaign step can actually be taken that day
- * (W5b: an actionable, not-yet-done quest in an UNLOCKED act —
- * engines/campaign.ts — or the step was already taken that day; a slot nothing
- * can complete would make the streak impossible again, W1b review), and
- * "clear the review queue".
+ * track.slate_drills=1) that the learner has not switched off and that still
+ * has drills to give (see "Drill-slot size"), one campaign step ONLY when a
+ * campaign step can actually be taken that day (W5b: an actionable,
+ * not-yet-done quest in an UNLOCKED act — engines/campaign.ts — or the step was
+ * already taken that day; a slot nothing can complete would make the streak
+ * impossible again, W1b review), and "clear the review queue" once the learner
+ * has review cards (see "Review slot").
+ *
+ * Slate settings (ab wave A1, migration 017): the learner's choice of tracks
+ * and set size is an append-only ledger (slate_setting). slateShape(db, day)
+ * reads, per track, the latest row with effective_day <= day; a track with no
+ * row is on the slate (when track.slate_drills = 1) with the unconfigured
+ * default size DEFAULT_DRILL_SET_SIZE = 1, so day one asks for one drill per
+ * track. The settings service always writes effective_day = tomorrow, so a
+ * change never reshapes today's open slate or any closed day, and the size never
+ * ramps on its own (no hidden growth when the learner starts passing drills).
+ * track.slate_drills stays the capability flag (the track gives drill slots at
+ * all) and is never changed by a setting.
+ *
+ * Review slot: shown only when some non-retest review_item was created before
+ * the day STARTED (review_item.created_at is never rewritten), so a learner
+ * with no cards is not shown a vacuously ticked "nothing due" slot, and the slot
+ * cannot appear mid-day.
  *
  * Drill-slot size (fix/slate): a track's set asks for
- * min(DRILL_SET_SIZE, R) drills, where R = drillUnitsRemaining(track, day) is
+ * min(size, R) drills (size from slateShape), where R = drillUnitsRemaining(track, day) is
  * the number of live drill units with no verified pass and no reveal before the
  * day STARTS. R = 0 drops the slot. Without this, a track whose content ran out
  * (~112 C# / ~104 Java drills at 5 a day: about three weeks) left a slot
@@ -88,7 +105,10 @@ import { xpOnDay } from './xp.ts';
  * only when the streak breaks.
  */
 
+/** Per-track drill-set size of the `full` preset (the pre-ab default: 5 drills per track). */
 export const DRILL_SET_SIZE = 5;
+/** Per-track drill-set size with no slate_setting row (or a row with size NULL): day one is small. */
+export const DEFAULT_DRILL_SET_SIZE = 1;
 export const PARTIAL_DAY_XP = 20;
 export const SLATE_DAYS_PER_TOKEN = 7;
 export const MAX_TOKENS = 2;
@@ -167,19 +187,60 @@ export function drillUnitsRemaining(db: Db, trackId: string, day: string): numbe
   );
 }
 
-/** The slot list for `day` (done flags unset), from the tracks, the drill ledger and campaign state. */
+/** One slate track's chosen shape as of a day (see the header, "Slate settings"). */
+export interface SlateTrackShape {
+  trackId: string;
+  name: string;
+  /** on the slate that day (a learner choice; the track must also be unlocked with slate_drills = 1) */
+  enabled: boolean;
+  /** drills asked for before the R cap (DEFAULT_DRILL_SET_SIZE when unset) */
+  size: number;
+  /** a slate_setting row decides this track (false = the unconfigured default) */
+  configured: boolean;
+}
+
+/**
+ * The slate shape as of `day`, one entry per slate-capable track (unlocked, slate_drills = 1) in sort
+ * order: the latest slate_setting row with effective_day <= day, else on with the default size.
+ */
+export function slateShape(db: Db, day: string): SlateTrackShape[] {
+  return db
+    .all<{ id: string; name: string; enabled: boolean | null; size: number | null }>(
+      `SELECT t.id, t.name, s.enabled, s.size FROM track t
+         LEFT JOIN slate_setting s ON s.id = (
+           SELECT s2.id FROM slate_setting s2 WHERE s2.track_id = t.id AND s2.effective_day <= ?
+            ORDER BY s2.effective_day DESC, s2.id DESC LIMIT 1)
+        WHERE t.locked = 0 AND t.slate_drills = 1
+        ORDER BY t.sort_order`,
+      day,
+    )
+    .map((r) => ({
+      trackId: r.id,
+      name: r.name,
+      enabled: r.enabled ?? true, // db/hygiene.ts maps the 0/1 `enabled` column to a boolean
+      size: r.size ?? DEFAULT_DRILL_SET_SIZE,
+      configured: r.enabled !== null,
+    }));
+}
+
+/** The learner had a (non-retest) review card before `dayStart` ms: only then is the review slot on the slate. */
+export function reviewSlotShown(db: Db, dayStart: number): boolean {
+  return db.get(`SELECT 1 AS x FROM review_item WHERE kind <> 'retest' AND created_at < ? LIMIT 1`, dayStart) !== undefined;
+}
+
+/** The slot list for `day` (done flags unset), from the slate settings, the drill ledger, campaign state and the cards. */
 function slateStructure(db: Db, day: string): SlateItem[] {
-  const tracks = db.all<{ id: string }>('SELECT id FROM track WHERE locked = 0 AND slate_drills = 1 ORDER BY sort_order');
   const [start, end] = dayBounds(day);
   const hasCampaign = campaignStepAvailable(db) || campaignStepDone(db, start, end);
   const items: SlateItem[] = [];
-  for (const tr of tracks) {
+  for (const tr of slateShape(db, day)) {
+    if (!tr.enabled) continue;
     // an exhausted track drops its slot; a nearly-exhausted one asks only for what is left
-    const size = Math.min(DRILL_SET_SIZE, drillUnitsRemaining(db, tr.id, day));
-    if (size > 0) items.push({ slot: `drill:${tr.id}`, kind: 'drill-set', track: tr.id, size, done: false });
+    const size = Math.min(tr.size, drillUnitsRemaining(db, tr.trackId, day));
+    if (size > 0) items.push({ slot: `drill:${tr.trackId}`, kind: 'drill-set', track: tr.trackId, size, done: false });
   }
   if (hasCampaign) items.push({ slot: 'campaign', kind: 'campaign-step', done: false });
-  items.push({ slot: 'review', kind: 'review-clear', done: false });
+  if (reviewSlotShown(db, start)) items.push({ slot: 'review', kind: 'review-clear', done: false });
   return items;
 }
 

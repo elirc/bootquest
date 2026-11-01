@@ -256,6 +256,28 @@ describe('bootquest CLI against the real server', () => {
     expect(r.stdout).toMatch(/^Next up:$/m);
   });
 
+  it('ab A1 slate: --tracks java,sysdesign --size 3 is saved for TOMORROW; today keeps its slate', async () => {
+    const todayBefore = (await (await fetch(`${base}/api/dashboard`)).json()) as { slate: unknown };
+    const show = await cli(['slate'], tmp);
+    expect(show.code).toBe(0);
+    expect(show.stdout).toMatch(/^Today \(\d{4}-\d{2}-\d{2}\):$/m);
+    const r = await cli(['slate', '--tracks', 'java,sysdesign', '--size', '3'], tmp);
+    expect(r.stderr).toBe('');
+    expect(r.code).toBe(0);
+    expect(r.stdout).toMatch(/^Saved\. It takes effect tomorrow \(\d{4}-\d{2}-\d{2}\)/m);
+    const s = (await (await fetch(`${base}/api/settings/slate`)).json()) as {
+      configured: boolean;
+      tomorrowTracks: { trackId: string; enabled: boolean; size: number }[];
+    };
+    expect(s.configured).toBe(true);
+    expect(s.tomorrowTracks.filter((t) => t.enabled).map((t) => [t.trackId, t.size])).toEqual([['java', 3], ['sysdesign', 3]]);
+    const todayAfter = (await (await fetch(`${base}/api/dashboard`)).json()) as { slate: unknown };
+    expect(todayAfter.slate).toEqual(todayBefore.slate);
+    const bad = await cli(['slate', '--tracks', 'rust'], tmp);
+    expect(bad.code).toBe(2);
+    expect(bad.stderr).toMatch(/not a slate track: rust/);
+  });
+
   it('unitId config works too (resolved without the key lookup)', async () => {
     const units = (await (await fetch(`${base}/api/tracks/js/units`)).json()) as { units: { id: number; key: string }[] };
     const id = units.units.find((u) => u.key === drill.key)!.id;
@@ -397,9 +419,9 @@ describe('bootquest CLI against the real server', () => {
     expect(r.stderr).toMatch(new RegExp(`Cannot reach the BootQuest server at http://127\\.0\\.0\\.1:${port} \\(ECONNREFUSED\\)`));
     expect(r.stderr).toMatch(/npm run serve/);
     expect(r.stderr).not.toMatch(/\n\s+at /); // no stack trace
-    // B4: `today` is informational: the same down server is reported honestly with exit 0
+    // B4 + ab A1: `today` reports the same down server honestly, and exits 2 (no longer swallowed)
     const t = await cli(['today']);
-    expect(t.code).toBe(0);
+    expect(t.code).toBe(2);
     expect(t.stdout).toMatch(/Today: unavailable - the server could not be read/);
     expect(t.stderr).toMatch(new RegExp(`Cannot reach the BootQuest server at http://127\\.0\\.0\\.1:${port} \\(ECONNREFUSED\\)`));
   });

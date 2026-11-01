@@ -58,6 +58,7 @@ import { campaignProgress, passRates, reviewStats, xpStats } from './stats-servi
 import { defaultRunners, type RunnerRegistry } from './runners.ts';
 import { emptySeedItemStore, type SeedItemStore } from '../store/seed-items.ts';
 import { ladderUnits } from '../store/ladder.ts';
+import { registerSettingsRoutes } from './settings-routes.ts';
 import {
   answerExplainBack,
   getAttemptDetail,
@@ -445,6 +446,8 @@ export function createApp(opts: AppOptions): Express {
     validate(EmptyQuery, req.query, 'query');
     sendJson(res, 200, RefContentResponse.parse(await getRefContent(deps, id)));
   }));
+
+  registerSettingsRoutes(router, deps); // ab S1: GET/PUT /settings/slate
 
   app.use('/api', router);
 
