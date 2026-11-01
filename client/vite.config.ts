@@ -29,8 +29,10 @@ export default defineConfig({
     proxy: { '/api': { target: `http://127.0.0.1:${process.env.BOOTQUEST_PORT ?? '4178'}` } },
     // Imported packs carry reference solutions and answer keys: the dev server must never
     // serve them via /@fs/ (w2-review i1). Setting `deny` replaces Vite's defaults, so they
-    // are restated here.
-    fs: { deny: ['.env', '.env.*', '*.{crt,pem}', '**/.git/**', '**/content/packs/**'] },
+    // are restated here. ab S3 (ring review, `npm run app` makes this server the default): all of
+    // content/ (seed packs hold quiz answer keys and explain-back key points, seed-drafts too) and
+    // .cache/ (pinned upstream checkouts with solutions) are denied; the client imports neither.
+    fs: { deny: ['.env', '.env.*', '*.{crt,pem}', '**/.git/**', '**/content/**', '**/.cache/**'] },
   },
   build: {
     target: 'es2022',
