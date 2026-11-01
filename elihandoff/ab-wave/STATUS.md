@@ -76,6 +76,9 @@ resume from here without re-auditing or re-running the council.
     frozen-both-sides + 4 accepted), lint precision 17/20 on a hand sample, slotcheck 0 BAD; tools/seed 2260, server
     640/640, scoped seed:check 19/19, restamp 697/697, lints green. `seed:pins` must run at the hub (clone lacks the
     mirrors). Pulse re-seeded with `--allow-quarantine` (pre-existing quarantined reading step; keys unchanged).
+  - S1 DONE: ab-s1 e1b74801 engine, 88db9719 settings API, 2731d447 CLI, 908f6f55 client; server 658/658 (own
+    re-run, scratchpad/S1/S1-server.txt 14:22), cli 120/120 incl. e2e, client 385/385, demo:promotion 39/39, restamp
+    697/697, lints green. Its report still says "in progress" because the cut-off hit before it updated it.
   - S2 DONE: ab-s2 fe8c2d3b, 5d27c51a, 42978194, 228f916f (Review paging), 90474337 (README rule); server 646/646,
     client 381/381, demo:promotion 39/39, restamp 697/697, lints green (all re-run by S2 itself after the incident).
     Hub accepted its 3 deviations: "Queue cleared" only when the server due count is 0 (else "Session done" + "Review
@@ -97,6 +100,8 @@ resume from here without re-auditing or re-running the council.
   S1 reviews S2, S2→S3, S3→S4, S4→S5, S5→S6, S6→S7, S7→S1. Started the 5 pairs that do not involve S1 (S1 was still
   re-running its server suite); S4 was also asked to run its owed full client suite first. Reviews land in
   `S\review\S<you>-on-S<t>.md`; then each target fixes BLOCKING + SHOULD as new commits.
+  2026-10-31 ~14:30 all 7 agents hit the usage limit again (reset 18:40 PT) before any review was written; on
+  2026-11-01 all 7 were resumed with their review (S1 on S2 and S7 on S1 added; S4 still owes its client suite).
 
 ## Not done
 - Finish the streams (resume prompt below tells each agent to adopt its clone's partial work), ring review, hub
