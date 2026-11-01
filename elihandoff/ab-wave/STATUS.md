@@ -101,6 +101,32 @@ resume from here without re-auditing or re-running the council.
   re-running its server suite); S4 was also asked to run its owed full client suite first. Reviews land in
   `S\review\S<you>-on-S<t>.md`; then each target fixes BLOCKING + SHOULD as new commits.
   2026-10-31 ~14:30 all 7 agents hit the usage limit again (reset 18:40 PT) before any review was written; on
+  Review verdicts and hub merge items (fill in as they arrive):
+  - S3-on-S4 PASS WITH FIXES: S4 fixes SHOULD-1 (mixed drills follow today's slate tracks) + N1 (palette Enter during
+    debounce). **Hub at merge:** swap S1's `server/test/api/settings.test.ts` to `DashboardResponseExt` (strict slate
+    item rejects `targetUnitId`); expect import-block conflicts in `api.test.ts`, `campaign.test.ts`, `api-ext.ts`,
+    client `api/`, `Dashboard.tsx`; refresh the request-count comment; check the "Review-only day" note on an empty slate.
+  - S5-on-S6 PASS WITH FIXES (0 BLOCKING; 9/9 new test values recomputed, 9 trap tests solution+naive OK): S6 fixes
+    its report's SEEDING bullet (only sysdrills is gated). Next-wave item: 5 javadrills task lines still hand over a
+    formula (03-streams 2, 07-exception-flow 1, 08-money-math 1, 10-completablefuture 1).
+  - S7-on-S1 PASS WITH FIXES: S1 adds a local-midnight boundary test + fixes README:69-70 ("today always exits 0").
+    **Hub at merge:** S1's focus card also fetches the slate settings on each dashboard load, so the merged mount =
+    dashboard + competencies + tracks + `/due` + `/stats/weak` + `/settings/slate`; update S4's `find.test.tsx:47-49`
+    to that set, by counting.
+  - S2-on-S3 PASS WITH FIXES, 1 BLOCKING: S3's weak-due test double-inserts `eb_score_detail` once S5 is merged
+    (018 trigger aborts). S3 fixes it + hub-approved `client/vite.config.ts` deny of `**/content/**` and `**/.cache/**`
+    (the Vite dev server could serve answer keys from `content/seed` via `/@fs/`; pre-existing for `npm run dev`) +
+    a real retest in the /due-vs-/competencies test + relative `BOOTQUEST_DB` handling in the launcher.
+  - S6-on-S7 PASS WITH FIXES (code-truth 37/92 keys OK; 143 frozen entries verified byte-identical at 9b7f0ea3):
+    the masterstore accepted pair is a REAL leak (the note restates a whole [w3] kp). **Hub ruling revised:** S7
+    fixes it on the editable side and drops it from the baseline (accepted pairs ≤ 3); S7 also adds a ratchet test
+    (shrink-only was not enforced) and settles one id convention (the reports mixed 0- and 1-based ids). S6 fixed
+    its own report (SEEDING bullet: only sysdrills gates task lines).
+  - S1-on-S2 PASS (0 BLOCKING, 0 SHOULD; targeted 17/17 + 4/4; counts verified). **Hub at merge:** refresh the
+    `demote()` doc comment in `evidence.ts` (still says a row is written at the floor). Accepted NIT: a repeat quiz miss
+    moves the card to Relearning, so a later Again on it does not demote (conservative).
+  - S1 ring fixes DONE: a52edb5c (midnight-boundary tests), 08cbd895 + a7f7d6e7 (README `today` exits 2; the
+    `bootquest slate` README line is drafted in S1's report for the hub). Expected server count 660 (not re-run).
   2026-11-01 all 7 were resumed with their review (S1 on S2 and S7 on S1 added; S4 still owes its client suite).
 
 ## Not done
