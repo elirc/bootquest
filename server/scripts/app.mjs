@@ -12,7 +12,7 @@
 // Refuses, before touching anything, when BOOTQUEST_DB is unset: there is no default DB.
 import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
@@ -29,6 +29,16 @@ export function launchProblem(env) {
       '  PowerShell:  $env:BOOTQUEST_DB = "C:\\Users\\Owner\\bootquest\\bootquest.db"',
       '  Git Bash:    export BOOTQUEST_DB=/c/Users/Owner/bootquest/bootquest.db',
       'A file that does not exist yet (in an existing folder) starts a new, empty DB.',
+    ].join('\n');
+  }
+  // a relative path would resolve against wherever npm happens to run the script (the repo root
+  // here, server/ for `npm run serve`): two commands, two DBs. Refuse it rather than guess.
+  const db = env.BOOTQUEST_DB.trim();
+  if (db !== ':memory:' && !isAbsolute(db)) {
+    return [
+      `BOOTQUEST_DB must be an absolute path, got "${env.BOOTQUEST_DB}".`,
+      'A relative path would name a different file depending on where the command runs.',
+      '  e.g.  set BOOTQUEST_DB=C:\\Users\\Owner\\bootquest\\bootquest.db',
     ].join('\n');
   }
   for (const name of ['BOOTQUEST_PORT', 'BOOTQUEST_UI_PORT']) {

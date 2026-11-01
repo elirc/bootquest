@@ -44,7 +44,7 @@ npm run app
 ```
 
 `npm run app` prints the URL to open (http://localhost:5173 by default) once both halves are
-up. It refuses, before opening anything, when `BOOTQUEST_DB` is unset. Both halves run in one
+up. It refuses, before opening anything, when `BOOTQUEST_DB` is unset or not an absolute path. Both halves run in one
 Node process, so Ctrl+C (or closing the window) never leaves a server behind, in cmd,
 PowerShell or Git Bash alike. Set the variable the same way in the other shells:
 `$env:BOOTQUEST_DB = "C:\Users\Owner\bootquest\bootquest.db"` (PowerShell) or

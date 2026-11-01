@@ -1,4 +1,6 @@
 import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 // @ts-expect-error: a plain .mjs script (no declaration file); launchProblem is its one pure export
@@ -24,12 +26,17 @@ describe('npm run app: refusals (ab wave S3)', () => {
     }
   });
 
-  it('bad or clashing ports are refused; a DB alone is enough', () => {
-    expect(check({ BOOTQUEST_DB: 'x.db' })).toBeNull();
-    expect(check({ BOOTQUEST_DB: 'x.db', BOOTQUEST_PORT: '4999', BOOTQUEST_UI_PORT: '5999' })).toBeNull();
-    expect(check({ BOOTQUEST_DB: 'x.db', BOOTQUEST_UI_PORT: 'abc' })).toMatch(/BOOTQUEST_UI_PORT must be an integer/);
-    expect(check({ BOOTQUEST_DB: 'x.db', BOOTQUEST_PORT: '70000' })).toMatch(/BOOTQUEST_PORT must be an integer/);
-    expect(check({ BOOTQUEST_DB: 'x.db', BOOTQUEST_PORT: '5000', BOOTQUEST_UI_PORT: '5000' })).toMatch(/must differ/);
+  it('bad or clashing ports are refused; an absolute DB path alone is enough', () => {
+    const DB = resolve(tmpdir(), 'x.db');
+    expect(check({ BOOTQUEST_DB: DB })).toBeNull();
+    expect(check({ BOOTQUEST_DB: DB, BOOTQUEST_PORT: '4999', BOOTQUEST_UI_PORT: '5999' })).toBeNull();
+    expect(check({ BOOTQUEST_DB: DB, BOOTQUEST_UI_PORT: 'abc' })).toMatch(/BOOTQUEST_UI_PORT must be an integer/);
+    expect(check({ BOOTQUEST_DB: DB, BOOTQUEST_PORT: '70000' })).toMatch(/BOOTQUEST_PORT must be an integer/);
+    expect(check({ BOOTQUEST_DB: DB, BOOTQUEST_PORT: '5000', BOOTQUEST_UI_PORT: '5000' })).toMatch(/must differ/);
+  });
+
+  it('a relative BOOTQUEST_DB is refused (it would name a different file per working directory)', () => {
+    for (const db of ['x.db', './bootquest.db', 'data\\bq.db']) expect(check({ BOOTQUEST_DB: db })).toMatch(/must be an absolute path/);
   });
 
   it('the real entrypoint exits 1 with that message and starts nothing when BOOTQUEST_DB is unset', () => {
