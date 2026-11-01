@@ -141,7 +141,7 @@ function UnitBrowser({ units }: { units: UnitSummary[] }) {
         </button>
         {groups.length > 0 && (
           <button type="button" className="btn btn-sm" onClick={() => setAll(!anyOpen)} data-testid="track-units-all">
-            {anyOpen ? 'Collapse all' : 'Expand all'}
+            {anyOpen ? 'Collapse all' : shown > AUTO_EXPAND_MAX ? `Expand all (${shown} rows)` : 'Expand all'}
           </button>
         )}
       </div>

@@ -32,6 +32,8 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
   const input = useRef<HTMLInputElement>(null);
   const opener = useRef<Element | null>(null);
   const navigated = useRef(false);
+  /** Enter pressed while the hits on screen belong to an older query: open the current query's first hit */
+  const enterPending = useRef(false);
   const [text, setText] = useState('');
   const query = useDebouncedValue(text.trim(), DEBOUNCE_MS);
   const [result, setResult] = useState<Result | null>(null);
@@ -57,6 +59,10 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
         if (!live) return;
         setResult({ q: query, data });
         setActive(0);
+        if (enterPending.current && query === input.current?.value.trim()) {
+          enterPending.current = false;
+          open(data.items[0]);
+        }
       },
       (e: unknown) => live && setResult({ q: query, error: errorText(e) }),
     );
@@ -97,7 +103,9 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
     }
     if (key === 'Enter' && e.target === input.current) {
       e.preventDefault();
-      open(hits[at]);
+      // ring fix N1: the hits may still be the previous query's (150 ms debounce, request in flight)
+      if (text.trim() !== '' && (result === null || result.q !== text.trim())) enterPending.current = true;
+      else open(hits[at]);
       return;
     }
     if (key !== 'Tab' || !ref.current) return;
@@ -155,6 +163,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
           onChange={(e) => {
             setText(e.target.value);
             setActive(0);
+            enterPending.current = false;
           }}
         />
         <p className="palette-status muted small" data-testid="palette-count">

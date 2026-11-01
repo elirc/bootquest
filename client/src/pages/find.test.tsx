@@ -80,16 +80,17 @@ describe('dashboard: slate targets come with GET /dashboard (no fan-out)', () =>
 });
 
 describe('dashboard: Mixed drills', () => {
-  it('asks GET /drills/next only on click, over the unlocked slate drill tracks, and opens that drill', async () => {
+  it('asks GET /drills/next only on click, over today\'s slate drill-set tracks, and opens that drill', async () => {
     const { api, calls, args } = spyApi();
     const r = renderApp('/', api);
     const box = await screen.findByTestId('mixed-drills');
-    expect(box).toHaveTextContent('JS/TS · C#/.NET · Java · System design');
+    // the fixture slate holds drill sets for js, csharp and java (ring fix SHOULD-1: the learner's focus)
+    expect(box).toHaveTextContent(/rotating JS\/TS · C#\/\.NET · Java$/);
     expect(calls).not.toContain('getNextDrill');
     await r.user.click(within(box).getByRole('button', { name: /Mixed drills/ }));
     await waitFor(() => expect(r.path()).toMatch(/^\/play\/\d+$/));
-    expect(args.getNextDrill).toEqual([[['js', 'csharp', 'java', 'sysdesign']]]);
-    const expected = await createMockApi().getNextDrill(['js', 'csharp', 'java', 'sysdesign']);
+    expect(args.getNextDrill).toEqual([[['js', 'csharp', 'java']]]);
+    const expected = await createMockApi().getNextDrill(['js', 'csharp', 'java']);
     expect(r.path()).toBe(`/play/${expected.unit!.id}`);
   });
 
@@ -110,6 +111,29 @@ describe('dashboard: Mixed drills', () => {
     fail = true;
     await r.user.click(within(box).getByRole('button', { name: /Mixed drills/ }));
     await waitFor(() => expect(within(box).getByTestId('mixed-note')).not.toHaveTextContent('No drill is open'));
+  });
+
+  it('ring fix SHOULD-1: a 2-drill-set slate (the chosen focus) is what rotates; under 2 falls back to every unlocked drill track', async () => {
+    const focus = spyApi(
+      withSlate([
+        { slot: 'drill:java', kind: 'drill-set', track: 'java', size: 1, done: false, targetUnitId: null },
+        { slot: 'drill:sysdesign', kind: 'drill-set', track: 'sysdesign', size: 1, done: false, targetUnitId: null },
+        { slot: 'campaign', kind: 'campaign-step', done: false, targetUnitId: 102 },
+      ]),
+    );
+    const r = renderApp('/', focus.api);
+    const box = await screen.findByTestId('mixed-drills');
+    expect(box).toHaveTextContent(/rotating Java · System design$/);
+    await r.user.click(within(box).getByRole('button', { name: /Mixed drills/ }));
+    await waitFor(() => expect(focus.args.getNextDrill).toEqual([[['java', 'sysdesign']]]));
+    r.unmount();
+
+    const one = spyApi(withSlate([{ slot: 'drill:java', kind: 'drill-set', track: 'java', size: 1, done: false, targetUnitId: null }]));
+    const r2 = renderApp('/', one.api);
+    const box2 = await screen.findByTestId('mixed-drills');
+    await waitFor(() => expect(box2).toHaveTextContent(/rotating JS\/TS · C#\/\.NET · Java · System design$/));
+    await r2.user.click(within(box2).getByRole('button', { name: /Mixed drills/ }));
+    await waitFor(() => expect(one.args.getNextDrill).toEqual([[['js', 'csharp', 'java', 'sysdesign']]]));
   });
 
   it('mock rotation is deterministic: same ledger, same answer; it never picks a revealed or done drill', async () => {
@@ -235,6 +259,37 @@ describe('Ctrl+K unit palette', () => {
     expect(byId(603).textContent).toBe('JVj5campaign/java/j5campaignstudylocked');
     fireEvent.click(byId(603));
     expect(r.path()).toBe('/play/603');
+  });
+
+  it('ring fix N1: Enter while the hits are still an older query\'s opens the CURRENT query\'s first hit', async () => {
+    const base = createMockApi();
+    const quiz = (await base.searchUnits('quiz', 30)).items[0]!;
+    const fresh = (await base.searchUnits('signalpost', 30)).items[0]!;
+    expect(fresh.id).not.toBe(quiz.id);
+    const r = renderApp('/', base);
+    await screen.findByTestId('due-now');
+    await r.user.click(screen.getByTestId('open-palette'));
+    await r.user.type(combo(), 'quiz');
+    await waitFor(() => expect(options()[0]).toHaveAttribute('data-unit', String(quiz.id)));
+    // replace the query and press Enter at once: the quiz hits are still on screen (debounce running)
+    fireEvent.change(combo(), { target: { value: 'signalpost' } });
+    fireEvent.keyDown(combo(), { key: 'Enter' });
+    expect(r.path()).toBe('/');
+    expect(palette()).toBeInTheDocument();
+    await waitFor(() => expect(r.path()).toBe(`/play/${fresh.id}`));
+    expect(palette()).toBeNull();
+  });
+
+  it('ring fix N1: typing after a pending Enter cancels it', async () => {
+    const r = renderApp('/');
+    await screen.findByTestId('due-now');
+    await r.user.click(screen.getByTestId('open-palette'));
+    fireEvent.change(combo(), { target: { value: 'signal' } });
+    fireEvent.keyDown(combo(), { key: 'Enter' });
+    fireEvent.change(combo(), { target: { value: 'signalpost U0' } });
+    await waitFor(() => expect(options().length).toBeGreaterThan(0));
+    expect(r.path()).toBe('/');
+    expect(palette()).toBeInTheDocument();
   });
 
   it('no match and errors are stated; a cleared box shows the prompt', async () => {

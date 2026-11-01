@@ -84,8 +84,9 @@ describe('unit browser: groups collapsed by default (4,000-row fixture)', () => 
     expect(groupButtons()[0]).toHaveTextContent('mod0 10/100 done · 25 shown');
   });
 
-  it('Expand all / Collapse all', async () => {
+  it('Expand all / Collapse all (ring fix N3: a large list names the row count first)', async () => {
     const { user, sec, search } = await open();
+    expect(within(sec).getByTestId('track-units-all')).toHaveTextContent(`Expand all (${MODULES * PER_MODULE} rows)`);
     await user.type(search, 'mod7');
     const all = within(sec).getByTestId('track-units-all');
     expect(all).toHaveTextContent('Collapse all');

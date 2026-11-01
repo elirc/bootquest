@@ -318,9 +318,22 @@ function Slate({ d }: { d: DashboardData }) {
           Review-only day: no drill set and no campaign step can be taken. Clearing the queue counts only after at least one review today; with nothing due, earn 20 XP to keep the streak.
         </p>
       )}
-      <MixedDrills tracks={SLATE_DRILL_TRACKS.filter(unlocked)} />
+      <MixedDrills tracks={mixedTracks(items, SLATE_DRILL_TRACKS.filter(unlocked))} />
     </>
   );
+}
+
+/**
+ * ab S4 ring fix (S3 review SHOULD-1): the tracks Mixed drills rotate over are today's slate drill-set
+ * tracks (the learner's chosen focus), unlocked ones only, in slate order; with fewer than 2 of them it
+ * falls back to every unlocked drill track, so the button still mixes something.
+ */
+export function mixedTracks(items: readonly SlateItem[], unlockedDrillTracks: readonly TrackId[]): TrackId[] {
+  const slate = [...new Set(items.flatMap((s) => {
+    const t = slateTrack(s);
+    return t !== null && unlockedDrillTracks.includes(t) ? [t] : [];
+  }))];
+  return slate.length >= 2 ? slate : [...unlockedDrillTracks];
 }
 
 /**
