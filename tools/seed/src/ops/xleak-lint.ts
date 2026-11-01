@@ -24,6 +24,9 @@
 // an entry that no longer fires, names a side that is gone, or whose side text changed is STALE and
 // fails (delete it, or re-justify the changed side). Anything not in the baseline fails. There is no
 // CLI to add entries: a new pair is fixed by rewriting the editable side and re-seeding.
+// The lint does not read an entry's `why`. xleak-lint.test.ts holds the file to account instead: a
+// ratchet on the entry and acceptance counts (lower it when an entry goes, never raise it), and a test
+// that re-derives both texts of every "frozen@9b7f0ea3" entry at 9b7f0ea3 (git archive) and compares hashes.
 // Read-only (no stamps touched). Lives in ops/ so it is outside the fingerprint walk.
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';

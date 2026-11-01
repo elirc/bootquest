@@ -1,8 +1,9 @@
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { DEFAULT_SEED_DIR } from '../factory/report.ts';
+import { DEFAULT_SEED_DIR, REPO_ROOT } from '../factory/report.ts';
 import {
   DEFAULT_XLEAK_BASELINE,
   formatXleakReport,
@@ -18,6 +19,12 @@ import {
   type XleakBaseline,
   type XleakBaselineEntry,
 } from './xleak-lint.ts';
+
+/** the content freeze line (REVIEW §6.8): items present here stay byte-identical */
+const FREEZE_SHA = '9b7f0ea3';
+/** ratchet (shrink-only): 143 frozen-both-sides + 3 recorded acceptances after the ab ring fixes */
+const XLEAK_BASELINE_MAX = 146;
+const XLEAK_ACCEPTED_MAX = 3;
 
 const tmp = mkdtempSync(join(tmpdir(), 'bq-xleak-'));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
@@ -197,4 +204,39 @@ describe('xleak lint on the shipped estate (content/seed + xleak-baseline.json)'
     expect(new Set(ids).size).toBe(ids.length);
     expect([...ids].sort()).toEqual(ids);
   });
+
+  // The ratchet: the baseline only shrinks. Lower these constants when an entry goes; never raise them
+  // (a new pair is fixed by rewriting its editable side, not by adding an entry).
+  it(`ratchet: at most ${XLEAK_BASELINE_MAX} entries, at most ${XLEAK_ACCEPTED_MAX} recorded acceptances`, () => {
+    expect(baseline.entries.length).toBeLessThanOrEqual(XLEAK_BASELINE_MAX);
+    expect(baseline.entries.filter((e) => e.why.startsWith('accepted ab-S7')).length).toBeLessThanOrEqual(XLEAK_ACCEPTED_MAX);
+  });
+
+  // A "frozen@9b7f0ea3" why is a claim: both sides must be byte-identical to the items present at the
+  // freeze line. Re-derive the texts of every referenced pack AT 9b7f0ea3 (git archive) and compare hashes.
+  const hasFreezeLine = spawnSync('git', ['cat-file', '-e', `${FREEZE_SHA}^{commit}`], { cwd: REPO_ROOT, windowsHide: true }).status === 0;
+  it.skipIf(!hasFreezeLine)('every frozen@9b7f0ea3 entry has both side texts unchanged since 9b7f0ea3', () => {
+    const frozen = baseline.entries.filter((e) => e.why.startsWith('frozen@9b7f0ea3'));
+    expect(frozen.length).toBeGreaterThan(0);
+    const packPath = (id: string): string => {
+      const [kind, rest] = [id.slice(0, id.indexOf(':')), id.slice(id.indexOf(':') + 1)];
+      if (kind === 'eb') return `content/seed/explainback/${rest.split(' ')[0]}`;
+      return `content/seed/${kind === 'note' ? 'notes' : 'quests'}/${rest.split('/')[0]}`;
+    };
+    const paths = [...new Set(frozen.flatMap((e) => [e.a, e.b]).map(packPath))].flatMap((p) => [`${p}/items.json`, `${p}/manifest.json`]);
+    const dir = join(tmp, 'at-freeze-line');
+    mkdirSync(dir, { recursive: true });
+    const tarFile = join(dir, 'seed.tar');
+    const arch = spawnSync('git', ['archive', '-o', tarFile, FREEZE_SHA, '--', ...paths], { cwd: REPO_ROOT, windowsHide: true, encoding: 'utf8' });
+    expect(arch.status, arch.stderr).toBe(0);
+    const untar = spawnSync('tar', ['-xf', 'seed.tar'], { cwd: dir, windowsHide: true, encoding: 'utf8' });
+    expect(untar.status, untar.stderr).toBe(0);
+    const then = xleakEstate(join(dir, 'content', 'seed')).texts;
+    const notFrozen = frozen.filter((e) => {
+      const a = then.get(e.a);
+      const b = then.get(e.b);
+      return a === undefined || b === undefined || textHash(a) !== e.aHash || textHash(b) !== e.bHash;
+    });
+    expect(notFrozen.map(pairId)).toEqual([]);
+  }, 120_000);
 });
