@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Db } from '../src/db/database.ts';
-import { DAY_MS } from '../src/engines/clock.ts';
+import { putSlateSettings } from '../src/api/settings-service.ts';
+import { DAY_MS, dayKey, nowMs } from '../src/engines/clock.ts';
 import { addReviewItem } from '../src/engines/fsrs.ts';
 import {
   closeElapsedDays,
@@ -210,5 +211,54 @@ describe('A1 phantom missed days (display-only, R3.1)', () => {
     ctx.db.run(`INSERT INTO xp_event (kind, amount, day, created_at) VALUES ('review', 0, '2026-10-02', ?)`, ctx.clock().getTime());
     expect(slateStatuses(ctx.db, '2026-10-01', '2026-10-03').get('2026-10-01')).toBeUndefined();
     expect(slateStatuses(ctx.db, '2026-10-01', '2026-10-03').get('2026-10-02')).toBe('missed');
+  });
+});
+
+describe('A1 local-midnight boundary (ring review S7-on-S1 SHOULD-1)', () => {
+  const ctx = useTempDb();
+  /** 23:59 local on 2026-10-01 (day D) */
+  const lateOnD = () => new Date(2026, 9, 1, 23, 59, 0, 0).getTime();
+
+  it('a change saved at 23:59 on day D is effective D+1: D keeps its slate; at 00:01 on D+1 the new shape applies', () => {
+    stock(ctx.db, ctx.clock);
+    ctx.clock.set(lateOnD());
+    const dayD = composeSlate(ctx.db, ctx.clock);
+    expect(dayD.day).toBe('2026-10-01');
+    const saved = putSlateSettings(
+      { db: ctx.db, clock: ctx.clock },
+      {
+        tracks: [
+          { trackId: 'js', enabled: false },
+          { trackId: 'csharp', enabled: false },
+          { trackId: 'java', enabled: true, size: 3 },
+          { trackId: 'sysdesign', enabled: true, size: 3 },
+        ],
+      },
+    );
+    expect(saved).toMatchObject({ today: '2026-10-01', effectiveDay: '2026-10-02' });
+    expect(ctx.db.all<{ d: string }>('SELECT DISTINCT effective_day AS d FROM slate_setting')).toEqual([{ d: '2026-10-02' }]);
+    // still day D (23:59): its slate does not move
+    expect(composeSlate(ctx.db, ctx.clock).items).toEqual(dayD.items);
+    ctx.clock.advance(2 * 60 * 1000); // 00:01 local on D+1
+    expect(dayKey(nowMs(ctx.clock))).toBe('2026-10-02');
+    expect(shapeOf(ctx.db, ctx.clock)).toEqual(['drill:javax3', 'drill:sysdesignx3']);
+    // D closed with the slot list it had
+    expect(getSlate(ctx.db, '2026-10-01')!.items.map((i) => i.slot)).toEqual(dayD.items.map((i) => i.slot));
+  });
+
+  it('an attempt at 23:59 on day D makes D (not D+1) the first-action day of the heatmap remap', () => {
+    const ids = stock(ctx.db, ctx.clock);
+    composeSlate(ctx.db, ctx.clock); // day D noon: a dashboard open only
+    ctx.clock.set(new Date(2026, 9, 2, 23, 59, 0, 0).getTime()); // 23:59 on D+1 = 2026-10-02
+    composeSlate(ctx.db, ctx.clock);
+    submit(ctx.db, ctx.clock, ids.js![0]!, { pass: false }); // the first learner action, a minute before midnight
+    ctx.clock.advance(2 * 60 * 1000); // 00:01 on 2026-10-03
+    expect(dayKey(nowMs(ctx.clock))).toBe('2026-10-03');
+    ctx.clock.advance(DAY_MS); // 2026-10-04: 10-01..10-03 are closed
+    streakStatus(ctx.db, ctx.clock);
+    const statuses = slateStatuses(ctx.db, '2026-09-01', '2026-10-04');
+    expect(statuses.get('2026-10-01')).toBeUndefined(); // before the first action: renders none
+    expect(statuses.get('2026-10-02')).toBe('missed'); // the 23:59 attempt's own local day
+    expect(statuses.get('2026-10-03')).toBe('missed');
   });
 });
